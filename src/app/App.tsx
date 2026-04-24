@@ -6,6 +6,7 @@ import MainToolbar from "../ui/components/MainToolbar";
 import ConfigurationSection from "../ui/components/ConfigurationSection";
 import SourceObjectSection from "../ui/components/SourceObjectSection";
 import DesignIntentSection from "../ui/components/DesignIntentSection";
+import ZoomSection from "../ui/components/ZoomSection.tsx";
 import RequirementsSection from "../ui/components/RequirementsSection";
 import LegacyPanels from "../ui/components/LegacyPanels";
 import { SystemDataPanel } from "../ui/components/LegacyPanels";
@@ -33,6 +34,7 @@ import { calculateSurfaceOrigins, transformPointToLocal } from "../../raytracing
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
+const RENDER_SHOW_PRINCIPAL_POINTS_KEY = 'coopt.render.showPrincipalPointLabels';
 const RENDER_SCALE_BAR_MIN_WIDTH_PX = 72;
 const RENDER_SCALE_BAR_TARGET_WIDTH_PX = 160;
 const RENDER_SCALE_BAR_MAX_WIDTH_PX = 240;
@@ -71,6 +73,15 @@ type RenderCompareEntry = {
   rows: any[];
   objectRows: any[];
   isActive: boolean;
+};
+
+type RenderZoomUiState = {
+  available: boolean;
+  blockId: string;
+  zoomPosition: number;
+  groupNames: string[];
+  lawGroups: string[];
+  configName: string;
 };
 
 function isPlainObject(v: any): boolean {
@@ -555,11 +566,25 @@ export default function App() {
   const [renderColorUiRevision, setRenderColorUiRevision] = useState(0);
   const [renderScaleLabel, setRenderScaleLabel] = useState('Scale unavailable');
   const [renderScaleBarWidthPx, setRenderScaleBarWidthPx] = useState(RENDER_SCALE_BAR_TARGET_WIDTH_PX);
-  const [workspaceFocus, setWorkspaceFocus] = useState<'configuration' | 'source' | 'intent' | 'requirements'>('configuration');
+  const [renderZoomUiRevision, setRenderZoomUiRevision] = useState(0);
+  const [workspaceFocus, setWorkspaceFocus] = useState<'configuration' | 'source' | 'intent' | 'zoom' | 'requirements'>('configuration');
   const renderScaleRafRef = useRef<number | null>(null);
+  const renderViewModeRef = useRef<'3D' | 'XZ' | 'YZ'>('3D');
+  const renderViewAxisRef = useRef<'YZ' | 'XZ'>('YZ');
+  const renderRedrawInFlightRef = useRef(false);
+  const renderPendingRowsRef = useRef<any[] | null>(null);
+  const render3DPrevRowsRef = useRef<any[] | null>(null);
+  const render3DPrevOriginsRef = useRef<any[] | null>(null);
   const [renderShowDesignIntentLabels, setRenderShowDesignIntentLabels] = useState<boolean>(() => {
     try {
       return localStorage.getItem(RENDER_SHOW_LABELS_KEY) !== 'false';
+    } catch (_) {
+      return true;
+    }
+  });
+  const [renderShowPrincipalPointLabels, setRenderShowPrincipalPointLabels] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(RENDER_SHOW_PRINCIPAL_POINTS_KEY) !== 'false';
     } catch (_) {
       return true;
     }
@@ -580,6 +605,14 @@ export default function App() {
       return false;
     }
   })();
+
+  useEffect(() => {
+    renderViewModeRef.current = renderViewMode;
+  }, [renderViewMode]);
+
+  useEffect(() => {
+    renderViewAxisRef.current = renderViewAxis;
+  }, [renderViewAxis]);
   const analysisWindowMode = (() => {
     try {
       const url = new URL(window.location.href);
@@ -651,6 +684,126 @@ export default function App() {
     } catch (_) {}
     return null;
   };
+
+  function approxEqualNumber(left: any, right: any, epsilon = 1e-9): boolean {
+    const l = Number(left);
+    const r = Number(right);
+    if (!Number.isFinite(l) && !Number.isFinite(r)) return true;
+    if (!Number.isFinite(l) || !Number.isFinite(r)) return false;
+    return Math.abs(l - r) <= epsilon;
+  }
+
+  function surfaceIdentityKey(surface: any, index0: number): string {
+    const blockId = String(surface?._blockId ?? '').trim();
+    const role = String(surface?._surfaceRole ?? '').trim();
+    const id = String(surface?.id ?? '').trim();
+    const surfType = String(surface?.surfType ?? surface?.type ?? '').trim();
+    const objectType = String(surface?.['object type'] ?? '').trim();
+    return [index0, blockId, role, id, surfType, objectType].join('|');
+  }
+
+  function rotationMatrixStable(left: any, right: any): boolean {
+    const leftRows = Array.isArray(left) ? left : null;
+    const rightRows = Array.isArray(right) ? right : null;
+    if (!leftRows && !rightRows) return true;
+    if (!leftRows || !rightRows || leftRows.length !== rightRows.length) return false;
+    for (let rowIndex = 0; rowIndex < leftRows.length; rowIndex += 1) {
+      const leftRow = Array.isArray(leftRows[rowIndex]) ? leftRows[rowIndex] : null;
+      const rightRow = Array.isArray(rightRows[rowIndex]) ? rightRows[rowIndex] : null;
+      if (!leftRow && !rightRow) continue;
+      if (!leftRow || !rightRow || leftRow.length !== rightRow.length) return false;
+      for (let colIndex = 0; colIndex < leftRow.length; colIndex += 1) {
+        if (!approxEqualNumber(leftRow[colIndex], rightRow[colIndex])) return false;
+      }
+    }
+    return true;
+  }
+
+  function getUserDataSurfaceIndex0(userData: any): number | null {
+    const direct = Number(userData?.surfaceIndex0);
+    if (Number.isInteger(direct) && direct >= 0) return direct;
+
+    const raw = Number(userData?.surfaceIndex);
+    if (!Number.isInteger(raw)) return null;
+    if (userData?.type === 'surfaceProfile' || userData?.type === 'connectionLine') {
+      return raw > 0 ? raw - 1 : raw;
+    }
+    return raw >= 0 ? raw : null;
+  }
+
+  function translateSceneObjectGeometry(object: any, dx: number, dy: number, dz: number): void {
+    if (!object) return;
+    if (object.geometry?.attributes?.position?.array) {
+      const positions = object.geometry.attributes.position.array as ArrayLike<number> & { [index: number]: number };
+      for (let index = 0; index < positions.length; index += 3) {
+        positions[index] += dx;
+        positions[index + 1] += dy;
+        positions[index + 2] += dz;
+      }
+      object.geometry.attributes.position.needsUpdate = true;
+      if (typeof object.geometry.computeBoundingSphere === 'function') object.geometry.computeBoundingSphere();
+      if (typeof object.geometry.computeBoundingBox === 'function') object.geometry.computeBoundingBox();
+      return;
+    }
+    if (object.position && typeof object.position.set === 'function') {
+      object.position.set(
+        Number(object.position.x || 0) + dx,
+        Number(object.position.y || 0) + dy,
+        Number(object.position.z || 0) + dz,
+      );
+    }
+  }
+
+  function canFastTranslate3DPreview(prevRows: any[], nextRows: any[], prevOrigins: any[], nextOrigins: any[], labelsEnabled: boolean): boolean {
+    if (labelsEnabled) return false;
+    if (!Array.isArray(prevRows) || !Array.isArray(nextRows) || !Array.isArray(prevOrigins) || !Array.isArray(nextOrigins)) return false;
+    if (prevRows.length === 0 || prevRows.length !== nextRows.length || prevOrigins.length !== nextOrigins.length || prevRows.length !== prevOrigins.length) return false;
+
+    for (let index = 0; index < prevRows.length; index += 1) {
+      if (surfaceIdentityKey(prevRows[index], index) !== surfaceIdentityKey(nextRows[index], index)) return false;
+      if (!rotationMatrixStable(prevOrigins[index]?.rotationMatrix, nextOrigins[index]?.rotationMatrix)) return false;
+    }
+    return true;
+  }
+
+  function tryFastTranslateRender3DPreview(
+    scene: any,
+    prevRows: any[],
+    nextRows: any[],
+    prevOrigins: any[],
+    nextOrigins: any[],
+    labelsEnabled: boolean,
+  ): boolean {
+    if (!scene || !canFastTranslate3DPreview(prevRows, nextRows, prevOrigins, nextOrigins, labelsEnabled)) return false;
+
+    const surfaceDeltaByIndex = new Map<number, { dx: number; dy: number; dz: number }>();
+    for (let index = 0; index < nextOrigins.length; index += 1) {
+      const prevOrigin = prevOrigins[index]?.origin;
+      const nextOrigin = nextOrigins[index]?.origin;
+      const dx = Number(nextOrigin?.x || 0) - Number(prevOrigin?.x || 0);
+      const dy = Number(nextOrigin?.y || 0) - Number(prevOrigin?.y || 0);
+      const dz = Number(nextOrigin?.z || 0) - Number(prevOrigin?.z || 0);
+      if (Math.abs(dx) > 1e-9 || Math.abs(dy) > 1e-9 || Math.abs(dz) > 1e-9) {
+        surfaceDeltaByIndex.set(index, { dx, dy, dz });
+      }
+    }
+
+    if (surfaceDeltaByIndex.size === 0) return true;
+
+    scene.traverse((child: any) => {
+      const type = child?.userData?.type;
+      if (type === 'optical-ray' || child?.userData?.isRayLine || child?.userData?.rayType === 'crossBeam') {
+        return;
+      }
+      const surfaceIndex0 = getUserDataSurfaceIndex0(child?.userData);
+      if (surfaceIndex0 === null) return;
+      const delta = surfaceDeltaByIndex.get(surfaceIndex0);
+      if (!delta) return;
+      translateSceneObjectGeometry(child, delta.dx, delta.dy, delta.dz);
+    });
+
+    return true;
+  }
 
   const getActiveConfigFromSystemConfig = (systemConfig: any): any => {
     if (!systemConfig || !Array.isArray(systemConfig.configurations)) return null;
@@ -731,6 +884,150 @@ export default function App() {
       return [activeEntry, ...rest];
     } catch (_) {
       return [];
+    }
+  };
+
+  const getRenderHostWindow = (): any => {
+    try {
+      const openerWindow = (window as any).opener;
+      if (openerWindow && !openerWindow.closed) return openerWindow;
+    } catch (_) {}
+    return window as any;
+  };
+
+  const parseZoomLawGroupNames = (rawValue: any): string[] => {
+    const raw = String(rawValue ?? '').trim();
+    if (!raw) return [];
+    const groupNames: string[] = [];
+    for (const line of raw.split(/\r?\n|;/)) {
+      const trimmed = String(line ?? '').trim();
+      if (!trimmed) continue;
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex <= 0) continue;
+      const name = String(trimmed.slice(0, eqIndex)).trim();
+      if (name && !groupNames.includes(name)) groupNames.push(name);
+    }
+    return groupNames;
+  };
+
+  const getRenderZoomUiState = (): RenderZoomUiState => {
+    try {
+      const hostWindow = getRenderHostWindow();
+      const systemConfig = getSystemConfigFromWindow(hostWindow);
+      const activeCfg = getActiveConfigFromSystemConfig(systemConfig);
+      const blocks = Array.isArray(activeCfg?.blocks) ? activeCfg.blocks : [];
+      if (blocks.length === 0) {
+        return { available: false, blockId: '', zoomPosition: 0, groupNames: [], lawGroups: [], configName: '' };
+      }
+
+      const controller = blocks.find((block: any) => {
+        const blockType = String(block?.blockType ?? '').trim();
+        return blockType === 'ObjectSurface' || blockType === 'ObjectPlane';
+      });
+      if (!controller) {
+        return { available: false, blockId: '', zoomPosition: 0, groupNames: [], lawGroups: [], configName: String(activeCfg?.name ?? '').trim() };
+      }
+
+      const params = (controller.parameters && typeof controller.parameters === 'object') ? controller.parameters : {};
+      const rawZoomPosition = Number(params.zoomPosition);
+      const zoomPosition = Number.isFinite(rawZoomPosition) ? Math.max(0, Math.min(1, rawZoomPosition)) : 0;
+      const lawGroups = parseZoomLawGroupNames(params.zoomGroupProfiles);
+      const groupNames: string[] = [];
+      for (const block of blocks) {
+        const blockType = String(block?.blockType ?? '').trim();
+        if (!blockType || blockType === 'Gap' || blockType === 'AirGap' || blockType === 'ImageSurface' || blockType === 'ObjectSurface' || blockType === 'ObjectPlane') {
+          continue;
+        }
+        const blockParams = (block?.parameters && typeof block.parameters === 'object') ? block.parameters : {};
+        const groupName = String(blockParams.zoomGroup ?? '').trim();
+        if (groupName && !groupNames.includes(groupName)) groupNames.push(groupName);
+      }
+
+      return {
+        available: true,
+        blockId: String(controller.blockId ?? '').trim(),
+        zoomPosition,
+        groupNames,
+        lawGroups,
+        configName: String(activeCfg?.name ?? '').trim(),
+      };
+    } catch (_) {
+      return { available: false, blockId: '', zoomPosition: 0, groupNames: [], lawGroups: [], configName: '' };
+    }
+  };
+
+  const applyRenderZoomPosition = async (nextZoomPosition: number): Promise<boolean> => {
+    const safeZoomPosition = Math.max(0, Math.min(1, Number(nextZoomPosition) || 0));
+    try {
+      const hostWindow = getRenderHostWindow();
+      const systemConfig = getSystemConfigFromWindow(hostWindow);
+      const activeCfg = getActiveConfigFromSystemConfig(systemConfig);
+      const blocks = Array.isArray(activeCfg?.blocks) ? activeCfg.blocks : [];
+      if (!activeCfg || blocks.length === 0) return false;
+
+      const controller = blocks.find((block: any) => {
+        const blockType = String(block?.blockType ?? '').trim();
+        return blockType === 'ObjectSurface' || blockType === 'ObjectPlane';
+      });
+      if (!controller) return false;
+
+      if (!controller.parameters || typeof controller.parameters !== 'object') controller.parameters = {};
+      controller.parameters.zoomPosition = safeZoomPosition;
+      if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+      activeCfg.metadata.modified = new Date().toISOString();
+
+      let renderRows: any[] = [];
+      try {
+        const expander = hostWindow?.expandBlocksToOpticalSystemRows || (window as any)?.expandBlocksToOpticalSystemRows;
+        if (Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof expander === 'function') {
+          const expanded = expander(activeCfg.blocks);
+          if (expanded && Array.isArray(expanded.rows) && expanded.rows.length > 0) {
+            renderRows = expanded.rows;
+            activeCfg.opticalSystem = expanded.rows;
+          }
+        }
+      } catch (_) {}
+      if (renderRows.length === 0 && Array.isArray(activeCfg.opticalSystem) && activeCfg.opticalSystem.length > 0) {
+        renderRows = activeCfg.opticalSystem;
+      }
+
+      if (typeof hostWindow.saveSystemConfigurationsFromTableConfig === 'function') {
+        hostWindow.saveSystemConfigurationsFromTableConfig(systemConfig);
+      } else if (typeof hostWindow.saveSystemConfigurations === 'function') {
+        hostWindow.saveSystemConfigurations(systemConfig);
+      }
+
+      if (typeof hostWindow.loadActiveConfigurationToTables === 'function') {
+        await Promise.resolve(hostWindow.loadActiveConfigurationToTables({ applyToUI: true }));
+      }
+      try { requestRefreshBlockInspector(hostWindow); } catch (_) {}
+      try {
+        hostWindow.dispatchEvent(new CustomEvent('coopt:system-configurations-updated'));
+      } catch (_) {}
+
+      if (hostWindow !== window) {
+        try {
+          if (typeof (window as any).loadActiveConfigurationToTables === 'function') {
+            await Promise.resolve((window as any).loadActiveConfigurationToTables({ applyToUI: true }));
+          }
+        } catch (_) {}
+      }
+
+      if (renderRows.length > 0) {
+        try {
+          const renderWindow = window as any;
+          if (typeof renderWindow.__cooptRenderWindowRedraw === 'function') {
+            await Promise.resolve(renderWindow.__cooptRenderWindowRedraw(renderRows));
+            return true;
+          }
+        } catch (_) {}
+      }
+
+      await redrawCurrentRenderView();
+      return true;
+    } catch (err) {
+      console.error('[RenderWindow] Failed to apply zoom position:', err);
+      return false;
     }
   };
 
@@ -2469,9 +2766,25 @@ const collectLegacyCrossRays = async (
 
   const drawCrossSectionView = async (axis: 'YZ' | 'XZ'): Promise<boolean> => {
     const w = window as any;
+    let overrideRows: any[] = [];
+    try {
+      const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+      const hostWindow = getRenderHostWindow();
+      const localOverride = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0
+        ? g.__cooptOpticalSystemRowsOverride
+        : null;
+      const hostOverride = hostWindow && Array.isArray((hostWindow as any).__cooptOpticalSystemRowsOverride) && (hostWindow as any).__cooptOpticalSystemRowsOverride.length > 0
+        ? (hostWindow as any).__cooptOpticalSystemRowsOverride
+        : null;
+      const resolvedOverride = localOverride ?? hostOverride ?? [];
+      overrideRows = Array.isArray(resolvedOverride) ? resolvedOverride : [];
+    } catch (_) {
+      overrideRows = [];
+    }
+
     try {
       const cm = w.ConfigurationManager;
-      if (cm && typeof cm.loadActiveConfigurationToTables === 'function') {
+      if (overrideRows.length === 0 && cm && typeof cm.loadActiveConfigurationToTables === 'function') {
         await Promise.resolve(cm.loadActiveConfigurationToTables({ applyToUI: true }));
       }
     } catch (_) {}
@@ -2486,11 +2799,11 @@ const collectLegacyCrossRays = async (
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     } catch (_) {}
 
-    const compareEntries = renderCompareScope === 'all' ? getRenderCompareEntries(w) : [];
-    const compareEnabled = compareEntries.length > 1;
+    const compareEntries = overrideRows.length === 0 && renderCompareScope === 'all' ? getRenderCompareEntries(w) : [];
+    const compareEnabled = overrideRows.length === 0 && compareEntries.length > 1;
     const activeCompareEntry = compareEntries.find((entry) => entry.isActive) || compareEntries[0] || null;
 
-    let rows: any[] = activeCompareEntry?.rows || [];
+    let rows: any[] = overrideRows || activeCompareEntry?.rows || [];
     if (!rows.length) {
       try {
         if (typeof w.getOpticalSystemRows === 'function') {
@@ -2575,6 +2888,7 @@ const collectLegacyCrossRays = async (
               showSemidiaRing: false,
               showMirrorBackText: false,
               showDesignIntentLabels: renderShowDesignIntentLabels,
+              showPrincipalPointLabels: renderShowPrincipalPointLabels,
               crossSectionDirection: axis,
               crossSectionCenterOffset: 0
             });
@@ -2599,6 +2913,7 @@ const collectLegacyCrossRays = async (
             showSemidiaRing: false,
             showMirrorBackText: false,
             showDesignIntentLabels: renderShowDesignIntentLabels,
+            showPrincipalPointLabels: renderShowPrincipalPointLabels,
             crossSectionDirection: axis,
             crossSectionCenterOffset: 0
           });
@@ -2702,18 +3017,63 @@ const collectLegacyCrossRays = async (
         return false;
       }
 
+      const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+      const isZoomPreviewActive = !!g?.__cooptZoomPreviewActive;
+      const prevRows = render3DPrevRowsRef.current;
+      const prevOrigins = render3DPrevOriginsRef.current;
+      let nextSurfaceOrigins: any[] | null = null;
+      if (isZoomPreviewActive) {
+        try {
+          nextSurfaceOrigins = calculateSurfaceOrigins(rows);
+        } catch (_) {
+          nextSurfaceOrigins = null;
+        }
+        if (
+          Array.isArray(nextSurfaceOrigins) &&
+          tryFastTranslateRender3DPreview(
+            sceneForDraw,
+            prevRows || [],
+            rows,
+            prevOrigins || [],
+            nextSurfaceOrigins,
+            renderShowDesignIntentLabels || renderShowPrincipalPointLabels,
+          )
+        ) {
+          const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
+          const scene = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
+          const camera = w.camera || (typeof w.getCamera === 'function' ? w.getCamera() : null);
+          if (renderer && scene && camera && typeof renderer.render === 'function') {
+            renderer.render(scene, camera);
+          }
+          render3DPrevRowsRef.current = rows;
+          render3DPrevOriginsRef.current = nextSurfaceOrigins;
+          scheduleRenderScaleOverlayUpdate();
+          setRenderWindowStatus('Ready (3D preview)');
+          return true;
+        }
+      }
+
       if (typeof w.clearAllOpticalElements === 'function') {
         try { w.clearAllOpticalElements(sceneForDraw); } catch (_) {}
       }
 
       try {
-        const raysToRemove: any[] = [];
+        const objectsToRemove: any[] = [];
         sceneForDraw.traverse((child: any) => {
-          if (child?.userData?.type === 'optical-ray' || child?.userData?.isRayLine) {
-            raysToRemove.push(child);
+          const type = child?.userData?.type;
+          if (
+            type === 'optical-ray' ||
+            child?.userData?.isRayLine ||
+            type === 'popupLensFill' ||
+            type === 'renderWindowDirectFill' ||
+            type === 'surfaceProfile' ||
+            type === 'connectionLine' ||
+            type === 'renderCompareGroup'
+          ) {
+            objectsToRemove.push(child);
           }
         });
-        [...new Set(raysToRemove)].forEach((obj: any) => {
+        [...new Set(objectsToRemove)].forEach((obj: any) => {
           sceneForDraw.remove(obj);
           if (obj.geometry) obj.geometry.dispose();
           if (obj.material) {
@@ -2732,6 +3092,7 @@ const collectLegacyCrossRays = async (
           showSemidiaRing: true,
           showMirrorBackText: false,
           showDesignIntentLabels: renderShowDesignIntentLabels,
+          showPrincipalPointLabels: renderShowPrincipalPointLabels,
           crossSectionDirection: 'YZ',
           crossSectionCenterOffset: 0
         });
@@ -2790,6 +3151,15 @@ const collectLegacyCrossRays = async (
       if (renderer && scene && camera && typeof renderer.render === 'function') {
         renderer.render(scene, camera);
       }
+      if (!Array.isArray(nextSurfaceOrigins)) {
+        try {
+          nextSurfaceOrigins = calculateSurfaceOrigins(rows);
+        } catch (_) {
+          nextSurfaceOrigins = null;
+        }
+      }
+      render3DPrevRowsRef.current = rows;
+      render3DPrevOriginsRef.current = nextSurfaceOrigins;
       scheduleRenderScaleOverlayUpdate();
 
       setRenderWindowStatus('Ready (3D)');
@@ -2868,12 +3238,16 @@ const collectLegacyCrossRays = async (
     }
   };
 
-  const redrawCurrentRenderView = async () => {
+  const redrawCurrentRenderView = async (
+    modeOverride?: '3D' | 'XZ' | 'YZ',
+    axisOverride?: 'YZ' | 'XZ'
+  ) => {
+    const nextMode = modeOverride ?? renderViewModeRef.current;
+    const nextAxis = (axisOverride ?? renderViewAxisRef.current) === 'XZ' ? 'XZ' : 'YZ';
     if (isTauriRuntime()) {
-      console.log('[RenderColor][Tauri] redrawCurrentRenderView', { renderViewMode, renderViewAxis });
+      console.log('[RenderColor][Tauri] redrawCurrentRenderView', { renderViewMode: nextMode, renderViewAxis: nextAxis });
     }
-    const nextAxis = renderViewAxis === 'XZ' ? 'XZ' : 'YZ';
-    if (renderViewMode === '3D') {
+    if (nextMode === '3D') {
       await drawRender3DView();
       return;
     }
@@ -2889,6 +3263,16 @@ const collectLegacyCrossRays = async (
       setRenderWindowStatus('Draw failed');
     });
   }, [renderShowDesignIntentLabels]);
+
+  useEffect(() => {
+    if (!isRenderWindowMode) return;
+    try {
+      localStorage.setItem(RENDER_SHOW_PRINCIPAL_POINTS_KEY, renderShowPrincipalPointLabels ? 'true' : 'false');
+    } catch (_) {}
+    redrawCurrentRenderView().catch(() => {
+      setRenderWindowStatus('Draw failed');
+    });
+  }, [renderShowPrincipalPointLabels]);
 
   useEffect(() => {
     if (!isRenderWindowMode) return;
@@ -2947,23 +3331,42 @@ const collectLegacyCrossRays = async (
     if (!isRenderWindowMode) return;
     const w = window as any;
     w.__cooptRenderWindowRedraw = async (rows?: any[]) => {
+      if (Array.isArray(rows) && rows.length > 0) {
+        renderPendingRowsRef.current = rows;
+      }
+      if (renderRedrawInFlightRef.current) {
+        return;
+      }
+      renderRedrawInFlightRef.current = true;
       try {
-        const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-        const prevRunning = g ? !!g.__cooptOptimizerIsRunning : false;
-        const prevOverride = g ? g.__cooptOpticalSystemRowsOverride : null;
-        if (g && Array.isArray(rows) && rows.length > 0) {
-          g.__cooptOpticalSystemRowsOverride = rows;
-        }
-        if (g) g.__cooptOptimizerIsRunning = true;
-        try {
-          await redrawCurrentRenderView();
-        } finally {
-          if (g) {
-            g.__cooptOptimizerIsRunning = prevRunning;
-            g.__cooptOpticalSystemRowsOverride = prevOverride;
+        let shouldDrawCurrentView = !Array.isArray(rows) || rows.length === 0;
+        while (shouldDrawCurrentView || (Array.isArray(renderPendingRowsRef.current) && renderPendingRowsRef.current.length > 0)) {
+          const queuedRows = Array.isArray(renderPendingRowsRef.current) && renderPendingRowsRef.current.length > 0
+            ? renderPendingRowsRef.current
+            : null;
+          renderPendingRowsRef.current = null;
+          shouldDrawCurrentView = false;
+
+          const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+          const prevRunning = g ? !!g.__cooptOptimizerIsRunning : false;
+          const prevOverride = g ? g.__cooptOpticalSystemRowsOverride : null;
+          if (g && queuedRows) {
+            g.__cooptOpticalSystemRowsOverride = queuedRows;
+          }
+          if (g) g.__cooptOptimizerIsRunning = true;
+          try {
+            await redrawCurrentRenderView();
+          } finally {
+            if (g) {
+              g.__cooptOptimizerIsRunning = prevRunning;
+              g.__cooptOpticalSystemRowsOverride = prevOverride;
+            }
           }
         }
-      } catch (_) {}
+      } catch (_) {
+      } finally {
+        renderRedrawInFlightRef.current = false;
+      }
     };
 
     try {
@@ -2976,6 +3379,8 @@ const collectLegacyCrossRays = async (
     } catch (_) {}
 
     return () => {
+      renderPendingRowsRef.current = null;
+      renderRedrawInFlightRef.current = false;
       try { delete (w as any).__cooptRenderWindowRedraw; } catch (_) {
         (w as any).__cooptRenderWindowRedraw = undefined;
       }
@@ -3040,8 +3445,11 @@ const collectLegacyCrossRays = async (
           }
 
           try {
-            setRenderViewMode('3D');
-            const ok = await drawRender3DView();
+            const currentMode = renderViewModeRef.current;
+            const currentAxis = renderViewAxisRef.current;
+            const ok = currentMode === '3D'
+              ? await drawRender3DView()
+              : await drawCrossSectionView(currentMode === 'XZ' ? 'XZ' : currentAxis === 'XZ' ? 'XZ' : 'YZ');
             if (!ok) {
               setRenderWindowStatus('Draw failed');
               return false;
@@ -3054,8 +3462,13 @@ const collectLegacyCrossRays = async (
 
           const hasCanvas = ensureRenderCanvasAttached() || !!document.querySelector('#threejs-canvas-container canvas');
           if (hasCanvas) {
-            setRenderViewMode('3D');
-            setRenderWindowStatus('Ready (3D)');
+            const currentMode = renderViewModeRef.current;
+            const currentAxis = renderViewAxisRef.current;
+            setRenderWindowStatus(
+              currentMode === '3D'
+                ? 'Ready (3D)'
+                : `Ready (${currentMode === 'XZ' ? 'XZ' : currentAxis === 'XZ' ? 'XZ' : 'YZ'} section)`
+            );
             return true;
           }
 
@@ -4753,6 +5166,7 @@ const collectLegacyCrossRays = async (
           refreshRenderLensTargets([]);
         }
 
+        renderViewModeRef.current = '3D';
         setRenderViewMode('3D');
         const ok = await drawRender3DView();
         if (!ok) return;
@@ -4766,19 +5180,23 @@ const collectLegacyCrossRays = async (
     };
 
     const handleViewXZ = () => {
+      renderViewAxisRef.current = 'XZ';
+      renderViewModeRef.current = 'XZ';
       setRenderViewAxis('XZ');
       setRenderViewMode('XZ');
       refreshRenderLensTargets();
-      drawCrossSectionView('XZ').catch(() => {
+      redrawCurrentRenderView('XZ', 'XZ').catch(() => {
         setRenderWindowStatus('Draw failed');
       });
     };
 
     const handleViewYZ = () => {
+      renderViewAxisRef.current = 'YZ';
+      renderViewModeRef.current = 'YZ';
       setRenderViewAxis('YZ');
       setRenderViewMode('YZ');
       refreshRenderLensTargets();
-      drawCrossSectionView('YZ').catch(() => {
+      redrawCurrentRenderView('YZ', 'YZ').catch(() => {
         setRenderWindowStatus('Draw failed');
       });
     };
@@ -4840,12 +5258,18 @@ const collectLegacyCrossRays = async (
       } catch (_) {}
     };
 
+    const handleToggleRenderPrincipalPoints = (enabled: boolean) => {
+      setRenderShowPrincipalPointLabels(enabled);
+      try {
+        localStorage.setItem(RENDER_SHOW_PRINCIPAL_POINTS_KEY, enabled ? 'true' : 'false');
+      } catch (_) {}
+    };
+
     const comparePreviewEntries = renderCompareScope === 'all' ? getRenderCompareEntries(window as any) : [];
     const comparePreviewOffsets = buildRenderCompareOffsets(comparePreviewEntries.length);
     const compareDirectionLabel = renderViewMode === 'YZ'
       ? (renderCompareOffsetDirection === 'positive' ? 'Up' : renderCompareOffsetDirection === 'negative' ? 'Down' : 'Centered')
       : (renderCompareOffsetDirection === 'positive' ? 'Right' : renderCompareOffsetDirection === 'negative' ? 'Left' : 'Centered');
-
     return (
       <>
         <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', margin: 0 }}>
@@ -4916,6 +5340,14 @@ const collectLegacyCrossRays = async (
                 onChange={(e) => handleToggleRenderLabels(e.target.checked)}
               />
               Labels
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 500 }}>
+              <input
+                type="checkbox"
+                checked={renderShowPrincipalPointLabels}
+                onChange={(e) => handleToggleRenderPrincipalPoints(e.target.checked)}
+              />
+              Paraxial
             </label>
             {renderCompareScope === 'all' && (
               <span style={{ fontWeight: 400, fontSize: 12, color: '#666' }}>
@@ -5105,7 +5537,7 @@ const collectLegacyCrossRays = async (
   }
 
   const selectWorkspaceTab = (
-    focus: 'configuration' | 'source' | 'intent' | 'requirements',
+    focus: 'configuration' | 'source' | 'intent' | 'zoom' | 'requirements',
   ) => {
     setWorkspaceFocus(focus);
     try {
@@ -5124,14 +5556,34 @@ const collectLegacyCrossRays = async (
     } catch (_) {}
   };
 
+  useEffect(() => {
+    const w = window as any;
+    w.__cooptFocusZoomTab = () => {
+      selectWorkspaceTab('zoom');
+      try {
+        const container = document.getElementById('zoom-container');
+        container?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (_) {}
+    };
+
+    return () => {
+      try {
+        if (w.__cooptFocusZoomTab) delete w.__cooptFocusZoomTab;
+      } catch (_) {
+        w.__cooptFocusZoomTab = undefined;
+      }
+    };
+  }, []);
+
   const workspaceSections: Array<{
-    key: 'configuration' | 'source' | 'intent' | 'requirements';
+    key: 'configuration' | 'source' | 'intent' | 'zoom' | 'requirements';
     label: string;
     icon: string;
   }> = [
     { key: 'configuration', label: 'System', icon: '🧭' },
     { key: 'source', label: 'Sources / Objects', icon: '🔎' },
     { key: 'intent', label: 'Design Intent', icon: '🧩' },
+    { key: 'zoom', label: 'Zoom', icon: '🔭' },
     { key: 'requirements', label: 'Requirements', icon: '📏' },
   ];
 
@@ -5223,6 +5675,9 @@ const collectLegacyCrossRays = async (
         </div>
         <div className={`app-shell__tabBody${workspaceFocus === 'intent' ? '' : ' is-hidden'}`}>
           <DesignIntentSection />
+        </div>
+        <div className={`app-shell__tabBody${workspaceFocus === 'zoom' ? '' : ' is-hidden'}`}>
+          <ZoomSection />
         </div>
         <div className={`app-shell__tabBody${workspaceFocus === 'requirements' ? '' : ' is-hidden'}`}>
           <RequirementsSection />

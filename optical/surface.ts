@@ -908,7 +908,12 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   });
 
   const mesh = new THREE_CTX.Mesh(geometry, material);
-  mesh.userData = { type: 'lensSurface', isLensSurface: true, surfaceType: '3DSurface' };
+  mesh.userData = {
+    type: 'lensSurface',
+    isLensSurface: true,
+    surfaceType: '3DSurface',
+    surfaceIndex0: Number.isInteger(Number(params?.__cooptSurfaceIndex0)) ? Number(params.__cooptSurfaceIndex0) : undefined,
+  };
   scene.add(mesh);
   
 }
@@ -1021,7 +1026,12 @@ export function drawToricSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, 
   });
   
   const mesh = new THREE_CTX.Mesh(geometry, material);
-  mesh.userData = { type: 'lensSurface', isLensSurface: true, surfaceType: 'Toric' };
+  mesh.userData = {
+    type: 'lensSurface',
+    isLensSurface: true,
+    surfaceType: 'Toric',
+    surfaceIndex0: Number.isInteger(Number(params?.__cooptSurfaceIndex0)) ? Number(params.__cooptSurfaceIndex0) : undefined,
+  };
   scene.add(mesh);
   
   debugLog(`✅ drawToricSurfaceWithOrigin: Added toric surface to scene, grid: ${segments}x${segments}, vertices: ${positions.length/3}, color: 0x${color.toString(16)}`);
@@ -1169,7 +1179,8 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
   line.userData = { 
     type: 'semidiaRing',
     semidia: semidia,
-    isOpticalElement: true 
+    isOpticalElement: true,
+    surfaceIndex0: Number.isInteger(Number(surf?.__cooptSurfaceIndex0)) ? Number(surf.__cooptSurfaceIndex0) : undefined,
   };
   
   scene.add(line);
@@ -1329,7 +1340,8 @@ export function drawRectApertureWithOriginAndSurface(scene, width = 20, height =
     type: 'apertureRect',
     width,
     height,
-    isOpticalElement: true
+    isOpticalElement: true,
+    surfaceIndex0: Number.isInteger(Number(surf?.__cooptSurfaceIndex0)) ? Number(surf.__cooptSurfaceIndex0) : undefined,
   };
 
   scene.add(line);

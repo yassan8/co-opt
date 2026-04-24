@@ -10,6 +10,7 @@ const w: Record<string, any> = window;
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.ts';
 import {
     calculateFullSystemParaxialTrace,
+    calculatePrincipalPointPositions,
     calculateParaxialData,
     findStopSurfaceIndex
 } from '../../raytracing/core/ray-paraxial.ts';
@@ -400,7 +401,7 @@ function applyOverridesToBlocks(blocks: any[], overrides: any): any[] {
         const { blockId, key } = parseOverrideKey(variableId);
         if (!blockId || !key) continue;
 
-        const block = cloned.find((b: any) => b && String(b.id) === String(blockId));
+        const block = cloned.find((b: any) => b && String(b.blockId ?? b.id ?? '') === String(blockId));
         if (!block || typeof block !== 'object') continue;
 
         const keys = key.split('.');
@@ -983,6 +984,9 @@ class MeritFunctionEditor {
                 }
                 // Default: full system EFL
                 return this.calculatePrimarySystemMetric(operand, opticalSystemData, 'EFL');
+            case 'PP1':
+            case 'PP2':
+                return this.calculatePrincipalPointMetric(operand, opticalSystemData, operand.operand);
             case 'EFFL':
                 return this.calculateEFFL(operand, opticalSystemData);
 
@@ -3406,6 +3410,35 @@ class MeritFunctionEditor {
         );
     }
 
+    _getSurfaceCountFromBlockType(block: any): number {
+        const blockType = String(block?.blockType || '').trim();
+        switch (blockType) {
+            case 'ObjectPlane':
+            case 'ObjectSurface':
+                return 1;
+            case 'Lens':
+            case 'PositiveLens':
+                return 2;
+            case 'Paraxial':
+                return 1;
+            case 'Doublet':
+                return 3;
+            case 'Gap':
+            case 'AirGap':
+                return 0;
+            case 'Stop':
+                return 1;
+            case 'SingleSurface':
+                return 1;
+            default:
+                if (Array.isArray(block?.surfaces)) {
+                    return block.surfaces.length;
+                }
+                console.warn(`[Merit Debug] Unknown blockType: ${blockType}, assuming 1 surface`);
+                return 1;
+        }
+    }
+
     _getBlockSurfaceRange(blockLabel: string, configId: any): { startSurf: number; endSurf: number } | null {
         try {
             const sys = tryLoadSystemConfigurations();
@@ -3444,41 +3477,10 @@ class MeritFunctionEditor {
                 return null;
             }
             
-            // Helper function to get surface count from blockType
-            const getSurfaceCountFromBlockType = (block: any): number => {
-                const blockType = String(block?.blockType || '').trim();
-                switch (blockType) {
-                    case 'ObjectPlane':
-                    case 'ObjectSurface':
-                        return 1; // Object plane creates the Object surface at index 0
-                    case 'Lens':
-                    case 'PositiveLens':
-                        return 2; // front + back
-                    case 'Paraxial':
-                        return 1; // single logical thin-lens surface
-                    case 'Doublet':
-                        return 3; // front + middle + back
-                    case 'Gap':
-                    case 'AirGap':
-                        return 0; // Gap doesn't create surfaces, only sets thickness
-                    case 'Stop':
-                        return 1;
-                    case 'SingleSurface':
-                        return 1;
-                    default:
-                        // Fallback: check if surfaces array exists
-                        if (Array.isArray(block.surfaces)) {
-                            return block.surfaces.length;
-                        }
-                        console.warn(`[EFL Debug] Unknown blockType: ${blockType}, assuming 1 surface`);
-                        return 1;
-                }
-            };
-            
             // Calculate surface range by counting surfaces in blocks before this one
             let currentSurf = 0; // Start at 0 (Object surface is at index 0)
             for (const block of blocks) {
-                const surfCount = getSurfaceCountFromBlockType(block);
+                const surfCount = this._getSurfaceCountFromBlockType(block);
                 if (block === targetBlock) {
                     // Found it! Return the range
                     const startSurf = currentSurf;
@@ -3495,36 +3497,57 @@ class MeritFunctionEditor {
         }
     }
 
+    _getZoomGroupSurfaceRange(zoomGroupLabel: string, configId: any): { startSurf: number; endSurf: number } | null {
+        try {
+            const sys = tryLoadSystemConfigurations();
+            const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
+
+            let cfg = null;
+            if (configId !== undefined && configId !== null) {
+                const hint = String(configId).trim();
+                cfg = configs.find((c: any) => c && String(c.id) === hint) || null;
+            }
+            if (!cfg) {
+                const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null) ? String(sys.activeConfigId) : '';
+                cfg = configs.find((c: any) => c && String(c.id) === activeId) || configs[0] || null;
+            }
+
+            const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
+            if (!Array.isArray(blocks) || blocks.length === 0) return null;
+
+            const target = String(zoomGroupLabel ?? '').trim().toUpperCase();
+            if (!target) return null;
+
+            let currentSurf = 0;
+            let startSurf = Number.POSITIVE_INFINITY;
+            let endSurf = Number.NEGATIVE_INFINITY;
+
+            for (const block of blocks) {
+                const surfCount = this._getSurfaceCountFromBlockType(block);
+                const blockParams = (block?.parameters && typeof block.parameters === 'object') ? block.parameters : null;
+                const zoomGroup = String(blockParams?.zoomGroup ?? '').trim().toUpperCase();
+                if (surfCount > 0 && zoomGroup && zoomGroup === target) {
+                    startSurf = Math.min(startSurf, currentSurf);
+                    endSurf = Math.max(endSurf, currentSurf + surfCount - 1);
+                }
+                currentSurf += surfCount;
+            }
+
+            if (!Number.isFinite(startSurf) || !Number.isFinite(endSurf)) return null;
+            return { startSurf, endSurf };
+        } catch (err) {
+            console.error('[PP] Error getting zoom-group surface range:', err);
+            return null;
+        }
+    }
+
     _calculateEFLForSurfaceRange(opticalSystemData: any[], startSurf: number, endSurf: number, wavelength: number): number {
         try {
-            // Extract surfaces in the range
-            const lensSurfaces = opticalSystemData.slice(startSurf, endSurf + 1);
-            if (lensSurfaces.length === 0) return 0;
+            const rangeData = this._buildIsolatedSurfaceRangeSystem(opticalSystemData, startSurf, endSurf);
+            if (!rangeData) return 0;
             
-            console.log(`[EFL Range] Calculating EFL for surfaces ${startSurf}-${endSurf} (${lensSurfaces.length} surfaces)`);
-            
-            // Build a minimal optical system: Object + Lens surfaces + Image
-            // This allows proper paraxial trace calculation
-            const rangeData = [
-                // Object surface at infinity
-                {
-                    'object type': 'Object',
-                    'thickness': Infinity,
-                    'radius': Infinity,
-                    'comment': 'Virtual Object for EFL calc'
-                },
-                // The lens surfaces
-                ...lensSurfaces,
-                // Image surface
-                {
-                    'object type': 'Image',
-                    'thickness': 0,
-                    'radius': Infinity,
-                    'comment': 'Virtual Image for EFL calc'
-                }
-            ];
-            
-            console.log(`[EFL Range] Built system with ${rangeData.length} surfaces (Object + ${lensSurfaces.length} lens + Image)`);
+            console.log(`[EFL Range] Calculating EFL for surfaces ${startSurf}-${endSurf} (${rangeData.length - 2} surfaces)`);
+            console.log(`[EFL Range] Built system with ${rangeData.length} surfaces (Object + ${rangeData.length - 2} lens + Image)`);
             
             // Calculate paraxial trace for this isolated system
             const eflTrace = calculateFullSystemParaxialTrace(rangeData, wavelength) as any;
@@ -3536,6 +3559,130 @@ class MeritFunctionEditor {
             return this.safeFiniteNumberOrZero(efl);
         } catch (err) {
             console.error('[EFL Range] Error calculating EFL:', err);
+            return 0;
+        }
+    }
+
+    _buildIsolatedSystemFromLensSurfaces(lensSurfaces: any[], label: string): any[] | null {
+        if (!Array.isArray(lensSurfaces) || lensSurfaces.length === 0) return null;
+
+        return [
+            {
+                'object type': 'Object',
+                'thickness': Infinity,
+                'radius': Infinity,
+                'comment': `Virtual Object for ${label}`
+            },
+            ...lensSurfaces,
+            {
+                'object type': 'Image',
+                'thickness': 0,
+                'radius': Infinity,
+                'comment': `Virtual Image for ${label}`
+            }
+        ];
+    }
+
+    _buildIsolatedSurfaceRangeSystem(opticalSystemData: any[], startSurf: number, endSurf: number): any[] | null {
+        const lensSurfaces = opticalSystemData.slice(startSurf, endSurf + 1);
+        if (lensSurfaces.length === 0) return null;
+        return this._buildIsolatedSystemFromLensSurfaces(lensSurfaces, 'surface-range calc');
+    }
+
+    _calculatePrincipalPointsForSurfaceRange(opticalSystemData: any[], startSurf: number, endSurf: number, wavelength: number): any | null {
+        try {
+            const rangeData = this._buildSubsystemBySurfaceIds(opticalSystemData, startSurf, endSurf);
+            if (!rangeData) return null;
+            return calculatePrincipalPointPositions(rangeData, wavelength);
+        } catch (err) {
+            console.error('[PP Range] Error calculating principal points:', err);
+            return null;
+        }
+    }
+
+    _buildSubsystemBySurfaceIds(opticalSystemData: any[], startSurf: number, endSurf: number): any[] | null {
+        if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
+        const normalizedStart = Number.isFinite(Number(startSurf)) ? Number(startSurf) : 1;
+        const normalizedEnd = Number.isFinite(Number(endSurf)) ? Number(endSurf) : (opticalSystemData.length - 2);
+        if (normalizedEnd < normalizedStart) return null;
+
+        const subSystemData: any[] = [];
+        const objectSurfaceIdNum = Number(opticalSystemData[0]?.id);
+        const objectSurfaceId = Number.isFinite(objectSurfaceIdNum) ? objectSurfaceIdNum : 1;
+
+        if (normalizedStart === objectSurfaceId) {
+            subSystemData.push(opticalSystemData[0]);
+        } else {
+            subSystemData.push({
+                surface: 0,
+                'object type': 'Object',
+                thickness: Infinity,
+                radius: Infinity,
+                comment: 'Virtual Object'
+            });
+        }
+
+        for (let i = 1; i < opticalSystemData.length - 1; i++) {
+            const surface = opticalSystemData[i];
+            const surfaceIdNum = Number(surface?.id);
+            if (!Number.isFinite(surfaceIdNum)) continue;
+            if (surfaceIdNum >= normalizedStart && surfaceIdNum <= normalizedEnd) {
+                subSystemData.push({ ...surface, id: surfaceIdNum });
+            }
+        }
+
+        if (subSystemData.length <= 1) return null;
+
+        subSystemData.push({
+            surface: subSystemData.length,
+            'object type': 'Image',
+            thickness: 0,
+            radius: Infinity,
+            comment: 'Image'
+        });
+
+        return subSystemData;
+    }
+
+    calculatePrincipalPointMetric(operand: any, opticalSystemData: any[], metricKey: 'PP1' | 'PP2'): number {
+        try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length < 3) return 0;
+
+            const { source: sourceRows } = this.getConfigTablesByConfigId(operand?.configId);
+            const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+            const modeRaw = String(operand?.param4 ?? '').trim().toUpperCase();
+            const param2Raw = String(operand?.param2 ?? '').trim();
+
+            let startSurf = parseInt(operand?.param2, 10) || 1;
+            let endSurf = parseInt(operand?.param3, 10) || (opticalSystemData.length - 2);
+
+            const wantsZoomGroup = modeRaw === 'ZG' || (!!param2Raw && !Number.isFinite(Number(param2Raw)));
+            if (wantsZoomGroup) {
+                const range = this._getZoomGroupSurfaceRange(param2Raw, operand?.configId);
+                if (!range) {
+                    console.warn(`[PP] Could not find zoom group "${param2Raw}"`);
+                    return 0;
+                }
+                startSurf = range.startSurf;
+                endSurf = range.endSurf;
+            }
+
+            const principalPoints = this._calculatePrincipalPointsForSurfaceRange(
+                opticalSystemData,
+                startSurf,
+                endSurf,
+                wavelength
+            );
+
+            if (!principalPoints) return 0;
+
+            const value = metricKey === 'PP1'
+                ? principalPoints.frontPrincipalFromFirstSurfaceMm
+                : principalPoints.rearPrincipalFromFirstSurfaceMm;
+            return this.safeFiniteNumberOrZero(value);
+        } catch (err) {
+            console.error(`[PP] Error calculating ${metricKey}:`, err);
             return 0;
         }
     }
@@ -3993,38 +4140,11 @@ class MeritFunctionEditor {
             ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
             : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
 
-        let subSystemData: any[] = [];
-
-        const objectSurfaceIdNum = Number(opticalSystemData[0]?.id);
-        const objectSurfaceId = Number.isFinite(objectSurfaceIdNum) ? objectSurfaceIdNum : 1;
-        if (startSurf === objectSurfaceId) {
-            subSystemData.push(opticalSystemData[0]);
-        } else {
-            const virtualObject = {
-                surface: 0,
-                "object type": "Object",
-                thickness: Infinity,
-                comment: "Virtual Object"
-            };
-            subSystemData.push(virtualObject);
+        const subSystemData = this._buildSubsystemBySurfaceIds(opticalSystemData, startSurf, endSurf);
+        if (!subSystemData) {
+            console.warn(`❌ EFFL計算失敗: 面${startSurf}〜${endSurf}, subsystem build failed`);
+            return 0;
         }
-
-        for (let i = 1; i < opticalSystemData.length - 1; i++) {
-            const surface = opticalSystemData[i];
-            const surfaceIdNum = Number(surface?.id);
-            if (!Number.isFinite(surfaceIdNum)) continue;
-            if (surfaceIdNum >= startSurf && surfaceIdNum <= endSurf) {
-                subSystemData.push({ ...surface, id: surfaceIdNum });
-            }
-        }
-
-        const imageSurface = {
-            surface: subSystemData.length,
-            "object type": "Image",
-            thickness: 0,
-            comment: "Image"
-        };
-        subSystemData.push(imageSurface);
 
         const paraxialResult = calculateFullSystemParaxialTrace(subSystemData, wavelength) as any;
 

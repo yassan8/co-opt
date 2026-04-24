@@ -18,6 +18,7 @@ export default function DesignIntentSection() {
         </select>
         <button id="design-intent-add-block-btn" type="button">Add Block</button>
         <button id="design-intent-delete-block-btn" type="button">Delete Block</button>
+        <button id="design-intent-generate-zoom-scenarios-btn" type="button">Generate W/M/T</button>
         <button id="design-intent-param-all-on-btn" type="button">Parameter All ON</button>
         <button id="design-intent-param-all-off-btn" type="button">Parameter All OFF</button>
       </div>
@@ -48,7 +49,7 @@ export default function DesignIntentSection() {
         （Surface の解析・編集は可能ですが、設計意図は完全には利用できません）
       </div>
 
-      <div className="block-inspector-panel" aria-label="Block Inspector">
+      <div id="design-intent-blocks-panel" className="block-inspector-panel" aria-label="Block Inspector">
         <div id="block-inspector" className="block-inspector" role="listbox" aria-label="Design blocks"></div>
       </div>
 

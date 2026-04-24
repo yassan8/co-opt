@@ -2,18 +2,17 @@
  * Optical system renderer for 3D visualization
  */
 
-
-
-import * as THREE from 'three';
-import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawToricSurfaceWithOrigin,
          drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, 
          drawSemidiaRingWithOriginAndSurface, drawRectApertureWithOriginAndSurface, asphericSurfaceZ, toricSurfaceZ, addMirrorBackText,
          drawConnectionCornerRings3D } from './surface.ts';
+import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
+import { calculatePrincipalPointPositions } from '../raytracing/core/ray-paraxial.ts';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordTrans';
 const RENDER_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showDesignIntentLabels';
+const RENDER_PRINCIPAL_POINT_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showPrincipalPointLabels';
 
 function __coopt_isCoordTransDebugEnabled() {
     try {
@@ -240,6 +239,14 @@ function __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMa
     drawSemidiaRingWithOriginAndSurface(scene, semidia, 100, color, origin, rotationMatrix, surface);
 }
 
+function __coopt_withSurfaceRenderMeta(surface, surfaceIndex0) {
+    if (!surface || typeof surface !== 'object') return surface;
+    return {
+        ...surface,
+        __cooptSurfaceIndex0: surfaceIndex0,
+    };
+}
+
 function __coopt_loadSurfaceColorOverrides() {
     try {
         if (typeof localStorage === 'undefined') return {};
@@ -257,6 +264,18 @@ function __coopt_shouldShowDesignIntentLabels(value) {
     try {
         if (typeof localStorage !== 'undefined') {
             const raw = String(localStorage.getItem(RENDER_LABEL_TOGGLE_STORAGE_KEY) ?? '').trim().toLowerCase();
+            if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+            if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+        }
+    } catch (_) {}
+    return false;
+}
+
+function __coopt_shouldShowPrincipalPointLabels(value) {
+    if (typeof value === 'boolean') return value;
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const raw = String(localStorage.getItem(RENDER_PRINCIPAL_POINT_LABEL_TOGGLE_STORAGE_KEY) ?? '').trim().toLowerCase();
             if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
             if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
         }
@@ -532,6 +551,26 @@ function __coopt_addDesignIntentLabelSprite(scene, text, position, style = {}) {
     scene.add(sprite);
 }
 
+function __coopt_measureDesignIntentLabelWorldSize(text) {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return { width: 24, height: 6 };
+
+    const fontPt = 25;
+    const paddingX = 10;
+    const paddingY = 5;
+    context.font = `600 ${fontPt}pt Arial, sans-serif`;
+    const metrics = context.measureText(String(text));
+    const textHeight = Math.ceil(fontPt * 1.55);
+    const canvasWidth = Math.ceil(metrics.width + paddingX * 2);
+    const canvasHeight = Math.ceil(textHeight + paddingY * 2);
+
+    return {
+        width: canvasWidth / 13,
+        height: canvasHeight / 13,
+    };
+}
+
 function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceOrigins, options = {}) {
     if (!scene || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return;
     if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return;
@@ -599,6 +638,323 @@ function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceO
     layoutGroup(gapEntries, gapBase, -1);
 }
 
+function __coopt_getZoomGroupName(block) {
+    try {
+        const params = (block && typeof block.parameters === 'object') ? block.parameters : null;
+        const raw = String(params?.zoomGroup ?? '').trim();
+        if (!raw) return '';
+        return /^fixed$/i.test(raw) ? '' : raw;
+    } catch (_) {
+        return '';
+    }
+}
+
+function __coopt_isPrincipalPointGroupBlockType(blockType) {
+    const t = __coopt_normalizeBlockDisplayType(blockType).toLowerCase();
+    if (!t) return false;
+    return !(t === 'objectsurface'
+        || t === 'imagesurface'
+        || t === 'gap'
+        || t === 'airgap'
+        || t === 'stop'
+        || t === 'coordtrans'
+        || t === 'coord trans'
+        || t === 'coordinate transform'
+        || t === 'coordinatebreak'
+        || t === 'coordinate break');
+}
+
+function __coopt_buildPrincipalPointSubsystem(opticalSystemData, startIdx, endIdx) {
+    if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+    const start = Math.max(0, Math.min(opticalSystemData.length - 1, Number(startIdx) || 0));
+    const end = Math.max(start, Math.min(opticalSystemData.length - 1, Number(endIdx) || start));
+
+    const subsystem = [{
+        surface: 0,
+        'object type': 'Object',
+        thickness: Infinity,
+        radius: Infinity,
+        comment: 'Virtual Object'
+    }];
+
+    for (let i = start; i <= end; i += 1) {
+        const row = opticalSystemData[i];
+        if (!row || typeof row !== 'object') continue;
+        const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+        if (objectType === 'object' || objectType === 'image') continue;
+        subsystem.push({ ...row });
+    }
+
+    if (subsystem.length <= 1) return null;
+    subsystem.push({
+        surface: subsystem.length,
+        'object type': 'Image',
+        thickness: 0,
+        radius: Infinity,
+        comment: 'Virtual Image'
+    });
+    return subsystem;
+}
+
+function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins) {
+    const blocks = __coopt_getActiveDesignIntentBlocks();
+    const surfRangeByBlockId = __coopt_buildSurfRangeByBlockId(opticalSystemData);
+    const groups = new Map();
+
+    for (let i = 0; i < blocks.length; i += 1) {
+        const block = blocks[i];
+        const blockType = String(block?.blockType ?? '').trim();
+        if (!__coopt_isPrincipalPointGroupBlockType(blockType)) continue;
+
+        const zoomGroup = __coopt_getZoomGroupName(block);
+        if (!zoomGroup) continue;
+
+        const blockId = String(block?.blockId ?? '').trim();
+        if (!blockId) continue;
+        const range = surfRangeByBlockId.get(blockId);
+        if (!range) continue;
+
+        const existing = groups.get(zoomGroup) || {
+            zoomGroup,
+            startIdx: range.min,
+            endIdx: range.max,
+            order: i,
+        };
+        existing.startIdx = Math.min(existing.startIdx, range.min);
+        existing.endIdx = Math.max(existing.endIdx, range.max);
+        groups.set(zoomGroup, existing);
+    }
+
+    const orderedGroups = Array.from(groups.values()).sort((a, b) => {
+        if (a.startIdx !== b.startIdx) return a.startIdx - b.startIdx;
+        return a.order - b.order;
+    });
+
+    const descriptors = [];
+    for (const group of orderedGroups) {
+        const subsystem = __coopt_buildPrincipalPointSubsystem(opticalSystemData, group.startIdx, group.endIdx);
+        if (!subsystem) continue;
+
+        const principal = calculatePrincipalPointPositions(subsystem);
+        if (!principal) continue;
+
+        const startOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[group.startIdx]);
+        const anchor = __coopt_averageOriginForRange(surfaceOrigins, group.startIdx, group.endIdx) || startOrigin.clone();
+        const frontGlobal = anchor.clone();
+        const rearGlobal = anchor.clone();
+        frontGlobal.z = Number(startOrigin.z || 0) + Number(principal.frontPrincipalFromFirstSurfaceMm || 0);
+        rearGlobal.z = Number(startOrigin.z || 0) + Number(principal.rearPrincipalFromFirstSurfaceMm || 0);
+
+        descriptors.push({
+            zoomGroup: group.zoomGroup,
+            startIdx: group.startIdx,
+            endIdx: group.endIdx,
+            anchor,
+            frontGlobal,
+            rearGlobal,
+            frontFromFirstSurfaceMm: Number(principal.frontPrincipalFromFirstSurfaceMm || 0),
+            rearFromFirstSurfaceMm: Number(principal.rearPrincipalFromFirstSurfaceMm || 0),
+        });
+    }
+
+    return descriptors;
+}
+
+function __coopt_addPrincipalPointVerticalMarker(scene, axis, position, verticalMin, verticalMax, color, userType) {
+    if (!scene || !position || !Number.isFinite(verticalMin) || !Number.isFinite(verticalMax)) return;
+    const points = (String(axis).trim().toUpperCase() === 'XZ')
+        ? [
+            new THREE.Vector3(verticalMin, Number(position.y || 0), Number(position.z || 0)),
+            new THREE.Vector3(verticalMax, Number(position.y || 0), Number(position.z || 0)),
+          ]
+        : [
+            new THREE.Vector3(Number(position.x || 0), verticalMin, Number(position.z || 0)),
+            new THREE.Vector3(Number(position.x || 0), verticalMax, Number(position.z || 0)),
+          ];
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.78,
+        depthTest: false,
+        depthWrite: false,
+    });
+    const line = new THREE.Line(geometry, material);
+    line.renderOrder = 65020;
+    line.frustumCulled = false;
+    line.userData = { type: userType, isOpticalElement: true };
+    scene.add(line);
+}
+
+function __coopt_addPrincipalPointCadDimension(scene, axis, startPoint, endPoint, dimensionCoord, color, userType, labelOffset = 2.8) {
+    if (!scene || !startPoint || !endPoint || !Number.isFinite(dimensionCoord)) return null;
+
+    const normalizedAxis = (String(axis).trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+    const useXAsVertical = normalizedAxis === 'XZ';
+    const getVertical = (vec) => useXAsVertical ? Number(vec?.x || 0) : Number(vec?.y || 0);
+    const getDepth = (vec) => useXAsVertical ? Number(vec?.y || 0) : Number(vec?.x || 0);
+    const getZ = (vec) => Number(vec?.z || 0);
+    const makePoint = (vertical, depth, z) => useXAsVertical
+        ? new THREE.Vector3(vertical, depth, z)
+        : new THREE.Vector3(depth, vertical, z);
+
+    const startVertical = getVertical(startPoint);
+    const endVertical = getVertical(endPoint);
+    const startDepth = getDepth(startPoint);
+    const endDepth = getDepth(endPoint);
+    const startZ = getZ(startPoint);
+    const endZ = getZ(endPoint);
+
+    const dimStart = makePoint(dimensionCoord, startDepth, startZ);
+    const dimEnd = makePoint(dimensionCoord, endDepth, endZ);
+    const extStart = makePoint(startVertical, startDepth, startZ);
+    const extEnd = makePoint(endVertical, endDepth, endZ);
+
+    __coopt_addDesignIntentLabelPolyline(scene, [extStart, dimStart], color);
+    __coopt_addDesignIntentLabelPolyline(scene, [extEnd, dimEnd], color);
+    __coopt_addDesignIntentLabelPolyline(scene, [dimStart, dimEnd], color);
+
+    return makePoint(
+        dimensionCoord + Number(labelOffset || 0),
+        (startDepth + endDepth) / 2,
+        (startZ + endZ) / 2,
+    );
+}
+
+function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemData, surfaceOrigins, options = {}) {
+    if (!scene || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return;
+    if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return;
+
+    const descriptors = __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins);
+    if (!descriptors.length) return;
+
+    const axis = (String(options?.axis ?? 'YZ').trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+    const getVerticalCoord = (vec) => axis === 'XZ' ? vec.x : vec.y;
+    const getDepthCoord = (vec) => axis === 'XZ' ? vec.y : vec.x;
+    const makePoint = (vertical, depth, z) => {
+        return axis === 'XZ'
+            ? new THREE.Vector3(vertical, depth, z)
+            : new THREE.Vector3(depth, vertical, z);
+    };
+
+    let surfaceTop = Number.NEGATIVE_INFINITY;
+    let surfaceBottom = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < opticalSystemData.length; i += 1) {
+        const surface = opticalSystemData[i];
+        if (!surface || __coopt_isGapSurface(surface)) continue;
+        const originVec = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+        const semidia = __coopt_getRenderSemidiaMm(surface);
+        const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
+        const halfExtent = axis === 'XZ'
+            ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0)
+            : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
+        surfaceTop = Math.max(surfaceTop, getVerticalCoord(originVec) + halfExtent);
+        surfaceBottom = Math.min(surfaceBottom, getVerticalCoord(originVec) - halfExtent);
+    }
+    if (!Number.isFinite(surfaceTop) || !Number.isFinite(surfaceBottom)) return;
+
+    const frontColor = 0xf97316;
+    const rearColor = 0x14b8a6;
+    const distanceColor = 0x0f766e;
+    const markerMin = surfaceBottom - 4;
+    const markerMax = surfaceTop + 4;
+    const topLabelBase = surfaceTop + 12;
+    const topLabelLaneStep = 8;
+    const principalDimBase = surfaceTop + 18;
+    const groupDimBase = surfaceBottom - 24;
+
+    const topLabelItems = [];
+
+    descriptors.forEach((entry, index) => {
+        __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.frontGlobal, markerMin, markerMax, frontColor, 'principal-point-front-marker');
+        __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.rearGlobal, markerMin, markerMax, rearColor, 'principal-point-rear-marker');
+
+        const principalDimCoord = principalDimBase + index * 8;
+        const frontText = `${entry.zoomGroup} PP1 ${entry.frontFromFirstSurfaceMm.toFixed(2)} mm`;
+        const rearText = `${entry.zoomGroup} PP2 ${entry.rearFromFirstSurfaceMm.toFixed(2)} mm`;
+
+        topLabelItems.push({
+            text: frontText,
+            sourcePoint: entry.frontGlobal.clone(),
+            depth: getDepthCoord(entry.anchor),
+            z: Number(entry.frontGlobal.z || 0),
+            color: frontColor,
+            style: {
+                fillStyle: 'rgba(255,247,237,0.96)',
+                strokeStyle: '#ea580c',
+                textStyle: '#9a3412',
+                lineColor: frontColor,
+            },
+        });
+        topLabelItems.push({
+            text: rearText,
+            sourcePoint: entry.rearGlobal.clone(),
+            depth: getDepthCoord(entry.anchor),
+            z: Number(entry.rearGlobal.z || 0),
+            color: rearColor,
+            style: {
+                fillStyle: 'rgba(240,253,250,0.96)',
+                strokeStyle: '#0f766e',
+                textStyle: '#115e59',
+                lineColor: rearColor,
+            },
+        });
+
+    });
+
+    const laneLastMaxByIndex = [];
+    const laneGap = 6;
+    topLabelItems
+        .map((item) => {
+            const size = __coopt_measureDesignIntentLabelWorldSize(item.text);
+            return {
+                ...item,
+                widthWorld: Math.max(18, Number(size.width) || 0),
+            };
+        })
+        .sort((a, b) => a.z - b.z)
+        .forEach((item) => {
+            const halfWidth = item.widthWorld / 2;
+            const minZ = item.z - halfWidth;
+            const maxZ = item.z + halfWidth;
+            let laneIndex = 0;
+            while (laneIndex < laneLastMaxByIndex.length) {
+                const lastMax = laneLastMaxByIndex[laneIndex];
+                if (!Number.isFinite(lastMax) || minZ > lastMax + laneGap) break;
+                laneIndex += 1;
+            }
+            laneLastMaxByIndex[laneIndex] = maxZ;
+
+            const labelPoint = makePoint(topLabelBase + laneIndex * topLabelLaneStep, item.depth, item.z);
+            __coopt_addDesignIntentLabelPolyline(scene, [item.sourcePoint.clone(), labelPoint.clone()], item.color);
+            __coopt_addDesignIntentLabelSprite(scene, item.text, labelPoint, item.style);
+        });
+
+    for (let i = 0; i < descriptors.length - 1; i += 1) {
+        const current = descriptors[i];
+        const next = descriptors[i + 1];
+        const distanceMm = Number(next.frontGlobal.z || 0) - Number(current.rearGlobal.z || 0);
+        const labelPoint = __coopt_addPrincipalPointCadDimension(
+            scene,
+            axis,
+            current.rearGlobal,
+            next.frontGlobal,
+            groupDimBase - i * 8,
+            distanceColor,
+            'principal-point-intergroup-dimension',
+            -2.8,
+        );
+        if (labelPoint) {
+            __coopt_addDesignIntentLabelSprite(scene, `${current.zoomGroup}→${next.zoomGroup} ${distanceMm.toFixed(2)} mm`, labelPoint, {
+                fillStyle: 'rgba(240,253,250,0.98)',
+                strokeStyle: '#0f766e',
+                textStyle: '#134e4a',
+                lineColor: distanceColor,
+            });
+        }
+    }
+}
+
 /**
  * Draw optical system surfaces
  * @param {Object} options - Drawing options
@@ -620,6 +976,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
         showSemidiaRing = false,
         showMirrorBackText = false,
         showDesignIntentLabels = false,
+        showPrincipalPointLabels = false,
         crossSectionDirection = 'YZ',
         viewPlane = null,
         crossSectionCenterOffset = 0,
@@ -721,6 +1078,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
     if (!crossSectionOnly) {
         for (let i = 0; i < opticalSystemData.length; i++) {
             const surface = opticalSystemData[i];
+            const renderSurfaceMeta = __coopt_withSurfaceRenderMeta(surface, i);
             const isStopSurface = __coopt_isStopSurface(surface);
 
             // Gap/AirGap rows are spacing-only and should never be rendered as physical surfaces.
@@ -819,7 +1177,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                 // Object 面の球面メッシュを描画
                                 drawLensSurfaceWithOrigin(
                                     scene,
-                                    params,
+                                    { ...params, __cooptSurfaceIndex0: i },
                                     objOrigin,
                                     objRotMat,
                                     'even',
@@ -1240,7 +1598,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                     const mirrorColor = (mirrorOverride !== null) ? mirrorOverride : mirrorDefaultColor;
                     drawLensSurfaceWithOrigin(
                         scene, 
-                        surface,                     // params オブジェクト全体
+                        renderSurfaceMeta,           // params オブジェクト全体
                         surfaceOrigins[i].origin,    // origin から .origin プロパティを使用
                         surfaceOrigins[i].rotationMatrix, // rotation matrix
                         "even",                      // mode
@@ -1267,7 +1625,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                     
                     drawToricSurfaceWithOrigin(
                         scene,
-                        surface,                         // params with radiusX, radiusY, conic, semidia
+                        renderSurfaceMeta,               // params with radiusX, radiusY, conic, semidia
                         surfaceOrigins[i].origin,
                         surfaceOrigins[i].rotationMatrix,
                         256,                             // 256x256 grid mesh for smooth surface
@@ -1280,13 +1638,14 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                     // 3D表面を描画
                     const isThinLens = __coopt_isThinLensSurface(surface);
                     const renderSurface = isThinLens ? __coopt_makeFlatThinLensSurface(surface) : surface;
+                    const renderSurfaceWithMeta = __coopt_withSurfaceRenderMeta(renderSurface, i);
                     const lensDefaultColor = isThinLens ? 0x66ccff : 0x00ccff;
                     const lensKey = __coopt_surfaceColorKey(surface, i);
                     const lensOverride = __coopt_parseColorToInt(surfaceColorOverrides?.[lensKey]);
                     const lensColor = (lensOverride !== null) ? lensOverride : lensDefaultColor;
                     drawLensSurfaceWithOrigin(
                         scene, 
-                        renderSurface,                // params オブジェクト全体
+                        renderSurfaceWithMeta,        // params オブジェクト全体
                         surfaceOrigins[i].origin,    // origin から .origin プロパティを使用
                         surfaceOrigins[i].rotationMatrix, // rotation matrix
                         "even",                      // mode
@@ -1318,7 +1677,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                         } else {
                         __coopt_drawApertureOutline(
                             scene,
-                            surface,
+                            renderSurfaceMeta,
                             ringSemidia,
                             surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0},
                             surfaceOrigins[i]?.rotationMatrix || null,
@@ -1355,12 +1714,23 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
         );
     }
 
-    if (__coopt_shouldShowDesignIntentLabels(showDesignIntentLabels)) {
+    const showDesignLabels = __coopt_shouldShowDesignIntentLabels(showDesignIntentLabels);
+    const showPrincipalLabels = __coopt_shouldShowPrincipalPointLabels(showPrincipalPointLabels);
+
+    if (showDesignLabels || showPrincipalLabels) {
         try {
-            __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
-                axis: actualCrossSectionDirection,
-                crossSectionOnly,
-            });
+            if (showDesignLabels) {
+                __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
+                    axis: actualCrossSectionDirection,
+                    crossSectionOnly,
+                });
+            }
+            if (showPrincipalLabels) {
+                __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
+                    axis: actualCrossSectionDirection,
+                    crossSectionOnly,
+                });
+            }
         } catch (labelErr) {
             console.warn('⚠️ Failed to draw design intent labels:', labelErr);
         }

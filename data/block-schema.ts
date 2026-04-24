@@ -197,6 +197,372 @@ function normalizeThicknessToRowValue(value: any): number | string {
   return 0;
 }
 
+function normalizeZoomGroupName(value: any): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 'Fixed';
+  const upper = raw.toUpperCase();
+  if (upper === 'FIXED' || upper === 'STATIC' || upper === 'BASE') return 'Fixed';
+  return raw;
+}
+
+function normalizeZoomPosition(value: any): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.min(1, num));
+}
+
+function parseZoomProfilePoints(value: any): Array<{ x: number; y: number }> {
+  const text = String(value ?? '').trim();
+  if (!text) return [{ x: 0, y: 0 }, { x: 1, y: 0 }];
+
+  // Single-value shorthand means a constant offset over the full zoom range.
+  if (!text.includes(',') && /^[-+]?((\d+\.\d*)|(\d*\.\d+)|(\d+))(?:[eE][-+]?\d+)?$/.test(text)) {
+    const constantValue = Number(text);
+    if (Number.isFinite(constantValue)) {
+      return [{ x: 0, y: constantValue }, { x: 1, y: constantValue }];
+    }
+  }
+
+  // Two-value shorthand means start:end over the normalized zoom range 0..1.
+  if (!text.includes(',')) {
+    const shorthandMatch = text.match(/^([^:]+):([^:]+)$/);
+    if (shorthandMatch) {
+      const startValue = Number(String(shorthandMatch[1]).trim());
+      const endValue = Number(String(shorthandMatch[2]).trim());
+      if (Number.isFinite(startValue) && Number.isFinite(endValue)) {
+        return [{ x: 0, y: startValue }, { x: 1, y: endValue }];
+      }
+    }
+  }
+
+  const points: Array<{ x: number; y: number }> = [];
+  const segments = text.split(',');
+  for (const segment of segments) {
+    const part = String(segment ?? '').trim();
+    if (!part) continue;
+    const match = part.match(/^([^:]+):([^:]+)$/);
+    if (!match) continue;
+    const x = Number(String(match[1]).trim());
+    const y = Number(String(match[2]).trim());
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    points.push({ x: Math.max(0, Math.min(1, x)), y });
+  }
+
+  if (points.length === 0) return [{ x: 0, y: 0 }, { x: 1, y: 0 }];
+
+  points.sort((left, right) => left.x - right.x);
+  const deduped: Array<{ x: number; y: number }> = [];
+  for (const point of points) {
+    const prev = deduped[deduped.length - 1];
+    if (prev && Math.abs(prev.x - point.x) <= 1e-9) {
+      prev.y = point.y;
+    } else {
+      deduped.push({ ...point });
+    }
+  }
+
+  if (deduped[0].x > 0) deduped.unshift({ x: 0, y: deduped[0].y });
+  const last = deduped[deduped.length - 1];
+  if (last.x < 1) deduped.push({ x: 1, y: last.y });
+  return deduped;
+}
+
+function parseZoomGroupProfiles(value: any, legacyProfiles?: Record<string, any>): Record<string, Array<{ x: number; y: number }>> {
+  const groups: Record<string, Array<{ x: number; y: number }>> = {};
+
+  if (isPlainObject(value)) {
+    for (const [rawGroupName, rawProfile] of Object.entries(value)) {
+      const groupName = normalizeZoomGroupName(rawGroupName);
+      if (groupName === 'Fixed') continue;
+      groups[groupName] = parseZoomProfilePoints(rawProfile);
+    }
+  } else {
+    const text = String(value ?? '').trim();
+    if (text) {
+      const entries = text.split(/\r?\n|;/);
+      for (const entry of entries) {
+        const line = String(entry ?? '').trim();
+        if (!line) continue;
+        const eqIndex = line.indexOf('=');
+        if (eqIndex <= 0) continue;
+        const groupName = normalizeZoomGroupName(line.slice(0, eqIndex));
+        if (groupName === 'Fixed') continue;
+        groups[groupName] = parseZoomProfilePoints(line.slice(eqIndex + 1));
+      }
+    }
+  }
+
+  if (Object.keys(groups).length > 0) return groups;
+
+  if (legacyProfiles && typeof legacyProfiles === 'object') {
+    for (const [rawGroupName, rawProfile] of Object.entries(legacyProfiles)) {
+      const profileText = String(rawProfile ?? '').trim();
+      if (!profileText) continue;
+      const groupName = normalizeZoomGroupName(rawGroupName);
+      if (groupName === 'Fixed') continue;
+      groups[groupName] = parseZoomProfilePoints(profileText);
+    }
+  }
+
+  return groups;
+}
+
+type ZoomLawDefinition =
+  | { type: 'profile'; points: Array<{ x: number; y: number }> }
+  | { type: 'expression'; expression: string };
+
+function parseZoomLawDefinitions(value: any, legacyProfiles?: Record<string, any>): Record<string, ZoomLawDefinition> {
+  const groups: Record<string, ZoomLawDefinition> = {};
+
+  const assignDefinition = (rawGroupName: any, rawProfile: any) => {
+    const groupName = normalizeZoomGroupName(rawGroupName);
+    if (groupName === 'Fixed') return;
+    const profileText = String(rawProfile ?? '').trim();
+    if (!profileText) return;
+    const hasExplicitPointSyntax = profileText.includes(',') || /^([^:]+):([^:]+)$/.test(profileText) || /^[-+]?((\d+\.\d*)|(\d*\.\d+)|(\d+))(?:[eE][-+]?\d+)?$/.test(profileText);
+    if (hasExplicitPointSyntax) {
+      groups[groupName] = { type: 'profile', points: parseZoomProfilePoints(profileText) };
+      return;
+    }
+    groups[groupName] = { type: 'expression', expression: profileText };
+  };
+
+  if (isPlainObject(value)) {
+    for (const [rawGroupName, rawProfile] of Object.entries(value)) {
+      assignDefinition(rawGroupName, rawProfile);
+    }
+  } else {
+    const text = String(value ?? '').trim();
+    if (text) {
+      const entries = text.split(/\r?\n|;/);
+      for (const entry of entries) {
+        const line = String(entry ?? '').trim();
+        if (!line) continue;
+        const eqIndex = line.indexOf('=');
+        if (eqIndex <= 0) continue;
+        assignDefinition(line.slice(0, eqIndex), line.slice(eqIndex + 1));
+      }
+    }
+  }
+
+  if (Object.keys(groups).length > 0) return groups;
+
+  if (legacyProfiles && typeof legacyProfiles === 'object') {
+    for (const [rawGroupName, rawProfile] of Object.entries(legacyProfiles)) {
+      assignDefinition(rawGroupName, rawProfile);
+    }
+  }
+
+  return groups;
+}
+
+function parseZoomLawExpressionNumber(value: string): number | null {
+  const numericText = String(value ?? '').trim();
+  if (!numericText) return null;
+  const parsed = Number(numericText);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function evaluateZoomLawPolynomial(expression: string, groupName: string, groupValue: number): number | null {
+  const compact = String(expression ?? '').replace(/\s+/g, '');
+  if (!compact) return null;
+
+  const escapedGroupName = groupName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const groupTokenRegex = new RegExp(escapedGroupName, 'gi');
+  const normalized = compact.replace(groupTokenRegex, 'X');
+  if (!/^[0-9eE+\-*.^X]+$/.test(normalized)) return null;
+  if (/[A-DF-WYZ]/i.test(normalized)) return null;
+
+  const terms = normalized.match(/[+-]?[^+-]+/g);
+  if (!terms || terms.length === 0) return null;
+
+  let total = 0;
+  for (const rawTerm of terms) {
+    if (!rawTerm) continue;
+    let sign = 1;
+    let term = rawTerm;
+    if (term.startsWith('+')) {
+      term = term.slice(1);
+    } else if (term.startsWith('-')) {
+      sign = -1;
+      term = term.slice(1);
+    }
+    if (!term) return null;
+
+    const factors = term.split('*').filter(Boolean);
+    if (factors.length === 0) return null;
+
+    let coefficient = 1;
+    let power = 0;
+    for (const factor of factors) {
+      if (factor === 'X') {
+        power += 1;
+        continue;
+      }
+      if (factor === 'X^2') {
+        power += 2;
+        continue;
+      }
+      const numericFactor = parseZoomLawExpressionNumber(factor);
+      if (numericFactor !== null) {
+        coefficient *= numericFactor;
+        continue;
+      }
+      return null;
+    }
+
+    if (power > 2) return null;
+    total += sign * coefficient * Math.pow(groupValue, power);
+  }
+
+  return Number.isFinite(total) ? total : null;
+}
+
+function evaluateZoomLawExpression(expression: string, offsets: Map<string, number>): number | null {
+  const compact = String(expression ?? '').replace(/\s+/g, '');
+  if (!compact) return null;
+
+  const constantValue = parseZoomLawExpressionNumber(compact);
+  if (constantValue !== null) return constantValue;
+
+  const referencedGroups = Array.from(offsets.keys())
+    .filter((groupName) => groupName !== 'Fixed')
+    .sort((left, right) => right.length - left.length);
+
+  for (const groupName of referencedGroups) {
+    const baseValue = offsets.get(groupName);
+    if (!Number.isFinite(baseValue)) continue;
+    const evaluated = evaluateZoomLawPolynomial(compact, groupName, Number(baseValue));
+    if (evaluated !== null) return evaluated;
+  }
+
+  return null;
+}
+
+function evaluateZoomProfile(points: Array<{ x: number; y: number }>, zoomPosition: number): number {
+  if (!Array.isArray(points) || points.length === 0) return 0;
+  const z = normalizeZoomPosition(zoomPosition);
+  if (z <= points[0].x) return points[0].y;
+  for (let index = 1; index < points.length; index++) {
+    const prev = points[index - 1];
+    const next = points[index];
+    if (z > next.x) continue;
+    const dx = next.x - prev.x;
+    if (!(Number.isFinite(dx) && Math.abs(dx) > 1e-12)) return next.y;
+    const t = (z - prev.x) / dx;
+    return prev.y + (next.y - prev.y) * t;
+  }
+  return points[points.length - 1].y;
+}
+
+function isZoomAnchorBlockType(blockType: any): boolean {
+  const type = String(blockType ?? '').trim();
+  return type !== '' && type !== 'Gap' && type !== 'AirGap';
+}
+
+function applyZoomMotionToBlocks(blocks: Block[]): Block[] {
+  if (!Array.isArray(blocks) || blocks.length === 0) return Array.isArray(blocks) ? blocks : [];
+
+  const zoomController = blocks.find((block) => {
+    const type = isPlainObject(block) ? String(block.blockType ?? '').trim() : '';
+    return type === 'ObjectSurface' || type === 'ObjectPlane';
+  });
+
+  const controllerParams = isPlainObject(zoomController?.parameters) ? zoomController.parameters : null;
+  const controllerVars = isPlainObject(zoomController?.variables) ? zoomController.variables : null;
+  const zoomPosition = normalizeZoomPosition(getParamOrVarValue(controllerParams, controllerVars, 'zoomPosition'));
+  const lawDefinitions = parseZoomLawDefinitions(
+    getParamOrVarValue(controllerParams, controllerVars, 'zoomGroupProfiles'),
+    {
+      A: getParamOrVarValue(controllerParams, controllerVars, 'zoomGroupAProfile'),
+      B: getParamOrVarValue(controllerParams, controllerVars, 'zoomGroupBProfile')
+    }
+  );
+
+  const offsets = new Map<string, number>();
+  offsets.set('Fixed', 0);
+  const unresolvedDefinitions = new Map(Object.entries(lawDefinitions));
+  let didResolve = true;
+  while (unresolvedDefinitions.size > 0 && didResolve) {
+    didResolve = false;
+    for (const [groupName, definition] of Array.from(unresolvedDefinitions.entries())) {
+      let nextValue: number | null = null;
+      if (definition.type === 'profile') {
+        nextValue = evaluateZoomProfile(definition.points, zoomPosition);
+      } else {
+        nextValue = evaluateZoomLawExpression(definition.expression, offsets);
+      }
+      if (!Number.isFinite(nextValue)) continue;
+      offsets.set(groupName, Number(nextValue));
+      unresolvedDefinitions.delete(groupName);
+      didResolve = true;
+    }
+  }
+
+  for (const groupName of unresolvedDefinitions.keys()) {
+    offsets.set(groupName, 0);
+  }
+
+  const clonedBlocks = blocks.map((block) => {
+    if (!isPlainObject(block)) return block;
+    return {
+      ...block,
+      parameters: isPlainObject(block.parameters) ? { ...block.parameters } : block.parameters,
+      variables: isPlainObject(block.variables) ? { ...block.variables } : block.variables,
+      metadata: isPlainObject(block.metadata) ? { ...block.metadata } : block.metadata,
+      aperture: isPlainObject(block.aperture) ? { ...block.aperture } : block.aperture
+    };
+  });
+
+  const getBlockGroup = (block: any): string => {
+    if (!isPlainObject(block)) return 'Fixed';
+    const params = isPlainObject(block.parameters) ? block.parameters : null;
+    const vars = isPlainObject(block.variables) ? block.variables : null;
+    return normalizeZoomGroupName(getParamOrVarValue(params, vars, 'zoomGroup'));
+  };
+
+  const findNextAnchorGroup = (startIndex: number): string => {
+    for (let index = startIndex; index < clonedBlocks.length; index++) {
+      const block = clonedBlocks[index];
+      if (!isPlainObject(block) || !isZoomAnchorBlockType(block.blockType)) continue;
+      return getBlockGroup(block);
+    }
+    return 'Fixed';
+  };
+
+  let prevAnchorGroup = 'Fixed';
+  for (let index = 0; index < clonedBlocks.length; index++) {
+    const block = clonedBlocks[index];
+    if (!isPlainObject(block)) continue;
+
+    const blockType = String(block.blockType ?? '').trim();
+    if (blockType === 'Gap' || blockType === 'AirGap') {
+      const params = isPlainObject(block.parameters) ? block.parameters : (block.parameters = {});
+      const baseThickness = normalizeThicknessToRowValue(params.thickness);
+      if (typeof baseThickness === 'number' && Number.isFinite(baseThickness)) {
+        const nextAnchorGroup = findNextAnchorGroup(index + 1);
+        const gapDelta = (offsets.get(nextAnchorGroup) ?? 0) - (offsets.get(prevAnchorGroup) ?? 0);
+        params.thickness = baseThickness + gapDelta;
+        if (!isPlainObject(block.metadata)) block.metadata = {};
+        block.metadata.zoomDerived = {
+          zoomPosition,
+          prevAnchorGroup,
+          nextAnchorGroup,
+          baseThickness,
+          gapDelta
+        };
+      }
+      continue;
+    }
+
+    if (isZoomAnchorBlockType(blockType)) {
+      prevAnchorGroup = getBlockGroup(block);
+    }
+  }
+
+  return clonedBlocks;
+}
+
 function normalizeSemidia(prevRow) {
   const prev = prevRow?.semidia;
   if (typeof prev === 'number' && Number.isFinite(prev)) return String(prev);
@@ -1300,12 +1666,14 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
     return { rows: [], issues };
   }
 
+  const effectiveBlocks = applyZoomMotionToBlocks(blocks);
+
   const rows: any[] = [createDefaultObjectRow()];
   rows[0]._blockType = 'Object';
   rows[0]._blockId = null;
 
   // Process ObjectSurface/ObjectPlane first to ensure it's always at surface 0
-  const objectSurfaceBlock = blocks.find(b => {
+  const objectSurfaceBlock = effectiveBlocks.find(b => {
     const type = isPlainObject(b) ? b.blockType : null;
     return type === 'ObjectSurface' || type === 'ObjectPlane';
   });
@@ -1375,7 +1743,7 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
     return value;
   };
 
-  for (const block of blocks) {
+  for (const block of effectiveBlocks) {
     const blockId = isPlainObject(block) ? block.blockId : undefined;
 
     if (!isPlainObject(block)) {

@@ -203,92 +203,52 @@ function getSliderRangeForParameter(key: string, blockType: string, currentValue
             return { min: -100, max: 100, step: 0.1, useLog: false };
         }
         const absVal = Math.abs(val);
-        const range = absVal * 0.5;
-        return {
-            min: val - range,
-            max: val + range,
-            step: absVal * 0.001,
-            useLog: false
-        };
+        const delta = absVal * 0.5;
+        return { min: val - delta, max: val + delta, step: absVal * 0.001, useLog: false };
     }
-    
-    // Thickness parameters (non-negative)
+
     if (key.includes('Thickness') || key === 'thickness' || key.includes('hickness')) {
         if (isZeroOrNaN) {
             return { min: 0, max: 20, step: 0.1, useLog: false };
         }
-        return {
-            min: 0,
-            max: val * 2,
-            step: val * 0.001,
-            useLog: false
-        };
+        return { min: 0, max: val * 2, step: val * 0.001, useLog: false };
     }
-    
-    // Semi-diameter / aperture parameters (non-negative)
+
     if (key.includes('semidia') || key.includes('Semidia') || key.includes('aperture')) {
         if (isZeroOrNaN) {
             return { min: 0.1, max: 20, step: 0.1, useLog: false };
         }
-        return {
-            min: Math.max(0.1, val * 0.5),
-            max: val * 1.5,
-            step: val * 0.001,
-            useLog: false
-        };
+        return { min: Math.max(0.1, val * 0.5), max: val * 1.5, step: val * 0.001, useLog: false };
     }
-    
-    // Conic constant
+
     if (key === 'conic') {
         if (isZeroOrNaN) {
             return { min: -10, max: 10, step: 0.01, useLog: false };
         }
         const absVal = Math.abs(val);
-        const range = Math.max(absVal * 0.5, 1);
-        return {
-            min: val - range,
-            max: val + range,
-            step: absVal > 1 ? absVal * 0.001 : 0.001,
-            useLog: false
-        };
+        const delta = Math.max(absVal * 0.5, 1);
+        return { min: val - delta, max: val + delta, step: absVal > 1 ? absVal * 0.001 : 0.001, useLog: false };
     }
-    
-    // Aspheric coefficients (can be very small)
+
     if (key.startsWith('coef') || key.includes('Coef')) {
         if (isZeroOrNaN) {
             return { min: -10, max: 10, step: 0.001, useLog: false };
         }
         const absVal = Math.abs(val);
-        const range = Math.max(absVal * 0.5, absVal * 10);
-        return {
-            min: val - range,
-            max: val + range,
-            step: absVal * 0.01,
-            useLog: false
-        };
+        const delta = Math.max(absVal * 0.5, absVal * 10);
+        return { min: val - delta, max: val + delta, step: absVal * 0.01, useLog: false };
     }
-    
-    // Default range
+
     if (isZeroOrNaN) {
         return { min: -10, max: 10, step: 0.01, useLog: false };
     }
-    
+
     const absVal = Math.abs(val);
-    const range = Math.max(absVal * 0.5, absVal);
-    return {
-        min: val - range,
-        max: val + range,
-        step: absVal * 0.01,
-        useLog: false
-    };
+    const delta = Math.max(absVal * 0.5, absVal);
+    return { min: val - delta, max: val + delta, step: absVal * 0.01, useLog: false };
 }
 
-// ============================================================================
-// END OF PARAMETER SLIDER HELPERS
-// ============================================================================
-
 function coordTransDebugLog(message: string, ...args: any[]): void {
-    // 1. ブラウザコンソールに出力（多くの場合失敗してもキャッチされる）
     try {
         if (message.includes('🔴') || message.includes('❌')) {
             console.log(`%c${message}`, 'color: red; font-weight: bold; font-size: 13px;', ...args);
@@ -310,7 +270,6 @@ function coordTransDebugLog(message: string, ...args: any[]): void {
         }
     } catch {}
 
-    // 2. メモリに記録（JavaScript から確認可能）
     try {
         const wAny = window as any;
         if (!Array.isArray(wAny.__coordTransDebugLogs)) {
@@ -5461,9 +5420,11 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     cooptAutoApplyGapThicknessModes(blocks, path);
 
     // Re-expand Design Intent blocks into opticalSystem rows so rendering/ray-tracing sees latest values.
+    let expandedRowsForRender: any[] | null = null;
     try {
         const expanded = expandBlocksToOpticalSystemRows(blocks as any);
         if (expanded && Array.isArray(expanded.rows)) {
+            expandedRowsForRender = expanded.rows;
             activeConfig.opticalSystem = expanded.rows;
             try { saveOpticalSystemTableData(expanded.rows as any); } catch (_) {}
             try { if (typeof w.saveLensTableData === 'function') w.saveLensTableData(expanded.rows); } catch (_) {}
@@ -5484,16 +5445,568 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     } catch (_) {}
     try { saveSystemConfigurations(systemConfig); } catch (_) {}
     try { refreshBlockInspector(); } catch (_) {}
+    try { refreshZoomControlTab(); } catch (_) {}
     try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
 
-    // Request render refresh (especially for popup 3D view)
+    // Request render refresh for both the local render surface and popup render window.
+    try {
+        if (Array.isArray(expandedRowsForRender) && expandedRowsForRender.length > 0) {
+            if (typeof w.__cooptRenderWindowRedraw === 'function') {
+                w.__cooptRenderWindowRedraw(expandedRowsForRender);
+            } else if (typeof w.drawOpticalSystem === 'function') {
+                w.drawOpticalSystem();
+            }
+        }
+    } catch (_) {}
     try {
         const popup = w.popup3DWindow;
-        if (popup && !popup.closed && typeof popup.postMessage === 'function') {
-            popup.postMessage({ action: 'request-redraw' }, '*');
+        if (popup && !popup.closed) {
+            if (typeof popup.__cooptRenderWindowRedraw === 'function' && Array.isArray(expandedRowsForRender) && expandedRowsForRender.length > 0) {
+                popup.__cooptRenderWindowRedraw(expandedRowsForRender);
+            } else if (typeof popup.postMessage === 'function') {
+                popup.postMessage({ action: 'request-redraw' }, '*');
+            }
         }
     } catch (_) {}
 }
+
+const ZOOM_GROUP_OPTIONS = ['Fixed', ...Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index))];
+const ZOOM_PREVIEW_COMMIT_DELAY_MS = 140;
+
+let __zoomPreviewCommitTimer: number | null = null;
+let __zoomPreviewRafId: number | null = null;
+let __zoomPreviewQueuedValue: number | null = null;
+let __zoomPreviewPendingCommit: {
+    blockId: string;
+    oldValue: number;
+    latestValue: number;
+    systemConfig: any;
+    activeConfig: any;
+    controller: any;
+    blocks: any[];
+} | null = null;
+
+function __zoom_requestRenderRefresh(expandedRowsForRender: any[] | null): void {
+    try {
+    if (Array.isArray(expandedRowsForRender) && expandedRowsForRender.length > 0) {
+        if (typeof w.__cooptRenderWindowRedraw === 'function') {
+        w.__cooptRenderWindowRedraw(expandedRowsForRender);
+        } else if (typeof w.drawOpticalSystem === 'function') {
+        w.drawOpticalSystem();
+        }
+    }
+    } catch (_) {}
+    try {
+    const popup = w.popup3DWindow;
+    if (popup && !popup.closed) {
+        if (typeof popup.__cooptRenderWindowRedraw === 'function' && Array.isArray(expandedRowsForRender) && expandedRowsForRender.length > 0) {
+        popup.__cooptRenderWindowRedraw(expandedRowsForRender);
+        } else if (typeof popup.postMessage === 'function') {
+        popup.postMessage({ action: 'request-redraw' }, '*');
+        }
+    }
+    } catch (_) {}
+}
+
+function __zoom_applyPreviewPosition(nextValue: number): void {
+    const pending = __zoomPreviewPendingCommit;
+    if (!pending?.activeConfig || !pending?.controller || !Array.isArray(pending.blocks)) return;
+
+    try {
+        (globalThis as any).__cooptZoomPreviewActive = true;
+    } catch (_) {}
+
+    const safeZoomPosition = Math.max(0, Math.min(1, Number(nextValue) || 0));
+    if (!pending.controller.parameters || typeof pending.controller.parameters !== 'object') pending.controller.parameters = {};
+    pending.controller.parameters.zoomPosition = safeZoomPosition;
+    pending.latestValue = safeZoomPosition;
+    if (!pending.activeConfig.metadata || typeof pending.activeConfig.metadata !== 'object') pending.activeConfig.metadata = {};
+    pending.activeConfig.metadata.modified = new Date().toISOString();
+
+    let expandedRowsForRender: any[] | null = null;
+    try {
+        const expanded = expandBlocksToOpticalSystemRows(pending.blocks as any);
+        if (expanded && Array.isArray(expanded.rows)) {
+            expandedRowsForRender = expanded.rows;
+            pending.activeConfig.opticalSystem = expanded.rows;
+        }
+    } catch (_) {}
+
+    __zoom_requestRenderRefresh(expandedRowsForRender);
+}
+
+function __zoom_schedulePreviewCommit(): void {
+    if (__zoomPreviewCommitTimer !== null) {
+        try { window.clearTimeout(__zoomPreviewCommitTimer); } catch (_) {}
+    }
+    __zoomPreviewCommitTimer = window.setTimeout(() => {
+        __zoomPreviewCommitTimer = null;
+        __zoom_flushPreviewCommit();
+    }, ZOOM_PREVIEW_COMMIT_DELAY_MS);
+}
+
+function __zoom_previewSetPosition(nextValue: any): any {
+    const state = __zoom_collectState();
+    if (!state.available || !state.controllerBlockId) return state;
+
+    const safeZoomPosition = Math.max(0, Math.min(1, Number(nextValue) || 0));
+    if (!__zoomPreviewPendingCommit || __zoomPreviewPendingCommit.blockId !== state.controllerBlockId) {
+        const { systemConfig, activeConfig, controller } = __zoom_getActiveConfigAndController();
+        const blocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
+        if (!systemConfig || !activeConfig || !controller || !Array.isArray(blocks) || blocks.length === 0) {
+            return state;
+        }
+        __zoomPreviewPendingCommit = {
+            blockId: state.controllerBlockId,
+            oldValue: Number(state.zoomPosition) || 0,
+            latestValue: safeZoomPosition,
+            systemConfig,
+            activeConfig,
+            controller,
+            blocks
+        };
+    } else {
+        __zoomPreviewPendingCommit.latestValue = safeZoomPosition;
+    }
+
+    __zoomPreviewQueuedValue = safeZoomPosition;
+    if (__zoomPreviewRafId === null) {
+        __zoomPreviewRafId = window.requestAnimationFrame(() => {
+            __zoomPreviewRafId = null;
+            const queuedValue = __zoomPreviewQueuedValue;
+            __zoomPreviewQueuedValue = null;
+            if (!Number.isFinite(queuedValue)) return;
+            __zoom_applyPreviewPosition(queuedValue as number);
+        });
+    }
+
+    __zoom_schedulePreviewCommit();
+    return {
+        ...state,
+        zoomPosition: safeZoomPosition
+    };
+}
+
+function __zoom_flushPreviewCommit(): any {
+    if (__zoomPreviewCommitTimer !== null) {
+        try { window.clearTimeout(__zoomPreviewCommitTimer); } catch (_) {}
+        __zoomPreviewCommitTimer = null;
+    }
+
+    if (__zoomPreviewRafId !== null) {
+        try { window.cancelAnimationFrame(__zoomPreviewRafId); } catch (_) {}
+        __zoomPreviewRafId = null;
+        const queuedValue = __zoomPreviewQueuedValue;
+        __zoomPreviewQueuedValue = null;
+        if (Number.isFinite(queuedValue)) {
+            __zoom_applyPreviewPosition(queuedValue as number);
+        }
+    }
+
+    const pending = __zoomPreviewPendingCommit;
+    __zoomPreviewPendingCommit = null;
+    try {
+        (globalThis as any).__cooptZoomPreviewActive = false;
+    } catch (_) {}
+    if (!pending || !pending.blockId) return __zoom_collectState();
+    if (pending.oldValue === pending.latestValue) return __zoom_collectState();
+
+    cooptApplyBlockValue(pending.blockId, 'parameters.zoomPosition', pending.oldValue, pending.latestValue);
+    return __zoom_collectState();
+}
+
+function __zoom_updateSliderReadout(nextValue: number): void {
+    const zoomValue = document.getElementById('design-intent-zoom-value');
+    if (zoomValue) zoomValue.textContent = Number(nextValue || 0).toFixed(2);
+}
+
+function __zoom_getActiveConfigAndController(): { systemConfig: any; activeConfig: any; controller: any | null } {
+        const systemConfig = loadSystemConfigurations();
+        const activeConfig = systemConfig?.configurations?.find((c: any) => c.id === systemConfig?.activeConfigId)
+                || systemConfig?.configurations?.[0]
+                || null;
+        const controller = Array.isArray(activeConfig?.blocks)
+                ? activeConfig.blocks.find((block: any) => {
+                        const type = String(block?.blockType ?? '').trim();
+                        return type === 'ObjectSurface' || type === 'ObjectPlane';
+                }) || null
+                : null;
+        return { systemConfig, activeConfig, controller };
+}
+
+function __zoom_getControllerLawText(params: any): string {
+        const raw = String(params?.zoomGroupProfiles ?? '').trim();
+        if (raw) return raw;
+        const legacyA = String(params?.zoomGroupAProfile ?? '').trim();
+        const legacyB = String(params?.zoomGroupBProfile ?? '').trim();
+        const lines: string[] = [];
+        if (legacyA) lines.push(`A=${legacyA}`);
+        if (legacyB) lines.push(`B=${legacyB}`);
+        return lines.join('\n');
+}
+
+function __zoom_parseLawGroupNames(rawValue: any): string[] {
+        const text = String(rawValue ?? '').trim();
+        if (!text) return [];
+        const names: string[] = [];
+        for (const line of text.split(/\r?\n|;/)) {
+                const trimmed = String(line ?? '').trim();
+                if (!trimmed) continue;
+                const eqIndex = trimmed.indexOf('=');
+                if (eqIndex <= 0) continue;
+                const groupName = String(trimmed.slice(0, eqIndex)).trim();
+                if (groupName && !names.includes(groupName)) names.push(groupName);
+        }
+        return names;
+}
+
+function __zoom_collectState(): any {
+        try {
+                const { activeConfig, controller } = __zoom_getActiveConfigAndController();
+                const blocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
+                if (!activeConfig || !controller) {
+                        return {
+                                available: false,
+                                configName: String(activeConfig?.name ?? '').trim(),
+                                zoomPosition: 0,
+                                lawsText: '',
+                                lawGroups: [],
+                                groupNames: [],
+                                controllerBlockId: ''
+                        };
+                }
+
+                const params = (controller.parameters && typeof controller.parameters === 'object') ? controller.parameters : {};
+                const zoomPositionRaw = Number(params.zoomPosition);
+                const pendingPreviewValue = (__zoomPreviewPendingCommit && __zoomPreviewPendingCommit.blockId === String(controller?.blockId ?? '').trim())
+                    ? __zoomPreviewPendingCommit.latestValue
+                    : null;
+                const zoomPosition = Number.isFinite(pendingPreviewValue)
+                    ? Math.max(0, Math.min(1, Number(pendingPreviewValue)))
+                    : (Number.isFinite(zoomPositionRaw) ? Math.max(0, Math.min(1, zoomPositionRaw)) : 0);
+                const lawsText = __zoom_getControllerLawText(params) || 'A=0:0,1:0';
+                const lawGroups = __zoom_parseLawGroupNames(lawsText);
+                const groupNames: string[] = [];
+                for (const block of blocks) {
+                        const blockType = String(block?.blockType ?? '').trim();
+                        if (!blockType || blockType === 'Gap' || blockType === 'AirGap' || blockType === 'ImageSurface' || blockType === 'ObjectSurface' || blockType === 'ObjectPlane') {
+                                continue;
+                        }
+                        const blockParams = (block?.parameters && typeof block.parameters === 'object') ? block.parameters : null;
+                        const groupName = String(blockParams?.zoomGroup ?? '').trim() || 'Fixed';
+                        if (!groupNames.includes(groupName)) groupNames.push(groupName);
+                }
+
+                return {
+                        available: true,
+                        configName: String(activeConfig?.name ?? '').trim(),
+                        zoomPosition,
+                        lawsText,
+                        lawGroups,
+                        groupNames,
+                        controllerBlockId: String(controller?.blockId ?? '').trim()
+                };
+        } catch (_) {
+                return {
+                        available: false,
+                        configName: '',
+                        zoomPosition: 0,
+                        lawsText: '',
+                        lawGroups: [],
+                        groupNames: [],
+                        controllerBlockId: ''
+                };
+        }
+}
+
+    function refreshZoomControlTab(): void {
+        const configName = document.getElementById('design-intent-zoom-config-name');
+        const zoomValue = document.getElementById('design-intent-zoom-value');
+        const zoomSlider = document.getElementById('design-intent-zoom-slider') as HTMLInputElement | null;
+        const groupChips = document.getElementById('design-intent-zoom-group-chips');
+        const lawChips = document.getElementById('design-intent-zoom-law-chips');
+        const lawsInput = document.getElementById('design-intent-zoom-laws') as HTMLTextAreaElement | null;
+        const emptyState = document.getElementById('design-intent-zoom-empty');
+        const body = document.getElementById('design-intent-zoom-body');
+        if (!configName || !zoomValue || !zoomSlider || !groupChips || !lawChips || !lawsInput || !emptyState || !body) return;
+
+        const renderChips = (target: HTMLElement, values: string[], prefix: string, className: string, emptyText: string) => {
+            target.innerHTML = '';
+            if (!Array.isArray(values) || values.length === 0) {
+                const empty = document.createElement('span');
+                empty.className = 'design-intent-zoom-empty-inline';
+                empty.textContent = emptyText;
+                target.appendChild(empty);
+                return;
+            }
+            for (const value of values) {
+                const chip = document.createElement('span');
+                chip.className = className;
+                chip.textContent = `${prefix}${value}`;
+                target.appendChild(chip);
+            }
+        };
+
+        const state = __zoom_collectState();
+        if (!state || !state.available) {
+                configName.textContent = 'No zoom controller on active config';
+                zoomValue.textContent = '0.00';
+                zoomSlider.value = '0';
+                zoomSlider.disabled = true;
+                lawsInput.value = '';
+                lawsInput.disabled = true;
+                body.style.display = 'none';
+                emptyState.style.display = '';
+                renderChips(groupChips, [], 'ZG ', 'design-intent-zoom-chip design-intent-zoom-chip-group', 'No zoom groups');
+                renderChips(lawChips, [], 'Law ', 'design-intent-zoom-chip design-intent-zoom-chip-law', 'No zoom laws');
+                return;
+        }
+
+        configName.textContent = state.configName || 'Active config';
+        zoomValue.textContent = Number(state.zoomPosition || 0).toFixed(2);
+        zoomSlider.value = String(state.zoomPosition || 0);
+        zoomSlider.disabled = false;
+        if (document.activeElement !== lawsInput) {
+            lawsInput.value = state.lawsText || '';
+        }
+        lawsInput.disabled = false;
+        body.style.display = '';
+        emptyState.style.display = 'none';
+        renderChips(groupChips, state.groupNames || [], 'ZG ', 'design-intent-zoom-chip design-intent-zoom-chip-group', 'No zoom groups');
+        renderChips(lawChips, state.lawGroups || [], 'Law ', 'design-intent-zoom-chip design-intent-zoom-chip-law', 'No zoom laws');
+    }
+
+function __zoom_setControllerValue(field: 'zoomPosition' | 'zoomGroupProfiles', nextValue: any): any {
+    if (field === 'zoomPosition') {
+        return __zoom_previewSetPosition(nextValue);
+    }
+        const state = __zoom_collectState();
+        if (!state.available || !state.controllerBlockId) return state;
+    const oldValue = state.lawsText;
+        cooptApplyBlockValue(state.controllerBlockId, `parameters.${field}`, oldValue, nextValue);
+        return __zoom_collectState();
+}
+
+    function setupZoomControlTab(): void {
+        const zoomSlider = document.getElementById('design-intent-zoom-slider') as HTMLInputElement | null;
+        const lawsInput = document.getElementById('design-intent-zoom-laws') as HTMLTextAreaElement | null;
+        const applyLawsButton = document.getElementById('design-intent-zoom-apply-laws');
+        const refreshButton = document.getElementById('design-intent-zoom-refresh');
+        if (!zoomSlider || !lawsInput || !applyLawsButton || !refreshButton) return;
+        if (!zoomSlider.dataset.zoomControlBound) {
+            zoomSlider.dataset.zoomControlBound = '1';
+            zoomSlider.addEventListener('input', () => {
+                const value = Number.parseFloat(zoomSlider.value);
+                if (!Number.isFinite(value)) return;
+                __zoom_setControllerValue('zoomPosition', value);
+                __zoom_updateSliderReadout(value);
+            });
+            zoomSlider.addEventListener('change', () => {
+                __zoom_flushPreviewCommit();
+                refreshZoomControlTab();
+            });
+        }
+        if (!applyLawsButton.dataset.zoomControlBound) {
+            applyLawsButton.dataset.zoomControlBound = '1';
+            applyLawsButton.addEventListener('click', () => {
+                __zoom_setControllerValue('zoomGroupProfiles', lawsInput.value);
+                refreshZoomControlTab();
+            });
+        }
+        if (!refreshButton.dataset.zoomControlBound) {
+            refreshButton.dataset.zoomControlBound = '1';
+            refreshButton.addEventListener('click', () => refreshZoomControlTab());
+        }
+        refreshZoomControlTab();
+    }
+
+function openZoomControlWindow(): void {
+        try {
+                const existing = w.__cooptZoomControlWindow;
+                if (existing && !existing.closed) {
+                        try { existing.focus(); } catch (_) {}
+                        try { if (typeof existing.__cooptRefresh === 'function') existing.__cooptRefresh(); } catch (_) {}
+                        return;
+                }
+        } catch (_) {}
+
+        const popup = window.open('', 'coopt_zoom_control', 'popup=yes,width=420,height=360');
+        if (!popup) {
+                alert('Popup was blocked. Please allow popups for this site and try again.');
+                return;
+        }
+
+        try { w.__cooptZoomControlWindow = popup; } catch (_) {}
+
+        popup.document.open();
+        popup.document.write(`<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Zoom Control</title>
+    <style>
+        html, body { margin: 0; padding: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #111827; }
+        .wrap { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+        .card { background: #fff; border: 1px solid rgba(17,24,39,0.12); border-radius: 10px; padding: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.06); }
+        .title { font-size: 18px; font-weight: 700; margin: 0 0 4px; }
+        .meta { font-size: 12px; color: #4b5563; }
+        .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+        .chip { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+        .chip-group { background: #eef2ff; color: #3730a3; }
+        .chip-law { background: #ecfeff; color: #155e75; }
+        .label { display: block; font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px; }
+        textarea { width: 100%; min-height: 120px; resize: vertical; box-sizing: border-box; padding: 8px 10px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; border-radius: 8px; border: 1px solid #d1d5db; }
+        input[type="range"] { width: 100%; }
+        .actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        button { height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+        button.primary { background: #111827; color: #fff; border-color: #111827; }
+        .hint { font-size: 11px; color: #6b7280; line-height: 1.4; }
+        .empty { color: #6b7280; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="card">
+            <div class="title">Zoom Control</div>
+            <div id="configName" class="meta">Active config</div>
+            <div class="row" style="margin-top: 10px;">
+                <div id="zoomValue" class="value">0.00</div>
+                <button id="refreshBtn" type="button">Refresh</button>
+            </div>
+            <input id="zoomSlider" type="range" min="0" max="1" step="0.001" value="0" />
+            <div class="hint">Use this window to drive zoomPosition. Render and tables refresh from the active configuration.</div>
+            <div id="groupChips" class="chips"></div>
+        </div>
+        <div class="card">
+            <label class="label" for="lawsInput">Zoom Laws</label>
+            <textarea id="lawsInput" spellcheck="false"></textarea>
+            <div class="actions" style="margin-top: 8px;">
+                <div id="lawChips" class="chips" style="margin-top: 0;"></div>
+                <button id="applyLawsBtn" type="button" class="primary">Apply Laws</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            var slider = document.getElementById('zoomSlider');
+            var zoomValue = document.getElementById('zoomValue');
+            var configName = document.getElementById('configName');
+            var groupChips = document.getElementById('groupChips');
+            var lawChips = document.getElementById('lawChips');
+            var lawsInput = document.getElementById('lawsInput');
+            var applyLawsBtn = document.getElementById('applyLawsBtn');
+            var refreshBtn = document.getElementById('refreshBtn');
+            var suspendTextSync = false;
+
+            function getApi() {
+                try {
+                    return window.opener && window.opener.__cooptZoomControlApi ? window.opener.__cooptZoomControlApi : null;
+                } catch (_) {
+                    return null;
+                }
+            }
+
+            function renderChips(target, values, className, prefix) {
+                target.innerHTML = '';
+                if (!Array.isArray(values) || values.length === 0) {
+                    var empty = document.createElement('span');
+                    empty.className = 'empty';
+                    empty.textContent = prefix === 'Law ' ? 'No zoom laws' : 'No zoom groups';
+                    target.appendChild(empty);
+                    return;
+                }
+                values.forEach(function(value) {
+                    var chip = document.createElement('span');
+                    chip.className = 'chip ' + className;
+                    chip.textContent = prefix + value;
+                    target.appendChild(chip);
+                });
+            }
+
+            function refresh() {
+                var api = getApi();
+                if (!api || typeof api.getState !== 'function') return;
+                var state = api.getState();
+                if (!state || !state.available) {
+                    configName.textContent = 'No zoom controller on active config';
+                    zoomValue.textContent = '0.00';
+                    slider.value = '0';
+                    renderChips(groupChips, [], 'chip-group', 'ZG ');
+                    renderChips(lawChips, [], 'chip-law', 'Law ');
+                    if (!suspendTextSync) lawsInput.value = '';
+                    return;
+                }
+
+                configName.textContent = state.configName || 'Active config';
+                zoomValue.textContent = Number(state.zoomPosition || 0).toFixed(2);
+                slider.value = String(state.zoomPosition || 0);
+                renderChips(groupChips, state.groupNames || [], 'chip-group', 'ZG ');
+                renderChips(lawChips, state.lawGroups || [], 'chip-law', 'Law ');
+                if (!suspendTextSync && document.activeElement !== lawsInput) {
+                    lawsInput.value = state.lawsText || '';
+                }
+            }
+
+            slider.addEventListener('input', function() {
+                var api = getApi();
+                if (!api || typeof api.setZoomPosition !== 'function') return;
+                var value = Number.parseFloat(slider.value);
+                if (!Number.isFinite(value)) return;
+                api.setZoomPosition(value);
+                zoomValue.textContent = Number(value || 0).toFixed(2);
+            });
+
+            slider.addEventListener('change', function() {
+                var api = getApi();
+                if (!api || typeof api.commitZoomPosition !== 'function') {
+                    refresh();
+                    return;
+                }
+                api.commitZoomPosition();
+                refresh();
+            });
+
+            lawsInput.addEventListener('focus', function() {
+                suspendTextSync = true;
+            });
+            lawsInput.addEventListener('blur', function() {
+                suspendTextSync = false;
+            });
+
+            applyLawsBtn.addEventListener('click', function() {
+                var api = getApi();
+                if (!api || typeof api.setZoomGroupProfiles !== 'function') return;
+                api.setZoomGroupProfiles(lawsInput.value);
+                suspendTextSync = false;
+                refresh();
+            });
+
+            refreshBtn.addEventListener('click', refresh);
+            window.__cooptRefresh = refresh;
+            window.addEventListener('focus', refresh);
+            window.setInterval(refresh, 500);
+            refresh();
+        })();
+    </script>
+</body>
+</html>`);
+        popup.document.close();
+}
+
+try {
+        w.__cooptZoomControlApi = {
+                getState: () => __zoom_collectState(),
+                setZoomPosition: (value: any) => __zoom_setControllerValue('zoomPosition', value),
+            commitZoomPosition: () => __zoom_flushPreviewCommit(),
+                setZoomGroupProfiles: (value: any) => __zoom_setControllerValue('zoomGroupProfiles', value),
+                open: () => openZoomControlWindow()
+        };
+        w.__cooptOpenZoomControlWindow = openZoomControlWindow;
+} catch (_) {}
 
 function renderBlockInspector(summary: any[], groups: any, blockById: Map<string, any> | null = null, blocksInOrder: any[] | null = null): void {
     const container = document.getElementById('block-inspector');
@@ -5669,6 +6182,82 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         return Math.max(14, maxChars + 1);
     })();
 
+    const getZoomGroupLabel = (blockLike: any): string => {
+        if (!blockLike || typeof blockLike !== 'object') return '';
+        const blockType = String(blockLike?.blockType ?? '').trim();
+        if (blockType === 'Gap' || blockType === 'AirGap' || blockType === 'ImageSurface' || blockType === 'ObjectSurface' || blockType === 'ObjectPlane') {
+            return '';
+        }
+        const params = (blockLike.parameters && typeof blockLike.parameters === 'object') ? blockLike.parameters : null;
+        const raw = String(params?.zoomGroup ?? '').trim();
+        return raw || 'Fixed';
+    };
+
+    const getZoomLawGroupNames = (blockLike: any): string[] => {
+        if (!blockLike || typeof blockLike !== 'object') return [];
+        const blockType = String(blockLike?.blockType ?? '').trim();
+        if (blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane') return [];
+        const params = (blockLike.parameters && typeof blockLike.parameters === 'object') ? blockLike.parameters : null;
+        const raw = String(params?.zoomGroupProfiles ?? '').trim();
+        if (!raw) return [];
+        const names: string[] = [];
+        const lines = raw.split(/\r?\n|;/);
+        for (const line of lines) {
+            const text = String(line ?? '').trim();
+            if (!text) continue;
+            const eqIndex = text.indexOf('=');
+            if (eqIndex <= 0) continue;
+            const groupName = String(text.slice(0, eqIndex)).trim();
+            if (!groupName) continue;
+            if (!names.includes(groupName)) names.push(groupName);
+        }
+        return names;
+    };
+
+    const getZoomPositionSummary = (blockLike: any): string => {
+        if (!blockLike || typeof blockLike !== 'object') return '';
+        const blockType = String(blockLike?.blockType ?? '').trim();
+        if (blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane') return '';
+        const params = (blockLike.parameters && typeof blockLike.parameters === 'object') ? blockLike.parameters : null;
+        const value = Number(params?.zoomPosition);
+        if (!Number.isFinite(value)) return 'Zoom x=0.00';
+        return `Zoom x=${value.toFixed(2)}`;
+    };
+
+    const getGapBoundaryLabel = (blockLike: any): string => {
+        const blockType = String(blockLike?.blockType ?? '').trim();
+        if (blockType !== 'Gap' && blockType !== 'AirGap') return '';
+
+        const sourceBlocks = Array.isArray(blocksInOrder) && blocksInOrder.length > 0 ? blocksInOrder : list;
+        const currentId = String(blockLike?.blockId ?? '').trim();
+        if (!currentId || !Array.isArray(sourceBlocks) || sourceBlocks.length === 0) return '';
+
+        const currentIndex = sourceBlocks.findIndex((candidate: any) => String(candidate?.blockId ?? '').trim() === currentId);
+        if (currentIndex < 0) return '';
+
+        const getAnchorGroupAt = (startIndex: number, direction: -1 | 1): string => {
+            for (let index = startIndex; index >= 0 && index < sourceBlocks.length; index += direction) {
+                const candidate = sourceBlocks[index];
+                const candidateType = String(candidate?.blockType ?? '').trim();
+                if (!candidateType || candidateType === 'Gap' || candidateType === 'AirGap' || candidateType === 'ImageSurface') continue;
+                if (candidateType === 'ObjectSurface' || candidateType === 'ObjectPlane') return 'Fixed';
+                return getZoomGroupLabel(candidate) || 'Fixed';
+            }
+            return 'Fixed';
+        };
+
+        const prevGroup = getAnchorGroupAt(currentIndex - 1, -1);
+        const nextGroup = getAnchorGroupAt(currentIndex + 1, 1);
+        return `${prevGroup} -> ${nextGroup}`;
+    };
+
+    const createSummaryChip = (text: string, kind: 'group' | 'controller' | 'gap'): HTMLElement => {
+        const chip = document.createElement('span');
+        chip.className = `block-inspector-summary-chip block-inspector-summary-chip-${kind}`;
+        chip.textContent = text;
+        return chip;
+    };
+
     for (const b of list) {
         const blockId = String(b.blockId ?? '').trim();
         const row = document.createElement('div');
@@ -5700,7 +6289,31 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
         const colParams = document.createElement('div');
         colParams.className = 'block-inspector-col-params';
-        colParams.textContent = String(b.preview ?? '');
+        const realBlock = (blockById && typeof blockById.get === 'function') ? blockById.get(blockId) || b : b;
+        const previewText = String(b.preview ?? '');
+        const previewSpan = document.createElement('span');
+        previewSpan.className = 'block-inspector-col-params-text';
+        previewSpan.textContent = previewText;
+        if (previewText) colParams.appendChild(previewSpan);
+
+        const rawTypeForSummary = String(realBlock?.blockType ?? b?.blockType ?? '').trim();
+        if (rawTypeForSummary === 'ObjectSurface' || rawTypeForSummary === 'ObjectPlane') {
+            colParams.appendChild(createSummaryChip(getZoomPositionSummary(realBlock), 'controller'));
+            const lawGroups = getZoomLawGroupNames(realBlock);
+            if (lawGroups.length > 0) {
+                colParams.appendChild(createSummaryChip(`Laws: ${lawGroups.join(', ')}`, 'controller'));
+            }
+        } else if (rawTypeForSummary === 'Gap' || rawTypeForSummary === 'AirGap') {
+            const gapBoundaryText = getGapBoundaryLabel(realBlock);
+            if (gapBoundaryText) {
+                colParams.appendChild(createSummaryChip(`ZG ${gapBoundaryText}`, 'gap'));
+            }
+        } else {
+            const zoomGroupText = getZoomGroupLabel(realBlock);
+            if (zoomGroupText) {
+                colParams.appendChild(createSummaryChip(`ZG ${zoomGroupText}`, 'group'));
+            }
+        }
 
         const colCount = document.createElement('div');
         colCount.className = 'block-inspector-col-count';
@@ -5719,8 +6332,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
         container.appendChild(row);
 
-        const realBlock = blockById && typeof blockById.get === 'function' ? blockById.get(blockId) : null;
-        if (realBlock && __blockInspectorExpandedBlockId === blockId) {
+        const expandedBlock = blockById && typeof blockById.get === 'function' ? blockById.get(blockId) : null;
+        if (expandedBlock && __blockInspectorExpandedBlockId === blockId) {
             const panel = document.createElement('div');
             panel.className = 'block-inspector-expanded-panel';
             panel.style.padding = '8px 10px';
@@ -5733,8 +6346,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             panel.dataset.blockId = String(blockId);
             panel.setAttribute('data-block-id', String(blockId));
 
-            const params = (realBlock.parameters && typeof realBlock.parameters === 'object') ? realBlock.parameters : {};
-            const vars = (realBlock.variables && typeof realBlock.variables === 'object') ? realBlock.variables : {};
+            const params = (expandedBlock.parameters && typeof expandedBlock.parameters === 'object') ? expandedBlock.parameters : {};
+            const vars = (expandedBlock.variables && typeof expandedBlock.variables === 'object') ? expandedBlock.variables : {};
             
             // Custom sort order: material1 → material2 → abbe → front* → back* → radius → conic → thickness → semidia → coef*
             const sortParameterKeys = (keys: string[]): string[] => {
@@ -5868,6 +6481,14 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     // Thickness
                     if (aLower.includes('thickness') && !bLower.includes('thickness')) return -1;
                     if (!aLower.includes('thickness') && bLower.includes('thickness')) return 1;
+
+                    // Zoom controls
+                    if (a === 'zoomPosition' && b !== 'zoomPosition') return -1;
+                    if (b === 'zoomPosition' && a !== 'zoomPosition') return 1;
+                    if (a === 'zoomGroup' && b !== 'zoomGroup' && b !== 'zoomPosition') return -1;
+                    if (b === 'zoomGroup' && a !== 'zoomGroup' && a !== 'zoomPosition') return 1;
+                    if (a === 'zoomGroupProfiles' && !['zoomPosition', 'zoomGroup', 'zoomGroupProfiles'].includes(b)) return -1;
+                    if (b === 'zoomGroupProfiles' && !['zoomPosition', 'zoomGroup', 'zoomGroupProfiles'].includes(a)) return 1;
                     
                     // Aperture parameters: apertureShape → apertureWidth → apertureHeight
                     if (a === 'apertureShape' && b !== 'apertureShape') return -1;
@@ -5903,13 +6524,15 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 });
             };
             
-            const blockType = String(realBlock.blockType || realBlock.type || 'unknown');
+            const blockType = String(expandedBlock.blockType || expandedBlock.type || 'unknown');
             
             // For Gap blocks, ensure material/thicknessMode are always in paramKeys even if not set
             const allParamKeys = Object.keys(params || {}).filter(k => {
                 // chiefRayShiftX/Y/Z は廃止フィールド。表示しない
                 const kl = k.toLowerCase();
                 if (kl === 'chiefrayshiftx' || kl === 'chiefrayshifty' || kl === 'chiefrayshiftz') return false;
+                if (kl === 'zoomgroupaprofile' || kl === 'zoomgroupbprofile') return false;
+                if ((blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && (kl === 'zoomposition' || kl === 'zoomgroupprofiles')) return false;
                 if (blockType === 'Paraxial') {
                     if (kl === 'material' || kl === 'abbe' || kl === 'vd' || kl === 'nd' || kl === 'rindex' || kl === 'bending') return false;
                     if (kl === 'frontradius' || kl === 'backradius' || kl === 'centerthickness' || kl === 'radiusx') return false;
@@ -5947,6 +6570,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (!allParamKeys.includes('surfType')) allParamKeys.push('surfType');
                 if (!allParamKeys.includes('focalLengthX')) allParamKeys.push('focalLengthX');
                 if (!allParamKeys.includes('focalLengthY')) allParamKeys.push('focalLengthY');
+            }
+            if (blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'ImageSurface' && blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane') {
+                if (!allParamKeys.includes('zoomGroup')) allParamKeys.push('zoomGroup');
             }
             // For Lens and other blocks with front/back surfaces, ensure coefficient fields are present
             if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'SingleSurface' || blockType === 'Mirror') {
@@ -6007,6 +6633,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (label === 'focalLengthX') return 'Focal Length X';
                     if (label === 'focalLengthY' || label === 'focalLength') return 'Focal Length Y';
                 }
+                if (label === 'zoomPosition') return 'Zoom Position';
+                if (label === 'zoomGroup') return 'Zoom Group';
+                if (label === 'zoomGroupProfiles') return 'Zoom Group Laws';
                 if (label === 'frontSurfType') return 's1 Surf Type';
                 if (label === 'backSurfType') return 's2 Surf Type';
                 if (label === 'surf1SurfType') return 's1 Surf Type';
@@ -6065,9 +6694,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const isCoordReturn = blockType === 'CoordTrans' && label === 'coordReturn';
                 const isCoordOrder = blockType === 'CoordTrans' && label === 'order';
                 const isCoordToSurf = blockType === 'CoordTrans' && label === 'toSurf';
+                const isZoomGroup = label === 'zoomGroup';
                 // Exclude nd, vd, abbe from slider display - they should be text input only
                 const isGlassProperty = label === 'nd' || label === 'vd' || label === 'abbe';
-                const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isGapThicknessMode && !isObjectDistanceMode && !isImageSemidiaMode && !isApertureShape && !isCoordReturn && !isCoordOrder && !isCoordToSurf && !isNaN(parseFloat(String(value)));
+                const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isGapThicknessMode && !isObjectDistanceMode && !isImageSemidiaMode && !isApertureShape && !isCoordReturn && !isCoordOrder && !isCoordToSurf && !isZoomGroup && !isNaN(parseFloat(String(value)));
                 
                 // Determine if this parameter should show coef parameters based on surfType
                 const shouldHideCoef = (key: string, surfTypeValue: string) => {
@@ -6517,6 +7147,41 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         const newValue = select.value;
                         if (newValue !== currentValue) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
+                        }
+                    });
+
+                    inputElement = select;
+                } else if (isZoomGroup) {
+                    const select = document.createElement('select');
+                    select.style.fontSize = '12px';
+                    select.style.padding = '4px 6px';
+                    select.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
+                    select.style.background = isDarkMode ? '#111827' : '#fff';
+                    select.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    select.style.borderRadius = '4px';
+                    select.style.flex = '1';
+                    select.style.cursor = 'pointer';
+                    select.style.minWidth = '200px';
+                    select.style.height = '28px';
+                    select.style.boxSizing = 'border-box';
+
+                    const currentValue = String(value ?? 'Fixed').trim() || 'Fixed';
+                    const options = ZOOM_GROUP_OPTIONS.includes(currentValue)
+                        ? ZOOM_GROUP_OPTIONS.slice()
+                        : [currentValue, ...ZOOM_GROUP_OPTIONS.filter((option) => option !== currentValue)];
+
+                    options.forEach((opt) => {
+                        const option = document.createElement('option');
+                        option.value = opt;
+                        option.textContent = opt;
+                        if (opt === currentValue) option.selected = true;
+                        select.appendChild(option);
+                    });
+
+                    select.addEventListener('change', () => {
+                        const newValue = select.value;
+                        if (newValue !== currentValue) {
+                            cooptApplyBlockValue(blockId, path, currentValue, newValue);
                         }
                     });
 
@@ -7154,6 +7819,20 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (blockType === 'Paraxial' && key === 'surfType' && (value === undefined || value === null || String(value).trim() === '')) {
                         value = 'Toric';
                     }
+                    if ((blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && key === 'zoomPosition' && (value === undefined || value === null || String(value).trim() === '')) {
+                        value = 0;
+                    }
+                    if ((blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && key === 'zoomGroupProfiles' && (value === undefined || value === null || String(value).trim() === '')) {
+                        const legacyA = String((params as any)?.zoomGroupAProfile ?? '').trim();
+                        const legacyB = String((params as any)?.zoomGroupBProfile ?? '').trim();
+                        const lines: string[] = [];
+                        if (legacyA) lines.push(`A=${legacyA}`);
+                        if (legacyB) lines.push(`B=${legacyB}`);
+                        value = lines.length > 0 ? lines.join('\n') : 'A=0:0,1:0';
+                    }
+                    if (key === 'zoomGroup' && (value === undefined || value === null || String(value).trim() === '')) {
+                        value = 'Fixed';
+                    }
                     if (blockType === 'ImageSurface' && key === 'semidiaMode' && (value === undefined || value === null || String(value).trim() === '')) {
                         const opt = String((params as any)?.optimizeSemiDia ?? '').trim().toUpperCase();
                         value = (opt === 'A' || opt === 'AUTO') ? 'Auto' : 'Manual';
@@ -7283,7 +7962,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             }
 
             // Add aperture section for blocks that have aperture data
-            const aperture = (realBlock.aperture && typeof realBlock.aperture === 'object') ? realBlock.aperture : null;
+            const aperture = (expandedBlock.aperture && typeof expandedBlock.aperture === 'object') ? expandedBlock.aperture : null;
             const renderedApertureKeys = new Set<string>();
             if (aperture && Object.keys(aperture).length > 0) {
                 panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
@@ -7541,10 +8220,12 @@ export function refreshBlockInspector(): void {
                 blockById.set(id, b);
             }
             renderBlockInspector(merged, {}, blockById, blocks);
+            refreshZoomControlTab();
         } else {
             if (typeof w.dumpOpticalSystemProvenance !== 'function') return;
             const result = w.dumpOpticalSystemProvenance({ quiet: true });
             renderBlockInspector(result?.summary || [], result?.groups || {}, null, null);
+            refreshZoomControlTab();
         }
     } catch (e) {
         console.warn('⚠️ [Blocks] Failed to refresh block inspector:', e);
@@ -7768,7 +8449,9 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
     if (type === 'ObjectSurface') {
         base.parameters = {
             objectDistanceMode: 'Finite',
-            objectDistance: 100
+            objectDistance: 100,
+            zoomPosition: 0,
+            zoomGroupProfiles: 'A=0:0,1:0'
         };
         return base;
     }
@@ -8019,12 +8702,83 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
     return { ok: true, blockData: removedBlock, blockIndex: idx };
 }
 
+function __blocks_generateZoomScenariosForActiveConfig(): any {
+    const systemConfig = loadSystemConfigurations();
+    if (!systemConfig || !Array.isArray(systemConfig.configurations)) {
+        return { ok: false, reason: 'systemConfigurations not found.' };
+    }
+
+    const activeCfg = systemConfig.configurations.find((cfg: any) => cfg && String(cfg.id) === String(systemConfig.activeConfigId));
+    if (!activeCfg || !Array.isArray(activeCfg.blocks)) {
+        return { ok: false, reason: 'active config has no blocks.' };
+    }
+
+    const objectBlock = activeCfg.blocks.find((block: any) => {
+        const type = String(block?.blockType ?? '').trim();
+        return type === 'ObjectSurface' || type === 'ObjectPlane';
+    });
+    if (!objectBlock || typeof objectBlock !== 'object') {
+        return { ok: false, reason: 'ObjectSurface block not found.' };
+    }
+
+    if (!objectBlock.parameters || typeof objectBlock.parameters !== 'object') objectBlock.parameters = {};
+    if (objectBlock.parameters.zoomPosition === undefined || objectBlock.parameters.zoomPosition === null || String(objectBlock.parameters.zoomPosition).trim() === '') {
+        objectBlock.parameters.zoomPosition = 0;
+    }
+    if (objectBlock.parameters.zoomGroupProfiles === undefined || objectBlock.parameters.zoomGroupProfiles === null || String(objectBlock.parameters.zoomGroupProfiles).trim() === '') {
+        const legacyA = String(objectBlock.parameters.zoomGroupAProfile ?? '').trim();
+        const legacyB = String(objectBlock.parameters.zoomGroupBProfile ?? '').trim();
+        const lines: string[] = [];
+        if (legacyA) lines.push(`A=${legacyA}`);
+        if (legacyB) lines.push(`B=${legacyB}`);
+        objectBlock.parameters.zoomGroupProfiles = lines.length > 0 ? lines.join('\n') : 'A=0:0,1:0';
+    }
+
+    const objectBlockId = String(objectBlock.blockId ?? '').trim();
+    if (!objectBlockId) return { ok: false, reason: 'ObjectSurface blockId is missing.' };
+
+    const generatedIds = new Set(['zoom-wide', 'zoom-mid', 'zoom-tele']);
+    const existingScenarios = Array.isArray(activeCfg.scenarios) ? activeCfg.scenarios : [];
+    const preservedScenarios = existingScenarios.filter((scenario: any) => !generatedIds.has(String(scenario?.id ?? '').trim()));
+    const buildScenario = (id: string, name: string, zoomPosition: number) => ({
+        id,
+        name,
+        weight: 1,
+        overrides: {
+            [`${objectBlockId}.zoomPosition`]: zoomPosition
+        },
+        metadata: { source: 'zoom-mvp' }
+    });
+
+    activeCfg.scenarios = [
+        ...preservedScenarios,
+        buildScenario('zoom-wide', 'Wide', 0),
+        buildScenario('zoom-mid', 'Mid', 0.5),
+        buildScenario('zoom-tele', 'Tele', 1)
+    ];
+    activeCfg.activeScenarioId = 'zoom-wide';
+
+    try {
+        if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+        activeCfg.metadata.modified = new Date().toISOString();
+    } catch (_) {}
+
+    try {
+        saveSystemConfigurations(systemConfig);
+    } catch (e) {
+        return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
+    }
+
+    return { ok: true, count: 3, blockId: objectBlockId };
+}
+
 // Design Intent Add/Delete Buttons Setup
 function setupDesignIntentButtons(): void {
     const addBtn = document.getElementById('design-intent-add-block-btn');
     const deleteBtn = document.getElementById('design-intent-delete-block-btn');
     const paramAllOnBtn = document.getElementById('design-intent-param-all-on-btn');
     const paramAllOffBtn = document.getElementById('design-intent-param-all-off-btn');
+    const zoomScenarioBtn = document.getElementById('design-intent-generate-zoom-scenarios-btn');
     const typeSelect = document.getElementById('design-intent-add-block-type') as HTMLSelectElement | null;
 
     if (addBtn && !addBtn.dataset.designIntentAddBound) {
@@ -8135,6 +8889,31 @@ function setupDesignIntentButtons(): void {
             }
         });
     }
+
+    if (zoomScenarioBtn && !zoomScenarioBtn.dataset.designIntentZoomScenarioBound) {
+        zoomScenarioBtn.dataset.designIntentZoomScenarioBound = '1';
+        zoomScenarioBtn.addEventListener('click', (e) => {
+            try { e?.preventDefault?.(); } catch (_) {}
+            try { e?.stopPropagation?.(); } catch (_) {}
+            try {
+                const res = __blocks_generateZoomScenariosForActiveConfig();
+                if (!res || res.ok !== true) {
+                    alert(`Failed to generate zoom scenarios: ${res?.reason || 'unknown error'}`);
+                    return;
+                }
+                try { refreshBlockInspector(); } catch (_) {}
+                try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
+                try {
+                    if (w.popup3DWindow && !w.popup3DWindow.closed) {
+                        w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
+                    }
+                } catch (_) {}
+            } catch (e) {
+                console.error('❌ Failed to generate zoom scenarios:', e);
+                alert(`Failed to generate zoom scenarios: ${(e as Error)?.message || String(e)}`);
+            }
+        });
+    }
 }
 
 // Main DOM Event Handlers Setup Function
@@ -8151,6 +8930,7 @@ export function setupDOMEventHandlers(): void {
         setupLoadAllButton();
         setupClearStorageButton();
         setupDesignIntentButtons(); // Add Design Intent Add/Delete buttons
+        setupZoomControlTab();
         
         // setupOpticalSystemChangeListeners needs to wait for React to mount the button
         // It will be called after React mount event

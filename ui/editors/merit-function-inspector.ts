@@ -43,6 +43,28 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "System Dataに表示しているEFL（h[1]=1なのでEFL=1/α[final]）を返します。\n\nBlocks(param2):\n- 空欄 / ALL: 全系EFL\n- blockId: そのブロック単体のEFL（ブロックを空気中のサブシステムとして評価）\n- blockId,blockId,... : 選択ブロック連結サブシステムのEFL（系内順序で抽出）\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
+  "PP1": {
+    name: "Front Principal Point (PP1)",
+    description: "Front principal point position from the first surface of the selected subsystem",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "S1", description: "Start Surface" },
+      { key: "param3", label: "S2", description: "End Surface" },
+      { key: "param4", label: "Mode", description: "blank=Surface range, ZG=Zoom Group" }
+    ],
+    notes: "開始面 S1 から終了面 S2 までのレンズ群、または指定した Zoom Group の範囲を空気中のサブシステムとして評価し、先頭面を 0 mm としたときの前側主点位置(mm)を返します。\n\n前側主点側は、選択サブシステムを反転した近軸 reverse trace から前側焦点距離を求め、その結果から主点位置を算出します。\n\n指定方法:\n- Surface range: param2=S1, param3=S2, param4=空欄\n- Zoom Group: param2=zoom group名, param4=ZG\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
+  },
+  "PP2": {
+    name: "Rear Principal Point (PP2)",
+    description: "Rear principal point position from the first surface of the selected subsystem",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "S1", description: "Start Surface" },
+      { key: "param3", label: "S2", description: "End Surface" },
+      { key: "param4", label: "Mode", description: "blank=Surface range, ZG=Zoom Group" }
+    ],
+    notes: "開始面 S1 から終了面 S2 までのレンズ群、または指定した Zoom Group の範囲を空気中のサブシステムとして評価し、先頭面を 0 mm としたときの後側主点位置(mm)を返します。\n\nPP2 から群の最終面位置を引くと、最終面基準の後側主点オフセットになります。\n\n指定方法:\n- Surface range: param2=S1, param3=S2, param4=空欄\n- Zoom Group: param2=zoom group名, param4=ZG\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
+  },
   "BFL": {
     name: "Back Focal Length (BFL)",
     description: "Back focal length (System Data)",
@@ -491,7 +513,7 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
 // Only expose operands that are implemented and intended for the UI.
 // Keep other definitions for backward compatibility / future work, but hide them from dropdowns.
 const VISIBLE_OPERANDS_IN_UI = new Set([
-  'FL', 'EFL', 'BFL', 'IMD', 'OBJD', 'TSL',
+  'FL', 'EFL', 'PP1', 'PP2', 'BFL', 'IMD', 'OBJD', 'TSL',
   'BEXP', 'EXPD', 'EXPP',
   'ENPD', 'ENPP', 'ENPM',
   'PMAG',
@@ -601,6 +623,9 @@ export class InspectorManager {
     // Optional interactive helpers
     try {
       this._installEflBlockPickerIfNeeded(data);
+    } catch (_) {}
+    try {
+      this._installPrincipalPointZoomGroupPickerIfNeeded(data);
     } catch (_) {}
   }
 
@@ -749,6 +774,66 @@ export class InspectorManager {
     while (div.firstChild) {
       this.contentElement.appendChild(div.firstChild);
     }
+  }
+
+  _installPrincipalPointZoomGroupPickerIfNeeded(data: any): void {
+    const operandType = data?.operand;
+    if (operandType !== 'PP1' && operandType !== 'PP2') return;
+
+    const rowId = data?.id;
+    if (rowId === undefined || rowId === null) return;
+
+    const blocks = this._getBlocksForConfigHint(data?.configId);
+    if (!Array.isArray(blocks) || blocks.length === 0) return;
+
+    const zoomGroups = Array.from(new Set(
+      blocks
+        .map((b: any) => String(b?.parameters?.zoomGroup ?? '').trim())
+        .filter(Boolean)
+    ));
+    if (zoomGroups.length === 0) return;
+
+    const modeRaw = String(data?.param4 ?? '').trim().toUpperCase();
+    const currentGroup = modeRaw === 'ZG' ? String(data?.param2 ?? '').trim() : '';
+    const selectId = `coopt-pp-zoom-group-${String(rowId)}`;
+
+    const options = [
+      `<option value="">Use S1 / S2</option>`,
+      ...zoomGroups.map((group) => {
+        const selected = currentGroup === group ? 'selected' : '';
+        return `<option value="${group}" ${selected}>${group}</option>`;
+      })
+    ].join('');
+
+    this._appendInspectorHtml(`
+      <div class="inspector-row">
+        <strong>Zoom Group:</strong>
+        <div style="margin-top:6px;">
+          <select id="${selectId}" style="min-width:180px; padding:4px 6px;">
+            ${options}
+          </select>
+          <div style="margin-top:6px; color:#666; font-size:12px;">Selecting a zoom group writes group name to param2 and sets param4=ZG. "Use S1 / S2" switches back to surface-range input.</div>
+        </div>
+      </div>
+    `);
+
+    const select = this.contentElement?.querySelector(`#${CSS.escape(selectId)}`) as HTMLSelectElement | null;
+    if (!select) return;
+
+    select.addEventListener('change', () => {
+      try {
+        const sre = w.systemRequirementsEditor;
+        if (!sre || !sre.table || typeof sre.table.updateData !== 'function') return;
+        const selected = String(select.value ?? '').trim();
+        if (selected) {
+          sre.table.updateData([{ id: rowId, param2: selected, param3: '', param4: 'ZG' }]);
+        } else {
+          sre.table.updateData([{ id: rowId, param2: '', param3: '', param4: '' }]);
+        }
+        if (typeof sre.saveToStorage === 'function') sre.saveToStorage();
+        if (typeof sre.scheduleEvaluateAndUpdate === 'function') sre.scheduleEvaluateAndUpdate();
+      } catch (_) {}
+    });
   }
 
   _getBlocksForConfigHint(configIdHint: any): any[] {

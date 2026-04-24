@@ -341,6 +341,46 @@ class SystemRequirementsEditor {
       }
     };
 
+    const ensurePrincipalPointZoomGroupsDatalist = (blocks: any[]): string | null => {
+      try {
+        const id = 'coopt-pp-zoom-groups-datalist';
+        let dl = document.getElementById(id) as HTMLDataListElement | null;
+        if (!dl) {
+          dl = document.createElement('datalist');
+          dl.id = id;
+          document.body.appendChild(dl);
+        }
+        dl.innerHTML = '';
+
+        const zoomGroups = Array.from(new Set(
+          (blocks || [])
+            .map((b: any) => String(b?.parameters?.zoomGroup ?? '').trim())
+            .filter(Boolean)
+        ));
+
+        for (const group of zoomGroups) {
+          const o = document.createElement('option');
+          o.value = group;
+          dl.appendChild(o);
+        }
+        return id;
+      } catch (_) {
+        return null;
+      }
+    };
+
+    const getPrincipalPointZoomGroups = (blocks: any[]): string[] => {
+      try {
+        return Array.from(new Set(
+          (blocks || [])
+            .map((b: any) => String(b?.parameters?.zoomGroup ?? '').trim())
+            .filter(Boolean)
+        ));
+      } catch (_) {
+        return [];
+      }
+    };
+
     const container = document.getElementById('table-system-requirements');
     if (!container) {
       console.warn('[Requirements] Table container not found');
@@ -707,6 +747,10 @@ class SystemRequirementsEditor {
         const isNollParam = paramLabel === 'n (Noll)';
         const isSamplingParam = paramLabel === 'Sampling';
         const isS1Param = paramLabel === 'S1' || (paramLabel.startsWith('S') && paramDesc.includes('Surface'));
+        const isPrincipalPointOperand = String(row?.operand ?? '').trim() === 'PP1' || String(row?.operand ?? '').trim() === 'PP2';
+        const isPrincipalPointModeParam = isPrincipalPointOperand && field === 'param4';
+        const isPrincipalPointZoomGroupParam = isPrincipalPointOperand && field === 'param2' && String(row?.param4 ?? '').trim().toUpperCase() === 'ZG';
+        const isPrincipalPointZoomGroupUnusedParam = isPrincipalPointOperand && field === 'param3' && String(row?.param4 ?? '').trim().toUpperCase() === 'ZG';
         
         // SPOT_SIZE param5: Surface selection (1-based, empty=image)
         const isSpotSizeSurfaceParam = field === 'param5' && String(row?.operand ?? '').startsWith('SPOT_SIZE');
@@ -959,6 +1003,41 @@ class SystemRequirementsEditor {
           }
           
           control.value = String(row[field] || '');
+        } else if (isPrincipalPointZoomGroupParam) {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const emptyOpt = document.createElement('option');
+          emptyOpt.value = '';
+          emptyOpt.textContent = '(select zoom group)';
+          control.appendChild(emptyOpt);
+          try {
+            const blocks = this._getBlocksForConfigHint(row?.configId);
+            const zoomGroups = getPrincipalPointZoomGroups(blocks);
+            for (const group of zoomGroups) {
+              const opt = document.createElement('option');
+              opt.value = group;
+              opt.textContent = group;
+              control.appendChild(opt);
+            }
+          } catch (_) {}
+          control.value = (row[field] === undefined || row[field] === null) ? '' : String(row[field]);
+        } else if (isPrincipalPointZoomGroupUnusedParam) {
+          control = document.createElement('input');
+          control.type = 'text';
+          control.placeholder = '(unused in Zoom Group mode)';
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          control.value = '';
+          control.disabled = true;
         } else if (isS1Param) {
           // S1 (Surface) dropdown: 0=Total, then surfaces from Design Intent
           control = document.createElement('select');
@@ -1039,6 +1118,25 @@ class SystemRequirementsEditor {
             { value: '128', label: '128×128' },
             { value: '256', label: '256×256' },
             { value: '512', label: '512×512' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '');
+        } else if (isPrincipalPointModeParam) {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const options = [
+            { value: '', label: 'Surface Range' },
+            { value: 'ZG', label: 'Zoom Group' }
           ];
           for (const opt of options) {
             const el = document.createElement('option');
@@ -1212,6 +1310,10 @@ class SystemRequirementsEditor {
                 const blocks = this._getBlocksForConfigHint(row?.configId);
                 const dlId = ensureEflBlocksDatalist(blocks);
                 if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
+              } else if (isPrincipalPointZoomGroupParam && control.tagName === 'INPUT') {
+                const blocks = this._getBlocksForConfigHint(row?.configId);
+                const dlId = ensurePrincipalPointZoomGroupsDatalist(blocks);
+                if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
               }
             } catch (_) {}
           });
@@ -1221,6 +1323,15 @@ class SystemRequirementsEditor {
           control.addEventListener('change', () => {
             const oldValue = row[field];
             row[field] = control.value;
+
+            if (isPrincipalPointModeParam) {
+              if (control.value === 'ZG') {
+                row.param3 = '';
+              }
+              if (control.value !== 'ZG' && String(row.param2 ?? '').trim() !== '' && !Number.isFinite(Number(row.param2))) {
+                row.param2 = '';
+              }
+            }
             
             // Record undo command
             try {
@@ -1237,10 +1348,17 @@ class SystemRequirementsEditor {
             }
             
             this.saveToStorage();
+
+            if (isPrincipalPointModeParam) {
+              this.renderTable();
+              this.scheduleEvaluateAndUpdate();
+              return;
+            }
             
             // Re-render table if EDGE param1 changes (to update Height dropdown based on new semidia)
             if (field === 'param1' && String(row?.operand ?? '').trim() === 'EDGE') {
-              this.render();
+              this.renderTable();
+              this.scheduleEvaluateAndUpdate();
               return;
             }
             
@@ -1435,6 +1553,18 @@ class SystemRequirementsEditor {
             const dlId = ensureEflBlocksDatalist(blocks);
             if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
             (control as HTMLInputElement).placeholder = 'ALL or blockId (comma separated allowed)';
+          } catch (_) {}
+        } else if ((operand === 'PP1' || operand === 'PP2') && i === 2 && control.tagName === 'INPUT') {
+          try {
+            if (String(row?.param4 ?? '').trim().toUpperCase() === 'ZG') {
+              const configIdHint = row?.configId;
+              const blocks = this._getBlocksForConfigHint(configIdHint);
+              const dlId = ensurePrincipalPointZoomGroupsDatalist(blocks);
+              if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
+              (control as HTMLInputElement).placeholder = 'Zoom Group (A-Z)';
+            } else {
+              (control as HTMLInputElement).placeholder = 'Start Surface';
+            }
           } catch (_) {}
         }
 

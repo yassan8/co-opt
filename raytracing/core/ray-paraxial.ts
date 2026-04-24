@@ -2136,11 +2136,10 @@ export function isCoordTransSurface(surface) {
  * @param {number} wavelength - 波長 (nm)
  * @returns {Object} {finalHeight, finalAlpha}
  */
-function calculateEFLTrace(opticalSystemRows, wavelength = 0.5875618, meridian = 'average') {
-  const initialHeight = 1.0;
+function traceParaxialBasisRay(opticalSystemRows, initialHeight = 1.0, initialAlpha = 0, wavelength = 0.5875618, meridian = 'average') {
   let h = initialHeight;
-  let alpha = 0; // 無限遠物体条件
-  
+  let alpha = initialAlpha;
+
   let prevN = 1.0; // 前の媒質の屈折率（空気から開始）
   
   for (let j = 1; j < opticalSystemRows.length - 1; j++) {
@@ -2218,6 +2217,134 @@ function calculateEFLTrace(opticalSystemRows, wavelength = 0.5875618, meridian =
     finalAlpha: alpha,
     finalN: prevN  // 最終屈折率を返す（ミラーの符号を考慮）
   };
+}
+
+function calculateEFLTrace(opticalSystemRows, wavelength = 0.5875618, meridian = 'average') {
+  return traceParaxialBasisRay(opticalSystemRows, 1.0, 0, wavelength, meridian);
+}
+
+function createReversedIsolatedOpticalSystem(opticalSystemRows, wavelength = 0.5875618) {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length < 3) {
+    return null;
+  }
+
+  const reversedLensSurfaces = [];
+  for (let i = opticalSystemRows.length - 2; i >= 1; i--) {
+    const surface = opticalSystemRows[i];
+    if (isCoordTransSurface(surface)) {
+      continue;
+    }
+
+    const reversedSurface = { ...surface };
+    const radius = surface?.radius;
+    if (radius !== Infinity && radius !== 'Infinity' && radius !== 'INF' && radius !== undefined && radius !== null && String(radius).trim() !== '') {
+      const numericRadius = Number(radius);
+      if (Number.isFinite(numericRadius)) {
+        reversedSurface.radius = -numericRadius;
+      }
+    }
+
+    if (i > 1) {
+      const previousSurface = opticalSystemRows[i - 1];
+      reversedSurface.thickness = getSafeThickness(previousSurface);
+      reversedSurface.material = previousSurface?.material || '';
+      reversedSurface.rindex = getRefractiveIndex(previousSurface, wavelength) || 1;
+      reversedSurface.abbe = previousSurface?.abbe || previousSurface?.Abbe || previousSurface?.vd || previousSurface?.Vd || '';
+    } else {
+      reversedSurface.thickness = 0;
+      reversedSurface.material = '';
+      reversedSurface.rindex = 1;
+      reversedSurface.abbe = '';
+    }
+
+    reversedLensSurfaces.push(reversedSurface);
+  }
+
+  if (reversedLensSurfaces.length === 0) {
+    return null;
+  }
+
+  return [
+    {
+      'object type': 'Object',
+      thickness: Infinity,
+      radius: Infinity,
+      comment: 'Virtual Object for reverse principal-point calc'
+    },
+    ...reversedLensSurfaces,
+    {
+      'object type': 'Image',
+      thickness: 0,
+      radius: Infinity,
+      comment: 'Virtual Image for reverse principal-point calc'
+    }
+  ];
+}
+
+export function calculatePrincipalPointPositions(opticalSystemRows, wavelength = 0.5875618, meridian = 'average') {
+  try {
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length < 3) {
+      return null;
+    }
+
+    const heightRay = traceParaxialBasisRay(opticalSystemRows, 1.0, 0, wavelength, meridian);
+    const angleRay = traceParaxialBasisRay(opticalSystemRows, 0, 1.0, wavelength, meridian);
+
+    if (!heightRay || !angleRay) {
+      return null;
+    }
+
+    const A = Number(heightRay.finalHeight);
+    const C = Number(heightRay.finalAlpha);
+    const D = Number(angleRay.finalAlpha);
+
+    if (!Number.isFinite(C) || Math.abs(C) <= 1e-12) {
+      return null;
+    }
+
+    const reverseSystem = createReversedIsolatedOpticalSystem(opticalSystemRows, wavelength);
+    const reverseTrace = reverseSystem
+      ? calculateFullSystemParaxialTrace(reverseSystem, wavelength, meridian)
+      : null;
+
+    let lastSurfacePositionMm = 0;
+    for (let j = 1; j < opticalSystemRows.length - 2; j++) {
+      const surface = opticalSystemRows[j];
+      if (isCoordTransSurface(surface)) {
+        continue;
+      }
+      const thickness = getSafeThickness(surface);
+      if (Number.isFinite(thickness) && thickness > 0) {
+        lastSurfacePositionMm += thickness;
+      }
+    }
+
+    const effectiveFocalLengthMm = 1.0 / C;
+    const backFocalLengthMm = A / C;
+    let reverseBackFocalLengthMm = Number(reverseTrace?.backFocalLength);
+    if (!Number.isFinite(reverseBackFocalLengthMm) && reverseTrace && Number.isFinite(reverseTrace.finalHeight) && Number.isFinite(reverseTrace.finalAlpha) && Math.abs(reverseTrace.finalAlpha) > 1e-12) {
+      reverseBackFocalLengthMm = Number(reverseTrace.finalHeight) / Number(reverseTrace.finalAlpha);
+    }
+    const frontFocalLengthMm = Number.isFinite(reverseBackFocalLengthMm)
+      ? -reverseBackFocalLengthMm
+      : (Number.isFinite(D) ? (-D / C) : NaN);
+    const frontPrincipalFromFirstSurfaceMm = effectiveFocalLengthMm + frontFocalLengthMm;
+    const rearPrincipalFromLastSurfaceMm = backFocalLengthMm - effectiveFocalLengthMm;
+    const rearPrincipalFromFirstSurfaceMm = lastSurfacePositionMm + rearPrincipalFromLastSurfaceMm;
+
+    return {
+      effectiveFocalLengthMm,
+      frontFocalLengthMm,
+      backFocalLengthMm,
+      reverseBackFocalLengthMm,
+      lastSurfacePositionMm,
+      frontPrincipalFromFirstSurfaceMm,
+      rearPrincipalFromLastSurfaceMm,
+      rearPrincipalFromFirstSurfaceMm,
+    };
+  } catch (_) {
+    return null;
+  }
 }
 
 /**

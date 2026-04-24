@@ -1088,6 +1088,8 @@ body.dark-mode #design-intent-add-block-type option {
 }
 
 #design-intent-container,
+#design-intent-container,
+#zoom-container,
 #requirements-container {
     flex: 1 1 auto;
     min-height: 0;
@@ -1102,6 +1104,163 @@ body.dark-mode #design-intent-add-block-type option {
     flex: 1 1 38%;
     min-height: 260px;
     display: flex;
+}
+
+.design-intent-tabs {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    margin-bottom: 10px;
+}
+
+.design-intent-tab {
+    margin: 0;
+    padding: 0 12px;
+    min-height: 34px;
+    height: 34px;
+    border: 1px solid #d6deea;
+    border-radius: 999px;
+    background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+    color: #334155;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    box-sizing: border-box;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.design-intent-tab.active {
+    background: #111827;
+    border-color: #111827;
+    color: #ffffff;
+}
+
+.design-intent-zoom-panel {
+    flex: 1 1 38%;
+    min-height: 260px;
+    display: flex;
+}
+
+.design-intent-zoom-card {
+    flex: 1 1 auto;
+    min-height: clamp(260px, 36vh, 440px);
+    border: 1px solid #d6deea;
+    border-radius: 12px;
+    background: #ffffff;
+    padding: 16px;
+    overflow: auto;
+}
+
+.design-intent-zoom-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.design-intent-zoom-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #111827;
+}
+
+.design-intent-zoom-meta {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #4b5563;
+}
+
+.design-intent-zoom-empty {
+    margin-top: 14px;
+    font-size: 13px;
+    color: #6b7280;
+}
+
+.design-intent-zoom-value-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.design-intent-zoom-value {
+    font-size: 32px;
+    line-height: 1;
+    font-weight: 700;
+    color: #111827;
+    font-variant-numeric: tabular-nums;
+}
+
+.design-intent-zoom-hint {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.design-intent-zoom-panel input[type="range"] {
+    width: 100%;
+    margin-top: 10px;
+}
+
+.design-intent-zoom-chip-section {
+    margin-top: 14px;
+}
+
+.design-intent-zoom-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #374151;
+}
+
+.design-intent-zoom-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.design-intent-zoom-chip {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.design-intent-zoom-chip-group {
+    background: #eef2ff;
+    color: #3730a3;
+}
+
+.design-intent-zoom-chip-law {
+    background: #ecfeff;
+    color: #155e75;
+}
+
+.design-intent-zoom-empty-inline {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.design-intent-zoom-textarea {
+    width: 100%;
+    min-height: 140px;
+    resize: vertical;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #ffffff;
+    color: #111827;
+}
+
+.design-intent-zoom-actions {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
 }
 
 .block-inspector {
@@ -2156,9 +2315,47 @@ button:active {
     flex: 2;
     min-width: 0;
     overflow: hidden;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    color: #57606a;
+}
+
+.block-inspector-col-params-text {
+    min-width: 0;
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #57606a;
+}
+
+.block-inspector-summary-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 1.3;
+    white-space: nowrap;
+}
+
+.block-inspector-summary-chip-group {
+    background: #eef2ff;
+    border: 1px solid #c7d2fe;
+    color: #4338ca;
+}
+
+.block-inspector-summary-chip-controller {
+    background: #ecfeff;
+    border: 1px solid #a5f3fc;
+    color: #155e75;
+}
+
+.block-inspector-summary-chip-gap {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    color: #334155;
 }
 
 .block-inspector-expanded-panel {
@@ -4422,6 +4619,52 @@ body.dark-mode .ide-section-card {
     box-shadow: none;
 }
 
+body.dark-mode .design-intent-tab {
+    border-color: #374151;
+    background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
+    color: #e5e7eb;
+}
+
+body.dark-mode .design-intent-tab.active {
+    background: #f9fafb;
+    border-color: #f9fafb;
+    color: #111827;
+}
+
+body.dark-mode .design-intent-zoom-card {
+    border-color: #374151;
+    background: #111827;
+}
+
+body.dark-mode .design-intent-zoom-title,
+body.dark-mode .design-intent-zoom-value,
+body.dark-mode .design-intent-zoom-label {
+    color: #f9fafb;
+}
+
+body.dark-mode .design-intent-zoom-meta,
+body.dark-mode .design-intent-zoom-hint,
+body.dark-mode .design-intent-zoom-empty,
+body.dark-mode .design-intent-zoom-empty-inline {
+    color: #9ca3af;
+}
+
+body.dark-mode .design-intent-zoom-chip-group {
+    background: #312e81;
+    color: #c7d2fe;
+}
+
+body.dark-mode .design-intent-zoom-chip-law {
+    background: #083344;
+    color: #a5f3fc;
+}
+
+body.dark-mode .design-intent-zoom-textarea {
+    border-color: #4b5563;
+    background: #0f172a;
+    color: #f9fafb;
+}
+
 body.dark-mode .section-title {
     color: var(--text-primary) !important;
 }
@@ -4448,6 +4691,24 @@ body.dark-mode .block-inspector-col-type,
 body.dark-mode .block-inspector-col-count,
 body.dark-mode .block-inspector-col-params {
     color: var(--text-secondary) !important;
+}
+
+body.dark-mode .block-inspector-summary-chip-group {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(165, 180, 252, 0.35);
+    color: #c7d2fe;
+}
+
+body.dark-mode .block-inspector-summary-chip-controller {
+    background: rgba(8, 145, 178, 0.18);
+    border-color: rgba(103, 232, 249, 0.35);
+    color: #a5f3fc;
+}
+
+body.dark-mode .block-inspector-summary-chip-gap {
+    background: rgba(148, 163, 184, 0.14);
+    border-color: rgba(148, 163, 184, 0.3);
+    color: #e2e8f0;
 }
 
 /* Block Inspector Icon Buttons (Map and Find Glass) */
