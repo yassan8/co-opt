@@ -511,24 +511,30 @@ function __coopt_addDesignIntentLabelSprite(scene, text, position, style = {}) {
     const context = canvas.getContext('2d');
     if (!context) return;
 
-    const fontPt = 25;
-    const paddingX = 10;
-    const paddingY = 5;
+    const fontPt = Number(style?.fontPt) > 0 ? Number(style.fontPt) : 25;
+    const paddingX = Number(style?.paddingX) >= 0 ? Number(style.paddingX) : 10;
+    const paddingY = Number(style?.paddingY) >= 0 ? Number(style.paddingY) : 5;
     const fillStyle = String(style?.fillStyle || 'rgba(255,255,255,0.94)');
     const strokeStyle = String(style?.strokeStyle || '#475569');
     const textStyle = String(style?.textStyle || '#111827');
-    context.font = `600 ${fontPt}pt Arial, sans-serif`;
+    const fontWeight = String(style?.fontWeight || '600');
+    const fontFamily = String(style?.fontFamily || 'Arial, sans-serif');
+    const drawFrame = style?.drawFrame !== false;
+    const rotation = Number(style?.rotation || 0);
+    context.font = `${fontWeight} ${fontPt}pt ${fontFamily}`;
     const metrics = context.measureText(String(text));
     const textHeight = Math.ceil(fontPt * 1.55);
     canvas.width = Math.ceil(metrics.width + paddingX * 2);
     canvas.height = Math.ceil(textHeight + paddingY * 2);
 
-    context.font = `600 ${fontPt}pt Arial, sans-serif`;
-    context.fillStyle = fillStyle;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = strokeStyle;
-    context.lineWidth = 1;
-    context.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
+    context.font = `${fontWeight} ${fontPt}pt ${fontFamily}`;
+    if (drawFrame) {
+        context.fillStyle = fillStyle;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.strokeStyle = strokeStyle;
+        context.lineWidth = 1;
+        context.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
+    }
     context.fillStyle = textStyle;
     context.textAlign = 'center';
     context.textBaseline = 'middle';
@@ -542,6 +548,7 @@ function __coopt_addDesignIntentLabelSprite(scene, text, position, style = {}) {
         depthWrite: false,
     });
     const sprite = new THREE.Sprite(spriteMaterial);
+    spriteMaterial.rotation = rotation;
     sprite.center.set(0.5, 0.5);
     sprite.scale.set(canvas.width / 13, canvas.height / 13, 1);
     sprite.position.copy(position);
@@ -754,10 +761,34 @@ function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surf
             rearGlobal,
             frontFromFirstSurfaceMm: Number(principal.frontPrincipalFromFirstSurfaceMm || 0),
             rearFromFirstSurfaceMm: Number(principal.rearPrincipalFromFirstSurfaceMm || 0),
+            effectiveFocalLengthMm: Number(principal.effectiveFocalLengthMm),
         });
     }
 
     return descriptors;
+}
+
+function __coopt_getSurfaceRangeVerticalBounds(opticalSystemData, surfaceOrigins, startIdx, endIdx, axis) {
+    const normalizedAxis = (String(axis).trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+    const getVerticalCoord = (vec) => normalizedAxis === 'XZ' ? vec.x : vec.y;
+
+    let top = Number.NEGATIVE_INFINITY;
+    let bottom = Number.POSITIVE_INFINITY;
+    for (let i = startIdx; i <= endIdx; i += 1) {
+        const surface = opticalSystemData[i];
+        if (!surface || __coopt_isGapSurface(surface)) continue;
+        const originVec = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+        const semidia = __coopt_getRenderSemidiaMm(surface);
+        const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
+        const halfExtent = normalizedAxis === 'XZ'
+            ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0)
+            : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
+        top = Math.max(top, getVerticalCoord(originVec) + halfExtent);
+        bottom = Math.min(bottom, getVerticalCoord(originVec) - halfExtent);
+    }
+
+    if (!Number.isFinite(top) || !Number.isFinite(bottom)) return null;
+    return { top, bottom };
 }
 
 function __coopt_addPrincipalPointVerticalMarker(scene, axis, position, verticalMin, verticalMax, color, userType) {
@@ -786,7 +817,7 @@ function __coopt_addPrincipalPointVerticalMarker(scene, axis, position, vertical
     scene.add(line);
 }
 
-function __coopt_addPrincipalPointCadDimension(scene, axis, startPoint, endPoint, dimensionCoord, color, userType, labelOffset = 2.8) {
+function __coopt_addPrincipalPointCadDimension(scene, axis, startPoint, endPoint, dimensionCoord, color, userType, labelOffset = 2.8, labelCoord = null, extensionVerticals = null, arrowAtEnd = false, dotAtStart = false) {
     if (!scene || !startPoint || !endPoint || !Number.isFinite(dimensionCoord)) return null;
 
     const normalizedAxis = (String(axis).trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
@@ -805,20 +836,101 @@ function __coopt_addPrincipalPointCadDimension(scene, axis, startPoint, endPoint
     const startZ = getZ(startPoint);
     const endZ = getZ(endPoint);
 
+    const extensionStartVertical = Number.isFinite(extensionVerticals?.start)
+        ? Number(extensionVerticals.start)
+        : startVertical;
+    const extensionEndVertical = Number.isFinite(extensionVerticals?.end)
+        ? Number(extensionVerticals.end)
+        : endVertical;
+
     const dimStart = makePoint(dimensionCoord, startDepth, startZ);
     const dimEnd = makePoint(dimensionCoord, endDepth, endZ);
-    const extStart = makePoint(startVertical, startDepth, startZ);
-    const extEnd = makePoint(endVertical, endDepth, endZ);
+    const extStart = makePoint(extensionStartVertical, startDepth, startZ);
+    const extEnd = makePoint(extensionEndVertical, endDepth, endZ);
 
     __coopt_addDesignIntentLabelPolyline(scene, [extStart, dimStart], color);
     __coopt_addDesignIntentLabelPolyline(scene, [extEnd, dimEnd], color);
     __coopt_addDesignIntentLabelPolyline(scene, [dimStart, dimEnd], color);
+    if (dotAtStart) {
+        const dotGeometry = new THREE.SphereGeometry(0.45, 10, 10);
+        const dotMaterial = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.92,
+            depthTest: false,
+            depthWrite: false,
+        });
+        const dot = new THREE.Mesh(dotGeometry, dotMaterial);
+        dot.position.copy(dimStart);
+        dot.renderOrder = 65021;
+        dot.frustumCulled = false;
+        dot.userData = { type: userType, isOpticalElement: true };
+        scene.add(dot);
+    }
+    if (arrowAtEnd) {
+        const arrowWidth = 1.6;
+        const arrowHeight = 0.9;
+        const arrowBaseZ = endZ + (endZ >= startZ ? -arrowWidth : arrowWidth);
+        __coopt_addDesignIntentLabelPolyline(scene, [
+            makePoint(dimensionCoord + arrowHeight, endDepth, arrowBaseZ),
+            dimEnd,
+        ], color);
+        __coopt_addDesignIntentLabelPolyline(scene, [
+            makePoint(dimensionCoord - arrowHeight, endDepth, arrowBaseZ),
+            dimEnd,
+        ], color);
+    }
+
+    const resolvedLabelCoord = Number.isFinite(labelCoord)
+        ? Number(labelCoord)
+        : dimensionCoord + Number(labelOffset || 0);
 
     return makePoint(
-        dimensionCoord + Number(labelOffset || 0),
+        resolvedLabelCoord,
         (startDepth + endDepth) / 2,
         (startZ + endZ) / 2,
     );
+}
+
+function __coopt_formatZoomGroupSpanLabel(entry) {
+    if (!entry) return '';
+    const zoomGroup = String(entry.zoomGroup || '').trim();
+    if (zoomGroup) return zoomGroup;
+    const startLabel = `S${Number(entry.startIdx) + 1}`;
+    const endLabel = `S${Number(entry.endIdx) + 1}`;
+    return `${startLabel}→${endLabel}`;
+}
+
+function __coopt_addZoomGroupSpanBrace(scene, axis, verticalCoord, depthCoord, startZ, endZ, color) {
+    if (!scene || !Number.isFinite(verticalCoord) || !Number.isFinite(depthCoord) || !Number.isFinite(startZ) || !Number.isFinite(endZ)) return;
+
+    const normalizedAxis = (String(axis).trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+    const makePoint = (vertical, depth, z) => normalizedAxis === 'XZ'
+        ? new THREE.Vector3(vertical, depth, z)
+        : new THREE.Vector3(depth, vertical, z);
+
+    const minZ = Math.min(startZ, endZ);
+    const maxZ = Math.max(startZ, endZ);
+    const midZ = (minZ + maxZ) / 2;
+    const span = Math.max(6, maxZ - minZ);
+    const endPostHeight = Math.min(2.4, Math.max(1.2, span * 0.05));
+    const stemHeight = Math.min(4.2, Math.max(2.4, span * 0.1));
+    __coopt_addDesignIntentLabelPolyline(scene, [
+        makePoint(verticalCoord, depthCoord, minZ),
+        makePoint(verticalCoord + endPostHeight, depthCoord, minZ),
+    ], color);
+    __coopt_addDesignIntentLabelPolyline(scene, [
+        makePoint(verticalCoord, depthCoord, minZ),
+        makePoint(verticalCoord, depthCoord, maxZ),
+    ], color);
+    __coopt_addDesignIntentLabelPolyline(scene, [
+        makePoint(verticalCoord, depthCoord, midZ),
+        makePoint(verticalCoord - stemHeight, depthCoord, midZ),
+    ], color);
+    __coopt_addDesignIntentLabelPolyline(scene, [
+        makePoint(verticalCoord, depthCoord, maxZ),
+        makePoint(verticalCoord + endPostHeight, depthCoord, maxZ),
+    ], color);
 }
 
 function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemData, surfaceOrigins, options = {}) {
@@ -856,22 +968,33 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
     const frontColor = 0xf97316;
     const rearColor = 0x14b8a6;
     const distanceColor = 0x0f766e;
-    const markerMin = surfaceBottom - 4;
-    const markerMax = surfaceTop + 4;
     const topLabelBase = surfaceTop + 12;
     const topLabelLaneStep = 8;
     const principalDimBase = surfaceTop + 18;
-    const groupDimBase = surfaceBottom - 24;
+    const groupDimBase = surfaceBottom - 8;
+    const groupLabelCoord = groupDimBase - 3.2;
+    const groupSpanBase = groupLabelCoord - 4.4;
+    const lowerExtensionGap = 1.4;
+    const descriptorBounds = descriptors.map((entry) => __coopt_getSurfaceRangeVerticalBounds(
+        opticalSystemData,
+        surfaceOrigins,
+        entry.startIdx,
+        entry.endIdx,
+        axis,
+    ));
 
     const topLabelItems = [];
 
     descriptors.forEach((entry, index) => {
-        __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.frontGlobal, markerMin, markerMax, frontColor, 'principal-point-front-marker');
-        __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.rearGlobal, markerMin, markerMax, rearColor, 'principal-point-rear-marker');
+        const bounds = descriptorBounds[index];
+        const markerBottom = Number.isFinite(bounds?.bottom) ? Number(bounds.bottom) : surfaceBottom;
+        const markerTop = Number.isFinite(bounds?.top) ? Number(bounds.top) : surfaceTop;
+        __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.frontGlobal, markerBottom, markerTop, frontColor, 'principal-point-front-marker');
+        __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.rearGlobal, markerBottom, markerTop, rearColor, 'principal-point-rear-marker');
 
         const principalDimCoord = principalDimBase + index * 8;
-        const frontText = `${entry.zoomGroup} PP1 ${entry.frontFromFirstSurfaceMm.toFixed(2)} mm`;
-        const rearText = `${entry.zoomGroup} PP2 ${entry.rearFromFirstSurfaceMm.toFixed(2)} mm`;
+        const frontText = `${entry.zoomGroup} H ${entry.frontFromFirstSurfaceMm.toFixed(2)}`;
+        const rearText = `${entry.zoomGroup} H' ${entry.rearFromFirstSurfaceMm.toFixed(2)}`;
 
         topLabelItems.push({
             text: frontText,
@@ -930,22 +1053,66 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
             __coopt_addDesignIntentLabelSprite(scene, item.text, labelPoint, item.style);
         });
 
+    descriptors.forEach((entry) => {
+        const startOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[entry.startIdx]);
+        const endOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[entry.endIdx]);
+        const startZ = Number(startOrigin?.z || 0);
+        const endZ = Number(endOrigin?.z || 0);
+        const minZ = Math.min(startZ, endZ);
+        const maxZ = Math.max(startZ, endZ);
+        const midZ = (minZ + maxZ) / 2;
+        const span = Math.max(6, maxZ - minZ);
+        const stemHeight = Math.min(4.2, Math.max(2.4, span * 0.1));
+        const groupLabelPoint = makePoint(groupSpanBase - stemHeight - 3.2, getDepthCoord(entry.anchor), midZ);
+        const groupFocalPoint = makePoint(groupSpanBase - stemHeight - 6.0, getDepthCoord(entry.anchor), midZ);
+
+        __coopt_addZoomGroupSpanBrace(scene, axis, groupSpanBase, getDepthCoord(entry.anchor), minZ, maxZ, distanceColor);
+        __coopt_addDesignIntentLabelSprite(scene, __coopt_formatZoomGroupSpanLabel(entry), groupLabelPoint, {
+            drawFrame: false,
+            fillStyle: 'rgba(0,0,0,0)',
+            strokeStyle: 'rgba(0,0,0,0)',
+            textStyle: '#134e4a',
+            paddingX: 2,
+            paddingY: 0,
+            fontWeight: '600',
+        });
+        if (Number.isFinite(entry.effectiveFocalLengthMm)) {
+            __coopt_addDesignIntentLabelSprite(scene, `f ${entry.effectiveFocalLengthMm.toFixed(2)}`, groupFocalPoint, {
+                drawFrame: false,
+                fillStyle: 'rgba(0,0,0,0)',
+                strokeStyle: 'rgba(0,0,0,0)',
+                textStyle: '#0f766e',
+                paddingX: 2,
+                paddingY: 0,
+            });
+        }
+    });
+
     for (let i = 0; i < descriptors.length - 1; i += 1) {
         const current = descriptors[i];
         const next = descriptors[i + 1];
+        const currentBounds = descriptorBounds[i];
+        const nextBounds = descriptorBounds[i + 1];
         const distanceMm = Number(next.frontGlobal.z || 0) - Number(current.rearGlobal.z || 0);
         const labelPoint = __coopt_addPrincipalPointCadDimension(
             scene,
             axis,
             current.rearGlobal,
             next.frontGlobal,
-            groupDimBase - i * 8,
+            groupDimBase,
             distanceColor,
             'principal-point-intergroup-dimension',
             -2.8,
+            groupLabelCoord,
+            {
+                start: Number.isFinite(currentBounds?.bottom) ? Number(currentBounds.bottom) - lowerExtensionGap : null,
+                end: Number.isFinite(nextBounds?.bottom) ? Number(nextBounds.bottom) - lowerExtensionGap : null,
+            },
+            true,
+            true,
         );
         if (labelPoint) {
-            __coopt_addDesignIntentLabelSprite(scene, `${current.zoomGroup}→${next.zoomGroup} ${distanceMm.toFixed(2)} mm`, labelPoint, {
+            __coopt_addDesignIntentLabelSprite(scene, `${current.zoomGroup}→${next.zoomGroup} ${distanceMm.toFixed(2)}`, labelPoint, {
                 fillStyle: 'rgba(240,253,250,0.98)',
                 strokeStyle: '#0f766e',
                 textStyle: '#134e4a',

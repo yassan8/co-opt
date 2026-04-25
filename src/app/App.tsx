@@ -1031,6 +1031,34 @@ export default function App() {
     }
   };
 
+  const collectCrossSectionCameraBoundsOverride = (sceneForDraw: any, axis: 'XZ' | 'YZ') => {
+    const verticalIndex = axis === 'XZ' ? 0 : 1;
+    const bounds = { minY: Infinity, maxY: -Infinity };
+    try {
+      if (sceneForDraw) {
+        sceneForDraw.traverse((child: any) => {
+          if (child?.userData?.rayType === 'crossBeam' && child.geometry) {
+            const positions = child.geometry.attributes?.position;
+            if (positions && Array.isArray(positions.array)) {
+              const posArray = positions.array as any;
+              for (let i = verticalIndex; i < posArray.length; i += 3) {
+                const coord = posArray[i];
+                if (Number.isFinite(coord)) {
+                  bounds.minY = Math.min(bounds.minY, coord);
+                  bounds.maxY = Math.max(bounds.maxY, coord);
+                }
+              }
+            }
+          }
+        });
+      }
+    } catch (_) {}
+
+    return (Number.isFinite(bounds.minY) && Number.isFinite(bounds.maxY))
+      ? bounds
+      : null;
+  };
+
   const buildRenderCompareOffsets = (count: number): number[] => {
     const step = Math.max(0, Number(renderCompareOffsetStepMm) || 0);
     if (count <= 0 || step <= 0) return Array.from({ length: Math.max(0, count) }, () => 0);
@@ -2953,12 +2981,6 @@ const collectLegacyCrossRays = async (
       } else if (axis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
         w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
       }
-
-      try {
-        if (typeof w.updateCameraViewBounds === 'function') {
-          w.updateCameraViewBounds();
-        }
-      } catch (_) {}
 
       syncOrthoBoundsToRendererAspect();
       const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);

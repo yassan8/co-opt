@@ -2591,10 +2591,10 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
         if (options.cameraBoundsOverride) {
             const cbo = options.cameraBoundsOverride as any;
             if (Number.isFinite(cbo.minY) && Number.isFinite(cbo.maxY)) {
-                minY = cbo.minY;
-                maxY = cbo.maxY;
-                targetCenterY = (cbo.minY + cbo.maxY) / 2;
-                console.log(`[RAY-DEBUG] Using camera bounds override: minY=${minY.toFixed(1)}, maxY=${maxY.toFixed(1)}`);
+                minY = Math.min(minY, cbo.minY);
+                maxY = Math.max(maxY, cbo.maxY);
+                targetCenterY = (minY + maxY) / 2;
+                console.log(`[RAY-DEBUG] Using merged camera bounds override: minY=${minY.toFixed(1)}, maxY=${maxY.toFixed(1)}`);
             }
         }
 
@@ -2763,7 +2763,7 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
         }
 
         const cameraDistance = options.cameraDistance || 300;
-        const targetX = targetOverride ? targetOverride.x : 0;
+    const targetX = targetOverride ? targetOverride.x : 0;
         const targetY = targetOverride ? targetOverride.y : 0;
         const targetZ = targetOverride ? targetOverride.z : targetCenterZ;
 
