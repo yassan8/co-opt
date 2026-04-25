@@ -56,14 +56,14 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
   },
   "PP2": {
     name: "Rear Principal Point (PP2)",
-    description: "Rear principal point position from the first surface of the selected subsystem",
+    description: "Rear principal point position from the last surface of the selected subsystem",
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
       { key: "param2", label: "S1", description: "Start Surface" },
       { key: "param3", label: "S2", description: "End Surface" },
       { key: "param4", label: "Mode", description: "blank=Surface range, ZG=Zoom Group" }
     ],
-    notes: "開始面 S1 から終了面 S2 までのレンズ群、または指定した Zoom Group の範囲を空気中のサブシステムとして評価し、先頭面を 0 mm としたときの後側主点位置(mm)を返します。\n\nPP2 から群の最終面位置を引くと、最終面基準の後側主点オフセットになります。\n\n指定方法:\n- Surface range: param2=S1, param3=S2, param4=空欄\n- Zoom Group: param2=zoom group名, param4=ZG\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
+    notes: "開始面 S1 から終了面 S2 までのレンズ群、または指定した Zoom Group の範囲を空気中のサブシステムとして評価し、最終面を 0 mm としたときの後側主点位置(mm)を返します。\n\n指定方法:\n- Surface range: param2=S1, param3=S2, param4=空欄\n- Zoom Group: param2=zoom group名, param4=ZG\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
   "BFL": {
     name: "Back Focal Length (BFL)",

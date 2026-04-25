@@ -75,6 +75,78 @@ function parseZernikeUnit(raw: any): string {
     return 'waves';
 }
 
+function isGapOpticalRow(row: any): boolean {
+    if (!row || typeof row !== 'object') return false;
+
+    const blockType = String(row._blockType ?? row.blockType ?? '').trim().toLowerCase();
+    if (blockType === 'gap' || blockType === 'airgap') return true;
+
+    const objectType = String(row['object type'] ?? row.object ?? row.objectType ?? row.type ?? '').trim().toLowerCase();
+    if (objectType === 'gap' || objectType === 'airgap' || objectType === 'air gap') return true;
+
+    const surfaceRole = String(row._surfaceRole ?? row.surfaceRole ?? '').trim().toLowerCase();
+    return surfaceRole === 'gap' || surfaceRole === 'airgap';
+}
+
+function isCoordTransOpticalRow(row: any): boolean {
+    if (!row || typeof row !== 'object') return false;
+
+    const values = [
+        row.surfType, row.type, row.surfaceType, row.surface_type,
+        row['object type'], row.object, row.Object,
+        row.comment, row.Comment,
+        row._blockType, row.blockType, row.block_type, row.blockTypeName,
+    ];
+
+    return values.some((value) => {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        if (!normalized) return false;
+        return normalized === 'ct'
+            || normalized === 'coordtrans'
+            || normalized === 'coordinatebreak'
+            || normalized === 'coord trans'
+            || normalized === 'coordinate break'
+            || normalized.includes('coord trans')
+            || normalized.includes('coordinate break');
+    });
+}
+
+function resolvePhysicalSurfaceIdRangeFromOrdinals(opticalSystemData: any[], startOrdinal: number, endOrdinal: number): { startSurf: number; endSurf: number } | null {
+    if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
+    const normalizedStart = Math.max(0, Math.floor(Number(startOrdinal) || 0));
+    const normalizedEnd = Math.max(normalizedStart, Math.floor(Number(endOrdinal) || normalizedStart));
+
+    let physicalOrdinal = 0;
+    let startSurf: number | null = null;
+    let endSurf: number | null = null;
+
+    for (const row of opticalSystemData) {
+        if (!row || isGapOpticalRow(row) || isCoordTransOpticalRow(row)) continue;
+
+        const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+        if (objectType === 'object' || objectType === 'image') continue;
+
+        const surfaceId = Number(row.id);
+        if (!Number.isFinite(surfaceId)) {
+            continue;
+        }
+
+        if (physicalOrdinal === normalizedStart) {
+            startSurf = surfaceId;
+        }
+        if (physicalOrdinal === normalizedEnd) {
+            endSurf = surfaceId;
+            break;
+        }
+
+        physicalOrdinal += 1;
+    }
+
+    if (!Number.isFinite(startSurf) || !Number.isFinite(endSurf)) return null;
+    return { startSurf: Number(startSurf), endSurf: Number(endSurf) };
+}
+
 function readCoeff(container: any, noll: any): number {
     const n = Number(noll);
     if (!Number.isFinite(n) || !container || typeof container !== 'object') return 0;
@@ -3425,6 +3497,7 @@ class MeritFunctionEditor {
                 return 3;
             case 'Gap':
             case 'AirGap':
+            case 'CoordTrans':
                 return 0;
             case 'Stop':
                 return 1;
@@ -3497,8 +3570,10 @@ class MeritFunctionEditor {
         }
     }
 
-    _getZoomGroupSurfaceRange(zoomGroupLabel: string, configId: any): { startSurf: number; endSurf: number } | null {
+    _getZoomGroupSurfaceRange(opticalSystemData: any[], zoomGroupLabel: string, configId: any): { startSurf: number; endSurf: number } | null {
         try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
             const sys = tryLoadSystemConfigurations();
             const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
 
@@ -3512,25 +3587,45 @@ class MeritFunctionEditor {
                 cfg = configs.find((c: any) => c && String(c.id) === activeId) || configs[0] || null;
             }
 
-            const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
-            if (!Array.isArray(blocks) || blocks.length === 0) return null;
-
             const target = String(zoomGroupLabel ?? '').trim().toUpperCase();
             if (!target) return null;
 
-            let currentSurf = 0;
+            const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
+            if (!Array.isArray(blocks) || blocks.length === 0) return null;
+
+            const zoomGroupBlockIds = new Set<string>();
+            for (const block of blocks) {
+                const blockParams = (block?.parameters && typeof block.parameters === 'object') ? block.parameters : null;
+                const zoomGroup = String(blockParams?.zoomGroup ?? '').trim().toUpperCase();
+                const blockId = String(block?.blockId ?? '').trim();
+                if (!blockId || !zoomGroup || zoomGroup !== target) continue;
+                if (this._getSurfaceCountFromBlockType(block) <= 0) continue;
+                zoomGroupBlockIds.add(blockId);
+            }
+
+            if (zoomGroupBlockIds.size === 0) return null;
+
             let startSurf = Number.POSITIVE_INFINITY;
             let endSurf = Number.NEGATIVE_INFINITY;
 
-            for (const block of blocks) {
-                const surfCount = this._getSurfaceCountFromBlockType(block);
-                const blockParams = (block?.parameters && typeof block.parameters === 'object') ? block.parameters : null;
-                const zoomGroup = String(blockParams?.zoomGroup ?? '').trim().toUpperCase();
-                if (surfCount > 0 && zoomGroup && zoomGroup === target) {
-                    startSurf = Math.min(startSurf, currentSurf);
-                    endSurf = Math.max(endSurf, currentSurf + surfCount - 1);
-                }
-                currentSurf += surfCount;
+            for (const row of opticalSystemData) {
+                if (!row || isGapOpticalRow(row) || isCoordTransOpticalRow(row)) continue;
+
+                const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+                if (objectType === 'object' || objectType === 'image') continue;
+
+                const blockId = String(row._blockId ?? '').trim();
+                if (!blockId || !zoomGroupBlockIds.has(blockId)) continue;
+
+                const blockType = String(row._blockType ?? row.blockType ?? '').trim().toLowerCase();
+                const surfaceRole = String(row._surfaceRole ?? row.surfaceRole ?? '').trim().toLowerCase();
+                if ((blockType === 'paraxial' || blockType === 'thinlens') && surfaceRole === 'back') continue;
+
+                const surfaceId = Number(row.id);
+                if (!Number.isFinite(surfaceId)) continue;
+
+                startSurf = Math.min(startSurf, surfaceId);
+                endSurf = Math.max(endSurf, surfaceId);
             }
 
             if (!Number.isFinite(startSurf) || !Number.isFinite(endSurf)) return null;
@@ -3659,7 +3754,7 @@ class MeritFunctionEditor {
 
             const wantsZoomGroup = modeRaw === 'ZG' || (!!param2Raw && !Number.isFinite(Number(param2Raw)));
             if (wantsZoomGroup) {
-                const range = this._getZoomGroupSurfaceRange(param2Raw, operand?.configId);
+                const range = this._getZoomGroupSurfaceRange(opticalSystemData, param2Raw, operand?.configId);
                 if (!range) {
                     console.warn(`[PP] Could not find zoom group "${param2Raw}"`);
                     return 0;
@@ -3679,7 +3774,7 @@ class MeritFunctionEditor {
 
             const value = metricKey === 'PP1'
                 ? principalPoints.frontPrincipalFromFirstSurfaceMm
-                : principalPoints.rearPrincipalFromFirstSurfaceMm;
+                : principalPoints.rearPrincipalFromLastSurfaceMm;
             return this.safeFiniteNumberOrZero(value);
         } catch (err) {
             console.error(`[PP] Error calculating ${metricKey}:`, err);

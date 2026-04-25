@@ -2130,6 +2130,25 @@ export function isCoordTransSurface(surface) {
   return fields.some(isCb);
 }
 
+function isGapSurface(surface) {
+  if (!surface) return false;
+
+  const fields = [
+    surface._blockType, surface.blockType, surface.block_type, surface.blockTypeName,
+    surface.surfType, surface.type, surface.surfaceType, surface.surface_type,
+    surface['object type'], surface.object, surface.Object,
+    surface._surfaceRole,
+    surface.comment, surface.Comment,
+  ];
+
+  const isGap = (value) => {
+    const normalized = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    return normalized === 'gap' || normalized === 'airgap';
+  };
+
+  return fields.some(isGap);
+}
+
 /**
  * EFL計算専用の無限遠物体条件での光線追跡
  * @param {Array} opticalSystemRows - 光学系データ配列
@@ -2287,8 +2306,34 @@ export function calculatePrincipalPointPositions(opticalSystemRows, wavelength =
       return null;
     }
 
-    const heightRay = traceParaxialBasisRay(opticalSystemRows, 1.0, 0, wavelength, meridian);
-    const angleRay = traceParaxialBasisRay(opticalSystemRows, 0, 1.0, wavelength, meridian);
+    const principalRows = [opticalSystemRows[0]];
+    for (let j = 1; j < opticalSystemRows.length - 1; j += 1) {
+      const surface = opticalSystemRows[j];
+      if (!surface || isGapSurface(surface)) {
+        continue;
+      }
+      principalRows.push({ ...surface });
+    }
+    principalRows.push(opticalSystemRows[opticalSystemRows.length - 1]);
+
+    if (principalRows.length < 3) {
+      return null;
+    }
+
+    const finalPhysicalSurface = principalRows[principalRows.length - 2];
+    const attachedGapThickness = Number(finalPhysicalSurface?.__cooptGapThickness);
+    const hasAttachedTrailingGap = finalPhysicalSurface?.__cooptGapApplied === true
+      || (finalPhysicalSurface?.__cooptGapThickness !== undefined
+        && finalPhysicalSurface?.__cooptGapThickness !== null
+        && String(finalPhysicalSurface.__cooptGapThickness).trim() !== ''
+        && Number.isFinite(attachedGapThickness));
+    if (hasAttachedTrailingGap && finalPhysicalSurface && typeof finalPhysicalSurface === 'object') {
+      finalPhysicalSurface.thickness = 0;
+      finalPhysicalSurface.__cooptGapThickness = 0;
+    }
+
+    const heightRay = traceParaxialBasisRay(principalRows, 1.0, 0, wavelength, meridian);
+    const angleRay = traceParaxialBasisRay(principalRows, 0, 1.0, wavelength, meridian);
 
     if (!heightRay || !angleRay) {
       return null;
@@ -2302,14 +2347,14 @@ export function calculatePrincipalPointPositions(opticalSystemRows, wavelength =
       return null;
     }
 
-    const reverseSystem = createReversedIsolatedOpticalSystem(opticalSystemRows, wavelength);
+    const reverseSystem = createReversedIsolatedOpticalSystem(principalRows, wavelength);
     const reverseTrace = reverseSystem
       ? calculateFullSystemParaxialTrace(reverseSystem, wavelength, meridian)
       : null;
 
     let lastSurfacePositionMm = 0;
-    for (let j = 1; j < opticalSystemRows.length - 2; j++) {
-      const surface = opticalSystemRows[j];
+    for (let j = 1; j < principalRows.length - 2; j++) {
+      const surface = principalRows[j];
       if (isCoordTransSurface(surface)) {
         continue;
       }

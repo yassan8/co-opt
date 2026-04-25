@@ -167,6 +167,29 @@ function __coopt_isGapSurface(surface) {
     return false;
 }
 
+function __coopt_isCoordTransSurface(surface) {
+    if (!surface || typeof surface !== 'object') return false;
+
+    const values = [
+        surface.surfType, surface.type, surface.surfaceType, surface.surface_type,
+        surface['object type'], surface.object, surface.Object,
+        surface.comment, surface.Comment,
+        surface._blockType, surface.blockType, surface.block_type, surface.blockTypeName,
+    ];
+
+    return values.some((value) => {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        if (!normalized) return false;
+        return normalized === 'ct'
+            || normalized === 'coordtrans'
+            || normalized === 'coordinatebreak'
+            || normalized === 'coord trans'
+            || normalized === 'coordinate break'
+            || normalized.includes('coord trans')
+            || normalized.includes('coordinate break');
+    });
+}
+
 function __coopt_isThinLensSurface(surface) {
     if (!surface || typeof surface !== 'object') return false;
     const blockType = String(surface._blockType ?? surface.blockType ?? '').trim().toLowerCase();
@@ -687,6 +710,7 @@ function __coopt_buildPrincipalPointSubsystem(opticalSystemData, startIdx, endId
     for (let i = start; i <= end; i += 1) {
         const row = opticalSystemData[i];
         if (!row || typeof row !== 'object') continue;
+        if (__coopt_isGapSurface(row) || __coopt_isCoordTransSurface(row)) continue;
         const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
         if (objectType === 'object' || objectType === 'image') continue;
         subsystem.push({ ...row });
@@ -701,6 +725,37 @@ function __coopt_buildPrincipalPointSubsystem(opticalSystemData, startIdx, endId
         comment: 'Virtual Image'
     });
     return subsystem;
+}
+
+function __coopt_getPrincipalPointPhysicalRange(opticalSystemData, startIdx, endIdx) {
+    if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
+    const start = Math.max(0, Math.min(opticalSystemData.length - 1, Number(startIdx) || 0));
+    const end = Math.max(start, Math.min(opticalSystemData.length - 1, Number(endIdx) || start));
+
+    let physicalStart = null;
+    for (let i = start; i <= end; i += 1) {
+        const row = opticalSystemData[i];
+        if (!row || __coopt_isGapSurface(row) || __coopt_isCoordTransSurface(row)) continue;
+        const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+        if (objectType === 'object' || objectType === 'image') continue;
+        physicalStart = i;
+        break;
+    }
+
+    if (!Number.isInteger(physicalStart)) return null;
+
+    let physicalEnd = physicalStart;
+    for (let i = end; i >= physicalStart; i -= 1) {
+        const row = opticalSystemData[i];
+        if (!row || __coopt_isGapSurface(row) || __coopt_isCoordTransSurface(row)) continue;
+        const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+        if (objectType === 'object' || objectType === 'image') continue;
+        physicalEnd = i;
+        break;
+    }
+
+    return { startIdx: physicalStart, endIdx: physicalEnd };
 }
 
 function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins) {
@@ -739,27 +794,33 @@ function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surf
 
     const descriptors = [];
     for (const group of orderedGroups) {
-        const subsystem = __coopt_buildPrincipalPointSubsystem(opticalSystemData, group.startIdx, group.endIdx);
+        const physicalRange = __coopt_getPrincipalPointPhysicalRange(opticalSystemData, group.startIdx, group.endIdx);
+        if (!physicalRange) continue;
+
+        const subsystem = __coopt_buildPrincipalPointSubsystem(opticalSystemData, physicalRange.startIdx, physicalRange.endIdx);
         if (!subsystem) continue;
 
         const principal = calculatePrincipalPointPositions(subsystem);
         if (!principal) continue;
 
-        const startOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[group.startIdx]);
-        const anchor = __coopt_averageOriginForRange(surfaceOrigins, group.startIdx, group.endIdx) || startOrigin.clone();
+        const startOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[physicalRange.startIdx]);
+        const endOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[physicalRange.endIdx]);
+        const anchor = __coopt_averageOriginForRange(surfaceOrigins, physicalRange.startIdx, physicalRange.endIdx)
+            || startOrigin.clone().lerp(endOrigin, 0.5);
         const frontGlobal = anchor.clone();
         const rearGlobal = anchor.clone();
         frontGlobal.z = Number(startOrigin.z || 0) + Number(principal.frontPrincipalFromFirstSurfaceMm || 0);
-        rearGlobal.z = Number(startOrigin.z || 0) + Number(principal.rearPrincipalFromFirstSurfaceMm || 0);
+        rearGlobal.z = Number(endOrigin.z || 0) + Number(principal.rearPrincipalFromLastSurfaceMm || 0);
 
         descriptors.push({
             zoomGroup: group.zoomGroup,
-            startIdx: group.startIdx,
-            endIdx: group.endIdx,
+            startIdx: physicalRange.startIdx,
+            endIdx: physicalRange.endIdx,
             anchor,
             frontGlobal,
             rearGlobal,
             frontFromFirstSurfaceMm: Number(principal.frontPrincipalFromFirstSurfaceMm || 0),
+            rearFromLastSurfaceMm: Number(principal.rearPrincipalFromLastSurfaceMm || 0),
             rearFromFirstSurfaceMm: Number(principal.rearPrincipalFromFirstSurfaceMm || 0),
             effectiveFocalLengthMm: Number(principal.effectiveFocalLengthMm),
         });
@@ -994,7 +1055,7 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
 
         const principalDimCoord = principalDimBase + index * 8;
         const frontText = `${entry.zoomGroup} H ${entry.frontFromFirstSurfaceMm.toFixed(2)}`;
-        const rearText = `${entry.zoomGroup} H' ${entry.rearFromFirstSurfaceMm.toFixed(2)}`;
+        const rearText = `${entry.zoomGroup} H' ${entry.rearFromLastSurfaceMm.toFixed(2)}`;
 
         topLabelItems.push({
             text: frontText,
