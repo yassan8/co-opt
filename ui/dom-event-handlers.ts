@@ -6564,6 +6564,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (!allParamKeys.includes('focalLengthX')) allParamKeys.push('focalLengthX');
                 if (!allParamKeys.includes('focalLengthY')) allParamKeys.push('focalLengthY');
             }
+            if (blockType === 'Stop') {
+                if (!allParamKeys.includes('semiDiameter')) allParamKeys.push('semiDiameter');
+            }
             if (blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'ImageSurface' && blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane') {
                 if (!allParamKeys.includes('zoomGroup')) allParamKeys.push('zoomGroup');
             }
@@ -7955,7 +7958,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             }
 
             // Add aperture section for blocks that have aperture data
-            const aperture = (expandedBlock.aperture && typeof expandedBlock.aperture === 'object') ? expandedBlock.aperture : null;
+            const aperture = (blockType !== 'Stop' && expandedBlock.aperture && typeof expandedBlock.aperture === 'object') ? expandedBlock.aperture : null;
             const renderedApertureKeys = new Set<string>();
             if (aperture && Object.keys(aperture).length > 0) {
                 panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
