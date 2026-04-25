@@ -3686,13 +3686,53 @@ class MeritFunctionEditor {
 
     _calculatePrincipalPointsForSurfaceRange(opticalSystemData: any[], startSurf: number, endSurf: number, wavelength: number): any | null {
         try {
-            const rangeData = this._buildSubsystemBySurfaceIds(opticalSystemData, startSurf, endSurf);
+            const normalizedRange = this._expandPrincipalPointSurfaceRange(opticalSystemData, startSurf, endSurf);
+            if (!normalizedRange) return null;
+
+            const rangeData = this._buildSubsystemBySurfaceIds(
+                opticalSystemData,
+                normalizedRange.startSurf,
+                normalizedRange.endSurf
+            );
             if (!rangeData) return null;
             return calculatePrincipalPointPositions(rangeData, wavelength);
         } catch (err) {
             console.error('[PP Range] Error calculating principal points:', err);
             return null;
         }
+    }
+
+    _expandPrincipalPointSurfaceRange(opticalSystemData: any[], startSurf: number, endSurf: number): { startSurf: number; endSurf: number } | null {
+        if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
+        const normalizedStart = Number.isFinite(Number(startSurf)) ? Number(startSurf) : 1;
+        let normalizedEnd = Number.isFinite(Number(endSurf)) ? Number(endSurf) : normalizedStart;
+        if (normalizedEnd < normalizedStart) return null;
+
+        const endRow = opticalSystemData.find((row) => Number(row?.id) === normalizedEnd);
+        const endBlockId = String(endRow?._blockId ?? '').trim();
+        const endBlockType = String(endRow?._blockType ?? endRow?.blockType ?? '').trim().toLowerCase();
+
+        if ((endBlockType === 'paraxial' || endBlockType === 'thinlens') && endBlockId) {
+            for (const row of opticalSystemData) {
+                if (!row || isGapOpticalRow(row) || isCoordTransOpticalRow(row)) continue;
+
+                const blockId = String(row._blockId ?? '').trim();
+                if (blockId !== endBlockId) continue;
+
+                const blockType = String(row._blockType ?? row.blockType ?? '').trim().toLowerCase();
+                const surfaceRole = String(row._surfaceRole ?? row.surfaceRole ?? '').trim().toLowerCase();
+                if ((blockType === 'paraxial' || blockType === 'thinlens') && surfaceRole === 'back') {
+                    const backSurfaceId = Number(row.id);
+                    if (Number.isFinite(backSurfaceId)) {
+                        normalizedEnd = Math.max(normalizedEnd, backSurfaceId);
+                    }
+                    break;
+                }
+            }
+        }
+
+        return { startSurf: normalizedStart, endSurf: normalizedEnd };
     }
 
     _buildSubsystemBySurfaceIds(opticalSystemData: any[], startSurf: number, endSurf: number): any[] | null {

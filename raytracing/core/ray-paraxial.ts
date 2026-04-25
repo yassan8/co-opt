@@ -473,6 +473,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       
       const radius = getSafeRadius(surface, meridian);
       const thickness = getSafeThickness(surface);
+      const combinedPower = Number(surface?.__cooptCombinedPower);
       const isStopSurface = String(surface?.['object type'] ?? surface?.object ?? '').trim().toLowerCase() === 'stop';
       
       // Mirror面の検出
@@ -481,7 +482,9 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       // 次の媒質の屈折率を決定
       let nextN = 1.0; // デフォルトは空気
       
-      if (isMirror) {
+      if (Number.isFinite(combinedPower)) {
+        nextN = prevN;
+      } else if (isMirror) {
         // Mirror面: 屈折率反転法 (n' = -n)
         // 反射を「負の屈折率空間への屈折」として扱う標準的な近軸光線追跡法
         // 屈折力: φ = (n' - n) / R = (-n - n) / R = -2n/R
@@ -518,7 +521,9 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       
       // 屈折力 φ[j] = (nextN - prevN) / radius
       let phi = 0;
-      if (radius !== Infinity && radius !== 0) {
+      if (Number.isFinite(combinedPower)) {
+        phi = combinedPower;
+      } else if (radius !== Infinity && radius !== 0) {
         phi = (nextN - prevN) / radius;
         if (!isFinite(phi)) {
           // console.log(`  ⚠️ 無効な屈折力 φ=${phi}, 0を使用`);
@@ -2149,6 +2154,100 @@ function isGapSurface(surface) {
   return fields.some(isGap);
 }
 
+function isThinLensSurface(surface) {
+  if (!surface) return false;
+
+  const blockType = String(
+    surface._blockType ?? surface.blockType ?? surface.block_type ?? surface.blockTypeName ?? ''
+  ).trim().toLowerCase();
+
+  return blockType === 'thinlens' || blockType === 'paraxial';
+}
+
+function isThinLensBackSurface(surface) {
+  if (!isThinLensSurface(surface)) return false;
+
+  const surfaceRole = String(
+    surface._surfaceRole ?? surface.surfaceRole ?? ''
+  ).trim().toLowerCase();
+
+  return surfaceRole === 'back';
+}
+
+function buildPrincipalPointTraceSystem(opticalSystemRows, wavelength = 0.5875618, meridian = 'average') {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length < 3) {
+    return null;
+  }
+
+  const objectSurface = opticalSystemRows[0];
+  const imageSurface = opticalSystemRows[opticalSystemRows.length - 1];
+  const principalRows = [objectSurface];
+
+  for (let j = 1; j < opticalSystemRows.length - 1; j += 1) {
+    const surface = opticalSystemRows[j];
+    if (!surface || isGapSurface(surface) || isCoordTransSurface(surface)) {
+      continue;
+    }
+
+    if (isThinLensBackSurface(surface)) {
+      continue;
+    }
+
+    if (isThinLensSurface(surface)) {
+      const blockId = String(surface._blockId ?? '').trim();
+      const frontSurface = { ...surface };
+      let combinedPower = 0;
+      let carryThickness = Number(getSafeThickness(surface)) || 0;
+      let prevN = 1.0;
+      let nextN = getRefractiveIndex(surface, wavelength);
+      const frontRadius = getSafeRadius(surface, meridian);
+      if (!Number.isFinite(nextN) || nextN === 0) nextN = 1.0;
+      if (frontRadius !== Infinity && frontRadius !== 0) {
+        combinedPower += (nextN - prevN) / frontRadius;
+      }
+
+      if (blockId) {
+        for (let k = j + 1; k < opticalSystemRows.length - 1; k += 1) {
+          const nextSurface = opticalSystemRows[k];
+          if (!nextSurface || isGapSurface(nextSurface) || isCoordTransSurface(nextSurface)) {
+            continue;
+          }
+
+          const nextBlockId = String(nextSurface._blockId ?? '').trim();
+          if (nextBlockId !== blockId) {
+            break;
+          }
+
+          if (isThinLensBackSurface(nextSurface)) {
+            const backRadius = getSafeRadius(nextSurface, meridian);
+            let exitN = getRefractiveIndex(nextSurface, wavelength);
+            if (!Number.isFinite(exitN) || exitN === 0) exitN = 1.0;
+            if (backRadius !== Infinity && backRadius !== 0) {
+              combinedPower += (exitN - nextN) / backRadius;
+            }
+            carryThickness = Number(getSafeThickness(nextSurface)) || 0;
+            j = k;
+            break;
+          }
+        }
+      }
+
+      frontSurface.thickness = carryThickness;
+      frontSurface.material = '';
+      frontSurface.rindex = 1;
+      frontSurface.abbe = '';
+      frontSurface.__cooptCombinedPower = combinedPower;
+      principalRows.push(frontSurface);
+      continue;
+    }
+
+    principalRows.push({ ...surface });
+  }
+
+  principalRows.push(imageSurface);
+  return principalRows.length >= 3 ? principalRows : null;
+}
+
 /**
  * EFL計算専用の無限遠物体条件での光線追跡
  * @param {Array} opticalSystemRows - 光学系データ配列
@@ -2176,6 +2275,7 @@ function traceParaxialBasisRay(opticalSystemRows, initialHeight = 1.0, initialAl
     
     const radius = getSafeRadius(surface, meridian);
     const thickness = getSafeThickness(surface);
+    const combinedPower = Number(surface?.__cooptCombinedPower);
     
     // Mirror面の検出
     const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
@@ -2184,7 +2284,9 @@ function traceParaxialBasisRay(opticalSystemRows, initialHeight = 1.0, initialAl
     // 次の媒質の屈折率を決定
     let nextN = 1.0; // デフォルトは空気
     
-    if (isMirror) {
+    if (Number.isFinite(combinedPower)) {
+      nextN = prevN;
+    } else if (isMirror) {
       // Mirror面: ZEMAXスタイル - 屈折率は変えずに反射を処理
       nextN = prevN;
     } else if (isStopSurface) {
@@ -2208,7 +2310,9 @@ function traceParaxialBasisRay(opticalSystemRows, initialHeight = 1.0, initialAl
     
     // 屈折力 φ[j] = (nextN - prevN) / radius
     let phi = 0;
-    if (radius !== Infinity && radius !== 0) {
+    if (Number.isFinite(combinedPower)) {
+      phi = combinedPower;
+    } else if (radius !== Infinity && radius !== 0) {
       phi = (nextN - prevN) / radius;
       if (!isFinite(phi)) {
         phi = 0;
@@ -2259,8 +2363,12 @@ function createReversedIsolatedOpticalSystem(opticalSystemRows, wavelength = 0.5
     }
 
     const reversedSurface = { ...surface };
+    if (Number.isFinite(Number(surface?.__cooptCombinedPower))) {
+      reversedSurface.__cooptCombinedPower = Number(surface.__cooptCombinedPower);
+      reversedSurface.radius = Infinity;
+    }
     const radius = surface?.radius;
-    if (radius !== Infinity && radius !== 'Infinity' && radius !== 'INF' && radius !== undefined && radius !== null && String(radius).trim() !== '') {
+    if (!Number.isFinite(Number(surface?.__cooptCombinedPower)) && radius !== Infinity && radius !== 'Infinity' && radius !== 'INF' && radius !== undefined && radius !== null && String(radius).trim() !== '') {
       const numericRadius = Number(radius);
       if (Number.isFinite(numericRadius)) {
         reversedSurface.radius = -numericRadius;
@@ -2310,17 +2418,9 @@ export function calculatePrincipalPointPositions(opticalSystemRows, wavelength =
       return null;
     }
 
-    const principalRows = [opticalSystemRows[0]];
-    for (let j = 1; j < opticalSystemRows.length - 1; j += 1) {
-      const surface = opticalSystemRows[j];
-      if (!surface || isGapSurface(surface)) {
-        continue;
-      }
-      principalRows.push({ ...surface });
-    }
-    principalRows.push(opticalSystemRows[opticalSystemRows.length - 1]);
+    const principalRows = buildPrincipalPointTraceSystem(opticalSystemRows, wavelength, meridian);
 
-    if (principalRows.length < 3) {
+    if (!Array.isArray(principalRows) || principalRows.length < 3) {
       return null;
     }
 
@@ -2335,6 +2435,15 @@ export function calculatePrincipalPointPositions(opticalSystemRows, wavelength =
       finalPhysicalSurface.thickness = 0;
       finalPhysicalSurface.__cooptGapThickness = 0;
     }
+
+    const effectivePhysicalSurfaces = principalRows.slice(1, -1).filter((surface) => {
+      if (!surface) return false;
+      if (isGapSurface(surface)) return false;
+      if (isCoordTransSurface(surface)) return false;
+      return true;
+    });
+    const singleThinLensSubsystem = effectivePhysicalSurfaces.length === 1
+      && isThinLensSurface(effectivePhysicalSurfaces[0]);
 
     const heightRay = traceParaxialBasisRay(principalRows, 1.0, 0, wavelength, meridian);
     const angleRay = traceParaxialBasisRay(principalRows, 0, 1.0, wavelength, meridian);
@@ -2370,6 +2479,10 @@ export function calculatePrincipalPointPositions(opticalSystemRows, wavelength =
 
     const effectiveFocalLengthMm = 1.0 / C;
     const backFocalLengthMm = A / C;
+    let reverseEffectiveFocalLengthMm = Number(reverseTrace?.focalLength);
+    if (!Number.isFinite(reverseEffectiveFocalLengthMm) && reverseTrace && Number.isFinite(reverseTrace.finalAlpha) && Math.abs(reverseTrace.finalAlpha) > 1e-12) {
+      reverseEffectiveFocalLengthMm = 1.0 / Number(reverseTrace.finalAlpha);
+    }
     let reverseBackFocalLengthMm = Number(reverseTrace?.backFocalLength);
     if (!Number.isFinite(reverseBackFocalLengthMm) && reverseTrace && Number.isFinite(reverseTrace.finalHeight) && Number.isFinite(reverseTrace.finalAlpha) && Math.abs(reverseTrace.finalAlpha) > 1e-12) {
       reverseBackFocalLengthMm = Number(reverseTrace.finalHeight) / Number(reverseTrace.finalAlpha);
@@ -2377,7 +2490,23 @@ export function calculatePrincipalPointPositions(opticalSystemRows, wavelength =
     const frontFocalLengthMm = Number.isFinite(reverseBackFocalLengthMm)
       ? -reverseBackFocalLengthMm
       : (Number.isFinite(D) ? (-D / C) : NaN);
-    const frontPrincipalFromFirstSurfaceMm = effectiveFocalLengthMm + frontFocalLengthMm;
+
+    if (singleThinLensSubsystem) {
+      return {
+        effectiveFocalLengthMm,
+        frontFocalLengthMm,
+        backFocalLengthMm,
+        reverseBackFocalLengthMm,
+        lastSurfacePositionMm,
+        frontPrincipalFromFirstSurfaceMm: 0,
+        rearPrincipalFromLastSurfaceMm: 0,
+        rearPrincipalFromFirstSurfaceMm: 0,
+      };
+    }
+
+    const frontPrincipalFromFirstSurfaceMm = (Number.isFinite(reverseBackFocalLengthMm) && Number.isFinite(reverseEffectiveFocalLengthMm))
+      ? (reverseBackFocalLengthMm - reverseEffectiveFocalLengthMm)
+      : (frontFocalLengthMm - effectiveFocalLengthMm);
     const rearPrincipalFromLastSurfaceMm = backFocalLengthMm - effectiveFocalLengthMm;
     const rearPrincipalFromFirstSurfaceMm = lastSurfacePositionMm + rearPrincipalFromLastSurfaceMm;
 
