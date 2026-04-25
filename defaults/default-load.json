@@ -27,14 +27,14 @@
       "id": 1,
       "xHeightAngle": 0,
       "yHeightAngle": 0,
-      "position": "Angle",
+      "position": "ImageHeight",
       "angle": 0
     },
     {
       "id": 2,
       "xHeightAngle": 0,
-      "yHeightAngle": 17.05,
-      "position": "Angle",
+      "yHeightAngle": 21.6,
+      "position": "ImageHeight",
       "angle": 0
     }
   ],
@@ -1061,8 +1061,8 @@
       "optimizeR": "",
       "thickness": "",
       "optimizeT": "",
-      "semidia": 20.903855783524207,
-      "optimizeSemiDia": "A",
+      "semidia": "21.6",
+      "optimizeSemiDia": "",
       "apertureShape": "Circular",
       "apertureWidth": "",
       "apertureHeight": "",
@@ -1109,7 +1109,8 @@
       "target": "0",
       "weight": 1,
       "value": 108.33117064857237,
-      "contribution": 19.770983653841633
+      "contribution": 19.770983653841633,
+      "configId": "1"
     },
     {
       "id": 2,
@@ -1121,7 +1122,8 @@
       "target": 0,
       "weight": 1,
       "value": -34.02042800035927,
-      "contribution": 1.9498488677399284
+      "contribution": 1.9498488677399284,
+      "configId": "1"
     },
     {
       "id": 3,
@@ -1133,7 +1135,8 @@
       "target": 0,
       "weight": 1,
       "value": 94.26154546039008,
-      "contribution": 14.968921691476833
+      "contribution": 14.968921691476833,
+      "configId": "1"
     },
     {
       "id": 4,
@@ -1145,7 +1148,8 @@
       "target": 0,
       "weight": 1,
       "value": 87.38146525020812,
-      "contribution": 12.863526641004713
+      "contribution": 12.863526641004713,
+      "configId": "1"
     },
     {
       "id": 5,
@@ -1157,7 +1161,8 @@
       "target": 0,
       "weight": 1,
       "value": -158.00277446422908,
-      "contribution": 42.058214408047164
+      "contribution": 42.058214408047164,
+      "configId": "1"
     },
     {
       "id": 6,
@@ -1169,127 +1174,224 @@
       "target": 0,
       "weight": 1,
       "value": 70.56373735374773,
-      "contribution": 8.388504737889733
+      "contribution": 8.388504737889733,
+      "configId": "1"
     }
   ],
   "systemRequirements": [
     {
       "id": 1,
       "enabled": true,
-      "operand": "SPOT_SIZE_RECT",
+      "operand": "PP1",
       "rationale": "",
+      "rationaleHeight": 0,
       "configId": "1",
-      "param1": "2",
-      "param2": "1",
-      "param3": "rms",
-      "param4": "101",
-      "op": "<=",
+      "param1": "",
+      "param2": "A",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
       "tol": 0,
-      "target": "10",
+      "target": 0,
       "weight": 1,
-      "current": 3.975416839099456,
-      "status": "OK",
-      "_violation": 0,
-      "_contribution": 0
+      "current": 3.702708927208562,
+      "status": "NG",
+      "_violation": 3.702708927208562,
+      "_contribution": 3.702708927208562
     },
     {
       "id": 2,
       "enabled": true,
-      "operand": "SPOT_SIZE_RECT",
+      "operand": "PP2",
       "rationale": "",
+      "rationaleHeight": 0,
       "configId": "1",
-      "param1": "2",
-      "param2": "2",
-      "param3": "rms",
-      "param4": "101",
-      "op": "<=",
+      "param1": "",
+      "param2": "A",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
       "tol": 0,
-      "target": "10",
+      "target": 0,
       "weight": 1,
-      "current": 3.75034754208761,
-      "status": "OK",
-      "_violation": 0,
-      "_contribution": 0
+      "current": -5.149734413743573,
+      "status": "NG",
+      "_violation": 5.149734413743573,
+      "_contribution": 5.149734413743573
     },
     {
       "id": 3,
       "enabled": true,
-      "operand": "SPOT_SIZE_RECT",
+      "operand": "PP1",
       "rationale": "",
-      "configId": "2",
-      "param1": "2",
-      "param2": "1",
-      "param3": "rms",
-      "param4": "101",
-      "op": "<=",
+      "rationaleHeight": 0,
+      "configId": "1",
+      "param1": "",
+      "param2": "B",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
       "tol": 0,
-      "target": "10",
+      "target": 0,
       "weight": 1,
-      "current": 9.03673591128103,
-      "status": "OK",
-      "_violation": 0,
-      "_contribution": 0
+      "current": 2.5951828796982355,
+      "status": "NG",
+      "_violation": 2.5951828796982355,
+      "_contribution": 2.5951828796982355
     },
     {
       "id": 4,
       "enabled": true,
-      "operand": "SPOT_SIZE_RECT",
+      "operand": "PP2",
       "rationale": "",
-      "configId": "2",
-      "param1": "2",
-      "param2": "2",
-      "param3": "rms",
-      "param4": "101",
-      "op": "<=",
+      "rationaleHeight": 0,
+      "configId": "1",
+      "param1": "",
+      "param2": "B",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
       "tol": 0,
-      "target": "10",
+      "target": 0,
       "weight": 1,
-      "current": 6.913152277857897,
-      "status": "OK",
-      "_violation": 0,
-      "_contribution": 0
+      "current": -5.102068630658003,
+      "status": "NG",
+      "_violation": 5.102068630658003,
+      "_contribution": 5.102068630658003
     },
     {
       "id": 5,
       "enabled": true,
-      "operand": "SPOT_SIZE_RECT",
+      "operand": "PP1",
       "rationale": "",
-      "configId": "3",
-      "param1": "2",
-      "param2": "1",
-      "param3": "rms",
-      "param4": "101",
-      "op": "<=",
+      "rationaleHeight": 0,
+      "configId": "1",
+      "param1": "",
+      "param2": "C",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
       "tol": 0,
-      "target": "10",
+      "target": 0,
       "weight": 1,
-      "current": 5.973706713241255,
-      "status": "OK",
-      "_violation": 0,
-      "_contribution": 0
+      "current": 3.2360274465155072,
+      "status": "NG",
+      "_violation": 3.2360274465155072,
+      "_contribution": 3.2360274465155072
     },
     {
       "id": 6,
       "enabled": true,
-      "operand": "SPOT_SIZE_RECT",
+      "operand": "PP2",
       "rationale": "",
-      "configId": "3",
-      "param1": "2",
-      "param2": "2",
-      "param3": "rms",
-      "param4": "101",
-      "op": "<=",
+      "rationaleHeight": 0,
+      "configId": "1",
+      "param1": "",
+      "param2": "C",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
       "tol": 0,
-      "target": "10",
+      "target": 0,
       "weight": 1,
-      "current": 3.5531090319047043,
-      "status": "OK",
-      "_violation": 0,
-      "_contribution": 0
+      "current": -1.5186566137933255,
+      "status": "NG",
+      "_violation": 1.5186566137933255,
+      "_contribution": 1.5186566137933255
+    },
+    {
+      "id": 7,
+      "enabled": true,
+      "operand": "PP1",
+      "rationale": "",
+      "rationaleHeight": 0,
+      "configId": "1",
+      "param1": "",
+      "param2": "D",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
+      "tol": 0,
+      "target": 0,
+      "weight": 1,
+      "current": -2.476090939836382,
+      "status": "NG",
+      "_violation": 2.476090939836382,
+      "_contribution": 2.476090939836382
+    },
+    {
+      "id": 8,
+      "enabled": true,
+      "operand": "PP2",
+      "rationale": "",
+      "rationaleHeight": 0,
+      "configId": "1",
+      "param1": "",
+      "param2": "D",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
+      "tol": 0,
+      "target": 0,
+      "weight": 1,
+      "current": -8.120615549982844,
+      "status": "NG",
+      "_violation": 8.120615549982844,
+      "_contribution": 8.120615549982844
+    },
+    {
+      "id": 9,
+      "enabled": true,
+      "operand": "PP1",
+      "rationale": "",
+      "rationaleHeight": 0,
+      "configId": "1",
+      "param1": "",
+      "param2": "E",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
+      "tol": 0,
+      "target": 0,
+      "weight": 1,
+      "current": -9.491156950022798,
+      "status": "NG",
+      "_violation": 9.491156950022798,
+      "_contribution": 9.491156950022798
+    },
+    {
+      "id": 10,
+      "enabled": true,
+      "operand": "PP2",
+      "rationale": "",
+      "rationaleHeight": 0,
+      "configId": "1",
+      "param1": "",
+      "param2": "E",
+      "param3": "",
+      "param4": "ZG",
+      "param5": "",
+      "op": "=",
+      "tol": 0,
+      "target": 0,
+      "weight": 1,
+      "current": -13.861202818807413,
+      "status": "NG",
+      "_violation": 13.861202818807413,
+      "_contribution": 13.861202818807413
     }
   ],
   "systemData": {
-    "referenceFocalLength": "50"
+    "referenceFocalLength": ""
   },
   "configurations": {
     "configurations": [
@@ -1301,14 +1403,14 @@
             "id": 1,
             "xHeightAngle": 0,
             "yHeightAngle": 0,
-            "position": "Angle",
+            "position": "ImageHeight",
             "angle": 0
           },
           {
             "id": 2,
             "xHeightAngle": 0,
-            "yHeightAngle": 17.05,
-            "position": "Angle",
+            "yHeightAngle": 21.6,
+            "position": "ImageHeight",
             "angle": 0
           }
         ],
@@ -1365,7 +1467,7 @@
             "optimizeR": "",
             "thickness": 2.8,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "S-TIH 6",
             "optimizeMaterial": "",
@@ -1373,7 +1475,7 @@
             "optimizeRI": "",
             "abbe": "25.42",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1408,7 +1510,7 @@
             "optimizeR": "",
             "thickness": 6.6,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "N-SK4",
             "optimizeMaterial": "",
@@ -1416,7 +1518,7 @@
             "optimizeRI": "",
             "abbe": "58.63",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1451,7 +1553,7 @@
             "optimizeR": "",
             "thickness": 0.2,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -1459,7 +1561,7 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1483,7 +1585,8 @@
             "optimizeCoef10": "",
             "_blockType": "Doublet",
             "_blockId": "Doublet-1",
-            "_surfaceRole": "s3"
+            "_surfaceRole": "s3",
+            "__cooptGapApplied": true
           },
           {
             "id": 4,
@@ -1494,7 +1597,7 @@
             "optimizeR": "",
             "thickness": 4.7,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "N-SK4",
             "optimizeMaterial": "",
@@ -1502,7 +1605,7 @@
             "optimizeRI": "",
             "abbe": "58.63",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1526,7 +1629,8 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-1",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 26
           },
           {
             "id": 5,
@@ -1537,7 +1641,7 @@
             "optimizeR": "",
             "thickness": 0.5,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -1545,7 +1649,7 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1569,7 +1673,9 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-1",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 26,
+            "__cooptGapApplied": true
           },
           {
             "id": 6,
@@ -1580,7 +1686,7 @@
             "optimizeR": "",
             "thickness": 1.5,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-LAL 8",
             "optimizeMaterial": "",
@@ -1588,7 +1694,7 @@
             "optimizeRI": "",
             "abbe": "53.87",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1612,7 +1718,8 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-2",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 7,
@@ -1623,7 +1730,7 @@
             "optimizeR": "",
             "thickness": 4.2,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -1631,7 +1738,7 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1655,7 +1762,9 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-2",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 8,
@@ -1666,7 +1775,7 @@
             "optimizeR": "",
             "thickness": 1.5,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-LAL 8",
             "optimizeMaterial": "",
@@ -1674,7 +1783,7 @@
             "optimizeRI": "",
             "abbe": "53.87",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1709,7 +1818,7 @@
             "optimizeR": "",
             "thickness": 3.4,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "N-SF57",
             "optimizeMaterial": "",
@@ -1717,7 +1826,7 @@
             "optimizeRI": "",
             "abbe": "23.83",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1752,7 +1861,7 @@
             "optimizeR": "",
             "thickness": 34.12,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -1760,7 +1869,7 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1784,7 +1893,8 @@
             "optimizeCoef10": "",
             "_blockType": "Doublet",
             "_blockId": "Doublet-2",
-            "_surfaceRole": "s3"
+            "_surfaceRole": "s3",
+            "__cooptGapApplied": true
           },
           {
             "id": 11,
@@ -1795,7 +1905,7 @@
             "optimizeR": "",
             "thickness": 5.8,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "N-BK7",
             "optimizeMaterial": "",
@@ -1803,7 +1913,7 @@
             "optimizeRI": "",
             "abbe": "64.17",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1838,7 +1948,7 @@
             "optimizeR": "",
             "thickness": 1.5,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-TIH 4",
             "optimizeMaterial": "",
@@ -1846,7 +1956,7 @@
             "optimizeRI": "",
             "abbe": "27.51",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1881,7 +1991,7 @@
             "optimizeR": "",
             "thickness": 18.62,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -1889,7 +1999,7 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1913,7 +2023,8 @@
             "optimizeCoef10": "",
             "_blockType": "Doublet",
             "_blockId": "Doublet-3",
-            "_surfaceRole": "s3"
+            "_surfaceRole": "s3",
+            "__cooptGapApplied": true
           },
           {
             "id": 14,
@@ -1967,7 +2078,7 @@
             "optimizeR": "",
             "thickness": 4.5,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "N-SK4",
             "optimizeMaterial": "",
@@ -1975,7 +2086,7 @@
             "optimizeRI": "",
             "abbe": "58.63",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -1999,7 +2110,8 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-3",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 16,
@@ -2010,7 +2122,7 @@
             "optimizeR": "",
             "thickness": 1.95,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -2018,7 +2130,7 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -2042,7 +2154,9 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-3",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 17,
@@ -2053,7 +2167,7 @@
             "optimizeR": "",
             "thickness": 2,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-TIH 6",
             "optimizeMaterial": "",
@@ -2061,7 +2175,7 @@
             "optimizeRI": "",
             "abbe": "25.42",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -2085,7 +2199,8 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-4",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 18,
@@ -2096,7 +2211,7 @@
             "optimizeR": "",
             "thickness": 47.33,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -2104,7 +2219,7 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -2128,7 +2243,9 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-4",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 19,
@@ -2139,7 +2256,7 @@
             "optimizeR": "",
             "thickness": 2,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-LAH53",
             "optimizeMaterial": "",
@@ -2147,7 +2264,7 @@
             "optimizeRI": "",
             "abbe": "40.92",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -2171,7 +2288,8 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-5",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 20,
@@ -2182,7 +2300,7 @@
             "optimizeR": "",
             "thickness": 0.3,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -2190,7 +2308,7 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -2214,7 +2332,9 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-5",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 21,
@@ -2225,7 +2345,7 @@
             "optimizeR": "",
             "thickness": 3.5,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-TIM 8",
             "optimizeMaterial": "",
@@ -2233,7 +2353,7 @@
             "optimizeRI": "",
             "abbe": "39.24",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -2257,7 +2377,8 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-6",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 22,
@@ -2268,7 +2389,7 @@
             "optimizeR": "",
             "thickness": 42.418757,
             "optimizeT": "",
-            "semidia": "",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -2276,7 +2397,7 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
+            "conic": "0",
             "optimizeConic": "",
             "coef1": "",
             "optimizeCoef1": "",
@@ -2300,7 +2421,9 @@
             "optimizeCoef10": "",
             "_blockType": "Lens",
             "_blockId": "Lens-6",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 23,
@@ -2308,11 +2431,17 @@
             "surfType": "Spherical",
             "comment": "",
             "radius": "INF",
+            "radiusX": "",
+            "radiusY": "",
+            "axis": "",
             "optimizeR": "",
             "thickness": "",
             "optimizeT": "",
-            "semidia": 20.903855783524207,
-            "optimizeSemiDia": "A",
+            "semidia": "21.6",
+            "optimizeSemiDia": "",
+            "apertureShape": "Circular",
+            "apertureWidth": "",
+            "apertureHeight": "",
             "material": "",
             "optimizeMaterial": "",
             "rindex": "",
@@ -2421,13 +2550,13 @@
         ],
         "metadata": {
           "created": "2025-12-15T07:27:58.187Z",
-          "modified": "2026-04-22T11:08:51.933Z",
+          "modified": "2026-04-25T08:05:30.553Z",
           "optimizationTarget": null,
           "locked": false,
           "importAnalyzeMode": false
         },
         "systemData": {
-          "referenceFocalLength": "50"
+          "referenceFocalLength": ""
         },
         "schemaVersion": "0.1",
         "blocks": [
@@ -2438,7 +2567,9 @@
             "constraints": {},
             "parameters": {
               "objectDistanceMode": "INF",
-              "objectDistance": 100
+              "objectDistance": 100,
+              "zoomPosition": 0,
+              "zoomGroupProfiles": "B=0:43.36"
             },
             "variables": {},
             "metadata": {
@@ -2493,7 +2624,8 @@
               "surf3Coef7": 0,
               "surf3Coef8": 0,
               "surf3Coef9": 0,
-              "surf3Coef10": 0
+              "surf3Coef10": 0,
+              "zoomGroup": "A"
             },
             "variables": {},
             "metadata": {
@@ -2551,7 +2683,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "A"
             },
             "variables": {},
             "metadata": {
@@ -2608,7 +2741,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "B"
             },
             "variables": {},
             "metadata": {
@@ -2680,7 +2814,8 @@
               "surf3Coef7": 0,
               "surf3Coef8": 0,
               "surf3Coef9": 0,
-              "surf3Coef10": 0
+              "surf3Coef10": 0,
+              "zoomGroup": "B"
             },
             "variables": {},
             "metadata": {
@@ -2753,7 +2888,8 @@
               "surf3Coef7": 0,
               "surf3Coef8": 0,
               "surf3Coef9": 0,
-              "surf3Coef10": 0
+              "surf3Coef10": 0,
+              "zoomGroup": "C"
             },
             "variables": {},
             "metadata": {
@@ -2824,7 +2960,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "D"
             },
             "variables": {},
             "metadata": {
@@ -2881,7 +3018,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "D"
             },
             "variables": {},
             "metadata": {
@@ -2938,7 +3076,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "E"
             },
             "variables": {},
             "metadata": {
@@ -2995,7 +3134,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "E"
             },
             "variables": {},
             "metadata": {
@@ -3029,11 +3169,48 @@
               "source": "legacy-opticalSystem"
             },
             "parameters": {
-              "optimizeSemiDia": "A",
-              "semidia": 20.903855783524207
+              "optimizeSemiDia": "",
+              "semidia": "21.6",
+              "semidiaMode": "Manual"
             }
           }
-        ]
+        ],
+        "scenarios": [
+          {
+            "id": "zoom-wide",
+            "name": "Wide",
+            "weight": 1,
+            "overrides": {
+              "ObjectSurface-1.zoomPosition": 0
+            },
+            "metadata": {
+              "source": "zoom-mvp"
+            }
+          },
+          {
+            "id": "zoom-mid",
+            "name": "Mid",
+            "weight": 1,
+            "overrides": {
+              "ObjectSurface-1.zoomPosition": 0.5
+            },
+            "metadata": {
+              "source": "zoom-mvp"
+            }
+          },
+          {
+            "id": "zoom-tele",
+            "name": "Tele",
+            "weight": 1,
+            "overrides": {
+              "ObjectSurface-1.zoomPosition": 1
+            },
+            "metadata": {
+              "source": "zoom-mvp"
+            }
+          }
+        ],
+        "activeScenarioId": "zoom-wide"
       },
       {
         "id": 2,
@@ -3043,15 +3220,15 @@
             "id": 1,
             "xHeightAngle": 0,
             "yHeightAngle": 0,
-            "position": "Angle",
+            "position": "ImageHeight",
             "angle": 0
           },
           {
             "id": 2,
             "xHeightAngle": 0,
-            "yHeightAngle": 8.97,
-            "position": "Angle",
-            "angle": 0
+            "yHeightAngle": 21.6,
+            "position": "ImageHeight",
+            "angle": 21.6
           }
         ],
         "opticalSystem": [
@@ -4077,8 +4254,8 @@
             "optimizeR": "",
             "thickness": "",
             "optimizeT": "",
-            "semidia": 21.9911746575637,
-            "optimizeSemiDia": "A",
+            "semidia": "21.6",
+            "optimizeSemiDia": "",
             "apertureShape": "Circular",
             "apertureWidth": "",
             "apertureHeight": "",
@@ -4190,13 +4367,13 @@
         ],
         "metadata": {
           "created": "2025-12-15T07:28:51.847Z",
-          "modified": "2026-04-22T11:08:41.409Z",
+          "modified": "2026-04-25T08:03:37.242Z",
           "optimizationTarget": null,
           "locked": false,
           "importAnalyzeMode": false
         },
         "systemData": {
-          "referenceFocalLength": "50"
+          "referenceFocalLength": ""
         },
         "schemaVersion": "0.1",
         "blocks": [
@@ -4207,7 +4384,9 @@
             "constraints": {},
             "parameters": {
               "objectDistanceMode": "INF",
-              "objectDistance": 100
+              "objectDistance": 100,
+              "zoomPosition": 0,
+              "zoomGroupProfiles": "A=0:0,1:43.86"
             },
             "variables": {},
             "metadata": {
@@ -4779,11 +4958,48 @@
               "source": "legacy-opticalSystem"
             },
             "parameters": {
-              "optimizeSemiDia": "A",
-              "semidia": 21.9911746575637
+              "optimizeSemiDia": "",
+              "semidia": "21.6",
+              "semidiaMode": "Manual"
             }
           }
-        ]
+        ],
+        "scenarios": [
+          {
+            "id": "zoom-wide",
+            "name": "Wide",
+            "weight": 1,
+            "overrides": {
+              "ObjectSurface-1.zoomPosition": 0
+            },
+            "metadata": {
+              "source": "zoom-mvp"
+            }
+          },
+          {
+            "id": "zoom-mid",
+            "name": "Mid",
+            "weight": 1,
+            "overrides": {
+              "ObjectSurface-1.zoomPosition": 0.5
+            },
+            "metadata": {
+              "source": "zoom-mvp"
+            }
+          },
+          {
+            "id": "zoom-tele",
+            "name": "Tele",
+            "weight": 1,
+            "overrides": {
+              "ObjectSurface-1.zoomPosition": 1
+            },
+            "metadata": {
+              "source": "zoom-mvp"
+            }
+          }
+        ],
+        "activeScenarioId": "zoom-wide"
       },
       {
         "id": 3,
@@ -4793,14 +5009,14 @@
             "id": 1,
             "xHeightAngle": 0,
             "yHeightAngle": 0,
-            "position": "Angle",
+            "position": "ImageHeight",
             "angle": 0
           },
           {
             "id": 2,
             "xHeightAngle": 0,
-            "yHeightAngle": 6.02,
-            "position": "Angle",
+            "yHeightAngle": 21.6,
+            "position": "ImageHeight",
             "angle": 0
           }
         ],
@@ -4851,42 +5067,42 @@
           {
             "id": 1,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "144.296",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 2.8,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "S-TIH 6",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.805181",
             "optimizeRI": "",
             "abbe": "25.42",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Doublet",
             "_blockId": "Doublet-1",
             "_surfaceRole": "s1"
@@ -4894,42 +5110,42 @@
           {
             "id": 2,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "67.895",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 6.6,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "N-SK4",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.61272",
             "optimizeRI": "",
             "abbe": "58.63",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Doublet",
             "_blockId": "Doublet-1",
             "_surfaceRole": "s2"
@@ -4937,13 +5153,13 @@
           {
             "id": 3,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "-4571.825",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 0.2,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -4951,85 +5167,87 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Doublet",
             "_blockId": "Doublet-1",
-            "_surfaceRole": "s3"
+            "_surfaceRole": "s3",
+            "__cooptGapApplied": true
           },
           {
             "id": 4,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "94.482",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 4.7,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "N-SK4",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.61272",
             "optimizeRI": "",
             "abbe": "58.63",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-1",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 26
           },
           {
             "id": 5,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "26667.449",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 43.86,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 26,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -5037,85 +5255,88 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-1",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 26,
+            "__cooptGapApplied": true
           },
           {
             "id": 6,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "464.312",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 1.5,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-LAL 8",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.712995",
             "optimizeRI": "",
             "abbe": "53.87",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-2",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 7,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "40.285",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 4.2,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -5123,71 +5344,73 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-2",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 8,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "-45.202",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 1.5,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-LAL 8",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.712995",
             "optimizeRI": "",
             "abbe": "53.87",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Doublet",
             "_blockId": "Doublet-2",
             "_surfaceRole": "s1"
@@ -5195,42 +5418,42 @@
           {
             "id": 9,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "44.784",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 3.4,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "N-SF57",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.84666",
             "optimizeRI": "",
             "abbe": "23.83",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Doublet",
             "_blockId": "Doublet-2",
             "_surfaceRole": "s2"
@@ -5238,13 +5461,13 @@
           {
             "id": 10,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "-3270.421",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 0.68,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -5252,71 +5475,72 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Doublet",
             "_blockId": "Doublet-2",
-            "_surfaceRole": "s3"
+            "_surfaceRole": "s3",
+            "__cooptGapApplied": true
           },
           {
             "id": 11,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "108.4",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 5.8,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "N-BK7",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.5168",
             "optimizeRI": "",
             "abbe": "64.17",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Doublet",
             "_blockId": "Doublet-3",
             "_surfaceRole": "s1"
@@ -5324,42 +5548,42 @@
           {
             "id": 12,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "-32.441",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 1.5,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-TIH 4",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.755199",
             "optimizeRI": "",
             "abbe": "27.51",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Doublet",
             "_blockId": "Doublet-3",
             "_surfaceRole": "s2"
@@ -5367,13 +5591,13 @@
           {
             "id": 13,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "-56.83",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 8.7,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -5381,31 +5605,32 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Doublet",
             "_blockId": "Doublet-3",
-            "_surfaceRole": "s3"
+            "_surfaceRole": "s3",
+            "__cooptGapApplied": true
           },
           {
             "id": 14,
@@ -5453,56 +5678,57 @@
           {
             "id": 15,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "36.187",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 4.5,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "N-SK4",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.61272",
             "optimizeRI": "",
             "abbe": "58.63",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-3",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 16,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "797.679",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 1.95,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -5510,85 +5736,88 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-3",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 17,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "-213.357",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 2,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-TIH 6",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.805181",
             "optimizeRI": "",
             "abbe": "25.42",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-4",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 18,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "570.712",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 47.33,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -5596,85 +5825,88 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-4",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 19,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "-19.993",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 2,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-LAH53",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.806098",
             "optimizeRI": "",
             "abbe": "40.92",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-5",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 20,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "-42.359",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 0.3,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -5682,85 +5914,88 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-5",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 21,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "172.917",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 3.5,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "S-TIM 8",
-            "optimizeMaterial": "",
+            "optimizeMaterial": "V",
             "rindex": "1.595509",
             "optimizeRI": "",
             "abbe": "39.24",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-6",
-            "_surfaceRole": "front"
+            "_surfaceRole": "front",
+            "__cooptExplicitApertureSemidia": 12
           },
           {
             "id": 22,
             "object type": "",
-            "surfType": "Spherical",
+            "surfType": "Aspheric even",
             "comment": "",
             "radius": "-61.717",
-            "optimizeR": "",
+            "optimizeR": "V",
             "thickness": 42.418757,
-            "optimizeT": "",
-            "semidia": "",
+            "optimizeT": "V",
+            "semidia": 12,
             "optimizeSemiDia": "",
             "material": "AIR",
             "optimizeMaterial": "",
@@ -5768,31 +6003,33 @@
             "optimizeRI": "",
             "abbe": "",
             "optimizeAbbe": "",
-            "conic": "",
-            "optimizeConic": "",
-            "coef1": "",
-            "optimizeCoef1": "",
-            "coef2": "",
-            "optimizeCoef2": "",
-            "coef3": "",
-            "optimizeCoef3": "",
-            "coef4": "",
-            "optimizeCoef4": "",
-            "coef5": "",
-            "optimizeCoef5": "",
-            "coef6": "",
-            "optimizeCoef6": "",
-            "coef7": "",
-            "optimizeCoef7": "",
-            "coef8": "",
-            "optimizeCoef8": "",
-            "coef9": "",
-            "optimizeCoef9": "",
-            "coef10": "",
-            "optimizeCoef10": "",
+            "conic": "0",
+            "optimizeConic": "V",
+            "coef1": "0",
+            "optimizeCoef1": "V",
+            "coef2": "0",
+            "optimizeCoef2": "V",
+            "coef3": "0",
+            "optimizeCoef3": "V",
+            "coef4": "0",
+            "optimizeCoef4": "V",
+            "coef5": "0",
+            "optimizeCoef5": "V",
+            "coef6": "0",
+            "optimizeCoef6": "V",
+            "coef7": "0",
+            "optimizeCoef7": "V",
+            "coef8": "0",
+            "optimizeCoef8": "V",
+            "coef9": "0",
+            "optimizeCoef9": "V",
+            "coef10": "0",
+            "optimizeCoef10": "V",
             "_blockType": "Lens",
             "_blockId": "Lens-6",
-            "_surfaceRole": "back"
+            "_surfaceRole": "back",
+            "__cooptExplicitApertureSemidia": 12,
+            "__cooptGapApplied": true
           },
           {
             "id": 23,
@@ -5800,11 +6037,17 @@
             "surfType": "Spherical",
             "comment": "",
             "radius": "INF",
+            "radiusX": "",
+            "radiusY": "",
+            "axis": "",
             "optimizeR": "",
             "thickness": "",
             "optimizeT": "",
-            "semidia": 22.247190631027156,
-            "optimizeSemiDia": "A",
+            "semidia": "21.6",
+            "optimizeSemiDia": "",
+            "apertureShape": "Circular",
+            "apertureWidth": "",
+            "apertureHeight": "",
             "material": "",
             "optimizeMaterial": "",
             "rindex": "",
@@ -5913,7 +6156,7 @@
         ],
         "metadata": {
           "created": "2025-12-15T07:32:44.889Z",
-          "modified": "2026-04-22T10:39:18.710Z",
+          "modified": "2026-04-25T08:03:37.242Z",
           "optimizationTarget": null,
           "locked": false,
           "importAnalyzeMode": false
@@ -5930,9 +6173,26 @@
             "constraints": {},
             "parameters": {
               "objectDistanceMode": "INF",
-              "objectDistance": 100
+              "objectDistance": 100,
+              "zoomGroupProfiles": "A=0:43.36",
+              "zoomPosition": 0.091
             },
-            "variables": {},
+            "variables": {
+              "objectDistanceMode": {
+                "value": "INF",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "objectDistance": {
+                "value": 100,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "ui-add"
             }
@@ -5987,7 +6247,330 @@
               "surf3Coef9": 0,
               "surf3Coef10": 0
             },
-            "variables": {},
+            "variables": {
+              "radius1": {
+                "value": 144.296,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "radius2": {
+                "value": 67.895,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "radius3": {
+                "value": -4571.825,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "thickness1": {
+                "value": 2.8,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "thickness2": {
+                "value": 6.6,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material1": {
+                "value": "S-TIH 6",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material2": {
+                "value": "N-SK4",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1SurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Conic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2SurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Conic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3SurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Conic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "s1": {
+                "value": 26,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "s2": {
+                "value": 26,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "s3": {
+                "value": 26,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
@@ -6005,7 +6588,15 @@
             "parameters": {
               "thickness": 0.2
             },
-            "variables": {},
+            "variables": {
+              "thickness": {
+                "value": 0.2,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6045,7 +6636,218 @@
               "backCoef9": 0,
               "backCoef10": 0
             },
-            "variables": {},
+            "variables": {
+              "frontRadius": {
+                "value": 94.482,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backRadius": {
+                "value": 26667.449,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "centerThickness": {
+                "value": 4.7,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material": {
+                "value": "N-SK4",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "front": {
+                "value": 26,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "back": {
+                "value": 26,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
@@ -6062,7 +6864,15 @@
             "parameters": {
               "thickness": 43.86
             },
-            "variables": {},
+            "variables": {
+              "thickness": {
+                "value": 43.86,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6102,7 +6912,218 @@
               "backCoef9": 0,
               "backCoef10": 0
             },
-            "variables": {},
+            "variables": {
+              "frontRadius": {
+                "value": 464.312,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backRadius": {
+                "value": 40.285,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "centerThickness": {
+                "value": 1.5,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material": {
+                "value": "S-LAL 8",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "front": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "back": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
@@ -6119,7 +7140,15 @@
             "parameters": {
               "thickness": 4.2
             },
-            "variables": {},
+            "variables": {
+              "thickness": {
+                "value": 4.2,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6174,7 +7203,330 @@
               "surf3Coef9": 0,
               "surf3Coef10": 0
             },
-            "variables": {},
+            "variables": {
+              "radius1": {
+                "value": -45.202,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "radius2": {
+                "value": 44.784,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "radius3": {
+                "value": -3270.421,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "thickness1": {
+                "value": 1.5,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "thickness2": {
+                "value": 3.4,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material1": {
+                "value": "S-LAL 8",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material2": {
+                "value": "N-SF57",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1SurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Conic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2SurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Conic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3SurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Conic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "s1": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "s2": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "s3": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
@@ -6192,7 +7544,15 @@
             "parameters": {
               "thickness": 0.68
             },
-            "variables": {},
+            "variables": {
+              "thickness": {
+                "value": 0.68,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6247,7 +7607,330 @@
               "surf3Coef9": 0,
               "surf3Coef10": 0
             },
-            "variables": {},
+            "variables": {
+              "radius1": {
+                "value": 108.4,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "radius2": {
+                "value": -32.441,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "radius3": {
+                "value": -56.83,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "thickness1": {
+                "value": 5.8,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "thickness2": {
+                "value": 1.5,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material1": {
+                "value": "N-BK7",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material2": {
+                "value": "S-TIH 4",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1SurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Conic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf1Coef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2SurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Conic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf2Coef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3SurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Conic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "surf3Coef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "s1": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "s2": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "s3": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
@@ -6265,7 +7948,15 @@
             "parameters": {
               "thickness": 8.7
             },
-            "variables": {},
+            "variables": {
+              "thickness": {
+                "value": 8.7,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6278,7 +7969,15 @@
             "parameters": {
               "semiDiameter": 12
             },
-            "variables": {},
+            "variables": {
+              "semiDiameter": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6318,7 +8017,218 @@
               "backCoef9": 0,
               "backCoef10": 0
             },
-            "variables": {},
+            "variables": {
+              "frontRadius": {
+                "value": 36.187,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backRadius": {
+                "value": 797.679,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "centerThickness": {
+                "value": 4.5,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material": {
+                "value": "N-SK4",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "front": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "back": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
@@ -6335,7 +8245,15 @@
             "parameters": {
               "thickness": 1.95
             },
-            "variables": {},
+            "variables": {
+              "thickness": {
+                "value": 1.95,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6375,7 +8293,218 @@
               "backCoef9": 0,
               "backCoef10": 0
             },
-            "variables": {},
+            "variables": {
+              "frontRadius": {
+                "value": -213.357,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backRadius": {
+                "value": 570.712,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "centerThickness": {
+                "value": 2,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material": {
+                "value": "S-TIH 6",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "front": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "back": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
@@ -6392,7 +8521,15 @@
             "parameters": {
               "thickness": 47.33
             },
-            "variables": {},
+            "variables": {
+              "thickness": {
+                "value": 47.33,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6432,7 +8569,218 @@
               "backCoef9": 0,
               "backCoef10": 0
             },
-            "variables": {},
+            "variables": {
+              "frontRadius": {
+                "value": -19.993,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backRadius": {
+                "value": -42.359,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "centerThickness": {
+                "value": 2,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material": {
+                "value": "S-LAH53",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "front": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "back": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
@@ -6449,7 +8797,15 @@
             "parameters": {
               "thickness": 0.3
             },
-            "variables": {},
+            "variables": {
+              "thickness": {
+                "value": 0.3,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6489,7 +8845,218 @@
               "backCoef9": 0,
               "backCoef10": 0
             },
-            "variables": {},
+            "variables": {
+              "frontRadius": {
+                "value": 172.917,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backRadius": {
+                "value": -61.717,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "centerThickness": {
+                "value": 3.5,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "material": {
+                "value": "S-TIM 8",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "frontCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backSurfType": {
+                "value": "Spherical",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backConic": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef1": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef2": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef3": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef4": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef5": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef6": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef7": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef8": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef9": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "backCoef10": {
+                "value": 0,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "front": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "back": {
+                "value": 12,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
@@ -6506,7 +9073,15 @@
             "parameters": {
               "thickness": 42.418757
             },
-            "variables": {},
+            "variables": {
+              "thickness": {
+                "value": 42.418757,
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             }
@@ -6516,13 +9091,36 @@
             "blockType": "ImageSurface",
             "role": null,
             "constraints": {},
-            "variables": {},
+            "variables": {
+              "optimizeSemiDia": {
+                "value": "",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "semidia": {
+                "value": "21.6",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              },
+              "semidiaMode": {
+                "value": "Manual",
+                "optimize": {
+                  "mode": "V",
+                  "scope": "perConfig"
+                }
+              }
+            },
             "metadata": {
               "source": "legacy-opticalSystem"
             },
             "parameters": {
-              "optimizeSemiDia": "A",
-              "semidia": 22.247190631027156
+              "optimizeSemiDia": "",
+              "semidia": "21.6",
+              "semidiaMode": "Manual"
             }
           }
         ]

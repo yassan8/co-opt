@@ -13788,6 +13788,15 @@ export function getAllGlassDatabases() {
   return [miscellaneousDB, oharaGlassDB, schottGlassDB, hoyaGlassDB, hikariGlassDB, sumitaGlassDB, cdgmGlassDB];
 }
 
+type GlassRecordWithPrice = {
+  name?: unknown;
+  nd?: unknown;
+  vd?: unknown;
+  manufacturer?: unknown;
+  price?: number | null;
+  [key: string]: unknown;
+};
+
 function __applyPriceIndexToGlassDb() {
   function __normalizeGlassNameKey(s) {
     return String(s ?? '')
@@ -13809,17 +13818,20 @@ function __applyPriceIndexToGlassDb() {
     for (const g of db) {
       if (!g || typeof g !== 'object') continue;
 
-      const manufacturer = g.manufacturer;
-      const name = g.name;
-      const vendorMap = manufacturer && maps[manufacturer];
+      const glass = g as GlassRecordWithPrice;
+
+      const manufacturer = glass.manufacturer;
+      const manufacturerName = manufacturer == null ? '' : String(manufacturer);
+      const name = glass.name;
+      const vendorMap = manufacturerName ? maps[manufacturerName] : undefined;
 
       let raw = vendorMap && name != null ? vendorMap[String(name)] : undefined;
       if (!Number.isFinite(raw) && vendorMap && typeof vendorMap === 'object' && name != null) {
-        const manufacturerKey = String(manufacturer);
+        const manufacturerKey = manufacturerName;
         let normalizedVendorMap = normalizedVendorMapCache.get(manufacturerKey);
         if (!normalizedVendorMap) {
           normalizedVendorMap = Object.create(null);
-          const ambiguous = new Set();
+          const ambiguous = new Set<string>();
           for (const [k, v] of Object.entries(vendorMap)) {
             if (!Number.isFinite(v)) continue;
             const nk = __normalizeGlassNameKey(k);
@@ -13854,16 +13866,17 @@ function __applyPriceIndexToGlassDb() {
       }
 
       if (!Number.isFinite(raw)) {
-        g.price = null;
+        glass.price = null;
         continue;
       }
 
-      const scale = manufacturer && norm[manufacturer] ? norm[manufacturer].scaleToNBK7 : null;
+      const normalization = manufacturerName ? norm[manufacturerName] : null;
+      const scale = normalization ? normalization.scaleToNBK7 : null;
       if (!Number.isFinite(scale)) {
-        g.price = null;
+        glass.price = null;
         continue;
       }
-      g.price = raw * scale;
+      glass.price = raw * scale;
     }
   }
 }
@@ -13914,8 +13927,9 @@ export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
     if (!Array.isArray(db)) continue;
     for (const glass of db) {
       if (!glass) continue;
-      const nd = glass.nd;
-      const vd = glass.vd;
+      const pricedGlass = glass as GlassRecordWithPrice;
+      const nd = Number(pricedGlass.nd);
+      const vd = Number(pricedGlass.vd);
       if (!Number.isFinite(nd) || !Number.isFinite(vd)) continue;
       const ndDiff = nd - targetNd;
       const vdDiff = vd - targetVd;
@@ -13923,11 +13937,11 @@ export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
       const normalizedVdDiff = Math.abs(vdDiff) / vdRange;
       const totalDiff = normalizedNdDiff + normalizedVdDiff;
       out.push({
-        name: String(glass.name),
+        name: String(pricedGlass.name),
         nd,
         vd,
-        manufacturer: glass.manufacturer || 'Unknown',
-        price: Number.isFinite(glass.price) ? Number(glass.price) : null,
+        manufacturer: pricedGlass.manufacturer || 'Unknown',
+        price: Number.isFinite(pricedGlass.price) ? Number(pricedGlass.price) : null,
         ndDiff,
         vdDiff,
         totalDiff
@@ -14019,8 +14033,9 @@ export function findSimilarGlassNames(query, maxResults = 20) {
   for (const db of dbs) {
     if (!Array.isArray(db)) continue;
     for (const g of db) {
-      if (!g || typeof g.name !== 'string') continue;
-      const name = g.name;
+      const glass = g as GlassRecordWithPrice;
+      if (!glass || typeof glass.name !== 'string') continue;
+      const name = glass.name;
       const nn = __normalizeGlassNameForSearch(name);
       if (nn === '') continue;
 
@@ -14032,10 +14047,10 @@ export function findSimilarGlassNames(query, maxResults = 20) {
       out.push({
         name,
         score,
-        manufacturer: g.manufacturer || 'Unknown',
-        price: Number.isFinite(g.price) ? Number(g.price) : null,
-        nd: g.nd,
-        vd: g.vd,
+        manufacturer: glass.manufacturer || 'Unknown',
+        price: Number.isFinite(glass.price) ? Number(glass.price) : null,
+        nd: glass.nd,
+        vd: glass.vd,
       });
     }
   }
