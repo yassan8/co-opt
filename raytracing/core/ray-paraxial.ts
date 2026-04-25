@@ -2179,6 +2179,7 @@ function traceParaxialBasisRay(opticalSystemRows, initialHeight = 1.0, initialAl
     
     // Mirror面の検出
     const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
+    const isStopSurface = String(surface?.['object type'] ?? surface?.object ?? '').trim().toLowerCase() === 'stop';
     
     // 次の媒質の屈折率を決定
     let nextN = 1.0; // デフォルトは空気
@@ -2186,12 +2187,15 @@ function traceParaxialBasisRay(opticalSystemRows, initialHeight = 1.0, initialAl
     if (isMirror) {
       // Mirror面: ZEMAXスタイル - 屈折率は変えずに反射を処理
       nextN = prevN;
+    } else if (isStopSurface) {
+      // Stop面は開口制限のみ。媒質は変えない。
+      nextN = prevN;
     } else {
       // 手動設定のRef Indexまたは材料名がある場合
-      const hasManualRefIndex = surface['ref index'] || surface.refIndex || surface['Ref Index'];
+      const hasManualRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
       const hasMaterial = surface.material && surface.material !== "" && surface.material !== "0";
       
-      if (thickness > 0 && (hasManualRefIndex || hasMaterial)) {
+      if (hasManualRefIndex || hasMaterial) {
         nextN = getRefractiveIndex(surface, wavelength);
       } else {
         nextN = 1.0;

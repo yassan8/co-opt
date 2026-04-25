@@ -58,6 +58,7 @@ import {
     loadTableData as loadSystemRequirementsTableData,
     saveTableData as saveSystemRequirementsTableData
 } from '../data/table-system-requirements.ts';
+import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 
 // Type definitions
@@ -4194,15 +4195,7 @@ function setupLoadDefaultButton(): void {
         if (!confirm('Load default optical system? Current data will be replaced.')) return;
         
         try {
-            // Try both paths for development and production
-            let response = await fetch('/co-opt/defaults/default-load.json');
-            if (!response.ok) {
-                response = await fetch('/defaults/default-load.json');
-            }
-            if (!response.ok) {
-                throw new Error(`Failed to load default system: ${response.statusText}`);
-            }
-            const data = await response.json();
+            const data = await loadBrowserDefaultProjectJson();
             
             await __loadAllDataObjectIntoApp(data, { filename: 'default-load.json' });
         } catch (err) {
@@ -6483,12 +6476,12 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (!aLower.includes('thickness') && bLower.includes('thickness')) return 1;
 
                     // Zoom controls
-                    if (a === 'zoomPosition' && b !== 'zoomPosition') return -1;
-                    if (b === 'zoomPosition' && a !== 'zoomPosition') return 1;
-                    if (a === 'zoomGroup' && b !== 'zoomGroup' && b !== 'zoomPosition') return -1;
-                    if (b === 'zoomGroup' && a !== 'zoomGroup' && a !== 'zoomPosition') return 1;
-                    if (a === 'zoomGroupProfiles' && !['zoomPosition', 'zoomGroup', 'zoomGroupProfiles'].includes(b)) return -1;
-                    if (b === 'zoomGroupProfiles' && !['zoomPosition', 'zoomGroup', 'zoomGroupProfiles'].includes(a)) return 1;
+                    if (a === 'zoomGroup' && b !== 'zoomGroup') return -1;
+                    if (b === 'zoomGroup' && a !== 'zoomGroup') return 1;
+                    if (a === 'zoomPosition' && b !== 'zoomGroup' && b !== 'zoomPosition') return -1;
+                    if (b === 'zoomPosition' && a !== 'zoomGroup' && a !== 'zoomPosition') return 1;
+                    if (a === 'zoomGroupProfiles' && !['zoomGroup', 'zoomPosition', 'zoomGroupProfiles'].includes(b)) return -1;
+                    if (b === 'zoomGroupProfiles' && !['zoomGroup', 'zoomPosition', 'zoomGroupProfiles'].includes(a)) return 1;
                     
                     // Aperture parameters: apertureShape → apertureWidth → apertureHeight
                     if (a === 'apertureShape' && b !== 'apertureShape') return -1;
@@ -8010,25 +8003,30 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     apertureRow.style.marginBottom = '4px';
 
                     // Optimize checkbox
+                    const summaryContainer = document.createElement('div');
+                    summaryContainer.className = 'block-inspector-col-params-summary';
                     const cb = document.createElement('input');
                     cb.type = 'checkbox';
                     cb.style.flex = '0 0 auto';
-                    cb.style.width = '16px';
+                        summaryContainer.appendChild(createSummaryChip(getZoomPositionSummary(realBlock), 'controller'));
                     cb.style.height = '16px';
                     cb.style.margin = '0 4px 0 0';
-                    cb.checked = false; // Aperture typically not optimized
+                            summaryContainer.appendChild(createSummaryChip(`Laws: ${lawGroups.join(', ')}`, 'controller'));
                     cb.addEventListener('click', (e) => e.stopPropagation());
 
                     // Scope select (Per-config / Shared)
                     const scopeSel = document.createElement('select');
-                    scopeSel.style.flex = '0 0 110px';
+                            summaryContainer.appendChild(createSummaryChip(`ZG ${gapBoundaryText}`, 'gap'));
                     scopeSel.style.fontSize = '12px';
                     scopeSel.style.padding = '2px 4px';
                     scopeSel.innerHTML = '<option value="perConfig">Per-config</option><option value="global">Shared (all configs)</option>';
                     scopeSel.value = 'perConfig';
-                    scopeSel.disabled = true;
+                            summaryContainer.appendChild(createSummaryChip(`ZG ${zoomGroupText}`, 'group'));
                     scopeSel.addEventListener('click', (e) => e.stopPropagation());
 
+                    if (summaryContainer.childElementCount > 0) {
+                        colParams.appendChild(summaryContainer);
+                    }
                     cb.addEventListener('change', (e) => {
                         e.stopPropagation();
                         try { scopeSel.disabled = !cb.checked; } catch (_) {}
@@ -8356,6 +8354,7 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
 
     if (type === 'Paraxial') {
         base.parameters = {
+            zoomGroup: 'Fixed',
             surfType: 'Toric',
             focalLengthX: 100,
             focalLengthY: 100

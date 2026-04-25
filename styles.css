@@ -2317,16 +2317,26 @@ button:active {
     overflow: hidden;
     display: flex;
     align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
+    gap: 8px;
+    flex-wrap: nowrap;
     color: #57606a;
 }
 
 .block-inspector-col-params-text {
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.block-inspector-col-params-summary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    flex: 0 0 auto;
+    min-width: 0;
 }
 
 .block-inspector-summary-chip {

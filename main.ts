@@ -160,6 +160,7 @@ import { exposeWindowValue, installCooptWindowFacadeMarker, requestRefreshBlockI
 import { setRenderingContext } from './core/rendering-context.ts';
 import { setRayTracingWasmStrict, setPsfWasmStrict } from './core/wasm-service.ts';
 import { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } from './rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
+import { loadBrowserDefaultProjectJson } from './utils/default-project-loader.ts';
 import { isTauriRuntime } from './src/desktop/runtime.ts';
 import { getDefaultProject } from './src/desktop/ipc/client.ts';
 
@@ -321,14 +322,7 @@ async function loadDefaultProjectForPhaseCAutorun(): Promise<void> {
         return;
     }
 
-    let response = await fetch('/co-opt/defaults/default-load.json');
-    if (!response.ok) {
-        response = await fetch('/defaults/default-load.json');
-    }
-    if (!response.ok) {
-        throw new Error(`Failed to load default system: ${response.statusText}`);
-    }
-    const project = await response.json();
+    const project = await loadBrowserDefaultProjectJson();
     await loadIntoApp(project, { filename: 'default-load.json' });
     await waitForPhaseCAutorunLoadSettled();
 }

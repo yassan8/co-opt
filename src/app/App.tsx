@@ -2577,6 +2577,12 @@ const collectLegacyCrossRays = async (
       const back = opticalSystemRows[i + 1];
       if (!isLensInterval(front, back)) continue;
 
+      // Skip thin-lens (Paraxial) intervals: front/back share the same z, which would
+      // produce a degenerate fill mesh that visually covers the profile line.
+      const frontIsThin = !!(front?._idealThinLens) || String(front?._blockType || '').toLowerCase() === 'paraxial' || String(front?._blockType || '').toLowerCase() === 'thinlens';
+      const backIsThin = !!(back?._idealThinLens) || String(back?._blockType || '').toLowerCase() === 'paraxial' || String(back?._blockType || '').toLowerCase() === 'thinlens';
+      if (frontIsThin || backIsThin) continue;
+
       const frontIndex = i + 1;
       const backIndex = i + 2;
       const frontLine = profileMap.get(frontIndex);

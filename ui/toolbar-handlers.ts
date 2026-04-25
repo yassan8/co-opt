@@ -10,6 +10,7 @@ import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
 import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, readDesktopSetting, recommendWavefrontGrid, runAnalysisPreview, writeDesktopSetting } from '../src/desktop/ipc/client.ts';
+import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.ts';
 import { buildShareUrlFromCompressedString, encodeAllDataToCompressedString } from '../utils/url-share.ts';
 
 declare global {
@@ -411,14 +412,7 @@ export async function handleLoadDefault(): Promise<void> {
       return;
     }
 
-    let response = await fetch('/co-opt/defaults/default-load.json');
-    if (!response.ok) {
-      response = await fetch('/defaults/default-load.json');
-    }
-    if (!response.ok) {
-      throw new Error(`Failed to load default system: ${response.statusText}`);
-    }
-    const data = await response.json();
+    const data = await loadBrowserDefaultProjectJson();
     
     if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
       await (window as any).__loadAllDataObjectIntoApp(data, { filename: 'default-load.json' });

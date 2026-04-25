@@ -99,6 +99,13 @@ function __coopt_getRenderSemidiaMm(surface) {
         if (n !== null && n > 0) return n;
     }
 
+    // Paraxial/ThinLens is an ideal zero-thickness element. Existing projects may
+    // not carry an explicit aperture/semidia, but it still needs a finite visual
+    // height so the ideal-lens symbol and principal-point dimensions can render.
+    try {
+        if (__coopt_isThinLensSurface(surface)) return 10;
+    } catch (_) {}
+
     // Stop surfaces may supply diameter-like aperture.
     try {
         const objTypeRaw = surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type;
@@ -418,9 +425,26 @@ function __coopt_makeSequentialDesignIntentLabel(displayCounts, blockType, block
     return `${base}-${next}`;
 }
 
+function __coopt_indexToAlphabetLabel(index) {
+    let value = Math.max(0, Math.floor(Number(index) || 0));
+    let label = '';
+    do {
+        label = String.fromCharCode(65 + (value % 26)) + label;
+        value = Math.floor(value / 26) - 1;
+    } while (value >= 0);
+    return label;
+}
+
+function __coopt_makeStandaloneParaxialPrincipalLabel(displayCounts) {
+    const key = '__standalone_paraxial_principal_label__';
+    const next = Number(displayCounts.get(key) || 0);
+    displayCounts.set(key, next + 1);
+    return __coopt_indexToAlphabetLabel(next);
+}
+
 function __coopt_getDesignIntentLabelStyle(blockType, blockId) {
     const base = __coopt_getDesignIntentDisplayBase(blockType, blockId);
-    if (base === 'Lens' || base === 'Doublet' || base === 'Triplet') {
+    if (base === 'Lens' || base === 'Paraxial' || base === 'Doublet' || base === 'Triplet') {
         return {
             fillStyle: 'rgba(223,241,255,0.96)',
             strokeStyle: '#bfdbfe',
@@ -758,33 +782,90 @@ function __coopt_getPrincipalPointPhysicalRange(opticalSystemData, startIdx, end
     return { startIdx: physicalStart, endIdx: physicalEnd };
 }
 
+function __coopt_expandPrincipalPointRangeForThinLensBack(opticalSystemData, range) {
+    if (!Array.isArray(opticalSystemData) || !range) return range;
+
+    const startIdx = Math.max(0, Math.min(opticalSystemData.length - 1, Number(range.startIdx) || 0));
+    let endIdx = Math.max(startIdx, Math.min(opticalSystemData.length - 1, Number(range.endIdx) || startIdx));
+    const endRow = opticalSystemData[endIdx];
+    const endBlockId = String(endRow?._blockId ?? '').trim();
+    const endBlockType = String(endRow?._blockType ?? endRow?.blockType ?? '').trim().toLowerCase();
+
+    if ((endBlockType === 'paraxial' || endBlockType === 'thinlens') && endBlockId) {
+        for (let i = endIdx + 1; i < opticalSystemData.length; i += 1) {
+            const row = opticalSystemData[i];
+            const rowBlockId = String(row?._blockId ?? '').trim();
+            const rowBlockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+            const rowSurfaceRole = String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase();
+
+            if (rowBlockId !== endBlockId) break;
+            if ((rowBlockType === 'paraxial' || rowBlockType === 'thinlens') && rowSurfaceRole === 'back') {
+                endIdx = i;
+                break;
+            }
+        }
+    }
+
+    return { startIdx, endIdx };
+}
+
 function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins) {
     const blocks = __coopt_getActiveDesignIntentBlocks();
     const surfRangeByBlockId = __coopt_buildSurfRangeByBlockId(opticalSystemData);
     const groups = new Map();
+    const standaloneDisplayCounts = new Map();
+
+    const registerGroup = (groupKey, zoomGroupLabel, range, order) => {
+        if (!groupKey || !zoomGroupLabel || !range) return;
+        const existing = groups.get(groupKey) || {
+            zoomGroup: zoomGroupLabel,
+            startIdx: range.min,
+            endIdx: range.max,
+            order,
+        };
+        existing.startIdx = Math.min(existing.startIdx, range.min);
+        existing.endIdx = Math.max(existing.endIdx, range.max);
+        groups.set(groupKey, existing);
+    };
 
     for (let i = 0; i < blocks.length; i += 1) {
         const block = blocks[i];
         const blockType = String(block?.blockType ?? '').trim();
         if (!__coopt_isPrincipalPointGroupBlockType(blockType)) continue;
 
+        const normalizedBlockType = __coopt_normalizeBlockDisplayType(blockType);
         const zoomGroup = __coopt_getZoomGroupName(block);
-        if (!zoomGroup) continue;
+        const standaloneParaxialLabel = (!zoomGroup && normalizedBlockType === 'Paraxial')
+            ? __coopt_makeStandaloneParaxialPrincipalLabel(standaloneDisplayCounts)
+            : '';
+        if (!zoomGroup && !standaloneParaxialLabel) continue;
 
         const blockId = String(block?.blockId ?? '').trim();
         if (!blockId) continue;
         const range = surfRangeByBlockId.get(blockId);
         if (!range) continue;
 
-        const existing = groups.get(zoomGroup) || {
-            zoomGroup,
-            startIdx: range.min,
-            endIdx: range.max,
-            order: i,
-        };
-        existing.startIdx = Math.min(existing.startIdx, range.min);
-        existing.endIdx = Math.max(existing.endIdx, range.max);
-        groups.set(zoomGroup, existing);
+        const groupKey = zoomGroup || `__standalone_paraxial__:${blockId}`;
+        registerGroup(groupKey, zoomGroup || standaloneParaxialLabel, range, i);
+    }
+
+    if (groups.size === 0) {
+        const fallbackEntries = Array.from(surfRangeByBlockId.entries())
+            .map(([blockId, range]) => ({ blockId, range }))
+            .sort((a, b) => a.range.min - b.range.min);
+
+        for (let i = 0; i < fallbackEntries.length; i += 1) {
+            const entry = fallbackEntries[i];
+            const row = opticalSystemData?.[entry.range.min] || null;
+            const blockType = __coopt_normalizeBlockDisplayType(row?._blockType ?? row?.blockType ?? '');
+            if (!__coopt_isPrincipalPointGroupBlockType(blockType)) continue;
+
+            const zoomGroupLabel = blockType === 'Paraxial'
+                ? __coopt_makeStandaloneParaxialPrincipalLabel(standaloneDisplayCounts)
+                : __coopt_makeSequentialDesignIntentLabel(standaloneDisplayCounts, blockType, entry.blockId);
+
+            registerGroup(`__fallback_principal__:${entry.blockId}`, zoomGroupLabel, entry.range, entry.range.min);
+        }
     }
 
     const orderedGroups = Array.from(groups.values()).sort((a, b) => {
@@ -794,8 +875,12 @@ function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surf
 
     const descriptors = [];
     for (const group of orderedGroups) {
-        const physicalRange = __coopt_getPrincipalPointPhysicalRange(opticalSystemData, group.startIdx, group.endIdx);
-        if (!physicalRange) continue;
+        const rawPhysicalRange = __coopt_getPrincipalPointPhysicalRange(opticalSystemData, group.startIdx, group.endIdx);
+        if (!rawPhysicalRange) continue;
+        const physicalRange = __coopt_expandPrincipalPointRangeForThinLensBack(opticalSystemData, rawPhysicalRange);
+        const leadSurface = opticalSystemData?.[rawPhysicalRange.startIdx];
+        const isSingleThinLensGroup = rawPhysicalRange.startIdx === rawPhysicalRange.endIdx
+            && __coopt_isThinLensSurface(leadSurface);
 
         const subsystem = __coopt_buildPrincipalPointSubsystem(opticalSystemData, physicalRange.startIdx, physicalRange.endIdx);
         if (!subsystem) continue;
@@ -809,8 +894,14 @@ function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surf
             || startOrigin.clone().lerp(endOrigin, 0.5);
         const frontGlobal = anchor.clone();
         const rearGlobal = anchor.clone();
-        frontGlobal.z = Number(startOrigin.z || 0) + Number(principal.frontPrincipalFromFirstSurfaceMm || 0);
-        rearGlobal.z = Number(endOrigin.z || 0) + Number(principal.rearPrincipalFromLastSurfaceMm || 0);
+        if (isSingleThinLensGroup) {
+            const lensPlaneZ = Number(startOrigin.z || 0);
+            frontGlobal.z = lensPlaneZ;
+            rearGlobal.z = lensPlaneZ;
+        } else {
+            frontGlobal.z = Number(startOrigin.z || 0) + Number(principal.frontPrincipalFromFirstSurfaceMm || 0);
+            rearGlobal.z = Number(endOrigin.z || 0) + Number(principal.rearPrincipalFromLastSurfaceMm || 0);
+        }
 
         descriptors.push({
             zoomGroup: group.zoomGroup,
@@ -819,9 +910,10 @@ function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surf
             anchor,
             frontGlobal,
             rearGlobal,
-            frontFromFirstSurfaceMm: Number(principal.frontPrincipalFromFirstSurfaceMm || 0),
-            rearFromLastSurfaceMm: Number(principal.rearPrincipalFromLastSurfaceMm || 0),
-            rearFromFirstSurfaceMm: Number(principal.rearPrincipalFromFirstSurfaceMm || 0),
+            isSingleThinLensGroup,
+            frontFromFirstSurfaceMm: isSingleThinLensGroup ? 0 : Number(principal.frontPrincipalFromFirstSurfaceMm || 0),
+            rearFromLastSurfaceMm: isSingleThinLensGroup ? 0 : Number(principal.rearPrincipalFromLastSurfaceMm || 0),
+            rearFromFirstSurfaceMm: isSingleThinLensGroup ? 0 : Number(principal.rearPrincipalFromFirstSurfaceMm || 0),
             effectiveFocalLengthMm: Number(principal.effectiveFocalLengthMm),
         });
     }
@@ -962,6 +1054,14 @@ function __coopt_formatZoomGroupSpanLabel(entry) {
     return `${startLabel}→${endLabel}`;
 }
 
+function __coopt_formatZoomGroupDistanceLabel(current, next, distanceMm) {
+    const currentLabel = __coopt_formatZoomGroupSpanLabel(current);
+    const nextLabel = __coopt_formatZoomGroupSpanLabel(next);
+    const useDash = /^[A-Z]+$/.test(currentLabel) && /^[A-Z]+$/.test(nextLabel);
+    const connector = useDash ? '-' : '→';
+    return `${currentLabel}${connector}${nextLabel} ${Number(distanceMm || 0).toFixed(2)}`;
+}
+
 function __coopt_addZoomGroupSpanBrace(scene, axis, verticalCoord, depthCoord, startZ, endZ, color) {
     if (!scene || !Number.isFinite(verticalCoord) || !Number.isFinite(depthCoord) || !Number.isFinite(startZ) || !Number.isFinite(endZ)) return;
 
@@ -1050,39 +1150,43 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
         const bounds = descriptorBounds[index];
         const markerBottom = Number.isFinite(bounds?.bottom) ? Number(bounds.bottom) : surfaceBottom;
         const markerTop = Number.isFinite(bounds?.top) ? Number(bounds.top) : surfaceTop;
-        __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.frontGlobal, markerBottom, markerTop, frontColor, 'principal-point-front-marker');
-        __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.rearGlobal, markerBottom, markerTop, rearColor, 'principal-point-rear-marker');
+        if (!entry.isSingleThinLensGroup) {
+            __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.frontGlobal, markerBottom, markerTop, frontColor, 'principal-point-front-marker');
+            __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.rearGlobal, markerBottom, markerTop, rearColor, 'principal-point-rear-marker');
+        }
 
         const principalDimCoord = principalDimBase + index * 8;
         const frontText = `${entry.zoomGroup} H ${entry.frontFromFirstSurfaceMm.toFixed(2)}`;
         const rearText = `${entry.zoomGroup} H' ${entry.rearFromLastSurfaceMm.toFixed(2)}`;
 
-        topLabelItems.push({
-            text: frontText,
-            sourcePoint: entry.frontGlobal.clone(),
-            depth: getDepthCoord(entry.anchor),
-            z: Number(entry.frontGlobal.z || 0),
-            color: frontColor,
-            style: {
-                fillStyle: 'rgba(255,247,237,0.96)',
-                strokeStyle: '#ea580c',
-                textStyle: '#9a3412',
-                lineColor: frontColor,
-            },
-        });
-        topLabelItems.push({
-            text: rearText,
-            sourcePoint: entry.rearGlobal.clone(),
-            depth: getDepthCoord(entry.anchor),
-            z: Number(entry.rearGlobal.z || 0),
-            color: rearColor,
-            style: {
-                fillStyle: 'rgba(240,253,250,0.96)',
-                strokeStyle: '#0f766e',
-                textStyle: '#115e59',
-                lineColor: rearColor,
-            },
-        });
+        if (!entry.isSingleThinLensGroup) {
+            topLabelItems.push({
+                text: frontText,
+                sourcePoint: entry.frontGlobal.clone(),
+                depth: getDepthCoord(entry.anchor),
+                z: Number(entry.frontGlobal.z || 0),
+                color: frontColor,
+                style: {
+                    fillStyle: 'rgba(255,247,237,0.96)',
+                    strokeStyle: '#ea580c',
+                    textStyle: '#9a3412',
+                    lineColor: frontColor,
+                },
+            });
+            topLabelItems.push({
+                text: rearText,
+                sourcePoint: entry.rearGlobal.clone(),
+                depth: getDepthCoord(entry.anchor),
+                z: Number(entry.rearGlobal.z || 0),
+                color: rearColor,
+                style: {
+                    fillStyle: 'rgba(240,253,250,0.96)',
+                    strokeStyle: '#0f766e',
+                    textStyle: '#115e59',
+                    lineColor: rearColor,
+                },
+            });
+        }
 
     });
 
@@ -1173,7 +1277,7 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
             true,
         );
         if (labelPoint) {
-            __coopt_addDesignIntentLabelSprite(scene, `${current.zoomGroup}→${next.zoomGroup} ${distanceMm.toFixed(2)}`, labelPoint, {
+            __coopt_addDesignIntentLabelSprite(scene, __coopt_formatZoomGroupDistanceLabel(current, next, distanceMm), labelPoint, {
                 fillStyle: 'rgba(240,253,250,0.98)',
                 strokeStyle: '#0f766e',
                 textStyle: '#134e4a',

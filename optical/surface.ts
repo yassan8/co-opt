@@ -49,6 +49,13 @@ function __coopt_getSemidiaMm(params) {
     if (n !== null && n > 0) return n;
   }
 
+  // Render-only fallback for ideal Paraxial/ThinLens rows. Some saved projects
+  // have no explicit aperture on these zero-thickness elements; without a finite
+  // semidia the surface/profile drawing paths skip them completely.
+  try {
+    if (__coopt_isThinLensProfileSurface(params)) return 10;
+  } catch (_) {}
+
   // Stop surfaces sometimes provide diameter-like aperture. Use half as a last resort.
   try {
     const objType = String(params?.['object type'] ?? params?.object ?? params?.type ?? '').trim().toLowerCase();
@@ -1609,7 +1616,8 @@ function __coopt_drawThinLensArrows(scene, surf, semidia, originData, axis = 'YZ
         geo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
         const mat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide, depthTest: false });
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.renderOrder = 1001;
+        mesh.renderOrder = 70001;
+        mesh.frustumCulled = false;
         mesh.userData = { type: 'thinLensArrow', isOpticalElement: true };
         scene.add(mesh);
     };
@@ -1715,7 +1723,7 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
     const mat = String(s.material ?? "").trim().toUpperCase();
     const pointsYZ = [];
     const pointsXZ = [];
-    const semidia = Number(s.params.semidia);
+    const semidia = Number(__coopt_getSemidiaMm(s.params ?? s));
     const radiusRaw = s.params.radius;
     const radiusNum = Number(radiusRaw);
     // radiusがINF文字列または数値的に無効なら平面扱い
@@ -1739,7 +1747,7 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
         // Try to find a reasonable semidia from nearby surfaces
         let reasonableSemidia = 10; // fallback default
         for (let j = 0; j < surfaces.length; j++) {
-          const nearSemidia = Number(surfaces[j]?.params?.semidia);
+          const nearSemidia = Number(__coopt_getSemidiaMm(surfaces[j]?.params ?? surfaces[j]));
           if (isFinite(nearSemidia) && nearSemidia > 0) {
             reasonableSemidia = nearSemidia;
             break;
@@ -1755,7 +1763,7 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
       
       // Find reasonable semidia from nearby surfaces
       for (let j = 0; j < surfaces.length; j++) {
-        const nearSemidia = Number(surfaces[j]?.params?.semidia);
+        const nearSemidia = Number(__coopt_getSemidiaMm(surfaces[j]?.params ?? surfaces[j]));
         if (isFinite(nearSemidia) && nearSemidia > 0) {
           return nearSemidia;
         }
@@ -2634,7 +2642,8 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                 depthTest: false
             });
             const yzLine = new THREE.Line(yzGeometry, yzMaterial);
-            yzLine.renderOrder = 1000;
+            yzLine.renderOrder = 70000;
+            yzLine.frustumCulled = false;
             yzLine.userData = { type: 'surfaceProfile', profileType: 'YZ', surfaceIndex: i + 1, isOpticalElement: true };
             scene.add(yzLine);
             yzProfileCount++;
@@ -2698,7 +2707,8 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                 depthTest: false
             });
             const xzLine = new THREE.Line(xzGeometry, xzMaterial);
-            xzLine.renderOrder = 1000;
+            xzLine.renderOrder = 70000;
+            xzLine.frustumCulled = false;
             xzLine.userData = { type: 'surfaceProfile', profileType: 'XZ', surfaceIndex: i + 1, isOpticalElement: true };
             scene.add(xzLine);
             xzProfileCount++;
