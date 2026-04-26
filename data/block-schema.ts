@@ -5,7 +5,7 @@
 // - Glass material must exist in glass.js DB; numeric refractive index is disallowed.
 
 import { getAllGlassDatabases, getGlassDataWithSellmeier } from './glass.ts';
-import { calculateFullSystemParaxialTrace } from '../raytracing/core/ray-paraxial.ts';
+import { calculateFullSystemParaxialTrace, calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 
 export const BLOCK_SCHEMA_VERSION = '0.1';
 export const DEFAULT_SEMIDIA = '10';
@@ -308,6 +308,222 @@ function parseZoomGroupProfiles(value: any, legacyProfiles?: Record<string, any>
   return groups;
 }
 
+function parseLinkedZoomGroupDefinitions(value: any): Array<LinkedZoomGroupDefinition> {
+  const linkedGroups: Array<LinkedZoomGroupDefinition> = [];
+  const seen = new Set<string>();
+
+  const assignDefinition = (rawGroupName: any, rawScale: any) => {
+    const groupName = normalizeZoomGroupName(rawGroupName);
+    if (!groupName || groupName === 'Fixed' || seen.has(groupName)) return;
+    const scaleText = String(rawScale ?? '').trim();
+    const numericScale = scaleText === '' ? 1 : Number(scaleText);
+    if (!Number.isFinite(numericScale) || Math.abs(numericScale) <= 1e-12) return;
+    seen.add(groupName);
+    linkedGroups.push({ groupName, scale: numericScale });
+  };
+
+  if (isPlainObject(value)) {
+    for (const [rawGroupName, rawScale] of Object.entries(value)) {
+      assignDefinition(rawGroupName, rawScale);
+    }
+    return linkedGroups;
+  }
+
+  const text = String(value ?? '').trim();
+  if (!text) return linkedGroups;
+
+  for (const entry of text.split(/\r?\n|;/)) {
+    const line = String(entry ?? '').trim();
+    if (!line) continue;
+    const eqIndex = line.indexOf('=');
+    if (eqIndex > 0) {
+      assignDefinition(line.slice(0, eqIndex), line.slice(eqIndex + 1));
+      continue;
+    }
+    assignDefinition(line, 1);
+  }
+
+  return linkedGroups;
+}
+
+function normalizeZoomCompensationStroke(value: any): number {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : 0;
+}
+
+function normalizeZoomCompensationSampleCount(value: any, fallback = 33): number {
+  const numericValue = Math.floor(Number(value));
+  if (!Number.isFinite(numericValue)) return fallback;
+  return Math.max(5, Math.min(201, numericValue));
+}
+
+function getLinkedZoomOffsetsForPosition(
+  linkedGroups: Array<LinkedZoomGroupDefinition>,
+  stroke: number,
+  zoomPosition: number
+): Map<string, number> {
+  const linkedOffsets = new Map<string, number>();
+  if (!Array.isArray(linkedGroups) || linkedGroups.length === 0) return linkedOffsets;
+  if (!Number.isFinite(stroke) || Math.abs(stroke) <= 1e-12) return linkedOffsets;
+
+  const effectiveZoomPosition = normalizeZoomPosition(zoomPosition);
+  for (const linkedGroup of linkedGroups) {
+    if (!linkedGroup || !linkedGroup.groupName) continue;
+    const offset = stroke * Number(linkedGroup.scale || 0) * effectiveZoomPosition;
+    if (!Number.isFinite(offset)) continue;
+    linkedOffsets.set(linkedGroup.groupName, offset);
+  }
+  return linkedOffsets;
+}
+
+function mapToNumberRecord(input: Map<string, number>): Record<string, number> {
+  const record: Record<string, number> = {};
+  for (const [key, value] of input.entries()) {
+    if (!key || !Number.isFinite(value)) continue;
+    record[key] = value;
+  }
+  return record;
+}
+
+function computeZeroCrossings(samples: Array<ZoomCompensationSample>): number[] {
+  const zeroCrossings: number[] = [];
+  for (let index = 0; index < samples.length; index += 1) {
+    const current = samples[index];
+    const currentShift = Number(current?.focusShift);
+    if (!Number.isFinite(currentShift)) continue;
+
+    if (Math.abs(currentShift) <= 1e-9) {
+      zeroCrossings.push(current.zoomPosition);
+      continue;
+    }
+
+    if (index === 0) continue;
+    const prev = samples[index - 1];
+    const prevShift = Number(prev?.focusShift);
+    if (!Number.isFinite(prevShift) || Math.abs(prevShift) <= 1e-9) continue;
+    if ((prevShift < 0 && currentShift < 0) || (prevShift > 0 && currentShift > 0)) continue;
+
+    const dy = currentShift - prevShift;
+    if (!Number.isFinite(dy) || Math.abs(dy) <= 1e-12) continue;
+    const t = -prevShift / dy;
+    if (!Number.isFinite(t)) continue;
+    zeroCrossings.push(prev.zoomPosition + ((current.zoomPosition - prev.zoomPosition) * t));
+  }
+  return zeroCrossings;
+}
+
+function getMinimumFiniteThickness(rows: any[]): number | null {
+  let minThickness: number | null = null;
+  for (const row of rows || []) {
+    const thickness = Number(row?.thickness);
+    if (!Number.isFinite(thickness)) continue;
+    minThickness = minThickness === null ? thickness : Math.min(minThickness, thickness);
+  }
+  return minThickness;
+}
+
+export function evaluateZoomCompensation(
+  blocks: Block[],
+  options?: { sampleCount?: number; wavelength?: number }
+): ZoomCompensationEvaluation {
+  const emptyResult: ZoomCompensationEvaluation = {
+    available: false,
+    stroke: 0,
+    sampleCount: 0,
+    linkedGroups: [],
+    samples: [],
+    zeroCrossings: [],
+    collisionPositions: [],
+    minFocusShift: null,
+    maxFocusShift: null
+  };
+
+  if (!Array.isArray(blocks) || blocks.length === 0) return emptyResult;
+
+  const zoomController = blocks.find((block) => {
+    const type = isPlainObject(block) ? String(block.blockType ?? '').trim() : '';
+    return type === 'ObjectSurface' || type === 'ObjectPlane';
+  });
+  if (!zoomController) return emptyResult;
+
+  const controllerParams = isPlainObject(zoomController?.parameters) ? zoomController.parameters : null;
+  const controllerVars = isPlainObject(zoomController?.variables) ? zoomController.variables : null;
+  const linkedGroups = parseLinkedZoomGroupDefinitions(getParamOrVarValue(controllerParams, controllerVars, 'zoomLinkedGroupScales'));
+  const stroke = normalizeZoomCompensationStroke(getParamOrVarValue(controllerParams, controllerVars, 'zoomCompensationStroke'));
+  const sampleCount = normalizeZoomCompensationSampleCount(
+    options?.sampleCount ?? getParamOrVarValue(controllerParams, controllerVars, 'zoomCompensationSamples'),
+    33
+  );
+  const wavelength = Number.isFinite(Number(options?.wavelength)) ? Number(options?.wavelength) : 0.5875618;
+
+  const samples: Array<ZoomCompensationSample> = [];
+  let baselineBackFocalLength: number | null = null;
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const zoomPosition = sampleCount <= 1 ? 0 : index / (sampleCount - 1);
+    const sampleBlocks = blocks.map((block) => {
+      if (!isPlainObject(block)) return block;
+      return {
+        ...block,
+        parameters: isPlainObject(block.parameters) ? { ...block.parameters } : block.parameters,
+        variables: isPlainObject(block.variables) ? { ...block.variables } : block.variables,
+        metadata: isPlainObject(block.metadata) ? { ...block.metadata } : block.metadata,
+        aperture: isPlainObject(block.aperture) ? { ...block.aperture } : block.aperture
+      };
+    });
+
+    const sampleController = sampleBlocks.find((block) => String(block?.blockType ?? '').trim() === String(zoomController?.blockType ?? '').trim() && String(block?.blockId ?? '') === String(zoomController?.blockId ?? ''));
+    if (sampleController && isPlainObject(sampleController.parameters)) {
+      sampleController.parameters.zoomPosition = zoomPosition;
+    }
+
+    const expanded = expandBlocksToOpticalSystemRows(sampleBlocks);
+    const rows = Array.isArray(expanded?.rows) ? expanded.rows : [];
+    const paraxial = rows.length > 0 ? calculateParaxialData(rows, wavelength) : null;
+    const backFocalLength = Number(paraxial?.backFocalLength);
+    const imageDistance = Number(paraxial?.imageDistance);
+    if (baselineBackFocalLength === null && Number.isFinite(backFocalLength)) {
+      baselineBackFocalLength = backFocalLength;
+    }
+
+    const minThickness = getMinimumFiniteThickness(rows);
+    const collision = Number.isFinite(minThickness) ? Number(minThickness) < 0 : false;
+    const linkedOffsets = getLinkedZoomOffsetsForPosition(linkedGroups, stroke, zoomPosition);
+    const focusShift = Number.isFinite(backFocalLength) && Number.isFinite(baselineBackFocalLength)
+      ? backFocalLength - Number(baselineBackFocalLength)
+      : null;
+
+    samples.push({
+      zoomPosition,
+      backFocalLength: Number.isFinite(backFocalLength) ? backFocalLength : null,
+      imageDistance: Number.isFinite(imageDistance) ? imageDistance : null,
+      focusShift,
+      linkedOffsets: mapToNumberRecord(linkedOffsets),
+      collision,
+      minThickness
+    });
+  }
+
+  const finiteFocusShifts = samples
+    .map((sample) => Number(sample.focusShift))
+    .filter((value) => Number.isFinite(value));
+  const collisionPositions = samples
+    .filter((sample) => sample.collision)
+    .map((sample) => sample.zoomPosition);
+
+  return {
+    available: true,
+    stroke,
+    sampleCount,
+    linkedGroups,
+    samples,
+    zeroCrossings: computeZeroCrossings(samples),
+    collisionPositions,
+    minFocusShift: finiteFocusShifts.length > 0 ? Math.min(...finiteFocusShifts) : null,
+    maxFocusShift: finiteFocusShifts.length > 0 ? Math.max(...finiteFocusShifts) : null
+  };
+}
+
 type ZoomLawDefinition =
   | { type: 'profile'; points: Array<{ x: number; y: number }> }
   | { type: 'expression'; expression: string };
@@ -315,6 +531,7 @@ type ZoomLawDefinition =
 type ZoomLawParseResult = {
   definitions: Record<string, ZoomLawDefinition>;
   constants: Record<string, number>;
+  constantExpressions: Record<string, string>;
 };
 
 type ZoomLawResolutionResult = {
@@ -322,11 +539,46 @@ type ZoomLawResolutionResult = {
   errors: string[];
 };
 
+type LinkedZoomGroupDefinition = {
+  groupName: string;
+  scale: number;
+};
+
+export type ZoomCompensationSample = {
+  zoomPosition: number;
+  backFocalLength: number | null;
+  imageDistance: number | null;
+  focusShift: number | null;
+  linkedOffsets: Record<string, number>;
+  collision: boolean;
+  minThickness: number | null;
+};
+
+export type ZoomCompensationEvaluation = {
+  available: boolean;
+  stroke: number;
+  sampleCount: number;
+  linkedGroups: Array<LinkedZoomGroupDefinition>;
+  samples: Array<ZoomCompensationSample>;
+  zeroCrossings: number[];
+  collisionPositions: number[];
+  minFocusShift: number | null;
+  maxFocusShift: number | null;
+};
+
 type ZoomLawDiagnosticState = {
   message: string | null;
 };
 
+type ZoomLawEvaluationContext = {
+  objectDistanceMode: 'Finite' | 'INF';
+  blocks?: Block[];
+  zoomPosition?: number;
+  currentGroupName?: string;
+};
+
 const autoZoomLawConstantCache = new WeakMap<Block[], { key: string; constants: Record<string, number> }>();
+const zoomLawFocusTargetCache = new WeakMap<Block[], { key: string; imageDistance: number | null }>();
 
 type CooptPerfCounter = {
   count: number;
@@ -381,13 +633,22 @@ function isZoomProfileDefinitionText(value: any): boolean {
 function parseZoomLawDefinitions(value: any, legacyProfiles?: Record<string, any>): ZoomLawParseResult {
   const groups: Record<string, ZoomLawDefinition> = {};
   const constants: Record<string, number> = {};
+  const constantExpressions: Record<string, string> = {};
 
   const assignConstant = (rawName: any, rawValue: any): boolean => {
     const nameText = String(rawName ?? '').trim();
     const match = nameText.match(/^(?:const\s+|\$)([A-Za-z_][A-Za-z0-9_]*)$/i);
     if (!match) return false;
-    const numericValue = parseZoomLawExpressionNumber(String(rawValue ?? '').trim());
-    if (numericValue !== null) constants[match[1]] = numericValue;
+    const constantName = match[1];
+    const valueText = String(rawValue ?? '').trim();
+    const numericValue = parseZoomLawExpressionNumber(valueText);
+    delete constants[constantName];
+    delete constantExpressions[constantName];
+    if (numericValue !== null) {
+      constants[constantName] = numericValue;
+    } else if (valueText) {
+      constantExpressions[constantName] = valueText;
+    }
     return true;
   };
 
@@ -424,8 +685,8 @@ function parseZoomLawDefinitions(value: any, legacyProfiles?: Record<string, any
     }
   }
 
-  if (Object.keys(groups).length > 0 || Object.keys(constants).length > 0) {
-    return { definitions: groups, constants };
+  if (Object.keys(groups).length > 0 || Object.keys(constants).length > 0 || Object.keys(constantExpressions).length > 0) {
+    return { definitions: groups, constants, constantExpressions };
   }
 
   if (legacyProfiles && typeof legacyProfiles === 'object') {
@@ -434,7 +695,7 @@ function parseZoomLawDefinitions(value: any, legacyProfiles?: Record<string, any
     }
   }
 
-  return { definitions: groups, constants };
+  return { definitions: groups, constants, constantExpressions };
 }
 
 function parseZoomLawExpressionNumber(value: string): number | null {
@@ -484,22 +745,95 @@ function collectZoomLawIdentifiers(expression: string): string[] {
 
 function collectReferencedAutoZoomLawConstantNames(
   definitions: Record<string, ZoomLawDefinition>,
+  constantExpressions: Record<string, string>,
   explicitConstants: Record<string, number>
 ): Set<string> {
   const referenced = new Set<string>();
   const explicitNames = new Set(Object.keys(explicitConstants || {}));
 
-  for (const definition of Object.values(definitions || {})) {
-    if (!definition || definition.type !== 'expression') continue;
-    const identifiers = collectZoomLawIdentifiers(definition.expression);
+  const inspectExpression = (expression: string) => {
+    const identifiers = collectZoomLawIdentifiers(expression);
     for (const identifier of identifiers) {
       if (!/^phi[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) continue;
       if (explicitNames.has(identifier)) continue;
       referenced.add(identifier);
     }
+  };
+
+  for (const definition of Object.values(definitions || {})) {
+    if (!definition || definition.type !== 'expression') continue;
+    inspectExpression(definition.expression);
+  }
+  for (const expression of Object.values(constantExpressions || {})) {
+    inspectExpression(expression);
   }
 
   return referenced;
+}
+
+function collectReferencedAutoZoomLawCoordinateNames(
+  definitions: Record<string, ZoomLawDefinition>,
+  constantExpressions: Record<string, string>,
+  explicitConstants: Record<string, number>
+): Set<string> {
+  const referenced = new Set<string>();
+  const explicitNames = new Set(Object.keys(explicitConstants || {}));
+
+  const inspectExpression = (expression: string) => {
+    const identifiers = collectZoomLawIdentifiers(expression);
+    for (const identifier of identifiers) {
+      if (explicitNames.has(identifier)) continue;
+      if (identifier === 'zObj' || identifier === 'zImg') {
+        referenced.add(identifier);
+        continue;
+      }
+      if (/^z[A-Za-z_][A-Za-z0-9_]*0$/.test(identifier)) {
+        referenced.add(identifier);
+        continue;
+      }
+      if (/^z[A-Za-z_][A-Za-z0-9_]*seed$/.test(identifier)) {
+        referenced.add(identifier);
+      }
+    }
+  };
+
+  for (const definition of Object.values(definitions || {})) {
+    if (!definition || definition.type !== 'expression') continue;
+    inspectExpression(definition.expression);
+  }
+  for (const expression of Object.values(constantExpressions || {})) {
+    inspectExpression(expression);
+  }
+
+  return referenced;
+}
+
+function resolveZoomLawConstantExpressions(
+  baseConstants: Record<string, number>,
+  constantExpressions: Record<string, string>
+): Record<string, number> {
+  const resolvedConstants: Record<string, number> = {};
+  for (const [name, value] of Object.entries(baseConstants || {})) {
+    if (isValidZoomLawIdentifier(name) && Number.isFinite(value)) {
+      resolvedConstants[name] = Number(value);
+    }
+  }
+
+  const unresolvedExpressions = new Map(Object.entries(constantExpressions || {}));
+  let didResolve = true;
+  while (unresolvedExpressions.size > 0 && didResolve) {
+    didResolve = false;
+    for (const [name, expression] of Array.from(unresolvedExpressions.entries())) {
+      const diagnosticState: ZoomLawDiagnosticState = { message: null };
+      const nextValue = evaluateZoomLawExpression(expression, new Map(), resolvedConstants, diagnosticState);
+      if (!Number.isFinite(nextValue)) continue;
+      resolvedConstants[name] = Number(nextValue);
+      unresolvedExpressions.delete(name);
+      didResolve = true;
+    }
+  }
+
+  return resolvedConstants;
 }
 
 function buildAutoZoomLawConstantCacheKey(blocks: Block[], requiredConstantNames: Set<string>): string {
@@ -555,40 +889,302 @@ function pickNearestFiniteValue(values: Array<number>, target: number): number |
   return best;
 }
 
-function solveCamCompAbsolute(
-  zB: number,
-  phiB: number,
+function deriveZoomReferenceCoordinateConstants(
+  blocks: Block[],
+  requiredConstantNames: Set<string>
+): Record<string, number> {
+  const constants: Record<string, number> = {};
+  if (!Array.isArray(blocks) || blocks.length === 0 || requiredConstantNames.size === 0) return constants;
+
+  const clonedBlocks = blocks.map((block) => {
+    if (!isPlainObject(block)) return block;
+    return {
+      ...block,
+      parameters: isPlainObject(block.parameters) ? { ...block.parameters } : block.parameters,
+      variables: isPlainObject(block.variables) ? { ...block.variables } : block.variables,
+      metadata: isPlainObject(block.metadata) ? { ...block.metadata } : block.metadata,
+      aperture: isPlainObject(block.aperture) ? { ...block.aperture } : block.aperture
+    };
+  });
+
+  const controller = clonedBlocks.find((block) => {
+    const type = isPlainObject(block) ? String(block.blockType ?? '').trim() : '';
+    return type === 'ObjectSurface' || type === 'ObjectPlane';
+  });
+  if (isPlainObject(controller)) {
+    if (!isPlainObject(controller.parameters)) controller.parameters = {};
+    controller.parameters.zoomPosition = 0;
+  }
+
+  const groupByBlockId = new Map<string, string>();
+  for (const block of clonedBlocks) {
+    if (!isPlainObject(block) || !isZoomAnchorBlockType(block.blockType)) continue;
+    const blockType = String(block.blockType ?? '').trim();
+    if (blockType === 'ObjectSurface' || blockType === 'ObjectPlane' || blockType === 'ImageSurface') continue;
+    const blockId = String(block.blockId ?? '').trim();
+    if (!blockId) continue;
+    const groupName = getBlockZoomGroup(block);
+    if (!groupName || groupName === 'Fixed') continue;
+    groupByBlockId.set(blockId, groupName);
+  }
+
+  const expanded = expandBlocksToOpticalSystemRows(clonedBlocks, { disableAutoZoomLawConstants: true });
+  const rows = Array.isArray(expanded?.rows) ? expanded.rows : [];
+  if (rows.length === 0) return constants;
+
+  const objectThickness = normalizeThicknessToRowValue(rows[0]?.thickness);
+  let currentZ = 0;
+  const hasFiniteObjectReference = objectThickness !== 'INF' && Number.isFinite(Number(objectThickness));
+  let coordinatesAreFinite = true;
+  const groupStartZ = new Map<string, number>();
+  let imageZ: number | null = null;
+
+  for (let index = 1; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (coordinatesAreFinite) {
+      const prevThickness = Number(rows[index - 1]?.thickness);
+      if (!Number.isFinite(prevThickness)) {
+        // Infinite object distance should not discard downstream relative coordinates.
+        // Treat the first physical surface after the object gap as z=0, but keep zObj
+        // unavailable because there is no finite object-plane reference.
+        if (index !== 1) {
+          coordinatesAreFinite = false;
+        }
+      } else {
+        currentZ += prevThickness;
+      }
+    }
+
+    if (!coordinatesAreFinite) continue;
+
+    const blockType = String(row?._blockType ?? '').trim();
+    const blockId = String(row?._blockId ?? '').trim();
+    if (blockType === 'ImageSurface' && imageZ === null) {
+      imageZ = currentZ;
+    }
+    const groupName = groupByBlockId.get(blockId);
+    if (groupName && !groupStartZ.has(groupName)) {
+      groupStartZ.set(groupName, currentZ);
+    }
+  }
+
+  if (requiredConstantNames.has('zObj') && (hasFiniteObjectReference || objectThickness === 'INF')) {
+    constants.zObj = 0;
+  }
+  if (requiredConstantNames.has('zImg') && Number.isFinite(imageZ)) {
+    constants.zImg = Number(imageZ);
+  }
+  for (const constantName of requiredConstantNames) {
+    const groupZeroMatch = /^z([A-Za-z_][A-Za-z0-9_]*)0$/.exec(constantName);
+    if (groupZeroMatch) {
+      const groupName = normalizeZoomGroupName(groupZeroMatch[1]);
+      const groupZ = groupStartZ.get(groupName);
+      if (Number.isFinite(groupZ)) {
+        constants[constantName] = Number(groupZ);
+      }
+      continue;
+    }
+    const groupSeedMatch = /^z([A-Za-z_][A-Za-z0-9_]*)seed$/.exec(constantName);
+    if (groupSeedMatch) {
+      const groupName = normalizeZoomGroupName(groupSeedMatch[1]);
+      const groupZ = groupStartZ.get(groupName);
+      if (Number.isFinite(groupZ)) {
+        constants[constantName] = Number(groupZ);
+      }
+    }
+  }
+
+  return constants;
+}
+
+function getZoomLawEvaluationContext(blocks: Block[]): ZoomLawEvaluationContext {
+  const defaultContext: ZoomLawEvaluationContext = { objectDistanceMode: 'Finite', blocks, zoomPosition: 0 };
+  if (!Array.isArray(blocks) || blocks.length === 0) return defaultContext;
+
+  const objectSurfaceBlock = blocks.find((block) => {
+    const type = isPlainObject(block) ? String(block.blockType ?? '').trim() : '';
+    return type === 'ObjectSurface' || type === 'ObjectPlane';
+  });
+  if (!isPlainObject(objectSurfaceBlock)) return defaultContext;
+
+  const params = objectSurfaceBlock.parameters;
+  const vars = isPlainObject(objectSurfaceBlock.variables) ? objectSurfaceBlock.variables : null;
+  const modeRaw = getParamOrVarValue(params, vars, 'objectDistanceMode');
+  const modeKey = String(modeRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
+  const zoomPosition = normalizeZoomPosition(getParamOrVarValue(params, vars, 'zoomPosition'));
+  return {
+    objectDistanceMode: modeKey === 'INF' || modeKey === 'INFINITY' ? 'INF' : 'Finite',
+    blocks,
+    zoomPosition
+  };
+}
+
+function cloneBlocksForZoomEvaluation(blocks: Block[]): Block[] {
+  return (blocks || []).map((block) => {
+    if (!isPlainObject(block)) return block;
+    return {
+      ...block,
+      parameters: isPlainObject(block.parameters) ? { ...block.parameters } : block.parameters,
+      variables: isPlainObject(block.variables) ? { ...block.variables } : block.variables,
+      metadata: isPlainObject(block.metadata) ? { ...block.metadata } : block.metadata,
+      aperture: isPlainObject(block.aperture) ? { ...block.aperture } : block.aperture
+    };
+  });
+}
+
+function clearZoomLawControllerFields(blocks: Block[], zoomPosition: number): void {
+  const controller = blocks.find((block) => {
+    const type = isPlainObject(block) ? String(block.blockType ?? '').trim() : '';
+    return type === 'ObjectSurface' || type === 'ObjectPlane';
+  });
+  if (!isPlainObject(controller)) return;
+  const params = isPlainObject(controller.parameters) ? controller.parameters : (controller.parameters = {});
+  params.zoomPosition = zoomPosition;
+  delete params.zoomGroupProfiles;
+  delete params.zoomGroupAProfile;
+  delete params.zoomGroupBProfile;
+}
+
+function applyResolvedZoomOffsetsToBlocks(blocks: Block[], zoomPosition: number, offsets: Map<string, number>): Block[] {
+  const clonedBlocks = cloneBlocksForZoomEvaluation(blocks);
+
+  const findNextAnchorGroup = (startIndex: number): string => {
+    for (let index = startIndex; index < clonedBlocks.length; index += 1) {
+      const block = clonedBlocks[index];
+      if (!isPlainObject(block) || !isZoomAnchorBlockType(block.blockType)) continue;
+      return getBlockZoomGroup(block);
+    }
+    return 'Fixed';
+  };
+
+  let prevAnchorGroup = 'Fixed';
+  for (let index = 0; index < clonedBlocks.length; index += 1) {
+    const block = clonedBlocks[index];
+    if (!isPlainObject(block)) continue;
+
+    const blockType = String(block.blockType ?? '').trim();
+    if (blockType === 'Gap' || blockType === 'AirGap') {
+      const params = isPlainObject(block.parameters) ? block.parameters : (block.parameters = {});
+      const baseThickness = normalizeThicknessToRowValue(params.thickness);
+      if (typeof baseThickness === 'number' && Number.isFinite(baseThickness)) {
+        const nextAnchorGroup = findNextAnchorGroup(index + 1);
+        const gapDelta = (offsets.get(nextAnchorGroup) ?? 0) - (offsets.get(prevAnchorGroup) ?? 0);
+        params.thickness = baseThickness + gapDelta;
+        if (!isPlainObject(block.metadata)) block.metadata = {};
+        block.metadata.zoomDerived = {
+          zoomPosition,
+          prevAnchorGroup,
+          nextAnchorGroup,
+          baseThickness,
+          gapDelta
+        };
+      }
+      continue;
+    }
+
+    if (isZoomAnchorBlockType(blockType)) {
+      prevAnchorGroup = getBlockZoomGroup(block);
+    }
+  }
+
+  return clonedBlocks;
+}
+
+function calculateZoomLawFocusTargetImageDistance(blocks: Block[], evaluationContext?: ZoomLawEvaluationContext): number | null {
+  if (!Array.isArray(blocks) || blocks.length === 0) return null;
+  const mode = evaluationContext?.objectDistanceMode ?? 'Finite';
+  const cacheKey = JSON.stringify({ mode });
+  const cached = zoomLawFocusTargetCache.get(blocks);
+  if (cached?.key === cacheKey) return cached.imageDistance;
+
+  const baselineBlocks = cloneBlocksForZoomEvaluation(blocks);
+  clearZoomLawControllerFields(baselineBlocks, 0);
+  const expanded = expandBlocksToOpticalSystemRows(baselineBlocks, { disableAutoZoomLawConstants: true });
+  const rows = Array.isArray(expanded?.rows) ? expanded.rows : [];
+  const paraxial = rows.length > 0 ? calculateParaxialData(rows, 0.5875618) : null;
+  const imageDistance = Number(paraxial?.imageDistance);
+  const target = Number.isFinite(imageDistance) ? imageDistance : null;
+  zoomLawFocusTargetCache.set(blocks, { key: cacheKey, imageDistance: target });
+  return target;
+}
+
+function solveCamCompNumericOffset(
+  bOffset: number,
+  zC0: number,
+  zCSeed: number | undefined,
+  offsets: Map<string, number>,
+  diagnosticState?: ZoomLawDiagnosticState,
+  evaluationContext?: ZoomLawEvaluationContext
+): number | null {
+  const blocks = evaluationContext?.blocks;
+  const targetGroupName = evaluationContext?.currentGroupName;
+  const zoomPosition = normalizeZoomPosition(evaluationContext?.zoomPosition ?? 0);
+  if (!Array.isArray(blocks) || !targetGroupName || targetGroupName === 'Fixed') return null;
+
+  const targetImageDistance = calculateZoomLawFocusTargetImageDistance(blocks, evaluationContext);
+  if (!Number.isFinite(targetImageDistance)) return null;
+
+  const evaluateCandidate = (candidateOffset: number): { offset: number; error: number; imageDistance: number | null } => {
+    const candidateOffsets = new Map(offsets);
+    candidateOffsets.set(targetGroupName, candidateOffset);
+    const candidateBlocks = applyResolvedZoomOffsetsToBlocks(blocks, zoomPosition, candidateOffsets);
+    clearZoomLawControllerFields(candidateBlocks, zoomPosition);
+    const expanded = expandBlocksToOpticalSystemRows(candidateBlocks, { disableAutoZoomLawConstants: true });
+    const rows = Array.isArray(expanded?.rows) ? expanded.rows : [];
+    const paraxial = rows.length > 0 ? calculateParaxialData(rows, 0.5875618) : null;
+    const imageDistance = Number(paraxial?.imageDistance);
+    const error = Number.isFinite(imageDistance) ? Math.abs(imageDistance - targetImageDistance) : Infinity;
+    return {
+      offset: candidateOffset,
+      error,
+      imageDistance: Number.isFinite(imageDistance) ? imageDistance : null
+    };
+  };
+
+  const seedOffset = Number.isFinite(zCSeed) ? Number(zCSeed) - zC0 : 0;
+  const searchCenter = Number.isFinite(seedOffset) ? seedOffset : 0;
+  const searchHalfRange = Math.max(60, Math.abs(bOffset) * 3, Math.abs(searchCenter) + 20);
+  const coarseSteps = 33;
+  let best = evaluateCandidate(searchCenter);
+  const coarseStep = (searchHalfRange * 2) / (coarseSteps - 1);
+  for (let index = 0; index < coarseSteps; index += 1) {
+    const candidateOffset = searchCenter - searchHalfRange + (coarseStep * index);
+    const candidate = evaluateCandidate(candidateOffset);
+    if (candidate.error < best.error) best = candidate;
+  }
+
+  let refineStep = coarseStep;
+  for (let iteration = 0; iteration < 8; iteration += 1) {
+    refineStep *= 0.5;
+    const left = evaluateCandidate(best.offset - refineStep);
+    const right = evaluateCandidate(best.offset + refineStep);
+    if (left.error < best.error) best = left;
+    if (right.error < best.error) best = right;
+  }
+
+  if (!Number.isFinite(best.error) || best.error > 0.5) {
+    if (diagnosticState) diagnosticState.message = `camComp numeric solve could not keep imageDistance near the baseline target (best error ${Number(best.error).toFixed(6)} mm).`;
+    return null;
+  }
+  if (diagnosticState) diagnosticState.message = null;
+  return best.offset;
+}
+
+function solveCamCompFromIntermediateImage(
+  zBPrime: number,
   phiC: number,
-  zObj: number,
   zImg: number,
   zCSeed: number,
   diagnosticState?: ZoomLawDiagnosticState
 ): number | null {
-  if (![zB, phiB, phiC, zObj, zImg, zCSeed].every((value) => Number.isFinite(value))) {
-    if (diagnosticState) diagnosticState.message = 'camCompAbs requires finite numeric arguments.';
+  if (![zBPrime, phiC, zImg, zCSeed].every((value) => Number.isFinite(value))) {
+    if (diagnosticState) diagnosticState.message = 'camComp requires finite intermediate-image arguments.';
     return null;
   }
   if (Math.abs(phiC) <= 1e-12) {
-    if (diagnosticState) diagnosticState.message = 'camCompAbs requires phiC to be non-zero.';
+    if (diagnosticState) diagnosticState.message = 'camComp requires phiC to be non-zero.';
     return null;
   }
-
-  // Align the helper with the repo's paraxial convention:
-  // finite-object initial alpha is -h / distance and imageDistance = h / alpha.
-  // For a single powered group, that gives s' = s / (phi*s - 1).
-  const sB = zB - zObj;
-  const bDenom = (phiB * sB) - 1;
-  if (!(Number.isFinite(bDenom) && Math.abs(bDenom) > 1e-12)) {
-    if (diagnosticState) diagnosticState.message = 'camCompAbs encountered a singular B-group imaging denominator (phiB*sB - 1 = 0).';
-    return null;
-  }
-
-  const sPrimeB = sB / bDenom;
-  if (!Number.isFinite(sPrimeB)) {
-    if (diagnosticState) diagnosticState.message = 'camCompAbs produced a non-finite intermediate image distance.';
-    return null;
-  }
-  const zBPrime = zB + sPrimeB;
 
   const solveQuadraticNearest = (a: number, b: number, c: number): { solution: number | null; discriminant: number } => {
     const discriminant = (b * b) - (4 * a * c);
@@ -611,7 +1207,6 @@ function solveCamCompAbsolute(
     };
   };
 
-  // Primary convention: 1/s' + 1/s = phiC
   const primary = solveQuadraticNearest(
     phiC,
     -phiC * (zImg + zBPrime),
@@ -619,8 +1214,6 @@ function solveCamCompAbsolute(
   );
   let solution = primary.solution;
 
-  // Fallback for the negative-compensator convention used in classic zoom-lens texts:
-  // 1/s' - 1/s = phiC
   if (!Number.isFinite(solution)) {
     const alternate = solveQuadraticNearest(
       phiC,
@@ -652,6 +1245,53 @@ function solveCamCompAbsolute(
   return solution;
 }
 
+function solveCamCompAbsolute(
+  zB: number,
+  phiB: number,
+  phiC: number,
+  zObj: number,
+  zImg: number,
+  zCSeed: number,
+  diagnosticState?: ZoomLawDiagnosticState,
+  evaluationContext?: ZoomLawEvaluationContext
+): number | null {
+  if (![zB, phiB, phiC, zImg, zCSeed].every((value) => Number.isFinite(value))) {
+    if (diagnosticState) diagnosticState.message = 'camCompAbs requires finite numeric arguments.';
+    return null;
+  }
+  if (evaluationContext?.objectDistanceMode === 'INF') {
+    if (Math.abs(phiB) <= 1e-12) {
+      if (diagnosticState) diagnosticState.message = 'camCompAbs in INF mode requires phiB to be non-zero.';
+      return null;
+    }
+    const zBPrime = zB + (1 / phiB);
+    return solveCamCompFromIntermediateImage(zBPrime, phiC, zImg, zCSeed, diagnosticState);
+  }
+
+  if (![zObj].every((value) => Number.isFinite(value))) {
+    if (diagnosticState) diagnosticState.message = 'camCompAbs requires finite zObj in finite-object mode.';
+    return null;
+  }
+
+  // Align the helper with the repo's paraxial convention:
+  // finite-object initial alpha is -h / distance and imageDistance = h / alpha.
+  // For a single powered group, that gives s' = s / (phi*s - 1).
+  const sB = zB - zObj;
+  const bDenom = (phiB * sB) - 1;
+  if (!(Number.isFinite(bDenom) && Math.abs(bDenom) > 1e-12)) {
+    if (diagnosticState) diagnosticState.message = 'camCompAbs encountered a singular B-group imaging denominator (phiB*sB - 1 = 0).';
+    return null;
+  }
+
+  const sPrimeB = sB / bDenom;
+  if (!Number.isFinite(sPrimeB)) {
+    if (diagnosticState) diagnosticState.message = 'camCompAbs produced a non-finite intermediate image distance.';
+    return null;
+  }
+  const zBPrime = zB + sPrimeB;
+  return solveCamCompFromIntermediateImage(zBPrime, phiC, zImg, zCSeed, diagnosticState);
+}
+
 function solveCamCompOffset(
   bOffset: number,
   phiB: number,
@@ -661,17 +1301,30 @@ function solveCamCompOffset(
   zB0: number,
   zC0: number,
   zCSeed?: number,
-  diagnosticState?: ZoomLawDiagnosticState
+  offsets?: Map<string, number>,
+  diagnosticState?: ZoomLawDiagnosticState,
+  evaluationContext?: ZoomLawEvaluationContext
 ): number | null {
-  if (![bOffset, phiB, phiC, zObj, zImg, zB0, zC0].every((value) => Number.isFinite(value))) {
+  if (![bOffset, phiB, phiC, zImg, zB0, zC0].every((value) => Number.isFinite(value))) {
     if (diagnosticState) diagnosticState.message = 'camComp requires finite numeric arguments.';
     return null;
   }
+  if (evaluationContext?.objectDistanceMode !== 'INF' && !Number.isFinite(zObj)) {
+    if (diagnosticState) diagnosticState.message = 'camComp requires finite zObj in finite-object mode.';
+    return null;
+  }
+  const numericOffset = solveCamCompNumericOffset(bOffset, zC0, zCSeed, offsets ?? new Map(), diagnosticState, evaluationContext);
+  if (Number.isFinite(numericOffset)) return numericOffset;
   const zB = zB0 + bOffset;
   const absoluteSeed = Number.isFinite(zCSeed) ? Number(zCSeed) : zC0;
-  const zC = solveCamCompAbsolute(zB, phiB, phiC, zObj, zImg, absoluteSeed, diagnosticState);
+  const zC = solveCamCompAbsolute(zB, phiB, phiC, zObj, zImg, absoluteSeed, diagnosticState, evaluationContext);
   if (!Number.isFinite(zC)) return null;
-  const offset = zC - zC0;
+  const baselineZC = solveCamCompAbsolute(zB0, phiB, phiC, zObj, zImg, absoluteSeed, diagnosticState, evaluationContext);
+  if (!Number.isFinite(baselineZC)) {
+    if (diagnosticState) diagnosticState.message = 'camComp could not establish a finite baseline compensator position.';
+    return null;
+  }
+  const offset = zC - baselineZC;
   if (!Number.isFinite(offset)) {
     if (diagnosticState) diagnosticState.message = 'camComp produced a non-finite compensator offset.';
     return null;
@@ -682,7 +1335,7 @@ function solveCamCompOffset(
 
 const ZOOM_LAW_BUILTIN_NAMES = Object.freeze(['abs', 'sqrt', 'min', 'max', 'pow', 'camComp', 'camCompAbs']);
 
-function createZoomLawBuiltins(diagnosticState?: ZoomLawDiagnosticState): Record<string, (...args: Array<number>) => number> {
+function createZoomLawBuiltins(offsets: Map<string, number>, diagnosticState?: ZoomLawDiagnosticState, evaluationContext?: ZoomLawEvaluationContext): Record<string, (...args: Array<number>) => number> {
   return {
     abs: (...args: Array<number>) => {
       if (!(args.length === 1 && Number.isFinite(args[0]))) {
@@ -728,14 +1381,14 @@ function createZoomLawBuiltins(diagnosticState?: ZoomLawDiagnosticState): Record
         if (diagnosticState) diagnosticState.message = 'camComp(...) requires 7 or 8 arguments: B, phiB, phiC, zObj, zImg, zB0, zC0, [zCseed].';
         return NaN;
       }
-      return solveCamCompOffset(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], diagnosticState) ?? NaN;
+      return solveCamCompOffset(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], offsets, diagnosticState, evaluationContext) ?? NaN;
     },
     camCompAbs: (...args: Array<number>) => {
       if (args.length !== 6) {
         if (diagnosticState) diagnosticState.message = 'camCompAbs(...) requires 6 arguments: zB, phiB, phiC, zObj, zImg, zCseed.';
         return NaN;
       }
-      return solveCamCompAbsolute(args[0], args[1], args[2], args[3], args[4], args[5], diagnosticState) ?? NaN;
+      return solveCamCompAbsolute(args[0], args[1], args[2], args[3], args[4], args[5], diagnosticState, evaluationContext) ?? NaN;
     }
   };
 }
@@ -785,7 +1438,8 @@ function explainZoomLawFailure(
 function resolveZoomLawOffsets(
   zoomPosition: number,
   lawDefinitions: Record<string, ZoomLawDefinition>,
-  lawConstants: Record<string, number>
+  lawConstants: Record<string, number>,
+  evaluationContext?: ZoomLawEvaluationContext
 ): ZoomLawResolutionResult {
   const offsets = new Map<string, number>();
   offsets.set('Fixed', 0);
@@ -800,7 +1454,7 @@ function resolveZoomLawOffsets(
       if (definition.type === 'profile') {
         nextValue = evaluateZoomProfile(definition.points, zoomPosition);
       } else {
-        nextValue = evaluateZoomLawExpression(definition.expression, offsets, lawConstants, diagnosticState);
+        nextValue = evaluateZoomLawExpression(definition.expression, offsets, lawConstants, diagnosticState, { ...(evaluationContext || { objectDistanceMode: 'Finite' }), currentGroupName: groupName, zoomPosition });
       }
       if (!Number.isFinite(nextValue)) continue;
       offsets.set(groupName, Number(nextValue));
@@ -813,7 +1467,7 @@ function resolveZoomLawOffsets(
   for (const [groupName, definition] of unresolvedDefinitions.entries()) {
     const diagnosticState: ZoomLawDiagnosticState = { message: null };
     if (definition.type === 'expression') {
-      evaluateZoomLawExpression(definition.expression, offsets, lawConstants, diagnosticState);
+      evaluateZoomLawExpression(definition.expression, offsets, lawConstants, diagnosticState, { ...(evaluationContext || { objectDistanceMode: 'Finite' }), currentGroupName: groupName, zoomPosition });
     }
     offsets.set(groupName, 0);
     errors.push(explainZoomLawFailure(groupName, definition, offsets, lawConstants, zoomPosition, diagnosticState.message));
@@ -877,7 +1531,7 @@ function evaluateZoomLawPolynomial(expression: string, groupName: string, groupV
   return Number.isFinite(total) ? total : null;
 }
 
-function evaluateZoomLawExpression(expression: string, offsets: Map<string, number>, constants?: Record<string, number>, diagnosticState?: ZoomLawDiagnosticState): number | null {
+function evaluateZoomLawExpression(expression: string, offsets: Map<string, number>, constants?: Record<string, number>, diagnosticState?: ZoomLawDiagnosticState, evaluationContext?: ZoomLawEvaluationContext): number | null {
   const compact = String(expression ?? '').replace(/\s+/g, '');
   if (!compact) return null;
 
@@ -906,7 +1560,7 @@ function evaluateZoomLawExpression(expression: string, offsets: Map<string, numb
     if (!isValidZoomLawIdentifier(name) || !Number.isFinite(value)) continue;
     scope.set(name, Number(value));
   }
-  for (const [name, fn] of Object.entries(createZoomLawBuiltins(diagnosticState))) {
+  for (const [name, fn] of Object.entries(createZoomLawBuiltins(offsets, diagnosticState, evaluationContext))) {
     scope.set(name, fn);
   }
 
@@ -1000,34 +1654,40 @@ function estimateZoomGroupParaxialPower(blocks: Block[], groupName: string): num
 function resolveAutomaticZoomLawConstants(
   blocks: Block[],
   explicitConstants: Record<string, number>,
+  constantExpressions: Record<string, string>,
   definitions: Record<string, ZoomLawDefinition>
 ): Record<string, number> {
   const startMs = performance.now();
   try {
     const resolvedConstants: Record<string, number> = {};
-    const requiredConstantNames = collectReferencedAutoZoomLawConstantNames(definitions, explicitConstants);
+    const requiredConstantNames = collectReferencedAutoZoomLawConstantNames(definitions, constantExpressions, explicitConstants);
+    const requiredCoordinateNames = collectReferencedAutoZoomLawCoordinateNames(definitions, constantExpressions, explicitConstants);
+    const requiredAutoNames = new Set<string>([...requiredConstantNames, ...requiredCoordinateNames]);
     const seenGroups = new Set<string>();
 
-    if (requiredConstantNames.size > 0 && Array.isArray(blocks)) {
-      const cacheKey = buildAutoZoomLawConstantCacheKey(blocks, requiredConstantNames);
+    if (requiredAutoNames.size > 0 && Array.isArray(blocks)) {
+      const cacheKey = buildAutoZoomLawConstantCacheKey(blocks, requiredAutoNames);
       const cached = autoZoomLawConstantCache.get(blocks);
       if (cached?.key === cacheKey) {
         Object.assign(resolvedConstants, cached.constants);
       } else {
-        for (const block of blocks) {
-          if (!isPlainObject(block) || !isZoomAnchorBlockType(block.blockType)) continue;
-          const blockType = String(block.blockType ?? '').trim();
-          if (blockType === 'ObjectSurface' || blockType === 'ObjectPlane' || blockType === 'ImageSurface') continue;
-          const groupName = getBlockZoomGroup(block);
-          if (!groupName || groupName === 'Fixed' || seenGroups.has(groupName)) continue;
-          seenGroups.add(groupName);
-          const constantName = `phi${groupName}`;
-          if (!requiredConstantNames.has(constantName)) continue;
-          const estimatedPower = estimateZoomGroupParaxialPower(blocks, groupName);
-          if (Number.isFinite(estimatedPower)) {
-            resolvedConstants[constantName] = Number(estimatedPower);
+        if (requiredConstantNames.size > 0) {
+          for (const block of blocks) {
+            if (!isPlainObject(block) || !isZoomAnchorBlockType(block.blockType)) continue;
+            const blockType = String(block.blockType ?? '').trim();
+            if (blockType === 'ObjectSurface' || blockType === 'ObjectPlane' || blockType === 'ImageSurface') continue;
+            const groupName = getBlockZoomGroup(block);
+            if (!groupName || groupName === 'Fixed' || seenGroups.has(groupName)) continue;
+            seenGroups.add(groupName);
+            const constantName = `phi${groupName}`;
+            if (!requiredConstantNames.has(constantName)) continue;
+            const estimatedPower = estimateZoomGroupParaxialPower(blocks, groupName);
+            if (Number.isFinite(estimatedPower)) {
+              resolvedConstants[constantName] = Number(estimatedPower);
+            }
           }
         }
+        Object.assign(resolvedConstants, deriveZoomReferenceCoordinateConstants(blocks, requiredCoordinateNames));
         autoZoomLawConstantCache.set(blocks, { key: cacheKey, constants: { ...resolvedConstants } });
       }
     }
@@ -1038,7 +1698,7 @@ function resolveAutomaticZoomLawConstants(
       }
     }
 
-    return resolvedConstants;
+    return resolveZoomLawConstantExpressions(resolvedConstants, constantExpressions);
   } finally {
     recordCooptPerfSample('blocks.resolveAutomaticZoomLawConstants', performance.now() - startMs);
   }
@@ -1057,7 +1717,8 @@ function applyZoomMotionToBlocks(blocks: Block[], options?: { disableAutoZoomLaw
   const controllerParams = isPlainObject(zoomController?.parameters) ? zoomController.parameters : null;
   const controllerVars = isPlainObject(zoomController?.variables) ? zoomController.variables : null;
   const zoomPosition = normalizeZoomPosition(getParamOrVarValue(controllerParams, controllerVars, 'zoomPosition'));
-  const { definitions: lawDefinitions, constants: lawConstants } = parseZoomLawDefinitions(
+  const zoomLawEvaluationContext = getZoomLawEvaluationContext(blocks);
+  const { definitions: lawDefinitions, constants: lawConstants, constantExpressions: lawConstantExpressions } = parseZoomLawDefinitions(
     getParamOrVarValue(controllerParams, controllerVars, 'zoomGroupProfiles'),
     {
       A: getParamOrVarValue(controllerParams, controllerVars, 'zoomGroupAProfile'),
@@ -1065,10 +1726,16 @@ function applyZoomMotionToBlocks(blocks: Block[], options?: { disableAutoZoomLaw
     }
   );
   const resolvedLawConstants = options?.disableAutoZoomLawConstants
-    ? { ...(lawConstants || {}) }
-    : resolveAutomaticZoomLawConstants(blocks, lawConstants, lawDefinitions);
+    ? resolveZoomLawConstantExpressions({ ...(lawConstants || {}) }, lawConstantExpressions)
+    : resolveAutomaticZoomLawConstants(blocks, lawConstants, lawConstantExpressions, lawDefinitions);
+  const linkedGroups = parseLinkedZoomGroupDefinitions(getParamOrVarValue(controllerParams, controllerVars, 'zoomLinkedGroupScales'));
+  const linkedStroke = normalizeZoomCompensationStroke(getParamOrVarValue(controllerParams, controllerVars, 'zoomCompensationStroke'));
 
-  const { offsets } = resolveZoomLawOffsets(zoomPosition, lawDefinitions, resolvedLawConstants);
+  const { offsets } = resolveZoomLawOffsets(zoomPosition, lawDefinitions, resolvedLawConstants, zoomLawEvaluationContext);
+  const linkedOffsets = getLinkedZoomOffsetsForPosition(linkedGroups, linkedStroke, zoomPosition);
+  for (const [groupName, offset] of linkedOffsets.entries()) {
+    offsets.set(groupName, (offsets.get(groupName) ?? 0) + offset);
+  }
 
   const clonedBlocks = blocks.map((block) => {
     if (!isPlainObject(block)) return block;
@@ -1140,16 +1807,17 @@ export function validateZoomLawDefinitions(blocks: Block[]): string[] {
   const controllerParams = isPlainObject(zoomController?.parameters) ? zoomController.parameters : null;
   const controllerVars = isPlainObject(zoomController?.variables) ? zoomController.variables : null;
   const zoomPosition = normalizeZoomPosition(getParamOrVarValue(controllerParams, controllerVars, 'zoomPosition'));
-  const { definitions: lawDefinitions, constants: lawConstants } = parseZoomLawDefinitions(
+  const zoomLawEvaluationContext = getZoomLawEvaluationContext(blocks);
+  const { definitions: lawDefinitions, constants: lawConstants, constantExpressions: lawConstantExpressions } = parseZoomLawDefinitions(
     getParamOrVarValue(controllerParams, controllerVars, 'zoomGroupProfiles'),
     {
       A: getParamOrVarValue(controllerParams, controllerVars, 'zoomGroupAProfile'),
       B: getParamOrVarValue(controllerParams, controllerVars, 'zoomGroupBProfile')
     }
   );
-    const resolvedLawConstants = resolveAutomaticZoomLawConstants(blocks, lawConstants, lawDefinitions);
+    const resolvedLawConstants = resolveAutomaticZoomLawConstants(blocks, lawConstants, lawConstantExpressions, lawDefinitions);
 
-    return resolveZoomLawOffsets(zoomPosition, lawDefinitions, resolvedLawConstants).errors;
+    return resolveZoomLawOffsets(zoomPosition, lawDefinitions, resolvedLawConstants, zoomLawEvaluationContext).errors;
   } finally {
     recordCooptPerfSample('blocks.validateZoomLawDefinitions', performance.now() - startMs);
   }

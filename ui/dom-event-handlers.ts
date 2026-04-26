@@ -16,6 +16,7 @@ import {
     expandBlocksToOpticalSystemRows,
     expandBlocksIntoConfiguration,
     deriveBlocksFromLegacyOpticalSystemRows,
+    evaluateZoomCompensation,
     validateZoomLawDefinitions,
     validateBlocksConfiguration,
     BLOCK_SCHEMA_VERSION
@@ -5631,6 +5632,216 @@ function __zoom_parseLawGroupNames(rawValue: any): string[] {
         return names;
 }
 
+    function __zoom_getControllerLinkText(params: any): string {
+        return String(params?.zoomLinkedGroupScales ?? '').trim();
+    }
+
+    function __zoom_parseLinkedGroupNames(rawValue: any): string[] {
+        const text = String(rawValue ?? '').trim();
+        if (!text) return [];
+        const names: string[] = [];
+        for (const line of text.split(/\r?\n|;/)) {
+            const trimmed = String(line ?? '').trim();
+            if (!trimmed) continue;
+            const eqIndex = trimmed.indexOf('=');
+            const groupName = String(eqIndex > 0 ? trimmed.slice(0, eqIndex) : trimmed).trim();
+            if (!groupName || groupName === 'Fixed') continue;
+            if (!names.includes(groupName)) names.push(groupName);
+        }
+        return names;
+    }
+
+    let __zoomPlotlyLoadPromise: Promise<void> | null = null;
+
+    function __zoom_clearCompensationChart(target: HTMLElement): void {
+        if (!target) return;
+        try {
+            if (window.Plotly && typeof window.Plotly.purge === 'function') {
+                window.Plotly.purge(target);
+            }
+        } catch (_) {
+            // Ignore Plotly cleanup failures and fall back to replacing contents.
+        }
+    }
+
+    function __zoom_showChartPlaceholder(target: HTMLElement, text: string): void {
+        if (!target) return;
+        __zoom_clearCompensationChart(target);
+        target.innerHTML = `<div class="design-intent-zoom-empty" style="padding: 14px;">${text}</div>`;
+    }
+
+    async function __zoom_ensurePlotlyLoaded(): Promise<void> {
+        if (window.Plotly && typeof window.Plotly.newPlot === 'function') {
+            return;
+        }
+
+        if (!__zoomPlotlyLoadPromise) {
+            __zoomPlotlyLoadPromise = new Promise<void>((resolve, reject) => {
+                const existing = document.querySelector('script[data-coopt-plotly="1"]') as HTMLScriptElement | null;
+                if (existing) {
+                    if (window.Plotly && typeof window.Plotly.newPlot === 'function') {
+                        resolve();
+                        return;
+                    }
+                    existing.addEventListener('load', () => resolve(), { once: true });
+                    existing.addEventListener('error', () => reject(new Error('Failed to load Plotly')), { once: true });
+                    return;
+                }
+
+                const script = document.createElement('script');
+                script.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                script.async = true;
+                script.setAttribute('data-coopt-plotly', '1');
+                script.addEventListener('load', () => resolve(), { once: true });
+                script.addEventListener('error', () => reject(new Error('Failed to load Plotly')), { once: true });
+                document.head.appendChild(script);
+            }).finally(() => {
+                if (!(window.Plotly && typeof window.Plotly.newPlot === 'function')) {
+                    __zoomPlotlyLoadPromise = null;
+                }
+            });
+        }
+
+        await __zoomPlotlyLoadPromise;
+        if (!(window.Plotly && typeof window.Plotly.newPlot === 'function')) {
+            throw new Error('Plotly is unavailable');
+        }
+    }
+
+    async function __zoom_renderCompensationChart(target: HTMLElement, compensation: any): Promise<void> {
+        if (!target) return;
+        const samples = Array.isArray(compensation?.samples) ? compensation.samples : [];
+        const finiteSamples = samples.filter((sample: any) => Number.isFinite(Number(sample?.focusShift)));
+        if (finiteSamples.length === 0) {
+            __zoom_showChartPlaceholder(target, 'No valid paraxial focus-shift samples.');
+            return;
+        }
+
+        const renderToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        target.dataset.zoomPlotToken = renderToken;
+
+        const values = finiteSamples.map((sample: any) => Number(sample.focusShift));
+        let minY = Math.min(...values);
+        let maxY = Math.max(...values);
+        if (Math.abs(maxY - minY) <= 1e-9) {
+            const pad = Math.abs(maxY) > 1e-6 ? Math.abs(maxY) * 0.15 : 0.1;
+            minY -= pad;
+            maxY += pad;
+        }
+
+        try {
+            await __zoom_ensurePlotlyLoaded();
+            if (target.dataset.zoomPlotToken !== renderToken) return;
+
+            const isDarkMode = document.body.classList.contains('dark-mode');
+            const xValues = finiteSamples.map((sample: any) => Number(sample.zoomPosition));
+            const yValues = finiteSamples.map((sample: any) => Number(sample.focusShift));
+            const collisionSamples = finiteSamples.filter((sample: any) => !!sample?.collision);
+            const zeroCrossings = Array.isArray(compensation?.zeroCrossings) ? compensation.zeroCrossings : [];
+            const traces: any[] = [
+                {
+                    x: xValues,
+                    y: yValues,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: 'Focus shift',
+                    line: { color: '#2563eb', width: 2.5 },
+                    marker: { color: '#2563eb', size: 6 },
+                    hovertemplate: 'x=%{x:.3f}<br>focus shift=%{y:.5f} mm<extra></extra>'
+                }
+            ];
+
+            if (collisionSamples.length > 0) {
+                traces.push({
+                    x: collisionSamples.map((sample: any) => Number(sample.zoomPosition)),
+                    y: collisionSamples.map((sample: any) => Number(sample.focusShift)),
+                    type: 'scatter',
+                    mode: 'markers',
+                    name: 'Collision',
+                    marker: { color: '#dc2626', size: 10, symbol: 'diamond' },
+                    hovertemplate: 'x=%{x:.3f}<br>focus shift=%{y:.5f} mm<br>negative gap detected<extra></extra>'
+                });
+            }
+
+            const shapes: any[] = [];
+            if (minY <= 0 && maxY >= 0) {
+                shapes.push({
+                    type: 'line',
+                    x0: 0,
+                    x1: 1,
+                    y0: 0,
+                    y1: 0,
+                    line: { color: '#94a3b8', width: 1, dash: 'dash' }
+                });
+            }
+            for (const crossing of zeroCrossings) {
+                const value = Number(crossing);
+                if (!Number.isFinite(value)) continue;
+                shapes.push({
+                    type: 'line',
+                    x0: value,
+                    x1: value,
+                    y0: minY,
+                    y1: maxY,
+                    line: { color: '#f97316', width: 1.25, dash: 'dot' }
+                });
+            }
+
+            const layout = {
+                margin: { l: 56, r: 20, t: 20, b: 44 },
+                paper_bgcolor: isDarkMode ? 'rgba(15, 23, 42, 0)' : 'rgba(255,255,255,0)',
+                plot_bgcolor: isDarkMode ? 'rgba(15, 23, 42, 0.32)' : 'rgba(248, 251, 255, 0.9)',
+                showlegend: traces.length > 1,
+                legend: {
+                    orientation: 'h',
+                    x: 0,
+                    y: 1.15,
+                    font: { size: 11, color: isDarkMode ? '#e2e8f0' : '#475569' }
+                },
+                font: { color: isDarkMode ? '#e2e8f0' : '#334155' },
+                xaxis: {
+                    title: 'Zoom position',
+                    range: [0, 1],
+                    tickformat: '.2f',
+                    gridcolor: isDarkMode ? 'rgba(148, 163, 184, 0.16)' : 'rgba(148, 163, 184, 0.18)',
+                    zeroline: false
+                },
+                yaxis: {
+                    title: 'Focus shift [mm]',
+                    range: [minY, maxY],
+                    tickformat: '.4f',
+                    gridcolor: isDarkMode ? 'rgba(148, 163, 184, 0.16)' : 'rgba(148, 163, 184, 0.18)',
+                    zeroline: false
+                },
+                shapes,
+                annotations: zeroCrossings.map((crossing: number) => ({
+                    x: Number(crossing),
+                    y: maxY,
+                    yanchor: 'bottom',
+                    text: '0-cross',
+                    showarrow: false,
+                    font: { size: 10, color: '#f97316' },
+                    bgcolor: isDarkMode ? 'rgba(15, 23, 42, 0.72)' : 'rgba(255,255,255,0.85)'
+                }))
+            };
+            const config = {
+                responsive: true,
+                displaylogo: false,
+                displayModeBar: false
+            };
+
+            if (typeof window.Plotly.react === 'function') {
+                await window.Plotly.react(target, traces, layout, config);
+            } else {
+                await window.Plotly.newPlot(target, traces, layout, config);
+            }
+            try { window.Plotly?.Plots?.resize?.(target); } catch (_) {}
+        } catch (error: any) {
+            if (target.dataset.zoomPlotToken !== renderToken) return;
+            __zoom_showChartPlaceholder(target, `Plotly render failed: ${String(error?.message ?? error ?? 'Unknown error')}`);
+        }
+    }
+
 function __zoom_collectState(): any {
         try {
                 const { activeConfig, controller } = __zoom_getActiveConfigAndController();
@@ -5641,7 +5852,12 @@ function __zoom_collectState(): any {
                                 configName: String(activeConfig?.name ?? '').trim(),
                                 zoomPosition: 0,
                                 lawsText: '',
-                        lawErrors: [],
+                                lawErrors: [],
+                                linkedGroupsText: '',
+                                linkedGroupNames: [],
+                                compensationStroke: 0,
+                                compensationSamples: 33,
+                                compensation: null,
                                 lawGroups: [],
                                 groupNames: [],
                                 controllerBlockId: ''
@@ -5657,8 +5873,12 @@ function __zoom_collectState(): any {
                     ? Math.max(0, Math.min(1, Number(pendingPreviewValue)))
                     : (Number.isFinite(zoomPositionRaw) ? Math.max(0, Math.min(1, zoomPositionRaw)) : 0);
                 const lawsText = __zoom_getControllerLawText(params) || 'A=0:0,1:0';
+                const linkedGroupsText = __zoom_getControllerLinkText(params);
                 const lawErrors = validateZoomLawDefinitions(blocks);
                 const lawGroups = __zoom_parseLawGroupNames(lawsText);
+                const linkedGroupNames = __zoom_parseLinkedGroupNames(linkedGroupsText);
+                const compensationStrokeRaw = Number(params.zoomCompensationStroke);
+                const compensationSamplesRaw = Math.floor(Number(params.zoomCompensationSamples));
                 const groupNames: string[] = [];
                 for (const block of blocks) {
                         const blockType = String(block?.blockType ?? '').trim();
@@ -5670,12 +5890,21 @@ function __zoom_collectState(): any {
                         if (!groupNames.includes(groupName)) groupNames.push(groupName);
                 }
 
+                const compensation = evaluateZoomCompensation(blocks, {
+                    sampleCount: Number.isFinite(compensationSamplesRaw) ? compensationSamplesRaw : 33
+                });
+
                 return {
                         available: true,
                         configName: String(activeConfig?.name ?? '').trim(),
                         zoomPosition,
                         lawsText,
                         lawErrors,
+                    linkedGroupsText,
+                    linkedGroupNames,
+                    compensationStroke: Number.isFinite(compensationStrokeRaw) ? compensationStrokeRaw : 0,
+                    compensationSamples: Number.isFinite(compensationSamplesRaw) ? compensationSamplesRaw : 33,
+                    compensation,
                         lawGroups,
                         groupNames,
                         controllerBlockId: String(controller?.blockId ?? '').trim()
@@ -5687,6 +5916,11 @@ function __zoom_collectState(): any {
                         zoomPosition: 0,
                         lawsText: '',
                         lawErrors: [],
+                        linkedGroupsText: '',
+                        linkedGroupNames: [],
+                        compensationStroke: 0,
+                        compensationSamples: 33,
+                        compensation: null,
                         lawGroups: [],
                         groupNames: [],
                         controllerBlockId: ''
@@ -5700,11 +5934,17 @@ function __zoom_collectState(): any {
         const zoomSlider = document.getElementById('design-intent-zoom-slider') as HTMLInputElement | null;
         const groupChips = document.getElementById('design-intent-zoom-group-chips');
         const lawChips = document.getElementById('design-intent-zoom-law-chips');
+        const linkedGroupsInput = document.getElementById('design-intent-zoom-linked-groups') as HTMLTextAreaElement | null;
+        const compStrokeInput = document.getElementById('design-intent-zoom-comp-stroke') as HTMLInputElement | null;
+        const compSamplesInput = document.getElementById('design-intent-zoom-comp-samples') as HTMLInputElement | null;
+        const compSummary = document.getElementById('design-intent-zoom-comp-summary');
+        const compAlert = document.getElementById('design-intent-zoom-comp-alert');
+        const compChart = document.getElementById('design-intent-zoom-comp-chart');
         const lawError = document.getElementById('design-intent-zoom-law-error');
         const lawsInput = document.getElementById('design-intent-zoom-laws') as HTMLTextAreaElement | null;
         const emptyState = document.getElementById('design-intent-zoom-empty');
         const body = document.getElementById('design-intent-zoom-body');
-        if (!configName || !zoomValue || !zoomSlider || !groupChips || !lawChips || !lawsInput || !emptyState || !body || !lawError) return;
+        if (!configName || !zoomValue || !zoomSlider || !groupChips || !lawChips || !linkedGroupsInput || !compStrokeInput || !compSamplesInput || !compSummary || !compAlert || !compChart || !lawsInput || !emptyState || !body || !lawError) return;
 
         const renderChips = (target: HTMLElement, values: string[], prefix: string, className: string, emptyText: string) => {
             target.innerHTML = '';
@@ -5731,6 +5971,16 @@ function __zoom_collectState(): any {
                 zoomSlider.disabled = true;
                 lawsInput.value = '';
                 lawsInput.disabled = true;
+                linkedGroupsInput.value = '';
+                linkedGroupsInput.disabled = true;
+                compStrokeInput.value = '0';
+                compStrokeInput.disabled = true;
+                compSamplesInput.value = '33';
+                compSamplesInput.disabled = true;
+                compSummary.textContent = '';
+                compAlert.textContent = '';
+                compAlert.style.display = 'none';
+                compChart.innerHTML = '<div class="design-intent-zoom-empty" style="padding: 14px;">No compensation data.</div>';
                 body.style.display = 'none';
                 emptyState.style.display = '';
                 lawError.textContent = '';
@@ -5747,7 +5997,15 @@ function __zoom_collectState(): any {
         if (document.activeElement !== lawsInput) {
             lawsInput.value = state.lawsText || '';
         }
+        if (document.activeElement !== linkedGroupsInput) {
+            linkedGroupsInput.value = state.linkedGroupsText || '';
+        }
         lawsInput.disabled = false;
+        linkedGroupsInput.disabled = false;
+        compStrokeInput.disabled = false;
+        compSamplesInput.disabled = false;
+        compStrokeInput.value = String(Number(state.compensationStroke || 0));
+        compSamplesInput.value = String(Number(state.compensationSamples || 33));
         body.style.display = '';
         emptyState.style.display = 'none';
         renderChips(groupChips, state.groupNames || [], 'ZG ', 'design-intent-zoom-chip design-intent-zoom-chip-group', 'No zoom groups');
@@ -5759,6 +6017,31 @@ function __zoom_collectState(): any {
             lawError.textContent = '';
             lawError.style.display = 'none';
         }
+
+        const compensation = state.compensation;
+        const linkedGroupNames = Array.isArray(state.linkedGroupNames) ? state.linkedGroupNames : [];
+        const zeroCrossings = Array.isArray(compensation?.zeroCrossings) ? compensation.zeroCrossings : [];
+        const focusMin = Number(compensation?.minFocusShift);
+        const focusMax = Number(compensation?.maxFocusShift);
+        compSummary.textContent = linkedGroupNames.length > 0
+            ? `Linked groups: ${linkedGroupNames.join(', ')} | stroke ${Number(state.compensationStroke || 0).toFixed(2)} mm | zero crossings ${zeroCrossings.length}`
+            : 'No optical compensation link is defined yet. Enter Group=scale lines, set the stroke in mm, click Apply Links, then use this chart to reduce the focus-shift span.';
+
+        const warnings: string[] = [];
+        if (Array.isArray(compensation?.collisionPositions) && compensation.collisionPositions.length > 0) {
+            warnings.push(`Motion limit collision detected near x=${Number(compensation.collisionPositions[0]).toFixed(3)}.`);
+        }
+        if (Number.isFinite(focusMin) && Number.isFinite(focusMax)) {
+            warnings.push(`Focus shift span ${focusMin.toFixed(4)} to ${focusMax.toFixed(4)} mm.`);
+        }
+        if (warnings.length > 0) {
+            compAlert.textContent = warnings.join(' ');
+            compAlert.style.display = '';
+        } else {
+            compAlert.textContent = '';
+            compAlert.style.display = 'none';
+        }
+        __zoom_renderCompensationChart(compChart, compensation);
     }
 
 function __zoom_setControllerValue(field: 'zoomPosition' | 'zoomGroupProfiles', nextValue: any): any {
@@ -5776,8 +6059,12 @@ function __zoom_setControllerValue(field: 'zoomPosition' | 'zoomGroupProfiles', 
         const zoomSlider = document.getElementById('design-intent-zoom-slider') as HTMLInputElement | null;
         const lawsInput = document.getElementById('design-intent-zoom-laws') as HTMLTextAreaElement | null;
         const applyLawsButton = document.getElementById('design-intent-zoom-apply-laws');
+        const linkedGroupsInput = document.getElementById('design-intent-zoom-linked-groups') as HTMLTextAreaElement | null;
+        const compStrokeInput = document.getElementById('design-intent-zoom-comp-stroke') as HTMLInputElement | null;
+        const compSamplesInput = document.getElementById('design-intent-zoom-comp-samples') as HTMLInputElement | null;
+        const applyCompButton = document.getElementById('design-intent-zoom-apply-comp');
         const refreshButton = document.getElementById('design-intent-zoom-refresh');
-        if (!zoomSlider || !lawsInput || !applyLawsButton || !refreshButton) return;
+        if (!zoomSlider || !lawsInput || !applyLawsButton || !linkedGroupsInput || !compStrokeInput || !compSamplesInput || !applyCompButton || !refreshButton) return;
         if (!zoomSlider.dataset.zoomControlBound) {
             zoomSlider.dataset.zoomControlBound = '1';
             zoomSlider.addEventListener('input', () => {
@@ -5795,6 +6082,17 @@ function __zoom_setControllerValue(field: 'zoomPosition' | 'zoomGroupProfiles', 
             applyLawsButton.dataset.zoomControlBound = '1';
             applyLawsButton.addEventListener('click', () => {
                 __zoom_setControllerValue('zoomGroupProfiles', lawsInput.value);
+                refreshZoomControlTab();
+            });
+        }
+        if (!applyCompButton.dataset.zoomControlBound) {
+            applyCompButton.dataset.zoomControlBound = '1';
+            applyCompButton.addEventListener('click', () => {
+                const strokeValue = Number.parseFloat(compStrokeInput.value);
+                const sampleValue = Math.round(Number.parseFloat(compSamplesInput.value));
+                __zoom_setControllerValue('zoomLinkedGroupScales', linkedGroupsInput.value);
+                __zoom_setControllerValue('zoomCompensationStroke', Number.isFinite(strokeValue) ? strokeValue : 0);
+                __zoom_setControllerValue('zoomCompensationSamples', Number.isFinite(sampleValue) ? sampleValue : 33);
                 refreshZoomControlTab();
             });
         }
