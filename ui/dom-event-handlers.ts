@@ -5503,6 +5503,9 @@ function __zoom_applyPreviewPosition(nextValue: number): void {
         }
     } catch (_) {}
 
+    // Keep React/web analysis views in sync during lightweight zoom preview.
+    try { saveSystemConfigurations(pending.systemConfig); } catch (_) {}
+
     __zoom_requestRenderRefresh(expandedRowsForRender);
 }
 
