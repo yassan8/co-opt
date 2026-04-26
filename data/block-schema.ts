@@ -1124,7 +1124,13 @@ function solveCamCompNumericOffset(
   const targetImageDistance = calculateZoomLawFocusTargetImageDistance(blocks, evaluationContext);
   if (!Number.isFinite(targetImageDistance)) return null;
 
-  const evaluateCandidate = (candidateOffset: number): { offset: number; error: number; imageDistance: number | null } => {
+  const evaluateCandidate = (candidateOffset: number): {
+    offset: number;
+    error: number;
+    imageDistance: number | null;
+    minThickness: number | null;
+    collision: boolean;
+  } => {
     const candidateOffsets = new Map(offsets);
     candidateOffsets.set(targetGroupName, candidateOffset);
     const candidateBlocks = applyResolvedZoomOffsetsToBlocks(blocks, zoomPosition, candidateOffsets);
@@ -1133,12 +1139,33 @@ function solveCamCompNumericOffset(
     const rows = Array.isArray(expanded?.rows) ? expanded.rows : [];
     const paraxial = rows.length > 0 ? calculateParaxialData(rows, 0.5875618) : null;
     const imageDistance = Number(paraxial?.imageDistance);
+    const minThickness = getMinimumFiniteThickness(rows);
+    const collision = Number.isFinite(minThickness) ? Number(minThickness) < 0 : false;
     const error = Number.isFinite(imageDistance) ? Math.abs(imageDistance - targetImageDistance) : Infinity;
     return {
       offset: candidateOffset,
       error,
-      imageDistance: Number.isFinite(imageDistance) ? imageDistance : null
+      imageDistance: Number.isFinite(imageDistance) ? imageDistance : null,
+      minThickness,
+      collision
     };
+  };
+
+  const isBetterCandidate = (
+    candidate: { error: number; minThickness: number | null; collision: boolean },
+    currentBest: { error: number; minThickness: number | null; collision: boolean }
+  ): boolean => {
+    if (candidate.collision !== currentBest.collision) return !candidate.collision;
+    const candidateErrorFinite = Number.isFinite(candidate.error);
+    const bestErrorFinite = Number.isFinite(currentBest.error);
+    if (candidateErrorFinite !== bestErrorFinite) return candidateErrorFinite;
+    if (candidateErrorFinite && Math.abs(candidate.error - currentBest.error) > 1e-9) {
+      return candidate.error < currentBest.error;
+    }
+    const candidateGap = Number.isFinite(candidate.minThickness) ? Number(candidate.minThickness) : -Infinity;
+    const bestGap = Number.isFinite(currentBest.minThickness) ? Number(currentBest.minThickness) : -Infinity;
+    if (Math.abs(candidateGap - bestGap) > 1e-9) return candidateGap > bestGap;
+    return false;
   };
 
   const seedOffset = Number.isFinite(zCSeed) ? Number(zCSeed) - zC0 : 0;
@@ -1150,7 +1177,7 @@ function solveCamCompNumericOffset(
   for (let index = 0; index < coarseSteps; index += 1) {
     const candidateOffset = searchCenter - searchHalfRange + (coarseStep * index);
     const candidate = evaluateCandidate(candidateOffset);
-    if (candidate.error < best.error) best = candidate;
+    if (isBetterCandidate(candidate, best)) best = candidate;
   }
 
   let refineStep = coarseStep;
@@ -1158,15 +1185,26 @@ function solveCamCompNumericOffset(
     refineStep *= 0.5;
     const left = evaluateCandidate(best.offset - refineStep);
     const right = evaluateCandidate(best.offset + refineStep);
-    if (left.error < best.error) best = left;
-    if (right.error < best.error) best = right;
+    if (isBetterCandidate(left, best)) best = left;
+    if (isBetterCandidate(right, best)) best = right;
   }
 
-  if (!Number.isFinite(best.error) || best.error > 0.5) {
-    if (diagnosticState) diagnosticState.message = `camComp numeric solve could not keep imageDistance near the baseline target (best error ${Number(best.error).toFixed(6)} mm).`;
+  if (!Number.isFinite(best.error)) {
+    if (diagnosticState) diagnosticState.message = 'camComp numeric solve could not find a finite paraxial imageDistance candidate.';
     return null;
   }
-  if (diagnosticState) diagnosticState.message = null;
+
+  if (diagnosticState) {
+    if (best.collision) {
+      const gapText = Number.isFinite(best.minThickness) ? Number(best.minThickness).toFixed(6) : 'n/a';
+      diagnosticState.message = `camComp numeric solve could not find a collision-free candidate; using the least-collision candidate (minThickness ${gapText} mm, focus error ${Number(best.error).toFixed(6)} mm).`;
+    } else if (best.error > 0.5) {
+      const gapText = Number.isFinite(best.minThickness) ? Number(best.minThickness).toFixed(6) : 'n/a';
+      diagnosticState.message = `camComp numeric solve prioritized a collision-free candidate (minThickness ${gapText} mm) with residual focus error ${Number(best.error).toFixed(6)} mm.`;
+    } else {
+      diagnosticState.message = null;
+    }
+  }
   return best.offset;
 }
 

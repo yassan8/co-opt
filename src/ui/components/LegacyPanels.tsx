@@ -35,7 +35,7 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
         if (typeof cached === 'string') initial = cached;
       } catch (_) {}
     }
-    if (initial) applySystemDataText(initial);
+    if (!visible && initial) applySystemDataText(initial);
 
     return () => {
       try {
@@ -45,7 +45,50 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
         }
       } catch (_) {}
     };
-  }, []);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || typeof window === 'undefined') return;
+
+    const w = window as any;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: number | null = null;
+
+    const runInitialParaxial = () => {
+      if (cancelled) return;
+      attempts += 1;
+
+      try {
+        const ta = document.getElementById('system-data') as HTMLTextAreaElement | null;
+        if (ta && attempts === 1) {
+          ta.value = '';
+        }
+      } catch (_) {}
+
+      try {
+        if (typeof w.outputParaxialDataToDebug === 'function' && w.tableOpticalSystem) {
+          w.outputParaxialDataToDebug(w.tableOpticalSystem);
+          return;
+        }
+      } catch (_) {}
+
+      if (attempts < 20) {
+        timer = window.setTimeout(runInitialParaxial, 100);
+      }
+    };
+
+    timer = window.setTimeout(runInitialParaxial, 0);
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        try {
+          window.clearTimeout(timer);
+        } catch (_) {}
+      }
+    };
+  }, [visible]);
 
   return (
     <div className={`system-section ${visible ? 'system-section-window-fit' : ''}`} style={{ display: visible ? 'flex' : 'none' }}>

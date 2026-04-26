@@ -170,7 +170,6 @@ const BLOCK_PERF_LABELS: Record<string, string> = {
   'blocks.validateZoomLawDefinitions': 'lawCheck',
 };
 
-const INITIAL_3D_LIGHT_RAY_COUNT = 2;
 const RENDER_3D_SURFACE_MESH_SEGMENTS = 64;
 const RENDER_3D_TORIC_MESH_SEGMENTS = 96;
 
@@ -241,7 +240,7 @@ function formatRenderTimingSummary(
 
 function getInitial3DLightRayCount(rayCount: number): number {
   const safeRayCount = Number.isFinite(Number(rayCount)) ? Math.max(1, Math.floor(Number(rayCount))) : 1;
-  return Math.min(safeRayCount, INITIAL_3D_LIGHT_RAY_COUNT);
+  return safeRayCount;
 }
 
 function isPlainObject(v: any): boolean {
@@ -3288,13 +3287,14 @@ const collectLegacyCrossRays = async (
 
       const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
       const isZoomPreviewActive = !!g?.__cooptZoomPreviewActive;
-        const isInitial3DPass = !render3DPrevRowsRef.current && Array.isArray(startupStages) && startupStages.length > 0;
-        const lightRayCount = getInitial3DLightRayCount(renderRayCount);
-        const useLightweightInitialRays = !isZoomPreviewActive && isInitial3DPass && lightRayCount < renderRayCount;
+      const allowFastZoomPreview = false;
+      const isInitial3DPass = !render3DPrevRowsRef.current && Array.isArray(startupStages) && startupStages.length > 0;
+      const lightRayCount = getInitial3DLightRayCount(renderRayCount);
+      const useLightweightInitialRays = !isZoomPreviewActive && isInitial3DPass && lightRayCount < renderRayCount;
       const prevRows = render3DPrevRowsRef.current;
       const prevOrigins = render3DPrevOriginsRef.current;
       let nextSurfaceOrigins: any[] | null = null;
-      if (isZoomPreviewActive) {
+      if (isZoomPreviewActive && allowFastZoomPreview) {
         const previewStartMs = performance.now();
         try {
           nextSurfaceOrigins = calculateSurfaceOrigins(rows);
@@ -3536,7 +3536,7 @@ const collectLegacyCrossRays = async (
     try {
       (globalThis as any).__cooptLastRenderTiming = detail;
     } catch (_) {}
-    setRenderWindowStatus(summary ? `${baseStatus} | ${summary}` : baseStatus);
+    setRenderWindowStatus(baseStatus);
   };
 
   const redrawCurrentRenderView = async (
@@ -5879,8 +5879,8 @@ const collectLegacyCrossRays = async (
     { key: 'configuration', label: 'System', icon: '🧭' },
     { key: 'source', label: 'Sources / Objects', icon: '🔎' },
     { key: 'intent', label: 'Design Intent', icon: '🧩' },
-    { key: 'zoom', label: 'Zoom', icon: '🔭' },
     { key: 'requirements', label: 'Requirements', icon: '📏' },
+    { key: 'zoom', label: 'Zoom', icon: '🔭' },
   ];
 
   const variableCountSummary = (() => {

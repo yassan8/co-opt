@@ -1144,10 +1144,10 @@ body.dark-mode #design-intent-add-block-type option {
 .design-intent-zoom-card {
     flex: 1 1 auto;
     min-height: clamp(260px, 36vh, 440px);
-    border: 1px solid #d6deea;
-    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
     background: #ffffff;
-    padding: 16px;
+    padding: 14px;
     overflow: auto;
 }
 
@@ -1178,10 +1178,10 @@ body.dark-mode #design-intent-add-block-type option {
 
 .design-intent-zoom-guide {
     margin-top: 14px;
-    padding: 12px 14px;
-    border: 1px solid #dbe4f0;
-    border-radius: 12px;
-    background: linear-gradient(180deg, #f8fbff 0%, #f2f7ff 100%);
+    padding: 10px 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    background: #f9fafb;
 }
 
 .design-intent-zoom-guide-title {
@@ -1205,6 +1205,15 @@ body.dark-mode #design-intent-add-block-type option {
     margin-top: 14px;
 }
 
+.design-intent-zoom-slider-row {
+    margin-top: 10px;
+}
+
+.design-intent-zoom-slider {
+    width: min(44%, 320px);
+    min-width: 180px;
+}
+
 .design-intent-zoom-value {
     font-size: 32px;
     line-height: 1;
@@ -1221,11 +1230,6 @@ body.dark-mode #design-intent-add-block-type option {
 .design-intent-zoom-hint-block {
     margin-bottom: 8px;
     line-height: 1.5;
-}
-
-.design-intent-zoom-panel input[type="range"] {
-    width: 100%;
-    margin-top: 10px;
 }
 
 .design-intent-zoom-chip-section {
@@ -1275,7 +1279,7 @@ body.dark-mode #design-intent-add-block-type option {
     box-sizing: border-box;
     padding: 10px 12px;
     border: 1px solid #d1d5db;
-    border-radius: 10px;
+    border-radius: 8px;
     font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
     background: #ffffff;
     color: #111827;
@@ -1303,7 +1307,7 @@ body.dark-mode #design-intent-add-block-type option {
     box-sizing: border-box;
     padding: 0 10px;
     border: 1px solid #d1d5db;
-    border-radius: 10px;
+    border-radius: 8px;
     background: #ffffff;
     color: #111827;
 }
@@ -1317,7 +1321,7 @@ body.dark-mode #design-intent-add-block-type option {
 .design-intent-zoom-alert {
     margin-top: 8px;
     padding: 8px 10px;
-    border-radius: 10px;
+    border-radius: 8px;
     border: 1px solid #fed7aa;
     background: #fff7ed;
     color: #9a3412;
@@ -1328,9 +1332,9 @@ body.dark-mode #design-intent-add-block-type option {
 .design-intent-zoom-chart {
     margin-top: 10px;
     min-height: 220px;
-    border: 1px solid #d6deea;
-    border-radius: 12px;
-    background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    background: #ffffff;
     overflow: hidden;
 }
 
@@ -1346,6 +1350,19 @@ body.dark-mode #design-intent-add-block-type option {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+}
+
+.design-intent-zoom-actions button {
+    flex: 0 0 auto;
+    min-width: 96px;
+    white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+    .design-intent-zoom-slider {
+        width: 100%;
+        min-width: 0;
+    }
 }
 
 .block-inspector {

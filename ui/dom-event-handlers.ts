@@ -5470,6 +5470,9 @@ function __zoom_requestRenderRefresh(expandedRowsForRender: any[] | null): void 
     try {
     const popup = w.popup3DWindow;
     if (popup && !popup.closed) {
+        try {
+        popup.__cooptZoomPreviewActive = !!(globalThis as any).__cooptZoomPreviewActive;
+        } catch (_) {}
         if (typeof popup.__cooptRenderWindowRedraw === 'function' && Array.isArray(expandedRowsForRender) && expandedRowsForRender.length > 0) {
         popup.__cooptRenderWindowRedraw(expandedRowsForRender);
         } else if (typeof popup.postMessage === 'function') {
@@ -5581,6 +5584,12 @@ function __zoom_flushPreviewCommit(): any {
     __zoomPreviewPendingCommit = null;
     try {
         (globalThis as any).__cooptZoomPreviewActive = false;
+    } catch (_) {}
+    try {
+        const popup = w.popup3DWindow;
+        if (popup && !popup.closed) {
+            popup.__cooptZoomPreviewActive = false;
+        }
     } catch (_) {}
     if (!pending || !pending.blockId) return __zoom_collectState();
     if (pending.oldValue === pending.latestValue) return __zoom_collectState();
@@ -6066,8 +6075,7 @@ function __zoom_setControllerValue(field: 'zoomPosition' | 'zoomGroupProfiles', 
         const compStrokeInput = document.getElementById('design-intent-zoom-comp-stroke') as HTMLInputElement | null;
         const compSamplesInput = document.getElementById('design-intent-zoom-comp-samples') as HTMLInputElement | null;
         const applyCompButton = document.getElementById('design-intent-zoom-apply-comp');
-        const refreshButton = document.getElementById('design-intent-zoom-refresh');
-        if (!zoomSlider || !lawsInput || !applyLawsButton || !linkedGroupsInput || !compStrokeInput || !compSamplesInput || !applyCompButton || !refreshButton) return;
+        if (!zoomSlider || !lawsInput || !applyLawsButton || !linkedGroupsInput || !compStrokeInput || !compSamplesInput || !applyCompButton) return;
         if (!zoomSlider.dataset.zoomControlBound) {
             zoomSlider.dataset.zoomControlBound = '1';
             zoomSlider.addEventListener('input', () => {
@@ -6098,10 +6106,6 @@ function __zoom_setControllerValue(field: 'zoomPosition' | 'zoomGroupProfiles', 
                 __zoom_setControllerValue('zoomCompensationSamples', Number.isFinite(sampleValue) ? sampleValue : 33);
                 refreshZoomControlTab();
             });
-        }
-        if (!refreshButton.dataset.zoomControlBound) {
-            refreshButton.dataset.zoomControlBound = '1';
-            refreshButton.addEventListener('click', () => refreshZoomControlTab());
         }
         refreshZoomControlTab();
     }
