@@ -84,6 +84,166 @@ type RenderZoomUiState = {
   configName: string;
 };
 
+type RenderTimingStage = {
+  label: string;
+  ms: number;
+};
+
+type CollectLegacyCrossRaysOptions = {
+  rayCountOverride?: number;
+};
+
+type CooptPerfCounter = {
+  count: number;
+  totalMs: number;
+  maxMs: number;
+  lastMs: number;
+};
+
+function recordCooptPerfSample(name: string, durationMs: number): void {
+  const safeDuration = Number(durationMs);
+  if (!name || !Number.isFinite(safeDuration) || safeDuration < 0) return;
+  try {
+    const g = globalThis as typeof globalThis & {
+      __cooptPerf?: { samples?: Record<string, CooptPerfCounter> };
+    };
+    if (!g.__cooptPerf || typeof g.__cooptPerf !== 'object') {
+      g.__cooptPerf = { samples: {} };
+    }
+    if (!g.__cooptPerf.samples || typeof g.__cooptPerf.samples !== 'object') {
+      g.__cooptPerf.samples = {};
+    }
+    const current = g.__cooptPerf.samples[name] || { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
+    current.count += 1;
+    current.totalMs += safeDuration;
+    current.maxMs = Math.max(current.maxMs, safeDuration);
+    current.lastMs = safeDuration;
+    g.__cooptPerf.samples[name] = current;
+  } catch (_) {}
+}
+
+const BLOCK_PERF_KEYS = [
+  'collectLegacyCrossRays.total',
+  'collectLegacyCrossRays.generate',
+  'collectLegacyCrossRays.normalize',
+  'collectLegacyCrossRays.limit',
+  'surfaceRenderer.clear',
+  'surfaceRenderer.origins',
+  'surfaceRenderer.draw3d',
+  'surfaceRenderer.crossSection',
+  'surfaceRenderer.labels',
+  'surfaceRenderer.total',
+  'ray.infiniteCrossBeam.chiefSolve',
+  'ray.infiniteCrossBeam.chiefRefine',
+  'ray.infiniteCrossBeam.boundary',
+  'ray.infiniteCrossBeam.entrance',
+  'ray.infiniteCrossBeam.trace',
+  'ray.infiniteCrossBeam.total',
+  'blocks.expandBlocksToOpticalSystemRows',
+  'blocks.applyZoomMotionToBlocks',
+  'blocks.resolveAutomaticZoomLawConstants',
+  'blocks.estimateZoomGroupParaxialPower',
+  'blocks.validateZoomLawDefinitions',
+] as const;
+
+const BLOCK_PERF_LABELS: Record<string, string> = {
+  'collectLegacyCrossRays.total': 'collectTotal',
+  'collectLegacyCrossRays.generate': 'collectGen',
+  'collectLegacyCrossRays.normalize': 'collectNorm',
+  'collectLegacyCrossRays.limit': 'collectLimit',
+  'surfaceRenderer.clear': 'surfClear',
+  'surfaceRenderer.origins': 'surfOrig',
+  'surfaceRenderer.draw3d': 'surf3d',
+  'surfaceRenderer.crossSection': 'surfXsec',
+  'surfaceRenderer.labels': 'surfLabels',
+  'surfaceRenderer.total': 'surfTotal',
+  'ray.infiniteCrossBeam.chiefSolve': 'chiefSolve',
+  'ray.infiniteCrossBeam.chiefRefine': 'chiefRefine',
+  'ray.infiniteCrossBeam.boundary': 'boundary',
+  'ray.infiniteCrossBeam.entrance': 'entrance',
+  'ray.infiniteCrossBeam.trace': 'traceCross',
+  'ray.infiniteCrossBeam.total': 'crossTotal',
+  'blocks.expandBlocksToOpticalSystemRows': 'expand',
+  'blocks.applyZoomMotionToBlocks': 'zoom',
+  'blocks.resolveAutomaticZoomLawConstants': 'autoPhi',
+  'blocks.estimateZoomGroupParaxialPower': 'groupPhi',
+  'blocks.validateZoomLawDefinitions': 'lawCheck',
+};
+
+const INITIAL_3D_LIGHT_RAY_COUNT = 2;
+const RENDER_3D_SURFACE_MESH_SEGMENTS = 64;
+const RENDER_3D_TORIC_MESH_SEGMENTS = 96;
+
+function readCooptPerfCounters(): Record<string, CooptPerfCounter> {
+  try {
+    const raw = (globalThis as typeof globalThis & {
+      __cooptPerf?: { samples?: Record<string, CooptPerfCounter> };
+    }).__cooptPerf?.samples;
+    if (!raw || typeof raw !== 'object') return {};
+    return Object.fromEntries(
+      Object.entries(raw).map(([name, counter]) => [
+        name,
+        {
+          count: Number(counter?.count) || 0,
+          totalMs: Number(counter?.totalMs) || 0,
+          maxMs: Number(counter?.maxMs) || 0,
+          lastMs: Number(counter?.lastMs) || 0,
+        }
+      ])
+    );
+  } catch (_) {
+    return {};
+  }
+}
+
+function diffCooptPerfCounters(
+  before: Record<string, CooptPerfCounter>,
+  keys: readonly string[]
+): Array<{ name: string; countDelta: number; totalMsDelta: number; lastMs: number; maxMs: number }> {
+  const after = readCooptPerfCounters();
+  const results: Array<{ name: string; countDelta: number; totalMsDelta: number; lastMs: number; maxMs: number }> = [];
+  for (const name of keys) {
+    const prev = before[name] || { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
+    const next = after[name] || { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
+    const countDelta = Math.max(0, next.count - prev.count);
+    const totalMsDelta = Math.max(0, next.totalMs - prev.totalMs);
+    if (countDelta <= 0 && totalMsDelta <= 0.25) continue;
+    results.push({ name, countDelta, totalMsDelta, lastMs: next.lastMs, maxMs: next.maxMs });
+  }
+  return results;
+}
+
+function formatTimingMs(durationMs: number): string {
+  const safe = Number(durationMs);
+  if (!Number.isFinite(safe) || safe < 0.5) return '0ms';
+  if (safe >= 100) return `${Math.round(safe)}ms`;
+  if (safe >= 10) return `${safe.toFixed(1)}ms`;
+  return `${safe.toFixed(2)}ms`;
+}
+
+function formatRenderTimingSummary(
+  stages: RenderTimingStage[],
+  blockPerfEntries: Array<{ name: string; countDelta: number; totalMsDelta: number }>
+): string {
+  const parts: string[] = [];
+  for (const stage of stages) {
+    if (!Number.isFinite(stage.ms) || stage.ms < 1) continue;
+    parts.push(`${stage.label} ${formatTimingMs(stage.ms)}`);
+  }
+  for (const entry of blockPerfEntries) {
+    if (!Number.isFinite(entry.totalMsDelta) || entry.totalMsDelta < 1) continue;
+    const label = BLOCK_PERF_LABELS[entry.name] || entry.name;
+    const suffix = entry.countDelta > 1 ? `/${entry.countDelta}x` : '';
+    parts.push(`${label} ${formatTimingMs(entry.totalMsDelta)}${suffix}`);
+  }
+  return parts.join(' | ');
+}
+
+function getInitial3DLightRayCount(rayCount: number): number {
+  const safeRayCount = Number.isFinite(Number(rayCount)) ? Math.max(1, Math.floor(Number(rayCount))) : 1;
+  return Math.min(safeRayCount, INITIAL_3D_LIGHT_RAY_COUNT);
+}
+
 function isPlainObject(v: any): boolean {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
@@ -572,6 +732,7 @@ export default function App() {
   const renderViewModeRef = useRef<'3D' | 'XZ' | 'YZ'>('3D');
   const renderViewAxisRef = useRef<'YZ' | 'XZ'>('YZ');
   const renderRedrawInFlightRef = useRef(false);
+  const renderLastTimingRef = useRef<{ mode: string; summary: string; stages: RenderTimingStage[]; blockPerf: Array<{ name: string; countDelta: number; totalMsDelta: number }> } | null>(null);
   const renderPendingRowsRef = useRef<any[] | null>(null);
   const render3DPrevRowsRef = useRef<any[] | null>(null);
   const render3DPrevOriginsRef = useRef<any[] | null>(null);
@@ -905,6 +1066,7 @@ export default function App() {
       const eqIndex = trimmed.indexOf('=');
       if (eqIndex <= 0) continue;
       const name = String(trimmed.slice(0, eqIndex)).trim();
+      if (/^(?:const\s+|\$)[A-Za-z_][A-Za-z0-9_]*$/i.test(name)) continue;
       if (name && !groupNames.includes(name)) groupNames.push(name);
     }
     return groupNames;
@@ -2194,8 +2356,10 @@ export default function App() {
 const collectLegacyCrossRays = async (
   opticalSystemRows: any[],
   axis: 'YZ' | 'XZ' | 'BOTH' = 'BOTH',
-  objectRowsOverride?: any[]
+  objectRowsOverride?: any[],
+  options?: CollectLegacyCrossRaysOptions
 ): Promise<any[]> => {
+    const totalStartMs = performance.now();
     const w = window as any;
     try {
       const getObjectRows = w.getObjectRows;
@@ -2219,25 +2383,64 @@ const collectLegacyCrossRays = async (
       const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
         ? (Number(w.getPrimaryWavelength()) || 0.5876)
         : 0.5876;
+      const effectiveRayCount = (() => {
+        const override = Number(options?.rayCountOverride);
+        if (Number.isFinite(override) && override > 0) return Math.max(1, Math.floor(override));
+        return Math.max(1, Math.floor(Number(renderRayCount) || 1));
+      })();
 
       const toNumber = (value: any) => {
         const parsed = parseFloat(String(value ?? ''));
         return Number.isFinite(parsed) ? parsed : 0;
       };
 
+      let cachedInfiniteImageHeightEfl: number | null | undefined;
+      const getInfiniteImageHeightEfl = (): number | null => {
+        if (cachedInfiniteImageHeightEfl !== undefined) return cachedInfiniteImageHeightEfl;
+        try {
+          const calculateParaxialData = w.calculateParaxialData;
+          if (typeof calculateParaxialData !== 'function') {
+            cachedInfiniteImageHeightEfl = null;
+            return cachedInfiniteImageHeightEfl;
+          }
+          const paraxial = calculateParaxialData(opticalSystemRows, primaryWavelength);
+          const focalLength = Number(paraxial?.focalLength);
+          cachedInfiniteImageHeightEfl = Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12
+            ? focalLength
+            : null;
+          return cachedInfiniteImageHeightEfl;
+        } catch (_) {
+          cachedInfiniteImageHeightEfl = null;
+          return cachedInfiniteImageHeightEfl;
+        }
+      };
+
       let crossBeamResult: any = null;
       const crossType = axis === 'YZ' ? 'vertical' : (axis === 'XZ' ? 'horizontal' : 'both');
       const requestedPupilSamplingMode = readCurrentForceMode() || undefined;
+      const generateStartMs = performance.now();
       if (isInfiniteSystem && typeof w.generateInfiniteSystemCrossBeam === 'function') {
         const objectAngles = (objectRows.length ? objectRows : [{}]).map((row: any) => {
           const posNorm = String(row?.position ?? '').trim().toLowerCase();
-          if (posNorm === 'imageheight' && typeof w.convertImageHeightToEffectiveObject === 'function') {
-            try {
-              const conjugateType = 'infinite';
-              const effective = w.convertImageHeightToEffectiveObject(row, opticalSystemRows, primaryWavelength, conjugateType);
-              return { x: toNumber(effective?.xHeightAngle ?? effective?.x), y: toNumber(effective?.yHeightAngle ?? effective?.y) };
-            } catch (e) {
-              console.warn('[collectLegacyCrossRays] ImageHeight conversion failed, using raw value:', e);
+          if (posNorm === 'imageheight') {
+            const targetX = toNumber(row?.xHeightAngle ?? row?.x);
+            const targetY = toNumber(row?.yHeightAngle ?? row?.y);
+            const efl = getInfiniteImageHeightEfl();
+            if (Number.isFinite(efl)) {
+              const radToDeg = 180 / Math.PI;
+              return {
+                x: Math.atan2(targetX, efl as number) * radToDeg,
+                y: Math.atan2(targetY, efl as number) * radToDeg,
+              };
+            }
+            if (typeof w.convertImageHeightToEffectiveObject === 'function') {
+              try {
+                const conjugateType = 'infinite';
+                const effective = w.convertImageHeightToEffectiveObject(row, opticalSystemRows, primaryWavelength, conjugateType);
+                return { x: toNumber(effective?.xHeightAngle ?? effective?.x), y: toNumber(effective?.yHeightAngle ?? effective?.y) };
+              } catch (e) {
+                console.warn('[collectLegacyCrossRays] ImageHeight conversion failed, using raw value:', e);
+              }
             }
           }
           return { x: toNumber(row?.xHeightAngle ?? row?.x), y: toNumber(row?.yHeightAngle ?? row?.y) };
@@ -2252,7 +2455,7 @@ const collectLegacyCrossRays = async (
         const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
 
         crossBeamResult = await w.generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, {
-          rayCount: renderRayCount,
+          rayCount: effectiveRayCount,
           debugMode: false,
           wavelength: primaryWavelength,
           crossType,
@@ -2275,24 +2478,21 @@ const collectLegacyCrossRays = async (
         });
 
         crossBeamResult = await w.generateCrossBeam(opticalSystemRows, allObjectPositions, {
-          rayCount: renderRayCount,
+          rayCount: effectiveRayCount,
           debugMode: false,
           wavelength: primaryWavelength,
           crossType
         });
       }
-
-      console.log('[RAY-DEBUG] crossBeamResult keys:', crossBeamResult ? Object.keys(crossBeamResult) : 'null');
-      console.log('[RAY-DEBUG] crossBeamResult.success:', crossBeamResult?.success);
-      if (crossBeamResult?.allTracedRays) console.log('[RAY-DEBUG] allTracedRays count:', crossBeamResult.allTracedRays.length, 'success:', crossBeamResult.allTracedRays.filter((r:any)=>r.success).length);
-      if (crossBeamResult?.allCrossBeamRays) console.log('[RAY-DEBUG] allCrossBeamRays count:', crossBeamResult.allCrossBeamRays.length, 'types:', [...new Set(crossBeamResult.allCrossBeamRays.map((r:any)=>r.type))].join(','));
+      recordCooptPerfSample('collectLegacyCrossRays.generate', performance.now() - generateStartMs);
 
       if (!crossBeamResult || crossBeamResult.success === false) {
-        console.warn('[RAY-DEBUG] crossBeamResult failed or null');
+        recordCooptPerfSample('collectLegacyCrossRays.total', performance.now() - totalStartMs);
         return [];
       }
 
       let allRays: any[] = [];
+      const normalizeStartMs = performance.now();
       const objectResults = Array.isArray(crossBeamResult.objectResults)
         ? crossBeamResult.objectResults
         : (Array.isArray(crossBeamResult.results) ? crossBeamResult.results : null);
@@ -2375,6 +2575,7 @@ const collectLegacyCrossRays = async (
           }
         };
       }) : [];
+      recordCooptPerfSample('collectLegacyCrossRays.normalize', performance.now() - normalizeStartMs);
 
       const chiefOnlyObjectCount = (() => {
         const objectIndices = new Set<number>();
@@ -2394,8 +2595,10 @@ const collectLegacyCrossRays = async (
         chiefOnlyObjectCount > 0 &&
         normalizedAllRays.length === chiefOnlyObjectCount
       ) {
-        const yzRays = await collectLegacyCrossRays(opticalSystemRows, 'YZ');
-        const xzRays = await collectLegacyCrossRays(opticalSystemRows, 'XZ');
+        const [yzRays, xzRays] = await Promise.all([
+          collectLegacyCrossRays(opticalSystemRows, 'YZ', undefined, options),
+          collectLegacyCrossRays(opticalSystemRows, 'XZ', undefined, options),
+        ]);
         const merged = [...yzRays, ...xzRays];
         const seenChiefObjects = new Set<number>();
         const mergedDeduped = merged.filter((ray: any) => {
@@ -2406,14 +2609,11 @@ const collectLegacyCrossRays = async (
           seenChiefObjects.add(objectIndex);
           return true;
         });
-        console.warn('[RAY-DEBUG] BOTH stop-mode generation returned chief-only rays; falling back to merged YZ/XZ stop rays', {
-          mergedCount: mergedDeduped.length,
-          forceMode: requestedPupilSamplingMode || 'auto'
-        });
         return mergedDeduped;
       }
 
-      const desiredCount = Math.max(1, Number.parseInt(String(renderRayCount), 10) || 1);
+      const desiredCount = effectiveRayCount;
+      const limitStartMs = performance.now();
       const grouped = new Map<number, any[]>();
       normalizedAllRays.forEach((ray: any) => {
         const objectIndex = Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : 0;
@@ -2443,9 +2643,12 @@ const collectLegacyCrossRays = async (
         limitedRays.push(...limited);
       });
 
-      console.log('[RAY-DEBUG] collectLegacyCrossRays: per-object count=', perObjectCount, 'total returning=', limitedRays.length, 'Sample type:', limitedRays[0]?.originalRay?.type, 'success:', limitedRays[0]?.success);
+      recordCooptPerfSample('collectLegacyCrossRays.limit', performance.now() - limitStartMs);
+      recordCooptPerfSample('collectLegacyCrossRays.total', performance.now() - totalStartMs);
+
       return limitedRays;
     } catch (error) {
+      recordCooptPerfSample('collectLegacyCrossRays.total', performance.now() - totalStartMs);
       console.error('[RenderWindow] Legacy cross-beam generation failed:', error);
       return [];
     }
@@ -2800,6 +3003,8 @@ const collectLegacyCrossRays = async (
 
   const drawCrossSectionView = async (axis: 'YZ' | 'XZ'): Promise<boolean> => {
     const w = window as any;
+    const timingStages: RenderTimingStage[] = [];
+    const blockPerfBefore = readCooptPerfCounters();
     let overrideRows: any[] = [];
     try {
       const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
@@ -2819,20 +3024,29 @@ const collectLegacyCrossRays = async (
     try {
       const cm = w.ConfigurationManager;
       if (overrideRows.length === 0 && cm && typeof cm.loadActiveConfigurationToTables === 'function') {
+        const startMs = performance.now();
         await Promise.resolve(cm.loadActiveConfigurationToTables({ applyToUI: true }));
+        timingStages.push({ label: 'load', ms: performance.now() - startMs });
       }
     } catch (_) {}
 
     try {
-      if (typeof w.initializeAllTables === 'function') w.initializeAllTables();
+      if (typeof w.initializeAllTables === 'function') {
+        const startMs = performance.now();
+        w.initializeAllTables();
+        timingStages.push({ label: 'tables', ms: performance.now() - startMs });
+      }
     } catch (_) {}
 
     ensureRenderCanvasAttached();
 
     try {
+      const startMs = performance.now();
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      timingStages.push({ label: 'raf', ms: performance.now() - startMs });
     } catch (_) {}
 
+    const rowsStartMs = performance.now();
     const compareEntries = overrideRows.length === 0 && renderCompareScope === 'all' ? getRenderCompareEntries(w) : [];
     const compareEnabled = overrideRows.length === 0 && compareEntries.length > 1;
     const activeCompareEntry = compareEntries.find((entry) => entry.isActive) || compareEntries[0] || null;
@@ -2848,6 +3062,7 @@ const collectLegacyCrossRays = async (
         rows = [];
       }
     }
+    timingStages.push({ label: 'rows', ms: performance.now() - rowsStartMs });
 
     if (!rows.length) {
       setRenderWindowStatus('No optical data');
@@ -2855,7 +3070,10 @@ const collectLegacyCrossRays = async (
     }
 
     try {
+      const scenePrepStartMs = performance.now();
       const sceneForDraw = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
+        let rayCollectMs = 0;
+        let rayDrawMs = 0;
       if (sceneForDraw && typeof w.clearAllOpticalElements === 'function') {
         try { w.clearAllOpticalElements(sceneForDraw); } catch (_) {}
       }
@@ -2898,7 +3116,10 @@ const collectLegacyCrossRays = async (
           });
         } catch (_) {}
       }
+      timingStages.push({ label: 'scene', ms: performance.now() - scenePrepStartMs });
+
       if (typeof w.drawOpticalSystemSurfaces === 'function' && sceneForDraw) {
+        const surfacesStartMs = performance.now();
         if (compareEnabled) {
           const offsets = buildRenderCompareOffsets(compareEntries.length);
           for (let index = 0; index < compareEntries.length; index += 1) {
@@ -2933,9 +3154,13 @@ const collectLegacyCrossRays = async (
               console.warn('[RenderWindow] Compare cross-section lens fill failed:', fillErr);
             }
 
+            const collectStartMs = performance.now();
             const compareRays = await collectLegacyCrossRays(entry.rows, axis, entry.objectRows);
+            rayCollectMs += performance.now() - collectStartMs;
             if (compareRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
+              const drawStartMs = performance.now();
               w.drawCrossBeamRays(compareRays, group);
+              rayDrawMs += performance.now() - drawStartMs;
             }
           }
         } else {
@@ -2952,6 +3177,7 @@ const collectLegacyCrossRays = async (
             crossSectionCenterOffset: 0
           });
         }
+        timingStages.push({ label: 'surfaces', ms: performance.now() - surfacesStartMs });
       }
 
       if (sceneForDraw) {
@@ -2969,10 +3195,13 @@ const collectLegacyCrossRays = async (
       }
 
       if (!compareEnabled) {
+        const collectStartMs = performance.now();
         const legacyCrossRays = await collectLegacyCrossRays(rows, axis);
-        console.log('[RAY-DEBUG] drawCrossSectionView: legacyCrossRays.length=', legacyCrossRays.length, 'drawCrossBeamRays defined=', typeof w.drawCrossBeamRays === 'function', 'sceneForDraw=', !!sceneForDraw);
+        rayCollectMs += performance.now() - collectStartMs;
         if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
+          const drawStartMs = performance.now();
           w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
+          rayDrawMs += performance.now() - drawStartMs;
         }
 
         try {
@@ -2981,23 +3210,29 @@ const collectLegacyCrossRays = async (
           console.warn('[RenderWindow] Cross-section lens fill failed:', fillErr);
         }
       }
+      if (rayCollectMs > 0) timingStages.push({ label: 'rayCollect', ms: rayCollectMs });
+      if (rayDrawMs > 0) timingStages.push({ label: 'rayDraw', ms: rayDrawMs });
 
+      const cameraStartMs = performance.now();
       if (axis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
         w.setCameraForXZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
       } else if (axis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
         w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
       }
+      timingStages.push({ label: 'camera', ms: performance.now() - cameraStartMs });
 
       syncOrthoBoundsToRendererAspect();
+      const renderStartMs = performance.now();
       const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
       const scene = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
       const camera = w.camera || (typeof w.getCamera === 'function' ? w.getCamera() : null);
       if (renderer && scene && camera && typeof renderer.render === 'function') {
         renderer.render(scene, camera);
       }
+      timingStages.push({ label: 'render', ms: performance.now() - renderStartMs });
       scheduleRenderScaleOverlayUpdate();
 
-      setRenderWindowStatus(compareEnabled ? `Ready (${axis} compare)` : `Ready (${axis} section)`);
+      publishRenderTiming(compareEnabled ? `Ready (${axis} compare)` : `Ready (${axis} section)`, `cross-${axis}`, timingStages, blockPerfBefore);
       return true;
     } catch (err) {
       console.error('[RenderWindow] Cross-section draw failed:', err);
@@ -3006,14 +3241,19 @@ const collectLegacyCrossRays = async (
     }
   };
 
-  const drawRender3DView = async (): Promise<boolean> => {
+  const drawRender3DView = async (startupStages?: RenderTimingStage[]): Promise<boolean> => {
     const w = window as any;
+    const timingStages: RenderTimingStage[] = Array.isArray(startupStages) ? [...startupStages] : [];
+    const blockPerfBefore = readCooptPerfCounters();
 
     try {
       ensureRenderCanvasAttached();
+      const rafStartMs = performance.now();
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      timingStages.push({ label: 'raf', ms: performance.now() - rafStartMs });
 
       let rows: any[] = [];
+      const rowsStartMs = performance.now();
       try {
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
         const overrideRows = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0
@@ -3025,6 +3265,7 @@ const collectLegacyCrossRays = async (
       } catch (_) {
         rows = [];
       }
+      timingStages.push({ label: 'rows', ms: performance.now() - rowsStartMs });
       try {
         if (!rows.length && typeof w.getOpticalSystemRows === 'function') {
           const r = w.getOpticalSystemRows(w.tableOpticalSystem);
@@ -3047,10 +3288,14 @@ const collectLegacyCrossRays = async (
 
       const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
       const isZoomPreviewActive = !!g?.__cooptZoomPreviewActive;
+        const isInitial3DPass = !render3DPrevRowsRef.current && Array.isArray(startupStages) && startupStages.length > 0;
+        const lightRayCount = getInitial3DLightRayCount(renderRayCount);
+        const useLightweightInitialRays = !isZoomPreviewActive && isInitial3DPass && lightRayCount < renderRayCount;
       const prevRows = render3DPrevRowsRef.current;
       const prevOrigins = render3DPrevOriginsRef.current;
       let nextSurfaceOrigins: any[] | null = null;
       if (isZoomPreviewActive) {
+        const previewStartMs = performance.now();
         try {
           nextSurfaceOrigins = calculateSurfaceOrigins(rows);
         } catch (_) {
@@ -3076,11 +3321,14 @@ const collectLegacyCrossRays = async (
           render3DPrevRowsRef.current = rows;
           render3DPrevOriginsRef.current = nextSurfaceOrigins;
           scheduleRenderScaleOverlayUpdate();
-          setRenderWindowStatus('Ready (3D preview)');
+          timingStages.push({ label: 'preview', ms: performance.now() - previewStartMs });
+          publishRenderTiming('Ready (3D preview)', '3d-preview', timingStages, blockPerfBefore);
           return true;
         }
+        timingStages.push({ label: 'preview', ms: performance.now() - previewStartMs });
       }
 
+      const scenePrepStartMs = performance.now();
       if (typeof w.clearAllOpticalElements === 'function') {
         try { w.clearAllOpticalElements(sceneForDraw); } catch (_) {}
       }
@@ -3110,10 +3358,20 @@ const collectLegacyCrossRays = async (
           }
         });
       } catch (_) {}
+      timingStages.push({ label: 'scene', ms: performance.now() - scenePrepStartMs });
 
       if (typeof w.drawOpticalSystemSurfaces === 'function') {
+        if (!Array.isArray(nextSurfaceOrigins)) {
+          try {
+            nextSurfaceOrigins = calculateSurfaceOrigins(rows);
+          } catch (_) {
+            nextSurfaceOrigins = null;
+          }
+        }
+        const surfacesStartMs = performance.now();
         w.drawOpticalSystemSurfaces({
           opticalSystemData: rows,
+          surfaceOrigins: nextSurfaceOrigins,
           scene: sceneForDraw,
           crossSectionOnly: false,
           showSurfaceOrigins: false,
@@ -3121,18 +3379,25 @@ const collectLegacyCrossRays = async (
           showMirrorBackText: false,
           showDesignIntentLabels: renderShowDesignIntentLabels,
           showPrincipalPointLabels: renderShowPrincipalPointLabels,
+          surfaceMeshSegments: RENDER_3D_SURFACE_MESH_SEGMENTS,
+          toricMeshSegments: RENDER_3D_TORIC_MESH_SEGMENTS,
           crossSectionDirection: 'YZ',
           crossSectionCenterOffset: 0
         });
+        timingStages.push({ label: 'surfaces', ms: performance.now() - surfacesStartMs });
       }
 
-      const legacyCrossRays = await collectLegacyCrossRays(rows, 'BOTH');
-      console.log('[RAY-DEBUG] drawRender3DView: legacyCrossRays.length=', legacyCrossRays.length, 'drawCrossBeamRays defined=', typeof w.drawCrossBeamRays === 'function', 'sceneForDraw=', !!sceneForDraw);
+      const rayCollectStartMs = performance.now();
+      const legacyCrossRays = await collectLegacyCrossRays(rows, 'BOTH', undefined, useLightweightInitialRays ? { rayCountOverride: lightRayCount } : undefined);
+      timingStages.push({ label: useLightweightInitialRays ? `rayCollectLite(${lightRayCount})` : 'rayCollect', ms: performance.now() - rayCollectStartMs });
       if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
+        const rayDrawStartMs = performance.now();
         w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
+        timingStages.push({ label: 'rayDraw', ms: performance.now() - rayDrawStartMs });
       }
 
       try {
+        const cameraStartMs = performance.now();
         // Calculate actual bounds of drawn rays before adjusting camera
         const rayBoundsForCamera = { minY: Infinity, maxY: -Infinity };
         if (sceneForDraw) {
@@ -3157,10 +3422,6 @@ const collectLegacyCrossRays = async (
           ? { minY: rayBoundsForCamera.minY, maxY: rayBoundsForCamera.maxY }
           : null;
         
-        if (cameraBoundsOverride) {
-          console.log('[RAY-DEBUG] Camera Y bounds from rays:', cameraBoundsOverride);
-        }
-
         if (typeof w.setCameraForYZCrossSection === 'function') {
           w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true, cameraBoundsOverride });
         } else if (typeof w.fitCameraToScene === 'function') {
@@ -3171,26 +3432,22 @@ const collectLegacyCrossRays = async (
           const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
           w.adjustCameraView(sceneForDraw, camera, controls, renderer);
         }
+        timingStages.push({ label: 'camera', ms: performance.now() - cameraStartMs });
       } catch (_) {}
 
+      const renderStartMs = performance.now();
       const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
       const scene = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
       const camera = w.camera || (typeof w.getCamera === 'function' ? w.getCamera() : null);
       if (renderer && scene && camera && typeof renderer.render === 'function') {
         renderer.render(scene, camera);
       }
-      if (!Array.isArray(nextSurfaceOrigins)) {
-        try {
-          nextSurfaceOrigins = calculateSurfaceOrigins(rows);
-        } catch (_) {
-          nextSurfaceOrigins = null;
-        }
-      }
+      timingStages.push({ label: 'render', ms: performance.now() - renderStartMs });
       render3DPrevRowsRef.current = rows;
       render3DPrevOriginsRef.current = nextSurfaceOrigins;
       scheduleRenderScaleOverlayUpdate();
 
-      setRenderWindowStatus('Ready (3D)');
+      publishRenderTiming('Ready (3D)', '3d', timingStages, blockPerfBefore);
       return true;
     } catch (err) {
       console.error('[RenderWindow] 3D draw failed:', err);
@@ -3266,15 +3523,28 @@ const collectLegacyCrossRays = async (
     }
   };
 
+  const publishRenderTiming = (
+    baseStatus: string,
+    mode: string,
+    stages: RenderTimingStage[],
+    blockPerfBefore: Record<string, CooptPerfCounter>
+  ) => {
+    const blockPerf = diffCooptPerfCounters(blockPerfBefore, BLOCK_PERF_KEYS);
+    const summary = formatRenderTimingSummary(stages, blockPerf);
+    const detail = { mode, summary, stages, blockPerf };
+    renderLastTimingRef.current = detail;
+    try {
+      (globalThis as any).__cooptLastRenderTiming = detail;
+    } catch (_) {}
+    setRenderWindowStatus(summary ? `${baseStatus} | ${summary}` : baseStatus);
+  };
+
   const redrawCurrentRenderView = async (
     modeOverride?: '3D' | 'XZ' | 'YZ',
     axisOverride?: 'YZ' | 'XZ'
   ) => {
     const nextMode = modeOverride ?? renderViewModeRef.current;
     const nextAxis = (axisOverride ?? renderViewAxisRef.current) === 'XZ' ? 'XZ' : 'YZ';
-    if (isTauriRuntime()) {
-      console.log('[RenderColor][Tauri] redrawCurrentRenderView', { renderViewMode: nextMode, renderViewAxis: nextAxis });
-    }
     if (nextMode === '3D') {
       await drawRender3DView();
       return;
@@ -3428,10 +3698,13 @@ const collectLegacyCrossRays = async (
       if (isRenderWindowMode) {
         const drawWithPreparedData = async (): Promise<boolean> => {
           const w = window as any;
+          const startupStages: RenderTimingStage[] = [];
           try {
             const cm = w.ConfigurationManager;
             if (cm && typeof cm.loadActiveConfigurationToTables === 'function') {
+              const startMs = performance.now();
               await Promise.resolve(cm.loadActiveConfigurationToTables({ applyToUI: true }));
+              startupStages.push({ label: 'load', ms: performance.now() - startMs });
             }
           } catch (err) {
             console.warn('[RenderWindow] Configuration load failed before draw:', err);
@@ -3439,14 +3712,18 @@ const collectLegacyCrossRays = async (
 
           try {
             if (typeof w.initializeAllTables === 'function') {
+              const startMs = performance.now();
               w.initializeAllTables();
+              startupStages.push({ label: 'tables', ms: performance.now() - startMs });
             }
           } catch (_) {}
 
           ensureRenderCanvasAttached();
 
           try {
+            const startMs = performance.now();
             await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+            startupStages.push({ label: 'raf', ms: performance.now() - startMs });
           } catch (_) {}
 
           let rowCount = 0;
@@ -3476,7 +3753,7 @@ const collectLegacyCrossRays = async (
             const currentMode = renderViewModeRef.current;
             const currentAxis = renderViewAxisRef.current;
             const ok = currentMode === '3D'
-              ? await drawRender3DView()
+              ? await drawRender3DView(startupStages)
               : await drawCrossSectionView(currentMode === 'XZ' ? 'XZ' : currentAxis === 'XZ' ? 'XZ' : 'YZ');
             if (!ok) {
               setRenderWindowStatus('Draw failed');
@@ -3492,11 +3769,13 @@ const collectLegacyCrossRays = async (
           if (hasCanvas) {
             const currentMode = renderViewModeRef.current;
             const currentAxis = renderViewAxisRef.current;
-            setRenderWindowStatus(
-              currentMode === '3D'
-                ? 'Ready (3D)'
-                : `Ready (${currentMode === 'XZ' ? 'XZ' : currentAxis === 'XZ' ? 'XZ' : 'YZ'} section)`
-            );
+            if (!renderLastTimingRef.current) {
+              setRenderWindowStatus(
+                currentMode === '3D'
+                  ? 'Ready (3D)'
+                  : `Ready (${currentMode === 'XZ' ? 'XZ' : currentAxis === 'XZ' ? 'XZ' : 'YZ'} section)`
+              );
+            }
             return true;
           }
 
@@ -5152,23 +5431,30 @@ const collectLegacyCrossRays = async (
     const handleRenderDraw = async () => {
       try {
         const w = window as any;
+        const startupStages: RenderTimingStage[] = [];
         try {
           const cm = w.ConfigurationManager;
           if (cm && typeof cm.loadActiveConfigurationToTables === 'function') {
+            const startMs = performance.now();
             await Promise.resolve(cm.loadActiveConfigurationToTables({ applyToUI: true }));
+            startupStages.push({ label: 'load', ms: performance.now() - startMs });
           }
         } catch (_) {}
 
         try {
           if (typeof w.initializeAllTables === 'function') {
+            const startMs = performance.now();
             w.initializeAllTables();
+            startupStages.push({ label: 'tables', ms: performance.now() - startMs });
           }
         } catch (_) {}
 
         ensureRenderCanvasAttached();
 
         try {
+          const startMs = performance.now();
           await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+          startupStages.push({ label: 'raf', ms: performance.now() - startMs });
         } catch (_) {}
 
         let rowCount = 0;
@@ -5196,11 +5482,10 @@ const collectLegacyCrossRays = async (
 
         renderViewModeRef.current = '3D';
         setRenderViewMode('3D');
-        const ok = await drawRender3DView();
+        const ok = await drawRender3DView(startupStages);
         if (!ok) return;
 
         ensureRenderCanvasAttached();
-        setRenderWindowStatus('Ready (3D)');
       } catch (err) {
         console.error('[RenderWindow] Manual draw failed:', err);
         setRenderWindowStatus('Draw failed');
@@ -5233,13 +5518,6 @@ const collectLegacyCrossRays = async (
       const keys = Array.isArray(target?.keys) ? target.keys : [target?.key];
       const validKeys = [...new Set(keys.map((k) => String(k || '').trim()).filter(Boolean))];
       if (validKeys.length === 0) return;
-      if (isTauriRuntime()) {
-        console.log('[RenderColor][Tauri] handleSetLensColor:start', {
-          label: target?.label,
-          colorHex,
-          validKeys,
-        });
-      }
       const next = { ...loadSurfaceColorOverridesSafe() };
       if (!colorHex) {
         for (const k of validKeys) delete next[k];
@@ -5247,16 +5525,6 @@ const collectLegacyCrossRays = async (
         for (const k of validKeys) next[k] = colorHex;
       }
       saveSurfaceColorOverridesSafe(next);
-      if (isTauriRuntime()) {
-        const probe = validKeys.reduce((acc: Record<string, any>, k) => {
-          acc[k] = next[k];
-          return acc;
-        }, {});
-        console.log('[RenderColor][Tauri] handleSetLensColor:saved', {
-          probe,
-          overrideCount: Object.keys(next).length,
-        });
-      }
       setRenderColorUiRevision((v) => v + 1);
       redrawCurrentRenderView().catch(() => {
         setRenderWindowStatus('Draw failed');

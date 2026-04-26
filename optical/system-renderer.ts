@@ -9,6 +9,33 @@ import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurface
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
 import { calculatePrincipalPointPositions } from '../raytracing/core/ray-paraxial.ts';
 
+type CooptPerfCounter = {
+    count: number;
+    totalMs: number;
+    maxMs: number;
+    lastMs: number;
+};
+
+function recordCooptPerfSample(name, durationMs) {
+    const safeDuration = Number(durationMs);
+    if (!name || !Number.isFinite(safeDuration) || safeDuration < 0) return;
+    try {
+        const g = globalThis;
+        if (!g.__cooptPerf || typeof g.__cooptPerf !== 'object') {
+            g.__cooptPerf = { samples: {} };
+        }
+        if (!g.__cooptPerf.samples || typeof g.__cooptPerf.samples !== 'object') {
+            g.__cooptPerf.samples = {};
+        }
+        const current = g.__cooptPerf.samples[name] || { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
+        current.count += 1;
+        current.totalMs += safeDuration;
+        current.maxMs = Math.max(current.maxMs, safeDuration);
+        current.lastMs = safeDuration;
+        g.__cooptPerf.samples[name] = current;
+    } catch (_) {}
+}
+
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordTrans';
 const RENDER_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showDesignIntentLabels';
@@ -1300,6 +1327,7 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
  * @param {Array} options.opticalSystemData - Optical system data
  */
 export function drawOpticalSystemSurfaces(options: any = {}) {
+    const totalStartMs = performance.now();
     
     const {
         crossSectionOnly = false,
@@ -1309,10 +1337,13 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
         showMirrorBackText = false,
         showDesignIntentLabels = false,
         showPrincipalPointLabels = false,
+        surfaceMeshSegments = 100,
+        toricMeshSegments = 256,
         crossSectionDirection = 'YZ',
         viewPlane = null,
         crossSectionCenterOffset = 0,
-        opticalSystemData
+        opticalSystemData,
+        surfaceOrigins: precomputedSurfaceOrigins = null
     } = options;
 
     // viewPlaneパラメータをcrossSectionDirectionに変換
@@ -1332,10 +1363,16 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
 
 
     // Clear existing optical elements before drawing new ones
+    const clearStartMs = performance.now();
     clearExistingOpticalElements(scene);
+    recordCooptPerfSample('surfaceRenderer.clear', performance.now() - clearStartMs);
 
     // Surface origins calculation - NOW with the correct parameter
-    const surfaceOrigins = calculateSurfaceOrigins(opticalSystemData);
+    const originsStartMs = performance.now();
+    const surfaceOrigins = Array.isArray(precomputedSurfaceOrigins) && precomputedSurfaceOrigins.length === opticalSystemData.length
+        ? precomputedSurfaceOrigins
+        : calculateSurfaceOrigins(opticalSystemData);
+    recordCooptPerfSample('surfaceRenderer.origins', performance.now() - originsStartMs);
 
     // Opt-in Coord Break debug: helps verify that decenter params are numeric at render time.
     try {
@@ -1408,6 +1445,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
 
     // Draw 3D surfaces (skip if crossSectionOnly is true)
     if (!crossSectionOnly) {
+        const draw3DStartMs = performance.now();
         for (let i = 0; i < opticalSystemData.length; i++) {
             const surface = opticalSystemData[i];
             const renderSurfaceMeta = __coopt_withSurfaceRenderMeta(surface, i);
@@ -1518,7 +1556,6 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                     0.3,
                                     'Spherical'
                                 );
-                                console.log(`✅ OBJECT Surface ${i}: 球面メッシュを描画`, { radius, conic });
                             } catch (error) {
                                 console.error(`❌ OBJECT Surface ${i}: 球面メッシュ描画エラー:`, error);
                             }
@@ -1553,7 +1590,6 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                     radiusY: radiusY,
                                     conic: Number(surface.conic) || 0
                                 };
-                                console.log(`[OBJECT Crosshair] Toric params: radiusX=${radiusX}, radiusY=${radiusY}`);
                             }
                         }
 
@@ -1732,7 +1768,6 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                     0.3,
                                     'Spherical'
                                 );
-                                console.log(`✅ IMAGE Surface ${i}: 球面メッシュを描画`, { radius, conic });
                             } catch (error) {
                                 console.error(`❌ IMAGE Surface ${i}: 球面メッシュ描画エラー:`, error);
                             }
@@ -1767,7 +1802,6 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                     radiusY: radiusY,
                                     conic: Number(surface.conic) || 0
                                 };
-                                console.log(`[IMAGE Crosshair] Toric params: radiusX=${radiusX}, radiusY=${radiusY}`);
                             }
                         }
                         
@@ -1934,7 +1968,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                         surfaceOrigins[i].origin,    // origin から .origin プロパティを使用
                         surfaceOrigins[i].rotationMatrix, // rotation matrix
                         "even",                      // mode
-                        100,                         // segments
+                        surfaceMeshSegments,         // segments
                         mirrorColor,                // color
                         0.8,                        // opacity
                         'Mirror'                     // surfaceType
@@ -1960,7 +1994,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                         renderSurfaceMeta,               // params with radiusX, radiusY, conic, semidia
                         surfaceOrigins[i].origin,
                         surfaceOrigins[i].rotationMatrix,
-                        256,                             // 256x256 grid mesh for smooth surface
+                        toricMeshSegments,
                         toricColor,                      // color
                         0.5                              // opacity
                     );
@@ -1981,7 +2015,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                         surfaceOrigins[i].origin,    // origin から .origin プロパティを使用
                         surfaceOrigins[i].rotationMatrix, // rotation matrix
                         "even",                      // mode
-                        100,                         // segments
+                        surfaceMeshSegments,         // segments
                         lensColor,                  // color
                         isThinLens ? 0.25 : 0.5,    // opacity
                         renderSurface.type          // surfaceType
@@ -2028,10 +2062,12 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
 
         // 3Dビュー専用: 接続直角部リングを描画
         drawConnectionCornerRings3D(scene, opticalSystemData, surfaceOrigins);
+        recordCooptPerfSample('surfaceRenderer.draw3d', performance.now() - draw3DStartMs);
     } else {
     }
 
     // Draw cross-sections
+    const crossSectionStartMs = performance.now();
     if (actualCrossSectionDirection === 'YZ') {
         drawLensCrossSectionWithSurfaceOrigins(
             scene, 
@@ -2045,11 +2081,13 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
             surfaceOrigins
         );
     }
+    recordCooptPerfSample('surfaceRenderer.crossSection', performance.now() - crossSectionStartMs);
 
     const showDesignLabels = __coopt_shouldShowDesignIntentLabels(showDesignIntentLabels);
     const showPrincipalLabels = __coopt_shouldShowPrincipalPointLabels(showPrincipalPointLabels);
 
     if (showDesignLabels || showPrincipalLabels) {
+        const labelsStartMs = performance.now();
         try {
             if (showDesignLabels) {
                 __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
@@ -2065,8 +2103,12 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
             }
         } catch (labelErr) {
             console.warn('⚠️ Failed to draw design intent labels:', labelErr);
+        } finally {
+            recordCooptPerfSample('surfaceRenderer.labels', performance.now() - labelsStartMs);
         }
     }
+
+    recordCooptPerfSample('surfaceRenderer.total', performance.now() - totalStartMs);
 }
 
 /**

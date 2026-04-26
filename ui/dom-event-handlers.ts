@@ -16,6 +16,7 @@ import {
     expandBlocksToOpticalSystemRows,
     expandBlocksIntoConfiguration,
     deriveBlocksFromLegacyOpticalSystemRows,
+    validateZoomLawDefinitions,
     validateBlocksConfiguration,
     BLOCK_SCHEMA_VERSION
 } from '../data/block-schema.ts';
@@ -2109,21 +2110,12 @@ function setupImportZemaxButton(): void {
             if (!file) return;
 
             try {
-                console.log('📥 [Zemax Import] Selected file:', file.name, `(${file.size} bytes)`);
                 const arrayBuffer = await file.arrayBuffer();
                 const parsed: any = parseZMXArrayBufferToOpticalSystemRows(arrayBuffer);
 
                 if (!parsed || typeof parsed !== 'object') {
                     throw new Error('Invalid Zemax parse result.');
                 }
-
-                console.log('📥 [Zemax Import] Parsed:', {
-                    rows: Array.isArray(parsed?.rows) ? parsed.rows.length : 0,
-                    sourceRows: Array.isArray(parsed?.sourceRows) ? parsed.sourceRows.length : 0,
-                    objectRows: Array.isArray(parsed?.objectRows) ? parsed.objectRows.length : 0,
-                    issues: Array.isArray(parsed?.issues) ? parsed.issues.length : 0
-                });
-
                 const payload = __buildZemaxLoadPayload(parsed);
                 const loaded = await __loadAllDataObjectIntoApp(payload, { filename: file.name });
                 if (!loaded) {
@@ -2137,7 +2129,6 @@ function setupImportZemaxButton(): void {
                     const { loadActiveConfigurationToTables: loadConfigToTables } = await import('../data/table-configuration.ts');
                     if (typeof loadConfigToTables === 'function') {
                         await loadConfigToTables({ applyToUI: true });
-                        console.log('[Zemax Import] ✅ Loaded active configuration to tables (UI updated)');
                     }
                 } catch (err) {
                     console.error('[Zemax Import] ❌ Failed to load configuration to tables:', err);
@@ -2206,7 +2197,6 @@ function setupImportZemaxButton(): void {
                     __zmxSyncDesignIntentApertureFromOpticalRows();
                 } catch (_) {}
 
-                console.log('✅ [Zemax Import] Completed:', file.name);
             } catch (err) {
                 console.error('❌ Zemax import failed:', err);
                 alert(`Import failed: ${(err as Error)?.message || String(err)}`);
@@ -3982,7 +3972,6 @@ function setupNewFileButton(): void {
         if (!confirm('Create new file? Current data will be cleared.')) return;
         
         try {
-            console.log('🔵 [New File] Clearing localStorage and creating default configuration...');
             clearAllPersistedState();
             
             // Create default configuration using the same structure as table-configuration.ts
@@ -4047,7 +4036,6 @@ function setupNewFileButton(): void {
             };
             
             saveSystemConfigurations(systemConfig);
-            console.log('✅ [New File] Default configuration created, reloading...');
             location.reload();
         } catch (err) {
             console.error('❌ Failed to create new file:', err);
@@ -4769,13 +4757,10 @@ export function setActiveConfiguration(configId: number): boolean {
     
     systemConfig.activeConfigId = configId;
     saveSystemConfigurations(systemConfig);
-    console.log(`✅ [Configuration] Active config changed to: ${config.name}`);
     return true;
 }
 
 export function saveCurrentToActiveConfiguration(): void {
-    console.log('🔵 [Configuration] Saving current table data to active configuration...');
-    
     const systemConfig = loadSystemConfigurations();
     const activeConfig = systemConfig.configurations.find((c: any) => c.id === systemConfig.activeConfigId);
     
@@ -4804,7 +4789,6 @@ export function saveCurrentToActiveConfiguration(): void {
     }
     
     saveSystemConfigurations(systemConfig);
-    console.log(`✅ [Configuration] Saved to: ${activeConfig.name}`);
 }
 
 export function loadActiveConfigurationToTables(): void {
@@ -4852,8 +4836,6 @@ export function addConfiguration(name: string): number {
     
     systemConfig.configurations.push(newConfig);
     saveSystemConfigurations(systemConfig);
-    
-    console.log(`✅ [Configuration] Added new configuration: ${name} (ID: ${newId})`);
     return newId;
 }
 
@@ -4877,11 +4859,9 @@ export function deleteConfiguration(configId: number): boolean {
     
     if (systemConfig.activeConfigId === configId) {
         systemConfig.activeConfigId = systemConfig.configurations[0].id;
-        console.log(`🔄 [Configuration] Active config changed to: ${systemConfig.configurations[0].name}`);
     }
     
     saveSystemConfigurations(systemConfig);
-    console.log(`✅ [Configuration] Deleted configuration: ${configName}`);
     return true;
 }
 
@@ -4905,8 +4885,6 @@ export function duplicateConfiguration(configId: number): number | null {
     
     systemConfig.configurations.push(newConfig);
     saveSystemConfigurations(systemConfig);
-    
-    console.log(`✅ [Configuration] Duplicated configuration: ${newConfig.name} (ID: ${newId})`);
     return newId;
 }
 
@@ -4924,7 +4902,6 @@ export function renameConfiguration(configId: number, newName: string): boolean 
     config.metadata.modified = new Date().toISOString();
     
     saveSystemConfigurations(systemConfig);
-    console.log(`✅ [Configuration] Renamed: ${oldName} → ${newName}`);
     return true;
 }
 
@@ -5647,7 +5624,8 @@ function __zoom_parseLawGroupNames(rawValue: any): string[] {
                 if (!trimmed) continue;
                 const eqIndex = trimmed.indexOf('=');
                 if (eqIndex <= 0) continue;
-                const groupName = String(trimmed.slice(0, eqIndex)).trim();
+            const groupName = String(trimmed.slice(0, eqIndex)).trim();
+            if (/^(?:const\s+|\$)[A-Za-z_][A-Za-z0-9_]*$/i.test(groupName)) continue;
                 if (groupName && !names.includes(groupName)) names.push(groupName);
         }
         return names;
@@ -5663,6 +5641,7 @@ function __zoom_collectState(): any {
                                 configName: String(activeConfig?.name ?? '').trim(),
                                 zoomPosition: 0,
                                 lawsText: '',
+                        lawErrors: [],
                                 lawGroups: [],
                                 groupNames: [],
                                 controllerBlockId: ''
@@ -5678,6 +5657,7 @@ function __zoom_collectState(): any {
                     ? Math.max(0, Math.min(1, Number(pendingPreviewValue)))
                     : (Number.isFinite(zoomPositionRaw) ? Math.max(0, Math.min(1, zoomPositionRaw)) : 0);
                 const lawsText = __zoom_getControllerLawText(params) || 'A=0:0,1:0';
+                const lawErrors = validateZoomLawDefinitions(blocks);
                 const lawGroups = __zoom_parseLawGroupNames(lawsText);
                 const groupNames: string[] = [];
                 for (const block of blocks) {
@@ -5695,6 +5675,7 @@ function __zoom_collectState(): any {
                         configName: String(activeConfig?.name ?? '').trim(),
                         zoomPosition,
                         lawsText,
+                        lawErrors,
                         lawGroups,
                         groupNames,
                         controllerBlockId: String(controller?.blockId ?? '').trim()
@@ -5705,6 +5686,7 @@ function __zoom_collectState(): any {
                         configName: '',
                         zoomPosition: 0,
                         lawsText: '',
+                        lawErrors: [],
                         lawGroups: [],
                         groupNames: [],
                         controllerBlockId: ''
@@ -5718,10 +5700,11 @@ function __zoom_collectState(): any {
         const zoomSlider = document.getElementById('design-intent-zoom-slider') as HTMLInputElement | null;
         const groupChips = document.getElementById('design-intent-zoom-group-chips');
         const lawChips = document.getElementById('design-intent-zoom-law-chips');
+        const lawError = document.getElementById('design-intent-zoom-law-error');
         const lawsInput = document.getElementById('design-intent-zoom-laws') as HTMLTextAreaElement | null;
         const emptyState = document.getElementById('design-intent-zoom-empty');
         const body = document.getElementById('design-intent-zoom-body');
-        if (!configName || !zoomValue || !zoomSlider || !groupChips || !lawChips || !lawsInput || !emptyState || !body) return;
+        if (!configName || !zoomValue || !zoomSlider || !groupChips || !lawChips || !lawsInput || !emptyState || !body || !lawError) return;
 
         const renderChips = (target: HTMLElement, values: string[], prefix: string, className: string, emptyText: string) => {
             target.innerHTML = '';
@@ -5750,6 +5733,8 @@ function __zoom_collectState(): any {
                 lawsInput.disabled = true;
                 body.style.display = 'none';
                 emptyState.style.display = '';
+                lawError.textContent = '';
+                lawError.style.display = 'none';
                 renderChips(groupChips, [], 'ZG ', 'design-intent-zoom-chip design-intent-zoom-chip-group', 'No zoom groups');
                 renderChips(lawChips, [], 'Law ', 'design-intent-zoom-chip design-intent-zoom-chip-law', 'No zoom laws');
                 return;
@@ -5767,6 +5752,13 @@ function __zoom_collectState(): any {
         emptyState.style.display = 'none';
         renderChips(groupChips, state.groupNames || [], 'ZG ', 'design-intent-zoom-chip design-intent-zoom-chip-group', 'No zoom groups');
         renderChips(lawChips, state.lawGroups || [], 'Law ', 'design-intent-zoom-chip design-intent-zoom-chip-law', 'No zoom laws');
+        if (Array.isArray(state.lawErrors) && state.lawErrors.length > 0) {
+            lawError.textContent = state.lawErrors[0];
+            lawError.style.display = '';
+        } else {
+            lawError.textContent = '';
+            lawError.style.display = 'none';
+        }
     }
 
 function __zoom_setControllerValue(field: 'zoomPosition' | 'zoomGroupProfiles', nextValue: any): any {
@@ -5858,6 +5850,7 @@ function openZoomControlWindow(): void {
         button.primary { background: #111827; color: #fff; border-color: #111827; }
         .hint { font-size: 11px; color: #6b7280; line-height: 1.4; }
         .empty { color: #6b7280; font-size: 12px; }
+        .error { display: none; margin-top: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid #fecaca; background: #fff1f2; color: #991b1b; font-size: 12px; line-height: 1.4; }
     </style>
 </head>
 <body>
@@ -5876,6 +5869,7 @@ function openZoomControlWindow(): void {
         <div class="card">
             <label class="label" for="lawsInput">Zoom Laws</label>
             <textarea id="lawsInput" spellcheck="false"></textarea>
+            <div id="lawError" class="error"></div>
             <div class="actions" style="margin-top: 8px;">
                 <div id="lawChips" class="chips" style="margin-top: 0;"></div>
                 <button id="applyLawsBtn" type="button" class="primary">Apply Laws</button>
@@ -5890,6 +5884,7 @@ function openZoomControlWindow(): void {
             var configName = document.getElementById('configName');
             var groupChips = document.getElementById('groupChips');
             var lawChips = document.getElementById('lawChips');
+            var lawError = document.getElementById('lawError');
             var lawsInput = document.getElementById('lawsInput');
             var applyLawsBtn = document.getElementById('applyLawsBtn');
             var refreshBtn = document.getElementById('refreshBtn');
@@ -5928,6 +5923,8 @@ function openZoomControlWindow(): void {
                     configName.textContent = 'No zoom controller on active config';
                     zoomValue.textContent = '0.00';
                     slider.value = '0';
+                    lawError.textContent = '';
+                    lawError.style.display = 'none';
                     renderChips(groupChips, [], 'chip-group', 'ZG ');
                     renderChips(lawChips, [], 'chip-law', 'Law ');
                     if (!suspendTextSync) lawsInput.value = '';
@@ -5939,6 +5936,13 @@ function openZoomControlWindow(): void {
                 slider.value = String(state.zoomPosition || 0);
                 renderChips(groupChips, state.groupNames || [], 'chip-group', 'ZG ');
                 renderChips(lawChips, state.lawGroups || [], 'chip-law', 'Law ');
+                if (Array.isArray(state.lawErrors) && state.lawErrors.length > 0) {
+                    lawError.textContent = state.lawErrors[0];
+                    lawError.style.display = '';
+                } else {
+                    lawError.textContent = '';
+                    lawError.style.display = 'none';
+                }
                 if (!suspendTextSync && document.activeElement !== lawsInput) {
                     lawsInput.value = state.lawsText || '';
                 }
@@ -8006,30 +8010,20 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     apertureRow.style.marginBottom = '4px';
 
                     // Optimize checkbox
-                    const summaryContainer = document.createElement('div');
-                    summaryContainer.className = 'block-inspector-col-params-summary';
                     const cb = document.createElement('input');
                     cb.type = 'checkbox';
                     cb.style.flex = '0 0 auto';
-                        summaryContainer.appendChild(createSummaryChip(getZoomPositionSummary(realBlock), 'controller'));
                     cb.style.height = '16px';
                     cb.style.margin = '0 4px 0 0';
-                            summaryContainer.appendChild(createSummaryChip(`Laws: ${lawGroups.join(', ')}`, 'controller'));
                     cb.addEventListener('click', (e) => e.stopPropagation());
 
                     // Scope select (Per-config / Shared)
                     const scopeSel = document.createElement('select');
-                            summaryContainer.appendChild(createSummaryChip(`ZG ${gapBoundaryText}`, 'gap'));
                     scopeSel.style.fontSize = '12px';
                     scopeSel.style.padding = '2px 4px';
                     scopeSel.innerHTML = '<option value="perConfig">Per-config</option><option value="global">Shared (all configs)</option>';
                     scopeSel.value = 'perConfig';
-                            summaryContainer.appendChild(createSummaryChip(`ZG ${zoomGroupText}`, 'group'));
                     scopeSel.addEventListener('click', (e) => e.stopPropagation());
-
-                    if (summaryContainer.childElementCount > 0) {
-                        colParams.appendChild(summaryContainer);
-                    }
                     cb.addEventListener('change', (e) => {
                         e.stopPropagation();
                         try { scopeSel.disabled = !cb.checked; } catch (_) {}

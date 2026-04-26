@@ -11,7 +11,7 @@
  * 作成日: 2025/07/15
  */
 
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../core/ray-tracing.ts';
+import { traceRay, traceRayHitPoint, traceRayHitPointBatch, calculateSurfaceOrigins } from '../core/ray-tracing.ts';
 import { getRustRayTracingWasmSync } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
 
@@ -32,6 +32,36 @@ const REQUIRE_RUST_CROSS_BEAM = (() => {
         return false;
     }
 })();
+
+type CooptPerfCounter = {
+    count: number;
+    totalMs: number;
+    maxMs: number;
+    lastMs: number;
+};
+
+function recordCooptPerfSample(name: string, durationMs: number): void {
+    const safeDuration = Number(durationMs);
+    if (!name || !Number.isFinite(safeDuration) || safeDuration < 0) return;
+    try {
+        const g = globalThis as typeof globalThis & {
+            __cooptPerf?: { samples?: Record<string, CooptPerfCounter> };
+        };
+        if (!g.__cooptPerf || typeof g.__cooptPerf !== 'object') {
+            g.__cooptPerf = { samples: {} };
+        }
+        if (!g.__cooptPerf.samples || typeof g.__cooptPerf.samples !== 'object') {
+            g.__cooptPerf.samples = {};
+        }
+        const current = g.__cooptPerf.samples[name] || { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
+        current.count += 1;
+        current.totalMs += safeDuration;
+        current.maxMs = Math.max(current.maxMs, safeDuration);
+        current.lastMs = safeDuration;
+        g.__cooptPerf.samples[name] = current;
+    } catch (_) {
+    }
+}
 
 function assertRustRenderTracingAvailable() {
     if (!REQUIRE_RUST_CROSS_BEAM) return;
@@ -58,6 +88,13 @@ function traceRayHitPointForRenderTs(opticalSystemRows, ray0, n0 = 1.0, targetSu
     return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
 }
 
+function traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, n0 = 1.0, targetSurfaceIndex = null) {
+    const list = Array.isArray(rays) ? rays : [];
+    if (!list.length) return [];
+    assertRustRenderTracingAvailable();
+    return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
+}
+
 const CHIEF_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     useRustWasm: true,
@@ -67,6 +104,13 @@ const CHIEF_RUST_TRACE_OPTIONS = {
 function traceRayHitPointForChiefSearch(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
     assertRustRenderTracingAvailable();
     return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, CHIEF_RUST_TRACE_OPTIONS as any);
+}
+
+function traceRayHitPointBatchForChiefSearch(opticalSystemRows, rays, n0 = 1.0, targetSurfaceIndex = null) {
+    const list = Array.isArray(rays) ? rays : [];
+    if (!list.length) return [];
+    assertRustRenderTracingAvailable();
+    return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, CHIEF_RUST_TRACE_OPTIONS as any);
 }
 
 // Runtime build stamp (for cache/stale-module diagnostics)
@@ -170,6 +214,81 @@ function fnv1a32(str) {
 }
 
 const chiefRayOriginSearchCache = new Map<string, { x: number; y: number; z: number } | null>();
+const chiefRayOriginSeedCache = new Map<string, Array<{ direction: { i: number; j: number; k: number }; origin: { x: number; y: number; z: number } }>>();
+
+function buildChiefRayOriginSearchFamilyKey(stopCenter, stopSurfaceIndex, targetSurfaceIndex, opticalSystemRows, wavelength) {
+    try {
+        const rowsSig = fnv1a32(JSON.stringify((opticalSystemRows || []).map((row) => ({
+            t: row?.surfType ?? row?.['object type'] ?? row?.object ?? row?.type,
+            r: row?.radius,
+            th: row?.thickness,
+            k: row?.conic,
+            s: row?.semidia,
+            od: row?.objectRenderDistance
+        }))));
+        return [
+            rowsSig,
+            Number(stopCenter?.x || 0).toFixed(10),
+            Number(stopCenter?.y || 0).toFixed(10),
+            Number(stopCenter?.z || 0).toFixed(10),
+            Number(stopSurfaceIndex || 0),
+            Number(targetSurfaceIndex || 0),
+            Number(wavelength || 0).toFixed(10)
+        ].join('#');
+    } catch (_) {
+        return null;
+    }
+}
+
+function getNearbyChiefRayOriginSeed(familyKey, direction) {
+    if (!familyKey) return null;
+    const entries = chiefRayOriginSeedCache.get(familyKey);
+    if (!Array.isArray(entries) || !entries.length) return null;
+    let bestEntry = null;
+    let bestDistance = Infinity;
+    for (const entry of entries) {
+        const di = Number(entry?.direction?.i) - Number(direction?.i);
+        const dj = Number(entry?.direction?.j) - Number(direction?.j);
+        const dk = Number(entry?.direction?.k) - Number(direction?.k);
+        const distance = Math.hypot(di, dj, dk);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestEntry = entry;
+        }
+    }
+    if (!bestEntry || bestDistance > 0.15) return null;
+    return { ...bestEntry.origin };
+}
+
+function storeChiefRayOriginSeed(familyKey, direction, origin) {
+    if (!familyKey || !origin || !direction) return;
+    const entries = chiefRayOriginSeedCache.get(familyKey) ?? [];
+    const nextEntry = {
+        direction: {
+            i: Number(direction.i) || 0,
+            j: Number(direction.j) || 0,
+            k: Number(direction.k) || 0
+        },
+        origin: {
+            x: Number(origin.x) || 0,
+            y: Number(origin.y) || 0,
+            z: Number(origin.z) || 0
+        }
+    };
+    const deduped = entries.filter((entry) => {
+        const di = Number(entry?.direction?.i) - nextEntry.direction.i;
+        const dj = Number(entry?.direction?.j) - nextEntry.direction.j;
+        const dk = Number(entry?.direction?.k) - nextEntry.direction.k;
+        return Math.hypot(di, dj, dk) > 1e-6;
+    });
+    deduped.unshift(nextEntry);
+    if (deduped.length > 16) deduped.length = 16;
+    chiefRayOriginSeedCache.set(familyKey, deduped);
+    if (chiefRayOriginSeedCache.size > 128) {
+        const firstKey = chiefRayOriginSeedCache.keys().next().value;
+        if (firstKey !== undefined) chiefRayOriginSeedCache.delete(firstKey);
+    }
+}
 
 function buildChiefRayOriginSearchCacheKey(direction, stopCenter, stopSurfaceIndex, targetSurfaceIndex, opticalSystemRows, wavelength) {
     try {
@@ -623,31 +742,84 @@ function hasUsableBoundaryRaysForCrossType(boundaryRays, crossType) {
 }
 
 function solveStopEdgeDistanceBrent(chiefOrigin, direction, basis, directionSpec, stopInfo, maxDistance, opticalSystemRows, tolerance, debugMode, wavelength = 0.5876) {
+    const stopTraceSurfaceIndex = Math.max(0, Number(stopInfo?.index) || 0);
     const mkOrigin = (distance) => ({
         x: chiefOrigin.x + distance * (basis.x.x * directionSpec.vector.x + basis.y.x * directionSpec.vector.y),
         y: chiefOrigin.y + distance * (basis.x.y * directionSpec.vector.x + basis.y.y * directionSpec.vector.y),
         z: chiefOrigin.z + distance * (basis.x.z * directionSpec.vector.x + basis.y.z * directionSpec.vector.y)
     });
 
+    const evaluationCache = new Map<string, { valid: boolean; value: number }>();
+    const cacheKeyForDistance = (distance) => {
+        const safeDistance = Number(distance);
+        if (!Number.isFinite(safeDistance)) return 'nan';
+        return safeDistance.toFixed(6);
+    };
+
     const evaluate = (distance) => {
+        const cacheKey = cacheKeyForDistance(distance);
+        const cached = evaluationCache.get(cacheKey);
+        if (cached) return cached;
         const origin = mkOrigin(distance);
         const ray = { pos: origin, dir: direction, wavelength };
-        const rayPath = traceRayForRenderTs(opticalSystemRows, ray, 1.0, null, stopInfo.index + 1);
-        const stopPoint = getRayPointAtSurfaceIndex(rayPath, opticalSystemRows, stopInfo.index);
+        const stopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopTraceSurfaceIndex);
         if (!stopPoint) {
-            return { valid: false, value: Infinity };
+            const result = { valid: false, value: Infinity };
+            evaluationCache.set(cacheKey, result);
+            return result;
         }
 
         if (directionSpec.name === 'upper' || directionSpec.name === 'lower') {
             const targetY = stopInfo.center.y + (directionSpec.name === 'upper' ? stopInfo.radius : -stopInfo.radius);
-            return { valid: true, value: stopPoint.y - targetY };
+            const result = { valid: true, value: stopPoint.y - targetY };
+            evaluationCache.set(cacheKey, result);
+            return result;
         }
 
         const targetX = stopInfo.center.x + (directionSpec.name === 'right' ? stopInfo.radius : -stopInfo.radius);
-        return { valid: true, value: stopPoint.x - targetX };
+        const result = { valid: true, value: stopPoint.x - targetX };
+        evaluationCache.set(cacheKey, result);
+        return result;
     };
 
-    const sampleCount = 16;
+    const evaluateBatch = (distances: number[]) => {
+        const uncachedDistances = distances.filter((distance) => {
+            const cacheKey = cacheKeyForDistance(distance);
+            return !evaluationCache.has(cacheKey);
+        });
+        if (!uncachedDistances.length) {
+            return distances.map((distance) => evaluate(distance));
+        }
+
+        const rays = uncachedDistances.map((distance) => ({
+            pos: mkOrigin(distance),
+            dir: direction,
+            wavelength
+        }));
+        const stopPoints = traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, 1.0, stopTraceSurfaceIndex);
+
+        uncachedDistances.forEach((distance, index) => {
+            const cacheKey = cacheKeyForDistance(distance);
+            const stopPoint = Array.isArray(stopPoints) ? stopPoints[index] : null;
+            if (!stopPoint) {
+                evaluationCache.set(cacheKey, { valid: false, value: Infinity });
+                return;
+            }
+
+            if (directionSpec.name === 'upper' || directionSpec.name === 'lower') {
+                const targetY = stopInfo.center.y + (directionSpec.name === 'upper' ? stopInfo.radius : -stopInfo.radius);
+                evaluationCache.set(cacheKey, { valid: true, value: stopPoint.y - targetY });
+                return;
+            }
+
+            const targetX = stopInfo.center.x + (directionSpec.name === 'right' ? stopInfo.radius : -stopInfo.radius);
+            evaluationCache.set(cacheKey, { valid: true, value: stopPoint.x - targetX });
+        });
+
+        return distances.map((distance) => evaluate(distance));
+    };
+
+    const sampleCount = 12;
     let bestDistance = null;
     let bestAbsValue = Infinity;
     let bracketStart = null;
@@ -673,9 +845,12 @@ function solveStopEdgeDistanceBrent(chiefOrigin, direction, basis, directionSpec
         let localPrevDistance = 0;
         let localPrevEval = prevEval;
 
-        for (let i = 1; i <= sampleCount; i++) {
-            const distance = sign * (maxDistance * i) / sampleCount;
-            const currentEval = evaluate(distance);
+        const distances = Array.from({ length: sampleCount }, (_, index) => sign * (maxDistance * (index + 1)) / sampleCount);
+        const evaluations = evaluateBatch(distances);
+
+        for (let i = 0; i < distances.length; i++) {
+            const distance = distances[i];
+            const currentEval = evaluations[i];
             __diagSamples.push({ d: Number(distance.toFixed(3)), valid: currentEval.valid, v: currentEval.valid ? Number(currentEval.value.toFixed(4)) : null });
             if (!currentEval.valid) {
                 // reset prev so we don't bridge across invalid gaps
@@ -737,7 +912,7 @@ function solveStopEdgeDistanceBrent(chiefOrigin, direction, basis, directionSpec
     // DIAGNOSTIC: per-call summary
     try {
         const win: any = (typeof window !== 'undefined') ? window : null;
-        if (win && win.__cooptStopEdgeDiag !== false) {
+        if (win && win.__cooptStopEdgeDiag === true) {
             const validCount = __diagSamples.filter(s => s.valid).length;
             const tag = `[STOP-EDGE-DIAG] ${directionSpec.name}`;
             console.log(`${tag} origin=(${chiefOrigin.x.toFixed(2)},${chiefOrigin.y.toFixed(2)},${chiefOrigin.z.toFixed(2)}) dir=(${direction.x.toFixed(3)},${direction.y.toFixed(3)},${direction.z.toFixed(3)}) stopIdx=${stopInfo.index} stopR=${stopInfo.radius} maxD=${maxDistance.toFixed(2)} validSamples=${validCount}/${__diagSamples.length} bracket=[${bracketStart},${bracketEnd}] brent=${brentResult !== null ? brentResult.toFixed(4) : 'null'}${brentError ? ' ERR='+brentError : ''} bestD=${bestDistance !== null ? bestDistance.toFixed(4) : 'null'}`);
@@ -1483,8 +1658,14 @@ function brent(f, a, b, tol = 1e-8, maxIter = 100) {
  * @returns {Object} 生成結果
  */
 export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, options: any = {}) {
+    const totalStartMs = performance.now();
     // console.log('[RAY-DEBUG] generateInfiniteSystemCrossBeam called. rows:', opticalSystemRows?.length, 'angles:', objectAngles?.length, 'options:', JSON.stringify(options).slice(0, 100));
     opticalSystemRows = cooptNormalizeOpticalSystemRows(opticalSystemRows);
+    let chiefSolveMs = 0;
+    let chiefRefineMs = 0;
+    let boundaryBuildMs = 0;
+    let entranceBuildMs = 0;
+    let traceCrossMs = 0;
     
     const {
         rayCount = 51,  // 31 → 51 に増加（絞り周辺により密な光線配置）
@@ -1579,6 +1760,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         const dirStr = (Number.isFinite(dirX) && Number.isFinite(dirY) && Number.isFinite(dirZ))
             ? `(${dirX.toFixed(6)}, ${dirY.toFixed(6)}, ${dirZ.toFixed(6)})`
             : '(invalid)';
+        const chiefSolveStartMs = performance.now();
         let chiefRayOrigin = findInfiniteSystemChiefRayOrigin(
             direction,
             stopSurfaceInfo.center,
@@ -1588,6 +1770,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             resolvedTargetSurfaceIndex,
             wavelength
         );
+        chiefSolveMs += performance.now() - chiefSolveStartMs;
         if (!chiefRayOrigin) {
             console.warn(`❌ [Chief Ray Failed] Object ${objectIndex + 1}: Could not find origin that reaches stop center`);
         }
@@ -1755,6 +1938,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
 
         // chiefRayOrigin は上で null チェック済み
 
+        const chiefRefineStartMs = performance.now();
         const refinedChiefDirection = refineChiefDirectionToStopCenter(
             chiefRayOrigin,
             direction,
@@ -1763,6 +1947,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             opticalSystemRows,
             wavelength
         );
+        chiefRefineMs += performance.now() - chiefRefineStartMs;
         const chiefDirection = refinedChiefDirection || direction;
 
         // 4. 各objectの主光線に垂直な面を計算
@@ -1784,6 +1969,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         let effectivePupilSamplingMode = pupilSamplingMode;
 
         const buildEntrancePupilCrossBeam = () => {
+            const entranceBuildStartMs = performance.now();
             const entranceAxes = buildEntrancePlaneAxesLikeOPD(dirXYZ);
             const entranceRadiusGuess = (() => {
                 try {
@@ -1867,6 +2053,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                     entrancePupil.extents
                 );
             }
+            entranceBuildMs += performance.now() - entranceBuildStartMs;
         };
 
         if (effectivePupilSamplingMode === 'entrance') {
@@ -1876,6 +2063,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             if (debugMode) {
             }
 
+            const boundaryBuildStartMs = performance.now();
             apertureBoundaryRays = findApertureBoundaryRays(
                 chiefRayOrigin,
                 dirXYZ,
@@ -1907,6 +2095,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 objectIndex,
                 wavelength
             );
+            boundaryBuildMs += performance.now() - boundaryBuildStartMs;
 
             const needsThinLensFallback = thinLensSystem && (
                 crossBeamRays.length <= 1 ||
@@ -1926,6 +2115,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
 
         // 7. 光線追跡の実行
         // console.log(`[RAY-DEBUG] Object${objectIndex}: pupilSamplingMode=${effectivePupilSamplingMode} apertureBoundaryRays=${apertureBoundaryRays.length} crossBeamRays=${crossBeamRays.length} types=${crossBeamRays.map(r=>r.type).join(',')}`);
+        const traceCrossStartMs = performance.now();
         const tracedRays = traceCrossBeamRays(
             opticalSystemRows,
             crossBeamRays,
@@ -1933,6 +2123,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             debugMode,
             resolvedTargetSurfaceIndex
         );
+        traceCrossMs += performance.now() - traceCrossStartMs;
 
         // --- Diagnostics
         const successCount = tracedRays.filter(r => r && r.success).length;
@@ -2012,6 +2203,13 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         crossType: crossType,
         wavelength: wavelength
     };
+
+    recordCooptPerfSample('ray.infiniteCrossBeam.total', performance.now() - totalStartMs);
+    if (chiefSolveMs > 0) recordCooptPerfSample('ray.infiniteCrossBeam.chiefSolve', chiefSolveMs);
+    if (chiefRefineMs > 0) recordCooptPerfSample('ray.infiniteCrossBeam.chiefRefine', chiefRefineMs);
+    if (boundaryBuildMs > 0) recordCooptPerfSample('ray.infiniteCrossBeam.boundary', boundaryBuildMs);
+    if (entranceBuildMs > 0) recordCooptPerfSample('ray.infiniteCrossBeam.entrance', entranceBuildMs);
+    if (traceCrossMs > 0) recordCooptPerfSample('ray.infiniteCrossBeam.trace', traceCrossMs);
 
     return result;
 }
@@ -2127,6 +2325,7 @@ function calculateInfiniteSystemDirection(objectAngle) {
  */
 export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurfaceIndex, opticalSystemRows, debugMode, targetSurfaceIndex, wavelength) {
     const cacheKey = buildChiefRayOriginSearchCacheKey(direction, stopCenter, stopSurfaceIndex, targetSurfaceIndex, opticalSystemRows, wavelength);
+    const familyKey = buildChiefRayOriginSearchFamilyKey(stopCenter, stopSurfaceIndex, targetSurfaceIndex, opticalSystemRows, wavelength);
     if (cacheKey && chiefRayOriginSearchCache.has(cacheKey)) {
         const cached = chiefRayOriginSearchCache.get(cacheKey);
         return cached ? { ...cached } : null;
@@ -2250,6 +2449,33 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             let best = { x, y, error: Infinity };
             const tol = 1e-6;
 
+            const evaluateRayToStopBatch = (points) => {
+                const trials = Array.isArray(points) ? points : [];
+                if (!trials.length) return [];
+                const rays = trials.map(({ x: px, y: py }) => ({
+                    pos: { x: px, y: py, z: initialZ },
+                    dir: { x: direction.i, y: direction.j, z: direction.k },
+                    wavelength: wavelength
+                }));
+
+                const prevSuppressFlag = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_SUPPRESS_RAY_ERRORS : undefined;
+                try {
+                    if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = true;
+                    const hitPoints = traceRayHitPointBatchForChiefSearch(opticalSystemRows, rays, 1.0, stopSurfaceIndex);
+                    return trials.map((_, index) => {
+                        const actualStopPoint = Array.isArray(hitPoints) ? hitPoints[index] : null;
+                        if (!actualStopPoint) return { valid: false, error: Infinity, stopPoint: null };
+                        const errorX = actualStopPoint.x - stopX;
+                        const errorY = actualStopPoint.y - stopY;
+                        return { valid: true, error: Math.hypot(errorX, errorY), stopPoint: actualStopPoint };
+                    });
+                } catch (_) {
+                    return trials.map(() => ({ valid: false, error: Infinity, stopPoint: null }));
+                } finally {
+                    if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = prevSuppressFlag;
+                }
+            };
+
             for (let iter = 0; iter < 40; iter++) {
                 const centerEval = evaluateRayToStop(x, y);
                 if (!centerEval.valid || !centerEval.stopPoint) {
@@ -2267,8 +2493,10 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
                 }
 
                 const eps = Math.max(1e-4, 1e-3 * (1 + centerError));
-                const evalX = evaluateRayToStop(x + eps, y);
-                const evalY = evaluateRayToStop(x, y + eps);
+                const [evalX, evalY] = evaluateRayToStopBatch([
+                    { x: x + eps, y },
+                    { x, y: y + eps }
+                ]);
                 if (!evalX.valid || !evalX.stopPoint || !evalY.valid || !evalY.stopPoint) {
                     return best.error < 1e-3 ? best : null;
                 }
@@ -2325,7 +2553,11 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             return best.error < 1e-3 ? best : null;
         };
 
-        const newtonResult = solveChiefOriginByNewton2D(guessX, guessY);
+        const nearbySeed = getNearbyChiefRayOriginSeed(familyKey, direction);
+        const newtonResult = solveChiefOriginByNewton2D(
+            nearbySeed?.x ?? guessX,
+            nearbySeed?.y ?? guessY
+        ) ?? (nearbySeed ? solveChiefOriginByNewton2D(guessX, guessY) : null);
         if (newtonResult) {
             const result = {
                 x: newtonResult.x,
@@ -2350,6 +2582,7 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
                     if (firstKey !== undefined) chiefRayOriginSearchCache.delete(firstKey);
                 }
             }
+            storeChiefRayOriginSeed(familyKey, direction, result);
 
             return result;
         }
@@ -4051,7 +4284,7 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
                 pos: rayPosition,
                 dir: rayDirection,
                 wavelength: wavelength  // 波長を追加
-            }, 1.0);  // 全面追跡
+            }, 1.0, null, effectiveTargetIndex);
 
             // console.log(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] type=${ray.type} rayPathFull=${rayPathFull ? rayPathFull.length : 'null'} effectiveTargetPointIndex=${effectiveTargetPointIndex} effectiveTargetIndex=${effectiveTargetIndex}`);
 
@@ -4063,7 +4296,7 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
                         pos: rayPosition,
                         dir: rayDirection,
                         wavelength: wavelength
-                    }, 1.0, diagLog, null, { ...RENDER_RUST_TRACE_OPTIONS, isDetailedDebug: true });
+                    }, 1.0, diagLog, effectiveTargetIndex, { ...RENDER_RUST_TRACE_OPTIONS, isDetailedDebug: true });
                 } catch (_) {}
                 const failLines = diagLog.filter(l => l.includes('❌') || l.includes('BLOCK') || l.includes('INTERSECT') || l.includes('APERTURE') || l.includes('NO_INT'));
                 // console.warn(`[RAY-DEBUG] ray[${i}] traceRay=null diagLines:`, failLines.length > 0 ? failLines : diagLog.slice(-5));
@@ -4074,7 +4307,7 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
                         pos: rayPosition,
                         dir: rayDirection,
                         wavelength: wavelength
-                    }, 1.0, null, null, { allowNonStrict: true, requireWasmRayTracing: false, disableWasmRayTracing: true });
+                    }, 1.0, null, effectiveTargetIndex, { allowNonStrict: true, requireWasmRayTracing: false, disableWasmRayTracing: true });
                     if (Array.isArray(fallbackPath) && fallbackPath.length >= 2) {
                         // console.warn(`[RAY-DEBUG] ray[${i}] fallback (no-WASM) succeeded! length=${fallbackPath.length}`);
                         // フォールバック成功: このパスを使用

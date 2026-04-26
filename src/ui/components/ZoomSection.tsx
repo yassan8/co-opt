@@ -37,8 +37,17 @@ export default function ZoomSection() {
             <div className="design-intent-zoom-chip-section">
               <label htmlFor="design-intent-zoom-laws" className="design-intent-zoom-label">Law Definitions</label>
               <textarea id="design-intent-zoom-laws" className="design-intent-zoom-textarea" spellCheck={false}></textarea>
+              <div
+                id="design-intent-zoom-law-error"
+                style={{ display: 'none', marginTop: 8, padding: '8px 10px', borderRadius: 8, border: '1px solid #fecaca', background: '#fff1f2', color: '#991b1b', fontSize: 12, lineHeight: 1.4 }}
+              />
               <div className="design-intent-zoom-actions">
-                <div className="design-intent-zoom-hint">Example: A=0:43.36, B=0.01*A*A+2*A+3 or A=0:0,0.5:12,1:43.36</div>
+                <div className="design-intent-zoom-hint">
+                  camComp(B, phiB, phiC, zObj, zImg, zB0, zC0, zCseed) returns the C-group offset.
+                  If phiB or phiC are not defined explicitly, they are auto-derived from the current zoom groups by paraxial power.
+                  Example: const zObj=-120, const zImg=189.438757, const zB0=20, const zC0=52, const zCseed=52, B=0:0,1:43.36, C=camComp(B, phiB, phiC, zObj, zImg, zB0, zC0, zCseed).
+                  Meaning: B=current B offset, phiB/phiC=group power, zObj=object plane Z, zImg=image plane Z, zB0/zC0=group reference Z at B=0 and C=0, zCseed=preferred starting root near the expected C position.
+                </div>
                 <button id="design-intent-zoom-apply-laws" type="button">Apply Laws</button>
               </div>
             </div>
