@@ -52,8 +52,8 @@ function isIOSLike(): boolean {
         if (/iPad|iPhone|iPod/i.test(ua)) return true;
         // iPadOS 13+ reports as Macintosh with touch support
         if (/Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1) return true;
-    } catch (_) {
-        // Ignore errors in restricted environments
+    } catch (error) {
+        console.warn('⚠️ [SceneSetup] Failed to detect iOS environment:', error);
     }
     return false;
 }

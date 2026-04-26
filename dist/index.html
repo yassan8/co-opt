@@ -17,7 +17,7 @@
         url.searchParams.set('v', String(Date.now()));
         location.replace(url.toString());
       } catch (_) {
-        // ignore
+        console.warn('⚠️ [Startup] Auto cache-bust redirect skipped:', _);
       }
     })();
   </script>
@@ -91,7 +91,7 @@
             try {
               history.back();
             } catch (_) {
-              // ignore
+              console.warn('⚠️ [Startup] Back navigation retry failed:', _);
             }
           }, 0);
           return;
@@ -101,7 +101,7 @@
         try {
           history.pushState({ __cooptBackGuard: true, t: Date.now() }, '', location.href);
         } catch (_) {
-          // ignore
+          console.warn('⚠️ [Startup] Back navigation guard re-arm failed:', _);
         }
       });
 
@@ -114,7 +114,7 @@
           e.returnValue = '';
           return '';
         } catch (_) {
-          // ignore
+          console.warn('⚠️ [Startup] beforeunload guard setup failed:', _);
         }
       };
       window.addEventListener('beforeunload', onBeforeUnload, { capture: true });
@@ -132,7 +132,7 @@
           await Promise.all(regs.map(r => r.unregister()));
         }
       } catch (_) {
-        // ignore
+        console.warn('⚠️ [Startup] Service worker cleanup skipped:', _);
       }
     })();
   </script>
@@ -145,7 +145,9 @@
           const ua = String(navigator.userAgent || '');
           if (/iPad|iPhone|iPod/i.test(ua)) return true;
           if (/Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1) return true;
-        } catch (_) {}
+        } catch (_) {
+          console.warn('⚠️ [Startup] iOS detection failed:', _);
+        }
         return false;
       };
       
@@ -172,7 +174,7 @@
             return;
           }
         } catch (_) {
-          // ignore
+          originalWarn('⚠️ [Startup] Three.js warning filter failed:', _);
         }
         originalWarn(...args);
       };
@@ -216,7 +218,7 @@
           console.warn('❌ [Resource Error]', url);
         }
       } catch (_) {
-        // ignore
+        console.warn('⚠️ [Startup] Resource error logger failed:', _);
       }
     }, true);
   </script>
@@ -231,8 +233,8 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-BG88Ocz1.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-DLrNrJTM.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/main-BY2dJFJZ.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-DYQ2ys27.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-BVPhUMfh.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/toolbar-collapsed-storage-CRUI4dFE.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-C2PUdIMN.js">

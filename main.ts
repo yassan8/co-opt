@@ -432,8 +432,8 @@ async function initializeApplication() {
             g.__COOPT_RAYTRACE_WASM_STRICT = rayStrict;
             g.__COOPT_PSF_WASM_STRICT = psfStrict;
             console.log('🔒 [Init] WASM strict mode', { rayStrict, psfStrict });
-        } catch (_) {
-            // ignore strict bootstrap errors and continue initialization
+        } catch (error) {
+            console.warn('⚠️ [Init] Failed to apply WASM strict bootstrap defaults:', error);
         }
 
         // Initialize WASM system (non-blocking - run in background)

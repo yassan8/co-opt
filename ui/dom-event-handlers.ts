@@ -264,14 +264,18 @@ function coordTransDebugLog(message: string, ...args: any[]): void {
         } else {
             console.log(message, ...args);
         }
-    } catch {}
+    } catch (error) {
+        console.warn('[CoordTrans] Failed to write styled debug log:', error);
+    }
 
     try {
         const op = (window as any)?.opener;
         if (op && op.console && typeof op.console.log === 'function') {
             op.console.log(message, ...args);
         }
-    } catch {}
+    } catch (error) {
+        console.warn('[CoordTrans] Failed to forward debug log to opener:', error);
+    }
 
     try {
         const wAny = window as any;
@@ -283,7 +287,9 @@ function coordTransDebugLog(message: string, ...args: any[]): void {
             message,
             args
         });
-    } catch {}
+    } catch (error) {
+        console.warn('[CoordTrans] Failed to store in-memory debug log:', error);
+    }
 }
 
 try {
@@ -293,7 +299,9 @@ try {
         coordTransDebugLog(`✅ [CoordTrans][TEST] coordTransDebugLog OK at ${stamp}`);
         return stamp;
     };
-} catch {}
+} catch (error) {
+    console.warn('[CoordTrans] Failed to install __coordTransConsoleTest:', error);
+}
 
 try {
     (window as any).__coordTransConsoleTestFire = () => {
@@ -303,7 +311,9 @@ try {
         console.info(`[CoordTrans][TEST] console.info OK at ${stamp}`);
         return stamp;
     };
-} catch {}
+} catch (error) {
+    console.warn('[CoordTrans] Failed to install __coordTransConsoleTestFire:', error);
+}
 
 
 // CoordTrans auto-calculation (module-level function, called directly from button handler)

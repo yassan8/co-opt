@@ -1178,218 +1178,7 @@
       "configId": "1"
     }
   ],
-  "systemRequirements": [
-    {
-      "id": 1,
-      "enabled": true,
-      "operand": "PP1",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "A",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": 3.702708927208562,
-      "status": "NG",
-      "_violation": 3.702708927208562,
-      "_contribution": 3.702708927208562
-    },
-    {
-      "id": 2,
-      "enabled": true,
-      "operand": "PP2",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "A",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": -5.149734413743573,
-      "status": "NG",
-      "_violation": 5.149734413743573,
-      "_contribution": 5.149734413743573
-    },
-    {
-      "id": 3,
-      "enabled": true,
-      "operand": "PP1",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "B",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": 2.5951828796982355,
-      "status": "NG",
-      "_violation": 2.5951828796982355,
-      "_contribution": 2.5951828796982355
-    },
-    {
-      "id": 4,
-      "enabled": true,
-      "operand": "PP2",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "B",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": -5.102068630658003,
-      "status": "NG",
-      "_violation": 5.102068630658003,
-      "_contribution": 5.102068630658003
-    },
-    {
-      "id": 5,
-      "enabled": true,
-      "operand": "PP1",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "C",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": 3.2360274465155072,
-      "status": "NG",
-      "_violation": 3.2360274465155072,
-      "_contribution": 3.2360274465155072
-    },
-    {
-      "id": 6,
-      "enabled": true,
-      "operand": "PP2",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "C",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": -1.5186566137933255,
-      "status": "NG",
-      "_violation": 1.5186566137933255,
-      "_contribution": 1.5186566137933255
-    },
-    {
-      "id": 7,
-      "enabled": true,
-      "operand": "PP1",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "D",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": -2.476090939836382,
-      "status": "NG",
-      "_violation": 2.476090939836382,
-      "_contribution": 2.476090939836382
-    },
-    {
-      "id": 8,
-      "enabled": true,
-      "operand": "PP2",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "D",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": -8.120615549982844,
-      "status": "NG",
-      "_violation": 8.120615549982844,
-      "_contribution": 8.120615549982844
-    },
-    {
-      "id": 9,
-      "enabled": true,
-      "operand": "PP1",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "E",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": -9.491156950022798,
-      "status": "NG",
-      "_violation": 9.491156950022798,
-      "_contribution": 9.491156950022798
-    },
-    {
-      "id": 10,
-      "enabled": true,
-      "operand": "PP2",
-      "rationale": "",
-      "rationaleHeight": 0,
-      "configId": "1",
-      "param1": "",
-      "param2": "E",
-      "param3": "",
-      "param4": "ZG",
-      "param5": "",
-      "op": "=",
-      "tol": 0,
-      "target": 0,
-      "weight": 1,
-      "current": -13.861202818807413,
-      "status": "NG",
-      "_violation": 13.861202818807413,
-      "_contribution": 13.861202818807413
-    }
-  ],
+  "systemRequirements": [],
   "systemData": {
     "referenceFocalLength": ""
   },
@@ -2550,7 +2339,7 @@
         ],
         "metadata": {
           "created": "2025-12-15T07:27:58.187Z",
-          "modified": "2026-04-25T08:05:30.553Z",
+          "modified": "2026-04-26T09:18:32.420Z",
           "optimizationTarget": null,
           "locked": false,
           "importAnalyzeMode": false
@@ -2569,7 +2358,10 @@
               "objectDistanceMode": "INF",
               "objectDistance": 100,
               "zoomPosition": 0,
-              "zoomGroupProfiles": "B=0:43.36"
+              "zoomGroupProfiles": "B=0:0,1:43.36\nC=camComp(B, phiB, phiC, zObj, zImg, zB0, zC0, zCseed)",
+              "zoomLinkedGroupScales": "",
+              "zoomCompensationStroke": 0.02,
+              "zoomCompensationSamples": 33
             },
             "variables": {},
             "metadata": {
@@ -3456,7 +3248,7 @@
             "comment": "",
             "radius": "26667.449",
             "optimizeR": "",
-            "thickness": 32.54,
+            "thickness": 38.8272,
             "optimizeT": "",
             "semidia": "26",
             "optimizeSemiDia": "",
@@ -3676,7 +3468,7 @@
             "comment": "",
             "radius": "-3270.421",
             "optimizeR": "",
-            "thickness": 17.63,
+            "thickness": 9.9219015625,
             "optimizeT": "",
             "semidia": 12,
             "optimizeSemiDia": "",
@@ -3806,7 +3598,7 @@
             "comment": "",
             "radius": "-56.83",
             "optimizeR": "",
-            "thickness": 3.07,
+            "thickness": 4.4908984375,
             "optimizeT": "",
             "semidia": 12,
             "optimizeSemiDia": "",
@@ -4367,7 +4159,7 @@
         ],
         "metadata": {
           "created": "2025-12-15T07:28:51.847Z",
-          "modified": "2026-04-25T08:03:37.242Z",
+          "modified": "2026-04-26T09:13:55.333Z",
           "optimizationTarget": null,
           "locked": false,
           "importAnalyzeMode": false
@@ -4385,8 +4177,8 @@
             "parameters": {
               "objectDistanceMode": "INF",
               "objectDistance": 100,
-              "zoomPosition": 0,
-              "zoomGroupProfiles": "A=0:0,1:43.86"
+              "zoomPosition": 0.145,
+              "zoomGroupProfiles": "B=0:0,1:43.36\nC=camComp(B, phiB, phiC, zObj, zImg, zB0, zC0, zCseed)"
             },
             "variables": {},
             "metadata": {
@@ -4441,7 +4233,8 @@
               "surf3Coef7": 0,
               "surf3Coef8": 0,
               "surf3Coef9": 0,
-              "surf3Coef10": 0
+              "surf3Coef10": 0,
+              "zoomGroup": "A"
             },
             "variables": {},
             "metadata": {
@@ -4480,7 +4273,8 @@
               "frontSurfType": "Spherical",
               "backSurfType": "Spherical",
               "frontConic": 0,
-              "backConic": 0
+              "backConic": 0,
+              "zoomGroup": "A"
             },
             "variables": {},
             "metadata": {
@@ -4537,7 +4331,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "B"
             },
             "variables": {},
             "metadata": {
@@ -4609,7 +4404,8 @@
               "surf3Coef7": 0,
               "surf3Coef8": 0,
               "surf3Coef9": 0,
-              "surf3Coef10": 0
+              "surf3Coef10": 0,
+              "zoomGroup": "B"
             },
             "variables": {},
             "metadata": {
@@ -4682,7 +4478,8 @@
               "surf3Coef7": 0,
               "surf3Coef8": 0,
               "surf3Coef9": 0,
-              "surf3Coef10": 0
+              "surf3Coef10": 0,
+              "zoomGroup": "C"
             },
             "variables": {},
             "metadata": {
@@ -4753,7 +4550,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "D"
             },
             "variables": {},
             "metadata": {
@@ -4810,7 +4608,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "D"
             },
             "variables": {},
             "metadata": {
@@ -4867,7 +4666,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "E"
             },
             "variables": {},
             "metadata": {
@@ -4924,7 +4724,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "E"
             },
             "variables": {},
             "metadata": {
@@ -6156,13 +5957,13 @@
         ],
         "metadata": {
           "created": "2025-12-15T07:32:44.889Z",
-          "modified": "2026-04-25T08:03:37.242Z",
+          "modified": "2026-04-26T09:18:32.033Z",
           "optimizationTarget": null,
           "locked": false,
           "importAnalyzeMode": false
         },
         "systemData": {
-          "referenceFocalLength": "50"
+          "referenceFocalLength": ""
         },
         "schemaVersion": "0.1",
         "blocks": [
@@ -6174,8 +5975,8 @@
             "parameters": {
               "objectDistanceMode": "INF",
               "objectDistance": 100,
-              "zoomGroupProfiles": "A=0:43.36",
-              "zoomPosition": 0.091
+              "zoomGroupProfiles": "const zCseed = zC0 + 0.2 * B\nC = camComp(B, phiB, phiC, zObj, zImg, zB0, zC0, zCseed)",
+              "zoomPosition": 0
             },
             "variables": {
               "objectDistanceMode": {
@@ -6245,7 +6046,8 @@
               "surf3Coef7": 0,
               "surf3Coef8": 0,
               "surf3Coef9": 0,
-              "surf3Coef10": 0
+              "surf3Coef10": 0,
+              "zoomGroup": "A"
             },
             "variables": {
               "radius1": {
@@ -6634,7 +6436,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "A"
             },
             "variables": {
               "frontRadius": {
@@ -6910,7 +6713,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "B"
             },
             "variables": {
               "frontRadius": {
@@ -7201,7 +7005,8 @@
               "surf3Coef7": 0,
               "surf3Coef8": 0,
               "surf3Coef9": 0,
-              "surf3Coef10": 0
+              "surf3Coef10": 0,
+              "zoomGroup": "B"
             },
             "variables": {
               "radius1": {
@@ -7605,7 +7410,8 @@
               "surf3Coef7": 0,
               "surf3Coef8": 0,
               "surf3Coef9": 0,
-              "surf3Coef10": 0
+              "surf3Coef10": 0,
+              "zoomGroup": "C"
             },
             "variables": {
               "radius1": {
@@ -8015,7 +7821,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "D"
             },
             "variables": {
               "frontRadius": {
@@ -8291,7 +8098,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "D"
             },
             "variables": {
               "frontRadius": {
@@ -8567,7 +8375,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "E"
             },
             "variables": {
               "frontRadius": {
@@ -8843,7 +8652,8 @@
               "backCoef7": 0,
               "backCoef8": 0,
               "backCoef9": 0,
-              "backCoef10": 0
+              "backCoef10": 0,
+              "zoomGroup": "E"
             },
             "variables": {
               "frontRadius": {
