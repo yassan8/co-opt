@@ -176,7 +176,20 @@ class RayTracingOptimizationPatch {
      * フォールバック用asphericSag実装
      */
     fallbackAsphericSag(r, params, mode = "even") {
-        const { radius, conic = 0, coef1 = 0, coef2 = 0, coef3 = 0, coef4 = 0 } = params;
+        const {
+            radius,
+            conic = 0,
+            coef1 = 0,
+            coef2 = 0,
+            coef3 = 0,
+            coef4 = 0,
+            coef5 = 0,
+            coef6 = 0,
+            coef7 = 0,
+            coef8 = 0,
+            coef9 = 0,
+            coef10 = 0,
+        } = params;
         if (!isFinite(radius) || radius === 0) return 0;
         
         const r2 = r * r;
@@ -184,15 +197,25 @@ class RayTracingOptimizationPatch {
         if (!isFinite(sqrtTerm) || sqrtTerm < 0) return 0;
         
         const base = r2 / (radius * (1 + Math.sqrt(sqrtTerm)));
-        const coefs = [coef1, coef2, coef3, coef4];
+        const coefs = [coef1, coef2, coef3, coef4, coef5, coef6, coef7, coef8, coef9, coef10];
         
         let asphere = 0;
-        let r_power = r2;
-        for (let i = 0; i < coefs.length; i++) {
-            if (coefs[i] !== 0) {
-                asphere += coefs[i] * r_power;
+        if (mode === "odd") {
+            let r_power = r2 * r;
+            for (let i = 0; i < coefs.length; i++) {
+                if (coefs[i] !== 0) {
+                    asphere += coefs[i] * r_power;
+                }
+                r_power *= r2;
             }
-            r_power *= r2;
+        } else {
+            let r_power = r2 * r2;
+            for (let i = 0; i < coefs.length; i++) {
+                if (coefs[i] !== 0) {
+                    asphere += coefs[i] * r_power;
+                }
+                r_power *= r2;
+            }
         }
         
         return base + asphere;

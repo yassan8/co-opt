@@ -1674,39 +1674,13 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
   break;
       }
       
-      // 微分計算とNewtonステップ
-      let dzdr = 0;
-      if (r > 1e-10) {
-        const k = conic;
-        const r2 = r * r;
-        
-        if (isFinite(radius) && radius !== 0) {
-          const R = radius;
-          const term = (1 + k) * r2 / (R * R);
-          
-          if (term < 1) {
-            const sqrtTerm = Math.sqrt(1 - term);
-            const denominator = R * (1 + sqrtTerm);
-            const sqrtDerivative = (1 + k) * r / (R * R * sqrtTerm);
-            dzdr = (2 * r * denominator - r2 * R * sqrtDerivative) / (denominator * denominator);
-          } else {
-            dzdr = 1 / R;
-          }
-          
-          // 非球面部分の微分
-          let dzdr_asp = 0;
-          if (mode === "odd") {
-            dzdr_asp = 3 * coef1 * Math.pow(r, 2) + 5 * coef2 * Math.pow(r, 4) + 7 * coef3 * Math.pow(r, 6) +
-              9 * coef4 * Math.pow(r, 8) + 11 * coef5 * Math.pow(r, 10);
-          } else {
-            // even-mode coefficients are A4..A22 (r^4..r^22)
-            dzdr_asp = 4 * coef1 * Math.pow(r, 3) + 6 * coef2 * Math.pow(r, 5) + 8 * coef3 * Math.pow(r, 7) +
-              10 * coef4 * Math.pow(r, 9) + 12 * coef5 * Math.pow(r, 11) + 14 * coef6 * Math.pow(r, 13) +
-              16 * coef7 * Math.pow(r, 15) + 18 * coef8 * Math.pow(r, 17) + 20 * coef9 * Math.pow(r, 19) +
-              22 * coef10 * Math.pow(r, 21);
-          }
-          dzdr += dzdr_asp;
-        }
+      // Reuse the shared analytical derivative implementation so JS fallback
+      // matches the surface sag/normal math used elsewhere.
+      const dzdr = (r > 1e-10) ? asphericSagDerivative(r, params, mode) : 0;
+      if (!Number.isFinite(dzdr)) {
+        if (debugLog) debugLog.push(`     ⚠️ Iteration ${i}: dzdr is invalid (${dzdr}), breaking`);
+        if (RT_PROF.enabled) RT_PROF.stats.__lastIterCount = __iterCount;
+        break;
       }
       
       const dFdt = ray.dir.z - dzdr * (pt.x * ray.dir.x + pt.y * ray.dir.y) / (r > 1e-10 ? r : 1e-10);

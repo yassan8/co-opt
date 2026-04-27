@@ -2211,6 +2211,39 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
       );
     };
 
+    const __coopt_isImageSurface = (surf) => {
+      const surfType = String(surf?.surfType ?? surf?.type ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const objType = String(surf?.['object type'] ?? surf?.object ?? surf?.objectType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const blockType = String(surf?._blockType ?? surf?.blockType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      return surfType === 'imagesurface' || objType === 'image' || objType === 'imagesurface' || blockType === 'imagesurface';
+    };
+
+    const __coopt_isGapSurface = (surf) => {
+      const blockType = String(surf?._blockType ?? surf?.blockType ?? '').trim().toLowerCase();
+      if (blockType === 'gap' || blockType === 'airgap') return true;
+      const objType = String(surf?.['object type'] ?? surf?.type ?? '').trim().toLowerCase();
+      if (objType === 'gap' || objType === 'air gap' || objType === 'airgap') return true;
+      const role = String(surf?._surfaceRole ?? '').trim().toLowerCase();
+      return role === 'gap' || role === 'airgap';
+    };
+
+    const __coopt_hasLensTag = (surf) => {
+      const blockType = String(surf?._blockType ?? surf?.blockType ?? '').trim().toLowerCase();
+      const surfaceRole = String(surf?._surfaceRole ?? surf?.surfaceRole ?? '').trim().toLowerCase();
+      if (blockType === 'lens' || blockType === 'glass' || blockType === 'element') return true;
+      if (surfaceRole === 'lens' || surfaceRole === 'front' || surfaceRole === 'back') return true;
+      return /^s\d+$/.test(surfaceRole);
+    };
+
+    const __coopt_isRenderableLensConnectionSurface = (surf) => {
+      if (!surf) return false;
+      if (__coopt_isStopSurface(surf)) return false;
+      if (__coopt_isImageSurface(surf)) return false;
+      if (__coopt_isGapSurface(surf)) return false;
+      if (__coopt_isThinLensProfileSurface(surf)) return false;
+      return true;
+    };
+
     const __coopt_calculateSurfaceSag = (surf, x, y) => {
       if (!surf) return 0;
       if (__coopt_isThinLensProfileSurface(surf)) return 0;
@@ -2318,22 +2351,15 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             continue;
         }
         
-        // レンズ材料がある面から次の面への接続線を描画
-        const isLens = currentSurf.material && 
-                      currentSurf.material !== '' && 
-                      currentSurf.material !== 'AIR' && 
-                      currentSurf.material !== '0' &&
-                      currentSurf.material !== 'MIRROR';
-        
-        // Gap面はスキップ
-        const blockType = String(currentSurf._blockType || currentSurf.blockType || '').trim().toLowerCase();
-        const surfRole = String(currentSurf._surfaceRole || '').trim().toLowerCase();
-        const isGap = (
-            blockType === 'gap' || blockType === 'airgap' ||
-            surfRole === 'gap' || surfRole === 'airgap'
-        );
-        
-        if (isLens && !isGap) {
+        const currentBlockId = String(currentSurf?._blockId ?? currentSurf?.blockId ?? '').trim();
+        const nextBlockId = String(nextSurf?._blockId ?? nextSurf?.blockId ?? '').trim();
+        const currentIsLens = (__coopt_hasLensTag(currentSurf) || (currentSurf.material && currentSurf.material !== '' && currentSurf.material !== 'AIR' && currentSurf.material !== '0' && currentSurf.material !== 'MIRROR'));
+        const nextIsLens = (__coopt_hasLensTag(nextSurf) || (nextSurf.material && nextSurf.material !== '' && nextSurf.material !== 'AIR' && nextSurf.material !== '0' && nextSurf.material !== 'MIRROR'));
+
+        if (__coopt_isRenderableLensConnectionSurface(currentSurf) &&
+          __coopt_isRenderableLensConnectionSurface(nextSurf) &&
+          currentBlockId && nextBlockId && currentBlockId === nextBlockId &&
+          currentIsLens && nextIsLens) {
             const surfaceIndex = i;
             const nextSurfaceIndex = i + 1;
             

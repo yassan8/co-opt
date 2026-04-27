@@ -2965,15 +2965,19 @@ function __coopt_hasLensTag(surface: any): boolean {
 
 function __coopt_isLensInterval(frontSurface: any, backSurface: any): boolean {
     if (!frontSurface || !backSurface) return false;
-    if ((frontSurface['object type'] || '') === 'Object') return false;
+    if (!__coopt_isRenderableLensCandidateSurface(frontSurface) || !__coopt_isRenderableLensCandidateSurface(backSurface)) return false;
     if (__coopt_isGapSurface(frontSurface) || __coopt_isGapSurface(backSurface)) return false;
     if (__coopt_isCoordBreakSurface(frontSurface) || __coopt_isCoordBreakSurface(backSurface)) return false;
+
+    const frontBlockId = String(frontSurface?._blockId ?? frontSurface?.blockId ?? '').trim();
+    const backBlockId = String(backSurface?._blockId ?? backSurface?.blockId ?? '').trim();
+    if (!frontBlockId || !backBlockId || frontBlockId !== backBlockId) return false;
 
     const frontIsGlass = __coopt_isGlassMaterial(frontSurface.material);
     const backIsGlass = __coopt_isGlassMaterial(backSurface.material);
     const frontHasLensTag = __coopt_hasLensTag(frontSurface);
     const backHasLensTag = __coopt_hasLensTag(backSurface);
-    return frontIsGlass || backIsGlass || frontHasLensTag || backHasLensTag;
+    return (frontIsGlass || frontHasLensTag) && (backIsGlass || backHasLensTag);
 }
 
 function __coopt_getSurfaceSemidiaMm(surface: any): number | null {
@@ -3004,9 +3008,23 @@ function __coopt_isObjectSurface(surface: any): boolean {
     return objectType === 'object';
 }
 
+function __coopt_isImageSurface(surface: any): boolean {
+    const objectType = String(surface?.['object type'] ?? surface?.type ?? '').trim().toLowerCase();
+    const blockType = String(surface?._blockType ?? surface?.blockType ?? '').trim().toLowerCase();
+    return objectType === 'image' || blockType === 'imagesurface';
+}
+
+function __coopt_isStopSurface(surface: any): boolean {
+    const objectType = String(surface?.['object type'] ?? surface?.type ?? '').trim().toLowerCase();
+    const blockType = String(surface?._blockType ?? surface?.blockType ?? '').trim().toLowerCase();
+    return objectType === 'stop' || objectType === 'sto' || blockType === 'stop';
+}
+
 function __coopt_isRenderableLensCandidateSurface(surface: any): boolean {
     if (!surface) return false;
     if (__coopt_isObjectSurface(surface)) return false;
+    if (__coopt_isImageSurface(surface)) return false;
+    if (__coopt_isStopSurface(surface)) return false;
     if (__coopt_isGapSurface(surface)) return false;
     if (__coopt_isCoordBreakSurface(surface)) return false;
     return true;

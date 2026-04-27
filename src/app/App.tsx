@@ -9,7 +9,7 @@ import DesignIntentSection from "../ui/components/DesignIntentSection";
 import ZoomSection from "../ui/components/ZoomSection.tsx";
 import RequirementsSection from "../ui/components/RequirementsSection";
 import LegacyPanels from "../ui/components/LegacyPanels";
-import { SystemDataPanel } from "../ui/components/LegacyPanels";
+import { LiteratureImportPanel, SystemDataPanel } from "../ui/components/LegacyPanels";
 import {
   handleAnalysisSelect,
   handleClearStorage,
@@ -414,6 +414,42 @@ function isGapSurface(surface: any): boolean {
   return false;
 }
 
+function isObjectSurface(surface: any): boolean {
+  const objectType = String(surface?.['object type'] ?? surface?.type ?? '').trim().toLowerCase();
+  return objectType === 'object';
+}
+
+function isImageSurface(surface: any): boolean {
+  const objectType = String(surface?.['object type'] ?? surface?.type ?? '').trim().toLowerCase();
+  const blockType = String(surface?._blockType ?? surface?.blockType ?? '').trim().toLowerCase();
+  return objectType === 'image' || blockType === 'imagesurface';
+}
+
+function isStopSurface(surface: any): boolean {
+  const objectType = String(surface?.['object type'] ?? surface?.type ?? '').trim().toLowerCase();
+  const blockType = String(surface?._blockType ?? surface?.blockType ?? '').trim().toLowerCase();
+  return objectType === 'stop' || objectType === 'sto' || blockType === 'stop';
+}
+
+function hasLensTag(surface: any): boolean {
+  const blockType = String(surface?._blockType ?? surface?.blockType ?? '').trim().toLowerCase();
+  const surfaceRole = String(surface?._surfaceRole ?? surface?.surfaceRole ?? '').trim().toLowerCase();
+  if (blockType === 'lens' || blockType === 'glass' || blockType === 'element') return true;
+  if (surfaceRole === 'lens' || surfaceRole === 'front' || surfaceRole === 'back') return true;
+  if (/^s\d+$/.test(surfaceRole)) return true;
+  return false;
+}
+
+function isRenderableLensCandidateSurface(surface: any): boolean {
+  if (!surface) return false;
+  if (isObjectSurface(surface)) return false;
+  if (isImageSurface(surface)) return false;
+  if (isStopSurface(surface)) return false;
+  if (isGapSurface(surface)) return false;
+  if (isCoordBreakSurface(surface)) return false;
+  return true;
+}
+
 function isGlassMaterial(materialValue: any): boolean {
   const material = String(materialValue ?? '').trim().toUpperCase();
   if (!material) return false;
@@ -422,10 +458,11 @@ function isGlassMaterial(materialValue: any): boolean {
 
 function isLensInterval(front: any, back: any): boolean {
   if (!front || !back) return false;
-  if (String(front?.['object type'] ?? '').trim().toLowerCase() === 'object') return false;
-  if (isGapSurface(front) || isGapSurface(back)) return false;
-  if (isCoordBreakSurface(front) || isCoordBreakSurface(back)) return false;
-  return isGlassMaterial(front?.material);
+  if (!isRenderableLensCandidateSurface(front) || !isRenderableLensCandidateSurface(back)) return false;
+  const frontBlockId = String(front?._blockId ?? front?.blockId ?? '').trim();
+  const backBlockId = String(back?._blockId ?? back?.blockId ?? '').trim();
+  if (!frontBlockId || !backBlockId || frontBlockId !== backBlockId) return false;
+  return (isGlassMaterial(front?.material) || hasLensTag(front)) && (isGlassMaterial(back?.material) || hasLensTag(back));
 }
 
 function buildRenderLensColorTargets(opticalSystemRows: any[]): RenderLensColorTarget[] {
@@ -726,7 +763,7 @@ export default function App() {
   const [renderScaleLabel, setRenderScaleLabel] = useState('Scale unavailable');
   const [renderScaleBarWidthPx, setRenderScaleBarWidthPx] = useState(RENDER_SCALE_BAR_TARGET_WIDTH_PX);
   const [renderZoomUiRevision, setRenderZoomUiRevision] = useState(0);
-  const [workspaceFocus, setWorkspaceFocus] = useState<'configuration' | 'source' | 'intent' | 'zoom' | 'requirements'>('configuration');
+  const [workspaceFocus, setWorkspaceFocus] = useState<'configuration' | 'source' | 'intent' | 'literature' | 'zoom' | 'requirements'>('configuration');
   const renderScaleRafRef = useRef<number | null>(null);
   const renderViewModeRef = useRef<'3D' | 'XZ' | 'YZ'>('3D');
   const renderViewAxisRef = useRef<'YZ' | 'XZ'>('YZ');
@@ -5833,7 +5870,7 @@ const collectLegacyCrossRays = async (
   }
 
   const selectWorkspaceTab = (
-    focus: 'configuration' | 'source' | 'intent' | 'zoom' | 'requirements',
+    focus: 'configuration' | 'source' | 'intent' | 'literature' | 'zoom' | 'requirements',
   ) => {
     setWorkspaceFocus(focus);
     try {
@@ -5872,13 +5909,14 @@ const collectLegacyCrossRays = async (
   }, []);
 
   const workspaceSections: Array<{
-    key: 'configuration' | 'source' | 'intent' | 'zoom' | 'requirements';
+    key: 'configuration' | 'source' | 'intent' | 'literature' | 'zoom' | 'requirements';
     label: string;
     icon: string;
   }> = [
     { key: 'configuration', label: 'System', icon: '🧭' },
     { key: 'source', label: 'Sources / Objects', icon: '🔎' },
     { key: 'intent', label: 'Design Intent', icon: '🧩' },
+    { key: 'literature', label: 'Patent', icon: '📚' },
     { key: 'requirements', label: 'Requirements', icon: '📏' },
     { key: 'zoom', label: 'Zoom', icon: '🔭' },
   ];
@@ -5971,6 +6009,9 @@ const collectLegacyCrossRays = async (
         </div>
         <div className={`app-shell__tabBody${workspaceFocus === 'intent' ? '' : ' is-hidden'}`}>
           <DesignIntentSection />
+        </div>
+        <div className={`app-shell__tabBody${workspaceFocus === 'literature' ? '' : ' is-hidden'}`}>
+          <LiteratureImportPanel />
         </div>
         <div className={`app-shell__tabBody${workspaceFocus === 'zoom' ? '' : ' is-hidden'}`}>
           <ZoomSection />

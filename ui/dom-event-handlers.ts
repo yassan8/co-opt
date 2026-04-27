@@ -1005,6 +1005,137 @@ function __zmxResolveMaxObjectAnglesDeg(objectRows: any[]): { x: number; y: numb
     return { x: maxX, y: maxY };
 }
 
+function __zmxResolveLargestObjectSample(objectRows: any[]): { x: number; y: number; z?: number } | null {
+    if (!Array.isArray(objectRows) || objectRows.length === 0) return null;
+
+    let best: { x: number; y: number; z?: number } | null = null;
+    let bestRadius = -1;
+    for (const row of objectRows) {
+        if (!row || typeof row !== 'object') continue;
+        const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
+        const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
+        const z = Number(row?.z ?? 0);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const radius = Math.sqrt(x * x + y * y);
+        if (radius <= bestRadius) continue;
+        bestRadius = radius;
+        best = Number.isFinite(z) ? { x, y, z } : { x, y };
+    }
+
+    return bestRadius > 0 ? best : null;
+}
+
+function __cooptResolveMaxImageHeightObjectSample(objectRows: any[]): { index: number; sample: { x: number; y: number; z?: number } } | null {
+    if (!Array.isArray(objectRows) || objectRows.length === 0) return null;
+
+    let bestIndex = -1;
+    let bestSample: { x: number; y: number; z?: number } | null = null;
+    let bestHeight = -1;
+    for (let index = 0; index < objectRows.length; index++) {
+        const row = objectRows[index];
+        if (!row || typeof row !== 'object') continue;
+        const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
+        const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
+        const z = Number(row?.z ?? 0);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const height = Math.abs(y);
+        if (height <= bestHeight) continue;
+        bestHeight = height;
+        bestIndex = index;
+        bestSample = Number.isFinite(z) ? { x, y, z } : { x, y };
+    }
+
+    if (bestIndex < 0 || !bestSample || bestHeight <= 0) return null;
+    return { index: bestIndex, sample: bestSample };
+}
+
+function __cooptNormalizeObjectSampleForTrace(sample: { x: number; y: number; z?: number }, sourceRow: any, opticalRows: any[], wavelengthMicrons: number, isInfinite: boolean): { x: number; y: number; z?: number } {
+    if (!sample || typeof sample !== 'object') return { x: 0, y: 0 };
+    if (!isInfinite) return sample;
+
+    const posNorm = String(sourceRow?.position ?? '').trim().toLowerCase();
+    if (posNorm !== 'imageheight') return sample;
+
+    const targetX = Number(sample?.x ?? 0);
+    const targetY = Number(sample?.y ?? 0);
+    try {
+        const paraxial = calculateParaxialData(opticalRows, wavelengthMicrons);
+        const focalLength = Number(paraxial?.focalLength);
+        if (Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12) {
+            const radToDeg = 180 / Math.PI;
+            return {
+                x: Math.atan2(targetX, focalLength) * radToDeg,
+                y: Math.atan2(targetY, focalLength) * radToDeg,
+            };
+        }
+    } catch (_) {}
+
+    try {
+        if (typeof w.convertImageHeightToEffectiveObject === 'function') {
+            const effective = w.convertImageHeightToEffectiveObject(sourceRow, opticalRows, wavelengthMicrons, 'infinite');
+            return {
+                x: Number(effective?.xHeightAngle ?? effective?.x ?? targetX) || 0,
+                y: Number(effective?.yHeightAngle ?? effective?.y ?? targetY) || 0,
+            };
+        }
+    } catch (_) {}
+
+    return sample;
+}
+
+function __zmxFormatLargestObjectConditionSummary(objectRows: any[]): string | null {
+    if (!Array.isArray(objectRows) || objectRows.length === 0) return null;
+
+    let bestIndex = -1;
+    let bestRow: any = null;
+    let bestRadius = -1;
+    for (let index = 0; index < objectRows.length; index++) {
+        const row = objectRows[index];
+        if (!row || typeof row !== 'object') continue;
+        const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
+        const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const radius = Math.sqrt(x * x + y * y);
+        if (radius <= bestRadius) continue;
+        bestRadius = radius;
+        bestIndex = index;
+        bestRow = row;
+    }
+
+    if (!bestRow || bestIndex < 0 || bestRadius <= 0) return null;
+
+    const x = Number(bestRow?.xHeightAngle ?? bestRow?.x ?? bestRow?.fieldX ?? 0);
+    const y = Number(bestRow?.yHeightAngle ?? bestRow?.y ?? bestRow?.fieldY ?? 0);
+    const z = Number(bestRow?.z ?? 0);
+    const position = String(bestRow?.position ?? bestRow?.object ?? bestRow?.objectType ?? '').trim();
+    const isAngle = position.toLowerCase() === 'angle';
+    const units = isAngle ? 'deg' : 'mm';
+    const parts = [`Object ${bestIndex + 1}`, position || (isAngle ? 'Angle' : 'ImageHeight')];
+    parts.push(`x=${x.toFixed(3)} ${units}`);
+    parts.push(`y=${y.toFixed(3)} ${units}`);
+    if (!isAngle && Number.isFinite(z) && Math.abs(z) > 1e-9) parts.push(`z=${z.toFixed(3)} mm`);
+    return parts.join(' | ');
+}
+
+function __cooptFormatMaxImageHeightConditionSummary(objectRows: any[]): string | null {
+    const resolved = __cooptResolveMaxImageHeightObjectSample(objectRows);
+    if (!resolved) return null;
+
+    const row = objectRows[resolved.index] ?? null;
+    const x = Number(resolved.sample.x ?? 0);
+    const y = Number(resolved.sample.y ?? 0);
+    const z = Number(resolved.sample.z ?? 0);
+    const position = String(row?.position ?? row?.object ?? row?.objectType ?? 'ImageHeight').trim();
+    const isAngle = position.toLowerCase() === 'angle';
+    const units = isAngle ? 'deg' : 'mm';
+    const parts = [`Object ${resolved.index + 1}`, position || 'ImageHeight'];
+    parts.push(`maxY=${Math.abs(y).toFixed(3)} ${units}`);
+    parts.push(`x=${x.toFixed(3)} ${units}`);
+    parts.push(`y=${y.toFixed(3)} ${units}`);
+    if (!isAngle && Number.isFinite(z) && Math.abs(z) > 1e-9) parts.push(`z=${z.toFixed(3)} mm`);
+    return parts.join(' | ');
+}
+
 function __zmxSolveCrossRayToStopCoordAxis(
     rows: any[],
     stopIndex: number,
@@ -1066,7 +1197,7 @@ function __zmxSolveCrossRayToStopCoordAxis(
     }
 }
 
-function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicrons: number, objectRows: any[] = []): void {
+function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicrons: number, objectRows: any[] = [], options: { forceOverwriteSemidia?: boolean; strictMaxImageHeightMarginalOnly?: boolean } = {}): void {
     const stopIndex = rows.findIndex((r: any) => {
         const ot = String(r?.['object type'] ?? r?.object ?? '').toLowerCase();
         return ot === 'stop';
@@ -1077,6 +1208,9 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
     const isInfinite = __zmxIsInfiniteConjugateFromObjectRow(objectRow);
 
     const rowsForTrace = __zmxBuildRowsForSemidiaTrace(rows);
+    const largestObjectSample = __zmxResolveLargestObjectSample(objectRows);
+    const maxImageHeightSample = __cooptResolveMaxImageHeightObjectSample(objectRows);
+    const strictMaxImageHeightMarginalOnly = options?.strictMaxImageHeightMarginalOnly === true;
 
     const enpdHintMm = Number((rows as any)?.__zmxEntrancePupilDiameterMm);
     const searchRadiusMm = __zmxResolveSearchRadiusMm(rows, Number.isFinite(enpdHintMm) ? enpdHintMm : undefined);
@@ -1096,21 +1230,35 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
         sampleY = Number.isFinite(crossY) ? crossY : searchRadiusMm;
     }
 
-    if (!Number.isFinite(sampleX) || !Number.isFinite(sampleY) || sampleX <= 0 || sampleY <= 0) return;
+    if (!largestObjectSample && (!Number.isFinite(sampleX) || !Number.isFinite(sampleY) || sampleX <= 0 || sampleY <= 0)) return;
+
+    const objectSamples = strictMaxImageHeightMarginalOnly && maxImageHeightSample
+        ? [__cooptNormalizeObjectSampleForTrace(maxImageHeightSample.sample, objectRows[maxImageHeightSample.index], rowsForTrace, wavelengthMicrons, isInfinite)]
+        : largestObjectSample
+        ? [__cooptNormalizeObjectSampleForTrace(largestObjectSample, objectRows.find((row: any) => {
+            const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
+            const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
+            return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - largestObjectSample.x) < 1e-9 && Math.abs(y - largestObjectSample.y) < 1e-9;
+        }), rowsForTrace, wavelengthMicrons, isInfinite)]
+        : (isInfinite
+            ? [{ x: sampleX, y: 0 }, { x: 0, y: sampleY }]
+            : [{ x: sampleX, y: 0, z: 0 }, { x: 0, y: sampleY, z: 0 }]);
 
     const rays = isInfinite
         ? (typeof w.generateInfiniteSystemCrossBeam === 'function'
-            ? w.generateInfiniteSystemCrossBeam(rowsForTrace, [{ x: sampleX, y: 0 }, { x: 0, y: sampleY }], {
-                rayCount: 13,
+            ? w.generateInfiniteSystemCrossBeam(rowsForTrace, objectSamples.map((sample: any) => ({ x: Number(sample?.x) || 0, y: Number(sample?.y) || 0 })), {
+                rayCount: strictMaxImageHeightMarginalOnly ? 3 : 13,
                 wavelength: wavelengthMicrons,
-                debugMode: false
+                debugMode: false,
+                crossType: strictMaxImageHeightMarginalOnly ? 'vertical' : 'both'
             })
             : null)
         : (typeof w.generateCrossBeam === 'function'
-            ? w.generateCrossBeam(rowsForTrace, [{ x: sampleX, y: 0, z: 0 }, { x: 0, y: sampleY, z: 0 }], {
-                rayCount: 13,
+            ? w.generateCrossBeam(rowsForTrace, objectSamples.map((sample: any) => ({ x: Number(sample?.x) || 0, y: Number(sample?.y) || 0, z: Number(sample?.z) || 0 })), {
+                rayCount: strictMaxImageHeightMarginalOnly ? 3 : 13,
                 wavelength: wavelengthMicrons,
-                debugMode: false
+                debugMode: false,
+                crossType: strictMaxImageHeightMarginalOnly ? 'vertical' : 'both'
             })
             : null);
 
@@ -1139,8 +1287,18 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
 
     if (allRays.length === 0) return;
 
+    const filteredRays = strictMaxImageHeightMarginalOnly
+        ? allRays.filter((ray: any) => {
+            const side = String(ray?.side ?? ray?.originalRay?.side ?? '').trim().toLowerCase();
+            if (side !== 'upper' && side !== 'lower') return false;
+            return true;
+        })
+        : allRays;
+
+    if (filteredRays.length === 0) return;
+
     const maxBySurface = new Array(rows.length).fill(0);
-    for (const ray of allRays) {
+    for (const ray of filteredRays) {
         const rayPath = Array.isArray(ray?.rayPath)
             ? ray.rayPath
             : (Array.isArray(ray?.rayPathToTarget)
@@ -1157,6 +1315,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
             if (rr > maxBySurface[i]) maxBySurface[i] = rr;
         }
     }
+    const forceOverwriteSemidia = options?.forceOverwriteSemidia === true;
     let updateCount = 0;
     for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
@@ -1167,14 +1326,14 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
         const wasMissing = __zmxIsMissingSemidia(r);
         const prev = __zmxReadPositiveFiniteSemidiaMm(r);
         const maxR = maxBySurface[i];
-        if (maxR > 0 && (wasMissing || prev === null || maxR > (prev + 1e-6))) {
+        if (maxR > 0 && (forceOverwriteSemidia || wasMissing || prev === null || maxR > (prev + 1e-6) || maxR < (prev - 1e-6))) {
             r.semidia = maxR;
             updateCount++;
         }
     }
 }
 
-function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], options: { entrancePupilDiameterMm?: number; stopSemidiaWasMissing?: boolean } = {}): void {
+function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], options: { entrancePupilDiameterMm?: number; stopSemidiaWasMissing?: boolean; forceOverwriteSemidia?: boolean } = {}): void {
     console.log('[autoCalculateMissingSemidia] START');
     const tbl = w.tableOpticalSystem || w.tableOpticalSystem;
     const rows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
@@ -1223,7 +1382,9 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], optio
             (rows as any).__zmxEntrancePupilDiameterMm = enpd;
         }
 
-        __zmxApplySemidiaOverridesFromMarginalRays(rows, primaryWavelength, objectRows);
+        __zmxApplySemidiaOverridesFromMarginalRays(rows, primaryWavelength, objectRows, {
+            forceOverwriteSemidia: options?.forceOverwriteSemidia === true
+        });
 
         console.log('[autoCalculateMissingSemidia] Ray tracing completed. Sample rows with semidia:', 
             rows.slice(0, 5).map((r: any) => ({
@@ -1271,6 +1432,107 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], optio
             console.error('[autoCalculateMissingSemidia] ❌ Failed to save configuration:', err);
         }
     } catch (_) {}
+}
+
+function __cooptExpectedApertureKeysForBlockType(blockTypeRaw: any): string[] {
+    const blockType = String(blockTypeRaw ?? '').trim().toLowerCase();
+    if (blockType === 'paraxial' || blockType === 'thinlens') return ['front'];
+    if (blockType === 'lens' || blockType === 'positivelens') return ['front', 'back'];
+    if (blockType === 'doublet') return ['s1', 's2', 's3'];
+    if (blockType === 'triplet') return ['s1', 's2', 's3', 's4'];
+    if (blockType === 'singlesurface' || blockType === 'mirror') return ['semidia'];
+    return [];
+}
+
+function __cooptHasUsableApertureValue(value: any): boolean {
+    if (value === null || value === undefined) return false;
+    const text = String(value).trim();
+    if (text === '') return false;
+    const numeric = Number(text);
+    return Number.isFinite(numeric) && numeric > 0;
+}
+
+function __cooptActiveConfigHasMissingTrackedAperture(systemConfig?: any): boolean {
+    try {
+        const cfgs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+        const activeCfg = cfgs.find((c: any) => c && String(c.id) === String(systemConfig?.activeConfigId)) || cfgs[0];
+        if (!activeCfg || !Array.isArray(activeCfg.blocks)) return false;
+        return activeCfg.blocks.some((block: any) => {
+            const keys = __cooptExpectedApertureKeysForBlockType(block?.blockType);
+            if (keys.length === 0) return false;
+            const aperture = (block?.aperture && typeof block.aperture === 'object') ? block.aperture : null;
+            return keys.some((key) => !__cooptHasUsableApertureValue(aperture?.[key]));
+        });
+    } catch (_) {
+        return false;
+    }
+}
+
+function __cooptAutoCalculateMissingDesignIntentApertures(): boolean {
+    try {
+        const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
+        if (!__cooptActiveConfigHasMissingTrackedAperture(systemConfig)) return false;
+
+        const sourceRows = (() => {
+            try {
+                const activeCfg = Array.isArray(systemConfig?.configurations)
+                    ? (systemConfig.configurations.find((c: any) => c && String(c.id) === String(systemConfig?.activeConfigId)) || systemConfig.configurations[0])
+                    : null;
+                if (Array.isArray(activeCfg?.source) && activeCfg.source.length > 0) return activeCfg.source;
+            } catch (_) {}
+            try { return loadSourceTableData(); } catch (_) { return []; }
+        })();
+        const objectRows = (() => {
+            try {
+                const activeCfg = Array.isArray(systemConfig?.configurations)
+                    ? (systemConfig.configurations.find((c: any) => c && String(c.id) === String(systemConfig?.activeConfigId)) || systemConfig.configurations[0])
+                    : null;
+                if (Array.isArray(activeCfg?.object) && activeCfg.object.length > 0) return activeCfg.object;
+            } catch (_) {}
+            try { return loadObjectTableData(); } catch (_) { return []; }
+        })();
+
+        autoCalculateMissingSemidia(sourceRows, objectRows, {});
+        __zmxSyncDesignIntentApertureFromOpticalRows();
+        return true;
+    } catch (err) {
+        console.warn('[DesignIntent] Missing aperture auto-calculation failed:', err);
+        return false;
+    }
+}
+
+function autoSetBlockAperturesFromLargestObjectCondition(): boolean {
+    try {
+        const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
+        const sourceRows = (() => {
+            try {
+                const activeCfg = Array.isArray(systemConfig?.configurations)
+                    ? (systemConfig.configurations.find((c: any) => c && String(c.id) === String(systemConfig?.activeConfigId)) || systemConfig.configurations[0])
+                    : null;
+                if (Array.isArray(activeCfg?.source) && activeCfg.source.length > 0) return activeCfg.source;
+            } catch (_) {}
+            try { return loadSourceTableData(); } catch (_) { return []; }
+        })();
+        const objectRows = (() => {
+            try {
+                const activeCfg = Array.isArray(systemConfig?.configurations)
+                    ? (systemConfig.configurations.find((c: any) => c && String(c.id) === String(systemConfig?.activeConfigId)) || systemConfig.configurations[0])
+                    : null;
+                if (Array.isArray(activeCfg?.object) && activeCfg.object.length > 0) return activeCfg.object;
+            } catch (_) {}
+            try { return loadObjectTableData(); } catch (_) { return []; }
+        })();
+
+        autoCalculateMissingSemidia(sourceRows, objectRows, {
+            forceOverwriteSemidia: true,
+            strictMaxImageHeightMarginalOnly: true
+        } as any);
+        __zmxSyncDesignIntentApertureFromOpticalRows();
+        return true;
+    } catch (err) {
+        console.warn('[DesignIntent] Largest-object aperture auto-calculation failed:', err);
+        return false;
+    }
 }
 
 function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
@@ -1547,6 +1809,11 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                     if (!cfg.metadata || typeof cfg.metadata !== 'object') cfg.metadata = {};
                     cfg.metadata.importAnalyzeMode = false;
                 }
+            } else if (typeof w.expandBlocksIntoConfiguration === 'function') {
+                // Existing blocks stay authoritative, but imported legacy rows may still
+                // contain semidia that needs to be persisted into block.aperture so the
+                // Design Intent inspector can display and edit Aperture (Semidiameter).
+                w.expandBlocksIntoConfiguration(cfg);
             }
         } catch (_) {}
     }
@@ -1777,6 +2044,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 void runRequirementSyncSequence();
             } catch (_) {}
             try { refreshBlockInspector(); } catch (_) {}
+            try { __cooptAutoCalculateMissingDesignIntentApertures(); } catch (_) {}
             try {
                 if (typeof w.updateTransformSurfaceSelect === 'function') {
                     w.updateTransformSurfaceSelect();
@@ -1804,6 +2072,7 @@ if (typeof window !== 'undefined') {
     try {
         w.__loadAllDataObjectIntoApp = __loadAllDataObjectIntoApp;
         w.autoCalculateMissingSemidia = autoCalculateMissingSemidia;
+        w.autoSetBlockAperturesFromLargestObjectCondition = autoSetBlockAperturesFromLargestObjectCondition;
     } catch (_) {}
 }
 
@@ -2032,6 +2301,22 @@ function __coopt_normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
     }
 
     return blocks;
+}
+
+function __coopt_shouldAcceptDerivedBlocks(blocks: any[], rows: any[]): boolean {
+    if (!Array.isArray(blocks) || blocks.length === 0) return false;
+
+    const physicalBlocks = blocks.filter((block: any) => {
+        const blockType = String(block?.blockType ?? '').trim();
+        return blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane' && blockType !== 'ImageSurface';
+    });
+
+    if (physicalBlocks.length === 0) return false;
+
+    const physicalRowCount = Math.max(0, (Array.isArray(rows) ? rows.length : 0) - 2);
+    if (physicalRowCount >= 4 && physicalBlocks.length <= 1) return false;
+
+    return true;
 }
 
 function __buildZemaxLoadPayload(parsed: any): any {
@@ -2295,7 +2580,6 @@ function setupOptimizeDesignIntentButton(): void {
     const optimizeBtn = document.getElementById('optimize-design-intent-btn') as HTMLButtonElement | null;
     if (!optimizeBtn) return;
     if (isReactManagedButton(optimizeBtn)) return;
-
     optimizeBtn.addEventListener('click', async () => {
         const _gThis = (typeof globalThis !== 'undefined') ? globalThis as any : {} as any;
         const isRunningFlag = !!_gThis.__cooptOptimizerIsRunning;
@@ -2312,104 +2596,8 @@ function setupOptimizeDesignIntentButton(): void {
 
         const prevDisabled = optimizeBtn.disabled;
         optimizeBtn.disabled = true;
+
         try {
-            if (isTauriRuntime()) {
-                const opticalSystemRows = (w.getOpticalSystemRows && w.tableOpticalSystem)
-                    ? w.getOpticalSystemRows(w.tableOpticalSystem)
-                    : ((w.tableOpticalSystem && typeof w.tableOpticalSystem.getData === 'function') ? w.tableOpticalSystem.getData() : []);
-
-                if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
-                    alert('最適化対象の光学系データがありません。');
-                    return;
-                }
-
-                const systemRequirementsRows = (() => {
-                    try {
-                        const sre = (window as any).systemRequirementsEditor;
-                        if (sre && typeof sre.getData === 'function') {
-                            const rows = sre.getData();
-                            if (Array.isArray(rows)) return rows;
-                        }
-                    } catch (_) {}
-                    return [];
-                })();
-
-                const sourceRows = (w.tableSource && typeof w.tableSource.getData === 'function')
-                    ? w.tableSource.getData()
-                    : [];
-                const objectRows = (w.tableObject && typeof w.tableObject.getData === 'function')
-                    ? w.tableObject.getData()
-                    : [];
-                const activeConfigId = (() => {
-                    try {
-                        const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
-                            ? w.loadSystemConfigurationsFromTableConfig()
-                            : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
-                        if (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null) {
-                            return String(cfg.activeConfigId).trim();
-                        }
-                    } catch (_) {}
-                    return '';
-                })();
-
-                const opt = w.OptimizationMVP;
-                if (!opt || typeof opt.run !== 'function') {
-                    alert('OptimizationMVP が利用できません。');
-                    return;
-                }
-
-                const progressEvents: any[] = [];
-                const result = await opt.run({
-                    opticalSystemRows,
-                    sourceRows,
-                    objectRows,
-                    activeConfigId,
-                    systemRequirementsRows,
-                    maxIterations: 24,
-                    method: 'kkt',
-                    forceTs: true,
-                    onProgress: (ev: any) => {
-                        if (!ev || typeof ev !== 'object') return;
-                        progressEvents.push(ev);
-                    },
-                });
-
-                if (Array.isArray(progressEvents) && progressEvents.length > 0) {
-                    console.log('📈 [Optimize][TS][Progress]', progressEvents.slice(-8));
-                }
-
-                try {
-                    if (typeof (window as any).drawOpticalSystem === 'function') {
-                        (window as any).drawOpticalSystem();
-                    }
-                } catch (applyErr) {
-                    console.warn('⚠️ [Optimize][TS] result apply failed:', applyErr);
-                }
-
-                const modeUsed = String(result?.method || 'kkt');
-                const iterations = Number(result?.iterations ?? 0);
-                const variableCount = Number(result?.variables ?? 0);
-                const meritBefore = Number(result?.before ?? Number.NaN);
-                const requirementScoreAfter = Number(result?.violationScore ?? Number.NaN);
-                const meritAfter = Number.isFinite(requirementScoreAfter)
-                    ? requirementScoreAfter
-                    : Number(result?.best ?? Number.NaN);
-                const converged = !result?.aborted;
-
-                alert(
-                    [
-                        'TS optimizer step completed',
-                        `mode: ${modeUsed}`,
-                        `iterations: ${iterations}`,
-                        `variables: ${variableCount}`,
-                        `merit: ${Number.isFinite(meritBefore) ? meritBefore.toFixed(6) : 'NaN'} -> ${Number.isFinite(meritAfter) ? meritAfter.toFixed(6) : 'NaN'}`,
-                        `requirements: ${Number.isFinite(requirementScoreAfter) ? requirementScoreAfter.toFixed(6) : 'NaN'}`,
-                        converged ? 'status: converged' : 'status: in-progress',
-                    ].join('\n')
-                );
-                return;
-            }
-
             const opt = w.OptimizationMVP;
             if (!opt || typeof opt.run !== 'function') {
                 alert('OptimizationMVP が利用できません。');
@@ -3647,7 +3835,7 @@ function setupOptimizeDesignIntentButton(): void {
             console.warn('⚠️ [Optimize] Failed:', e);
             alert('Optimize の実行に失敗しました。console を確認してください。');
         } finally {
-            try { optimizeBtn.disabled = false; } catch (_) {}
+            try { optimizeBtn.disabled = prevDisabled; } catch (_) {}
             const _gThis2 = (typeof globalThis !== 'undefined') ? globalThis as any : {} as any;
             _gThis2.__cooptOptimizerIsRunning = false;
         }
@@ -4740,9 +4928,13 @@ export function saveSystemConfigurations(systemConfig: any): void {
     }
 }
 
+function configIdsEqual(left: any, right: any): boolean {
+    return String(left ?? '') === String(right ?? '');
+}
+
 export function getActiveConfiguration(): any {
     const systemConfig = loadSystemConfigurations();
-    const activeConfig = systemConfig.configurations.find((c: any) => c.id === systemConfig.activeConfigId);
+    const activeConfig = systemConfig.configurations.find((c: any) => configIdsEqual(c?.id, systemConfig.activeConfigId));
     
     if (!activeConfig) {
         console.warn('⚠️ [Configuration] Active config not found, using first');
@@ -4759,7 +4951,7 @@ export function getActiveConfigId(): number {
 
 export function setActiveConfiguration(configId: number): boolean {
     const systemConfig = loadSystemConfigurations();
-    const config = systemConfig.configurations.find((c: any) => c.id === configId);
+    const config = systemConfig.configurations.find((c: any) => configIdsEqual(c?.id, configId));
     
     if (!config) {
         console.error('❌ [Configuration] Config not found:', configId);
@@ -4773,7 +4965,7 @@ export function setActiveConfiguration(configId: number): boolean {
 
 export function saveCurrentToActiveConfiguration(): void {
     const systemConfig = loadSystemConfigurations();
-    const activeConfig = systemConfig.configurations.find((c: any) => c.id === systemConfig.activeConfigId);
+    const activeConfig = systemConfig.configurations.find((c: any) => configIdsEqual(c?.id, systemConfig.activeConfigId));
     
     if (!activeConfig) {
         console.error('❌ [Configuration] Active config not found');
@@ -4858,7 +5050,7 @@ export function deleteConfiguration(configId: number): boolean {
         return false;
     }
     
-    const index = systemConfig.configurations.findIndex((c: any) => c.id === configId);
+    const index = systemConfig.configurations.findIndex((c: any) => configIdsEqual(c?.id, configId));
     
     if (index === -1) {
         console.error('❌ [Configuration] Config not found:', configId);
@@ -4868,7 +5060,7 @@ export function deleteConfiguration(configId: number): boolean {
     const configName = systemConfig.configurations[index].name;
     systemConfig.configurations.splice(index, 1);
     
-    if (systemConfig.activeConfigId === configId) {
+    if (configIdsEqual(systemConfig.activeConfigId, configId)) {
         systemConfig.activeConfigId = systemConfig.configurations[0].id;
     }
     
@@ -4878,7 +5070,7 @@ export function deleteConfiguration(configId: number): boolean {
 
 export function duplicateConfiguration(configId: number): number | null {
     const systemConfig = loadSystemConfigurations();
-    const sourceConfig = systemConfig.configurations.find((c: any) => c.id === configId);
+    const sourceConfig = systemConfig.configurations.find((c: any) => configIdsEqual(c?.id, configId));
     
     if (!sourceConfig) {
         console.error('❌ [Configuration] Config not found:', configId);
@@ -4901,7 +5093,7 @@ export function duplicateConfiguration(configId: number): number | null {
 
 export function renameConfiguration(configId: number, newName: string): boolean {
     const systemConfig = loadSystemConfigurations();
-    const config = systemConfig.configurations.find((c: any) => c.id === configId);
+    const config = systemConfig.configurations.find((c: any) => configIdsEqual(c?.id, configId));
     
     if (!config) {
         console.error('❌ [Configuration] Config not found:', configId);
@@ -4921,7 +5113,7 @@ export function getConfigurationList(): any[] {
     return systemConfig.configurations.map((c: any) => ({
         id: c.id,
         name: c.name,
-        active: c.id === systemConfig.activeConfigId,
+        active: configIdsEqual(c?.id, systemConfig.activeConfigId),
         created: c.metadata.created,
         modified: c.metadata.modified,
         locked: c.metadata.locked
@@ -6325,6 +6517,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     if (!container) return;
 
     container.innerHTML = '';
+    const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
 
     // Show error banner if scope errors exist
     try {
@@ -6342,6 +6535,43 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             banner.style.fontSize = '12px';
             banner.textContent = `ERROR: Cannot apply "Shared (all configs)" because this Block is missing in some configurations: ${String(e0?.blockId ?? '')}.${String(e0?.key ?? '')} / missing in ${miss.length} config(s): ${names.join(', ')}${miss.length > names.length ? ', ...' : ''}`;
             container.appendChild(banner);
+        }
+    } catch (_) {}
+
+    try {
+        const importSummary = String(
+            activeCfg?.systemData?.literatureImportSummary
+            ?? activeCfg?.metadata?.literatureImportSummary
+            ?? ''
+        ).trim();
+        if (importSummary) {
+            const panel = document.createElement('details');
+            panel.className = 'block-inspector-import-summary';
+            panel.style.padding = '8px 10px';
+            panel.style.margin = '6px 0 10px 0';
+            panel.style.border = '1px solid #cbd5e1';
+            panel.style.background = '#f8fafc';
+            panel.style.color = '#0f172a';
+            panel.style.borderRadius = '6px';
+            panel.style.fontSize = '12px';
+
+            const title = document.createElement('summary');
+            title.textContent = 'Patent Import Draft Summary';
+            title.style.cursor = 'pointer';
+            title.style.fontWeight = '600';
+            panel.appendChild(title);
+
+            const body = document.createElement('pre');
+            body.textContent = importSummary;
+            body.style.whiteSpace = 'pre-wrap';
+            body.style.margin = '8px 0 0 0';
+            body.style.maxHeight = '220px';
+            body.style.overflow = 'auto';
+            body.style.fontSize = '11px';
+            body.style.lineHeight = '1.4';
+            panel.appendChild(body);
+
+            container.appendChild(panel);
         }
     } catch (_) {}
 
@@ -6837,6 +7067,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             };
             
             const blockType = String(expandedBlock.blockType || expandedBlock.type || 'unknown');
+            const hideLegacyRindexParams =
+                blockType === 'Lens'
+                || blockType === 'PositiveLens'
+                || blockType === 'Doublet'
+                || blockType === 'Triplet';
             
             // For Gap blocks, ensure material/thicknessMode are always in paramKeys even if not set
             const allParamKeys = Object.keys(params || {}).filter(k => {
@@ -6845,6 +7080,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (kl === 'chiefrayshiftx' || kl === 'chiefrayshifty' || kl === 'chiefrayshiftz') return false;
                 if (kl === 'zoomgroupaprofile' || kl === 'zoomgroupbprofile') return false;
                 if ((blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && (kl === 'zoomposition' || kl === 'zoomgroupprofiles')) return false;
+                if (hideLegacyRindexParams && /^rindex\d*$/.test(kl)) return false;
                 if (blockType === 'Paraxial') {
                     if (kl === 'material' || kl === 'abbe' || kl === 'vd' || kl === 'nd' || kl === 'rindex' || kl === 'bending') return false;
                     if (kl === 'frontradius' || kl === 'backradius' || kl === 'centerthickness' || kl === 'radiusx') return false;
@@ -7994,6 +8230,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         const newValue = cooptNormalizeInputValue(input.value, value);
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
+                            if (/^aperture\./.test(String(path)) && String(newValue ?? '').trim() === '') {
+                                setTimeout(() => {
+                                    try { __cooptAutoCalculateMissingDesignIntentApertures(); } catch (_) {}
+                                }, 0);
+                            }
                         }
                     });
 
@@ -8073,6 +8314,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         const newValue = cooptNormalizeInputValue(input.value, value);
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
+                            if (/^aperture\./.test(String(path)) && String(newValue ?? '').trim() === '') {
+                                setTimeout(() => {
+                                    try { __cooptAutoCalculateMissingDesignIntentApertures(); } catch (_) {}
+                                }, 0);
+                            }
                         }
                     });
 
@@ -8276,43 +8522,50 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 }
             }
 
-            // Add aperture section for blocks that have aperture data
+            // Add aperture section for blocks that can accept semidiameter input,
+            // even when imported JSON does not yet carry block.aperture.
             const aperture = (blockType !== 'Stop' && expandedBlock.aperture && typeof expandedBlock.aperture === 'object') ? expandedBlock.aperture : null;
             const renderedApertureKeys = new Set<string>();
-            if (aperture && Object.keys(aperture).length > 0) {
-                panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
-
-                const apertureEntries: Array<{ rawKey: string; displayKey: string; value: any }> = [];
-                const pickApertureEntry = (displayKey: string, aliases: string[]) => {
-                    for (const alias of aliases) {
-                        if (Object.prototype.hasOwnProperty.call(aperture, alias)) {
-                            apertureEntries.push({ rawKey: alias, displayKey, value: (aperture as any)[alias] });
-                            renderedApertureKeys.add(displayKey.toLowerCase());
-                            return;
-                        }
-                    }
-                };
-
-                if (blockType === 'Paraxial') {
-                    pickApertureEntry('s1', ['s1', 'front', 'back', 'surf1', 'surf2']);
-                } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
-                    pickApertureEntry('s1', ['s1', 'front', 'surf1']);
-                    pickApertureEntry('s2', ['s2', 'back', 'surf2']);
-                } else if (blockType === 'Doublet') {
-                    pickApertureEntry('s1', ['s1', 'front', 'surf1']);
-                    pickApertureEntry('s2', ['s2', 'middle', 'mid', 'center', 'surf2']);
-                    pickApertureEntry('s3', ['s3', 'back', 'rear', 'surf3']);
-                } else if (blockType === 'Triplet') {
-                    pickApertureEntry('s1', ['s1', 'front', 'surf1']);
-                    pickApertureEntry('s2', ['s2', 'surf2']);
-                    pickApertureEntry('s3', ['s3', 'surf3']);
-                    pickApertureEntry('s4', ['s4', 'back', 'rear', 'surf4']);
-                } else {
-                    for (const key of Object.keys(aperture)) {
-                        apertureEntries.push({ rawKey: key, displayKey: key, value: (aperture as any)[key] });
-                        renderedApertureKeys.add(String(key).toLowerCase());
+            const apertureEntries: Array<{ rawKey: string; displayKey: string; value: any }> = [];
+            const pickApertureEntry = (displayKey: string, aliases: string[], fallbackKey?: string) => {
+                for (const alias of aliases) {
+                    if (aperture && Object.prototype.hasOwnProperty.call(aperture, alias)) {
+                        apertureEntries.push({ rawKey: alias, displayKey, value: (aperture as any)[alias] });
+                        renderedApertureKeys.add(displayKey.toLowerCase());
+                        return;
                     }
                 }
+                if (fallbackKey) {
+                    apertureEntries.push({ rawKey: fallbackKey, displayKey, value: '' });
+                    renderedApertureKeys.add(displayKey.toLowerCase());
+                }
+            };
+
+            if (blockType === 'Paraxial') {
+                pickApertureEntry('s1', ['s1', 'front', 'back', 'surf1', 'surf2'], 'front');
+            } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
+                pickApertureEntry('s1', ['s1', 'front', 'surf1'], 'front');
+                pickApertureEntry('s2', ['s2', 'back', 'surf2'], 'back');
+            } else if (blockType === 'Doublet') {
+                pickApertureEntry('s1', ['s1', 'front', 'surf1'], 's1');
+                pickApertureEntry('s2', ['s2', 'middle', 'mid', 'center', 'surf2'], 's2');
+                pickApertureEntry('s3', ['s3', 'back', 'rear', 'surf3'], 's3');
+            } else if (blockType === 'Triplet') {
+                pickApertureEntry('s1', ['s1', 'front', 'surf1'], 's1');
+                pickApertureEntry('s2', ['s2', 'surf2'], 's2');
+                pickApertureEntry('s3', ['s3', 'surf3'], 's3');
+                pickApertureEntry('s4', ['s4', 'back', 'rear', 'surf4'], 's4');
+            } else if (blockType === 'SingleSurface' || blockType === 'Mirror') {
+                pickApertureEntry('semidia', ['semidia', 's1', 'front'], 'semidia');
+            } else if (aperture) {
+                for (const key of Object.keys(aperture)) {
+                    apertureEntries.push({ rawKey: key, displayKey: key, value: (aperture as any)[key] });
+                    renderedApertureKeys.add(String(key).toLowerCase());
+                }
+            }
+
+            if (apertureEntries.length > 0) {
+                panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
 
                 for (const { rawKey, displayKey, value } of apertureEntries) {
                     
@@ -8451,7 +8704,57 @@ export function refreshBlockInspector(): void {
 
     try {
         const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
-        const blocks = activeCfg && Array.isArray(activeCfg.blocks) ? activeCfg.blocks : null;
+        let blocks = activeCfg && Array.isArray(activeCfg.blocks) ? activeCfg.blocks : null;
+
+        if ((!blocks || blocks.length === 0) && activeCfg && Array.isArray(activeCfg.opticalSystem) && activeCfg.opticalSystem.length > 0) {
+            try {
+                const legacyRows = activeCfg.opticalSystem;
+                let recoveredBlocks: any[] = [];
+                const derived = deriveBlocksFromLegacyOpticalSystemRows(legacyRows);
+                const fatals = Array.isArray(derived?.issues)
+                    ? derived.issues.filter((issue: any) => issue && issue.severity === 'fatal')
+                    : [];
+
+                if (fatals.length === 0 && __coopt_shouldAcceptDerivedBlocks(derived?.blocks, legacyRows)) {
+                    recoveredBlocks = __coopt_normalizeObjectDistanceInBlocks(derived.blocks);
+                } else {
+                    recoveredBlocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(legacyRows));
+                }
+
+                if (recoveredBlocks.length > 0) {
+                    const systemConfig = loadSystemConfigurations();
+                    const cfgList = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+                    const persistedCfg = cfgList.find((cfg: any) => configIdsEqual(cfg?.id, systemConfig?.activeConfigId));
+                    if (persistedCfg) {
+                        persistedCfg.blocks = recoveredBlocks;
+                        if (!persistedCfg.metadata || typeof persistedCfg.metadata !== 'object') persistedCfg.metadata = {};
+                        persistedCfg.metadata.importAnalyzeMode = false;
+                        persistedCfg.metadata.modified = new Date().toISOString();
+                        saveSystemConfigurations(systemConfig);
+                        blocks = recoveredBlocks;
+                        console.log('✅ [Blocks] Recovered missing Design Intent blocks from optical rows:', {
+                            activeConfigId: systemConfig?.activeConfigId,
+                            rowCount: legacyRows.length,
+                            blockCount: recoveredBlocks.length,
+                        });
+                    }
+                }
+            } catch (recoverError) {
+                console.warn('⚠️ [Blocks] Failed to recover blocks from optical rows during refresh:', recoverError);
+            }
+        }
+
+        if (activeCfg) {
+            console.log('🔍 [Blocks] refreshBlockInspector state:', {
+                activeConfigId: activeCfg?.id,
+                blockCount: Array.isArray(blocks) ? blocks.length : 0,
+                opticalRowCount: Array.isArray(activeCfg?.opticalSystem) ? activeCfg.opticalSystem.length : 0,
+            });
+        }
+
+        const apertureAutoConditionSummary = __zmxFormatLargestObjectConditionSummary(
+            Array.isArray(activeCfg?.object) ? activeCfg.object : []
+        );
 
         try {
             const isImportAnalyze = !blocks || blocks.length === 0;
@@ -9089,6 +9392,7 @@ function setupDesignIntentButtons(): void {
     const deleteBtn = document.getElementById('design-intent-delete-block-btn');
     const paramAllOnBtn = document.getElementById('design-intent-param-all-on-btn');
     const paramAllOffBtn = document.getElementById('design-intent-param-all-off-btn');
+    const autoSetAperturesBtn = document.getElementById('design-intent-auto-set-apertures-btn');
     const zoomScenarioBtn = document.getElementById('design-intent-generate-zoom-scenarios-btn');
     const typeSelect = document.getElementById('design-intent-add-block-type') as HTMLSelectElement | null;
 
@@ -9197,6 +9501,33 @@ function setupDesignIntentButtons(): void {
             const res = __blocks_setParameterAndApertureModeBulk(false);
             if (!res || res.ok !== true) {
                 alert(`Failed to set Parameter All OFF: ${res?.reason || 'unknown error'}`);
+            }
+        });
+    }
+
+    if (autoSetAperturesBtn && !autoSetAperturesBtn.dataset.designIntentAutoSetAperturesBound) {
+        autoSetAperturesBtn.dataset.designIntentAutoSetAperturesBound = '1';
+        autoSetAperturesBtn.addEventListener('click', (e) => {
+            try { e?.preventDefault?.(); } catch (_) {}
+            try { e?.stopPropagation?.(); } catch (_) {}
+            try {
+                const ok = typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function'
+                    ? w.autoSetBlockAperturesFromLargestObjectCondition()
+                    : false;
+                if (!ok) {
+                    alert('Failed to auto-set apertures.');
+                    return;
+                }
+                try { refreshBlockInspector(); } catch (_) {}
+                try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
+                try {
+                    if (w.popup3DWindow && !w.popup3DWindow.closed) {
+                        w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
+                    }
+                } catch (_) {}
+            } catch (err) {
+                console.error('❌ Failed to auto-set apertures:', err);
+                alert(`Failed to auto-set apertures: ${(err as Error)?.message || String(err)}`);
             }
         });
     }
