@@ -4422,15 +4422,41 @@ export function calculateGlassRefractiveIndex(glassData, wavelength) {
  */
 export function getGlassDataWithSellmeier(glassName) {
   if (!glassName) return null;
+  const normalizedGlassName = String(glassName).trim();
+  const databases = getAllGlassDatabases();
+
+  for (const db of databases) {
+    const glassData = db.find(glass => glass.name === normalizedGlassName);
+    if (glassData) return glassData;
+  }
   
   // Check if glassName is a numeric value (e.g., "1.5", "1.517")
-  const numericValue = parseFloat(glassName);
+  const numericValue = parseFloat(normalizedGlassName);
   if (!isNaN(numericValue) && numericValue > 0 && numericValue < 4) {
+    let closestNumericMatch = null;
+    let closestNumericDelta = Infinity;
+
+    for (const db of databases) {
+      for (const glassData of db) {
+        const nd = Number(glassData?.nd);
+        if (!Number.isFinite(nd)) continue;
+        const delta = Math.abs(nd - numericValue);
+        if (delta < closestNumericDelta) {
+          closestNumericMatch = glassData;
+          closestNumericDelta = delta;
+        }
+      }
+    }
+
+    if (closestNumericMatch && closestNumericDelta <= 5e-5) {
+      return closestNumericMatch;
+    }
+
     // Create synthetic glass data with constant refractive index
     // n² = 1 + A1, so A1 = n² - 1
     const A1 = numericValue * numericValue - 1;
     return {
-      name: glassName,
+      name: normalizedGlassName,
       nd: numericValue,
       vd: undefined, // No dispersion (Abbe number not applicable)
       sellmeier: {
@@ -4442,13 +4468,6 @@ export function getGlassDataWithSellmeier(glassName) {
         B3: 0
       }
     };
-  }
-  
-  // Search in all databases
-  const databases = getAllGlassDatabases();
-  for (const db of databases) {
-    const glassData = db.find(glass => glass.name === glassName);
-    if (glassData) return glassData;
   }
   
   return null;

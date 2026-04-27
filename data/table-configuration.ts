@@ -12,7 +12,7 @@ const w: Record<string, any> = window;
 import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows } from './block-schema.ts';
 import { storageGetItem, storageSetItem, storageRemoveItem } from '../utils/local-storage-gateway.ts';
 import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
-import { getPrimaryWavelength } from './glass.ts';
+import { getGlassDataWithSellmeier, getPrimaryWavelength } from './glass.ts';
 
 // Block interface (for type safety with block-schema)
 interface Block {
@@ -33,9 +33,111 @@ const cfgWarn = (...args: any[]): void => { if (CONFIG_DEBUG) console.warn(...ar
 
 let warnedActiveConfigNotFound = false;
 const loggedBlockValidationFatalKeys = new Set<string>();
+const APERTURE_TRACKED_BLOCK_TYPES = new Set(['lens', 'paraxial', 'thinlens', 'doublet', 'triplet', 'singlesurface', 'mirror']);
 
 function idsEqual(a: any, b: any): boolean {
   return String(a ?? '') === String(b ?? '');
+}
+
+function hasUsableExplicitApertureSemidia(value: any): boolean {
+  const text = String(value ?? '').trim();
+  if (!text || text.toLowerCase() === 'auto') return false;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0;
+}
+
+function getOpticalRowSemidiaValue(row: any): any {
+  if (!row || typeof row !== 'object') return undefined;
+  return row.__cooptActualSemidia ?? row.semidia ?? row['Semi Diameter'] ?? row['semi diameter'] ?? row.semiDiameter ?? row.semiDia;
+}
+
+function interpolateExplicitApertureSemidiaForConfiguration(cfg: any): void {
+  if (!cfg || typeof cfg !== 'object') return;
+  const opticalRows = Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem : null;
+  if (!opticalRows || opticalRows.length === 0) return;
+
+  const explicitByProvenance = new Map<string, any>();
+  try {
+    if (configurationHasBlocks(cfg) && Array.isArray(cfg.blocks)) {
+      const expanded = expandBlocksToOpticalSystemRows(cfg.blocks);
+      const expandedRows = Array.isArray(expanded?.rows) ? expanded.rows : [];
+      for (const expandedRow of expandedRows) {
+        const blockId = String(expandedRow?._blockId ?? expandedRow?.blockId ?? '').trim();
+        const surfaceRole = String(expandedRow?._surfaceRole ?? expandedRow?.surfaceRole ?? '').trim().toLowerCase();
+        const explicit = expandedRow?.__cooptExplicitApertureSemidia;
+        if (!blockId || !surfaceRole || !hasUsableExplicitApertureSemidia(explicit)) continue;
+        explicitByProvenance.set(`${blockId}::${surfaceRole}`, explicit);
+      }
+    }
+  } catch (_) {}
+
+  for (const row of opticalRows) {
+    if (!row || typeof row !== 'object') continue;
+    if (hasUsableExplicitApertureSemidia(row.__cooptExplicitApertureSemidia)) continue;
+
+    const blockId = String(row._blockId ?? row.blockId ?? '').trim();
+    const surfaceRole = String(row._surfaceRole ?? row.surfaceRole ?? '').trim().toLowerCase();
+    const provenanceKey = blockId && surfaceRole ? `${blockId}::${surfaceRole}` : '';
+    if (provenanceKey && explicitByProvenance.has(provenanceKey)) {
+      row.__cooptExplicitApertureSemidia = explicitByProvenance.get(provenanceKey);
+      continue;
+    }
+
+    const blockType = String(row._blockType ?? row.blockType ?? '').trim().toLowerCase();
+    if (!APERTURE_TRACKED_BLOCK_TYPES.has(blockType)) continue;
+
+    const fallbackSemidia = getOpticalRowSemidiaValue(row);
+    if (hasUsableExplicitApertureSemidia(fallbackSemidia)) {
+      row.__cooptExplicitApertureSemidia = fallbackSemidia;
+    }
+  }
+}
+
+function hasOpticalValue(value: any): boolean {
+  return String(value ?? '').trim() !== '';
+}
+
+function backfillOpticalPropertiesFromMaterial(target: any, suffix = ''): void {
+  if (!target || typeof target !== 'object') return;
+
+  const materialKey = `material${suffix}`;
+  const rindexKey = `rindex${suffix}`;
+  const abbeKey = `abbe${suffix}`;
+  const vdKey = `vd${suffix}`;
+  const material = String(target[materialKey] ?? '').trim();
+  if (!material || material.toUpperCase() === 'AIR') return;
+
+  const glass = getGlassDataWithSellmeier(material);
+  if (!glass) return;
+
+  if (!hasOpticalValue(target[rindexKey]) && Number.isFinite(glass.nd)) {
+    target[rindexKey] = String(glass.nd);
+  }
+
+  if (!hasOpticalValue(target[abbeKey]) && !hasOpticalValue(target[vdKey]) && Number.isFinite(glass.vd)) {
+    target[abbeKey] = String(glass.vd);
+  }
+}
+
+function backfillMissingGlassPropertiesForConfiguration(cfg: any): void {
+  if (!cfg || typeof cfg !== 'object') return;
+
+  if (Array.isArray(cfg.opticalSystem)) {
+    for (const row of cfg.opticalSystem) {
+      backfillOpticalPropertiesFromMaterial(row);
+    }
+  }
+
+  if (Array.isArray(cfg.blocks)) {
+    for (const block of cfg.blocks) {
+      const parameters = block?.parameters;
+      if (!parameters || typeof parameters !== 'object') continue;
+      backfillOpticalPropertiesFromMaterial(parameters);
+      backfillOpticalPropertiesFromMaterial(parameters, '1');
+      backfillOpticalPropertiesFromMaterial(parameters, '2');
+      backfillOpticalPropertiesFromMaterial(parameters, '3');
+    }
+  }
 }
 
 interface SystemData {
@@ -195,6 +297,8 @@ export function loadSystemConfigurations(): SystemConfiguration {
           if (cfg.name === undefined || cfg.name === null) {
             cfg.name = `Config ${String(cfg.id ?? '') || ''}`.trim() || 'Config';
           }
+          backfillMissingGlassPropertiesForConfiguration(cfg);
+          interpolateExplicitApertureSemidiaForConfiguration(cfg);
         }
       }
       cfgLog('🔵 [Configuration] Loaded configurations:', parsed.configurations.length);
@@ -212,6 +316,11 @@ export function loadSystemConfigurations(): SystemConfiguration {
 export function saveSystemConfigurations(systemConfig: SystemConfiguration): void {
   cfgLog('🔵 [Configuration] Saving system configurations...');
   if (systemConfig && systemConfig.configurations) {
+    try {
+      for (const cfg of systemConfig.configurations) {
+        interpolateExplicitApertureSemidiaForConfiguration(cfg);
+      }
+    } catch (_) {}
     storageSetItem(STORAGE_KEY, JSON.stringify(systemConfig));
     cfgLog(`💾 [Configuration] Saved ${systemConfig.configurations.length} configurations`);
   } else {

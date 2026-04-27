@@ -1,4 +1,2577 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+type LiteratureExtractResult = {
+  patentIds: string[];
+  sourceUrls: string[];
+  focalLengths: number[];
+  fNumbers: number[];
+  fieldAngles: number[];
+  imageHeights: number[];
+  totalLengths: number[];
+  glassNames: string[];
+  embodiments: LiteratureOption[];
+  zoomPositions: LiteratureOption[];
+  candidateTableRows: LiteratureCandidateRow[];
+};
+
+type LiteratureOption = {
+  key: string;
+  label: string;
+  zoomIndex?: number | null;
+};
+
+type LiteratureCandidateRow = {
+  line: string;
+  numbers: number[];
+  embodimentKey: string;
+  embodimentLabel: string;
+  zoomKey: string;
+  zoomLabel: string;
+  surfaceIndex?: number | null;
+};
+
+type DraftBuildResult = {
+  rows: Array<Record<string, any>>;
+  notes: string[];
+};
+
+type PatentAsphereTerms = {
+  hasAny: boolean;
+  conic: number | null;
+  surfType: 'Aspheric even' | 'Aspheric odd' | null;
+  coefficients: Record<number, number>;
+};
+
+const LITERATURE_IMPORT_EXAMPLE = [
+  'JP2024-123456 A Zoom lens',
+  'f = 24 50 72',
+  'Fno = 2.8 4.0 5.6',
+  'Half angle = 38.2 22.4 15.1',
+  'TL = 118.5',
+  'G1   34.12  -28.45   4.20   N-BK7   64.17',
+  'G2  -41.55   96.30   1.80   N-SF10  28.41',
+  'Air  INF     INF    12.60',
+].join('\n');
+
+const PATENT_OCR_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/^\s*r[Il|l][sS](?=\s*[#%*¥]?\s*=)/gim, 'r1'],
+  [/\br[Il|l]{2}(?=\s*[#%*¥]?\s*=)/g, 'r11'],
+  [/^\s*[Tt]\s*r\s*(\d{1,2})\s*[#%*¥]?\s*=\s*/gim, 'r$1='],
+  [/^\s*[Tt][Il|l]?(\d{1,2})\s*[#%*¥]?\s*=\s*/gim, 'r$1='],
+  [/\br[Il|](?=\s*[#%*¥]?\s*=)/g, 'r1'],
+  [/\bd[Il|](?=\s*[#%*¥]?\s*=)/g, 'd1'],
+  [/\bv[Il|](?=\s*[#%*¥]?\s*=)/g, 'v1'],
+  [/\bN[Il|](?=\s*[#%*¥]?\s*=)/g, 'N1'],
+  [/\brl(?=\d)/g, 'r1'],
+  [/\bdl(?=\d)/g, 'd1'],
+  [/\bvl(?=\d)/g, 'v1'],
+  [/\bNl(?=\d)/g, 'N1'],
+  [/\br1(1[0-7])(?=\s*[#%*¥]?\s*=|\))/g, 'r$1'],
+  [/\bM[Il](?=\s*=|\s*[-:]\s*(?=\d))/g, 'N1'],
+  [/\bM(\d+)\s*[-:]\s*(?=\d)/g, 'N$1='],
+  [/\br(\d+)%\s*=/gi, 'r$1='],
+  [/\br(\d+)[#*¥]\s*=/gi, 'r$1='],
+  [/\bd(\d+)%\s*=/gi, 'd$1='],
+  [/\bd(\d+)[#*¥]\s*=/gi, 'd$1='],
+  [/\bv(\d+)%\s*=/gi, 'v$1='],
+  [/^\s*([1-9]\d?)\s*[#%*¥]\s+(?=[+\-]?\d)/gm, 'r$1= '],
+  [/^\s*(\d{1,2})\s*=\s*(?=-)/gm, 'r$1='],
+  [/^\s*[39](\d{1,2})\s*[-=]\s*(?=[+\-]?\d)/gm, 'd$1='],
+  [/^\s*4(1[0-7]|[1-9])\s*[-=]\s*(?=[+\-]?\d)/gm, 'd$1='],
+  [/^\s*(1[0-7]|[1-9])(?=\d\.\d+\s*[~〜へ])/gm, 'd$1='],
+  [/^\s*(1[0-7]|[1-9])\s+(?=[+\-]?\d+(?:\.\d+)?\s*[~〜へ])/gm, 'd$1= '],
+  [/\bN(\d+)\s*[-:]\s*=?\s*(?=\d)/g, 'N$1='],
+  [/(^|\s)0(?=\d{1,2}\s*=)/gm, '$1d'],
+  [/(^|\s)O(?=\d{1,2}\s*=)/gm, '$1d'],
+  [/^(\d{1,2})\s*=(?=\s*[+\-]?\d)/gm, 'd$1='],
+  [/([εϵ∈])\s*=/g, 'epsilon='],
+  [/\b[Oo](?=\d+(?:\.\d+)?\b)/g, '0'],
+  [/\bINF\s+INF\b/g, 'INF d='],
+  [/^\s*18\s*--\s*(?=[+\-]?\d)/gim, 'A18='],
+];
+
+const PATENT_NUMBER_SOURCE = '[+\\-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+\\-]?\\d+)?';
+const PATENT_ISOLATED_NUMBER_PATTERN = new RegExp(`(?:^|[^A-Za-z0-9_.])(${PATENT_NUMBER_SOURCE})(?=$|[^A-Za-z0-9_.])`, 'gi');
+
+const PDFJS_CMAP_ASSET_MODULES = {
+  ...import.meta.glob('../../../node_modules/pdfjs-dist/cmaps/Adobe-Japan1-*.bcmap', { query: '?url', import: 'default', eager: true }),
+  ...import.meta.glob('../../../node_modules/pdfjs-dist/cmaps/UniJIS*.bcmap', { query: '?url', import: 'default', eager: true }),
+  ...import.meta.glob('../../../node_modules/pdfjs-dist/cmaps/*RKSJ*.bcmap', { query: '?url', import: 'default', eager: true }),
+  ...import.meta.glob('../../../node_modules/pdfjs-dist/cmaps/Hankaku.bcmap', { query: '?url', import: 'default', eager: true }),
+  ...import.meta.glob('../../../node_modules/pdfjs-dist/cmaps/Hiragana.bcmap', { query: '?url', import: 'default', eager: true }),
+  ...import.meta.glob('../../../node_modules/pdfjs-dist/cmaps/Katakana.bcmap', { query: '?url', import: 'default', eager: true }),
+  ...import.meta.glob('../../../node_modules/pdfjs-dist/cmaps/Roman.bcmap', { query: '?url', import: 'default', eager: true }),
+};
+
+const PDFJS_STANDARD_FONT_ASSET_MODULES = import.meta.glob('../../../node_modules/pdfjs-dist/standard_fonts/*', { query: '?url', import: 'default', eager: true });
+
+function buildPdfJsAssetUrlMap(modules: Record<string, unknown>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [filePath, assetUrl] of Object.entries(modules ?? {})) {
+    const fileName = String(filePath.split('/').pop() ?? '').trim();
+    const resolvedUrl = String(assetUrl ?? '').trim();
+    if (!fileName || !resolvedUrl) continue;
+    result[fileName] = resolvedUrl;
+  }
+  return result;
+}
+
+const PDFJS_CMAP_ASSET_URLS = buildPdfJsAssetUrlMap(PDFJS_CMAP_ASSET_MODULES as Record<string, unknown>);
+const PDFJS_STANDARD_FONT_ASSET_URLS = buildPdfJsAssetUrlMap(PDFJS_STANDARD_FONT_ASSET_MODULES as Record<string, unknown>);
+
+class PdfJsBinaryDataFactory {
+  constructor(_options?: { cMapUrl?: string | null; standardFontDataUrl?: string | null; wasmUrl?: string | null }) {}
+
+  async fetch({ kind, filename }: { kind: string; filename: string }): Promise<Uint8Array> {
+    const assetMap = kind === 'cMapUrl'
+      ? PDFJS_CMAP_ASSET_URLS
+      : kind === 'standardFontDataUrl'
+        ? PDFJS_STANDARD_FONT_ASSET_URLS
+        : null;
+    const assetUrl = assetMap ? String(assetMap[String(filename ?? '').trim()] ?? '').trim() : '';
+    if (!assetUrl) {
+      throw new Error(`Missing PDF.js asset for ${kind}:${filename}`);
+    }
+    const response = await fetch(assetUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to load PDF.js asset ${filename}: ${response.status} ${response.statusText}`);
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  }
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const rawValue of values) {
+    const value = String(rawValue ?? '').trim();
+    if (!value) continue;
+    const key = value.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+function uniqueNumbers(values: number[], digits = 6): number[] {
+  const seen = new Set<string>();
+  const result: number[] = [];
+  for (const rawValue of values) {
+    const value = Number(rawValue);
+    if (!Number.isFinite(value)) continue;
+    const key = value.toFixed(digits);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+function collectMatches(text: string, pattern: RegExp, transform?: (value: string) => string): string[] {
+  const result: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const value = transform ? transform(match[0]) : match[0];
+    if (value) result.push(value);
+  }
+  pattern.lastIndex = 0;
+  return uniqueStrings(result);
+}
+
+function collectNumericGroups(text: string, pattern: RegExp): number[] {
+  const result: number[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    for (let index = 1; index < match.length; index += 1) {
+      const value = Number(match[index]);
+      if (Number.isFinite(value)) result.push(value);
+    }
+  }
+  pattern.lastIndex = 0;
+  return uniqueNumbers(result);
+}
+
+function normalizePatentOcrText(input: string): string {
+  let text = String(input ?? '')
+    .replace(/[\u3000\t]+/g, ' ')
+    .replace(/[−–—]/g, '-')
+    .replace(/[，]/g, ',')
+    .replace(new RegExp(`(${PATENT_NUMBER_SOURCE})\\s*[×xX*]\\s*10\\s*\\^?\\s*([+\\-]?\\d+)`, 'gi'), '$1e$2')
+    .replace(new RegExp(`(${PATENT_NUMBER_SOURCE})\\s*[×xX*]\\s*10\\s*[”″〃]+`, 'gi'), '$1e-4')
+    .replace(new RegExp(`(${PATENT_NUMBER_SOURCE})\\s*[×xX*]\\s*10\\s*['’\\x60]+`, 'gi'), '$1e-5')
+    .replace(/(\d),(\d)/g, '$1.$2')
+    .replace(/(\d)\.\s+(\d)/g, '$1.$2')
+    .replace(/([+\-]?\d)\s+\.\s+(\d)/g, '$1.$2')
+    .replace(/([+\-])\s+(\d)/g, '$1$2')
+    .replace(/(\d)[Oo](?=\d|\.)/g, (_match, digit) => `${digit}0`)
+    .replace(/\b[Oo](?=\d|\.\d)/g, '0')
+    .replace(/\b[Il](?=\d{2,}\b)/g, '1');
+
+  for (const [pattern, replacement] of PATENT_OCR_REPLACEMENTS) {
+    text = text.replace(pattern, replacement);
+  }
+
+  return text.replace(/\s{2,}/g, ' ');
+}
+
+function isInfLikePatentImport(value: any): boolean {
+  if (value === Infinity) return true;
+  const text = String(value ?? '').trim().toUpperCase();
+  return text === 'INF' || text === 'INFINITY' || text === '∞';
+}
+
+function extractPatentNumbers(text: string): number[] {
+  const result: number[] = [];
+  const sourceText = String(text ?? '');
+  let match: RegExpExecArray | null;
+  while ((match = PATENT_ISOLATED_NUMBER_PATTERN.exec(sourceText)) !== null) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) result.push(value);
+  }
+  PATENT_ISOLATED_NUMBER_PATTERN.lastIndex = 0;
+  return result;
+}
+
+function extractPatentSurfaceIndexHint(line: string): number | null {
+  const text = String(line ?? '').trim();
+  if (!text) return null;
+
+  const explicitRadiusMatch = text.match(/\br\s*(\d+)\b/i);
+  if (explicitRadiusMatch) {
+    const value = Number(explicitRadiusMatch[1]);
+    return Number.isInteger(value) ? value : null;
+  }
+
+  const explicitThicknessMatch = text.match(/\bd\s*(\d+)\b/i);
+  if (explicitThicknessMatch) {
+    const value = Number(explicitThicknessMatch[1]);
+    return Number.isInteger(value) ? value : null;
+  }
+
+  const surfaceHeaderMatch = text.match(/第\s*([0-9]+)\s*面.*\(\s*r?\s*(\d+)\s*\)/i)
+    || text.match(/\(\s*r?\s*(\d+)\s*\).*第\s*([0-9]+)\s*面/i);
+  if (surfaceHeaderMatch) {
+    const value = Number(surfaceHeaderMatch[2] ?? surfaceHeaderMatch[1]);
+    return Number.isInteger(value) ? value : null;
+  }
+
+  const plainSurfaceHeaderMatch = text.match(/第\s*([0-9]+)\s*面/i);
+  if (plainSurfaceHeaderMatch) {
+    const value = Number(plainSurfaceHeaderMatch[1]);
+    return Number.isInteger(value) ? value : null;
+  }
+
+  return null;
+}
+
+function normalizePatentAsphereLine(line: string): string {
+  return String(line ?? '')
+    .replace(/^\s*\[[^\]]+\]\s*/g, '')
+    .replace(/^\s*(?:【\s*0*\d+\s*】|\[\s*0*\d+\s*\])\s*/g, '')
+    .replace(/^\s*\d+\s+(?=A[dD]\s*[:=\-])/i, '')
+    .replace(/\bAd(?=\s*[:=\-])/gi, 'A4')
+    .replace(/\bA([Il|])\s*([0-9])/g, 'A1$2')
+    .replace(/\bAL\s*([0-9])/gi, 'A1$1')
+    .replace(/\bA\s*([0-9]{1,2})\s*--\s*/gi, 'A$1=-')
+    .replace(/\bA\s*([0-9]{1,2})\s*[-ー]\s*(?=[+\-]?\d)/gi, 'A$1=')
+    .replace(/^\s*M(?=\s*[:=]\s*[+\-]?\d)/i, 'A4')
+    .replace(/\bM(?=\s*[:=]\s*[+\-]?\d+(?:\.\d+)?\s*[x×X*]\s*10)/g, 'A4')
+    .replace(/^[&gq](?=\s*[:=]\s*[+\-]?\d)/i, 'epsilon')
+    .replace(/\bx\s*10\s*[”″〃]+/g, 'e-4')
+    .replace(/\bx\s*10\s*['’`]+/g, 'e-5')
+    .replace(/\bx\s*10\s*\*/g, 'e-6');
+}
+
+function isLikelyCorruptedPatentAsphereValue(rawText: string, value: number): boolean {
+  if (!Number.isFinite(value)) return true;
+
+  const raw = String(rawText ?? '').trim();
+  if (!raw) return true;
+
+  const normalized = raw
+    .replace(/\s+/g, '')
+    .replace(/[”″〃]/g, '')
+    .replace(/[’'`]/g, '');
+
+  const hasExplicitExponent = /e[+\-]?\d+/i.test(normalized) || /(?:x|×|\*)10/i.test(raw);
+  const hasDecimalPoint = normalized.includes('.');
+  const digitCount = (normalized.match(/\d/g) ?? []).length;
+  const absoluteValue = Math.abs(value);
+
+  if (!hasExplicitExponent && !hasDecimalPoint && digitCount >= 6) return true;
+  if (!hasExplicitExponent && absoluteValue >= 1e4) return true;
+  if (absoluteValue >= 1e8) return true;
+  return false;
+}
+
+function normalizePatentAsphereHeaderText(text: string): string {
+  return String(text ?? '')
+    .replace(/【\s*0*(\d+)\s*】\s*/g, '')
+    .replace(/\[\s*/g, '[')
+    .replace(/\s*\]/g, ']')
+    .replace(/第\s*(\d+)\s*面\s*\(?\s*[gG6]?\s*(\d+)\s*\)?/g, (_match, surfaceText, parenText) => {
+      const surface = Number(surfaceText);
+      const paren = Number(parenText);
+      const resolved = Number.isInteger(paren) ? paren : surface;
+      return `第${surface}面(${resolved})`;
+    })
+    .replace(/\s*の\s*非\s*球面\s*係数/g, 'の非球面係数')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isPatentNoiseLine(line: string): boolean {
+  const text = String(line ?? '').trim();
+  if (!text) return true;
+  if (/^g[0o]?2b\s*\d+/i.test(text)) return true;
+  if (/特許|請求項|発明|課題|作用|効果|手段/.test(text) && !/(?:r\s*\d+|d\s*\d+|n\s*\d+|v\s*\d+|epsilon|[εϵ]|\bA\s*(?:4|6|8|10|12|14|16|18|20|22)\s*=)/i.test(text)) {
+    return true;
+  }
+  if (/[ぁ-んァ-ン一-龯]/.test(text) && /(?:である|有する|方向|高さ|パワ)/.test(text)) return true;
+  return false;
+}
+
+function parsePatentAsphereTerms(line: string): PatentAsphereTerms {
+  const text = normalizePatentAsphereLine(line);
+  const coefficients: Record<number, number> = {};
+  let surfType: PatentAsphereTerms['surfType'] = null;
+
+  let conic: number | null = null;
+  const conicPatterns = [
+    new RegExp(`(?:^|[^A-Z0-9])(?:conic\\s*constant|conic|cc|k)\\s*[:=]?\\s*(${PATENT_NUMBER_SOURCE})`, 'i'),
+    new RegExp(`\\bK\\s*=\\s*(${PATENT_NUMBER_SOURCE})`, 'i'),
+    new RegExp(`(?:^|[^A-Z0-9])(?:epsilon|ε|ϵ|2次曲面パラメータ|二次曲面パラメータ)\\s*[:=：]?\\s*(${PATENT_NUMBER_SOURCE})`, 'i'),
+    new RegExp(`^\\s*(?:&|g|q)\\s*[:=]\\s*(${PATENT_NUMBER_SOURCE})`, 'i'),
+    new RegExp(`(?:円錐定数|コーニック定数|コニック定数|円すい定数)\\s*[:=：]?\\s*(${PATENT_NUMBER_SOURCE})`, 'i'),
+  ];
+  for (const pattern of conicPatterns) {
+    const match = text.match(pattern);
+    const value = Number(match?.[1]);
+    if (Number.isFinite(value)) {
+      conic = value;
+      break;
+    }
+  }
+
+  const orderPattern = new RegExp(`\\bA\\s*(3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22)\\s*[:=]?\\s*(${PATENT_NUMBER_SOURCE})`, 'gi');
+  for (const match of text.matchAll(orderPattern)) {
+    const order = Number(match[1]);
+    const rawValue = String(match[2] ?? '');
+    const value = Number(rawValue);
+    if (!Number.isFinite(order) || !Number.isFinite(value)) continue;
+    if (isLikelyCorruptedPatentAsphereValue(rawValue, value)) continue;
+    if (order >= 4 && order <= 22 && order % 2 === 0) {
+      coefficients[(order - 2) / 2] = value;
+      surfType = surfType === 'Aspheric odd' ? surfType : 'Aspheric even';
+      continue;
+    }
+    if (order >= 3 && order <= 21 && order % 2 === 1) {
+      coefficients[(order - 1) / 2] = value;
+      surfType = 'Aspheric odd';
+    }
+  }
+
+  const relaxedOrderPattern = new RegExp(`\\bA\\s*([Il|1]?\\s*(?:3|4|5|6|7|8|9)|[12Il|]\\s*(?:0|1|2|3|4|5|6|7|8|9)|[dD])\\s*(?:[:=]|=-)?\\s*(${PATENT_NUMBER_SOURCE})`, 'gi');
+  for (const match of text.matchAll(relaxedOrderPattern)) {
+    const normalizedOrderText = String(match[1] ?? '')
+      .replace(/[Il|]/g, '1')
+      .replace(/[dD]/g, '4')
+      .replace(/\\s+/g, '');
+    const order = Number(normalizedOrderText);
+    const rawValue = String(match[2] ?? '');
+    const value = Number(rawValue);
+    if (!Number.isFinite(order) || !Number.isFinite(value)) continue;
+    if (isLikelyCorruptedPatentAsphereValue(rawValue, value)) continue;
+    if (order >= 4 && order <= 22 && order % 2 === 0) {
+      coefficients[(order - 2) / 2] = value;
+      surfType = surfType === 'Aspheric odd' ? surfType : 'Aspheric even';
+      continue;
+    }
+    if (order >= 3 && order <= 21 && order % 2 === 1) {
+      coefficients[(order - 1) / 2] = value;
+      surfType = 'Aspheric odd';
+    }
+  }
+
+  const coefPattern = new RegExp(`\\bcoef\\s*(10|[1-9])\\s*[:=]?\\s*(${PATENT_NUMBER_SOURCE})`, 'gi');
+  for (const match of text.matchAll(coefPattern)) {
+    const index = Number(match[1]);
+    const value = Number(match[2]);
+    if (!Number.isFinite(index) || !Number.isFinite(value) || index < 1 || index > 10) continue;
+    coefficients[index] = value;
+    if (!surfType) surfType = 'Aspheric even';
+  }
+
+  const japaneseOrderPattern = new RegExp(`(?:非球面係数|非球面\\s*係数|係数)\\s*A?\\s*(3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22)\\s*[:=：]?\\s*(${PATENT_NUMBER_SOURCE})`, 'gi');
+  for (const match of text.matchAll(japaneseOrderPattern)) {
+    const order = Number(match[1]);
+    const rawValue = String(match[2] ?? '');
+    const value = Number(rawValue);
+    if (!Number.isFinite(order) || !Number.isFinite(value)) continue;
+    if (isLikelyCorruptedPatentAsphereValue(rawValue, value)) continue;
+    if (order >= 4 && order <= 22 && order % 2 === 0) {
+      coefficients[(order - 2) / 2] = value;
+      surfType = surfType === 'Aspheric odd' ? surfType : 'Aspheric even';
+      continue;
+    }
+    if (order >= 3 && order <= 21 && order % 2 === 1) {
+      coefficients[(order - 1) / 2] = value;
+      surfType = 'Aspheric odd';
+    }
+  }
+
+  return {
+    hasAny: conic !== null || Object.keys(coefficients).length > 0,
+    conic,
+    surfType,
+    coefficients,
+  };
+}
+
+function textContainsPatentAsphereMarkers(text: string): boolean {
+  const source = String(text ?? '');
+  if (!source.trim()) return false;
+  return /非球面係数|非球面|円錐定数|コーニック定数|コニック定数|円すい定数|2次曲面パラメータ|二次曲面パラメータ|(?:^|\s)[εϵ]\s*[:=]|\bepsilon\s*[:=]|\bA\s*(?:4|6|8|10|12|14|16|18|20|22)\s*[:=]/im.test(source);
+}
+
+function textContainsPatentRadiusMarkers(text: string): boolean {
+  const source = normalizePatentOcrText(String(text ?? ''));
+  if (!source.trim()) return false;
+  return /\br\s*\d+\s*[#%*¥]?\s*=/i.test(source);
+}
+
+function textLooksLikePatentOpticalTable(text: string): boolean {
+  const source = normalizePatentOcrText(String(text ?? ''));
+  if (!source.trim()) return false;
+  return /曲率半径|軸上面間隔|屈折率|アッベ数|\bd\s*\d+\s*[#%*¥]?\s*=|\bN\s*\d+\s*[#%*¥]?\s*=|\bv\s*\d+\s*[#%*¥]?\s*=/i.test(source);
+}
+
+function candidateRowsContainPatentAsphereMarkers(rows: LiteratureCandidateRow[]): boolean {
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  return rows.some((row) => parsePatentAsphereTerms(row?.line ?? '').hasAny);
+}
+
+function candidateRowsContainPatentRadiusMarkers(rows: LiteratureCandidateRow[]): boolean {
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  return rows.some((row) => textContainsPatentRadiusMarkers(row?.line ?? ''));
+}
+
+function countCandidateRowsWithPatentAsphereMarkers(rows: LiteratureCandidateRow[]): number {
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+  return rows.reduce((count, row) => count + (parsePatentAsphereTerms(row?.line ?? '').hasAny ? 1 : 0), 0);
+}
+
+function getPatentCandidateSurfaceIndex(line: string): number | null {
+  const normalized = normalizePatentOcrText(String(line ?? ''));
+  const match = normalized.match(/(?:^|[^A-Z0-9])(?:r|d)\s*(\d{1,2})\s*[#%*¥]?\s*=/i)
+    || normalized.match(/第\s*(\d{1,2})\s*面/i);
+  const value = Number(match?.[1]);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function candidateLineHasRadius(line: string): boolean {
+  return /(?:^|[^A-Z0-9])r\s*\d{0,2}\s*[#%*¥]?\s*=\s*(?:\([^)]*\)|INF|INFINITY|∞|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)/i.test(normalizePatentOcrText(String(line ?? '')));
+}
+
+function candidateLineHasThickness(line: string): boolean {
+  return /(?:^|[^A-Z0-9])d\s*\d{0,2}\s*[#%*¥]?\s*=\s*(?:INF|INFINITY|∞|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)/i.test(normalizePatentOcrText(String(line ?? '')));
+}
+
+function candidateLineIsAsphereLike(line: string): boolean {
+  const text = String(line ?? '');
+  return /非\s*球面\s*係数/i.test(text) || parsePatentAsphereTerms(text).hasAny;
+}
+
+function patentCandidateGeometryScore(line: string): number {
+  let score = 0;
+  if (candidateLineHasRadius(line)) score += 2;
+  if (candidateLineHasThickness(line)) score += 1;
+  if (/\bN\s*\d{0,2}\s*[#%*¥]?\s*=/i.test(normalizePatentOcrText(line))) score += 0.2;
+  if (/\bv\s*\d{0,2}\s*[#%*¥]?\s*=/i.test(normalizePatentOcrText(line))) score += 0.2;
+  return score;
+}
+
+function cleanupPatentCandidateRows(rows: LiteratureCandidateRow[]): LiteratureCandidateRow[] {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+
+  const prepared: Array<{ row: LiteratureCandidateRow; index: number; groupKey: string; surfaceIndex: number | null; score: number; kind: number }> = [];
+  const seenLines = new Set<string>();
+  const groupOrder = new Map<string, number>();
+  const bestGeometryScore = new Map<string, number>();
+
+  rows.forEach((rawRow, index) => {
+    const sanitizedLine = sanitizePatentCandidateLine(rawRow?.line ?? '');
+    if (!sanitizedLine || isPatentNoiseLine(sanitizedLine)) return;
+
+    const hasGeometry = candidateLineHasRadius(sanitizedLine) || candidateLineHasThickness(sanitizedLine);
+    const isAsphereLike = candidateLineIsAsphereLike(sanitizedLine);
+    if (!hasGeometry && !isAsphereLike) return;
+
+    const lineKey = sanitizedLine.replace(/\s+/g, ' ').trim().toUpperCase();
+    const contextKey = `${rawRow?.embodimentKey ?? 'all'}|${rawRow?.zoomKey ?? 'all'}`;
+    const exactKey = `${contextKey}|${lineKey}`;
+    if (seenLines.has(exactKey)) return;
+    seenLines.add(exactKey);
+
+    if (!groupOrder.has(contextKey)) groupOrder.set(contextKey, groupOrder.size);
+
+    const surfaceIndex = rawRow?.surfaceIndex ?? getPatentCandidateSurfaceIndex(sanitizedLine);
+    const score = hasGeometry ? patentCandidateGeometryScore(sanitizedLine) : 0;
+    const kind = hasGeometry ? 0 : 1;
+    const normalizedNumbers = extractPatentNumbers(sanitizedLine);
+    const row = {
+      ...rawRow,
+      line: sanitizedLine,
+      numbers: normalizedNumbers.length > 0 ? normalizedNumbers : rawRow.numbers,
+      surfaceIndex,
+    };
+    prepared.push({ row, index, groupKey: contextKey, surfaceIndex, score, kind });
+
+    if (hasGeometry && surfaceIndex !== null) {
+      const geometryKey = `${contextKey}|${surfaceIndex}`;
+      bestGeometryScore.set(geometryKey, Math.max(bestGeometryScore.get(geometryKey) ?? 0, score));
+    }
+  });
+
+  return prepared
+    .filter((item) => {
+      if (item.kind !== 0 || item.surfaceIndex === null) return true;
+      const bestScore = bestGeometryScore.get(`${item.groupKey}|${item.surfaceIndex}`) ?? item.score;
+      return !(bestScore >= 3 && item.score < bestScore);
+    })
+    .sort((left, right) => {
+      const groupCompare = (groupOrder.get(left.groupKey) ?? 0) - (groupOrder.get(right.groupKey) ?? 0);
+      if (groupCompare !== 0) return groupCompare;
+      if (left.kind !== right.kind) return left.kind - right.kind;
+      if (left.kind === 0) {
+        const leftSurface = left.surfaceIndex ?? 9999;
+        const rightSurface = right.surfaceIndex ?? 9999;
+        if (leftSurface !== rightSurface) return leftSurface - rightSurface;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.row);
+}
+
+function formatPatentNumericValue(value: number): string {
+  if (!Number.isFinite(value)) return '';
+  const text = Number(value).toExponential(12).replace(/e\+?/i, 'e');
+  const numeric = Number(text);
+  return Number.isFinite(numeric)
+    ? String(numeric).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+    : String(value);
+}
+
+function sanitizePatentCandidateLine(line: string): string {
+  const text = String(line ?? '').trim();
+  if (!text) return '';
+
+  const withoutContextPrefix = text.replace(/^\[[^\]]+\]\s*/g, '').trim();
+  const headerMatch = withoutContextPrefix.match(/(?:【\s*0*\d+\s*】\s*)?\[?\s*第\s*\d+\s*面[^\n]*?非\s*球面\s*係数\s*\]?/i);
+  if (headerMatch) {
+    return normalizePatentAsphereHeaderText(headerMatch[0]);
+  }
+
+  const asphereTerms = parsePatentAsphereTerms(withoutContextPrefix);
+  if (asphereTerms.hasAny) {
+    const parts: string[] = [];
+    if (asphereTerms.conic !== null) parts.push(`epsilon=${formatPatentNumericValue(asphereTerms.conic)}`);
+    for (const [indexText, rawValue] of Object.entries(asphereTerms.coefficients).sort((left, right) => Number(left[0]) - Number(right[0]))) {
+      const index = Number(indexText);
+      if (!Number.isInteger(index) || !Number.isFinite(rawValue)) continue;
+      const order = asphereTerms.surfType === 'Aspheric odd' ? (index * 2) + 1 : (index * 2) + 2;
+      parts.push(`A${order}=${formatPatentNumericValue(rawValue)}`);
+    }
+    if (parts.length > 0) return parts.join(' ');
+  }
+
+  const normalized = normalizePatentOcrText(withoutContextPrefix);
+  if (isPatentNoiseLine(normalized)) return '';
+  if (/[ぁ-んァ-ン一-龯]/.test(normalized) && /\bd\s*\d+\s*[<＜]/i.test(normalized)) return '';
+  const radiusPart = normalized.match(/\br\s*\d*\s*[#%*¥]?\s*=\s*(?:\([^)]*\)|INF|INFINITY|∞|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
+  const thicknessPart = normalized.match(/\bd\s*\d*\s*[#%*¥]?\s*=\s*(?:INF|INFINITY|∞|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?(?:\s*[~〜]\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)*)/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
+  const refractiveIndexPart = normalized.match(/\bN\s*\d*\s*[#%*¥]?\s*=\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
+  const abbePart = normalized.match(/\bv\s*\d*\s*[#%*¥]?\s*=\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
+  const stopPart = /絞り|\(stop\)/i.test(normalized) ? 'r= (stop)' : '';
+  const parts = [radiusPart || stopPart, thicknessPart, refractiveIndexPart, abbePart].filter(Boolean);
+  if (parts.length > 0) return parts.join(' ');
+
+  return withoutContextPrefix;
+}
+
+function isPatentOpticalDataLine(line: string): boolean {
+  const text = String(line ?? '').trim();
+  if (!text) return false;
+  if (isPatentNoiseLine(text)) return false;
+  if (isPatentAsphereContinuationLine(text)) return true;
+  if (/第\s*\d+\s*面|曲率半径|軸上面間隔|屈折率|アッベ数|絞り|\(絞り\)|\(stop\)/i.test(text)) return true;
+  return /(?:^|\s)(?:r\s*\d+|d\s*\d+|n\s*\d+|v\s*\d+|r\s*=|d\s*=|n\s*=|v\s*=)/i.test(text);
+}
+
+function isPatentAsphereContinuationLine(line: string): boolean {
+  return /^\s*(?:asph(?:eric)?|conic(?:\s*constant)?|cc(?:\s*[:=])?|k(?:\s*[:=])?|epsilon(?:\s*[:=])?|[εϵ](?:\s*[:=])?|[&gq](?:\s*[:=])?|a\s*(?:3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|[dD]|[Il|]\s*[0-9])(?:\s*[:=]|\s*=\-|\s*--)?|coef\s*(?:10|[1-9])(?:\s*[:=])?|非球面|非球面係数|円錐定数|コーニック定数|コニック定数|円すい定数|2次曲面パラメータ|二次曲面パラメータ|係数\s*A?\s*(?:3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22)\b)/i.test(normalizePatentAsphereLine(String(line ?? '').trim()));
+}
+
+function applyPatentAsphereTerms(row: Record<string, any>, terms: PatentAsphereTerms): void {
+  if (!row || !terms.hasAny) return;
+  const surfType = String(row.surfType ?? '').trim();
+  if (!surfType || surfType === 'Spherical') {
+    row.surfType = terms.surfType || 'Aspheric even';
+  }
+  if (terms.conic !== null) {
+    row.conic = String(terms.conic);
+  }
+  for (const [indexText, value] of Object.entries(terms.coefficients)) {
+    const index = Number(indexText);
+    if (!Number.isInteger(index) || index < 1 || index > 10) continue;
+    row[`coef${index}`] = String(value);
+  }
+}
+
+function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const blocks: any[] = [];
+
+  const inferImageSemidia = (): number | null => {
+    for (let index = safeRows.length - 1; index >= 0; index -= 1) {
+      const row = safeRows[index] || {};
+      const raw = row?.semidia ?? row?.semiDiameter ?? row?.semiDia ?? row?.['semi diameter'] ?? row?.['Semi Diameter'];
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    }
+    return null;
+  };
+
+  const firstRow = safeRows[0] || {};
+  const objectDistanceMode = isInfLikePatentImport(firstRow?.thickness) ? 'INF' : 'Finite';
+  const objectDistance = Number(firstRow?.thickness);
+  blocks.push({
+    blockId: 'ObjectSurface-1',
+    blockType: 'ObjectSurface',
+    role: null,
+    constraints: {},
+    parameters: objectDistanceMode === 'INF'
+      ? { objectDistanceMode: 'INF' }
+      : { objectDistanceMode: 'Finite', objectDistance: Number.isFinite(objectDistance) ? objectDistance : 10 },
+    variables: {},
+    metadata: { source: 'patent-import-fallback' },
+  });
+
+  let stopCount = 0;
+  let lensCount = 0;
+  let doubletCount = 0;
+  let tripletCount = 0;
+  let singleCount = 0;
+  let gapCount = 0;
+  const end = Math.max(1, safeRows.length - 1);
+
+  const rowObjectType = (row: Record<string, any>): string => String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+  const isStopRow = (row: Record<string, any>): boolean => {
+    const objectType = rowObjectType(row);
+    return objectType === 'stop' || objectType === 'sto';
+  };
+  const isFallbackGapRow = (row: Record<string, any>): boolean => {
+    if (!row || typeof row !== 'object') return false;
+    if (row._patentImportKind === 'surface') return false;
+    return isPatentGapRow(row);
+  };
+  const getSemidia = (row: Record<string, any>): any => row?.semidia ?? row?.semiDiameter ?? row?.semiDia ?? row?.['semi diameter'] ?? row?.['Semi Diameter'] ?? '';
+  const normalizeBlockRadius = (value: any): any => isInfLikePatentImport(value) ? 'INF' : (String(value ?? '').trim() === '' ? 'INF' : value);
+  const normalizeBlockThickness = (value: any): string | number => {
+    if (isInfLikePatentImport(value)) return 'INF';
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+  const getMediumMaterial = (row: Record<string, any>): string => {
+    const material = String(row?.material ?? '').trim();
+    if (material && material.toUpperCase() !== 'AIR') return material;
+    const rindex = String(row?.rindex ?? '').trim();
+    return rindex || '';
+  };
+  const materialKey = (value: string): string => String(value ?? '').replace(/\s+/g, '').toUpperCase();
+  const hasPostGap = (row: Record<string, any>): boolean => {
+    const thickness = normalizeBlockThickness(row?.thickness);
+    return thickness === 'INF' || (typeof thickness === 'number' && Number.isFinite(thickness) && Math.abs(thickness) > 1e-12);
+  };
+  const appendGapAfterSurface = (row: Record<string, any>, rowIndex: number, from: string, groupMaterials: string[] = []) => {
+    if (!hasPostGap(row)) return;
+    gapCount += 1;
+    const rawMaterial = String(row?.material ?? '').trim();
+    const rawMaterialKey = materialKey(rawMaterial);
+    const groupMaterialKeys = new Set(groupMaterials.map((material) => materialKey(material)).filter(Boolean));
+    const gapMaterial = rawMaterial && rawMaterialKey !== 'AIR' && !groupMaterialKeys.has(rawMaterialKey) ? rawMaterial : 'AIR';
+    blocks.push({
+      blockId: `Gap-${gapCount}`,
+      blockType: 'Gap',
+      role: null,
+      constraints: {},
+      parameters: { thickness: normalizeBlockThickness(row?.thickness), material: gapMaterial },
+      variables: {},
+      metadata: { source: 'patent-import-fallback', from, rowIndex },
+    });
+  };
+  const copySurfaceShapeParams = (row: Record<string, any>, prefix: string): Record<string, any> => {
+    const params: Record<string, any> = {};
+    const surfType = String(row?.surfType ?? '').trim() || 'Spherical';
+    params[`${prefix}SurfType`] = surfType;
+    const conicText = String(row?.conic ?? '').trim();
+    if (conicText) {
+      const conicNumeric = Number(conicText);
+      params[`${prefix}Conic`] = Number.isFinite(conicNumeric) ? conicNumeric : conicText;
+    }
+    for (let coefIndex = 1; coefIndex <= 10; coefIndex += 1) {
+      const coefText = String(row?.[`coef${coefIndex}`] ?? '').trim();
+      if (!coefText) continue;
+      const coefNumeric = Number(coefText);
+      params[`${prefix}Coef${coefIndex}`] = Number.isFinite(coefNumeric) ? coefNumeric : coefText;
+    }
+    if (surfType === 'Toric') {
+      const radiusXText = String(row?.radiusX ?? '').trim();
+      if (radiusXText) params[`${prefix}RadiusX`] = normalizeBlockRadius(row.radiusX);
+      const axisNumeric = Number(row?.axis);
+      if (Number.isFinite(axisNumeric)) params[`${prefix}Axis`] = axisNumeric;
+    }
+    return params;
+  };
+  const makeSingleSurfaceParams = (row: Record<string, any>): Record<string, any> => {
+    const surfType = String(row?.surfType ?? '').trim() || 'Spherical';
+    const params: Record<string, any> = {
+      radius: normalizeBlockRadius(row?.radius),
+      thickness: normalizeBlockThickness(row?.thickness),
+      material: String(row?.material ?? '').trim(),
+      rindex: String(row?.rindex ?? '').trim(),
+      abbe: String(row?.abbe ?? '').trim(),
+      surfType,
+      semidia: getSemidia(row),
+    };
+    const conicText = String(row?.conic ?? '').trim();
+    if (conicText) {
+      const conicNumeric = Number(conicText);
+      params.conic = Number.isFinite(conicNumeric) ? conicNumeric : conicText;
+    }
+    if (surfType === 'Toric') {
+      params.radiusX = normalizeBlockRadius(row?.radiusX);
+      params.radiusY = normalizeBlockRadius(row?.radiusY);
+      const axisNumeric = Number(row?.axis);
+      params.axis = Number.isFinite(axisNumeric) ? axisNumeric : 0;
+    }
+    for (let coefIndex = 1; coefIndex <= 10; coefIndex += 1) {
+      const coefText = String(row?.[`coef${coefIndex}`] ?? '').trim();
+      if (!coefText) continue;
+      const coefNumeric = Number(coefText);
+      params[`coef${coefIndex}`] = Number.isFinite(coefNumeric) ? coefNumeric : coefText;
+    }
+    return params;
+  };
+  const scanElementGroup = (startIndex: number): { rows: Array<{ row: Record<string, any>; rowIndex: number }>; elementCount: number; materials: string[] } | null => {
+    const groupRows: Array<{ row: Record<string, any>; rowIndex: number }> = [];
+    const materials: string[] = [];
+    for (let scanIndex = startIndex; scanIndex < end; scanIndex += 1) {
+      const candidateRow = safeRows[scanIndex] || {};
+      if (isStopRow(candidateRow) || isFallbackGapRow(candidateRow)) break;
+      const mediumMaterial = getMediumMaterial(candidateRow);
+      groupRows.push({ row: candidateRow, rowIndex: scanIndex });
+      if (mediumMaterial) {
+        materials.push(mediumMaterial);
+        if (materials.length > 3) return null;
+        continue;
+      }
+      if (materials.length > 0 && groupRows.length === materials.length + 1) {
+        return { rows: groupRows, elementCount: materials.length, materials };
+      }
+      return null;
+    }
+    return null;
+  };
+
+  for (let index = 1; index < end; index += 1) {
+    const row = safeRows[index] || {};
+    if (isStopRow(row)) {
+      stopCount += 1;
+      const stopSemidiaRaw = getSemidia(row);
+      const stopSemidia = Number(stopSemidiaRaw);
+      blocks.push({
+        blockId: `Stop-${stopCount}`,
+        blockType: 'Stop',
+        role: null,
+        constraints: {},
+        parameters: Number.isFinite(stopSemidia) && stopSemidia > 0 ? { semiDiameter: stopSemidia } : {},
+        variables: {},
+        metadata: { source: 'patent-import-fallback' },
+      });
+
+      const thicknessRaw = row?.thickness;
+      const thicknessNumeric = Number(thicknessRaw);
+      const hasGap = isInfLikePatentImport(thicknessRaw) || (Number.isFinite(thicknessNumeric) && Math.abs(thicknessNumeric) > 1e-12);
+      if (hasGap) {
+        gapCount += 1;
+        blocks.push({
+          blockId: `Gap-${gapCount}`,
+          blockType: 'Gap',
+          role: null,
+          constraints: {},
+          parameters: { thickness: isInfLikePatentImport(thicknessRaw) ? 'INF' : thicknessNumeric, material: 'AIR' },
+          variables: {},
+          metadata: { source: 'patent-import-fallback', from: 'stop-thickness' },
+        });
+      }
+      continue;
+    }
+
+    if (isFallbackGapRow(row)) {
+      const thicknessRaw = row?.thickness;
+      const thicknessNumeric = Number(thicknessRaw);
+      const hasGap = isInfLikePatentImport(thicknessRaw) || (Number.isFinite(thicknessNumeric) && Math.abs(thicknessNumeric) > 1e-12);
+      if (hasGap) {
+        gapCount += 1;
+        blocks.push({
+          blockId: `Gap-${gapCount}`,
+          blockType: 'Gap',
+          role: null,
+          constraints: {},
+          parameters: {
+            thickness: isInfLikePatentImport(thicknessRaw) ? 'INF' : thicknessNumeric,
+            material: 'AIR',
+          },
+          variables: {},
+          metadata: { source: 'patent-import-fallback', from: 'gap-row', rowIndex: index },
+        });
+      }
+      continue;
+    }
+
+    const elementGroup = scanElementGroup(index);
+    if (elementGroup && elementGroup.elementCount === 1 && elementGroup.rows.length >= 2) {
+      lensCount += 1;
+      const frontSurface = elementGroup.rows[0];
+      const backSurface = elementGroup.rows[1];
+      const material = elementGroup.materials[0] || 'N-BK7';
+      const params: Record<string, any> = {
+        frontRadius: normalizeBlockRadius(frontSurface.row.radius),
+        backRadius: normalizeBlockRadius(backSurface.row.radius),
+        centerThickness: normalizeBlockThickness(frontSurface.row.thickness),
+        material,
+        ...copySurfaceShapeParams(frontSurface.row, 'front'),
+        ...copySurfaceShapeParams(backSurface.row, 'back'),
+      };
+      const rindex = String(frontSurface.row?.rindex ?? '').trim();
+      const abbe = String(frontSurface.row?.abbe ?? '').trim();
+      if (rindex) params.rindex = rindex;
+      if (abbe) params.abbe = abbe;
+      blocks.push({
+        blockId: `Lens-${lensCount}`,
+        blockType: 'Lens',
+        role: null,
+        constraints: {},
+        parameters: params,
+        aperture: { front: getSemidia(frontSurface.row), back: getSemidia(backSurface.row) },
+        variables: {},
+        metadata: { source: 'patent-import-fallback', rowRange: [frontSurface.rowIndex, backSurface.rowIndex] },
+      });
+      appendGapAfterSurface(backSurface.row, backSurface.rowIndex, 'lens-exit-thickness', elementGroup.materials);
+      index += elementGroup.rows.length - 1;
+      continue;
+    }
+
+    if (elementGroup && elementGroup.elementCount === 2 && elementGroup.rows.length >= 3) {
+      doubletCount += 1;
+      const firstSurface = elementGroup.rows[0];
+      const secondSurface = elementGroup.rows[1];
+      const thirdSurface = elementGroup.rows[2];
+      const params: Record<string, any> = {
+        radius1: normalizeBlockRadius(firstSurface.row.radius),
+        radius2: normalizeBlockRadius(secondSurface.row.radius),
+        radius3: normalizeBlockRadius(thirdSurface.row.radius),
+        thickness1: normalizeBlockThickness(firstSurface.row.thickness),
+        thickness2: normalizeBlockThickness(secondSurface.row.thickness),
+        material1: elementGroup.materials[0] || 'N-BK7',
+        material2: elementGroup.materials[1] || 'N-SF5',
+        ...copySurfaceShapeParams(firstSurface.row, 'surf1'),
+        ...copySurfaceShapeParams(secondSurface.row, 'surf2'),
+        ...copySurfaceShapeParams(thirdSurface.row, 'surf3'),
+      };
+      const abbe1 = String(firstSurface.row?.abbe ?? '').trim();
+      const abbe2 = String(secondSurface.row?.abbe ?? '').trim();
+      if (abbe1) params.abbe1 = abbe1;
+      if (abbe2) params.abbe2 = abbe2;
+      blocks.push({
+        blockId: `Doublet-${doubletCount}`,
+        blockType: 'Doublet',
+        role: null,
+        constraints: {},
+        parameters: params,
+        aperture: { s1: getSemidia(firstSurface.row), s2: getSemidia(secondSurface.row), s3: getSemidia(thirdSurface.row) },
+        variables: {},
+        metadata: { source: 'patent-import-fallback', rowRange: [firstSurface.rowIndex, thirdSurface.rowIndex] },
+      });
+      appendGapAfterSurface(thirdSurface.row, thirdSurface.rowIndex, 'doublet-exit-thickness', elementGroup.materials);
+      index += elementGroup.rows.length - 1;
+      continue;
+    }
+
+    if (elementGroup && elementGroup.elementCount === 3 && elementGroup.rows.length >= 4) {
+      tripletCount += 1;
+      const firstSurface = elementGroup.rows[0];
+      const secondSurface = elementGroup.rows[1];
+      const thirdSurface = elementGroup.rows[2];
+      const fourthSurface = elementGroup.rows[3];
+      const params: Record<string, any> = {
+        radius1: normalizeBlockRadius(firstSurface.row.radius),
+        radius2: normalizeBlockRadius(secondSurface.row.radius),
+        radius3: normalizeBlockRadius(thirdSurface.row.radius),
+        radius4: normalizeBlockRadius(fourthSurface.row.radius),
+        thickness1: normalizeBlockThickness(firstSurface.row.thickness),
+        thickness2: normalizeBlockThickness(secondSurface.row.thickness),
+        thickness3: normalizeBlockThickness(thirdSurface.row.thickness),
+        material1: elementGroup.materials[0] || 'N-BK7',
+        material2: elementGroup.materials[1] || 'N-SF5',
+        material3: elementGroup.materials[2] || 'N-BK7',
+        ...copySurfaceShapeParams(firstSurface.row, 'surf1'),
+        ...copySurfaceShapeParams(secondSurface.row, 'surf2'),
+        ...copySurfaceShapeParams(thirdSurface.row, 'surf3'),
+        ...copySurfaceShapeParams(fourthSurface.row, 'surf4'),
+      };
+      const abbe1 = String(firstSurface.row?.abbe ?? '').trim();
+      const abbe2 = String(secondSurface.row?.abbe ?? '').trim();
+      const rindex3 = String(thirdSurface.row?.rindex ?? '').trim();
+      const abbe3 = String(thirdSurface.row?.abbe ?? '').trim();
+      if (abbe1) params.abbe1 = abbe1;
+      if (abbe2) params.abbe2 = abbe2;
+      if (rindex3) params.rindex3 = rindex3;
+      if (abbe3) params.abbe3 = abbe3;
+      blocks.push({
+        blockId: `Triplet-${tripletCount}`,
+        blockType: 'Triplet',
+        role: null,
+        constraints: {},
+        parameters: params,
+        aperture: { s1: getSemidia(firstSurface.row), s2: getSemidia(secondSurface.row), s3: getSemidia(thirdSurface.row), s4: getSemidia(fourthSurface.row) },
+        variables: {},
+        metadata: { source: 'patent-import-fallback', rowRange: [firstSurface.rowIndex, fourthSurface.rowIndex] },
+      });
+      appendGapAfterSurface(fourthSurface.row, fourthSurface.rowIndex, 'triplet-exit-thickness', elementGroup.materials);
+      index += elementGroup.rows.length - 1;
+      continue;
+    }
+
+    singleCount += 1;
+    blocks.push({
+      blockId: `SingleSurface-${singleCount}`,
+      blockType: 'SingleSurface',
+      role: null,
+      constraints: {},
+      parameters: makeSingleSurfaceParams(row),
+      variables: {},
+      metadata: { source: 'patent-import-fallback', rowIndex: index },
+    });
+  }
+
+  const imageSemidia = inferImageSemidia();
+  blocks.push({
+    blockId: 'ImageSurface-1',
+    blockType: 'ImageSurface',
+    role: null,
+    constraints: {},
+    parameters: Number.isFinite(imageSemidia as any) && (imageSemidia as number) > 0
+      ? { semidia: imageSemidia, semidiaMode: 'Auto', optimizeSemiDia: 'A' }
+      : { semidiaMode: 'Auto', optimizeSemiDia: 'A' },
+    variables: {},
+    metadata: { source: 'patent-import-fallback' },
+  });
+
+  return blocks;
+}
+
+function normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
+  if (!Array.isArray(blocks)) return [];
+
+  let hasObjectSurface = false;
+  for (const block of blocks) {
+    if (!block || block.blockType !== 'ObjectSurface') continue;
+    hasObjectSurface = true;
+    const params = (block.parameters && typeof block.parameters === 'object')
+      ? block.parameters
+      : (block.parameters = {});
+
+    const modeRaw = String(params.objectDistanceMode ?? '').trim();
+    if (isInfLikePatentImport(modeRaw)) {
+      params.objectDistanceMode = 'INF';
+      const distanceInf = Number(params.objectDistance);
+      params.objectDistance = Number.isFinite(distanceInf) ? distanceInf : 10;
+      continue;
+    }
+
+    params.objectDistanceMode = 'Finite';
+    const distance = Number(params.objectDistance);
+    params.objectDistance = Number.isFinite(distance) ? distance : 10;
+  }
+
+  if (!hasObjectSurface) {
+    blocks.unshift({
+      blockId: 'ObjectSurface-1',
+      blockType: 'ObjectSurface',
+      role: null,
+      constraints: {},
+      parameters: { objectDistanceMode: 'Finite', objectDistance: 10 },
+      variables: {},
+      metadata: { source: 'patent-import-fallback', inserted: true },
+    });
+  }
+
+  return blocks;
+}
+
+function attachPatentImportMetadataToBlocks(blocks: any[], summaryText: string, appliedAt: string): any[] {
+  if (!Array.isArray(blocks)) return [];
+  const summary = String(summaryText ?? '').trim();
+  return blocks.map((block) => {
+    if (!block || typeof block !== 'object') return block;
+    return {
+      ...block,
+      metadata: {
+        ...(block.metadata && typeof block.metadata === 'object' ? block.metadata : {}),
+        importSource: 'patent-import',
+        importAppliedAt: appliedAt,
+        literatureImportSummary: summary,
+      },
+    };
+  });
+}
+
+async function persistLiteratureSummaryToActiveConfig(summaryText: string): Promise<void> {
+  const summary = String(summaryText ?? '').trim();
+  if (!summary) return;
+
+  const [{ loadSystemConfigurations, saveSystemConfigurations }, { requestRefreshBlockInspector }] = await Promise.all([
+    import('../../../data/table-configuration.ts'),
+    import('../../../core/window-facade.ts'),
+  ]);
+
+  const systemConfig = loadSystemConfigurations();
+  const activeConfig = Array.isArray(systemConfig?.configurations)
+    ? systemConfig.configurations.find((config: any) => String(config?.id) === String(systemConfig?.activeConfigId)) || systemConfig.configurations[0]
+    : null;
+  if (!activeConfig) return;
+
+  const nowIso = new Date().toISOString();
+  activeConfig.systemData = {
+    ...(activeConfig.systemData || {}),
+    literatureImportSummary: summary,
+  };
+  activeConfig.metadata = {
+    ...(activeConfig.metadata || {}),
+    modified: nowIso,
+    literatureImportSummary: summary,
+  };
+  if (Array.isArray(activeConfig.blocks)) {
+    activeConfig.blocks = attachPatentImportMetadataToBlocks(activeConfig.blocks, summary, nowIso);
+  }
+  saveSystemConfigurations(systemConfig);
+
+  try {
+    requestRefreshBlockInspector(window);
+  } catch (_) {}
+}
+
+function shouldAcceptDerivedPatentBlocks(blocks: any[], rows: Array<Record<string, any>>): boolean {
+  if (!Array.isArray(blocks) || blocks.length === 0) return false;
+
+  const physicalBlocks = blocks.filter((block) => {
+    const blockType = String(block?.blockType ?? '').trim();
+    return blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane' && blockType !== 'ImageSurface';
+  });
+
+  if (physicalBlocks.length === 0) return false;
+
+  const physicalRowCount = Math.max(0, (Array.isArray(rows) ? rows.length : 0) - 2);
+  if (physicalRowCount >= 4 && physicalBlocks.length <= 1) return false;
+
+  return true;
+}
+
+function makeOption(key: string, label: string, zoomIndex: number | null = null): LiteratureOption {
+  return { key, label, zoomIndex };
+}
+
+function normalizeEmbodiment(rawValue: string): LiteratureOption {
+  const value = String(rawValue ?? '').trim();
+  if (!value) return makeOption('all', 'All');
+  const match = value.match(/(embodiment|example|numerical example|実施例)\s*([A-Za-z0-9一二三四五六七八九十\-]+)/i);
+  if (match) {
+    const suffix = String(match[2] ?? '').trim();
+    return makeOption(`embodiment-${suffix.toLowerCase()}`, `Embodiment ${suffix}`);
+  }
+  return makeOption(value.toLowerCase().replace(/\s+/g, '-'), value);
+}
+
+function normalizeZoomPosition(rawValue: string): LiteratureOption {
+  const value = String(rawValue ?? '').trim();
+  const lower = value.toLowerCase();
+  if (!value) return makeOption('all', 'All', null);
+  if (/(wide|wide end|short focal|広角|ワイド)/i.test(value)) return makeOption('wide', 'Wide', 0);
+  if (/(middle|mid|中間)/i.test(value)) return makeOption('mid', 'Mid', 1);
+  if (/(tele|tele end|long focal|望遠|テレ)/i.test(value)) return makeOption('tele', 'Tele', 2);
+  const numberMatch = lower.match(/(?:zoom|position|state|point)\s*([1-9]\d*)/i);
+  if (numberMatch) {
+    const zoomIndex = Math.max(0, Number(numberMatch[1]) - 1);
+    return makeOption(`position-${numberMatch[1]}`, `Position ${numberMatch[1]}`, zoomIndex);
+  }
+  return makeOption(lower.replace(/\s+/g, '-'), value, null);
+}
+
+function buildInferredZoomOptions(values: number[]): LiteratureOption[] {
+  const count = Array.isArray(values) ? values.length : 0;
+  if (count >= 3) return [makeOption('wide', 'Wide', 0), makeOption('mid', 'Mid', 1), makeOption('tele', 'Tele', 2)];
+  if (count === 2) return [makeOption('wide', 'Wide', 0), makeOption('tele', 'Tele', 1)];
+  if (count === 1) return [makeOption('position-1', 'Position 1', 0)];
+  return [];
+}
+
+function parseContextualCandidateRows(text: string): { rows: LiteratureCandidateRow[]; embodiments: LiteratureOption[]; zoomPositions: LiteratureOption[] } {
+  const embodiments = new Map<string, LiteratureOption>();
+  const zoomPositions = new Map<string, LiteratureOption>();
+  const rows: LiteratureCandidateRow[] = [];
+
+  const defaultEmbodiment = makeOption('all', 'All');
+  const defaultZoom = makeOption('all', 'All');
+  embodiments.set(defaultEmbodiment.key, defaultEmbodiment);
+  zoomPositions.set(defaultZoom.key, defaultZoom);
+
+  let currentEmbodiment = defaultEmbodiment;
+  let currentZoom = defaultZoom;
+  let currentAsphereSurfaceIndex: number | null = null;
+
+  const embodimentPattern = /(embodiment|example|numerical example|実施例)\s*[#:]?\s*([A-Za-z0-9一二三四五六七八九十\-]+)/i;
+  const zoomPattern = /(wide end|wide|tele end|tele|middle|mid|short focal length|long focal length|広角端|望遠端|中間|ワイド|テレ|zoom\s*[1-9]\d*|position\s*[1-9]\d*|state\s*[1-9]\d*)/i;
+
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const embodimentMatch = line.match(embodimentPattern);
+    if (embodimentMatch) {
+      currentEmbodiment = normalizeEmbodiment(embodimentMatch[0]);
+      embodiments.set(currentEmbodiment.key, currentEmbodiment);
+    }
+
+    const zoomMatch = line.match(zoomPattern);
+    if (zoomMatch) {
+      currentZoom = normalizeZoomPosition(zoomMatch[0]);
+      zoomPositions.set(currentZoom.key, currentZoom);
+    }
+
+    const surfaceIndexHint = extractPatentSurfaceIndexHint(line);
+    if (/非球面|円錐定数|コーニック定数|コニック定数|2次曲面パラメータ|二次曲面パラメータ/i.test(line) && surfaceIndexHint !== null) {
+      currentAsphereSurfaceIndex = surfaceIndexHint;
+    }
+
+    const numbers = extractPatentNumbers(line);
+    const asphereTerms = parsePatentAsphereTerms(line);
+    const isAsphereContinuation = asphereTerms.hasAny && isPatentAsphereContinuationLine(line);
+    const isOpticalDataLine = isPatentOpticalDataLine(line);
+    if ((!isAsphereContinuation && numbers.length < 3) || numbers.length > 16) continue;
+    if (/^\s*(f\/?#|fno|focal|half\s*angle|field\s*angle|image\s*height|total\s*length|ttl|oal|tl)\b/i.test(line)) continue;
+    if (!isOpticalDataLine && surfaceIndexHint === null) continue;
+
+    rows.push({
+      line: sanitizePatentCandidateLine(line),
+      numbers,
+      embodimentKey: currentEmbodiment.key,
+      embodimentLabel: currentEmbodiment.label,
+      zoomKey: currentZoom.key,
+      zoomLabel: currentZoom.label,
+      surfaceIndex: surfaceIndexHint ?? (isAsphereContinuation ? currentAsphereSurfaceIndex : null),
+    });
+  }
+
+  return {
+    rows: cleanupPatentCandidateRows(mergeSequentialPatentCandidateRows(text, rows)),
+    embodiments: Array.from(embodiments.values()),
+    zoomPositions: Array.from(zoomPositions.values()),
+  };
+}
+
+function mergeSequentialPatentCandidateRows(text: string, existingRows: LiteratureCandidateRow[]): LiteratureCandidateRow[] {
+  const mergedRows = Array.isArray(existingRows) ? [...existingRows] : [];
+  const seenLines = new Set(mergedRows.map((row) => String(row?.line ?? '').trim()).filter(Boolean));
+  const lines = String(text ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+
+  const defaultEmbodiment = makeOption('all', 'All');
+  const defaultZoom = makeOption('all', 'All');
+  let currentEmbodiment = defaultEmbodiment;
+  let currentZoom = defaultZoom;
+
+  const embodimentPattern = /(embodiment|example|numerical example|実施例)\s*[#:]?\s*([A-Za-z0-9一二三四五六七八九十\-]+)/i;
+  const zoomPattern = /(wide end|wide|tele end|tele|middle|mid|short focal length|long focal length|広角端|望遠端|中間|ワイド|テレ|zoom\s*[1-9]\d*|position\s*[1-9]\d*|state\s*[1-9]\d*)/i;
+
+  type PendingSurface = {
+    surfaceIndex: number;
+    radiusPart: string;
+    thicknessPart: string;
+    embodimentKey: string;
+    embodimentLabel: string;
+    zoomKey: string;
+    zoomLabel: string;
+    order: number;
+  };
+
+  const pending = new Map<number, PendingSurface>();
+  let orderCounter = 0;
+  let lastRadiusSurfaceIndex: number | null = null;
+  let lastThicknessSurfaceIndex: number | null = null;
+
+  const flushPending = (surfaceIndex: number) => {
+    const item = pending.get(surfaceIndex);
+    if (!item || !item.radiusPart || !item.thicknessPart) return;
+    const line = `${item.radiusPart} ${item.thicknessPart}`.trim();
+    const sanitizedLine = sanitizePatentCandidateLine(line);
+    const sanitizedThicknessLine = sanitizePatentCandidateLine(item.thicknessPart);
+    if (sanitizedThicknessLine) {
+      for (let rowIndex = mergedRows.length - 1; rowIndex >= 0; rowIndex -= 1) {
+        if (String(mergedRows[rowIndex]?.line ?? '').trim() !== sanitizedThicknessLine) continue;
+        mergedRows.splice(rowIndex, 1);
+        seenLines.delete(sanitizedThicknessLine);
+      }
+    }
+    if (seenLines.has(sanitizedLine)) {
+      pending.delete(surfaceIndex);
+      return;
+    }
+    const numbers = extractPatentNumbers(sanitizedLine);
+    if (numbers.length === 0) {
+      pending.delete(surfaceIndex);
+      return;
+    }
+    mergedRows.push({
+      line: sanitizedLine,
+      numbers,
+      embodimentKey: item.embodimentKey,
+      embodimentLabel: item.embodimentLabel,
+      zoomKey: item.zoomKey,
+      zoomLabel: item.zoomLabel,
+      surfaceIndex: surfaceIndex,
+    });
+    seenLines.add(sanitizedLine);
+    pending.delete(surfaceIndex);
+  };
+
+  for (const line of lines) {
+    const normalizedLine = normalizePatentOcrText(line);
+
+    const embodimentMatch = line.match(embodimentPattern);
+    if (embodimentMatch) {
+      currentEmbodiment = normalizeEmbodiment(embodimentMatch[0]);
+    }
+
+    const zoomMatch = line.match(zoomPattern);
+    if (zoomMatch) {
+      currentZoom = normalizeZoomPosition(zoomMatch[0]);
+    }
+
+    const contextualRadiusMatch = line.match(/^\s*([1-9]\d?)\s*[#%*¥]?\s*(?:=|\s+)\s*([+\-]?(?:\d+(?:[.,]\d+)?|\.\d+)(?:e[+\-]?\d+)?)/i);
+    if (contextualRadiusMatch) {
+      const surfaceIndex = Number(contextualRadiusMatch[1]);
+      const value = String(contextualRadiusMatch[2] ?? '').replace(',', '.');
+      const followsPreviousThickness = Number.isInteger(surfaceIndex) && lastThicknessSurfaceIndex === surfaceIndex - 1;
+      const alreadyHasRadius = Number.isInteger(surfaceIndex) && !!pending.get(surfaceIndex)?.radiusPart;
+      if (followsPreviousThickness && !alreadyHasRadius) {
+        const next = pending.get(surfaceIndex) || {
+          surfaceIndex,
+          radiusPart: '',
+          thicknessPart: '',
+          embodimentKey: currentEmbodiment.key,
+          embodimentLabel: currentEmbodiment.label,
+          zoomKey: currentZoom.key,
+          zoomLabel: currentZoom.label,
+          order: orderCounter += 1,
+        };
+        next.radiusPart = `r${surfaceIndex}= ${value}`;
+        pending.set(surfaceIndex, next);
+        lastRadiusSurfaceIndex = surfaceIndex;
+        flushPending(surfaceIndex);
+        continue;
+      }
+    }
+
+    const unlabeledThicknessMatch = normalizedLine.match(/^\s*=\s*(.+)$/i);
+    if (unlabeledThicknessMatch && lastRadiusSurfaceIndex !== null) {
+      const surfaceIndex = lastRadiusSurfaceIndex;
+      const next = pending.get(surfaceIndex);
+      if (next?.radiusPart && !next.thicknessPart) {
+        next.thicknessPart = `d${surfaceIndex}= ${String(unlabeledThicknessMatch[1] ?? '').trim()}`;
+        pending.set(surfaceIndex, next);
+        lastThicknessSurfaceIndex = surfaceIndex;
+        flushPending(surfaceIndex);
+        continue;
+      }
+    }
+
+    const radiusMatch = normalizedLine.match(/\br\s*(\d+)[#%*¥]?\s*=\s*(\([^)]*絞[^)]*\)|\([^)]*stop[^)]*\)|INF|INFINITY|∞|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)/i);
+    if (radiusMatch) {
+      const surfaceIndex = Number(radiusMatch[1]);
+      if (Number.isInteger(surfaceIndex)) {
+        const next = pending.get(surfaceIndex) || {
+          surfaceIndex,
+          radiusPart: '',
+          thicknessPart: '',
+          embodimentKey: currentEmbodiment.key,
+          embodimentLabel: currentEmbodiment.label,
+          zoomKey: currentZoom.key,
+          zoomLabel: currentZoom.label,
+          order: orderCounter += 1,
+        };
+        next.radiusPart = /絞|stop/i.test(radiusMatch[2]) ? `r${surfaceIndex}= (stop)` : `r${surfaceIndex}= ${radiusMatch[2]}`;
+        pending.set(surfaceIndex, next);
+        lastRadiusSurfaceIndex = surfaceIndex;
+        flushPending(surfaceIndex);
+        continue;
+      }
+    }
+
+    const thicknessMatch = normalizedLine.match(/\bd\s*(\d+)\s*=\s*(.+)$/i);
+    if (thicknessMatch) {
+      const surfaceIndex = Number(thicknessMatch[1]);
+      if (Number.isInteger(surfaceIndex)) {
+        const next = pending.get(surfaceIndex) || {
+          surfaceIndex,
+          radiusPart: '',
+          thicknessPart: '',
+          embodimentKey: currentEmbodiment.key,
+          embodimentLabel: currentEmbodiment.label,
+          zoomKey: currentZoom.key,
+          zoomLabel: currentZoom.label,
+          order: orderCounter += 1,
+        };
+        next.thicknessPart = `d${surfaceIndex}= ${thicknessMatch[2].trim()}`;
+        pending.set(surfaceIndex, next);
+        lastThicknessSurfaceIndex = surfaceIndex;
+        flushPending(surfaceIndex);
+        continue;
+      }
+    }
+  }
+
+  const remaining = Array.from(pending.values())
+    .sort((left, right) => left.order - right.order)
+    .filter((item) => item.radiusPart || item.thicknessPart);
+  for (const item of remaining) {
+    const line = `${item.radiusPart} ${item.thicknessPart}`.trim();
+    const sanitizedLine = sanitizePatentCandidateLine(line);
+    if (!sanitizedLine || seenLines.has(sanitizedLine)) continue;
+    const numbers = extractPatentNumbers(sanitizedLine);
+    if (numbers.length === 0) continue;
+    mergedRows.push({
+      line: sanitizedLine,
+      numbers,
+      embodimentKey: item.embodimentKey,
+      embodimentLabel: item.embodimentLabel,
+      zoomKey: item.zoomKey,
+      zoomLabel: item.zoomLabel,
+      surfaceIndex: item.surfaceIndex,
+    });
+    seenLines.add(sanitizedLine);
+  }
+
+  return mergedRows;
+}
+
+function parseLiteratureText(input: string): LiteratureExtractResult {
+  const text = normalizePatentOcrText(input);
+
+  const patentIds = collectMatches(text, /\b(?:JP|US|EP|WO)[A-Z0-9\-\/]{5,}\b/gi, (value) => value.toUpperCase());
+  const sourceUrls = collectMatches(text, /https?:\/\/[^\s)]+/gi);
+  const focalLengths = collectNumericGroups(text, /(?:^|\b)(?:f(?:ocal)?(?:\s*length)?|efl|焦点距離)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)(?:\s*[,\/~-]\s*([+-]?\d+(?:\.\d+)?))?(?:\s*[,\/~-]\s*([+-]?\d+(?:\.\d+)?))?/gim);
+  const fNumbers = collectNumericGroups(text, /(?:^|\b)(?:f\/?#|fno|f-number|Ｆ値)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)(?:\s*[,\/~-]\s*([+-]?\d+(?:\.\d+)?))?(?:\s*[,\/~-]\s*([+-]?\d+(?:\.\d+)?))?/gim);
+  const fieldAngles = collectNumericGroups(text, /(?:^|\b)(?:half\s*angle|field\s*angle|angle\s*of\s*view|画角)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)(?:\s*[,\/~-]\s*([+-]?\d+(?:\.\d+)?))?(?:\s*[,\/~-]\s*([+-]?\d+(?:\.\d+)?))?/gim);
+  const imageHeights = collectNumericGroups(text, /(?:^|\b)(?:image\s*height|y'?\s*image|像高)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)(?:\s*[,\/~-]\s*([+-]?\d+(?:\.\d+)?))?(?:\s*[,\/~-]\s*([+-]?\d+(?:\.\d+)?))?/gim);
+  const totalLengths = collectNumericGroups(text, /(?:^|\b)(?:total\s*length|overall\s*length|ttl|oal|tl)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)/gim);
+  const glassNames = uniqueStrings([
+    ...collectMatches(text, /\b(?:N|S|P|L)?-[A-Z]{1,6}[A-Z0-9-]*\b/g),
+    ...collectMatches(text, /\b(?:FUSED\s+SILICA|PMMA|COP|COC|BK7|SF10|LAK\d+|FK\d+)\b/gi, (value) => value.toUpperCase()),
+  ]);
+
+  const contextual = parseContextualCandidateRows(text);
+  const inferredZooms = buildInferredZoomOptions(focalLengths.length > 0 ? focalLengths : fNumbers);
+  const zoomPositions = contextual.zoomPositions.length > 1
+    ? contextual.zoomPositions
+    : [makeOption('all', 'All'), ...inferredZooms];
+
+  return {
+    patentIds,
+    sourceUrls,
+    focalLengths,
+    fNumbers,
+    fieldAngles,
+    imageHeights,
+    totalLengths,
+    glassNames,
+    embodiments: contextual.embodiments,
+    zoomPositions,
+    candidateTableRows: contextual.rows,
+  };
+}
+
+function formatNumberList(values: number[]): string {
+  if (!Array.isArray(values) || values.length === 0) return 'n/a';
+  return values.map((value) => Number(value).toFixed(Math.abs(value) >= 100 ? 1 : 3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')).join(', ');
+}
+
+function buildLiteratureSummary(query: string, sourceUrl: string, result: LiteratureExtractResult): string {
+  const lines: string[] = [];
+  const asphereRowCount = countCandidateRowsWithPatentAsphereMarkers(result.candidateTableRows);
+  lines.push('[Patent Literature Import Draft]');
+  lines.push(`Query: ${query.trim() || 'n/a'}`);
+  lines.push(`Source URL: ${sourceUrl.trim() || (result.sourceUrls[0] || 'n/a')}`);
+  lines.push(`Patent IDs: ${result.patentIds.length > 0 ? result.patentIds.join(', ') : 'n/a'}`);
+  lines.push('');
+  lines.push('[Detected Spec Candidates]');
+  lines.push(`Focal length(s): ${formatNumberList(result.focalLengths)}`);
+  lines.push(`F-number(s): ${formatNumberList(result.fNumbers)}`);
+  lines.push(`Field angle(s): ${formatNumberList(result.fieldAngles)}`);
+  lines.push(`Image height(s): ${formatNumberList(result.imageHeights)}`);
+  lines.push(`Total length(s): ${formatNumberList(result.totalLengths)}`);
+  lines.push(`Glass names: ${result.glassNames.length > 0 ? result.glassNames.join(', ') : 'n/a'}`);
+  lines.push(`Embodiments: ${result.embodiments.length > 1 ? result.embodiments.filter((option) => option.key !== 'all').map((option) => option.label).join(', ') : 'n/a'}`);
+  lines.push(`Zoom positions: ${result.zoomPositions.length > 1 ? result.zoomPositions.filter((option) => option.key !== 'all').map((option) => option.label).join(', ') : 'n/a'}`);
+  lines.push(`Asphere rows: ${asphereRowCount > 0 ? String(asphereRowCount) : 'not detected'}`);
+  lines.push('');
+  lines.push('[Candidate Numeric Rows]');
+  if (result.candidateTableRows.length === 0) {
+    lines.push('No table-like numeric rows were detected. Paste OCR text or a table excerpt from the PDF.');
+  } else {
+    result.candidateTableRows.forEach((row, index) => {
+      const contextPrefix = [row.embodimentLabel !== 'All' ? row.embodimentLabel : '', row.zoomLabel !== 'All' ? row.zoomLabel : ''].filter(Boolean).join(' / ');
+      lines.push(`${index + 1}. ${contextPrefix ? `[${contextPrefix}] ` : ''}${row.line}`);
+    });
+  }
+  lines.push('');
+  lines.push('[Next Step]');
+  lines.push('Pick one embodiment and one zoom position, then map each numeric row to surface radius / thickness / glass / Abbe before building the optical system.');
+  return lines.join('\n');
+}
+
+function formatCandidateRowsForEditor(rows: LiteratureCandidateRow[]): string {
+  const cleanedRows = cleanupPatentCandidateRows(rows);
+  if (cleanedRows.length === 0) return '';
+  const uniqueEmbodimentKeys = new Set(cleanedRows.map((row) => String(row?.embodimentKey ?? 'all')));
+  const uniqueZoomKeys = new Set(cleanedRows.map((row) => String(row?.zoomKey ?? 'all')));
+  const omitContextPrefix = uniqueEmbodimentKeys.size <= 1 && uniqueZoomKeys.size <= 1;
+  return cleanedRows.map((row) => {
+    const contextPrefix = [row.embodimentLabel !== 'All' ? row.embodimentLabel : '', row.zoomLabel !== 'All' ? row.zoomLabel : '']
+      .filter(Boolean)
+      .join(' / ');
+    return `${!omitContextPrefix && contextPrefix ? `[${contextPrefix}] ` : ''}${sanitizePatentCandidateLine(row.line)}`;
+  }).join('\n');
+}
+
+function parseCandidateRowsFromEditor(text: string): LiteratureCandidateRow[] {
+  const rows: LiteratureCandidateRow[] = [];
+  const lines = normalizePatentOcrText(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  let currentAsphereSurfaceIndex: number | null = null;
+  for (const line of lines) {
+    let embodimentLabel = 'All';
+    let embodimentKey = 'all';
+    let zoomLabel = 'All';
+    let zoomKey = 'all';
+    let content = line.replace(/^\d+\.\s*/, '').trim();
+
+    const contextMatch = content.match(/^\[([^\]]+)\]\s*(.+)$/);
+    if (contextMatch) {
+      const contextText = String(contextMatch[1] ?? '').trim();
+      content = String(contextMatch[2] ?? '').trim();
+      const parts = contextText.split('/').map((part) => part.trim()).filter(Boolean);
+      if (parts[0]) {
+        const embodiment = normalizeEmbodiment(parts[0]);
+        embodimentKey = embodiment.key;
+        embodimentLabel = embodiment.label;
+      }
+      if (parts[1]) {
+        const zoom = normalizeZoomPosition(parts[1]);
+        zoomKey = zoom.key;
+        zoomLabel = zoom.label;
+      }
+    }
+
+    const surfaceIndexHint = extractPatentSurfaceIndexHint(content);
+    if (/非球面|円錐定数|コーニック定数|コニック定数|2次曲面パラメータ|二次曲面パラメータ/i.test(content) && surfaceIndexHint !== null) {
+      currentAsphereSurfaceIndex = surfaceIndexHint;
+    }
+
+    content = sanitizePatentCandidateLine(content);
+
+    const numbers = (content.match(/[+-]?\d+(?:\.\d+)?/g) ?? [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+    if (numbers.length === 0) continue;
+    const asphereTerms = parsePatentAsphereTerms(content);
+    const isAsphereContinuation = asphereTerms.hasAny && isPatentAsphereContinuationLine(content);
+    rows.push({
+      line: content,
+      numbers,
+      embodimentKey,
+      embodimentLabel,
+      zoomKey,
+      zoomLabel,
+      surfaceIndex: surfaceIndexHint ?? (isAsphereContinuation ? currentAsphereSurfaceIndex : null),
+    });
+  }
+  return rows;
+}
+
+function mergeCorrectedCandidateRows(baseResult: LiteratureExtractResult, correctedText: string): LiteratureExtractResult {
+  const correctedRows = cleanupPatentCandidateRows(parseCandidateRowsFromEditor(correctedText)).map((row, index) => {
+    const baseRow = Array.isArray(baseResult.candidateTableRows) ? baseResult.candidateTableRows[index] : null;
+    const usesImplicitContext = row.embodimentKey === 'all' && row.zoomKey === 'all' && !!baseRow;
+    return usesImplicitContext
+      ? {
+          ...row,
+          embodimentKey: baseRow.embodimentKey,
+          embodimentLabel: baseRow.embodimentLabel,
+          zoomKey: baseRow.zoomKey,
+          zoomLabel: baseRow.zoomLabel,
+          surfaceIndex: row.surfaceIndex ?? baseRow.surfaceIndex ?? null,
+        }
+      : row;
+  });
+  const correctedGlassNames = uniqueStrings([
+    ...baseResult.glassNames,
+    ...collectMatches(correctedText, /\b(?:N|S|P|L)?-[A-Z]{1,6}[A-Z0-9-]*\b/g),
+    ...collectMatches(correctedText, /\b(?:FUSED\s+SILICA|PMMA|COP|COC|BK7|SF10|LAK\d+|FK\d+)\b/gi, (value) => value.toUpperCase()),
+  ]);
+  return {
+    ...baseResult,
+    glassNames: correctedGlassNames,
+    candidateTableRows: correctedRows,
+  };
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+async function loadTextFromPdfBlob(blob: Blob): Promise<string> {
+  const { text } = await extractPdfTextLayer(blob);
+  return text;
+}
+
+async function extractPdfTextLayer(blob: Blob): Promise<{ text: string; pdf: any; pageCount: number }> {
+  const buffer = await blob.arrayBuffer();
+  const pdfjs = await import('pdfjs-dist');
+  const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+  (pdfjs as any).GlobalWorkerOptions.workerSrc = (workerModule as any).default;
+
+  const loadingTask = (pdfjs as any).getDocument({
+    data: buffer,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    cMapUrl: 'cmaps/',
+    cMapPacked: true,
+    standardFontDataUrl: 'standard_fonts/',
+    BinaryDataFactory: PdfJsBinaryDataFactory,
+  });
+  const pdf = await loadingTask.promise;
+  const pages: string[] = [];
+  for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
+    const page = await pdf.getPage(pageIndex);
+    const content = await page.getTextContent();
+    const text = (content.items ?? []).map((item: any) => String(item?.str ?? '')).join(' ');
+    if (text.trim()) pages.push(text.trim());
+  }
+  return { text: pages.join('\n\n'), pdf, pageCount: Number(pdf?.numPages || 0) };
+}
+
+function createScratchCanvas(width: number, height: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+function binarizeCanvas(canvas: HTMLCanvasElement): void {
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return;
+  try {
+    const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    const data = image.data;
+    for (let index = 0; index < data.length; index += 4) {
+      const gray = (data[index] * 0.299) + (data[index + 1] * 0.587) + (data[index + 2] * 0.114);
+      const value = gray < 190 ? 0 : 255;
+      data[index] = value;
+      data[index + 1] = value;
+      data[index + 2] = value;
+      data[index + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+  } catch (_) {}
+}
+
+function createScaledCropCanvas(
+  source: HTMLCanvasElement,
+  crop: { x: number; y: number; width: number; height: number },
+  outputScale = 1.75
+): HTMLCanvasElement {
+  const sx = Math.max(0, Math.floor(source.width * crop.x));
+  const sy = Math.max(0, Math.floor(source.height * crop.y));
+  const sw = Math.max(1, Math.min(source.width - sx, Math.floor(source.width * crop.width)));
+  const sh = Math.max(1, Math.min(source.height - sy, Math.floor(source.height * crop.height)));
+  const target = createScratchCanvas(Math.max(1, Math.ceil(sw * outputScale)), Math.max(1, Math.ceil(sh * outputScale)));
+  const context = target.getContext('2d', { willReadFrequently: true });
+  if (!context) return target;
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, target.width, target.height);
+  context.imageSmoothingEnabled = false;
+  context.drawImage(source, sx, sy, sw, sh, 0, 0, target.width, target.height);
+  binarizeCanvas(target);
+  return target;
+}
+
+async function setOcrParameters(worker: any, parameters: Record<string, string>): Promise<void> {
+  try {
+    if (worker && typeof worker.setParameters === 'function') {
+      await worker.setParameters(parameters);
+    }
+  } catch (_) {}
+}
+
+async function runPdfOcr(blob: Blob, options?: { maxPages?: number; onProgress?: (message: string) => void }): Promise<{ text: string; pagesProcessed: number }> {
+  const { pdf, pageCount } = await extractPdfTextLayer(blob);
+  const requestedMaxPages = Number(options?.maxPages);
+  const normalizedPageCount = Math.max(1, Number(pageCount || 0) || 1);
+  const maxPages = Number.isFinite(requestedMaxPages) && requestedMaxPages > 0
+    ? Math.max(1, Math.min(requestedMaxPages, normalizedPageCount))
+    : normalizedPageCount;
+  const tesseract = await import('tesseract.js');
+  let worker: any = null;
+
+  try {
+    worker = await (tesseract as any).createWorker('jpn+eng');
+  } catch (error) {
+    console.warn('⚠️ [Patent OCR] Failed to initialize jpn+eng OCR, falling back to eng:', error);
+    worker = await (tesseract as any).createWorker('eng');
+  }
+
+  try {
+    const pageTexts: string[] = [];
+    await setOcrParameters(worker, { tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' });
+    for (let pageIndex = 1; pageIndex <= maxPages; pageIndex += 1) {
+      options?.onProgress?.(`Running OCR on page ${pageIndex}/${maxPages}...`);
+      const page = await pdf.getPage(pageIndex);
+      const pageContent = await page.getTextContent().catch(() => null);
+      const pageLayerText = (pageContent?.items ?? []).map((item: any) => String(item?.str ?? '')).join(' ');
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = createScratchCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) continue;
+      await page.render({ canvasContext: context, viewport }).promise;
+      const result = await worker.recognize(canvas);
+      const text = String(result?.data?.text ?? '').trim();
+      const pageParts = text ? [text] : [];
+      const pageContextText = [pageLayerText, text].filter(Boolean).join('\n');
+      if (!textContainsPatentRadiusMarkers(pageContextText) && textLooksLikePatentOpticalTable(pageContextText)) {
+        options?.onProgress?.(`Running focused radius OCR on page ${pageIndex}/${maxPages}...`);
+        await setOcrParameters(worker, { tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+        const cropCanvases = [
+          createScaledCropCanvas(canvas, { x: 0, y: 0.08, width: 0.46, height: 0.88 }, 2),
+          createScaledCropCanvas(canvas, { x: 0, y: 0.12, width: 0.34, height: 0.82 }, 2.35),
+        ];
+        for (let cropIndex = 0; cropIndex < cropCanvases.length; cropIndex += 1) {
+          const cropResult = await worker.recognize(cropCanvases[cropIndex]);
+          const cropText = String(cropResult?.data?.text ?? '').trim();
+          if (cropText) pageParts.push(`[Focused radius OCR page ${pageIndex}.${cropIndex + 1}]\n${cropText}`);
+        }
+        await setOcrParameters(worker, { tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' });
+      }
+      if (pageParts.length > 0) pageTexts.push(pageParts.join('\n'));
+    }
+    return { text: pageTexts.join('\n\n'), pagesProcessed: maxPages };
+  } finally {
+    await worker.terminate();
+  }
+}
+
+function loadTextFromHtmlText(text: string): string {
+  const parser = new DOMParser();
+  const documentNode = parser.parseFromString(text, 'text/html');
+  documentNode.querySelectorAll('script, style, noscript').forEach((element) => element.remove());
+  const root = documentNode.querySelector('article, main, body') || documentNode.body;
+  return String(root?.textContent ?? '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+async function loadTextFromDocumentUrl(url: string): Promise<{ text: string; sourceKind: 'pdf' | 'html' | 'text' }> {
+  const trimmedUrl = String(url ?? '').trim();
+  if (!trimmedUrl) throw new Error('Document URL is empty.');
+
+  const response = await fetch(trimmedUrl, { method: 'GET' });
+  if (!response.ok) {
+    throw new Error(`Document fetch failed: ${response.status} ${response.statusText}`);
+  }
+
+  const contentType = String(response.headers.get('content-type') ?? '').toLowerCase();
+  if (contentType.includes('pdf') || /\.pdf(?:$|\?)/i.test(trimmedUrl)) {
+    const pdfBlob = await response.blob();
+    return { text: await loadTextFromPdfBlob(pdfBlob), sourceKind: 'pdf' };
+  }
+
+  const text = await response.text();
+  if (contentType.includes('html')) {
+    return { text: loadTextFromHtmlText(text), sourceKind: 'html' };
+  }
+  return { text, sourceKind: 'text' };
+}
+
+function detectGlassName(line: string, fallbackGlassNames: string[]): string {
+  const matched = fallbackGlassNames.find((glassName) => new RegExp(`\\b${glassName.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i').test(line));
+  if (matched) return matched;
+  if (/\bAIR\b/i.test(line)) return 'AIR';
+  return '';
+}
+
+function isPatentGapCandidateLine(line: string): boolean {
+  const text = String(line ?? '').trim();
+  if (!text) return false;
+  return /^(air|gap|air\s*gap|airspace|space)\b/i.test(text)
+    || /\b(gap|air\s*gap|airspace)\b/i.test(text);
+}
+
+function isPatentStopCandidateLine(line: string): boolean {
+  const text = String(line ?? '').trim();
+  if (!text) return false;
+  return /\b(stop|aperture)\b/i.test(text) || /絞り/.test(text);
+}
+
+function parsePatentNamedValue(line: string, labels: string[]): number | null {
+  const escaped = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const match = String(line ?? '').match(new RegExp(`(?:^|[^A-Z0-9])(?:${escaped.join('|')})\\s*\
+    (?:\\d+\\s*)?[#%*¥]?\\s*[:=]\\s*(${PATENT_NUMBER_SOURCE})`.replace(/\s+/g, ''), 'i'));
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function hasPatentNamedField(line: string, labels: string[]): boolean {
+  const escaped = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`(?:^|[^A-Z0-9])(?:${escaped.join('|')})(?:\\s*\\d+)?\\s*[#%*¥]?\\s*[:=]`, 'i').test(String(line ?? ''));
+}
+
+function isPatentGapRow(row: Record<string, any>): boolean {
+  if (!row || typeof row !== 'object') return false;
+  if (row._patentImportKind === 'gap') return true;
+  const material = String(row.material ?? '').trim().toUpperCase();
+  if (material !== 'AIR') return false;
+  if (!isInfLikePatentImport(row.radius)) return false;
+  const thickness = row.thickness;
+  const thicknessNumeric = Number(thickness);
+  return isInfLikePatentImport(thickness) || (Number.isFinite(thicknessNumeric) && Math.abs(thicknessNumeric) > 1e-12);
+}
+
+function makeOpticalRow(id: number, patch: Record<string, any>): Record<string, any> {
+  return {
+    id,
+    'object type': '',
+    surfType: 'Spherical',
+    comment: '',
+    radius: 'INF',
+    optimizeR: '',
+    thickness: 0,
+    optimizeT: '',
+    semidia: '',
+    optimizeSemiDia: '',
+    material: 'AIR',
+    optimizeMaterial: '',
+    rindex: '',
+    optimizeRI: '',
+    abbe: '',
+    optimizeAbbe: '',
+    conic: '0',
+    optimizeConic: '',
+    coef1: '',
+    optimizeCoef1: '',
+    coef2: '',
+    optimizeCoef2: '',
+    coef3: '',
+    optimizeCoef3: '',
+    coef4: '',
+    optimizeCoef4: '',
+    coef5: '',
+    optimizeCoef5: '',
+    coef6: '',
+    optimizeCoef6: '',
+    coef7: '',
+    optimizeCoef7: '',
+    coef8: '',
+    optimizeCoef8: '',
+    coef9: '',
+    optimizeCoef9: '',
+    coef10: '',
+    optimizeCoef10: '',
+    ...patch,
+  };
+}
+
+function pickSelectedValue(values: number[], option: LiteratureOption | null): number | null {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  if (!option || option.key === 'all') return values[0];
+  const zoomIndex = Number(option.zoomIndex);
+  if (Number.isInteger(zoomIndex) && zoomIndex >= 0 && zoomIndex < values.length) return values[zoomIndex];
+  if (option.key === 'tele') return values[values.length - 1];
+  if (option.key === 'mid') return values[Math.floor(values.length / 2)];
+  return values[0];
+}
+
+async function buildDraftRowsFromSelection(result: LiteratureExtractResult, embodimentKey: string, zoomKey: string): Promise<DraftBuildResult> {
+  const glassModule = await import('../../../data/glass.ts');
+  const getGlassDataWithSellmeier = (glassModule as any).getGlassDataWithSellmeier as ((name: string) => any) | undefined;
+
+  const zoomOption = result.zoomPositions.find((option) => option.key === zoomKey) || null;
+  const filteredCandidates = result.candidateTableRows.filter((row) => {
+    const embodimentMatches = embodimentKey === 'all' || row.embodimentKey === embodimentKey || row.embodimentKey === 'all';
+    const zoomMatches = zoomKey === 'all' || row.zoomKey === zoomKey || row.zoomKey === 'all';
+    return embodimentMatches && zoomMatches;
+  });
+
+  const notes: string[] = [];
+  const focalLength = pickSelectedValue(result.focalLengths, zoomOption);
+  const fNumber = pickSelectedValue(result.fNumbers, zoomOption);
+  if (focalLength !== null) notes.push(`Selected focal length: ${focalLength}`);
+  if (fNumber !== null) notes.push(`Selected F-number: ${fNumber}`);
+
+  const objectRow = makeOpticalRow(0, {
+    'object type': 'Object',
+    radius: 'INF',
+    thickness: 'INF',
+    material: 'AIR',
+    comment: 'Draft literature import object surface',
+    objectRenderDistance: 100,
+  });
+
+  const draftRows: Array<Record<string, any>> = [];
+  for (const candidate of filteredCandidates) {
+    let numbers = candidate.numbers.slice();
+    if (numbers.length >= 4 && Number.isInteger(numbers[0]) && Math.abs(numbers[0]) <= 200) {
+      numbers = numbers.slice(1);
+    }
+
+    const isGapLine = isPatentGapCandidateLine(candidate.line);
+    const isStopLine = isPatentStopCandidateLine(candidate.line);
+    const asphereTerms = parsePatentAsphereTerms(candidate.line);
+    if (!isGapLine && asphereTerms.hasAny && isPatentAsphereContinuationLine(candidate.line) && draftRows.length > 0) {
+      const targetRow = (() => {
+        const targetSurfaceIndex = Number(candidate.surfaceIndex);
+        if (Number.isInteger(targetSurfaceIndex) && targetSurfaceIndex > 0) {
+          for (let index = draftRows.length - 1; index >= 0; index -= 1) {
+            const row = draftRows[index];
+            const rowSurfaceIndex = Number(row?._patentSurfaceIndex);
+            if (Number.isInteger(rowSurfaceIndex) && rowSurfaceIndex === targetSurfaceIndex) return row;
+          }
+        }
+        return draftRows[draftRows.length - 1];
+      })();
+      applyPatentAsphereTerms(targetRow, asphereTerms);
+      targetRow.comment = `${targetRow.comment} || ${candidate.line}`;
+      continue;
+    }
+
+    const material = detectGlassName(candidate.line, result.glassNames) || 'AIR';
+    const glassData = material && material !== 'AIR' && typeof getGlassDataWithSellmeier === 'function'
+      ? getGlassDataWithSellmeier(material)
+      : null;
+
+    const hasNamedRadius = hasPatentNamedField(candidate.line, ['r', 'radius']);
+    const hasNamedThickness = hasPatentNamedField(candidate.line, ['d', 't', 'thickness']);
+    const namedRindex = parsePatentNamedValue(candidate.line, ['nd', 'n', 'n_d', 'rindex']);
+    const namedAbbe = parsePatentNamedValue(candidate.line, ['vd', 'v', 'abbe']);
+    const namedRadius = parsePatentNamedValue(candidate.line, ['r', 'radius']);
+    const namedThickness = parsePatentNamedValue(candidate.line, ['d', 't', 'thickness']);
+
+    const hasSurfaceGeometry = isGapLine || isStopLine || hasNamedRadius || hasNamedThickness;
+    if (!hasSurfaceGeometry && !asphereTerms.hasAny) {
+      continue;
+    }
+
+    const radius = isGapLine || isStopLine
+      ? 'INF'
+      : (namedRadius !== null ? String(namedRadius) : (numbers.length > 0 ? String(numbers[0]) : 'INF'));
+    let thickness: string | number = isGapLine
+      ? (namedThickness !== null ? namedThickness : (numbers.length > 0 ? numbers[0] : 0))
+      : isStopLine
+        ? (namedThickness !== null ? namedThickness : (numbers.length > 0 ? numbers[numbers.length - 1] : 0))
+        : (namedThickness !== null ? namedThickness : (numbers.length > 1 ? numbers[1] : 0));
+    let semidia: string | number = '';
+    let rindex = namedRindex !== null ? String(namedRindex) : (glassData?.nd ? String(glassData.nd) : '');
+    let abbe = namedAbbe !== null ? String(namedAbbe) : (glassData?.vd ? String(glassData.vd) : '');
+
+    const remaining = (hasNamedRadius || hasNamedThickness || namedRindex !== null || namedAbbe !== null)
+      ? []
+      : numbers.slice(isGapLine ? 1 : 2);
+    for (const value of remaining) {
+      if (!rindex && value > 1 && value < 3.5) {
+        rindex = String(value);
+        continue;
+      }
+      if (!abbe && value > 10 && value < 100) {
+        abbe = String(value);
+        continue;
+      }
+      if (semidia === '' && value > 0 && value <= 200) {
+        semidia = value;
+      }
+    }
+
+    const normalizedMaterial = (() => {
+      if (isGapLine) return 'AIR';
+      if (material !== 'AIR') return material;
+      if (rindex) return rindex;
+      return 'AIR';
+    })();
+
+    if (normalizedMaterial === 'AIR' && !rindex) rindex = '';
+    if (normalizedMaterial === 'AIR' && !abbe) abbe = '';
+
+    const draftRow = makeOpticalRow(draftRows.length + 1, {
+      'object type': isStopLine ? 'Stop' : '',
+      radius,
+      thickness,
+      semidia,
+      material: normalizedMaterial,
+      rindex,
+      abbe,
+      _patentSurfaceIndex: candidate.surfaceIndex ?? null,
+      _patentImportKind: isGapLine ? 'gap' : 'surface',
+      comment: `${candidate.embodimentLabel}${candidate.zoomLabel !== 'All' ? ` / ${candidate.zoomLabel}` : ''} | ${candidate.line}`,
+    });
+    applyPatentAsphereTerms(draftRow, asphereTerms);
+    draftRows.push(draftRow);
+  }
+
+  const imageRow = makeOpticalRow(draftRows.length + 1, {
+    'object type': 'Image',
+    radius: 'INF',
+    thickness: 0,
+    material: 'AIR',
+    comment: 'Draft literature import image surface',
+  });
+
+  if (filteredCandidates.length === 0) {
+    notes.push('No candidate numeric rows matched the current embodiment / zoom selection.');
+  }
+
+  return {
+    rows: [objectRow, ...draftRows, imageRow],
+    notes,
+  };
+}
+
+function formatDraftRows(rows: Array<Record<string, any>>, notes: string[], summary: string): string {
+  const lines: string[] = [];
+  lines.push('[Optical System Draft Rows]');
+  if (notes.length > 0) {
+    for (const note of notes) lines.push(`- ${note}`);
+    lines.push('');
+  }
+  rows.forEach((row) => {
+    lines.push(`${row.id}\t${row['object type'] || ''}\tR=${row.radius}\tT=${row.thickness}\tSD=${row.semidia || ''}\tMAT=${row.material || ''}\tnd=${row.rindex || ''}\tvd=${row.abbe || ''}\t${row.comment || ''}`);
+  });
+  lines.push('');
+  lines.push(summary);
+  return lines.join('\n');
+}
+
+function countPatentDraftSurfaceRows(rows: Array<Record<string, any>>): number {
+  if (!Array.isArray(rows)) return 0;
+  return rows.reduce((count, row) => {
+    const objectType = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+    if (objectType === 'object' || objectType === 'image') return count;
+    return count + 1;
+  }, 0);
+}
+
+async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDataText: string, mode: 'replace' | 'new' = 'replace'): Promise<void> {
+  const [{ loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables }, { saveTableData }, { deriveBlocksFromLegacyOpticalSystemRows }, { requestRefreshBlockInspector }] = await Promise.all([
+    import('../../../data/table-configuration.ts'),
+    import('../../../data/table-optical-system.ts'),
+    import('../../../data/block-schema.ts'),
+    import('../../../core/window-facade.ts'),
+  ]);
+
+  try {
+    const systemConfig = loadSystemConfigurations();
+    const activeConfig = Array.isArray(systemConfig?.configurations)
+      ? systemConfig.configurations.find((config: any) => String(config?.id) === String(systemConfig?.activeConfigId)) || systemConfig.configurations[0]
+      : null;
+    if (activeConfig) {
+      const nowIso = new Date().toISOString();
+      const targetConfig = (() => {
+        if (mode === 'new') {
+          const maxId = Math.max(...systemConfig.configurations.map((config: any) => Number(config?.id) || 0), 0);
+          const newId = maxId + 1;
+          const importedConfig = JSON.parse(JSON.stringify(activeConfig));
+          importedConfig.id = newId;
+          importedConfig.name = `${String(activeConfig.name || 'Config')} (Patent Import)`;
+          importedConfig.metadata = {
+            ...(importedConfig.metadata || {}),
+            created: nowIso,
+            modified: nowIso,
+            designer: {
+              type: 'imported',
+              name: 'patent-import',
+              confidence: null,
+            },
+          };
+          systemConfig.configurations.push(importedConfig);
+          systemConfig.activeConfigId = newId;
+          return importedConfig;
+        }
+        return activeConfig;
+      })();
+
+      let derivedBlocks: any[] = [];
+      let importAnalyzeMode = true;
+      try {
+        const derived = deriveBlocksFromLegacyOpticalSystemRows(rows);
+        const fatals = Array.isArray(derived?.issues)
+          ? derived.issues.filter((issue: any) => issue && issue.severity === 'fatal')
+          : [];
+        if (fatals.length === 0 && shouldAcceptDerivedPatentBlocks(derived?.blocks, rows)) {
+          derivedBlocks = normalizeObjectDistanceInBlocks(derived.blocks);
+          importAnalyzeMode = false;
+        } else {
+          derivedBlocks = normalizeObjectDistanceInBlocks(buildFallbackBlocksFromRows(rows));
+          importAnalyzeMode = false;
+        }
+      } catch (_) {
+        derivedBlocks = normalizeObjectDistanceInBlocks(buildFallbackBlocksFromRows(rows));
+        importAnalyzeMode = false;
+      }
+      derivedBlocks = attachPatentImportMetadataToBlocks(derivedBlocks, systemDataText, nowIso);
+
+      // Imported draft rows become the persisted surface representation.
+      // When block derivation succeeds, keep blocks in sync so Design Intent can open.
+      // Otherwise fall back to surface-only import/analyze mode.
+      targetConfig.blocks = derivedBlocks;
+      targetConfig.opticalSystem = rows;
+      targetConfig.systemData = {
+        ...(targetConfig.systemData || {}),
+        literatureImportSummary: systemDataText,
+      };
+      if (targetConfig.metadata && typeof targetConfig.metadata === 'object') {
+        targetConfig.metadata.modified = nowIso;
+        targetConfig.metadata.importAnalyzeMode = importAnalyzeMode;
+        targetConfig.metadata.literatureImportSummary = systemDataText;
+      }
+      saveSystemConfigurations(systemConfig);
+    }
+  } catch (_) {}
+
+  try {
+    saveTableData(rows as any);
+  } catch (_) {}
+
+  const w = window as any;
+  try {
+    if (w.tableOpticalSystem && typeof w.tableOpticalSystem.replaceData === 'function') {
+      await w.tableOpticalSystem.replaceData(rows);
+    }
+  } catch (_) {}
+
+  try {
+    if (typeof loadActiveConfigurationToTables === 'function') {
+      await loadActiveConfigurationToTables({ applyToUI: true });
+    }
+  } catch (_) {}
+
+  try {
+    if (typeof requestRefreshBlockInspector === 'function') {
+      requestRefreshBlockInspector(window);
+    }
+  } catch (_) {}
+
+  try {
+    if (typeof w.__cooptPushSystemDataText === 'function') {
+      w.__cooptPushSystemDataText(systemDataText);
+    }
+  } catch (_) {}
+}
+
+export function LiteratureImportPanel() {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [query, setQuery] = useState('zoom lens');
+  const [sourceUrl, setSourceUrl] = useState('');
+  const [rawText, setRawText] = useState('');
+  const [summary, setSummary] = useState('');
+  const [draftPreview, setDraftPreview] = useState('');
+  const [status, setStatus] = useState('Load a patent URL or paste OCR text, then extract and build a draft.');
+  const [result, setResult] = useState<LiteratureExtractResult | null>(null);
+  const [selectedEmbodiment, setSelectedEmbodiment] = useState('all');
+  const [selectedZoom, setSelectedZoom] = useState('all');
+  const [draftRows, setDraftRows] = useState<Array<Record<string, any>>>([]);
+  const [candidateRowsText, setCandidateRowsText] = useState('');
+  const [isLoadingUrl, setIsLoadingUrl] = useState(false);
+  const [isLoadingPdf, setIsLoadingPdf] = useState(false);
+  const [isRunningOcr, setIsRunningOcr] = useState(false);
+  const [sourcePdfBlob, setSourcePdfBlob] = useState<Blob | null>(null);
+
+  const openSearch = (target: 'google-patents' | 'jplatpat') => {
+    const nextQuery = query.trim() || 'zoom lens patent';
+    const url = target === 'google-patents'
+      ? `https://patents.google.com/?q=${encodeURIComponent(nextQuery)}`
+      : `https://www.google.com/search?q=${encodeURIComponent(`site:j-platpat.inpit.go.jp ${nextQuery}`)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const rebuildDraft = async (nextResult: LiteratureExtractResult, embodimentKey: string, zoomKey: string, nextSummary: string) => {
+    const draft = await buildDraftRowsFromSelection(nextResult, embodimentKey, zoomKey);
+    setDraftRows(draft.rows);
+    setDraftPreview(formatDraftRows(draft.rows, draft.notes, nextSummary));
+    return draft;
+  };
+
+  const rebuildDraftFromCurrentCandidateRows = async (): Promise<{ rows: Array<Record<string, any>>; summaryText: string; surfaceCount: number } | null> => {
+    if (!result) {
+      const surfaceCount = countPatentDraftSurfaceRows(draftRows);
+      return {
+        rows: draftRows,
+        summaryText: summary || draftPreview,
+        surfaceCount,
+      };
+    }
+
+    const correctedResult = candidateRowsText.trim()
+      ? mergeCorrectedCandidateRows(result, candidateRowsText)
+      : result;
+    if (correctedResult.candidateTableRows.length === 0) {
+      setStatus('No numeric candidate rows are available. Run Extract Candidate Data or restore Correct Candidate Rows before applying.');
+      return null;
+    }
+
+    const nextSummary = buildLiteratureSummary(query, sourceUrl, correctedResult);
+    let nextEmbodiment = correctedResult.embodiments.find((option) => option.key === selectedEmbodiment)?.key
+      || correctedResult.embodiments.find((option) => option.key !== 'all')?.key
+      || 'all';
+    let nextZoom = correctedResult.zoomPositions.find((option) => option.key === selectedZoom)?.key
+      || correctedResult.zoomPositions.find((option) => option.key !== 'all')?.key
+      || 'all';
+    let draft = await buildDraftRowsFromSelection(correctedResult, nextEmbodiment, nextZoom);
+
+    if (countPatentDraftSurfaceRows(draft.rows) === 0 && (nextEmbodiment !== 'all' || nextZoom !== 'all')) {
+      const allDraft = await buildDraftRowsFromSelection(correctedResult, 'all', 'all');
+      if (countPatentDraftSurfaceRows(allDraft.rows) > 0) {
+        nextEmbodiment = 'all';
+        nextZoom = 'all';
+        draft = {
+          rows: allDraft.rows,
+          notes: ['Selected embodiment / zoom had no surface rows; using all corrected candidate rows.', ...allDraft.notes],
+        };
+      }
+    }
+
+    setResult(correctedResult);
+    setSummary(nextSummary);
+    setCandidateRowsText(formatCandidateRowsForEditor(correctedResult.candidateTableRows));
+    setSelectedEmbodiment(nextEmbodiment);
+    setSelectedZoom(nextZoom);
+    setDraftRows(draft.rows);
+    setDraftPreview(formatDraftRows(draft.rows, draft.notes, nextSummary));
+    return {
+      rows: draft.rows,
+      summaryText: nextSummary,
+      surfaceCount: countPatentDraftSurfaceRows(draft.rows),
+    };
+  };
+
+  const handleEmbodimentChange = async (value: string) => {
+    setSelectedEmbodiment(value);
+    if (!result) return;
+    const draft = await rebuildDraft(result, value, selectedZoom, summary);
+    setStatus(`Updated patent selection. ${countPatentDraftSurfaceRows(draft.rows)} surface row(s) are ready.`);
+  };
+
+  const handleZoomChange = async (value: string) => {
+    setSelectedZoom(value);
+    if (!result) return;
+    const draft = await rebuildDraft(result, selectedEmbodiment, value, summary);
+    setStatus(`Updated patent selection. ${countPatentDraftSurfaceRows(draft.rows)} surface row(s) are ready.`);
+  };
+
+  const handleRunOcr = async (mode: 'replace' | 'append' = 'append') => {
+    if (!sourcePdfBlob) {
+      setStatus('Load or paste a PDF first. OCR runs on the current PDF source.');
+      return null;
+    }
+
+    setIsRunningOcr(true);
+    setStatus('Preparing OCR...');
+    try {
+      const ocrResult = await runPdfOcr(sourcePdfBlob, {
+        onProgress: (message) => setStatus(message),
+      });
+      const ocrText = String(ocrResult.text ?? '').trim();
+      if (!ocrText) {
+        setStatus('OCR finished, but no text was recognized. The PDF may require higher-resolution OCR or different language data.');
+        return '';
+      }
+
+      const combinedText = mode === 'replace' || !rawText.trim()
+        ? ocrText
+        : `${rawText.trim()}\n\n[OCR Fallback]\n${ocrText}`;
+      setRawText(combinedText);
+      setStatus(`OCR finished for ${ocrResult.pagesProcessed} page(s). Run Extract Candidate Data again.`);
+      return combinedText;
+    } catch (error) {
+      const message = String((error as any)?.message || error || 'Unknown error');
+      setStatus(`OCR failed: ${message}`);
+      return null;
+    } finally {
+      setIsRunningOcr(false);
+    }
+  };
+
+  const handleLoadFromUrl = async () => {
+    const url = sourceUrl.trim();
+    if (!url) {
+      setStatus('Enter a document URL first.');
+      return;
+    }
+
+    setIsLoadingUrl(true);
+    setSourcePdfBlob(null);
+    setStatus('Fetching document and extracting text...');
+    try {
+      const loaded = await loadTextFromDocumentUrl(url);
+      setRawText(loaded.text);
+      setStatus(`Loaded ${loaded.sourceKind.toUpperCase()} text (${loaded.text.length.toLocaleString()} chars). Run Extract Candidate Data next.`);
+    } catch (error) {
+      const message = String((error as any)?.message || error || 'Unknown error');
+      setStatus(`URL load failed: ${message}. Many patent sites block browser fetch by CORS. Use Open Search, then paste the PDF file or choose it with Select PDF.`);
+    } finally {
+      setIsLoadingUrl(false);
+    }
+  };
+
+  const handlePdfFile = async (file: File | Blob | null | undefined) => {
+    if (!file) return;
+    setIsLoadingPdf(true);
+    setSourcePdfBlob(file);
+    setStatus('Reading PDF file...');
+    try {
+      const text = await loadTextFromPdfBlob(file);
+      setRawText(text);
+      if (text.trim().length < 80) {
+        setStatus('PDF text layer is sparse. Running OCR fallback...');
+        const ocrText = await handleRunOcr('replace');
+        if (ocrText && String(ocrText).trim()) return;
+      }
+      setStatus(`Loaded PDF text (${text.length.toLocaleString()} chars). Run Extract Candidate Data next.`);
+    } catch (error) {
+      const message = String((error as any)?.message || error || 'Unknown error');
+      setStatus(`PDF load failed: ${message}`);
+    } finally {
+      setIsLoadingPdf(false);
+    }
+  };
+
+  const handlePdfInputChange = async (event: any) => {
+    const file = event?.target?.files?.[0] as File | undefined;
+    await handlePdfFile(file);
+    if (event?.target) event.target.value = '';
+  };
+
+  const extractPdfFileFromTransfer = (transfer: DataTransfer | null | undefined): File | null => {
+    const items = Array.from(transfer?.items ?? []);
+    const pdfItem = items.find((item: any) => item?.kind === 'file' && /pdf/i.test(String(item?.type ?? '')));
+    if (pdfItem?.getAsFile) return pdfItem.getAsFile();
+
+    const files = Array.from(transfer?.files ?? []);
+    return files.find((file: File) => /pdf/i.test(String(file.type ?? '')) || /\.pdf$/i.test(file.name)) ?? null;
+  };
+
+  const extractPdfFileFromClipboard = (clipboardData: DataTransfer | null | undefined): File | null => {
+    return extractPdfFileFromTransfer(clipboardData);
+  };
+
+  const handlePanelDragOver = (event: any) => {
+    const file = extractPdfFileFromTransfer(event?.dataTransfer);
+    if (!file) return;
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+  };
+
+  const handlePanelDrop = async (event: any) => {
+    const file = extractPdfFileFromTransfer(event?.dataTransfer);
+    if (!file) return;
+    event.preventDefault();
+    event.stopPropagation();
+    await handlePdfFile(file);
+  };
+
+  const handleRawTextPaste = async (event: any) => {
+    const file = extractPdfFileFromClipboard(event?.clipboardData);
+    if (!file) return;
+    event.preventDefault();
+    await handlePdfFile(file);
+  };
+
+  useEffect(() => {
+    const handleWindowPasteCapture = (event: ClipboardEvent) => {
+      const panel = panelRef.current;
+      if (!panel || panel.offsetParent === null) return;
+      const file = extractPdfFileFromClipboard(event.clipboardData);
+      if (!file) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void handlePdfFile(file);
+    };
+
+    window.addEventListener('paste', handleWindowPasteCapture, true);
+    return () => {
+      window.removeEventListener('paste', handleWindowPasteCapture, true);
+    };
+  }, []);
+
+  const handleExtract = async () => {
+    let nextText = rawText.trim();
+    if (!nextText) {
+      setStatus('Paste literature text first.');
+      return;
+    }
+
+    let nextResult = parseLiteratureText(nextText);
+    let nextSummary = buildLiteratureSummary(query, sourceUrl, nextResult);
+    const lacksAsphereContent = !textContainsPatentAsphereMarkers(nextText) && !candidateRowsContainPatentAsphereMarkers(nextResult.candidateTableRows);
+    const lacksRadiusContent = !textContainsPatentRadiusMarkers(nextText) && !candidateRowsContainPatentRadiusMarkers(nextResult.candidateTableRows);
+    if ((nextResult.candidateTableRows.length === 0 || lacksAsphereContent || lacksRadiusContent) && sourcePdfBlob && !isRunningOcr) {
+      setStatus(
+        nextResult.candidateTableRows.length === 0
+          ? 'No candidate rows found from text layer. Running OCR fallback...'
+          : lacksRadiusContent
+            ? 'No radius column detected from the current PDF text. Running full-document OCR fallback...'
+            : 'No asphere section detected from the current PDF text. Running full-document OCR fallback...'
+      );
+      const ocrCombinedText = await handleRunOcr('append');
+      if (ocrCombinedText && String(ocrCombinedText).trim()) {
+        nextText = String(ocrCombinedText).trim();
+        nextResult = parseLiteratureText(nextText);
+        nextSummary = buildLiteratureSummary(query, sourceUrl, nextResult);
+      }
+    }
+    const nextEmbodiment = nextResult.embodiments.find((option) => option.key !== 'all')?.key || 'all';
+    const nextZoom = nextResult.zoomPositions.find((option) => option.key !== 'all')?.key || 'all';
+    setResult(nextResult);
+    setSummary(nextSummary);
+    setCandidateRowsText(formatCandidateRowsForEditor(nextResult.candidateTableRows));
+    setSelectedEmbodiment(nextEmbodiment);
+    setSelectedZoom(nextZoom);
+    const draft = await rebuildDraft(nextResult, nextEmbodiment, nextZoom, nextSummary);
+    setStatus(`Extracted ${nextResult.candidateTableRows.length} candidate row(s) and built ${countPatentDraftSurfaceRows(draft.rows)} draft surface row(s).`);
+  };
+
+  const handleApplyCorrectedCandidateRows = async () => {
+    if (!result) {
+      setStatus('Run Extract Candidate Data first.');
+      return;
+    }
+
+    const correctedResult = mergeCorrectedCandidateRows(result, candidateRowsText);
+    if (correctedResult.candidateTableRows.length === 0) {
+      setStatus('No numeric candidate rows remain after correction.');
+      return;
+    }
+
+    const nextSummary = buildLiteratureSummary(query, sourceUrl, correctedResult);
+    const nextEmbodiment = correctedResult.embodiments.find((option) => option.key === selectedEmbodiment)?.key
+      || correctedResult.embodiments.find((option) => option.key !== 'all')?.key
+      || 'all';
+    const nextZoom = correctedResult.zoomPositions.find((option) => option.key === selectedZoom)?.key
+      || correctedResult.zoomPositions.find((option) => option.key !== 'all')?.key
+      || 'all';
+    setResult(correctedResult);
+    setSummary(nextSummary);
+    setSelectedEmbodiment(nextEmbodiment);
+    setSelectedZoom(nextZoom);
+    const draft = await rebuildDraft(correctedResult, nextEmbodiment, nextZoom, nextSummary);
+    setStatus(`Applied corrected candidate rows. ${countPatentDraftSurfaceRows(draft.rows)} draft surface row(s) are ready.`);
+  };
+
+  const pushSummaryToSystemData = async () => {
+    const nextSummary = summary.trim();
+    if (!nextSummary) {
+      setStatus('Run Extract Candidate Data first.');
+      return;
+    }
+
+    const w = window as any;
+    try {
+      if (typeof w.__cooptPushSystemDataText === 'function') {
+        w.__cooptPushSystemDataText(nextSummary);
+      } else {
+        const textarea = document.getElementById('system-data') as HTMLTextAreaElement | null;
+        if (textarea) textarea.value = nextSummary;
+      }
+    } catch (_) {}
+
+    const copied = await copyText(nextSummary);
+    await persistLiteratureSummaryToActiveConfig(nextSummary);
+    setStatus(copied ? 'Summary sent to System Data / Design Intent and copied to clipboard.' : 'Summary sent to System Data / Design Intent.');
+  };
+
+  const handleApplyDraft = async () => {
+    const draft = await rebuildDraftFromCurrentCandidateRows();
+    if (!draft) return;
+    if (draft.rows.length === 0) {
+      setStatus('Extract candidate data first.');
+      return;
+    }
+    if (draft.surfaceCount === 0) {
+      setStatus('Draft Summary is available, but no surface rows were built. Check Correct Candidate Rows for r/d rows before applying.');
+      return;
+    }
+    await applyDraftToWorkspace(draft.rows, draft.summaryText);
+    setStatus(`Patent optical system rows and Draft Summary applied to the active optical system / Design Intent (${draft.surfaceCount} surface row(s)).`);
+  };
+
+  const handleApplyDraftAsNewConfig = async () => {
+    const draft = await rebuildDraftFromCurrentCandidateRows();
+    if (!draft) return;
+    if (draft.rows.length === 0) {
+      setStatus('Extract candidate data first.');
+      return;
+    }
+    if (draft.surfaceCount === 0) {
+      setStatus('Draft Summary is available, but no surface rows were built. Check Correct Candidate Rows for r/d rows before applying.');
+      return;
+    }
+    await applyDraftToWorkspace(draft.rows, draft.summaryText, 'new');
+    setStatus(`Patent optical system rows and Draft Summary applied as a new Design Intent configuration (${draft.surfaceCount} surface row(s)).`);
+  };
+
+  return (
+    <div
+      ref={panelRef}
+      className="literature-import-section"
+      onDragOver={handlePanelDragOver}
+      onDrop={(event) => void handlePanelDrop(event)}
+    >
+    <div className="literature-import-panel">
+      <div className="literature-import-panel__header">
+        <div>
+          <h3>Patent Import</h3>
+          <p>Independent workspace tab for semi-automatic patent import: load URL text when allowed, or paste/select a PDF file, then choose embodiment / zoom position and apply the extracted optical system directly.</p>
+        </div>
+        <div className="literature-import-panel__actions">
+          <button type="button" onClick={() => openSearch('jplatpat')}>Search J-PlatPat</button>
+          <button type="button" onClick={() => openSearch('google-patents')}>Search Google Patents</button>
+        </div>
+      </div>
+
+      <div className="literature-import-panel__grid">
+        <label>
+          <span>Search Keywords</span>
+          <input
+            type="text"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="zoom lens, JP patent number, applicant..."
+          />
+        </label>
+        <label>
+          <span>Document URL</span>
+          <input
+            type="text"
+            value={sourceUrl}
+            onChange={(event) => setSourceUrl(event.target.value)}
+            placeholder="https://patents.google.com/... or PDF URL"
+          />
+        </label>
+      </div>
+
+      <div className="literature-import-panel__actions literature-import-panel__actions--primary">
+        <button type="button" onClick={handleLoadFromUrl} disabled={isLoadingUrl}>{isLoadingUrl ? 'Loading URL...' : 'Load URL Text'}</button>
+        <label className="literature-import-panel__fileButton">
+          <input type="file" accept="application/pdf,.pdf" onChange={handlePdfInputChange} />
+          <span>{isLoadingPdf ? 'Loading PDF...' : 'Select PDF'}</span>
+        </label>
+        <button type="button" onClick={() => void handleRunOcr('append')} disabled={isRunningOcr || !sourcePdfBlob}>{isRunningOcr ? 'Running OCR...' : 'Run OCR'}</button>
+        <button type="button" onClick={() => setRawText(LITERATURE_IMPORT_EXAMPLE)}>Use Example</button>
+      </div>
+
+      <label className="literature-import-panel__field">
+        <span>Paste PDF Text / OCR or Paste a PDF File</span>
+        <textarea
+          value={rawText}
+          onChange={(event) => setRawText(event.target.value)}
+          onPaste={handleRawTextPaste}
+          rows={8}
+          placeholder="Paste patent text, table rows, OCR output, or copy a PDF file and paste it here..."
+        />
+      </label>
+      <div className="literature-import-panel__hint">Direct URL loading works only for documents the browser is allowed to fetch. For image PDFs, use Run OCR. Automatic OCR fallback also runs when candidate rows are not detected from the PDF text layer.</div>
+
+      <div className="literature-import-panel__actions literature-import-panel__actions--primary">
+        <button type="button" onClick={handleExtract}>Extract Candidate Data</button>
+        <button type="button" onClick={handleApplyCorrectedCandidateRows} disabled={!result}>Apply Corrected Rows</button>
+        <button type="button" onClick={handleApplyDraft}>Apply To Optical System</button>
+        <button type="button" onClick={handleApplyDraftAsNewConfig}>Apply as New Config</button>
+        <button type="button" onClick={pushSummaryToSystemData}>Send Summary To System Data</button>
+      </div>
+
+      <div className="literature-import-panel__status">{status}</div>
+
+      {result ? (
+        <div className="literature-import-panel__chips" aria-label="Extracted counts">
+          <span>{result.patentIds.length} patent id(s)</span>
+          <span>{result.glassNames.length} glass name(s)</span>
+          <span>{result.candidateTableRows.length} table row(s)</span>
+          <span>{countCandidateRowsWithPatentAsphereMarkers(result.candidateTableRows)} asphere row(s)</span>
+          <span>{result.focalLengths.length} focal length candidate(s)</span>
+        </div>
+      ) : null}
+
+      {result ? (
+        <div className="literature-import-panel__grid literature-import-panel__grid--selectors">
+          <label>
+            <span>Embodiment</span>
+            <select value={selectedEmbodiment} onChange={(event) => { void handleEmbodimentChange(event.target.value); }}>
+              {result.embodiments.map((option) => (
+                <option key={option.key} value={option.key}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Zoom Position</span>
+            <select value={selectedZoom} onChange={(event) => { void handleZoomChange(event.target.value); }}>
+              {result.zoomPositions.map((option) => (
+                <option key={option.key} value={option.key}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      ) : null}
+
+      <label className="literature-import-panel__field">
+        <span>Correct Candidate Rows</span>
+        <textarea
+          value={candidateRowsText}
+          onChange={(event) => setCandidateRowsText(event.target.value)}
+          rows={12}
+          placeholder="Correct OCR typos here, then click Apply Corrected Rows..."
+        />
+      </label>
+      <div className="literature-import-panel__hint">Edit only the extracted candidate rows here. You can fix OCR typos like `rl3` to `r13`, `N5-1.84666` to `N5=1.84666`, or malformed decimals, then click Apply Corrected Rows.</div>
+
+      <label className="literature-import-panel__field">
+        <span>Draft Summary</span>
+        <textarea value={summary} readOnly rows={12} placeholder="Extraction summary will appear here..." />
+      </label>
+    </div>
+    </div>
+  );
+}
 
 export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
   useEffect(() => {

@@ -668,6 +668,9 @@ function notifyPrimaryWavelengthChanged(): void {
  */
 function recalculateAutoSemiDiaIfAvailable(): void {
   try {
+    if (typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function') {
+      w.autoSetBlockAperturesFromLargestObjectCondition();
+    }
     if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
       console.log('🔄 Source変更検知: Image面のSemi Dia自動計算を再実行');
       w.calculateImageSemiDiaFromChiefRays();

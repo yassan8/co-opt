@@ -3419,10 +3419,12 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
         // Persisted aperture (semidia) stored in Design Intent
         if (semidiaRaw !== null && semidiaRaw !== undefined && String(semidiaRaw).trim() !== '') {
           surf.semidia = semidiaRaw;
+          surf.__cooptExplicitApertureSemidia = semidiaRaw;
         } else {
           const vSemidia = aperture ? aperture.semidia : null;
           if (vSemidia !== null && vSemidia !== undefined && String(vSemidia).trim() !== '') {
             surf.semidia = vSemidia;
+            surf.__cooptExplicitApertureSemidia = vSemidia;
           } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'semidia')) {
             surf.semidia = '';
           }
@@ -3583,16 +3585,19 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
         const v3 = aperture ? aperture.s3 : null;
         if (v1 !== null && v1 !== undefined && String(v1).trim() !== '') {
           s1.semidia = v1;
+          s1.__cooptExplicitApertureSemidia = v1;
         } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's1')) {
           s1.semidia = '';
         }
         if (v2 !== null && v2 !== undefined && String(v2).trim() !== '') {
           s2.semidia = v2;
+          s2.__cooptExplicitApertureSemidia = v2;
         } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's2')) {
           s2.semidia = '';
         }
         if (v3 !== null && v3 !== undefined && String(v3).trim() !== '') {
           s3.semidia = v3;
+          s3.__cooptExplicitApertureSemidia = v3;
         } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's3')) {
           s3.semidia = '';
         }
@@ -3605,9 +3610,7 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       const thickness2 = getParamOrVarValue(params, vars, 'thickness2');
       const material1 = getParamOrVarValue(params, vars, 'material1');
       const material2 = getParamOrVarValue(params, vars, 'material2');
-      const rindex1 = getParamOrVarValue(params, vars, 'rindex1');
       const abbe1 = getParamOrVarValue(params, vars, 'abbe1');
-      const rindex2 = getParamOrVarValue(params, vars, 'rindex2');
       const abbe2 = getParamOrVarValue(params, vars, 'abbe2');
 
       s1.radius = normalizeRadiusToRowValue(radius1);
@@ -3630,9 +3633,6 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       
       // Apply rindex/abbe only if material was user-specified
       if (!usedDefaultMaterial1) {
-        if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
-          s1.rindex = String(rindex1);
-        }
         if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
           s1.abbe = String(abbe1);
         }
@@ -3659,9 +3659,6 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       
       // Apply rindex/abbe only if material was user-specified
       if (!usedDefaultMaterial2) {
-        if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
-          s2.rindex = String(rindex2);
-        }
         if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
           s2.abbe = String(abbe2);
         }
@@ -3755,21 +3752,25 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
         const v4 = aperture ? aperture.s4 : null;
         if (v1 !== null && v1 !== undefined && String(v1).trim() !== '') {
           s1.semidia = v1;
+          s1.__cooptExplicitApertureSemidia = v1;
         } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's1')) {
           s1.semidia = '';
         }
         if (v2 !== null && v2 !== undefined && String(v2).trim() !== '') {
           s2.semidia = v2;
+          s2.__cooptExplicitApertureSemidia = v2;
         } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's2')) {
           s2.semidia = '';
         }
         if (v3 !== null && v3 !== undefined && String(v3).trim() !== '') {
           s3.semidia = v3;
+          s3.__cooptExplicitApertureSemidia = v3;
         } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's3')) {
           s3.semidia = '';
         }
         if (v4 !== null && v4 !== undefined && String(v4).trim() !== '') {
           s4.semidia = v4;
+          s4.__cooptExplicitApertureSemidia = v4;
         } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's4')) {
           s4.semidia = '';
         }
@@ -3785,9 +3786,7 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       const material1 = getParamOrVarValue(params, vars, 'material1');
       const material2 = getParamOrVarValue(params, vars, 'material2');
       const material3 = getParamOrVarValue(params, vars, 'material3');
-      const rindex1 = getParamOrVarValue(params, vars, 'rindex1');
       const abbe1 = getParamOrVarValue(params, vars, 'abbe1');
-      const rindex2 = getParamOrVarValue(params, vars, 'rindex2');
       const abbe2 = getParamOrVarValue(params, vars, 'abbe2');
       const rindex3 = getParamOrVarValue(params, vars, 'rindex3');
       const abbe3 = getParamOrVarValue(params, vars, 'abbe3');
@@ -3812,9 +3811,6 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       
       // Apply rindex/abbe only if material was user-specified
       if (!usedDefaultMaterial1) {
-        if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
-          s1.rindex = String(rindex1);
-        }
         if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
           s1.abbe = String(abbe1);
         }
@@ -3841,9 +3837,6 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       
       // Apply rindex/abbe only if material was user-specified
       if (!usedDefaultMaterial2) {
-        if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
-          s2.rindex = String(rindex2);
-        }
         if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
           s2.abbe = String(abbe2);
         }
@@ -3993,6 +3986,7 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       if (shape === 'Circular') {
         if (semidiaRaw !== null && semidiaRaw !== undefined && String(semidiaRaw).trim() !== '') {
           mirror.semidia = semidiaRaw;
+          mirror.__cooptExplicitApertureSemidia = semidiaRaw;
         } else {
           mirror.semidia = '';
         }

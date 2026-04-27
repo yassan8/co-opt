@@ -21,6 +21,7 @@ export default function DesignIntentSection() {
         <button id="design-intent-generate-zoom-scenarios-btn" type="button">Generate W/M/T</button>
         <button id="design-intent-param-all-on-btn" type="button">Parameter All ON</button>
         <button id="design-intent-param-all-off-btn" type="button">Parameter All OFF</button>
+        <button id="design-intent-auto-set-apertures-btn" type="button">Auto-set apertures</button>
       </div>
 
       <div

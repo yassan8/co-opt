@@ -2810,6 +2810,14 @@ async function calculateImageSemiDiaFromChiefRays() {
               if (typeof saveTableData === 'function') {
                 saveTableData(tableOpticalSystem.getData());
               }
+
+                try {
+                  if (typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function') {
+                    w.autoSetBlockAperturesFromLargestObjectCondition();
+                  }
+                } catch (e) {
+                  console.warn('⚠️ Failed to auto-sync block apertures from largest object condition:', e);
+                }
             } else {
               emitChiefRayDiag('image-hit-computation-failed', {
                 raysCount: rays.length,

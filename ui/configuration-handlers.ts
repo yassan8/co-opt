@@ -30,6 +30,7 @@ let autoSaveIntervalId: number | null = null;
 let isConfigurationSwitching = false;
 let beforeUnloadHandlerInstalled = false;
 let delegatedConfigListenerInstalled = false;
+let delegatedConfigClickListenerInstalled = false;
 let lastConfigSwitchTimestamp = 0;
 
 function areTablesReady(): boolean {
@@ -388,6 +389,32 @@ function setupConfigurationEventListeners(): void {
       }
     });
   }
+
+  if (!delegatedConfigClickListenerInstalled) {
+    delegatedConfigClickListenerInstalled = true;
+    document.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement | null;
+      const button = target?.closest('button');
+      if (!button) return;
+
+      switch (button.id) {
+        case 'add-config-btn':
+          handleAddConfiguration();
+          break;
+        case 'delete-config-btn':
+          handleDeleteConfiguration();
+          break;
+        case 'duplicate-config-btn':
+          handleDuplicateConfiguration();
+          break;
+        case 'rename-config-btn':
+          handleRenameConfiguration();
+          break;
+        default:
+          break;
+      }
+    });
+  }
   
   // Configuration選択変更
   const select = document.getElementById('config-select');
@@ -395,30 +422,6 @@ function setupConfigurationEventListeners(): void {
     // 既存のリスナーを削除してから追加（重複防止）
     select.removeEventListener('change', handleConfigurationChange);
     select.addEventListener('change', handleConfigurationChange);
-  }
-  
-  // Add Configボタン
-  const addBtn = document.getElementById('add-config-btn');
-  if (addBtn) {
-    addBtn.addEventListener('click', handleAddConfiguration);
-  }
-  
-  // Delete Configボタン
-  const deleteBtn = document.getElementById('delete-config-btn');
-  if (deleteBtn) {
-    deleteBtn.addEventListener('click', handleDeleteConfiguration);
-  }
-  
-  // Duplicate Configボタン
-  const duplicateBtn = document.getElementById('duplicate-config-btn');
-  if (duplicateBtn) {
-    duplicateBtn.addEventListener('click', handleDuplicateConfiguration);
-  }
-  
-  // Rename Configボタン
-  const renameBtn = document.getElementById('rename-config-btn');
-  if (renameBtn) {
-    renameBtn.addEventListener('click', handleRenameConfiguration);
   }
   
   // テーブル変更時に自動保存

@@ -22,6 +22,11 @@ function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function deepCloneJson(value) {
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(value));
+}
+
 function isNumericString(value) {
   if (typeof value !== 'string') return false;
   const s = value.trim();
@@ -49,6 +54,128 @@ function defaultObjectRows() {
     { id: 2, xHeightAngle: 0, yHeightAngle: 5, position: 'Rectangle', angle: 5 },
     { id: 3, xHeightAngle: 0, yHeightAngle: 10, position: 'Rectangle', angle: 10 }
   ];
+}
+
+function looksLikeCompactOpticalDiffRows(rows, baseRows) {
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  if (!Array.isArray(baseRows) || baseRows.length === 0) return false;
+  if (rows.length >= baseRows.length) return false;
+
+  const baseIds = new Set(
+    baseRows
+      .map((row) => String(row?.id ?? '').trim())
+      .filter(Boolean)
+  );
+
+  let matchedRows = 0;
+  for (const row of rows) {
+    if (!isPlainObject(row)) return false;
+    const keys = Object.keys(row);
+    const rowId = String(row?.id ?? '').trim();
+    if (!rowId || !baseIds.has(rowId)) return false;
+    if (keys.length > 6) return false;
+    matchedRows += 1;
+  }
+
+  return matchedRows === rows.length;
+}
+
+function mergeOpticalRowDiffs(baseRows, overrideRows) {
+  const mergedRows = Array.isArray(baseRows) ? deepCloneJson(baseRows) : [];
+  const mergedById = new Map();
+
+  for (const row of mergedRows) {
+    const rowId = String(row?.id ?? '').trim();
+    if (rowId) mergedById.set(rowId, row);
+  }
+
+  for (const rawOverride of Array.isArray(overrideRows) ? overrideRows : []) {
+    if (!isPlainObject(rawOverride)) continue;
+    const rowId = String(rawOverride?.id ?? '').trim();
+    const override = deepCloneJson(rawOverride);
+    if (!rowId || !mergedById.has(rowId)) {
+      mergedRows.push(override);
+      continue;
+    }
+    Object.assign(mergedById.get(rowId), override);
+  }
+
+  return mergedRows;
+}
+
+function expandCompactConfigurationPayload(raw, issues) {
+  if (!isPlainObject(raw?.configurations) || !Array.isArray(raw.configurations.configurations)) return;
+
+  const wrapper = raw.configurations;
+  const configs = wrapper.configurations;
+  const baseObject = Array.isArray(raw.object) ? raw.object : null;
+  const baseOpticalSystem = Array.isArray(raw.opticalSystem) ? raw.opticalSystem : null;
+  const baseSystemData = isPlainObject(raw.systemData) ? raw.systemData : { referenceFocalLength: '' };
+  const schemaVersion = String(raw.schemaVersion ?? wrapper.schemaVersion ?? '0.1').trim() || '0.1';
+  const now = new Date().toISOString();
+
+  if (!Array.isArray(wrapper.meritFunction) && Array.isArray(raw.meritFunction)) {
+    wrapper.meritFunction = deepCloneJson(raw.meritFunction);
+  }
+  if (!Array.isArray(wrapper.systemRequirements) && Array.isArray(raw.systemRequirements)) {
+    wrapper.systemRequirements = deepCloneJson(raw.systemRequirements);
+  }
+  if (!isPlainObject(wrapper.optimizationRules) && isPlainObject(raw.optimizationRules)) {
+    wrapper.optimizationRules = deepCloneJson(raw.optimizationRules);
+  }
+
+  let expandedCount = 0;
+
+  for (const cfg of configs) {
+    if (!isPlainObject(cfg)) continue;
+
+    const hasCompactOnlyShape = (
+      !Array.isArray(cfg.object)
+      && !isPlainObject(cfg.systemData)
+      && !isPlainObject(cfg.metadata)
+      && (cfg.schemaVersion === undefined || cfg.schemaVersion === null || String(cfg.schemaVersion).trim() === '')
+    );
+
+    if (hasCompactOnlyShape && looksLikeCompactOpticalDiffRows(cfg.opticalSystem, baseOpticalSystem)) {
+      cfg.opticalSystem = mergeOpticalRowDiffs(baseOpticalSystem, cfg.opticalSystem);
+      expandedCount += 1;
+    } else if ((!Array.isArray(cfg.opticalSystem) || cfg.opticalSystem.length === 0) && Array.isArray(baseOpticalSystem) && baseOpticalSystem.length > 0) {
+      cfg.opticalSystem = deepCloneJson(baseOpticalSystem);
+    }
+
+    if ((!Array.isArray(cfg.object) || cfg.object.length === 0) && Array.isArray(baseObject) && baseObject.length > 0) {
+      cfg.object = deepCloneJson(baseObject);
+    }
+
+    if (!isPlainObject(cfg.systemData)) {
+      cfg.systemData = deepCloneJson(baseSystemData);
+    }
+
+    if (!isPlainObject(cfg.metadata)) {
+      cfg.metadata = {
+        created: now,
+        modified: now,
+        optimizationTarget: null,
+        locked: false,
+      };
+    } else {
+      if (!cfg.metadata.created) cfg.metadata.created = now;
+      if (!cfg.metadata.modified) cfg.metadata.modified = now;
+      if (cfg.metadata.locked === undefined) cfg.metadata.locked = false;
+    }
+
+    if (cfg.schemaVersion === undefined || cfg.schemaVersion === null || String(cfg.schemaVersion).trim() === '') {
+      cfg.schemaVersion = schemaVersion;
+    }
+  }
+
+  if (expandedCount > 0) {
+    issues.push({
+      severity: 'warning',
+      phase: 'normalize',
+      message: `${expandedCount} compact configurations were expanded from top-level opticalSystem/object/systemData.`
+    });
+  }
 }
 
 function normalizeBlockType(rawType) {
@@ -269,6 +396,8 @@ export function normalizeDesign(raw) {
       issues.push({ severity: 'warning', phase: 'normalize', message: 'Configuration-level source detected; promoted to top-level source.' });
     }
   }
+
+  expandCompactConfigurationPayload(raw, issues);
 
   // Case 1: already canonical save wrapper: { configurations: <systemConfigurations> }
   if (isPlainObject(raw.configurations) && Array.isArray(raw.configurations.configurations)) {

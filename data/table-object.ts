@@ -681,6 +681,9 @@ function updateWavefrontObjectOptionsIfAvailable(): void {
  */
 function recalculateAutoSemiDiaIfAvailable(): void {
   try {
+    if (typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function') {
+      w.autoSetBlockAperturesFromLargestObjectCondition();
+    }
     if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
       w.calculateImageSemiDiaFromChiefRays();
     }

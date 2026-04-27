@@ -1672,6 +1672,177 @@ button:active {
     margin-bottom: 10px;
 }
 
+.literature-import-panel {
+    display: grid;
+    gap: 12px;
+    margin: 0 0 14px 0;
+    padding: 14px;
+    border: 1px solid #d8dee8;
+    border-radius: 10px;
+    background: #fbfcfe;
+}
+
+.literature-import-section {
+    padding: 20px;
+    min-height: 0;
+    box-sizing: border-box;
+}
+
+.literature-import-panel__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.literature-import-panel__header h3 {
+    margin: 0;
+    font-size: 15px;
+    color: #111827;
+}
+
+.literature-import-panel__header p {
+    margin: 4px 0 0 0;
+    max-width: 780px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #4b5563;
+}
+
+.literature-import-panel__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(240px, 1fr));
+    gap: 12px;
+}
+
+.literature-import-panel__field,
+.literature-import-panel__grid label {
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+    color: #374151;
+}
+
+.literature-import-panel__field span,
+.literature-import-panel__grid label span {
+    font-weight: 600;
+}
+
+.literature-import-panel input,
+.literature-import-panel select,
+.literature-import-panel textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #111827;
+    padding: 8px 10px;
+    font: inherit;
+}
+
+.literature-import-panel__grid--selectors {
+    grid-template-columns: repeat(2, minmax(180px, 280px));
+}
+
+.literature-import-panel textarea {
+    resize: vertical;
+    min-height: 112px;
+    font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
+}
+
+.literature-import-panel__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.literature-import-panel__actions--primary {
+    margin-top: -2px;
+}
+
+.literature-import-panel__actions button,
+.literature-import-panel__fileButton {
+    margin: 0;
+    padding: 0 12px;
+    min-height: 34px;
+    height: 34px;
+    border: 1px solid #d6deea;
+    border-radius: 8px;
+    background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+    color: #334155;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    box-sizing: border-box;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    transition: border-color 140ms ease, background 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.literature-import-panel__actions button:hover,
+.literature-import-panel__fileButton:hover {
+    background: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
+    border-color: #b9c8e4;
+    color: #1f2937;
+    box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+    transform: translateY(-1px);
+}
+
+.literature-import-panel__actions button:active,
+.literature-import-panel__fileButton:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.literature-import-panel__fileButton {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.literature-import-panel__fileButton input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.literature-import-panel__fileButton span {
+    pointer-events: none;
+}
+
+.literature-import-panel__hint {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.literature-import-panel__status {
+    font-size: 12px;
+    color: #475569;
+}
+
+.literature-import-panel__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.literature-import-panel__chips span {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    background: #e8eefc;
+    color: #1d4ed8;
+    padding: 4px 9px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
 .system-controls button {
     margin-right: 5px;
     padding: 6px 10px;
@@ -1882,6 +2053,10 @@ button:active {
     flex: 1 1 auto;
     margin: 0;
     resize: none;
+}
+
+.system-section.system-section-window-fit .literature-import-panel {
+    flex: 0 0 auto;
 }
 
 /* スポットダイヤグラムコントロール */
@@ -3930,6 +4105,12 @@ h4 {
     .param-input-with-slider input[type="range"] {
         flex: 1 1 100% !important;
         order: 10;
+    }
+}
+
+@media (max-width: 900px) {
+    .literature-import-panel__grid {
+        grid-template-columns: 1fr;
     }
 }
 

@@ -497,12 +497,19 @@ function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOri
     const objectAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[0]) : null;
     const imageAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[surfaceOrigins.length - 1]) : null;
 
-    const pushDescriptor = (id, text, anchor, style = null) => {
+    const pushDescriptor = (id, text, anchor, style = null, metadata = null) => {
         const safeId = String(id ?? '').trim();
         if (!safeId || !text || !anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !Number.isFinite(anchor.z)) return;
         if (seenIds.has(safeId)) return;
         seenIds.add(safeId);
-        descriptors.push({ id: safeId, text: String(text), anchor, style: style || __coopt_getDesignIntentLabelStyle('', safeId) });
+        descriptors.push({
+            id: safeId,
+            text: String(text),
+            anchor,
+            style: style || __coopt_getDesignIntentLabelStyle('', safeId),
+            blockType: String(metadata?.blockType ?? '').trim(),
+            isGap: metadata?.isGap === true,
+        });
     };
 
     if (blocks.length > 0) {
@@ -546,7 +553,10 @@ function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOri
 
             const displayText = __coopt_makeSequentialDesignIntentLabel(displayCounts, blockType, blockId);
             const labelStyle = __coopt_getDesignIntentLabelStyle(blockType, blockId);
-            pushDescriptor(blockId, displayText, anchor, labelStyle);
+            pushDescriptor(blockId, displayText, anchor, labelStyle, {
+                blockType,
+                isGap: blockType === 'Gap' || blockType === 'AirGap',
+            });
         }
     }
 
@@ -556,7 +566,11 @@ function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOri
         const anchor = __coopt_averageOriginForRange(surfaceOrigins, range.min, range.max);
         if (/^Object(Surface|Plane)?/i.test(String(blockId))) continue;
         const displayText = __coopt_makeSequentialDesignIntentLabel(displayCounts, '', blockId);
-        pushDescriptor(blockId, displayText, anchor, __coopt_getDesignIntentLabelStyle('', blockId));
+        const displayBase = __coopt_getDesignIntentDisplayBase('', blockId);
+        pushDescriptor(blockId, displayText, anchor, __coopt_getDesignIntentLabelStyle('', blockId), {
+            blockType: displayBase,
+            isGap: displayBase === 'Gap',
+        });
     }
 
     return descriptors;
@@ -694,8 +708,8 @@ function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceO
         surfaceBottom = Math.min(...descriptors.map((d) => getVerticalCoord(d.anchor)));
     }
 
-    const primaryEntries = descriptors.filter((entry) => !/^(Gap|AirGap)/i.test(String(entry.id)));
-    const gapEntries = descriptors.filter((entry) => /^(Gap|AirGap)/i.test(String(entry.id)));
+    const primaryEntries = descriptors.filter((entry) => entry?.isGap !== true);
+    const gapEntries = descriptors.filter((entry) => entry?.isGap === true);
 
     const layoutGroup = (entries, baseVertical, verticalDir = 1) => {
         const ordered = [...entries];
@@ -713,7 +727,7 @@ function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceO
     };
 
     const primaryBase = surfaceTop + 10;
-    const gapBase = surfaceBottom - 9;
+    const gapBase = surfaceBottom - 16;
 
     layoutGroup(primaryEntries, primaryBase, 1);
     layoutGroup(gapEntries, gapBase, -1);
