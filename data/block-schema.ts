@@ -1938,6 +1938,7 @@ function __applySemidiaOverridesToRows(rows, overrides) {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (!row || typeof row !== 'object') continue;
+    if (__semidiaHasValue(row.__cooptExplicitApertureSemidia)) continue;
     const t = __rowTypeLower(row);
     if (t === 'image' || __isCoordTransRow(row)) continue;
     const pk = __provenanceKey(row);
@@ -1978,7 +1979,13 @@ function __captureBlockApertureFromLegacyRows(blocks, legacyRows) {
       const n = isNumericString(s) ? Number(s) : (typeof v === 'number' ? v : NaN);
       if (Number.isFinite(n) && n > 0) {
         if (!isPlainObject(block.parameters)) block.parameters = {};
-        block.parameters.semiDiameter = n;
+        const existingRaw = block.parameters.semiDiameter;
+        const existing = (typeof existingRaw === 'number')
+          ? existingRaw
+          : (isNumericString(String(existingRaw ?? '').trim()) ? Number(existingRaw) : NaN);
+        if (!(Number.isFinite(existing) && existing > 0)) {
+          block.parameters.semiDiameter = n;
+        }
       }
       continue;
     }
@@ -4953,6 +4960,7 @@ export function expandBlocksIntoConfiguration(config: any): { expandedOpticalSys
         if (!er || typeof er !== 'object') continue;
         const t = __rowTypeLower(er);
         if (t === 'image' || __isCoordTransRow(er)) continue;
+        if (__semidiaHasValue(er.__cooptExplicitApertureSemidia)) continue;
         const pk = __provenanceKey(er);
         if (!pk) continue;
         if (legacyByProv.has(pk)) er.semidia = legacyByProv.get(pk);

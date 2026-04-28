@@ -23,7 +23,7 @@ import { loadTableData as loadSystemRequirementsTableData } from '../data/table-
 import { requestRefreshBlockInspector } from '../core/window-facade.ts';
 import { getWindowDebugBagValue, setWindowDebugBagValue } from '../utils/window-debug-bag.ts';
 import { runKKTOptimization } from './kkt-optimizer.ts';
-import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
+import { calculateParaxialData, calculateImageSpaceDiffractionParams } from '../raytracing/core/ray-paraxial.ts';
 import {
   preloadOptimizerWasmBridge,
   solveLinearSystemWithOptimizerWasm,
@@ -2442,11 +2442,43 @@ function persistBlocksByConfigIdToSystemConfig({ systemConfig, configsById, targ
         ? persistedBlocks
         : JSON.parse(JSON.stringify(blocks));
       updateExpandedOpticalSystemInConfig(cfg);
+      syncDerivedSystemDataFromOpticalSystem(cfg);
     }
     return saveSystemConfigurationsRaw(systemConfig);
   } catch {
     return false;
   }
+}
+
+function syncDerivedSystemDataFromOpticalSystem(cfg) {
+  try {
+    if (!cfg || typeof cfg !== 'object') return;
+    const rows = Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem : null;
+    if (!rows || rows.length === 0) return;
+
+    const primaryWavelength = getPrimaryWavelengthForOptimization();
+    const diffParams = calculateImageSpaceDiffractionParams(rows, primaryWavelength);
+    const workingFNumber = Number(diffParams?.fNumberWorking);
+    const entrancePupilDiameterMm = Number(diffParams?.entrancePupilDiameterMm);
+
+    const nextSystemData = {
+      ...(cfg.systemData && typeof cfg.systemData === 'object' ? cfg.systemData : {})
+    };
+
+    if (Number.isFinite(workingFNumber) && workingFNumber > 0) {
+      nextSystemData.paraxialWorkingFNumber = workingFNumber;
+    } else {
+      delete nextSystemData.paraxialWorkingFNumber;
+    }
+
+    if (Number.isFinite(entrancePupilDiameterMm) && entrancePupilDiameterMm > 0) {
+      nextSystemData.entrancePupilDiameterMm = entrancePupilDiameterMm;
+    } else {
+      delete nextSystemData.entrancePupilDiameterMm;
+    }
+
+    cfg.systemData = nextSystemData;
+  } catch (_) {}
 }
 
 function restoreBestSnapshotAndPersist({
@@ -4705,6 +4737,129 @@ export async function runOptimizationMVP(options = {}) {
   try { __prevDisablePersistedTableFallback = (typeof globalThis !== 'undefined') ? (globalThis as any).__cooptDisablePersistedTableFallback : undefined; } catch (_) { __prevDisablePersistedTableFallback = undefined; }
   try { __prevTaEvalRunId = (typeof globalThis !== 'undefined') ? (globalThis as any).__cooptTaEvalRunId : undefined; } catch (_) { __prevTaEvalRunId = undefined; }
 
+  const restorePreOptimizationGlobalsForUiSync = () => {
+    try {
+      setBlocksOverrideGlobal(__prevBlocksOverride);
+    } catch (_) {}
+    try {
+      if (typeof window !== 'undefined') {
+        try { delete (window as any).__cooptOpticalSystemByConfigId; } catch (_) {}
+        try { delete (window as any).__cooptSystemConfig; } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined') {
+        try { delete globalThis.__cooptOpticalSystemRowsOverride; } catch (_) {
+          globalThis.__cooptOpticalSystemRowsOverride = null;
+        }
+      }
+    } catch (_) {}
+    try {
+      setScenarioOverrideGlobal((__prevScenarioOverride && typeof __prevScenarioOverride === 'object') ? __prevScenarioOverride : null);
+    } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined') {
+        if (__prevMeritFastMode !== undefined) globalThis.__cooptMeritFastMode = __prevMeritFastMode;
+        else {
+          try { delete globalThis.__cooptMeritFastMode; } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined') {
+        if (__prevDisableRayTraceDebug !== undefined) globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG = __prevDisableRayTraceDebug;
+        else {
+          try { delete globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG; } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    try {
+      if (__prevCalcOperandValue && editor && typeof editor.calculateOperandValue === 'function') {
+        editor.calculateOperandValue = __prevCalcOperandValue;
+      }
+    } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined') {
+        if (__prevOptimizerProfileContext !== undefined) globalThis.__cooptOptimizerProfileContext = __prevOptimizerProfileContext;
+        else {
+          try { delete globalThis.__cooptOptimizerProfileContext; } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined') {
+        if (__prevDisablePersistedTableFallback !== undefined) (globalThis as any).__cooptDisablePersistedTableFallback = __prevDisablePersistedTableFallback;
+        else {
+          try { delete (globalThis as any).__cooptDisablePersistedTableFallback; } catch (_) {}
+        }
+
+        if (__prevTaEvalRunId !== undefined) (globalThis as any).__cooptTaEvalRunId = __prevTaEvalRunId;
+        else {
+          try { delete (globalThis as any).__cooptTaEvalRunId; } catch (_) {}
+        }
+
+        try { delete (globalThis as any).__cooptEvalXKey; } catch (_) {}
+        try { delete (globalThis as any).__cooptEvalXKeyApproxTa; } catch (_) {}
+      }
+    } catch (_) {}
+  };
+
+  const recalculateMeritIfSurfaceRangesValid = () => {
+    try {
+      if (!window.meritFunctionEditor || typeof window.meritFunctionEditor.calculateMerit !== 'function') {
+        return;
+      }
+
+      const meritRows = (typeof window.meritFunctionEditor.getData === 'function')
+        ? window.meritFunctionEditor.getData()
+        : [];
+      if (!Array.isArray(meritRows) || meritRows.length === 0) {
+        window.meritFunctionEditor.calculateMerit();
+        return;
+      }
+
+      const opticalRows = (() => {
+        try {
+          if (window.tableOpticalSystem && typeof window.tableOpticalSystem.getData === 'function') {
+            const rows = window.tableOpticalSystem.getData();
+            return Array.isArray(rows) ? rows : [];
+          }
+        } catch (_) {}
+        return [];
+      })();
+
+      const validSurfaceIds = new Set<number>();
+      for (const row of opticalRows) {
+        const objectType = String((row as any)?.['object type'] ?? '').trim().toLowerCase();
+        if (objectType === 'object' || objectType === 'image') continue;
+        const surfaceId = Number((row as any)?.id);
+        if (Number.isFinite(surfaceId)) validSurfaceIds.add(surfaceId);
+      }
+
+      const invalidEfflOperand = meritRows.find((operand: any) => {
+        if (String(operand?.operand ?? '').trim().toUpperCase() !== 'EFFL') return false;
+        const startSurf = Number.parseInt(String(operand?.param2 ?? '').trim(), 10);
+        const endSurf = Number.parseInt(String(operand?.param3 ?? '').trim(), 10);
+        if (!Number.isFinite(startSurf) || !Number.isFinite(endSurf)) return false;
+        for (let surfaceId = startSurf; surfaceId <= endSurf; surfaceId += 1) {
+          if (validSurfaceIds.has(surfaceId)) return false;
+        }
+        return true;
+      });
+
+      if (invalidEfflOperand) {
+        console.warn('⚠️ [OptimizerMVP] Skipping final merit recalculation because the active merit table references non-existent EFFL surfaces after restore:', {
+          operandId: invalidEfflOperand.id,
+          range: `${invalidEfflOperand.param2}-${invalidEfflOperand.param3}`,
+          availableSurfaces: Array.from(validSurfaceIds).sort((a, b) => a - b)
+        });
+        return;
+      }
+
+      window.meritFunctionEditor.calculateMerit();
+    } catch (_) {}
+  };
+
   try {
     setBlocksOverrideGlobal(blocksByConfigId);
   } catch (_) {}
@@ -5701,6 +5856,8 @@ export async function runOptimizationMVP(options = {}) {
         restoreBestSnapshotAndPersist({ finalEval, jointState, systemConfig, configsById, targetConfigIds });
       } catch (_) {}
 
+      restorePreOptimizationGlobalsForUiSync();
+
       try {
         if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
           await window.ConfigurationManager.loadActiveConfigurationToTables({
@@ -5714,7 +5871,7 @@ export async function runOptimizationMVP(options = {}) {
       } catch (_) {}
       try {
         if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
-          window.meritFunctionEditor.calculateMerit();
+          recalculateMeritIfSurfaceRangesValid();
         }
       } catch (_) {}
       try {
@@ -5743,8 +5900,8 @@ export async function runOptimizationMVP(options = {}) {
           onProgress({
             phase: 'done',
             iter: completed0,
-            current: finalViolationScore0,
-            best: finalViolationScore0,
+              current: finalObjectiveScore0,
+              best: finalObjectiveScore0,
             method: 'lm',
             multiScenario,
             requirementCount,
@@ -5761,7 +5918,7 @@ export async function runOptimizationMVP(options = {}) {
         ok: true,
         aborted: aborted0,
         before: before0,
-        best: finalViolationScore0,
+          best: finalObjectiveScore0,
         iterations: completed0,
         variables: 0,
         method: 'lm',
@@ -6447,6 +6604,8 @@ export async function runOptimizationMVP(options = {}) {
       restoreBestSnapshotAndPersist({ finalEval, jointState, systemConfig, configsById, targetConfigIds });
     } catch (_) {}
 
+    restorePreOptimizationGlobalsForUiSync();
+
     try {
       if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
         await window.ConfigurationManager.loadActiveConfigurationToTables({
@@ -6460,7 +6619,7 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
     try {
       if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
-        window.meritFunctionEditor.calculateMerit();
+        recalculateMeritIfSurfaceRangesValid();
       }
     } catch (_) {}
     try {
@@ -6500,8 +6659,8 @@ export async function runOptimizationMVP(options = {}) {
         onProgress({
           phase: 'done',
           iter: completedIterations,
-          current: finalViolationScore,
-          best: finalViolationScore,
+            current: finalObjectiveScore,
+            best: finalObjectiveScore,
           method: 'lm',
           multiScenario,
           requirementCount,
@@ -6519,7 +6678,7 @@ export async function runOptimizationMVP(options = {}) {
       ok: true,
       aborted,
       before,
-      best: finalViolationScore,
+        best: finalObjectiveScore,
       iterations: completedIterations,
       variables: vars.length,
       method: 'lm',
@@ -9183,6 +9342,8 @@ export async function runOptimizationMVP(options = {}) {
         console.error('❌ [AL] Error restoring/persisting best state:', e);
       }
 
+      restorePreOptimizationGlobalsForUiSync();
+
       // Final sync to tables - this is critical to reflect values in UI
       try {
         if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
@@ -9199,7 +9360,7 @@ export async function runOptimizationMVP(options = {}) {
 
       try {
         if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
-          window.meritFunctionEditor.calculateMerit();
+          recalculateMeritIfSurfaceRangesValid();
         }
       } catch (_) {}
 
@@ -9273,7 +9434,7 @@ export async function runOptimizationMVP(options = {}) {
         ok: true,
         aborted: shouldStopKKT(),
         before: initialScore,
-        best: finalViolationScore,
+          best: finalObjectiveScore,
         iterations: completedIterations,
         variables: vars.length,
         method: 'kkt',
@@ -9364,6 +9525,8 @@ export async function runOptimizationMVP(options = {}) {
       restoreBestSnapshotAndPersist({ finalEval, jointState, systemConfig, configsById, targetConfigIds });
     } catch (_) {}
 
+    restorePreOptimizationGlobalsForUiSync();
+
     // Final sync to tables
     try {
       if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
@@ -9380,7 +9543,7 @@ export async function runOptimizationMVP(options = {}) {
 
     try {
       if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
-        window.meritFunctionEditor.calculateMerit();
+        recalculateMeritIfSurfaceRangesValid();
       }
     } catch (_) {}
     try {
@@ -9633,6 +9796,8 @@ export async function runOptimizationMVP(options = {}) {
     restoreBestSnapshotAndPersist({ finalEval, jointState, systemConfig, configsById, targetConfigIds });
   } catch (_) {}
 
+  restorePreOptimizationGlobalsForUiSync();
+
   try {
     if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
       await window.ConfigurationManager.loadActiveConfigurationToTables({
@@ -9649,7 +9814,7 @@ export async function runOptimizationMVP(options = {}) {
   try {
     // Update UI once at the end
     if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
-      window.meritFunctionEditor.calculateMerit();
+      recalculateMeritIfSurfaceRangesValid();
     }
   } catch (_) {}
   try {
@@ -9678,7 +9843,7 @@ export async function runOptimizationMVP(options = {}) {
 
   if (onProgress) {
     try {
-      onProgress({ phase: 'done', iter: completedIterations, current: finalViolationScore, best: finalViolationScore, multiScenario, ms: Math.round(t1 - t0), feasible: finalFeasible, violationScore: finalViolationScore, softPenalty: finalSoftPenalty });
+      onProgress({ phase: 'done', iter: completedIterations, current: finalObjectiveScore, best: finalObjectiveScore, multiScenario, ms: Math.round(t1 - t0), feasible: finalFeasible, violationScore: finalViolationScore, softPenalty: finalSoftPenalty });
     } catch (_) {}
     await nextFrame();
   }
@@ -9688,7 +9853,7 @@ export async function runOptimizationMVP(options = {}) {
     ok: true,
     aborted,
     before,
-    best: finalViolationScore,
+    best: finalObjectiveScore,
     iterations: completedIterations,
     variables: vars.length,
     method: 'cd',

@@ -142,6 +142,8 @@ function backfillMissingGlassPropertiesForConfiguration(cfg: any): void {
 
 interface SystemData {
   referenceFocalLength?: string | number;
+  entrancePupilDiameterMm?: number | null;
+  paraxialWorkingFNumber?: number | null;
 }
 
 interface ConfigurationMetadata {

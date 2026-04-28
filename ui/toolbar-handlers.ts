@@ -1393,6 +1393,9 @@ export function handleOptimize(): void {
             const before = beforeOptimizationState;
             const after = afterOptimizationState;
             const command = {
+              timestamp: Date.now(),
+              __cooptOptimizationCommand: true,
+              description: 'Optimization',
               name: 'Optimization',
               execute: async () => {
                 saveSystemConfigurations(after);
@@ -1413,6 +1416,12 @@ export function handleOptimize(): void {
               redo: function() { return (this as any).execute(); },
             };
             w.undoHistory.record(command);
+            try {
+              (globalThis as any).__cooptLastOptimizationUndoRecordAt = Number(command.timestamp) || Date.now();
+            } catch (_) {}
+            try {
+              (globalThis as any).__cooptUndoRecordSuppressedUntil = Date.now() + 1500;
+            } catch (_) {}
           }
         }
       } catch (_) {}

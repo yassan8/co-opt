@@ -92,6 +92,17 @@ function shouldSkipAutoSave(): boolean {
   try {
     // Skip if config switching is in progress
     if (isConfigurationSwitching) return true;
+
+    // Skip while optimizer is running so periodic table autosave cannot
+    // overwrite the optimizer's final persisted best snapshot.
+    if (w.__cooptOptimizerIsRunning === true) return true;
+
+    // Skip briefly after optimization completes so post-run UI/table sync cannot
+    // be re-persisted from stale table projections.
+    const timeSinceOptimizationSync = Date.now() - Number(w.__cooptLastOptimizationSyncAt || 0);
+    if (Number.isFinite(timeSinceOptimizationSync) && timeSinceOptimizationSync >= 0 && timeSinceOptimizationSync < 10000) {
+      return true;
+    }
     
     // Skip if explicitly disabled
     if (w.__configurationAutoSaveDisabled === true) return true;

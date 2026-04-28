@@ -3194,11 +3194,13 @@ function setupOptimizeDesignIntentButton(): void {
                 const progressViolationScore = Number(p?.violationScore);
                 const snap = getRequirementScoreSnapshot();
                 const tableRequirementScore = Number(snap.score);
-                const displayCurrentScore = Number.isFinite(tableRequirementScore)
-                    ? tableRequirementScore
-                    : Number.NaN;
-                if (Number.isFinite(tableRequirementScore)) {
-                    bestRequirementScore = Math.min(bestRequirementScore, tableRequirementScore);
+                    const displayCurrentScore = Number.isFinite(cur)
+                        ? cur
+                        : (Number.isFinite(tableRequirementScore) ? tableRequirementScore : Number.NaN);
+                if (Number.isFinite(best)) {
+                    bestRequirementScore = best;
+                } else if (!Number.isFinite(bestRequirementScore) && Number.isFinite(tableRequirementScore)) {
+                    bestRequirementScore = tableRequirementScore;
                 }
                 const displayBestScore = Number.isFinite(bestRequirementScore)
                     ? bestRequirementScore
@@ -3377,17 +3379,15 @@ function setupOptimizeDesignIntentButton(): void {
                             }
                             const finalSnap = getRequirementScoreSnapshot();
                             const finalScore = Number(finalSnap.score);
-                            if (!Number.isFinite(finalScore)) return;
-                            bestRequirementScore = Math.min(bestRequirementScore, finalScore);
                             if (!popup || popup.closed) return;
                             const doc = popup.document;
                             const setText = (id: string, v: string) => {
                                 const el = doc.getElementById(id);
                                 if (el) el.textContent = v;
                             };
-                            setText('opt-cur', finalScore.toFixed(6));
-                            setText('opt-vio', finalScore.toFixed(6));
-                            setText('opt-best', bestRequirementScore.toFixed(6));
+                                if (Number.isFinite(finalScore)) {
+                                    setText('opt-vio', finalScore.toFixed(6));
+                                }
                             if (Number.isFinite(Number(finalSnap.reqCount))) {
                                 setText('opt-req', String(Math.max(0, Math.floor(Number(finalSnap.reqCount)))));
                             }
@@ -3708,19 +3708,19 @@ function setupOptimizeDesignIntentButton(): void {
                             onProgress: updateProgressUI,
                             shouldStop: shouldStopNow
                         });
-                        // Restore flags after successful completion
+                        // Restore flags after successful completion.
+                        // Keep the autosave guard active until post-run state capture finishes.
                         try {
                             if (__prevDisableRayTraceDebug !== undefined) _gThis.__COOPT_DISABLE_RAYTRACE_DEBUG = __prevDisableRayTraceDebug;
                             else {
                                 try { delete _gThis.__COOPT_DISABLE_RAYTRACE_DEBUG; } catch (_) {}
                             }
-                            _gThis.__cooptOptimizerIsRunning = false;
                         } catch (_) {}
 
-                        // Re-enable undo recording after optimization
-                        if (w.undoHistory) {
-                            w.undoHistory.isExecuting = false;
-                        }
+                        try {
+                            _gThis.__cooptLastOptimizationSyncAt = Date.now();
+                            _gThis.__cooptOptimizerIsRunning = false;
+                        } catch (_) {}
 
                         // Record optimization as a single undo operation
                         try {
@@ -3728,33 +3728,73 @@ function setupOptimizeDesignIntentButton(): void {
                                 const sys = loadSystemConfigurations();
                                 const afterOptimizationState = sys ? JSON.parse(JSON.stringify(sys)) : null;
                                 if (JSON.stringify(beforeOptimizationState) !== JSON.stringify(afterOptimizationState)) {
+                                    const applyOptimizationSnapshot = async (snapshot: any) => {
+                                        if (!snapshot) return;
+                                        try {
+                                            delete w.__cooptBlocksOverride;
+                                        } catch (_) {}
+                                        try {
+                                            delete w.__cooptScenarioOverride;
+                                        } catch (_) {}
+                                        try {
+                                            delete w.__cooptOpticalSystemByConfigId;
+                                        } catch (_) {}
+                                        try {
+                                            delete w.__cooptSystemConfig;
+                                        } catch (_) {}
+                                        try {
+                                            delete (globalThis as any).__cooptOpticalSystemRowsOverride;
+                                        } catch (_) {}
+
+                                        saveSystemConfigurations(snapshot);
+
+                                        try {
+                                            if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+                                                await w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
+                                            }
+                                        } catch (_) {}
+                                        try {
+                                            requestRefreshBlockInspector(w);
+                                        } catch (_) {}
+                                        try {
+                                            if (typeof w.refreshAllUI === 'function') {
+                                                w.refreshAllUI();
+                                            }
+                                        } catch (_) {}
+                                        try {
+                                            if (w.systemRequirementsEditor && typeof w.systemRequirementsEditor.evaluateAndUpdateNow === 'function') {
+                                                await w.systemRequirementsEditor.evaluateAndUpdateNow({ reason: 'optimization-undo-redo' });
+                                            }
+                                        } catch (_) {}
+                                        try {
+                                            if (w.meritFunctionEditor && typeof w.meritFunctionEditor.calculateMerit === 'function') {
+                                                w.meritFunctionEditor.calculateMerit();
+                                            }
+                                        } catch (_) {}
+                                    };
                                     const command = {
+                                        timestamp: Date.now(),
+                                        __cooptOptimizationCommand: true,
+                                        description: 'Optimization',
                                         name: 'Optimization',
                                         execute: async () => {
-                                            saveSystemConfigurations(afterOptimizationState);
-                                            try {
-                                                if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
-                                                    await w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
-                                                }
-                                            } catch (_) {}
-                                            try {
-                                                requestRefreshBlockInspector(w);
-                                            } catch (_) {}
+                                            await applyOptimizationSnapshot(afterOptimizationState);
                                         },
                                         undo: async () => {
-                                            saveSystemConfigurations(beforeOptimizationState);
-                                            try {
-                                                if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
-                                                    await w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
-                                                }
-                                            } catch (_) {}
-                                            try {
-                                                requestRefreshBlockInspector(w);
-                                            } catch (_) {}
+                                            await applyOptimizationSnapshot(beforeOptimizationState);
                                         },
                                         redo: function() { return this.execute(); }
                                     };
+                                    if (w.undoHistory) {
+                                        w.undoHistory.isExecuting = false;
+                                    }
                                     w.undoHistory.record(command);
+                                    try {
+                                        (globalThis as any).__cooptLastOptimizationUndoRecordAt = Number(command.timestamp) || Date.now();
+                                    } catch (_) {}
+                                    try {
+                                        (globalThis as any).__cooptUndoRecordSuppressedUntil = Date.now() + 1500;
+                                    } catch (_) {}
                                 }
                             }
                         } catch (e) {
@@ -3776,7 +3816,19 @@ function setupOptimizeDesignIntentButton(): void {
                         }
                     } finally {
                         isRunning = false;
-                        _gThis.__cooptOptimizerIsRunning = false;
+                        try {
+                            if (typeof _gThis.__cooptLastOptimizationSyncAt !== 'number') {
+                                _gThis.__cooptLastOptimizationSyncAt = Date.now();
+                            }
+                            _gThis.__cooptOptimizerIsRunning = false;
+                        } catch (_) {
+                        try {
+                            if (w.undoHistory && w.undoHistory.isExecuting === true) {
+                                w.undoHistory.isExecuting = false;
+                            }
+                        } catch (_) {}
+                            _gThis.__cooptOptimizerIsRunning = false;
+                        }
                         try { optimizeBtn.disabled = false; } catch (_) {}
                         try {
                             if (popup && !popup.closed) {
@@ -4333,6 +4385,7 @@ function buildAllDataForExport(): any {
     const referenceFocalLength = refFLInput ? refFLInput.value : '';
 
     let opticalSystemData = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
+    let activeSystemData: any = null;
     
     try {
         const systemConfig = (typeof w.loadSystemConfigurations === 'function') 
@@ -4341,6 +4394,9 @@ function buildAllDataForExport(): any {
         const activeId = systemConfig?.activeConfigId;
         const activeCfg = Array.isArray(systemConfig?.configurations)
             ? (systemConfig.configurations.find((c: any) => String(c?.id) === String(activeId)) || systemConfig.configurations[0])
+            : null;
+        activeSystemData = (activeCfg && typeof activeCfg === 'object' && activeCfg.systemData && typeof activeCfg.systemData === 'object')
+            ? activeCfg.systemData
             : null;
         
         const configurationHasBlocks = (cfg: any) => {
@@ -4366,6 +4422,7 @@ function buildAllDataForExport(): any {
         meritFunction: w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [],
         systemRequirements: w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : [],
         systemData: {
+            ...(activeSystemData && typeof activeSystemData === 'object' ? activeSystemData : {}),
             referenceFocalLength: referenceFocalLength
         },
         configurations: getSanitizedConfigurationsForExport()

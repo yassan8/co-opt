@@ -100,6 +100,7 @@ class SystemRequirementsEditor {
   _operandKeys: string[];
   _isEvaluating: boolean;
   _pendingEvalRequested: boolean;
+  _evaluationPromise: Promise<void> | null;
   inspector: InspectorManager;
   _renderBody: any;
   _renderRow: any;
@@ -121,6 +122,7 @@ class SystemRequirementsEditor {
     this._operandKeys = [];
     this._isEvaluating = false;
     this._pendingEvalRequested = false;
+    this._evaluationPromise = null;
     this._paramsExpanded = false;
     this._paramToggleBtn = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
@@ -2460,9 +2462,11 @@ class SystemRequirementsEditor {
   async evaluateAndUpdateNow(options: any = null): Promise<void> {
     if (this._isEvaluating) {
       this._pendingEvalRequested = true;
+      await (this._evaluationPromise || Promise.resolve());
       return;
     }
     this._isEvaluating = true;
+    this._evaluationPromise = (async () => {
 
     try {
       w.__cooptLastRequirementsEval = { at: Date.now(), stage: 'enter' };
@@ -2725,6 +2729,13 @@ class SystemRequirementsEditor {
     if (this._pendingEvalRequested) {
       this._pendingEvalRequested = false;
       try { await this.evaluateAndUpdateNow({ reason: 'pending' }); } catch (_) {}
+    }
+    })();
+
+    try {
+      await this._evaluationPromise;
+    } finally {
+      this._evaluationPromise = null;
     }
   }
 

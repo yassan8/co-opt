@@ -896,6 +896,49 @@ export class UndoHistory {
   maxSize: number;
   isExecuting: boolean;
 
+  private isOptimizationLike(command: any): boolean {
+    if (!command || typeof command !== 'object') return false;
+    if (command.__cooptOptimizationCommand === true) return true;
+    const name = String(command.name ?? '').trim();
+    const description = String(command.description ?? '').trim();
+    return name === 'Optimization'
+      || description === 'Optimization'
+      || name.startsWith('Optimization ')
+      || description.startsWith('Optimization ');
+  }
+
+  private describeCommand(command: any): Record<string, any> {
+    if (!command || typeof command !== 'object') {
+      return { kind: 'unknown' };
+    }
+    return {
+      description: String(command.description ?? command.name ?? ''),
+      timestamp: Number(command.timestamp ?? 0),
+      isOptimization: this.isOptimizationLike(command),
+      isTrailing: command.__cooptPostOptimizationTrailing === true,
+    };
+  }
+
+  private logOptimizationUndoDebug(reason: string): void {
+    try {
+      const recentUndo = this.undoStack.slice(-4).map((command, index) => ({
+        index: this.undoStack.length - Math.min(4, this.undoStack.length) + index,
+        ...this.describeCommand(command),
+      }));
+      const recentRedo = this.redoStack.slice(-2).map((command, index) => ({
+        index: this.redoStack.length - Math.min(2, this.redoStack.length) + index,
+        ...this.describeCommand(command),
+      }));
+      console.log('🧭 [UndoHistory][Optimize]', {
+        reason,
+        undoSize: this.undoStack.length,
+        redoSize: this.redoStack.length,
+        recentUndo,
+        recentRedo,
+      });
+    } catch (_) {}
+  }
+
   constructor(maxSize: number = 100) {
     this.undoStack = [];
     this.redoStack = [];
@@ -910,9 +953,68 @@ export class UndoHistory {
     if (this.isExecuting) {
       return; // Don't record undo/redo operations
     }
+
+    let isOptimizationCommand = false;
+
+    try {
+      const suppressUntil = Number((globalThis as any).__cooptUndoRecordSuppressedUntil || 0);
+      if (Number.isFinite(suppressUntil) && Date.now() < suppressUntil) {
+        return;
+      }
+    } catch (_) {}
+
+    try {
+      const lastOptimizationAt = Number((globalThis as any).__cooptLastOptimizationUndoRecordAt || 0);
+      isOptimizationCommand = this.isOptimizationLike(command as any);
+      if (!isOptimizationCommand && Number.isFinite(lastOptimizationAt) && lastOptimizationAt > 0) {
+        const dt = Date.now() - lastOptimizationAt;
+        if (dt >= 0 && dt < 10000) {
+          (command as any).__cooptPostOptimizationTrailing = true;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      if (isOptimizationCommand && this.undoStack.length > 0) {
+        const top = this.undoStack[this.undoStack.length - 1] as any;
+        const topIsOptimization = this.isOptimizationLike(top);
+        if (topIsOptimization) {
+          const incomingIsMainOptimization = (command as any)?.__cooptOptimizationCommand === true;
+          const topIsMainOptimization = top?.__cooptOptimizationCommand === true;
+          const topTs = Number(top?.timestamp ?? 0);
+          const nextTs = Number((command as any)?.timestamp ?? Date.now());
+          const closeInTime = Number.isFinite(topTs) && Number.isFinite(nextTs)
+            && Math.abs(nextTs - topTs) < 10000;
+          if (closeInTime) {
+            if (topIsMainOptimization && !incomingIsMainOptimization) {
+              this.logOptimizationUndoDebug('skip-trailing-after-main');
+              return;
+            }
+            if (!topIsMainOptimization && incomingIsMainOptimization) {
+              this.undoStack[this.undoStack.length - 1] = command;
+              this.redoStack = [];
+              this.logOptimizationUndoDebug('replace-trailing-with-main');
+              this.notifyListeners();
+              return;
+            }
+            this.undoStack[this.undoStack.length - 1] = command;
+            this.redoStack = [];
+            this.logOptimizationUndoDebug('dedupe-optimization-record');
+            this.notifyListeners();
+            return;
+          }
+        }
+      }
+    } catch (_) {}
     
     this.undoStack.push(command);
     this.redoStack = []; // Clear redo stack on new command
+
+    try {
+      if (isOptimizationCommand || (command as any)?.__cooptPostOptimizationTrailing === true) {
+        this.logOptimizationUndoDebug('record');
+      }
+    } catch (_) {}
     
     // Limit stack size
     if (this.undoStack.length > this.maxSize) {
@@ -929,12 +1031,36 @@ export class UndoHistory {
     if (this.undoStack.length === 0) {
       return false;
     }
+
+    this.logOptimizationUndoDebug('undo-before');
+
+    try {
+      while (this.undoStack.length >= 2) {
+        const top = this.undoStack[this.undoStack.length - 1] as any;
+        const prev = this.undoStack[this.undoStack.length - 2] as any;
+        const prevIsOptimization = this.isOptimizationLike(prev);
+        if (!prevIsOptimization) break;
+
+        const trailing = top?.__cooptPostOptimizationTrailing === true;
+        if (!trailing) break;
+
+        this.undoStack.pop();
+        this.logOptimizationUndoDebug('undo-collapse-trailing');
+      }
+    } catch (_) {}
     
     this.isExecuting = true;
     const command = this.undoStack.pop()!;
     try {
+      const described = this.describeCommand(command as any);
+      if (described.isOptimization || described.isTrailing) {
+        console.log('🧭 [UndoHistory][Optimize]', { reason: 'undo-pop', command: described });
+      }
+    } catch (_) {}
+    try {
       const result = command.undo();
       this.redoStack.push(command);
+      this.logOptimizationUndoDebug('undo-after-push-redo');
       this.notifyListeners();
       if (result && typeof (result as any).then === 'function') {
         // Async undo: keep isExecuting=true until the promise settles to prevent

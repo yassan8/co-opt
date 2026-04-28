@@ -508,6 +508,85 @@ class MeritFunctionEditor {
         this.initializeEventListeners();
     }
 
+    private normalizeMeritOperands(data: any[]): { operands: any[]; droppedInvalidEffl: any[] } {
+        const droppedInvalidEffl: any[] = [];
+
+        let activeConfigId = "";
+        try {
+            const systemConfig = tryLoadSystemConfigurations();
+            if (systemConfig && systemConfig.activeConfigId !== undefined && systemConfig.activeConfigId !== null) {
+                activeConfigId = String(systemConfig.activeConfigId);
+            }
+        } catch (e) {
+            console.warn('Active config ID取得エラー:', e);
+        }
+
+        const dropDeprecated = (op: any) => {
+            const name = String(op?.operand ?? '').trim();
+            return name === 'ZERN_WL_UM' || name === 'ZERN_FIT_TERMS';
+        };
+
+        const normalized = Array.isArray(data)
+            ? data
+                .filter((op: any) => !dropDeprecated(op))
+                .map((operand: any) => {
+                    if (operand.configId === undefined || operand.configId === null) {
+                        return { ...operand, configId: activeConfigId };
+                    }
+                    return { ...operand, configId: String(operand.configId) };
+                })
+            : [];
+
+        const validByConfigId = new Map<string, Set<number>>();
+        const getValidSurfaceIds = (configId: any): Set<number> | null => {
+            const key = (configId === undefined || configId === null) ? '' : String(configId).trim();
+            if (validByConfigId.has(key)) return validByConfigId.get(key) ?? null;
+            try {
+                const opticalRows = this.getOpticalSystemDataByConfigId(key);
+                const validIds = new Set<number>();
+                if (Array.isArray(opticalRows)) {
+                    for (const row of opticalRows) {
+                        const objectType = String(row?.['object type'] ?? '').trim().toLowerCase();
+                        if (objectType === 'object' || objectType === 'image') continue;
+                        const surfaceId = Number(row?.id);
+                        if (Number.isFinite(surfaceId)) validIds.add(surfaceId);
+                    }
+                }
+                validByConfigId.set(key, validIds);
+                return validIds;
+            } catch (_) {
+                validByConfigId.set(key, new Set<number>());
+                return null;
+            }
+        };
+
+        const operands = normalized.filter((operand: any) => {
+            if (String(operand?.operand ?? '').trim().toUpperCase() !== 'EFFL') {
+                return true;
+            }
+
+            const startSurf = Number.parseInt(String(operand?.param2 ?? '').trim(), 10);
+            const endSurf = Number.parseInt(String(operand?.param3 ?? '').trim(), 10);
+            if (!Number.isFinite(startSurf) || !Number.isFinite(endSurf)) {
+                return true;
+            }
+
+            const validSurfaceIds = getValidSurfaceIds(operand?.configId);
+            if (!validSurfaceIds || validSurfaceIds.size === 0) {
+                return true;
+            }
+
+            if (!validSurfaceIds.has(startSurf) || !validSurfaceIds.has(endSurf)) {
+                droppedInvalidEffl.push(operand);
+                return false;
+            }
+
+            return true;
+        });
+
+        return { operands, droppedInvalidEffl };
+    }
+
     initializeTable(): void {
         const container = document.getElementById('table-merit-function');
         if (!container) {
@@ -4365,13 +4444,17 @@ class MeritFunctionEditor {
             return;
         }
 
-        const dropDeprecated = (op: any) => {
-            const name = String(op?.operand ?? '').trim();
-            return name === 'ZERN_WL_UM' || name === 'ZERN_FIT_TERMS';
-        };
-
-        this.operands = data.filter((op: any) => !dropDeprecated(op));
+        const { operands, droppedInvalidEffl } = this.normalizeMeritOperands(data);
+        this.operands = operands;
         this.updateRowNumbers();
+
+        if (droppedInvalidEffl.length > 0) {
+            console.warn('⚠️ Merit Function: dropped invalid EFFL operands that reference non-existent surfaces:', droppedInvalidEffl.map((operand: any) => ({
+                id: operand?.id,
+                configId: operand?.configId,
+                range: `${operand?.param2}-${operand?.param3}`
+            })));
+        }
 
         if (this.table) {
             this.table.setData(this.operands);
@@ -4382,29 +4465,16 @@ class MeritFunctionEditor {
         try {
             const data = loadMeritFunctionTableData();
             if (Array.isArray(data) && data.length > 0) {
-
-                const dropDeprecated = (op: any) => {
-                    const name = String(op?.operand ?? '').trim();
-                    return name === 'ZERN_WL_UM' || name === 'ZERN_FIT_TERMS';
-                };
-                const sanitized = data.filter((op: any) => !dropDeprecated(op));
-
-                let activeConfigId = "";
-                try {
-                    const systemConfig = tryLoadSystemConfigurations();
-                    if (systemConfig && systemConfig.activeConfigId) {
-                        activeConfigId = String(systemConfig.activeConfigId);
-                    }
-                } catch (e) {
-                    console.warn('Active config ID取得エラー:', e);
+                const { operands, droppedInvalidEffl } = this.normalizeMeritOperands(data);
+                this.operands = operands;
+                if (droppedInvalidEffl.length > 0) {
+                    console.warn('⚠️ Merit Function: removed invalid EFFL operands from storage:', droppedInvalidEffl.map((operand: any) => ({
+                        id: operand?.id,
+                        configId: operand?.configId,
+                        range: `${operand?.param2}-${operand?.param3}`
+                    })));
+                    saveMeritFunctionTableData(this.operands as any);
                 }
-
-                this.operands = sanitized.map((operand: any) => {
-                    if (operand.configId === undefined || operand.configId === null) {
-                        return { ...operand, configId: activeConfigId };
-                    }
-                    return { ...operand, configId: String(operand.configId) };
-                });
             }
         } catch (error) {
             console.error('❌ Merit Function ローカルストレージ読み込みエラー:', error);

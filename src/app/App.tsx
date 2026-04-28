@@ -2045,9 +2045,13 @@ export default function App() {
         const changed = configChanged || rowsChanged;
         const undoHistory = (window as any).undoHistory;
         if (!changed || !undoHistory || typeof undoHistory.record !== 'function') return;
+        const isOptimizationRun = String(description || '').trim() === 'Optimization run';
         const cmd = {
           id: `opt-main-apply-${Date.now()}`,
+          __cooptOptimizationCommand: isOptimizationRun,
+          __cooptPostOptimizationTrailing: !isOptimizationRun,
           description,
+          name: 'Optimization',
           timestamp: Date.now(),
           execute: () => {
             applySystemConfigSnapshotSync(afterSnapshot);
@@ -2059,6 +2063,9 @@ export default function App() {
           },
         } as any;
         undoHistory.record(cmd);
+        try {
+          (globalThis as any).__cooptLastOptimizationUndoRecordAt = Number(cmd.timestamp) || Date.now();
+        } catch (_) {}
       } catch (_) {}
     };
 
