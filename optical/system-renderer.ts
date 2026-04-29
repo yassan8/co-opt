@@ -104,8 +104,10 @@ function __coopt_getRenderSemidiaMm(surface) {
 
     // CB rows propagate the prior surface's semidia in a dedicated field
     // to avoid confusing it with decenterX (which reuses the semidia column).
-    const cbActual = __coopt_parseNumberOrNull(surface.__cooptActualSemidia);
-    if (cbActual !== null && cbActual > 0) return cbActual;
+    if (__coopt_isCoordTransSurface(surface)) {
+        const cbActual = __coopt_parseNumberOrNull(surface.__cooptActualSemidia);
+        if (cbActual !== null && cbActual > 0) return cbActual;
+    }
 
     const candidates = [
         surface.semidia,
@@ -302,6 +304,380 @@ function __coopt_withSurfaceRenderMeta(surface, surfaceIndex0) {
         ...surface,
         __cooptSurfaceIndex0: surfaceIndex0,
     };
+}
+
+function __coopt_computeRenderableCenter(object3d) {
+    try {
+        const posAttr = object3d?.geometry?.getAttribute?.('position');
+        if (!posAttr || !Number.isFinite(Number(posAttr.count)) || posAttr.count <= 0) return null;
+        let sx = 0;
+        let sy = 0;
+        let sz = 0;
+        for (let i = 0; i < posAttr.count; i += 1) {
+            sx += Number(posAttr.getX(i)) || 0;
+            sy += Number(posAttr.getY(i)) || 0;
+            sz += Number(posAttr.getZ(i)) || 0;
+        }
+        const inv = 1 / posAttr.count;
+        return { x: sx * inv, y: sy * inv, z: sz * inv };
+    } catch (_) {
+        return null;
+    }
+}
+
+function __coopt_removeSceneObject(scene, object3d) {
+    if (!scene || !object3d) return;
+    try { scene.remove(object3d); } catch (_) {}
+    try { object3d.geometry?.dispose?.(); } catch (_) {}
+    try {
+        if (Array.isArray(object3d.material)) {
+            object3d.material.forEach((m) => m?.dispose?.());
+        } else {
+            object3d.material?.dispose?.();
+        }
+    } catch (_) {}
+}
+
+function __coopt_isImageSurfaceDiagEnabled() {
+    try {
+        const w = (typeof window !== 'undefined') ? window : null;
+        if (w && (w as any).__cooptImageSurfaceDiag === true) return true;
+    } catch (_) {}
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const raw = String(localStorage.getItem('coopt.imageSurfaceDiag') ?? '').trim().toLowerCase();
+            return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
+        }
+    } catch (_) {}
+    return false;
+}
+
+function __coopt_getExpectedImageOriginFromPreviousRow(opticalSystemData, surfaceOrigins, imageIndex0) {
+    if (!Array.isArray(opticalSystemData) || !Array.isArray(surfaceOrigins)) return null;
+    if (!Number.isInteger(imageIndex0) || imageIndex0 <= 0) return null;
+    const prevRow = opticalSystemData[imageIndex0 - 1];
+    const prevEntry = surfaceOrigins[imageIndex0 - 1];
+    if (!prevRow || !prevEntry?.origin) return null;
+
+    const hasAttachedGap = (prevRow as any)?.__cooptGapApplied === true;
+    const spacingRaw = hasAttachedGap
+        ? ((prevRow as any).__cooptGapThickness ?? prevRow?.thickness)
+        : (prevRow?.thickness ?? (prevRow as any).__cooptGapThickness);
+    const spacing = __coopt_parseNumberOrNull(spacingRaw);
+    if (spacing === null || !Number.isFinite(spacing) || spacing === 0) return null;
+
+    const prevRot = prevEntry.rotationMatrix;
+    const axis = (Array.isArray(prevRot) && prevRot.length >= 3)
+        ? {
+            x: Number(prevRot?.[0]?.[2]) || 0,
+            y: Number(prevRot?.[1]?.[2]) || 0,
+            z: Number(prevRot?.[2]?.[2]) || 1,
+        }
+        : { x: 0, y: 0, z: 1 };
+
+    return {
+        x: Number(prevEntry.origin.x || 0) + axis.x * spacing,
+        y: Number(prevEntry.origin.y || 0) + axis.y * spacing,
+        z: Number(prevEntry.origin.z || 0) + axis.z * spacing,
+    };
+}
+
+function __coopt_dedupeImageSurfaceArtifacts(scene, imageSurfaceIndex0, expectedOrigin) {
+    if (!scene || !Number.isInteger(imageSurfaceIndex0)) return;
+    const expected = expectedOrigin || { x: 0, y: 0, z: 0 };
+    const rings = [];
+    const crossY = [];
+    const crossX = [];
+
+    scene.traverse((child) => {
+        const ud = child?.userData;
+        if (!ud || typeof ud !== 'object') return;
+        if (ud.type === 'semidiaRing' && Number(ud.surfaceIndex0) === imageSurfaceIndex0) {
+            rings.push(child);
+            return;
+        }
+        if (ud.type === 'plane-crosshair' && Number(ud.surfaceIndex) === imageSurfaceIndex0) {
+            const dir = String(ud.direction || '').toLowerCase();
+            if (dir === 'vertical') crossY.push(child);
+            if (dir === 'horizontal') crossX.push(child);
+        }
+    });
+
+    const distance2 = (obj) => {
+        const c = __coopt_computeRenderableCenter(obj);
+        if (!c) return Number.POSITIVE_INFINITY;
+        const dx = c.x - expected.x;
+        const dy = c.y - expected.y;
+        const dz = c.z - expected.z;
+        return dx * dx + dy * dy + dz * dz;
+    };
+
+    const dedupeList = (items) => {
+        if (!Array.isArray(items) || items.length <= 1) return;
+        const sorted = [...items].sort((a, b) => distance2(a) - distance2(b));
+        for (let i = 1; i < sorted.length; i += 1) {
+            __coopt_removeSceneObject(scene, sorted[i]);
+        }
+    };
+
+    dedupeList(rings);
+    dedupeList(crossY);
+    dedupeList(crossX);
+}
+
+function __coopt_pruneNearbyNonImageRings(scene, imageSurfaceIndex0, expectedOrigin, toleranceMm = 2.0) {
+    if (!scene || !Number.isInteger(imageSurfaceIndex0) || !expectedOrigin) return;
+    const tol = Number(toleranceMm);
+    if (!Number.isFinite(tol) || tol <= 0) return;
+
+    const expected = {
+        x: Number(expectedOrigin.x || 0),
+        y: Number(expectedOrigin.y || 0),
+        z: Number(expectedOrigin.z || 0),
+    };
+
+    const nearby = [];
+    scene.traverse((child) => {
+        const ud = child?.userData;
+        if (!ud || ud.type !== 'semidiaRing') return;
+        const ringSurfaceIndex0 = Number(ud.surfaceIndex0);
+        if (Number.isInteger(ringSurfaceIndex0) && ringSurfaceIndex0 === imageSurfaceIndex0) return;
+
+        const center = __coopt_computeRenderableCenter(child);
+        if (!center) return;
+        const dx = center.x - expected.x;
+        const dy = center.y - expected.y;
+        const dz = center.z - expected.z;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (Number.isFinite(dist) && dist <= tol) {
+            nearby.push({ child, dist, surfaceIndex0: Number.isInteger(ringSurfaceIndex0) ? ringSurfaceIndex0 : null });
+        }
+    });
+
+    if (nearby.length <= 1) return;
+
+    const toRemove = nearby
+        .sort((a, b) => a.dist - b.dist)
+        .slice(1)
+        .map((entry) => entry.child);
+
+    if (toRemove.length > 0) {
+        for (const obj of toRemove) {
+            __coopt_removeSceneObject(scene, obj);
+        }
+        if (__coopt_isImageSurfaceDiagEnabled()) {
+            console.log('[ImageSurfaceDiag] pruned nearby non-image rings', {
+                imageSurfaceIndex0,
+                removedCount: toRemove.length,
+                toleranceMm: tol,
+            });
+        }
+    }
+}
+
+function __coopt_removeUnindexedSemidiaRings(scene) {
+    if (!scene) return;
+    const toRemove = [];
+    scene.traverse((child) => {
+        const ud = child?.userData;
+        if (!ud || ud.type !== 'semidiaRing') return;
+        const idx = Number(ud.surfaceIndex0);
+        if (!Number.isInteger(idx)) {
+            toRemove.push(child);
+        }
+    });
+
+    if (toRemove.length > 0) {
+        for (const obj of toRemove) {
+            __coopt_removeSceneObject(scene, obj);
+        }
+        if (__coopt_isImageSurfaceDiagEnabled()) {
+            console.log('[ImageSurfaceDiag] removed unindexed semidia rings', {
+                removedCount: toRemove.length,
+            });
+        }
+    }
+}
+
+function __coopt_pruneNearbyConnectionCornerRings(scene, expectedOrigin, toleranceMm = 8.0) {
+    if (!scene || !expectedOrigin) return;
+    const tol = Number(toleranceMm);
+    if (!Number.isFinite(tol) || tol <= 0) return;
+
+    const expected = {
+        x: Number(expectedOrigin.x || 0),
+        y: Number(expectedOrigin.y || 0),
+        z: Number(expectedOrigin.z || 0),
+    };
+
+    const toRemove = [];
+    scene.traverse((child) => {
+        const ud = child?.userData;
+        if (!ud || ud.type !== 'connectionCornerRing') return;
+        const center = __coopt_computeRenderableCenter(child);
+        if (!center) return;
+        const dx = center.x - expected.x;
+        const dy = center.y - expected.y;
+        const dz = center.z - expected.z;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (Number.isFinite(dist) && dist <= tol) {
+            toRemove.push(child);
+        }
+    });
+
+    if (toRemove.length > 0) {
+        for (const obj of toRemove) {
+            __coopt_removeSceneObject(scene, obj);
+        }
+        if (__coopt_isImageSurfaceDiagEnabled()) {
+            console.log('[ImageSurfaceDiag] pruned nearby connection corner rings', {
+                removedCount: toRemove.length,
+                toleranceMm: tol,
+            });
+        }
+    }
+}
+
+function __coopt_translateRenderableGeometry(object3d, dx, dy, dz) {
+    if (!object3d?.geometry || (!dx && !dy && !dz)) return;
+    try {
+        const posAttr = object3d.geometry.getAttribute?.('position');
+        if (!posAttr || !Number.isFinite(Number(posAttr.count)) || posAttr.count <= 0) return;
+        for (let i = 0; i < posAttr.count; i += 1) {
+            posAttr.setXYZ(
+                i,
+                (Number(posAttr.getX(i)) || 0) + dx,
+                (Number(posAttr.getY(i)) || 0) + dy,
+                (Number(posAttr.getZ(i)) || 0) + dz
+            );
+        }
+        posAttr.needsUpdate = true;
+        object3d.geometry.computeBoundingSphere?.();
+        object3d.geometry.computeBoundingBox?.();
+    } catch (_) {}
+}
+
+function __coopt_snapImageSurfaceArtifactsToOrigin(scene, imageSurfaceIndex0, expectedOrigin) {
+    if (!scene || !Number.isInteger(imageSurfaceIndex0) || !expectedOrigin) return;
+    const targets = [];
+    scene.traverse((child) => {
+        const ud = child?.userData;
+        if (!ud || typeof ud !== 'object') return;
+        if (ud.type === 'semidiaRing' && Number(ud.surfaceIndex0) === imageSurfaceIndex0) {
+            targets.push(child);
+            return;
+        }
+        if (ud.type === 'plane-crosshair' && Number(ud.surfaceIndex) === imageSurfaceIndex0) {
+            targets.push(child);
+        }
+    });
+
+    for (const obj of targets) {
+        const center = __coopt_computeRenderableCenter(obj);
+        if (!center) continue;
+        const dx = Number(expectedOrigin.x || 0) - center.x;
+        const dy = Number(expectedOrigin.y || 0) - center.y;
+        const dz = Number(expectedOrigin.z || 0) - center.z;
+        const err2 = dx * dx + dy * dy + dz * dz;
+        if (err2 > 1e-10) {
+            __coopt_translateRenderableGeometry(obj, dx, dy, dz);
+        }
+    }
+}
+
+function __coopt_logImageRingDiagnostics(scene, imageSurfaceIndex0, expectedOrigin) {
+    if (!scene || !Number.isInteger(imageSurfaceIndex0)) return;
+
+    const expected = expectedOrigin || { x: 0, y: 0, z: 0 };
+    const ringRows = [];
+    const crossRows = [];
+    const cornerRingRows = [];
+
+    const distMm = (center) => {
+        if (!center) return Number.POSITIVE_INFINITY;
+        const dx = Number(center.x || 0) - Number(expected.x || 0);
+        const dy = Number(center.y || 0) - Number(expected.y || 0);
+        const dz = Number(center.z || 0) - Number(expected.z || 0);
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    };
+
+    scene.traverse((child) => {
+        const ud = child?.userData;
+        if (!ud || typeof ud !== 'object') return;
+
+        if (ud.type === 'semidiaRing') {
+            const center = __coopt_computeRenderableCenter(child);
+            ringRows.push({
+                surfaceIndex0: Number.isInteger(Number(ud.surfaceIndex0)) ? Number(ud.surfaceIndex0) : null,
+                semidia: Number.isFinite(Number(ud.semidia)) ? Number(ud.semidia) : null,
+                center,
+                distanceToExpectedMm: distMm(center),
+                name: String(child?.name || ''),
+            });
+            return;
+        }
+
+        if (ud.type === 'plane-crosshair') {
+            const center = __coopt_computeRenderableCenter(child);
+            crossRows.push({
+                surfaceIndex: Number.isInteger(Number(ud.surfaceIndex)) ? Number(ud.surfaceIndex) : null,
+                direction: String(ud.direction || ''),
+                center,
+                distanceToExpectedMm: distMm(center),
+                name: String(child?.name || ''),
+            });
+            return;
+        }
+
+        if (ud.type === 'connectionCornerRing') {
+            const center = __coopt_computeRenderableCenter(child);
+            cornerRingRows.push({
+                surfaceIndex: Number.isInteger(Number(ud.surfaceIndex)) ? Number(ud.surfaceIndex) : null,
+                direction: String(ud.direction || ''),
+                center,
+                distanceToExpectedMm: distMm(center),
+                name: String(child?.name || ''),
+            });
+        }
+    });
+
+    const countsBySurfaceIndex0 = {};
+    for (const row of ringRows) {
+        const key = String(row.surfaceIndex0);
+        countsBySurfaceIndex0[key] = (Number(countsBySurfaceIndex0[key]) || 0) + 1;
+    }
+
+    const nearExpectedRings = ringRows
+        .filter((row) => Number.isFinite(Number(row.distanceToExpectedMm)) && Number(row.distanceToExpectedMm) <= 2.0)
+        .sort((a, b) => Number(a.distanceToExpectedMm) - Number(b.distanceToExpectedMm));
+
+    const imageCrossRows = crossRows
+        .filter((row) => row.surfaceIndex === imageSurfaceIndex0)
+        .sort((a, b) => Number(a.distanceToExpectedMm) - Number(b.distanceToExpectedMm));
+
+    const nearExpectedCornerRings = cornerRingRows
+        .filter((row) => Number.isFinite(Number(row.distanceToExpectedMm)) && Number(row.distanceToExpectedMm) <= 8.0)
+        .sort((a, b) => Number(a.distanceToExpectedMm) - Number(b.distanceToExpectedMm));
+
+    console.log('[ImageSurfaceDiag] render summary', {
+        imageSurfaceIndex0,
+        expectedOrigin: {
+            x: Number(expected.x || 0),
+            y: Number(expected.y || 0),
+            z: Number(expected.z || 0),
+        },
+        ringCount: ringRows.length,
+        crosshairCount: crossRows.length,
+        connectionCornerRingCount: cornerRingRows.length,
+        ringCountsBySurfaceIndex0: countsBySurfaceIndex0,
+        nearExpectedRingCount: nearExpectedRings.length,
+        nearExpectedConnectionCornerRingCount: nearExpectedCornerRings.length,
+        imageCrosshairCount: imageCrossRows.length,
+    });
+
+    console.log('[ImageSurfaceDiag] near-expected rings (<=2mm)', nearExpectedRings.slice(0, 12));
+    console.log('[ImageSurfaceDiag] near-expected connection corner rings (<=8mm)', nearExpectedCornerRings.slice(0, 12));
+    console.log('[ImageSurfaceDiag] image crosshairs', imageCrossRows.slice(0, 12));
 }
 
 function __coopt_loadSurfaceColorOverrides() {
@@ -1460,6 +1836,18 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
     // Draw 3D surfaces (skip if crossSectionOnly is true)
     if (!crossSectionOnly) {
         const draw3DStartMs = performance.now();
+        const isImageLikeSurface = (row) => {
+            const surfType = String(row?.surfType ?? row?.type ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+            const objType = String(row?.['object type'] ?? row?.object ?? row?.objectType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+            const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+            return surfType === 'imagesurface' || objType === 'image' || objType === 'imagesurface' || blockType === 'imagesurface';
+        };
+        const lastImageSurfaceIndex = (() => {
+            for (let idx = opticalSystemData.length - 1; idx >= 0; idx -= 1) {
+                if (isImageLikeSurface(opticalSystemData[idx])) return idx;
+            }
+            return -1;
+        })();
         for (let i = 0; i < opticalSystemData.length; i++) {
             const surface = opticalSystemData[i];
             const renderSurfaceMeta = __coopt_withSurfaceRenderMeta(surface, i);
@@ -1473,6 +1861,10 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
             
             // Object面のスキップ判定
             const objectType = surface["object type"] || "";
+            const isImageSurfaceCurrent = isImageLikeSurface(surface);
+            if (isImageSurfaceCurrent && lastImageSurfaceIndex >= 0 && i !== lastImageSurfaceIndex) {
+                continue;
+            }
             if (objectType === "Object") {
                 const objectThickness = surface.thickness;
                 const isInfiniteThickness = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
@@ -1701,7 +2093,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
             }
 
             // Image面のスキップ判定（無限系のみスキップ、有限系では描画）
-            if (objectType === "Image") {
+            if (isImageSurfaceCurrent) {
                 // 有限系かどうかを判定するため、Object面のthicknessを確認
                 const firstSurface = opticalSystemData[0];
                 const objectThickness = firstSurface?.thickness;
@@ -1711,16 +2103,8 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                 try {
                         // semidiaの取得
                         let planeSemidia = __coopt_getRenderSemidiaMm(surface);
-                        if (planeSemidia === null) {
-                            // 近くの面からsemidiaを取得
-                            for (let j = 0; j < opticalSystemData.length; j++) {
-                                const nearSemidia = __coopt_getRenderSemidiaMm(opticalSystemData[j]);
-                                if (nearSemidia !== null) {
-                                    planeSemidia = nearSemidia;
-                                    break;
-                                }
-                            }
-                        }
+                        // Image面のリングは他面のsemidiaを流用しない。
+                        // semidia未指定時はこの面自身の情報だけで推定し、最後に既定値へフォールバックする。
                         // 球面メッシュがある場合、radius から semidia を推定
                         if (planeSemidia === null && surface.radius !== undefined && surface.radius !== null && 
                             surface.radius !== 'INF' && surface.radius !== Infinity && 
@@ -1742,6 +2126,50 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             imgRotMat = surfaceOrigins[i].rotationMatrix || null;
                         } else {
                         }
+
+                        // Reconcile image render origin with previous-surface spacing.
+                        // Some imports store the final gap as attached metadata on the previous
+                        // physical surface (__cooptGapApplied/__cooptGapThickness) rather than a
+                        // standalone Gap row. In that case, force Image rendering to the advanced
+                        // position so the ring does not remain at the pre-gap vertex.
+                        try {
+                            const prevRow = (i > 0) ? opticalSystemData[i - 1] : null;
+                            if (prevRow && Array.isArray(surfaceOrigins) && surfaceOrigins[i - 1]) {
+                                const prevEntry = surfaceOrigins[i - 1];
+                                const prevOrigin = prevEntry?.origin;
+                                const prevRot = prevEntry?.rotationMatrix;
+                                const hasAttachedGap = (prevRow as any)?.__cooptGapApplied === true;
+                                const spacingRaw = hasAttachedGap
+                                    ? ((prevRow as any).__cooptGapThickness ?? prevRow?.thickness)
+                                    : (prevRow?.thickness ?? (prevRow as any).__cooptGapThickness);
+                                const spacing = __coopt_parseNumberOrNull(spacingRaw);
+
+                                if (prevOrigin && spacing !== null && Number.isFinite(spacing) && spacing !== 0) {
+                                    const axis = (Array.isArray(prevRot) && prevRot.length >= 3)
+                                        ? {
+                                            x: Number(prevRot?.[0]?.[2]) || 0,
+                                            y: Number(prevRot?.[1]?.[2]) || 0,
+                                            z: Number(prevRot?.[2]?.[2]) || 1,
+                                        }
+                                        : { x: 0, y: 0, z: 1 };
+
+                                    const expectedFromGap = {
+                                        x: Number(prevOrigin.x || 0) + axis.x * spacing,
+                                        y: Number(prevOrigin.y || 0) + axis.y * spacing,
+                                        z: Number(prevOrigin.z || 0) + axis.z * spacing,
+                                    };
+
+                                    const dx = Number(imgOrigin.x || 0) - expectedFromGap.x;
+                                    const dy = Number(imgOrigin.y || 0) - expectedFromGap.y;
+                                    const dz = Number(imgOrigin.z || 0) - expectedFromGap.z;
+                                    const err2 = dx * dx + dy * dy + dz * dz;
+
+                                    if (err2 > 1e-10) {
+                                        imgOrigin = expectedFromGap;
+                                    }
+                                }
+                            }
+                        } catch (_) {}
                         
                         // Image面が球面メッシュを指定しているか確認
                         const hasSphereRadius = (
@@ -1787,14 +2215,14 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             }
                         }
                         
-                        // アパーチャ枠描画
+                        // Image 面のリングは表示する。近傍の重複だけ後段で整理する。
                         __coopt_drawApertureOutline(
                             scene,
-                            surface,
+                            renderSurfaceMeta,
                             planeSemidia,
                             imgOrigin,
                             imgRotMat,
-                            0x404040 // 暗いグレー
+                            0x404040
                         );
                         
                         const { halfX: crossHalfX, halfY: crossHalfY } = __coopt_getCrosshairHalfExtents(surface, planeSemidia);
@@ -2076,6 +2504,22 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
 
         // 3Dビュー専用: 接続直角部リングを描画
         drawConnectionCornerRings3D(scene, opticalSystemData, surfaceOrigins);
+
+        // Hard guard: keep only one ImageSurface ring/crosshair set in 3D Render.
+        if (lastImageSurfaceIndex >= 0) {
+            const expectedImageOrigin = __coopt_getExpectedImageOriginFromPreviousRow(
+                opticalSystemData,
+                surfaceOrigins,
+                lastImageSurfaceIndex
+            ) || (surfaceOrigins?.[lastImageSurfaceIndex]?.origin ?? null);
+            __coopt_snapImageSurfaceArtifactsToOrigin(scene, lastImageSurfaceIndex, expectedImageOrigin);
+            __coopt_pruneNearbyNonImageRings(scene, lastImageSurfaceIndex, expectedImageOrigin, 2.0);
+            __coopt_dedupeImageSurfaceArtifacts(scene, lastImageSurfaceIndex, expectedImageOrigin);
+            __coopt_removeUnindexedSemidiaRings(scene);
+            __coopt_pruneNearbyConnectionCornerRings(scene, expectedImageOrigin, 8.0);
+            __coopt_logImageRingDiagnostics(scene, lastImageSurfaceIndex, expectedImageOrigin);
+        }
+
         recordCooptPerfSample('surfaceRenderer.draw3d', performance.now() - draw3DStartMs);
     } else {
     }

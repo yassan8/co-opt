@@ -22,13 +22,30 @@ function __coopt_parseNumberOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function __coopt_isCoordTransSurfaceLike(params) {
+  if (!params || typeof params !== 'object') return false;
+  const surfType = String(params.surfType ?? params.type ?? params.surfaceType ?? '').trim().toLowerCase();
+  const objType = String(params['object type'] ?? params.object ?? params.objectType ?? '').trim().toLowerCase();
+  return (
+    surfType === 'coord break' || surfType === 'coordinate break' ||
+    surfType === 'cb' || surfType === 'coordtrans' ||
+    surfType === 'coordinatebreak' || surfType === 'coord trans' ||
+    surfType === 'coordinate transform' || surfType === 'ct' ||
+    objType === 'coord break' || objType === 'coordinate break' ||
+    objType === 'cb' || objType === 'coordtrans' ||
+    objType === 'coordinatebreak'
+  );
+}
+
 function __coopt_getSemidiaMm(params) {
   if (!params || typeof params !== 'object') return null;
 
   // CB rows propagate the prior surface's semidia in a dedicated field
   // to avoid confusing it with decenterX (which reuses the semidia column).
-  const cbActual = __coopt_parseNumberOrNull(params.__cooptActualSemidia);
-  if (cbActual !== null && cbActual > 0) return cbActual;
+  if (__coopt_isCoordTransSurfaceLike(params)) {
+    const cbActual = __coopt_parseNumberOrNull(params.__cooptActualSemidia);
+    if (cbActual !== null && cbActual > 0) return cbActual;
+  }
 
   const candidates = [
     params.semidia,
