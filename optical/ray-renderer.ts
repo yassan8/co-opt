@@ -1887,12 +1887,14 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
         // rendered chief ray consistent with that solve (so the chief ray actually
         // hits the requested image height), force stop-center chief-ray aiming
         // when delegating to the Angle / Rectangle generators.
+        const imageSurfaceIndex = findImageSurfaceIndex(opticalSystemRows);
         const effectiveObj = convertImageHeightToEffectiveObject(obj, opticalSystemRows, wavelengthUm, conjugateType);
         const imageHeightDelegationOptions = {
             ...enhancedOptions,
             aimThroughStop: true,
             useChiefRayAnalysis: true,
             allowStopBasedOriginSolve: true,
+            targetSurfaceIndex: Number.isInteger(imageSurfaceIndex) ? imageSurfaceIndex : enhancedOptions?.targetSurfaceIndex,
         };
         if (effectiveObj.position === 'Angle') {
             return generateRaysForAngleObject(effectiveObj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...imageHeightDelegationOptions, wavelengthUm, apertureLimitMm: apertureLimit });
@@ -2541,7 +2543,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         if (allowStopBasedOriginSolve && shouldRunChiefOriginAnalysis && !isOnAxis && stopSurfaceCenter3d && Number.isInteger(stopSurfaceIndex)) {
             try {
                 const directionForAnalysis = { i: chiefDir.x, j: chiefDir.y, k: chiefDir.z };
-                const wavelengthForSolve = options?.wavelength ?? 0.5876;
+                const wavelengthForSolve = options?.wavelength ?? options?.wavelengthUm ?? 0.5876;
                 const cacheKey = buildChiefRayOriginCacheKey(
                     opticalSystemRows,
                     angleX,
@@ -2660,7 +2662,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 stopSurfaceCenter3d,
                 stopSurfaceIndex,
                 opticalSystemRows,
-                options?.wavelength ?? 0.5876,
+                options?.wavelength ?? options?.wavelengthUm ?? 0.5876,
                 originSolveTraceBackend
             );
             if (refined && Number.isFinite(refined.x) && Number.isFinite(refined.y) && Number.isFinite(refined.z)) {
