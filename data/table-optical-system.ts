@@ -2498,20 +2498,46 @@ async function calculateImageSemiDiaFromChiefRays() {
           emitChiefRayDiag('object-rows-empty');
             return false;
         }
-        // Objectの位置を取得
-        const allObjectPositions = objectRows.map(obj => ({
-            x: parseFloat(obj.xHeightAngle) || 0,
-            y: parseFloat(obj.yHeightAngle) || 0,
-            z: 0
-        }));
         // 主波長を取得
         const primaryWavelength = (typeof window.getPrimaryWavelength === 'function') 
             ? Number(window.getPrimaryWavelength()) || 0.5876 
             : 0.5876;
+        const toNumber = (value) => {
+          const parsed = parseFloat(String(value ?? ''));
+          return Number.isFinite(parsed) ? parsed : 0;
+        };
+        const normalizeObjectSampleForTrace = (row, isInfinite) => {
+          const posNorm = String(row?.position ?? '').trim().toLowerCase();
+          if (posNorm === 'imageheight' && typeof window.convertImageHeightToEffectiveObject === 'function') {
+            try {
+              const effective = window.convertImageHeightToEffectiveObject(
+                row,
+                opticalSystemRows,
+                primaryWavelength,
+                isInfinite ? 'infinite' : 'finite'
+              );
+              if (effective && typeof effective === 'object') {
+                return {
+                  x: toNumber(effective?.xHeightAngle ?? effective?.x),
+                  y: toNumber(effective?.yHeightAngle ?? effective?.y),
+                  z: 0
+                };
+              }
+            } catch (error) {
+              console.warn('[calculateImageSemiDiaFromChiefRays] ImageHeight conversion failed, using raw value:', error);
+            }
+          }
+          return {
+            x: toNumber(row?.xHeightAngle ?? row?.x ?? row?.height ?? row?.heightX),
+            y: toNumber(row?.yHeightAngle ?? row?.y ?? row?.height ?? row?.heightY),
+            z: 0
+          };
+        };
         // 主光線のみを生成（光線数=1）
         const objectSurface = opticalSystemRows[0];
         const objectThickness = objectSurface?.thickness;
         const isInfiniteSystem = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
+        const allObjectPositions = objectRows.map(obj => normalizeObjectSampleForTrace(obj, isInfiniteSystem));
         let crossBeamResult;
         if (isInfiniteSystem) {
           // In Blocks-only mode, ObjectSurface with mode=INF expands to Object row thickness='INF'.

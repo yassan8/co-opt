@@ -51,6 +51,21 @@ function getOpticalRowSemidiaValue(row: any): any {
   return row.__cooptActualSemidia ?? row.semidia ?? row['Semi Diameter'] ?? row['semi diameter'] ?? row.semiDiameter ?? row.semiDia;
 }
 
+function normalizeImageSurfaceBlocksForConfiguration(cfg: any): void {
+  if (!cfg || typeof cfg !== 'object' || !Array.isArray(cfg.blocks)) return;
+
+  const imageSurfaceBlocks = cfg.blocks.filter((block: any) => {
+    return block && typeof block === 'object' && String(block.blockType ?? '').trim() === 'ImageSurface';
+  });
+  if (imageSurfaceBlocks.length <= 1) return;
+
+  const retainedImageSurface = imageSurfaceBlocks[imageSurfaceBlocks.length - 1];
+  cfg.blocks = cfg.blocks.filter((block: any) => {
+    return !(block && typeof block === 'object' && String(block.blockType ?? '').trim() === 'ImageSurface');
+  });
+  cfg.blocks.push(retainedImageSurface);
+}
+
 function interpolateExplicitApertureSemidiaForConfiguration(cfg: any): void {
   if (!cfg || typeof cfg !== 'object') return;
   const opticalRows = Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem : null;
@@ -299,6 +314,7 @@ export function loadSystemConfigurations(): SystemConfiguration {
           if (cfg.name === undefined || cfg.name === null) {
             cfg.name = `Config ${String(cfg.id ?? '') || ''}`.trim() || 'Config';
           }
+          normalizeImageSurfaceBlocksForConfiguration(cfg);
           backfillMissingGlassPropertiesForConfiguration(cfg);
           interpolateExplicitApertureSemidiaForConfiguration(cfg);
         }
@@ -320,6 +336,7 @@ export function saveSystemConfigurations(systemConfig: SystemConfiguration): voi
   if (systemConfig && systemConfig.configurations) {
     try {
       for (const cfg of systemConfig.configurations) {
+        normalizeImageSurfaceBlocksForConfiguration(cfg);
         interpolateExplicitApertureSemidiaForConfiguration(cfg);
       }
     } catch (_) {}

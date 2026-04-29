@@ -1443,6 +1443,33 @@ function deriveDistortionFieldValuesForPopup(objectRows: any[]): { fieldValues: 
     return { fieldValues, heightMode: false };
 }
 
+function deriveDistortionDisplayFieldValuesForPopup(objectRows: any[], fallbackFieldValues: number[]): number[] {
+    const rows = Array.isArray(objectRows) ? objectRows : [];
+    const tags = rows
+        .map((o) => String(o?.__cooptOriginalPosition ?? o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type ?? '').toLowerCase())
+        .filter(Boolean);
+    if (!tags.some((tag) => tag.includes('imageheight'))) return fallbackFieldValues;
+
+    const sampleCount = Math.max(1, Array.isArray(fallbackFieldValues) ? fallbackFieldValues.length : 0);
+    const heights = rows
+        .map((o) => parseFloat(o?.yHeightAngle ?? o?.y ?? o?.height ?? o?.yHeight ?? o?.y_height ?? Number.NaN))
+        .filter((v) => Number.isFinite(v));
+    if (!heights.length) return fallbackFieldValues;
+
+    let minH = Math.min(...heights);
+    let maxH = Math.max(...heights);
+    if (minH <= 0) {
+        minH = 0.001;
+        if (maxH < minH) maxH = minH;
+    }
+    if (sampleCount === 1 || minH === maxH) return [parseFloat(maxH.toFixed(6))];
+
+    return Array.from({ length: sampleCount }, (_, i) => {
+        const t = i / (sampleCount - 1);
+        return parseFloat((minH + (maxH - minH) * t).toFixed(6));
+    });
+}
+
 async function runPortableDistortionDataForPopup(payload: {
     wavelengths?: number[];
     onProgress?: (evt: { percent?: number; message?: string }) => void;
@@ -1475,8 +1502,9 @@ async function runPortableDistortionDataForPopup(payload: {
             heightMode,
             wavelength: wl,
         });
+        const responseFieldValues = Array.isArray(resp?.fieldValues) ? resp.fieldValues : fieldValues;
         allData.push({
-            fieldValues: Array.isArray(resp?.fieldValues) ? resp.fieldValues : fieldValues,
+            fieldValues: deriveDistortionDisplayFieldValuesForPopup(objectRows, responseFieldValues),
             idealHeights: Array.isArray(resp?.idealHeights) ? resp.idealHeights : [],
             realHeights: Array.isArray(resp?.realHeights) ? resp.realHeights : [],
             distortion: Array.isArray(resp?.distortion) ? resp.distortion : [],

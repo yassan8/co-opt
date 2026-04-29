@@ -811,6 +811,198 @@ function __zmxIsPhysicalOpticalRow(row: any): boolean {
     return true;
 }
 
+function __zmxIsImageOpticalRow(row: any): boolean {
+    if (!row || typeof row !== 'object') return false;
+    const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+    return objectType === 'image' || objectType.startsWith('image');
+}
+
+function __zmxGetRayPathPointIndexForSurfaceIndex(rows: any[], surfaceIndex0: number): number | null {
+    if (!Array.isArray(rows)) return null;
+    const sIdx = Number(surfaceIndex0);
+    if (!Number.isInteger(sIdx) || sIdx < 0 || sIdx >= rows.length) return null;
+    const row = rows[sIdx];
+    const surfType = String(row?.surfType ?? row?.['surf type'] ?? '').trim().toLowerCase().replace(/\s+/g, '');
+    const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+    const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+    const isSkippedRow = objectType === 'object'
+        || surfType === 'coordtrans'
+        || surfType === 'coordinatebreak'
+        || surfType === 'ct'
+        || blockType === 'gap'
+        || blockType === 'airgap';
+    if (isSkippedRow) return null;
+
+    let count = 0;
+    for (let i = 0; i <= sIdx; i++) {
+        const r = rows[i];
+        const st = String(r?.surfType ?? r?.['surf type'] ?? '').trim().toLowerCase().replace(/\s+/g, '');
+        const ot = String(r?.['object type'] ?? r?.object ?? r?.Object ?? '').trim().toLowerCase();
+        const bt = String(r?._blockType ?? r?.blockType ?? '').trim().toLowerCase();
+        if (ot === 'object') continue;
+        if (st === 'coordtrans' || st === 'coordinatebreak' || st === 'ct') continue;
+        if (bt === 'gap' || bt === 'airgap') continue;
+        count++;
+    }
+    return count > 0 ? count : null;
+}
+
+function __zmxTransformPointToSurfaceLocal(globalPoint: any, surfaceInfo: any): { x: number; y: number; z: number } | null {
+    if (!globalPoint || !surfaceInfo?.origin) return null;
+    const translated = {
+        x: Number(globalPoint.x) - Number(surfaceInfo.origin.x),
+        y: Number(globalPoint.y) - Number(surfaceInfo.origin.y),
+        z: Number(globalPoint.z) - Number(surfaceInfo.origin.z)
+    };
+    if (!Number.isFinite(translated.x) || !Number.isFinite(translated.y) || !Number.isFinite(translated.z)) return null;
+
+    const mInv = surfaceInfo?.inverseRotationMatrix;
+    if (Array.isArray(mInv) && Array.isArray(mInv[0])) {
+        return {
+            x: mInv[0][0] * translated.x + mInv[0][1] * translated.y + mInv[0][2] * translated.z,
+            y: mInv[1][0] * translated.x + mInv[1][1] * translated.y + mInv[1][2] * translated.z,
+            z: mInv[2][0] * translated.x + mInv[2][1] * translated.y + mInv[2][2] * translated.z
+        };
+    }
+
+    const m = surfaceInfo?.rotationMatrix;
+    if (Array.isArray(m) && Array.isArray(m[0])) {
+        return {
+            x: m[0][0] * translated.x + m[1][0] * translated.y + m[2][0] * translated.z,
+            y: m[0][1] * translated.x + m[1][1] * translated.y + m[2][1] * translated.z,
+            z: m[0][2] * translated.x + m[1][2] * translated.y + m[2][2] * translated.z
+        };
+    }
+
+    return translated;
+}
+
+function __zmxResolveImageSurfaceSemidiaFromChiefRays(rows: any[], wavelengthMicrons: number, objectRows: any[] = []): number | null {
+    try {
+        if (!Array.isArray(rows) || rows.length === 0) return null;
+        const imageSurfaceIndex = rows.findIndex((row: any) => __zmxIsImageOpticalRow(row));
+        if (imageSurfaceIndex < 0) return null;
+
+        const isInfinite = __zmxIsInfiniteConjugateFromObjectRow(rows[0]);
+        const rowsForTrace = __zmxBuildRowsForSemidiaTrace(rows);
+        const traceObjectSamples = (Array.isArray(objectRows) ? objectRows : [])
+            .map((row: any) => {
+                const sourceIndex = Array.isArray(objectRows) ? objectRows.indexOf(row) : -1;
+                const sample = {
+                    x: Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0),
+                    y: Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0),
+                    ...(Number.isFinite(Number(row?.z)) ? { z: Number(row.z) } : {}),
+                    ...(sourceIndex >= 0 ? { objectIndex: sourceIndex } : {})
+                };
+                const normalized = __cooptNormalizeObjectSampleForTrace(sample, row, rowsForTrace, wavelengthMicrons, isInfinite) as any;
+                if (sourceIndex >= 0 && (normalized?.objectIndex === undefined || normalized?.objectIndex === null)) {
+                    normalized.objectIndex = sourceIndex;
+                }
+                return normalized;
+            })
+            .filter((sample: any) => Number.isFinite(Number(sample?.x)) && Number.isFinite(Number(sample?.y)));
+        if (traceObjectSamples.length === 0) return null;
+
+        const tracedRows = isInfinite
+            ? rowsForTrace.map((row: any, index: number) => (index === 0 ? { ...(row || {}), thickness: 0 } : row))
+            : rowsForTrace;
+        const rays = isInfinite
+            ? (typeof w.generateInfiniteSystemCrossBeam === 'function'
+                ? w.generateInfiniteSystemCrossBeam(tracedRows, traceObjectSamples.map((sample: any) => ({
+                    x: Number(sample?.x) || 0,
+                    y: Number(sample?.y) || 0,
+                    ...(Number.isInteger(Number(sample?.objectIndex)) ? { objectIndex: Number(sample.objectIndex) } : {})
+                })), {
+                    rayCount: 1,
+                    wavelength: wavelengthMicrons,
+                    debugMode: false,
+                    crossType: 'both',
+                    targetSurfaceIndex: imageSurfaceIndex,
+                    angleUnit: 'deg',
+                    chiefZ: -20
+                })
+                : null)
+            : (typeof w.generateCrossBeam === 'function'
+                ? w.generateCrossBeam(tracedRows, traceObjectSamples.map((sample: any) => ({
+                    x: Number(sample?.x) || 0,
+                    y: Number(sample?.y) || 0,
+                    z: Number(sample?.z) || 0,
+                    ...(Number.isInteger(Number(sample?.objectIndex)) ? { objectIndex: Number(sample.objectIndex) } : {})
+                })), {
+                    rayCount: 1,
+                    wavelength: wavelengthMicrons,
+                    debugMode: false,
+                    crossType: 'both'
+                })
+                : null);
+        if (!rays) return null;
+
+        let tracedRays: any[] = [];
+        if (Array.isArray(rays?.allTracedRays)) {
+            tracedRays = rays.allTracedRays;
+        } else if (Array.isArray(rays?.objectResults)) {
+            for (const objResult of rays.objectResults) {
+                if (Array.isArray(objResult?.tracedRays)) tracedRays.push(...objResult.tracedRays);
+            }
+        } else if (Array.isArray(rays?.rays)) {
+            tracedRays = rays.rays;
+        }
+        if (tracedRays.length === 0) return null;
+
+        const chiefRays = tracedRays.filter((ray: any) => {
+            const type = String(ray?.beamType ?? ray?.type ?? ray?.side ?? ray?.role ?? '').trim().toLowerCase();
+            return !type || type.includes('chief') || type.includes('center') || type.includes('middle');
+        });
+        const candidateRays = chiefRays.length > 0 ? chiefRays : tracedRays;
+        const pointIndex = __zmxGetRayPathPointIndexForSurfaceIndex(tracedRows, imageSurfaceIndex);
+        const calcSurfaceOrigins = (w as any).calculateSurfaceOrigins || (w as any).mainDebugFunctions?.calculateSurfaceOrigins;
+        const surfaceInfoList = typeof calcSurfaceOrigins === 'function' ? calcSurfaceOrigins(tracedRows) : null;
+        const imageSurfaceInfo = Array.isArray(surfaceInfoList) ? surfaceInfoList[imageSurfaceIndex] : null;
+
+        let maxHeight = 0;
+        for (const ray of candidateRays) {
+            const rayPath = Array.isArray(ray?.rayPath)
+                ? ray.rayPath
+                : (Array.isArray(ray?.rayPathToTarget)
+                    ? ray.rayPathToTarget
+                    : (Array.isArray(ray?.path) ? ray.path : null));
+            if (!Array.isArray(rayPath) || rayPath.length === 0) continue;
+
+            let imagePoint = null;
+            if (pointIndex !== null && pointIndex >= 0 && pointIndex < rayPath.length) {
+                const direct = rayPath[pointIndex];
+                if (direct && Number.isFinite(Number(direct.x)) && Number.isFinite(Number(direct.y))) {
+                    imagePoint = direct;
+                }
+            }
+            if (!imagePoint) {
+                for (let i = rayPath.length - 1; i >= 0; i--) {
+                    const p = rayPath[i];
+                    const pSurfaceIndex = Number(p?.surfaceIndex ?? p?.surface ?? p?.surfaceIdx);
+                    if (Number.isInteger(pSurfaceIndex) && pSurfaceIndex === imageSurfaceIndex) {
+                        if (Number.isFinite(Number(p?.x)) && Number.isFinite(Number(p?.y))) {
+                            imagePoint = p;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!imagePoint) continue;
+
+            const localPoint = imageSurfaceInfo
+                ? (__zmxTransformPointToSurfaceLocal(imagePoint, imageSurfaceInfo) || imagePoint)
+                : imagePoint;
+            const height = Math.max(Math.abs(Number(localPoint?.x) || 0), Math.abs(Number(localPoint?.y) || 0));
+            if (Number.isFinite(height)) maxHeight = Math.max(maxHeight, height);
+        }
+
+        return maxHeight > 0 ? maxHeight : null;
+    } catch (err) {
+        console.warn('[autoCalculateMissingSemidia] ImageSurface chief-ray semidia resolution failed:', err);
+        return null;
+    }
+}
+
 function __zmxIsMissingSemidia(row: any): boolean {
     const sd = row?.semidia ?? row?.['semidia(mm)'] ?? row?.semidiameter;
     if (sd === undefined || sd === null) return true;
@@ -974,6 +1166,7 @@ function __zmxBuildRowsForSemidiaTrace(rows: any[]): any[] {
     const cloned = Array.isArray(rows) ? rows.map((r: any) => ({ ...(r || {}) })) : [];
     const baseMax = __zmxGetMaxPositiveSemidiaMmFromRows(cloned);
     const hugeSemidia = Math.max(1000, Number.isFinite(baseMax as number) ? Number(baseMax) * 20 : 1000);
+    const hugeDiameter = hugeSemidia * 2;
 
     for (const row of cloned) {
         if (!row || typeof row !== 'object') continue;
@@ -985,6 +1178,16 @@ function __zmxBuildRowsForSemidiaTrace(rows: any[]): any[] {
         if (surfType === 'coord trans' || surfType === 'coordinate transform' || surfType === 'ct' || surfType === 'coordtrans' || surfType === 'coordinatetransform') continue;
 
         row.semidia = hugeSemidia;
+        row.__cooptActualSemidia = hugeSemidia;
+        row.__cooptExplicitApertureSemidia = hugeSemidia;
+        row._apertureWidth = hugeDiameter;
+        row._apertureHeight = hugeDiameter;
+        row.apertureWidth = hugeDiameter;
+        row.apertureHeight = hugeDiameter;
+        row.apertureX = hugeDiameter;
+        row.apertureY = hugeDiameter;
+        row.apertureWidthMm = hugeDiameter;
+        row.apertureHeightMm = hugeDiameter;
     }
 
     return cloned;
@@ -1034,6 +1237,8 @@ function __cooptResolveMaxImageHeightObjectSample(objectRows: any[]): { index: n
     for (let index = 0; index < objectRows.length; index++) {
         const row = objectRows[index];
         if (!row || typeof row !== 'object') continue;
+        const posNorm = String(row?.position ?? row?.object ?? row?.objectType ?? '').trim().toLowerCase();
+        if (posNorm !== 'imageheight') continue;
         const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
         const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
         const z = Number(row?.z ?? 0);
@@ -1051,31 +1256,32 @@ function __cooptResolveMaxImageHeightObjectSample(objectRows: any[]): { index: n
 
 function __cooptNormalizeObjectSampleForTrace(sample: { x: number; y: number; z?: number }, sourceRow: any, opticalRows: any[], wavelengthMicrons: number, isInfinite: boolean): { x: number; y: number; z?: number } {
     if (!sample || typeof sample !== 'object') return { x: 0, y: 0 };
-    if (!isInfinite) return sample;
-
     const posNorm = String(sourceRow?.position ?? '').trim().toLowerCase();
     if (posNorm !== 'imageheight') return sample;
 
     const targetX = Number(sample?.x ?? 0);
     const targetY = Number(sample?.y ?? 0);
-    try {
-        const paraxial = calculateParaxialData(opticalRows, wavelengthMicrons);
-        const focalLength = Number(paraxial?.focalLength);
-        if (Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12) {
-            const radToDeg = 180 / Math.PI;
-            return {
-                x: Math.atan2(targetX, focalLength) * radToDeg,
-                y: Math.atan2(targetY, focalLength) * radToDeg,
-            };
-        }
-    } catch (_) {}
+    if (isInfinite) {
+        try {
+            const paraxial = calculateParaxialData(opticalRows, wavelengthMicrons);
+            const focalLength = Number(paraxial?.focalLength);
+            if (Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12) {
+                const radToDeg = 180 / Math.PI;
+                return {
+                    x: Math.atan2(targetX, focalLength) * radToDeg,
+                    y: Math.atan2(targetY, focalLength) * radToDeg,
+                };
+            }
+        } catch (_) {}
+    }
 
     try {
         if (typeof w.convertImageHeightToEffectiveObject === 'function') {
-            const effective = w.convertImageHeightToEffectiveObject(sourceRow, opticalRows, wavelengthMicrons, 'infinite');
+            const effective = w.convertImageHeightToEffectiveObject(sourceRow, opticalRows, wavelengthMicrons, isInfinite ? 'infinite' : 'finite');
             return {
                 x: Number(effective?.xHeightAngle ?? effective?.x ?? targetX) || 0,
                 y: Number(effective?.yHeightAngle ?? effective?.y ?? targetY) || 0,
+                z: Number(effective?.z ?? sample?.z ?? 0) || 0,
             };
         }
     } catch (_) {}
@@ -1104,13 +1310,19 @@ function __zmxFormatLargestObjectConditionSummary(objectRows: any[]): string | n
 
     if (!bestRow || bestIndex < 0 || bestRadius <= 0) return null;
 
-    const x = Number(bestRow?.xHeightAngle ?? bestRow?.x ?? bestRow?.fieldX ?? 0);
-    const y = Number(bestRow?.yHeightAngle ?? bestRow?.y ?? bestRow?.fieldY ?? 0);
-    const z = Number(bestRow?.z ?? 0);
-    const position = String(bestRow?.position ?? bestRow?.object ?? bestRow?.objectType ?? '').trim();
+    return __zmxFormatObjectConditionSummary(bestRow, bestIndex);
+}
+
+function __zmxFormatObjectConditionSummary(row: any, index: number): string | null {
+    if (!row || typeof row !== 'object' || index < 0) return null;
+
+    const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
+    const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
+    const z = Number(row?.z ?? 0);
+    const position = String(row?.position ?? row?.object ?? row?.objectType ?? '').trim();
     const isAngle = position.toLowerCase() === 'angle';
     const units = isAngle ? 'deg' : 'mm';
-    const parts = [`Object ${bestIndex + 1}`, position || (isAngle ? 'Angle' : 'ImageHeight')];
+    const parts = [`Object ${index + 1}`, position || (isAngle ? 'Angle' : 'ImageHeight')];
     parts.push(`x=${x.toFixed(3)} ${units}`);
     parts.push(`y=${y.toFixed(3)} ${units}`);
     if (!isAngle && Number.isFinite(z) && Math.abs(z) > 1e-9) parts.push(`z=${z.toFixed(3)} mm`);
@@ -1208,8 +1420,6 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
     const isInfinite = __zmxIsInfiniteConjugateFromObjectRow(objectRow);
 
     const rowsForTrace = __zmxBuildRowsForSemidiaTrace(rows);
-    const largestObjectSample = __zmxResolveLargestObjectSample(objectRows);
-    const maxImageHeightSample = __cooptResolveMaxImageHeightObjectSample(objectRows);
     const strictMaxImageHeightMarginalOnly = options?.strictMaxImageHeightMarginalOnly === true;
 
     const enpdHintMm = Number((rows as any)?.__zmxEntrancePupilDiameterMm);
@@ -1230,23 +1440,64 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
         sampleY = Number.isFinite(crossY) ? crossY : searchRadiusMm;
     }
 
-    if (!largestObjectSample && (!Number.isFinite(sampleX) || !Number.isFinite(sampleY) || sampleX <= 0 || sampleY <= 0)) return;
+    const candidateObjectRows = (Array.isArray(objectRows) ? objectRows : []).filter((row: any) => {
+        if (!row || typeof row !== 'object') return false;
+        const posNorm = String(row?.position ?? row?.object ?? row?.objectType ?? '').trim().toLowerCase();
+        if (strictMaxImageHeightMarginalOnly && posNorm !== 'imageheight') return false;
+        const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
+        const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
+        return Number.isFinite(x) && Number.isFinite(y);
+    });
 
-    const objectSamples = strictMaxImageHeightMarginalOnly && maxImageHeightSample
-        ? [__cooptNormalizeObjectSampleForTrace(maxImageHeightSample.sample, objectRows[maxImageHeightSample.index], rowsForTrace, wavelengthMicrons, isInfinite)]
-        : largestObjectSample
-        ? [__cooptNormalizeObjectSampleForTrace(largestObjectSample, objectRows.find((row: any) => {
-            const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
-            const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
-            return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - largestObjectSample.x) < 1e-9 && Math.abs(y - largestObjectSample.y) < 1e-9;
-        }), rowsForTrace, wavelengthMicrons, isInfinite)]
+    const prioritizedObjectRows = (() => {
+        if (!strictMaxImageHeightMarginalOnly || candidateObjectRows.length === 0) return candidateObjectRows;
+
+        const withRadius = candidateObjectRows
+            .map((row: any) => {
+                const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
+                const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
+                return { row, radius: Math.hypot(x, y) };
+            })
+            .filter((entry) => Number.isFinite(entry.radius));
+
+        const offAxis = withRadius.filter((entry) => entry.radius > 1e-9);
+        const chosen = offAxis.length > 0 ? offAxis : withRadius;
+        chosen.sort((a, b) => b.radius - a.radius);
+        return chosen.map((entry) => entry.row);
+    })();
+
+    const objectSamples = prioritizedObjectRows
+        .map((row: any) => {
+            const sourceIndex = Array.isArray(objectRows) ? objectRows.indexOf(row) : -1;
+            const sample = {
+                x: Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0),
+                y: Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0),
+                ...(Number.isFinite(Number(row?.z)) ? { z: Number(row.z) } : {}),
+                ...(sourceIndex >= 0 ? { objectIndex: sourceIndex } : {})
+            };
+            const normalized = __cooptNormalizeObjectSampleForTrace(sample, row, rowsForTrace, wavelengthMicrons, isInfinite) as any;
+            if (sourceIndex >= 0 && (normalized?.objectIndex === undefined || normalized?.objectIndex === null)) {
+                normalized.objectIndex = sourceIndex;
+            }
+            return normalized;
+        })
+        .filter((sample: any) => Number.isFinite(Number(sample?.x)) && Number.isFinite(Number(sample?.y)));
+
+    if (objectSamples.length === 0 && (!Number.isFinite(sampleX) || !Number.isFinite(sampleY) || sampleX <= 0 || sampleY <= 0)) return;
+
+    const traceObjectSamples = objectSamples.length > 0
+        ? objectSamples
         : (isInfinite
             ? [{ x: sampleX, y: 0 }, { x: 0, y: sampleY }]
             : [{ x: sampleX, y: 0, z: 0 }, { x: 0, y: sampleY, z: 0 }]);
 
     const rays = isInfinite
         ? (typeof w.generateInfiniteSystemCrossBeam === 'function'
-            ? w.generateInfiniteSystemCrossBeam(rowsForTrace, objectSamples.map((sample: any) => ({ x: Number(sample?.x) || 0, y: Number(sample?.y) || 0 })), {
+            ? w.generateInfiniteSystemCrossBeam(rowsForTrace, traceObjectSamples.map((sample: any) => ({
+                x: Number(sample?.x) || 0,
+                y: Number(sample?.y) || 0,
+                ...(Number.isInteger(Number(sample?.objectIndex)) ? { objectIndex: Number(sample.objectIndex) } : {})
+            })), {
                 rayCount: strictMaxImageHeightMarginalOnly ? 3 : 13,
                 wavelength: wavelengthMicrons,
                 debugMode: false,
@@ -1254,7 +1505,12 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
             })
             : null)
         : (typeof w.generateCrossBeam === 'function'
-            ? w.generateCrossBeam(rowsForTrace, objectSamples.map((sample: any) => ({ x: Number(sample?.x) || 0, y: Number(sample?.y) || 0, z: Number(sample?.z) || 0 })), {
+            ? w.generateCrossBeam(rowsForTrace, traceObjectSamples.map((sample: any) => ({
+                x: Number(sample?.x) || 0,
+                y: Number(sample?.y) || 0,
+                z: Number(sample?.z) || 0,
+                ...(Number.isInteger(Number(sample?.objectIndex)) ? { objectIndex: Number(sample.objectIndex) } : {})
+            })), {
                 rayCount: strictMaxImageHeightMarginalOnly ? 3 : 13,
                 wavelength: wavelengthMicrons,
                 debugMode: false,
@@ -1289,15 +1545,18 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
 
     const filteredRays = strictMaxImageHeightMarginalOnly
         ? allRays.filter((ray: any) => {
-            const side = String(ray?.side ?? ray?.originalRay?.side ?? '').trim().toLowerCase();
-            if (side !== 'upper' && side !== 'lower') return false;
-            return true;
+            const side = String(ray?.side ?? ray?.originalRay?.side ?? ray?.name ?? '').trim().toLowerCase();
+            if (!side) return true;
+            if (side === 'upper' || side === 'lower' || side === 'chief' || side === 'center' || side === 'middle') return true;
+            if (side.includes('upper') || side.includes('lower') || side.includes('chief') || side.includes('center')) return true;
+            return false;
         })
         : allRays;
 
     if (filteredRays.length === 0) return;
 
     const maxBySurface = new Array(rows.length).fill(0);
+    const maxBySurfaceSource = new Array(rows.length).fill(null);
     for (const ray of filteredRays) {
         const rayPath = Array.isArray(ray?.rayPath)
             ? ray.rayPath
@@ -1312,11 +1571,19 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
             const p = rayPath[i];
             if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
             const rr = Math.sqrt(p.x * p.x + p.y * p.y);
-            if (rr > maxBySurface[i]) maxBySurface[i] = rr;
+            if (rr > maxBySurface[i]) {
+                maxBySurface[i] = rr;
+                maxBySurfaceSource[i] = {
+                    radius: rr,
+                    objectIndex: Number.isInteger(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : null,
+                    rayType: String(ray?.type ?? ray?.side ?? ray?.role ?? ray?.name ?? 'unknown').trim() || 'unknown'
+                };
+            }
         }
     }
     const forceOverwriteSemidia = options?.forceOverwriteSemidia === true;
     let updateCount = 0;
+    const updateSummaries: string[] = [];
     for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
         if (!r || typeof r !== 'object') continue;
@@ -1329,7 +1596,23 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
         if (maxR > 0 && (forceOverwriteSemidia || wasMissing || prev === null || maxR > (prev + 1e-6) || maxR < (prev - 1e-6))) {
             r.semidia = maxR;
             updateCount++;
+            const winner = maxBySurfaceSource[i];
+            const objectIndex = Number.isInteger(Number(winner?.objectIndex)) ? Number(winner.objectIndex) : null;
+            const objectSummary = objectIndex !== null && Array.isArray(objectRows) && objectRows[objectIndex]
+                ? __zmxFormatObjectConditionSummary(objectRows[objectIndex], objectIndex)
+                : null;
+            const surfaceLabel = `Surface ${Number.isFinite(Number(r?.surf)) ? Number(r.surf) : i}`;
+            const typeLabel = String(r?.type ?? r?.['object type'] ?? '').trim() || 'unknown';
+            updateSummaries.push([
+                `${surfaceLabel} (${typeLabel})`,
+                `semidia=${maxR.toFixed(6)}mm`,
+                winner?.rayType ? `ray=${winner.rayType}` : null,
+                objectSummary ? `winner=${objectSummary}` : null
+            ].filter(Boolean).join(' | '));
         }
+    }
+    if (updateSummaries.length > 0) {
+        console.log('[autoCalculateMissingSemidia] Aperture winners by surface:', updateSummaries);
     }
 }
 
@@ -1385,6 +1668,13 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], optio
         __zmxApplySemidiaOverridesFromMarginalRays(rows, primaryWavelength, objectRows, {
             forceOverwriteSemidia: options?.forceOverwriteSemidia === true
         });
+
+        const imageSurfaceIndex = rows.findIndex((row: any) => __zmxIsImageOpticalRow(row));
+        const imageChiefSemidia = __zmxResolveImageSurfaceSemidiaFromChiefRays(rows, primaryWavelength, objectRows);
+        if (imageSurfaceIndex >= 0 && Number.isFinite(imageChiefSemidia) && (imageChiefSemidia as number) > 0) {
+            rows[imageSurfaceIndex].semidia = imageChiefSemidia;
+            console.log(`[autoCalculateMissingSemidia] ImageSurface chief-ray semidia=${Number(imageChiefSemidia).toFixed(6)}mm`);
+        }
 
         console.log('[autoCalculateMissingSemidia] Ray tracing completed. Sample rows with semidia:', 
             rows.slice(0, 5).map((r: any) => ({
@@ -1558,6 +1848,15 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
         if (!activeCfg || !Array.isArray(activeCfg.blocks) || activeCfg.blocks.length === 0) return;
 
         console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] Active config has', activeCfg.blocks.length, 'blocks');
+
+        const imageRow = tableRows.find((row: any) => __zmxIsImageOpticalRow(row));
+        const imageSemidia = imageRow ? __zmxReadPositiveFiniteSemidiaMm(imageRow) : null;
+        const imageBlock = activeCfg.blocks.find((block: any) => String(block?.blockType ?? '').trim() === 'ImageSurface');
+        if (imageBlock && imageSemidia !== null) {
+            if (!imageBlock.parameters || typeof imageBlock.parameters !== 'object') imageBlock.parameters = {};
+            imageBlock.parameters.semidia = imageSemidia;
+            console.log(`[ImageSurface Sync] Block ${String(imageBlock?.blockId ?? 'unknown')} semidia = ${imageSemidia}mm`);
+        }
 
         const blockById = new Map<string, any>();
         for (const b of activeCfg.blocks) {
@@ -2044,7 +2343,6 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 void runRequirementSyncSequence();
             } catch (_) {}
             try { refreshBlockInspector(); } catch (_) {}
-            try { __cooptAutoCalculateMissingDesignIntentApertures(); } catch (_) {}
             try {
                 if (typeof w.updateTransformSurfaceSelect === 'function') {
                     w.updateTransformSurfaceSelect();
@@ -4362,9 +4660,34 @@ function setupSaveButton(): void {
 
 function getSanitizedConfigurationsForExport(): any {
     const parsedConfig = loadSystemConfigurations();
+    const liveSource = w.tableSource ? w.tableSource.getData() : [];
+    const liveObject = w.tableObject ? w.tableObject.getData() : [];
+    const liveOpticalSystem = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
+    const liveMeritFunction = w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [];
+    const liveSystemRequirements = w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : [];
+    const refFLInput = document.getElementById('reference-focal-length') as HTMLInputElement | null;
     
     const sanitizedConfig = parsedConfig ? JSON.parse(JSON.stringify(parsedConfig)) : null;
     if (sanitizedConfig) {
+        try {
+            const activeId = sanitizedConfig.activeConfigId;
+            const activeCfg = Array.isArray(sanitizedConfig.configurations)
+                ? (sanitizedConfig.configurations.find((cfg: any) => String(cfg?.id) === String(activeId)) || sanitizedConfig.configurations[0])
+                : null;
+            if (activeCfg && typeof activeCfg === 'object') {
+                activeCfg.source = liveSource;
+                activeCfg.object = liveObject;
+                activeCfg.opticalSystem = liveOpticalSystem;
+                activeCfg.systemData = {
+                    ...(activeCfg.systemData && typeof activeCfg.systemData === 'object' ? activeCfg.systemData : {}),
+                    referenceFocalLength: refFLInput ? refFLInput.value : ''
+                };
+                if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+                activeCfg.metadata.modified = new Date().toISOString();
+            }
+            sanitizedConfig.meritFunction = liveMeritFunction;
+            sanitizedConfig.systemRequirements = liveSystemRequirements;
+        } catch (_) {}
         try { delete sanitizedConfig.meritFunction; } catch (_) {}
         try { delete sanitizedConfig.systemRequirements; } catch (_) {}
         try {
@@ -6315,7 +6638,10 @@ function __zoom_collectState(): any {
         __zoom_renderCompensationChart(compChart, compensation);
     }
 
-function __zoom_setControllerValue(field: 'zoomPosition' | 'zoomGroupProfiles', nextValue: any): any {
+function __zoom_setControllerValue(
+    field: 'zoomPosition' | 'zoomGroupProfiles' | 'zoomLinkedGroupScales' | 'zoomCompensationStroke' | 'zoomCompensationSamples',
+    nextValue: any
+): any {
     if (field === 'zoomPosition') {
         return __zoom_previewSetPosition(nextValue);
     }
@@ -8287,11 +8613,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         const newValue = cooptNormalizeInputValue(input.value, value);
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
-                            if (/^aperture\./.test(String(path)) && String(newValue ?? '').trim() === '') {
-                                setTimeout(() => {
-                                    try { __cooptAutoCalculateMissingDesignIntentApertures(); } catch (_) {}
-                                }, 0);
-                            }
                         }
                     });
 
@@ -8371,11 +8692,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         const newValue = cooptNormalizeInputValue(input.value, value);
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
-                            if (/^aperture\./.test(String(path)) && String(newValue ?? '').trim() === '') {
-                                setTimeout(() => {
-                                    try { __cooptAutoCalculateMissingDesignIntentApertures(); } catch (_) {}
-                                }, 0);
-                            }
                         }
                     });
 

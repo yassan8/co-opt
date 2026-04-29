@@ -48,6 +48,51 @@ function getPrimaryWavelength(): number {
   return 0.5876;
 }
 
+function normalizeDistortionObjectRows(objectRows: any[], opticalSystemRows: any[], sourceRows: any[]): any[] {
+  const rows = Array.isArray(objectRows) ? objectRows : [];
+  const wavelength = (() => {
+    const source = Array.isArray(sourceRows) ? sourceRows : [];
+    let fallback = getPrimaryWavelength();
+    for (const row of source) {
+      const wl = Number(row?.wavelength ?? row?.Wavelength);
+      if (!Number.isFinite(wl) || wl <= 0) continue;
+      fallback = wl;
+      const primaryFlag = row?.primary ?? row?.Primary ?? row?.['Primary Wavelength'] ?? row?.isPrimary;
+      const isPrimary = typeof primaryFlag === 'boolean'
+        ? primaryFlag
+        : String(primaryFlag ?? '').trim().toLowerCase();
+      if (isPrimary === true || isPrimary === 'true' || isPrimary === '1' || isPrimary === 'yes' || (typeof isPrimary === 'string' && isPrimary.includes('primary'))) {
+        return wl;
+      }
+    }
+    return fallback;
+  })();
+  const thickness = Number(opticalSystemRows?.[0]?.thickness);
+  const conjugateType = Number.isFinite(thickness) && thickness < 1e9 ? 'finite' : 'infinite';
+
+  return rows.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const normalized = { ...row } as any;
+    if (normalized.xHeightAngle == null && normalized.x != null) normalized.xHeightAngle = normalized.x;
+    if (normalized.yHeightAngle == null && normalized.y != null) normalized.yHeightAngle = normalized.y;
+    if (normalized.position == null && normalized.objectType != null) normalized.position = normalized.objectType;
+    const pos = String(normalized.position ?? '').trim().toLowerCase();
+    if (pos !== 'imageheight') return normalized;
+    try {
+      const candidates = [window as any, (() => { try { return (window as any).opener as any; } catch (_) { return null; } })()];
+      for (const w of candidates) {
+        if (w && typeof w.convertImageHeightToEffectiveObject === 'function') {
+          const effective = w.convertImageHeightToEffectiveObject(normalized, opticalSystemRows, wavelength, conjugateType);
+          if (effective && typeof effective === 'object') {
+            return { ...normalized, ...effective, __cooptOriginalPosition: normalized.position };
+          }
+        }
+      }
+    } catch (_) {}
+    return normalized;
+  });
+}
+
 function getRows() {
   const candidates = [window as any, (() => { try { return (window as any).opener as any; } catch (_) { return null; } })()];
   for (const w of candidates) {
@@ -132,6 +177,33 @@ function deriveFieldValues(objectRows: any[]): { fieldValues: number[]; heightMo
   for (let a = minAngle; a <= maxAngle + 1e-9; a += step) fieldValues.push(parseFloat(a.toFixed(6)));
   if (fieldValues[fieldValues.length - 1] !== maxAngle) fieldValues.push(maxAngle);
   return { fieldValues, heightMode: false };
+}
+
+function deriveDisplayFieldValues(originalObjectRows: any[], fallbackFieldValues: number[]): number[] {
+  const rows = Array.isArray(originalObjectRows) ? originalObjectRows : [];
+  const tags = rows
+    .map((o) => String(o?.__cooptOriginalPosition ?? o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type ?? '').toLowerCase())
+    .filter(Boolean);
+  if (!tags.some((tag) => tag.includes('imageheight'))) return fallbackFieldValues;
+
+  const sampleCount = Math.max(1, Array.isArray(fallbackFieldValues) ? fallbackFieldValues.length : 0);
+  const heights = rows
+    .map((o) => parseFloat(o?.yHeightAngle ?? o?.y ?? o?.height ?? o?.yHeight ?? o?.y_height ?? Number.NaN))
+    .filter((v) => Number.isFinite(v));
+  if (!heights.length) return fallbackFieldValues;
+
+  let minH = Math.min(...heights);
+  let maxH = Math.max(...heights);
+  if (minH <= 0) {
+    minH = 0.001;
+    if (maxH < minH) maxH = minH;
+  }
+  if (sampleCount === 1 || minH === maxH) return [parseFloat(maxH.toFixed(6))];
+
+  return Array.from({ length: sampleCount }, (_, i) => {
+    const t = i / (sampleCount - 1);
+    return parseFloat((minH + (maxH - minH) * t).toFixed(6));
+  });
 }
 
 function deriveDistortionWavelengths(sourceRows: any[]): number[] {
@@ -316,7 +388,8 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
     try {
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
       const { opticalSystemRows, sourceRows, objectRows } = getRows();
-      const { fieldValues, heightMode } = deriveFieldValues(objectRows);
+      const normalizedObjectRows = normalizeDistortionObjectRows(objectRows, opticalSystemRows, sourceRows);
+      const { fieldValues, heightMode } = deriveFieldValues(normalizedObjectRows);
       const wavelengths = deriveDistortionWavelengths(sourceRows);
       const runtimeLabel = isTauriRuntime() ? 'tauri' : 'web';
       setBackendInfo(formatRuntimeInfo(runtimeLabel));
@@ -328,15 +401,16 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
         const resp = await runNativeDistortion({
           opticalSystemRows,
           sourceRows,
-          objectRows,
+          objectRows: normalizedObjectRows,
           fieldSamples: fieldValues,
           heightMode,
           wavelength: wl,
         });
         const backendLabel = String(resp?.backend || "unknown");
         setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
+        const responseFieldValues = Array.isArray(resp?.fieldValues) ? resp.fieldValues : fieldValues;
         allData.push({
-          fieldValues: Array.isArray(resp?.fieldValues) ? resp.fieldValues : fieldValues,
+          fieldValues: deriveDisplayFieldValues(objectRows, responseFieldValues),
           idealHeights: Array.isArray(resp?.idealHeights) ? resp.idealHeights : [],
           realHeights: Array.isArray(resp?.realHeights) ? resp.realHeights : [],
           distortion: Array.isArray(resp?.distortion) ? resp.distortion : [],
@@ -349,7 +423,7 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       if (!bestData.length) {
         throw new Error('Distortion returned no plottable points (all chief rays failed).');
       }
-      await plotDistortionPercent(bestData, chartRef.current as any);
+      await plotDistortionPercent(bestData, chartRef.current as any, { objectRows });
       hideProgress();
     } catch (err: any) {
       setProgress(100, 'Failed');

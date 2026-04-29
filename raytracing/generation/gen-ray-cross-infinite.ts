@@ -1704,24 +1704,27 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
 
     for (let objectIndex = 0; objectIndex < angles.length; objectIndex++) {
         const objectAngle = angles[objectIndex];
+        const actualObjectIndex = Number.isInteger(Number(objectAngle?.objectIndex))
+            ? Number(objectAngle.objectIndex)
+            : objectIndex;
 
         // 1. 角度から方向ベクトル計算
         const direction = calculateInfiniteSystemDirection(objectAngle);
         
         if (!direction) {
-            console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}の方向ベクトル計算失敗: 角度(${objectAngle.x}°, ${objectAngle.y}°)`);
+            console.warn(`⚠️ [InfiniteSystem] Object${actualObjectIndex + 1}の方向ベクトル計算失敗: 角度(${objectAngle.x}°, ${objectAngle.y}°)`);
             continue;
         }
         
         // 高画角での方向ベクトルの妥当性チェック
         if (Math.abs(direction.k) < 1e-10) {
-            console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}: 方向ベクトルのk成分が小さすぎます: ${direction.k}`);
+            console.warn(`⚠️ [InfiniteSystem] Object${actualObjectIndex + 1}: 方向ベクトルのk成分が小さすぎます: ${direction.k}`);
             console.warn(`   角度(${objectAngle.x}°, ${objectAngle.y}°)でほぼ水平な光線のため、処理をスキップ`);
             continue;
         }
         
         if (direction.k <= 0) {
-            console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}: 後方を向く方向ベクトル: k=${direction.k}`);
+            console.warn(`⚠️ [InfiniteSystem] Object${actualObjectIndex + 1}: 後方を向く方向ベクトル: k=${direction.k}`);
             console.warn(`   角度(${objectAngle.x}°, ${objectAngle.y}°)で90度以上の画角のため、処理をスキップ`);
             continue;
         }
@@ -1743,12 +1746,12 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         const stopSurfaceInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
         
         if (!stopSurfaceInfo) {
-            console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}のStop面が見つかりません`);
+            console.warn(`⚠️ [InfiniteSystem] Object${actualObjectIndex + 1}のStop面が見つかりません`);
             continue;
         }
         
         if (!stopSurfaceInfo.center) {
-            console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}のStop面中心が未定義です`);
+            console.warn(`⚠️ [InfiniteSystem] Object${actualObjectIndex + 1}のStop面中心が未定義です`);
             console.warn(`   stopSurfaceInfo:`, stopSurfaceInfo);
             continue;
         }
@@ -2139,15 +2142,15 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             traceRayForRenderTs(Array.isArray(opticalSystemRows) ? opticalSystemRows.slice() : opticalSystemRows, ray0, 1.0, dbg);
             const block = _extractFirstApertureBlockFromDebugLog(dbg);
             if (block) {
-                console.warn(`🚫 [DrawCrossDiag] Object${objectIndex}: PHYSICAL_APERTURE_BLOCK at Surface ${block.surfaceNumber ?? '?'} (hitRadius=${block.hitRadiusMm ?? '?'}mm > limit=${block.apertureLimitMm ?? '?'}mm)`);
+                console.warn(`🚫 [DrawCrossDiag] Object${actualObjectIndex + 1}: PHYSICAL_APERTURE_BLOCK at Surface ${block.surfaceNumber ?? '?'} (hitRadius=${block.hitRadiusMm ?? '?'}mm > limit=${block.apertureLimitMm ?? '?'}mm)`);
             } else {
-                console.warn(`🚫 [DrawCrossDiag] Object${objectIndex}: no rays reached target, but no PHYSICAL_APERTURE_BLOCK found in debugLog`);
+                console.warn(`🚫 [DrawCrossDiag] Object${actualObjectIndex + 1}: no rays reached target, but no PHYSICAL_APERTURE_BLOCK found in debugLog`);
             }
         }
 
         // Object毎の結果を保存
         const objectResult = {
-            objectIndex: objectIndex,
+            objectIndex: actualObjectIndex,
             objectAngle: objectAngle,
             objectPosition: objectAngle,  // 互換性のために角度を位置としても保存
             direction: chiefDirection,

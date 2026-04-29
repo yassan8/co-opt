@@ -2551,6 +2551,14 @@ button:active {
     color: #1d4ed8;
 }
 
+.block-inspector-col-id[data-block-type="stop"] {
+    display: inline-flex;
+    align-items: center;
+    background: #dcfce7;
+    border: 1px solid #86efac;
+    color: #15803d;
+}
+
 .block-inspector-col-id[data-block-type="gap"] {
     background: #f8fafc;
     border: 1px solid #e2e8f0;
@@ -4427,6 +4435,14 @@ body.dark-mode .block-inspector-col-id[data-block-type="triplet"] {
     background: rgba(56, 189, 248, 0.18);
     border: 1px solid rgba(96, 165, 250, 0.45);
     color: #bae6fd;
+}
+
+body.dark-mode .block-inspector-col-id[data-block-type="stop"] {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(34, 197, 94, 0.18);
+    border: 1px solid rgba(74, 222, 128, 0.45);
+    color: #bbf7d0;
 }
 
 body.dark-mode .block-inspector-col-id[data-block-type="gap"] {

@@ -277,9 +277,35 @@ function getSanitizedConfigurationsForExport(): any {
       return null;
     }
   })();
+
+  const liveSource = w.tableSource ? w.tableSource.getData() : [];
+  const liveObject = w.tableObject ? w.tableObject.getData() : [];
+  const liveOpticalSystem = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
+  const liveMeritFunction = w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [];
+  const liveSystemRequirements = w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : [];
+  const refFLInput = document.getElementById('reference-focal-length') as HTMLInputElement | null;
   
   const sanitizedConfig = parsedConfig ? JSON.parse(JSON.stringify(parsedConfig)) : null;
   if (sanitizedConfig) {
+    try {
+      const activeId = sanitizedConfig.activeConfigId;
+      const activeCfg = Array.isArray(sanitizedConfig.configurations)
+        ? (sanitizedConfig.configurations.find((cfg: any) => String(cfg?.id) === String(activeId)) || sanitizedConfig.configurations[0])
+        : null;
+      if (activeCfg && typeof activeCfg === 'object') {
+        activeCfg.source = liveSource;
+        activeCfg.object = liveObject;
+        activeCfg.opticalSystem = liveOpticalSystem;
+        activeCfg.systemData = {
+          ...(activeCfg.systemData && typeof activeCfg.systemData === 'object' ? activeCfg.systemData : {}),
+          referenceFocalLength: refFLInput ? refFLInput.value : ''
+        };
+        if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+        activeCfg.metadata.modified = new Date().toISOString();
+      }
+      sanitizedConfig.meritFunction = liveMeritFunction;
+      sanitizedConfig.systemRequirements = liveSystemRequirements;
+    } catch (_) {}
     try { delete sanitizedConfig.meritFunction; } catch (_) {}
     try { delete sanitizedConfig.systemRequirements; } catch (_) {}
     try {

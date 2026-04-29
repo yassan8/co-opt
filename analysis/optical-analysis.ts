@@ -30,6 +30,71 @@ let pendingSpotDiagramRequest: { requestId: number; options: any; requestedAt: n
 let analysisRustTraceOptionsCache: { options: any; at: number; forceKey: string } | null = null;
 let analysisRustTraceOptionsPromise: Promise<any | null> | null = null;
 
+function getPrimaryWavelengthFromSourceRows(sourceRows: any[]): number {
+    const rows = Array.isArray(sourceRows) ? sourceRows : [];
+    let fallback = 0.5876;
+
+    for (const row of rows) {
+        const wavelength = Number(row?.wavelength ?? row?.Wavelength);
+        if (!Number.isFinite(wavelength) || wavelength <= 0) continue;
+        fallback = wavelength;
+
+        const primaryFlag = row?.primary ?? row?.Primary ?? row?.['Primary Wavelength'] ?? row?.isPrimary;
+        const isPrimary = typeof primaryFlag === 'boolean'
+            ? primaryFlag
+            : String(primaryFlag ?? '').trim().toLowerCase();
+        if (isPrimary === true || isPrimary === 'true' || isPrimary === '1' || isPrimary === 'yes' || (typeof isPrimary === 'string' && isPrimary.includes('primary'))) {
+            return wavelength;
+        }
+    }
+
+    return fallback;
+}
+
+function normalizeAstigmatismObjectRowsForImageHeight(objectRows: any[], opticalSystemRows: any[], sourceRows: any[]): any[] {
+    if (!Array.isArray(objectRows) || objectRows.length === 0) return [];
+
+    const conjugateType = String(detectConjugateType(opticalSystemRows) || '').toLowerCase() === 'finite'
+        ? 'finite'
+        : 'infinite';
+    const wavelengthUm = getPrimaryWavelengthFromSourceRows(sourceRows);
+
+    return objectRows.map((row: any) => {
+        if (!row || typeof row !== 'object') return row;
+
+        const normalizedRow = { ...row } as any;
+        if (normalizedRow.xHeightAngle == null && normalizedRow['object x'] != null) normalizedRow.xHeightAngle = normalizedRow['object x'];
+        if (normalizedRow.yHeightAngle == null && normalizedRow['object y'] != null) normalizedRow.yHeightAngle = normalizedRow['object y'];
+        if (normalizedRow.xHeightAngle == null && normalizedRow.x != null) normalizedRow.xHeightAngle = normalizedRow.x;
+        if (normalizedRow.yHeightAngle == null && normalizedRow.y != null) normalizedRow.yHeightAngle = normalizedRow.y;
+        if (normalizedRow.position == null && normalizedRow.objectType != null) normalizedRow.position = normalizedRow.objectType;
+
+        const posNorm = String(normalizedRow.position ?? '').trim().toLowerCase();
+        if (posNorm !== 'imageheight') return normalizedRow;
+
+        try {
+            if (typeof w.convertImageHeightToEffectiveObject === 'function') {
+                const effective = w.convertImageHeightToEffectiveObject(normalizedRow, opticalSystemRows, wavelengthUm, conjugateType);
+                if (effective && typeof effective === 'object') {
+                    return {
+                        ...normalizedRow,
+                        ...effective,
+                        __cooptOriginalPosition: normalizedRow.position,
+                    };
+                }
+            }
+        } catch (error) {
+            console.warn('⚠️ [Astigmatism] ImageHeight conversion failed; using raw object row:', error);
+        }
+
+        return normalizedRow;
+    });
+}
+
+function normalizeDistortionObjectRowsForImageHeight(objectRows: any[], opticalSystemRows: any[], sourceRows: any[]): any[] {
+    return normalizeAstigmatismObjectRowsForImageHeight(objectRows, opticalSystemRows, sourceRows);
+}
+
 async function resolveAnalysisRustTraceOptions(options: { forceRustWasm?: boolean; requireRustWasm?: boolean } = {}): Promise<any | null> {
     const forceRustWasm = options.forceRustWasm === true;
     const requireRustWasmFromCaller = options.requireRustWasm === true;
@@ -3032,15 +3097,15 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
 
         // 補間モードの場合、0°から最大値まで100等分した画角を生成
         // ただし Rectangle/height 指定が1件でもあれば高さモードとみなし、補間は行わずそのまま使う
-        let processedObjectRows = objectRows;
+        let processedObjectRows = normalizeAstigmatismObjectRowsForImageHeight(objectRows, opticalSystemRows, sourceRows);
         const hasHeightRect = (objectRows || []).some((obj: any) => {
             const pos = (obj.position || obj.fieldType || obj.type || '').toLowerCase();
             return pos.includes('height') || pos.includes('rect');
         });
 
-        if (fieldMode === 'interpolate' && (objectRows || []).length > 0 && !hasHeightRect) {
+        if (fieldMode === 'interpolate' && (processedObjectRows || []).length > 0 && !hasHeightRect) {
             // Y方向の最大角度を取得
-            const maxYAngle = Math.max(...objectRows.map((obj: any) => Math.abs(parseFloat(obj.yHeightAngle || 0))));
+            const maxYAngle = Math.max(...processedObjectRows.map((obj: any) => Math.abs(parseFloat(obj.yHeightAngle || 0))));
 
             // 0°から最大値まで100等分（101点）
             const subdivisions = 50;
@@ -3714,7 +3779,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         astigmatismData = await runNativeAstigmatism({
             opticalSystemRows,
             sourceRows: sourceRows || [],
-            objectRows: objectRows || [],
+            objectRows: normalizeAstigmatismObjectRowsForImageHeight(objectRows || [], opticalSystemRows, sourceRows),
             surfaceIndex,
             rayCount: rayCountAstigmatism,
             ringCount: astigRingCount,
@@ -3752,10 +3817,11 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
             if (heightCandidates.length > 0 && angleCandidates.length === 0) return { mode: 'height' };
             return { mode: 'angle' };
         };
-        const fieldMode = inferObjectFieldMode(objectRows);
+        const normalizedDistortionObjectRows = normalizeDistortionObjectRowsForImageHeight(objectRows, opticalSystemRows, sourceRows);
+        const fieldMode = inferObjectFieldMode(normalizedDistortionObjectRows);
         const heightMode = fieldMode.mode === 'height';
 
-        const heightCandidates = (objectRows || []).map((o: any) => parseFloat(o.yHeight ?? o.y ?? o.yHeightAngle ?? NaN)).filter(v => Number.isFinite(v));
+        const heightCandidates = (normalizedDistortionObjectRows || []).map((o: any) => parseFloat(o.yHeight ?? o.y ?? o.yHeightAngle ?? NaN)).filter(v => Number.isFinite(v));
 
         const numPoints = 10;
         let fieldValues: number[] = [];
@@ -3850,6 +3916,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
             height: 600,
             mainTitle: `Integrated Aberration Diagram - ${configName}`,
             configName: configName,
+            objectRows,
             ...(options?.containerElement ? { containerElement: options.containerElement } : {}),
             ...(options?.infoElement ? { infoElement: options.infoElement } : {})
         });

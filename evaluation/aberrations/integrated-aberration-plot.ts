@@ -46,6 +46,35 @@ function inferObjectFieldMode(objects) {
     return { mode: hasNumericHeight ? 'height' : 'angle' };
 }
 
+function resolveFieldAxisLabel(objects) {
+    const rows = Array.isArray(objects) ? objects : [];
+    const tags = rows
+        .map((o) => String(o?.__cooptOriginalPosition ?? o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type ?? '').toLowerCase())
+        .filter(Boolean);
+
+    if (tags.some((tag) => tag.includes('imageheight'))) {
+        return {
+            mode: 'height',
+            axisTitle: 'Image Height (mm)',
+            infoLabel: 'image heights'
+        };
+    }
+
+    if (tags.some((tag) => tag.includes('rect') || tag.includes('rectangle') || tag.includes('height'))) {
+        return {
+            mode: 'height',
+            axisTitle: 'Object Height (mm)',
+            infoLabel: 'object heights'
+        };
+    }
+
+    return {
+        mode: 'angle',
+        axisTitle: 'Object Angle θ (deg)',
+        infoLabel: 'object angles'
+    };
+}
+
 /**
  * 統合収差図を表示
  * @param {Object} longitudinalData - 球面収差データ
@@ -190,15 +219,18 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
 
     const traces = [];
     // Object table (Angle / Rectangle) からモード判定
-    let objectRows = [];
-    try {
-        const openerWindow = targetWindow.opener || window;
-        objectRows = openerWindow?.tableObject?.getData?.() || [];
-    } catch (_) {
-        objectRows = [];
+    let objectRows = Array.isArray(options?.objectRows) ? options.objectRows : [];
+    if (!objectRows.length) {
+        try {
+            const openerWindow = targetWindow.opener || window;
+            objectRows = openerWindow?.tableObject?.getData?.() || [];
+        } catch (_) {
+            objectRows = [];
+        }
     }
     const fieldMode = inferObjectFieldMode(objectRows);
     const heightMode = fieldMode.mode === 'height';
+    const fieldAxisLabel = resolveFieldAxisLabel(objectRows);
     const astigFieldMode = (() => {
         const mode = String(astigmatismData?.fieldMode || '').toLowerCase();
         if (mode === 'angle' || mode === 'height') return mode;
@@ -464,7 +496,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
             gridcolor: '#E0E0E0'
         },
         yaxis2: {
-            title: { text: heightMode ? 'Object Height (mm)' : 'Object Angle θ (deg)', font: { size: 12 } },
+            title: { text: fieldAxisLabel.axisTitle, font: { size: 12 } },
             anchor: 'x2',
             domain: [0, 1],
             rangemode: 'tozero',
@@ -489,7 +521,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
             gridcolor: '#E0E0E0'
         },
         yaxis3: {
-            title: { text: heightMode ? 'Object Height (mm)' : 'Object Angle θ (deg)', font: { size: 12 } },
+            title: { text: fieldAxisLabel.axisTitle, font: { size: 12 } },
             anchor: 'x3',
             domain: [0, 1],
             rangemode: 'tozero',
@@ -514,7 +546,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
             gridcolor: '#E0E0E0'
         },
         yaxis4: {
-            title: { text: heightMode ? 'Object Height (mm)' : 'Object Angle θ (deg)', font: { size: 12 } },
+            title: { text: fieldAxisLabel.axisTitle, font: { size: 12 } },
             anchor: 'x4',
             domain: [0, 1],
             rangemode: 'tozero',
@@ -607,7 +639,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
 
     // 情報パネルの更新（任意）
     if (infoElement) {
-        updateInfoPanel({ infoElement }, longitudinalData, astigmatismData, distortionData, lcaData, heightMode);
+        updateInfoPanel({ infoElement }, longitudinalData, astigmatismData, distortionData, lcaData, fieldAxisLabel);
     }
     
     console.log('✅ 統合収差図作成完了');
@@ -616,7 +648,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
 /**
  * 情報パネルを更新
  */
-function updateInfoPanel(target, longitudinalData, astigmatismData, distortionData, lcaData, heightMode = false) {
+function updateInfoPanel(target, longitudinalData, astigmatismData, distortionData, lcaData, fieldAxisLabel = { mode: 'angle', axisTitle: 'Object Angle θ (deg)', infoLabel: 'object angles' }) {
     const infoPanel = target?.infoElement || null;
     if (!infoPanel) return;
     
@@ -653,7 +685,7 @@ function updateInfoPanel(target, longitudinalData, astigmatismData, distortionDa
         // ユニークなフィールド値をカウント
         const uniqueFieldValues = new Set(fieldValues);
         const fieldCount = uniqueFieldValues.size;
-        const fieldLabel = heightMode ? 'object heights' : 'object angles';
+        const fieldLabel = fieldAxisLabel?.infoLabel || 'object angles';
         html += `<li><strong>Astigmatism:</strong> ${fieldCount} ${fieldLabel}</li>`;
     }
     

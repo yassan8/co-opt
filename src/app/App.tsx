@@ -1092,6 +1092,28 @@ export default function App() {
     return window as any;
   };
 
+  const getRenderObjectRows = (targetWindow?: any): any[] => {
+    const hostWindow = targetWindow || getRenderHostWindow();
+    try {
+      if (typeof hostWindow?.getObjectRows === 'function') {
+        const rows = hostWindow.getObjectRows(hostWindow.tableObject);
+        if (Array.isArray(rows)) return rows;
+      }
+    } catch (_) {}
+    try {
+      const systemConfig = getSystemConfigFromWindow(hostWindow);
+      const activeCfg = getActiveConfigFromSystemConfig(systemConfig);
+      if (Array.isArray(activeCfg?.object)) return activeCfg.object;
+    } catch (_) {}
+    try {
+      if (typeof window?.getObjectRows === 'function') {
+        const rows = window.getObjectRows((window as any).tableObject);
+        if (Array.isArray(rows)) return rows;
+      }
+    } catch (_) {}
+    return [];
+  };
+
   const parseZoomLawGroupNames = (rawValue: any): string[] => {
     const raw = String(rawValue ?? '').trim();
     if (!raw) return [];
@@ -3090,7 +3112,8 @@ const collectLegacyCrossRays = async (
     } catch (_) {}
 
     const rowsStartMs = performance.now();
-    const compareEntries = overrideRows.length === 0 && renderCompareScope === 'all' ? getRenderCompareEntries(w) : [];
+    const hostWindow = getRenderHostWindow();
+    const compareEntries = overrideRows.length === 0 && renderCompareScope === 'all' ? getRenderCompareEntries(hostWindow) : [];
     const compareEnabled = overrideRows.length === 0 && compareEntries.length > 1;
     const activeCompareEntry = compareEntries.find((entry) => entry.isActive) || compareEntries[0] || null;
 
@@ -3239,7 +3262,12 @@ const collectLegacyCrossRays = async (
 
       if (!compareEnabled) {
         const collectStartMs = performance.now();
-        const legacyCrossRays = await collectLegacyCrossRays(rows, axis);
+        const renderObjectRows = getRenderObjectRows(hostWindow);
+        const legacyCrossRays = await collectLegacyCrossRays(
+          rows,
+          axis,
+          Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined
+        );
         rayCollectMs += performance.now() - collectStartMs;
         if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
           const drawStartMs = performance.now();
@@ -3286,6 +3314,7 @@ const collectLegacyCrossRays = async (
 
   const drawRender3DView = async (startupStages?: RenderTimingStage[]): Promise<boolean> => {
     const w = window as any;
+    const hostWindow = getRenderHostWindow();
     const timingStages: RenderTimingStage[] = Array.isArray(startupStages) ? [...startupStages] : [];
     const blockPerfBefore = readCooptPerfCounters();
 
@@ -3432,7 +3461,13 @@ const collectLegacyCrossRays = async (
       }
 
       const rayCollectStartMs = performance.now();
-      const legacyCrossRays = await collectLegacyCrossRays(rows, 'BOTH', undefined, useLightweightInitialRays ? { rayCountOverride: lightRayCount } : undefined);
+      const renderObjectRows = getRenderObjectRows(hostWindow);
+      const legacyCrossRays = await collectLegacyCrossRays(
+        rows,
+        'BOTH',
+        Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined,
+        useLightweightInitialRays ? { rayCountOverride: lightRayCount } : undefined
+      );
       timingStages.push({ label: useLightweightInitialRays ? `rayCollectLite(${lightRayCount})` : 'rayCollect', ms: performance.now() - rayCollectStartMs });
       if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
         const rayDrawStartMs = performance.now();

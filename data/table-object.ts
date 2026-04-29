@@ -677,13 +677,11 @@ function updateWavefrontObjectOptionsIfAvailable(): void {
 }
 
 /**
- * Image面のSemi Dia自動計算を再実行（optimizeSemiDia="A"の場合）
+ * Object編集後に必要な自動計算のみ再実行する。
+ * Design Intent aperture は明示的な Auto-set apertures 操作でのみ更新する。
  */
 function recalculateAutoSemiDiaIfAvailable(): void {
   try {
-    if (typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function') {
-      w.autoSetBlockAperturesFromLargestObjectCondition();
-    }
     if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
       w.calculateImageSemiDiaFromChiefRays();
     }

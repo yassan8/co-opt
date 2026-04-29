@@ -10,7 +10,7 @@ import { getPrimaryWavelength } from '../../data/glass.ts';
 function inferObjectFieldMode(objects) {
   const rows = Array.isArray(objects) ? objects : [];
   const pickTag = (o) => {
-    const raw = o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type;
+    const raw = o?.__cooptOriginalPosition ?? o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type;
     return (raw ?? '').toString().toLowerCase();
   };
   const tags = rows.map(pickTag).filter(Boolean);
@@ -30,6 +30,39 @@ function inferObjectFieldMode(objects) {
     return Number.isFinite(h) && Math.abs(h) > 0;
   });
   return { mode: hasNumericHeight ? 'height' : 'angle' };
+}
+
+function resolveFieldAxisLabel(objects) {
+  const mode = inferObjectFieldMode(objects)?.mode;
+  const rows = Array.isArray(objects) ? objects : [];
+  const tags = rows
+    .map((o) => String(o?.__cooptOriginalPosition ?? o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type ?? '').toLowerCase())
+    .filter(Boolean);
+
+  if (tags.some((tag) => tag.includes('imageheight'))) {
+    return {
+      mode: 'image-height',
+      title: 'Distortion vs Image Height',
+      axisTitle: 'Image Height (mm)',
+      traceLabel: 'img'
+    };
+  }
+
+  if (mode === 'height') {
+    return {
+      mode: 'height',
+      title: 'Distortion vs Object Height',
+      axisTitle: 'Object Height (mm)',
+      traceLabel: 'h'
+    };
+  }
+
+  return {
+    mode: 'angle',
+    title: 'Distortion vs Object Angle',
+    axisTitle: 'Object Angle θ (deg)',
+    traceLabel: 'θ'
+  };
 }
 
 export function deriveMaxFieldAngleFromObjects() {
@@ -125,7 +158,7 @@ function resolvePlotTarget(target) {
   return { element: el, plotly, isElement: true };
 }
 
-export function plotDistortionPercent(dataArray, targetDivId = 'distortion-percent') {
+export function plotDistortionPercent(dataArray, targetDivId = 'distortion-percent', options = {}) {
   // Handle both single data object and array of data objects
   const dataList = Array.isArray(dataArray) ? dataArray : [dataArray];
   
@@ -133,6 +166,8 @@ export function plotDistortionPercent(dataArray, targetDivId = 'distortion-perce
     console.warn('No valid data provided for distortion percent plot');
     return;
   }
+
+  const fieldAxisLabel = resolveFieldAxisLabel(options?.objectRows);
 
   // Create a trace for each wavelength
   const traces = dataList.map((data, index) => {
@@ -144,8 +179,7 @@ export function plotDistortionPercent(dataArray, targetDivId = 'distortion-perce
     const wavelength = data.meta?.wavelength || 0.5876;
     const wavelengthNm = (wavelength * 1000).toFixed(1);
     const color = getWavelengthColor(wavelength);
-    const isHeightMode = data.meta?.heightMode;
-    const label = isHeightMode ? 'h' : 'θ';
+  const label = fieldAxisLabel.traceLabel;
 
     return {
       x: data.distortionPercent,  // Horizontal axis
@@ -165,16 +199,14 @@ export function plotDistortionPercent(dataArray, targetDivId = 'distortion-perce
     data.fieldValues ? Math.min(...data.fieldValues) : 0
   ));
 
-  const heightMode = dataList.some(d => d?.meta?.heightMode);
-
   const layout = {
-    title: heightMode ? 'Distortion vs Object Height' : 'Distortion vs Object Angle',
+    title: fieldAxisLabel.title,
     xaxis: { 
       title: 'Distortion (%)',
       range: [-5, 5],  // 基本±5%
       dtick: 1  // 1%刻みの目盛り
     },
-    yaxis: { title: heightMode ? 'Object Height (mm)' : 'Object Angle θ (deg)' },
+    yaxis: { title: fieldAxisLabel.axisTitle },
     width: 800,
     height: 600,
     showlegend: true,
@@ -284,7 +316,7 @@ export async function generateDistortionPlots({
   }
 
   // Plot all wavelengths
-  plotDistortionPercent(allData, targetElement || 'distortion-percent');
+  plotDistortionPercent(allData, targetElement || 'distortion-percent', { objectRows: objects });
   
   return allData;
 }
