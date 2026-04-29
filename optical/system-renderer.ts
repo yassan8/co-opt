@@ -454,11 +454,39 @@ function __coopt_pruneNearbyNonImageRings(scene, imageSurfaceIndex0, expectedOri
         }
     });
 
-    if (nearby.length <= 1) return;
+    if (nearby.length <= 3) return;
 
-    const toRemove = nearby
-        .sort((a, b) => a.dist - b.dist)
-        .slice(1)
+    const sorted = nearby.sort((a, b) => a.dist - b.dist);
+    const indexedBySurface = new Map();
+    const unindexedEntries = [];
+
+    for (const entry of sorted) {
+        if (entry.surfaceIndex0 === null) {
+            unindexedEntries.push(entry);
+            continue;
+        }
+        const key = String(entry.surfaceIndex0);
+        if (!indexedBySurface.has(key)) {
+            indexedBySurface.set(key, entry);
+        }
+    }
+
+    const keepObjects = new Set(
+        Array.from(indexedBySurface.values())
+            .sort((a, b) => {
+                if (b.surfaceIndex0 !== a.surfaceIndex0) return b.surfaceIndex0 - a.surfaceIndex0;
+                return a.dist - b.dist;
+            })
+            .slice(0, 3)
+            .map((entry) => entry.child)
+    );
+
+    if (keepObjects.size === 0 && unindexedEntries.length > 0) {
+        keepObjects.add(unindexedEntries[0].child);
+    }
+
+    const toRemove = sorted
+        .filter((entry) => !keepObjects.has(entry.child))
         .map((entry) => entry.child);
 
     if (toRemove.length > 0) {
