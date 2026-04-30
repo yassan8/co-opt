@@ -221,6 +221,12 @@ function isInfLikePatentImport(value: any): boolean {
   return text === 'INF' || text === 'INFINITY' || text === '∞';
 }
 
+function isVariableLikePatentImport(value: any): boolean {
+  const text = String(value ?? '').trim();
+  if (!text) return false;
+  return /^可変$/i.test(text) || /^var(?:iable)?$/i.test(text);
+}
+
 function extractPatentNumbers(text: string): number[] {
   const result: number[] = [];
   const sourceText = String(text ?? '');
@@ -262,7 +268,76 @@ function extractPatentSurfaceIndexHint(line: string): number | null {
     return Number.isInteger(value) ? value : null;
   }
 
+  const englishSurfaceMatch = text.match(/(?:surface|surf\.?|面)\s*([0-9]{1,2})\b/i)
+    || text.match(/\b([0-9]{1,2})(?:st|nd|rd|th)\s*(?:surface|surf\.?)\b/i)
+    || text.match(/\bS\s*([0-9]{1,2})\b/i);
+  if (englishSurfaceMatch) {
+    const value = Number(englishSurfaceMatch[1]);
+    return Number.isInteger(value) ? value : null;
+  }
+
   return null;
+}
+
+function collectPatentAiSourceExcerpts(sourceText: string): string {
+  const source = String(sourceText ?? '').trim();
+  if (!source) return '';
+  if (source.length <= 20000) return source;
+
+  const markerPattern = /非\s*球面\s*(?:データ|係数)|非\s*球面|円錐定数|コーニック定数|コニック定数|円すい定数|2次曲面パラメータ|二次曲面パラメータ|aspheric|asphere|conic|epsilon|\bK\s*[=:]|\b[A-D]\s*(?:4|6|8|10|12|14|16|18|20)\s*[=:\-]/gi;
+  const windows: Array<{ start: number; end: number }> = [{ start: 0, end: Math.min(9000, source.length) }];
+  for (const match of source.matchAll(markerPattern)) {
+    const index = Number(match.index ?? -1);
+    if (!Number.isInteger(index) || index < 0) continue;
+    windows.push({
+      start: Math.max(0, index - 3500),
+      end: Math.min(source.length, index + 6500),
+    });
+  }
+
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const window of windows.sort((left, right) => left.start - right.start)) {
+    const prev = merged[merged.length - 1];
+    if (prev && window.start <= prev.end + 500) {
+      prev.end = Math.max(prev.end, window.end);
+    } else {
+      merged.push({ ...window });
+    }
+  }
+
+  const parts: string[] = [];
+  let total = 0;
+  for (const window of merged) {
+    if (total >= 26000) break;
+    const excerpt = source.slice(window.start, window.end).trim();
+    if (!excerpt) continue;
+    parts.push(`[source chars ${window.start}-${window.end}]\n${excerpt}`);
+    total += excerpt.length;
+  }
+  return parts.join('\n\n---\n\n');
+}
+
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read image'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function dataUrlToGeminiInlineData(dataUrl: string, fallbackMimeType = 'image/png'): { mimeType: string; data: string } {
+  const match = String(dataUrl || '').match(/^data:([^;,]+);base64,(.*)$/);
+  if (match) {
+    return {
+      mimeType: String(match[1] || fallbackMimeType),
+      data: String(match[2] || ''),
+    };
+  }
+  return {
+    mimeType: fallbackMimeType,
+    data: String(dataUrl || '').replace(/^data:[^,]*,/, ''),
+  };
 }
 
 function normalizePatentAsphereLine(line: string): string {
@@ -275,6 +350,7 @@ function normalizePatentAsphereLine(line: string): string {
     .replace(/\bAL\s*([0-9])/gi, 'A1$1')
     .replace(/\bA\s*([0-9]{1,2})\s*--\s*/gi, 'A$1=-')
     .replace(/\bA\s*([0-9]{1,2})\s*[-ー]\s*(?=[+\-]?\d)/gi, 'A$1=')
+    .replace(/\b[BCD]\s*(4|6|8|10|12|14|16|18|20)\s*(?=[:=\-])/gi, 'A$1')
     .replace(/^\s*M(?=\s*[:=]\s*[+\-]?\d)/i, 'A4')
     .replace(/\bM(?=\s*[:=]\s*[+\-]?\d+(?:\.\d+)?\s*[x×X*]\s*10)/g, 'A4')
     .replace(/^[&gq](?=\s*[:=]\s*[+\-]?\d)/i, 'epsilon')
@@ -316,7 +392,7 @@ function normalizePatentAsphereHeaderText(text: string): string {
       const resolved = Number.isInteger(paren) ? paren : surface;
       return `第${surface}面(${resolved})`;
     })
-    .replace(/\s*の\s*非\s*球面\s*係数/g, 'の非球面係数')
+    .replace(/\s*の\s*非\s*球面\s*(?:係数|データ)/g, 'の非球面係数')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -475,7 +551,7 @@ function candidateLineHasRadius(line: string): boolean {
 }
 
 function candidateLineHasThickness(line: string): boolean {
-  return /(?:^|[^A-Z0-9])d\s*\d{0,2}\s*[#%*¥]?\s*=\s*(?:INF|INFINITY|∞|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)/i.test(normalizePatentOcrText(String(line ?? '')));
+  return /(?:^|[^A-Z0-9])d\s*\d{0,2}\s*[#%*¥]?\s*=\s*(?:INF|INFINITY|∞|可変|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)/i.test(normalizePatentOcrText(String(line ?? '')));
 }
 
 function candidateLineIsAsphereLike(line: string): boolean {
@@ -568,8 +644,20 @@ function sanitizePatentCandidateLine(line: string): string {
   if (!text) return '';
 
   const withoutContextPrefix = text.replace(/^\[[^\]]+\]\s*/g, '').trim();
-  const headerMatch = withoutContextPrefix.match(/(?:【\s*0*\d+\s*】\s*)?\[?\s*第\s*\d+\s*面[^\n]*?非\s*球面\s*係数\s*\]?/i);
+    const headerMatch = withoutContextPrefix.match(/(?:【\s*0*\d+\s*】\s*)?\[?\s*第\s*\d+\s*面[^\n]*?非\s*球面\s*(?:係数|データ)\s*\]?/i);
   if (headerMatch) {
+    const asphereTerms = parsePatentAsphereTerms(withoutContextPrefix);
+    if (asphereTerms.hasAny) {
+      const parts: string[] = [normalizePatentAsphereHeaderText(headerMatch[0])];
+      if (asphereTerms.conic !== null) parts.push(`epsilon=${formatPatentNumericValue(asphereTerms.conic)}`);
+      for (const [indexText, rawValue] of Object.entries(asphereTerms.coefficients).sort((left, right) => Number(left[0]) - Number(right[0]))) {
+        const index = Number(indexText);
+        if (!Number.isInteger(index) || !Number.isFinite(rawValue)) continue;
+        const order = asphereTerms.surfType === 'Aspheric odd' ? (index * 2) + 1 : (index * 2) + 2;
+        parts.push(`A${order}=${formatPatentNumericValue(rawValue)}`);
+      }
+      return parts.join(' ');
+    }
     return normalizePatentAsphereHeaderText(headerMatch[0]);
   }
 
@@ -590,7 +678,7 @@ function sanitizePatentCandidateLine(line: string): string {
   if (isPatentNoiseLine(normalized)) return '';
   if (/[ぁ-んァ-ン一-龯]/.test(normalized) && /\bd\s*\d+\s*[<＜]/i.test(normalized)) return '';
   const radiusPart = normalized.match(/\br\s*\d*\s*[#%*¥]?\s*=\s*(?:\([^)]*\)|INF|INFINITY|∞|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
-  const thicknessPart = normalized.match(/\bd\s*\d*\s*[#%*¥]?\s*=\s*(?:INF|INFINITY|∞|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?(?:\s*[~〜]\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)*)/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
+  const thicknessPart = normalized.match(/\bd\s*\d*\s*[#%*¥]?\s*=\s*(?:INF|INFINITY|∞|可変|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?(?:\s*[~〜]\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)*)/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
   const refractiveIndexPart = normalized.match(/\bN\s*\d*\s*[#%*¥]?\s*=\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
   const abbePart = normalized.match(/\bv\s*\d*\s*[#%*¥]?\s*=\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
   const stopPart = /絞り|\(stop\)/i.test(normalized) ? 'r= (stop)' : '';
@@ -609,8 +697,44 @@ function isPatentOpticalDataLine(line: string): boolean {
   return /(?:^|\s)(?:r\s*\d+|d\s*\d+|n\s*\d+|v\s*\d+|r\s*=|d\s*=|n\s*=|v\s*=)/i.test(text);
 }
 
+function parseJapanesePatentSurfaceTableLine(line: string): { line: string; numbers: number[]; surfaceIndex: number } | null {
+  const source = normalizePatentOcrText(String(line ?? '').trim());
+  if (!source) return null;
+  if (/^(?:物面|像面|面番号|面データ|単位|数値実施例|非球面)/.test(source)) return null;
+
+  const match = source.match(/^\s*([1-9]\d?)\s*[*＊]?\s*(?:[（(][^）)]*[）)]\s*)?((?:∞|INF|INFINITY)|[+\-]?(?:\d+(?:\.\d+)?|\.\d+))\s*(.*)$/i);
+  if (!match) return null;
+
+  const surfaceIndex = Number(match[1]);
+  if (!Number.isInteger(surfaceIndex) || surfaceIndex <= 0) return null;
+
+  const radiusRaw = String(match[2] ?? '').trim();
+  const rest = String(match[3] ?? '').trim();
+  const restValues = Array.from(rest.matchAll(/(?:∞|INF|INFINITY)|可変|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/gi)).map((item) => String(item[0] ?? '').trim());
+  if (restValues.length === 0) return null;
+
+  const parts = [`r${surfaceIndex}=${isInfLikePatentImport(radiusRaw) ? 'INF' : radiusRaw}`];
+  const thicknessRaw = restValues[0];
+  if (thicknessRaw) parts.push(`d${surfaceIndex}=${isInfLikePatentImport(thicknessRaw) ? 'INF' : thicknessRaw}`);
+
+  const numericTail = restValues.slice(1)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  const refractiveIndex = numericTail.find((value) => value > 1 && value < 3.5) ?? null;
+  const abbe = numericTail.find((value) => value > 10 && value < 100) ?? null;
+  if (refractiveIndex !== null) parts.push(`N${surfaceIndex}=${String(refractiveIndex)}`);
+  if (abbe !== null) parts.push(`v${surfaceIndex}=${String(abbe)}`);
+
+  const normalizedLine = parts.join(' ');
+  return {
+    line: normalizedLine,
+    numbers: extractPatentNumbers(normalizedLine),
+    surfaceIndex,
+  };
+}
+
 function isPatentAsphereContinuationLine(line: string): boolean {
-  return /^\s*(?:asph(?:eric)?|conic(?:\s*constant)?|cc(?:\s*[:=])?|k(?:\s*[:=])?|epsilon(?:\s*[:=])?|[εϵ](?:\s*[:=])?|[&gq](?:\s*[:=])?|a\s*(?:3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|[dD]|[Il|]\s*[0-9])(?:\s*[:=]|\s*=\-|\s*--)?|coef\s*(?:10|[1-9])(?:\s*[:=])?|非球面|非球面係数|円錐定数|コーニック定数|コニック定数|円すい定数|2次曲面パラメータ|二次曲面パラメータ|係数\s*A?\s*(?:3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22)\b)/i.test(normalizePatentAsphereLine(String(line ?? '').trim()));
+  return /^\s*(?:(?:surface|surf\.?|s)\s*\d{1,2}\s*(?:asph(?:eric)?|非球面|coefficients?|coef)|(?:\d{1,2})(?:st|nd|rd|th)\s*(?:surface|surf\.?)\s*(?:asph(?:eric)?|coefficients?|coef)|asph(?:eric)?|conic(?:\s*constant)?|cc(?:\s*[:=])?|k(?:\s*[:=])?|epsilon(?:\s*[:=])?|[εϵ](?:\s*[:=])?|[&gq](?:\s*[:=])?|a\s*(?:3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|[dD]|[Il|]\s*[0-9])(?:\s*[:=]|\s*=\-|\s*--)?|coef\s*(?:10|[1-9])(?:\s*[:=])?|非球面|非球面データ|非球面係数|円錐定数|コーニック定数|コニック定数|円すい定数|2次曲面パラメータ|二次曲面パラメータ|係数\s*[A-D]?\s*(?:3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22)\b)/i.test(normalizePatentAsphereLine(String(line ?? '').trim()));
 }
 
 function applyPatentAsphereTerms(row: Record<string, any>, terms: PatentAsphereTerms): void {
@@ -629,7 +753,7 @@ function applyPatentAsphereTerms(row: Record<string, any>, terms: PatentAsphereT
   }
 }
 
-function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
+function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>, preserveSurfaces = false): any[] {
   const safeRows = Array.isArray(rows) ? rows : [];
   const blocks: any[] = [];
 
@@ -662,7 +786,6 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
   let lensCount = 0;
   let doubletCount = 0;
   let tripletCount = 0;
-  let singleCount = 0;
   let gapCount = 0;
   const end = Math.max(1, safeRows.length - 1);
 
@@ -680,8 +803,10 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
   const normalizeBlockRadius = (value: any): any => isInfLikePatentImport(value) ? 'INF' : (String(value ?? '').trim() === '' ? 'INF' : value);
   const normalizeBlockThickness = (value: any): string | number => {
     if (isInfLikePatentImport(value)) return 'INF';
+    if (isVariableLikePatentImport(value)) return 0;
+    const text = String(value ?? '').trim();
     const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric : 0;
+    return Number.isFinite(numeric) ? numeric : (text || 0);
   };
   const getMediumMaterial = (row: Record<string, any>): string => {
     const material = String(row?.material ?? '').trim();
@@ -692,7 +817,19 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
   const materialKey = (value: string): string => String(value ?? '').replace(/\s+/g, '').toUpperCase();
   const hasPostGap = (row: Record<string, any>): boolean => {
     const thickness = normalizeBlockThickness(row?.thickness);
-    return thickness === 'INF' || (typeof thickness === 'number' && Number.isFinite(thickness) && Math.abs(thickness) > 1e-12);
+    return thickness === 'INF'
+      || isVariableLikePatentImport(row?.thickness)
+      || (typeof thickness === 'number' && Number.isFinite(thickness) && Math.abs(thickness) > 1e-12);
+  };
+  const isStandaloneGapLikeRow = (row: Record<string, any>): boolean => {
+    if (!row || typeof row !== 'object') return false;
+    if (row._patentImportKind === 'gap') return true;
+    const material = String(row?.material ?? '').trim().toUpperCase();
+    const rindex = String(row?.rindex ?? '').trim();
+    const abbe = String(row?.abbe ?? '').trim();
+    if (material !== 'AIR') return false;
+    if (rindex || abbe) return false;
+    return hasPostGap(row);
   };
   const appendGapAfterSurface = (row: Record<string, any>, rowIndex: number, from: string, groupMaterials: string[] = []) => {
     if (!hasPostGap(row)) return;
@@ -764,12 +901,29 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
     }
     return params;
   };
+  const makeLensParamsFromSingleSurface = (row: Record<string, any>): Record<string, any> => {
+    const material = String(row?.material ?? '').trim();
+    const rindex = String(row?.rindex ?? '').trim();
+    const abbe = String(row?.abbe ?? '').trim();
+    const params: Record<string, any> = {
+      frontRadius: normalizeBlockRadius(row?.radius),
+      backRadius: 'INF',
+      centerThickness: normalizeBlockThickness(row?.thickness),
+      material: material || (rindex ? rindex : 'N-BK7'),
+      ...copySurfaceShapeParams(row, 'front'),
+      backSurfType: 'Spherical',
+      backConic: 0,
+    };
+    if (rindex) params.rindex = rindex;
+    if (abbe) params.abbe = abbe;
+    return params;
+  };
   const scanElementGroup = (startIndex: number): { rows: Array<{ row: Record<string, any>; rowIndex: number }>; elementCount: number; materials: string[] } | null => {
     const groupRows: Array<{ row: Record<string, any>; rowIndex: number }> = [];
     const materials: string[] = [];
     for (let scanIndex = startIndex; scanIndex < end; scanIndex += 1) {
       const candidateRow = safeRows[scanIndex] || {};
-      if (isStopRow(candidateRow) || isFallbackGapRow(candidateRow)) break;
+      if (isStopRow(candidateRow) || isFallbackGapRow(candidateRow) || isStandaloneGapLikeRow(candidateRow)) break;
       const mediumMaterial = getMediumMaterial(candidateRow);
       groupRows.push({ row: candidateRow, rowIndex: scanIndex });
       if (mediumMaterial) {
@@ -803,7 +957,9 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
 
       const thicknessRaw = row?.thickness;
       const thicknessNumeric = Number(thicknessRaw);
-      const hasGap = isInfLikePatentImport(thicknessRaw) || (Number.isFinite(thicknessNumeric) && Math.abs(thicknessNumeric) > 1e-12);
+      const hasGap = isInfLikePatentImport(thicknessRaw)
+        || isVariableLikePatentImport(thicknessRaw)
+        || (Number.isFinite(thicknessNumeric) && Math.abs(thicknessNumeric) > 1e-12);
       if (hasGap) {
         gapCount += 1;
         blocks.push({
@@ -822,7 +978,9 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
     if (isFallbackGapRow(row)) {
       const thicknessRaw = row?.thickness;
       const thicknessNumeric = Number(thicknessRaw);
-      const hasGap = isInfLikePatentImport(thicknessRaw) || (Number.isFinite(thicknessNumeric) && Math.abs(thicknessNumeric) > 1e-12);
+      const hasGap = isInfLikePatentImport(thicknessRaw)
+        || isVariableLikePatentImport(thicknessRaw)
+        || (Number.isFinite(thicknessNumeric) && Math.abs(thicknessNumeric) > 1e-12);
       if (hasGap) {
         gapCount += 1;
         blocks.push({
@@ -838,6 +996,34 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
           metadata: { source: 'patent-import-fallback', from: 'gap-row', rowIndex: index },
         });
       }
+      continue;
+    }
+
+    if (preserveSurfaces) {
+      if (isStandaloneGapLikeRow(row)) {
+        gapCount += 1;
+        blocks.push({
+          blockId: `Gap-${gapCount}`,
+          blockType: 'Gap',
+          role: null,
+          constraints: {},
+          parameters: { thickness: normalizeBlockThickness(row?.thickness), material: 'AIR' },
+          variables: {},
+          metadata: { source: 'patent-import-fallback', rowIndex: index, preserveSurface: true, gapLikeFallback: true },
+        });
+        continue;
+      }
+      lensCount += 1;
+      blocks.push({
+        blockId: `Lens-${lensCount}`,
+        blockType: 'Lens',
+        role: null,
+        constraints: {},
+        parameters: makeLensParamsFromSingleSurface(row),
+        aperture: { front: getSemidia(row), back: getSemidia(row) },
+        variables: {},
+        metadata: { source: 'patent-import-fallback', rowIndex: index, preserveSurface: true, singleSurfaceFallback: true },
+      });
       continue;
     }
 
@@ -955,15 +1141,30 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>): any[] {
       continue;
     }
 
-    singleCount += 1;
+    if (isStandaloneGapLikeRow(row)) {
+      gapCount += 1;
+      blocks.push({
+        blockId: `Gap-${gapCount}`,
+        blockType: 'Gap',
+        role: null,
+        constraints: {},
+        parameters: { thickness: normalizeBlockThickness(row?.thickness), material: 'AIR' },
+        variables: {},
+        metadata: { source: 'patent-import-fallback', rowIndex: index, gapLikeFallback: true },
+      });
+      continue;
+    }
+
+    lensCount += 1;
     blocks.push({
-      blockId: `SingleSurface-${singleCount}`,
-      blockType: 'SingleSurface',
+      blockId: `Lens-${lensCount}`,
+      blockType: 'Lens',
       role: null,
       constraints: {},
-      parameters: makeSingleSurfaceParams(row),
+      parameters: makeLensParamsFromSingleSurface(row),
+      aperture: { front: getSemidia(row), back: getSemidia(row) },
       variables: {},
-      metadata: { source: 'patent-import-fallback', rowIndex: index },
+      metadata: { source: 'patent-import-fallback', rowIndex: index, singleSurfaceFallback: true },
     });
   }
 
@@ -1074,22 +1275,6 @@ async function persistLiteratureSummaryToActiveConfig(summaryText: string): Prom
   } catch (_) {}
 }
 
-function shouldAcceptDerivedPatentBlocks(blocks: any[], rows: Array<Record<string, any>>): boolean {
-  if (!Array.isArray(blocks) || blocks.length === 0) return false;
-
-  const physicalBlocks = blocks.filter((block) => {
-    const blockType = String(block?.blockType ?? '').trim();
-    return blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane' && blockType !== 'ImageSurface';
-  });
-
-  if (physicalBlocks.length === 0) return false;
-
-  const physicalRowCount = Math.max(0, (Array.isArray(rows) ? rows.length : 0) - 2);
-  if (physicalRowCount >= 4 && physicalBlocks.length <= 1) return false;
-
-  return true;
-}
-
 function makeOption(key: string, label: string, zoomIndex: number | null = null): LiteratureOption {
   return { key, label, zoomIndex };
 }
@@ -1141,12 +1326,17 @@ function parseContextualCandidateRows(text: string): { rows: LiteratureCandidate
   let currentEmbodiment = defaultEmbodiment;
   let currentZoom = defaultZoom;
   let currentAsphereSurfaceIndex: number | null = null;
+  let inAsphereDataSection = false;
 
   const embodimentPattern = /(embodiment|example|numerical example|実施例)\s*[#:]?\s*([A-Za-z0-9一二三四五六七八九十\-]+)/i;
   const zoomPattern = /(wide end|wide|tele end|tele|middle|mid|short focal length|long focal length|広角端|望遠端|中間|ワイド|テレ|zoom\s*[1-9]\d*|position\s*[1-9]\d*|state\s*[1-9]\d*)/i;
 
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   for (const line of lines) {
+    if (/非\s*球面\s*(?:データ|係数)/i.test(line)) {
+      inAsphereDataSection = true;
+    }
+
     const embodimentMatch = line.match(embodimentPattern);
     if (embodimentMatch) {
       currentEmbodiment = normalizeEmbodiment(embodimentMatch[0]);
@@ -1160,8 +1350,22 @@ function parseContextualCandidateRows(text: string): { rows: LiteratureCandidate
     }
 
     const surfaceIndexHint = extractPatentSurfaceIndexHint(line);
-    if (/非球面|円錐定数|コーニック定数|コニック定数|2次曲面パラメータ|二次曲面パラメータ/i.test(line) && surfaceIndexHint !== null) {
+    if ((inAsphereDataSection || /非\s*球面|円錐定数|コーニック定数|コニック定数|2次曲面パラメータ|二次曲面パラメータ/i.test(line)) && surfaceIndexHint !== null) {
       currentAsphereSurfaceIndex = surfaceIndexHint;
+    }
+
+    const japaneseSurfaceRow = parseJapanesePatentSurfaceTableLine(line);
+    if (japaneseSurfaceRow) {
+      rows.push({
+        line: japaneseSurfaceRow.line,
+        numbers: japaneseSurfaceRow.numbers,
+        embodimentKey: currentEmbodiment.key,
+        embodimentLabel: currentEmbodiment.label,
+        zoomKey: currentZoom.key,
+        zoomLabel: currentZoom.label,
+        surfaceIndex: japaneseSurfaceRow.surfaceIndex,
+      });
+      continue;
     }
 
     const numbers = extractPatentNumbers(line);
@@ -1753,6 +1957,16 @@ function parsePatentNamedValue(line: string, labels: string[]): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+function parsePatentNamedRawValue(line: string, labels: string[]): string | null {
+  const escaped = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const valueSource = `(?:INF|INFINITY|∞|可変|${PATENT_NUMBER_SOURCE})`;
+  const match = String(line ?? '').match(new RegExp(`(?:^|[^A-Z0-9])(?:${escaped.join('|')})(?:\\s*\\d+)?[#%*¥]?\\s*[:=]\\s*(${valueSource})`, 'i'));
+  if (!match) return null;
+  const value = String(match[1] ?? '').trim();
+  if (!value) return null;
+  return isInfLikePatentImport(value) ? 'INF' : value;
+}
+
 function hasPatentNamedField(line: string, labels: string[]): boolean {
   const escaped = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   return new RegExp(`(?:^|[^A-Z0-9])(?:${escaped.join('|')})(?:\\s*\\d+)?\\s*[#%*¥]?\\s*[:=]`, 'i').test(String(line ?? ''));
@@ -1766,7 +1980,9 @@ function isPatentGapRow(row: Record<string, any>): boolean {
   if (!isInfLikePatentImport(row.radius)) return false;
   const thickness = row.thickness;
   const thicknessNumeric = Number(thickness);
-  return isInfLikePatentImport(thickness) || (Number.isFinite(thicknessNumeric) && Math.abs(thicknessNumeric) > 1e-12);
+  return isInfLikePatentImport(thickness)
+    || isVariableLikePatentImport(thickness)
+    || (Number.isFinite(thicknessNumeric) && Math.abs(thicknessNumeric) > 1e-12);
 }
 
 function makeOpticalRow(id: number, patch: Record<string, any>): Record<string, any> {
@@ -1883,10 +2099,18 @@ async function buildDraftRowsFromSelection(result: LiteratureExtractResult, embo
 
     const hasNamedRadius = hasPatentNamedField(candidate.line, ['r', 'radius']);
     const hasNamedThickness = hasPatentNamedField(candidate.line, ['d', 't', 'thickness']);
+    const namedRadiusRaw = parsePatentNamedRawValue(candidate.line, ['r', 'radius']);
+    const namedThicknessRaw = parsePatentNamedRawValue(candidate.line, ['d', 't', 'thickness']);
     const namedRindex = parsePatentNamedValue(candidate.line, ['nd', 'n', 'n_d', 'rindex']);
     const namedAbbe = parsePatentNamedValue(candidate.line, ['vd', 'v', 'abbe']);
-    const namedRadius = parsePatentNamedValue(candidate.line, ['r', 'radius']);
-    const namedThickness = parsePatentNamedValue(candidate.line, ['d', 't', 'thickness']);
+    const namedRadiusNumeric = namedRadiusRaw !== null ? Number(namedRadiusRaw) : NaN;
+    const namedThicknessNumeric = namedThicknessRaw !== null ? Number(namedThicknessRaw) : NaN;
+    const namedRadius = namedRadiusRaw !== null
+      ? (Number.isFinite(namedRadiusNumeric) ? namedRadiusNumeric : namedRadiusRaw)
+      : null;
+    const namedThickness = namedThicknessRaw !== null
+      ? (Number.isFinite(namedThicknessNumeric) ? namedThicknessNumeric : namedThicknessRaw)
+      : null;
 
     const hasSurfaceGeometry = isGapLine || isStopLine || hasNamedRadius || hasNamedThickness;
     if (!hasSurfaceGeometry && !asphereTerms.hasAny) {
@@ -1900,7 +2124,11 @@ async function buildDraftRowsFromSelection(result: LiteratureExtractResult, embo
       ? (namedThickness !== null ? namedThickness : (numbers.length > 0 ? numbers[0] : 0))
       : isStopLine
         ? (namedThickness !== null ? namedThickness : (numbers.length > 0 ? numbers[numbers.length - 1] : 0))
-        : (namedThickness !== null ? namedThickness : (numbers.length > 1 ? numbers[1] : 0));
+        : (namedThickness !== null
+          ? namedThickness
+          : (hasNamedRadius || hasNamedThickness || namedRindex !== null || namedAbbe !== null)
+            ? 0
+            : (numbers.length > 1 ? numbers[1] : 0));
     let semidia: string | number = '';
     let rindex = namedRindex !== null ? String(namedRindex) : (glassData?.nd ? String(glassData.nd) : '');
     let abbe = namedAbbe !== null ? String(namedAbbe) : (glassData?.vd ? String(glassData.vd) : '');
@@ -1990,14 +2218,15 @@ function countPatentDraftSurfaceRows(rows: Array<Record<string, any>>): number {
   }, 0);
 }
 
-async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDataText: string, mode: 'replace' | 'new' = 'replace'): Promise<void> {
-  const [{ loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables }, { saveTableData }, { deriveBlocksFromLegacyOpticalSystemRows }, { requestRefreshBlockInspector }] = await Promise.all([
+async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDataText: string, mode: 'replace' | 'new' = 'replace'): Promise<{ saved: boolean; blockCount: number }> {
+  const [{ loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables }, { saveTableData }, { requestRefreshBlockInspector }] = await Promise.all([
     import('../../../data/table-configuration.ts'),
     import('../../../data/table-optical-system.ts'),
-    import('../../../data/block-schema.ts'),
     import('../../../core/window-facade.ts'),
   ]);
 
+  let saved = false;
+  let blockCount = 0;
   try {
     const systemConfig = loadSystemConfigurations();
     const activeConfig = Array.isArray(systemConfig?.configurations)
@@ -2029,25 +2258,10 @@ async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDat
         return activeConfig;
       })();
 
-      let derivedBlocks: any[] = [];
-      let importAnalyzeMode = true;
-      try {
-        const derived = deriveBlocksFromLegacyOpticalSystemRows(rows);
-        const fatals = Array.isArray(derived?.issues)
-          ? derived.issues.filter((issue: any) => issue && issue.severity === 'fatal')
-          : [];
-        if (fatals.length === 0 && shouldAcceptDerivedPatentBlocks(derived?.blocks, rows)) {
-          derivedBlocks = normalizeObjectDistanceInBlocks(derived.blocks);
-          importAnalyzeMode = false;
-        } else {
-          derivedBlocks = normalizeObjectDistanceInBlocks(buildFallbackBlocksFromRows(rows));
-          importAnalyzeMode = false;
-        }
-      } catch (_) {
-        derivedBlocks = normalizeObjectDistanceInBlocks(buildFallbackBlocksFromRows(rows));
-        importAnalyzeMode = false;
-      }
+      let derivedBlocks = normalizeObjectDistanceInBlocks(buildFallbackBlocksFromRows(rows, false));
+      let importAnalyzeMode = false;
       derivedBlocks = attachPatentImportMetadataToBlocks(derivedBlocks, systemDataText, nowIso);
+      blockCount = derivedBlocks.length;
 
       // Imported draft rows become the persisted surface representation.
       // When block derivation succeeds, keep blocks in sync so Design Intent can open.
@@ -2058,12 +2272,14 @@ async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDat
         ...(targetConfig.systemData || {}),
         literatureImportSummary: systemDataText,
       };
-      if (targetConfig.metadata && typeof targetConfig.metadata === 'object') {
-        targetConfig.metadata.modified = nowIso;
-        targetConfig.metadata.importAnalyzeMode = importAnalyzeMode;
-        targetConfig.metadata.literatureImportSummary = systemDataText;
-      }
+      targetConfig.metadata = {
+        ...(targetConfig.metadata && typeof targetConfig.metadata === 'object' ? targetConfig.metadata : {}),
+        modified: nowIso,
+        importAnalyzeMode,
+        literatureImportSummary: systemDataText,
+      };
       saveSystemConfigurations(systemConfig);
+      saved = true;
     }
   } catch (_) {}
 
@@ -2085,9 +2301,33 @@ async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDat
   } catch (_) {}
 
   try {
+    if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+      await Promise.resolve(w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true }));
+    } else if (typeof w.loadActiveConfigurationToTables === 'function') {
+      await Promise.resolve(w.loadActiveConfigurationToTables({ applyToUI: true }));
+    }
+  } catch (_) {}
+
+  try {
     if (typeof requestRefreshBlockInspector === 'function') {
       requestRefreshBlockInspector(window);
     }
+  } catch (_) {}
+
+  try {
+    if (typeof w.refreshBlockInspector === 'function') {
+      w.refreshBlockInspector();
+    }
+  } catch (_) {}
+
+  try {
+    if (w.ConfigurationManager && typeof w.ConfigurationManager.renderBlocksUI === 'function') {
+      w.ConfigurationManager.renderBlocksUI();
+    }
+  } catch (_) {}
+
+  try {
+    window.dispatchEvent(new CustomEvent('coopt:system-configurations-updated'));
   } catch (_) {}
 
   try {
@@ -2095,7 +2335,18 @@ async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDat
       w.__cooptPushSystemDataText(systemDataText);
     }
   } catch (_) {}
+
+  return { saved, blockCount };
 }
+
+const PATENT_AI_KEY_STORAGE = 'coopt.patentAi.geminiKey';
+const PATENT_AI_MODEL_STORAGE = 'coopt.patentAi.model';
+
+type PatentSourceImage = {
+  dataUrl: string;
+  mimeType: string;
+  name: string;
+};
 
 export function LiteratureImportPanel() {
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -2114,6 +2365,20 @@ export function LiteratureImportPanel() {
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
   const [isRunningOcr, setIsRunningOcr] = useState(false);
   const [sourcePdfBlob, setSourcePdfBlob] = useState<Blob | null>(null);
+  const [sourceImage, setSourceImage] = useState<PatentSourceImage | null>(null);
+  const [aiApiKey, setAiApiKey] = useState<string>(() => {
+    try { return localStorage.getItem(PATENT_AI_KEY_STORAGE) ?? ''; } catch { return ''; }
+  });
+  const [aiModel, setAiModel] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(PATENT_AI_MODEL_STORAGE) ?? '';
+      // Migrate deprecated models to current equivalent
+      if (!saved || saved === 'gemini-2.5-flash' || saved === 'gemini-2.0-flash' || saved === 'gemini-1.5-pro' || saved === 'gemma-3-27b-it') return 'gemini-3.1-pro-preview';
+      return saved;
+    } catch { return 'gemini-3.1-pro-preview'; }
+  });
+  const [showAiSettings, setShowAiSettings] = useState(false);
+  const [isAiProcessing, setIsAiProcessing] = useState(false);
 
   const openSearch = (target: 'google-patents' | 'jplatpat') => {
     const nextQuery = query.trim() || 'zoom lens patent';
@@ -2256,6 +2521,7 @@ export function LiteratureImportPanel() {
     if (!file) return;
     setIsLoadingPdf(true);
     setSourcePdfBlob(file);
+    setSourceImage(null);
     setStatus('Reading PDF file...');
     try {
       const text = await loadTextFromPdfBlob(file);
@@ -2280,6 +2546,34 @@ export function LiteratureImportPanel() {
     if (event?.target) event.target.value = '';
   };
 
+  const handleImageFile = async (file: File | Blob | null | undefined) => {
+    if (!file) return;
+    const mimeType = String((file as any)?.type || 'image/png');
+    if (!/^image\//i.test(mimeType)) {
+      setStatus('Select or paste an image file for screenshot AI extraction.');
+      return;
+    }
+    setIsAiProcessing(true);
+    setStatus('Reading screenshot image...');
+    try {
+      const dataUrl = await readBlobAsDataUrl(file);
+      const name = String((file as any)?.name || 'pasted screenshot');
+      setSourceImage({ dataUrl, mimeType, name });
+      setStatus(`Loaded screenshot image (${name}). Click AI Enhance to extract surface and asphere data.`);
+    } catch (error) {
+      const message = String((error as any)?.message || error || 'Unknown error');
+      setStatus(`Image load failed: ${message}`);
+    } finally {
+      setIsAiProcessing(false);
+    }
+  };
+
+  const handleImageInputChange = async (event: any) => {
+    const file = event?.target?.files?.[0] as File | undefined;
+    await handleImageFile(file);
+    if (event?.target) event.target.value = '';
+  };
+
   const extractPdfFileFromTransfer = (transfer: DataTransfer | null | undefined): File | null => {
     const items = Array.from(transfer?.items ?? []);
     const pdfItem = items.find((item: any) => item?.kind === 'file' && /pdf/i.test(String(item?.type ?? '')));
@@ -2289,12 +2583,25 @@ export function LiteratureImportPanel() {
     return files.find((file: File) => /pdf/i.test(String(file.type ?? '')) || /\.pdf$/i.test(file.name)) ?? null;
   };
 
+  const extractImageFileFromTransfer = (transfer: DataTransfer | null | undefined): File | null => {
+    const items = Array.from(transfer?.items ?? []);
+    const imageItem = items.find((item: any) => item?.kind === 'file' && /^image\//i.test(String(item?.type ?? '')));
+    if (imageItem?.getAsFile) return imageItem.getAsFile();
+
+    const files = Array.from(transfer?.files ?? []);
+    return files.find((file: File) => /^image\//i.test(String(file.type ?? '')) || /\.(?:png|jpe?g|webp)$/i.test(file.name)) ?? null;
+  };
+
   const extractPdfFileFromClipboard = (clipboardData: DataTransfer | null | undefined): File | null => {
     return extractPdfFileFromTransfer(clipboardData);
   };
 
+  const extractImageFileFromClipboard = (clipboardData: DataTransfer | null | undefined): File | null => {
+    return extractImageFileFromTransfer(clipboardData);
+  };
+
   const handlePanelDragOver = (event: any) => {
-    const file = extractPdfFileFromTransfer(event?.dataTransfer);
+    const file = extractPdfFileFromTransfer(event?.dataTransfer) || extractImageFileFromTransfer(event?.dataTransfer);
     if (!file) return;
     event.preventDefault();
     if (event.dataTransfer) {
@@ -2303,29 +2610,35 @@ export function LiteratureImportPanel() {
   };
 
   const handlePanelDrop = async (event: any) => {
-    const file = extractPdfFileFromTransfer(event?.dataTransfer);
-    if (!file) return;
+    const pdfFile = extractPdfFileFromTransfer(event?.dataTransfer);
+    const imageFile = !pdfFile ? extractImageFileFromTransfer(event?.dataTransfer) : null;
+    if (!pdfFile && !imageFile) return;
     event.preventDefault();
     event.stopPropagation();
-    await handlePdfFile(file);
+    if (pdfFile) await handlePdfFile(pdfFile);
+    else await handleImageFile(imageFile);
   };
 
   const handleRawTextPaste = async (event: any) => {
-    const file = extractPdfFileFromClipboard(event?.clipboardData);
-    if (!file) return;
+    const pdfFile = extractPdfFileFromClipboard(event?.clipboardData);
+    const imageFile = !pdfFile ? extractImageFileFromClipboard(event?.clipboardData) : null;
+    if (!pdfFile && !imageFile) return;
     event.preventDefault();
-    await handlePdfFile(file);
+    if (pdfFile) await handlePdfFile(pdfFile);
+    else await handleImageFile(imageFile);
   };
 
   useEffect(() => {
     const handleWindowPasteCapture = (event: ClipboardEvent) => {
       const panel = panelRef.current;
       if (!panel || panel.offsetParent === null) return;
-      const file = extractPdfFileFromClipboard(event.clipboardData);
-      if (!file) return;
+      const pdfFile = extractPdfFileFromClipboard(event.clipboardData);
+      const imageFile = !pdfFile ? extractImageFileFromClipboard(event.clipboardData) : null;
+      if (!pdfFile && !imageFile) return;
       event.preventDefault();
       event.stopPropagation();
-      void handlePdfFile(file);
+      if (pdfFile) void handlePdfFile(pdfFile);
+      else void handleImageFile(imageFile);
     };
 
     window.addEventListener('paste', handleWindowPasteCapture, true);
@@ -2372,12 +2685,16 @@ export function LiteratureImportPanel() {
   };
 
   const handleApplyCorrectedCandidateRows = async () => {
-    if (!result) {
-      setStatus('Run Extract Candidate Data first.');
+    const correctedText = candidateRowsText.trim();
+    if (!correctedText && !result) {
+      setStatus('Run Extract Candidate Data or AI Enhance first.');
       return;
     }
 
-    const correctedResult = mergeCorrectedCandidateRows(result, candidateRowsText);
+    const baseResult = result || parseLiteratureText(correctedText || rawText);
+    const correctedResult = correctedText
+      ? mergeCorrectedCandidateRows(baseResult, correctedText)
+      : baseResult;
     if (correctedResult.candidateTableRows.length === 0) {
       setStatus('No numeric candidate rows remain after correction.');
       return;
@@ -2395,44 +2712,149 @@ export function LiteratureImportPanel() {
     setSelectedEmbodiment(nextEmbodiment);
     setSelectedZoom(nextZoom);
     const draft = await rebuildDraft(correctedResult, nextEmbodiment, nextZoom, nextSummary);
-    setStatus(`Applied corrected candidate rows. ${countPatentDraftSurfaceRows(draft.rows)} draft surface row(s) are ready.`);
+    const surfaceCount = countPatentDraftSurfaceRows(draft.rows);
+    if (surfaceCount === 0) {
+      setStatus('Applied corrected candidate rows, but no surface rows were built. Check r/d rows before applying.');
+      return;
+    }
+    const applied = await applyDraftToWorkspace(draft.rows, nextSummary);
+    setStatus(
+      applied.saved
+        ? `Applied corrected rows and built Design Intent (${surfaceCount} surface row(s), ${applied.blockCount} block(s)).`
+        : 'Corrected rows were parsed, but Design Intent could not be saved. Check console for configuration storage errors.'
+    );
   };
 
-  const pushSummaryToSystemData = async () => {
-    const nextSummary = summary.trim();
-    if (!nextSummary) {
-      setStatus('Run Extract Candidate Data first.');
+  const handleSaveAiSettings = () => {
+    const key = aiApiKey.trim();
+    const model = aiModel.trim() || 'gemini-3.1-pro-preview';
+    try { localStorage.setItem(PATENT_AI_KEY_STORAGE, key); } catch { /* ignore */ }
+    try { localStorage.setItem(PATENT_AI_MODEL_STORAGE, model); } catch { /* ignore */ }
+    setAiModel(model);
+    setShowAiSettings(false);
+    setStatus(key ? 'AI settings saved. You can now use AI Enhance.' : 'AI settings saved (no API key set).');
+  };
+
+  const handleAiEnhance = async () => {
+    const key = aiApiKey.trim();
+    if (!key) {
+      setShowAiSettings(true);
+      setStatus('Enter your Gemini API key first (free at aistudio.google.com).');
+      return;
+    }
+    const candidateText = candidateRowsText.trim();
+    const sourceText = rawText.trim();
+    if (!candidateText && !sourceText && !sourceImage) {
+      setStatus('Paste patent text, paste/select a screenshot, or run Extract Candidate Data first.');
       return;
     }
 
-    const w = window as any;
+    setIsAiProcessing(true);
+    setStatus(sourceImage ? 'Sending screenshot to AI... (this may take 10–30 seconds)' : 'Sending to AI... (this may take 10–30 seconds)');
     try {
-      if (typeof w.__cooptPushSystemDataText === 'function') {
-        w.__cooptPushSystemDataText(nextSummary);
-      } else {
-        const textarea = document.getElementById('system-data') as HTMLTextAreaElement | null;
-        if (textarea) textarea.value = nextSummary;
+      const model = (aiModel.trim() || 'gemini-3.1-pro-preview');
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+      const sourceExcerpts = collectPatentAiSourceExcerpts(sourceText);
+      const sourceHasAsphereMarkers = textContainsPatentAsphereMarkers(sourceText);
+      const imageInlineData = sourceImage ? dataUrlToGeminiInlineData(sourceImage.dataUrl, sourceImage.mimeType) : null;
+
+      const systemPrompt = `You are an expert optical design engineer extracting lens prescriptions from patent OCR text.
+
+    Your job has TWO independent passes:
+    1. Surface prescription pass: find every optical surface row containing curvature radius, thickness/spacing, refractive index, and Abbe number.
+    2. Asphere pass: scan the ENTIRE source text for aspheric data sections, even if they are far away from the radius table. This pass is mandatory. Look for Japanese and English markers such as 非球面データ, 非球面, 非球面係数, 第N面, 円錐定数, コーニック定数, コニック定数, 2次曲面パラメータ, epsilon, conic, K, k, cc, A4, A6, A8, A10, A12, A14, A16, A18, A20, C4, C6, C8, D4, D6, D8, 4th order, 6th order, 8th order.
+
+    Do not stop after the radius table. Many patents list aspheric coefficients in a separate later table. If the excerpts contain any asphere-like marker, your output must include the corresponding asphere lines unless no numeric coefficients are present.
+
+    Output ONLY normalized data lines. No markdown, no explanations, no table headers.
+
+    Surface row format:
+    rN={radius}  dN={thickness}  NN={refractiveIndex}  vN={abbeNumber}
+
+    Examples:
+    r1=24.380  d1=1.500  N1=1.80518  v1=25.4
+    r2=10.980  d2=0.100
+    r4=10.000
+
+    Asphere output MUST use this parser-compatible two-line format:
+    第N面の非球面係数
+    epsilon={conic} A4={value} A6={value} A8={value} A10={value} A12={value} A14={value} A16={value} A18={value} A20={value}
+
+    If the source writes coefficients as C4/C6/C8, B4/B6/B8, D4/D6/D8, coefficient 4/6/8, or 4th/6th/8th order, normalize them to A4/A6/A8. Treat tables titled 非球面データ exactly like 非球面係数 tables.
+
+    Asphere rules:
+    - Use the real surface number N from the source text, e.g. 第6面 or 6th surface.
+    - Put coefficient orders exactly as A4, A6, A8, A10, A12, A14, A16, A18, A20.
+    - Use epsilon for conic/K/cc/2次曲面パラメータ/円錐定数.
+    - If conic is absent, omit epsilon.
+    - Include only coefficients explicitly present in the source.
+    - Do not attach the surface number to coefficient names. Correct: A4=1e-5. Wrong: A64=1e-5 or A6_4=1e-5.
+
+    General rules:
+    - Use = between symbol and value.
+    - Convert scientific notation like 1×10^-5, 1 x 10 -5, 1.23E-006 to e notation.
+    - Fix obvious OCR mistakes: rl3 -> r13, l/|/I in numeric labels -> 1, N5-1.84666 -> N5=1.84666.
+    - Preserve numeric precision as much as possible.
+    - Do not invent missing values. If a value is not present, omit that field.
+    - If you see an incomplete trailing fragment such as a lone r, ignore it.
+
+    Image/screenshot rules:
+    - If an image is provided, read the image directly. Use the visible table structure, not OCR text guesses alone.
+    - For Japanese 面データ tables, columns usually mean 面番号 / r / d / nd / vd. A star after a surface number means that surface is aspheric.
+    - For Japanese 非球面データ sections, pair each 第N面 block with the following k/epsilon line and A4/A6/A8... coefficient lines.
+    - If a row has 可変 in the d column, output dN=可変.
+    - If the radius is ∞, output rN=INF.`;
+
+      const userPrompt = `Extract and correct the optical surface and aspheric data from the following patent source. If a screenshot image is attached, prioritize the visual table content and use the text only as supplementary context.
+
+    [Already extracted candidate rows, may be incomplete]
+    ${candidateText || '(none)'}
+
+    [Asphere-focused excerpts from full patent OCR/source text]
+    ${sourceExcerpts || '(none)'}
+
+    [Attached screenshot]
+    ${sourceImage ? `${sourceImage.name} (${sourceImage.mimeType})` : '(none)'}`;
+
+      const userParts: any[] = [{ text: userPrompt }];
+      if (imageInlineData?.data) {
+        userParts.push({ inline_data: { mime_type: imageInlineData.mimeType, data: imageInlineData.data } });
       }
-    } catch (_) {}
 
-    const copied = await copyText(nextSummary);
-    await persistLiteratureSummaryToActiveConfig(nextSummary);
-    setStatus(copied ? 'Summary sent to System Data / Design Intent and copied to clipboard.' : 'Summary sent to System Data / Design Intent.');
-  };
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ role: 'user', parts: userParts }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
+        }),
+      });
 
-  const handleApplyDraft = async () => {
-    const draft = await rebuildDraftFromCurrentCandidateRows();
-    if (!draft) return;
-    if (draft.rows.length === 0) {
-      setStatus('Extract candidate data first.');
-      return;
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        const msg = (err as any)?.error?.message ?? `HTTP ${response.status}`;
+        throw new Error(`Gemini API error: ${msg}`);
+      }
+
+      const data = await response.json();
+      const aiText: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+      if (!aiText.trim()) throw new Error('AI returned empty response');
+
+      setCandidateRowsText(aiText.trim());
+      const aiResult = parseCandidateRowsFromEditor(aiText);
+      const aiFoundAsphere = candidateRowsContainPatentAsphereMarkers(aiResult);
+      setStatus(
+        (sourceHasAsphereMarkers || sourceImage) && !aiFoundAsphere
+          ? 'AI enhancement complete, but no asphere coefficients were detected in the AI output. The source contains asphere markers; try AI Enhance again or paste the asphere coefficient section into the text box.'
+          : 'AI enhancement complete. Review the Correct Candidate Rows, then click Apply Corrected Rows.'
+      );
+    } catch (error) {
+      const msg = String((error as any)?.message ?? error ?? 'Unknown error');
+      setStatus(`AI Enhance failed: ${msg}`);
+    } finally {
+      setIsAiProcessing(false);
     }
-    if (draft.surfaceCount === 0) {
-      setStatus('Draft Summary is available, but no surface rows were built. Check Correct Candidate Rows for r/d rows before applying.');
-      return;
-    }
-    await applyDraftToWorkspace(draft.rows, draft.summaryText);
-    setStatus(`Patent optical system rows and Draft Summary applied to the active optical system / Design Intent (${draft.surfaceCount} surface row(s)).`);
   };
 
   const handleApplyDraftAsNewConfig = async () => {
@@ -2443,11 +2865,15 @@ export function LiteratureImportPanel() {
       return;
     }
     if (draft.surfaceCount === 0) {
-      setStatus('Draft Summary is available, but no surface rows were built. Check Correct Candidate Rows for r/d rows before applying.');
+      setStatus('No surface rows were built. Check Correct Candidate Rows for r/d rows before applying.');
       return;
     }
-    await applyDraftToWorkspace(draft.rows, draft.summaryText, 'new');
-    setStatus(`Patent optical system rows and Draft Summary applied as a new Design Intent configuration (${draft.surfaceCount} surface row(s)).`);
+    const applied = await applyDraftToWorkspace(draft.rows, draft.summaryText, 'new');
+    setStatus(
+      applied.saved
+        ? `Patent optical system rows applied as a new Design Intent configuration (${draft.surfaceCount} surface row(s), ${applied.blockCount} block(s)).`
+        : 'Patent optical system rows were parsed, but the new Design Intent configuration could not be saved.'
+    );
   };
 
   return (
@@ -2496,29 +2922,95 @@ export function LiteratureImportPanel() {
           <input type="file" accept="application/pdf,.pdf" onChange={handlePdfInputChange} />
           <span>{isLoadingPdf ? 'Loading PDF...' : 'Select PDF'}</span>
         </label>
+        <label className="literature-import-panel__fileButton">
+          <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleImageInputChange} />
+          <span>Select Screenshot</span>
+        </label>
         <button type="button" onClick={() => void handleRunOcr('append')} disabled={isRunningOcr || !sourcePdfBlob}>{isRunningOcr ? 'Running OCR...' : 'Run OCR'}</button>
         <button type="button" onClick={() => setRawText(LITERATURE_IMPORT_EXAMPLE)}>Use Example</button>
       </div>
 
+      {sourceImage ? (
+        <div className="literature-import-panel__imagePreview">
+          <img src={sourceImage.dataUrl} alt="Patent screenshot for AI extraction" />
+          <div>
+            <strong>{sourceImage.name}</strong>
+            <span>{sourceImage.mimeType}</span>
+            <button type="button" onClick={() => setSourceImage(null)}>Clear Screenshot</button>
+          </div>
+        </div>
+      ) : null}
+
       <label className="literature-import-panel__field">
-        <span>Paste PDF Text / OCR or Paste a PDF File</span>
+        <span>Paste PDF Text / OCR, PDF File, or Screenshot</span>
         <textarea
           value={rawText}
           onChange={(event) => setRawText(event.target.value)}
           onPaste={handleRawTextPaste}
           rows={8}
-          placeholder="Paste patent text, table rows, OCR output, or copy a PDF file and paste it here..."
+          placeholder="Paste patent text, table rows, OCR output, or copy a PDF/screenshot and paste it here..."
         />
       </label>
-      <div className="literature-import-panel__hint">Direct URL loading works only for documents the browser is allowed to fetch. For image PDFs, use Run OCR. Automatic OCR fallback also runs when candidate rows are not detected from the PDF text layer.</div>
+      <div className="literature-import-panel__hint">Direct URL loading works only for documents the browser is allowed to fetch. For image PDFs, use Run OCR. For patent table screenshots, paste or select the image, then use AI Enhance.</div>
 
       <div className="literature-import-panel__actions literature-import-panel__actions--primary">
         <button type="button" onClick={handleExtract}>Extract Candidate Data</button>
-        <button type="button" onClick={handleApplyCorrectedCandidateRows} disabled={!result}>Apply Corrected Rows</button>
-        <button type="button" onClick={handleApplyDraft}>Apply To Optical System</button>
+        <button type="button" onClick={handleApplyCorrectedCandidateRows} disabled={!result && !candidateRowsText.trim()}>Apply Corrected Rows</button>
+        <button
+          type="button"
+          onClick={() => void handleAiEnhance()}
+          disabled={isAiProcessing}
+          title="Use Gemini AI (free) to fix OCR errors and extract surface data"
+        >
+          {isAiProcessing ? 'AI Processing...' : '✨ AI Enhance'}
+        </button>
         <button type="button" onClick={handleApplyDraftAsNewConfig}>Apply as New Config</button>
-        <button type="button" onClick={pushSummaryToSystemData}>Send Summary To System Data</button>
+        <button
+          type="button"
+          onClick={() => setShowAiSettings((v) => !v)}
+          title="Configure free Gemini API key for AI Enhance"
+          style={{ marginLeft: 'auto', opacity: 0.7, fontSize: '0.85em' }}
+        >
+          ⚙ AI Key
+        </button>
       </div>
+
+      {showAiSettings && (
+        <div className="literature-import-panel__ai-settings">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: '0.85em', whiteSpace: 'nowrap' }}>
+              Gemini API Key{' '}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.9em' }}>
+                (free at aistudio.google.com)
+              </a>
+            </label>
+            <input
+              type="password"
+              value={aiApiKey}
+              onChange={(e) => setAiApiKey(e.target.value)}
+              placeholder="AIza..."
+              style={{ flex: '1 1 200px', minWidth: 0 }}
+            />
+            <select
+              value={aiModel}
+              onChange={(e) => setAiModel(e.target.value)}
+              style={{ minWidth: '160px' }}
+              title="Gemini model to use"
+            >
+              <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (latest, high accuracy)</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash (fast, free)</option>
+              <option value="gemini-2.5-pro">gemini-2.5-pro (high accuracy)</option>
+              <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (lightweight)</option>
+              <option value="gemini-1.5-flash">gemini-1.5-flash (legacy)</option>
+            </select>
+            <button type="button" onClick={handleSaveAiSettings}>Save</button>
+            <button type="button" onClick={() => setShowAiSettings(false)} style={{ opacity: 0.6 }}>Cancel</button>
+          </div>
+          <div style={{ fontSize: '0.8em', color: '#666', marginTop: '4px' }}>
+            Key is stored in browser localStorage only. Free tier: 15 req/min, 1500/day. Keys are never sent to any server other than Google.
+          </div>
+        </div>
+      )}
 
       <div className="literature-import-panel__status">{status}</div>
 
@@ -2563,11 +3055,6 @@ export function LiteratureImportPanel() {
         />
       </label>
       <div className="literature-import-panel__hint">Edit only the extracted candidate rows here. You can fix OCR typos like `rl3` to `r13`, `N5-1.84666` to `N5=1.84666`, or malformed decimals, then click Apply Corrected Rows.</div>
-
-      <label className="literature-import-panel__field">
-        <span>Draft Summary</span>
-        <textarea value={summary} readOnly rows={12} placeholder="Extraction summary will appear here..." />
-      </label>
     </div>
     </div>
   );

@@ -161,6 +161,11 @@ function isThinLensRow(row) {
     });
 }
 
+function isThinLensBackRow(row) {
+    if (!isThinLensRow(row)) return false;
+    return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
+}
+
 function systemHasThinLensRows(opticalSystemRows) {
     return Array.isArray(opticalSystemRows) && opticalSystemRows.some((row) => isThinLensRow(row));
 }
@@ -191,6 +196,7 @@ function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
         if (isCoordTransRow(row)) continue;
         if (isObjectRow(row)) continue;
         if (isGapRow(row)) continue;
+        if (isThinLensBackRow(row)) continue;
         count++;
     }
     return count > 0 ? count : null;
@@ -421,6 +427,28 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
         return null; // No optical system rows provided
     }
+
+    const radiusFields = ['semidia', 'semiDiameter', 'semi-diameter', 'semi_diameter', 'radius', 'aperture', 'diameter', 'semi-dia', 'semiDia', 'aper', 'halfDiameter', 'half-diameter', 'Clear_Aperture', 'clearAperture', 'clear_aperture'];
+    const readSurfaceCenter = (entry) => {
+        const origin = entry?.origin ?? entry ?? null;
+        return {
+            x: Number.isFinite(Number(origin?.x)) ? Number(origin.x) : 0,
+            y: Number.isFinite(Number(origin?.y)) ? Number(origin.y) : 0,
+            z: Number.isFinite(Number(origin?.z)) ? Number(origin.z) : 0
+        };
+    };
+    const readApertureRadius = (surface) => {
+        for (const field of radiusFields) {
+            const value = surface?.[field];
+            if (value !== undefined && value !== null && value !== '') {
+                const numValue = parseFloat(value);
+                if (!isNaN(numValue) && numValue > 0) {
+                    return numValue;
+                }
+            }
+        }
+        return null;
+    };
     
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const surface = opticalSystemRows[i];
@@ -428,30 +456,10 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
         if (isStopRow(surface) || (String(surface?.comment ?? surface?.Comment ?? '').toLowerCase().includes('stop'))) {
             const oRaw = (surfaceOrigins && surfaceOrigins[i]) ? surfaceOrigins[i] : null;
             const o = (oRaw && oRaw.origin) ? oRaw.origin : oRaw;
-            const stopCenter = {
-                x: (o && Number.isFinite(o.x)) ? o.x : 0,
-                y: (o && Number.isFinite(o.y)) ? o.y : 0,
-                z: (o && Number.isFinite(o.z)) ? o.z : 0
-            };
+            const stopCenter = readSurfaceCenter(o);
             
             // Stop面の半径を取得
-            let stopRadius = 10; // デフォルト値
-            const radiusFields = ['semidia', 'semiDiameter', 'semi-diameter', 'semi_diameter', 'radius', 'aperture', 'diameter', 'semi-dia', 'semiDia', 'aper', 'halfDiameter', 'half-diameter', 'Clear_Aperture', 'clearAperture', 'clear_aperture'];
-            
-            for (const field of radiusFields) {
-                const value = surface[field];
-                if (value !== undefined && value !== null && value !== '') {
-                    const numValue = parseFloat(value);
-                    if (!isNaN(numValue)) {
-                        stopRadius = numValue;
-                        break;
-                    }
-                }
-            }
-            
-            if (isNaN(stopRadius)) {
-                stopRadius = 10;
-            }
+            let stopRadius = readApertureRadius(surface) ?? 10;
             
             return {
                 surface: surface,
@@ -462,6 +470,37 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
                 origin: o
             };
         }
+    }
+
+    const pseudoStopCandidates = [];
+    for (let i = 0; i < opticalSystemRows.length; i++) {
+        const surface = opticalSystemRows[i];
+        if (!surface || isObjectRow(surface) || isCoordTransRow(surface) || isThinLensBackRow(surface)) continue;
+
+        const objType = String(surface?.['object type'] ?? surface?.object ?? surface?.Object ?? '').trim().toLowerCase();
+        if (objType === 'image') continue;
+
+        const stopRadius = readApertureRadius(surface);
+        if (!(Number.isFinite(stopRadius) && stopRadius > 0)) continue;
+
+        pseudoStopCandidates.push({ index: i, surface, radius: stopRadius });
+    }
+
+    if (pseudoStopCandidates.length > 0) {
+        const chosen = pseudoStopCandidates[Math.floor(pseudoStopCandidates.length / 2)];
+        const oRaw = (surfaceOrigins && surfaceOrigins[chosen.index]) ? surfaceOrigins[chosen.index] : null;
+        const o = (oRaw && oRaw.origin) ? oRaw.origin : oRaw;
+        const stopCenter = readSurfaceCenter(o);
+        console.warn(`⚠️ [InfiniteSystem.findStopSurface] No explicit Stop row; using Surface ${chosen.index} as pseudo-stop`);
+        return {
+            surface: chosen.surface,
+            index: chosen.index,
+            center: stopCenter,
+            position: stopCenter,
+            radius: chosen.radius,
+            origin: o,
+            pseudoStop: true
+        };
     }
     
     return null;

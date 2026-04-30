@@ -110,7 +110,7 @@ import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } f
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './optical/surface.ts';
 
 // Ray tracing modules
-import { traceRay, calculateSurfaceOrigins, transformPointToLocal, calculateAllSurfacesLocalCoordinates, resetToSurfaceCoordinates, shiftToChiefRayOrigin, restoreFromLocalCoordinates, transformToChiefRayLocalCoordinates, calculateChiefRaySurfaceIntersections } from './raytracing/core/ray-tracing.ts';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, transformPointToLocal, calculateAllSurfacesLocalCoordinates, resetToSurfaceCoordinates, shiftToChiefRayOrigin, restoreFromLocalCoordinates, transformToChiefRayLocalCoordinates, calculateChiefRaySurfaceIntersections } from './raytracing/core/ray-tracing.ts';
 import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance, calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculateFullSystemParaxialTrace, calculateParaxialData, debugParaxialRayTrace, calculatePupilsByNewSpec, findStopSurfaceIndex, calculateImageSpaceDiffractionParams } from './raytracing/core/ray-paraxial.ts';
 
 // Marginal ray modules
@@ -2253,6 +2253,187 @@ function calculateOpticalSystemZRange() {
     }
 }
 
+function __cooptGetRayPathPointIndexForSurfaceIndex(rows, surfaceIndex) {
+    if (!Array.isArray(rows) || surfaceIndex === null || surfaceIndex === undefined) return null;
+    const isCoordTransRow = (row) => {
+        const stRaw = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
+        const st = stRaw.trim();
+        return st === 'coord trans' || st === 'coordinate break' || st === 'coordtrans' || st === 'coordinatebreak' || st === 'ct';
+    };
+    const isObjectRow = (row) => {
+        const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').toLowerCase();
+        return t === 'object';
+    };
+    const isGapRow = (row) => {
+        const fields = [
+            row?.blockType, row?._blockType, row?.block_type, row?.blockTypeName,
+            row?.['object type'], row?.object, row?.Object,
+            row?.type, row?.Type,
+            row?.comment, row?.Comment,
+        ];
+        return fields.some((value) => {
+            const key = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+            return key === 'gap' || key === 'airgap' || key.includes('airgap');
+        });
+    };
+    const isThinLensBackRow = (row) => {
+        const blockType = String(row?._blockType ?? row?.blockType ?? row?.block_type ?? row?.blockTypeName ?? '').trim().toLowerCase();
+        if (blockType !== 'thinlens' && blockType !== 'paraxial') return false;
+        return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
+    };
+
+    const sIdx = Math.max(0, Math.min(surfaceIndex, rows.length - 1));
+    let count = 0;
+    for (let i = 0; i <= sIdx; i++) {
+        const row = rows[i];
+        if (isCoordTransRow(row)) continue;
+        if (isObjectRow(row)) continue;
+        if (isGapRow(row)) continue;
+        if (isThinLensBackRow(row)) continue;
+        count++;
+    }
+    return count > 0 ? count : null;
+}
+
+function __cooptGetRayPointAtSurfaceIndex(rayPath, rows, surfaceIndex) {
+    if (!Array.isArray(rayPath)) return null;
+    for (let i = rayPath.length - 1; i >= 0; i--) {
+        const point = rayPath[i];
+        const pSurfaceIndex = Number(point?.surfaceIndex ?? point?.surface ?? point?.surfaceIdx);
+        if (Number.isInteger(pSurfaceIndex) && pSurfaceIndex === surfaceIndex) {
+            if (Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y)) && Number.isFinite(Number(point?.z))) {
+                return point;
+            }
+        }
+    }
+    const pIdx = __cooptGetRayPathPointIndexForSurfaceIndex(rows, surfaceIndex);
+    if (pIdx !== null && pIdx >= 0 && pIdx < rayPath.length) {
+        const direct = rayPath[pIdx];
+        if (direct && Number.isFinite(Number(direct.x)) && Number.isFinite(Number(direct.y)) && Number.isFinite(Number(direct.z))) {
+            return direct;
+        }
+    }
+    return null;
+}
+
+function __cooptShowDrawCrossCoordinateReport(rays, opticalSystemRows, objectRows, targetSurfaceIndex, hostWindow = window) {
+    try {
+        const diagnosticsHost = hostWindow as any;
+        const diagnosticsAlwaysEnabled = diagnosticsHost?.__COOPT_ENABLE_DRAWCROSS_COORD_REPORT === true;
+        const diagnosticsRequestedOnce = diagnosticsHost?.__COOPT_REQUEST_DRAWCROSS_COORD_REPORT_ONCE === true;
+        if (!diagnosticsAlwaysEnabled && !diagnosticsRequestedOnce) return;
+        if (!Array.isArray(rays) || !Array.isArray(opticalSystemRows) || !opticalSystemRows.length) return;
+        const safeTargetSurfaceIndex = Number.isInteger(Number(targetSurfaceIndex))
+            ? Math.max(0, Math.min(Number(targetSurfaceIndex), opticalSystemRows.length - 1))
+            : Math.max(0, opticalSystemRows.length - 1);
+        const displaySurfaceNumber = __cooptGetRayPathPointIndexForSurfaceIndex(opticalSystemRows, safeTargetSurfaceIndex)
+            ?? safeTargetSurfaceIndex;
+        const surfaceInfos = calculateSurfaceOrigins(opticalSystemRows);
+        const surfaceInfo = Array.isArray(surfaceInfos) ? surfaceInfos[safeTargetSurfaceIndex] : null;
+        const rayTypeSummary = new Map<string, number>();
+        rays.forEach((ray) => {
+            const label = String(ray?.beamType ?? ray?.type ?? ray?.originalRay?.type ?? ray?.originalRay?.beamType ?? 'unknown').trim().toLowerCase() || 'unknown';
+            rayTypeSummary.set(label, (rayTypeSummary.get(label) ?? 0) + 1);
+        });
+        const chiefRays = rays.filter((ray) => {
+            const type = String(ray?.beamType ?? ray?.type ?? ray?.originalRay?.type ?? '').trim().toLowerCase();
+            return type.includes('chief');
+        });
+        const headerLines = [
+            `[DrawCrossCoords] surface=${displaySurfaceNumber}`,
+            `rays=${rays.length} chief=${chiefRays.length} objects=${Array.isArray(objectRows) ? objectRows.length : 0}`,
+            `types=${Array.from(rayTypeSummary.entries()).map(([key, count]) => `${key}:${count}`).join(', ') || 'none'}`
+        ];
+
+        const lines = chiefRays.length
+            ? chiefRays.map((ray, idx) => {
+                const objectIndexRaw = ray?.objectIndex ?? ray?.originalRay?.objectIndex ?? idx;
+                const objectIndex = Number.isFinite(Number(objectIndexRaw)) ? Number(objectIndexRaw) : idx;
+                const objectRow = Array.isArray(objectRows) ? objectRows[objectIndex] : null;
+                const sourceTarget = objectRow?.__cooptImageHeightTarget;
+                const targetX = Number(sourceTarget?.x ?? objectRow?.xHeightAngle ?? 0) || 0;
+                const targetY = Number(sourceTarget?.y ?? objectRow?.yHeightAngle ?? 0) || 0;
+                const inputX = Number(objectRow?.xHeightAngle ?? 0) || 0;
+                const inputY = Number(objectRow?.yHeightAngle ?? 0) || 0;
+                const inputPosition = String(objectRow?.position ?? '');
+                const solveMode = String(objectRow?.__cooptImageHeightSolve?.mode ?? '');
+                const solveHit = objectRow?.__cooptImageHeightSolve?.hit;
+                const solveHitX = Number(solveHit?.x);
+                const solveHitY = Number(solveHit?.y);
+                const solveErrX = Number.isFinite(solveHitX) ? solveHitX - targetX : NaN;
+                const solveErrY = Number.isFinite(solveHitY) ? solveHitY - targetY : NaN;
+                const globalPoint = __cooptGetRayPointAtSurfaceIndex(ray?.rayPath, opticalSystemRows, safeTargetSurfaceIndex);
+                const localPoint = (globalPoint && surfaceInfo) ? transformPointToLocal(globalPoint, surfaceInfo) : globalPoint;
+                let directLocalPoint = null;
+                try {
+                    const originalRay = ray?.originalRay ?? {};
+                    const ray0 = {
+                        pos: originalRay?.origin ?? originalRay?.position ?? originalRay?.pos ?? ray?.origin ?? ray?.position,
+                        dir: originalRay?.direction ?? originalRay?.dir ?? ray?.direction ?? ray?.dir,
+                        wavelength: originalRay?.wavelength ?? ray?.wavelength ?? 0.5876,
+                    };
+                    if (ray0.pos && ray0.dir) {
+                        const directGlobalPoint = traceRayHitPoint(
+                            opticalSystemRows,
+                            ray0,
+                            1.0,
+                            safeTargetSurfaceIndex,
+                            {
+                                allowNonStrict: true,
+                                requireWasmRayTracing: false,
+                                useRustWasm: false,
+                                requireRustWasm: false,
+                                disableWasmRayTracing: true,
+                            }
+                        );
+                        directLocalPoint = (directGlobalPoint && surfaceInfo) ? transformPointToLocal(directGlobalPoint, surfaceInfo) : directGlobalPoint;
+                    }
+                } catch (_) {}
+                const directX = Number(directLocalPoint?.x);
+                const directY = Number(directLocalPoint?.y);
+                const actualX = Number(localPoint?.x);
+                const actualY = Number(localPoint?.y);
+                const deltaX = Number.isFinite(actualX) ? actualX - targetX : NaN;
+                const deltaY = Number.isFinite(actualY) ? actualY - targetY : NaN;
+                return [
+                    `obj${objectIndex + 1}`,
+                    `target=(${targetX.toFixed(6)}, ${targetY.toFixed(6)})`,
+                    `input=(${inputX.toFixed(6)}, ${inputY.toFixed(6)})`,
+                    `position=${inputPosition || 'n/a'}`,
+                    `solve=${solveMode || 'n/a'}`,
+                    `solveHit=(${Number.isFinite(solveHitX) ? solveHitX.toFixed(6) : 'n/a'}, ${Number.isFinite(solveHitY) ? solveHitY.toFixed(6) : 'n/a'})`,
+                    `solveErr=(${Number.isFinite(solveErrX) ? solveErrX.toFixed(6) : 'n/a'}, ${Number.isFinite(solveErrY) ? solveErrY.toFixed(6) : 'n/a'})`,
+                    `actualLocal=(${Number.isFinite(actualX) ? actualX.toFixed(6) : 'n/a'}, ${Number.isFinite(actualY) ? actualY.toFixed(6) : 'n/a'})`,
+                    `directLocal=(${Number.isFinite(directX) ? directX.toFixed(6) : 'n/a'}, ${Number.isFinite(directY) ? directY.toFixed(6) : 'n/a'})`,
+                    `delta=(${Number.isFinite(deltaX) ? deltaX.toFixed(6) : 'n/a'}, ${Number.isFinite(deltaY) ? deltaY.toFixed(6) : 'n/a'})`,
+                    `pathLen=${Array.isArray(ray?.rayPath) ? ray.rayPath.length : 'n/a'}`,
+                    `global=(${Number.isFinite(Number(globalPoint?.x)) ? Number(globalPoint.x).toFixed(6) : 'n/a'}, ${Number.isFinite(Number(globalPoint?.y)) ? Number(globalPoint.y).toFixed(6) : 'n/a'}, ${Number.isFinite(Number(globalPoint?.z)) ? Number(globalPoint.z).toFixed(6) : 'n/a'})`
+                ].join(' | ');
+            })
+            : ['No chief ray found in Draw Cross result.'];
+
+        const title = headerLines[0];
+        const text = `${headerLines.join('\n')}\n${lines.join('\n')}`;
+        diagnosticsHost.__COOPT_LAST_DRAWCROSS_COORDS = {
+            title,
+            headerLines,
+            lines,
+            targetSurfaceIndex: safeTargetSurfaceIndex,
+            rayTypeSummary: Object.fromEntries(rayTypeSummary.entries())
+        };
+        if (diagnosticsRequestedOnce) diagnosticsHost.__COOPT_REQUEST_DRAWCROSS_COORD_REPORT_ONCE = false;
+        console.warn(text);
+
+        const doc = hostWindow?.document;
+        const existingPanel = doc?.getElementById?.('coopt-drawcross-coords-overlay');
+        if (existingPanel) existingPanel.remove();
+    } catch (error) {
+        console.warn('⚠️ [DrawCrossCoords] Failed to build coordinate report:', error);
+    }
+}
+
+(window as any).__cooptShowDrawCrossCoordinateReport = __cooptShowDrawCrossCoordinateReport;
+
 /**
  * Image面のSemi Diaを主光線の最大高さで更新
  * optimizeSemiDiaフィールドが"U"の場合のみ更新
@@ -3049,12 +3230,19 @@ const startApplicationOnce = (() => {
                         return;
                     }
                     
-                    // 全てのObjectの位置を取得（X-Z/Y-Zボタンと同じ処理）
+                    // Draw ray numberの値を取得
+                    const drawRayCountInput = document.getElementById('draw-ray-count-input');
+                    const rayCount = drawRayCountInput ? (parseInt(drawRayCountInput.value, 10) || 7) : 7;  // デフォルト7本
+                    const primaryWavelength = (typeof window.getPrimaryWavelength === 'function')
+                        ? Number(window.getPrimaryWavelength()) || 0.5876
+                        : 0.5876;
+
+                    // 全てのObjectの位置を取得。
+                    // ImageHeight は主光線 solve 済みの等価 Angle/Rectangle に変換してから cross-beam に渡す。
                     const allObjectPositions = [];
-                    
                     objectRows.forEach((obj, index) => {
                         let objectPosition;
-                        
+
                         if (Array.isArray(obj)) {
                             const xValue = parseFloat(obj[1]);
                             const yValue = parseFloat(obj[2]);
@@ -3064,46 +3252,61 @@ const startApplicationOnce = (() => {
                                 z: 0
                             };
                         } else {
-                            // オブジェクト形式の場合（X-Z/Y-Zボタンと同じシンプルな処理）
-                            const xCoord = parseFloat(obj.xHeightAngle) || 0;
-                            const yCoord = parseFloat(obj.yHeightAngle) || 0;
+                            let effectiveObj = obj;
+                            const posNorm = String(obj?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+                            if (posNorm === 'imageheight') {
+                                try {
+                                    effectiveObj = convertImageHeightToEffectiveObject(
+                                        obj,
+                                        opticalSystemRows,
+                                        primaryWavelength,
+                                        isInfiniteSystem ? 'infinite' : 'finite'
+                                    );
+                                } catch (error) {
+                                    console.warn('⚠️ [DrawCross] Failed to convert ImageHeight object; using raw values.', error);
+                                }
+                            }
+
+                            const xCoord = parseFloat(effectiveObj?.xHeightAngle) || 0;
+                            const yCoord = parseFloat(effectiveObj?.yHeightAngle) || 0;
                             objectPosition = {
                                 x: xCoord,
                                 y: yCoord,
-                                z: 0
+                                z: 0,
+                                objectIndex: index,
+                                __effectivePosition: effectiveObj?.position ?? obj?.position ?? null
                             };
                         }
-                        
+
                         allObjectPositions.push(objectPosition);
                     });
-                    
-                    // Draw ray numberの値を取得
-                    const drawRayCountInput = document.getElementById('draw-ray-count-input');
-                    const rayCount = drawRayCountInput ? (parseInt(drawRayCountInput.value, 10) || 7) : 7;  // デフォルト7本
                     
                     
                     // 評価面の選択値を取得
                     const transverseSurfaceSelect = document.getElementById('transverse-surface-select');
+                    const imageSurfaceIndex = opticalSystemRows.findIndex(row =>
+                        row && (row['object type'] === 'Image' || row.object === 'Image')
+                    );
+                    const hasImageHeightObject = objectRows.some((obj: any) =>
+                        !Array.isArray(obj) && String(obj?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '') === 'imageheight'
+                    );
                     let targetSurfaceIndex = null;
-                    if (transverseSurfaceSelect && transverseSurfaceSelect.value !== '') {
+                    if (hasImageHeightObject && imageSurfaceIndex >= 0) {
+                        targetSurfaceIndex = imageSurfaceIndex;
+                    } else if (transverseSurfaceSelect && transverseSurfaceSelect.value !== '') {
                         targetSurfaceIndex = parseInt(transverseSurfaceSelect.value) - 1; // 1-based to 0-based
                     } else {
-                        const imageSurfaceIndex = opticalSystemRows.findIndex(row =>
-                            row && (row['object type'] === 'Image' || row.object === 'Image')
-                        );
                         targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
                     }
                     
                     // Object Thicknessに基づいて適切な関数を選択
                     let crossBeamResult;
-                    const primaryWavelength = (typeof window.getPrimaryWavelength === 'function')
-                        ? Number(window.getPrimaryWavelength()) || 0.5876
-                        : 0.5876;
                     if (isInfiniteSystem) {
                         // 無限系の場合、objectPositionsを角度形式に変換
                         const objectAngles = allObjectPositions.map(pos => ({
                             x: pos.x || 0,  // 角度として扱う
-                            y: pos.y || 0   // 角度として扱う
+                            y: pos.y || 0,   // 角度として扱う
+                            ...(Number.isInteger(Number(pos.objectIndex)) ? { objectIndex: Number(pos.objectIndex) } : {})
                         }));
                         
                         crossBeamResult = await generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, {
@@ -3245,6 +3448,7 @@ const startApplicationOnce = (() => {
                     // 結果をグローバルに保存
                     window['crossBeamResult'] = crossBeamResult;
                     window['lastGeneratedRays'] = allRays;
+                    __cooptShowDrawCrossCoordinateReport(allRays, opticalSystemRows, objectRows, targetSurfaceIndex);
                     
                     // Image面のSemi Diaを主光線の最大高さで更新（optimizeSemiDiaが"U"の場合）
                     updateImageSemiDiaFromChiefRays(allRays, opticalSystemRows);

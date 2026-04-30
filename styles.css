@@ -1821,6 +1821,72 @@ button:active {
     color: #64748b;
 }
 
+.literature-import-panel__imagePreview {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px;
+    border: 1px solid #d6deea;
+    border-radius: 8px;
+    background: #f8fafc;
+}
+
+.literature-import-panel__imagePreview img {
+    width: 96px;
+    height: 72px;
+    object-fit: contain;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.literature-import-panel__imagePreview div {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    min-width: 0;
+    font-size: 12px;
+    color: #475569;
+}
+
+.literature-import-panel__imagePreview strong {
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #0f172a;
+}
+
+.literature-import-panel__imagePreview button {
+    padding: 2px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    color: #334155;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.literature-import-panel__ai-settings {
+    padding: 10px 12px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.literature-import-panel__ai-settings input[type="password"],
+.literature-import-panel__ai-settings select {
+    padding: 4px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 0.85em;
+    background: #fff;
+}
+
 .literature-import-panel__status {
     font-size: 12px;
     color: #475569;
@@ -2469,6 +2535,23 @@ button:active {
     margin: 0;
 }
 
+.design-intent-toolbar-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    font-size: 12px;
+    color: #57606a;
+    cursor: pointer;
+    user-select: none;
+}
+
+.design-intent-toolbar-toggle input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+}
+
 /* Blocks Inspector (read-only) */
 .block-inspector-panel {
     flex: 1 1 38%;
@@ -2530,6 +2613,86 @@ button:active {
     box-shadow: inset 0 0 0 1px #93c5fd;
 }
 
+.block-inspector-row.dragging {
+    opacity: 0.4;
+}
+
+.block-inspector-row.drag-over-before {
+    border-top: 2px solid #3b82f6;
+}
+
+.block-inspector-row.drag-over-after {
+    border-bottom: 2px solid #3b82f6;
+}
+
+.block-inspector-drag-handle {
+    flex: 0 0 auto;
+    cursor: grab;
+    color: #9ca3af;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+    user-select: none;
+}
+
+.block-inspector-drag-handle:active {
+    cursor: grabbing;
+}
+
+.block-inspector-zg-chip {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    border: 1px solid #c7d2fe;
+    background: #eef2ff;
+    color: #4338ca;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.block-inspector-zg-chip:hover {
+    background: #e0e7ff;
+}
+
+.block-inspector-zg-chip-gap {
+    border-color: #d0d7de;
+    background: #ffffff;
+    color: #475569;
+}
+
+.block-inspector-zg-chip-gap:hover {
+    background: #f8fafc;
+}
+
+.block-inspector-quick-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    min-width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+    box-sizing: border-box;
+    line-height: 1;
+    border: 1px solid #d0d7de;
+    border-radius: 4px;
+    background: #fff;
+    color: #111827;
+    cursor: pointer;
+}
+
+.block-inspector-quick-btn:hover {
+    background: #f6f8fa;
+}
+
 .block-inspector-col-id {
     flex: 0 1 auto;
     min-width: 0;
@@ -2539,6 +2702,26 @@ button:active {
     padding: 3px 6px;
     border-radius: 999px;
     box-sizing: border-box;
+}
+
+.block-inspector-col-id-clickable {
+    cursor: pointer;
+    position: relative;
+    padding-right: 18px;
+}
+
+.block-inspector-col-id-clickable::after {
+    content: "▾";
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-48%);
+    font-size: 10px;
+    opacity: 0.8;
+}
+
+.block-inspector-col-id-clickable:hover {
+    filter: brightness(0.98);
 }
 
 .block-inspector-col-id[data-block-type="lens"],
@@ -2605,6 +2788,62 @@ button:active {
     gap: 8px;
     flex-wrap: nowrap;
     color: #57606a;
+}
+
+.block-inspector-quick-editor {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.block-inspector-quick-editor-multiline {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+.block-inspector-quick-editor-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.block-inspector-quick-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+
+.block-inspector-quick-label {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: #f3f4f6;
+    color: #4b5563;
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 600;
+}
+
+.block-inspector-quick-content {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.block-inspector-quick-material {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .block-inspector-col-params-text {
@@ -3911,12 +4150,14 @@ h4 {
     top: 0;
     right: 0;
     bottom: 0;
-    width: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
     height: auto;
     border-radius: 0;
     resize: none;
 }
 
+    scrollbar-width: none;
 .ai-panel-header {
     padding: 10px 15px;
     background-color: #007bff;
@@ -4126,9 +4367,15 @@ h4 {
 .scale-mode-btn,
 .magnitude-btn,
 .block-inspector-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     min-width: 40px;
     height: 28px;
+    min-height: 28px;
     padding: 0 8px;
+    box-sizing: border-box;
+    line-height: 1;
     font-size: 10px;
     font-weight: 600;
     border: 1px solid #d6deea;
@@ -5033,6 +5280,10 @@ body.dark-mode .block-inspector-row.selected:hover {
 body.dark-mode .block-inspector-col-type,
 body.dark-mode .block-inspector-col-count,
 body.dark-mode .block-inspector-col-params {
+    color: var(--text-secondary) !important;
+}
+
+body.dark-mode .design-intent-toolbar-toggle {
     color: var(--text-secondary) !important;
 }
 

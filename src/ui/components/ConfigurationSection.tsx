@@ -4,10 +4,10 @@ export default function ConfigurationSection() {
       <h2 className="section-title">Configuration</h2>
       <div className="configuration-controls ide-toolbar" role="toolbar" aria-label="Configuration controls">
         <select id="config-select"></select>
-        <button id="add-config-btn" type="button">➕ Add Configuration</button>
-        <button id="delete-config-btn" type="button">🗑️ Delete Configuration</button>
-        <button id="duplicate-config-btn" type="button">📋 Duplicate Configuration</button>
-        <button id="rename-config-btn" type="button">✏️ Rename Configuration</button>
+        <button id="add-config-btn" type="button">➕ Add</button>
+        <button id="delete-config-btn" type="button">🗑️ Delete</button>
+        <button id="duplicate-config-btn" type="button">📋 Duplicate</button>
+        <button id="rename-config-btn" type="button">✏️ Rename</button>
       </div>
       <div id="config-info" className="config-info"></div>
       <div className="configuration-note">

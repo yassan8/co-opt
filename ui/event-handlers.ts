@@ -3215,6 +3215,15 @@ function __coopt_setPopupStatusWithFillDebug(popupWindow: any, baseStatus: strin
     } catch (_) {}
 }
 
+function __coopt_setVisibleDrawCrossDebug(targetWindow: any, text: string): void {
+    try {
+        const doc = targetWindow?.document;
+        if (!doc) return;
+        let banner = doc.getElementById('coopt-drawcross-debug-banner') as HTMLDivElement | null;
+        if (banner) banner.remove();
+    } catch (_) {}
+}
+
 function __coopt_applyPopupCrossSectionLensFill(options: {
     popupWindow: any;
     scene: any;
@@ -3939,6 +3948,7 @@ function ensurePopupMessageHandler(): void {
                 })();
 
                 let crossBeamResult: any;
+                let coordinateReportSurfaceIndex = Math.max(0, opticalSystemRows.length - 1);
                 if (isInfiniteSystem) {
                     const objectAngles = objectRows.map((row: any) => ({
                         x: parseFloat(row.xHeightAngle) || 0,
@@ -3954,6 +3964,7 @@ function ensurePopupMessageHandler(): void {
                         row && isImageRow(row)
                     );
                     const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
+                    coordinateReportSurfaceIndex = targetSurfaceIndex;
                     if (imageSurfaceIndex < 0) {
                         console.warn(`⚠️ [DrawCross] Image surface not detected by object type. Falling back to last row index=${targetSurfaceIndex}.`);
                     }
@@ -4025,6 +4036,27 @@ function ensurePopupMessageHandler(): void {
                             (popupWindow as any).__lastCrossRays = allRays;
                             w.__lastCrossRays = allRays;
                         } catch (_) {}
+                    }
+
+                    try {
+                        const rayTypeCounts = new Map<string, number>();
+                        (allRays || []).forEach((ray: any) => {
+                            const key = String(ray?.beamType ?? ray?.type ?? ray?.originalRay?.type ?? 'unknown').toLowerCase() || 'unknown';
+                            rayTypeCounts.set(key, (rayTypeCounts.get(key) ?? 0) + 1);
+                        });
+                        __coopt_setVisibleDrawCrossDebug(
+                            popupWindow || w,
+                            `[DrawCross popup] rays=${allRays?.length ?? 0} types=${Array.from(rayTypeCounts.entries()).map(([k, v]) => `${k}:${v}`).join(', ') || 'none'}`
+                        );
+                    } catch (_) {}
+
+                    try {
+                        const showDrawCrossCoordinateReport = (w as any).__cooptShowDrawCrossCoordinateReport;
+                        if (typeof showDrawCrossCoordinateReport === 'function') {
+                            showDrawCrossCoordinateReport(allRays, opticalSystemRows, objectRows, coordinateReportSurfaceIndex, popupWindow || w);
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ Popup Draw Cross coordinate report failed:', e);
                     }
 
                     try {
@@ -4447,9 +4479,17 @@ function executeCrossSectionView(options: {
         })();
         
         let result: any;
+        let coordinateReportSurfaceIndex = Math.max(0, opticalSystemRows.length - 1);
         if (isInfiniteSystem) {
             if (typeof generateInfiniteSystemCrossBeam === 'function') {
-                result = generateInfiniteSystemCrossBeam(opticalSystemRows, { rayCount });
+                const isImageRow = (row: any) => {
+                    const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+                    const normalized = String(raw).trim().toLowerCase().replace(/[\s_-]+/g, '');
+                    return normalized === 'image' || normalized.startsWith('image');
+                };
+                const imageSurfaceIndex = opticalSystemRows.findIndex((row: any) => row && isImageRow(row));
+                coordinateReportSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
+                result = generateInfiniteSystemCrossBeam(opticalSystemRows, { rayCount, targetSurfaceIndex: coordinateReportSurfaceIndex });
             }
         } else {
             if (typeof generateCrossBeam === 'function' && objectRows && objectRows.length > 0) {
@@ -4475,6 +4515,18 @@ function executeCrossSectionView(options: {
         };
         
         const rays = collectRaysFromResult(result);
+
+        try {
+            const rayTypeCounts = new Map<string, number>();
+            rays.forEach((ray: any) => {
+                const key = String(ray?.beamType ?? ray?.type ?? ray?.originalRay?.type ?? 'unknown').toLowerCase() || 'unknown';
+                rayTypeCounts.set(key, (rayTypeCounts.get(key) ?? 0) + 1);
+            });
+            __coopt_setVisibleDrawCrossDebug(
+                window,
+                `[DrawCross render] view=${viewAxis} rays=${rays.length} types=${Array.from(rayTypeCounts.entries()).map(([k, v]) => `${k}:${v}`).join(', ') || 'none'}`
+            );
+        } catch (_) {}
         
         const sceneRef = targetScene || w.scene;
         const cameraRef = targetCamera || w.camera;
@@ -4674,6 +4726,15 @@ function executeCrossSectionView(options: {
         
         if (rays && rays.length > 0 && sceneRef && typeof drawCrossBeamRays === 'function') {
             drawCrossBeamRays(rays, sceneRef);
+        }
+
+        try {
+            const showDrawCrossCoordinateReport = (w as any).__cooptShowDrawCrossCoordinateReport;
+            if (typeof showDrawCrossCoordinateReport === 'function') {
+                showDrawCrossCoordinateReport(rays, opticalSystemRows, objectRows, coordinateReportSurfaceIndex, window);
+            }
+        } catch (reportError) {
+            console.warn('[RenderWindow] Draw Cross coordinate report failed:', reportError);
         }
         
         if (sceneRef && typeof harmonizeSceneGeometry === 'function') {

@@ -31,6 +31,7 @@ import { clearOptimizerStop, readDesktopSetting, writeDesktopSetting } from "../
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
 import { calculateSurfaceOrigins, transformPointToLocal } from "../../raytracing/core/ray-tracing.ts";
+import { convertImageHeightToEffectiveObject } from "../../optical/ray-renderer.ts";
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
@@ -66,6 +67,7 @@ type RenderLensColorTarget = {
 
 type RenderCompareScope = 'active' | 'all';
 type RenderCompareOffsetDirection = 'centered' | 'positive' | 'negative';
+type RenderCompareAlignReference = 'object' | 'image';
 
 type RenderCompareEntry = {
   configId: string;
@@ -756,6 +758,7 @@ export default function App() {
   const [renderCompareScope, setRenderCompareScope] = useState<RenderCompareScope>('active');
   const [renderCompareOffsetDirection, setRenderCompareOffsetDirection] = useState<RenderCompareOffsetDirection>('centered');
   const [renderCompareOffsetStepMm, setRenderCompareOffsetStepMm] = useState(20);
+  const [renderCompareAlignReference, setRenderCompareAlignReference] = useState<RenderCompareAlignReference>('object');
   const [renderRayCount, setRenderRayCount] = useState(5);
   const [renderSurfaceColorsCollapsed, setRenderSurfaceColorsCollapsed] = useState(true);
   const [renderLensColorTargets, setRenderLensColorTargets] = useState<RenderLensColorTarget[]>([]);
@@ -1048,18 +1051,19 @@ export default function App() {
 
   const getConfigObjectRowsForRender = (targetWindow: any, cfg: any, systemConfig?: any): any[] => {
     if (!cfg || typeof cfg !== 'object') return [];
+    const opticalSystemRows = getConfigRowsForRender(targetWindow, cfg, systemConfig);
     try {
       const activeId = systemConfig?.activeConfigId;
       const isActive = activeId !== undefined && activeId !== null && String(cfg.id) === String(activeId);
       if (isActive && typeof targetWindow?.getObjectRows === 'function') {
         const tableRows = targetWindow.getObjectRows(targetWindow.tableObject);
         if (Array.isArray(tableRows) && tableRows.length > 0) {
-          return tableRows;
+          return normalizeRenderObjectRows(targetWindow, tableRows, opticalSystemRows);
         }
       }
     } catch (_) {}
 
-    return Array.isArray(cfg.object) ? cfg.object : [];
+    return normalizeRenderObjectRows(targetWindow, Array.isArray(cfg.object) ? cfg.object : [], opticalSystemRows);
   };
 
   const getRenderCompareEntries = (targetWindow: any): RenderCompareEntry[] => {
@@ -1092,23 +1096,82 @@ export default function App() {
     return window as any;
   };
 
-  const getRenderObjectRows = (targetWindow?: any): any[] => {
+  const normalizeRenderObjectRows = (targetWindow: any, objectRows: any[], opticalSystemRows: any[]): any[] => {
+    if (!Array.isArray(objectRows) || objectRows.length === 0) return [];
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return objectRows;
+
+    const objectSurface = opticalSystemRows[0] || {};
+    const thicknessRaw = objectSurface?.thickness;
+    const thicknessStr = String(thicknessRaw ?? '').trim().toUpperCase();
+    const thicknessVal = Number(thicknessRaw);
+    const conjugateType = (
+      thicknessRaw === Infinity ||
+      thicknessStr === 'INF' ||
+      thicknessStr === 'INFINITY' ||
+      thicknessStr === '∞' ||
+      (Number.isFinite(thicknessVal) && Math.abs(thicknessVal) > 1e6)
+    ) ? 'infinite' : 'finite';
+
+    let primaryWavelength = 0.5876;
+    try {
+      if (typeof targetWindow?.getPrimaryWavelength === 'function') {
+        const wl = Number(targetWindow.getPrimaryWavelength());
+        if (Number.isFinite(wl) && wl > 0) primaryWavelength = wl;
+      }
+    } catch (_) {}
+
+    return objectRows.map((row: any) => {
+      const posNorm = String(row?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const storedTarget = row?.__cooptImageHeightTarget;
+      const hasStoredImageHeightTarget = storedTarget
+        && Number.isFinite(Number(storedTarget.x))
+        && Number.isFinite(Number(storedTarget.y));
+      if (posNorm !== 'imageheight' && !hasStoredImageHeightTarget) return row;
+      try {
+        const sourceRow = hasStoredImageHeightTarget
+          ? {
+              ...row,
+              position: 'ImageHeight',
+              xHeightAngle: Number(storedTarget.x),
+              yHeightAngle: Number(storedTarget.y),
+            }
+          : row;
+        return convertImageHeightToEffectiveObject(sourceRow, opticalSystemRows, primaryWavelength, conjugateType);
+      } catch (error) {
+        console.warn('[RenderWindow] ImageHeight normalization failed; using raw object row.', error);
+        return row;
+      }
+    });
+  };
+
+  const getRenderObjectRows = (targetWindow?: any, opticalSystemRowsOverride?: any[]): any[] => {
     const hostWindow = targetWindow || getRenderHostWindow();
+    const opticalSystemRows = Array.isArray(opticalSystemRowsOverride) && opticalSystemRowsOverride.length > 0
+      ? opticalSystemRowsOverride
+      : (() => {
+      try {
+        if (typeof hostWindow?.getOpticalSystemRows === 'function') {
+          const rows = hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem);
+          if (Array.isArray(rows) && rows.length > 0) return rows;
+        }
+      } catch (_) {}
+      return [];
+    })();
     try {
       if (typeof hostWindow?.getObjectRows === 'function') {
         const rows = hostWindow.getObjectRows(hostWindow.tableObject);
-        if (Array.isArray(rows)) return rows;
+        if (Array.isArray(rows)) return normalizeRenderObjectRows(hostWindow, rows, opticalSystemRows);
       }
     } catch (_) {}
     try {
       const systemConfig = getSystemConfigFromWindow(hostWindow);
       const activeCfg = getActiveConfigFromSystemConfig(systemConfig);
-      if (Array.isArray(activeCfg?.object)) return activeCfg.object;
+      if (Array.isArray(activeCfg?.object)) return normalizeRenderObjectRows(hostWindow, activeCfg.object, opticalSystemRows);
     } catch (_) {}
     try {
       if (typeof window?.getObjectRows === 'function') {
         const rows = window.getObjectRows((window as any).tableObject);
-        if (Array.isArray(rows)) return rows;
+        if (Array.isArray(rows)) return normalizeRenderObjectRows(hostWindow, rows, opticalSystemRows);
       }
     } catch (_) {}
     return [];
@@ -1279,6 +1342,53 @@ export default function App() {
       : null;
   };
 
+  const isRenderWindowOpticalArtifact = (child: any): boolean => {
+    const userData = child?.userData || {};
+    const type = String(userData?.type ?? '');
+    if (type === 'popupLensFill' && userData?.isUltraDebugOverlay === true) return false;
+    return !!(
+      type === 'lensSurface' ||
+      type === 'semidiaRing' ||
+      type === 'ring' ||
+      type === 'apertureRect' ||
+      type === 'connectionCornerRing' ||
+      type === 'thinLensArrow' ||
+      type === 'plane-crosshair' ||
+      type === 'surface-origin-marker' ||
+      type === 'design-intent-label' ||
+      type === 'design-intent-label-line' ||
+      type === 'surfaceProfile' ||
+      type === 'connectionLine' ||
+      type === 'renderWindowDirectFill' ||
+      type === 'popupLensFill' ||
+      type === 'optical-ray' ||
+      type === 'ray' ||
+      type === 'crossSection' ||
+      userData?.isLensSurface === true ||
+      userData?.isOpticalElement === true ||
+      userData?.isRayLine === true ||
+      userData?.surfaceType === '3DSurface' ||
+      userData?.rayType === 'crossBeam'
+    );
+  };
+
+  const removeRenderWindowObjects = (sceneForDraw: any, objects: any[]): void => {
+    if (!sceneForDraw || !Array.isArray(objects) || objects.length === 0) return;
+    [...new Set(objects)].forEach((obj: any) => {
+      try { sceneForDraw.remove(obj); } catch (_) {}
+      try { if (obj.geometry) obj.geometry.dispose(); } catch (_) {}
+      try {
+        if (obj.material) {
+          const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+          materials.forEach((material: any) => {
+            try { if (material?.map && typeof material.map.dispose === 'function') material.map.dispose(); } catch (_) {}
+            try { if (typeof material?.dispose === 'function') material.dispose(); } catch (_) {}
+          });
+        }
+      } catch (_) {}
+    });
+  };
+
   const buildRenderCompareOffsets = (count: number): number[] => {
     const step = Math.max(0, Number(renderCompareOffsetStepMm) || 0);
     if (count <= 0 || step <= 0) return Array.from({ length: Math.max(0, count) }, () => 0);
@@ -1303,6 +1413,47 @@ export default function App() {
       return;
     }
     group.position.x = offsetMm;
+  };
+
+  const findImageSurfaceIndexForRenderCompare = (rows: any[]): number => {
+    if (!Array.isArray(rows) || rows.length === 0) return -1;
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      const row = rows[index];
+      const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const surfaceType = String(row?.surfType ?? row?.surfaceType ?? row?.type ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      if (objectType === 'image' || objectType === 'imagesurface' || surfaceType === 'imagesurface' || blockType === 'imagesurface') {
+        return index;
+      }
+    }
+    return rows.length - 1;
+  };
+
+  const resolveRenderCompareImageZ = (rows: any[]): number | null => {
+    try {
+      if (!Array.isArray(rows) || rows.length === 0) return null;
+      const imageSurfaceIndex = findImageSurfaceIndexForRenderCompare(rows);
+      if (imageSurfaceIndex < 0) return null;
+      const origins = calculateSurfaceOrigins(rows);
+      const z = Number(origins?.[imageSurfaceIndex]?.origin?.z);
+      return Number.isFinite(z) ? z : null;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const resolveRenderCompareReferenceZ = (entries: RenderCompareEntry[]): number | null => {
+    if (renderCompareAlignReference !== 'image') return null;
+    const activeEntry = entries.find((entry) => entry.isActive) || entries[0] || null;
+    if (!activeEntry) return null;
+    return resolveRenderCompareImageZ(activeEntry.rows);
+  };
+
+  const applyRenderCompareTransform = (group: THREE.Group, axis: 'YZ' | 'XZ', offsetMm: number, imageAlignZOffsetMm = 0): void => {
+    applyRenderCompareOffset(group, axis, offsetMm);
+    if (Number.isFinite(imageAlignZOffsetMm) && Math.abs(imageAlignZOffsetMm) >= 1e-9) {
+      group.position.z += imageAlignZOffsetMm;
+    }
   };
 
   useEffect(() => {
@@ -2459,53 +2610,32 @@ const collectLegacyCrossRays = async (
         return Number.isFinite(parsed) ? parsed : 0;
       };
 
-      let cachedInfiniteImageHeightEfl: number | null | undefined;
-      const getInfiniteImageHeightEfl = (): number | null => {
-        if (cachedInfiniteImageHeightEfl !== undefined) return cachedInfiniteImageHeightEfl;
-        try {
-          const calculateParaxialData = w.calculateParaxialData;
-          if (typeof calculateParaxialData !== 'function') {
-            cachedInfiniteImageHeightEfl = null;
-            return cachedInfiniteImageHeightEfl;
-          }
-          const paraxial = calculateParaxialData(opticalSystemRows, primaryWavelength);
-          const focalLength = Number(paraxial?.focalLength);
-          cachedInfiniteImageHeightEfl = Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12
-            ? focalLength
-            : null;
-          return cachedInfiniteImageHeightEfl;
-        } catch (_) {
-          cachedInfiniteImageHeightEfl = null;
-          return cachedInfiniteImageHeightEfl;
-        }
-      };
-
       let crossBeamResult: any = null;
       const crossType = axis === 'YZ' ? 'vertical' : (axis === 'XZ' ? 'horizontal' : 'both');
       const requestedPupilSamplingMode = readCurrentForceMode() || undefined;
       const generateStartMs = performance.now();
       if (isInfiniteSystem && typeof w.generateInfiniteSystemCrossBeam === 'function') {
         const objectAngles = (objectRows.length ? objectRows : [{}]).map((row: any) => {
-          const posNorm = String(row?.position ?? '').trim().toLowerCase();
-          if (posNorm === 'imageheight') {
-            const targetX = toNumber(row?.xHeightAngle ?? row?.x);
-            const targetY = toNumber(row?.yHeightAngle ?? row?.y);
-            const efl = getInfiniteImageHeightEfl();
-            if (Number.isFinite(efl)) {
-              const radToDeg = 180 / Math.PI;
-              return {
-                x: Math.atan2(targetX, efl as number) * radToDeg,
-                y: Math.atan2(targetY, efl as number) * radToDeg,
-              };
-            }
-            if (typeof w.convertImageHeightToEffectiveObject === 'function') {
-              try {
-                const conjugateType = 'infinite';
-                const effective = w.convertImageHeightToEffectiveObject(row, opticalSystemRows, primaryWavelength, conjugateType);
-                return { x: toNumber(effective?.xHeightAngle ?? effective?.x), y: toNumber(effective?.yHeightAngle ?? effective?.y) };
-              } catch (e) {
-                console.warn('[collectLegacyCrossRays] ImageHeight conversion failed, using raw value:', e);
-              }
+          const posNorm = String(row?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+          const storedTarget = row?.__cooptImageHeightTarget;
+          const hasStoredImageHeightTarget = storedTarget
+            && Number.isFinite(Number(storedTarget.x))
+            && Number.isFinite(Number(storedTarget.y));
+          if (posNorm === 'imageheight' || hasStoredImageHeightTarget) {
+            try {
+              const conjugateType = 'infinite';
+              const sourceRow = hasStoredImageHeightTarget
+                ? {
+                    ...row,
+                    position: 'ImageHeight',
+                    xHeightAngle: Number(storedTarget.x),
+                    yHeightAngle: Number(storedTarget.y),
+                  }
+                : row;
+              const effective = convertImageHeightToEffectiveObject(sourceRow, opticalSystemRows, primaryWavelength, conjugateType);
+              return { x: toNumber(effective?.xHeightAngle ?? effective?.x), y: toNumber(effective?.yHeightAngle ?? effective?.y) };
+            } catch (e) {
+              console.warn('[collectLegacyCrossRays] ImageHeight conversion failed, using raw value:', e);
             }
           }
           return { x: toNumber(row?.xHeightAngle ?? row?.x), y: toNumber(row?.yHeightAngle ?? row?.y) };
@@ -3152,11 +3282,7 @@ const collectLegacyCrossRays = async (
               compareGroupsToRemove.push(child);
               return;
             }
-            if (child?.userData?.type === 'optical-ray' || child?.userData?.isRayLine || child?.userData?.rayType === 'crossBeam') {
-              raysToRemove.push(child);
-            }
-            // Clear popupLensFill objects left by the legacy draw-cross path
-            if (child?.userData?.type === 'popupLensFill' && !child?.userData?.isUltraDebugOverlay) {
+            if (isRenderWindowOpticalArtifact(child)) {
               raysToRemove.push(child);
             }
           });
@@ -3172,14 +3298,7 @@ const collectLegacyCrossRays = async (
             } catch (_) {}
             sceneForDraw.remove(group);
           });
-          [...new Set(raysToRemove)].forEach((obj: any) => {
-            sceneForDraw.remove(obj);
-            if (obj.geometry) obj.geometry.dispose();
-            if (obj.material) {
-              if (Array.isArray(obj.material)) obj.material.forEach((m: any) => m.dispose());
-              else obj.material.dispose();
-            }
-          });
+          removeRenderWindowObjects(sceneForDraw, raysToRemove);
         } catch (_) {}
       }
       timingStages.push({ label: 'scene', ms: performance.now() - scenePrepStartMs });
@@ -3188,8 +3307,13 @@ const collectLegacyCrossRays = async (
         const surfacesStartMs = performance.now();
         if (compareEnabled) {
           const offsets = buildRenderCompareOffsets(compareEntries.length);
+          const compareReferenceImageZ = resolveRenderCompareReferenceZ(compareEntries);
           for (let index = 0; index < compareEntries.length; index += 1) {
             const entry = compareEntries[index];
+            const entryImageZ = renderCompareAlignReference === 'image' ? resolveRenderCompareImageZ(entry.rows) : null;
+            const imageAlignZOffset = (Number.isFinite(Number(compareReferenceImageZ)) && Number.isFinite(Number(entryImageZ)))
+              ? Number(compareReferenceImageZ) - Number(entryImageZ)
+              : 0;
             const group = new THREE.Group();
             group.name = `render-compare-${entry.configId}`;
             group.userData = {
@@ -3197,9 +3321,11 @@ const collectLegacyCrossRays = async (
               configId: entry.configId,
               configName: entry.name,
               compareOffsetMm: offsets[index] || 0,
+              compareAlignReference: renderCompareAlignReference,
+              compareImageAlignZOffsetMm: imageAlignZOffset,
               compareAxis: axis,
             };
-            applyRenderCompareOffset(group, axis, offsets[index] || 0);
+            applyRenderCompareTransform(group, axis, offsets[index] || 0, imageAlignZOffset);
             sceneForDraw.add(group);
             w.drawOpticalSystemSurfaces({
               opticalSystemData: entry.rows,
@@ -3262,13 +3388,31 @@ const collectLegacyCrossRays = async (
 
       if (!compareEnabled) {
         const collectStartMs = performance.now();
-        const renderObjectRows = getRenderObjectRows(hostWindow);
+        const renderObjectRows = getRenderObjectRows(hostWindow, rows);
         const legacyCrossRays = await collectLegacyCrossRays(
           rows,
           axis,
           Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined
         );
         rayCollectMs += performance.now() - collectStartMs;
+        try {
+          const showDrawCrossCoordinateReport = (w as any).__cooptShowDrawCrossCoordinateReport;
+          if (typeof showDrawCrossCoordinateReport === 'function') {
+            const imageSurfaceIndex = rows.findIndex((row: any) => {
+              const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+              const normalized = String(raw).trim().toLowerCase().replace(/[\s_-]+/g, '');
+              return normalized === 'image' || normalized.startsWith('image');
+            });
+            const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, rows.length - 1);
+            showDrawCrossCoordinateReport(
+              legacyCrossRays,
+              rows,
+              Array.isArray(renderObjectRows) ? renderObjectRows : [],
+              targetSurfaceIndex,
+              window
+            );
+          }
+        } catch (_) {}
         if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
           const drawStartMs = performance.now();
           w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
@@ -3280,6 +3424,8 @@ const collectLegacyCrossRays = async (
         } catch (fillErr) {
           console.warn('[RenderWindow] Cross-section lens fill failed:', fillErr);
         }
+
+        setRenderVisibleDebug('');
       }
       if (rayCollectMs > 0) timingStages.push({ label: 'rayCollect', ms: rayCollectMs });
       if (rayDrawMs > 0) timingStages.push({ label: 'rayDraw', ms: rayDrawMs });
@@ -3319,6 +3465,7 @@ const collectLegacyCrossRays = async (
     const blockPerfBefore = readCooptPerfCounters();
 
     try {
+      setRenderVisibleDebug('');
       ensureRenderCanvasAttached();
       const rafStartMs = performance.now();
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
@@ -3409,27 +3556,11 @@ const collectLegacyCrossRays = async (
       try {
         const objectsToRemove: any[] = [];
         sceneForDraw.traverse((child: any) => {
-          const type = child?.userData?.type;
-          if (
-            type === 'optical-ray' ||
-            child?.userData?.isRayLine ||
-            type === 'popupLensFill' ||
-            type === 'renderWindowDirectFill' ||
-            type === 'surfaceProfile' ||
-            type === 'connectionLine' ||
-            type === 'renderCompareGroup'
-          ) {
+          if (child?.userData?.type === 'renderCompareGroup' || isRenderWindowOpticalArtifact(child)) {
             objectsToRemove.push(child);
           }
         });
-        [...new Set(objectsToRemove)].forEach((obj: any) => {
-          sceneForDraw.remove(obj);
-          if (obj.geometry) obj.geometry.dispose();
-          if (obj.material) {
-            if (Array.isArray(obj.material)) obj.material.forEach((m: any) => m.dispose());
-            else obj.material.dispose();
-          }
-        });
+        removeRenderWindowObjects(sceneForDraw, objectsToRemove);
       } catch (_) {}
       timingStages.push({ label: 'scene', ms: performance.now() - scenePrepStartMs });
 
@@ -3461,7 +3592,7 @@ const collectLegacyCrossRays = async (
       }
 
       const rayCollectStartMs = performance.now();
-      const renderObjectRows = getRenderObjectRows(hostWindow);
+      const renderObjectRows = getRenderObjectRows(hostWindow, rows);
       const legacyCrossRays = await collectLegacyCrossRays(
         rows,
         'BOTH',
@@ -3618,6 +3749,13 @@ const collectLegacyCrossRays = async (
     setRenderWindowStatus(baseStatus);
   };
 
+  const setRenderVisibleDebug = (_text: string) => {
+    try {
+      const banner = window.document.getElementById('coopt-drawcross-debug-banner');
+      if (banner) banner.remove();
+    } catch (_) {}
+  };
+
   const redrawCurrentRenderView = async (
     modeOverride?: '3D' | 'XZ' | 'YZ',
     axisOverride?: 'YZ' | 'XZ'
@@ -3656,7 +3794,7 @@ const collectLegacyCrossRays = async (
     redrawCurrentRenderView().catch(() => {
       setRenderWindowStatus('Draw failed');
     });
-  }, [isRenderWindowMode, renderCompareScope, renderCompareOffsetDirection, renderCompareOffsetStepMm]);
+  }, [isRenderWindowMode, renderCompareScope, renderCompareOffsetDirection, renderCompareOffsetStepMm, renderCompareAlignReference]);
 
   useEffect(() => {
     if (!isRenderWindowMode) return;
@@ -5593,6 +5731,17 @@ const collectLegacyCrossRays = async (
       });
     };
 
+    const handleRenderCompareScopeChange = (scope: RenderCompareScope) => {
+      if (renderViewModeRef.current === '3D') {
+        const sectionAxis = renderViewAxisRef.current === 'XZ' ? 'XZ' : 'YZ';
+        renderViewAxisRef.current = sectionAxis;
+        renderViewModeRef.current = sectionAxis;
+        setRenderViewAxis(sectionAxis);
+        setRenderViewMode(sectionAxis);
+      }
+      setRenderCompareScope(scope);
+    };
+
     const handleSetLensColor = (target: RenderLensColorTarget, colorHex: string | null) => {
       const keys = Array.isArray(target?.keys) ? target.keys : [target?.key];
       const validKeys = [...new Set(keys.map((k) => String(k || '').trim()).filter(Boolean))];
@@ -5642,9 +5791,11 @@ const collectLegacyCrossRays = async (
 
     const comparePreviewEntries = renderCompareScope === 'all' ? getRenderCompareEntries(window as any) : [];
     const comparePreviewOffsets = buildRenderCompareOffsets(comparePreviewEntries.length);
+    const comparePreviewReferenceImageZ = resolveRenderCompareReferenceZ(comparePreviewEntries);
     const compareDirectionLabel = renderViewMode === 'YZ'
       ? (renderCompareOffsetDirection === 'positive' ? 'Up' : renderCompareOffsetDirection === 'negative' ? 'Down' : 'Centered')
       : (renderCompareOffsetDirection === 'positive' ? 'Right' : renderCompareOffsetDirection === 'negative' ? 'Left' : 'Centered');
+    const compareAlignLabel = renderCompareAlignReference === 'image' ? 'Image' : 'Object';
     return (
       <>
         <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', margin: 0 }}>
@@ -5656,7 +5807,7 @@ const collectLegacyCrossRays = async (
             <select
               id="render-compare-scope"
               value={renderCompareScope}
-              onChange={(e) => setRenderCompareScope(e.target.value === 'all' ? 'all' : 'active')}
+              onChange={(e) => handleRenderCompareScopeChange(e.target.value === 'all' ? 'all' : 'active')}
               style={{ height: 28 }}
             >
               <option value="active">Active only</option>
@@ -5690,6 +5841,17 @@ const collectLegacyCrossRays = async (
               disabled={renderCompareScope !== 'all'}
               style={{ width: 86 }}
             />
+            <label htmlFor="render-compare-align" style={{ fontSize: 12, fontWeight: 500, opacity: renderCompareScope === 'all' && renderViewMode !== '3D' ? 1 : 0.5 }}>Align</label>
+            <select
+              id="render-compare-align"
+              value={renderCompareAlignReference}
+              onChange={(e) => setRenderCompareAlignReference(e.target.value === 'image' ? 'image' : 'object')}
+              disabled={renderCompareScope !== 'all' || renderViewMode === '3D'}
+              style={{ height: 28 }}
+            >
+              <option value="object">Object</option>
+              <option value="image">Image</option>
+            </select>
             <label htmlFor="render-ray-count-input" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Raynum</label>
             <input
               id="render-ray-count-input"
@@ -5728,7 +5890,7 @@ const collectLegacyCrossRays = async (
               <span style={{ fontWeight: 400, fontSize: 12, color: '#666' }}>
                 {renderViewMode === '3D'
                   ? 'Compare offset applies to X-Z / Y-Z views.'
-                  : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm`}
+                  : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm, align ${compareAlignLabel}`}
               </span>
             )}
             <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: 12, color: '#666' }}>{renderWindowStatus}</span>
@@ -5758,10 +5920,15 @@ const collectLegacyCrossRays = async (
                   {comparePreviewEntries.map((entry, index) => {
                     const offset = comparePreviewOffsets[index] || 0;
                     const signed = offset > 0 ? `+${offset}` : `${offset}`;
+                    const imageZ = renderCompareAlignReference === 'image' ? resolveRenderCompareImageZ(entry.rows) : null;
+                    const zOffset = (Number.isFinite(Number(comparePreviewReferenceImageZ)) && Number.isFinite(Number(imageZ)))
+                      ? Number(comparePreviewReferenceImageZ) - Number(imageZ)
+                      : 0;
+                    const zSigned = zOffset > 0 ? `+${zOffset.toFixed(3)}` : zOffset.toFixed(3);
                     return (
                       <div key={entry.configId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontSize: 12, color: '#374151' }}>
                         <span style={{ fontWeight: entry.isActive ? 700 : 500 }}>{entry.name}{entry.isActive ? ' (active)' : ''}</span>
-                        <span>{signed} mm</span>
+                        <span>{renderCompareAlignReference === 'image' ? `${signed} mm, Z ${zSigned}` : `${signed} mm`}</span>
                       </div>
                     );
                   })}

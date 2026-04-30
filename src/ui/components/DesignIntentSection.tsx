@@ -22,6 +22,10 @@ export default function DesignIntentSection() {
         <button id="design-intent-param-all-on-btn" type="button">Parameter All ON</button>
         <button id="design-intent-param-all-off-btn" type="button">Parameter All OFF</button>
         <button id="design-intent-auto-set-apertures-btn" type="button">Auto-set apertures</button>
+        <label className="design-intent-toolbar-toggle" htmlFor="design-intent-quick-editor-toggle">
+          <input id="design-intent-quick-editor-toggle" type="checkbox" aria-label="Quick editor" />
+          <span>Quick editor</span>
+        </label>
       </div>
 
       <div

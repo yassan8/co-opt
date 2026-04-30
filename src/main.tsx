@@ -4,6 +4,29 @@ import App from "./app/App";
 import "./app.css";
 import "../core/undo-history.ts";
 
+function initializeGA(measurementId: string): void {
+  const w = window as any;
+  if (w.__cooptGaInitialized) return;
+  w.__cooptGaInitialized = true;
+
+  const script = document.createElement("script");
+  script.async = true;
+  script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(measurementId)}`;
+  document.head.appendChild(script);
+
+  w.dataLayer = w.dataLayer || [];
+  w.gtag = w.gtag || function (...args: any[]) { w.dataLayer.push(args); };
+  w.gtag("js", new Date());
+  w.gtag("config", measurementId);
+}
+
+function installProductionAnalytics(): void {
+  if (import.meta.env.PROD) {
+    // Run GA only in production builds (yassan8.github.io)
+    initializeGA("G-JCN7K04XZY");
+  }
+}
+
 function installVersionUpdatePrompt(): void {
   if (!import.meta.env.PROD) return;
   const w = window as any;
@@ -97,6 +120,7 @@ import("../main.ts").then(() => {
   }
 
   ReactDOM.createRoot(container).render(<App />);
+  installProductionAnalytics();
   installVersionUpdatePrompt();
 
   // Notify main.ts that React has been mounted
@@ -110,6 +134,7 @@ import("../main.ts").then(() => {
   const container = document.getElementById("react-root");
   if (container) {
     ReactDOM.createRoot(container).render(<App />);
+    installProductionAnalytics();
     installVersionUpdatePrompt();
     // Notify main.ts that React has been mounted (fallback path)
     (window as any).__cooptReactMounted = true;

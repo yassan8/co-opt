@@ -78,6 +78,64 @@ type ChangeRecord = {
 
 // Default stop semiDiameter constant
 const DEFAULT_STOP_SEMI_DIAMETER = 10;
+const COOPT_AUTO_APERTURE_MARGIN_FACTOR = 1.10;
+const COOPT_AUTO_APERTURE_MARGIN_MM = 0.05;
+
+function __cooptApplyAutoApertureMargin(radiusMm: number, factor = COOPT_AUTO_APERTURE_MARGIN_FACTOR, absoluteMm = COOPT_AUTO_APERTURE_MARGIN_MM): number {
+    const radius = Number(radiusMm);
+    if (!(Number.isFinite(radius) && radius > 0)) return radius;
+    const marginFactor = Number.isFinite(Number(factor)) && Number(factor) >= 1 ? Number(factor) : COOPT_AUTO_APERTURE_MARGIN_FACTOR;
+    const marginMm = Number.isFinite(Number(absoluteMm)) && Number(absoluteMm) >= 0 ? Number(absoluteMm) : COOPT_AUTO_APERTURE_MARGIN_MM;
+    return Math.max(radius * marginFactor, radius + marginMm);
+}
+
+function __cooptAppendImageHeightDiagToSystemData(record: any): void {
+    try {
+        const textarea = (document.getElementById('system-data')
+            || document.getElementById('systemData')
+            || document.querySelector('textarea[data-system-data]')
+            || document.querySelector('#system-data, #systemData, textarea.system-data')) as HTMLTextAreaElement | null;
+        if (!textarea) return;
+        const line = `[ImageHeightDiag] ${String(record?.label ?? 'unknown')} ${JSON.stringify(record)}`;
+        textarea.value = textarea.value ? `${textarea.value}\n${line}` : line;
+    } catch (_) {}
+}
+
+function __cooptSummarizeImageHeightDiag(record: any): string {
+    const label = String(record?.label ?? 'unknown');
+    const renderErrorX = Number(record?.renderError?.x);
+    const renderErrorY = Number(record?.renderError?.y);
+    const solveErrorX = Number(record?.error?.x ?? record?.solve?.error?.x);
+    const solveErrorY = Number(record?.error?.y ?? record?.solve?.error?.y);
+    if (Number.isFinite(renderErrorX) || Number.isFinite(renderErrorY)) {
+        return `ImageHeightDiag ${label}\nrenderError: x=${Number.isFinite(renderErrorX) ? renderErrorX.toFixed(6) : 'n/a'}, y=${Number.isFinite(renderErrorY) ? renderErrorY.toFixed(6) : 'n/a'}`;
+    }
+    if (Number.isFinite(solveErrorX) || Number.isFinite(solveErrorY)) {
+        return `ImageHeightDiag ${label}\nsolveError: x=${Number.isFinite(solveErrorX) ? solveErrorX.toFixed(6) : 'n/a'}, y=${Number.isFinite(solveErrorY) ? solveErrorY.toFixed(6) : 'n/a'}`;
+    }
+    return `ImageHeightDiag ${label}`;
+}
+
+function setupImageHeightDiagnosticsBridge(): void {
+    if ((window as any).__cooptImageHeightDiagBridgeBound === true) return;
+    (window as any).__cooptImageHeightDiagBridgeBound = true;
+
+    window.addEventListener('message', (event) => {
+        try {
+            if (event?.data?.type !== 'COOPT_IMAGEHEIGHT_DIAG') return;
+            const record = event.data.payload;
+            const logs = Array.isArray((window as any).__COOPT_IMAGEHEIGHT_DIAG_LOGS)
+                ? (window as any).__COOPT_IMAGEHEIGHT_DIAG_LOGS
+                : [];
+            logs.push(record);
+            if (logs.length > 50) logs.splice(0, logs.length - 50);
+            (window as any).__COOPT_IMAGEHEIGHT_DIAG_LOGS = logs;
+            (window as any).__COOPT_LAST_IMAGEHEIGHT_DIAG = record;
+        } catch (error) {
+            console.warn('⚠️ [ImageHeightDiag] Failed to receive diagnostic message:', error);
+        }
+    });
+}
 
 // ============================================================================
 // PARAMETER SLIDER HELPER FUNCTIONS
@@ -799,6 +857,7 @@ function __zmxGetApertureKeysByBlockType(blockType: any): string[] {
     if (t === 'Lens' || t === 'PositiveLens') return ['front', 'back'];
     if (t === 'Doublet') return ['s1', 's2', 's3'];
     if (t === 'Triplet') return ['s1', 's2', 's3', 's4'];
+    if (t === 'SingleSurface' || t === 'Mirror') return ['semidia'];
     return [];
 }
 
@@ -1193,6 +1252,91 @@ function __zmxBuildRowsForSemidiaTrace(rows: any[]): any[] {
     return cloned;
 }
 
+function __zmxApplyChiefRaySemidiaFloorFromImageHeight(rows: any[], wavelengthMicrons: number, objectRows: any[] = [], options: { apertureMarginFactor?: number; apertureMarginMm?: number } = {}): void {
+    try {
+        if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(objectRows) || objectRows.length === 0) return;
+        const resolved = __cooptResolveMaxImageHeightObjectSample(objectRows);
+        if (!resolved || !objectRows[resolved.index]) return;
+
+        const imageSurfaceIndex = rows.findIndex((row: any) => __zmxIsImageOpticalRow(row));
+        const rowsForTrace = __zmxBuildRowsForSemidiaTrace(rows);
+        const generateChiefRay = typeof w.generateRayStartPointsForObject === 'function' ? w.generateRayStartPointsForObject : null;
+        const traceRayFn = typeof w.traceRay === 'function' ? w.traceRay : null;
+        const calcSurfaceOrigins = (w as any).calculateSurfaceOrigins || (w as any).mainDebugFunctions?.calculateSurfaceOrigins;
+        if (typeof generateChiefRay !== 'function' || typeof traceRayFn !== 'function' || typeof calcSurfaceOrigins !== 'function') return;
+
+        const rayStarts = generateChiefRay(objectRows[resolved.index], rowsForTrace, 1, null, {
+            wavelengthUm: wavelengthMicrons,
+            wavelength: wavelengthMicrons,
+            aimThroughStop: true,
+            useChiefRayAnalysis: true,
+            allowStopBasedOriginSolve: true,
+            ...(imageSurfaceIndex >= 0 ? { targetSurfaceIndex: imageSurfaceIndex } : {})
+        });
+        if (!Array.isArray(rayStarts) || rayStarts.length === 0) return;
+
+        const chiefRay = rayStarts[0];
+        if (!chiefRay?.startP || !chiefRay?.dir) return;
+
+        const tracedPath = traceRayFn(
+            rowsForTrace,
+            {
+                pos: chiefRay.startP,
+                dir: chiefRay.dir,
+                wavelength: wavelengthMicrons,
+            },
+            1.0,
+            null,
+            imageSurfaceIndex >= 0 ? imageSurfaceIndex : null,
+            { allowNonStrict: true, requireWasmRayTracing: false, disableWasmRayTracing: false }
+        );
+        if (!Array.isArray(tracedPath) || tracedPath.length === 0) return;
+
+        const surfaceInfoList = calcSurfaceOrigins(rowsForTrace);
+        const updates: string[] = [];
+
+        for (let surfaceIndex = 0; surfaceIndex < rows.length; surfaceIndex += 1) {
+            const row = rows[surfaceIndex];
+            if (!__zmxIsPhysicalOpticalRow(row)) continue;
+
+            const pointIndex = __zmxGetRayPathPointIndexForSurfaceIndex(rowsForTrace, surfaceIndex);
+            let point = null;
+            if (pointIndex !== null && pointIndex >= 0 && pointIndex < tracedPath.length) {
+                point = tracedPath[pointIndex];
+            }
+            if (!point) {
+                for (let pathIndex = tracedPath.length - 1; pathIndex >= 0; pathIndex -= 1) {
+                    const candidate = tracedPath[pathIndex];
+                    const candidateSurfaceIndex = Number(candidate?.surfaceIndex ?? candidate?.surface ?? candidate?.surfaceIdx);
+                    if (Number.isInteger(candidateSurfaceIndex) && candidateSurfaceIndex === surfaceIndex) {
+                        point = candidate;
+                        break;
+                    }
+                }
+            }
+            if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) continue;
+
+            const surfaceInfo = Array.isArray(surfaceInfoList) ? surfaceInfoList[surfaceIndex] : null;
+            const localPoint = surfaceInfo ? (__zmxTransformPointToSurfaceLocal(point, surfaceInfo) || point) : point;
+            const chiefRadiusRaw = Math.hypot(Number(localPoint?.x) || 0, Number(localPoint?.y) || 0);
+            if (!(Number.isFinite(chiefRadiusRaw) && chiefRadiusRaw > 0)) continue;
+            const chiefRadius = __cooptApplyAutoApertureMargin(chiefRadiusRaw, options?.apertureMarginFactor, options?.apertureMarginMm);
+
+            const prev = __zmxReadPositiveFiniteSemidiaMm(row);
+            if (prev === null || chiefRadius > prev + 1e-6) {
+                row.semidia = chiefRadius;
+                updates.push(`Surface ${Number.isFinite(Number(row?.surf)) ? Number(row.surf) : surfaceIndex} chief=${chiefRadius.toFixed(6)}mm`);
+            }
+        }
+
+        if (updates.length > 0) {
+            console.log('[autoCalculateMissingSemidia] Chief-ray aperture floors:', updates);
+        }
+    } catch (err) {
+        console.warn('[autoCalculateMissingSemidia] Chief-ray aperture floor failed:', err);
+    }
+}
+
 function __zmxResolveMaxObjectAnglesDeg(objectRows: any[]): { x: number; y: number } {
     let maxX = 0;
     let maxY = 0;
@@ -1261,19 +1405,6 @@ function __cooptNormalizeObjectSampleForTrace(sample: { x: number; y: number; z?
 
     const targetX = Number(sample?.x ?? 0);
     const targetY = Number(sample?.y ?? 0);
-    if (isInfinite) {
-        try {
-            const paraxial = calculateParaxialData(opticalRows, wavelengthMicrons);
-            const focalLength = Number(paraxial?.focalLength);
-            if (Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12) {
-                const radToDeg = 180 / Math.PI;
-                return {
-                    x: Math.atan2(targetX, focalLength) * radToDeg,
-                    y: Math.atan2(targetY, focalLength) * radToDeg,
-                };
-            }
-        } catch (_) {}
-    }
 
     try {
         if (typeof w.convertImageHeightToEffectiveObject === 'function') {
@@ -1409,7 +1540,7 @@ function __zmxSolveCrossRayToStopCoordAxis(
     }
 }
 
-function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicrons: number, objectRows: any[] = [], options: { forceOverwriteSemidia?: boolean; strictMaxImageHeightMarginalOnly?: boolean } = {}): void {
+function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicrons: number, objectRows: any[] = [], options: { forceOverwriteSemidia?: boolean; strictMaxImageHeightMarginalOnly?: boolean; apertureMarginFactor?: number; apertureMarginMm?: number } = {}): void {
     const stopIndex = rows.findIndex((r: any) => {
         const ot = String(r?.['object type'] ?? r?.object ?? '').toLowerCase();
         return ot === 'stop';
@@ -1555,6 +1686,10 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
 
     if (filteredRays.length === 0) return;
 
+    const calcSurfaceOrigins = (w as any).calculateSurfaceOrigins || (w as any).mainDebugFunctions?.calculateSurfaceOrigins;
+    const surfaceInfoList = typeof calcSurfaceOrigins === 'function' ? calcSurfaceOrigins(rowsForTrace) : null;
+    const surfacePointIndices = rows.map((_: any, surfaceIndex: number) => __zmxGetRayPathPointIndexForSurfaceIndex(rowsForTrace, surfaceIndex));
+
     const maxBySurface = new Array(rows.length).fill(0);
     const maxBySurfaceSource = new Array(rows.length).fill(null);
     for (const ray of filteredRays) {
@@ -1566,11 +1701,29 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
                     ? ray.path
                     : (Array.isArray(ray?.ray?.path) ? ray.ray.path : null)));
         if (!Array.isArray(rayPath)) continue;
-        const rayPathLen = Math.min(rayPath.length, rows.length);
-        for (let i = 0; i < rayPathLen; i++) {
-            const p = rayPath[i];
-            if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
-            const rr = Math.sqrt(p.x * p.x + p.y * p.y);
+        for (let i = 0; i < rows.length; i++) {
+            const pointIndex = surfacePointIndices[i];
+            if (pointIndex === null) continue;
+
+            let p = null;
+            if (pointIndex >= 0 && pointIndex < rayPath.length) {
+                p = rayPath[pointIndex];
+            }
+            if ((!p || !Number.isFinite(Number(p.x)) || !Number.isFinite(Number(p.y))) && Array.isArray(rayPath)) {
+                for (let pathIndex = rayPath.length - 1; pathIndex >= 0; pathIndex -= 1) {
+                    const candidate = rayPath[pathIndex];
+                    const candidateSurfaceIndex = Number(candidate?.surfaceIndex ?? candidate?.surface ?? candidate?.surfaceIdx);
+                    if (Number.isInteger(candidateSurfaceIndex) && candidateSurfaceIndex === i) {
+                        p = candidate;
+                        break;
+                    }
+                }
+            }
+            if (!p || !Number.isFinite(Number(p.x)) || !Number.isFinite(Number(p.y))) continue;
+
+            const surfaceInfo = Array.isArray(surfaceInfoList) ? surfaceInfoList[i] : null;
+            const localPoint = surfaceInfo ? (__zmxTransformPointToSurfaceLocal(p, surfaceInfo) || p) : p;
+            const rr = Math.hypot(Number(localPoint?.x) || 0, Number(localPoint?.y) || 0);
             if (rr > maxBySurface[i]) {
                 maxBySurface[i] = rr;
                 maxBySurfaceSource[i] = {
@@ -1592,7 +1745,8 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
 
         const wasMissing = __zmxIsMissingSemidia(r);
         const prev = __zmxReadPositiveFiniteSemidiaMm(r);
-        const maxR = maxBySurface[i];
+        const maxRRaw = maxBySurface[i];
+        const maxR = __cooptApplyAutoApertureMargin(maxRRaw, options?.apertureMarginFactor, options?.apertureMarginMm);
         if (maxR > 0 && (forceOverwriteSemidia || wasMissing || prev === null || maxR > (prev + 1e-6) || maxR < (prev - 1e-6))) {
             r.semidia = maxR;
             updateCount++;
@@ -1606,6 +1760,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
             updateSummaries.push([
                 `${surfaceLabel} (${typeLabel})`,
                 `semidia=${maxR.toFixed(6)}mm`,
+                maxRRaw > 0 ? `required=${maxRRaw.toFixed(6)}mm` : null,
                 winner?.rayType ? `ray=${winner.rayType}` : null,
                 objectSummary ? `winner=${objectSummary}` : null
             ].filter(Boolean).join(' | '));
@@ -1616,7 +1771,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
     }
 }
 
-function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], options: { entrancePupilDiameterMm?: number; stopSemidiaWasMissing?: boolean; forceOverwriteSemidia?: boolean } = {}): void {
+function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], options: { entrancePupilDiameterMm?: number; stopSemidiaWasMissing?: boolean; forceOverwriteSemidia?: boolean; strictMaxImageHeightMarginalOnly?: boolean; apertureMarginFactor?: number; apertureMarginMm?: number } = {}): void {
     console.log('[autoCalculateMissingSemidia] START');
     const tbl = w.tableOpticalSystem || w.tableOpticalSystem;
     const rows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
@@ -1666,14 +1821,19 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], optio
         }
 
         __zmxApplySemidiaOverridesFromMarginalRays(rows, primaryWavelength, objectRows, {
-            forceOverwriteSemidia: options?.forceOverwriteSemidia === true
+            forceOverwriteSemidia: options?.forceOverwriteSemidia === true,
+            strictMaxImageHeightMarginalOnly: options?.strictMaxImageHeightMarginalOnly === true,
+            apertureMarginFactor: options?.apertureMarginFactor,
+            apertureMarginMm: options?.apertureMarginMm
+        });
+        __zmxApplyChiefRaySemidiaFloorFromImageHeight(rows, primaryWavelength, objectRows, {
+            apertureMarginFactor: options?.apertureMarginFactor,
+            apertureMarginMm: options?.apertureMarginMm
         });
 
-        const imageSurfaceIndex = rows.findIndex((row: any) => __zmxIsImageOpticalRow(row));
         const imageChiefSemidia = __zmxResolveImageSurfaceSemidiaFromChiefRays(rows, primaryWavelength, objectRows);
-        if (imageSurfaceIndex >= 0 && Number.isFinite(imageChiefSemidia) && (imageChiefSemidia as number) > 0) {
-            rows[imageSurfaceIndex].semidia = imageChiefSemidia;
-            console.log(`[autoCalculateMissingSemidia] ImageSurface chief-ray semidia=${Number(imageChiefSemidia).toFixed(6)}mm`);
+        if (Number.isFinite(imageChiefSemidia) && (imageChiefSemidia as number) > 0) {
+            console.log(`[autoCalculateMissingSemidia] ImageSurface chief-ray semidia resolved but not applied=${Number(imageChiefSemidia).toFixed(6)}mm`);
         }
 
         console.log('[autoCalculateMissingSemidia] Ray tracing completed. Sample rows with semidia:', 
@@ -1815,7 +1975,9 @@ function autoSetBlockAperturesFromLargestObjectCondition(): boolean {
 
         autoCalculateMissingSemidia(sourceRows, objectRows, {
             forceOverwriteSemidia: true,
-            strictMaxImageHeightMarginalOnly: true
+            strictMaxImageHeightMarginalOnly: true,
+            apertureMarginFactor: COOPT_AUTO_APERTURE_MARGIN_FACTOR,
+            apertureMarginMm: COOPT_AUTO_APERTURE_MARGIN_MM
         } as any);
         __zmxSyncDesignIntentApertureFromOpticalRows();
         return true;
@@ -1886,6 +2048,32 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
         console.log(`[__zmxSyncDesignIntentApertureFromOpticalRows] Provenance-based updates: ${provenanceUpdateCount}`);
 
         const fallbackRows = tableRows.filter((row: any) => __zmxIsPhysicalOpticalRow(row));
+        // Secondary fallback: if table rows had no provenance (e.g. Tabulator setData is async and getData
+        // returned stale rows), use activeCfg.opticalSystem which was synchronously saved by
+        // autoCalculateMissingSemidia with _blockId/_surfaceRole + updated semidia values.
+        if (provenanceUpdateCount === 0 && Array.isArray(activeCfg?.opticalSystem) && activeCfg.opticalSystem.length > 0) {
+            const configHasProvenance = activeCfg.opticalSystem.some((r: any) => String(r?._blockId ?? '').trim());
+            if (configHasProvenance) {
+                console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] Table had no _blockId, falling back to activeCfg.opticalSystem for provenance sync');
+                for (const row of activeCfg.opticalSystem) {
+                    const bid = String(row?._blockId ?? '').trim();
+                    const role = String(row?._surfaceRole ?? '').trim();
+                    if (!bid || !role) continue;
+                    const block = blockById.get(bid);
+                    if (!block) continue;
+                    const allowedKeys = __zmxGetApertureKeysByBlockType(block.blockType);
+                    if (!allowedKeys.includes(role)) continue;
+                    const semidia = __zmxReadPositiveFiniteSemidiaMm(row);
+                    if (semidia === null) continue;
+                    if (!block.aperture || typeof block.aperture !== 'object') block.aperture = {};
+                    block.aperture[role] = semidia;
+                    provenanceUpdatedBlockIds.add(bid);
+                    provenanceUpdateCount++;
+                    console.log(`[Config Provenance Sync] Block ${bid} (${block.blockType}) ${role} = ${semidia}mm`);
+                }
+                console.log(`[__zmxSyncDesignIntentApertureFromOpticalRows] Config provenance updates: ${provenanceUpdateCount}`);
+            }
+        }
         console.log(`[__zmxSyncDesignIntentApertureFromOpticalRows] Fallback physical rows: ${fallbackRows.length}`);
         let fallbackRowIndex = 0;
         let fallbackUpdateCount = 0;
@@ -5525,6 +5713,54 @@ if (typeof window !== 'undefined') {
 let __blockInspectorExpandedBlockId: string | null = null;
 const __blockInspectorPreferredMaterialKeyByBlockId = new Map<string, string>();
 let __blocks_lastScopeErrors: any[] = [];
+let __blocks_draggedBlockId: string | null = null;
+const DESIGN_INTENT_QUICK_EDITOR_STORAGE_KEY = 'coopt.blockInspectorQuickEditorEnabled';
+let __designIntentQuickEditorDelegatedBindingInstalled = false;
+
+function readDesignIntentQuickEditorEnabled(): boolean {
+    try {
+        const stored = localStorage.getItem(DESIGN_INTENT_QUICK_EDITOR_STORAGE_KEY);
+        if (stored === '0' || stored === 'false') return false;
+        if (stored === '1' || stored === 'true') return true;
+    } catch (_) {}
+    return true;
+}
+
+function writeDesignIntentQuickEditorEnabled(enabled: boolean): void {
+    try {
+        localStorage.setItem(DESIGN_INTENT_QUICK_EDITOR_STORAGE_KEY, enabled ? '1' : '0');
+    } catch (_) {}
+}
+
+function syncDesignIntentQuickEditorToggle(): void {
+    const toggle = document.getElementById('design-intent-quick-editor-toggle') as HTMLInputElement | null;
+    if (toggle) toggle.checked = readDesignIntentQuickEditorEnabled();
+}
+
+function ensureDesignIntentQuickEditorToggleBinding(): void {
+    if (__designIntentQuickEditorDelegatedBindingInstalled) {
+        syncDesignIntentQuickEditorToggle();
+        return;
+    }
+
+    document.addEventListener('click', (event) => {
+        const target = event.target as HTMLElement | null;
+        if (target && target.id === 'design-intent-quick-editor-toggle') {
+            try { event.stopPropagation(); } catch (_) {}
+        }
+    });
+
+    document.addEventListener('change', (event) => {
+        const target = event.target as HTMLInputElement | null;
+        if (!target || target.id !== 'design-intent-quick-editor-toggle') return;
+        writeDesignIntentQuickEditorEnabled(!!target.checked);
+        syncDesignIntentQuickEditorToggle();
+        try { refreshBlockInspector(); } catch (_) {}
+    });
+
+    __designIntentQuickEditorDelegatedBindingInstalled = true;
+    syncDesignIntentQuickEditorToggle();
+}
 
 function __blocks_shouldMarkVar(v: any): boolean {
     if (!v || typeof v !== 'object') return false;
@@ -5564,6 +5800,43 @@ function __blocks_setVarScope(blockId: string, key: string, scope: string): void
         try {
             saveSystemConfigurations(systemConfig);
         } catch (_) {}
+    } catch (_) {}
+}
+
+function __blocks_moveBlock(fromBlockId: string, toBlockId: string, position: 'before' | 'after'): void {
+    try {
+        const systemConfig = loadSystemConfigurations();
+        if (!systemConfig || !Array.isArray(systemConfig.configurations)) return;
+        const activeId = systemConfig.activeConfigId;
+        const activeCfg = systemConfig.configurations.find((c: any) => c && c.id === activeId);
+        if (!activeCfg || !Array.isArray(activeCfg.blocks)) return;
+
+        const blocks: any[] = activeCfg.blocks;
+        const fromIdx = blocks.findIndex((b: any) => String(b?.blockId ?? '') === fromBlockId);
+        const toIdx = blocks.findIndex((b: any) => String(b?.blockId ?? '') === toBlockId);
+        if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+
+        const [moved] = blocks.splice(fromIdx, 1);
+        const insertIdx = blocks.findIndex((b: any) => String(b?.blockId ?? '') === toBlockId);
+        const finalIdx = (position === 'before') ? insertIdx : insertIdx + 1;
+        blocks.splice(finalIdx, 0, moved);
+
+        // Re-expand optical system from new block order
+        try {
+            if (typeof expandBlocksToOpticalSystemRows === 'function') {
+                const exp = expandBlocksToOpticalSystemRows(blocks);
+                if (exp && Array.isArray(exp.rows)) {
+                    activeCfg.opticalSystem = exp.rows;
+                    try { if (typeof saveOpticalSystemTableData === 'function') saveOpticalSystemTableData(exp.rows as any); } catch (_) {}
+                }
+            }
+        } catch (_) {}
+
+        if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+        activeCfg.metadata.modified = new Date().toISOString();
+        saveSystemConfigurations(systemConfig);
+        try { refreshBlockInspector(); } catch (_) {}
+        try { if (typeof (w as any).loadActiveConfigurationToTables === 'function') (w as any).loadActiveConfigurationToTables({ applyToUI: true }); } catch (_) {}
     } catch (_) {}
 }
 
@@ -6900,6 +7173,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     if (!container) return;
 
     container.innerHTML = '';
+    syncDesignIntentQuickEditorToggle();
     const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
 
     // Show error banner if scope errors exist
@@ -6921,43 +7195,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         }
     } catch (_) {}
 
-    try {
-        const importSummary = String(
-            activeCfg?.systemData?.literatureImportSummary
-            ?? activeCfg?.metadata?.literatureImportSummary
-            ?? ''
-        ).trim();
-        if (importSummary) {
-            const panel = document.createElement('details');
-            panel.className = 'block-inspector-import-summary';
-            panel.style.padding = '8px 10px';
-            panel.style.margin = '6px 0 10px 0';
-            panel.style.border = '1px solid #cbd5e1';
-            panel.style.background = '#f8fafc';
-            panel.style.color = '#0f172a';
-            panel.style.borderRadius = '6px';
-            panel.style.fontSize = '12px';
-
-            const title = document.createElement('summary');
-            title.textContent = 'Patent Import Draft Summary';
-            title.style.cursor = 'pointer';
-            title.style.fontWeight = '600';
-            panel.appendChild(title);
-
-            const body = document.createElement('pre');
-            body.textContent = importSummary;
-            body.style.whiteSpace = 'pre-wrap';
-            body.style.margin = '8px 0 0 0';
-            body.style.maxHeight = '220px';
-            body.style.overflow = 'auto';
-            body.style.fontSize = '11px';
-            body.style.lineHeight = '1.4';
-            panel.appendChild(body);
-
-            container.appendChild(panel);
-        }
-    } catch (_) {}
-
     const list = Array.isArray(summary) ? summary : [];
     if (list.length === 0) {
         const empty = document.createElement('div');
@@ -6968,6 +7205,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         container.appendChild(empty);
         return;
     }
+
+    const quickEditorEnabled = readDesignIntentQuickEditorEnabled();
 
     const isLogicalDesignIntentSurfaceRow = (row: any) => {
         if (!row || typeof row !== 'object') return false;
@@ -7173,7 +7412,15 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
         const prevGroup = getAnchorGroupAt(currentIndex - 1, -1);
         const nextGroup = getAnchorGroupAt(currentIndex + 1, 1);
-        return `${prevGroup} -> ${nextGroup}`;
+        return `${prevGroup}→${nextGroup}`;
+    };
+
+    const getGapZoomChipLabel = (blockLike: any): string => {
+        const boundary = String(getGapBoundaryLabel(blockLike) || '').trim();
+        if (!boundary) return '';
+        const parts = boundary.split(/->|→/).map((part) => String(part ?? '').trim()).filter(Boolean);
+        if (parts.length === 2 && parts[0] === parts[1]) return parts[0];
+        return boundary;
     };
 
     const createSummaryChip = (text: string, kind: 'group' | 'controller' | 'gap'): HTMLElement => {
@@ -7181,6 +7428,460 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         chip.className = `block-inspector-summary-chip block-inspector-summary-chip-${kind}`;
         chip.textContent = text;
         return chip;
+    };
+
+    const readPathValue = (target: any, path: string): any => {
+        if (!target || typeof target !== 'object') return undefined;
+        const parts = String(path || '').split('.').filter(Boolean);
+        let cursor = target;
+        for (const part of parts) {
+            if (!cursor || typeof cursor !== 'object') return undefined;
+            cursor = cursor[part];
+        }
+        return cursor;
+    };
+
+    const stopRowToggle = (el: HTMLElement): void => {
+        const stopper = (event: Event) => {
+            try { event.stopPropagation(); } catch (_) {}
+        };
+        el.addEventListener('click', stopper);
+        el.addEventListener('mousedown', stopper);
+        el.addEventListener('keydown', stopper);
+    };
+
+    const styleQuickInput = (el: HTMLInputElement | HTMLSelectElement, widthPx: number): void => {
+        const dark = document.body.classList.contains('dark-mode');
+        el.className = 'block-inspector-quick-input';
+        el.style.width = `${widthPx}px`;
+        el.style.minWidth = `${widthPx}px`;
+        el.style.height = '24px';
+        el.style.boxSizing = 'border-box';
+        el.style.fontSize = '11px';
+        el.style.padding = '2px 6px';
+        el.style.borderRadius = '4px';
+        el.style.border = dark ? '1px solid #4b5563' : '1px solid #d0d7de';
+        el.style.background = dark ? '#111827' : '#ffffff';
+        el.style.color = dark ? '#f9fafb' : '#111827';
+    };
+
+    const createQuickFieldShell = (label: string): { wrapper: HTMLSpanElement; content: HTMLSpanElement } => {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'block-inspector-quick-field';
+        const tag = document.createElement('span');
+        tag.className = 'block-inspector-quick-label';
+        tag.textContent = label;
+        const content = document.createElement('span');
+        content.className = 'block-inspector-quick-content';
+        wrapper.appendChild(tag);
+        wrapper.appendChild(content);
+        return { wrapper, content };
+    };
+
+    const openQuickGlassPicker = (results: any[], onPick: (glass: any) => void): void => {
+        if (!Array.isArray(results) || results.length === 0) {
+            alert('No glasses found in database.');
+            return;
+        }
+        const dark = document.body.classList.contains('dark-mode');
+        const overlay = document.createElement('div');
+        overlay.style.position = 'fixed';
+        overlay.style.inset = '0';
+        overlay.style.background = 'rgba(0, 0, 0, 0.45)';
+        overlay.style.display = 'flex';
+        overlay.style.alignItems = 'center';
+        overlay.style.justifyContent = 'center';
+        overlay.style.zIndex = '9999';
+
+        const dialog = document.createElement('div');
+        dialog.style.width = 'min(520px, calc(100vw - 32px))';
+        dialog.style.maxHeight = '70vh';
+        dialog.style.overflow = 'auto';
+        dialog.style.borderRadius = '10px';
+        dialog.style.padding = '14px';
+        dialog.style.background = dark ? '#111827' : '#ffffff';
+        dialog.style.boxShadow = '0 20px 50px rgba(0, 0, 0, 0.25)';
+
+        const title = document.createElement('div');
+        title.textContent = 'Select Glass';
+        title.style.fontSize = '13px';
+        title.style.fontWeight = '600';
+        title.style.marginBottom = '10px';
+        title.style.color = dark ? '#f9fafb' : '#111827';
+        dialog.appendChild(title);
+
+        const listEl = document.createElement('div');
+        listEl.style.display = 'flex';
+        listEl.style.flexDirection = 'column';
+        listEl.style.gap = '6px';
+        results.slice(0, 12).forEach((glass: any, index: number) => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.style.textAlign = 'left';
+            item.style.padding = '8px 10px';
+            item.style.borderRadius = '6px';
+            item.style.border = dark ? '1px solid #374151' : '1px solid #e5e7eb';
+            item.style.background = dark ? '#1f2937' : '#f8fafc';
+            item.style.color = dark ? '#f9fafb' : '#111827';
+            item.style.cursor = 'pointer';
+            item.style.fontSize = '12px';
+            item.textContent = `${index + 1}. ${glass.name} [${glass.manufacturer || 'Unknown'}] (nd=${Number(glass.nd).toFixed(4)}, vd=${Number(glass.vd).toFixed(1)})`;
+            item.onclick = (event) => {
+                try { event.preventDefault(); } catch (_) {}
+                try { event.stopPropagation(); } catch (_) {}
+                try { onPick(glass); } catch (_) {}
+                try { document.body.removeChild(overlay); } catch (_) {}
+            };
+            listEl.appendChild(item);
+        });
+        dialog.appendChild(listEl);
+
+        overlay.onclick = (event) => {
+            if (event.target === overlay) {
+                try { document.body.removeChild(overlay); } catch (_) {}
+            }
+        };
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+    };
+
+    const openQuickOptionMenu = (
+        anchor: HTMLElement,
+        title: string,
+        options: string[],
+        currentValue: string,
+        onPick: (value: string) => void
+    ): void => {
+        const dark = document.body.classList.contains('dark-mode');
+        const overlay = document.createElement('div');
+        overlay.style.position = 'fixed';
+        overlay.style.inset = '0';
+        overlay.style.zIndex = '9999';
+        overlay.style.background = 'transparent';
+
+        const menu = document.createElement('div');
+        menu.className = 'block-inspector-chip-menu';
+        menu.style.position = 'fixed';
+        menu.style.minWidth = '120px';
+        menu.style.maxWidth = '220px';
+        menu.style.padding = '6px';
+        menu.style.borderRadius = '10px';
+        menu.style.border = dark ? '1px solid #374151' : '1px solid #d0d7de';
+        menu.style.background = dark ? '#111827' : '#ffffff';
+        menu.style.boxShadow = '0 18px 40px rgba(0, 0, 0, 0.18)';
+
+        const rect = anchor.getBoundingClientRect();
+        menu.style.left = `${Math.max(8, rect.left)}px`;
+        menu.style.top = `${Math.min(window.innerHeight - 8, rect.bottom + 6)}px`;
+
+        const titleEl = document.createElement('div');
+        titleEl.textContent = title;
+        titleEl.style.fontSize = '11px';
+        titleEl.style.fontWeight = '600';
+        titleEl.style.padding = '4px 6px 8px';
+        titleEl.style.color = dark ? '#d1d5db' : '#4b5563';
+        menu.appendChild(titleEl);
+
+        const list = document.createElement('div');
+        list.style.display = 'flex';
+        list.style.flexDirection = 'column';
+        list.style.gap = '2px';
+
+        options.forEach((optionValue) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'block-inspector-chip-menu-item';
+            btn.textContent = optionValue;
+            btn.style.textAlign = 'left';
+            btn.style.padding = '7px 10px';
+            btn.style.border = 'none';
+            btn.style.borderRadius = '7px';
+            btn.style.background = optionValue === currentValue
+                ? (dark ? '#1d4ed8' : '#dbeafe')
+                : 'transparent';
+            btn.style.color = optionValue === currentValue
+                ? (dark ? '#eff6ff' : '#1d4ed8')
+                : (dark ? '#f9fafb' : '#111827');
+            btn.style.cursor = 'pointer';
+            btn.onclick = (event) => {
+                try { event.preventDefault(); } catch (_) {}
+                try { event.stopPropagation(); } catch (_) {}
+                try { onPick(optionValue); } catch (_) {}
+                try { document.body.removeChild(overlay); } catch (_) {}
+            };
+            list.appendChild(btn);
+        });
+
+        menu.appendChild(list);
+        overlay.appendChild(menu);
+        overlay.onclick = (event) => {
+            if (event.target === overlay) {
+                try { document.body.removeChild(overlay); } catch (_) {}
+            }
+        };
+        document.body.appendChild(overlay);
+    };
+
+    const createQuickEditor = (blockLike: any): HTMLElement | null => {
+        if (!blockLike || typeof blockLike !== 'object') return null;
+        const blockType = String(blockLike?.blockType ?? '').trim();
+        const params = (blockLike.parameters && typeof blockLike.parameters === 'object') ? blockLike.parameters : {};
+        const aperture = (blockLike.aperture && typeof blockLike.aperture === 'object') ? blockLike.aperture : {};
+        const blockId = String(blockLike?.blockId ?? '').trim();
+        if (!blockId) return null;
+
+        const root = document.createElement('div');
+        root.className = 'block-inspector-quick-editor';
+        stopRowToggle(root);
+
+        const createQuickRow = (): HTMLDivElement => {
+            const row = document.createElement('div');
+            row.className = 'block-inspector-quick-editor-row';
+            stopRowToggle(row);
+            return row;
+        };
+
+        const appendTextField = (label: string, path: string, currentValue: any, widthPx: number, target: HTMLElement = root) => {
+            const shell = createQuickFieldShell(label);
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = currentValue === undefined || currentValue === null ? '' : String(currentValue);
+            input.placeholder = label;
+            styleQuickInput(input, widthPx);
+            const commit = () => {
+                const nextValue = cooptNormalizeInputValue(input.value, currentValue);
+                if (nextValue !== currentValue) {
+                    cooptApplyBlockValue(blockId, path, currentValue, nextValue);
+                }
+            };
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    try { event.preventDefault(); } catch (_) {}
+                    commit();
+                }
+            });
+            input.addEventListener('blur', commit);
+            stopRowToggle(input);
+            shell.content.appendChild(input);
+            target.appendChild(shell.wrapper);
+        };
+
+        const appendSpacerField = (label: string, widthPx: number, target: HTMLElement = root) => {
+            const shell = createQuickFieldShell(label);
+            shell.wrapper.style.visibility = 'hidden';
+            shell.wrapper.style.pointerEvents = 'none';
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.tabIndex = -1;
+            styleQuickInput(input, widthPx);
+            shell.content.appendChild(input);
+            target.appendChild(shell.wrapper);
+        };
+
+        const appendSelectField = (label: string, path: string, currentValue: any, options: string[], widthPx: number, target: HTMLElement = root) => {
+            const shell = createQuickFieldShell(label);
+            const select = document.createElement('select');
+            styleQuickInput(select, widthPx);
+            const currentText = String(currentValue ?? '').trim() || options[0] || '';
+            const items = options.includes(currentText) ? options : [currentText, ...options.filter((item) => item !== currentText)];
+            for (const item of items) {
+                const option = document.createElement('option');
+                option.value = item;
+                option.textContent = item;
+                if (item === currentText) option.selected = true;
+                select.appendChild(option);
+            }
+            select.addEventListener('change', () => {
+                const nextValue = select.value;
+                if (nextValue !== currentValue) {
+                    cooptApplyBlockValue(blockId, path, currentValue, nextValue);
+                }
+            });
+            stopRowToggle(select);
+            shell.content.appendChild(select);
+            target.appendChild(shell.wrapper);
+        };
+
+        const appendMaterialField = (
+            materialPath: string,
+            materialValue: any,
+            abbePath: string | null,
+            abbeValue: any,
+            label: string = 'G',
+            target: HTMLElement = root
+        ) => {
+            const shell = createQuickFieldShell(label);
+            const group = document.createElement('span');
+            group.className = 'block-inspector-quick-material';
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = materialValue === undefined || materialValue === null ? '' : String(materialValue);
+            input.placeholder = 'Glass';
+            styleQuickInput(input, 96);
+            const commitMaterial = () => {
+                const nextValue = cooptNormalizeInputValue(input.value, materialValue);
+                if (nextValue !== materialValue) {
+                    cooptApplyBlockValue(blockId, materialPath, materialValue, nextValue);
+                }
+            };
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    try { event.preventDefault(); } catch (_) {}
+                    commitMaterial();
+                }
+            });
+            input.addEventListener('blur', commitMaterial);
+            stopRowToggle(input);
+            group.appendChild(input);
+
+            const applyGlass = (glass: any) => {
+                if (!glass || !glass.name) return;
+                input.value = String(glass.name);
+                const nextMaterial = cooptNormalizeInputValue(String(glass.name), materialValue);
+                if (nextMaterial !== materialValue) {
+                    cooptApplyBlockValue(blockId, materialPath, materialValue, nextMaterial);
+                }
+                if (abbePath && Number.isFinite(Number(glass.vd))) {
+                    const nextAbbe = Number(glass.vd);
+                    if (nextAbbe !== abbeValue) {
+                        cooptApplyBlockValue(blockId, abbePath, abbeValue, nextAbbe);
+                    }
+                }
+            };
+
+            const searchBtn = document.createElement('button');
+            searchBtn.type = 'button';
+            searchBtn.className = 'block-inspector-quick-btn';
+            searchBtn.textContent = '🔍';
+            searchBtn.title = 'Find glass';
+            searchBtn.onclick = (event) => {
+                try { event.preventDefault(); } catch (_) {}
+                try { event.stopPropagation(); } catch (_) {}
+                const query = String(input.value ?? '').trim();
+                const numericNd = /^[-+]?((\d+\.\d*)|(\d*\.\d+)|(\d+))(e[-+]?\d+)?$/i.test(query) ? Number(query) : NaN;
+                let results: any[] = [];
+                if (Number.isFinite(numericNd) && numericNd > 0 && numericNd < 4 && Number.isFinite(Number(abbeValue)) && Number(abbeValue) > 0) {
+                    results = findSimilarGlassesByNdVd(Number(numericNd), Number(abbeValue), 12);
+                } else {
+                    results = findSimilarGlassNames(query || String(materialValue ?? ''), 12);
+                }
+                openQuickGlassPicker(results, applyGlass);
+            };
+            stopRowToggle(searchBtn);
+            group.appendChild(searchBtn);
+
+            const mapBtn = document.createElement('button');
+            mapBtn.type = 'button';
+            mapBtn.className = 'block-inspector-quick-btn';
+            mapBtn.textContent = '🗺️';
+            mapBtn.title = 'Open glass map';
+            mapBtn.onclick = (event) => {
+                try { event.preventDefault(); } catch (_) {}
+                try { event.stopPropagation(); } catch (_) {}
+                if (typeof openGlassMapWindow === 'function') {
+                    openGlassMapWindow(
+                        () => {},
+                        (glass: any) => {
+                            applyGlass(glass);
+                            return true;
+                        }
+                    );
+                }
+            };
+            stopRowToggle(mapBtn);
+            group.appendChild(mapBtn);
+
+            shell.content.appendChild(group);
+            target.appendChild(shell.wrapper);
+        };
+
+        if (blockType === 'Lens' || blockType === 'PositiveLens') {
+            appendTextField('R1', 'parameters.frontRadius', params.frontRadius, 62);
+            appendTextField('R2', 'parameters.backRadius', params.backRadius, 62);
+            appendTextField('CT', 'parameters.centerThickness', params.centerThickness, 54);
+            appendMaterialField('parameters.material', params.material, 'parameters.abbe', params.abbe);
+            appendTextField('Abbe', 'parameters.abbe', params.abbe, 54);
+            appendTextField('SD1', 'aperture.front', aperture.front, 50);
+            appendTextField('SD2', 'aperture.back', aperture.back, 50);
+        } else if (blockType === 'Doublet') {
+            root.classList.add('block-inspector-quick-editor-multiline');
+            const row1 = createQuickRow();
+            const row2 = createQuickRow();
+
+            appendTextField('R1', 'parameters.radius1', params.radius1, 62, row1);
+            appendTextField('R2', 'parameters.radius2', params.radius2, 62, row1);
+            appendTextField('CT', 'parameters.thickness1', params.thickness1, 54, row1);
+            appendMaterialField('parameters.material1', params.material1, 'parameters.abbe1', params.abbe1, 'G1', row1);
+            appendTextField('Abbe1', 'parameters.abbe1', params.abbe1, 60, row1);
+            appendTextField('SD1', 'aperture.s1', aperture.s1, 50, row1);
+            appendTextField('SD2', 'aperture.s2', aperture.s2, 50, row1);
+
+            appendSpacerField('R1', 62, row2);
+            appendTextField('R3', 'parameters.radius3', params.radius3, 62, row2);
+            appendTextField('CT', 'parameters.thickness2', params.thickness2, 54, row2);
+            appendMaterialField('parameters.material2', params.material2, 'parameters.abbe2', params.abbe2, 'G2', row2);
+            appendTextField('Abbe2', 'parameters.abbe2', params.abbe2, 60, row2);
+            appendSpacerField('SD1', 50, row2);
+            appendTextField('SD3', 'aperture.s3', aperture.s3, 50, row2);
+
+            root.appendChild(row1);
+            root.appendChild(row2);
+        } else if (blockType === 'Triplet') {
+            root.classList.add('block-inspector-quick-editor-multiline');
+            const row1 = createQuickRow();
+            const row2 = createQuickRow();
+            const row3 = createQuickRow();
+
+            appendTextField('R1', 'parameters.radius1', params.radius1, 62, row1);
+            appendTextField('R2', 'parameters.radius2', params.radius2, 62, row1);
+            appendTextField('CT', 'parameters.thickness1', params.thickness1, 54, row1);
+            appendMaterialField('parameters.material1', params.material1, 'parameters.abbe1', params.abbe1, 'G1', row1);
+            appendTextField('Abbe1', 'parameters.abbe1', params.abbe1, 60, row1);
+            appendTextField('SD1', 'aperture.s1', aperture.s1, 50, row1);
+            appendTextField('SD2', 'aperture.s2', aperture.s2, 50, row1);
+
+            appendSpacerField('R1', 62, row2);
+            appendTextField('R3', 'parameters.radius3', params.radius3, 62, row2);
+            appendTextField('CT', 'parameters.thickness2', params.thickness2, 54, row2);
+            appendMaterialField('parameters.material2', params.material2, 'parameters.abbe2', params.abbe2, 'G2', row2);
+            appendTextField('Abbe2', 'parameters.abbe2', params.abbe2, 60, row2);
+            appendSpacerField('SD1', 50, row2);
+            appendTextField('SD3', 'aperture.s3', aperture.s3, 50, row2);
+
+            appendSpacerField('R1', 62, row3);
+            appendSpacerField('R2', 62, row3);
+            appendTextField('R4', 'parameters.radius4', params.radius4, 62, row3);
+            appendTextField('CT', 'parameters.thickness3', params.thickness3, 54, row3);
+            appendMaterialField('parameters.material3', params.material3, 'parameters.abbe3', params.abbe3, 'G3', row3);
+            appendTextField('Abbe3', 'parameters.abbe3', params.abbe3, 60, row3);
+            appendSpacerField('SD1', 50, row3);
+            appendSpacerField('SD2', 50, row3);
+            appendTextField('SD4', 'aperture.s4', aperture.s4, 50, row3);
+
+            root.appendChild(row1);
+            root.appendChild(row2);
+            root.appendChild(row3);
+        } else if (blockType === 'Gap' || blockType === 'AirGap') {
+            appendSpacerField('R1', 62);
+            appendSpacerField('R2', 62);
+            appendTextField('CT', 'parameters.thickness', params.thickness, 54);
+            appendMaterialField('parameters.material', params.material, 'parameters.abbe', params.abbe);
+            appendTextField('Abbe', 'parameters.abbe', params.abbe, 54);
+        } else if (blockType === 'SingleSurface' || blockType === 'Mirror') {
+            appendTextField('R', 'parameters.radius', params.radius, 62);
+            if (Object.prototype.hasOwnProperty.call(params, 'material')) {
+                appendMaterialField('parameters.material', params.material, 'parameters.abbe', params.abbe);
+                appendTextField('Abbe', 'parameters.abbe', params.abbe, 54);
+            }
+            appendTextField('SD', 'aperture.semidia', aperture.semidia, 54);
+        } else if (blockType === 'ImageSurface') {
+            appendTextField('SD', 'parameters.semidia', params.semidia, 54);
+        } else {
+            return null;
+        }
+
+        return root.childElementCount > 0 ? root : null;
     };
 
     for (const b of list) {
@@ -7193,6 +7894,35 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         colId.className = 'block-inspector-col-id';
         colId.textContent = buildBlockInspectorLabelText(b);
 
+        const realBlock = (blockById && typeof blockById.get === 'function') ? blockById.get(blockId) || b : b;
+        const zoomGroupLabel = getZoomGroupLabel(realBlock);
+        const gapZoomChipLabel = getGapZoomChipLabel(realBlock);
+        const currentZoomGroupValue = String(readPathValue(realBlock, 'parameters.zoomGroup') ?? 'Fixed').trim() || 'Fixed';
+        let zoomGroupChip: HTMLElement | null = null;
+        if (zoomGroupLabel) {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'block-inspector-zg-chip';
+            chip.textContent = `ZG ${currentZoomGroupValue}`;
+            chip.title = `Zoom Group: ${currentZoomGroupValue}`;
+            chip.onclick = (e: MouseEvent) => {
+                try { e.preventDefault(); } catch (_) {}
+                try { e.stopPropagation(); } catch (_) {}
+                openQuickOptionMenu(chip, 'Zoom Group', ZOOM_GROUP_OPTIONS, currentZoomGroupValue, (nextValue: string) => {
+                    if (nextValue !== currentZoomGroupValue) {
+                        cooptApplyBlockValue(blockId, 'parameters.zoomGroup', currentZoomGroupValue, nextValue);
+                    }
+                });
+            };
+            zoomGroupChip = chip;
+        } else if (gapZoomChipLabel) {
+            const chip = document.createElement('span');
+            chip.className = 'block-inspector-zg-chip block-inspector-zg-chip-gap';
+            chip.textContent = `ZG ${gapZoomChipLabel}`;
+            chip.title = `Zoom Group: ${gapZoomChipLabel}`;
+            zoomGroupChip = chip;
+        }
+
         const rawType = String(b.blockType ?? '').trim();
         const displayType = (rawType === 'ObjectPlane') ? 'ObjectSurface' : String(b.blockType ?? '(none)');
         const toneType = (() => {
@@ -7204,7 +7934,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         row.dataset.blockType = toneType;
         colId.dataset.blockType = toneType;
         colId.title = displayType;
-        if (unifiedLensToneTypes.has(toneType)) {
+        if (unifiedLensToneTypes.has(toneType) || toneType === 'gap') {
             const unifiedWidth = `${unifiedLensBadgeWidthCh}ch`;
             colId.style.width = unifiedWidth;
             colId.style.minWidth = unifiedWidth;
@@ -7214,12 +7944,17 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
         const colParams = document.createElement('div');
         colParams.className = 'block-inspector-col-params';
-        const realBlock = (blockById && typeof blockById.get === 'function') ? blockById.get(blockId) || b : b;
         const previewText = String(b.preview ?? '');
-        const previewSpan = document.createElement('span');
-        previewSpan.className = 'block-inspector-col-params-text';
-        previewSpan.textContent = previewText;
-        if (previewText) colParams.appendChild(previewSpan);
+        const quickEditor = quickEditorEnabled ? createQuickEditor(realBlock) : null;
+        if (quickEditor) {
+            if (previewText) colParams.title = previewText;
+            colParams.appendChild(quickEditor);
+        } else {
+            const previewSpan = document.createElement('span');
+            previewSpan.className = 'block-inspector-col-params-text';
+            previewSpan.textContent = previewText;
+            if (previewText) colParams.appendChild(previewSpan);
+        }
 
         const rawTypeForSummary = String(realBlock?.blockType ?? b?.blockType ?? '').trim();
         if (rawTypeForSummary === 'ObjectSurface' || rawTypeForSummary === 'ObjectPlane') {
@@ -7228,12 +7963,12 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if (lawGroups.length > 0) {
                 colParams.appendChild(createSummaryChip(`Laws: ${lawGroups.join(', ')}`, 'controller'));
             }
-        } else if (rawTypeForSummary === 'Gap' || rawTypeForSummary === 'AirGap') {
+        } else if ((rawTypeForSummary === 'Gap' || rawTypeForSummary === 'AirGap') && !zoomGroupChip) {
             const gapBoundaryText = getGapBoundaryLabel(realBlock);
             if (gapBoundaryText) {
                 colParams.appendChild(createSummaryChip(`ZG ${gapBoundaryText}`, 'gap'));
             }
-        } else {
+        } else if (!quickEditor && !zoomGroupChip) {
             const zoomGroupText = getZoomGroupLabel(realBlock);
             if (zoomGroupText) {
                 colParams.appendChild(createSummaryChip(`ZG ${zoomGroupText}`, 'group'));
@@ -7245,11 +7980,73 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         const n = getLogicalSurfaceCountForBlock(b);
         colCount.textContent = `→ ${Number.isFinite(n) ? n : 0} surfaces`;
 
+        // Drag handle
+        const dragHandle = document.createElement('span');
+        dragHandle.className = 'block-inspector-drag-handle';
+        dragHandle.textContent = '⠿';
+        dragHandle.title = 'ドラッグして並び替え';
+
+        row.appendChild(dragHandle);
         row.appendChild(colId);
         row.appendChild(colParams);
+        if (zoomGroupChip) row.appendChild(zoomGroupChip);
         row.appendChild(colCount);
 
-        row.onclick = () => {
+        // Drag-and-drop support (only when blocksInOrder is available)
+        if (Array.isArray(blocksInOrder) && blocksInOrder.length > 0 && blockId) {
+            row.draggable = true;
+            row.dataset.blockId = blockId;
+
+            row.addEventListener('dragstart', (e: DragEvent) => {
+                __blocks_draggedBlockId = blockId;
+                row.classList.add('dragging');
+                if (e.dataTransfer) {
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', blockId);
+                }
+                // Prevent expand/collapse click from firing on drag
+                e.stopPropagation();
+            });
+
+            row.addEventListener('dragend', () => {
+                __blocks_draggedBlockId = null;
+                row.classList.remove('dragging');
+                row.classList.remove('drag-over-before');
+                row.classList.remove('drag-over-after');
+            });
+
+            row.addEventListener('dragover', (e: DragEvent) => {
+                if (!__blocks_draggedBlockId || __blocks_draggedBlockId === blockId) return;
+                e.preventDefault();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+                const rect = row.getBoundingClientRect();
+                const midY = rect.top + rect.height / 2;
+                const isAbove = e.clientY < midY;
+                row.classList.toggle('drag-over-before', isAbove);
+                row.classList.toggle('drag-over-after', !isAbove);
+            });
+
+            row.addEventListener('dragleave', () => {
+                row.classList.remove('drag-over-before');
+                row.classList.remove('drag-over-after');
+            });
+
+            row.addEventListener('drop', (e: DragEvent) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const fromId = __blocks_draggedBlockId;
+                row.classList.remove('drag-over-before');
+                row.classList.remove('drag-over-after');
+                if (!fromId || fromId === blockId) return;
+                const rect = row.getBoundingClientRect();
+                const position: 'before' | 'after' = (e.clientY < rect.top + rect.height / 2) ? 'before' : 'after';
+                try { __blocks_moveBlock(fromId, blockId, position); } catch (_) {}
+            });
+        }
+
+        row.onclick = (e: MouseEvent) => {
+            // Ignore if dragging
+            if ((e.target as HTMLElement)?.classList?.contains('block-inspector-drag-handle')) return;
             if (!blockId) return;
             __blockInspectorExpandedBlockId = (__blockInspectorExpandedBlockId === blockId) ? null : blockId;
             try { refreshBlockInspector(); } catch (_) {}
@@ -7408,8 +8205,14 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (!aLower.includes('thickness') && bLower.includes('thickness')) return 1;
 
                     // Zoom controls
-                    if (a === 'zoomGroup' && b !== 'zoomGroup') return -1;
-                    if (b === 'zoomGroup' && a !== 'zoomGroup') return 1;
+                    const placeZoomGroupLast = blockType === 'Doublet' || blockType === 'Triplet';
+                    if (placeZoomGroupLast) {
+                        if (a === 'zoomGroup' && b !== 'zoomGroup') return 1;
+                        if (b === 'zoomGroup' && a !== 'zoomGroup') return -1;
+                    } else {
+                        if (a === 'zoomGroup' && b !== 'zoomGroup') return -1;
+                        if (b === 'zoomGroup' && a !== 'zoomGroup') return 1;
+                    }
                     if (a === 'zoomPosition' && b !== 'zoomGroup' && b !== 'zoomPosition') return -1;
                     if (b === 'zoomPosition' && a !== 'zoomGroup' && a !== 'zoomPosition') return 1;
                     if (a === 'zoomGroupProfiles' && !['zoomGroup', 'zoomPosition', 'zoomGroupProfiles'].includes(b)) return -1;
@@ -8351,10 +9154,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     glassBtn.className = 'block-inspector-icon-btn';
                     glassBtn.textContent = '🔍';
                     glassBtn.title = 'Find Glass';
-                    glassBtn.style.fontSize = '14px';
-                    glassBtn.style.padding = '0 8px';
-                    glassBtn.style.boxSizing = 'border-box';
-                    glassBtn.style.height = '28px';
 
                     // Glass Map button
                     const glassMapBtn = document.createElement('button');
@@ -8362,10 +9161,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     glassMapBtn.className = 'block-inspector-icon-btn';
                     glassMapBtn.textContent = '🗺️';
                     glassMapBtn.title = 'Open Glass Map';
-                    glassMapBtn.style.fontSize = '14px';
-                    glassMapBtn.style.padding = '0 8px';
-                    glassMapBtn.style.boxSizing = 'border-box';
-                    glassMapBtn.style.height = '28px';
 
                     glassMapBtn.onclick = (e) => {
                         e.preventDefault();
@@ -9768,6 +10563,7 @@ function setupDesignIntentButtons(): void {
     const autoSetAperturesBtn = document.getElementById('design-intent-auto-set-apertures-btn');
     const zoomScenarioBtn = document.getElementById('design-intent-generate-zoom-scenarios-btn');
     const typeSelect = document.getElementById('design-intent-add-block-type') as HTMLSelectElement | null;
+    ensureDesignIntentQuickEditorToggleBinding();
 
     if (addBtn && !addBtn.dataset.designIntentAddBound) {
         addBtn.dataset.designIntentAddBound = '1';
@@ -9934,6 +10730,7 @@ function setupDesignIntentButtons(): void {
 // Main DOM Event Handlers Setup Function
 export function setupDOMEventHandlers(): void {
     try {
+        setupImageHeightDiagnosticsBridge();
         setupImportZemaxButton();
         setupExportZemaxButton();
         setupOptimizeDesignIntentButton();
