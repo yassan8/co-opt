@@ -121,6 +121,141 @@ function isOpdDebugEnabled(): boolean {
 // skip repeated attempts to reduce console noise and extra overhead.
 let directDistortionWasmUnavailableInSession = false;
 
+function getPrimaryWavelengthFromSourceRows(sourceRows: any[] = []): number {
+  let fallback = 0.5876;
+
+  for (const row of sourceRows) {
+    const wavelength = Number((row as any)?.wavelength ?? (row as any)?.Wavelength);
+    if (!Number.isFinite(wavelength) || wavelength <= 0) continue;
+    fallback = wavelength;
+
+    const primaryFlag = (row as any)?.primary ?? (row as any)?.Primary ?? (row as any)?.["Primary Wavelength"] ?? (row as any)?.isPrimary;
+    const isPrimary = typeof primaryFlag === "boolean"
+      ? primaryFlag
+      : String(primaryFlag ?? "").trim().toLowerCase();
+    if (isPrimary === true || isPrimary === "true" || isPrimary === "1" || isPrimary === "yes" || (typeof isPrimary === "string" && isPrimary.includes("primary"))) {
+      return wavelength;
+    }
+  }
+
+  return fallback;
+}
+
+async function normalizeTransverseObjectRowsForImageHeight(
+  opticalSystemRows: any[],
+  sourceRows: any[],
+  objectRows: any[],
+  explicitWavelength?: number,
+): Promise<any[]> {
+  const rows = Array.isArray(objectRows) ? objectRows : [];
+  if (rows.length === 0) return [];
+
+  const normalizedRows = rows.map((row) => {
+    if (!row || typeof row !== "object") return row;
+    const normalizedRow = { ...row } as any;
+    if (normalizedRow.xHeightAngle == null && normalizedRow["object x"] != null) normalizedRow.xHeightAngle = normalizedRow["object x"];
+    if (normalizedRow.yHeightAngle == null && normalizedRow["object y"] != null) normalizedRow.yHeightAngle = normalizedRow["object y"];
+    if (normalizedRow.xHeightAngle == null && normalizedRow.x != null) normalizedRow.xHeightAngle = normalizedRow.x;
+    if (normalizedRow.yHeightAngle == null && normalizedRow.y != null) normalizedRow.yHeightAngle = normalizedRow.y;
+    if (normalizedRow.position == null && normalizedRow.objectType != null) normalizedRow.position = normalizedRow.objectType;
+    return normalizedRow;
+  });
+
+  const hasImageHeight = normalizedRows.some((row) => String((row as any)?.position ?? "").trim().toLowerCase() === "imageheight");
+  if (!hasImageHeight) return normalizedRows;
+
+  const [{ detectConjugateType }, { convertImageHeightToEffectiveObject }] = await Promise.all([
+    import("../../../utils/conjugate-detection.ts"),
+    import("../../../optical/ray-renderer.ts"),
+  ]);
+  const conjugateType = String(detectConjugateType(opticalSystemRows) || "").toLowerCase() === "finite"
+    ? "finite"
+    : "infinite";
+  const wavelength = Number.isFinite(Number(explicitWavelength))
+    ? Number(explicitWavelength)
+    : getPrimaryWavelengthFromSourceRows(sourceRows);
+
+  return normalizedRows.map((row) => {
+    const posNorm = String((row as any)?.position ?? "").trim().toLowerCase();
+    if (posNorm !== "imageheight") return row;
+
+    try {
+      const effective = convertImageHeightToEffectiveObject(row, opticalSystemRows, wavelength, conjugateType);
+      if (effective && typeof effective === "object") {
+        return {
+          ...row,
+          ...effective,
+          __cooptOriginalPosition: row.position,
+        };
+      }
+    } catch (_) {
+      // Fall through to the original row so the existing path still runs.
+    }
+
+    return row;
+  });
+}
+
+function buildTransverseFieldSettingsFromObjectRows(objectRows: any[] = []): any[] {
+  return objectRows.map((row, index) => {
+    const originalPositionType = String((row as any)?.__cooptOriginalPosition ?? (row as any)?.position ?? (row as any)?.fieldType ?? (row as any)?.type ?? "").trim().toLowerCase();
+    const positionType = String((row as any)?.position ?? (row as any)?.fieldType ?? (row as any)?.type ?? "").trim().toLowerCase();
+    const isAngle = positionType.includes("angle") && !positionType.includes("rect") && !positionType.includes("height");
+    const parseNumber = (value: unknown): number | null => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const pointModeLabel = originalPositionType.includes("imageheight")
+      ? "Image Height"
+      : originalPositionType.includes("point")
+        ? "Point"
+        : isAngle
+          ? "Angle"
+          : "Point";
+    const pointUnit = pointModeLabel === "Angle" ? "deg" : "mm";
+    const imageHeightTargetX = parseNumber((row as any)?.__cooptImageHeightTarget?.x);
+    const imageHeightTargetY = parseNumber((row as any)?.__cooptImageHeightTarget?.y);
+    const pointX = pointModeLabel === "Angle"
+      ? parseNumber((row as any)?.xFieldAngle ?? (row as any)?.xAngle ?? (row as any)?.xHeightAngle ?? (row as any)?.x)
+      : pointModeLabel === "Image Height"
+        ? imageHeightTargetX ?? parseNumber((row as any)?.xHeight ?? (row as any)?.x ?? (row as any)?.["object x"] ?? (row as any)?.xHeightAngle)
+      : parseNumber((row as any)?.xHeight ?? (row as any)?.x ?? (row as any)?.xHeightAngle ?? (row as any)?.["object x"]);
+    const pointY = pointModeLabel === "Angle"
+      ? parseNumber((row as any)?.yFieldAngle ?? (row as any)?.fieldAngle ?? (row as any)?.yAngle ?? (row as any)?.yHeightAngle ?? (row as any)?.y)
+      : pointModeLabel === "Image Height"
+        ? imageHeightTargetY ?? parseNumber((row as any)?.yHeight ?? (row as any)?.y ?? (row as any)?.["object y"] ?? (row as any)?.yHeightAngle)
+      : parseNumber((row as any)?.yHeight ?? (row as any)?.y ?? (row as any)?.yHeightAngle ?? (row as any)?.["object y"]);
+    const pointXText = Number.isFinite(pointX as number) ? (pointX as number).toFixed(3) : "0.000";
+    const pointYText = Number.isFinite(pointY as number) ? (pointY as number).toFixed(3) : "0.000";
+    const displayNameBase = String((row as any)?.comment ?? (row as any)?.name ?? "").trim();
+    const displayNameCore = `Object ${index + 1} (${pointModeLabel}: X=${pointXText} ${pointUnit}, Y=${pointYText} ${pointUnit})`;
+    const displayName = displayNameBase ? `${displayNameCore} - ${displayNameBase}` : displayNameCore;
+
+    if (isAngle) {
+      const xAngle = Number((row as any)?.xFieldAngle ?? (row as any)?.xAngle ?? (row as any)?.xHeightAngle ?? (row as any)?.x ?? 0) || 0;
+      const yAngle = Number((row as any)?.yFieldAngle ?? (row as any)?.fieldAngle ?? (row as any)?.yAngle ?? (row as any)?.yHeightAngle ?? (row as any)?.y ?? 0) || 0;
+      return {
+        objectIndex: index + 1,
+        fieldType: "Angle",
+        fieldAngle: yAngle,
+        xFieldAngle: xAngle,
+        yFieldAngle: yAngle,
+        displayName,
+      };
+    }
+
+    const xHeight = Number((row as any)?.xHeight ?? (row as any)?.x ?? (row as any)?.xHeightAngle ?? 0) || 0;
+    const yHeight = Number((row as any)?.yHeight ?? (row as any)?.y ?? (row as any)?.yHeightAngle ?? 0) || 0;
+    return {
+      objectIndex: index + 1,
+      fieldType: "Rectangle",
+      xHeight,
+      yHeight,
+      displayName,
+    };
+  });
+}
+
 function validateAnalysisPreviewRequest(payload: RunAnalysisPreviewRequest): void {
   if (!payload || typeof payload !== "object") {
     throw new Error("run_analysis_preview requires a request payload");
@@ -1010,24 +1145,35 @@ export async function runNativeAstigmatism(
 export async function runNativeTransverseAberration(
   payload: NativeTransverseAberrationRequest,
 ): Promise<NativeTransverseAberrationResponse> {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
+  const normalizedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
+    opticalSystemRows,
+    sourceRows,
+    Array.isArray(payload?.objectRows) ? payload.objectRows : [],
+    Number(payload?.wavelength),
+  );
+
   if (!isTauriRuntime()) {
     const {
       calculateTransverseAberrationAsync,
       getPrimaryWavelengthForAberration,
     } = await import("../../../evaluation/aberrations/transverse-aberration.ts");
 
-    const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
     const targetSurfaceIndex = Number.isInteger(payload?.surfaceIndex)
       ? Math.max(0, Number(payload.surfaceIndex))
       : Math.max(0, opticalSystemRows.length - 1);
     const wavelength = Number.isFinite(Number(payload?.wavelength))
       ? Number(payload.wavelength)
       : getPrimaryWavelengthForAberration();
+    const fieldSettings = normalizedObjectRows.length > 0
+      ? buildTransverseFieldSettingsFromObjectRows(normalizedObjectRows)
+      : null;
 
     const result = await calculateTransverseAberrationAsync(
       opticalSystemRows,
       targetSurfaceIndex,
-      null,
+      fieldSettings,
       wavelength,
       Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : 51,
       {
@@ -1043,9 +1189,15 @@ export async function runNativeTransverseAberration(
       message: "Computed via Web Rust/WASM transverse aberration API",
     } as NativeTransverseAberrationResponse;
   }
+  const normalizedPayload = {
+    ...payload,
+    opticalSystemRows,
+    sourceRows,
+    objectRows: normalizedObjectRows,
+  };
   return invokeCommand<NativeTransverseAberrationRequest, NativeTransverseAberrationResponse>(
     "run_native_transverse_aberration",
-    payload,
+    normalizedPayload,
   );
 }
 

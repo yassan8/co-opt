@@ -106,6 +106,11 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
     };
     const getFieldLabel = (fieldSetting, index) => {
         const fs = fieldSetting || {};
+        const displayName = String(fs.displayName ?? fs.display_name ?? '').trim();
+        if (displayName) {
+            return displayName;
+        }
+
         const posRaw = String(fs.position ?? fs.fieldType ?? fs.type ?? '').toLowerCase();
         const isAngle = posRaw.includes('angle') && !posRaw.includes('rect');
 
