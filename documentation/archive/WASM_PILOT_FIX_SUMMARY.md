@@ -69,9 +69,7 @@ try {
 ## 検証
 
 ### Node.js 診断
-```bash
-node test-wasm-quick.mjs
-```
+一時検証スクリプト `test-wasm-quick.mjs` は役目を終えたため削除済みです。
 
 **出力：**
 ```
@@ -125,17 +123,8 @@ get_errors [bridge, optimizer-mvp]
 
 ## テストコマンド
 
-**ブラウザ統合テスト：**
-```
-http://localhost:5176/co-opt/test-wasm-integration.html
-```
-
-**KKT ベンチマークテスト：**
-```
-http://localhost:5176/co-opt/test-kkt-benchmark.html
-```
-
-期待される結果：`pilotHits > 0` および `lastReason: "ok"`
+この修正時に使った一時 HTML / Node.js テストハーネスは archive から削除済みです。
+現在は通常の diagnostics と build を使って確認します。
 
 ---
 

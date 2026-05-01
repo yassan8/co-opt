@@ -42,7 +42,7 @@
 **実装**:
 - `evaluation/wavefront/adaptive-grid-size.ts`: 推奨グリッドサイズ計算ロジック
 - `getRecommendedGridSize()`: 用途別最適化
-- `testing/archive/root-legacy/test-grid-size-optimization.html`: ベンチマーク環境
+- 専用ベンチマークページで検証後、ページ自体は archive から削除
 
 **結果**:
 | Grid Size | Time (ms) | Speedup | Quality | Use Case |
@@ -74,7 +74,7 @@ const rec = getRecommendedGridSize('interactive', 10);
 - `evaluation/wavefront/wavefront-cache.ts`: LRUキャッシュシステム
 - `WavefrontCache`: 最大50エントリ、100MB制限
 - `generateSystemHash()`: 光学系の一意識別子生成
-- `testing/archive/root-legacy/test-cache-performance.html`: ベンチマーク環境
+- 専用ベンチマークページで検証後、ページ自体は archive から削除
 
 **結果**:
 - **1回目（キャッシュミス）**: 507ms
@@ -113,7 +113,7 @@ const result = await analyzer.generateWavefrontMap(
 **実装**:
 - `getProgressiveStrategy()`: 段階的品質向上戦略
 - 32×32 → 64×64 → 96×96 → 128×128（各ステージに遅延挿入）
-- `testing/archive/root-legacy/test-progressive-loading.html`: デモ環境
+- 専用デモページで検証後、ページ自体は archive から削除
 
 **結果**:
 | Metric | Progressive | Standard | Improvement |
@@ -213,9 +213,7 @@ for (const stage of strategy.stages) {
 - ❌ `evaluation/wavefront/wavefront-worker.ts` - 並列化（無効化済み）
 
 ### テスト・ベンチマーク環境
-- ✅ `testing/archive/root-legacy/test-grid-size-optimization.html` - グリッドサイズベンチマーク
-- ✅ `testing/archive/root-legacy/test-cache-performance.html` - キャッシュ性能テスト
-- ✅ `testing/archive/root-legacy/test-progressive-loading.html` - Progressive Loadingデモ
+- ✅ 専用の一時ベンチマーク/デモページで検証済み（現在は archive から削除）
 - ❌ `test-parallel-opd.html` - 並列化テスト（失敗記録）
 
 ### ドキュメント
