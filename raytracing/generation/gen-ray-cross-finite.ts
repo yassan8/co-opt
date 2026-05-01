@@ -34,6 +34,43 @@ function traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, n0 = 1.0, tar
     return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
 }
 
+function fnv1a32(str) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+        hash ^= str.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+const finiteChiefDirectionCache = new Map<string, { i: number; j: number; k: number } | null>();
+
+function buildFiniteChiefDirectionCacheKey(objectPosition, stopCenter, stopSurfaceIndex, opticalSystemRows, wavelength) {
+    try {
+        const rowsSig = fnv1a32(JSON.stringify((opticalSystemRows || []).map((row) => ({
+            t: row?.surfType ?? row?.['object type'] ?? row?.object ?? row?.type,
+            r: row?.radius,
+            th: row?.thickness,
+            k: row?.conic,
+            s: row?.semidia,
+            od: row?.objectRenderDistance
+        }))));
+        return [
+            rowsSig,
+            Number(objectPosition?.x || 0).toFixed(10),
+            Number(objectPosition?.y || 0).toFixed(10),
+            Number(objectPosition?.z || 0).toFixed(10),
+            Number(stopCenter?.x || 0).toFixed(10),
+            Number(stopCenter?.y || 0).toFixed(10),
+            Number(stopCenter?.z || 0).toFixed(10),
+            Number(stopSurfaceIndex || 0),
+            Number(wavelength || 0).toFixed(10)
+        ].join('#');
+    } catch (_) {
+        return null;
+    }
+}
+
 function isCoordTransRow(row) {
     const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();
     return st === 'coord trans' || st === 'coordinate transform' || st === 'ct' || st === 'coordtrans' || st === 'coordinatetransform';
@@ -1355,16 +1392,17 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
             }
         }
 
+        const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+
         // Stop面を検索
-        const stopSurface = findStopSurface(opticalSystemRows);
+        const stopSurface = findStopSurface(opticalSystemRows, surfaceOrigins);
         if (!stopSurface) {
             throw new Error('Stop面が見つかりません');
         }
 
         const stopSurfaceIndex = stopSurface.index;
-        
+
         // Stop面の正しいz位置を計算
-        const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
         let stopZ;
         
         if (surfaceOrigins && surfaceOrigins[stopSurfaceIndex] && surfaceOrigins[stopSurfaceIndex].origin) {
@@ -1523,14 +1561,44 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                 }
                 
                 // Brent法による主光線方向ベクトル探索
-                chiefRayDirection = findFiniteSystemChiefRayDirection(
-                    fixedObjectPos, 
-                    stopCenter, 
-                    stopSurfaceIndex, 
-                    opticalSystemRows, 
-                    actualDebugMode,
+                const chiefDirectionCacheKey = buildFiniteChiefDirectionCacheKey(
+                    fixedObjectPos,
+                    stopCenter,
+                    stopSurfaceIndex,
+                    opticalSystemRows,
                     wavelength
                 );
+                const cachedChiefDirection = chiefDirectionCacheKey
+                    ? finiteChiefDirectionCache.get(chiefDirectionCacheKey)
+                    : null;
+
+                if (cachedChiefDirection) {
+                    chiefRayDirection = {
+                        i: Number(cachedChiefDirection.i),
+                        j: Number(cachedChiefDirection.j),
+                        k: Number(cachedChiefDirection.k)
+                    };
+                } else {
+                    chiefRayDirection = findFiniteSystemChiefRayDirection(
+                        fixedObjectPos,
+                        stopCenter,
+                        stopSurfaceIndex,
+                        opticalSystemRows,
+                        actualDebugMode,
+                        wavelength
+                    );
+                    if (chiefDirectionCacheKey) {
+                        finiteChiefDirectionCache.set(chiefDirectionCacheKey, chiefRayDirection ? {
+                            i: Number(chiefRayDirection.i) || 0,
+                            j: Number(chiefRayDirection.j) || 0,
+                            k: Number(chiefRayDirection.k) || 0
+                        } : null);
+                        if (finiteChiefDirectionCache.size > 256) {
+                            const firstKey = finiteChiefDirectionCache.keys().next().value;
+                            if (firstKey !== undefined) finiteChiefDirectionCache.delete(firstKey);
+                        }
+                    }
+                }
                 
                 if (actualDebugMode) {
                     console.log(`   結果: (${chiefRayDirection.i.toFixed(6)}, ${chiefRayDirection.j.toFixed(6)}, ${chiefRayDirection.k.toFixed(6)})`);

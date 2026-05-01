@@ -31,7 +31,7 @@ import { clearOptimizerStop, readDesktopSetting, writeDesktopSetting } from "../
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
 import { calculateSurfaceOrigins, transformPointToLocal } from "../../raytracing/core/ray-tracing.ts";
-import { convertImageHeightToEffectiveObject } from "../../optical/ray-renderer.ts";
+import { calculateParaxialData } from "../../raytracing/core/ray-paraxial.ts";
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
@@ -174,6 +174,139 @@ const BLOCK_PERF_LABELS: Record<string, string> = {
 
 const RENDER_3D_SURFACE_MESH_SEGMENTS = 64;
 const RENDER_3D_TORIC_MESH_SEGMENTS = 96;
+const RENDER_IMAGEHEIGHT_APPROX_CACHE_LIMIT = 512;
+
+const renderRowsSignatureCache = new WeakMap<any[], string>();
+const renderImageHeightApproxCache = new Map<string, any>();
+const renderParaxialDataCache = new Map<string, any>();
+
+function clampRenderCacheSize(cache: Map<string, any>, limit = RENDER_IMAGEHEIGHT_APPROX_CACHE_LIMIT): void {
+  while (cache.size > limit) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey === undefined) break;
+    cache.delete(firstKey);
+  }
+}
+
+function buildRenderRowsSignature(rows: any[]): string {
+  if (!Array.isArray(rows)) return 'no-rows';
+  const cached = renderRowsSignatureCache.get(rows);
+  if (cached) return cached;
+
+  const parts: string[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index] || {};
+    parts.push([
+      index,
+      String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.['object type'] ?? ''),
+      String(row?.radius ?? row?.Radius ?? ''),
+      String(row?.thickness ?? row?.Thickness ?? ''),
+      String(row?.conic ?? row?.k ?? ''),
+      String(row?.semidia ?? row?.semiDiameter ?? row?.['Semi Diameter'] ?? row?.aperture ?? ''),
+      String(row?.material ?? row?.glass ?? row?.nd ?? ''),
+    ].join(':'));
+  }
+
+  const signature = parts.join('|');
+  renderRowsSignatureCache.set(rows, signature);
+  return signature;
+}
+
+function getRenderParaxialDataCached(opticalSystemRows: any[], wavelengthUm: number): any {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return null;
+  const signature = buildRenderRowsSignature(opticalSystemRows);
+  const cacheKey = `${signature}#${Number(wavelengthUm || 0).toFixed(6)}`;
+  if (renderParaxialDataCache.has(cacheKey)) {
+    return renderParaxialDataCache.get(cacheKey) ?? null;
+  }
+  let paraxial = null;
+  try {
+    paraxial = calculateParaxialData(opticalSystemRows, wavelengthUm);
+  } catch (_) {
+    paraxial = null;
+  }
+  renderParaxialDataCache.set(cacheKey, paraxial);
+  clampRenderCacheSize(renderParaxialDataCache, 64);
+  return paraxial;
+}
+
+function getRenderImageHeightTarget(row: any): { x: number; y: number } | null {
+  const storedTarget = row?.__cooptImageHeightTarget;
+  if (storedTarget && Number.isFinite(Number(storedTarget.x)) && Number.isFinite(Number(storedTarget.y))) {
+    return { x: Number(storedTarget.x), y: Number(storedTarget.y) };
+  }
+
+  const x = Number(row?.xHeightAngle);
+  const y = Number(row?.yHeightAngle);
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    return { x, y };
+  }
+  return null;
+}
+
+function approximateRenderImageHeightRow(
+  row: any,
+  index: number,
+  opticalSystemRows: any[],
+  wavelengthUm: number,
+  conjugateType: 'infinite' | 'finite'
+): any {
+  const target = getRenderImageHeightTarget(row);
+  if (!target) return row;
+
+  const signature = buildRenderRowsSignature(opticalSystemRows);
+  const cacheKey = [
+    signature,
+    Number(wavelengthUm || 0).toFixed(6),
+    conjugateType,
+    Number(target.x).toFixed(6),
+    Number(target.y).toFixed(6),
+    String(index),
+  ].join('#');
+  const cached = renderImageHeightApproxCache.get(cacheKey);
+  if (cached) {
+    return { ...cached };
+  }
+
+  const paraxial = getRenderParaxialDataCached(opticalSystemRows, wavelengthUm);
+  let approximatedRow = {
+    ...row,
+    __cooptOriginalPosition: row?.__cooptOriginalPosition ?? row?.position,
+    __cooptImageHeightTarget: { x: target.x, y: target.y },
+    __cooptRenderApproxImageHeight: true,
+  };
+
+  if (conjugateType === 'infinite') {
+    const focalLength = Number(paraxial?.focalLength);
+    if (Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-9) {
+      approximatedRow = {
+        ...approximatedRow,
+        position: 'Angle',
+        xHeightAngle: Math.atan2(target.x, focalLength) * 180 / Math.PI,
+        yHeightAngle: Math.atan2(target.y, focalLength) * 180 / Math.PI,
+      };
+    }
+  } else {
+    const imageDistance = Number(paraxial?.imageDistance);
+    const objectDistance = Number(opticalSystemRows?.[0]?.thickness);
+    const magnification = (Number.isFinite(imageDistance) && Number.isFinite(objectDistance) && Math.abs(objectDistance) > 1e-9)
+      ? imageDistance / objectDistance
+      : Number.NaN;
+    const scale = (Number.isFinite(magnification) && Math.abs(magnification) > 1e-9)
+      ? 1 / Math.abs(magnification)
+      : 1;
+    approximatedRow = {
+      ...approximatedRow,
+      position: 'Rectangle',
+      xHeightAngle: target.x * scale,
+      yHeightAngle: target.y * scale,
+    };
+  }
+
+  renderImageHeightApproxCache.set(cacheKey, approximatedRow);
+  clampRenderCacheSize(renderImageHeightApproxCache);
+  return { ...approximatedRow };
+}
 
 function readCooptPerfCounters(): Record<string, CooptPerfCounter> {
   try {
@@ -1128,15 +1261,7 @@ export default function App() {
         && Number.isFinite(Number(storedTarget.y));
       if (posNorm !== 'imageheight' && !hasStoredImageHeightTarget) return row;
       try {
-        const sourceRow = hasStoredImageHeightTarget
-          ? {
-              ...row,
-              position: 'ImageHeight',
-              xHeightAngle: Number(storedTarget.x),
-              yHeightAngle: Number(storedTarget.y),
-            }
-          : row;
-        return convertImageHeightToEffectiveObject(sourceRow, opticalSystemRows, primaryWavelength, conjugateType);
+        return approximateRenderImageHeightRow(row, Number(row?.objectIndex) || 0, opticalSystemRows, primaryWavelength, conjugateType);
       } catch (error) {
         console.warn('[RenderWindow] ImageHeight normalization failed; using raw object row.', error);
         return row;
@@ -2613,31 +2738,23 @@ const collectLegacyCrossRays = async (
       let crossBeamResult: any = null;
       const crossType = axis === 'YZ' ? 'vertical' : (axis === 'XZ' ? 'horizontal' : 'both');
       const requestedPupilSamplingMode = readCurrentForceMode() || undefined;
+      const normalizedObjectRows = objectRows.map((row: any, index: number) => {
+        const posNorm = String(row?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+        const storedTarget = row?.__cooptImageHeightTarget;
+        const hasStoredImageHeightTarget = storedTarget
+          && Number.isFinite(Number(storedTarget.x))
+          && Number.isFinite(Number(storedTarget.y));
+        if (posNorm !== 'imageheight' && !hasStoredImageHeightTarget) return row;
+        try {
+          return approximateRenderImageHeightRow(row, index, opticalSystemRows, primaryWavelength, isInfiniteSystem ? 'infinite' : 'finite');
+        } catch (error) {
+          console.warn('[collectLegacyCrossRays] ImageHeight approximation failed, using raw row:', error);
+          return row;
+        }
+      });
       const generateStartMs = performance.now();
       if (isInfiniteSystem && typeof w.generateInfiniteSystemCrossBeam === 'function') {
-        const objectAngles = (objectRows.length ? objectRows : [{}]).map((row: any) => {
-          const posNorm = String(row?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
-          const storedTarget = row?.__cooptImageHeightTarget;
-          const hasStoredImageHeightTarget = storedTarget
-            && Number.isFinite(Number(storedTarget.x))
-            && Number.isFinite(Number(storedTarget.y));
-          if (posNorm === 'imageheight' || hasStoredImageHeightTarget) {
-            try {
-              const conjugateType = 'infinite';
-              const sourceRow = hasStoredImageHeightTarget
-                ? {
-                    ...row,
-                    position: 'ImageHeight',
-                    xHeightAngle: Number(storedTarget.x),
-                    yHeightAngle: Number(storedTarget.y),
-                  }
-                : row;
-              const effective = convertImageHeightToEffectiveObject(sourceRow, opticalSystemRows, primaryWavelength, conjugateType);
-              return { x: toNumber(effective?.xHeightAngle ?? effective?.x), y: toNumber(effective?.yHeightAngle ?? effective?.y) };
-            } catch (e) {
-              console.warn('[collectLegacyCrossRays] ImageHeight conversion failed, using raw value:', e);
-            }
-          }
+        const objectAngles = (normalizedObjectRows.length ? normalizedObjectRows : [{}]).map((row: any) => {
           return { x: toNumber(row?.xHeightAngle ?? row?.x), y: toNumber(row?.yHeightAngle ?? row?.y) };
         });
 
@@ -2660,7 +2777,7 @@ const collectLegacyCrossRays = async (
           chiefZ: -20
         });
       } else if (typeof w.generateCrossBeam === 'function') {
-        const allObjectPositions = (objectRows.length ? objectRows : [{}]).map((row: any, index: number) => {
+        const allObjectPositions = (normalizedObjectRows.length ? normalizedObjectRows : [{}]).map((row: any, index: number) => {
           if (Array.isArray(row)) {
             return { x: toNumber(row[1]), y: toNumber(row[2]), z: 0, objectIndex: index };
           }
@@ -2771,41 +2888,6 @@ const collectLegacyCrossRays = async (
         };
       }) : [];
       recordCooptPerfSample('collectLegacyCrossRays.normalize', performance.now() - normalizeStartMs);
-
-      const chiefOnlyObjectCount = (() => {
-        const objectIndices = new Set<number>();
-        let hasNonChief = false;
-        normalizedAllRays.forEach((ray: any) => {
-          const objectIndex = Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : 0;
-          objectIndices.add(objectIndex);
-          const type = String(ray?.originalRay?.type || ray?.type || '').toLowerCase();
-          if (type !== 'chief') hasNonChief = true;
-        });
-        return hasNonChief ? -1 : objectIndices.size;
-      })();
-
-      if (
-        axis === 'BOTH' &&
-        isInfiniteSystem &&
-        chiefOnlyObjectCount > 0 &&
-        normalizedAllRays.length === chiefOnlyObjectCount
-      ) {
-        const [yzRays, xzRays] = await Promise.all([
-          collectLegacyCrossRays(opticalSystemRows, 'YZ', undefined, options),
-          collectLegacyCrossRays(opticalSystemRows, 'XZ', undefined, options),
-        ]);
-        const merged = [...yzRays, ...xzRays];
-        const seenChiefObjects = new Set<number>();
-        const mergedDeduped = merged.filter((ray: any) => {
-          const type = String(ray?.originalRay?.type || ray?.type || '').toLowerCase();
-          if (type !== 'chief') return true;
-          const objectIndex = Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : 0;
-          if (seenChiefObjects.has(objectIndex)) return false;
-          seenChiefObjects.add(objectIndex);
-          return true;
-        });
-        return mergedDeduped;
-      }
 
       const desiredCount = effectiveRayCount;
       const limitStartMs = performance.now();

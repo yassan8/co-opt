@@ -221,6 +221,7 @@ function fnv1a32(str) {
 
 const chiefRayOriginSearchCache = new Map<string, { x: number; y: number; z: number } | null>();
 const chiefRayOriginSeedCache = new Map<string, Array<{ direction: { i: number; j: number; k: number }; origin: { x: number; y: number; z: number } }>>();
+const infiniteCrossBeamChiefOriginCache = new Map<string, { x: number; y: number; z: number } | null>();
 
 function buildChiefRayOriginSearchFamilyKey(stopCenter, stopSurfaceIndex, targetSurfaceIndex, opticalSystemRows, wavelength) {
     try {
@@ -1740,6 +1741,19 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
     const angles = Array.isArray(objectAngles) ? objectAngles : [objectAngles];
     const allResults = [];
     const thinLensSystem = systemHasThinLensRows(opticalSystemRows);
+    let sharedSurfaceOriginsDetailed = null;
+    let sharedSurfaceOrigins = null;
+    try {
+        const detailedOrigins = calculateSurfaceOrigins(opticalSystemRows);
+        if (Array.isArray(detailedOrigins) && detailedOrigins.length === opticalSystemRows.length) {
+            sharedSurfaceOriginsDetailed = detailedOrigins;
+            sharedSurfaceOrigins = detailedOrigins.map((entry) => entry?.origin ?? { x: 0, y: 0, z: 0 });
+        }
+    } catch (_) {
+        sharedSurfaceOriginsDetailed = null;
+        sharedSurfaceOrigins = null;
+    }
+    const sharedStopSurfaceInfo = findStopSurface(opticalSystemRows, sharedSurfaceOrigins);
 
     for (let objectIndex = 0; objectIndex < angles.length; objectIndex++) {
         const objectAngle = angles[objectIndex];
@@ -1772,17 +1786,8 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         }
 
         // 2. Stop面情報の取得
-        let surfaceOrigins = null;
-        try {
-            const sd = calculateSurfaceOrigins(opticalSystemRows);
-            if (Array.isArray(sd) && sd.length === opticalSystemRows.length) {
-                surfaceOrigins = sd.map(d => d?.origin ?? { x: 0, y: 0, z: 0 });
-            }
-        } catch (_) {
-            surfaceOrigins = null;
-        }
-        
-        const stopSurfaceInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
+        const surfaceOrigins = sharedSurfaceOrigins;
+        const stopSurfaceInfo = sharedStopSurfaceInfo;
         
         if (!stopSurfaceInfo) {
             console.warn(`⚠️ [InfiniteSystem] Object${actualObjectIndex + 1}のStop面が見つかりません`);
@@ -1803,15 +1808,39 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             ? `(${dirX.toFixed(6)}, ${dirY.toFixed(6)}, ${dirZ.toFixed(6)})`
             : '(invalid)';
         const chiefSolveStartMs = performance.now();
-        let chiefRayOrigin = findInfiniteSystemChiefRayOrigin(
+        const chiefOriginCacheKey = buildChiefRayOriginSearchCacheKey(
             direction,
             stopSurfaceInfo.center,
             stopSurfaceInfo.index,
-            opticalSystemRows,
-            debugMode,
             resolvedTargetSurfaceIndex,
+            opticalSystemRows,
             wavelength
         );
+        let chiefRayOrigin = chiefOriginCacheKey ? infiniteCrossBeamChiefOriginCache.get(chiefOriginCacheKey) ?? null : null;
+        if (chiefRayOrigin) {
+            chiefRayOrigin = { x: Number(chiefRayOrigin.x), y: Number(chiefRayOrigin.y), z: Number(chiefRayOrigin.z) };
+        } else {
+            chiefRayOrigin = findInfiniteSystemChiefRayOrigin(
+                direction,
+                stopSurfaceInfo.center,
+                stopSurfaceInfo.index,
+                opticalSystemRows,
+                debugMode,
+                resolvedTargetSurfaceIndex,
+                wavelength
+            );
+            if (chiefOriginCacheKey) {
+                infiniteCrossBeamChiefOriginCache.set(chiefOriginCacheKey, chiefRayOrigin ? {
+                    x: Number(chiefRayOrigin.x) || 0,
+                    y: Number(chiefRayOrigin.y) || 0,
+                    z: Number(chiefRayOrigin.z) || 0,
+                } : null);
+                if (infiniteCrossBeamChiefOriginCache.size > 256) {
+                    const firstKey = infiniteCrossBeamChiefOriginCache.keys().next().value;
+                    if (firstKey !== undefined) infiniteCrossBeamChiefOriginCache.delete(firstKey);
+                }
+            }
+        }
         chiefSolveMs += performance.now() - chiefSolveStartMs;
         if (!chiefRayOrigin) {
             console.warn(`❌ [Chief Ray Failed] Object ${objectIndex + 1}: Could not find origin that reaches stop center`);
