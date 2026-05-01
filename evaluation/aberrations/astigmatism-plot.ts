@@ -311,34 +311,27 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
     // デフォルトオプション
     // Object Position Angleは無限系（角度）、Rectangle/Heightは有限系（物体高）
     const fsList = astigmatismData.fieldSettings || [];
+    const fieldTags = fsList
+        .map((fs) => String(fs?.__cooptOriginalPosition ?? fs?.position ?? fs?.fieldType ?? fs?.type ?? '').toLowerCase())
+        .filter(Boolean);
     const hasRectangleOrHeight = fsList.some(fs => {
-        const posType = (fs.position || fs.fieldType || '').toLowerCase();
+        const posType = String(fs?.__cooptOriginalPosition ?? fs?.position ?? fs?.fieldType ?? '').toLowerCase();
         return posType.includes('rectangle') || posType.includes('height');
     });
     const hasAngleOnly = fsList.some(fs => {
-        const posType = (fs.position || fs.fieldType || '').toLowerCase();
+        const posType = String(fs?.__cooptOriginalPosition ?? fs?.position ?? fs?.fieldType ?? '').toLowerCase();
         return posType.includes('angle') && !posType.includes('rectangle');
     });
+    const hasImageHeight = fieldTags.some((tag) => tag.includes('imageheight'));
     
     const fieldMode = astigmatismData.fieldMode
         ?? (astigmatismData.isAngleField ? 'angle' : null)
         ?? (hasRectangleOrHeight ? 'height' : (hasAngleOnly ? 'angle' : 'height'));
     const isAngleField = fieldMode === 'angle';
     
-    console.log(`📊 フィールドタイプ判定: hasRectangleOrHeight=${hasRectangleOrHeight}, hasAngleOnly=${hasAngleOnly}, fieldMode=${fieldMode}, isAngleField=${isAngleField}`);
-    console.log(`🔍 astigmatismData.isAngleField = ${astigmatismData.isAngleField}, fieldMode=${astigmatismData.fieldMode}`);
-    console.log(`🔍 fieldSettings詳細:`, fsList.map(fs => ({
-        name: fs.name || fs.displayName,
-        position: fs.position,
-        fieldType: fs.fieldType,
-        y: fs.y,
-        yHeight: fs.yHeight,
-        yFieldAngle: fs.yFieldAngle
-    })));
-    console.log(`🔍 data[0]サンプル:`, astigmatismData.data[0]);
-    const yAxisTitle = isAngleField ? 'Object Angle θ (deg)' : 'Object Height (mm)';
+    const yAxisTitle = isAngleField ? 'Object Angle θ (deg)' : (hasImageHeight ? 'Image Height (mm)' : 'Object Height (mm)');
     const yUnit = isAngleField ? 'deg' : 'mm';
-    const yValueLabel = isAngleField ? 'Object Angle θ' : 'Object Height';
+    const yValueLabel = isAngleField ? 'Object Angle θ' : (hasImageHeight ? 'Image Height' : 'Object Height');
     const defaultOptions = {
         title: 'Astigmatic Field Curves',
         xAxisTitle: 'Image Position (mm)',

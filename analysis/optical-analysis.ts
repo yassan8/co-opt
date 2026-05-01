@@ -95,6 +95,198 @@ function normalizeDistortionObjectRowsForImageHeight(objectRows: any[], opticalS
     return normalizeAstigmatismObjectRowsForImageHeight(objectRows, opticalSystemRows, sourceRows);
 }
 
+function deriveDisplayDistortionFieldValues(originalObjectRows: any[], fallbackFieldValues: number[]): number[] {
+    const rows = Array.isArray(originalObjectRows) ? originalObjectRows : [];
+    const tags = rows
+        .map((row) => String(row?.__cooptOriginalPosition ?? row?.position ?? row?.fieldType ?? row?.field_type ?? row?.field ?? row?.type ?? '').trim().toLowerCase())
+        .filter(Boolean);
+
+    if (!tags.some((tag) => tag.includes('imageheight'))) {
+        return Array.isArray(fallbackFieldValues) ? fallbackFieldValues : [];
+    }
+
+    const sampleCount = Math.max(1, Array.isArray(fallbackFieldValues) ? fallbackFieldValues.length : 0);
+    const heights = rows
+        .map((row: any) => parseFloat(row?.yHeightAngle ?? row?.y ?? row?.height ?? row?.yHeight ?? row?.y_height ?? Number.NaN))
+        .filter((value) => Number.isFinite(value));
+
+    if (!heights.length) {
+        return Array.isArray(fallbackFieldValues) ? fallbackFieldValues : [];
+    }
+
+    let minHeight = Math.min(...heights);
+    let maxHeight = Math.max(...heights);
+    if (minHeight <= 0) {
+        minHeight = 0.001;
+        if (maxHeight < minHeight) maxHeight = minHeight;
+    }
+
+    if (sampleCount === 1 || minHeight === maxHeight) {
+        return [parseFloat(maxHeight.toFixed(6))];
+    }
+
+    return Array.from({ length: sampleCount }, (_, index) => {
+        const t = index / (sampleCount - 1);
+        return parseFloat((minHeight + (maxHeight - minHeight) * t).toFixed(6));
+    });
+}
+
+function deriveIntegratedDistortionFieldValues(objectRows: any[]): { fieldValues: number[]; heightMode: boolean } {
+    const rows = Array.isArray(objectRows) ? objectRows : [];
+    const tags = rows
+        .map((row) => String(row?.position ?? row?.fieldType ?? row?.field_type ?? row?.field ?? row?.type ?? '').toLowerCase())
+        .filter(Boolean);
+    const mode = (() => {
+        if (tags.some((tag) => tag.includes('rect') || tag.includes('rectangle') || tag.includes('height'))) return 'height';
+        if (tags.some((tag) => tag.includes('angle'))) return 'angle';
+        const hasNumericHeight = rows.some((row) => {
+            const height = parseFloat(row?.yHeight ?? row?.y ?? row?.height ?? row?.y_height ?? Number.NaN);
+            return Number.isFinite(height) && Math.abs(height) > 0;
+        });
+        return hasNumericHeight ? 'height' : 'angle';
+    })();
+    if (mode === 'height') {
+        const heights = rows
+            .map((row: any) => parseFloat(row?.yHeight ?? row?.y ?? row?.height ?? row?.y_height ?? Number.NaN))
+            .filter((value) => Number.isFinite(value));
+        if (!heights.length) return { fieldValues: [0.001], heightMode: true };
+
+        let minHeight = Math.min(...heights);
+        let maxHeight = Math.max(...heights);
+        if (minHeight <= 0) {
+            minHeight = 0.001;
+            if (maxHeight < minHeight) maxHeight = minHeight;
+        }
+        if (minHeight === maxHeight) return { fieldValues: [minHeight], heightMode: true };
+
+        const pointCount = 10;
+        const fieldValues = Array.from({ length: pointCount }, (_, index) => {
+            const t = index / (pointCount - 1);
+            return parseFloat((minHeight + (maxHeight - minHeight) * t).toFixed(6));
+        });
+        return { fieldValues, heightMode: true };
+    }
+
+    let maxAngle = 0;
+    for (const row of rows) {
+        const candidates = [row?.yFieldAngle, row?.yAngle, row?.fieldAngle, row?.xFieldAngle, row?.xAngle, row?.xHeightAngle, row?.yHeightAngle];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+                maxAngle = Math.max(maxAngle, Math.abs(candidate));
+            }
+        }
+    }
+    if (!(maxAngle > 0)) maxAngle = 20;
+
+    let step = 1;
+    if (maxAngle <= 5) step = 0.5;
+    else if (maxAngle <= 15) step = 1;
+    else if (maxAngle <= 40) step = 2;
+    else step = Math.ceil(maxAngle / 25);
+
+    const minAngle = maxAngle * 0.001;
+    const fieldValues: number[] = [];
+    for (let angle = minAngle; angle <= maxAngle + 1e-9; angle += step) {
+        fieldValues.push(parseFloat(angle.toFixed(6)));
+    }
+    if (fieldValues[fieldValues.length - 1] !== maxAngle) fieldValues.push(maxAngle);
+    return { fieldValues, heightMode: false };
+}
+
+function sanitizeIntegratedDistortionSeries(seriesList: Array<{ wavelength: number; data: any }>): Array<{ wavelength: number; data: any }> {
+    return (Array.isArray(seriesList) ? seriesList : []).map((series) => {
+        const data = series?.data || {};
+        const xs = Array.isArray(data?.distortionPercent) ? data.distortionPercent : [];
+        const ys = Array.isArray(data?.fieldValues) ? data.fieldValues : [];
+        const n = Math.min(xs.length, ys.length);
+        const outX: number[] = [];
+        const outY: number[] = [];
+
+        for (let i = 0; i < n; i += 1) {
+            const xRaw = xs[i];
+            const x = (typeof xRaw === 'number' && Number.isFinite(xRaw) && Math.abs(xRaw) <= 50) ? xRaw : null;
+            const y = Number(ys[i]);
+            if (!Number.isFinite(y)) continue;
+            if (x === null) continue;
+            outX.push(x);
+            outY.push(y);
+        }
+
+        return {
+            ...series,
+            data: {
+                ...data,
+                distortionPercent: outX,
+                fieldValues: outY,
+            },
+        };
+    }).filter((series) => {
+        const xs = Array.isArray(series?.data?.distortionPercent) ? series.data.distortionPercent : [];
+        return xs.some((value: any) => typeof value === 'number' && Number.isFinite(value));
+    });
+}
+
+function deriveIntegratedLcaFieldValues(objectRows: any[], pointCount = 21): { fieldValues: number[]; heightMode: boolean } {
+    const rows = Array.isArray(objectRows) ? objectRows : [];
+    const pickTag = (row: any) => {
+        const raw = row?.position ?? row?.fieldType ?? row?.field_type ?? row?.field ?? row?.type;
+        return (raw ?? '').toString().toLowerCase();
+    };
+    const tags = rows.map(pickTag).filter(Boolean);
+    const hasRect = tags.some((tag) => tag.includes('rect') || tag.includes('rectangle'));
+    const hasHeight = tags.some((tag) => tag.includes('height'));
+    const heightMode = hasRect || hasHeight || (!tags.some((tag) => tag.includes('angle')) && rows.some((row) => {
+        const height = parseFloat(row?.yHeight ?? row?.y ?? Number.NaN);
+        return Number.isFinite(height);
+    }));
+
+    const rawFieldValues = rows
+        .map((row: any) => {
+            if (heightMode) {
+                return parseFloat(row?.yHeight ?? row?.y ?? row?.yHeightAngle ?? Number.NaN);
+            }
+            return parseFloat(row?.yHeightAngle ?? row?.yFieldAngle ?? row?.yAngle ?? row?.fieldAngle ?? row?.y ?? Number.NaN);
+        })
+        .filter((value) => Number.isFinite(value))
+        .map((value) => Math.abs(value));
+
+    if (rawFieldValues.length === 0) {
+        return { fieldValues: [], heightMode };
+    }
+
+    const maxFieldValue = Math.max(...rawFieldValues.map((value) => Number(value)));
+    if (!Number.isFinite(maxFieldValue) || maxFieldValue <= 0) {
+        return { fieldValues: [], heightMode };
+    }
+
+    if (pointCount <= 1) {
+        return { fieldValues: [maxFieldValue], heightMode };
+    }
+
+    const fieldValues = Array.from({ length: pointCount }, (_, index) => {
+        const value = (maxFieldValue * index) / (pointCount - 1);
+        return Number(value.toFixed(6));
+    });
+    return { fieldValues, heightMode };
+}
+
+function inferAstigmatismObjectFieldMode(objectRows: any[]): 'angle' | 'height' {
+    const rows = Array.isArray(objectRows) ? objectRows : [];
+    const tags = rows
+        .map((row) => String(row?.__cooptOriginalPosition ?? row?.position ?? row?.fieldType ?? row?.type ?? '').trim().toLowerCase())
+        .filter(Boolean);
+
+    if (tags.some((tag) => tag.includes('imageheight') || tag.includes('height') || tag.includes('rect'))) {
+        return 'height';
+    }
+
+    if (tags.some((tag) => tag.includes('angle'))) {
+        return 'angle';
+    }
+
+    return 'angle';
+}
+
 async function resolveAnalysisRustTraceOptions(options: { forceRustWasm?: boolean; requireRustWasm?: boolean } = {}): Promise<any | null> {
     const forceRustWasm = options.forceRustWasm === true;
     const requireRustWasmFromCaller = options.requireRustWasm === true;
@@ -3098,10 +3290,8 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
         // 補間モードの場合、0°から最大値まで100等分した画角を生成
         // ただし Rectangle/height 指定が1件でもあれば高さモードとみなし、補間は行わずそのまま使う
         let processedObjectRows = normalizeAstigmatismObjectRowsForImageHeight(objectRows, opticalSystemRows, sourceRows);
-        const hasHeightRect = (objectRows || []).some((obj: any) => {
-            const pos = (obj.position || obj.fieldType || obj.type || '').toLowerCase();
-            return pos.includes('height') || pos.includes('rect');
-        });
+        const objectFieldMode = inferAstigmatismObjectFieldMode(objectRows);
+        const hasHeightRect = objectFieldMode === 'height';
 
         if (fieldMode === 'interpolate' && (processedObjectRows || []).length > 0 && !hasHeightRect) {
             // Y方向の最大角度を取得
@@ -3795,81 +3985,35 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         // 3. 歪曲収差データを計算
         console.log('📊 Calculating distortion...');
         const { runNativeDistortion, runNativeMagnificationChromaticAberration } = await import('../src/desktop/ipc/client.ts');
-        const { deriveMaxFieldAngleFromObjects } = await import('../evaluation/aberrations/distortion-plot.js');
         
         // Decide field sweep (object angles vs object heights) based on Object table setting
-        const inferObjectFieldMode = (objects: any) => {
-            const rows = Array.isArray(objects) ? objects : [];
-            const pickTag = (o: any) => {
-                const raw = o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type;
-                return (raw ?? '').toString().toLowerCase();
-            };
-            const tags = rows.map(pickTag).filter(Boolean);
-            const hasRect = tags.some(t => t.includes('rect') || t.includes('rectangle'));
-            const hasHeight = tags.some(t => t.includes('height'));
-            if (hasRect || hasHeight) return { mode: 'height' };
-            const hasAngle = tags.some(t => t.includes('angle'));
-            if (hasAngle) return { mode: 'angle' };
-
-            // Fallback if tags are missing
-            const heightCandidates = (rows || []).map((o: any) => parseFloat(o?.yHeight ?? o?.y ?? o?.yHeightAngle ?? NaN)).filter(v => Number.isFinite(v));
-            const angleCandidates = (rows || []).map((o: any) => parseFloat(o?.fieldAngle ?? o?.yFieldAngle ?? o?.yAngle ?? NaN)).filter(v => Number.isFinite(v));
-            if (heightCandidates.length > 0 && angleCandidates.length === 0) return { mode: 'height' };
-            return { mode: 'angle' };
-        };
         const normalizedDistortionObjectRows = normalizeDistortionObjectRowsForImageHeight(objectRows, opticalSystemRows, sourceRows);
-        const fieldMode = inferObjectFieldMode(normalizedDistortionObjectRows);
-        const heightMode = fieldMode.mode === 'height';
-
-        const heightCandidates = (normalizedDistortionObjectRows || []).map((o: any) => parseFloat(o.yHeight ?? o.y ?? o.yHeightAngle ?? NaN)).filter(v => Number.isFinite(v));
-
-        const numPoints = 10;
-        let fieldValues: number[] = [];
-        if (heightMode) {
-            let minH = Math.min(...heightCandidates);
-            let maxH = Math.max(...heightCandidates);
-            if (minH <= 0) {
-                minH = 0.001; // avoid 0mm sample
-                if (maxH < minH) maxH = minH;
-            }
-            if (minH === maxH) {
-                fieldValues = [minH];
-            } else {
-                for (let i = 0; i < numPoints; i++) {
-                    const h = minH + ((maxH - minH) * i) / (numPoints - 1);
-                    fieldValues.push(parseFloat(h.toFixed(6)));
-                }
-            }
-            console.log(`📊 Object heights for distortion (${fieldValues.length} points): ${fieldValues.join(', ')} mm`);
-        } else {
-            const maxFieldAngle = deriveMaxFieldAngleFromObjects();
-            const minFieldAngle = maxFieldAngle * 0.001;  // 軸上色収差の観点から0を避ける
-            for (let i = 0; i < numPoints; i++) {
-                const angle = minFieldAngle + ((maxFieldAngle - minFieldAngle) * i) / (numPoints - 1);
-                fieldValues.push(parseFloat(angle.toFixed(6)));
-            }
-            console.log(`📊 Field angles for distortion (${numPoints} points, starting from ${minFieldAngle.toFixed(6)}°): ${fieldValues.join(', ')}°`);
-        }
+        const { fieldValues, heightMode } = deriveIntegratedDistortionFieldValues(normalizedDistortionObjectRows);
         
         // 各波長で歪曲収差を計算
-        const distortionDataByWavelength = [];
+        const distortionDataByWavelengthRaw = [];
         for (let wlIndex = 0; wlIndex < wavelengths.length; wlIndex++) {
             const wavelength = wavelengths[wlIndex];
-            const wlBase = 70 + (25 * wlIndex) / Math.max(1, wavelengths.length);
-            const wlSpan = 25 / Math.max(1, wavelengths.length);
             const distData = await runNativeDistortion({
                 opticalSystemRows,
+                sourceRows,
+                objectRows: normalizedDistortionObjectRows,
                 fieldSamples: fieldValues,
                 heightMode,
                 wavelength,
             } as any);
             if (distData) {
-                distortionDataByWavelength.push({
+                const responseFieldValues = Array.isArray(distData?.fieldValues) ? distData.fieldValues : fieldValues;
+                distortionDataByWavelengthRaw.push({
                     wavelength: wavelength,
-                    data: distData
+                    data: {
+                        ...distData,
+                        fieldValues: deriveDisplayDistortionFieldValues(objectRows, responseFieldValues),
+                    }
                 });
             }
         }
+        const distortionDataByWavelength = sanitizeIntegratedDistortionSeries(distortionDataByWavelengthRaw);
         
         if (distortionDataByWavelength.length === 0) {
             throw new Error('Failed to calculate distortion for any wavelength');
@@ -3877,17 +4021,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
 
         // 4. Lateral Chromatic Aberration (LCA) データを計算
         console.log('📊 Calculating lateral chromatic aberration...');
-        const lcaMaxField = heightMode
-            ? Math.max(...heightCandidates)
-            : Math.max(...fieldValues.map(v => Math.abs(v)));
-        const lcaPointCount = 21;
-        const lcaFieldValues: number[] = [];
-        if (Number.isFinite(lcaMaxField) && lcaMaxField > 0) {
-            for (let i = 0; i < lcaPointCount; i++) {
-                const v = (lcaMaxField * i) / (lcaPointCount - 1);
-                lcaFieldValues.push(Number(v.toFixed(6)));
-            }
-        }
+        const { fieldValues: lcaFieldValues, heightMode: lcaHeightMode } = deriveIntegratedLcaFieldValues(objectRows, 21);
 
         const lcaData = lcaFieldValues.length > 0
             ? await runNativeMagnificationChromaticAberration({
@@ -3896,7 +4030,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
                 fieldSamples: lcaFieldValues,
                 wavelengths,
                 referenceWavelength: 0.5876,
-                heightMode,
+                heightMode: lcaHeightMode,
             } as any)
             : null;
         

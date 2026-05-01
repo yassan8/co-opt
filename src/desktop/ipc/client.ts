@@ -964,7 +964,9 @@ export async function runNativeAstigmatism(
   payload: NativeAstigmatismRequest,
 ): Promise<NativeAstigmatismResponse> {
   if (!isTauriRuntime()) {
-    const { calculateAstigmatismDataNativeLike } = await import("../../../evaluation/aberrations/astigmatism.ts");
+    const {
+      calculateAstigmatismDataNativeLike,
+    } = await import("../../../evaluation/aberrations/astigmatism.ts");
     const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
     const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
     const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];

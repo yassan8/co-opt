@@ -1770,7 +1770,10 @@ function getFieldSettingsFromObject(objectRowsParam, systemMode = 'height') {
             const obj = objectRows[i];
             const name = obj.name || obj.Name || `Object${i + 1}`;
 
-            const isAngle = (systemMode === 'angle');
+            const originalTag = getAstigObjectPositionTag(obj);
+            const isImageHeight = originalTag.includes('imageheight');
+            const isHeightLike = isImageHeight || originalTag.includes('rect') || originalTag.includes('height');
+            const isAngle = !isHeightLike && (systemMode === 'angle');
             
             // X座標を取得
             let xValue = 0;
@@ -1778,7 +1781,10 @@ function getFieldSettingsFromObject(objectRowsParam, systemMode = 'height') {
                 xValue = parseFloat(obj.xFieldAngle || obj.xAngle || obj.xHeightAngle || obj.x || 0);
             } else {
                 // Heightフィールドでも xHeightAngle に値が入ることがあるためフォールバックに含める
-                xValue = parseFloat(obj.xHeight || obj.x || obj.xHeightAngle || obj.xFieldAngle || obj.xAngle || 0);
+                xValue = parseFloat(
+                    obj.__cooptImageHeightTarget?.x || obj.__cooptImageHeightTargetX ||
+                    obj.xHeight || obj.x || obj.xHeightAngle || obj.xFieldAngle || obj.xAngle || 0
+                );
             }
             
             // Y座標を取得
@@ -1787,10 +1793,13 @@ function getFieldSettingsFromObject(objectRowsParam, systemMode = 'height') {
                 yValue = parseFloat(obj.yFieldAngle || obj.fieldAngle || obj.yAngle || obj.yHeightAngle || obj.y || 0);
             } else {
                 // Heightフィールドでも yHeightAngle に値が入ることがあるためフォールバックに含める
-                yValue = parseFloat(obj.yHeight || obj.y || obj.yHeightAngle || obj.yFieldAngle || obj.yAngle || 0);
+                yValue = parseFloat(
+                    obj.__cooptImageHeightTarget?.y || obj.__cooptImageHeightTargetY ||
+                    obj.yHeight || obj.y || obj.yHeightAngle || obj.yFieldAngle || obj.yAngle || 0
+                );
             }
 
-            const normalizedPosition = isAngle ? 'angle' : 'height';
+            const effectivePosition = (systemMode === 'angle') ? 'angle' : 'height';
             
             fieldSettings.push({
                 name: name,
@@ -1799,11 +1808,12 @@ function getFieldSettingsFromObject(objectRowsParam, systemMode = 'height') {
                 y: yValue,
                 xHeight: isAngle ? 0 : xValue,
                 yHeight: isAngle ? 0 : yValue,
-                xHeightAngle: xValue,
-                yHeightAngle: yValue,
-                fieldType: isAngle ? 'angle' : 'height',
+                xHeightAngle: parseFloat(obj.xFieldAngle || obj.xAngle || obj.xHeightAngle || obj.x || 0),
+                yHeightAngle: parseFloat(obj.yFieldAngle || obj.fieldAngle || obj.yAngle || obj.yHeightAngle || obj.y || 0),
+                fieldType: effectivePosition,
                 objectIndex: i,
-                position: normalizedPosition
+                position: effectivePosition,
+                __cooptOriginalPosition: obj?.__cooptOriginalPosition ?? obj?.position ?? obj?.fieldType ?? obj?.type ?? null
             });
         }
         
@@ -1932,6 +1942,78 @@ function interpolateHeightFieldSettings(originalFields, totalPoints = 9) {
     return interpolatedFields;
 }
 
+function interpolateImageHeightFieldSettingsForAstig(originalFields, totalPoints = 51) {
+    if (!Array.isArray(originalFields) || originalFields.length === 0) {
+        return [];
+    }
+
+    const sourceFields = [...originalFields]
+        .filter((field) => Number.isFinite(Number(field?.y)))
+        .sort((a, b) => Number(a?.y ?? 0) - Number(b?.y ?? 0));
+    if (sourceFields.length === 0) {
+        return [];
+    }
+    if (sourceFields.length === 1) {
+        return sourceFields;
+    }
+
+    const interpolateAt = (targetY, valueGetter) => {
+        if (targetY <= Number(sourceFields[0]?.y ?? 0)) {
+            return Number(valueGetter(sourceFields[0]) ?? 0) || 0;
+        }
+        const last = sourceFields[sourceFields.length - 1];
+        if (targetY >= Number(last?.y ?? 0)) {
+            return Number(valueGetter(last) ?? 0) || 0;
+        }
+
+        for (let index = 1; index < sourceFields.length; index++) {
+            const left = sourceFields[index - 1];
+            const right = sourceFields[index];
+            const y0 = Number(left?.y ?? 0);
+            const y1 = Number(right?.y ?? 0);
+            if (!Number.isFinite(y0) || !Number.isFinite(y1) || y1 <= y0 || targetY > y1) {
+                continue;
+            }
+            const t = (targetY - y0) / (y1 - y0);
+            const v0 = Number(valueGetter(left) ?? 0) || 0;
+            const v1 = Number(valueGetter(right) ?? 0) || 0;
+            return v0 + (v1 - v0) * t;
+        }
+
+        return Number(valueGetter(last) ?? 0) || 0;
+    };
+
+    const minH = Number(sourceFields[0]?.y ?? 0);
+    const maxH = Number(sourceFields[sourceFields.length - 1]?.y ?? 0);
+    const sampleCount = Math.max(3, Math.round(Number(totalPoints) || 51));
+    const interpolatedFields = [];
+
+    for (let index = 0; index < sampleCount; index++) {
+        const targetH = minH + ((maxH - minH) * index) / (sampleCount - 1);
+        const effectiveXAngle = interpolateAt(targetH, (field) => field?.xHeightAngle ?? field?.xFieldAngle ?? field?.x ?? 0);
+        const effectiveYAngle = interpolateAt(targetH, (field) => field?.yHeightAngle ?? field?.yFieldAngle ?? field?.fieldAngle ?? 0);
+        interpolatedFields.push({
+            name: `Field${index + 1}`,
+            displayName: `${targetH.toFixed(2)}mm`,
+            x: 0,
+            y: targetH,
+            xHeight: 0,
+            yHeight: targetH,
+            xHeightAngle: effectiveXAngle,
+            yHeightAngle: effectiveYAngle,
+            yFieldAngle: effectiveYAngle,
+            fieldAngle: effectiveYAngle,
+            fieldType: 'angle',
+            position: 'angle',
+            objectIndex: -1,
+            isInterpolated: true,
+            __cooptOriginalPosition: 'ImageHeight'
+        });
+    }
+
+    return interpolatedFields;
+}
+
 function maybeInterpolateAngleFieldSettingsForAstig(originalFields, totalPoints = 51) {
     if (!Array.isArray(originalFields) || originalFields.length === 0) {
         return [];
@@ -2027,13 +2109,41 @@ function collectSpotWavelengthsForAstigWeb(sourceRows, wavelengthMode = 'all') {
     }));
 }
 
+function getAstigObjectPositionTag(objectRow) {
+    return String(
+        objectRow?.__cooptOriginalPosition
+        ?? objectRow?.position
+        ?? objectRow?.fieldType
+        ?? objectRow?.field_type
+        ?? objectRow?.field
+        ?? objectRow?.type
+        ?? ''
+    ).trim().toLowerCase();
+}
+
+function inferAstigObjectFieldMode(objectRows) {
+    const tags = (Array.isArray(objectRows) ? objectRows : [])
+        .map((row) => getAstigObjectPositionTag(row))
+        .filter(Boolean);
+
+    if (tags.some((tag) => tag.includes('imageheight') || tag.includes('height') || tag.includes('rect'))) {
+        return 'height';
+    }
+
+    if (tags.some((tag) => tag.includes('angle'))) {
+        return 'angle';
+    }
+
+    return 'angle';
+}
+
 function maybeInterpolateAngleObjectRowsForAstigWeb(objectRows, infiniteConjugate) {
     if (!infiniteConjugate || !Array.isArray(objectRows) || objectRows.length === 0) {
         return Array.isArray(objectRows) ? objectRows : [];
     }
 
     const hasHeightRect = objectRows.some((row) => {
-        const pos = String(row?.position ?? row?.fieldType ?? row?.type ?? '').toLowerCase();
+        const pos = getAstigObjectPositionTag(row);
         return pos.includes('height') || pos.includes('rect');
     });
     if (hasHeightRect) return objectRows;
@@ -2062,6 +2172,111 @@ function maybeInterpolateAngleObjectRowsForAstigWeb(objectRows, infiniteConjugat
         });
     }
     return out;
+}
+
+function resolveNativeLikeHeightInterpolationPointCount(objectRows, maxPoints = 17) {
+    const sourceCount = Array.isArray(objectRows) ? objectRows.length : 0;
+    if (sourceCount <= 1) return sourceCount;
+    const expanded = sourceCount * 4 + 1;
+    const capped = Math.max(3, Math.min(maxPoints, expanded));
+    return (capped % 2) === 0 ? capped + 1 : capped;
+}
+
+function maybeInterpolateHeightObjectRowsForAstigWeb(objectRows, totalPoints = 17) {
+    if (!Array.isArray(objectRows) || objectRows.length <= 1) {
+        return Array.isArray(objectRows) ? objectRows : [];
+    }
+
+    const sourceRows = [...objectRows]
+        .map((row) => {
+            const targetY = Number(
+                row?.__cooptImageHeightTarget?.y
+                ?? row?.__cooptImageHeightTargetY
+                ?? row?.yHeight
+                ?? row?.y
+                ?? row?.yHeightAngle
+                ?? row?.yFieldAngle
+                ?? row?.fieldAngle
+                ?? 0
+            );
+            return Number.isFinite(targetY)
+                ? { row, targetY }
+                : null;
+        })
+        .filter(Boolean)
+        .sort((left, right) => left.targetY - right.targetY);
+
+    if (sourceRows.length <= 1) {
+        return Array.isArray(objectRows) ? objectRows : [];
+    }
+
+    const firstRow = sourceRows[0].row;
+    const lastRow = sourceRows[sourceRows.length - 1].row;
+    const sampleCount = Math.max(3, Math.round(Number(totalPoints) || 17));
+    const representativePosition = String(firstRow?.position ?? firstRow?.fieldType ?? 'Rectangle');
+    const representativeOriginalPosition = firstRow?.__cooptOriginalPosition ?? firstRow?.position ?? firstRow?.fieldType ?? firstRow?.type ?? null;
+    const hasImageHeightTargets = sourceRows.some((entry) => !!entry?.row?.__cooptImageHeightTarget);
+    const minTargetY = sourceRows[0].targetY;
+    const maxTargetY = sourceRows[sourceRows.length - 1].targetY;
+
+    const interpolateAt = (targetY, getter) => {
+        if (targetY <= sourceRows[0].targetY) {
+            return Number(getter(sourceRows[0].row) ?? 0) || 0;
+        }
+        if (targetY >= sourceRows[sourceRows.length - 1].targetY) {
+            return Number(getter(lastRow) ?? 0) || 0;
+        }
+
+        for (let index = 1; index < sourceRows.length; index++) {
+            const left = sourceRows[index - 1];
+            const right = sourceRows[index];
+            if (targetY > right.targetY || right.targetY <= left.targetY) {
+                continue;
+            }
+            const ratio = (targetY - left.targetY) / (right.targetY - left.targetY);
+            const leftValue = Number(getter(left.row) ?? 0) || 0;
+            const rightValue = Number(getter(right.row) ?? 0) || 0;
+            return leftValue + (rightValue - leftValue) * ratio;
+        }
+
+        return Number(getter(lastRow) ?? 0) || 0;
+    };
+
+    const interpolatedRows = [];
+    for (let index = 0; index < sampleCount; index++) {
+        const targetY = minTargetY + ((maxTargetY - minTargetY) * index) / (sampleCount - 1);
+        const effectiveX = interpolateAt(targetY, (row) => row?.xHeightAngle ?? row?.xFieldAngle ?? row?.xHeight ?? row?.x ?? 0);
+        const effectiveY = interpolateAt(targetY, (row) => row?.yHeightAngle ?? row?.yFieldAngle ?? row?.fieldAngle ?? row?.yHeight ?? row?.y ?? 0);
+        const targetX = hasImageHeightTargets
+            ? interpolateAt(targetY, (row) => row?.__cooptImageHeightTarget?.x ?? row?.__cooptImageHeightTargetX ?? row?.xHeight ?? row?.x ?? 0)
+            : interpolateAt(targetY, (row) => row?.xHeight ?? row?.x ?? row?.xHeightAngle ?? 0);
+
+        const nextRow = {
+            name: `Field${index + 1}`,
+            position: representativePosition,
+            x: effectiveX,
+            y: effectiveY,
+            xHeight: effectiveX,
+            yHeight: effectiveY,
+            xHeightAngle: effectiveX,
+            yHeightAngle: effectiveY,
+            fieldAngle: effectiveY,
+            yFieldAngle: effectiveY,
+            objectIndex: -1,
+            isInterpolated: true,
+            __cooptOriginalPosition: representativeOriginalPosition,
+        } as any;
+
+        if (hasImageHeightTargets) {
+            nextRow.__cooptImageHeightTarget = { x: targetX, y: targetY };
+            nextRow.__cooptImageHeightTargetX = targetX;
+            nextRow.__cooptImageHeightTargetY = targetY;
+        }
+
+        interpolatedRows.push(nextRow);
+    }
+
+    return interpolatedRows;
 }
 
 function generateCrossOffsetsNativeLike(rayCount, maxRadius) {
@@ -2527,20 +2742,31 @@ function buildNativeLikeRayStartsForAstig(
 function resolveNativeLikeFieldSetting(objectRow, objectIndex, infiniteConjugate) {
     const label = String(objectRow?.id ?? `Object ${objectIndex + 1}`);
     const displayName = String(objectRow?.name ?? objectRow?.comment ?? label);
-    const pos = String(objectRow?.position ?? objectRow?.fieldType ?? objectRow?.type ?? '').toLowerCase();
+    const pos = getAstigObjectPositionTag(objectRow);
+    const isImageHeightField = pos.includes('imageheight');
     const isAngleField = pos.includes('angle') && !pos.includes('rect') && !pos.includes('height')
         ? true
         : !!infiniteConjugate && !pos.includes('rect') && !pos.includes('height');
-    const y = isAngleField
-        ? Number(objectRow?.yFieldAngle ?? objectRow?.fieldAngle ?? objectRow?.yAngle ?? objectRow?.yHeightAngle ?? objectRow?.y ?? 0)
-        : Number(objectRow?.yHeight ?? objectRow?.y ?? objectRow?.yHeightAngle ?? objectRow?.yFieldAngle ?? objectRow?.fieldAngle ?? 0);
+    const y = isImageHeightField
+        ? Number(
+            objectRow?.__cooptImageHeightTarget?.y
+            ?? objectRow?.__cooptImageHeightTargetY
+            ?? objectRow?.yHeightAngle
+            ?? objectRow?.y
+            ?? objectRow?.yHeight
+            ?? 0
+        )
+        : (isAngleField
+            ? Number(objectRow?.yFieldAngle ?? objectRow?.fieldAngle ?? objectRow?.yAngle ?? objectRow?.yHeightAngle ?? objectRow?.y ?? 0)
+            : Number(objectRow?.yHeight ?? objectRow?.y ?? objectRow?.yHeightAngle ?? objectRow?.yFieldAngle ?? objectRow?.fieldAngle ?? 0));
 
     return {
         label,
         displayName,
         y: Number.isFinite(y) ? y : 0,
-        position: isAngleField ? 'Angle' : 'Rectangle',
-        isAngleField
+        position: isImageHeightField ? 'ImageHeight' : (isAngleField ? 'Angle' : 'Rectangle'),
+        isAngleField,
+        __cooptOriginalPosition: objectRow?.__cooptOriginalPosition ?? objectRow?.position ?? objectRow?.fieldType ?? objectRow?.type ?? null,
     };
 }
 
@@ -2623,7 +2849,6 @@ export async function calculateAstigmatismDataNativeLike(
 
     const systemMode = detectSystemConjugateMode(opticalSystemRows);
     const infiniteConjugate = systemMode === 'angle';
-    const isAngleField = infiniteConjugate;
     const mirrorCount = Array.isArray(opticalSystemRows)
         ? opticalSystemRows.filter(row => {
             if (!row) return false;
@@ -2647,7 +2872,14 @@ export async function calculateAstigmatismDataNativeLike(
                 : { name: 'AutoField0', position: 'Rectangle', xHeight: 0, yHeight: 0 }
         ];
     }
-    effectiveObjectRows = maybeInterpolateAngleObjectRowsForAstigWeb(effectiveObjectRows, infiniteConjugate);
+    const objectFieldMode = inferAstigObjectFieldMode(effectiveObjectRows);
+    const isAngleField = objectFieldMode === 'angle';
+    effectiveObjectRows = isAngleField
+        ? maybeInterpolateAngleObjectRowsForAstigWeb(effectiveObjectRows, infiniteConjugate)
+        : maybeInterpolateHeightObjectRowsForAstigWeb(
+            effectiveObjectRows,
+            resolveNativeLikeHeightInterpolationPointCount(effectiveObjectRows)
+        );
 
     const wavelengths = collectSpotWavelengthsForAstigWeb(sourceRows, wavelengthMode);
     const primaryWavelength = __pickPrimaryWavelengthMicrons(sourceRows, wavelengths[0]?.wavelengthUm || 0.5876);
@@ -2933,7 +3165,7 @@ export async function calculateAstigmatismDataNativeLike(
         relativeTargetIndex: targetSurfaceIndex - stopSurfaceIndex,
         wavelengths: wavelengths.map(item => item.wavelengthUm),
         fieldSettings: dedupedFieldSettings,
-        fieldMode: systemMode,
+        fieldMode: objectFieldMode,
         isAngleField,
         primaryWavelength,
         primaryReferenceZ,
@@ -3021,6 +3253,10 @@ export async function calculateAstigmatismData(
             .map(row => parseFloat(row.wavelength || row.Wavelength || 0.5876))
             .filter(w => Number.isFinite(w) && w > 0);
         const systemConjugateMode = detectSystemConjugateMode(opticalSystemRows);
+        const objectFieldMode = inferAstigObjectFieldMode(objectRows);
+        const hasImageHeightFields = (Array.isArray(objectRows) ? objectRows : []).some((row) =>
+            getAstigObjectPositionTag(row).includes('imageheight')
+        );
 
         let fieldSettings = getFieldSettingsFromObject(objectRows, systemConjugateMode);
         if (!fieldSettings || fieldSettings.length === 0) {
@@ -3061,7 +3297,12 @@ export async function calculateAstigmatismData(
         
         // スポット表示モードでは補間を行わない。補間は角度フィールドのときのみ実行（Rectangle/heightの場合はそのまま）。
         if (!spotDiagramMode && interpolationPoints > 0) {
-            if (systemConjugateMode === 'angle') {
+            if (hasImageHeightFields && fieldSettings.length >= 2) {
+                fieldSettings = interpolateImageHeightFieldSettingsForAstig(
+                    fieldSettings,
+                    Math.max(interpolationPoints, 51)
+                );
+            } else if (objectFieldMode === 'angle') {
                 fieldSettings = maybeInterpolateAngleFieldSettingsForAstig(
                     fieldSettings,
                     Math.max(interpolationPoints, 51)
@@ -3102,7 +3343,7 @@ export async function calculateAstigmatismData(
             const primaryWl = spotResult?.primaryWavelength?.wavelength || spotResult?.primaryWavelength || wavelengths[0] || 0.5876;
 
             // Object Position Angleは無限系、Rectangle/Heightは有限系
-            const isAngleField = systemConjugateMode === 'angle';
+            const isAngleField = objectFieldMode === 'angle';
 
             const data = spotArray.map((sd, idx) => {
                 const obj = objectRows[sd.objectIndex] || fieldSettings[sd.objectIndex] || {};
@@ -3132,7 +3373,7 @@ export async function calculateAstigmatismData(
                 relativeTargetIndex: null,
                 wavelengths: wavelengths,
                 fieldSettings: fieldSettings,
-                fieldMode: systemConjugateMode,
+                fieldMode: objectFieldMode,
                 isAngleField,
                 primaryWavelength: primaryWl,
                 primaryReferenceZ: null,
@@ -3152,9 +3393,8 @@ export async function calculateAstigmatismData(
             relativeTargetIndex: relativeTargetIndex,
             wavelengths: wavelengths,
             fieldSettings: fieldSettings,
-            // Object Position Angleは無限系（角度）、Rectangle/Heightは有限系（物体高）
-            isAngleField: systemConjugateMode === 'angle',
-            fieldMode: systemConjugateMode,
+            isAngleField: objectFieldMode === 'angle',
+            fieldMode: objectFieldMode,
             primaryWavelength: null, // 主波長
             primaryReferenceZ: null, // 主波長の軸上（0°）近軸像点位置（すべての基準0点）
             data: [] // { wavelength, fieldAngle, paraxialImageZ, meridionalDeviation, sagittalDeviation }
@@ -3338,11 +3578,16 @@ function calculateFieldData(
     // Object Position Angle: 無限系として画角を使用
     // Rectangle/Height: 有限系として物体高さを使用
     let fieldAngle;
+    const originalPositionType = String(fieldSetting.__cooptOriginalPosition || '').toLowerCase();
     const positionType = (fieldSetting.position || fieldSetting.fieldType || '').toLowerCase();
     const isAngleField = positionType.includes('angle') && !positionType.includes('rectangle');
+    const isDisplayHeightField = originalPositionType.includes('imageheight')
+        || originalPositionType.includes('height')
+        || originalPositionType.includes('rect')
+        || !isAngleField;
     const fieldType = isAngleField ? 'angle' : 'height';
     
-    if (isAngleField) {
+    if (!isDisplayHeightField) {
         // 無限系: Y方向の角度を使用（複数のフィールド名に対応）
         fieldAngle = Math.abs(
             fieldSetting.yFieldAngle || 

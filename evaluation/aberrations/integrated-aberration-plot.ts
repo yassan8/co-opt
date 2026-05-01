@@ -392,8 +392,17 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
             const { wavelength, data } = wavelengthData;
             
             if (data && data.fieldValues && data.distortionPercent) {
-                const xValues = data.distortionPercent.filter(v => v !== null);
-                const yValues = data.fieldValues.filter((_, i) => data.distortionPercent[i] !== null);
+                const pairCount = Math.min(data.fieldValues.length, data.distortionPercent.length);
+                const xValues = [];
+                const yValues = [];
+                for (let i = 0; i < pairCount; i += 1) {
+                    const x = data.distortionPercent[i];
+                    const y = Number(data.fieldValues[i]);
+                    if (!(typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= 50)) continue;
+                    if (!Number.isFinite(y)) continue;
+                    xValues.push(x);
+                    yValues.push(y);
+                }
                 
                 if (xValues.length > 0) {
                     const wavelengthNm = (wavelength * 1000).toFixed(1);
@@ -404,6 +413,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
                         y: yValues,
                         mode: 'lines',
                         type: 'scatter',
+                        connectgaps: true,
                         name: `DIST ${wavelengthNm}nm`,
                         line: { color: color, width: 2 },
                         xaxis: 'x3',
@@ -605,7 +615,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
                 font: { size: 14, color: '#333', weight: 'bold' }
             },
             {
-                text: 'Laterac Chromatic',
+                text: 'Lateral Chromatic',
                 x: 0.89,
                 y: 1.05,
                 xref: 'paper',
