@@ -4940,6 +4940,31 @@ function buildAllDataForExport(): any {
     };
 }
 
+function buildAllDataForShareExport(): any {
+    const configurations = getSanitizedConfigurationsForExport();
+    if (!configurations || !Array.isArray(configurations.configurations)) {
+        return buildAllDataForExport();
+    }
+
+    const shareConfigurations = JSON.parse(JSON.stringify(configurations));
+    try {
+        if (Array.isArray(shareConfigurations.configurations)) {
+            for (const cfg of shareConfigurations.configurations) {
+                if (!cfg || typeof cfg !== 'object') continue;
+                if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0) {
+                    delete cfg.opticalSystem;
+                }
+            }
+        }
+    } catch (_) {}
+
+    return {
+        configurations: shareConfigurations,
+        meritFunction: w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [],
+        systemRequirements: w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : []
+    };
+}
+
 // Setup Load Default System Button
 function setupLoadDefaultButton(): void {
     const btn = document.getElementById('load-default-btn');
@@ -4978,8 +5003,8 @@ function setupShareUrlButton(): void {
 
             let compressed: string;
             try {
-                const allData = buildAllDataForExport();
-                compressed = encodeAllDataToCompressedString(allData);
+                const allData = buildAllDataForShareExport();
+                compressed = await encodeAllDataToCompressedString(allData);
             } catch (e) {
                 console.warn('❌ [Share] Failed to encode:', e);
                 alert((e as Error)?.message || 'Failed to generate share URL');
@@ -10778,7 +10803,7 @@ export async function loadFromCompressedDataHashIfPresent(): Promise<{ ok: boole
     
     let allData;
     try {
-        allData = decodeAllDataFromCompressedString(compressed);
+        allData = await decodeAllDataFromCompressedString(compressed);
     } catch (e) {
         console.warn('❌ [URL Load] Decode failed:', e);
         alert((e as any)?.message || 'Failed to load design from URL');

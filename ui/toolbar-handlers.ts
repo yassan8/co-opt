@@ -365,6 +365,31 @@ function buildAllDataForExport(): any {
   };
 }
 
+function buildAllDataForShareExport(): any {
+  const configurations = getSanitizedConfigurationsForExport();
+  if (!configurations || !Array.isArray(configurations.configurations)) {
+    return buildAllDataForExport();
+  }
+
+  const shareConfigurations = JSON.parse(JSON.stringify(configurations));
+  try {
+    if (Array.isArray(shareConfigurations.configurations)) {
+      for (const cfg of shareConfigurations.configurations) {
+        if (!cfg || typeof cfg !== 'object') continue;
+        if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0) {
+          delete cfg.opticalSystem;
+        }
+      }
+    }
+  } catch (_) {}
+
+  return {
+    configurations: shareConfigurations,
+    meritFunction: w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [],
+    systemRequirements: w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : []
+  };
+}
+
 export function handleSave(): void {
   try {
     if (document.activeElement) (document.activeElement as HTMLElement).blur();
@@ -520,8 +545,8 @@ export async function handleShareUrl(): Promise<void> {
 
     let compressed: string;
     try {
-      const allData = buildAllDataForExport();
-      compressed = encodeAllDataToCompressedString(allData);
+      const allData = buildAllDataForShareExport();
+      compressed = await encodeAllDataToCompressedString(allData);
     } catch (encodeErr) {
       alert((encodeErr as Error)?.message || 'Failed to generate share URL');
       return;

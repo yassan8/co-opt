@@ -2,6 +2,7 @@
 // Requires global LZString (loaded via classic <script>)
 
 export const COMPRESSED_DATA_HASH_KEY = 'compressed_data';
+const DEFLATE_PREFIX = 'd:';
 
 function __requireLZString() {
     const lz = (typeof window !== 'undefined' ? window.LZString : undefined);
@@ -9,6 +10,52 @@ function __requireLZString() {
         throw new Error('LZString is not available. Make sure lz-string.min.js is loaded.');
     }
     return lz;
+}
+
+function __hasDeflateStreams() {
+    return typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+}
+
+function __bytesToBase64Url(bytes) {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+        const chunk = bytes.subarray(index, index + chunkSize);
+        binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function __base64UrlToBytes(base64Url) {
+    const normalized = String(base64Url ?? '').replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized + '==='.slice((normalized.length + 3) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+}
+
+async function __compressTextToDeflateBase64Url(text) {
+    const encoder = new TextEncoder();
+    const input = encoder.encode(text);
+    const stream = new CompressionStream('deflate-raw');
+    const writer = stream.writable.getWriter();
+    await writer.write(input);
+    await writer.close();
+    const output = new Uint8Array(await new Response(stream.readable).arrayBuffer());
+    return __bytesToBase64Url(output);
+}
+
+async function __decompressDeflateBase64UrlToText(base64Url) {
+    const input = __base64UrlToBytes(base64Url);
+    const stream = new DecompressionStream('deflate-raw');
+    const writer = stream.writable.getWriter();
+    await writer.write(input);
+    await writer.close();
+    const output = new Uint8Array(await new Response(stream.readable).arrayBuffer());
+    return new TextDecoder().decode(output);
 }
 
 export function parseHashbangParams(hashString) {
@@ -40,19 +87,37 @@ export function parseHashbangParams(hashString) {
 export const parseHashParams = parseHashbangParams;
 export const parseQueryParams = parseHashbangParams;
 
-export function encodeAllDataToCompressedString(allData) {
-    const lz = __requireLZString();
+export async function encodeAllDataToCompressedString(allData) {
     const json = JSON.stringify(allData ?? null);
+
+    if (__hasDeflateStreams()) {
+        try {
+            return `${DEFLATE_PREFIX}${await __compressTextToDeflateBase64Url(json)}`;
+        } catch (error) {
+            console.warn('⚠️ [Share URL] deflate compression failed, falling back to LZString:', error);
+        }
+    }
+
+    const lz = __requireLZString();
     return lz.compressToEncodedURIComponent(json);
 }
 
-export function decodeAllDataFromCompressedString(compressed) {
-    const lz = __requireLZString();
+export async function decodeAllDataFromCompressedString(compressed) {
     const s = String(compressed ?? '');
     if (!s) throw new Error('Missing compressed data');
 
-    const json = lz.decompressFromEncodedURIComponent(s);
-    if (json === null || json === undefined) throw new Error('Failed to decompress');
+    let json;
+    if (s.startsWith(DEFLATE_PREFIX)) {
+        if (!__hasDeflateStreams()) {
+            throw new Error('This Share URL uses the new compression format, but this browser cannot decompress it.');
+        }
+        json = await __decompressDeflateBase64UrlToText(s.slice(DEFLATE_PREFIX.length));
+    } else {
+        const lz = __requireLZString();
+        json = lz.decompressFromEncodedURIComponent(s);
+        if (json === null || json === undefined) throw new Error('Failed to decompress');
+    }
+
     const trimmed = String(json).trim();
     if (!trimmed) throw new Error('Decompressed JSON is empty');
 
