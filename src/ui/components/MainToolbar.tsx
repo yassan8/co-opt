@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { 
   handleNewFile, 
   handleSave, 
@@ -37,21 +37,71 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
     return { text: 'No file loaded', color: '#999' };
   };
 
+  const resolveShareLengthState = () => {
+    try {
+      const rawLength = Number((window as any).__cooptLastShareUrlLength ?? 0);
+      if (Number.isFinite(rawLength) && rawLength > 0) {
+        return {
+          text: `Share URL: ${rawLength} chars`,
+          color: '#0f766e'
+        };
+      }
+    } catch (_) {}
+    return null;
+  };
+
   const [{ text: loadedFileText, color: loadedFileColor }, setLoadedFile] = useState(resolveLoadedFileName);
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(resolveToolbarCollapsed);
+  const shareLengthResetTimerRef = useRef<number>(0);
 
   useEffect(() => {
     const refresh = () => {
       setLoadedFile(resolveLoadedFileName());
     };
 
+    const refreshShareLength = (event?: Event) => {
+      const customEvent = event as CustomEvent<{ urlLength?: number }> | undefined;
+      const urlLength = Number(customEvent?.detail?.urlLength ?? (window as any).__cooptLastShareUrlLength ?? 0);
+      if (!Number.isFinite(urlLength) || urlLength <= 0) return;
+
+      try {
+        (window as any).__cooptLastShareUrlLength = urlLength;
+      } catch (_) {}
+
+      setLoadedFile({
+        text: `Share URL: ${urlLength} chars`,
+        color: '#0f766e'
+      });
+
+      if (shareLengthResetTimerRef.current > 0) {
+        window.clearTimeout(shareLengthResetTimerRef.current);
+      }
+
+      shareLengthResetTimerRef.current = window.setTimeout(() => {
+        try {
+          (window as any).__cooptLastShareUrlLength = 0;
+        } catch (_) {}
+        setLoadedFile(resolveLoadedFileName());
+        shareLengthResetTimerRef.current = 0;
+      }, 8000);
+    };
+
     refresh();
+    const initialShareLengthState = resolveShareLengthState();
+    if (initialShareLengthState) {
+      setLoadedFile(initialShareLengthState);
+    }
 
     window.addEventListener('coopt:loaded-file-updated', refresh as EventListener);
+    window.addEventListener('coopt:share-url-generated', refreshShareLength as EventListener);
     window.addEventListener('storage', refresh);
     return () => {
       window.removeEventListener('coopt:loaded-file-updated', refresh as EventListener);
+      window.removeEventListener('coopt:share-url-generated', refreshShareLength as EventListener);
       window.removeEventListener('storage', refresh);
+      if (shareLengthResetTimerRef.current > 0) {
+        window.clearTimeout(shareLengthResetTimerRef.current);
+      }
     };
   }, []);
 

@@ -4940,6 +4940,30 @@ function buildAllDataForExport(): any {
     };
 }
 
+function __compactSharePayloadValue(value: any): any {
+    if (value === null || value === undefined) return undefined;
+    if (Array.isArray(value)) {
+        const compacted = value
+            .map((item) => __compactSharePayloadValue(item))
+            .filter((item) => item !== undefined);
+        return compacted.length > 0 ? compacted : undefined;
+    }
+    if (typeof value !== 'object') {
+        return value;
+    }
+
+    const compacted: any = {};
+    for (const [key, raw] of Object.entries(value)) {
+        if (key === 'modified') continue;
+        if (key === 'referenceFocalLength' && String(raw ?? '').trim() === '') continue;
+        const next = __compactSharePayloadValue(raw);
+        if (next !== undefined) {
+            compacted[key] = next;
+        }
+    }
+    return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
 function buildAllDataForShareExport(): any {
     const configurations = getSanitizedConfigurationsForExport();
     if (!configurations || !Array.isArray(configurations.configurations)) {
@@ -4954,15 +4978,24 @@ function buildAllDataForShareExport(): any {
                 if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0) {
                     delete cfg.opticalSystem;
                 }
+                if (cfg.metadata && typeof cfg.metadata === 'object') {
+                    delete cfg.metadata.modified;
+                    if (Object.keys(cfg.metadata).length === 0) delete cfg.metadata;
+                }
+                if (cfg.systemData && typeof cfg.systemData === 'object') {
+                    const refFL = String(cfg.systemData.referenceFocalLength ?? '').trim();
+                    if (!refFL) delete cfg.systemData.referenceFocalLength;
+                    if (Object.keys(cfg.systemData).length === 0) delete cfg.systemData;
+                }
             }
         }
     } catch (_) {}
 
-    return {
+    return __compactSharePayloadValue({
         configurations: shareConfigurations,
         meritFunction: w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [],
         systemRequirements: w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : []
-    };
+    }) ?? { configurations: shareConfigurations };
 }
 
 // Setup Load Default System Button
@@ -4990,6 +5023,92 @@ function setupLoadDefaultButton(): void {
 }
 
 // Setup Share URL Button
+function showShareUrlLengthOnButton(urlLength: number): void {
+    const btn = document.getElementById('share-url-btn') as HTMLButtonElement | null;
+    if (!btn) return;
+
+    const nextLabel = `Share URL (${urlLength} chars)`;
+    const restoreMs = 8000;
+    const previousTimer = Number((btn as any).__cooptShareUrlLabelTimer);
+    if (Number.isFinite(previousTimer) && previousTimer > 0) {
+        window.clearTimeout(previousTimer);
+    }
+
+    if (!(btn as any).__cooptShareUrlLabelOriginal) {
+        (btn as any).__cooptShareUrlLabelOriginal = btn.textContent || 'Share URL';
+    }
+
+    btn.textContent = nextLabel;
+    btn.title = nextLabel;
+
+    const restoreLabel = String((btn as any).__cooptShareUrlLabelOriginal || 'Share URL');
+    (btn as any).__cooptShareUrlLabelTimer = window.setTimeout(() => {
+        btn.textContent = restoreLabel;
+        btn.title = restoreLabel;
+        (btn as any).__cooptShareUrlLabelTimer = 0;
+    }, restoreMs);
+}
+
+function showShareUrlLengthBanner(urlLength: number): void {
+    const bannerId = 'coopt-share-url-banner';
+    let banner = document.getElementById(bannerId) as HTMLDivElement | null;
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = bannerId;
+        banner.style.position = 'fixed';
+        banner.style.top = '14px';
+        banner.style.right = '14px';
+        banner.style.zIndex = '2147483647';
+        banner.style.padding = '10px 14px';
+        banner.style.borderRadius = '10px';
+        banner.style.border = '1px solid rgba(15, 23, 42, 0.14)';
+        banner.style.background = 'rgba(15, 23, 42, 0.94)';
+        banner.style.color = '#f8fafc';
+        banner.style.fontSize = '12px';
+        banner.style.fontWeight = '600';
+        banner.style.letterSpacing = '0.01em';
+        banner.style.boxShadow = '0 12px 30px rgba(15, 23, 42, 0.28)';
+        banner.style.opacity = '0';
+        banner.style.transform = 'translateY(-6px)';
+        banner.style.transition = 'opacity 140ms ease, transform 140ms ease';
+        banner.style.pointerEvents = 'none';
+        document.body.appendChild(banner);
+    }
+
+    const message = `Share URL length: ${urlLength} chars`;
+    banner.textContent = message;
+    banner.title = message;
+    banner.style.opacity = '1';
+    banner.style.transform = 'translateY(0)';
+
+    const previousTimer = Number((banner as any).__cooptHideTimer);
+    if (Number.isFinite(previousTimer) && previousTimer > 0) {
+        window.clearTimeout(previousTimer);
+    }
+
+    (banner as any).__cooptHideTimer = window.setTimeout(() => {
+        banner!.style.opacity = '0';
+        banner!.style.transform = 'translateY(-6px)';
+        (banner as any).__cooptHideTimer = 0;
+    }, 5000);
+}
+
+function announceShareUrlLength(urlLength: number): void {
+    try {
+        const loadedFileName = document.getElementById('loaded-file-name') as HTMLSpanElement | null;
+        if (loadedFileName) {
+            loadedFileName.textContent = `Share URL: ${urlLength} chars`;
+            loadedFileName.style.color = '#0f766e';
+        }
+    } catch (_) {}
+
+    try {
+        window.dispatchEvent(new CustomEvent('coopt:share-url-generated', {
+            detail: { urlLength }
+        }));
+    } catch (_) {}
+}
+
 function setupShareUrlButton(): void {
     const btn = document.getElementById('share-url-btn');
     if (!btn) return;
@@ -5022,17 +5141,22 @@ function setupShareUrlButton(): void {
             }
 
             const len = url.length;
+            announceShareUrlLength(len);
+            showShareUrlLengthOnButton(len);
+            showShareUrlLengthBanner(len);
             if (len >= WARN_LEN) {
                 const ok = confirm(`Share URL is long (${len} chars) and may not work in some apps.\n\nContinue?`);
                 if (!ok) return;
             }
 
+            // Show the length synchronously in a modal before any async clipboard call.
+            prompt(`Share URL (${len} chars):`, url);
+
             try {
                 await navigator.clipboard.writeText(url);
-                alert('Share URL copied to clipboard.');
             } catch (e) {
                 // Fallback: let user copy manually
-                prompt('Copy this URL:', url);
+                prompt(`Copy this URL (${len} chars):`, url);
             }
         } catch (err) {
             console.error('❌ Failed to share:', err);
