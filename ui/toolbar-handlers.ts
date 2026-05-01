@@ -531,10 +531,6 @@ export async function handleShareUrl(): Promise<void> {
     const url = buildShareUrlFromCompressedString(compressed, base);
 
     const urlLength = url.length;
-    if (urlLength > 30000) {
-      alert(`Share URL is too long (${urlLength} chars). Please use Save instead.`);
-      return;
-    }
     if (urlLength >= 2000) {
       const ok = confirm(`Share URL is long (${urlLength} chars) and may not work in some apps.\n\nContinue?`);
       if (!ok) return;

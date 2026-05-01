@@ -4971,7 +4971,6 @@ function setupShareUrlButton(): void {
     if (isReactManagedButton(btn as HTMLElement)) return;
 
     const WARN_LEN = 2000;
-    const MAX_LEN = 30000;
 
     const shareHandler = async () => {
         try {
@@ -4998,10 +4997,6 @@ function setupShareUrlButton(): void {
             }
 
             const len = url.length;
-            if (len > MAX_LEN) {
-                alert(`Share URL is too long (${len} chars). Please use Save instead.`);
-                return;
-            }
             if (len >= WARN_LEN) {
                 const ok = confirm(`Share URL is long (${len} chars) and may not work in some apps.\n\nContinue?`);
                 if (!ok) return;
