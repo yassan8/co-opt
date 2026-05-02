@@ -193,22 +193,29 @@ function getAxisInfo(): AxisInfo {
     }
   } catch (_) {}
   const objects = getRowsFromWindow(host).objectRows;
-  const first = Array.isArray(objects) && objects.length > 0 ? objects[0] : null;
+  const tags = (Array.isArray(objects) ? objects : [])
+    .map((obj: any) => String(obj?.position ?? obj?.object ?? obj?.objectType ?? ''))
+    .map((tag) => tag.trim().toLowerCase())
+    .filter(Boolean);
+  const hasImageHeight = tags.some((tag) => tag.includes('imageheight'));
+  const hasAngle = tags.some((tag) => /\bangle\b/.test(tag));
+  const hasHeight = tags.some((tag) => tag.includes('rect') || tag.includes('rectangle') || tag.includes('height'));
   let isAngle: boolean;
-  if (detectedMode === 'angle') isAngle = true;
+  if (hasImageHeight) isAngle = false;
+  else if (detectedMode === 'angle' && !hasHeight) isAngle = true;
   else if (detectedMode === 'height') isAngle = false;
-  else {
-    const posRaw = String(first?.position ?? first?.object ?? first?.objectType ?? 'Angle');
-    isAngle = /\bangle\b/i.test(posRaw);
-  }
+  else isAngle = hasAngle && !hasHeight;
   let maxVal = 10;
   if (Array.isArray(objects) && objects.length > 0) {
     const vals = objects.map((o: any) => Number(o?.yHeightAngle)).filter((v) => Number.isFinite(v));
     if (vals.length > 0) maxVal = Math.max(1e-6, Math.max(...vals.map(Math.abs)));
   }
+  const axisLabel = isAngle
+    ? 'Object Angle (deg)'
+    : (hasImageHeight ? 'Image Height (mm)' : 'Object Height (mm)');
   return {
     mode: isAngle ? 'angle' : 'height',
-    label: isAngle ? 'Object Angle (deg)' : 'Object Height (mm)',
+    label: axisLabel,
     unit: isAngle ? 'deg' : 'mm',
     max: maxVal,
   };

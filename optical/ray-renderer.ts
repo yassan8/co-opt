@@ -114,6 +114,10 @@ let rayColorMode = 'object'; // 'object' or 'segment'
 const chiefRayOriginSolveCache = new Map<string, any>();
 const opticalRowsSignatureCache = new WeakMap<any[], string>();
 const stopConfigCache = new WeakMap<any[], { surfaceOriginsRef: any[] | null; config: any }>();
+const rayStartGenerationCache = new Map<string, RayStartDataArray>();
+const RAY_START_GENERATION_CACHE_LIMIT = 128;
+const imageHeightEffectiveObjectCache = new Map<string, any>();
+const IMAGE_HEIGHT_EFFECTIVE_OBJECT_CACHE_LIMIT = 64;
 
 function buildOpticalRowsSignature(opticalSystemRows) {
     if (!Array.isArray(opticalSystemRows)) return 'no-rows';
@@ -151,6 +155,52 @@ function buildChiefRayOriginCacheKey(opticalSystemRows, angleX, angleY, stopSurf
         Number(targetSurfaceIndex),
         Number(wavelength).toFixed(10)
     ].join('#');
+}
+
+function stableSerializeForCache(value) {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    const valueType = typeof value;
+    if (valueType === 'number') {
+        return Number.isFinite(value) ? `num:${value}` : `num:${String(value)}`;
+    }
+    if (valueType === 'string') return `str:${value}`;
+    if (valueType === 'boolean') return value ? 'bool:1' : 'bool:0';
+    if (valueType !== 'object') return `${valueType}:${String(value)}`;
+    if (Array.isArray(value)) {
+        return `[${value.map((entry) => stableSerializeForCache(entry)).join(',')}]`;
+    }
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${key}:${stableSerializeForCache(value[key])}`).join(',')}}`;
+}
+
+function buildRayStartGenerationCacheKey(obj, opticalSystemRows, rayCount, apertureLimit, options, effectivePattern, annularRingCount, wavelengthUm) {
+    const optionsSignature = {
+        conjugateType: options?.conjugateType,
+        useChiefRayAnalysis: options?.useChiefRayAnalysis,
+        aimThroughStop: options?.aimThroughStop,
+        chiefRaySolveMode: options?.chiefRaySolveMode,
+        disableAngleObjectPositionOptimization: options?.disableAngleObjectPositionOptimization,
+        allowStopBasedOriginSolve: options?.allowStopBasedOriginSolve,
+        skipStopPointRefine: options?.skipStopPointRefine,
+        targetSurfaceIndex: options?.targetSurfaceIndex,
+        debugChiefRay: options?.debugChiefRay,
+        disableCrossExtent: options?.disableCrossExtent,
+        originSolveTraceBackend: options?.originSolveTraceBackend,
+        pupilScale: options?.pupilScale,
+        rectangleAsAngleWhenInfinite: options?.rectangleAsAngleWhenInfinite,
+    };
+
+    return [
+        buildOpticalRowsSignature(opticalSystemRows),
+        stableSerializeForCache(obj),
+        Number(rayCount) || 0,
+        Number.isFinite(Number(apertureLimit)) ? Number(apertureLimit) : 'none',
+        String(effectivePattern || ''),
+        annularRingCount ?? 'none',
+        Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : 0.5876,
+        stableSerializeForCache(optionsSignature),
+    ].join('||');
 }
 
 function normalizeAnnularRingCount(value) {
@@ -1532,8 +1582,10 @@ export function optimizeObjectPositionForStop(objectData, opticalSystemRows) {
  * @param {Array} opticalSystemRows - Optical system data
  * @returns {Object} Optimized position
  */
-export function optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows) {
-    const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+export function optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows, precomputedSurfaceOrigins = null) {
+    const surfaceOrigins = (Array.isArray(precomputedSurfaceOrigins) && precomputedSurfaceOrigins.length > 0)
+        ? precomputedSurfaceOrigins
+        : calculateSurfaceOrigins(opticalSystemRows);
     const stopInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
     if (!stopInfo) {
         console.warn('⚠️ No Stop surface found for angle optimization');
@@ -1924,6 +1976,26 @@ const mirrorChiefRayDiagToOpener = (label, payload) => {
 export function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wavelengthUm: number, conjugateType: ConjugateType): any {
     const targetX = Number(obj.xHeightAngle) || 0;
     const targetY = Number(obj.yHeightAngle) || 0;
+    const cacheKey = [
+        buildOpticalRowsSignature(opticalSystemRows),
+        stableSerializeForCache(obj),
+        Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : 0.5876,
+        String(conjugateType || '')
+    ].join('||');
+    if (cacheKey && imageHeightEffectiveObjectCache.has(cacheKey)) {
+        return imageHeightEffectiveObjectCache.get(cacheKey);
+    }
+
+    const storeResult = (value) => {
+        if (cacheKey && value && typeof value === 'object') {
+            imageHeightEffectiveObjectCache.set(cacheKey, value);
+            if (imageHeightEffectiveObjectCache.size > IMAGE_HEIGHT_EFFECTIVE_OBJECT_CACHE_LIMIT) {
+                const firstKey = imageHeightEffectiveObjectCache.keys().next().value;
+                if (firstKey !== undefined) imageHeightEffectiveObjectCache.delete(firstKey);
+            }
+        }
+        return value;
+    };
 
     try {
         const paraxial = calculateParaxialData(opticalSystemRows, wavelengthUm);
@@ -2016,7 +2088,7 @@ export function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wave
                 imageSurfaceIndex
             });
 
-            return {
+            return storeResult({
                 ...obj,
                 position: 'Angle',
                 xHeightAngle: solvedAngleXDeg,
@@ -2031,7 +2103,7 @@ export function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wave
                     imageSurfaceIndex,
                     wavelengthUm
                 },
-            };
+            });
         } else {
             const imgDist = Number(paraxial.imageDistance);
             const objSurf = opticalSystemRows && opticalSystemRows[0];
@@ -2123,7 +2195,7 @@ export function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wave
                 imageSurfaceIndex
             });
 
-            return {
+            return storeResult({
                 ...obj,
                 position: 'Rectangle',
                 xHeightAngle: solvedObjectX,
@@ -2138,16 +2210,16 @@ export function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wave
                     imageSurfaceIndex,
                     wavelengthUm
                 },
-            };
+            });
         }
     } catch (_) {
         // Fallback: treat as Angle with y = targetY degrees
-        return {
+        return storeResult({
             ...obj,
             position: 'Angle',
             xHeightAngle: targetX,
             yHeightAngle: targetY,
-        };
+        });
     }
 }
 
@@ -2155,7 +2227,6 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
     // console.log(`🎯 generateRayStartPointsForObject called for object type: ${obj.position}`);
     // console.log(`🔍 Current ray emission pattern: ${rayEmissionPattern}`);
     
-    const rayStartData: RayStartDataArray = [];
     const annularRingCount = normalizeAnnularRingCount(options?.annularRingCount);
     const wavelengthUmRaw = options?.wavelengthUm ?? options?.wavelength;
     const wavelengthUm = (typeof wavelengthUmRaw === 'number' && Number.isFinite(wavelengthUmRaw) && wavelengthUmRaw > 0)
@@ -2169,18 +2240,34 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
     const effectivePattern = (options && typeof options.pattern === 'string' && (options.pattern === 'grid' || options.pattern === 'annular'))
         ? options.pattern
         : rayEmissionPattern;
+    const cacheKey = buildRayStartGenerationCacheKey(
+        obj,
+        opticalSystemRows,
+        rayCount,
+        apertureLimit,
+        options,
+        effectivePattern,
+        annularRingCount,
+        wavelengthUm
+    );
+    if (cacheKey && rayStartGenerationCache.has(cacheKey)) {
+        const cached = rayStartGenerationCache.get(cacheKey);
+        if (cached) return cached;
+    }
 
     const posNorm = String(obj?.position ?? '').trim().toLowerCase();
 
     // Pass conjugateType to all generation functions
     const enhancedOptions = { ...options, conjugateType };
 
+    let generatedRayStarts: RayStartDataArray = [];
+
     if (posNorm === "point") {
-        return generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLimit, effectivePattern, annularRingCount, wavelengthUm, enhancedOptions);
+        generatedRayStarts = generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLimit, effectivePattern, annularRingCount, wavelengthUm, enhancedOptions);
     } else if (posNorm === "angle") {
-        return generateRaysForAngleObject(obj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...enhancedOptions, wavelengthUm, apertureLimitMm: apertureLimit });
+        generatedRayStarts = generateRaysForAngleObject(obj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...enhancedOptions, wavelengthUm, apertureLimitMm: apertureLimit });
     } else if (posNorm === "rectangle") {
-        return generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm, enhancedOptions);
+        generatedRayStarts = generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm, enhancedOptions);
     } else if (posNorm === "imageheight") {
         // Convert target image height → effective object field and delegate.
         // The solver inside convertImageHeightToEffectiveObject uses a stop-center
@@ -2242,16 +2329,26 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
         if (effectiveObj.position === 'Angle') {
             const rayStarts = generateRaysForAngleObject(effectiveObj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...imageHeightDelegationOptions, wavelengthUm, apertureLimitMm: apertureLimit });
             logDelegatedImageHeightResult(rayStarts);
-            return rayStarts;
+            generatedRayStarts = rayStarts;
         } else {
             const rayStarts = generateRaysForRectangleObject(effectiveObj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm, imageHeightDelegationOptions);
             logDelegatedImageHeightResult(rayStarts);
-            return rayStarts;
+            generatedRayStarts = rayStarts;
         }
     } else {
         console.warn(`⚠️ Unknown object position type: ${obj.position}`);
-        return [];
+        generatedRayStarts = [];
     }
+
+    if (cacheKey && Array.isArray(generatedRayStarts)) {
+        rayStartGenerationCache.set(cacheKey, generatedRayStarts);
+        if (rayStartGenerationCache.size > RAY_START_GENERATION_CACHE_LIMIT) {
+            const firstKey = rayStartGenerationCache.keys().next().value;
+            if (firstKey !== undefined) rayStartGenerationCache.delete(firstKey);
+        }
+    }
+
+    return generatedRayStarts;
 }
 
 // Helper functions for different object types would be implemented here
@@ -2760,6 +2857,9 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         // Spot diagram (physical-vignetting mode) may request disabling origin optimization
         // to preserve angle↔chief correlation.
         const disableAngleObjectPositionOptimization = options?.disableAngleObjectPositionOptimization === true;
+        const surfaceOrigins = (Array.isArray(options?.precomputedSurfaceOrigins) && options.precomputedSurfaceOrigins.length > 0)
+            ? options.precomputedSurfaceOrigins
+            : calculateSurfaceOrigins(opticalSystemRows);
 
         // IMPORTANT:
         // - Default: do NOT aim through stop unless explicitly requested.
@@ -2824,7 +2924,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 }
             } else {
                 // Object距離に関わらず最適化計算を試みる
-                optimizedPosition = optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows);
+                optimizedPosition = optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows, surfaceOrigins);
             }
         }
         
@@ -2840,9 +2940,6 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         const dirZ = chiefDir.z;
         
         // Get surface origins for object position calculation
-        const surfaceOrigins = (Array.isArray(options?.precomputedSurfaceOrigins) && options.precomputedSurfaceOrigins.length > 0)
-            ? options.precomputedSurfaceOrigins
-            : calculateSurfaceOrigins(opticalSystemRows);
         const firstSurfaceOrigin = surfaceOrigins[0] ? surfaceOrigins[0].origin : { x: 0, y: 0, z: 0 };
         const finiteObjectZ = Number.isFinite(firstSurfaceOrigin?.z) ? firstSurfaceOrigin.z : 0;
         

@@ -71,7 +71,6 @@ function getPopupPsfCalculator(): PSFCalculator {
     popupPsfCalculatorCache = new PsfCalculatorCtor();
     return popupPsfCalculatorCache;
 }
-
 function collectPopupRowsFromMainWindow(): {
     opticalSystemRows: any[];
     sourceRows: any[];
@@ -96,8 +95,6 @@ function collectPopupRowsFromMainWindow(): {
         if (Array.isArray(rows)) objectRows = rows;
     } catch (_) {}
 
-    // Keep popup analysis input aligned with the active configuration snapshot.
-    // This reduces path drift between popup-native and in-page analysis flows.
     try {
         let activeConfig: any = null;
         if (typeof w.getActiveConfiguration === 'function') {
@@ -2337,6 +2334,7 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
     wavelengthMode?: string;
     objectRows?: any[];
     defocusMm?: number;
+    onProgress?: (evt: { percent?: number; message?: string }) => void;
 }): Promise<any> {
     const normalizeSpotWavelengthUm = (raw: any): number | null => {
         const n = Number(raw);
@@ -2418,10 +2416,13 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
     const targetSurfaceIndex = Number.isInteger(payload?.surfaceIndex)
         ? Number(payload.surfaceIndex)
         : findImageSurfaceIndex(effectiveOpticalRows);
-    const tStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+    const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
+    const yieldToUi = async () => new Promise((resolve) => setTimeout(resolve, 0));
+    const tStart = nowMs();
     const requestedPattern = payload?.pattern ? String(payload.pattern) : 'annular';
     const airyRadiusUm = computePopupAiryRadiusUm(effectiveOpticalRows, sourceRows);
-    const tInvokeStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+    const tInvokeStart = nowMs();
+    let raySeriesGenerationMsLocal = 0;
     const requestBody = {
         opticalSystemRows: effectiveOpticalRows,
         sourceRows,
@@ -2434,13 +2435,21 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
     } as any;
 
     try {
+        const tSeriesStart = nowMs();
         const safePattern = (requestedPattern === 'grid' || requestedPattern === 'annular')
             ? requestedPattern
             : 'annular';
         const rayCount = Number.isInteger(payload?.rayCount) ? Math.max(1, Number(payload?.rayCount)) : 501;
         const ringCount = Number.isInteger(payload?.ringCount) ? Math.max(1, Number(payload?.ringCount)) : 10;
         const wavelengths = collectSpotWavelengths(sourceRows, payload?.wavelengthMode ? String(payload.wavelengthMode) : undefined);
+        const precomputedSurfaceOrigins = calculateSurfaceOrigins(effectiveOpticalRows);
         const raySeries: any[] = [];
+        const totalSeriesWork = Math.max(1, (Array.isArray(effectiveObjectRows) ? effectiveObjectRows.length : 0) * Math.max(1, wavelengths.length));
+        let completedSeriesWork = 0;
+        try {
+            payload?.onProgress?.({ percent: 8, message: 'Generating ray starts...' });
+        } catch (_) {}
+        await yieldToUi();
 
         if (Array.isArray(effectiveObjectRows) && effectiveObjectRows.length > 0 && wavelengths.length > 0) {
             for (let objIndex = 0; objIndex < effectiveObjectRows.length; objIndex++) {
@@ -2456,6 +2465,9 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
                             annularRingCount: ringCount,
                             wavelengthUm: wl.wavelengthUm,
                             pattern: safePattern,
+                            targetSurfaceIndex: targetSurfaceIndex,
+                            precomputedSurfaceOrigins,
+                            disableCrossExtent: true,
                         } as any,
                     );
                     const rays = (Array.isArray(starts) ? starts : [])
@@ -2484,6 +2496,18 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
                         hasFieldAngle: String(obj?.position ?? obj?.object ?? '').trim().toLowerCase() === 'angle',
                         rays,
                     });
+
+                    completedSeriesWork += 1;
+                    try {
+                        const pct = 8 + Math.round((completedSeriesWork / totalSeriesWork) * 52);
+                        payload?.onProgress?.({
+                            percent: Math.max(8, Math.min(60, pct)),
+                            message: `Generating ray starts (${completedSeriesWork}/${totalSeriesWork})...`,
+                        });
+                    } catch (_) {}
+                    if ((completedSeriesWork % 2) === 0) {
+                        await yieldToUi();
+                    }
                 }
             }
         }
@@ -2491,10 +2515,15 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
         if (raySeries.length > 0) {
             requestBody.raySeries = raySeries;
         }
+        raySeriesGenerationMsLocal = Math.max(0, nowMs() - tSeriesStart);
     } catch (_) {
         // Fall back to legacy request if explicit raySeries generation fails.
     }
 
+    try {
+        payload?.onProgress?.({ percent: 65, message: 'Tracing rays (Rust/WASM)...' });
+    } catch (_) {}
+    await yieldToUi();
     let result = await runNativeSpotRaytrace(requestBody);
 
     const selectedSurfaceHasNoHit = (Number(result?.totalHitRays) || 0) <= 0;
@@ -2521,6 +2550,10 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
 
         const fallbackSurfaceIndex = findImageSurfaceIndex(effectiveOpticalRows);
         if (Number.isInteger(fallbackSurfaceIndex) && fallbackSurfaceIndex !== targetSurfaceIndex) {
+            try {
+                payload?.onProgress?.({ percent: 72, message: 'Retrying on image surface...' });
+            } catch (_) {}
+            await yieldToUi();
             result = await runNativeSpotRaytrace({
                 ...requestBody,
                 surfaceIndex: fallbackSurfaceIndex,
@@ -2531,17 +2564,22 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
             } catch (_) {}
         }
     }
-    const tInvokeEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+    const tInvokeEnd = nowMs();
     const rustRayGenerationMs = Number(result?.rayGenerationMs);
     const rustTraceMs = Number(result?.traceMs);
+
+    try {
+        payload?.onProgress?.({ percent: 82, message: 'Preparing plot data...' });
+    } catch (_) {}
+    await yieldToUi();
 
     return {
         ...result,
         airyRadiusUm: Number.isFinite(airyRadiusUm) ? airyRadiusUm : undefined,
         timingMs: {
-            raySeriesGeneration: Number.isFinite(rustRayGenerationMs) ? rustRayGenerationMs : 0,
+            raySeriesGeneration: Number.isFinite(rustRayGenerationMs) ? rustRayGenerationMs : raySeriesGenerationMsLocal,
             nativeInvoke: Math.max(0, tInvokeEnd - tInvokeStart),
-            nativeTrace: Number.isFinite(rustTraceMs) ? rustTraceMs : 0,
+            nativeTrace: Number.isFinite(rustTraceMs) ? rustTraceMs : Math.max(0, tInvokeEnd - tInvokeStart - raySeriesGenerationMsLocal),
             total: Math.max(0, tInvokeEnd - tStart),
         },
     };
@@ -4864,27 +4902,6 @@ export function setupViewButtons(options: {
         console.error('setupViewButtons: Missing required THREE.js components');
         return;
     }
-    
-    const {
-        getOpticalSystemRows,
-        getObjectRows,
-        drawOpticalSystemSurfaces
-    } = getRequiredFunctions();
-    
-    if (!getOpticalSystemRows || !getObjectRows) {
-        console.error('setupViewButtons: Missing required functions');
-        return;
-    }
-    
-    const clearBtn = document.getElementById('clear-all-btn');
-    if (clearBtn) {
-        clearBtn.addEventListener('click', () => {
-            clearAllOpticalElements(scene);
-            if (renderer && scene && camera) {
-                renderer.render(scene, camera);
-            }
-        });
-    }
 }
 
 export function setupSimpleViewButtons(): void {
@@ -6508,8 +6525,133 @@ export function setupAnalysisWindows() {
         function setPopupStats(text) {
             try {
                 const el = document.getElementById('popup-spot-stats');
-                if (el) el.textContent = String(text || '');
+                if (el) {
+                    const value = String(text || '');
+                    el.textContent = value;
+                    el.style.display = value.trim().length > 0 ? 'block' : 'none';
+                    if (value.trim().length > 0) {
+                        el.style.padding = '8px 12px';
+                        el.style.fontSize = '12px';
+                        el.style.color = '#333';
+                        el.style.borderBottom = '1px solid #eee';
+                        el.style.background = '#fff';
+                        el.style.whiteSpace = 'normal';
+                    }
+                }
             } catch (_) {}
+        }
+
+        function calcPercentile(values, q) {
+            if (!Array.isArray(values) || values.length === 0) return 0;
+            const sorted = values
+                .map((value) => Number(value))
+                .filter((value) => Number.isFinite(value) && value >= 0)
+                .sort((a, b) => a - b);
+            if (sorted.length === 0) return 0;
+            const qq = Math.max(0, Math.min(1, Number(q) || 0));
+            const idx = Math.floor((sorted.length - 1) * qq);
+            return sorted[Math.max(0, Math.min(sorted.length - 1, idx))] || 0;
+        }
+
+        function computeSpotCentroidUm(rawPoints) {
+            const pts = (Array.isArray(rawPoints) ? rawPoints : [])
+                .map((p) => ({
+                    xUm: Number(p?.xUm),
+                    yUm: Number(p?.yUm),
+                }))
+                .filter((p) => Number.isFinite(p.xUm) && Number.isFinite(p.yUm));
+            if (pts.length === 0) return { xUm: 0, yUm: 0, count: 0 };
+
+            let sumX = 0;
+            let sumY = 0;
+            for (const point of pts) {
+                sumX += point.xUm;
+                sumY += point.yUm;
+            }
+
+            return {
+                xUm: sumX / pts.length,
+                yUm: sumY / pts.length,
+                count: pts.length,
+            };
+        }
+
+        function centerSpotPointsByCentroid(rawPoints, centroid) {
+            const cx = Number(centroid?.xUm);
+            const cy = Number(centroid?.yUm);
+            const offsetX = Number.isFinite(cx) ? cx : 0;
+            const offsetY = Number.isFinite(cy) ? cy : 0;
+            return (Array.isArray(rawPoints) ? rawPoints : [])
+                .map((p) => ({
+                    xUm: Number(p?.xUm),
+                    yUm: Number(p?.yUm),
+                }))
+                .filter((p) => Number.isFinite(p.xUm) && Number.isFinite(p.yUm))
+                .map((p) => ({
+                    xUm: p.xUm - offsetX,
+                    yUm: p.yUm - offsetY,
+                }));
+        }
+
+        function computeSpotAxisRangeAbsUm(rawPoints) {
+            const pts = (Array.isArray(rawPoints) ? rawPoints : [])
+                .map((p) => ({
+                    xUm: Number(p?.xUm),
+                    yUm: Number(p?.yUm),
+                }))
+                .filter((p) => Number.isFinite(p.xUm) && Number.isFinite(p.yUm));
+            if (pts.length === 0) return 5;
+
+            const radii = pts.map((p) => Math.hypot(p.xUm, p.yUm));
+            const maxRadius = radii.reduce((maxValue, value) => Math.max(maxValue, Number(value) || 0), 0);
+            const p95Radius = calcPercentile(radii, 0.95);
+            const p99Radius = calcPercentile(radii, 0.99);
+
+            let axisRangeAbs = Math.max(5, p99Radius * 1.12, p95Radius * 1.35);
+            if (maxRadius > axisRangeAbs * 1.8) {
+                axisRangeAbs = Math.max(axisRangeAbs, p99Radius * 1.22);
+            } else {
+                axisRangeAbs = Math.max(axisRangeAbs, maxRadius * 1.04);
+            }
+
+            return Math.max(5, axisRangeAbs);
+        }
+
+        function cullExtremeSpotOutliers(rawPoints) {
+            const pts = (Array.isArray(rawPoints) ? rawPoints : [])
+                .map((p) => ({
+                    xUm: Number(p?.xUm),
+                    yUm: Number(p?.yUm),
+                }))
+                .filter((p) => Number.isFinite(p.xUm) && Number.isFinite(p.yUm));
+            if (pts.length < 40) {
+                return { points: pts, culled: 0 };
+            }
+
+            const radii = pts.map((p) => Math.hypot(p.xUm, p.yUm));
+            const p95 = calcPercentile(radii, 0.95);
+            const p99 = calcPercentile(radii, 0.99);
+            const maxR = radii.reduce((m, v) => Math.max(m, Number(v) || 0), 0);
+            const clipR = Math.max(5, p99 * 1.3, p95 * 1.7);
+            if (!Number.isFinite(clipR) || clipR <= 0 || maxR <= clipR) {
+                return { points: pts, culled: 0 };
+            }
+
+            const filtered = [];
+            for (let i = 0; i < pts.length; i++) {
+                const p = pts[i];
+                if (Math.hypot(p.xUm, p.yUm) <= clipR) {
+                    filtered.push(p);
+                }
+            }
+
+            const culled = pts.length - filtered.length;
+            const maxAllowCull = Math.max(3, Math.floor(pts.length * 0.02));
+            if (culled <= 0 || culled > maxAllowCull || filtered.length < 10) {
+                return { points: pts, culled: 0 };
+            }
+
+            return { points: filtered, culled };
         }
 
         function syncSurfaceOptionsFromOpener() {
@@ -7039,7 +7181,7 @@ export function setupAnalysisWindows() {
                 const canUseDesktopRust = shouldUseDesktopRust && !!(
                     typeof opener.runDesktopAnalysisComputeForPopup === 'function'
                 );
-                const canUseNativeRustSpot = canUseDesktopRust && !!(
+                const canUseNativeRustSpot = !!(
                     typeof opener.runDesktopNativeSpotRaytraceForPopup === 'function'
                 );
                 const canUseRustSpotDiagram = canUseDesktopRust && !!(
@@ -7051,6 +7193,7 @@ export function setupAnalysisWindows() {
                     try {
                         setProgress(25, 'Computing Spot Diagram (Native Rust)...');
                         const nativeStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+                        let nativeStatsText = 'Native stats: running...';
                         try {
                             const objCount = Array.isArray(opener.getObjectRows ? opener.getObjectRows(opener.tableObject) : null)
                                 ? opener.getObjectRows(opener.tableObject).length
@@ -7101,6 +7244,14 @@ export function setupAnalysisWindows() {
                             pattern: popupPattern ? String(popupPattern.value || 'annular') : 'annular',
                             wavelengthMode: 'all',
                             objectRows: objectRowsForNative,
+                            onProgress: (evt) => {
+                                try {
+                                    const p = Number(evt && evt.percent);
+                                    const msg = (evt && (evt.message || evt.phase)) || 'Working...';
+                                    if (Number.isFinite(p)) setProgress(p, msg);
+                                    else setProgress(undefined, msg);
+                                } catch (_) {}
+                            },
                         });
                         const series = Array.isArray(result?.series) ? result.series : [];
                         const totalPointCount = series.reduce((sum, s) => {
@@ -7135,6 +7286,9 @@ export function setupAnalysisWindows() {
                             const meanHitRatePercent = Number(result?.meanHitRatePercent);
                             const maxHitRays = Number(result?.maxHitRays);
                             const wavelengthCount = Number(result?.wavelengthCount);
+                            const seriesCount = Number(result?.seriesCount);
+                            const objectCount = Number(result?.objectCount);
+                            const raysPerSeries = Number(result?.raysPerSeries);
                             const raySeriesGenerationMs = Number(result?.timingMs?.raySeriesGeneration);
                             const nativeInvokeMs = Number(result?.timingMs?.nativeInvoke);
                             const nativeTraceMs = Number(result?.timingMs?.nativeTrace);
@@ -7150,8 +7304,11 @@ export function setupAnalysisWindows() {
                                 'timing(ms): gen=' + (Number.isFinite(raySeriesGenerationMs) ? raySeriesGenerationMs.toFixed(1) : '-') +
                                 ', trace=' + (Number.isFinite(nativeTraceMs) ? nativeTraceMs.toFixed(1) : '-') +
                                 ', native=' + (Number.isFinite(nativeInvokeMs) ? nativeInvokeMs.toFixed(1) : '-');
-                            setPopupStats(
-                                'Native stats: requested=' + (Number.isFinite(requestedRays) ? requestedRays : '-') +
+                            nativeStatsText =
+                                'Native stats: requested(total)=' + (Number.isFinite(requestedRays) ? requestedRays : '-') +
+                                ', perSeries=' + (Number.isFinite(raysPerSeries) ? raysPerSeries : '-') +
+                                ', series=' + (Number.isFinite(seriesCount) ? seriesCount : stats.length) +
+                                ', objects=' + (Number.isFinite(objectCount) ? objectCount : '-') +
                                 ', generated=' + (Number.isFinite(generatedRays) ? generatedRays : '-') +
                                 ', attempted=' + (Number.isFinite(totalAttemptedRays) ? totalAttemptedRays : '-') +
                                 ', hits=' + (Number.isFinite(totalHitRays) ? totalHitRays : '-') +
@@ -7160,8 +7317,8 @@ export function setupAnalysisWindows() {
                                 ', wavelengths=' + (Number.isFinite(wavelengthCount) ? wavelengthCount : '-') +
                                 (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0 ? ', airyR=' + airyRadiusUm.toFixed(2) + 'µm' : '') +
                                 (statsText ? ' | ' + statsText : '') +
-                                ' | ' + timingsText
-                            );
+                                ' | ' + timingsText;
+                            setPopupStats(nativeStatsText);
                         } catch (_) {}
                         if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
                             throw new Error('Plotly is not available in Spot Diagram popup');
@@ -7200,64 +7357,6 @@ export function setupAnalysisWindows() {
                             return { objectLabel: raw, wavelengthLabel: 'Wavelength Primary' };
                         };
 
-                        const calcPercentile = (arr, q) => {
-                            if (!Array.isArray(arr) || arr.length === 0) return 0;
-                            const sorted = arr
-                                .filter((v) => Number.isFinite(v) && v >= 0)
-                                .sort((a, b) => a - b);
-                            if (sorted.length === 0) return 0;
-                            const qq = Math.max(0, Math.min(1, Number(q) || 0));
-                            const idx = Math.floor((sorted.length - 1) * qq);
-                            return sorted[Math.max(0, Math.min(sorted.length - 1, idx))] || 0;
-                        };
-
-                        const cullExtremeSpotOutliers = (rawPoints, centerXUm, centerYUm) => {
-                            const pts = (Array.isArray(rawPoints) ? rawPoints : [])
-                                .map((p) => ({
-                                    xUm: Number(p?.xUm),
-                                    yUm: Number(p?.yUm),
-                                }))
-                                .filter((p) => Number.isFinite(p.xUm) && Number.isFinite(p.yUm));
-                            if (pts.length < 40) {
-                                return { points: pts, culled: 0 };
-                            }
-
-                            const cx = Number.isFinite(centerXUm) ? centerXUm : 0;
-                            const cy = Number.isFinite(centerYUm) ? centerYUm : 0;
-                            const radii = pts.map((p) => {
-                                const dx = p.xUm - cx;
-                                const dy = p.yUm - cy;
-                                return Math.sqrt(dx * dx + dy * dy);
-                            });
-
-                            const p95 = calcPercentile(radii, 0.95);
-                            const p99 = calcPercentile(radii, 0.99);
-                            const maxR = radii.reduce((m, v) => Math.max(m, Number(v) || 0), 0);
-                            const clipR = Math.max(5, p99 * 1.35, p95 * 2.2);
-                            if (!Number.isFinite(clipR) || clipR <= 0 || maxR <= clipR) {
-                                return { points: pts, culled: 0 };
-                            }
-
-                            const filtered = [];
-                            for (let i = 0; i < pts.length; i++) {
-                                const p = pts[i];
-                                const dx = p.xUm - cx;
-                                const dy = p.yUm - cy;
-                                const r = Math.sqrt(dx * dx + dy * dy);
-                                if (r <= clipR) {
-                                    filtered.push(p);
-                                }
-                            }
-
-                            const culled = pts.length - filtered.length;
-                            const maxAllowCull = Math.max(3, Math.floor(pts.length * 0.02));
-                            if (culled <= 0 || culled > maxAllowCull || filtered.length < 10) {
-                                return { points: pts, culled: 0 };
-                            }
-
-                            return { points: filtered, culled };
-                        };
-
                         const groupedByObject = new Map();
                         for (let i = 0; i < series.length; i++) {
                             const s = series[i] || {};
@@ -7271,30 +7370,16 @@ export function setupAnalysisWindows() {
 
                         let culledPointsCount = 0;
                         const preparedObjects = objectEntries.map(([objectLabel, objectSeries], index) => {
+                            const objectCentroid = computeSpotCentroidUm(
+                                objectSeries.flatMap((seriesItem) => Array.isArray(seriesItem?.points) ? seriesItem.points : [])
+                            );
                             const groups = [];
                             for (let sIdx = 0; sIdx < objectSeries.length; sIdx++) {
                                 const s = objectSeries[sIdx] || {};
                                 const parsed = parseSeriesLabel(s?.label, objectLabel);
                                 const points = Array.isArray(s?.points) ? s.points : [];
-                                const hasFieldAngle = !!s?.hasFieldAngle;
-                                const chiefXUm = Number(s?.chiefPointUm?.xUm);
-                                const chiefYUm = Number(s?.chiefPointUm?.yUm);
-                                const useChiefCentering = hasFieldAngle && Number.isFinite(chiefXUm) && Number.isFinite(chiefYUm);
-                                const centeredPoints = useChiefCentering
-                                    ? points.map((p) => ({
-                                        xUm: (Number(p?.xUm) || 0) - chiefXUm,
-                                        yUm: (Number(p?.yUm) || 0) - chiefYUm,
-                                    }))
-                                    : points.map((p) => ({
-                                        xUm: Number(p?.xUm) || 0,
-                                        yUm: Number(p?.yUm) || 0,
-                                    }));
-
-                                const culled = cullExtremeSpotOutliers(
-                                    centeredPoints,
-                                    useChiefCentering ? 0 : undefined,
-                                    useChiefCentering ? 0 : undefined,
-                                );
+                                const centeredPoints = centerSpotPointsByCentroid(points, objectCentroid);
+                                const culled = cullExtremeSpotOutliers(centeredPoints);
                                 culledPointsCount += Number(culled?.culled) || 0;
 
                                 groups.push({
@@ -7303,27 +7388,22 @@ export function setupAnalysisWindows() {
                                     points: culled.points,
                                 });
                             }
-                            return { objectLabel, objectIndex: index + 1, groups };
+                            return {
+                                objectLabel,
+                                objectIndex: index + 1,
+                                centroid: objectCentroid,
+                                groups,
+                            };
                         });
 
-                        const absSamples = [];
+                        const allCenteredPoints = [];
                         for (const obj of preparedObjects) {
                             for (const g of obj.groups) {
                                 const pts = Array.isArray(g?.points) ? g.points : [];
-                                for (const p of pts) {
-                                    const x = Math.abs(Number(p?.xUm) || 0);
-                                    const y = Math.abs(Number(p?.yUm) || 0);
-                                    absSamples.push(x, y);
-                                }
+                                allCenteredPoints.push(...pts);
                             }
                         }
-                        const maxAbs = absSamples.reduce((m, v) => Math.max(m, Number(v) || 0), 0);
-                        const p98Abs = calcPercentile(absSamples, 0.98);
-                        let unifiedRangeAbs = Math.max(1, p98Abs * 1.25);
-                        if (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0) {
-                            unifiedRangeAbs = Math.max(unifiedRangeAbs, airyRadiusUm * 1.5);
-                        }
-                        unifiedRangeAbs = Math.min(unifiedRangeAbs, Math.max(50, maxAbs * 1.05 || 50));
+                        const unifiedRangeAbs = computeSpotAxisRangeAbsUm(allCenteredPoints);
 
                         const layout = {
                             margin: { l: 40, r: 16, t: 92, b: 32 },
@@ -7460,6 +7540,10 @@ export function setupAnalysisWindows() {
                         const plotStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
                         await window.Plotly.newPlot(popupContainer, traces, layout, { responsive: true, displaylogo: false });
                         const plotEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+                        const nativeEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+                        const plotMs = Math.max(0, plotEnd - plotStart);
+                        const wallMs = Math.max(0, nativeEnd - nativeStart);
+                        setPopupStats(nativeStatsText + ' | wall=' + wallMs.toFixed(1) + ', plot=' + plotMs.toFixed(1));
                         try {
                             if (progressWrapper) progressWrapper.style.display = 'none';
                         } catch (_) {}
@@ -7472,6 +7556,7 @@ export function setupAnalysisWindows() {
 
                 if (canUseRustSpotDiagram) {
                     setProgress(25, 'Computing Spot Diagram (Rust)...');
+                    const rustStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
                     const result = await opener.runDesktopAnalysisComputeForPopup({
                         kind: 'spot-diagram',
                         surfaceIndex: popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined,
@@ -7488,8 +7573,38 @@ export function setupAnalysisWindows() {
                     }
 
                     const traces = [];
-                    for (const s of series) {
-                        const points = Array.isArray(s?.points) ? s.points : [];
+                    const groupedByObject = new Map();
+                    for (let i = 0; i < series.length; i++) {
+                        const s = series[i] || {};
+                        const label = String(s?.label || 'Object ' + (i + 1));
+                        const objectLabel = label.replace(/\s*(Primary(?:\s*\([^)]*\))?|\d+(?:\.\d+)?\s*nm)\s*$/i, '').trim() || label;
+                        if (!groupedByObject.has(objectLabel)) {
+                            groupedByObject.set(objectLabel, []);
+                        }
+                        groupedByObject.get(objectLabel).push(s);
+                    }
+
+                    const centeredSeries = [];
+                    const allCenteredPoints = [];
+                    for (const objectSeries of groupedByObject.values()) {
+                        const objectCentroid = computeSpotCentroidUm(
+                            objectSeries.flatMap((seriesItem) => Array.isArray(seriesItem?.points) ? seriesItem.points : [])
+                        );
+                        for (const s of objectSeries) {
+                            const centeredPoints = centerSpotPointsByCentroid(s?.points, objectCentroid);
+                            const culled = cullExtremeSpotOutliers(centeredPoints);
+                            centeredSeries.push({
+                                series: s,
+                                points: culled.points,
+                            });
+                            allCenteredPoints.push(...culled.points);
+                        }
+                    }
+
+                    const unifiedRangeAbs = computeSpotAxisRangeAbsUm(allCenteredPoints);
+                    for (const entry of centeredSeries) {
+                        const s = entry.series;
+                        const points = entry.points;
                         traces.push({
                             x: points.map((p) => Number(p?.xUm) || 0),
                             y: points.map((p) => Number(p?.yUm) || 0),
@@ -7506,14 +7621,32 @@ export function setupAnalysisWindows() {
                     }
 
                     setProgress(85, 'Rendering Spot Diagram...');
+                    const plotStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
                     await window.Plotly.newPlot(popupContainer, traces, {
                         margin: { l: 52, r: 20, t: 20, b: 45 },
-                        xaxis: { title: 'X (µm)', zeroline: true },
-                        yaxis: { title: 'Y (µm)', zeroline: true, scaleanchor: 'x', scaleratio: 1 },
+                        xaxis: {
+                            title: 'X (µm)',
+                            zeroline: true,
+                            autorange: false,
+                            range: [-unifiedRangeAbs, unifiedRangeAbs],
+                        },
+                        yaxis: {
+                            title: 'Y (µm)',
+                            zeroline: true,
+                            autorange: false,
+                            range: [-unifiedRangeAbs, unifiedRangeAbs],
+                            scaleanchor: 'x',
+                            scaleratio: 1,
+                        },
                         showlegend: true,
                         paper_bgcolor: '#ffffff',
                         plot_bgcolor: '#ffffff',
                     }, { responsive: true, displaylogo: false });
+                    const plotEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+                    const rustEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+                    const plotMs = Math.max(0, plotEnd - plotStart);
+                    const wallMs = Math.max(0, rustEnd - rustStart);
+                    setPopupStats('Rust stats: series=' + series.length + ', wall=' + wallMs.toFixed(1) + ', plot=' + plotMs.toFixed(1));
                     try {
                         if (progressWrapper) progressWrapper.style.display = 'none';
                     } catch (_) {}
@@ -14144,18 +14277,28 @@ export function setupAnalysisWindows() {
             const objects = (typeof getObjectRows === 'function')
                 ? safeCall(() => getObjectRows(opener.tableObject), [])
                 : [];
-            const first = Array.isArray(objects) && objects.length > 0 ? objects[0] : null;
+            const tags = (Array.isArray(objects) ? objects : [])
+                .map(o => String(o?.position ?? o?.object ?? o?.objectType ?? '').trim().toLowerCase())
+                .filter(Boolean);
+            const hasImageHeight = tags.some(tag => tag.includes('imageheight'));
+            const hasAngle = tags.some(tag => /\bangle\b/.test(tag));
+            const hasHeight = tags.some(tag => tag.includes('rect') || tag.includes('rectangle') || tag.includes('height'));
 
             let isAngle;
-            if (detectedMode === 'angle') {
+            if (hasImageHeight) {
+                isAngle = false;
+            } else if (detectedMode === 'angle' && !hasHeight) {
                 isAngle = true;
+            } else if (detectedMode === 'height') {
+                isAngle = false;
             } else {
-                const posRaw = String(first?.position ?? first?.object ?? first?.objectType ?? 'Angle');
-                isAngle = /\bangle\b/i.test(posRaw);
+                isAngle = hasAngle && !hasHeight;
             }
 
             const unit = isAngle ? 'deg' : 'mm';
-            const label = isAngle ? 'Object Angle (deg)' : 'Object Height (mm)';
+            const label = isAngle
+                ? 'Object Angle (deg)'
+                : (hasImageHeight ? 'Image Height (mm)' : 'Object Height (mm)');
             let maxVal = 10;
             if (Array.isArray(objects) && objects.length > 0) {
                 const vals = objects.map(o => Number(o?.yHeightAngle)).filter(v => Number.isFinite(v));

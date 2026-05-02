@@ -776,6 +776,14 @@ export async function runRaytracePreview(
 export async function runNativeSpotRaytrace(
   payload: NativeSpotRaytraceRequest,
 ): Promise<NativeSpotRaytraceResponse> {
+  const nowMs = () => {
+    try {
+      if (typeof performance !== "undefined" && typeof performance.now === "function") {
+        return performance.now();
+      }
+    } catch (_) {}
+    return Date.now();
+  };
   const normalizedPayload: NativeSpotRaytraceRequest = {
     ...(payload || {} as any),
     surfaceIndex: Number.isInteger((payload as any)?.surfaceIndex)
@@ -801,6 +809,7 @@ export async function runNativeSpotRaytrace(
     if (Array.isArray(payload?.raySeries) && payload.raySeries.length > 0) {
       const { traceRayEvalBatchSummary } = await import("../../../raytracing/core/ray-tracing.ts");
       const requestSeries = payload.raySeries;
+      const traceStartMs = nowMs();
       const traceOptions = {
         useRustWasm: true,
         requireRustWasm: true,
@@ -891,6 +900,13 @@ export async function runNativeSpotRaytrace(
       const meanHitRatePercent = seriesStats.length > 0
         ? seriesStats.reduce((sum: number, s: any) => sum + Number(s.hitRatePercent || 0), 0) / seriesStats.length
         : 0;
+      const objectCount = new Set(
+        requestSeries.map((entry: any, idx: number) => String(entry?.label || `Series ${idx + 1}`).replace(/\s+(Primary(?:\s*\([^)]*\))?|\d+(?:\.\d+)?\s*nm)\s*$/i, "").trim() || `Series ${idx + 1}`)
+      ).size;
+      const raysPerSeries = seriesStats.length > 0
+        ? Math.max(0, ...seriesStats.map((s: any) => Number(s?.attemptedRays) || 0))
+        : 0;
+      const traceMs = Math.max(0, nowMs() - traceStartMs);
 
       return {
         backend: "web-rust-wasm",
@@ -899,10 +915,14 @@ export async function runNativeSpotRaytrace(
         requestedRays: totalAttemptedRays,
         generatedRays: totalAttemptedRays,
         wavelengthCount: new Set(series.map((s: any) => Number(s.wavelengthUm)).filter((v: number) => Number.isFinite(v) && v > 0)).size,
+        seriesCount: seriesStats.length,
+        objectCount,
+        raysPerSeries,
         totalAttemptedRays,
         totalHitRays,
         maxHitRays,
         meanHitRatePercent,
+        traceMs,
         seriesStats,
         series,
         message: "Computed via Web Rust/WASM spot raytrace API",
@@ -1007,6 +1027,9 @@ export async function runNativeSpotRaytrace(
     const meanHitRatePercent = seriesStats.length > 0
       ? seriesStats.reduce((sum: number, s: any) => sum + Number(s.hitRatePercent || 0), 0) / seriesStats.length
       : 0;
+    const raysPerSeries = seriesStats.length > 0
+      ? Math.max(0, ...seriesStats.map((s: any) => Number(s?.attemptedRays) || 0))
+      : 0;
 
     return {
       backend: "web-rust-wasm",
@@ -1015,6 +1038,9 @@ export async function runNativeSpotRaytrace(
       requestedRays: totalAttemptedRays,
       generatedRays: totalAttemptedRays,
       wavelengthCount: new Set(series.map((s: any) => Number(s.wavelengthUm)).filter((v: number) => Number.isFinite(v) && v > 0)).size,
+      seriesCount: seriesStats.length,
+      objectCount: series.length,
+      raysPerSeries,
       totalAttemptedRays,
       totalHitRays,
       maxHitRays,
@@ -2370,6 +2396,17 @@ export async function runNativeFieldMtfMap(
   const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
   const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
   const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload?.objectIndex))) : 0;
+  const normalizedInputObjectRows = objectRows.map((row) => {
+    if (!row || typeof row !== "object") return row;
+    const normalizedRow = { ...row } as any;
+    if (normalizedRow.xHeightAngle == null && normalizedRow["object x"] != null) normalizedRow.xHeightAngle = normalizedRow["object x"];
+    if (normalizedRow.yHeightAngle == null && normalizedRow["object y"] != null) normalizedRow.yHeightAngle = normalizedRow["object y"];
+    if (normalizedRow.xHeightAngle == null && normalizedRow.x != null) normalizedRow.xHeightAngle = normalizedRow.x;
+    if (normalizedRow.yHeightAngle == null && normalizedRow.y != null) normalizedRow.yHeightAngle = normalizedRow.y;
+    if (normalizedRow.position == null && normalizedRow.objectType != null) normalizedRow.position = normalizedRow.objectType;
+    return normalizedRow;
+  });
+  const hasImageHeightObjectRows = normalizedInputObjectRows.some((row) => String((row as any)?.position ?? "").trim().toLowerCase() === "imageheight");
 
   const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 256;
   const zeroPadToRaw = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : 0;
@@ -2421,7 +2458,7 @@ export async function runNativeFieldMtfMap(
   }
   const onProgress = typeof (payload as any)?.onProgress === "function" ? (payload as any).onProgress : null;
 
-  if (isTauriRuntime()) {
+  if (isTauriRuntime() && !hasImageHeightObjectRows) {
     try {
       return await invokeCommand<NativeFieldMtfMapRequest, NativeFieldMtfMapResponse>(
         "run_native_field_mtf_map",
@@ -2487,39 +2524,22 @@ export async function runNativeFieldMtfMap(
     return [getPrimaryWavelengthUm(sourceRows as any[], 0.5876)];
   })();
 
-  const cloneObjectRowsForField = (fieldValue: number): any[] => {
-    const cloned = Array.isArray(objectRows)
-      ? objectRows.map((r: any) => {
-          try { return JSON.parse(JSON.stringify(r)); } catch (_) { return { ...(r || {}) }; }
-        })
-      : [];
-    if (!cloned.length) {
-      cloned.push(axisMode === "angle"
-        ? { name: "AutoField0", position: "Angle", xHeightAngle: 0, yHeightAngle: fieldValue, x: 0, y: fieldValue }
-        : { name: "AutoField0", position: "Rectangle", xHeight: 0, yHeight: fieldValue, x: 0, y: fieldValue });
-    }
-    const idx = Math.max(0, Math.min(objectIndex, cloned.length - 1));
-    const row: any = cloned[idx] && typeof cloned[idx] === "object" ? cloned[idx] : {};
-    if (axisMode === "angle") {
-      row.position = "Angle";
-      row.xHeightAngle = 0;
-      row.yHeightAngle = fieldValue;
-      row.x = 0;
-      row.y = fieldValue;
-    } else {
-      row.position = "Rectangle";
-      row.xHeight = 0;
-      row.yHeight = fieldValue;
-      row.x = 0;
-      row.y = fieldValue;
-    }
-    cloned[idx] = row;
-    return cloned;
-  };
+  let imageHeightConjugateType: "finite" | "infinite" | null = null;
+  let convertImageHeightToEffectiveObjectFn: null | ((obj: any, opticalRows: any[], wavelengthUm: number, conjugateType: "finite" | "infinite") => any) = null;
+  if (hasImageHeightObjectRows) {
+    const [{ detectConjugateType }, { convertImageHeightToEffectiveObject }] = await Promise.all([
+      import("../../../utils/conjugate-detection.ts"),
+      import("../../../optical/ray-renderer.ts"),
+    ]);
+    imageHeightConjugateType = String(detectConjugateType(opticalSystemRows) || "").toLowerCase() === "finite"
+      ? "finite"
+      : "infinite";
+    convertImageHeightToEffectiveObjectFn = convertImageHeightToEffectiveObject;
+  }
 
-  const cloneObjectRowsForFieldAxis = (fieldValue: number, axisModeOverride: "angle" | "height"): any[] => {
-    const cloned = Array.isArray(objectRows)
-      ? objectRows.map((r: any) => {
+  const cloneObjectRowsForField = (fieldValue: number, wavelengthUm?: number, axisModeOverride: "angle" | "height" = axisMode): any[] => {
+    const cloned = Array.isArray(normalizedInputObjectRows)
+      ? normalizedInputObjectRows.map((r: any) => {
           try { return JSON.parse(JSON.stringify(r)); } catch (_) { return { ...(r || {}) }; }
         })
       : [];
@@ -2530,10 +2550,45 @@ export async function runNativeFieldMtfMap(
     }
     const idx = Math.max(0, Math.min(objectIndex, cloned.length - 1));
     const row: any = cloned[idx] && typeof cloned[idx] === "object" ? cloned[idx] : {};
+    const sourceRow: any = normalizedInputObjectRows[idx] && typeof normalizedInputObjectRows[idx] === "object" ? normalizedInputObjectRows[idx] : row;
+    const originalPosNorm = String(sourceRow?.__cooptOriginalPosition ?? sourceRow?.position ?? sourceRow?.object ?? sourceRow?.objectType ?? "").trim().toLowerCase();
+    const useImageHeight = axisModeOverride === "height"
+      && originalPosNorm === "imageheight"
+      && !!convertImageHeightToEffectiveObjectFn
+      && !!imageHeightConjugateType;
     if (axisModeOverride === "angle") {
       row.position = "Angle";
       row.xHeightAngle = 0;
       row.yHeightAngle = fieldValue;
+      row.x = 0;
+      row.y = fieldValue;
+    } else if (useImageHeight) {
+      const imageHeightRow = {
+        ...row,
+        position: "ImageHeight",
+        objectType: "ImageHeight",
+        xHeightAngle: 0,
+        yHeightAngle: fieldValue,
+        x: 0,
+        y: fieldValue,
+        __cooptOriginalPosition: sourceRow?.position ?? sourceRow?.object ?? sourceRow?.objectType ?? "ImageHeight",
+      };
+      try {
+        const effective = convertImageHeightToEffectiveObjectFn!(imageHeightRow, opticalSystemRows, Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : wavelengths[0], imageHeightConjugateType!);
+        if (effective && typeof effective === "object") {
+          cloned[idx] = {
+            ...imageHeightRow,
+            ...effective,
+            __cooptOriginalPosition: imageHeightRow.__cooptOriginalPosition,
+          };
+          return cloned;
+        }
+      } catch (_) {
+        // Fall back to finite-height approximation below if exact conversion fails.
+      }
+      row.position = "Rectangle";
+      row.xHeight = 0;
+      row.yHeight = fieldValue;
       row.x = 0;
       row.y = fieldValue;
     } else {
@@ -2634,7 +2689,7 @@ export async function runNativeFieldMtfMap(
     };
 
     const isZeroField = !(Math.abs(Number(fieldValue)) > 1e-12);
-    const primaryObjectRows = cloneObjectRowsForField(fieldValue);
+    const primaryObjectRows = cloneObjectRowsForField(fieldValue, wl);
     const primaryMode = requestedPupilSamplingMode || ((axisMode === "angle" && !isZeroField) ? "entrance" : undefined);
     const primaryRadius = isZeroField ? undefined : fixedPupilRadiusMm;
     const primaryResult = await tryFieldModes({
@@ -2646,7 +2701,7 @@ export async function runNativeFieldMtfMap(
 
     if (axisMode === "angle" && isZeroField) {
       const finiteResult = await tryFieldModes({
-        objectRowsForCall: cloneObjectRowsForFieldAxis(0, "height"),
+        objectRowsForCall: cloneObjectRowsForField(0, wl, "height"),
         primaryMode: requestedPupilSamplingMode,
         pupilRadiusMm: undefined,
       });
@@ -2866,7 +2921,7 @@ export async function runNativeFieldMtfMap(
           && anchorIndex >= 0;
         try {
           const anchorFieldValue = anchorIndex >= 0 ? Number(xAxis[anchorIndex]) : 0;
-          const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue);
+          const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue, wl);
           const anchorAutoMode = axisMode === "angle" ? "entrance" : undefined;
           const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
           const anchorRaw = runNativeOpdWasm(JSON.stringify({
@@ -3043,7 +3098,7 @@ export async function runNativeFieldMtfMap(
         && anchorIndex >= 0;
       try {
         const anchorFieldValue = anchorIndex >= 0 ? Number(xAxis[anchorIndex]) : 0;
-        const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue);
+          const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue, wl);
         const anchorAutoMode = axisMode === "angle" ? "entrance" : undefined;
         const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
         const anchorOpdResp: any = await runNativeOpdMap({
