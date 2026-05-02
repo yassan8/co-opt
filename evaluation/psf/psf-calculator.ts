@@ -28,6 +28,8 @@ let __lastFftWasmFallbackWarnAt = 0;
 const __fftWasmFallbackWarnIntervalMs = 5000;
 let __fftWasmPrewarmDone = false;
 
+import { runFFT2DWithBackend } from './fft-backend.ts';
+
 function isForceWasmFftEnabled(options: any): boolean {
     try {
         if (options && options.forceWasmFFT === true) return true;
@@ -984,6 +986,9 @@ export class PSFCalculator {
                 ...breakdown,
                 totalTime,
                 method: 'javascript',
+                fftBackend: psfData?.fftBackend || 'javascript',
+                requestedFftBackend: psfData?.requestedFftBackend || psfData?.fftBackend || 'javascript',
+                fftFallbackReason: psfData?.fftFallbackReason,
                 samplingSize,
                 fftSize: targetSize,  // Actual FFT size (after zero-padding)
                 wavelength: effectiveWavelength,
@@ -1645,12 +1650,14 @@ export class PSFCalculator {
 
         const onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
 
-        // Try WASM FFT first, fall back to JS if unavailable
         let fftResult;
         try {
-            const { fft2D_WASM } = await import('../../rust-wasm/ts/raytracing/fft-wasm-wrapper.ts');
-            // Keep JS fallback in this function to avoid duplicate warnings from wrapper.
-            fftResult = await fft2D_WASM(realIn, imagIn, { fallbackToJS: false });
+            fftResult = await runFFT2DWithBackend(realIn, imagIn, {
+                onProgress,
+                yieldEvery: (options && Number.isFinite(options.yieldEvery)) ? options.yieldEvery : undefined,
+                forceWasmFFT,
+                preferWebGPUFFT: options?.preferWebGPUFFT === true
+            });
         } catch (error) {
             if (forceWasmFFT) {
                 const msg = (error && (error as any).message) ? (error as any).message : String(error);
@@ -1689,10 +1696,19 @@ export class PSFCalculator {
         }
 
         const shifted = this.fftShift(intensity);
+        const attachBackendMetadata = (target) => {
+            if (!target || typeof target !== 'object') return target;
+            target.fftBackend = fftResult?.backend || 'javascript';
+            target.requestedFftBackend = fftResult?.requestedBackend || target.fftBackend;
+            if (fftResult?.fallbackReason) {
+                target.fftFallbackReason = fftResult.fallbackReason;
+            }
+            return target;
+        };
         if (options.returnMaxIntensity) {
-            return { psf: shifted, maxIntensity };
+            return attachBackendMetadata({ psf: shifted, maxIntensity });
         }
-        return shifted;
+        return attachBackendMetadata(shifted);
     }
 
     /**
