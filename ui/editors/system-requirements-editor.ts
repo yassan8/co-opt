@@ -158,7 +158,7 @@ class SystemRequirementsEditor {
         : '';
 
       const hint = (configIdValue === undefined || configIdValue === null) ? '' : String(configIdValue).trim();
-      let cfg = null;
+      if (!raw) return '';
       if (hint) {
         cfg = configs.find((c: any) => c && String(c.id) === hint) || configs.find((c: any) => c && String(c.name).trim() === hint) || null;
       }
@@ -168,7 +168,7 @@ class SystemRequirementsEditor {
       if (!cfg) cfg = configs[0] || null;
 
       const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
-      return Array.isArray(blocks) ? blocks : [];
+      return raw;
     } catch (_) {
       return [];
     }
