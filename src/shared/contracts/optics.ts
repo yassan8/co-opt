@@ -90,6 +90,9 @@ export interface NativeSpotRaytraceResponse {
   requestedRays: number;
   generatedRays: number;
   wavelengthCount: number;
+  seriesCount?: number;
+  objectCount?: number;
+  raysPerSeries?: number;
   totalAttemptedRays: number;
   totalHitRays: number;
   maxHitRays: number;

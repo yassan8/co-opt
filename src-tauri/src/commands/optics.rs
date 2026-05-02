@@ -904,63 +904,92 @@ pub fn run_native_spot_raytrace(req: NativeSpotRaytraceRequest) -> Result<Native
     let mut max_hit_rays = 0usize;
     let mut total_hit_rays = 0usize;
     let mut series_stats = Vec::<NativeSpotSeriesStats>::new();
+    let mut packed_cache = HashMap::<u64, PackedMeta>::new();
+    let target_origin = target_surface.origin;
+    let target_inv_rot = target_surface.inv_rot;
 
     let trace_start = Instant::now();
     for (series_label, series_color, has_field_angle, rays, wl_um) in input_series {
-        let packed = build_packed_meta(&rows, &surface_data, surface_index, wl_um)?;
-        let mut points = Vec::<SpotPoint>::new();
-        let mut chief_point_um: Option<SpotPoint> = None;
-        let mut fallback_center_point_um: Option<SpotPoint> = None;
+        let packed_key = if wl_um.is_finite() && wl_um > 0.0 {
+            wl_um.to_bits()
+        } else {
+            0.5876_f64.to_bits()
+        };
+        if !packed_cache.contains_key(&packed_key) {
+            let packed = build_packed_meta(&rows, &surface_data, surface_index, wl_um)?;
+            packed_cache.insert(packed_key, packed);
+        }
+        let packed = packed_cache
+            .get(&packed_key)
+            .ok_or_else(|| "run_native_spot_raytrace: packed meta cache miss".to_string())?;
         let ray_count = rays.len();
-
-        for i in 0..ray_count {
-            let r = &rays[i];
-            let start_dir = [
-                r.start_p.x,
-                r.start_p.y,
-                r.start_p.z,
-                r.dir.x,
-                r.dir.y,
-                r.dir.z,
-            ];
-            let hit = trace_single_ray_hit_point_with_meta_core(
-                &start_dir,
-                surface_index,
-                1.0,
-                &packed.row_meta,
-                &packed.row_params,
-                &packed.row_origins,
-                &packed.row_inv_rots,
-                &packed.row_rots,
-                packed.row_count,
-            );
-            if (hit[0] - 1.0).abs() > f64::EPSILON {
-                continue;
-            }
-
-            let relx = hit[2] - target_surface.origin[0];
-            let rely = hit[3] - target_surface.origin[1];
-            let relz = hit[4] - target_surface.origin[2];
-            let local = mul_mat3_vec3(&target_surface.inv_rot, [relx, rely, relz]);
-
-            if local[0].is_finite() && local[1].is_finite() {
-                let point = SpotPoint {
-                    x_um: local[0] * 1000.0,
-                    y_um: local[1] * 1000.0,
-                };
-                if r.is_chief {
-                    chief_point_um = Some(SpotPoint { x_um: point.x_um, y_um: point.y_um });
+        let mut ray_hits = rays
+            .par_iter()
+            .enumerate()
+            .filter_map(|(i, r)| {
+                let start_dir = [
+                    r.start_p.x,
+                    r.start_p.y,
+                    r.start_p.z,
+                    r.dir.x,
+                    r.dir.y,
+                    r.dir.z,
+                ];
+                let hit = trace_single_ray_hit_point_with_meta_core(
+                    &start_dir,
+                    surface_index,
+                    1.0,
+                    &packed.row_meta,
+                    &packed.row_params,
+                    &packed.row_origins,
+                    &packed.row_inv_rots,
+                    &packed.row_rots,
+                    packed.row_count,
+                );
+                if (hit[0] - 1.0).abs() > f64::EPSILON {
+                    return None;
                 }
-                if fallback_center_point_um.is_none() {
-                    fallback_center_point_um = Some(SpotPoint { x_um: point.x_um, y_um: point.y_um });
-                }
-                points.push(point);
-            }
-        }
 
-        if chief_point_um.is_none() {
-            chief_point_um = fallback_center_point_um;
-        }
+                let relx = hit[2] - target_origin[0];
+                let rely = hit[3] - target_origin[1];
+                let relz = hit[4] - target_origin[2];
+                let local = mul_mat3_vec3(&target_inv_rot, [relx, rely, relz]);
+                if !local[0].is_finite() || !local[1].is_finite() {
+                    return None;
+                }
+
+                Some((
+                    i,
+                    r.is_chief,
+                    SpotPoint {
+                        x_um: local[0] * 1000.0,
+                        y_um: local[1] * 1000.0,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        ray_hits.sort_by_key(|(i, _, _)| *i);
+
+        let points = ray_hits
+            .iter()
+            .map(|(_, _, point)| SpotPoint {
+                x_um: point.x_um,
+                y_um: point.y_um,
+            })
+            .collect::<Vec<_>>();
+        let chief_point_um = ray_hits
+            .iter()
+            .find(|(_, is_chief, _)| *is_chief)
+            .map(|(_, _, point)| SpotPoint {
+                x_um: point.x_um,
+                y_um: point.y_um,
+            })
+            .or_else(|| {
+                ray_hits.first().map(|(_, _, point)| SpotPoint {
+                    x_um: point.x_um,
+                    y_um: point.y_um,
+                })
+            });
 
         let hit_rays = points.len();
         total_hit_rays += hit_rays;

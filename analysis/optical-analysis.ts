@@ -30,6 +30,14 @@ let pendingSpotDiagramRequest: { requestId: number; options: any; requestedAt: n
 let analysisRustTraceOptionsCache: { options: any; at: number; forceKey: string } | null = null;
 let analysisRustTraceOptionsPromise: Promise<any | null> | null = null;
 
+function isSpotDiagramDebugEnabled(): boolean {
+    try {
+        return typeof window !== 'undefined' && (w as any).__COOPT_DEBUG_SPOT_DIAGRAM === true;
+    } catch (_) {
+        return false;
+    }
+}
+
 function getPrimaryWavelengthFromSourceRows(sourceRows: any[]): number {
     const rows = Array.isArray(sourceRows) ? sourceRows : [];
     let fallback = 0.5876;
@@ -1474,14 +1482,22 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             // ignore
         }
         
-        // Debug data retrieval
-        console.log('📊 Retrieved data:', { configId: selectedConfigId || '(Current)' });
-        console.log('  - opticalSystemRows:', opticalSystemRows ? opticalSystemRows.length : 'null', opticalSystemRows);
-        if (opticalSystemRows && opticalSystemRows.length > 0) {
-            opticalSystemRows.forEach((row: any, idx: number) => {
-                console.log(`    [${idx}]`, row);
-            });
-        } else {
+        const debugSpotDiagram = isSpotDiagramDebugEnabled();
+
+        if (debugSpotDiagram) {
+            console.log('📊 Retrieved data:', { configId: selectedConfigId || '(Current)' });
+            console.log('  - opticalSystemRows:', opticalSystemRows ? opticalSystemRows.length : 'null', opticalSystemRows);
+            if (opticalSystemRows && opticalSystemRows.length > 0) {
+                opticalSystemRows.forEach((row: any, idx: number) => {
+                    console.log(`    [${idx}]`, row);
+                });
+            }
+            console.log('  - objectRows:', objectRows ? objectRows.length : 'null', objectRows);
+            console.log('  - sourceRows:', sourceRows ? sourceRows.length : 'null', sourceRows);
+            console.log('  - effectiveSourceRowsForSpot:', effectiveSourceRowsForSpot);
+        }
+
+        if (!opticalSystemRows || opticalSystemRows.length === 0) {
             console.warn('⚠️ opticalSystemRows is empty! サンプルデータを自動生成します。');
             // サンプルデータ（仮）: 簡単なレンズ系
             opticalSystemRows = [
@@ -1490,11 +1506,10 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 { surfaceType: 'sphere', radius: -50, thickness: 10, refractiveIndex: 1.0, comment: 'Lens back' },
                 { surfaceType: 'image', radius: 'INF', thickness: 0, refractiveIndex: 1.0, comment: 'Image surface' }
             ];
-            console.log('📊 Generated sample optical system:', opticalSystemRows);
+            if (debugSpotDiagram) {
+                console.log('📊 Generated sample optical system:', opticalSystemRows);
+            }
         }
-        console.log('  - objectRows:', objectRows ? objectRows.length : 'null', objectRows);
-        console.log('  - sourceRows:', sourceRows ? sourceRows.length : 'null', sourceRows);
-        console.log('  - effectiveSourceRowsForSpot:', effectiveSourceRowsForSpot);
         
         // Validate surface index against actual data
         if (opticalSystemRows && opticalSystemRows.length > 0) {
@@ -1533,8 +1548,10 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             objectCount: Array.isArray(objectRows) ? objectRows.length : 0,
             opticalSurfaceCount: Array.isArray(opticalSystemRows) ? opticalSystemRows.length : 0
         };
-        console.log(`🎯 Final surface resolution: surfaceId(input)=${surfaceId} → rowIndex=${surfaceIndex} → surfaceNumber=${surfaceNumber}`);
-        console.log(`🎯 Target surface:`, opticalSystemRows[surfaceIndex]);
+        if (debugSpotDiagram) {
+            console.log(`🎯 Final surface resolution: surfaceId(input)=${surfaceId} → rowIndex=${surfaceIndex} → surfaceNumber=${surfaceNumber}`);
+            console.log('🎯 Target surface:', opticalSystemRows[surfaceIndex]);
+        }
         
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
             throw new Error('No optical system data available');
@@ -1553,7 +1570,9 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                     primary: true
                 }
             ];
-            console.log('📊 Using default object data:', defaultObjectRows);
+            if (debugSpotDiagram) {
+                console.log('📊 Using default object data:', defaultObjectRows);
+            }
             
             // Import functions and use default object data
             const { generateSpotDiagramAsync, drawSpotDiagram } = await import('../evaluation/spot-diagram.js');
@@ -1640,14 +1659,16 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                     : null
             };
             
-            console.log('📋 [SPOT DIAGRAM] About to call drawSpotDiagram with:', {
-                spotDataType: typeof spotDiagramData,
-                spotDataKeys: spotDiagramData ? Object.keys(spotDiagramData) : 'null',
-                actualSpotDataLength: spotDiagramData.spotData ? spotDiagramData.spotData.length : 'null',
-                surfaceNumber: surfaceNumber,
-                containerId: typeof containerTarget === 'string' ? containerTarget : '(element)',
-                wavelength: wavelength / 1000
-            });
+            if (debugSpotDiagram) {
+                console.log('📋 [SPOT DIAGRAM] About to call drawSpotDiagram with:', {
+                    spotDataType: typeof spotDiagramData,
+                    spotDataKeys: spotDiagramData ? Object.keys(spotDiagramData) : 'null',
+                    actualSpotDataLength: spotDiagramData.spotData ? spotDiagramData.spotData.length : 'null',
+                    surfaceNumber: surfaceNumber,
+                    containerId: typeof containerTarget === 'string' ? containerTarget : '(element)',
+                    wavelength: wavelength / 1000
+                });
+            }
             
             // Draw spot diagram with proper parameters
             try { onProgress?.({ percent: 90, message: 'Rendering...' }); } catch (_) {}
@@ -1662,7 +1683,9 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
 
             try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
             
-            console.log('✅ [SPOT DIAGRAM] drawSpotDiagram call completed');
+            if (debugSpotDiagram) {
+                console.log('✅ [SPOT DIAGRAM] drawSpotDiagram call completed');
+            }
         }
 
         spotProfile.timingsMs.total = Math.max(0, nowMs() - profileStartMs);
@@ -1677,26 +1700,27 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 (w as any).__cooptSpotDiagramProfileHistory = next.slice(Math.max(0, next.length - 20));
             }
         } catch (_) {}
-        console.warn('⏱️ [SPOT PROFILE]', {
-            backend: spotProfile?.backend?.kind || 'unknown',
-            totalMs: Number(spotProfile?.timingsMs?.total || 0).toFixed(1),
-            resolveBackendMs: Number(spotProfile?.timingsMs?.resolveBackend || 0).toFixed(1),
-            generateDataMs: Number(spotProfile?.timingsMs?.generateData || 0).toFixed(1),
-            generateCloneRowsMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.cloneRows || 0).toFixed(1),
-            generateStartsMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.generateStarts || 0).toFixed(1),
-            generateTraceRayMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.traceRay || 0).toFixed(1),
-            generateNonTraceMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.nonTrace || 0).toFixed(1),
-            renderMs: Number(spotProfile?.timingsMs?.render || 0).toFixed(1),
-            traceRayCalls: Number(spotProfile?.result?.generationProfile?.counters?.traceRayCalls || 0),
-            pupilAttempts: Number(spotProfile?.result?.generationProfile?.counters?.pupilAttempts || 0),
-            startGenerationCacheHits: Number(spotProfile?.result?.generationProfile?.counters?.startGenerationCacheHits || 0),
-            startGenerationCacheMisses: Number(spotProfile?.result?.generationProfile?.counters?.startGenerationCacheMisses || 0),
-            raysTried: Number(spotProfile?.result?.generationProfile?.counters?.raysTried || 0),
-            objects: Number(spotProfile?.result?.objectCount || 0),
-            rays: Number(spotProfile?.result?.successfulRays || 0) + '/' + Number(spotProfile?.result?.totalRays || 0)
-        });
-        
-        console.log('✅ Spot diagram generated successfully');
+        if (debugSpotDiagram) {
+            console.warn('⏱️ [SPOT PROFILE]', {
+                backend: spotProfile?.backend?.kind || 'unknown',
+                totalMs: Number(spotProfile?.timingsMs?.total || 0).toFixed(1),
+                resolveBackendMs: Number(spotProfile?.timingsMs?.resolveBackend || 0).toFixed(1),
+                generateDataMs: Number(spotProfile?.timingsMs?.generateData || 0).toFixed(1),
+                generateCloneRowsMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.cloneRows || 0).toFixed(1),
+                generateStartsMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.generateStarts || 0).toFixed(1),
+                generateTraceRayMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.traceRay || 0).toFixed(1),
+                generateNonTraceMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.nonTrace || 0).toFixed(1),
+                renderMs: Number(spotProfile?.timingsMs?.render || 0).toFixed(1),
+                traceRayCalls: Number(spotProfile?.result?.generationProfile?.counters?.traceRayCalls || 0),
+                pupilAttempts: Number(spotProfile?.result?.generationProfile?.counters?.pupilAttempts || 0),
+                startGenerationCacheHits: Number(spotProfile?.result?.generationProfile?.counters?.startGenerationCacheHits || 0),
+                startGenerationCacheMisses: Number(spotProfile?.result?.generationProfile?.counters?.startGenerationCacheMisses || 0),
+                raysTried: Number(spotProfile?.result?.generationProfile?.counters?.raysTried || 0),
+                objects: Number(spotProfile?.result?.objectCount || 0),
+                rays: Number(spotProfile?.result?.successfulRays || 0) + '/' + Number(spotProfile?.result?.totalRays || 0)
+            });
+            console.log('✅ Spot diagram generated successfully');
+        }
         
     } catch (error) {
         spotProfile.timingsMs.total = Math.max(0, nowMs() - profileStartMs);

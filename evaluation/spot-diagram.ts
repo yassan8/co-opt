@@ -167,7 +167,6 @@ function __spot_estimateStartStopAlignmentMm(opticalSystemRows, starts, waveleng
                 x: stopCenterX + u * stopPlaneU.x + v * stopPlaneV.x,
                 y: stopCenterY + u * stopPlaneU.y + v * stopPlaneV.y
             });
-            if (rays.length >= sampleCount) break;
         }
         if (rays.length === 0) return null;
 
@@ -214,9 +213,7 @@ function __spot_cloneRowsPreserveSpecialNumbers(rows) {
             (_k, v) => {
                 if (v === INF) return Infinity;
                 if (v === NINF) return -Infinity;
-                const pv = objectData?.physicalVignettingUsed;
                 if (v === NAN) return NaN;
-                modeInfo.textContent = `Pupil scale used: ${psText} \u007f Aim-through-stop: ${ats === true ? 'true' : (ats === false ? 'false' : 'N/A')} \u007f Physical vignetting: ${pv === true ? 'ON' : (pv === false ? 'OFF' : 'N/A')}`;
             }
         );
     } catch (_) {
@@ -2703,9 +2700,56 @@ try {
     }
 } catch (_) {}
 
+function isSpotDiagramDebugEnabled(): boolean {
+    try {
+        return typeof window !== 'undefined' && (window as any).__COOPT_DEBUG_SPOT_DIAGRAM === true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function getPercentile(sortedValues: number[], percentile: number): number {
+    if (!Array.isArray(sortedValues) || sortedValues.length === 0) return 0;
+    if (sortedValues.length === 1) return sortedValues[0];
+    const clamped = Math.min(1, Math.max(0, percentile));
+    const index = (sortedValues.length - 1) * clamped;
+    const lowerIndex = Math.floor(index);
+    const upperIndex = Math.ceil(index);
+    const lowerValue = sortedValues[lowerIndex];
+    const upperValue = sortedValues[upperIndex];
+    if (lowerIndex === upperIndex) return lowerValue;
+    const weight = index - lowerIndex;
+    return lowerValue + ((upperValue - lowerValue) * weight);
+}
+
+function computeSpotDiagramAxisRangeUm(xValuesUm: number[], yValuesUm: number[], airyRadiusUm: number | null): number {
+    const radii = xValuesUm
+        .map((x, index) => {
+            const y = yValuesUm[index];
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return Number.NaN;
+            return Math.hypot(x, y);
+        })
+        .filter((radius) => Number.isFinite(radius))
+        .sort((a, b) => a - b);
+
+    const finiteAiryRadiusUm = Number.isFinite(Number(airyRadiusUm)) ? Number(airyRadiusUm) : 0;
+    if (radii.length === 0) {
+        return Math.max(1, finiteAiryRadiusUm) * 1.2;
+    }
+
+    const maxRadiusUm = radii[radii.length - 1];
+    const robustRadiusUm = radii.length >= 9 ? getPercentile(radii, 0.98) : maxRadiusUm;
+    const effectiveRadiusUm = (maxRadiusUm > (robustRadiusUm * 3)) ? robustRadiusUm : maxRadiusUm;
+    const baseRangeUm = Math.max(1, effectiveRadiusUm);
+    return baseRangeUm * (radii.length > 1 ? 1.15 : 1.2);
+}
+
 // スポットダイアグラムの描画（仕様書準拠）
 export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWavelength = null) {
-    console.log('🎨 [SPOT DIAGRAM] Drawing spot diagram...');
+    const debugSpotDiagram = isSpotDiagramDebugEnabled();
+    if (debugSpotDiagram) {
+        console.log('🎨 [SPOT DIAGRAM] Drawing spot diagram...');
+    }
     
     // If spotData is an object with spotData property, extract the actual array
     let actualSpotData = spotData;
@@ -2713,7 +2757,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
     let airyInfo = null;
     if (spotData && typeof spotData === 'object') {
         if (spotData.spotData) {
-            console.log('🔄 [SPOT DIAGRAM] Extracting spotData from returned object');
+            if (debugSpotDiagram) {
+                console.log('🔄 [SPOT DIAGRAM] Extracting spotData from returned object');
+            }
             actualSpotData = spotData.spotData;
         }
         // Also extract primary wavelength if not provided
@@ -2728,10 +2774,12 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         }
     }
     
-    console.log('📊 [SPOT DIAGRAM] Actual spotData:', {
-        isArray: Array.isArray(actualSpotData),
-        length: actualSpotData ? actualSpotData.length : 'null'
-    });
+    if (debugSpotDiagram) {
+        console.log('📊 [SPOT DIAGRAM] Actual spotData:', {
+            isArray: Array.isArray(actualSpotData),
+            length: actualSpotData ? actualSpotData.length : 'null'
+        });
+    }
     
     const container = typeof containerId === 'string'
         ? document.getElementById(containerId)
@@ -2747,7 +2795,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         : surfaceNumber;
     const plotly = doc.defaultView?.Plotly || (typeof window !== 'undefined' ? window.Plotly : null);
     
-    console.log('✅ [SPOT DIAGRAM] Container found');
+    if (debugSpotDiagram) {
+        console.log('✅ [SPOT DIAGRAM] Container found');
+    }
     
     // コンテナをクリア
     container.innerHTML = '';
@@ -2773,7 +2823,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         return;
     }
     
-    console.log(`📊 [SPOT DIAGRAM] Processing ${actualSpotData.length} objects`);
+    if (debugSpotDiagram) {
+        console.log(`📊 [SPOT DIAGRAM] Processing ${actualSpotData.length} objects`);
+    }
 
     // Lightweight debug snapshot for comparing against Requirements spot-size evaluation.
     // Store as global variable for cross-tab comparison
@@ -2843,7 +2895,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             return;
         }
         
-        console.log(`✅ [SPOT DIAGRAM] Creating graph for Object ${objectData.objectId} with ${objectData.spotPoints.length} points`);
+        if (debugSpotDiagram) {
+            console.log(`✅ [SPOT DIAGRAM] Creating graph for Object ${objectData.objectId} with ${objectData.spotPoints.length} points`);
+        }
         graphsCreated++;
         
         const graphContainer = doc.createElement('div');
@@ -2933,11 +2987,11 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             console.warn(`⚠️ Object ${objectData.objectId}: Chief ray not found! Using centroid-closest point instead.`);
             console.warn(`   spotPoints count: ${objectData.spotPoints.length}`);
             console.warn(`   isChiefRay flags: ${objectData.spotPoints.map(p => p.isChiefRay).join(', ')}`);
-        } else {
+        } else if (debugSpotDiagram) {
             console.log(`📍 Object ${objectData.objectId}: Chief ray intersection at (${(chiefXMm * 1000).toFixed(3)}, ${(chiefYMm * 1000).toFixed(3)}) µm`);
         }
 
-        // Also surface the absolute chief-ray intersection in the UI (plots are centered on chief ray).
+        // Also surface the absolute chief-ray intersection in the UI.
         if (chiefRayPoint && Number.isFinite(Number(chiefXMm)) && Number.isFinite(Number(chiefYMm))) {
             const chiefInfo = doc.createElement('div');
             chiefInfo.textContent = `Chief @ target (mm): (${Number(chiefXMm).toFixed(6)}, ${Number(chiefYMm).toFixed(6)})`;
@@ -2952,14 +3006,21 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             const psText = Number.isFinite(ps) ? ps.toFixed(3) : 'N/A';
             const ats = objectData?.aimThroughStopUsed;
             const modeInfo = doc.createElement('div');
-            modeInfo.textContent = `Pupil scale used: ${psText}  Aim-through-stop: ${ats === true ? 'true' : (ats === false ? 'false' : 'N/A')}`;
+            modeInfo.textContent = `Pupil scale used: ${psText}  Aim-through-stop: ${ats === true ? 'true' : (ats === false ? 'false' : 'N/A')}`;
             modeInfo.style.cssText = 'margin: 0 0 10px 0; font-size: 12px; color: #777; font-style: italic;';
             graphContainer.appendChild(modeInfo);
         }
-        
-        // 主光線交点を中心とした座標系に変換（RMS計算用）
-        const xValuesUm = xValuesMm.map(x => (x - chiefXMm) * 1000);
-        const yValuesUm = yValuesMm.map(y => (y - chiefYMm) * 1000);
+
+        const plotCenterXMm = xValuesMm.length > 0
+            ? xValuesMm.reduce((sum, x) => sum + Number(x || 0), 0) / xValuesMm.length
+            : chiefXMm;
+        const plotCenterYMm = yValuesMm.length > 0
+            ? yValuesMm.reduce((sum, y) => sum + Number(y || 0), 0) / yValuesMm.length
+            : chiefYMm;
+
+        // 像高オフセットを除くため、重心を中心とした座標系でプロットとレンジ計算を行う。
+        const xValuesUm = xValuesMm.map(x => (x - plotCenterXMm) * 1000);
+        const yValuesUm = yValuesMm.map(y => (y - plotCenterYMm) * 1000);
         
         let adjustedXValuesUm = xValuesUm.slice();
         let adjustedYValuesUm = yValuesUm.slice();
@@ -3046,7 +3107,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         if (alignRectWithCross) {
             adjustedXValuesUm = adjustedXValuesUm.map(x => x - shiftXForAlignment);
             adjustedYValuesUm = adjustedYValuesUm.map(y => y - shiftYForAlignment);
-            console.log(`📍 [SpotDiag] Aligning Rect pattern to cross center: shift=(${centerShiftXUm.toFixed(3)}, ${centerShiftYUm.toFixed(3)}) µm`);
+            if (debugSpotDiagram) {
+                console.log(`📍 [SpotDiag] Aligning Rect pattern to cross center: shift=(${centerShiftXUm.toFixed(3)}, ${centerShiftYUm.toFixed(3)}) µm`);
+            }
         }
 
         const horizontalPlotPoints = alignRectWithCross
@@ -3082,7 +3145,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             });
         }
 
-        if (horizontalPoints.length > 0 || verticalPoints.length > 0) {
+        if (debugSpotDiagram && (horizontalPoints.length > 0 || verticalPoints.length > 0)) {
             console.log(`📐 [SpotDiag] Overlay draw-cross rays (aligned=${alignRectWithCross}): horizontal=${horizontalPoints.length}, vertical=${verticalPoints.length} at surface ${surfaceNumber}`);
         }
 
@@ -3094,11 +3157,8 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             return `Ray ${pointIndex + 1}<br>X: ${xUm.toFixed(3)} µm<br>Y: ${(adjustedYValuesUm[pointIndex]).toFixed(3)} µm<br>Wavelength: ${wavelengthText}`;
         });
 
-        const maxAbsX = Math.max(...adjustedXValuesUm.map(x => Math.abs(x)), 1);
-        const maxAbsY = Math.max(...adjustedYValuesUm.map(y => Math.abs(y)), 1);
         const airyRadiusUm = Number(airyInfo?.airyRadiusUm);
-        const rangeBase = Math.max(maxAbsX, maxAbsY, Number.isFinite(airyRadiusUm) ? airyRadiusUm : 0);
-        const maxRange = rangeBase * (objectData.spotPoints.length > 1 ? 1.1 : 1.2);
+        const maxRange = computeSpotDiagramAxisRangeUm(adjustedXValuesUm, adjustedYValuesUm, airyRadiusUm);
         const xRangePadding = maxRange;
         const yRangePadding = maxRange;
 
@@ -3110,7 +3170,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             return Math.hypot(gx - globalShiftXmm, gy - globalShiftYmm);
         }), 0);
         const maxLocalRadiusUm = Math.max(...adjustedXValuesUm.map((x, idx) => Math.hypot(x, adjustedYValuesUm[idx])), 0);
-        console.log(`📏 [SpotDiag] Surface ${surfaceNumber} Object ${objectData.objectId}: local max ${(maxLocalRadiusUm).toFixed(3)} µm vs global max ${(maxGlobalRadiusMm * 1000).toFixed(3)} µm`);
+        if (debugSpotDiagram) {
+            console.log(`📏 [SpotDiag] Surface ${surfaceNumber} Object ${objectData.objectId}: local max ${(maxLocalRadiusUm).toFixed(3)} µm vs global max ${(maxGlobalRadiusMm * 1000).toFixed(3)} µm, plotted half-range ${maxRange.toFixed(3)} µm`);
+        }
 
         const scatterTrace = {
             x: adjustedXValuesUm,
@@ -3141,12 +3203,12 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
                 title: 'X (µm)',
                 autorange: false,
                 range: [-xRangePadding, xRangePadding],
+                scaleanchor: 'y',
+                scaleratio: 1,
                 zeroline: false,
                 showgrid: true,
                 gridcolor: '#e5e5e5',
-                gridwidth: 1,
-                scaleanchor: 'y',
-                scaleratio: 1
+                gridwidth: 1
             },
             yaxis: {
                 title: 'Y (µm)',
@@ -3454,6 +3516,8 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
                 chiefSelection: hasChiefFlag ? 'flagged-chief' : 'centroid-closest',
                 chiefXMm: Number.isFinite(chiefXMm) ? chiefXMm : null,
                 chiefYMm: Number.isFinite(chiefYMm) ? chiefYMm : null,
+                plotCenterXMm: Number.isFinite(plotCenterXMm) ? plotCenterXMm : null,
+                plotCenterYMm: Number.isFinite(plotCenterYMm) ? plotCenterYMm : null,
                 nPoints: Array.isArray(objectData.spotPoints) ? objectData.spotPoints.length : null,
                 totalRays: objectData.totalRays ?? null,
                 successfulRays: objectData.successfulRays ?? null,
@@ -3526,10 +3590,14 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         graphContainer.appendChild(stats);
         
         mainContainer.appendChild(graphContainer);
-        console.log(`✅ [SPOT DIAGRAM] Graph ${graphsCreated} appended to mainContainer for Object ${objectData.objectId}`);
+        if (debugSpotDiagram) {
+            console.log(`✅ [SPOT DIAGRAM] Graph ${graphsCreated} appended to mainContainer for Object ${objectData.objectId}`);
+        }
     });
     
-    console.log(`📊 [SPOT DIAGRAM] Total graphs created: ${graphsCreated} out of ${actualSpotData.length} objects`);
+    if (debugSpotDiagram) {
+        console.log(`📊 [SPOT DIAGRAM] Total graphs created: ${graphsCreated} out of ${actualSpotData.length} objects`);
+    }
     container.appendChild(mainContainer);
 
     // Publish debug snapshot for SD vs Requirements comparisons.
