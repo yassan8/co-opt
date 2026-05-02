@@ -1032,6 +1032,45 @@ export function renameConfiguration(configId: number | string, newName: string):
   return true;
 }
 
+// Configurationの並び順を変更
+export function reorderConfiguration(
+  configId: number | string,
+  targetConfigId: number | string,
+  position: 'before' | 'after'
+): boolean {
+  const systemConfig = loadSystemConfigurations();
+  const configs = Array.isArray(systemConfig.configurations) ? systemConfig.configurations : [];
+
+  if (configs.length < 2) {
+    return false;
+  }
+
+  const fromIndex = configs.findIndex(c => idsEqual(c?.id, configId));
+  const targetIndex = configs.findIndex(c => idsEqual(c?.id, targetConfigId));
+
+  if (fromIndex === -1 || targetIndex === -1 || fromIndex === targetIndex) {
+    return false;
+  }
+
+  const reordered = configs.slice();
+  const [moved] = reordered.splice(fromIndex, 1);
+  if (!moved) {
+    return false;
+  }
+
+  let insertIndex = targetIndex;
+  if (position === 'after') insertIndex += 1;
+  if (fromIndex < insertIndex) insertIndex -= 1;
+  insertIndex = Math.max(0, Math.min(reordered.length, insertIndex));
+
+  reordered.splice(insertIndex, 0, moved);
+  systemConfig.configurations = reordered;
+  saveSystemConfigurations(systemConfig);
+
+  cfgLog(`✅ [Configuration] Reordered: ${String(configId)} ${position} ${String(targetConfigId)}`);
+  return true;
+}
+
 // 全Configuration一覧を取得（テーブル表示用）
 export function getConfigurationList(): ConfigurationListItem[] {
   const systemConfig = loadSystemConfigurations();
@@ -1058,6 +1097,7 @@ if (typeof window !== 'undefined') {
     addConfiguration,
     deleteConfiguration,
     duplicateConfiguration,
+    reorderConfiguration,
     renameConfiguration,
     getConfigurationList
   };

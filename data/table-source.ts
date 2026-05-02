@@ -165,6 +165,7 @@ const createCellEvent = (field: string, value: any, rowData: SourceRow): CellEve
 const createDOMTableSource = (container: HTMLElement | null, initialRows: SourceRow[]): TableSourceAPI => {
   let data = safeCloneRows(initialRows);
   let selectedRowId: number | null = null;
+  let draggedSourceRowId: string | null = null;
   let rowWrappers: RowWrapper[] = [];
   const listeners = new Map<string, Array<(...args: any[]) => void>>();
 
@@ -206,6 +207,50 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
     if (selectedRowId == null) return [];
     const w = rowWrappers.find(r => r.getData().id === selectedRowId);
     return w ? [w] : [];
+  };
+
+  const clearDropIndicator = (rowEl: HTMLTableRowElement | null): void => {
+    if (!rowEl) return;
+    rowEl.style.boxShadow = '';
+  };
+
+  const moveSourceRow = (fromId: string, toId: string, position: 'before' | 'after'): void => {
+    const beforeRows = getData();
+    if (!Array.isArray(beforeRows) || beforeRows.length < 2) return;
+
+    const fromIndex = beforeRows.findIndex(row => String(row?.id) === String(fromId));
+    const toIndex = beforeRows.findIndex(row => String(row?.id) === String(toId));
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+    const afterRows = beforeRows.slice();
+    const [movedRow] = afterRows.splice(fromIndex, 1);
+    if (!movedRow) return;
+
+    let insertIndex = toIndex;
+    if (position === 'after') insertIndex += 1;
+    if (fromIndex < insertIndex) insertIndex -= 1;
+    insertIndex = Math.max(0, Math.min(afterRows.length, insertIndex));
+    afterRows.splice(insertIndex, 0, movedRow);
+
+    const selectedRow = selectedRowId == null
+      ? null
+      : afterRows.find(row => String(row?.id) === String(selectedRowId)) || null;
+
+    afterRows.forEach((row, index) => {
+      if (row && typeof row === 'object') row.id = index + 1;
+    });
+
+    try {
+      if (w.undoHistory && w.ReorderTableRowsCommand && !w.undoHistory.isExecuting) {
+        const command = new w.ReorderTableRowsCommand('source', beforeRows, afterRows);
+        w.undoHistory.record(command);
+      }
+    } catch (_) {}
+
+    data = safeCloneRows(afterRows);
+    selectedRowId = selectedRow ? Number(selectedRow.id) : null;
+    rerender();
+    saveTableData(getData());
   };
 
   const normalizeRow = (row: Partial<SourceRow>, fallbackId: number): SourceRow => {
@@ -288,10 +333,78 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
         emit('rowClick', e, wrapper);
       });
 
+      if (data.length > 1) {
+        tr.addEventListener('dragover', (e: DragEvent) => {
+          if (!draggedSourceRowId || draggedSourceRowId === String(rowData.id)) return;
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+          const rect = tr.getBoundingClientRect();
+          const isBefore = e.clientY < rect.top + rect.height / 2;
+          tr.style.boxShadow = isBefore
+            ? 'inset 0 2px 0 #2563eb'
+            : 'inset 0 -2px 0 #2563eb';
+        });
+
+        tr.addEventListener('dragleave', (e: DragEvent) => {
+          const related = e.relatedTarget as Node | null;
+          if (related && tr.contains(related)) return;
+          clearDropIndicator(tr);
+        });
+
+        tr.addEventListener('drop', (e: DragEvent) => {
+          if (!draggedSourceRowId || draggedSourceRowId === String(rowData.id)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const rect = tr.getBoundingClientRect();
+          const position: 'before' | 'after' = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+          clearDropIndicator(tr);
+          moveSourceRow(draggedSourceRowId, String(rowData.id), position);
+        });
+      }
+
       // id
       const tdId = document.createElement('td');
-      tdId.textContent = String(rowData.id ?? '');
+      const idWrap = document.createElement('div');
+      idWrap.style.display = 'flex';
+      idWrap.style.alignItems = 'center';
+      idWrap.style.gap = '6px';
+
+      const dragHandle = document.createElement('span');
+      dragHandle.textContent = '⠿';
+      dragHandle.title = 'Drag to reorder';
+      dragHandle.className = 'glass-search-drag-handle';
+      dragHandle.draggable = data.length > 1;
+
+      const idLabel = document.createElement('span');
+      idLabel.textContent = String(rowData.id ?? '');
+
+      idWrap.appendChild(dragHandle);
+      idWrap.appendChild(idLabel);
+      tdId.appendChild(idWrap);
       tr.appendChild(tdId);
+
+      if (data.length > 1) {
+        dragHandle.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+
+        dragHandle.addEventListener('dragstart', (e: DragEvent) => {
+          draggedSourceRowId = String(rowData.id);
+          tr.classList.add('dragging');
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', String(rowData.id));
+          }
+          e.stopPropagation();
+        });
+
+        dragHandle.addEventListener('dragend', () => {
+          draggedSourceRowId = null;
+          tr.classList.remove('dragging');
+          clearDropIndicator(tr);
+        });
+      }
 
       // wavelength
       const tdWl = document.createElement('td');

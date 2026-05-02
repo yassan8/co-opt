@@ -17,6 +17,7 @@ import {
   addConfiguration,
   deleteConfiguration,
   duplicateConfiguration,
+  reorderConfiguration,
   renameConfiguration,
   getConfigurationList
 } from '../data/table-configuration.ts';
@@ -29,9 +30,9 @@ import { requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from '
 let autoSaveIntervalId: number | null = null;
 let isConfigurationSwitching = false;
 let beforeUnloadHandlerInstalled = false;
-let delegatedConfigListenerInstalled = false;
-let delegatedConfigClickListenerInstalled = false;
 let lastConfigSwitchTimestamp = 0;
+let draggedConfigId: string | null = null;
+let configurationDelegatedListenersInstalled = false;
 
 function areTablesReady(): boolean {
   return !!(w.tableSource && w.tableObject && w.tableOpticalSystem);
@@ -76,7 +77,6 @@ function ensureActiveConfigAppliedToTables(): void {
 
 function setConfigControlsEnabled(enabled: boolean): void {
   const ids = [
-    'config-select',
     'add-config-btn',
     'delete-config-btn',
     'duplicate-config-btn',
@@ -121,6 +121,11 @@ function shouldSkipAutoSave(): boolean {
 }
 
 function stopAutoSave(): void {
+  const globalIntervalId = Number(w.__configurationAutoSaveIntervalId);
+  if (Number.isFinite(globalIntervalId) && globalIntervalId !== 0) {
+    clearInterval(globalIntervalId);
+    w.__configurationAutoSaveIntervalId = null;
+  }
   if (autoSaveIntervalId !== null) {
     clearInterval(autoSaveIntervalId);
     autoSaveIntervalId = null;
@@ -328,39 +333,272 @@ function initializeConfigurationSystem(): void {
 }
 
 /**
- * Configuration選択ドロップダウンを更新
+ * Configuration UIを更新
  */
 function updateConfigurationSelect(): void {
-  const select = document.getElementById('config-select') as HTMLSelectElement | null;
-  if (!select) {
-    return;
-  }
-  
-  const configList = getConfigurationList();
-  const activeId = getActiveConfigId();
-  
-  select.innerHTML = '';
-  
-  configList.forEach((config: any) => {
-    const option = document.createElement('option');
-    option.value = String(config.id);
-    option.textContent = config.name;
-    
-    if (config.active) {
-      option.selected = true;
-      option.classList.add('active-config');
-      option.textContent += ' ★';
-    }
-    
-    select.appendChild(option);
-  });
-  
   // Keep Spot Diagram config selector synchronized with available configs.
   try {
     if (typeof window !== 'undefined' && typeof w.updateSpotDiagramConfigSelect === 'function') {
       w.updateSpotDiagramConfigSelect();
     }
   } catch (_) {}
+
+  renderConfigurationOrderList();
+}
+
+function clearConfigDropIndicator(row: HTMLElement | null): void {
+  if (!row) return;
+  row.classList.remove('drag-over-before');
+  row.classList.remove('drag-over-after');
+}
+
+function handleConfigurationReorder(targetConfigId: string, position: 'before' | 'after'): void {
+  if (!draggedConfigId || draggedConfigId === targetConfigId) {
+    return;
+  }
+
+  const changed = reorderConfiguration(draggedConfigId, targetConfigId, position);
+  if (!changed) {
+    return;
+  }
+
+  updateConfigurationSelect();
+  updateConfigInfo();
+}
+
+async function activateConfiguration(newConfigId: string): Promise<void> {
+  const normalizedConfigId = String(newConfigId ?? '').trim();
+  const currentConfigId = getActiveConfigId();
+
+  if (!normalizedConfigId || String(normalizedConfigId) === String(currentConfigId)) {
+    return;
+  }
+
+  if (!areTablesReady()) {
+    console.warn('⚠️ [Configuration] Tables not ready yet, deferring config switch...');
+    setTimeout(() => {
+      if (areTablesReady()) {
+        void activateConfiguration(normalizedConfigId);
+      }
+    }, 500);
+    return;
+  }
+
+  if (isConfigurationSwitching) {
+    return;
+  }
+
+  isConfigurationSwitching = true;
+  try {
+    if (typeof window !== 'undefined') {
+      (w as any).__configurationSwitching = true;
+    }
+  } catch (_) {}
+  stopAutoSave();
+  setConfigControlsEnabled(false);
+
+  console.log(`🔄 [Configuration] Switching from ${currentConfigId} to ${normalizedConfigId}...`);
+  console.log(`💾 [Configuration] Saving current config ${currentConfigId} before switch...`);
+  saveCurrentToActiveConfiguration();
+  console.log('✅ [Configuration] Current config saved');
+
+  try {
+    setActiveConfiguration(normalizedConfigId);
+
+    const targetConfig = getActiveConfiguration();
+    if (!targetConfig) {
+      throw new Error(`Target configuration ${normalizedConfigId} not found`);
+    }
+
+    const hasValidObject = Array.isArray(targetConfig.object) && targetConfig.object.length > 0;
+    const hasValidOptical = Array.isArray(targetConfig.opticalSystem) && targetConfig.opticalSystem.length > 0;
+    const hasValidBlocks = Array.isArray(targetConfig.blocks) && targetConfig.blocks.length > 0;
+
+    if (!hasValidObject) {
+      console.warn(`⚠️ [Configuration] Target config ${targetConfig.name} has no Object data`);
+    }
+
+    if (!hasValidOptical && !hasValidBlocks) {
+      console.warn(`⚠️ [Configuration] Target config ${targetConfig.name} has no Optical System or Blocks data`);
+    }
+
+    console.log(`🔄 [Configuration] Loading configuration ${normalizedConfigId} "${targetConfig.name}" to tables...`);
+    console.log('🔍 [Configuration] Target config data:', {
+      hasObject: hasValidObject,
+      objectCount: targetConfig.object?.length || 0,
+      hasOptical: hasValidOptical,
+      opticalCount: targetConfig.opticalSystem?.length || 0,
+      hasBlocks: hasValidBlocks,
+      blocksCount: targetConfig.blocks?.length || 0
+    });
+    console.log('🔍 [Configuration] Tables available:', {
+      source: !!w.tableSource,
+      object: !!w.tableObject,
+      opticalSystem: !!w.tableOpticalSystem
+    });
+
+    await loadActiveConfigurationToTables({ applyToUI: true });
+    console.log(`✅ [Configuration] Configuration ${normalizedConfigId} loaded to tables`);
+
+    try {
+      if (typeof window !== 'undefined') {
+        if (typeof w.updateWavefrontObjectSelect === 'function') {
+          w.updateWavefrontObjectSelect();
+        }
+        if (typeof w.updatePSFObjectOptions === 'function') {
+          w.updatePSFObjectOptions();
+        } else if (typeof w.setupPSFObjectSelect === 'function') {
+          w.setupPSFObjectSelect();
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [Configuration] Failed to refresh object selects:', e);
+    }
+
+    updateConfigurationSelect();
+    updateConfigInfo();
+
+    try {
+      const spotCfg = document.getElementById('spot-diagram-config-select') as HTMLSelectElement | null;
+      if (spotCfg) {
+        const desired = String(normalizedConfigId);
+        const has = Array.from(spotCfg.options || []).some(o => String(o.value) === desired);
+        spotCfg.value = has ? desired : '';
+      }
+    } catch (_) {}
+    try { w.updateSurfaceNumberSelectLegacy(); } catch (_) {}
+    try { requestUpdateSurfaceNumberSelect(); } catch (_) {}
+
+    try {
+      if (typeof window !== 'undefined' && typeof w.updateSpotDiagramConfigSelect === 'function') {
+        w.updateSpotDiagramConfigSelect();
+      }
+    } catch (_) {}
+
+    try {
+      requestRefreshBlockInspector();
+    } catch (e) {
+      console.warn('⚠️ [Configuration] Failed to refresh Design Intent (Blocks):', e);
+    }
+
+    try {
+      const popup = w.popup3DWindow;
+      if (popup && !popup.closed && typeof popup.postMessage === 'function') {
+        popup.postMessage({ action: 'request-redraw' }, '*');
+      }
+    } catch (e) {
+      console.warn('⚠️ [Configuration] Failed to request 3D popup redraw:', e);
+    }
+  } finally {
+    isConfigurationSwitching = false;
+    try {
+      if (typeof window !== 'undefined') {
+        setTimeout(() => {
+          try { (w as any).__configurationSwitching = false; } catch (_) {}
+        }, 0);
+      }
+    } catch (_) {}
+    lastConfigSwitchTimestamp = Date.now();
+    setConfigControlsEnabled(true);
+    setupAutoSave();
+    console.log('✅ [Configuration] Config switch complete, autosave will resume after 10s');
+  }
+}
+
+function renderConfigurationOrderList(): void {
+  const container = document.getElementById('config-order-list');
+  if (!container) return;
+
+  const configList = getConfigurationList();
+  container.innerHTML = '';
+
+  const title = document.createElement('div');
+  title.className = 'config-order-list-title';
+  title.textContent = 'Drag to reorder';
+  container.appendChild(title);
+
+  if (configList.length <= 1) {
+    const empty = document.createElement('div');
+    empty.className = 'config-order-empty';
+    empty.textContent = 'Add another configuration to change the order.';
+    container.appendChild(empty);
+    return;
+  }
+
+  configList.forEach((config: any) => {
+    const row = document.createElement('div');
+    row.className = 'config-order-row';
+    row.draggable = true;
+    row.dataset.configId = String(config.id);
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    if (config.active) row.classList.add('active');
+
+    const handle = document.createElement('span');
+    handle.className = 'config-order-handle';
+    handle.textContent = '⠿';
+    handle.title = 'Drag to reorder';
+
+    const name = document.createElement('span');
+    name.className = 'config-order-name';
+    name.textContent = config.active ? `${config.name} ★` : config.name;
+
+    row.appendChild(handle);
+    row.appendChild(name);
+
+    row.addEventListener('dragstart', (event: DragEvent) => {
+      draggedConfigId = String(config.id);
+      row.classList.add('dragging');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(config.id));
+      }
+    });
+
+    row.addEventListener('dragend', () => {
+      draggedConfigId = null;
+      row.classList.remove('dragging');
+      clearConfigDropIndicator(row);
+    });
+
+    row.addEventListener('dragover', (event: DragEvent) => {
+      if (!draggedConfigId || draggedConfigId === String(config.id)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      const rect = row.getBoundingClientRect();
+      const isBefore = event.clientY < rect.top + rect.height / 2;
+      row.classList.toggle('drag-over-before', isBefore);
+      row.classList.toggle('drag-over-after', !isBefore);
+    });
+
+    row.addEventListener('dragleave', (event: DragEvent) => {
+      const related = event.relatedTarget as Node | null;
+      if (related && row.contains(related)) return;
+      clearConfigDropIndicator(row);
+    });
+
+    row.addEventListener('drop', (event: DragEvent) => {
+      if (!draggedConfigId || draggedConfigId === String(config.id)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = row.getBoundingClientRect();
+      const position: 'before' | 'after' = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+      clearConfigDropIndicator(row);
+      handleConfigurationReorder(String(config.id), position);
+    });
+
+    row.addEventListener('click', () => {
+      void activateConfiguration(String(config.id));
+    });
+
+    row.addEventListener('keydown', (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      void activateConfiguration(String(config.id));
+    });
+
+    container.appendChild(row);
+  });
 }
 
 /**
@@ -391,18 +629,15 @@ function updateConfigInfo(): void {
  * イベントリスナー設定
  */
 function setupConfigurationEventListeners(): void {
-  if (!delegatedConfigListenerInstalled) {
-    delegatedConfigListenerInstalled = true;
-    document.addEventListener('change', (event) => {
-      const target = event.target as HTMLElement | null;
-      if (target && target.id === 'config-select') {
-        handleConfigurationChange(event);
-      }
-    });
+  const globalListenersInstalled = w.__configurationDelegatedListenersInstalled === true;
+  if (globalListenersInstalled) {
+    configurationDelegatedListenersInstalled = true;
   }
 
-  if (!delegatedConfigClickListenerInstalled) {
-    delegatedConfigClickListenerInstalled = true;
+  if (!configurationDelegatedListenersInstalled) {
+    configurationDelegatedListenersInstalled = true;
+    w.__configurationDelegatedListenersInstalled = true;
+
     document.addEventListener('click', (event) => {
       const target = event.target as HTMLElement | null;
       const button = target?.closest('button');
@@ -410,15 +645,19 @@ function setupConfigurationEventListeners(): void {
 
       switch (button.id) {
         case 'add-config-btn':
+          event.preventDefault();
           handleAddConfiguration();
           break;
         case 'delete-config-btn':
+          event.preventDefault();
           handleDeleteConfiguration();
           break;
         case 'duplicate-config-btn':
+          event.preventDefault();
           handleDuplicateConfiguration();
           break;
         case 'rename-config-btn':
+          event.preventDefault();
           handleRenameConfiguration();
           break;
         default:
@@ -427,188 +666,8 @@ function setupConfigurationEventListeners(): void {
     });
   }
   
-  // Configuration選択変更
-  const select = document.getElementById('config-select');
-  if (select) {
-    // 既存のリスナーを削除してから追加（重複防止）
-    select.removeEventListener('change', handleConfigurationChange);
-    select.addEventListener('change', handleConfigurationChange);
-  }
-  
   // テーブル変更時に自動保存
   setupAutoSave();
-}
-
-/**
- * Configuration変更ハンドラー
- */
-async function handleConfigurationChange(event: Event): Promise<void> {
-  console.log('🔥 [Configuration] handleConfigurationChange triggered!', event.type);
-  
-  const target = event.target as HTMLSelectElement;
-  console.log('🔍 [Configuration] Select element value:', target.value);
-  
-  const newConfigId = String(target.value ?? '').trim();
-  const currentConfigId = getActiveConfigId();
-  
-  console.log('🔍 [Configuration] newConfigId:', newConfigId, ', currentConfigId:', currentConfigId);
-  
-  if (!newConfigId || String(newConfigId) === String(currentConfigId)) {
-    console.log('⏩ [Configuration] Same config selected, skipping');
-    return;
-  }
-
-  // Check if tables are ready before allowing config switch
-  if (!areTablesReady()) {
-    console.warn('⚠️ [Configuration] Tables not ready yet, deferring config switch...');
-    try { target.value = String(currentConfigId ?? ''); } catch (_) {}
-    // Retry after a short delay
-    setTimeout(() => {
-      if (areTablesReady()) {
-        target.value = String(newConfigId);
-        target.dispatchEvent(new Event('change'));
-      }
-    }, 500);
-    return;
-  }
-
-  // Prevent overlapping async switches which can overwrite the wrong config
-  // (rare but possible with fast UI interactions).
-  if (isConfigurationSwitching) {
-    try { target.value = String(currentConfigId ?? ''); } catch (_) {}
-    return;
-  }
-  isConfigurationSwitching = true;
-  try {
-    if (typeof window !== 'undefined') {
-      (w as any).__configurationSwitching = true;
-    }
-  } catch (_) {}
-  stopAutoSave();
-  setConfigControlsEnabled(false);
-  
-  console.log(`🔄 [Configuration] Switching from ${currentConfigId} to ${newConfigId}...`);
-  
-  // 現在の編集内容を保存
-  console.log(`💾 [Configuration] Saving current config ${currentConfigId} before switch...`);
-  saveCurrentToActiveConfiguration();
-  console.log(`✅ [Configuration] Current config saved`);
-
-  try {
-    // 新しいConfigurationに切り替え
-    setActiveConfiguration(newConfigId);
-    
-    // CRITICAL: Validate target config has valid data before loading
-    const targetConfig = getActiveConfiguration();
-    if (!targetConfig) {
-      throw new Error(`Target configuration ${newConfigId} not found`);
-    }
-    
-    const hasValidObject = Array.isArray(targetConfig.object) && targetConfig.object.length > 0;
-    const hasValidOptical = Array.isArray(targetConfig.opticalSystem) && targetConfig.opticalSystem.length > 0;
-    const hasValidBlocks = Array.isArray(targetConfig.blocks) && targetConfig.blocks.length > 0;
-    
-    if (!hasValidObject) {
-      console.warn(`⚠️ [Configuration] Target config ${targetConfig.name} has no Object data`);
-    }
-    
-    if (!hasValidOptical && !hasValidBlocks) {
-      console.warn(`⚠️ [Configuration] Target config ${targetConfig.name} has no Optical System or Blocks data`);
-    }
-    
-    console.log(`🔄 [Configuration] Loading configuration ${newConfigId} "${targetConfig.name}" to tables...`);
-    console.log(`🔍 [Configuration] Target config data:`, {
-      hasObject: hasValidObject,
-      objectCount: targetConfig.object?.length || 0,
-      hasOptical: hasValidOptical,
-      opticalCount: targetConfig.opticalSystem?.length || 0,
-      hasBlocks: hasValidBlocks,
-      blocksCount: targetConfig.blocks?.length || 0
-    });
-    console.log(`🔍 [Configuration] Tables available:`, {
-      source: !!w.tableSource,
-      object: !!w.tableObject,
-      opticalSystem: !!w.tableOpticalSystem
-    });
-    
-    // 新しいConfigurationのデータをロード
-    await loadActiveConfigurationToTables({ applyToUI: true });
-    
-    console.log(`✅ [Configuration] Configuration ${newConfigId} loaded to tables`);
-
-  // Config切替後、Objectリストを即時反映（PSF/Wavefront）
-  try {
-    if (typeof window !== 'undefined') {
-      if (typeof w.updateWavefrontObjectSelect === 'function') {
-        w.updateWavefrontObjectSelect();
-      }
-      if (typeof w.updatePSFObjectOptions === 'function') {
-        w.updatePSFObjectOptions();
-      } else if (typeof w.setupPSFObjectSelect === 'function') {
-        w.setupPSFObjectSelect();
-      }
-    }
-  } catch (e) {
-    console.warn('⚠️ [Configuration] Failed to refresh object selects:', e);
-  }
-
-  // UI表示を更新
-  updateConfigurationSelect();
-  updateConfigInfo();
-
-  // Sync Spot Diagram config selection with active config and refresh surface list.
-  try {
-    const spotCfg = document.getElementById('spot-diagram-config-select') as HTMLSelectElement | null;
-    if (spotCfg) {
-      const desired = String(newConfigId);
-      const has = Array.from(spotCfg.options || []).some(o => String(o.value) === desired);
-      spotCfg.value = has ? desired : '';
-    }
-  } catch (_) {}
-  try { w.updateSurfaceNumberSelectLegacy(); } catch (_) {}
-  try { requestUpdateSurfaceNumberSelect(); } catch (_) {}
-
-  // Spot Diagram config selector may exist and should mirror available configs.
-  try {
-    if (typeof window !== 'undefined' && typeof w.updateSpotDiagramConfigSelect === 'function') {
-      w.updateSpotDiagramConfigSelect();
-    }
-  } catch (_) {}
-
-  // Design Intent (Blocks) 表示を更新
-  try {
-    requestRefreshBlockInspector();
-  } catch (e) {
-    console.warn('⚠️ [Configuration] Failed to refresh Design Intent (Blocks):', e);
-  }
-
-  // Render Optical System (3D popup) を自動再描画
-  try {
-    const popup = w.popup3DWindow;
-    if (popup && !popup.closed && typeof popup.postMessage === 'function') {
-      popup.postMessage({ action: 'request-redraw' }, '*');
-    }
-  } catch (e) {
-    console.warn('⚠️ [Configuration] Failed to request 3D popup redraw:', e);
-  }
-
-  } finally {
-    // Switching guard解除 + autosave再開
-    // Release immediately to allow next config switch
-    isConfigurationSwitching = false;
-    // Evaluation can fire immediately due to Tabulator events; keep the global flag true until next tick.
-    try {
-      if (typeof window !== 'undefined') {
-        setTimeout(() => {
-          try { (w as any).__configurationSwitching = false; } catch (_) {}
-        }, 0);
-      }
-    } catch (_) {}
-    lastConfigSwitchTimestamp = Date.now();  // Record switch completion time
-    setConfigControlsEnabled(true);
-    setupAutoSave();
-    console.log('✅ [Configuration] Config switch complete, autosave will resume after 10s');
-  }
 }
 
 /**
@@ -728,18 +787,29 @@ function handleRenameConfiguration(): void {
 function setupAutoSave(): void {
   // 既存のテーブルにイベントリスナーを追加
   // 各テーブルが変更されたときに、アクティブなConfigurationに自動保存
-  
+
+  const globalIntervalId = Number(w.__configurationAutoSaveIntervalId);
+  if (Number.isFinite(globalIntervalId) && globalIntervalId !== 0) {
+    autoSaveIntervalId = globalIntervalId;
+  }
+
   // 定期的に自動保存（5秒ごと）
   if (autoSaveIntervalId === null) {
     autoSaveIntervalId = window.setInterval(() => {
       if (shouldSkipAutoSave()) return;
       saveCurrentToActiveConfiguration();
     }, 5000);
+    w.__configurationAutoSaveIntervalId = autoSaveIntervalId;
   }
-  
+
+  if (w.__configurationBeforeUnloadHandlerInstalled === true) {
+    beforeUnloadHandlerInstalled = true;
+  }
+
   // ページ離脱時に保存
   if (!beforeUnloadHandlerInstalled) {
     beforeUnloadHandlerInstalled = true;
+    w.__configurationBeforeUnloadHandlerInstalled = true;
     window.addEventListener('beforeunload', () => {
       if (shouldSkipAutoSave()) return;
       saveCurrentToActiveConfiguration();

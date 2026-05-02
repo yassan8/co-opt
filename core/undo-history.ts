@@ -395,6 +395,104 @@ export class SetRequirementEnabledBulkCommand extends Command {
 }
 
 /**
+ * Command for reordering requirements in a single undo step
+ */
+export class ReorderRequirementsCommand extends Command {
+  beforeRows: any[];
+  afterRows: any[];
+
+  constructor(beforeRows: any[], afterRows: any[]) {
+    super('Reorder requirements');
+    this.beforeRows = Array.isArray(beforeRows) ? JSON.parse(JSON.stringify(beforeRows)) : [];
+    this.afterRows = Array.isArray(afterRows) ? JSON.parse(JSON.stringify(afterRows)) : [];
+  }
+
+  execute(): void {
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
+    try {
+      saveSystemRequirementsTableData(JSON.parse(JSON.stringify(this.afterRows)) as any);
+      this.refreshUI();
+    } finally {
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
+    }
+  }
+
+  undo(): void {
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
+    try {
+      saveSystemRequirementsTableData(JSON.parse(JSON.stringify(this.beforeRows)) as any);
+      this.refreshUI();
+    } finally {
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
+    }
+  }
+
+  refreshUI(): void {
+    if (w.systemRequirementsEditor) {
+      w.systemRequirementsEditor.loadFromStorage();
+      w.systemRequirementsEditor.renderTable();
+      if (typeof w.systemRequirementsEditor.syncRequirementsToSystemConfigFromStorage === 'function') {
+        w.systemRequirementsEditor.syncRequirementsToSystemConfigFromStorage();
+      }
+      if (typeof w.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+        w.systemRequirementsEditor.scheduleEvaluateAndUpdate();
+      }
+    }
+  }
+}
+
+export class ReorderTableRowsCommand extends Command {
+  tableType: 'source' | 'object';
+  beforeRows: any[];
+  afterRows: any[];
+
+  constructor(tableType: 'source' | 'object', beforeRows: any[], afterRows: any[]) {
+    super(`Reorder ${tableType} rows`);
+    this.tableType = tableType;
+    this.beforeRows = Array.isArray(beforeRows) ? JSON.parse(JSON.stringify(beforeRows)) : [];
+    this.afterRows = Array.isArray(afterRows) ? JSON.parse(JSON.stringify(afterRows)) : [];
+  }
+
+  execute(): void {
+    this.applyRows(this.afterRows);
+  }
+
+  undo(): void {
+    this.applyRows(this.beforeRows);
+  }
+
+  private applyRows(rows: any[]): void {
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
+    try {
+      const snapshot = Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+      if (this.tableType === 'source') {
+        saveSourceTableData(snapshot as any);
+      } else {
+        saveObjectTableData(snapshot as any);
+      }
+      this.refreshUI();
+    } finally {
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
+    }
+  }
+
+  private refreshUI(): void {
+    if (this.tableType === 'source') {
+      if (w.tableSource && typeof w.loadSourceTableData === 'function' && typeof w.tableSource.replaceData === 'function') {
+        const data = w.loadSourceTableData();
+        w.tableSource.replaceData(data);
+      }
+      return;
+    }
+
+    if (w.tableObject && typeof w.loadObjectTableData === 'function' && typeof w.tableObject.replaceData === 'function') {
+      const data = w.loadObjectTableData();
+      w.tableObject.replaceData(data);
+    }
+  }
+}
+
+/**
  * Command for setting Design Intent parameter/aperture optimize mode in bulk
  */
 export class SetDesignIntentOptimizeBulkCommand extends Command {
@@ -1180,6 +1278,8 @@ if (typeof window !== 'undefined') {
   w.SetSurfaceFieldCommand = SetSurfaceFieldCommand;
   w.SetRequirementCommand = SetRequirementCommand;
   w.SetRequirementEnabledBulkCommand = SetRequirementEnabledBulkCommand;
+  w.ReorderRequirementsCommand = ReorderRequirementsCommand;
+  w.ReorderTableRowsCommand = ReorderTableRowsCommand;
   w.SetDesignIntentOptimizeBulkCommand = SetDesignIntentOptimizeBulkCommand;
   w.SetSourceFieldCommand = SetSourceFieldCommand;
   w.SetObjectFieldCommand = SetObjectFieldCommand;

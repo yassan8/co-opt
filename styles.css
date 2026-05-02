@@ -597,27 +597,72 @@ h3 {
     margin-top: 10px;
 }
 
-#config-select {
-    flex: 0 0 200px;
-    width: 200px;
-    padding: 6px 12px;
-    font-size: 13px;
-    border: 1px solid #d6deea;
-    border-radius: 8px;
-    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-    color: #24292f;
-    height: 34px;
-    min-width: 200px;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-}
-
-#config-select option.active-config {
-    font-weight: bold;
-    background-color: #e7f3ff;
-}
-
 .configuration-controls button {
     white-space: nowrap;
+}
+
+.config-order-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.config-order-list-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #57606a;
+}
+
+.config-order-empty {
+    font-size: 12px;
+    color: #57606a;
+}
+
+.config-order-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 6px 10px;
+    border: 1px solid #d6deea;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #24292f;
+    cursor: grab;
+    user-select: none;
+}
+
+.config-order-row.active {
+    border-color: #93c5fd;
+    background: #eff6ff;
+}
+
+.config-order-row.dragging {
+    opacity: 0.55;
+    cursor: grabbing;
+}
+
+.config-order-row.drag-over-before {
+    box-shadow: inset 0 2px 0 #2563eb;
+}
+
+.config-order-row.drag-over-after {
+    box-shadow: inset 0 -2px 0 #2563eb;
+}
+
+.config-order-handle {
+    font-size: 12px;
+    color: #57606a;
+}
+
+.config-order-name {
+    font-size: 13px;
+    font-weight: 500;
 }
 
 #design-intent-add-block-type {
@@ -4032,6 +4077,19 @@ h4 {
     background-color: #f6f8fa;
 }
 
+.glass-search-drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    color: #6b7280;
+    user-select: none;
+}
+
+.glass-search-table tr.dragging {
+    opacity: 0.65;
+}
+
 .glass-search-table tr.selected {
     background: #cfe2ff;
 }
@@ -4665,6 +4723,31 @@ body.dark-mode .config-info strong {
     color: var(--text-primary);
 }
 
+body.dark-mode .config-order-list {
+    background: var(--bg-secondary);
+    border-color: var(--border-color);
+}
+
+body.dark-mode .config-order-list-title,
+body.dark-mode .config-order-empty {
+    color: var(--text-secondary);
+}
+
+body.dark-mode .config-order-row {
+    background: var(--bg-primary);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+body.dark-mode .config-order-row.active {
+    border-color: #60a5fa;
+    background: rgba(96, 165, 250, 0.16);
+}
+
+body.dark-mode .config-order-handle {
+    color: var(--text-secondary);
+}
+
 body.dark-mode .block-inspector-row:hover {
     border-left-color: #94a3b8 !important;
 }
@@ -4930,6 +5013,10 @@ body.dark-mode .glass-search-table tr.selected {
     background-color: var(--bg-tertiary) !important;
 }
 
+body.dark-mode .glass-search-drag-handle {
+    color: var(--text-secondary);
+}
+
 /* Design Intent section */
 body.dark-mode #design-intent-container,
 body.dark-mode .design-intent-section {
@@ -5080,23 +5167,6 @@ body.dark-mode #analysis-select {
 
 body.dark-mode #analysis-select option {
     background-color: var(--bg-input);
-    color: var(--text-primary);
-}
-
-/* Configuration controls */
-body.dark-mode #config-select {
-    background-color: var(--bg-input);
-    color: var(--text-primary);
-    border-color: var(--border-color);
-}
-
-body.dark-mode #config-select option {
-    background-color: var(--bg-input);
-    color: var(--text-primary);
-}
-
-body.dark-mode #config-select option.active-config {
-    background-color: var(--bg-hover);
     color: var(--text-primary);
 }
 

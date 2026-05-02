@@ -2550,16 +2550,16 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 }
             } catch (_) {}
             
-            // Wait for config-select element to be available, then initialize Configuration UI
-            const waitForConfigSelect = () => {
-                const selectElement = document.getElementById('config-select');
-                if (selectElement && typeof w.initializeConfigurationUI === 'function') {
+            // Wait for configuration UI anchor to be available, then initialize Configuration UI
+            const waitForConfigurationUI = () => {
+                const configListElement = document.getElementById('config-order-list');
+                if (configListElement && typeof w.initializeConfigurationUI === 'function') {
                     w.initializeConfigurationUI();
                 } else {
-                    setTimeout(waitForConfigSelect, 100);
+                    setTimeout(waitForConfigurationUI, 100);
                 }
             };
-            waitForConfigSelect();
+            waitForConfigurationUI();
         }, 0);
     } catch (_) {}
 

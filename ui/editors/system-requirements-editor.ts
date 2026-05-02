@@ -436,7 +436,7 @@ class SystemRequirementsEditor {
 
     // Sticky (left) columns
     const widths = {
-      id: 30,
+      id: 48,
       enabled: 60,
       operand: 200,
       spec: 88,
@@ -491,6 +491,58 @@ class SystemRequirementsEditor {
 
     const onCellFocus = (): void => setEditing(true);
     const onCellBlur = (): void => setEditing(false);
+    let draggedRequirementId: string | null = null;
+
+    const clearRequirementDropIndicator = (rowEl: HTMLTableRowElement | null): void => {
+      if (!rowEl) return;
+      rowEl.style.boxShadow = '';
+    };
+
+    const moveRequirementRow = (fromId: string, toId: string, position: 'before' | 'after'): void => {
+      const beforeRows = (() => {
+        try {
+          const rows = loadSystemRequirementsTableData();
+          return Array.isArray(rows) && rows.length > 0
+            ? JSON.parse(JSON.stringify(rows))
+            : JSON.parse(JSON.stringify(this.requirements || []));
+        } catch (_) {
+          return [];
+        }
+      })();
+
+      if (!Array.isArray(beforeRows) || beforeRows.length < 2) return;
+
+      const fromIndex = beforeRows.findIndex((entry: any) => String(entry?.id) === String(fromId));
+      const toIndex = beforeRows.findIndex((entry: any) => String(entry?.id) === String(toId));
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+      const afterRows = beforeRows.slice();
+      const [movedRow] = afterRows.splice(fromIndex, 1);
+      if (!movedRow) return;
+
+      let insertIndex = toIndex;
+      if (position === 'after') insertIndex += 1;
+      if (fromIndex < insertIndex) insertIndex -= 1;
+      insertIndex = Math.max(0, Math.min(afterRows.length, insertIndex));
+
+      afterRows.splice(insertIndex, 0, movedRow);
+      afterRows.forEach((entry: any, index: number) => {
+        if (entry && typeof entry === 'object') entry.id = index + 1;
+      });
+
+      try {
+        if (w.undoHistory && w.ReorderRequirementsCommand && !w.undoHistory.isExecuting) {
+          const command = new w.ReorderRequirementsCommand(beforeRows, afterRows);
+          w.undoHistory.record(command);
+        }
+      } catch (_) {}
+
+      this.persistRequirementsRows(afterRows);
+      this.loadFromStorage();
+      this._selectedId = insertIndex + 1;
+      this.renderTable();
+      this.scheduleEvaluateAndUpdate();
+    };
 
     const formatCurrentCell = (v: any): string => {
       if (v === null || v === undefined) return '';
@@ -576,9 +628,79 @@ class SystemRequirementsEditor {
       // Sticky cells
       let leftPx = 0;
       const tdId = mkTd(widths.id, leftPx);
-      tdId.textContent = String(row.id);
+      const idWrap = document.createElement('div');
+      idWrap.style.display = 'flex';
+      idWrap.style.alignItems = 'center';
+      idWrap.style.gap = '4px';
+
+      const dragHandle = document.createElement('span');
+      dragHandle.textContent = '⠿';
+      dragHandle.title = 'Drag to reorder';
+      dragHandle.style.cursor = 'grab';
+      dragHandle.style.fontSize = '12px';
+      dragHandle.style.color = '#666';
+      dragHandle.draggable = this.requirements.length > 1;
+
+      const idLabel = document.createElement('span');
+      idLabel.textContent = String(row.id);
+
+      idWrap.appendChild(dragHandle);
+      idWrap.appendChild(idLabel);
+      tdId.appendChild(idWrap);
       tr.appendChild(tdId);
       leftPx += widths.id;
+
+      if (this.requirements.length > 1) {
+        dragHandle.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+
+        dragHandle.addEventListener('dragstart', (e: DragEvent) => {
+          draggedRequirementId = String(row.id);
+          tr.classList.add('dragging');
+          dragHandle.style.cursor = 'grabbing';
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', String(row.id));
+          }
+          e.stopPropagation();
+        });
+
+        dragHandle.addEventListener('dragend', () => {
+          draggedRequirementId = null;
+          tr.classList.remove('dragging');
+          dragHandle.style.cursor = 'grab';
+          clearRequirementDropIndicator(tr);
+        });
+
+        tr.addEventListener('dragover', (e: DragEvent) => {
+          if (!draggedRequirementId || draggedRequirementId === String(row.id)) return;
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+          const rect = tr.getBoundingClientRect();
+          const isBefore = e.clientY < rect.top + rect.height / 2;
+          tr.style.boxShadow = isBefore
+            ? 'inset 0 2px 0 #2563eb'
+            : 'inset 0 -2px 0 #2563eb';
+        });
+
+        tr.addEventListener('dragleave', (e: DragEvent) => {
+          const related = e.relatedTarget as Node | null;
+          if (related && tr.contains(related)) return;
+          clearRequirementDropIndicator(tr);
+        });
+
+        tr.addEventListener('drop', (e: DragEvent) => {
+          if (!draggedRequirementId || draggedRequirementId === String(row.id)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const rect = tr.getBoundingClientRect();
+          const position: 'before' | 'after' = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+          clearRequirementDropIndicator(tr);
+          moveRequirementRow(draggedRequirementId, String(row.id), position);
+        });
+      }
 
       const tdOn = mkTd(widths.enabled, leftPx);
       const onCb = document.createElement('input');
