@@ -1079,6 +1079,19 @@ function __zmxGetMaxPositiveSemidiaMmFromRows(rows: any[]): number | null {
     return max > 0 ? max : null;
 }
 
+function __cooptGetMaxImageHeightTargetMmFromObjectRows(objectRows: any[]): number | null {
+    if (!Array.isArray(objectRows) || objectRows.length === 0) return null;
+    let maxTarget = 0;
+    for (const row of objectRows) {
+        const posNorm = String(row?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+        if (posNorm !== 'imageheight') continue;
+        const x = Math.abs(Number(row?.xHeightAngle) || 0);
+        const y = Math.abs(Number(row?.yHeightAngle) || 0);
+        maxTarget = Math.max(maxTarget, x, y);
+    }
+    return maxTarget > 0 ? maxTarget : null;
+}
+
 function __zmxGetStopRadiusMmFromRows(rows: any[]): number | null {
     for (const r of rows) {
         const ot = String(r?.['object type'] ?? r?.object ?? '').toLowerCase();
@@ -6378,6 +6391,14 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     }
 
     cooptSetNestedValue(block, path, newValue);
+    if (String(block?.blockType ?? '').trim() === 'ImageSurface' && String(path) === 'parameters.semidia') {
+        const semidiaText = String(newValue ?? '').trim().toLowerCase();
+        if (semidiaText !== '' && semidiaText !== 'auto') {
+            if (!block.parameters || typeof block.parameters !== 'object') block.parameters = {};
+            block.parameters.semidiaMode = 'Manual';
+            block.parameters.optimizeSemiDia = '';
+        }
+    }
     if (String(block?.blockType ?? '').trim() === 'Paraxial' && /^aperture\./.test(String(path))) {
         if (!block.aperture || typeof block.aperture !== 'object') block.aperture = {};
         const apertureKey = String(path).slice('aperture.'.length).trim();
@@ -7319,6 +7340,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     container.innerHTML = '';
     syncDesignIntentQuickEditorToggle();
     const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
+    const maxImageHeightTargetMm = __cooptGetMaxImageHeightTargetMmFromObjectRows(Array.isArray(activeCfg?.object) ? activeCfg.object : []);
 
     // Show error banner if scope errors exist
     try {
@@ -8021,6 +8043,22 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             appendTextField('SD', 'aperture.semidia', aperture.semidia, 54);
         } else if (blockType === 'ImageSurface') {
             appendTextField('SD', 'parameters.semidia', params.semidia, 54);
+            const semidiaValue = Number(params?.semidia);
+            if (Number.isFinite(semidiaValue) && semidiaValue > 0 && Number.isFinite(maxImageHeightTargetMm) && Number(maxImageHeightTargetMm) - semidiaValue > 1e-6) {
+                const isDarkMode = document.body.classList.contains('dark-mode');
+                const warning = document.createElement('div');
+                warning.style.flexBasis = '100%';
+                warning.style.marginTop = '6px';
+                warning.style.padding = '6px 8px';
+                warning.style.borderRadius = '6px';
+                warning.style.border = '1px solid #f5c2c7';
+                warning.style.background = isDarkMode ? '#3b0d0f' : '#fff1f2';
+                warning.style.color = isDarkMode ? '#fecdd3' : '#9f1239';
+                warning.style.fontSize = '11px';
+                warning.style.lineHeight = '1.35';
+                warning.textContent = `Warning: semidia ${semidiaValue.toFixed(2)} mm is smaller than max Image Height ${Number(maxImageHeightTargetMm).toFixed(2)} mm.`;
+                root.appendChild(warning);
+            }
         } else {
             return null;
         }

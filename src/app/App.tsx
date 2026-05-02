@@ -32,6 +32,7 @@ import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
 import { calculateSurfaceOrigins, transformPointToLocal } from "../../raytracing/core/ray-tracing.ts";
 import { calculateParaxialData } from "../../raytracing/core/ray-paraxial.ts";
+import { convertImageHeightToEffectiveObject } from "../../optical/ray-renderer.ts";
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
@@ -93,6 +94,14 @@ type RenderTimingStage = {
 
 type CollectLegacyCrossRaysOptions = {
   rayCountOverride?: number;
+};
+
+type RenderImageSemidiaWarning = {
+  imageSurfaceIndex: number;
+  semidia: number;
+  maxTargetHeight: number;
+  shortfall: number;
+  message: string;
 };
 
 type CooptPerfCounter = {
@@ -176,6 +185,17 @@ const RENDER_3D_SURFACE_MESH_SEGMENTS = 64;
 const RENDER_3D_TORIC_MESH_SEGMENTS = 96;
 const RENDER_IMAGEHEIGHT_APPROX_CACHE_LIMIT = 512;
 
+const RENDER_AUTO_APERTURE_MARGIN_FACTOR = 1.10;
+const RENDER_AUTO_APERTURE_MARGIN_MM = 0.05;
+
+function applyRenderAutoApertureMargin(radiusMm: number): number {
+  const radius = Number(radiusMm);
+  if (!(Number.isFinite(radius) && radius > 0)) return radius;
+  return Math.max(
+    radius * RENDER_AUTO_APERTURE_MARGIN_FACTOR,
+    radius + RENDER_AUTO_APERTURE_MARGIN_MM,
+  );
+}
 const renderRowsSignatureCache = new WeakMap<any[], string>();
 const renderImageHeightApproxCache = new Map<string, any>();
 const renderParaxialDataCache = new Map<string, any>();
@@ -274,7 +294,52 @@ function approximateRenderImageHeightRow(
     __cooptOriginalPosition: row?.__cooptOriginalPosition ?? row?.position,
     __cooptImageHeightTarget: { x: target.x, y: target.y },
     __cooptRenderApproxImageHeight: true,
+    __cooptRenderApproxDebug: {
+      objectIndex: index,
+      sourcePosition: row?.position ?? null,
+      targetX: target.x,
+      targetY: target.y,
+      conjugateType,
+      wavelengthUm,
+    },
   };
+
+  try {
+    const solvedRow = convertImageHeightToEffectiveObject(
+      {
+        ...row,
+        xHeightAngle: target.x,
+        yHeightAngle: target.y,
+        __cooptImageHeightTarget: { x: target.x, y: target.y },
+      },
+      opticalSystemRows,
+      wavelengthUm,
+      conjugateType,
+    );
+    const solvedPosition = String(solvedRow?.position ?? '').trim();
+    const solvedX = Number(solvedRow?.xHeightAngle);
+    const solvedY = Number(solvedRow?.yHeightAngle);
+    if ((solvedPosition === 'Angle' || solvedPosition === 'Rectangle') && Number.isFinite(solvedX) && Number.isFinite(solvedY)) {
+      approximatedRow = {
+        ...approximatedRow,
+        ...solvedRow,
+        __cooptOriginalPosition: row?.__cooptOriginalPosition ?? row?.position,
+        __cooptImageHeightTarget: { x: target.x, y: target.y },
+        __cooptRenderApproxImageHeight: true,
+        __cooptRenderApproxDebug: {
+          ...approximatedRow.__cooptRenderApproxDebug,
+          approxPosition: solvedPosition,
+          approxX: solvedX,
+          approxY: solvedY,
+          solveMode: String(solvedRow?.__cooptImageHeightSolve?.mode ?? 'exact'),
+          exactSolve: true,
+        },
+      };
+      renderImageHeightApproxCache.set(cacheKey, approximatedRow);
+      clampRenderCacheSize(renderImageHeightApproxCache);
+      return { ...approximatedRow };
+    }
+  } catch (_) {}
 
   if (conjugateType === 'infinite') {
     const focalLength = Number(paraxial?.focalLength);
@@ -284,6 +349,13 @@ function approximateRenderImageHeightRow(
         position: 'Angle',
         xHeightAngle: Math.atan2(target.x, focalLength) * 180 / Math.PI,
         yHeightAngle: Math.atan2(target.y, focalLength) * 180 / Math.PI,
+        __cooptRenderApproxDebug: {
+          ...approximatedRow.__cooptRenderApproxDebug,
+          approxPosition: 'Angle',
+          approxX: Math.atan2(target.x, focalLength) * 180 / Math.PI,
+          approxY: Math.atan2(target.y, focalLength) * 180 / Math.PI,
+          focalLength,
+        },
       };
     }
   } else {
@@ -300,12 +372,90 @@ function approximateRenderImageHeightRow(
       position: 'Rectangle',
       xHeightAngle: target.x * scale,
       yHeightAngle: target.y * scale,
+      __cooptRenderApproxDebug: {
+        ...approximatedRow.__cooptRenderApproxDebug,
+        approxPosition: 'Rectangle',
+        approxX: target.x * scale,
+        approxY: target.y * scale,
+        imageDistance,
+        objectDistance,
+        magnification,
+        scale,
+      },
     };
   }
 
   renderImageHeightApproxCache.set(cacheKey, approximatedRow);
   clampRenderCacheSize(renderImageHeightApproxCache);
   return { ...approximatedRow };
+}
+
+function readRenderSurfaceSemidiaMm(surface: any): number | null {
+  const candidates: Array<{ value: any; isDiameter: boolean }> = [
+    { value: surface?.__cooptActualSemidia, isDiameter: false },
+    { value: surface?.semidia, isDiameter: false },
+    { value: surface?.semiDiameter, isDiameter: false },
+    { value: surface?.['Semi Diameter'], isDiameter: false },
+    { value: surface?.['semi diameter'], isDiameter: false },
+    { value: surface?.diameter, isDiameter: true },
+  ];
+  for (const candidate of candidates) {
+    const parsed = Number(candidate.value);
+    if (!Number.isFinite(parsed) || parsed <= 0) continue;
+    return candidate.isDiameter ? parsed * 0.5 : parsed;
+  }
+  return null;
+}
+
+function getMaxRenderImageHeightTargetMm(objectRows: any[]): number | null {
+  if (!Array.isArray(objectRows) || objectRows.length === 0) return null;
+  let maxTarget = 0;
+  for (const row of objectRows) {
+    const target = getRenderImageHeightTarget(row);
+    if (!target) continue;
+    const candidate = Math.max(Math.abs(Number(target.x) || 0), Math.abs(Number(target.y) || 0));
+    if (Number.isFinite(candidate)) maxTarget = Math.max(maxTarget, candidate);
+  }
+  return maxTarget > 0 ? maxTarget : null;
+}
+
+function getRenderImageSemidiaWarning(opticalSystemRows: any[], objectRows: any[]): RenderImageSemidiaWarning | null {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return null;
+  const maxTargetHeight = getMaxRenderImageHeightTargetMm(objectRows);
+  if (!(Number.isFinite(maxTargetHeight) && maxTargetHeight > 0)) return null;
+  const imageSurfaceIndex = opticalSystemRows.findIndex((row: any) => {
+    const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+    const normalized = String(raw ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    return normalized === 'image' || normalized.startsWith('image');
+  });
+  if (imageSurfaceIndex < 0) return null;
+  const semidia = readRenderSurfaceSemidiaMm(opticalSystemRows[imageSurfaceIndex]);
+  if (!(Number.isFinite(semidia) && semidia > 0)) return null;
+  const shortfall = Number(maxTargetHeight) - Number(semidia);
+  if (!(Number.isFinite(shortfall) && shortfall > 1e-6)) return null;
+  return {
+    imageSurfaceIndex,
+    semidia: Number(semidia),
+    maxTargetHeight: Number(maxTargetHeight),
+    shortfall,
+    message: `Warning: Image semidia ${Number(semidia).toFixed(2)} < max Image Height ${Number(maxTargetHeight).toFixed(2)}`,
+  };
+}
+
+function applyRenderImageSemidiaWarning(rows: any[], warning: RenderImageSemidiaWarning | null): any[] {
+  if (!warning || !Array.isArray(rows) || rows.length === 0) return rows;
+  if (!Number.isInteger(warning.imageSurfaceIndex) || warning.imageSurfaceIndex < 0 || warning.imageSurfaceIndex >= rows.length) return rows;
+  const nextRows = rows.slice();
+  nextRows[warning.imageSurfaceIndex] = {
+    ...(rows[warning.imageSurfaceIndex] || {}),
+    __cooptRenderImageSemidiaWarning: warning,
+  };
+  return nextRows;
+}
+
+function formatRenderWindowStatus(baseStatus: string, warning: RenderImageSemidiaWarning | null): string {
+  if (!warning) return baseStatus;
+  return `${baseStatus} | ${warning.message}`;
 }
 
 function readCooptPerfCounters(): Record<string, CooptPerfCounter> {
@@ -904,6 +1054,7 @@ export default function App() {
   const renderViewModeRef = useRef<'3D' | 'XZ' | 'YZ'>('3D');
   const renderViewAxisRef = useRef<'YZ' | 'XZ'>('YZ');
   const renderRedrawInFlightRef = useRef(false);
+  const renderImageSemidiaWarningRef = useRef<RenderImageSemidiaWarning | null>(null);
   const renderLastTimingRef = useRef<{ mode: string; summary: string; stages: RenderTimingStage[]; blockPerf: Array<{ name: string; countDelta: number; totalMsDelta: number }> } | null>(null);
   const renderPendingRowsRef = useRef<any[] | null>(null);
   const render3DPrevRowsRef = useRef<any[] | null>(null);
@@ -3350,6 +3501,10 @@ const collectLegacyCrossRays = async (
     try {
       const scenePrepStartMs = performance.now();
       const sceneForDraw = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
+      const renderObjectRows = !compareEnabled ? getRenderObjectRows(hostWindow, rows) : [];
+      const imageSemidiaWarning = !compareEnabled ? getRenderImageSemidiaWarning(rows, renderObjectRows) : null;
+      const rowsForRender = !compareEnabled ? applyRenderImageSemidiaWarning(rows, imageSemidiaWarning) : rows;
+      renderImageSemidiaWarningRef.current = imageSemidiaWarning;
         let rayCollectMs = 0;
         let rayDrawMs = 0;
       if (sceneForDraw && typeof w.clearAllOpticalElements === 'function') {
@@ -3439,7 +3594,7 @@ const collectLegacyCrossRays = async (
           }
         } else {
           w.drawOpticalSystemSurfaces({
-            opticalSystemData: rows,
+            opticalSystemData: rowsForRender,
             scene: sceneForDraw,
             crossSectionOnly: true,
             showSurfaceOrigins: false,
@@ -3470,9 +3625,8 @@ const collectLegacyCrossRays = async (
 
       if (!compareEnabled) {
         const collectStartMs = performance.now();
-        const renderObjectRows = getRenderObjectRows(hostWindow, rows);
         const legacyCrossRays = await collectLegacyCrossRays(
-          rows,
+          rowsForRender,
           axis,
           Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined
         );
@@ -3480,7 +3634,7 @@ const collectLegacyCrossRays = async (
         try {
           const showDrawCrossCoordinateReport = (w as any).__cooptShowDrawCrossCoordinateReport;
           if (typeof showDrawCrossCoordinateReport === 'function') {
-            const imageSurfaceIndex = rows.findIndex((row: any) => {
+            const imageSurfaceIndex = rowsForRender.findIndex((row: any) => {
               const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
               const normalized = String(raw).trim().toLowerCase().replace(/[\s_-]+/g, '');
               return normalized === 'image' || normalized.startsWith('image');
@@ -3488,7 +3642,7 @@ const collectLegacyCrossRays = async (
             const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, rows.length - 1);
             showDrawCrossCoordinateReport(
               legacyCrossRays,
-              rows,
+              rowsForRender,
               Array.isArray(renderObjectRows) ? renderObjectRows : [],
               targetSurfaceIndex,
               window
@@ -3500,9 +3654,8 @@ const collectLegacyCrossRays = async (
           w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
           rayDrawMs += performance.now() - drawStartMs;
         }
-
         try {
-          applyRenderWindowDirectCrossFill(sceneForDraw, axis, rows);
+          applyRenderWindowDirectCrossFill(sceneForDraw, axis, rowsForRender);
         } catch (fillErr) {
           console.warn('[RenderWindow] Cross-section lens fill failed:', fillErr);
         }
@@ -3581,6 +3734,11 @@ const collectLegacyCrossRays = async (
         return false;
       }
 
+      const renderObjectRows = getRenderObjectRows(hostWindow, rows);
+      const imageSemidiaWarning = getRenderImageSemidiaWarning(rows, renderObjectRows);
+      const rowsForRender = applyRenderImageSemidiaWarning(rows, imageSemidiaWarning);
+      renderImageSemidiaWarningRef.current = imageSemidiaWarning;
+
       const sceneForDraw = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
       if (!sceneForDraw) {
         setRenderWindowStatus('Scene unavailable');
@@ -3599,7 +3757,7 @@ const collectLegacyCrossRays = async (
       if (isZoomPreviewActive && allowFastZoomPreview) {
         const previewStartMs = performance.now();
         try {
-          nextSurfaceOrigins = calculateSurfaceOrigins(rows);
+          nextSurfaceOrigins = calculateSurfaceOrigins(rowsForRender);
         } catch (_) {
           nextSurfaceOrigins = null;
         }
@@ -3649,14 +3807,14 @@ const collectLegacyCrossRays = async (
       if (typeof w.drawOpticalSystemSurfaces === 'function') {
         if (!Array.isArray(nextSurfaceOrigins)) {
           try {
-            nextSurfaceOrigins = calculateSurfaceOrigins(rows);
+            nextSurfaceOrigins = calculateSurfaceOrigins(rowsForRender);
           } catch (_) {
             nextSurfaceOrigins = null;
           }
         }
         const surfacesStartMs = performance.now();
         w.drawOpticalSystemSurfaces({
-          opticalSystemData: rows,
+          opticalSystemData: rowsForRender,
           surfaceOrigins: nextSurfaceOrigins,
           scene: sceneForDraw,
           crossSectionOnly: false,
@@ -3674,9 +3832,8 @@ const collectLegacyCrossRays = async (
       }
 
       const rayCollectStartMs = performance.now();
-      const renderObjectRows = getRenderObjectRows(hostWindow, rows);
       const legacyCrossRays = await collectLegacyCrossRays(
-        rows,
+        rowsForRender,
         'BOTH',
         Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined,
         useLightweightInitialRays ? { rayCountOverride: lightRayCount } : undefined
@@ -3828,7 +3985,7 @@ const collectLegacyCrossRays = async (
     try {
       (globalThis as any).__cooptLastRenderTiming = detail;
     } catch (_) {}
-    setRenderWindowStatus(baseStatus);
+    setRenderWindowStatus(formatRenderWindowStatus(baseStatus, renderImageSemidiaWarningRef.current));
   };
 
   const setRenderVisibleDebug = (_text: string) => {
@@ -4918,10 +5075,15 @@ const collectLegacyCrossRays = async (
             const chiefRays = Array.isArray(rays)
               ? rays.filter((ray: any) => {
                   const label = String(ray?.beamType ?? ray?.type ?? ray?.originalRay?.type ?? '').trim().toLowerCase();
-                  return label.includes('chief') && Array.isArray(ray?.rayPath) && ray.rayPath.length > 0;
+                  const isChiefLike = !label
+                    || label.includes('chief')
+                    || label.includes('center')
+                    || label.includes('middle');
+                  return isChiefLike && Array.isArray(ray?.rayPath) && ray.rayPath.length > 0;
                 })
               : [];
-            if (chiefRays.length === 0) return rows;
+            const candidateRays = chiefRays.length > 0 ? chiefRays : (Array.isArray(rays) ? rays : []);
+            if (candidateRays.length === 0) return rows;
 
             const isCoordTransRow = (row: any) => {
               const st = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').trim().toLowerCase();
@@ -4970,24 +5132,25 @@ const collectLegacyCrossRays = async (
             const imageSurfaceInfo = Array.isArray(surfaceInfos) ? surfaceInfos[imageSurfaceIndex] : null;
             let maxHeight = 0;
 
-            for (const ray of chiefRays) {
+            for (const ray of candidateRays) {
               const imagePoint = pickImagePointFromRay(ray);
               if (!imagePoint) continue;
               const localPoint = imageSurfaceInfo ? transformPointToLocal(imagePoint, imageSurfaceInfo) : imagePoint;
               const localX = Number(localPoint?.x);
               const localY = Number(localPoint?.y);
               if (!Number.isFinite(localX) || !Number.isFinite(localY)) continue;
-              const height = Math.sqrt(localX * localX + localY * localY);
+              const height = Math.max(Math.abs(localX), Math.abs(localY));
               if (Number.isFinite(height) && height > maxHeight) {
                 maxHeight = height;
               }
             }
 
             if (maxHeight > 0) {
+              const resolvedSemidia = applyRenderAutoApertureMargin(maxHeight);
               rows[imageSurfaceIndex] = {
                 ...rows[imageSurfaceIndex],
-                semidia: maxHeight,
-                __cooptActualSemidia: maxHeight,
+                semidia: resolvedSemidia,
+                __cooptActualSemidia: resolvedSemidia,
               };
             }
           } catch (_) {}

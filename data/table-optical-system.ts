@@ -1782,6 +1782,18 @@ tableOpticalSystem.on("cellEdited", function(cell){
     const rowIndex = allData.findIndex(data => data.id === rowData.id);
     
     console.log(`🔧 Cell edited: field=${field}, rowIndex=${rowIndex}, surfId=${rowData.id}, value=${value}`);
+
+    try {
+      const isImageRow = rowData && (rowData['object type'] === 'Image' || rowData.object === 'Image');
+      const semidiaText = String(value ?? '').trim().toLowerCase();
+      if (field === 'semidia' && isImageRow && semidiaText !== '' && semidiaText !== 'auto') {
+        const rid = (typeof rowData.id === 'number') ? rowData.id : Number(rowData.id);
+        if (Number.isFinite(rid) && String(rowData.optimizeSemiDia ?? '').trim() !== '') {
+          tableOpticalSystem.updateRow(rid, { optimizeSemiDia: '' });
+          rowData.optimizeSemiDia = '';
+        }
+      }
+    } catch (_) {}
     
     // optimizeSemiDia フィールドで Auto が選択された場合、主光線追跡を実行
     if (field === "optimizeSemiDia" && (value === "A" || value === "a" || value === "Auto")) {

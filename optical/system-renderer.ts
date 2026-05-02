@@ -298,6 +298,12 @@ function __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMa
     drawSemidiaRingWithOriginAndSurface(scene, semidia, 100, color, origin, rotationMatrix, surface);
 }
 
+function __coopt_getImageSemidiaWarningColor(surface, fallbackColor) {
+    const shortfall = Number(surface?.__cooptRenderImageSemidiaWarning?.shortfall);
+    if (Number.isFinite(shortfall) && shortfall > 1e-6) return 0xd92d20;
+    return fallbackColor;
+}
+
 function __coopt_withSurfaceRenderMeta(surface, surfaceIndex0) {
     if (!surface || typeof surface !== 'object') return surface;
     return {
@@ -2244,13 +2250,14 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                         }
                         
                         // Image 面のリングは表示する。近傍の重複だけ後段で整理する。
+                        const imageRingColor = __coopt_getImageSemidiaWarningColor(renderSurfaceMeta, 0x404040);
                         __coopt_drawApertureOutline(
                             scene,
                             renderSurfaceMeta,
                             planeSemidia,
                             imgOrigin,
                             imgRotMat,
-                            0x404040
+                            imageRingColor
                         );
                         
                         const { halfX: crossHalfX, halfY: crossHalfY } = __coopt_getCrosshairHalfExtents(surface, planeSemidia);
