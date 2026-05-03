@@ -70,6 +70,22 @@
     // Note: Modern browsers may ignore custom beforeunload text; popstate uses confirm().
     (() => {
       if (globalThis.__cooptBackWarningInstalled) return;
+
+      const isMainWindowContext = (() => {
+        try {
+          const url = new URL(window.location.href);
+          return ![
+            'coopt_render_window',
+            'coopt_analysis_window',
+            'coopt_optimize_window',
+            'coopt_settings_window'
+          ].some((key) => url.searchParams.get(key) === '1');
+        } catch (_) {
+          return true;
+        }
+      })();
+      if (!isMainWindowContext) return;
+
       globalThis.__cooptBackWarningInstalled = true;
 
       const message = 'Leave this page? Unsaved changes may be lost.';

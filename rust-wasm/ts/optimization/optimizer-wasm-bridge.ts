@@ -839,8 +839,13 @@ export function optimizeSystemOneIterationWasm(payload: {
         const hVec = asFiniteFloat64Vector(payload.steps, n);
         const r0Vec = asFiniteFloat64Vector(payload.residual0, m);
         const rbVec = asFiniteColMajorResidualBatch(payload.residualsPerturbed, m, n);
+        const payloadVarScales = ((Array.isArray(payload.varScales) || ArrayBuffer.isView(payload.varScales))
+          && typeof (payload.varScales as any).length === 'number'
+          && Number((payload.varScales as any).length) >= n)
+          ? payload.varScales
+          : new Float64Array(n).fill(1);
         const scalesVec = asFiniteFloat64Vector(
-          Array.isArray(payload.varScales) && payload.varScales.length === n ? payload.varScales : new Float64Array(n).fill(1),
+          payloadVarScales,
           n
         );
 

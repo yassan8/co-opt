@@ -2106,6 +2106,7 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                         const rayPath = window.traceRay ? window.traceRay(opticalSystemRows, ray, 1.0, null, null, {
                             allowNonStrict: true,
                             requireWasmRayTracing: false,
+                            returnPartialOnPhysicalBlock: true,
                             useRustWasm: true,
                             disableWasmRayTracing: false,
                         }) : null;

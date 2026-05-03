@@ -41,7 +41,12 @@ function normalizeSurfTypeValue(value: any): string {
 
   // Normalize aggressively so legacy imports don't fail Blocks validation.
   // Only return canonical values in ALLOWED_SURF_TYPES (or '').
-  const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+  const key = s
+    .replace(/[＊*]+/g, '')
+    .replace(/\(.*?\)/g, '')
+    .replace(/\s+/g, '')
+    .replace(/[_-]+/g, '')
+    .toLowerCase();
 
   // Zemax/CodeV style
   // IMPORTANT:
@@ -49,13 +54,19 @@ function normalizeSurfTypeValue(value: any): string {
   // - 'Spherical' is an explicit choice for polynomial terms (coef*), but conic is still valid.
   if (key === 'standard' || key === 'std') return '';
   if (key === 'spherical' || key === 'sphere' || key === 'sph') return 'Spherical';
-  if (key === 'asphericaleven' || key === 'asphericeven' || key === 'evenasphere' || key === 'evenaspheric') return 'Aspheric even';
-  if (key === 'asphericalodd' || key === 'asphericodd' || key === 'oddasphere' || key === 'oddaspheric') return 'Aspheric odd';
+  if (key === 'asphericaleven' || key === 'asphericeven' || key === 'evenasphere' || key === 'evenaspheric' || key === 'evenaspherical' || key === 'evenasperical' || key === 'aspericaleven') return 'Aspheric even';
+  if (key === 'asphericalodd' || key === 'asphericodd' || key === 'oddasphere' || key === 'oddaspheric' || key === 'oddaspherical' || key === 'oddasperical' || key === 'aspericalodd') return 'Aspheric odd';
+  if (key === 'aspherical' || key === 'aspheric' || key === 'asphere' || key === 'asperical') return 'Aspheric even';
   if (key === 'toric' || key === 'toroidal' || key === 'astigmatic' || key === 'anamorphic' || key === 'xypower' || key === 'x-y-power') return 'Toric';
 
   // Fuzzy matches
+  if (key.includes('aspherical') && key.includes('odd')) return 'Aspheric odd';
+  if (key.includes('aspherical')) return 'Aspheric even';
   if (key.includes('aspher') && key.includes('even')) return 'Aspheric even';
   if (key.includes('aspher') && key.includes('odd')) return 'Aspheric odd';
+  if (key.includes('asperical') && key.includes('odd')) return 'Aspheric odd';
+  if (key.includes('asperical')) return 'Aspheric even';
+  if (key.includes('aspher')) return 'Aspheric even';
 
   // Unknown surfType: treat as spherical to keep conversion best-effort.
   return '';

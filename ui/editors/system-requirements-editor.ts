@@ -176,7 +176,7 @@ class SystemRequirementsEditor {
 
   _normalizeConfigId(configIdValue: any, systemConfig: any, activeConfigId: string): string {
     const raw = (configIdValue === undefined || configIdValue === null) ? '' : String(configIdValue).trim();
-    if (!raw) return activeConfigId;
+    if (!raw) return '';
 
     const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
     // Already a valid id?
@@ -187,7 +187,7 @@ class SystemRequirementsEditor {
     const byName = configs.find((c: any) => c && String(c.name).trim() === raw);
     if (byName) return String(byName.id);
 
-    return activeConfigId;
+    return raw;
   }
 
   _getLiveRequirementsData(): any[] {
@@ -605,7 +605,18 @@ class SystemRequirementsEditor {
       tr.addEventListener('click', (e) => {
         const t = e?.target as HTMLElement | null;
         const selectionChanged = String(this._selectedId) !== String(row.id);
+        const clickedCheckbox = !!(t && (t as HTMLInputElement).type === 'checkbox');
         const clickedControl = !!(t && typeof t.closest === 'function' && t.closest('input,select,textarea,button'));
+
+        if (clickedCheckbox) {
+          // Clicking a checkbox should never trigger expand/collapse.
+          // Only update selection without expanding.
+          if (selectionChanged) {
+            setSelectedRow(row.id);
+            this.renderTable();
+          }
+          return;
+        }
 
         if (clickedControl) {
           if (selectionChanged) {
@@ -2579,6 +2590,129 @@ class SystemRequirementsEditor {
     if (Math.abs(v) >= 1e8) return { current: 'FAIL', ok: false };
 
     return { current: v, ok: true };
+  }
+
+  applyOptimizerRequirementSnapshot(snapshotRows: any[]): boolean {
+    const live = this._getLiveRequirementsData();
+    this.requirements = live;
+    if (!Array.isArray(live) || live.length === 0) return false;
+    if (!Array.isArray(snapshotRows) || snapshotRows.length === 0) return false;
+
+    const byId = new Map<string, any>();
+    for (const row of snapshotRows) {
+      if (!row || row.id === undefined || row.id === null) continue;
+      byId.set(String(row.id), row);
+    }
+    if (byId.size === 0) return false;
+
+    const updates: any[] = [];
+    for (const row of live) {
+      if (!row || row.id === undefined || row.id === null) continue;
+      const snap = byId.get(String(row.id));
+      if (!snap) continue;
+
+      const sanitized = this._sanitizeCurrentForUI(snap.current);
+      const amountRaw = Number(snap.amount);
+      const amount = Number.isFinite(amountRaw) ? Math.max(0, amountRaw) : Number.POSITIVE_INFINITY;
+      const weight = Math.max(0, Number.isFinite(Number(row?.weight)) ? Number(row.weight) : 1);
+      const contributionRaw = Number(snap.contribution);
+      const contribution = Number.isFinite(contributionRaw)
+        ? contributionRaw
+        : (sanitized.ok && Number.isFinite(amount) ? weight * amount : null);
+
+      let status = 'OK';
+      if (weight <= 0) {
+        status = 'OFF';
+      } else if (!sanitized.ok) {
+        status = 'NG';
+      } else if (!Number.isFinite(amount)) {
+        status = '—';
+      } else if (amount > 0) {
+        status = 'NG';
+      }
+
+      row.current = sanitized.current;
+      row.status = status;
+      row._violation = sanitized.ok && Number.isFinite(amount) ? amount : null;
+      row._contribution = sanitized.ok && Number.isFinite(Number(contribution)) ? Number(contribution) : null;
+      updates.push({
+        id: row.id,
+        current: row.current,
+        status: row.status,
+        _violation: row._violation,
+        _contribution: row._contribution,
+      });
+    }
+
+    if (updates.length === 0) return false;
+
+    try {
+      if (this._tbody) {
+        for (const u of updates) {
+          const tr = this._tbody.querySelector(`tr[data-id="${String(u.id)}"]`);
+          if (!tr) continue;
+          const curEl = tr.querySelector('td[data-role="current"]');
+          const stEl = tr.querySelector('td[data-role="status"]');
+          const scoreEl = tr.querySelector('td[data-role="score"]');
+          if (curEl) {
+            const v = u.current;
+            const n = Number(v);
+            curEl.textContent = (v === null || v === undefined) ? '' : (Number.isFinite(n) ? n.toFixed(6) : String(v));
+          }
+          if (stEl) stEl.textContent = String(u.status ?? '').trim();
+          if (scoreEl) {
+            const v = u._contribution;
+            const n = Number(v);
+            scoreEl.textContent = (v === null || v === undefined) ? '' : (Number.isFinite(n) ? n.toFixed(6) : String(v));
+          }
+        }
+      }
+    } catch (_) {}
+
+    try {
+      w.__cooptLastRequirementsEval = { at: Date.now(), stage: 'optimizer-snapshot', updated: updates.length };
+    } catch (_) {}
+
+    try {
+      const syncedAt = Date.now();
+      let syncedScore = Number.NaN;
+      let contributionCount = 0;
+      for (const row of live) {
+        const enabled = (row?.enabled === undefined || row?.enabled === null) ? true : !!row.enabled;
+        const operand = String(row?.operand ?? '').trim();
+        const weight = Number(row?.weight ?? 1);
+        if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
+        const contribution = Number(row?._contribution);
+        if (!Number.isFinite(contribution)) continue;
+        if (contribution > 0) {
+          syncedScore = Number.isFinite(syncedScore) ? (syncedScore + contribution) : contribution;
+        } else if (!Number.isFinite(syncedScore)) {
+          syncedScore = 0;
+        }
+        contributionCount += 1;
+      }
+
+      if (contributionCount > 0 && Number.isFinite(syncedScore)) {
+        try {
+          localStorage.setItem('coopt.requirementScoreSync', JSON.stringify({
+            ts: syncedAt,
+            score: syncedScore,
+            source: 'system-requirements-editor/optimizer-snapshot'
+          }));
+        } catch (_) {}
+        try {
+          window.dispatchEvent(new CustomEvent('coopt:requirements-updated', {
+            detail: {
+              ts: syncedAt,
+              score: syncedScore,
+              source: 'system-requirements-editor/optimizer-snapshot'
+            }
+          }));
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    return true;
   }
 
   async evaluateAndUpdateNow(options: any = null): Promise<void> {

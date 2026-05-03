@@ -62,6 +62,7 @@ import {
 } from '../data/table-system-requirements.ts';
 import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
+import { clearOptimizerStop } from '../src/desktop/ipc/client.ts';
 
 // Type definitions
 type BlockType = string;
@@ -3135,6 +3136,143 @@ function setupOptimizeDesignIntentButton(): void {
             const stopFlag = { stop: false };
             let popupWatchTimer: any = null;
             let isRunning = false;
+            let stopRequestedAtMs = 0;
+            let lastProgressAtMs = 0;
+            let lastActivityText = 'Idle';
+            let scoreHistory: number[] = [];
+            let lastIterForSparkline = -1;
+
+            const formatElapsedLabel = (ms: number): string => {
+                if (!Number.isFinite(ms) || ms <= 0) return '0s';
+                if (ms < 1000) return `${Math.round(ms)}ms`;
+                const seconds = ms / 1000;
+                if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)}s`;
+                const minutes = Math.floor(seconds / 60);
+                const remainSeconds = Math.round(seconds % 60);
+                return `${minutes}m ${remainSeconds}s`;
+            };
+
+            const setPopupText = (id: string, value: string) => {
+                try {
+                    if (!popup || popup.closed) return;
+                    const el = popup.document.getElementById(id);
+                    if (el) el.textContent = value;
+                } catch (_) {}
+            };
+
+            const describeOptimizerActivity = (p: any): string => {
+                const phase = String(p?.phase ?? '').trim().toLowerCase();
+                const iter = Number(p?.iter);
+                const method = String(p?.method ?? '').trim().toUpperCase();
+                const variableId = p?.variableId === undefined || p?.variableId === null
+                    ? ''
+                    : String(p.variableId);
+                switch (phase) {
+                    case 'prepare':
+                        return 'Preparing active configuration';
+                    case 'start':
+                        return `Initializing ${method || 'optimizer'} state`;
+                    case 'iter': {
+                        const parts: string[] = [];
+                        if (Number.isFinite(iter)) parts.push(`iter ${iter}`);
+                        if (method) parts.push(method);
+                        if (Number.isFinite(Number(p?.activeViolations))) {
+                            parts.push(`active violations ${Math.max(0, Math.floor(Number(p.activeViolations)))}`);
+                        }
+                        return parts.length > 0 ? `Evaluating ${parts.join(' | ')}` : 'Evaluating current design';
+                    }
+                    case 'jacobian':
+                        return Number.isFinite(iter)
+                            ? `Building Jacobian at iter ${iter}`
+                            : 'Building Jacobian';
+                    case 'jacobian-col': {
+                        const col = Number(p?.col);
+                        const cols = Number(p?.cols);
+                        if (Number.isFinite(col) && Number.isFinite(cols) && cols > 0) {
+                            return `Building Jacobian column ${Math.floor(col)}/${Math.floor(cols)}`;
+                        }
+                        return 'Building Jacobian columns';
+                    }
+                    case 'solve':
+                        return Number.isFinite(iter)
+                            ? `Solving step direction at iter ${iter}`
+                            : 'Solving step direction';
+                    case 'candidate':
+                        return variableId
+                            ? `Testing candidate for ${variableId}`
+                            : 'Testing candidate step';
+                    case 'accept':
+                        return variableId
+                            ? `Accepted update for ${variableId}`
+                            : 'Accepted candidate step';
+                    case 'reject':
+                        return variableId
+                            ? `Rejected update for ${variableId}`
+                            : 'Rejected candidate step';
+                    case 'done':
+                        return 'Optimization finished';
+                    case 'stopped':
+                        return 'Optimization stopped';
+                    case 'error':
+                        return 'Optimization failed';
+                    default:
+                        return phase ? `Working: ${phase}` : 'Waiting for progress update';
+                }
+            };
+
+            const refreshPopupRuntimeStatus = () => {
+                try {
+                    if (!popup || popup.closed) return;
+                    const now = Date.now();
+                    const stopState = popup.document.getElementById('opt-stop-state');
+                    const phaseText = String(popup.document.getElementById('opt-phase')?.textContent || '').trim().toLowerCase();
+                    const terminalPhase = phaseText === 'done' || phaseText === 'stopped' || phaseText === 'error';
+
+                    if (!terminalPhase) {
+                        if (stopFlag.stop) {
+                            if (stopState) stopState.textContent = 'Stopping...';
+                            const waited = stopRequestedAtMs > 0 ? formatElapsedLabel(now - stopRequestedAtMs) : '0s';
+                            setPopupText('opt-stop-detail', `Stop requested ${waited} ago. Waiting for a safe stop point.`);
+                        } else {
+                            if (stopState && isRunning) stopState.textContent = 'Running...';
+                            setPopupText('opt-stop-detail', isRunning ? 'No stop requested.' : 'Idle');
+                        }
+                    }
+
+                    if (lastProgressAtMs > 0) {
+                        setPopupText('opt-last-update', `${formatElapsedLabel(now - lastProgressAtMs)} since last progress event`);
+                    } else if (isRunning) {
+                        setPopupText('opt-last-update', 'Waiting for first progress event');
+                    } else {
+                        setPopupText('opt-last-update', 'No updates yet');
+                    }
+
+                    setPopupText('opt-activity', lastActivityText || '-');
+
+                    // Elapsed time counter
+                    try {
+                        if (runClickAtMs > 0 && isRunning) {
+                            const elapsedEl = popup.document.getElementById('opt-elapsed') as HTMLElement | null;
+                            if (elapsedEl) elapsedEl.textContent = formatElapsedLabel(now - runClickAtMs);
+                        }
+                    } catch (_) {}
+
+                    // Pulse dot state
+                    try {
+                        const dot = popup.document.getElementById('opt-pulse-dot') as HTMLElement | null;
+                        if (dot) {
+                            if (terminalPhase) {
+                                dot.className = phaseText === 'done' ? 'opt-pulse-dot done' : 'opt-pulse-dot error';
+                            } else if (isRunning) {
+                                dot.className = 'opt-pulse-dot running';
+                            } else {
+                                dot.className = 'opt-pulse-dot idle';
+                            }
+                        }
+                    } catch (_) {}
+                } catch (_) {}
+            };
+
             try {
                 popup = window.open('', 'coopt-optimizer-progress', 'width=500,height=550,resizable=yes,scrollbars=no');
                 if (popup && popup.document) {
@@ -3148,10 +3286,25 @@ function setupOptimizeDesignIntentButton(): void {
   <title>Optimize Progress</title>
   <base href="${baseOrigin}/" />
   <link rel="icon" type="image/svg+xml" href="${faviconHref}" />
+  <style>
+    @keyframes __opt_pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.78)}}
+    .opt-pulse-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#bbb;flex-shrink:0;vertical-align:middle;transition:background .4s}
+    .opt-pulse-dot.running{background:#4f8cff;animation:__opt_pulse 1.35s ease-in-out infinite}
+    .opt-pulse-dot.done{background:#22a854;animation:none}
+    .opt-pulse-dot.error{background:#d33;animation:none}
+    .opt-pulse-dot.idle{background:#bbb;animation:none}
+    @keyframes __opt_fl_acc{0%{background:#c8f0d8}100%{background:transparent}}
+    @keyframes __opt_fl_rej{0%{background:#f8d7da}100%{background:transparent}}
+    .opt-flash-accept{animation:__opt_fl_acc .9s ease-out forwards}
+    .opt-flash-reject{animation:__opt_fl_rej .9s ease-out forwards}
+    #opt-iter-bar-fill{height:100%;background:linear-gradient(90deg,#4f8cff,#82b4ff);border-radius:999px;transition:width 500ms ease;width:0%}
+  </style>
 </head>
 <body style="font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 12px;">
-<div style="display:flex; align-items:center; gap:10px; flex-wrap:nowrap; white-space:nowrap; margin-bottom:8px;">
+<div style="display:flex; align-items:center; gap:8px; flex-wrap:nowrap; white-space:nowrap; margin-bottom:6px;">
     <div style="font-size:14px; font-weight:600; flex:0 0 auto;">Optimize Progress</div>
+    <span class="opt-pulse-dot idle" id="opt-pulse-dot"></span>
+    <span id="opt-elapsed" style="font-size:11px;color:#888;flex:0 0 auto;min-width:28px;font-variant-numeric:tabular-nums;"></span>
     <div id="opt-startup-progress-wrap" style="display:flex; align-items:center; gap:8px; flex:1 1 auto; min-width:0; margin:0;">
         <div style="height:6px; background:#eceef2; border-radius:999px; overflow:hidden; flex:1 1 auto; min-width:120px;">
             <div id="opt-startup-progress-bar" style="width:0%; height:100%; background:#4f8cff; transition:width 120ms linear;"></div>
@@ -3159,13 +3312,18 @@ function setupOptimizeDesignIntentButton(): void {
         <div id="opt-startup-progress-label" style="font-size:11px; color:#666; flex:0 0 auto;">Idle</div>
     </div>
 </div>
-<div style="font-size:12px; color:#555; margin-bottom:10px; white-space:nowrap;">Updates per candidate evaluation (±step)</div>
-<div style="margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+<div style="height:4px;background:#eceef2;border-radius:999px;overflow:hidden;margin:0 0 4px;display:none" id="opt-iter-bar-wrap"><div id="opt-iter-bar-fill"></div></div>
+<div id="opt-sparkline-wrap" style="background:#f7f8fa;border:1px solid #eceef2;border-radius:4px;overflow:hidden;height:54px;margin:0 0 6px;display:none"><canvas id="opt-sparkline" height="54" style="display:block;width:100%;height:54px"></canvas></div>
+<div style="margin-bottom:8px; display:flex; align-items:center; gap:6px;">
     <button id="opt-run" style="padding:6px 10px;">Run</button>
     <button id="opt-stop" style="padding:6px 10px;" disabled>Stop</button>
     <span id="opt-stop-state" style="margin-left:8px; font-size:12px; color:#555;"></span>
 </div>
-<div style="margin-bottom:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+<div style="margin:-2px 0 8px 0; font-size:11px; color:#888; line-height:1.5;">
+    <div id="opt-stop-detail">Idle</div>
+    <div id="opt-last-update">No updates yet</div>
+</div>
+<div style="margin-bottom:8px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         Method
         <select id="opt-method" style="padding:4px 6px;">
@@ -3193,8 +3351,9 @@ function setupOptimizeDesignIntentButton(): void {
 </div>
 <div style="display:flex; gap:10px; flex-direction:column;">
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Phase</span><span id="opt-phase" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Activity</span><span id="opt-activity" style="margin-left:8px;">Idle</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Decision</span><span id="opt-decision" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Accept/Reject</span><span id="opt-decision-count" style="margin-left:8px;">0 / 0</span></div>
+    <div id="opt-decision-row" style="display:flex; align-items:baseline; border-radius:3px; padding:1px 3px 1px 0;"><span style="display:inline-block; width:110px; color:#555;">Accept/Reject</span><span id="opt-decision-count" style="margin-left:8px; font-variant-numeric:tabular-nums;">0 / 0</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Iter</span><span id="opt-iter" style="margin-left:8px;">0</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Vars</span><span id="opt-vars" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Req</span><span id="opt-req" style="margin-left:8px;">-</span></div>
@@ -3266,7 +3425,7 @@ function setupOptimizeDesignIntentButton(): void {
         <div>スケール付き微分ステップ</div>
 
         <div>staged</div>
-        <input id="opt-staged" type="checkbox" checked style="width:16px; height:16px;" />
+        <input id="opt-staged" type="checkbox" style="width:16px; height:16px;" />
         <div>係数の段階的解放</div>
 
         <div>stageStallLimit</div>
@@ -3317,6 +3476,8 @@ function setupOptimizeDesignIntentButton(): void {
                         if (stopBtn) {
                             stopBtn.addEventListener('click', () => {
                                 stopFlag.stop = true;
+                                stopRequestedAtMs = Date.now();
+                                lastActivityText = 'Stop requested from progress window';
                                 try { (globalThis as any).__cooptLastUiStopReason = 'popup-stop-button'; } catch (_) {}
                                 try {
                                     const _opt = w.OptimizationMVP;
@@ -3325,11 +3486,15 @@ function setupOptimizeDesignIntentButton(): void {
                                 try { if (stopBtn) stopBtn.disabled = true; } catch (_) {}
                                 try { if (runBtn) runBtn.disabled = true; } catch (_) {}
                                 if (stopState) stopState.textContent = 'Stopping...';
+                                refreshPopupRuntimeStatus();
                             });
                         }
                         if (runBtn) {
                             runBtn.addEventListener('click', () => {
                                 try {
+                                    stopRequestedAtMs = 0;
+                                    lastProgressAtMs = 0;
+                                    lastActivityText = 'Run requested. Preparing optimizer...';
                                     if (stopState) stopState.textContent = 'Running...';
                                     const phaseEl = popup?.document?.getElementById('opt-phase');
                                     if (phaseEl && String(phaseEl.textContent || '').trim() === '-') {
@@ -3343,6 +3508,7 @@ function setupOptimizeDesignIntentButton(): void {
                                     if (startupLabel) startupLabel.textContent = 'Run clicked. Preparing...';
                                     if (runBtn) runBtn.disabled = true;
                                     if (stopBtn) stopBtn.disabled = false;
+                                    refreshPopupRuntimeStatus();
                                 } catch (_) {}
                                 try {
                                     const fn = w.__cooptStartOptimizationFromPopup;
@@ -3401,6 +3567,8 @@ function setupOptimizeDesignIntentButton(): void {
                                     _gThis.__cooptOptimizerSchedulerWindow = null;
                                 }
                             } catch (_) {}
+                        } else {
+                            refreshPopupRuntimeStatus();
                         }
                     }, 250);
                 } catch (_) {}
@@ -3419,7 +3587,9 @@ function setupOptimizeDesignIntentButton(): void {
             let rejectCount = 0;
             let currentConvergenceProfile = 'balanced';
             let __lastReqRefreshAt = 0;
-            const __reqRefreshThrottleMs = 500;
+            let __lastReqDeepRefreshAt = 0;
+            const __reqRefreshThrottleMs = 250;
+            const __reqDeepRefreshThrottleMs = 2500;
             let optimizerWasmWarmupPromise: Promise<void> | null = null;
             let runClickAtMs = 0;
             let startupLatencyReported = false;
@@ -3540,6 +3710,7 @@ function setupOptimizeDesignIntentButton(): void {
                 } catch (_) {}
             };
 
+            let renderDebounceTimer: number | null = null;
             const ensureRenderPopupAndDraw = () => {
                 try {
                     const renderPopup = w.popup3DWindow;
@@ -3596,13 +3767,20 @@ function setupOptimizeDesignIntentButton(): void {
                         } catch (_) {}
                     };
 
-                    drawNow();
-                    window.setTimeout(drawNow, 120);
+                    // Debounce: cancel any pending draw timer and schedule a fresh one.
+                    // This prevents render request pile-up when the optimizer accepts rapidly.
+                    if (renderDebounceTimer !== null) clearTimeout(renderDebounceTimer);
+                    renderDebounceTimer = window.setTimeout(() => {
+                        renderDebounceTimer = null;
+                        drawNow();
+                    }, 120);
                 } catch (_) {}
             };
 
             const updateProgressUI = (p: any) => {
                 const phaseStr = String(p?.phase ?? '');
+                lastProgressAtMs = Date.now();
+                lastActivityText = describeOptimizerActivity(p);
 
                 const setStartupProgress = (percent: number, label?: string, done?: boolean) => {
                     try {
@@ -3667,14 +3845,6 @@ function setupOptimizeDesignIntentButton(): void {
                 }
 
                 if (phaseStr === 'accept') {
-                    acceptCount++;
-                    const a = (p && ('alpha' in p)) ? Number(p.alpha) : NaN;
-                    const r = (p && ('rho' in p)) ? Number(p.rho) : NaN;
-                    const aText = Number.isFinite(a) ? a.toFixed(6) : '-';
-                    const rText = Number.isFinite(r) ? r.toFixed(6) : '-';
-                    lastDecisionText = `ACCEPT (α=${aText}, ρ=${rText})`;
-                    lastRhoText = rText;  // 【追加】ρを保存して後で表示
-
                     try {
                         if (popup && !popup.closed) {
                             const autoRenderCheckbox = popup.document.getElementById('opt-auto-render') as HTMLInputElement | null;
@@ -3683,21 +3853,70 @@ function setupOptimizeDesignIntentButton(): void {
                             }
                         }
                     } catch (_) {}
+                }
+
+                if (phaseStr === 'accept') {
+                    acceptCount++;
+                    const a = (p && ('alpha' in p)) ? Number(p.alpha) : NaN;
+                    const r = (p && ('rho' in p)) ? Number(p.rho) : NaN;
+                    const aText = Number.isFinite(a) ? a.toFixed(6) : '-';
+                    const rText = Number.isFinite(r) ? r.toFixed(6) : '-';
+                    lastDecisionText = `ACCEPT (α=${aText}, ρ=${rText})`;
+                    lastRhoText = rText;  // 【追加】ρを保存して後で表示
+                    try {
+                        if (popup && !popup.closed) {
+                            const dc = popup.document.getElementById('opt-decision-row') as HTMLElement | null;
+                            if (dc) { dc.className = ''; void dc.offsetWidth; dc.className = 'opt-flash-accept'; }
+                        }
+                    } catch (_) {}
                 } else if (phaseStr === 'reject') {
                     rejectCount++;
                     lastDecisionText = 'REJECT';
+                    try {
+                        if (popup && !popup.closed) {
+                            const dc = popup.document.getElementById('opt-decision-row') as HTMLElement | null;
+                            if (dc) { dc.className = ''; void dc.offsetWidth; dc.className = 'opt-flash-reject'; }
+                        }
+                    } catch (_) {}
                 }
 
+                try {
+                    const now = Date.now();
+                    if ((now - __lastReqRefreshAt) >= __reqRefreshThrottleMs) {
+                        if (phaseStr === 'start' || phaseStr === 'iter' || phaseStr === 'candidate' || phaseStr === 'accept' || phaseStr === 'reject') {
+                            const sre = w.systemRequirementsEditor;
+                            const payloadReqSnapshot = Array.isArray(p?.requirementSnapshots) ? p.requirementSnapshots : null;
+                            const dbg = (w.__cooptLastOptimizerResidualDebug && typeof w.__cooptLastOptimizerResidualDebug === 'object')
+                                ? w.__cooptLastOptimizerResidualDebug
+                                : null;
+                            const reqSnapshot = (payloadReqSnapshot && payloadReqSnapshot.length > 0)
+                                ? payloadReqSnapshot
+                                : (Array.isArray(dbg?.requirementsSnapshot) ? dbg.requirementsSnapshot : null);
+                            let appliedSnapshot = false;
+                            if (sre && typeof sre.applyOptimizerRequirementSnapshot === 'function' && reqSnapshot && reqSnapshot.length > 0) {
+                                __lastReqRefreshAt = now;
+                                appliedSnapshot = !!sre.applyOptimizerRequirementSnapshot(reqSnapshot);
+                            }
+                            if ((!appliedSnapshot) && sre && typeof sre.scheduleEvaluateAndUpdate === 'function' && (now - __lastReqDeepRefreshAt) >= __reqDeepRefreshThrottleMs) {
+                                __lastReqRefreshAt = now;
+                                __lastReqDeepRefreshAt = now;
+                                sre.scheduleEvaluateAndUpdate();
+                            }
+                        }
+                    }
+                } catch (_) {}
+
                 const cur = Number(p?.current);
-                const best = Number(p?.best);
                 const progressViolationScore = Number(p?.violationScore);
                 const snap = getRequirementScoreSnapshot();
                 const tableRequirementScore = Number(snap.score);
-                    const displayCurrentScore = Number.isFinite(cur)
-                        ? cur
-                        : (Number.isFinite(tableRequirementScore) ? tableRequirementScore : Number.NaN);
-                if (Number.isFinite(best)) {
-                    bestRequirementScore = best;
+                const displayCurrentScore = Number.isFinite(tableRequirementScore)
+                    ? tableRequirementScore
+                    : (Number.isFinite(cur) ? cur : Number.NaN);
+                if (Number.isFinite(displayCurrentScore)) {
+                    bestRequirementScore = Number.isFinite(bestRequirementScore)
+                        ? Math.min(bestRequirementScore, displayCurrentScore)
+                        : displayCurrentScore;
                 } else if (!Number.isFinite(bestRequirementScore) && Number.isFinite(tableRequirementScore)) {
                     bestRequirementScore = tableRequirementScore;
                 }
@@ -3707,19 +3926,6 @@ function setupOptimizeDesignIntentButton(): void {
                 if (totalMeritEl && Number.isFinite(displayCurrentScore)) {
                     totalMeritEl.textContent = displayCurrentScore.toFixed(6);
                 }
-
-                try {
-                    const now = Date.now();
-                    if ((now - __lastReqRefreshAt) >= __reqRefreshThrottleMs) {
-                        if (phaseStr === 'start' || phaseStr === 'iter' || phaseStr === 'candidate' || phaseStr === 'accept' || phaseStr === 'reject') {
-                            const sre = w.systemRequirementsEditor;
-                            if (sre && typeof sre.scheduleEvaluateAndUpdate === 'function') {
-                                __lastReqRefreshAt = now;
-                                sre.scheduleEvaluateAndUpdate();
-                            }
-                        }
-                    }
-                } catch (_) {}
 
                 if (p && ('materialIssue' in p)) {
                     lastIssueText = (p.materialIssue === undefined || p.materialIssue === null || p.materialIssue === '')
@@ -3816,6 +4022,76 @@ function setupOptimizeDesignIntentButton(): void {
                     lastSoftText = Number.isFinite(s) ? s.toFixed(6) : '-';
                 }
 
+                // Sparkline + iter progress bar
+                try {
+                    const iterNum = Number(p?.iter);
+                    if (Number.isFinite(displayCurrentScore) && Number.isFinite(iterNum) && iterNum > lastIterForSparkline) {
+                        lastIterForSparkline = iterNum;
+                        scoreHistory.push(displayCurrentScore);
+                        if (scoreHistory.length > 400) scoreHistory.splice(0, scoreHistory.length - 400);
+                    }
+                    if (popup && !popup.closed) {
+                        // Iteration progress bar
+                        const iterBarWrap = popup.document.getElementById('opt-iter-bar-wrap') as HTMLElement | null;
+                        const iterBarFill = popup.document.getElementById('opt-iter-bar-fill') as HTMLElement | null;
+                        const maxIterInput = popup.document.getElementById('opt-max-iter') as HTMLInputElement | null;
+                        const maxIter = maxIterInput ? Number(maxIterInput.value) : 0;
+                        if (iterBarWrap && iterBarFill && Number.isFinite(iterNum) && Number.isFinite(maxIter) && maxIter > 0) {
+                            iterBarWrap.style.display = 'block';
+                            const pct = Math.max(0, Math.min(99.5, (iterNum / maxIter) * 100));
+                            iterBarFill.style.width = `${pct}%`;
+                        }
+                        // Sparkline
+                        if (scoreHistory.length >= 2) {
+                            const sparkWrap = popup.document.getElementById('opt-sparkline-wrap') as HTMLElement | null;
+                            const canvas = popup.document.getElementById('opt-sparkline') as HTMLCanvasElement | null;
+                            if (sparkWrap && canvas) {
+                                sparkWrap.style.display = 'block';
+                                const ctx = canvas.getContext('2d');
+                                if (ctx) {
+                                    const cw = canvas.offsetWidth || 460;
+                                    canvas.width = cw;
+                                    const ch = canvas.height;
+                                    ctx.clearRect(0, 0, cw, ch);
+                                    const scores = scoreHistory;
+                                    const minS = Math.min(...scores);
+                                    const maxS = Math.max(...scores);
+                                    const rng = maxS - minS;
+                                    const toY = (v: number) => rng > 1e-15 ? ch - 4 - ((v - minS) / rng) * (ch - 10) : ch / 2;
+                                    const toX = (i: number) => scores.length < 2 ? cw / 2 : (i / (scores.length - 1)) * (cw - 6) + 3;
+                                    // Shaded area
+                                    ctx.beginPath();
+                                    ctx.moveTo(toX(0), ch);
+                                    for (let i = 0; i < scores.length; i++) ctx.lineTo(toX(i), toY(scores[i]));
+                                    ctx.lineTo(toX(scores.length - 1), ch);
+                                    ctx.closePath();
+                                    ctx.fillStyle = 'rgba(79,140,255,0.10)';
+                                    ctx.fill();
+                                    // Line
+                                    ctx.beginPath();
+                                    ctx.strokeStyle = '#4f8cff';
+                                    ctx.lineWidth = 1.5;
+                                    for (let i = 0; i < scores.length; i++) {
+                                        if (i === 0) ctx.moveTo(toX(i), toY(scores[i]));
+                                        else ctx.lineTo(toX(i), toY(scores[i]));
+                                    }
+                                    ctx.stroke();
+                                    // Current point marker
+                                    ctx.beginPath();
+                                    ctx.arc(toX(scores.length - 1), toY(scores[scores.length - 1]), 3, 0, Math.PI * 2);
+                                    ctx.fillStyle = phaseStr === 'accept' ? '#1a7a3d' : (phaseStr === 'reject' ? '#c33' : '#4f8cff');
+                                    ctx.fill();
+                                    // Scale labels
+                                    ctx.fillStyle = 'rgba(100,100,100,0.7)';
+                                    ctx.font = '9px system-ui, sans-serif';
+                                    ctx.fillText(maxS.toExponential(2), 3, 9);
+                                    ctx.fillText(minS.toExponential(2), 3, ch - 2);
+                                }
+                            }
+                        }
+                    }
+                } catch (_) {}
+
                 if (popup && !popup.closed) {
                     try {
                         const doc = popup.document;
@@ -3824,6 +4100,7 @@ function setupOptimizeDesignIntentButton(): void {
                             if (el) el.textContent = v;
                         };
                         setText('opt-phase', String(p?.phase ?? '-'));
+                        setText('opt-activity', lastActivityText);
                         setText('opt-decision', lastDecisionText);
                         setText('opt-decision-count', `${acceptCount} / ${rejectCount}`);
                         setText('opt-iter', String(p?.iter ?? '-'));
@@ -3838,6 +4115,9 @@ function setupOptimizeDesignIntentButton(): void {
 
                         if (String(p?.phase) === 'stopped') {
                             setText('opt-stop-state', 'Stopped');
+                            setText('opt-stop-detail', stopRequestedAtMs > 0
+                                ? `Stop acknowledged after ${formatElapsedLabel(Date.now() - stopRequestedAtMs)}.`
+                                : 'Stopped by request.');
                             try {
                                 const btn = doc.getElementById('opt-stop') as HTMLButtonElement | null;
                                 if (btn) btn.disabled = true;
@@ -3846,6 +4126,9 @@ function setupOptimizeDesignIntentButton(): void {
                             } catch (_) {}
                         } else if (String(p?.phase) === 'done') {
                             setText('opt-stop-state', 'Done');
+                            setText('opt-stop-detail', stopRequestedAtMs > 0
+                                ? `Stop request completed after ${formatElapsedLabel(Date.now() - stopRequestedAtMs)}.`
+                                : 'Run completed normally.');
                             try {
                                 const btn = doc.getElementById('opt-stop') as HTMLButtonElement | null;
                                 if (btn) btn.disabled = true;
@@ -3854,6 +4137,7 @@ function setupOptimizeDesignIntentButton(): void {
                             } catch (_) {}
                         } else if (String(p?.phase) === 'error') {
                             setText('opt-stop-state', 'Error');
+                            setText('opt-stop-detail', 'Stopped because the optimizer reported an error.');
                             try {
                                 const btn = doc.getElementById('opt-stop') as HTMLButtonElement | null;
                                 if (btn) btn.disabled = true;
@@ -3862,7 +4146,12 @@ function setupOptimizeDesignIntentButton(): void {
                             } catch (_) {}
                         } else if (stopFlag.stop) {
                             setText('opt-stop-state', 'Stopping...');
+                            setText('opt-stop-detail', `Stop requested ${formatElapsedLabel(Date.now() - stopRequestedAtMs)} ago. Current task: ${lastActivityText}`);
+                        } else {
+                            setText('opt-stop-detail', 'No stop requested.');
                         }
+
+                        setText('opt-last-update', 'just now');
                     } catch (_) {}
                 }
 
@@ -3884,9 +4173,14 @@ function setupOptimizeDesignIntentButton(): void {
                                 const el = doc.getElementById(id);
                                 if (el) el.textContent = v;
                             };
-                                if (Number.isFinite(finalScore)) {
-                                    setText('opt-vio', finalScore.toFixed(6));
-                                }
+                            if (Number.isFinite(finalScore)) {
+                                bestRequirementScore = Number.isFinite(bestRequirementScore)
+                                    ? Math.min(bestRequirementScore, finalScore)
+                                    : finalScore;
+                                setText('opt-cur', finalScore.toFixed(6));
+                                setText('opt-best', bestRequirementScore.toFixed(6));
+                                setText('opt-vio', finalScore.toFixed(6));
+                            }
                             if (Number.isFinite(Number(finalSnap.reqCount))) {
                                 setText('opt-req', String(Math.max(0, Math.floor(Number(finalSnap.reqCount)))));
                             }
@@ -3935,18 +4229,24 @@ function setupOptimizeDesignIntentButton(): void {
                     } catch (_) {}
 
                     stopFlag.stop = false;
+                    stopRequestedAtMs = 0;
+                    lastProgressAtMs = 0;
                     try { (globalThis as any).__cooptLastUiStopReason = null; } catch (_) {}
                     acceptCount = 0;
                     rejectCount = 0;
                     bestRequirementScore = Number.POSITIVE_INFINITY;
                     lastIssueText = '-';
+                    scoreHistory = [];
+                    lastIterForSparkline = -1;
                     lastReqText = '-';
                     lastResText = '-';
                     lastRhoText = '-';
                     lastVioText = '-';
                     lastSoftText = '-';
                     lastDecisionText = '-';
+                    lastActivityText = 'Loading active configuration';
                     setPreRunProgress('prepare', 'Loading active configuration...');
+                    refreshPopupRuntimeStatus();
 
                     // Re-read config for each Run
                     try {
@@ -3998,6 +4298,8 @@ function setupOptimizeDesignIntentButton(): void {
                             if (stopBtn) stopBtn.disabled = false;
                             if (runBtn) runBtn.disabled = true;
                             if (stopState) stopState.textContent = 'Running...';
+                            setPopupText('opt-stop-detail', 'No stop requested.');
+                            setPopupText('opt-last-update', 'Waiting for first progress event');
                             if (phaseEl && String(phaseEl.textContent || '').trim() === '-') {
                                 phaseEl.textContent = 'starting';
                             }
@@ -4129,7 +4431,7 @@ function setupOptimizeDesignIntentButton(): void {
                             fdStepFraction: readNum('opt-fd-step-fraction', 1e-4),
                             fdMinStep: readNum('opt-fd-min-step', 1e-18),
                             fdScaledStep: readNum('opt-fd-scaled-step', 1e-3),
-                            staged: readBool('opt-staged', true),
+                            staged: readBool('opt-staged', false),
                             stageStallLimit: Math.max(1, Math.floor(readNum('opt-stage-stall-limit', 5))),
                             restartOnRejectStreak: Math.max(1, Math.floor(readNum('opt-restart-on-reject-streak', 8))),
                             restartMaxCount: Math.max(0, Math.floor(readNum('opt-restart-max-count', 2))),
@@ -4202,6 +4504,7 @@ function setupOptimizeDesignIntentButton(): void {
                             runUntilStopped: false,
                             maxIterations,
                             method: resolveOptMethod(),
+                            preferNative: isTauriRuntime(),
                             stageMaxCoef: [10],
                             ...optParams,
                             onProgress: updateProgressUI,
@@ -4219,6 +4522,34 @@ function setupOptimizeDesignIntentButton(): void {
                         try {
                             _gThis.__cooptLastOptimizationSyncAt = Date.now();
                             _gThis.__cooptOptimizerIsRunning = false;
+                        } catch (_) {}
+
+                        // Clean up render state to prevent UI slowdown on subsequent operations
+                        try {
+                            // Clear any pending render debounce timer
+                            if (renderDebounceTimer !== null) {
+                                clearTimeout(renderDebounceTimer);
+                                renderDebounceTimer = null;
+                            }
+                        } catch (_) {}
+
+                        try {
+                            // Reset draw-cross pending data and in-flight flag
+                            w.__cooptDrawCrossLastData = null;
+                            w.__cooptDrawCrossInFlight = false;
+                        } catch (_) {}
+
+                        try {
+                            // Reset stop flag for next optimization run
+                            stopFlag.stop = false;
+                            stopRequestedAtMs = 0;
+                        } catch (_) {}
+
+                        try {
+                            // Clear native optimizer stop state (Tauri only)
+                            if (typeof clearOptimizerStop === 'function') {
+                                await clearOptimizerStop();
+                            }
                         } catch (_) {}
 
                         // Record optimization as a single undo operation
@@ -4338,6 +4669,11 @@ function setupOptimizeDesignIntentButton(): void {
                                 if (stopBtn) stopBtn.disabled = true;
                                 if (runBtn) runBtn.disabled = false;
                                 if (stopState && stopFlag.stop) stopState.textContent = 'Stopped';
+                                if (stopFlag.stop) {
+                                    setPopupText('opt-stop-detail', stopRequestedAtMs > 0
+                                        ? `Stop completed after ${formatElapsedLabel(Date.now() - stopRequestedAtMs)}.`
+                                        : 'Stopped by request.');
+                                }
                             }
                         } catch (_) {}
                     }

@@ -624,6 +624,75 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
             const pts = [];
             let ok = 0;
             const maxRays = Math.min(starts.length, rayNumber);
+
+            // Batch fast path: when per-ray debug logging is not requested, trace all rays
+            // in a single batched call to avoid per-ray rows-clone and per-ray traceRay()
+            // overhead. Used during optimizer evaluations where Spot RMS is a hot path.
+            const __batch_enableSpotTraceDebugLog = !!(options && typeof options === 'object' && options.enableSpotTraceDebugLog === true);
+            const __batch_traceOptions = (options && typeof options === 'object' && options.traceOptions && typeof options.traceOptions === 'object')
+                ? options.traceOptions
+                : null;
+            if (!__batch_enableSpotTraceDebugLog && targetPointIndex !== null && targetSurfaceIndex >= 0 && maxRays > 0) {
+                try {
+                    const opticalRowsCopyShared = __spot_cloneRowsPreserveSpecialNumbers(opticalSystemRows);
+                    const rayBundle: any[] = [];
+                    const rayBundleIdx: number[] = [];
+                    for (let i = 0; i < maxRays; i++) {
+                        const rs = starts[i];
+                        if (!rs || !rs.startP || !rs.dir) continue;
+                        rayBundle.push({
+                            pos: rs.startP,
+                            dir: rs.dir,
+                            wavelength: Number(primaryWavelength?.wavelength) || 0.5876
+                        });
+                        rayBundleIdx.push(i);
+                    }
+                    const hitsBatch = traceRayHitPointBatch(opticalRowsCopyShared, rayBundle, 1.0, targetSurfaceIndex, __batch_traceOptions);
+                    for (let k = 0; k < hitsBatch.length; k++) {
+                        const i = rayBundleIdx[k];
+                        const rayStart = starts[i];
+                        const hitPointGlobal = hitsBatch[k];
+                        if (!hitPointGlobal) {
+                            __spot_recordTraceFailure(diag, null, 'NOT_REACHED_TARGET', opticalSystemRows, null);
+                            continue;
+                        }
+                        const surfaceInfo = surfaceInfoList[targetSurfaceIndex];
+                        const hitPointLocal = surfaceInfo ? transformPointToLocal(hitPointGlobal, surfaceInfo) : hitPointGlobal;
+                        if (!hitPointLocal || typeof hitPointLocal.x !== 'number' || typeof hitPointLocal.y !== 'number') {
+                            __spot_recordTraceFailure(diag, null, 'INVALID_HIT_POINT', opticalSystemRows, null);
+                            continue;
+                        }
+                        const centerByPlaneCoords = (() => {
+                            const u = Number(rayStart?.planeCoords?.u);
+                            const v = Number(rayStart?.planeCoords?.v);
+                            return Number.isFinite(u) && Number.isFinite(v) && Math.abs(u) <= 1e-12 && Math.abs(v) <= 1e-12;
+                        })();
+                        const isChief = rayStart.isChief === true || centerByPlaneCoords || (rayStart.isChief === undefined && i === 0);
+                        const spotPoint = {
+                            x: hitPointLocal.x,
+                            y: hitPointLocal.y,
+                            z: hitPointLocal.z,
+                            globalX: hitPointGlobal?.x,
+                            globalY: hitPointGlobal?.y,
+                            globalZ: hitPointGlobal?.z,
+                            wavelength: primaryWavelength.wavelength,
+                            wavelengthName: primaryWavelength.name,
+                            isPrimary: true,
+                            objectId: obj.id,
+                            rayIndex: i,
+                            isChiefRay: isChief,
+                            startPoint: undefined,
+                            initialDir: rayStart && rayStart.dir ? { ...rayStart.dir } : undefined
+                        };
+                        pts.push(spotPoint);
+                        ok++;
+                    }
+                    return { starts, ok, spotPoints: pts, diagnostics: diag, originSolveTraceBackend: attemptOriginSolveTraceBackend };
+                } catch (_) {
+                    // Fall through to per-ray loop on unexpected batch failure
+                }
+            }
+
             for (let i = 0; i < maxRays; i++) {
                 const rayStart = starts[i];
                 if (!rayStart || !rayStart.startP || !rayStart.dir) continue;

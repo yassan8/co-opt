@@ -6153,6 +6153,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
 function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null, options = null) {
   const __traceSetupT0 = RT_PROF.enabled ? now() : 0;
   const returnHitPointOnly = !!(options && typeof options === 'object' && options.returnHitPointOnly);
+  const returnPartialOnPhysicalBlock = !!(options && typeof options === 'object' && options.returnPartialOnPhysicalBlock === true);
   const disableWasmRayTracing = !!(options && typeof options === 'object' && options.disableWasmRayTracing === true);
   const allowNonStrict = !!(options && typeof options === 'object' && options.allowNonStrict === true);
   const requireWasmRayTracing = !disableWasmRayTracing && (
@@ -6338,6 +6339,14 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     y: safeRay0.pos.y, 
     z: safeRay0.pos.z 
   }];
+
+  const __traceReturnPartialPhysicalBlock = (localHitPoint, surfaceInfo) => {
+    if (!returnPartialOnPhysicalBlock || returnHitPointOnly || !Array.isArray(rayPath)) return null;
+    const globalHitPoint = transformPointToGlobal(localHitPoint, surfaceInfo, useRustWasm);
+    if (!globalHitPoint || ![globalHitPoint.x, globalHitPoint.y, globalHitPoint.z].every(Number.isFinite)) return null;
+    rayPath.push(globalHitPoint);
+    return __traceReturn(rayPath);
+  };
   
   // CB面による座標変換状態の管理
   let isInTransformedCoordinates = false; // CB面による座標変換が適用されているかのフラグ
@@ -6694,6 +6703,8 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
               y: rectHalfH
             }
           });
+          const partialPath = __traceReturnPartialPhysicalBlock(hitPoint, surfaceInfo);
+          if (partialPath) return partialPath;
           return __traceReturn(null);
         }
       } else if (!isImageSurface && !isEvaluationSurface && isFinite(apertureLimit) && hitRadius > apertureLimit) {
@@ -6753,6 +6764,8 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           semidia: row.semidia,
           aperture: row.aperture ?? row.Aperture
         });
+        const partialPath = __traceReturnPartialPhysicalBlock(hitPoint, surfaceInfo);
+        if (partialPath) return partialPath;
         // 光線追跡を完全に停止（像面まで到達させない）
         return __traceReturn(null);
       }
@@ -7110,6 +7123,8 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           semidia: row.semidia,
           aperture: row.aperture ?? row.Aperture
         });
+        const partialPath = __traceReturnPartialPhysicalBlock(hitPoint, surfaceInfo);
+        if (partialPath) return partialPath;
         // 光線追跡を完全に停止（像面まで到達させない）
         return null;
       }

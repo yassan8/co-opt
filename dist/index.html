@@ -57,6 +57,22 @@
     // Note: Modern browsers may ignore custom beforeunload text; popstate uses confirm().
     (() => {
       if (globalThis.__cooptBackWarningInstalled) return;
+
+      const isMainWindowContext = (() => {
+        try {
+          const url = new URL(window.location.href);
+          return ![
+            'coopt_render_window',
+            'coopt_analysis_window',
+            'coopt_optimize_window',
+            'coopt_settings_window'
+          ].some((key) => url.searchParams.get(key) === '1');
+        } catch (_) {
+          return true;
+        }
+      })();
+      if (!isMainWindowContext) return;
+
       globalThis.__cooptBackWarningInstalled = true;
 
       const message = 'Leave this page? Unsaved changes may be lost.';
@@ -224,12 +240,12 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-Bv5ET2FZ.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-BmvRdSIA.js"></script>
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-CnxVTe1r.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/toolbar-collapsed-storage-vh-2A-aX.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-Dg4yM76e.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/optimizer-wasm-bridge-CHqqRs4t.js">
+  <script type="module" crossorigin src="/co-opt/assets/main-DSKZzOCJ.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-BZKW9b2c.js"></script>
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-C6DjeSW3.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/toolbar-collapsed-storage-BMpEW0M_.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-2-To2iRX.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/optimizer-wasm-bridge-O2-5B7i_.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/app-g_j8JsWi.css">
 </head>
 <body>

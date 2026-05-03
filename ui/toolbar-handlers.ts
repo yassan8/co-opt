@@ -1510,7 +1510,7 @@ export function handleOptimize(): void {
         systemRequirementsRows,
         method: 'kkt',
         maxIterations: 24,
-        forceTs: true,
+        preferNative: isTauriRuntime(),
         onProgress: (ev: any) => {
           if (!ev || typeof ev !== 'object') return;
           progressEvents.push(ev);
@@ -1535,7 +1535,7 @@ export function handleOptimize(): void {
         variableCount,
         meritBefore,
         meritAfter,
-        requirementScoreBefore: requirementScoreAfter,
+        requirementScoreBefore,
         requirementScoreAfter,
         converged,
         progressEvents,
@@ -1620,7 +1620,7 @@ export function handleOptimize(): void {
         variableCount,
         meritBefore,
         meritAfter,
-        requirementScoreBefore: requirementScoreAfter,
+        requirementScoreBefore,
         requirementScoreAfter,
         converged,
         progressEvents,

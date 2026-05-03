@@ -24,6 +24,7 @@ import {
 import { saveTableData as saveSourceTableData, tryLoadPersistedTableData as tryLoadPersistedSourceTableData } from '../data/table-source.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedMeritFunctionTableData } from '../data/table-merit-function.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedSystemRequirementsTableData } from '../data/table-system-requirements.ts';
 import { saveTableData as saveObjectTableData, tryLoadPersistedTableData as tryLoadPersistedObjectTableData } from '../data/table-object.ts';
 import { requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 
@@ -232,12 +233,14 @@ function initializeConfigurationSystem(): void {
   const hasOpticalData = persistedOptical !== null;
   const persistedMerit = tryLoadPersistedMeritFunctionTableData();
   const hasMeritData = persistedMerit !== null;
+  const persistedRequirements = tryLoadPersistedSystemRequirementsTableData();
+  const hasRequirementsData = persistedRequirements !== null;
   
   const config1 = systemConfig.configurations[0];
   let needsSave = false;
   
   if (systemConfig.configurations.length === 1 && 
-      (hasSourceData || hasObjectData || hasOpticalData || hasMeritData)) {
+      (hasSourceData || hasObjectData || hasOpticalData || hasMeritData || hasRequirementsData)) {
     
     if (hasSourceData) {
       config1.source = persistedSource as any;
@@ -253,6 +256,10 @@ function initializeConfigurationSystem(): void {
     }
     if (hasMeritData) {
       config1.meritFunction = persistedMerit as any;
+      needsSave = true;
+    }
+    if (hasRequirementsData && Array.isArray(systemConfig.systemRequirements) && systemConfig.systemRequirements.length === 0) {
+      systemConfig.systemRequirements = persistedRequirements as any;
       needsSave = true;
     }
     
@@ -806,8 +813,22 @@ function setupAutoSave(): void {
     beforeUnloadHandlerInstalled = true;
   }
 
+  const isSecondaryWindowContext = (() => {
+    try {
+      const url = new URL(window.location.href);
+      return [
+        'coopt_render_window',
+        'coopt_analysis_window',
+        'coopt_optimize_window',
+        'coopt_settings_window'
+      ].some((key) => url.searchParams.get(key) === '1');
+    } catch (_) {
+      return false;
+    }
+  })();
+
   // ページ離脱時に保存
-  if (!beforeUnloadHandlerInstalled) {
+  if (!beforeUnloadHandlerInstalled && !isSecondaryWindowContext) {
     beforeUnloadHandlerInstalled = true;
     w.__configurationBeforeUnloadHandlerInstalled = true;
     window.addEventListener('beforeunload', () => {

@@ -3825,6 +3825,16 @@ function ensurePopupMessageHandler(): void {
         
         // Handle draw-cross message
         if (data.action === 'draw-cross') {
+            // Guard against concurrent renders: if one is already in flight, save the latest
+            // request data and bail. This prevents post-optimization render pile-up where
+            // hundreds of queued draw-cross messages would run concurrently (each triggering
+            // loadActiveConfigurationToTables + full ray trace), causing extreme slowdown.
+            if (w.__cooptDrawCrossInFlight) {
+                w.__cooptDrawCrossLastData = data;
+                return;
+            }
+            w.__cooptDrawCrossInFlight = true;
+            w.__cooptDrawCrossLastData = null;
             try {
                 const popupWindow = w.popup3DWindow;
                 const viewAxisRaw = (data?.viewAxis || 'YZ').toString().toUpperCase();
@@ -4160,7 +4170,15 @@ function ensurePopupMessageHandler(): void {
                 }
             } catch (error: any) {
                 console.error('Error stack:', error.stack);
-                w.popup3DWindow.postMessage({ status: 'Error: ' + error.message }, '*');
+                try { w.popup3DWindow.postMessage({ status: 'Error: ' + error.message }, '*'); } catch (_) {}
+            } finally {
+                w.__cooptDrawCrossInFlight = false;
+                // If a newer request arrived while rendering, dispatch it now
+                const pendingData = w.__cooptDrawCrossLastData;
+                if (pendingData) {
+                    w.__cooptDrawCrossLastData = null;
+                    setTimeout(() => window.postMessage(pendingData, '*'), 0);
+                }
             }
             return;
         }

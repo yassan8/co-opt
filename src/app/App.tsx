@@ -5305,6 +5305,9 @@ const collectLegacyCrossRays = async (
         const requestRenderSync = (rowsFromProgress?: any[]) => {
           const rowsForRender = resolveRowsForRender(rowsFromProgress);
           if (!Array.isArray(rowsForRender) || rowsForRender.length === 0) return;
+          if (renderSyncInFlight) {
+            renderSyncQueue.length = 0;
+          }
           renderSyncQueue.push(rowsForRender);
           void drainRenderSyncQueue();
         };
@@ -5451,9 +5454,7 @@ const collectLegacyCrossRays = async (
               tsBestRequirementScore = Math.min(tsBestRequirementScore, displayScore);
             }
 
-            if (phaseLower.includes('accept') || (ev as any)?.accepted === true) {
-              requestRenderSync(Array.isArray((ev as any)?.rows) ? (ev as any).rows : undefined);
-            }
+            requestRenderSync(Array.isArray((ev as any)?.rows) ? (ev as any).rows : undefined);
 
             setOptimizeState((prev: any) => ({
               ...prev,
@@ -5686,7 +5687,7 @@ const collectLegacyCrossRays = async (
           </label>
           <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
             <input type="checkbox" checked={optAutoRenderOnAccept} disabled={optRunning} onChange={(e) => setOptAutoRenderOnAccept(!!e.target.checked)} style={{ width: 16, height: 16 }} />
-            Auto-render on Accept
+            Auto-render
           </label>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

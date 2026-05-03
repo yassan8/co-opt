@@ -289,7 +289,7 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
       { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
       { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
       { key: "param3", label: "Metric", description: "'rms' or 'dia' (default 'rms')" },
-      { key: "param4", label: "Rays", description: "Ray count (default 501)" },
+      { key: "param4", label: "Rays", description: "Ray count (default 101)" },
       { key: "param5", label: "Surface", description: "Target surface (1-based, blank=Image)" }
     ],
     notes: "Spot Diagram と同じ生成経路（eva-spot-diagram.generateSpotDiagram）を使ってスポット点群を生成し、主光線基準でRMS/直径を計算します。\n\nRay pattern は Annular に固定します。Annular ring count は固定で 10。\n\nMetric: 'rms' または 'dia'（入力ゆれ許容: RMS/RMSTotal/R, Dia/Diam/D, Diameter）。\n定義: dia(diameter)=2*max(radius), rms=sqrt(mean(x^2)+mean(y^2))。単位µm。\n\nparam5: Surface番号（1-based）を指定すると、そのSurfaceでSpot Sizeを計算します。空欄の場合はImage面を使用します。"

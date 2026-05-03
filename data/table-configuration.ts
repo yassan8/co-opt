@@ -13,6 +13,7 @@ import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlock
 import { storageGetItem, storageSetItem, storageRemoveItem } from '../utils/local-storage-gateway.ts';
 import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 import { getGlassDataWithSellmeier, getPrimaryWavelength } from './glass.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedSystemRequirementsTableData } from './table-system-requirements.ts';
 
 // Block interface (for type safety with block-schema)
 interface Block {
@@ -518,11 +519,21 @@ export function saveCurrentToActiveConfiguration(): void {
     } catch (_) {}
   }
   
-  // Merit Function はグローバルに保存（各configには保存しない）
-  systemConfig.meritFunction = w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [];
+  // Merit/Requirements are global. Preserve the current persisted values when the
+  // current window does not host those editors (e.g. optimize/render child windows).
+  if (w.meritFunctionEditor && typeof w.meritFunctionEditor.getData === 'function') {
+    const meritRows = w.meritFunctionEditor.getData();
+    if (Array.isArray(meritRows)) {
+      systemConfig.meritFunction = meritRows;
+    }
+  }
 
-  // System Requirements はグローバルに保存（各configには保存しない）
-  systemConfig.systemRequirements = w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : [];
+  if (w.systemRequirementsEditor && typeof w.systemRequirementsEditor.getData === 'function') {
+    const requirementRows = w.systemRequirementsEditor.getData();
+    if (Array.isArray(requirementRows)) {
+      systemConfig.systemRequirements = requirementRows;
+    }
+  }
   
   // System Data を保存（localStorageとconfigの両方）
   const refFLInput = document.getElementById('reference-focal-length') as HTMLInputElement | null;
@@ -844,9 +855,19 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
     storageSetItem('meritFunctionData', JSON.stringify(systemConfig.meritFunction));
   }
 
-  // System Requirements はグローバルから読み込み
-  if (systemConfig.systemRequirements) {
+  // System Requirements are global. Do not let an empty global array wipe an existing
+  // persisted table cache during startup before migration/editor initialization completes.
+  if (Array.isArray(systemConfig.systemRequirements) && systemConfig.systemRequirements.length > 0) {
     storageSetItem('systemRequirementsData', JSON.stringify(systemConfig.systemRequirements));
+  } else {
+    try {
+      const persistedRequirements = tryLoadPersistedSystemRequirementsTableData();
+      if (!Array.isArray(persistedRequirements)) {
+        storageSetItem('systemRequirementsData', JSON.stringify([]));
+      }
+    } catch (_) {
+      storageSetItem('systemRequirementsData', JSON.stringify([]));
+    }
   }
   
   // System Data をlocalStorageに保存（リロード後も復元できるように）

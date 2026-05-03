@@ -1800,12 +1800,39 @@ class MeritFunctionEditor {
         }
     }
 
+    private stampRequirementBackend(kind: 'spot' | 'ta', payload: Record<string, any>): void {
+        try {
+            if (typeof window === 'undefined') return;
+
+            const backend = String(payload?.backend || 'unknown');
+            const route = String(payload?.route || 'unknown');
+            const storeKey = kind === 'spot'
+                ? '__cooptLastSpotSizeDebug'
+                : '__cooptLastTransverseAberrationDebug';
+            const currentStore = (w as any)[storeKey];
+            const nextStore = (currentStore && typeof currentStore === 'object') ? currentStore : {};
+            Object.assign(nextStore, {
+                requirementBackend: backend,
+                requirementRoute: route,
+                requirementLoggedAt: new Date().toISOString(),
+                ...payload,
+            });
+            (w as any)[storeKey] = nextStore;
+
+            if (!(w as any).__cooptRequirementBackendLogState || typeof (w as any).__cooptRequirementBackendLogState !== 'object') {
+                (w as any).__cooptRequirementBackendLogState = {};
+            }
+            const signature = `${backend}|${route}`;
+            const prev = (w as any).__cooptRequirementBackendLogState[kind];
+            if (prev !== signature) {
+                (w as any).__cooptRequirementBackendLogState[kind] = signature;
+                console.info(`[Requirements][${kind}] backend=${backend} route=${route}`, payload);
+            }
+        } catch (_) {}
+    }
+
     async calculateTransverseAberrationRmsUmViaNativeAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
         try {
-            const runtimeMod = await import('../../src/desktop/runtime.ts');
-            if (!runtimeMod || typeof runtimeMod.isTauriRuntime !== 'function' || !runtimeMod.isTauriRuntime()) {
-                return null;
-            }
             const ipcMod = await import('../../src/desktop/ipc/client.ts');
             if (!ipcMod || typeof ipcMod.runNativeTransverseAberration !== 'function') {
                 return null;
@@ -1857,6 +1884,17 @@ class MeritFunctionEditor {
                 rayCount,
                 wavelengthMode: 'primary',
                 wavelength
+            });
+
+            this.stampRequirementBackend('ta', {
+                backend: String(resp?.backend || 'unknown'),
+                route: 'ipc-wrapper',
+                operand: 'TA_RMS_UM',
+                configId: operand?.configId ?? '',
+                objectIndex0,
+                wavelength,
+                rayCount,
+                component,
             });
 
             const collectStats = (series: any[]) => {
@@ -1929,8 +1967,9 @@ class MeritFunctionEditor {
             const metric = (param3Raw === 'diameter' || param3Raw === 'dia') ? 'diameter' : 'rms';
 
             const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
-            let rayCount = (param4Raw === '') ? 501 : Math.floor(Number(param4Raw));
-            if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = 501;
+            const defaultRayCount = options.pattern === 'annular' ? 101 : 501;
+            let rayCount = (param4Raw === '') ? defaultRayCount : Math.floor(Number(param4Raw));
+            if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = defaultRayCount;
             if (rayCount > 5000) rayCount = 5000;
 
             const param5Raw = (operand.param5 !== undefined && operand.param5 !== null) ? String(operand.param5).trim() : '';
@@ -2060,11 +2099,6 @@ class MeritFunctionEditor {
         metric: 'rms' | 'diameter';
     }): Promise<number | null> {
         try {
-            const runtimeMod = await import('../../src/desktop/runtime.ts');
-            if (!runtimeMod || typeof runtimeMod.isTauriRuntime !== 'function' || !runtimeMod.isTauriRuntime()) {
-                return null;
-            }
-
             const ipcMod = await import('../../src/desktop/ipc/client.ts');
             if (!ipcMod || typeof ipcMod.runNativeSpotRaytrace !== 'function') {
                 return null;
@@ -2080,6 +2114,18 @@ class MeritFunctionEditor {
                 ringCount: ctx.ringCount,
                 pattern: ctx.pattern,
                 wavelengthMode: 'primary'
+            });
+
+            this.stampRequirementBackend('spot', {
+                backend: String(response?.backend || 'unknown'),
+                route: 'ipc-wrapper',
+                operand: ctx.pattern === 'grid' ? 'SPOT_SIZE_RECT' : 'SPOT_SIZE_ANNULAR',
+                targetSurfaceIndex: ctx.targetSurfaceIndex,
+                wavelength: ctx.wavelength,
+                rayCount: ctx.rayCount,
+                ringCount: ctx.ringCount,
+                pattern: ctx.pattern,
+                metric: ctx.metric,
             });
 
             const series = Array.isArray(response?.series) ? response.series : [];
@@ -2318,10 +2364,6 @@ class MeritFunctionEditor {
         if (rayCount > 5000) rayCount = 5000;
 
         const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
-        if (!objRow || typeof objRow !== 'object') {
-            console.warn('⚠️ TA_RMS_UM: object row not found');
-            return 0;
-        }
 
         const imageSurfaceIndex = (() => {
             for (let i = opticalSystemData.length - 1; i >= 0; i--) {
@@ -2562,8 +2604,9 @@ class MeritFunctionEditor {
             }
 
             const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
-            let rayCount = (param4Raw === '') ? 501 : Math.floor(Number(param4Raw));
-            if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = 501;
+            const defaultRayCount = options.pattern === 'annular' ? 101 : 501;
+            let rayCount = (param4Raw === '') ? defaultRayCount : Math.floor(Number(param4Raw));
+            if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = defaultRayCount;
             if (rayCount > 5000) rayCount = 5000;
 
             const useUiTables = (options.useUiTables !== undefined) ? options.useUiTables : useUiDefaults;
@@ -4207,6 +4250,14 @@ class MeritFunctionEditor {
             const targetConfigId = wantsCurrent ? activeConfigId : configId;
 
             const targetIdStr = (targetConfigId !== undefined && targetConfigId !== null) ? String(targetConfigId) : '';
+            const runtimeCacheKey = `optical-system-data:${targetIdStr || activeConfigId || 'active'}`;
+
+            if (this._runtimeCache && this._runtimeCache.has(runtimeCacheKey)) {
+                const cachedRows = this._runtimeCache.get(runtimeCacheKey);
+                if (Array.isArray(cachedRows)) {
+                    return cachedRows;
+                }
+            }
 
             const config = systemConfig?.configurations?.find((c: any) => String(c.id) === String(targetIdStr));
 
@@ -4223,7 +4274,9 @@ class MeritFunctionEditor {
             if ((isActiveConfig || wantsCurrent) && !isConfigSwitching) {
                 const hasBlocksForActive = Array.isArray(config?.blocks);
                 if (!hasBlocksForActive) {
-                    return getOpticalSystemRows({});
+                    const rows = getOpticalSystemRows({});
+                    if (this._runtimeCache && Array.isArray(rows)) this._runtimeCache.set(runtimeCacheKey, rows);
+                    return rows;
                 }
             }
 
@@ -4233,13 +4286,18 @@ class MeritFunctionEditor {
                 const hasBlocksForActive = Array.isArray(config?.blocks) && config.blocks.length > 0;
                 if (!hasBlocksForActive) {
                     const persisted = Array.isArray(config.opticalSystem) ? config.opticalSystem : null;
-                    if (persisted && persisted.length > 0) return persisted;
+                    if (persisted && persisted.length > 0) {
+                        if (this._runtimeCache) this._runtimeCache.set(runtimeCacheKey, persisted);
+                        return persisted;
+                    }
                 }
             }
 
             if (!config) {
                 console.warn(`Config ID ${targetIdStr} が見つかりません。現在のテーブルデータを使用します。`);
-                return getOpticalSystemRows({});
+                const rows = getOpticalSystemRows({});
+                if (this._runtimeCache && Array.isArray(rows)) this._runtimeCache.set(runtimeCacheKey, rows);
+                return rows;
             }
 
             let overrideBlocks: any = null;
@@ -4324,12 +4382,15 @@ class MeritFunctionEditor {
                             console.log(`📊 Config "${config.name}" (ID: ${targetIdStr}) blocks expanded${scenarioId ? ` (scenario: ${scenarioId})` : ''}`);
                         }
                     } catch (_) {}
+                    if (this._runtimeCache) this._runtimeCache.set(runtimeCacheKey, expanded.rows);
                     return expanded.rows;
                 }
             }
 
             console.log(`📊 Config "${config.name}" (ID: ${targetIdStr}) の光学系データを使用`);
-            return config.opticalSystem || [];
+            const rows = config.opticalSystem || [];
+            if (this._runtimeCache && Array.isArray(rows)) this._runtimeCache.set(runtimeCacheKey, rows);
+            return rows;
 
         } catch (error) {
             console.error('光学系データ取得エラー:', error);

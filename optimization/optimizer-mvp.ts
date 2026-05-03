@@ -33,7 +33,9 @@ import {
   getOptimizerWasmBridgeDebugInfo,
   generateFiniteDifferencePerturbationPointsWasm,
   assembleFiniteDifferenceJacobianGroupedWasm,
-  optimizeSystemOneIterationWasm
+  optimizeSystemOneIterationWasm,
+  backtrackingLineSearchArmijoWasm,
+  updateTrustRegionRadiusWasm
 } from '../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
@@ -73,32 +75,32 @@ async function runOptimizationMvpnative(options = {}) {
     return [];
   })();
 
-  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
-    return { ok: false, reason: 'No opticalSystemRows for native optimization' };
-  }
-
-  const systemRequirementsRows = (() => {
-    if (Array.isArray(opts.systemRequirementsRows) && opts.systemRequirementsRows.length > 0) {
-      return opts.systemRequirementsRows;
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+      return { ok: false, reason: 'No opticalSystemRows for native optimization' };
     }
-    try {
-      const w = window as any;
-      const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
-        ? w.loadSystemConfigurationsFromTableConfig()
-        : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
-      if (Array.isArray(cfg?.systemRequirements) && cfg.systemRequirements.length > 0) {
-        return cfg.systemRequirements;
+
+    const systemRequirementsRows = (() => {
+      if (Array.isArray(opts.systemRequirementsRows) && opts.systemRequirementsRows.length > 0) {
+        return opts.systemRequirementsRows;
       }
-    } catch (_) {}
-    try {
-      const sre = (window as any).systemRequirementsEditor;
-      if (sre && typeof sre.getData === 'function') {
-        const rows = sre.getData();
-        if (Array.isArray(rows)) return rows;
-      }
-    } catch (_) {}
-    return [];
-  })();
+      try {
+        const w = window as any;
+        const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+          ? w.loadSystemConfigurationsFromTableConfig()
+          : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+        if (Array.isArray(cfg?.systemRequirements) && cfg.systemRequirements.length > 0) {
+          return cfg.systemRequirements;
+        }
+      } catch (_) {}
+      try {
+        const sre = (window as any).systemRequirementsEditor;
+        if (sre && typeof sre.getData === 'function') {
+          const rows = sre.getData();
+          if (Array.isArray(rows)) return rows;
+        }
+      } catch (_) {}
+      return [];
+    })();
 
   const sourceRows = (() => {
     if (Array.isArray(opts.sourceRows) && opts.sourceRows.length > 0) {
@@ -154,12 +156,67 @@ async function runOptimizationMvpnative(options = {}) {
     ? Math.max(1, Math.floor(Number(opts.nativeChunkIterations)))
     : Math.min(5, maxIterations);
 
+  const readRequirementTableScoreSnapshot = () => {
+    try {
+      const sre = (window as any).systemRequirementsEditor;
+      if (sre && typeof sre.getData === 'function') {
+        const rr = sre.getData();
+        if (Array.isArray(rr)) {
+          let sum = 0;
+          let cnt = 0;
+          for (const row of rr) {
+            const weight = Number(row?.weight ?? 1);
+            const enabled = (row?.enabled === undefined || row?.enabled === null) ? true : !!row.enabled;
+            const operand = String(row?.operand ?? '').trim();
+            if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
+            const contribution = Number.isFinite(Number(row?._contribution)) ? Number(row._contribution) : Number(row?.score);
+            if (Number.isFinite(contribution) && contribution > 0) {
+              sum += contribution;
+              cnt += 1;
+            }
+          }
+          return {
+            score: (cnt > 0 && Number.isFinite(sum)) ? sum : Number.NaN,
+            reqCount: cnt,
+          };
+        }
+      }
+    } catch (_) {}
+    return { score: Number.NaN, reqCount: Number.NaN };
+  };
+
+  const refreshRequirementTableScore = async (reason: string) => {
+    try {
+      const sre = (window as any).systemRequirementsEditor;
+      if (sre && typeof sre.flushPendingEdits === 'function') {
+        const flushed = sre.flushPendingEdits();
+        if (flushed && typeof flushed.then === 'function') await flushed;
+      }
+      if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+        const p = sre.evaluateAndUpdateNow({ reason, forceSilent: true, silent: true });
+        if (p && typeof p.then === 'function') await p;
+      }
+    } catch (_) {}
+    return readRequirementTableScoreSnapshot();
+  };
+
+  let initialDisplayScore = Number.NaN;
+  let bestDisplayScore = Number.NaN;
+  try {
+    const initialSnap = await refreshRequirementTableScore(`optimize-native-${method}-start`);
+    if (Number.isFinite(Number(initialSnap?.score))) {
+      initialDisplayScore = Number(initialSnap.score);
+      bestDisplayScore = initialDisplayScore;
+    }
+  } catch (_) {}
+
   const sessionId = `native-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
   let consumedIterations = 0;
   let rowsWorking = opticalSystemRows;
   let lastResp: any = null;
   let aborted = false;
   let errorMessage: string | null = null;
+  let finalDisplayScore = Number.NaN;
 
   try {
     while (consumedIterations < maxIterations) {
@@ -219,6 +276,12 @@ async function runOptimizationMvpnative(options = {}) {
 
       if (Array.isArray(resp?.optimizedRows) && resp.optimizedRows.length > 0) {
         rowsWorking = resp.optimizedRows;
+        try {
+          const table = (window as any).tableOpticalSystem;
+          if (table && typeof table.setData === 'function') {
+            await table.setData(rowsWorking);
+          }
+        } catch (_) {}
       }
 
       if (onProgress && Array.isArray(resp?.progressEvents)) {
@@ -272,6 +335,8 @@ async function runOptimizationMvpnative(options = {}) {
     message: errorMessage || (aborted ? 'optimizer stopped by user' : 'no native optimizer response'),
   };
 
+  const nativeFailure = !!errorMessage;
+
   try {
     if (Array.isArray(resp.optimizedRows) && resp.optimizedRows.length > 0) {
       const table = (window as any).tableOpticalSystem;
@@ -282,7 +347,7 @@ async function runOptimizationMvpnative(options = {}) {
   } catch (_) {}
 
   return {
-    ok: true,
+    ok: !nativeFailure,
     aborted,
     before: Number(resp?.meritBefore) || 0,
     best: Number(resp?.meritAfter) || 0,
@@ -294,6 +359,7 @@ async function runOptimizationMvpnative(options = {}) {
     softPenalty: 0,
     hardViolations: [],
     softViolations: [],
+    reason: nativeFailure ? String(errorMessage || 'native optimization failed') : undefined,
     nativeMessage: String(resp?.message || ''),
   };
 }
@@ -448,6 +514,118 @@ function pickKktFdMetricsFromProfile(profile) {
     analyticEqualityCalibratedRows,
     effectiveRatioPct: rawCols > 0 ? (100 * effectiveCols / rawCols) : 0,
     reductionPct: rawCols > 0 ? (100 * (rawCols - effectiveCols) / rawCols) : 0
+  };
+}
+
+export async function profileOptimizationRun(baseOptions = {}) {
+  const source = isPlainObject(baseOptions) ? baseOptions : {};
+  const methodRaw = String(source.method || 'kkt').trim().toLowerCase();
+  const method = methodRaw === 'cd' || methodRaw === 'coordinatedescent'
+    ? 'cd'
+    : methodRaw === 'lm'
+      ? 'lm'
+      : 'kkt';
+  const common = { ...source, method, profile: true };
+
+  const deepClone = (value) => {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const originalSystemConfig = loadSystemConfigurationsRaw();
+  const baselineSystemConfig = deepClone(originalSystemConfig);
+  const restoreBaselineConfig = () => {
+    if (!baselineSystemConfig) return;
+    try {
+      saveSystemConfigurationsRaw(deepClone(baselineSystemConfig));
+    } catch (_) {}
+  };
+
+  let runError = null;
+  let result = null;
+  let elapsedMs = 0;
+  let profile = null;
+  try {
+    restoreBaselineConfig();
+    const t0 = nowMs();
+    result = await runOptimizationMVP(common);
+    elapsedMs = nowMs() - t0;
+    profile = getLastOptimizeProfile();
+  } catch (error) {
+    runError = error;
+    profile = getLastOptimizeProfile();
+  } finally {
+    restoreBaselineConfig();
+  }
+
+  const timing = pickTimingMetricsFromProfile(profile);
+  const kkt = method === 'kkt' ? pickKktFdMetricsFromProfile(profile) : null;
+  const analyticCandidates = pickAnalyticDerivativeCandidates(profile, {
+    limit: Number(source.analyticCandidateLimit ?? 3) || 3,
+    minCalls: Number(source.analyticCandidateMinCalls ?? 5) || 5,
+    minMs: Number(source.analyticCandidateMinMs ?? 1) || 1,
+    hotPct: Number(source.analyticCandidateHotPct ?? 2) || 2
+  });
+  const counts = profile?.counts && typeof profile.counts === 'object'
+    ? {
+        kktFiniteDiffJacobianMs: Number(profile.counts.kktFiniteDiffJacobianMs) || 0,
+        kktCandidateEvalCount: Number(profile.counts.kktCandidateEvalCount) || 0,
+        kktAcceptedSteps: Number(profile.counts.kktAcceptedSteps) || 0,
+        kktRejectedSteps: Number(profile.counts.kktRejectedSteps) || 0,
+        kktLineSearchBacktracks: Number(profile.counts.kktLineSearchBacktracks) || 0,
+        calculateOperandValueCalls: Number(profile.counts.calculateOperandValueCalls) || 0,
+        operandValueCacheHits: Number(profile.counts.operandValueCacheHits) || 0,
+        operandValueCacheMisses: Number(profile.counts.operandValueCacheMisses) || 0
+      }
+    : {};
+  const summary = {
+    method,
+    elapsedMs,
+    result: result
+      ? {
+          ok: !!result.ok,
+          aborted: !!result.aborted,
+          iterations: Number(result.iterations) || 0,
+          best: Number.isFinite(Number(result.best)) ? Number(result.best) : null,
+          feasible: result.feasible === undefined ? null : !!result.feasible,
+          violationScore: Number.isFinite(Number(result.violationScore)) ? Number(result.violationScore) : null,
+          softPenalty: Number.isFinite(Number(result.softPenalty)) ? Number(result.softPenalty) : null,
+          reason: result.reason || null
+        }
+      : null,
+    timing,
+    kkt,
+    counts,
+    dominantSection: Array.isArray(profile?.sectionRows) ? (profile.sectionRows[0] || null) : null,
+    dominantOperand: profile?.dominantOperand || null,
+    dominantOperandCfg: profile?.dominantOperandCfg || null,
+    analyticCandidates,
+    error: runError ? String(runError instanceof Error ? runError.message : runError) : null
+  };
+
+  try {
+    console.groupCollapsed('[OptimizerMVP] single-run profile', {
+      method,
+      ok: result ? !!result.ok : null,
+      elapsedMs: Math.round(elapsedMs)
+    });
+    console.log('summary', summary);
+    console.groupEnd();
+  } catch (_) {}
+
+  return {
+    options: common,
+    result,
+    elapsedMs,
+    profile,
+    summary,
+    timing,
+    kkt,
+    analyticCandidates,
+    error: runError
   };
 }
 
@@ -2845,17 +3023,6 @@ function updateActiveOpticalSystemOverrideFromBlocks(activeBlocks) {
     } catch (_) {}
   }
 }
-
-function getCurrentProgressRowsForRender() {
-  try {
-    const rows = (typeof globalThis !== 'undefined') ? globalThis.__cooptOpticalSystemRowsOverride : null;
-    if (!Array.isArray(rows) || rows.length === 0) return undefined;
-    return JSON.parse(JSON.stringify(rows));
-  } catch (_) {
-    return undefined;
-  }
-}
-
 function setJointDesignVariableValue({ blocksByConfigId, targetConfigIds, activeConfigId }, jointVariableId, newValue) {
   const { configId, baseId } = parseJointVariableId(jointVariableId);
   const activeId = String(activeConfigId ?? '').trim();
@@ -3030,7 +3197,10 @@ function normalizeRequirementRow(raw, systemConfig, activeConfigId) {
   };
 }
 
-function getSystemRequirementsRaw(systemConfig) {
+function getSystemRequirementsRaw(systemConfig, overrideRows = null) {
+  if (Array.isArray(overrideRows) && overrideRows.length > 0) {
+    return overrideRows;
+  }
   try {
     if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.getData === 'function') {
       const d = window.systemRequirementsEditor.getData();
@@ -3276,7 +3446,8 @@ function buildResidualItemsForConfigs(expandedRequirements, configsById, multiSc
 function evaluateRequirementsAllConfigsAllScenarios({
   expandedRequirements,
   residualItems,
-  multiScenario
+  multiScenario,
+  collectRequirementSnapshots = false
 }) {
   const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
   if (!editor || typeof editor.calculateOperandValue !== 'function') {
@@ -3298,6 +3469,7 @@ function evaluateRequirementsAllConfigsAllScenarios({
   let softPenalty = 0;
   const hardViolations = [];
   const softViolations = [];
+  const requirementSnapshotsById = collectRequirementSnapshots ? new Map() : null;
 
   try {
     for (const it of items) {
@@ -3351,6 +3523,28 @@ function evaluateRequirementsAllConfigsAllScenarios({
       const evaluated = computeAmountOrPenalty(r.op, rawValue, r.target, r.tol);
       const current = evaluated.current;
       const amount = evaluated.amount;
+      try {
+        const reqId = (r?.id === undefined || r?.id === null) ? '' : String(r.id);
+        if (requirementSnapshotsById && reqId) {
+          const contribution = Number.isFinite(amount) ? (w * Math.max(0, amount)) : null;
+          const snapshot = {
+            id: r.id,
+            configId: cfgId,
+            scenarioId: it.scenarioId ? String(it.scenarioId) : null,
+            current: rawValue,
+            ok: evaluated.ok === true,
+            amount: Number.isFinite(amount) ? amount : null,
+            contribution: Number.isFinite(contribution) ? contribution : null,
+            reason: evaluated.reason,
+          };
+          const prevSnapshot = requirementSnapshotsById.get(reqId);
+          const prevContribution = Number(prevSnapshot?.contribution);
+          const nextContribution = Number(snapshot.contribution);
+          if (!prevSnapshot || !Number.isFinite(prevContribution) || (Number.isFinite(nextContribution) && nextContribution >= prevContribution)) {
+            requirementSnapshotsById.set(reqId, snapshot);
+          }
+        }
+      } catch (_) {}
       if (!Number.isFinite(amount) || amount <= 0) continue;
 
       const entry = {
@@ -3372,7 +3566,14 @@ function evaluateRequirementsAllConfigsAllScenarios({
       hardViolations.push(entry);
     }
 
-    return { feasible, violationScore, softPenalty, hardViolations, softViolations };
+    return {
+      feasible,
+      violationScore,
+      softPenalty,
+      hardViolations,
+      softViolations,
+      requirementSnapshots: requirementSnapshotsById ? Array.from(requirementSnapshotsById.values()) : undefined
+    };
   } finally {
     setScenarioOverrideGlobal((prev && typeof prev === 'object') ? prev : null);
   }
@@ -3612,7 +3813,6 @@ async function runCategoricalMaterialSweep({
             })(),
             current: best ? best.score : NaN,
             best: best ? best.score : NaN,
-            rows: getCurrentProgressRowsForRender(),
             multiScenario,
             kind: 'categorical',
             feasible: best ? best.feasible : undefined,
@@ -3741,23 +3941,20 @@ function defaultScaleForKey(key) {
     // so we use even asphere scaling as default (more common).
     // For odd asphere, scales will be slightly off but still reasonable.
     // 
-    // Scaling strategy: match typical coefficient magnitudes to make scaled values ~1.0
-    // 
-    // IMPROVEMENT: For higher-order terms (idx > 6), use slightly larger scale
-    // to improve numerical stability and convergence during optimization.
+    // Scaling strategy: match typical coefficient magnitudes to make scaled values ~1.0.
+    // Relax higher-order exponents further so A12+ terms do not become effectively frozen
+    // by tiny trust-region and finite-difference scales.
     if (idx === null) return 1e-12;
-    
-    // Default to even asphere formula: r^(2*idx+2)
-    const power = 2 * (idx + 1);  // idx=1→4, idx=2→6, idx=7→14, idx=8→16
-    let exp = -power;              // base scale exponent
-    
-    // For higher-order terms (idx > 6: A14+), increase scale for better convergence
-    if (idx > 6) {
-      exp += 2;  // e.g., A14: 1e-14 → 1e-12, A16: 1e-16 → 1e-14
-    }
-    
+
+    const power = 2 * (idx + 1);
+    let exp = -power;
+    if (power >= 20) exp += 6;
+    else if (power >= 16) exp += 5;
+    else if (power >= 12) exp += 4;
+    else if (power >= 8) exp += 2;
+
     const sc = Math.pow(10, exp);
-    return (Number.isFinite(sc) && sc > 0) ? sc : 1e-20;  // fallback for very high orders
+    return (Number.isFinite(sc) && sc > 0) ? sc : 1e-18;
   }
   if (/conic$/i.test(s)) return 1;
   if (/radius$/i.test(s)) return 100;
@@ -3871,10 +4068,24 @@ function resetAsphericCoefficientsToZero({ configsById, targetConfigIds }) {
  */
 export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
+  const kktUseWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer === true;
+  const shouldPreferNativeRoute = isTauriRuntime()
+    && opts.forceTs !== true
+    && (opts.forceNative === true || opts.preferNative === true);
 
-  // TS-first migration: use Rust native optimizer only when explicitly requested.
-  if (isTauriRuntime() && opts.forceNative === true && opts.forceTs !== true) {
-    return runOptimizationMvpnative(opts);
+  // Native route is available on Tauri. `forceNative` keeps strict behavior for
+  // benchmarking, while `preferNative` falls back to TS when native startup fails.
+  if (shouldPreferNativeRoute) {
+    const nativeResult = await runOptimizationMvpnative(opts);
+    if (opts.forceNative === true || nativeResult?.ok !== false || nativeResult?.aborted) {
+      return nativeResult;
+    }
+    try {
+      console.warn('[OptimizerMVP] Native optimizer failed, falling back to TS optimizer.', {
+        reason: nativeResult?.reason,
+        nativeMessage: nativeResult?.nativeMessage,
+      });
+    } catch (_) {}
   }
 
   // Lightweight profiler to quickly identify bottlenecks.
@@ -4321,7 +4532,7 @@ export async function runOptimizationMVP(options = {}) {
           jsOverheadPctOfMeasured: Math.round((jsMs / totalMeasured) * 1000) / 10,
           wasmToObjectiveRatio: objectiveMs > 0 ? Math.round((wasmMs / objectiveMs) * 1000) / 1000 : null,
           objectiveToWasmRatio: wasmMs > 0 ? Math.round((objectiveMs / wasmMs) * 1000) / 1000 : null,
-          kktWasmPilotEnabled: opts?.kktUseWasmPilotOptimizer === true,
+          kktWasmPilotEnabled: kktUseWasmPilotOptimizer,
           kktMatrixFreeEnabled: opts?.kktUseMatrixFreeCore === true,
           kktWasmPilotHitRatePct: Math.round(pilotHitRatePct * 10) / 10,
           kktWasmPilotLastReason: pilotLastReason,
@@ -4418,8 +4629,9 @@ export async function runOptimizationMVP(options = {}) {
   const asphericRegularization = Number.isFinite(Number(opts.asphericRegularization)) ? Math.max(0, Number(opts.asphericRegularization)) : 0;
 
   // Continuation/staged optimization for aspherics.
-  // Enabled by default for LM because it significantly reduces local-minimum trapping.
-  const staged = (opts.staged === undefined) ? true : !!opts.staged;
+  // Default OFF so LM can optimize all enabled coefficients immediately unless the user
+  // explicitly opts into staged continuation.
+  const staged = (opts.staged === undefined) ? false : !!opts.staged;
   const stageMaxCoefList = staged ? buildStagedCoefMaxList(opts) : [10];
   // Fast stall limit: move to next stage quickly
   const stageStallLimit = Number.isFinite(Number(opts.stageStallLimit)) ? Math.max(1, Math.floor(Number(opts.stageStallLimit))) : 5;
@@ -4454,7 +4666,17 @@ export async function runOptimizationMVP(options = {}) {
   // Backtracking line search along LM step.
   const backtracking = (opts.backtracking === undefined) ? true : !!opts.backtracking;
   const backtrackingMaxTries = Number.isFinite(Number(opts.backtrackingMaxTries)) ? Math.max(1, Math.floor(Number(opts.backtrackingMaxTries))) : 5;
-
+  const lineSearchC = Number.isFinite(Number(opts.lineSearchC)) ? Math.max(1e-8, Number(opts.lineSearchC)) : 0.1;
+  const lineSearchRho = Number.isFinite(Number(opts.lineSearchRho)) ? Math.min(0.95, Math.max(1e-3, Number(opts.lineSearchRho))) : 0.5;
+  const lineSearchMaxBacktrack = Number.isFinite(Number(opts.lineSearchMaxBacktrack)) ? Math.max(1, Math.floor(Number(opts.lineSearchMaxBacktrack))) : 20;
+  const lmGeodesicAcceleration = (opts.lmGeodesicAcceleration === undefined) ? true : !!opts.lmGeodesicAcceleration;
+  const lmGeodesicAsphereOnly = (opts.lmGeodesicAsphereOnly === undefined) ? true : !!opts.lmGeodesicAsphereOnly;
+  const lmGeodesicProbeAlpha = Number.isFinite(Number(opts.lmGeodesicProbeAlpha))
+    ? Math.max(1e-3, Math.min(0.5, Number(opts.lmGeodesicProbeAlpha)))
+    : 0.1;
+  const lmGeodesicAccelLimit = Number.isFinite(Number(opts.lmGeodesicAccelLimit))
+    ? Math.max(0.05, Math.min(2.0, Number(opts.lmGeodesicAccelLimit)))
+    : 0.75;
   // If the LM step becomes (near-)zero (common when residuals are flat / discontinuous),
   // rho tends to 0 and we can get stuck rejecting forever. Allow a tiny random exploration
   // step inside the same trust-region envelope to break out.
@@ -4465,10 +4687,27 @@ export async function runOptimizationMVP(options = {}) {
   const kktUseMatrixFreeCore = opts?.kktUseMatrixFreeCore === true;
   const kktMatrixFreePriority = opts?.kktMatrixFreePriority === true;
   const phaseCDebug = opts?.phaseCDebug === true;
+  let kktWasmPilotFallbackLogged = false;
 
   if (useWasmLinearSolve) {
     try {
       await preloadOptimizerWasmBridge();
+    } catch (_) {}
+  }
+
+  if (method === 'kkt') {
+    try {
+      const wasmDbg = getOptimizerWasmBridgeDebugInfo();
+      console.log('[WASM-PILOT] Route configured', {
+        runtime: isTauriRuntime() ? 'tauri' : 'web',
+        enabled: kktUseWasmPilotOptimizer,
+        explicitOverride: opts?.kktUseWasmPilotOptimizer !== undefined,
+        wasmBridgeReady: wasmDbg?.ready === true,
+        hasPilotBufferAbi: wasmDbg?.hasPilotBufferAbi === true,
+        hasBuildNormalEq: wasmDbg?.hasBuildNormalEq === true,
+        initSource: wasmDbg?.initSource || 'unknown',
+        initError: wasmDbg?.initError || null,
+      });
     } catch (_) {}
   }
 
@@ -4994,12 +5233,29 @@ export async function runOptimizationMVP(options = {}) {
     }
   };
   const getBestEvalSoFar = () => bestFeasibleEval || bestInfeasibleEval;
+  let __lastRequirementsSnapshotAt = 0;
+  const __requirementsSnapshotThrottleMs = 120;
   const evalCompositeFromRequirements = () => {
+      const now = Date.now();
+      const shouldCollectRequirementSnapshots = (now - __lastRequirementsSnapshotAt) >= __requirementsSnapshotThrottleMs;
     const req = evaluateRequirementsAllConfigsAllScenarios({
       expandedRequirements,
       residualItems,
-      multiScenario
+        multiScenario,
+        collectRequirementSnapshots: shouldCollectRequirementSnapshots
     });
+    try {
+        if (shouldCollectRequirementSnapshots) {
+        __lastRequirementsSnapshotAt = now;
+        const prevDbg = getLastOptimizerResidualDebug();
+        setLastOptimizerResidualDebug({
+          ...(prevDbg && typeof prevDbg === 'object' ? prevDbg : {}),
+          at: now,
+          method,
+          requirementsSnapshot: Array.isArray(req?.requirementSnapshots) ? req.requirementSnapshots : []
+        });
+      }
+    } catch (_) {}
     const violationScore = toFiniteNumber(req.violationScore, 0);
     const softPenalty = toFiniteNumber(req.softPenalty, 0);
     const score = violationScore + softPenalty;
@@ -5009,6 +5265,7 @@ export async function runOptimizationMVP(options = {}) {
       feasible: !!req.feasible,
       violationScore,
       softPenalty,
+      requirementSnapshots: Array.isArray(req?.requirementSnapshots) ? req.requirementSnapshots : [],
       hardViolations: req.hardViolations || [],
       softViolations: req.softViolations || []
     };
@@ -5039,7 +5296,8 @@ export async function runOptimizationMVP(options = {}) {
     .map(coerceBlankAsphereToZero)
     .filter(v => v && typeof v.value === 'number' && Number.isFinite(v.value));
   const catVars = Array.isArray(jointVars.categoricalMaterial) ? jointVars.categoricalMaterial : [];
-  
+  const asphereVarCount = vars.filter(v => isAsphereCoefKey(v?.key)).length;
+
   if (vars.length === 0 && catVars.length === 0) {
     return { ok: false, reason: formatNoVariableReason(activeCfg) };
   }
@@ -5111,13 +5369,82 @@ export async function runOptimizationMVP(options = {}) {
     return solved;
   };
 
+  const updateTrustRegionRadiusWithOptionalWasm = ({
+    predictedReduction,
+    actualReduction,
+    currentRadius,
+    minRadius,
+    maxRadius,
+    eta1 = 0.25,
+    eta2 = 0.75,
+    gammaDec = 0.5,
+    gammaInc = 2.0
+  }) => {
+    const nextRadius = __profileBucketWrap('time_wasm_call', () => updateTrustRegionRadiusWasm(
+      predictedReduction,
+      actualReduction,
+      currentRadius,
+      eta1,
+      eta2,
+      gammaDec,
+      gammaInc,
+      minRadius,
+      maxRadius
+    ));
+    return Number.isFinite(nextRadius) ? nextRadius : null;
+  };
+
+  const sanitizeJacobianRows = (J, rowCount, colCount) => {
+    const safeRowCount = Number.isFinite(Number(rowCount)) ? Math.max(0, Math.floor(Number(rowCount))) : 0;
+    const safeColCount = Number.isFinite(Number(colCount)) ? Math.max(0, Math.floor(Number(colCount))) : 0;
+    const out = new Array(safeRowCount);
+    for (let i = 0; i < safeRowCount; i++) {
+      const srcRow = Array.isArray(J?.[i]) ? J[i] : [];
+      const dstRow = new Array(safeColCount).fill(0);
+      for (let j = 0; j < safeColCount; j++) {
+        const value = Number(srcRow[j]);
+        dstRow[j] = Number.isFinite(value) ? value : 0;
+      }
+      out[i] = dstRow;
+    }
+    return out;
+  };
+
   const buildNormalEquationsWithOptionalWasm = (J, r, m, n) => {
     if (__profile && __profile.counts) {
       __profile.counts.wasmNormalEqCalls = (Number(__profile.counts.wasmNormalEqCalls) || 0) + 1;
     }
 
+    const rowCount = Math.max(0, Math.min(
+      Number.isFinite(Number(m)) ? Math.floor(Number(m)) : 0,
+      Array.isArray(J) ? J.length : 0,
+      Array.isArray(r) ? r.length : 0,
+    ));
+    const colCount = Number.isFinite(Number(n)) ? Math.max(0, Math.floor(Number(n))) : 0;
+
+    if (rowCount <= 0 || colCount <= 0) {
+      return {
+        A: Array.from({ length: colCount }, () => Array(colCount).fill(0)),
+        g: Array(colCount).fill(0),
+      };
+    }
+
+    const sanitizedJ = new Array(rowCount);
+    const sanitizedR = new Array(rowCount);
+    for (let i = 0; i < rowCount; i++) {
+      const srcRow = Array.isArray(J?.[i]) ? J[i] : [];
+      const dstRow = new Array(colCount).fill(0);
+      for (let j = 0; j < colCount; j++) {
+        const value = Number(srcRow[j]);
+        dstRow[j] = Number.isFinite(value) ? value : 0;
+      }
+      sanitizedJ[i] = dstRow;
+      const residual = Number(r[i]);
+      sanitizedR[i] = Number.isFinite(residual) ? residual : 0;
+    }
+
     if (useWasmLinearSolve) {
-      const wasmBuilt = __profileBucketWrap('time_wasm_call', () => buildNormalEquationsWithOptimizerWasm(J, r, m, n));
+      const wasmBuilt = __profileBucketWrap('time_wasm_call', () => buildNormalEquationsWithOptimizerWasm(sanitizedJ, sanitizedR, rowCount, colCount));
       if (wasmBuilt && Array.isArray(wasmBuilt.A) && Array.isArray(wasmBuilt.g)) {
         if (__profile && __profile.counts) {
           __profile.counts.wasmNormalEqHits = (Number(__profile.counts.wasmNormalEqHits) || 0) + 1;
@@ -5131,20 +5458,20 @@ export async function runOptimizationMVP(options = {}) {
     }
 
     return __profileBucketWrap('time_js_overhead', () => {
-      const A = Array.from({ length: n }, () => Array(n).fill(0));
-      const g = Array(n).fill(0);
-      for (let j = 0; j < n; j++) {
+      const A = Array.from({ length: colCount }, () => Array(colCount).fill(0));
+      const g = Array(colCount).fill(0);
+      for (let j = 0; j < colCount; j++) {
         let gj = 0;
-        for (let i = 0; i < m; i++) {
-          gj += J[i][j] * r[i];
+        for (let i = 0; i < rowCount; i++) {
+          gj += sanitizedJ[i][j] * sanitizedR[i];
         }
         g[j] = gj;
       }
-      for (let j = 0; j < n; j++) {
+      for (let j = 0; j < colCount; j++) {
         for (let k = 0; k <= j; k++) {
           let s = 0;
-          for (let i = 0; i < m; i++) {
-            s += J[i][j] * J[i][k];
+          for (let i = 0; i < rowCount; i++) {
+            s += sanitizedJ[i][j] * sanitizedJ[i][k];
           }
           A[j][k] = s;
           A[k][j] = s;
@@ -5204,15 +5531,21 @@ export async function runOptimizationMVP(options = {}) {
 
     if (!Array.isArray(J) || !Array.isArray(r) || n <= 0) return completeMatrixFree(null, 'invalid-input-shape');
 
-    const m = J.length;
-    if (m <= 0 || r.length !== m) return completeMatrixFree(null, 'invalid-residual-shape');
+    const m = Math.max(0, Math.min(J.length, r.length));
+    if (m <= 0) return completeMatrixFree(null, 'invalid-residual-shape');
+
+    const sanitizedJ = sanitizeJacobianRows(J, m, n);
+    const sanitizedR = new Array(m);
+    for (let i = 0; i < m; i++) {
+      const residual = Number(r[i]);
+      sanitizedR[i] = Number.isFinite(residual) ? residual : 0;
+    }
 
     const jFlat = new Float64Array(m * n);
     for (let i = 0; i < m; i++) {
-      if (!Array.isArray(J[i]) || J[i].length < n) return completeMatrixFree(null, 'invalid-jacobian-row');
       const rowBase = i * n;
       for (let j = 0; j < n; j++) {
-        const value = Number(J[i][j]);
+        const value = Number(sanitizedJ[i][j]);
         if (!Number.isFinite(value)) return completeMatrixFree(null, 'non-finite-jacobian');
         jFlat[rowBase + j] = value;
       }
@@ -5226,7 +5559,7 @@ export async function runOptimizationMVP(options = {}) {
     for (let j = 0; j < n; j++) {
       let gj = 0;
       for (let i = 0; i < m; i++) {
-        gj += J[i][j] * r[i];
+        gj += sanitizedJ[i][j] * sanitizedR[i];
       }
       g[j] = gj;
     }
@@ -6030,6 +6363,7 @@ export async function runOptimizationMVP(options = {}) {
       const ids = curVars.map(v => v.id);
       const keys = curVars.map(v => v.key);
       const scales = curVars.map(v => getScaleForVar(v));
+      const hasAsphereVars = curVars.some((v) => isAsphereCoefKey(v?.key) || /conic$/i.test(String(v?.key || '')));
 
       // Evaluate base residuals
       const base = await evalResidualsNowProfiled();
@@ -6291,6 +6625,7 @@ export async function runOptimizationMVP(options = {}) {
       let acceptedCost = Infinity;
       let acceptedAlpha = 1;
       let acceptedRho = 0;
+      let acceptedDxStep = null;
 
       const predictedReductionForStep = (dxStep) => {
         // Predicted decrease using the linearized model: m(0) - m(dx)
@@ -6322,8 +6657,115 @@ export async function runOptimizationMVP(options = {}) {
         }
       };
 
+      const computeLmGeodesicStep = async (baseStep) => {
+        if (!lmGeodesicAcceleration) return null;
+        if (lmGeodesicAsphereOnly && !hasAsphereVars) return null;
+        if (!Array.isArray(baseStep) || baseStep.length !== n) return null;
+
+        let velocityNormScaled = 0;
+        for (let i = 0; i < n; i++) {
+          const si = scales[i] || 1;
+          const vi = baseStep[i] / si;
+          velocityNormScaled += vi * vi;
+        }
+        velocityNormScaled = Math.sqrt(Math.max(0, velocityNormScaled));
+        if (!Number.isFinite(velocityNormScaled) || velocityNormScaled < 1e-12) return null;
+
+        const probeAlpha = lmGeodesicProbeAlpha;
+        const xProbe = x0.map((v, i) => v + probeAlpha * baseStep[i]);
+        for (let k = 0; k < n; k++) {
+          setJointDesignVariableValue(jointState, ids[k], xProbe[k]);
+        }
+        maybeSave('candidate');
+
+        let probeResiduals = null;
+        try {
+          const probeEval = await evalResidualsNowProfiled();
+          probeResiduals = Array.isArray(probeEval?.residuals) ? probeEval.residuals : null;
+        } finally {
+          for (let k = 0; k < n; k++) {
+            setJointDesignVariableValue(jointState, ids[k], x0[k]);
+          }
+          maybeSave('restore');
+        }
+
+        if (!Array.isArray(probeResiduals) || probeResiduals.length < m) return null;
+
+        const fvv = new Array(m).fill(0);
+        for (let row = 0; row < m; row++) {
+          let jv = 0;
+          const jRow = J[row];
+          for (let col = 0; col < n; col++) {
+            jv += Number(jRow?.[col]) * Number(baseStep[col]);
+          }
+          const probeResidual = Number(probeResiduals[row]);
+          const baseResidual = Number(r0[row]);
+          const numerator = probeResidual - baseResidual - probeAlpha * jv;
+          const secondDirectional = (2 * numerator) / (probeAlpha * probeAlpha);
+          fvv[row] = Number.isFinite(secondDirectional) ? secondDirectional : 0;
+        }
+
+        const rhsAccel = buildNormalEquationsWithOptionalWasm(J, fvv, m, n).g.map((v) => -v);
+        const accel = solveLinearSystemWithOptionalWasm(Ad, rhsAccel, true);
+        if (!Array.isArray(accel) || accel.length !== n) return null;
+
+        let accelNormScaled = 0;
+        for (let i = 0; i < n; i++) {
+          const si = scales[i] || 1;
+          const ai = Number(accel[i]) / si;
+          accelNormScaled += ai * ai;
+        }
+        accelNormScaled = Math.sqrt(Math.max(0, accelNormScaled));
+        if (!Number.isFinite(accelNormScaled)) return null;
+
+        const accelRatio = (2 * accelNormScaled) / Math.max(1e-12, velocityNormScaled);
+        if (!Number.isFinite(accelRatio) || accelRatio > lmGeodesicAccelLimit) {
+          return null;
+        }
+
+        const corrected = baseStep.map((v, i) => v + 0.5 * Number(accel[i]));
+        if (trustRegion) {
+          let maxAbs = 0;
+          for (let i = 0; i < n; i++) {
+            const si = scales[i] || 1;
+            const di = corrected[i] / si;
+            const a = Math.abs(di);
+            if (a > maxAbs) maxAbs = a;
+          }
+          const delta = trustRegionDeltaEff;
+          if (Number.isFinite(maxAbs) && maxAbs > delta && maxAbs > 0) {
+            const factor = delta / maxAbs;
+            for (let i = 0; i < n; i++) corrected[i] *= factor;
+          }
+        }
+
+        for (const value of corrected) {
+          if (!Number.isFinite(value)) return null;
+        }
+
+        return {
+          step: corrected,
+          accelRatio,
+          velocityNormScaled,
+          accelNormScaled
+        };
+      };
+
+      let geodesicBaseStep = null;
+      if (!exploreThisIter) {
+        try {
+          geodesicBaseStep = await computeLmGeodesicStep(dx);
+        } catch (_) {
+          geodesicBaseStep = null;
+        }
+      }
+
       for (const alpha of alphas) {
-        const dxStep = exploreThisIter ? makeRandomStep(alpha) : dx.map(v => alpha * v);
+        const dxStep = exploreThisIter
+          ? makeRandomStep(alpha)
+          : ((alpha === 1 && geodesicBaseStep && Array.isArray(geodesicBaseStep.step))
+            ? geodesicBaseStep.step.slice()
+            : dx.map(v => alpha * v));
         // Candidate x
         const xCand = x0.map((v, i) => v + dxStep[i]);
         for (let k = 0; k < n; k++) {
@@ -6356,6 +6798,7 @@ export async function runOptimizationMVP(options = {}) {
               softPenalty: candEval.softPenalty,
               alpha,
               rho,
+              geodesicAccelRatio: (alpha === 1 && geodesicBaseStep) ? Number(geodesicBaseStep.accelRatio) : undefined,
               stageIndex,
               stageMaxCoef: maxCoef
             });
@@ -6372,6 +6815,7 @@ export async function runOptimizationMVP(options = {}) {
           acceptedCost = cost1;
           acceptedAlpha = alpha;
           acceptedRho = rho;
+          acceptedDxStep = dxStep.slice();
           break;
         }
 
@@ -6400,12 +6844,24 @@ export async function runOptimizationMVP(options = {}) {
         // only reliable intermittently.
         if (trustRegion) {
           const minDelta = trustRegionDelta * 0.1; // Prevent collapse to zero
-          if (acceptedRho > 0.75) {
+          const actualReduction = Number.isFinite(cost0) && Number.isFinite(acceptedCost) ? (cost0 - acceptedCost) : 0;
+          const predictedReduction = acceptedDxStep ? predictedReductionForStep(acceptedDxStep) : Number.NaN;
+          const wasmRadius = updateTrustRegionRadiusWithOptionalWasm({
+            predictedReduction,
+            actualReduction,
+            currentRadius: trustRegionDeltaEff,
+            minRadius: minDelta,
+            maxRadius: trustRegionDeltaMax,
+            gammaDec: 0.95,
+            gammaInc: 1.25
+          });
+          if (Number.isFinite(wasmRadius)) {
+            trustRegionDeltaEff = wasmRadius;
+          } else if (acceptedRho > 0.75) {
             trustRegionDeltaEff = Math.min(trustRegionDeltaMax, Math.max(trustRegionDelta, trustRegionDeltaEff * 1.25));
           } else if (acceptedRho > 0.25) {
             trustRegionDeltaEff = Math.min(trustRegionDeltaMax, Math.max(trustRegionDelta, trustRegionDeltaEff * 1.05));
           } else {
-            // Stability: don't shrink below minimum threshold
             trustRegionDeltaEff = Math.max(minDelta, trustRegionDeltaEff * 0.95);
           }
         }
@@ -6442,7 +6898,6 @@ export async function runOptimizationMVP(options = {}) {
               iter,
               current: acceptedEval.score,
               best,
-              rows: getCurrentProgressRowsForRender(),
               lambda,
               method: 'lm',
               multiScenario,
@@ -6473,7 +6928,17 @@ export async function runOptimizationMVP(options = {}) {
         if (trustRegion) {
           // Stability tuning: On rejection, shrink toward base with minimum threshold
           const minDelta = trustRegionDelta * 0.1;
-          trustRegionDeltaEff = Math.max(minDelta, trustRegionDeltaEff * 0.9);
+          const rejectedPred = predictedReductionForStep(dx);
+          const wasmRadius = updateTrustRegionRadiusWithOptionalWasm({
+            predictedReduction: rejectedPred,
+            actualReduction: 0,
+            currentRadius: trustRegionDeltaEff,
+            minRadius: minDelta,
+            maxRadius: trustRegionDeltaMax,
+            gammaDec: 0.9,
+            gammaInc: 1.1
+          });
+          trustRegionDeltaEff = Number.isFinite(wasmRadius) ? wasmRadius : Math.max(minDelta, trustRegionDeltaEff * 0.9);
         }
         
         // Stability check: if lambda is becoming extremely large, reset
@@ -7037,40 +7502,6 @@ export async function runOptimizationMVP(options = {}) {
           }
         }
 
-        // Check aspheric coefficient monotonicity
-        const asphericGroups = new Map<string, Array<{idx: number, order: number, value: number}>>();
-        for (let i = 0; i < Math.min(varIds.length, xClamped.length); i++) {
-          const varId = varIds[i];
-          const match = varId.match(/^(\d+):(.+?)\.(.+Coef)(\d+)$/);
-          if (match) {
-            const [_, blockId, blockName, coefPrefix, orderStr] = match;
-            const order = parseInt(orderStr);
-            if (order >= 4) {
-              const key = `${blockId}:${blockName}.${coefPrefix}`;
-              if (!asphericGroups.has(key)) asphericGroups.set(key, []);
-              asphericGroups.get(key)!.push({idx: i, order, value: xClamped[i]});
-            }
-          }
-        }
-
-        for (const [_, group] of asphericGroups) {
-          if (group.length < 2) continue;
-          group.sort((a, b) => a.order - b.order);
-          for (let i = 1; i < group.length; i++) {
-            // 【修正】微分不可能な Math.abs を避け、値の二乗で比較（滑らかな関数）
-            const prevSq = group[i - 1].value * group[i - 1].value;
-            const currSq = group[i].value * group[i].value;
-            if (prevSq > 1e-30) {
-              // currAbs > 1.2 * prevAbs  =>  currSq > 1.44 * prevSq
-              const violation = currSq - 1.44 * prevSq;
-              if (violation > 0) {
-                // 【修正】1e6は強すぎて地形を壊すため、10程度に抑えて滑らかにする
-                constraints.push(violation * 10);
-              }
-            }
-          }
-        }
-
         const feasible = constraints.every(c => c <= 0);
         return { objective, constraints, feasible, residuals };
       };
@@ -7139,35 +7570,8 @@ export async function runOptimizationMVP(options = {}) {
         return (op === '<=' || op === '>=') ? (acc + 1) : acc;
       }, 0);
 
-      const buildActiveAsphereMonotonicConstraints = (xClamped: number[]): Array<{ prevIdx: number; currIdx: number; value: number }> => {
-        const groups = new Map<string, Array<{ idx: number; order: number; value: number }>>();
-        for (let i = 0; i < Math.min(varIds.length, xClamped.length); i++) {
-          const varId = String(varIds[i] ?? '');
-          const match = varId.match(/^(\d+):(.+?)\.(.+Coef)(\d+)$/);
-          if (!match) continue;
-          const order = parseInt(match[4], 10);
-          if (!(Number.isFinite(order) && order >= 4)) continue;
-          const key = `${match[1]}:${match[2]}.${match[3]}`;
-          if (!groups.has(key)) groups.set(key, []);
-          groups.get(key)!.push({ idx: i, order, value: Number(xClamped[i]) || 0 });
-        }
-
-        const out: Array<{ prevIdx: number; currIdx: number; value: number }> = [];
-        for (const [, group] of groups) {
-          if (!Array.isArray(group) || group.length < 2) continue;
-          group.sort((a, b) => a.order - b.order);
-          for (let i = 1; i < group.length; i++) {
-            const prev = group[i - 1];
-            const curr = group[i];
-            const prevSq = prev.value * prev.value;
-            const currSq = curr.value * curr.value;
-            if (!(prevSq > 1e-30)) continue;
-            const violation = currSq - 1.44 * prevSq;
-            if (!(violation > 0)) continue;
-            out.push({ prevIdx: prev.idx, currIdx: curr.idx, value: violation * 10 });
-          }
-        }
-        return out;
+      const buildActiveAsphereMonotonicConstraints = (_xClamped: number[]): Array<{ prevIdx: number; currIdx: number; value: number }> => {
+        return [];
       };
 
       const smoothMaxDerivative = (val: number, beta: number): number => {
@@ -7436,6 +7840,7 @@ export async function runOptimizationMVP(options = {}) {
           const groups = buildDisjointColumnGroups(allCols, jacobianColumnSupports || [], kktFdGroupingMaxCols);
           groupCount = groups.length;
           for (const group of groups) {
+            if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
             if (!Array.isArray(group) || group.length === 0) continue;
             const xp = x.slice();
             for (const col of group) {
@@ -7472,6 +7877,7 @@ export async function runOptimizationMVP(options = {}) {
           const activeCols = Array.from({ length: n }, (_, i) => i).filter((col) => !analyticEqCols.has(col));
 
           for (const i of activeCols) {
+            if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
             let xp = Array.isArray(batchPoints) && Array.isArray(batchPoints[i])
               ? batchPoints[i].slice()
               : x.slice();
@@ -7617,6 +8023,7 @@ export async function runOptimizationMVP(options = {}) {
 
           const batchPoints = __profileBucketWrap('time_wasm_call', () => generateFiniteDifferencePerturbationPointsWasm(x, partialSteps));
           for (const col of validCols) {
+            if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
             let xp = Array.isArray(batchPoints) && Array.isArray(batchPoints[col])
               ? batchPoints[col].slice()
               : x.slice();
@@ -7653,6 +8060,7 @@ export async function runOptimizationMVP(options = {}) {
           effectiveEvals = validCols.length;
         } else {
           for (const group of groups) {
+            if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
             if (!Array.isArray(group) || group.length === 0) continue;
             const xp = x.slice();
             for (const col of group) {
@@ -8077,22 +8485,22 @@ export async function runOptimizationMVP(options = {}) {
       // Unified 1-loop: iterate with immediate multiplier updates (SQP-like behavior)
       const kktBroydenMaxSkips = Number.isFinite(Number(opts?.kktBroydenMaxSkips))
         ? Math.max(2, Math.floor(Number(opts.kktBroydenMaxSkips)))
-        : 16;
+        : 40;
       const kktBroydenMaxRejectStreak = Number.isFinite(Number(opts?.kktBroydenMaxRejectStreak))
         ? Math.max(1, Math.floor(Number(opts.kktBroydenMaxRejectStreak)))
         : 8;
       const kktJacobianRefreshInterval = Number.isFinite(Number(opts?.kktJacobianRefreshInterval))
         ? Math.max(2, Math.floor(Number(opts.kktJacobianRefreshInterval)))
-        : 8;
+        : 18;
       const kktJacobianMaxReuseWithoutRefresh = Number.isFinite(Number(opts?.kktJacobianMaxReuseWithoutRefresh))
         ? Math.max(1, Math.floor(Number(opts.kktJacobianMaxReuseWithoutRefresh)))
-        : 12;
+        : 36;
       const kktJacobianRejectRefreshInterval = Number.isFinite(Number(opts?.kktJacobianRejectRefreshInterval))
         ? Math.max(2, Math.floor(Number(opts.kktJacobianRejectRefreshInterval)))
-        : 4;
+        : 10;
       const kktForceRefreshOnRejectStreak = Number.isFinite(Number(opts?.kktForceRefreshOnRejectStreak))
         ? Math.max(2, Math.floor(Number(opts.kktForceRefreshOnRejectStreak)))
-        : 4;
+        : 8;
       const kktJacobianFullRefreshInterval = Number.isFinite(Number(opts?.kktJacobianFullRefreshInterval))
         ? Math.max(8, Math.floor(Number(opts.kktJacobianFullRefreshInterval)))
         : 24;
@@ -8104,7 +8512,7 @@ export async function runOptimizationMVP(options = {}) {
         : 2e-4;
       const kktJacobianPoorModelStreakForRefresh = Number.isFinite(Number(opts?.kktJacobianPoorModelStreakForRefresh))
         ? Math.max(1, Math.floor(Number(opts.kktJacobianPoorModelStreakForRefresh)))
-        : 2;
+        : 3;
       let jacobianReuseSinceRefresh = 0;
       let forceJacobianRefreshNextIter = false;
       let poorModelStreak = 0;
@@ -8113,6 +8521,9 @@ export async function runOptimizationMVP(options = {}) {
         completedIterations = iter + 1;
         const __iterT0 = nowMs();
         let postEvalCached: any = null;
+        // 【高速化】受理時に評価した composite を反復末尾の進捗評価で再利用するためのキャッシュ。
+        // 設計変数が変化する経路（stagnation auto-restart）では null に戻して無効化する。
+        let iterAcceptedCompositeEval: any = null;
         try {
           if (shouldStopKKT()) {
             console.log('⏸️  [AL] User stop requested at iter', iter);
@@ -8158,7 +8569,7 @@ export async function runOptimizationMVP(options = {}) {
 
         const jacobianRefreshMaxCols = Number.isFinite(Number(opts?.kktJacobianRefreshMaxCols))
           ? Math.max(1, Math.floor(Number(opts.kktJacobianRefreshMaxCols)))
-          : Math.max(4, Math.floor(n / 3));
+          : Math.max(3, Math.floor(n / 5));
         const jacobianPeriodicRefreshDue = (iter % kktJacobianRefreshInterval) === 0;
         const jacobianRefreshDueToReuseCap = jacobianReuseSinceRefresh >= kktJacobianMaxReuseWithoutRefresh;
         const jacobianRejectRefreshDue = kktRejectStreak > 0 && (kktRejectStreak % kktJacobianRejectRefreshInterval) === 0;
@@ -8264,6 +8675,8 @@ export async function runOptimizationMVP(options = {}) {
           }
         }
         
+        J = sanitizeJacobianRows(J, m, n);
+
         // Save current state for next Broyden update
         lastX = currentX.slice();
         lastR = r0.slice();
@@ -8418,6 +8831,17 @@ export async function runOptimizationMVP(options = {}) {
             const reason = String(dbg?.lastPilotReason || 'unknown');
             const detail = dbg?.lastPilotErrorDetail;
             __profile.counts.kktWasmPilotLastReason = detail ? `${reason}: ${String(detail)}` : reason;
+            if (!kktWasmPilotFallbackLogged) {
+              kktWasmPilotFallbackLogged = true;
+              console.warn('[WASM-PILOT] Falling back to JS/TS step solve', {
+                iter,
+                reason,
+                detail: detail ? String(detail) : null,
+                lastPilotPath: dbg?.lastPilotPath || 'none',
+                lastPilotBufferAttempted: dbg?.lastPilotBufferAttempted === true,
+                lastPilotBufferStatus: dbg?.lastPilotBufferStatus ?? null,
+              });
+            }
           } catch (_) {
             __profile.counts.kktWasmPilotLastReason = 'reason-read-failed';
           }
@@ -8444,6 +8868,7 @@ export async function runOptimizationMVP(options = {}) {
         // --- 2. Build normal equations: A = J^T J, g = J^T r ---
         let A: number[][] | null = null;
         let g: number[] | null = null;
+        let Ad: number[][] | null = null;
         if (!dx) {
           const ne = buildNormalEquationsWithOptionalWasm(J, r0, m, n);
           A = ne.A;
@@ -8502,7 +8927,7 @@ export async function runOptimizationMVP(options = {}) {
             console.log(`[DEBUG iter${iter}] Preconditioning scales: [${scaleMinAbs.toExponential(2)}, ${scaleMaxAbs.toExponential(2)}]`);
           }
         
-          const Ad = Array.from({ length: n }, () => Array(n).fill(0));
+          Ad = Array.from({ length: n }, () => Array(n).fill(0));
           for (let i = 0; i < n; i++) {
             for (let j = 0; j < n; j++) {
               Ad[i][j] = A![i][j] * scaleD[i] * scaleD[j];
@@ -8604,15 +9029,47 @@ export async function runOptimizationMVP(options = {}) {
         // --- 5. Line search ---
         // 【修正】Infeasibleな場合でも、必ず alpha=1（フルステップ）から試す！
         // ニュートン法系は alpha=1 で最も効率よく境界に到達する
+        const meritGrad0 = new Array(n).fill(0);
+        for (let j = 0; j < n; j++) {
+          let gj = 0;
+          for (let i = 0; i < m; i++) {
+            gj += J[i][j] * r0[i];
+          }
+          meritGrad0[j] = 2 * gj;
+        }
+
+        const wasmAlpha = backtrackingLineSearchArmijoWasm(
+          currentX,
+          dx,
+          cost0,
+          meritGrad0,
+          1,
+          lineSearchRho,
+          lineSearchC,
+          lineSearchMaxBacktrack,
+          (trialX) => {
+            const aug = evalAugmentedResiduals(clampToBounds(trialX.slice()), lambdaVec, mu, currentMaxViol);
+            const residuals = Array.isArray(aug?.residuals) ? aug.residuals : [];
+            let merit = 0;
+            for (let i = 0; i < residuals.length; i++) {
+              const v = Number(residuals[i]);
+              if (Number.isFinite(v)) merit += v * v;
+            }
+            return merit;
+          }
+        );
+
         const alphas = preFeasible 
-          ? [1, 0.5, 0.25]  // Feasible: 3回試行
-          : [1, 0.5, 0.25, 0.125, 0.0625];  // Infeasible: フルステップから開始
+          ? [1, 0.5, 0.25]
+          : [1, 0.5, 0.25, 0.125, 0.0625];
         
         let accepted = false;
         let nextX = currentX.slice();
         let acceptedCost = cost0;
+        let acceptedScore = score0;
         let acceptedRho = 0;
-
+        let acceptedAlpha = 1;
+        let acceptedDxStep: number[] | null = null;
         // 【追加】LM法と同じく、二次モデルによる予測減少量(pred)を計算する関数
         const predictedReductionForStep = (dxStep: number[]) => {
           try {
@@ -8659,6 +9116,9 @@ export async function runOptimizationMVP(options = {}) {
             accepted = true;
             nextX = trialX;
             acceptedCost = cost1;
+            acceptedScore = score1;
+            acceptedAlpha = alpha;
+            acceptedDxStep = dxStep.slice();
             
             // 【追加】予測と実際の減少量の比 (rho) を計算
             const pred = predictedReductionForStep(dxStep);
@@ -8691,7 +9151,18 @@ export async function runOptimizationMVP(options = {}) {
           if (lmDamp > 1e9) lmDamp = 2e-4;  // スタック時はリセット（初期値に合わせる）
           
           // 【追加】リジェクト（失敗）時は歩幅の限界を狭めてより慎重にする
-          trustRegionDeltaEff = Math.max(0.01, trustRegionDeltaEff * 0.5);
+          const rejectedRadius = updateTrustRegionRadiusWithOptionalWasm({
+            predictedReduction: predictedReductionForStep(dx),
+            actualReduction: 0,
+            currentRadius: trustRegionDeltaEff,
+            minRadius: 0.01,
+            maxRadius: 2.0,
+            gammaDec: 0.5,
+            gammaInc: 1.1
+          });
+          trustRegionDeltaEff = Number.isFinite(rejectedRadius)
+            ? rejectedRadius
+            : Math.max(0.01, trustRegionDeltaEff * 0.5);
           
           // Broyden状態をリセット（リジェクト時は有限差分から再計算）
           // lastJ is kept so next iteration can do partial finite-diff refresh.
@@ -8770,6 +9241,10 @@ export async function runOptimizationMVP(options = {}) {
           
           // 成功：現在位置を更新し、ダンピングを rho に応じて滑らかに減らす（LM法と同じ戦略）
           const rhoThreshold = 0.25;  // Accept range: rho > 0.25 means good prediction
+          const acceptedPredictedReduction = predictedReductionForStep(acceptedDxStep || dx.map(v => acceptedAlpha * v));
+          const acceptedActualReduction = Number.isFinite(score0) && Number.isFinite(acceptedScore)
+            ? (score0 - acceptedScore)
+            : 0;
           let factor;
           if (acceptedRho > rhoThreshold) {
             // 【最適化】予測が良い場合はより積極的に減らす
@@ -8779,7 +9254,18 @@ export async function runOptimizationMVP(options = {}) {
             
             // 【追加】予測精度が非常に高い場合は、トラスト領域を拡大して一気に進む
             if (acceptedRho > 0.75) {
-              trustRegionDeltaEff = Math.min(2.0, trustRegionDeltaEff * 1.25);
+              const expandedRadius = updateTrustRegionRadiusWithOptionalWasm({
+                predictedReduction: acceptedPredictedReduction,
+                actualReduction: acceptedActualReduction,
+                currentRadius: trustRegionDeltaEff,
+                minRadius: 0.01,
+                maxRadius: 2.0,
+                gammaDec: 0.9,
+                gammaInc: 1.25
+              });
+              trustRegionDeltaEff = Number.isFinite(expandedRadius)
+                ? expandedRadius
+                : Math.min(2.0, trustRegionDeltaEff * 1.25);
             }
           } else if (acceptedRho > 0.004) {
             // 【改善】予測がまあまあ（0.004 < rho <= 0.25）の場合も穏やかに減らす
@@ -8788,13 +9274,26 @@ export async function runOptimizationMVP(options = {}) {
             // 【改善】予測が悪い（rho <= 0.004）場合は増やす（ただしLM並みには保つ）
             factor = 1.5;  // 2.0 → 1.5（やや穏やかに）
             // 【追加】予測精度が低い場合は、トラスト領域を少し縮小する
-            trustRegionDeltaEff = Math.max(0.01, trustRegionDeltaEff * 0.9);
+            const reducedRadius = updateTrustRegionRadiusWithOptionalWasm({
+              predictedReduction: acceptedPredictedReduction,
+              actualReduction: acceptedActualReduction,
+              currentRadius: trustRegionDeltaEff,
+              minRadius: 0.01,
+              maxRadius: 2.0,
+              gammaDec: 0.9,
+              gammaInc: 1.1
+            });
+            trustRegionDeltaEff = Number.isFinite(reducedRadius)
+              ? reducedRadius
+              : Math.max(0.01, trustRegionDeltaEff * 0.9);
           }
           lmDamp = Math.max(1e-12, lmDamp * factor);
 
           // 【修正】currentXはすでに設計変数に設定済み（Line 4757-4764）なので、
           // objectiveForKKT()ではなく直接評価する（変数の復元を避けるため）
           const currentEval = evalCompositeFromRequirementsProfiled();
+          // 【高速化】末尾の進捗評価で再利用するため、受理時の composite を保存。
+          iterAcceptedCompositeEval = currentEval;
           const currentScore = currentEval?.score ?? 1e9;
           lastAcceptedScore = currentScore;  // 【追加】アクセプトされたスコアを記録
           
@@ -8802,6 +9301,12 @@ export async function runOptimizationMVP(options = {}) {
           // これにより、feasible/infeasibleの自動判定とBest値の正確な追跡が可能になる
           recordEval(currentEval);
           const prevBestScore = bestScore;
+          // 【高速化】evalSQPAtX(currentX) を一度だけ計算し、ベスト更新ログ・bestMerit 計算で共有する
+          // （以前は新ベスト達成時に同じ x で 2 回呼んでいた。kktEvalCache はあるが冗長を排除）
+          const acceptedConstraintEval = evalSQPAtX(currentX);
+          postEvalCached = acceptedConstraintEval;
+          const acceptedViolationVector = (acceptedConstraintEval.constraints || []).map(c => Math.max(0, c));
+          const acceptedViolationNorm = Math.sqrt(acceptedViolationVector.reduce((acc, v) => acc + v * v, 0));
           const bestEvalNow = getBestEvalSoFar();
           if (bestEvalNow) {
             bestScore = bestEvalNow.score;
@@ -8812,9 +9317,7 @@ export async function runOptimizationMVP(options = {}) {
             if (bestScore < prevBestScore) {
               lastBestIter = iter;
               const improvement = prevBestScore - bestScore;
-              const currentConstraintEval = evalSQPAtX(currentX);
-              const currentViolationVector = (currentConstraintEval.constraints || []).map(c => Math.max(0, c));
-              const currentViolation = Math.sqrt(currentViolationVector.reduce((acc, v) => acc + v * v, 0));
+              const currentViolation = acceptedViolationNorm;
               const status = currentEval.feasible ? '✓FEAS' : `Viol:${currentViolation.toExponential(2)}`;
               console.log(`🏆 [AL] Iter ${iter}: NEW BEST! Score: ${bestScore.toFixed(6)} (Δ${improvement.toFixed(3)}), ${status}, α=${lastAlpha.toFixed(3)}, ρ=${acceptedRho.toFixed(3)}`);
               
@@ -8840,11 +9343,8 @@ export async function runOptimizationMVP(options = {}) {
           }
           
           // bestMeritは参考値として計算（主にデバッグ用）
-          const currentConstraintEval = evalSQPAtX(currentX);
-          postEvalCached = currentConstraintEval;
-          const currentViolationVector = (currentConstraintEval.constraints || []).map(c => Math.max(0, c));
-          const currentViolation = Math.sqrt(currentViolationVector.reduce((acc, v) => acc + v * v, 0));
-          bestMerit = bestScore + currentViolation * 10000;
+          // 【高速化】受理時に評価済みの acceptedConstraintEval / acceptedViolationNorm を再利用
+          bestMerit = bestScore + acceptedViolationNorm * 10000;
         }
 
         // --- 5.5. Stagnation watchdog (auto soft-restart) ---
@@ -8877,6 +9377,8 @@ export async function runOptimizationMVP(options = {}) {
               setDesignVariableValue(activeCfg, varIds[k], currentX[k]);
             }
           }
+          // 【高速化】設計変数が変わったので受理時 composite キャッシュを無効化
+          iterAcceptedCompositeEval = null;
 
           lmDamp = 2e-4;
           trustRegionDeltaEff = 0.5;
@@ -9252,7 +9754,9 @@ export async function runOptimizationMVP(options = {}) {
           }
         }
 
-        const iterCompositeEval = evalCompositeFromRequirementsProfiled();
+        // 【高速化】受理時に評価した composite を再利用（設計変数が同じ場合）。
+        // null（リジェクト時 or stagnation auto-restart 後）の場合のみ再評価する。
+        const iterCompositeEval = iterAcceptedCompositeEval ?? evalCompositeFromRequirementsProfiled();
 
         if (onProgressKKT) {
           const displayScore = accepted ? lastAcceptedScore : bestScore;
@@ -9264,6 +9768,7 @@ export async function runOptimizationMVP(options = {}) {
             feasible: iterCompositeEval?.feasible ?? post.feasible,
             violationScore: iterCompositeEval?.violationScore,
             softPenalty: iterCompositeEval?.softPenalty,
+            requirementSnapshots: Array.isArray(iterCompositeEval?.requirementSnapshots) ? iterCompositeEval.requirementSnapshots : [],
             alpha: lastAlpha,
             rho: acceptedRho,
             mu: mu,
@@ -9287,6 +9792,7 @@ export async function runOptimizationMVP(options = {}) {
               feasible: iterCompositeEval?.feasible ?? post.feasible,
               violationScore: iterCompositeEval?.violationScore,
               softPenalty: iterCompositeEval?.softPenalty,
+              requirementSnapshots: Array.isArray(iterCompositeEval?.requirementSnapshots) ? iterCompositeEval.requirementSnapshots : [],
               activeViolations: activeViolations,
               maxViolation: maxViol,
               alpha: lastAlpha,
@@ -9434,7 +9940,7 @@ export async function runOptimizationMVP(options = {}) {
         ok: true,
         aborted: shouldStopKKT(),
         before: initialScore,
-          best: finalObjectiveScore,
+        best: finalViolationScore,
         iterations: completedIterations,
         variables: vars.length,
         method: 'kkt',
@@ -9445,7 +9951,25 @@ export async function runOptimizationMVP(options = {}) {
         hardViolations: bestFinalEval?.hardViolations ?? [],
         softViolations: bestFinalEval?.softViolations ?? []
       };
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.__cooptStop) {
+        // Stop was requested mid-Jacobian — treat as a clean aborted stop.
+        return {
+          ok: true,
+          aborted: true,
+          before: initialScore,
+          best: bestScore,
+          iterations: completedIterations,
+          variables: vars.length,
+          method: 'kkt',
+          feasible: false,
+          violationScore: bestScore,
+          softPenalty: 0,
+          objectiveScore: bestScore,
+          hardViolations: [],
+          softViolations: []
+        };
+      }
       console.error('❌ [AL Optimizer] Fatal error:', e);
       return {
         ok: false,
@@ -9945,6 +10469,7 @@ export async function runOptimizationMVP(options = {}) {
 if (typeof window !== 'undefined') {
   window['OptimizationMVP'] = {
     run: runOptimizationMVP,
+    profileRun: profileOptimizationRun,
     compareWasmPilot: compareWasmPilotBenchmark,
     compareMatrixFree: compareMatrixFreeBenchmark,
     compareTsVsNative: compareTsVsNativeOptimizerBenchmark,
