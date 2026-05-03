@@ -438,8 +438,6 @@ export function createFieldSettingFromObject(objectData: any): any {
     // Objectテーブルのキー揺れを吸収
     const objectTypeRaw = String(objectData.position ?? objectData.object ?? objectData.Object ?? objectData.objectType ?? 'Point');
     const objectType = objectTypeRaw.toLowerCase();
-    const xVal = (objectData.x ?? objectData.xHeightAngle ?? objectData.x_height_angle ?? 0);
-    const yVal = (objectData.y ?? objectData.yHeightAngle ?? objectData.y_height_angle ?? 0);
 
     const fieldSetting: any = {
         fieldType: objectTypeRaw,
@@ -449,17 +447,21 @@ export function createFieldSettingFromObject(objectData: any): any {
     };
 
     if (objectType.includes('angle')) {
+        const xAngleVal = (objectData.xFieldAngle ?? objectData.xAngle ?? objectData.xHeightAngle ?? objectData.x_height_angle ?? objectData.x ?? 0);
+        const yAngleVal = (objectData.yFieldAngle ?? objectData.yAngle ?? objectData.fieldAngle ?? objectData.yHeightAngle ?? objectData.y_height_angle ?? objectData.y ?? 0);
         fieldSetting.fieldAngle = {
-            x: Number(xVal) || 0,
-            y: Number(yVal) || 0
+            x: Number(xAngleVal) || 0,
+            y: Number(yAngleVal) || 0
         };
         fieldSetting.xHeight = 0;
         fieldSetting.yHeight = 0;
     } else {
         // Point/Rectangle/Height 等は高さ扱い
+        const xHeightVal = (objectData.xHeight ?? objectData.x_height ?? objectData.x ?? objectData.xHeightAngle ?? objectData.x_height_angle ?? 0);
+        const yHeightVal = (objectData.yHeight ?? objectData.y_height ?? objectData.y ?? objectData.yHeightAngle ?? objectData.y_height_angle ?? 0);
         fieldSetting.fieldAngle = { x: 0, y: 0 };
-        fieldSetting.xHeight = Number(xVal) || 0;
-        fieldSetting.yHeight = Number(yVal) || 0;
+        fieldSetting.xHeight = Number(xHeightVal) || 0;
+        fieldSetting.yHeight = Number(yHeightVal) || 0;
     }
     
     console.log('🎯 Created field setting for PSF:', fieldSetting);

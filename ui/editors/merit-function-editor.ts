@@ -1181,6 +1181,10 @@ class MeritFunctionEditor {
             case 'TA_RMS_UM':
                 return withRequirementRustRayTracing(() => this.calculateTransverseAberrationRmsUm(operand, opticalSystemData));
 
+            case 'OPD_RMS_WAVES':
+            case 'OPD_RMS_UM':
+                return withRequirementRustRayTracing(() => this.calculateOpdRmsWaves(operand, opticalSystemData));
+
             case 'CTCT': {
                 // Center Thickness: Evaluate thickness of specified surface
                 const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
@@ -1605,6 +1609,14 @@ class MeritFunctionEditor {
                 }
                 return this.calculateOperandValue(operand);
             }
+            case 'OPD_RMS_WAVES':
+            case 'OPD_RMS_UM': {
+                const nativeVal = await this.calculateOpdRmsWavesViaNativeAsync(operand, opticalSystemData);
+                if (Number.isFinite(nativeVal as any)) {
+                    return Number(nativeVal);
+                }
+                return this.calculateOperandValue(operand);
+            }
             case 'SA': {
                 const nativeVal = await this.calculateSphericalAberrationUmViaNativeAsync(operand, opticalSystemData);
                 if (Number.isFinite(nativeVal as any)) {
@@ -1795,6 +1807,135 @@ class MeritFunctionEditor {
             const marginal = points[points.length - 1].longitudinalAberration;
             const lsaMm = Math.abs(marginal - paraxial);
             return lsaMm * 1000;
+        } catch {
+            return null;
+        }
+    }
+
+    calculateOpdRmsWaves(operand: any, opticalSystemData: any[]): number {
+        if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return Number.NaN;
+
+        const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+        const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+        const wavelengthUm = (param1Raw === '')
+            ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+            : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+
+        const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+        const objectIndex1 = (param2Raw === '') ? 1 : Math.max(1, Math.floor(Number(param2Raw)));
+        const objectIndex0 = objectIndex1 - 1;
+        const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+        if (!objRow || typeof objRow !== 'object') return Number.NaN;
+
+        const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim() : '';
+        const sampling = (param3Raw === '') ? 32 : Math.max(8, Math.floor(Number(param3Raw)));
+
+        const isInfiniteSystem = isInfiniteSystemFromRows(opticalSystemData);
+        const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, isInfiniteSystem);
+
+        const calc = createOPDCalculator(opticalSystemData, wavelengthUm);
+        if (!calc || typeof (calc as any).setReferenceRay !== 'function' || typeof (calc as any).calculateOPD !== 'function') {
+            return Number.NaN;
+        }
+
+        (calc as any).setReferenceRay(fieldSetting);
+
+        let count = 0;
+        let sum = 0;
+        let sumSq = 0;
+        for (let iy = 0; iy < sampling; iy++) {
+            const py = -1 + (2 * iy) / (sampling - 1);
+            for (let ix = 0; ix < sampling; ix++) {
+                const px = -1 + (2 * ix) / (sampling - 1);
+                if ((px * px + py * py) > 1.000001) continue;
+
+                const opdUm = Number((calc as any).calculateOPD(px, py, fieldSetting));
+                if (!Number.isFinite(opdUm)) continue;
+                const opdWaves = opdUm / wavelengthUm;
+                if (!Number.isFinite(opdWaves)) continue;
+
+                sum += opdWaves;
+                sumSq += opdWaves * opdWaves;
+                count += 1;
+            }
+        }
+
+        if (count <= 0) return Number.NaN;
+        const mean = sum / count;
+        const variance = Math.max(0, (sumSq / count) - (mean * mean));
+        return Math.sqrt(variance);
+    }
+
+    async calculateOpdRmsWavesViaNativeAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
+        try {
+            const ipcMod = await import('../../src/desktop/ipc/client.ts');
+            if (!ipcMod || typeof ipcMod.runNativeOpdMap !== 'function') {
+                return null;
+            }
+
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId, {
+                preferConfigTables: true
+            });
+            if (!Array.isArray(objectRows) || objectRows.length === 0) return null;
+
+            const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+            const wavelengthUm = (param1Raw === '')
+                ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+                : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+
+            const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+            const objectIndex1 = (param2Raw === '') ? 1 : Math.max(1, Math.floor(Number(param2Raw)));
+            const objectIndex0 = objectIndex1 - 1;
+            const objRow = objectRows[objectIndex0];
+            if (!objRow || typeof objRow !== 'object') return null;
+
+            const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim() : '';
+            const gridSize = (param3Raw === '') ? 32 : Math.max(8, Math.floor(Number(param3Raw)));
+
+            const imageSurfaceIndex = (() => {
+                for (let i = opticalSystemData.length - 1; i >= 0; i--) {
+                    const row = opticalSystemData[i];
+                    const ot = String(row?.['object type'] || row?.objectType || row?.object || '').trim().toLowerCase();
+                    if (ot === 'image') return i;
+                }
+                return Math.max(0, opticalSystemData.length - 1);
+            })();
+
+            const opdResp = await ipcMod.runNativeOpdMap({
+                opticalSystemRows: opticalSystemData,
+                sourceRows,
+                objectRows,
+                objectIndex: objectIndex0,
+                surfaceIndex: imageSurfaceIndex,
+                gridSize,
+                wavelengthUm,
+                opdDisplayMode: 'pistonTiltRemoved'
+            });
+
+            const grid = Array.isArray(opdResp?.displayOpdGrid)
+                ? opdResp.displayOpdGrid
+                : (Array.isArray(opdResp?.rawOpdGrid) ? opdResp.rawOpdGrid : null);
+            if (!Array.isArray(grid) || grid.length === 0) return null;
+
+            let count = 0;
+            let sumWaves = 0;
+            let sumSqWaves = 0;
+            for (const row of grid) {
+                if (!Array.isArray(row)) continue;
+                for (const v of row) {
+                    const opdWaves = Number(v);
+                    if (!Number.isFinite(opdWaves)) continue;
+                    sumWaves += opdWaves;
+                    sumSqWaves += opdWaves * opdWaves;
+                    count += 1;
+                }
+            }
+
+            if (count <= 0) return null;
+            const meanWaves = sumWaves / count;
+            const varianceWaves2 = Math.max(0, (sumSqWaves / count) - (meanWaves * meanWaves));
+            return Math.sqrt(varianceWaves2);
         } catch {
             return null;
         }

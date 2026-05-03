@@ -232,8 +232,8 @@ function buildTransverseFieldSettingsFromObjectRows(objectRows: any[] = []): any
     const displayName = displayNameBase ? `${displayNameCore} - ${displayNameBase}` : displayNameCore;
 
     if (isAngle) {
-      const xAngle = Number((row as any)?.xFieldAngle ?? (row as any)?.xAngle ?? (row as any)?.xHeightAngle ?? (row as any)?.x ?? 0) || 0;
-      const yAngle = Number((row as any)?.yFieldAngle ?? (row as any)?.fieldAngle ?? (row as any)?.yAngle ?? (row as any)?.yHeightAngle ?? (row as any)?.y ?? 0) || 0;
+      const xAngle = Number.isFinite(pointX as number) ? Number(pointX) : 0;
+      const yAngle = Number.isFinite(pointY as number) ? Number(pointY) : 0;
       return {
         objectIndex: index + 1,
         fieldType: "Angle",
@@ -244,8 +244,8 @@ function buildTransverseFieldSettingsFromObjectRows(objectRows: any[] = []): any
       };
     }
 
-    const xHeight = Number((row as any)?.xHeight ?? (row as any)?.x ?? (row as any)?.xHeightAngle ?? 0) || 0;
-    const yHeight = Number((row as any)?.yHeight ?? (row as any)?.y ?? (row as any)?.yHeightAngle ?? 0) || 0;
+    const xHeight = Number.isFinite(pointX as number) ? Number(pointX) : 0;
+    const yHeight = Number.isFinite(pointY as number) ? Number(pointY) : 0;
     return {
       objectIndex: index + 1,
       fieldType: "Rectangle",
@@ -1501,7 +1501,14 @@ export async function runNativeOpdMap(
     const yVal = Number((selectedObject as any)?.yHeightAngle ?? (selectedObject as any)?.yFieldAngle ?? (selectedObject as any)?.fieldAngle ?? (selectedObject as any)?.yHeight ?? (selectedObject as any)?.y ?? 0) || 0;
     const fieldSetting = isAngle
       ? { type: "angle", fieldAngle: { x: xVal, y: yVal }, wavelength: wavelengthUm, objectIndex }
-      : { type: "height", objectHeight: { x: xVal, y: yVal }, wavelength: wavelengthUm, objectIndex };
+      : {
+          type: "height",
+          xHeight: xVal,
+          yHeight: yVal,
+          objectHeight: { x: xVal, y: yVal },
+          wavelength: wavelengthUm,
+          objectIndex,
+        };
 
     const gridSize = Number.isFinite(Number(payload?.gridSize)) ? Math.max(17, Math.floor(Number(payload.gridSize))) : 129;
     const requestedPupilSamplingMode = (payload?.pupilSamplingMode === "stop" || payload?.pupilSamplingMode === "entrance")

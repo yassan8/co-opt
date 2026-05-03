@@ -203,11 +203,19 @@ async function runOptimizationMvpnative(options = {}) {
   let initialDisplayScore = Number.NaN;
   let bestDisplayScore = Number.NaN;
   try {
-    const initialSnap = await refreshRequirementTableScore(`optimize-native-${method}-start`);
+    const initialSnap = readRequirementTableScoreSnapshot();
     if (Number.isFinite(Number(initialSnap?.score))) {
       initialDisplayScore = Number(initialSnap.score);
       bestDisplayScore = initialDisplayScore;
     }
+  } catch (_) {}
+
+  // Do not block optimizer startup on a full requirements reevaluation.
+  // Heavy operands like OPD_RMS_WAVES can take noticeable time here, but the
+  // optimizer uses the native requirement rows directly and does not need this
+  // UI refresh before phase start.
+  try {
+    void refreshRequirementTableScore(`optimize-native-${method}-start`);
   } catch (_) {}
 
   const sessionId = `native-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
@@ -366,6 +374,69 @@ async function runOptimizationMvpnative(options = {}) {
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function getActiveRequirementRowsForOptimizer(options = {}) {
+  const opts = isPlainObject(options) ? options : {};
+  if (Array.isArray(opts.systemRequirementsRows) && opts.systemRequirementsRows.length > 0) {
+    return opts.systemRequirementsRows;
+  }
+  try {
+    const w = window as any;
+    const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+      ? w.loadSystemConfigurationsFromTableConfig()
+      : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+    if (Array.isArray(cfg?.systemRequirements) && cfg.systemRequirements.length > 0) {
+      return cfg.systemRequirements;
+    }
+  } catch (_) {}
+  try {
+    const sre = (window as any).systemRequirementsEditor;
+    if (sre && typeof sre.getData === 'function') {
+      const rows = sre.getData();
+      if (Array.isArray(rows)) return rows;
+    }
+  } catch (_) {}
+  return [];
+}
+
+function findUnsupportedNativeRequirementOperands(requirementRows = []) {
+  const supported = new Set([
+    'OBJD', 'TSL', 'CTCT',
+    'FL', 'EFL', 'EFFL', 'BFL', 'IMD',
+    'BEXP', 'EXPD', 'EXPP', 'ENPD', 'ENPP', 'ENPM',
+    'PMAG', 'FNO_OBJ', 'FNO_IMG', 'FNO_WRK', 'NA_OBJ', 'NA_IMG',
+    'EDGE',
+    'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT', 'SPOT_SIZE_CURRENT',
+    'TA_RMS_UM',
+    'TOT3_SPH', 'TOT3_COMA', 'TOT3_ASTI', 'TOT3_FCUR', 'TOT3_DIST', 'TOT_LCA', 'TOT_TCA',
+    'REAY', 'RSCE', 'TRAC', 'DIST'
+  ]);
+
+  const unsupported = new Set();
+  for (const row of Array.isArray(requirementRows) ? requirementRows : []) {
+    if (!row || typeof row !== 'object') continue;
+    const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
+    const operand = String(row.operand ?? '').trim();
+    const weight = Number(row.weight ?? 1);
+    if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
+    if (!supported.has(operand)) unsupported.add(operand);
+  }
+  return Array.from(unsupported);
+}
+
+function hasAsyncPreferredRequirementOperands(requirementRows = []) {
+  for (const row of Array.isArray(requirementRows) ? requirementRows : []) {
+    if (!row || typeof row !== 'object') continue;
+    const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
+    const operand = String(row.operand ?? '').trim();
+    const weight = Number(row.weight ?? 1);
+    if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
+    if (operand === 'OPD_RMS_WAVES' || operand === 'OPD_RMS_UM') {
+      return true;
+    }
+  }
+  return false;
 }
 
 function nowMs() {
@@ -1981,6 +2052,20 @@ function bumpOptimizerProfileCount(name, delta = 1) {
   }
 }
 
+// Yield via MessageChannel.postMessage — not subject to Chrome's background/low-power
+// timer throttling (unlike setTimeout which can be delayed to 1000ms+ in background tabs).
+function yieldViaMessageChannel(callback: () => void): void {
+  try {
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => { ch.port1.close(); callback(); };
+    ch.port2.postMessage(null);
+    ch.port2.close();
+  } catch (_) {
+    // Fallback if MessageChannel is unavailable
+    setTimeout(callback, 0);
+  }
+}
+
 function nextFrame() {
   const prof = (() => {
     try {
@@ -2045,15 +2130,10 @@ function nextFrame() {
         schedulerWindow.requestAnimationFrame(() => resolve());
         return;
       }
-      if (canUseSchedulerTimers) {
-        schedulerWindow.setTimeout(() => resolve(), 0);
-        return;
-      }
-      if (canUseRaf) {
-        requestAnimationFrame(() => resolve());
-        return;
-      }
-      setTimeout(() => resolve(), 0);
+      // Use MessageChannel for yields when rAF is not available (background/low-power mode).
+      // MessageChannel.postMessage fires as a task without the 1000ms+ throttle Chrome applies
+      // to setTimeout(0) in background tabs or macOS low-power mode.
+      yieldViaMessageChannel(() => resolve());
     });
   }
 
@@ -2077,15 +2157,8 @@ function nextFrame() {
       schedulerWindow.requestAnimationFrame(() => done());
       return;
     }
-    if (canUseSchedulerTimers) {
-      schedulerWindow.setTimeout(() => done(), 0);
-      return;
-    }
-    if (canUseRaf) {
-      requestAnimationFrame(() => done());
-      return;
-    }
-    setTimeout(() => done(), 0);
+    // Use MessageChannel for yields when rAF is not available (background/low-power mode).
+    yieldViaMessageChannel(done);
   });
 }
 
@@ -4069,15 +4142,50 @@ function resetAsphericCoefficientsToZero({ configsById, targetConfigIds }) {
 export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
   const kktUseWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer === true;
+  const methodRaw = String(opts.method || '').trim().toLowerCase();
+  const requestedMethod = (methodRaw === 'kkt' || methodRaw === 'sqp')
+    ? 'kkt'
+    : (methodRaw === 'cd' || methodRaw === 'coordinatedescent')
+    ? 'cd'
+    : 'lm';
+  const activeRequirementRows = getActiveRequirementRowsForOptimizer(opts);
+  const unsupportedNativeOperands = findUnsupportedNativeRequirementOperands(
+    activeRequirementRows
+  );
+  const requiresAsyncRequirementEvaluation = hasAsyncPreferredRequirementOperands(activeRequirementRows);
+  const effectiveMethod = (requiresAsyncRequirementEvaluation && requestedMethod !== 'lm')
+    ? 'lm'
+    : requestedMethod;
+  const effectiveOpts = (effectiveMethod === requestedMethod)
+    ? opts
+    : { ...opts, method: effectiveMethod };
   const shouldPreferNativeRoute = isTauriRuntime()
-    && opts.forceTs !== true
-    && (opts.forceNative === true || opts.preferNative === true);
+    && effectiveOpts.forceTs !== true
+    && unsupportedNativeOperands.length === 0
+    && (effectiveOpts.forceNative === true || effectiveOpts.preferNative === true);
+
+  if (isTauriRuntime() && effectiveOpts.forceTs !== true && unsupportedNativeOperands.length > 0) {
+    try {
+      console.warn('[OptimizerMVP] Falling back to TS optimizer because native optimizer does not support some active requirement operands.', {
+        unsupportedOperands: unsupportedNativeOperands,
+      });
+    } catch (_) {}
+  }
+
+  if (effectiveMethod !== requestedMethod) {
+    try {
+      console.warn('[OptimizerMVP] Switching optimizer method to LM because active requirements need async evaluation.', {
+        requestedMethod,
+        effectiveMethod,
+      });
+    } catch (_) {}
+  }
 
   // Native route is available on Tauri. `forceNative` keeps strict behavior for
   // benchmarking, while `preferNative` falls back to TS when native startup fails.
   if (shouldPreferNativeRoute) {
-    const nativeResult = await runOptimizationMvpnative(opts);
-    if (opts.forceNative === true || nativeResult?.ok !== false || nativeResult?.aborted) {
+    const nativeResult = await runOptimizationMvpnative(effectiveOpts);
+    if (effectiveOpts.forceNative === true || nativeResult?.ok !== false || nativeResult?.aborted) {
       return nativeResult;
     }
     try {
@@ -4090,7 +4198,7 @@ export async function runOptimizationMVP(options = {}) {
 
   // Lightweight profiler to quickly identify bottlenecks.
   // Disabled by default; enable via { profile:true }.
-  const __profileEnabled = (opts.profile === undefined) ? false : !!opts.profile;
+  const __profileEnabled = (effectiveOpts.profile === undefined) ? false : !!effectiveOpts.profile;
   const __profile = __profileEnabled ? {
     t0: nowMs(),
     startedAt: Date.now(),
@@ -4587,25 +4695,20 @@ export async function runOptimizationMVP(options = {}) {
     }
   } catch (_) {}
   
-  const runUntilStopped = !!opts.runUntilStopped;
-  const methodRaw = String(opts.method || '').trim().toLowerCase();
-  const method = (methodRaw === 'kkt' || methodRaw === 'sqp')
-    ? 'kkt'
-    : (methodRaw === 'cd' || methodRaw === 'coordinatedescent')
-    ? 'cd'
-    : 'lm';
+  const runUntilStopped = !!effectiveOpts.runUntilStopped;
+  const method = effectiveMethod;
   // 【修正】KKT法はLM法より収束が遅いため、デフォルトを100→500に増加
   const defaultMaxIter = (method === 'kkt') ? 500 : 100;
   const maxIterations = runUntilStopped
     ? Number.MAX_SAFE_INTEGER
-    : (Number.isFinite(Number(opts.maxIterations)) ? Math.max(1, Math.floor(Number(opts.maxIterations))) : defaultMaxIter);
-  const stepFraction = Number.isFinite(Number(opts.stepFraction)) ? Math.max(1e-6, Number(opts.stepFraction)) : 0.02;
-  const minStep = Number.isFinite(Number(opts.minStep)) ? Math.max(1e-12, Number(opts.minStep)) : 1e-6;
-  const stepDecay = Number.isFinite(Number(opts.stepDecay)) ? Math.min(0.95, Math.max(0.1, Number(opts.stepDecay))) : 0.5;
+    : (Number.isFinite(Number(effectiveOpts.maxIterations)) ? Math.max(1, Math.floor(Number(effectiveOpts.maxIterations))) : defaultMaxIter);
+  const stepFraction = Number.isFinite(Number(effectiveOpts.stepFraction)) ? Math.max(1e-6, Number(effectiveOpts.stepFraction)) : 0.02;
+  const minStep = Number.isFinite(Number(effectiveOpts.minStep)) ? Math.max(1e-12, Number(effectiveOpts.minStep)) : 1e-6;
+  const stepDecay = Number.isFinite(Number(effectiveOpts.stepDecay)) ? Math.min(0.95, Math.max(0.1, Number(effectiveOpts.stepDecay))) : 0.5;
   const stallLimit = runUntilStopped
     ? Number.MAX_SAFE_INTEGER
-    : (Number.isFinite(Number(opts.stallLimit)) ? Math.max(1, Math.floor(Number(opts.stallLimit))) : 5);
-  const logEvery = Number.isFinite(Number(opts.logEvery)) ? Math.max(1, Math.floor(Number(opts.logEvery))) : 1;
+    : (Number.isFinite(Number(effectiveOpts.stallLimit)) ? Math.max(1, Math.floor(Number(effectiveOpts.stallLimit))) : 5);
+  const logEvery = Number.isFinite(Number(effectiveOpts.logEvery)) ? Math.max(1, Math.floor(Number(effectiveOpts.logEvery))) : 1;
 
   const lmLambda0 = Number.isFinite(Number(opts.lmLambda0)) ? Math.max(1e-12, Number(opts.lmLambda0)) : 1e-3;
   const lmLambdaUp = Number.isFinite(Number(opts.lmLambdaUp)) ? Math.max(1.1, Number(opts.lmLambdaUp)) : 10;
@@ -7186,13 +7289,31 @@ export async function runOptimizationMVP(options = {}) {
         : Number(v.value) || 0
       );
 
+      // Report start immediately, before heavy initial scoring, so Chrome can paint
+      // and avoid "page unresponsive" warnings while initial evaluation is running.
+      if (onProgress) {
+        try {
+          onProgress({
+            phase: 'start',
+            iter: 0,
+            current: Number.NaN,
+            best: Number.NaN,
+            method: 'kkt',
+            multiScenario,
+            requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
+            feasible: false
+          });
+        } catch (_) {}
+        await nextFrame();
+      }
+
       // Compute initial state before optimization
       const initialStateEval = evalCompositeFromRequirementsProfiled();
       const initialScore = initialStateEval?.score ?? 1e9;
 
       console.log('🚀 [AL] Starting optimization with', vars.length, 'variables, initial score:', initialScore);
 
-      // Report start phase
+      // Refresh start phase with actual initial score once available.
       if (onProgress) {
         try {
           onProgress({
@@ -7807,7 +7928,17 @@ export async function runOptimizationMVP(options = {}) {
         return out;
       };
 
-      const finiteDiffJacobian = (x: number[], r0: number[], lambdaVec: number[], mu: number, maxViol: number = 1.0, baseResidualCount: number = 0) => {
+      // Cooperative yield for long KKT CPU loops (especially FD Jacobian loops in Chrome).
+      // This prevents "page unresponsive" warnings by returning to the event loop regularly.
+      let __lastKktCoopYieldMs = nowMs();
+      const maybeYieldKktCpu = async (force = false): Promise<void> => {
+        const now = nowMs();
+        if (!force && (now - __lastKktCoopYieldMs) < 12) return;
+        __lastKktCoopYieldMs = now;
+        await nextFrame();
+      };
+
+      const finiteDiffJacobian = async (x: number[], r0: number[], lambdaVec: number[], mu: number, maxViol: number = 1.0, baseResidualCount: number = 0) => {
         const __fdT0 = nowMs();
         const n = x.length;
         const m = r0.length;
@@ -7841,6 +7972,7 @@ export async function runOptimizationMVP(options = {}) {
           groupCount = groups.length;
           for (const group of groups) {
             if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
+            await maybeYieldKktCpu();
             if (!Array.isArray(group) || group.length === 0) continue;
             const xp = x.slice();
             for (const col of group) {
@@ -7878,6 +8010,7 @@ export async function runOptimizationMVP(options = {}) {
 
           for (const i of activeCols) {
             if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
+            await maybeYieldKktCpu();
             let xp = Array.isArray(batchPoints) && Array.isArray(batchPoints[i])
               ? batchPoints[i].slice()
               : x.slice();
@@ -7964,7 +8097,7 @@ export async function runOptimizationMVP(options = {}) {
         return scored.slice(0, maxCols).map(v => v.idx).sort((a, b) => a - b);
       };
 
-      const finiteDiffJacobianPartial = (
+      const finiteDiffJacobianPartial = async (
         x: number[],
         r0: number[],
         lambdaVec: number[],
@@ -8024,6 +8157,7 @@ export async function runOptimizationMVP(options = {}) {
           const batchPoints = __profileBucketWrap('time_wasm_call', () => generateFiniteDifferencePerturbationPointsWasm(x, partialSteps));
           for (const col of validCols) {
             if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
+            await maybeYieldKktCpu();
             let xp = Array.isArray(batchPoints) && Array.isArray(batchPoints[col])
               ? batchPoints[col].slice()
               : x.slice();
@@ -8061,6 +8195,7 @@ export async function runOptimizationMVP(options = {}) {
         } else {
           for (const group of groups) {
             if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
+            await maybeYieldKktCpu();
             if (!Array.isArray(group) || group.length === 0) continue;
             const xp = x.slice();
             for (const col of group) {
@@ -8611,13 +8746,13 @@ export async function runOptimizationMVP(options = {}) {
             if (hasReusableJacobian) {
               if (shouldRunFiniteDiffRefresh) {
                 if (shouldRunFullJacobianRefresh) {
-                  J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
+                  J = await finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
                   if (iter < 3 || iter % 100 === 0) {
                     console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
                   }
                 } else {
                   const refreshCols = pickJacobianRefreshColumns(currentX, lastX || null, jacobianRefreshMaxCols);
-                  J = finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols, aug0.base?.residuals?.length || 0);
+                  J = await finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols, aug0.base?.residuals?.length || 0);
                   if (iter < 3 || iter % 100 === 0) {
                     console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
                   }
@@ -8632,7 +8767,7 @@ export async function runOptimizationMVP(options = {}) {
                 }
               }
             } else {
-              J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
+              J = await finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
               jacobianReuseSinceRefresh = 0;
             }
             broydenSkipCount = 0;
@@ -8643,13 +8778,13 @@ export async function runOptimizationMVP(options = {}) {
           if (hasReusableJacobian) {
             if (shouldRunFiniteDiffRefresh) {
               if (shouldRunFullJacobianRefresh) {
-                J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
+                J = await finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
                 if (iter < 3 || iter % 100 === 0) {
                   console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
                 }
               } else {
                 const refreshCols = pickJacobianRefreshColumns(currentX, lastX || null, jacobianRefreshMaxCols);
-                J = finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols, aug0.base?.residuals?.length || 0);
+                J = await finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols, aug0.base?.residuals?.length || 0);
                 if (iter < 3 || iter % 100 === 0) {
                   console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
                 }
@@ -8664,7 +8799,7 @@ export async function runOptimizationMVP(options = {}) {
               }
             }
           } else {
-            J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
+            J = await finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
             jacobianReuseSinceRefresh = 0;
           }
           broydenSkipCount = 0;

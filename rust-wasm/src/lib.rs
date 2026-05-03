@@ -3502,14 +3502,18 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         .and_then(value_to_string)
         .unwrap_or_else(|| "Point".to_string());
     let pos_lower = used_object_position.trim().to_lowercase();
-    let is_angle_object = pos_lower.contains("angle") || pos_lower == "point";
+    let use_infinite_mode = is_infinite_conjugate_native(&rows);
+    let is_angle_object = if use_infinite_mode {
+        true
+    } else {
+        pos_lower.contains("angle") || pos_lower == "point"
+    };
 
     let angle_object_x = get_object_numeric(selected_object_map, &["xHeightAngle", "xFieldAngle", "xAngle", "x", "X", "xHeight"]).unwrap_or(0.0);
     let angle_object_y = get_object_numeric(selected_object_map, &["yHeightAngle", "yFieldAngle", "fieldAngle", "yAngle", "angle", "y", "Y", "yHeight"]).unwrap_or(0.0);
     let height_object_x = get_object_numeric(selected_object_map, &["xHeight", "x", "X"]).unwrap_or(0.0);
     let height_object_y = get_object_numeric(selected_object_map, &["yHeight", "y", "Y", "height"]).unwrap_or(0.0);
 
-    let use_infinite_mode = is_infinite_conjugate_native(&rows);
     let (used_object_x, used_object_y) = if use_infinite_mode {
         if is_angle_object { (angle_object_x, angle_object_y) } else { (0.0, 0.0) }
     } else {

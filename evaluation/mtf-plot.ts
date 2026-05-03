@@ -4,6 +4,7 @@ import { calculateImageSpaceDiffractionParams } from '../raytracing/core/ray-par
 import { ensureMtfWasmReady, setRayTracingWasmStrict, isRayTracingWasmStrict } from '../core/wasm-service.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { runNativeMtfMap } from '../src/desktop/ipc/client.ts';
+import { convertImageHeightToEffectiveObject } from '../optical/ray-renderer.ts';
 import { TFMTFWorkerPool, getGlobalTFMTFWorkerPool } from './tfmtf-worker-pool.ts';
 import { extractPSFGridFromCalculatorResult, validatePSFGrid, extractPSFMetadata } from './psf-serialization.ts';
 
@@ -400,19 +401,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         }
     }
 
-    const selectedObject = hasOverride ? objectOverride : objects[objIndex];
-    const objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? 'Point');
-    const objectTypeLower = objectTypeRaw.toLowerCase();
-    const isAngleType = /\bangle\b/.test(objectTypeLower);
-    
-    // 🔍 DEBUG: Log objectOverride being received to diagnose cache reuse
-    ensureConsoleLog(`📥 [MTF] showMTFDiagram called with objectOverride:`, {
-        hasOverride,
-        objectOverride: objectOverride ? { x: objectOverride.x, y: objectOverride.y, xHeightAngle: objectOverride.xHeightAngle, yHeightAngle: objectOverride.yHeightAngle, position: objectOverride.position } : null,
-        selectedObject: { position: selectedObject.position, x: selectedObject.x, y: selectedObject.y, xHeightAngle: selectedObject.xHeightAngle, yHeightAngle: selectedObject.yHeightAngle },
-        defocusShiftMm,
-        callStack: 'showMTFDiagram'
-    });
+    const rawSelectedObject = hasOverride ? objectOverride : objects[objIndex];
     
     // Determine finite/infinite based on ObjectSurface (Priority 1)
     // If ObjectSurface is finite, always use finite solver regardless of field type
@@ -431,7 +420,59 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             }
         }
     } catch (_) {}
-    
+
+    const opticalSystemRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, defocusShiftMm, isFiniteObject);
+    const forceSymmetricIdealMtf = isIdealParaxialOnlySystem(opticalSystemRows);
+    if (!opticalSystemRows || opticalSystemRows.length === 0) {
+        throw new Error('光学システムデータがありません。まず光学システムを設定してください。');
+    }
+
+    let selectedObject = rawSelectedObject;
+    let objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? 'Point');
+    let objectTypeLower = objectTypeRaw.toLowerCase();
+    let isAngleType = /\bangle\b/.test(objectTypeLower);
+
+    if (!isFiniteObject && !isAngleType) {
+        const imageHeightCandidate = {
+            ...selectedObject,
+            position: 'ImageHeight',
+            xHeightAngle: selectedObject?.xHeightAngle ?? selectedObject?.xHeight ?? selectedObject?.x ?? 0,
+            yHeightAngle: selectedObject?.yHeightAngle ?? selectedObject?.yHeight ?? selectedObject?.y ?? 0,
+        };
+        try {
+            const effectiveObject = convertImageHeightToEffectiveObject(imageHeightCandidate, opticalSystemRows, wl, 'infinite');
+            if (effectiveObject && typeof effectiveObject === 'object') {
+                selectedObject = { ...selectedObject, ...effectiveObject };
+                objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? objectTypeRaw);
+                objectTypeLower = objectTypeRaw.toLowerCase();
+                isAngleType = /\bangle\b/.test(objectTypeLower);
+                ensureConsoleLog('🔁 [MTF] Converted infinite-system height field to effective angle field:', {
+                    requested: {
+                        x: imageHeightCandidate.xHeightAngle,
+                        y: imageHeightCandidate.yHeightAngle,
+                        position: imageHeightCandidate.position,
+                    },
+                    effective: {
+                        position: selectedObject.position,
+                        xHeightAngle: selectedObject.xHeightAngle,
+                        yHeightAngle: selectedObject.yHeightAngle,
+                    }
+                });
+            }
+        } catch (error) {
+            ensureConsoleError('⚠️ [MTF] Failed to convert infinite-system height field to angle; using raw field.', error);
+        }
+    }
+
+    // 🔍 DEBUG: Log objectOverride being received to diagnose cache reuse
+    ensureConsoleLog(`📥 [MTF] showMTFDiagram called with objectOverride:`, {
+        hasOverride,
+        objectOverride: objectOverride ? { x: objectOverride.x, y: objectOverride.y, xHeight: objectOverride.xHeight, yHeight: objectOverride.yHeight, xHeightAngle: objectOverride.xHeightAngle, yHeightAngle: objectOverride.yHeightAngle, position: objectOverride.position } : null,
+        selectedObject: { position: selectedObject.position, x: selectedObject.x, y: selectedObject.y, xHeight: selectedObject.xHeight, yHeight: selectedObject.yHeight, xHeightAngle: selectedObject.xHeightAngle, yHeightAngle: selectedObject.yHeightAngle },
+        defocusShiftMm,
+        callStack: 'showMTFDiagram'
+    });
+
     // Column priority: Angle→xHeightAngle/yHeightAngle, Height/Rectangle→x/y or xHeight/yHeight
     const objectX = isAngleType
         ? (selectedObject.xHeightAngle ?? selectedObject.x ?? 0)
@@ -439,14 +480,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     const objectY = isAngleType
         ? (selectedObject.yHeightAngle ?? selectedObject.y ?? 0)
         : (selectedObject.y ?? selectedObject.yHeight ?? selectedObject.yHeightAngle ?? 0);
-    
-    ensureConsoleLog(`🔍 [TFMTF Setup] Object ${objIndex}: type="${objectTypeRaw}", isAngleType=${isAngleType}, isFiniteObject=${isFiniteObject}, objectX=${objectX.toFixed(4)}, objectY=${objectY.toFixed(4)}, defocusShift=${defocusShiftMm} mm`);
 
-    const opticalSystemRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, defocusShiftMm, isFiniteObject);
-    const forceSymmetricIdealMtf = isIdealParaxialOnlySystem(opticalSystemRows);
-    if (!opticalSystemRows || opticalSystemRows.length === 0) {
-        throw new Error('光学システムデータがありません。まず光学システムを設定してください。');
-    }
+    ensureConsoleLog(`🔍 [TFMTF Setup] Object ${objIndex}: type="${objectTypeRaw}", isAngleType=${isAngleType}, isFiniteObject=${isFiniteObject}, objectX=${objectX.toFixed(4)}, objectY=${objectY.toFixed(4)}, defocusShift=${defocusShiftMm} mm`);
 
     let fieldAngle = { x: 0, y: 0 };
     let xHeight = 0;

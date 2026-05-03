@@ -95,6 +95,8 @@ class SystemRequirementsEditor {
   _tableRoot: HTMLTableElement | null;
   _tbody: HTMLTableSectionElement | null;
   _selectedId: any;
+  _selectedIds: string[];
+  _selectionAnchorId: string | null;
   _selectedTr: HTMLTableRowElement | null;
   _paramHeaderEls: any;
   _operandKeys: string[];
@@ -117,6 +119,8 @@ class SystemRequirementsEditor {
     this._tableRoot = null;
     this._tbody = null;
     this._selectedId = null;
+    this._selectedIds = [];
+    this._selectionAnchorId = null;
     this._selectedTr = null;
     this._paramHeaderEls = { param1: null, param2: null, param3: null, param4: null };
     this._operandKeys = [];
@@ -192,6 +196,43 @@ class SystemRequirementsEditor {
 
   _getLiveRequirementsData(): any[] {
     return Array.isArray(this.requirements) ? this.requirements : [];
+  }
+
+  _getSelectedRequirementIds(): string[] {
+    const rawIds = Array.isArray(this._selectedIds) && this._selectedIds.length > 0
+      ? this._selectedIds
+      : ((this._selectedId === null || this._selectedId === undefined || String(this._selectedId).trim() === '')
+        ? []
+        : [String(this._selectedId)]);
+    const uniqueIds: string[] = [];
+    for (const id of rawIds) {
+      const normalized = String(id ?? '').trim();
+      if (!normalized || uniqueIds.includes(normalized)) continue;
+      uniqueIds.push(normalized);
+    }
+    return uniqueIds;
+  }
+
+  _isRequirementSelected(rowId: any): boolean {
+    const rowKey = String(rowId ?? '').trim();
+    if (!rowKey) return false;
+    return this._getSelectedRequirementIds().includes(rowKey);
+  }
+
+  _getRequirementRangeIds(anchorId: any, rowId: any): string[] {
+    const items = Array.isArray(this.requirements) ? this.requirements : [];
+    const anchorKey = String(anchorId ?? '').trim();
+    const rowKey = String(rowId ?? '').trim();
+    if (!anchorKey || !rowKey) return rowKey ? [rowKey] : [];
+    const anchorIndex = items.findIndex((entry: any) => entry && String(entry.id) === anchorKey);
+    const rowIndex = items.findIndex((entry: any) => entry && String(entry.id) === rowKey);
+    if (anchorIndex < 0 || rowIndex < 0) return [rowKey];
+    const start = Math.min(anchorIndex, rowIndex);
+    const end = Math.max(anchorIndex, rowIndex);
+    return items
+      .slice(start, end + 1)
+      .map((entry: any) => String(entry?.id ?? '').trim())
+      .filter(Boolean);
   }
 
   initializeTable(): void {
@@ -556,18 +597,33 @@ class SystemRequirementsEditor {
       return Number.isFinite(n) ? n.toFixed(6) : String(v);
     };
 
-    const setSelectedRow = (rowId: any): void => {
-      this._selectedId = rowId;
+    const setSelectedRow = (rowId: any, options?: { shiftKey?: boolean }): void => {
+      const rowKey = String(rowId ?? '').trim();
+      if (!rowKey) return;
+
+      if (options?.shiftKey) {
+        const anchorId = this._selectionAnchorId || String(this._selectedId ?? '').trim() || rowKey;
+        this._selectedIds = this._getRequirementRangeIds(anchorId, rowKey);
+        this._selectedId = rowId;
+      } else {
+        this._selectedId = rowId;
+        this._selectedIds = [rowKey];
+        this._selectionAnchorId = rowKey;
+      }
+
       if (!this._tbody) return;
 
-      if (this._selectedTr) this._selectedTr.classList.remove('sr-selected');
-      const tr = this._tbody.querySelector(`tr[data-id="${String(rowId)}"]`) as HTMLTableRowElement | null;
-      if (tr) {
-        tr.classList.add('sr-selected');
-        this._selectedTr = tr;
-      } else {
-        this._selectedTr = null;
+      const selectedIds = new Set(this._getSelectedRequirementIds());
+      const rows = this._tbody.querySelectorAll('tr[data-id]');
+      for (const rowEl of Array.from(rows)) {
+        const tr = rowEl as HTMLTableRowElement;
+        const id = String(tr.dataset.id ?? '').trim();
+        tr.classList.toggle('sr-selected', !!id && selectedIds.has(id));
+        if (id === rowKey) {
+          this._selectedTr = tr;
+        }
       }
+      if (!this._selectedTr || String(this._selectedTr.dataset.id ?? '').trim() !== rowKey) this._selectedTr = null;
 
       const row = this.requirements.find((r: any) => r && String(r.id) === String(rowId)) || null;
       if (row) {
@@ -580,7 +636,7 @@ class SystemRequirementsEditor {
     const renderRow = (row: any): { tr: HTMLTableRowElement; editorTr: HTMLTableRowElement | null } => {
       const tr = document.createElement('tr');
       tr.dataset.id = String(row.id);
-      if (String(this._selectedId) === String(row.id)) tr.classList.add('sr-selected');
+      if (this._isRequirementSelected(row.id)) tr.classList.add('sr-selected');
 
       const mkTd = (widthPx: number, stickyLeftPx: number | null = null): HTMLTableCellElement => {
         const td = document.createElement('td');
@@ -604,7 +660,8 @@ class SystemRequirementsEditor {
 
       tr.addEventListener('click', (e) => {
         const t = e?.target as HTMLElement | null;
-        const selectionChanged = String(this._selectedId) !== String(row.id);
+        const shiftKey = !!(e as MouseEvent).shiftKey;
+        const selectionChanged = String(this._selectedId) !== String(row.id) || (shiftKey && !this._isRequirementSelected(row.id));
         const clickedCheckbox = !!(t && (t as HTMLInputElement).type === 'checkbox');
         const clickedControl = !!(t && typeof t.closest === 'function' && t.closest('input,select,textarea,button'));
 
@@ -612,22 +669,23 @@ class SystemRequirementsEditor {
           // Clicking a checkbox should never trigger expand/collapse.
           // Only update selection without expanding.
           if (selectionChanged) {
-            setSelectedRow(row.id);
-            this.renderTable();
+            setSelectedRow(row.id, { shiftKey });
           }
           return;
         }
 
         if (clickedControl) {
           if (selectionChanged) {
-            this._paramsExpanded = true;
-            setSelectedRow(row.id);
-            this.renderTable();
+            if (!shiftKey) this._paramsExpanded = true;
+            setSelectedRow(row.id, { shiftKey });
+            if (!shiftKey) this.renderTable();
           }
           return;
         }
 
-        if (selectionChanged) {
+        if (shiftKey) {
+          setSelectedRow(row.id, { shiftKey: true });
+        } else if (selectionChanged) {
           this._paramsExpanded = true;
           setSelectedRow(row.id);
         } else {
@@ -718,21 +776,31 @@ class SystemRequirementsEditor {
       onCb.type = 'checkbox';
       onCb.checked = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
       onCb.addEventListener('change', () => {
-        const oldValue = row.enabled;
-        row.enabled = !!onCb.checked;
-        
-        // Record undo command
-        if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.enabled) {
-          const command = new w.SetRequirementCommand(
-            row.id,
-            'enabled',
-            oldValue,
-            row.enabled
-          );
-          w.undoHistory.record(command);
+        const nextValue = !!onCb.checked;
+        const selectedIds = this._getSelectedRequirementIds();
+        const applyIds = selectedIds.length > 1 && selectedIds.includes(String(row.id))
+          ? selectedIds
+          : [String(row.id)];
+
+        for (const targetId of applyIds) {
+          const targetRow = this.requirements.find((entry: any) => entry && String(entry.id) === String(targetId));
+          if (!targetRow) continue;
+          const oldValue = targetRow.enabled;
+          targetRow.enabled = nextValue;
+
+          if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== targetRow.enabled) {
+            const command = new w.SetRequirementCommand(
+              targetRow.id,
+              'enabled',
+              oldValue,
+              targetRow.enabled
+            );
+            w.undoHistory.record(command);
+          }
         }
-        
+
         this.saveToStorage();
+        this.renderTable();
         this.scheduleEvaluateAndUpdate();
       });
       onCb.addEventListener('focus', onCellFocus);
@@ -783,6 +851,11 @@ class SystemRequirementsEditor {
           row.param2 = '1';  // Object: first row
           row.param3 = '';   // Component: total
           row.param4 = '';   // Raynum: default(51)
+        } else if (row.operand === 'OPD_RMS_WAVES') {
+          row.param1 = '';   // Source: Primary wavelength
+          row.param2 = '1';  // Object: first row
+          row.param3 = '';   // Sampling: default(32)
+          row.param4 = '';
         }
         
         // Record undo command
@@ -1604,10 +1677,13 @@ class SystemRequirementsEditor {
       paramsSummary.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        const selectionChanged = String(this._selectedId) !== String(row.id);
-        setSelectedRow(row.id);
-        if (selectionChanged || !this._paramsExpanded) {
+        const shiftKey = !!(ev as MouseEvent).shiftKey;
+        const selectionChanged = String(this._selectedId) !== String(row.id) || (shiftKey && !this._isRequirementSelected(row.id));
+        setSelectedRow(row.id, { shiftKey });
+        if (!shiftKey && (selectionChanged || !this._paramsExpanded)) {
           this._paramsExpanded = true;
+          this.renderTable();
+        } else if (shiftKey) {
           this.renderTable();
         }
       });
@@ -3185,6 +3261,11 @@ class SystemRequirementsEditor {
         r.operand = 'SPOT_SIZE_ANNULAR';
       }
 
+      // Migration: OPD RMS operand was renamed to explicit wavelength unit id.
+      if (typeof r.operand === 'string' && r.operand.trim() === 'OPD_RMS_UM') {
+        r.operand = 'OPD_RMS_WAVES';
+      }
+
       // Migration: configId may have been saved as a config name (e.g. "Wide").
       // Normalize to a real id so merit evaluation can load the intended config.
       r.configId = this._normalizeConfigId(r.configId, systemConfig, activeConfigId);
@@ -3219,6 +3300,11 @@ class SystemRequirementsEditor {
         // Migration: SPOT_SIZE_CURRENT was removed; map to Annular for compatibility.
         if (typeof r.operand === 'string' && r.operand.trim() === 'SPOT_SIZE_CURRENT') {
           r.operand = 'SPOT_SIZE_ANNULAR';
+        }
+
+        // Migration: OPD RMS operand was renamed to explicit wavelength unit id.
+        if (typeof r.operand === 'string' && r.operand.trim() === 'OPD_RMS_UM') {
+          r.operand = 'OPD_RMS_WAVES';
         }
 
         r.configId = this._normalizeConfigId(r.configId, systemConfig, activeConfigId);
@@ -3342,8 +3428,8 @@ try {
       const useRustFirst = mode !== 'js-only';
       const includeSpotCurrent = !!(options && options.includeSpotCurrent === true);
       const targets = includeSpotCurrent
-        ? new Set(['SPOT_SIZE_RECT', 'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_CURRENT', 'TA_RMS_UM'])
-        : new Set(['SPOT_SIZE_RECT', 'SPOT_SIZE_ANNULAR', 'TA_RMS_UM']);
+        ? new Set(['SPOT_SIZE_RECT', 'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_CURRENT', 'TA_RMS_UM', 'OPD_RMS_WAVES', 'OPD_RMS_UM'])
+        : new Set(['SPOT_SIZE_RECT', 'SPOT_SIZE_ANNULAR', 'TA_RMS_UM', 'OPD_RMS_WAVES', 'OPD_RMS_UM']);
 
       let prevDisableRustFirst: any = undefined;
       try {

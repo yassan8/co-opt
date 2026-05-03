@@ -5434,6 +5434,7 @@ const collectLegacyCrossRays = async (
           onProgress: (ev: any) => {
             const phase = String(ev?.phase ?? 'running');
             const phaseLower = phase.toLowerCase();
+            const progressMethod = String(ev?.method ?? (optMethod || 'kkt')).trim().toLowerCase();
             const iter = Number(ev?.iter ?? 0);
             scheduleRequirementRefresh();
             const snap = getRequirementTableScoreSnapshot();
@@ -5460,7 +5461,7 @@ const collectLegacyCrossRays = async (
               ...prev,
               status: 'running',
               phase,
-              modeUsed: optMethod,
+              modeUsed: progressMethod || optMethod,
               iterations: iter,
               meritBefore: prev.meritBefore,
               meritAfter: Number.isFinite(displayScore) ? displayScore : prev.meritAfter,

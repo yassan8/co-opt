@@ -301,6 +301,30 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
     const maxNewtonStep = Math.max(0.5, Math.min(2.0, 0.25 * maxSlope));
     let bestDir = buildDirFromSlopes(u, v);
     let bestErr = Infinity;
+    const finalizeResult = (candidateDir) => {
+        if (!candidateDir) return null;
+        if (traceBackend === 'rust') {
+            const tsResidual = evaluateDirectionSolveResidualMm(
+                centerPoint,
+                candidateDir,
+                stopTarget3d,
+                stopIdx,
+                opticalSystemRows,
+                wavelengthUm
+            );
+            if (!Number.isFinite(tsResidual) || tsResidual > Math.max(5e-3, tolMm * 3)) {
+                return solveRayDirectionToStopPointFast(
+                    centerPoint,
+                    stopTarget3d,
+                    stopSurfaceIndex,
+                    opticalSystemRows,
+                    wavelengthUm,
+                    'ts'
+                );
+            }
+        }
+        return candidateDir;
+    };
 
     for (let iter = 0; iter < maxIter; iter++) {
         u = Math.max(-maxSlope, Math.min(maxSlope, u));
@@ -329,7 +353,7 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
             bestDir = dir;
         }
         if (err < tolMm) {
-            return dir;
+            return finalizeResult(dir);
         }
 
         // Finite-difference Jacobian.
@@ -375,11 +399,40 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
     }
 
     // Not converged; use best-effort direction.
-    return bestDir;
+    return finalizeResult(bestDir);
 }
 
 function solveChiefRayDirectionToStopCenterFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceBackend: 'ts' | 'rust' = 'ts') {
     return solveRayDirectionToStopPointFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceBackend);
+}
+
+function evaluateDirectionSolveResidualMm(centerPoint, dirVector, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
+    const stopIdx = Number(stopSurfaceIndex);
+    if (!Number.isInteger(stopIdx) || stopIdx < 0) return Number.POSITIVE_INFINITY;
+    const c = {
+        x: Number(centerPoint?.x),
+        y: Number(centerPoint?.y),
+        z: Number(centerPoint?.z)
+    };
+    const d = normalizeVector3(dirVector, { x: 0, y: 0, z: 1 });
+    const t = {
+        x: Number(stopTarget3d?.x),
+        y: Number(stopTarget3d?.y),
+        z: Number(stopTarget3d?.z)
+    };
+    if (![c.x, c.y, c.z, d.x, d.y, d.z, t.x, t.y].every(Number.isFinite)) {
+        return Number.POSITIVE_INFINITY;
+    }
+    const hit = normalizeHitPoint(
+        traceRayHitPointForRenderTs(
+            opticalSystemRows,
+            { wavelength: wavelengthUm, pos: c, dir: d },
+            1.0,
+            stopIdx
+        )
+    );
+    if (!hit) return Number.POSITIVE_INFINITY;
+    return Math.hypot(hit.x - t.x, hit.y - t.y);
 }
 
 function evaluateOriginSolveResidualMm(origin, dirVector, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
@@ -2878,12 +2931,6 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             if (requestedOriginSolveTraceBackend === 'rust') return 'rust';
             if (requestedOriginSolveTraceBackend === 'ts') return 'ts';
             try {
-                const ua = String(navigator.userAgent || '');
-                const isChromeDesktop = /\bChrome\//.test(ua)
-                    && !/\bEdg\//.test(ua)
-                    && !/\bOPR\//.test(ua)
-                    && !/\bCriOS\//.test(ua);
-                if (!isChromeDesktop) return 'ts';
                 const rust = getRustRayTracingWasmSync();
                 return rust ? 'rust' : 'ts';
             } catch (_) {

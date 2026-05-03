@@ -4300,9 +4300,7 @@ function setupOptimizeDesignIntentButton(): void {
                             if (stopState) stopState.textContent = 'Running...';
                             setPopupText('opt-stop-detail', 'No stop requested.');
                             setPopupText('opt-last-update', 'Waiting for first progress event');
-                            if (phaseEl && String(phaseEl.textContent || '').trim() === '-') {
-                                phaseEl.textContent = 'starting';
-                            }
+                            if (phaseEl) phaseEl.textContent = 'starting';
                         }
                     } catch (_) {}
 
@@ -6708,6 +6706,12 @@ function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''
     }
 }
 
+let __cooptBlockParamDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let __cooptBlockParamPendingRefresh: {
+    systemConfig: any;
+    activeConfigId: string;
+} | null = null;
+
 function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newValue: any): void {
     const systemConfig = loadSystemConfigurations();
     const activeConfig = systemConfig?.configurations?.find((c: any) => c.id === systemConfig?.activeConfigId)
@@ -6746,55 +6750,75 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     }
     cooptAutoApplyGapThicknessModes(blocks, path);
 
-    // Re-expand Design Intent blocks into opticalSystem rows so rendering/ray-tracing sees latest values.
-    let expandedRowsForRender: any[] | null = null;
-    try {
-        const expanded = expandBlocksToOpticalSystemRows(blocks as any);
-        if (expanded && Array.isArray(expanded.rows)) {
-            expandedRowsForRender = expanded.rows;
-            activeConfig.opticalSystem = expanded.rows;
-            try { saveOpticalSystemTableData(expanded.rows as any); } catch (_) {}
-            try { if (typeof w.saveLensTableData === 'function') w.saveLensTableData(expanded.rows); } catch (_) {}
-
-            try {
-                const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
-                if (tableOptical && typeof tableOptical.replaceData === 'function') {
-                    tableOptical.replaceData(expanded.rows);
-                } else if (tableOptical && typeof tableOptical.setData === 'function') {
-                    tableOptical.setData(expanded.rows);
-                }
-            } catch (_) {}
-        }
-    } catch (_) {}
-
     try {
         if (activeConfig.metadata) activeConfig.metadata.modified = new Date().toISOString();
     } catch (_) {}
     try { saveSystemConfigurations(systemConfig); } catch (_) {}
-    try { refreshBlockInspector(); } catch (_) {}
-    try { refreshZoomControlTab(); } catch (_) {}
-    try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
 
-    // Request render refresh for both the local render surface and popup render window.
-    try {
-        if (Array.isArray(expandedRowsForRender) && expandedRowsForRender.length > 0) {
-            if (typeof w.__cooptRenderWindowRedraw === 'function') {
-                w.__cooptRenderWindowRedraw(expandedRowsForRender);
-            } else if (typeof w.drawOpticalSystem === 'function') {
-                w.drawOpticalSystem();
+    __cooptBlockParamPendingRefresh = {
+        systemConfig,
+        activeConfigId: String(systemConfig?.activeConfigId ?? activeConfig?.id ?? '')
+    };
+
+    // Debounce heavy UI refresh so rapid input (e.g. typing digits) does not freeze the page.
+    if (__cooptBlockParamDebounceTimer !== null) clearTimeout(__cooptBlockParamDebounceTimer);
+    __cooptBlockParamDebounceTimer = setTimeout(() => {
+        __cooptBlockParamDebounceTimer = null;
+        let rowsSnapshot: any[] | null = null;
+
+        try {
+            const pending = __cooptBlockParamPendingRefresh;
+            __cooptBlockParamPendingRefresh = null;
+            const latestSystemConfig = pending?.systemConfig || loadSystemConfigurations();
+            const latestActiveConfig = latestSystemConfig?.configurations?.find((c: any) => String(c?.id ?? '') === String(pending?.activeConfigId ?? ''))
+                || latestSystemConfig?.configurations?.find((c: any) => c.id === latestSystemConfig?.activeConfigId)
+                || latestSystemConfig?.configurations?.[0];
+            const latestBlocks = Array.isArray(latestActiveConfig?.blocks) ? latestActiveConfig.blocks : [];
+            const expanded = expandBlocksToOpticalSystemRows(latestBlocks as any);
+            if (expanded && Array.isArray(expanded.rows)) {
+                rowsSnapshot = expanded.rows.slice();
+                latestActiveConfig.opticalSystem = expanded.rows;
+                try { saveOpticalSystemTableData(expanded.rows as any); } catch (_) {}
+                try { if (typeof w.saveLensTableData === 'function') w.saveLensTableData(expanded.rows); } catch (_) {}
+
+                try {
+                    const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
+                    if (tableOptical && typeof tableOptical.replaceData === 'function') {
+                        tableOptical.replaceData(expanded.rows);
+                    } else if (tableOptical && typeof tableOptical.setData === 'function') {
+                        tableOptical.setData(expanded.rows);
+                    }
+                } catch (_) {}
+
+                try { saveSystemConfigurations(latestSystemConfig); } catch (_) {}
             }
-        }
-    } catch (_) {}
-    try {
-        const popup = w.popup3DWindow;
-        if (popup && !popup.closed) {
-            if (typeof popup.__cooptRenderWindowRedraw === 'function' && Array.isArray(expandedRowsForRender) && expandedRowsForRender.length > 0) {
-                popup.__cooptRenderWindowRedraw(expandedRowsForRender);
-            } else if (typeof popup.postMessage === 'function') {
-                popup.postMessage({ action: 'request-redraw' }, '*');
+        } catch (_) {}
+
+        try { refreshBlockInspector(); } catch (_) {}
+        try { refreshZoomControlTab(); } catch (_) {}
+        try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
+
+        // Request render refresh for both the local render surface and popup render window.
+        try {
+            if (Array.isArray(rowsSnapshot) && rowsSnapshot.length > 0) {
+                if (typeof w.__cooptRenderWindowRedraw === 'function') {
+                    w.__cooptRenderWindowRedraw(rowsSnapshot);
+                } else if (typeof w.drawOpticalSystem === 'function') {
+                    w.drawOpticalSystem();
+                }
             }
-        }
-    } catch (_) {}
+        } catch (_) {}
+        try {
+            const popup = w.popup3DWindow;
+            if (popup && !popup.closed) {
+                if (typeof popup.__cooptRenderWindowRedraw === 'function' && Array.isArray(rowsSnapshot) && rowsSnapshot.length > 0) {
+                    popup.__cooptRenderWindowRedraw(rowsSnapshot);
+                } else if (typeof popup.postMessage === 'function') {
+                    popup.postMessage({ action: 'request-redraw' }, '*');
+                }
+            }
+        } catch (_) {}
+    }, 80);
 }
 
 const ZOOM_GROUP_OPTIONS = ['Fixed', ...Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index))];

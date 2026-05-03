@@ -333,6 +333,16 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "横収差図（Transverse Aberration）を内部計算し、指定 Source/Object の評価で RMS を返します。\n\n定義:\n- 評価面: Image面\n- Component=total: meridional + sagittal の transverseAberration を合算して RMS = sqrt(mean(T^2))\n- Component=meridional: メリジオナルのみで RMS\n- Component=sagittal: サジタルのみで RMS\n- 単位: µm（計算値 mm を ×1000）"
   },
+  "OPD_RMS_WAVES": {
+    name: "Wavefront RMS OPD (waves)",
+    description: "RMS wavefront aberration based on OPD",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
+      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
+      { key: "param3", label: "Sampling", description: "OPD sampling grid (default 32)" }
+    ],
+    notes: "Rust/WASM OPDマップ（runNativeOpdMap）を優先して使用し、波面収差のRMSを返します。\n\n定義:\n- OPDサンプル: 瞳内の有限値のみ\n- RMS(OPD): sqrt(mean((OPD - mean(OPD))^2))\n- 単位: waves（波長単位）\n\nSamplingはOPDサンプリングのグリッドサイズ（32, 64, 128, 256, 512）。"
+  },
   "ZERN_COEFF": {
     name: "Zernike Coefficient (Noll)",
     description: "Nth Zernike coefficient (Noll index) for the current system (live). n=0 returns RMS over coefficients.",
@@ -523,7 +533,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'TOT3_SPH', 'TOT3_COMA', 'TOT3_ASTI', 'TOT3_FCUR', 'TOT3_DIST',
   'TOT_LCA', 'TOT_TCA',
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
-  'LA_RMS_UM', 'SA', 'TA_RMS_UM',
+  'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'OPD_RMS_WAVES',
   'ZERN_COEFF',
   'EDGE', 'CTCT'
 ]);
