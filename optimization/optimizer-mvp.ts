@@ -4152,13 +4152,9 @@ export async function runOptimizationMVP(options = {}) {
   const unsupportedNativeOperands = findUnsupportedNativeRequirementOperands(
     activeRequirementRows
   );
-  const requiresAsyncRequirementEvaluation = hasAsyncPreferredRequirementOperands(activeRequirementRows);
-  const effectiveMethod = (requiresAsyncRequirementEvaluation && requestedMethod !== 'lm')
-    ? 'lm'
-    : requestedMethod;
-  const effectiveOpts = (effectiveMethod === requestedMethod)
-    ? opts
-    : { ...opts, method: effectiveMethod };
+  const hasHeavyAsyncRequirementOperands = hasAsyncPreferredRequirementOperands(activeRequirementRows);
+  const effectiveMethod = requestedMethod;
+  const effectiveOpts = opts;
   const shouldPreferNativeRoute = isTauriRuntime()
     && effectiveOpts.forceTs !== true
     && unsupportedNativeOperands.length === 0
@@ -4168,15 +4164,6 @@ export async function runOptimizationMVP(options = {}) {
     try {
       console.warn('[OptimizerMVP] Falling back to TS optimizer because native optimizer does not support some active requirement operands.', {
         unsupportedOperands: unsupportedNativeOperands,
-      });
-    } catch (_) {}
-  }
-
-  if (effectiveMethod !== requestedMethod) {
-    try {
-      console.warn('[OptimizerMVP] Switching optimizer method to LM because active requirements need async evaluation.', {
-        requestedMethod,
-        effectiveMethod,
       });
     } catch (_) {}
   }
@@ -5322,20 +5309,26 @@ export async function runOptimizationMVP(options = {}) {
 
   let bestFeasibleEval = null;
   let bestInfeasibleEval = null;
+  let bestScoreEval = null;
   const recordEval = (e) => {
     if (!e) return;
     const snap = snapshotBlocksByConfigId(blocksByConfigId);
+    const scoredEval = { ...e, blocksSnapshot: snap };
+    if (!bestScoreEval || toFiniteNumber(e.score, Infinity) < (toFiniteNumber(bestScoreEval.score, Infinity) - 1e-12)) {
+      bestScoreEval = scoredEval;
+    }
     if (e.feasible) {
       if (!bestFeasibleEval || compareEval(e, bestFeasibleEval)) {
-        bestFeasibleEval = { ...e, blocksSnapshot: snap };
+        bestFeasibleEval = scoredEval;
       }
     } else {
       if (!bestInfeasibleEval || compareEval(e, bestInfeasibleEval)) {
-        bestInfeasibleEval = { ...e, blocksSnapshot: snap };
+        bestInfeasibleEval = scoredEval;
       }
     }
   };
   const getBestEvalSoFar = () => bestFeasibleEval || bestInfeasibleEval;
+  const getBestScoreEvalSoFar = () => bestScoreEval || bestFeasibleEval || bestInfeasibleEval;
   let __lastRequirementsSnapshotAt = 0;
   const __requirementsSnapshotThrottleMs = 120;
   const evalCompositeFromRequirements = () => {
@@ -6331,13 +6324,16 @@ export async function runOptimizationMVP(options = {}) {
       const finalObjectiveScore0 = Number.isFinite(finalCompositeEval0?.score)
         ? finalCompositeEval0.score
         : best0;
+      const finalBestScore0 = Number.isFinite(finalEval?.score)
+        ? finalEval.score
+        : best0;
       if (onProgress) {
         try {
           onProgress({
             phase: 'done',
             iter: completed0,
               current: finalObjectiveScore0,
-              best: finalObjectiveScore0,
+              best: finalBestScore0,
             method: 'lm',
             multiScenario,
             requirementCount,
@@ -6354,7 +6350,7 @@ export async function runOptimizationMVP(options = {}) {
         ok: true,
         aborted: aborted0,
         before: before0,
-          best: finalObjectiveScore0,
+          best: finalBestScore0,
         iterations: completed0,
         variables: 0,
         method: 'lm',
@@ -7221,6 +7217,9 @@ export async function runOptimizationMVP(options = {}) {
     const finalObjectiveScore = Number.isFinite(finalCompositeEval?.score)
       ? finalCompositeEval.score
       : best;
+    const finalBestScore = Number.isFinite(finalEval?.score)
+      ? finalEval.score
+      : best;
 
     if (onProgress) {
       try {
@@ -7228,7 +7227,7 @@ export async function runOptimizationMVP(options = {}) {
           phase: 'done',
           iter: completedIterations,
             current: finalObjectiveScore,
-            best: finalObjectiveScore,
+            best: finalBestScore,
           method: 'lm',
           multiScenario,
           requirementCount,
@@ -7246,7 +7245,7 @@ export async function runOptimizationMVP(options = {}) {
       ok: true,
       aborted,
       before,
-        best: finalObjectiveScore,
+        best: finalBestScore,
       iterations: completedIterations,
       variables: vars.length,
       method: 'lm',
@@ -8338,7 +8337,11 @@ export async function runOptimizationMVP(options = {}) {
         }
       };
 
-      calibrateAnalyticEqualityCtctRows(currentX);
+      if (hasHeavyAsyncRequirementOperands) {
+        analyticEqualityCalibrated = true;
+      } else {
+        calibrateAnalyticEqualityCtctRows(currentX);
+      }
       
       // 【重要】初期評価を recordEval() に記録（LMメソッドと同様）
       // これにより getBestEvalSoFar() が null を返さず、正しくベスト追跡できる
@@ -8536,7 +8539,7 @@ export async function runOptimizationMVP(options = {}) {
       }
 
       // 初期値が悪いケース向け: AL開始前に軽量な近傍探索で開始点を補正
-      const kktInitProbeEnabled = opts?.kktInitProbe !== false;
+      const kktInitProbeEnabled = !hasHeavyAsyncRequirementOperands && opts?.kktInitProbe !== false;
       if (kktInitProbeEnabled && currentX.length > 0) {
         const kktInitProbeMaxVars = Number.isFinite(Number(opts?.kktInitProbeMaxVars))
           ? Math.max(1, Math.floor(Number(opts.kktInitProbeMaxVars)))
@@ -8609,6 +8612,9 @@ export async function runOptimizationMVP(options = {}) {
             testedVars: candidateOrder.length
           });
         }
+      }
+      else if (hasHeavyAsyncRequirementOperands) {
+        console.log('[AL] Skipping KKT startup probe for async-heavy requirement operands');
       }
 
       // 【Broyden準Newton更新】前回のJacobian、変位dx、残差変化drを保存
@@ -8688,7 +8694,7 @@ export async function runOptimizationMVP(options = {}) {
         const aug0 = evalAugmentedResiduals(currentX, lambdaVec, mu, currentMaxViol);
         const r0 = aug0.residuals;
         const cost0 = r0.reduce((acc, v) => acc + v * v, 0);
-        const score0 = objectiveForKKT(currentX);
+        const score0 = Number.isFinite(Number(preEval.objective)) ? Number(preEval.objective) : objectiveForKKT(currentX);
         if (!Number.isFinite(cost0)) break;
 
         const n = currentX.length;
@@ -9173,27 +9179,6 @@ export async function runOptimizationMVP(options = {}) {
           meritGrad0[j] = 2 * gj;
         }
 
-        const wasmAlpha = backtrackingLineSearchArmijoWasm(
-          currentX,
-          dx,
-          cost0,
-          meritGrad0,
-          1,
-          lineSearchRho,
-          lineSearchC,
-          lineSearchMaxBacktrack,
-          (trialX) => {
-            const aug = evalAugmentedResiduals(clampToBounds(trialX.slice()), lambdaVec, mu, currentMaxViol);
-            const residuals = Array.isArray(aug?.residuals) ? aug.residuals : [];
-            let merit = 0;
-            for (let i = 0; i < residuals.length; i++) {
-              const v = Number(residuals[i]);
-              if (Number.isFinite(v)) merit += v * v;
-            }
-            return merit;
-          }
-        );
-
         const alphas = preFeasible 
           ? [1, 0.5, 0.25]
           : [1, 0.5, 0.25, 0.125, 0.0625];
@@ -9242,12 +9227,27 @@ export async function runOptimizationMVP(options = {}) {
           const aug1 = evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
           const r1 = aug1.residuals;
           const cost1 = r1.reduce((acc, v) => acc + v * v, 0);
-          const score1 = objectiveForKKT(trialX);
+          const score1 = Number.isFinite(Number(aug1?.base?.objective)) ? Number(aug1.base.objective) : objectiveForKKT(trialX);
+          const trialConstraints = Array.isArray(aug1?.base?.constraints) ? aug1.base.constraints : [];
+          const trialMaxViol = trialConstraints.length > 0 ? Math.max(0, ...trialConstraints) : 0;
           
           lastAlpha = alpha; // Track for progress report
           
+          const improvedCost = Number.isFinite(cost1) && Number.isFinite(cost0) && cost1 < (cost0 - 1e-12);
           const improvedScore = Number.isFinite(score1) && Number.isFinite(score0) && score1 < (score0 - 1e-12);
-          if (improvedScore) {
+          const improvedViolation = Number.isFinite(trialMaxViol) && Number.isFinite(currentMaxViol) && trialMaxViol < (currentMaxViol - 1e-9);
+          const nonWorsenedCost = Number.isFinite(cost1) && Number.isFinite(cost0) && cost1 <= (cost0 + 1e-12);
+          const nonWorsenedScore = Number.isFinite(score1) && Number.isFinite(score0) && score1 <= (score0 + 1e-12);
+          const nonWorsenedViolation = Number.isFinite(trialMaxViol) && Number.isFinite(currentMaxViol) && trialMaxViol <= (currentMaxViol + 1e-9);
+          const becameFeasible = trialMaxViol <= 1e-6;
+          const scoreDominantProgress = improvedScore && nonWorsenedCost && nonWorsenedViolation;
+          const violationDominantProgress = improvedViolation && nonWorsenedCost && nonWorsenedScore;
+          const safeFeasibilityTransition = becameFeasible && (nonWorsenedCost || nonWorsenedScore);
+          const acceptTrial = preFeasible
+            ? (improvedCost || scoreDominantProgress)
+            : (safeFeasibilityTransition || improvedCost || scoreDominantProgress || violationDominantProgress);
+
+          if (acceptTrial) {
             accepted = true;
             nextX = trialX;
             acceptedCost = cost1;
@@ -9257,7 +9257,7 @@ export async function runOptimizationMVP(options = {}) {
             
             // 【追加】予測と実際の減少量の比 (rho) を計算
             const pred = predictedReductionForStep(dxStep);
-            const act = score0 - score1;
+            const act = cost0 - cost1;
             acceptedRho = (Number.isFinite(act) && Number.isFinite(pred) && pred > 1e-30) ? (act / pred) : 0;
             
             // Broyden状態の更新：次回のイテレーションで使用
@@ -9377,8 +9377,8 @@ export async function runOptimizationMVP(options = {}) {
           // 成功：現在位置を更新し、ダンピングを rho に応じて滑らかに減らす（LM法と同じ戦略）
           const rhoThreshold = 0.25;  // Accept range: rho > 0.25 means good prediction
           const acceptedPredictedReduction = predictedReductionForStep(acceptedDxStep || dx.map(v => acceptedAlpha * v));
-          const acceptedActualReduction = Number.isFinite(score0) && Number.isFinite(acceptedScore)
-            ? (score0 - acceptedScore)
+          const acceptedActualReduction = Number.isFinite(cost0) && Number.isFinite(acceptedCost)
+            ? (cost0 - acceptedCost)
             : 0;
           let factor;
           if (acceptedRho > rhoThreshold) {
@@ -9434,6 +9434,7 @@ export async function runOptimizationMVP(options = {}) {
           
           // 【重要修正】LM法と同じくrecordEval()を使ってBest管理を統一
           // これにより、feasible/infeasibleの自動判定とBest値の正確な追跡が可能になる
+          const prevBestEval = getBestScoreEvalSoFar();
           recordEval(currentEval);
           const prevBestScore = bestScore;
           // 【高速化】evalSQPAtX(currentX) を一度だけ計算し、ベスト更新ログ・bestMerit 計算で共有する
@@ -9442,12 +9443,13 @@ export async function runOptimizationMVP(options = {}) {
           postEvalCached = acceptedConstraintEval;
           const acceptedViolationVector = (acceptedConstraintEval.constraints || []).map(c => Math.max(0, c));
           const acceptedViolationNorm = Math.sqrt(acceptedViolationVector.reduce((acc, v) => acc + v * v, 0));
-          const bestEvalNow = getBestEvalSoFar();
+          const bestEvalNow = getBestScoreEvalSoFar();
           if (bestEvalNow) {
             bestScore = bestEvalNow.score;
             bestEval = bestEvalNow;
-            // bestXは常に現在のcurrentXを保存（後で復元するため）
-            bestX = currentX.slice();
+            if (!prevBestEval || compareEval(currentEval, prevBestEval)) {
+              bestX = currentX.slice();
+            }
             
             if (bestScore < prevBestScore) {
               lastBestIter = iter;
@@ -9972,7 +9974,7 @@ export async function runOptimizationMVP(options = {}) {
       // これにより、Stop時も確実にベスト解が復元される
       console.log('🔧 [AL] Restoring best solution from snapshot...');
       try {
-        const bestFinalEval = getBestEvalSoFar();
+        const bestFinalEval = getBestScoreEvalSoFar();
         if (bestFinalEval) {
           restoreBestSnapshotAndPersist({ finalEval: bestFinalEval, jointState, systemConfig, configsById, targetConfigIds });
           console.log(`✅ [AL] Best solution restored (Score: ${bestFinalEval.score.toFixed(6)})`);
@@ -10012,7 +10014,7 @@ export async function runOptimizationMVP(options = {}) {
       } catch (_) {}
 
       // Get final best evaluation for fallback decision (objective-space)
-      const bestFinalEval = getBestEvalSoFar();
+      const bestFinalEval = getBestScoreEvalSoFar();
       const finalScore = bestFinalEval ? bestFinalEval.score : bestScore;
       const fallbackDepth = Number.isFinite(Number((opts as any)?.__kktFallbackDepth))
         ? Math.max(0, Math.floor(Number((opts as any).__kktFallbackDepth)))
@@ -10053,6 +10055,9 @@ export async function runOptimizationMVP(options = {}) {
       const finalObjectiveScore = Number.isFinite(finalCompositeEval?.score)
         ? finalCompositeEval.score
         : finalScore;
+      const finalBestScore = Number.isFinite(bestFinalEval?.score)
+        ? bestFinalEval.score
+        : bestScore;
 
       if (onProgress) {
         try {
@@ -10060,7 +10065,7 @@ export async function runOptimizationMVP(options = {}) {
             phase: 'done',
             iter: completedIterations,
             current: finalObjectiveScore,
-            best: finalObjectiveScore,
+            best: finalBestScore,
             ms: Math.round(t1 - t0),
             method: 'kkt',
             multiScenario,
@@ -10075,7 +10080,7 @@ export async function runOptimizationMVP(options = {}) {
         ok: true,
         aborted: shouldStopKKT(),
         before: initialScore,
-        best: finalViolationScore,
+        best: finalBestScore,
         iterations: completedIterations,
         variables: vars.length,
         method: 'kkt',
@@ -10499,10 +10504,13 @@ export async function runOptimizationMVP(options = {}) {
   const finalObjectiveScore = Number.isFinite(finalCompositeEval?.score)
     ? finalCompositeEval.score
     : best;
+  const finalBestScore = Number.isFinite(finalEval?.score)
+    ? finalEval.score
+    : best;
 
   if (onProgress) {
     try {
-      onProgress({ phase: 'done', iter: completedIterations, current: finalObjectiveScore, best: finalObjectiveScore, multiScenario, ms: Math.round(t1 - t0), feasible: finalFeasible, violationScore: finalViolationScore, softPenalty: finalSoftPenalty });
+      onProgress({ phase: 'done', iter: completedIterations, current: finalObjectiveScore, best: finalBestScore, multiScenario, ms: Math.round(t1 - t0), feasible: finalFeasible, violationScore: finalViolationScore, softPenalty: finalSoftPenalty });
     } catch (_) {}
     await nextFrame();
   }
@@ -10512,7 +10520,7 @@ export async function runOptimizationMVP(options = {}) {
     ok: true,
     aborted,
     before,
-    best: finalObjectiveScore,
+    best: finalBestScore,
     iterations: completedIterations,
     variables: vars.length,
     method: 'cd',

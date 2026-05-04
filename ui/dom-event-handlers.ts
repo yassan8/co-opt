@@ -4159,9 +4159,10 @@ function setupOptimizeDesignIntentButton(): void {
                     void (async () => {
                         try {
                             const sre = w.systemRequirementsEditor;
+                            const shouldAwaitFinalSync = !(phaseStr === 'stopped' || stopFlag.stop);
                             if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
                                 const r = sre.evaluateAndUpdateNow({ reason: 'optimize-progress-final-sync' });
-                                if (r && typeof (r as any).then === 'function') {
+                                if (shouldAwaitFinalSync && r && typeof (r as any).then === 'function') {
                                     await r;
                                 }
                             }

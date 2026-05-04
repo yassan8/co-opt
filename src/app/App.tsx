@@ -2205,7 +2205,7 @@ export default function App() {
       const thickness = row?.thickness;
       const material = row?.material;
       const conic = row?.conic;
-      const surfType = row?.surfType;
+      const surfType = String(row?.surfType ?? row?.surfaceType ?? '').trim();
 
       if (blockType === 'Lens') {
         if (r === 'front') {
@@ -2213,7 +2213,7 @@ export default function App() {
           setParam(block, 'centerThickness', thickness);
           setParam(block, 'material', material);
           setParam(block, 'frontConic', conic);
-          setParam(block, 'frontSurfType', surfType);
+          if (surfType) setParam(block, 'frontSurfType', surfType);
           if (row?.radiusX !== undefined && row?.radiusX !== '') setParam(block, 'frontRadiusX', row.radiusX);
           if (row?.axis !== undefined && row?.axis !== '') setParam(block, 'frontAxis', row.axis);
           for (let i = 1; i <= 10; i++) {
@@ -2223,7 +2223,7 @@ export default function App() {
         } else if (r === 'back') {
           setParam(block, 'backRadius', radius);
           setParam(block, 'backConic', conic);
-          setParam(block, 'backSurfType', surfType);
+          if (surfType) setParam(block, 'backSurfType', surfType);
           if (row?.radiusX !== undefined && row?.radiusX !== '') setParam(block, 'backRadiusX', row.radiusX);
           if (row?.axis !== undefined && row?.axis !== '') setParam(block, 'backAxis', row.axis);
           for (let i = 1; i <= 10; i++) {
@@ -2236,7 +2236,7 @@ export default function App() {
         setParam(block, 'thickness', thickness);
         setParam(block, 'material', material);
         setParam(block, 'conic', conic);
-        setParam(block, 'surfType', surfType);
+        if (surfType) setParam(block, 'surfType', surfType);
         if (row?.radiusX !== undefined && row?.radiusX !== '') setParam(block, 'radiusX', row.radiusX);
         if (row?.radiusY !== undefined && row?.radiusY !== '') setParam(block, 'radiusY', row.radiusY);
         if (row?.axis !== undefined && row?.axis !== '') setParam(block, 'axis', row.axis);
@@ -2248,7 +2248,7 @@ export default function App() {
         setParam(block, 'radius', radius);
         setParam(block, 'thickness', thickness);
         setParam(block, 'conic', conic);
-        setParam(block, 'surfType', surfType);
+        if (surfType) setParam(block, 'surfType', surfType);
         for (let i = 1; i <= 10; i++) {
           const key = `coef${i}`;
           if (Object.prototype.hasOwnProperty.call(row, key)) setParam(block, key, (row as any)[key]);
@@ -2258,7 +2258,7 @@ export default function App() {
         if (!idx) return;
         setParam(block, `radius${idx}`, radius);
         setParam(block, `surf${idx}Conic`, conic);
-        setParam(block, `surf${idx}SurfType`, surfType);
+        if (surfType) setParam(block, `surf${idx}SurfType`, surfType);
         if (idx === '1') {
           setParam(block, 'thickness1', thickness);
           setParam(block, 'material1', material);
@@ -2276,7 +2276,7 @@ export default function App() {
         if (!idx) return;
         setParam(block, `radius${idx}`, radius);
         setParam(block, `surf${idx}Conic`, conic);
-        setParam(block, `surf${idx}SurfType`, surfType);
+        if (surfType) setParam(block, `surf${idx}SurfType`, surfType);
         if (idx === '1') {
           setParam(block, 'thickness1', thickness);
           setParam(block, 'material1', material);
@@ -5506,46 +5506,60 @@ const collectLegacyCrossRays = async (
           }
         } catch (_) {}
 
-        try {
-          await syncHostDesignIntentAndRequirements(hostWindow, 'optimize-finished-reload', 'after');
+        if (!tsAborted) {
+          try {
+            await syncHostDesignIntentAndRequirements(hostWindow, 'optimize-finished-reload', 'after');
 
-          const rowsAfter = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
-          if (Array.isArray(rowsAfter) && rowsAfter.length > 0) {
-            await maybeAutoRender(rowsAfter);
-            const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            localStorage.setItem(optimizeRowsSyncKey, JSON.stringify({
-              rows: rowsAfter,
-              token: applyToken,
-              beforeConfigSnapshot: beforeHostConfigSnapshot,
-              beforeRowsSnapshot: beforeHostRowsSnapshot,
-              afterConfigSnapshot: afterHostConfigSnapshot,
-              afterRowsSnapshot: afterHostRowsSnapshot,
-            }));
+            const rowsAfter = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+            if (Array.isArray(rowsAfter) && rowsAfter.length > 0) {
+              await maybeAutoRender(rowsAfter);
+              const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              localStorage.setItem(optimizeRowsSyncKey, JSON.stringify({
+                rows: rowsAfter,
+                token: applyToken,
+                beforeConfigSnapshot: beforeHostConfigSnapshot,
+                beforeRowsSnapshot: beforeHostRowsSnapshot,
+                afterConfigSnapshot: afterHostConfigSnapshot,
+                afterRowsSnapshot: afterHostRowsSnapshot,
+              }));
+              try {
+                const mod = await import('@tauri-apps/api/event');
+                if (mod && typeof (mod as any).emit === 'function') {
+                  await (mod as any).emit('coopt-optimize-rows-sync', {
+                    rows: rowsAfter,
+                    token: applyToken,
+                    beforeConfigSnapshot: beforeHostConfigSnapshot,
+                    beforeRowsSnapshot: beforeHostRowsSnapshot,
+                    afterConfigSnapshot: afterHostConfigSnapshot,
+                    afterRowsSnapshot: afterHostRowsSnapshot,
+                  });
+                }
+              } catch (_) {}
+            }
+          } catch (_) {}
+
+          try {
+            const latestRows = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+            await syncHostDesignIntentAndRequirements(
+              hostWindow,
+              'optimize-finished-sync',
+              'after',
+              Array.isArray(latestRows) ? latestRows : []
+            );
+          } catch (_) {}
+        } else {
+          void (async () => {
             try {
-              const mod = await import('@tauri-apps/api/event');
-              if (mod && typeof (mod as any).emit === 'function') {
-                await (mod as any).emit('coopt-optimize-rows-sync', {
-                  rows: rowsAfter,
-                  token: applyToken,
-                  beforeConfigSnapshot: beforeHostConfigSnapshot,
-                  beforeRowsSnapshot: beforeHostRowsSnapshot,
-                  afterConfigSnapshot: afterHostConfigSnapshot,
-                  afterRowsSnapshot: afterHostRowsSnapshot,
-                });
-              }
+              const latestRows = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+              await syncHostDesignIntentAndRequirements(
+                hostWindow,
+                'optimize-stopped-sync',
+                'after',
+                Array.isArray(latestRows) ? latestRows : []
+              );
             } catch (_) {}
-          }
-        } catch (_) {}
-
-        try {
-          const latestRows = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
-          await syncHostDesignIntentAndRequirements(
-            hostWindow,
-            'optimize-finished-sync',
-            'after',
-            Array.isArray(latestRows) ? latestRows : []
-          );
-        } catch (_) {}
+          })();
+        }
 
         let finalTableScore = Number.NaN;
         try {
