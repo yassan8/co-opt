@@ -2634,6 +2634,151 @@ class SystemRequirementsEditor {
     this.scheduleEvaluateAndUpdate();
   }
 
+  setAllWeights(weightValue: number): { updated: number; reason?: string } {
+    const nextWeight = Number(weightValue);
+    if (!Number.isFinite(nextWeight) || nextWeight < 0) {
+      return { updated: 0, reason: 'invalid-weight' };
+    }
+
+    const live = this._getLiveRequirementsData();
+    this.requirements = live;
+    if (!Array.isArray(live) || live.length === 0) {
+      return { updated: 0, reason: 'no-requirements' };
+    }
+
+    const beforeRows = (() => {
+      try {
+        const rows = loadSystemRequirementsTableData();
+        return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+      } catch (_) {
+        return [];
+      }
+    })();
+
+    let updated = 0;
+    for (const row of live) {
+      if (!row || typeof row !== 'object') continue;
+      const prevWeight = Number(row.weight);
+      const prevComparable = Number.isFinite(prevWeight) ? prevWeight : 1;
+      if (Math.abs(prevComparable - nextWeight) <= Math.max(1e-12, Math.abs(nextWeight) * 1e-12)) continue;
+      row.weight = nextWeight;
+      updated += 1;
+    }
+
+    if (updated <= 0) {
+      return { updated: 0, reason: 'already-set' };
+    }
+
+    this.saveToStorage();
+
+    const afterRows = (() => {
+      try {
+        const rows = loadSystemRequirementsTableData();
+        return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+      } catch (_) {
+        return [];
+      }
+    })();
+
+    try {
+      if (w.undoHistory && w.SetRequirementWeightsBulkCommand && !w.undoHistory.isExecuting) {
+        const cmd = new w.SetRequirementWeightsBulkCommand(beforeRows, afterRows, `to ${nextWeight}`);
+        w.undoHistory.record(cmd);
+      }
+    } catch (_) {}
+
+    this.renderTable();
+    this.scheduleEvaluateAndUpdate();
+    return { updated };
+  }
+
+  async normalizeWeightsForUnitScore(): Promise<{ updated: number; skipped: number; reason?: string }> {
+    await this.flushPendingEdits();
+    await this.evaluateAndUpdateNow({ reason: 'normalize-weight-baseline' });
+
+    const live = this._getLiveRequirementsData();
+    this.requirements = live;
+    if (!Array.isArray(live) || live.length === 0) {
+      return { updated: 0, skipped: 0, reason: 'no-requirements' };
+    }
+
+    const beforeRows = (() => {
+      try {
+        const rows = loadSystemRequirementsTableData();
+        return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+      } catch (_) {
+        return [];
+      }
+    })();
+
+    let updated = 0;
+    let skipped = 0;
+
+    for (const row of live) {
+      if (!row || typeof row !== 'object') {
+        skipped += 1;
+        continue;
+      }
+
+      const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
+      const operand = String(row.operand || '').trim();
+      const score = Number(row._contribution);
+      const prevWeight = Number(row.weight);
+
+      if (!enabled || !operand) {
+        skipped += 1;
+        continue;
+      }
+      if (!Number.isFinite(score) || score <= 0) {
+        skipped += 1;
+        continue;
+      }
+      if (!Number.isFinite(prevWeight) || prevWeight <= 0) {
+        skipped += 1;
+        continue;
+      }
+
+      const nextWeight = Number((prevWeight / score).toPrecision(12));
+      if (!Number.isFinite(nextWeight) || nextWeight <= 0) {
+        skipped += 1;
+        continue;
+      }
+      if (Math.abs(nextWeight - prevWeight) <= Math.max(1e-12, Math.abs(prevWeight) * 1e-12)) {
+        skipped += 1;
+        continue;
+      }
+
+      row.weight = nextWeight;
+      updated += 1;
+    }
+
+    if (updated <= 0) {
+      return { updated: 0, skipped, reason: 'no-positive-scores' };
+    }
+
+    this.saveToStorage();
+
+    const afterRows = (() => {
+      try {
+        const rows = loadSystemRequirementsTableData();
+        return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+      } catch (_) {
+        return [];
+      }
+    })();
+
+    try {
+      if (w.undoHistory && w.SetRequirementWeightsBulkCommand && !w.undoHistory.isExecuting) {
+        const cmd = new w.SetRequirementWeightsBulkCommand(beforeRows, afterRows, `normalized (${updated})`);
+        w.undoHistory.record(cmd);
+      }
+    } catch (_) {}
+
+    this.renderTable();
+    await this.evaluateAndUpdateNow({ reason: 'normalize-weight-apply' });
+    return { updated, skipped };
+  }
+
   transferSelectedToEvaluation(): void {
     alert('System Evaluation は廃止されました。Requirements が仕様（合否）です。');
   }

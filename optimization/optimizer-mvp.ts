@@ -3469,9 +3469,10 @@ function evaluateRequirementsAllScenarios({
   }
 }
 
-function expandRequirementsForTargetConfigs(requirements, targetConfigIds) {
+function expandRequirementsForTargetConfigs(requirements, targetConfigIds, activeConfigId) {
   const ids = Array.isArray(targetConfigIds) ? targetConfigIds.map(id => String(id)) : [];
   const idSet = new Set(ids);
+  const activeId = (activeConfigId === undefined || activeConfigId === null) ? '' : String(activeConfigId).trim();
   const rows = Array.isArray(requirements) ? requirements : [];
   /** @type {any[]} */
   const out = [];
@@ -3481,7 +3482,8 @@ function expandRequirementsForTargetConfigs(requirements, targetConfigIds) {
     if (!r.operand) continue;
     const cfg = String(r.configId ?? '').trim();
     if (!cfg) {
-      for (const id of ids) out.push({ ...r, configId: String(id) });
+      // Keep "Current" scoped to the active configuration instead of expanding it to every target config.
+      if (activeId && idSet.has(activeId)) out.push({ ...r, configId: activeId });
       continue;
     }
     if (!idSet.has(cfg)) continue;
@@ -5284,7 +5286,7 @@ export async function runOptimizationMVP(options = {}) {
   const requirements = (Array.isArray(requirementsRaw) ? requirementsRaw : [])
     .map(r => normalizeRequirementRow(r, systemConfig, activeConfigId));
 
-  const expandedRequirements = expandRequirementsForTargetConfigs(requirements, targetConfigIds)
+  const expandedRequirements = expandRequirementsForTargetConfigs(requirements, targetConfigIds, activeConfigId)
     .filter(r => {
       const w = toFiniteNumber(r.weight, 1);
       return w > 0;
@@ -6321,12 +6323,14 @@ export async function runOptimizationMVP(options = {}) {
       const finalFeasible0 = (finalCompositeEval0?.feasible !== undefined)
         ? !!finalCompositeEval0.feasible
         : (finalEval ? finalEval.feasible : true);
-      const finalObjectiveScore0 = Number.isFinite(finalCompositeEval0?.score)
-        ? finalCompositeEval0.score
-        : best0;
       const finalBestScore0 = Number.isFinite(finalEval?.score)
         ? finalEval.score
         : best0;
+      const finalObjectiveScore0 = Number.isFinite(finalBestScore0)
+        ? finalBestScore0
+        : (Number.isFinite(finalCompositeEval0?.score)
+          ? finalCompositeEval0.score
+          : best0);
       if (onProgress) {
         try {
           onProgress({
@@ -7214,12 +7218,14 @@ export async function runOptimizationMVP(options = {}) {
     const finalFeasible = (finalCompositeEval?.feasible !== undefined)
       ? !!finalCompositeEval.feasible
       : (finalEval ? finalEval.feasible : true);
-    const finalObjectiveScore = Number.isFinite(finalCompositeEval?.score)
-      ? finalCompositeEval.score
-      : best;
     const finalBestScore = Number.isFinite(finalEval?.score)
       ? finalEval.score
       : best;
+    const finalObjectiveScore = Number.isFinite(finalBestScore)
+      ? finalBestScore
+      : (Number.isFinite(finalCompositeEval?.score)
+        ? finalCompositeEval.score
+        : best);
 
     if (onProgress) {
       try {
@@ -8703,10 +8709,13 @@ export async function runOptimizationMVP(options = {}) {
         // 【Broyden準Newton更新】条件：前回のデータがある、連続6回未満、ステップが十分に受け入れられている
         // 【修正】連続適用回数を増やし、積極的にヤコビアン計算をスキップする
         const hasReusableJacobian = !!(lastJ && lastJ[0] && lastJ[0].length === n);
-        const canUseBroyden = hasReusableJacobian && lastX && lastR && 
-                              lastX.length === n && lastR.length === m &&
-                              broydenSkipCount < kktBroydenMaxSkips &&
-                              kktRejectStreak < kktBroydenMaxRejectStreak;
+        const prevJ = hasReusableJacobian ? lastJ : null;
+        const prevX = Array.isArray(lastX) ? lastX : null;
+        const prevR = Array.isArray(lastR) ? lastR : null;
+        const canUseBroyden = !!(prevJ && prevX && prevR &&
+                  prevX.length === n && prevR.length === m &&
+                  broydenSkipCount < kktBroydenMaxSkips &&
+                  kktRejectStreak < kktBroydenMaxRejectStreak);
 
         const jacobianRefreshMaxCols = Number.isFinite(Number(opts?.kktJacobianRefreshMaxCols))
           ? Math.max(1, Math.floor(Number(opts.kktJacobianRefreshMaxCols)))
@@ -8718,14 +8727,14 @@ export async function runOptimizationMVP(options = {}) {
         const shouldRunFullJacobianRefresh = hasReusableJacobian && iter > 0 && (iter % kktJacobianFullRefreshInterval) === 0;
         
         let J: number[][];
-        if (canUseBroyden) {
+        if (canUseBroyden && prevJ && prevX && prevR) {
           // Broydenランク1更新: J_new = J_old + (dr - J_old*dx) * dx^T / (dx^T dx)
-          const dx = currentX.map((xi, i) => xi - lastX![i]);
-          const dr = r0.map((ri, i) => ri - lastR![i]);
+          const dx = currentX.map((xi, i) => xi - prevX[i]);
+          const dr = r0.map((ri, i) => ri - prevR[i]);
           
           const dxNorm2 = dx.reduce((acc, v) => acc + v * v, 0);
           if (dxNorm2 > 1e-18) {
-            J = lastJ.map(row => row.slice());  // Deep copy
+            J = prevJ.map(row => row.slice());  // Deep copy
             
             // Compute J_old * dx
             const Jdx = new Array(m).fill(0);
@@ -8757,8 +8766,8 @@ export async function runOptimizationMVP(options = {}) {
                     console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
                   }
                 } else {
-                  const refreshCols = pickJacobianRefreshColumns(currentX, lastX || null, jacobianRefreshMaxCols);
-                  J = await finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols, aug0.base?.residuals?.length || 0);
+                  const refreshCols = pickJacobianRefreshColumns(currentX, prevX, jacobianRefreshMaxCols);
+                  J = await finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, prevJ, refreshCols, aug0.base?.residuals?.length || 0);
                   if (iter < 3 || iter % 100 === 0) {
                     console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
                   }
@@ -8766,7 +8775,7 @@ export async function runOptimizationMVP(options = {}) {
                 jacobianReuseSinceRefresh = 0;
                 forceJacobianRefreshNextIter = false;
               } else {
-                J = lastJ!.map(row => row.slice());
+                J = prevJ.map(row => row.slice());
                 jacobianReuseSinceRefresh++;
                 if (__profile && __profile.counts) {
                   __profile.counts.kktJacobianReuseCalls = (Number(__profile.counts.kktJacobianReuseCalls) || 0) + 1;
@@ -8789,8 +8798,8 @@ export async function runOptimizationMVP(options = {}) {
                   console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
                 }
               } else {
-                const refreshCols = pickJacobianRefreshColumns(currentX, lastX || null, jacobianRefreshMaxCols);
-                J = await finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols, aug0.base?.residuals?.length || 0);
+                const refreshCols = pickJacobianRefreshColumns(currentX, prevX, jacobianRefreshMaxCols);
+                J = await finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, prevJ, refreshCols, aug0.base?.residuals?.length || 0);
                 if (iter < 3 || iter % 100 === 0) {
                   console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
                 }
@@ -8798,7 +8807,7 @@ export async function runOptimizationMVP(options = {}) {
               jacobianReuseSinceRefresh = 0;
               forceJacobianRefreshNextIter = false;
             } else {
-              J = lastJ!.map(row => row.slice());
+              J = prevJ.map(row => row.slice());
               jacobianReuseSinceRefresh++;
               if (__profile && __profile.counts) {
                 __profile.counts.kktJacobianReuseCalls = (Number(__profile.counts.kktJacobianReuseCalls) || 0) + 1;
@@ -10052,12 +10061,14 @@ export async function runOptimizationMVP(options = {}) {
       const finalFeasible = (finalCompositeEval?.feasible !== undefined)
         ? !!finalCompositeEval.feasible
         : (bestFinalEval?.feasible ?? false);
-      const finalObjectiveScore = Number.isFinite(finalCompositeEval?.score)
-        ? finalCompositeEval.score
-        : finalScore;
       const finalBestScore = Number.isFinite(bestFinalEval?.score)
         ? bestFinalEval.score
         : bestScore;
+      const finalObjectiveScore = Number.isFinite(finalBestScore)
+        ? finalBestScore
+        : (Number.isFinite(finalCompositeEval?.score)
+          ? finalCompositeEval.score
+          : finalScore);
 
       if (onProgress) {
         try {
@@ -10501,12 +10512,14 @@ export async function runOptimizationMVP(options = {}) {
   const finalFeasible = (finalCompositeEval?.feasible !== undefined)
     ? !!finalCompositeEval.feasible
     : (finalEval ? finalEval.feasible : true);
-  const finalObjectiveScore = Number.isFinite(finalCompositeEval?.score)
-    ? finalCompositeEval.score
-    : best;
   const finalBestScore = Number.isFinite(finalEval?.score)
     ? finalEval.score
     : best;
+  const finalObjectiveScore = Number.isFinite(finalBestScore)
+    ? finalBestScore
+    : (Number.isFinite(finalCompositeEval?.score)
+      ? finalCompositeEval.score
+      : best);
 
   if (onProgress) {
     try {

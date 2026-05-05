@@ -5049,6 +5049,7 @@ const collectLegacyCrossRays = async (
         const renderSyncQueue: any[][] = [];
         let renderSyncInFlight = false;
         let reqEvalInFlight = false;
+        let optimizeFinalized = false;
         let lastReqEvalAt = 0;
         const REQ_EVAL_THROTTLE_MS = 220;
 
@@ -5367,6 +5368,7 @@ const collectLegacyCrossRays = async (
         };
 
         const scheduleRequirementRefresh = () => {
+          if (optimizeFinalized) return;
           const now = Date.now();
           if (reqEvalInFlight) return;
           if ((now - lastReqEvalAt) < REQ_EVAL_THROTTLE_MS) return;
@@ -5387,15 +5389,18 @@ const collectLegacyCrossRays = async (
               const tableScore = Number(snap.score);
               if (!Number.isFinite(tableScore)) return;
               tsBestRequirementScore = Math.min(tsBestRequirementScore, tableScore);
+              if (optimizeFinalized) return;
 
               setOptimizeState((prev: any) => ({
                 ...prev,
                 meritAfter: tableScore,
                 requirementScoreAfter: tableScore,
                 requirementScoreTable: tableScore,
-                best: Number.isFinite(tsBestRequirementScore)
-                  ? tsBestRequirementScore
-                  : prev.best,
+                best: Number.isFinite(tsBestScore)
+                  ? tsBestScore
+                  : (Number.isFinite(tsBestRequirementScore)
+                    ? tsBestRequirementScore
+                    : prev.best),
               }));
             } catch (_) {
               // ignore live refresh failures and keep progress loop running
@@ -5439,6 +5444,7 @@ const collectLegacyCrossRays = async (
             scheduleRequirementRefresh();
             const snap = getRequirementTableScoreSnapshot();
             const progressCurrentScore = Number(ev?.current);
+            const progressBestScore = Number(ev?.best);
             const progressViolationScore = Number(ev?.violationScore);
             const tableScore = Number(snap.score);
             // ev.current = violationScore + softPenalty (total Requirement score)
@@ -5451,6 +5457,9 @@ const collectLegacyCrossRays = async (
 
             if (phaseLower === 'accept') tsAcceptCount += 1;
             if (phaseLower === 'reject') tsRejectCount += 1;
+            if (Number.isFinite(progressBestScore)) {
+              tsBestScore = Math.min(tsBestScore, progressBestScore);
+            }
             if (Number.isFinite(displayScore)) {
               tsBestRequirementScore = Math.min(tsBestRequirementScore, displayScore);
             }
@@ -5472,9 +5481,11 @@ const collectLegacyCrossRays = async (
               rejectCount: tsRejectCount,
               issue: '-',
               percent: maxIterations > 0 ? Math.round((Math.max(0, iter) / maxIterations) * 100) : 0,
-              best: Number.isFinite(tsBestRequirementScore)
-                ? tsBestRequirementScore
-                : prev.best,
+              best: Number.isFinite(tsBestScore)
+                ? tsBestScore
+                : (Number.isFinite(tsBestRequirementScore)
+                  ? tsBestRequirementScore
+                  : prev.best),
             }));
           },
         });
@@ -5489,6 +5500,8 @@ const collectLegacyCrossRays = async (
         if ((!Number.isFinite(tsIterations) || tsIterations <= 0) && !tsAborted) {
           throw new Error(`TS/WASM optimizer produced no iterations (iterations=${String(tsResult?.iterations)})`);
         }
+
+        optimizeFinalized = true;
 
         let afterHostConfigSnapshot: any = null;
         let afterHostRowsSnapshot: any[] = [];
@@ -5564,6 +5577,12 @@ const collectLegacyCrossRays = async (
         let finalTableScore = Number.NaN;
         try {
           const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
+          if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+            const p = sre.evaluateAndUpdateNow({ reason: 'optimize-final-score', forceSilent: true, silent: true });
+            if (p && typeof (p as any).then === 'function') {
+              await p;
+            }
+          }
           if (sre && typeof sre.getData === 'function') {
             const rr = sre.getData();
             if (Array.isArray(rr)) {
@@ -5578,15 +5597,20 @@ const collectLegacyCrossRays = async (
           }
         } catch (_) {}
 
-        const finalScore = Number.isFinite(finalTableScore)
-          ? finalTableScore
-          : Number.NaN;
-        const finalBest = Number.isFinite(finalScore)
-          ? Math.min(
-            Number.isFinite(tsBestRequirementScore) ? tsBestRequirementScore : finalScore,
-            finalScore
-          )
-          : (Number.isFinite(tsBestRequirementScore) ? tsBestRequirementScore : Number.NaN);
+        const resultBestScore = Number(tsResult?.best);
+        const resultObjectiveScore = Number(tsResult?.objectiveScore);
+        if (Number.isFinite(resultBestScore)) {
+          tsBestScore = Math.min(tsBestScore, resultBestScore);
+        }
+
+        const finalScore = Number.isFinite(resultObjectiveScore)
+          ? resultObjectiveScore
+          : (Number.isFinite(finalTableScore) ? finalTableScore : Number.NaN);
+        const finalBest = Number.isFinite(tsBestScore)
+          ? tsBestScore
+          : (Number.isFinite(tsBestRequirementScore)
+            ? tsBestRequirementScore
+            : finalScore);
         const aborted = tsAborted;
 
         setOptimizeState((prev: any) => ({

@@ -110,6 +110,34 @@ export default function RequirementsSection() {
     console.error('[RequirementsSection] ❌ Editor or setAllEnabled method not available');
   };
 
+  const handleNormalizeRequirementWeights = async () => {
+    const editor = await waitForRequirementsEditorReady();
+    if (editor && typeof editor.normalizeWeightsForUnitScore === 'function') {
+      try {
+        const result = await editor.normalizeWeightsForUnitScore();
+        console.info('[RequirementsSection] normalizeWeightsForUnitScore:', result);
+      } catch (err) {
+        console.error('[RequirementsSection] ❌ Error in normalizeWeightsForUnitScore:', err);
+      }
+      return;
+    }
+    console.error('[RequirementsSection] ❌ Editor or normalizeWeightsForUnitScore method not available');
+  };
+
+  const handleSetAllRequirementWeightsToOne = async () => {
+    const editor = await waitForRequirementsEditorReady();
+    if (editor && typeof editor.setAllWeights === 'function') {
+      try {
+        const result = editor.setAllWeights(1);
+        console.info('[RequirementsSection] setAllWeights(1):', result);
+      } catch (err) {
+        console.error('[RequirementsSection] ❌ Error in setAllWeights(1):', err);
+      }
+      return;
+    }
+    console.error('[RequirementsSection] ❌ Editor or setAllWeights method not available');
+  };
+
   return (
     <section className="merit-function-section requirements-section ide-section-card" id="requirements-container" aria-label="Requirements">
       <h2 className="section-title">Requirements</h2>
@@ -119,6 +147,8 @@ export default function RequirementsSection() {
         <button id="update-requirement-btn" type="button" onClick={handleUpdateRequirement}>Update Requirement</button>
         <button id="set-all-requirement-on-btn" type="button" onClick={handleSetAllRequirementOn}>All On</button>
         <button id="set-all-requirement-off-btn" type="button" onClick={handleSetAllRequirementOff}>All Off</button>
+        <button id="set-all-requirement-weight-one-btn" type="button" onClick={handleSetAllRequirementWeightsToOne}>All Weight=1</button>
+        <button id="normalize-requirement-weight-btn" type="button" onClick={handleNormalizeRequirementWeights} title="Set each positive current Score to 1 by adjusting Weight">Normalize Score=1</button>
       </div>
 
       <div className="requirements-layout">

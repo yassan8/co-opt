@@ -395,6 +395,55 @@ export class SetRequirementEnabledBulkCommand extends Command {
 }
 
 /**
+ * Command for bulk-updating requirement weights in a single undo step
+ */
+export class SetRequirementWeightsBulkCommand extends Command {
+  beforeRows: any[];
+  afterRows: any[];
+  descriptionSuffix: string;
+
+  constructor(beforeRows: any[], afterRows: any[], descriptionSuffix: string) {
+    super(`Set requirement weights ${String(descriptionSuffix || '').trim()}`.trim());
+    this.beforeRows = Array.isArray(beforeRows) ? JSON.parse(JSON.stringify(beforeRows)) : [];
+    this.afterRows = Array.isArray(afterRows) ? JSON.parse(JSON.stringify(afterRows)) : [];
+    this.descriptionSuffix = String(descriptionSuffix || '').trim();
+  }
+
+  execute(): void {
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
+    try {
+      saveSystemRequirementsTableData(JSON.parse(JSON.stringify(this.afterRows)) as any);
+      this.refreshUI();
+    } finally {
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
+    }
+  }
+
+  undo(): void {
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
+    try {
+      saveSystemRequirementsTableData(JSON.parse(JSON.stringify(this.beforeRows)) as any);
+      this.refreshUI();
+    } finally {
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
+    }
+  }
+
+  refreshUI(): void {
+    if (w.systemRequirementsEditor) {
+      w.systemRequirementsEditor.loadFromStorage();
+      if (typeof w.systemRequirementsEditor.syncRequirementsToSystemConfigFromStorage === 'function') {
+        w.systemRequirementsEditor.syncRequirementsToSystemConfigFromStorage();
+      }
+      w.systemRequirementsEditor.renderTable();
+      if (typeof w.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+        w.systemRequirementsEditor.scheduleEvaluateAndUpdate();
+      }
+    }
+  }
+}
+
+/**
  * Command for reordering requirements in a single undo step
  */
 export class ReorderRequirementsCommand extends Command {
@@ -1278,6 +1327,7 @@ if (typeof window !== 'undefined') {
   w.SetSurfaceFieldCommand = SetSurfaceFieldCommand;
   w.SetRequirementCommand = SetRequirementCommand;
   w.SetRequirementEnabledBulkCommand = SetRequirementEnabledBulkCommand;
+  w.SetRequirementWeightsBulkCommand = SetRequirementWeightsBulkCommand;
   w.ReorderRequirementsCommand = ReorderRequirementsCommand;
   w.ReorderTableRowsCommand = ReorderTableRowsCommand;
   w.SetDesignIntentOptimizeBulkCommand = SetDesignIntentOptimizeBulkCommand;
