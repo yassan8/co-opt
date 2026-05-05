@@ -7494,7 +7494,7 @@ export async function runOptimizationMVP(options = {}) {
 
       const shouldStopKKT = () => shouldStop('AL');
 
-      const evalSQPAtXUncached = (x: number[]) => {
+      const evalSQPAtXUncached = async (x: number[]) => {
         const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
         if (!editor || typeof editor.calculateOperandValue !== 'function') {
           return { objective: 1e9, constraints: [], feasible: false, residuals: [] };
@@ -7555,7 +7555,9 @@ export async function runOptimizationMVP(options = {}) {
           }
 
           const items = Array.isArray(residualItems) ? residualItems : [];
+          let __evalItemCount = 0;
           for (const it of items) {
+            if ((++__evalItemCount & 7) === 0) await maybeYieldKktCpu();
             const r = it?.req;
             if (!r || !r.enabled || !r.operand) continue;
 
@@ -7632,7 +7634,7 @@ export async function runOptimizationMVP(options = {}) {
         return { objective, constraints, feasible, residuals };
       };
 
-      const evalSQPAtX = (x: number[]) => {
+      const evalSQPAtX = async (x: number[]) => {
         const key = buildKktXKey(x);
         if (kktEvalCache.has(key)) {
           if (__profile && __profile.counts) {
@@ -7644,7 +7646,14 @@ export async function runOptimizationMVP(options = {}) {
         if (__profile && __profile.counts) {
           __profile.counts.kktEvalCacheMisses = (Number(__profile.counts.kktEvalCacheMisses) || 0) + 1;
         }
-        const value = __profileBucketWrap('time_objective_eval', () => evalSQPAtXUncached(x));
+        const __evalT0 = (__profile) ? nowMs() : 0;
+        const value = await evalSQPAtXUncached(x);
+        if (__profile) {
+          const dt = Math.max(0, nowMs() - __evalT0);
+          const buckets = __profile.timingBuckets || (__profile.timingBuckets = { time_objective_eval: 0, time_wasm_call: 0, time_js_overhead: 0 });
+          buckets.time_objective_eval = (Number(buckets.time_objective_eval) || 0) + dt;
+          if (__profile.counts) __profile.counts.timeObjectiveEvalCalls = (Number(__profile.counts.timeObjectiveEvalCalls) || 0) + 1;
+        }
         const storable = cloneKktEval(value);
         if (kktEvalCache.size >= kktEvalCacheMax) {
           const oldest = kktEvalCache.keys().next();
@@ -7663,8 +7672,8 @@ export async function runOptimizationMVP(options = {}) {
         return Math.log(1 + Math.exp(beta * val)) / beta;
       };
 
-      const evalAugmentedResiduals = (x: number[], lambdaVec: number[], mu: number, maxViolContext: number = 1.0) => {
-        const base = evalSQPAtX(x);
+      const evalAugmentedResiduals = async (x: number[], lambdaVec: number[], mu: number, maxViolContext: number = 1.0) => {
+        const base = await evalSQPAtX(x);
         const res = Array.isArray(base.residuals) && base.residuals.length > 0
           ? base.residuals.slice()
           : (base.objective > 0 ? [Math.sqrt(base.objective)] : []);
@@ -7938,7 +7947,7 @@ export async function runOptimizationMVP(options = {}) {
       let __lastKktCoopYieldMs = nowMs();
       const maybeYieldKktCpu = async (force = false): Promise<void> => {
         const now = nowMs();
-        if (!force && (now - __lastKktCoopYieldMs) < 12) return;
+        if (!force && (now - __lastKktCoopYieldMs) < 4) return;
         __lastKktCoopYieldMs = now;
         await nextFrame();
       };
@@ -7984,8 +7993,9 @@ export async function runOptimizationMVP(options = {}) {
               if (!(col >= 0 && col < n)) continue;
               xp[col] = x[col] + fdSteps[col];
             }
-            const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const e1 = await evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
             const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
+            await maybeYieldKktCpu();
             effectiveEvals += 1;
             for (const col of group) {
               if (!(col >= 0 && col < n)) continue;
@@ -8023,8 +8033,9 @@ export async function runOptimizationMVP(options = {}) {
               xp[i] = x[i] + fdSteps[i];
             }
 
-            const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const e1 = await evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
             const r1 = e1.residuals;
+            await maybeYieldKktCpu();
             perturbedResidualsActive.push(Array.isArray(r1) ? r1.slice(0, m) : []);
           }
 
@@ -8169,8 +8180,9 @@ export async function runOptimizationMVP(options = {}) {
             if (xp[col] === x[col]) {
               xp[col] = x[col] + stepByCol[col];
             }
-            const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const e1 = await evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
             const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
+            await maybeYieldKktCpu();
             perturbedResidualsActive.push(Array.isArray(r1) ? r1.slice(0, m) : r0.slice());
           }
 
@@ -8206,8 +8218,9 @@ export async function runOptimizationMVP(options = {}) {
             for (const col of group) {
               xp[col] = x[col] + stepByCol[col];
             }
-            const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const e1 = await evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
             const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
+            await maybeYieldKktCpu();
             effectiveEvals += 1;
 
             for (const col of group) {
@@ -8255,7 +8268,7 @@ export async function runOptimizationMVP(options = {}) {
       let currentX = bestX.slice();
       let completedIterations = 0;
 
-      const calibrateAnalyticEqualityCtctRows = (xRef: number[]) => {
+      const calibrateAnalyticEqualityCtctRows = async (xRef: number[]) => {
         if (!kktUseAnalyticEqualityCtctJacobian) {
           analyticEqualityCalibrated = true;
           return;
@@ -8265,7 +8278,7 @@ export async function runOptimizationMVP(options = {}) {
         analyticEqualityRowSpecs = [];
 
         try {
-          const baseEval = evalSQPAtX(xRef);
+          const baseEval = await evalSQPAtX(xRef);
           const baseResiduals = Array.isArray(baseEval?.residuals) ? baseEval.residuals : [];
           if (baseResiduals.length === 0) return;
 
@@ -8312,7 +8325,7 @@ export async function runOptimizationMVP(options = {}) {
 
               const xp = xRef.slice();
               xp[vi] = xv + eps;
-              const e1 = evalSQPAtX(xp);
+              const e1 = await evalSQPAtX(xp);
               const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
               if (!(row < r1.length)) continue;
               const slope = (Number(r1[row]) - Number(baseResiduals[row])) / eps;
@@ -8346,7 +8359,7 @@ export async function runOptimizationMVP(options = {}) {
       if (hasHeavyAsyncRequirementOperands) {
         analyticEqualityCalibrated = true;
       } else {
-        calibrateAnalyticEqualityCtctRows(currentX);
+        await calibrateAnalyticEqualityCtctRows(currentX);
       }
       
       // 【重要】初期評価を recordEval() に記録（LMメソッドと同様）
@@ -8357,7 +8370,7 @@ export async function runOptimizationMVP(options = {}) {
       
       // 【修正】ペナルティを含めた総合評価（メリット関数）でベストを追跡する
       // これにより、完全に feasible でなくても、十分に改善された解を保存できる
-      const initConstraintEval = evalSQPAtX(initialX);
+      const initConstraintEval = await evalSQPAtX(initialX);
       const initViolationVector = (initConstraintEval.constraints || []).map(c => Math.max(0, c));
       const initViolation = Math.sqrt(initViolationVector.reduce((acc, v) => acc + v * v, 0));
       let bestMerit = initialScore + initViolation * 10000;  // Penalty-weighted merit
@@ -8557,8 +8570,8 @@ export async function runOptimizationMVP(options = {}) {
           ? Math.max(100, Number(opts.kktInitProbePenalty))
           : 10000;
 
-        const evalInitProbeMerit = (xProbe: number[]) => {
-          const s = evalSQPAtX(xProbe);
+        const evalInitProbeMerit = async (xProbe: number[]) => {
+          const s = await evalSQPAtX(xProbe);
           const vv = (s.constraints || []).map(c => Math.max(0, c));
           const viol = Math.sqrt(vv.reduce((acc, v) => acc + v * v, 0));
           const merit = Number(s.objective) + viol * kktInitProbePenalty;
@@ -8577,7 +8590,7 @@ export async function runOptimizationMVP(options = {}) {
           .slice(0, Math.min(currentX.length, kktInitProbeMaxVars));
 
         let probeBestX = currentX.slice();
-        let probeBest = evalInitProbeMerit(probeBestX);
+        let probeBest = await evalInitProbeMerit(probeBestX);
 
         for (const item of candidateOrder) {
           const col = item.idx;
@@ -8591,7 +8604,7 @@ export async function runOptimizationMVP(options = {}) {
             const trial = probeBestX.slice();
             trial[col] = clampToBounds([trial[col] + dir * eps])[0];
             if (!Number.isFinite(trial[col]) || trial[col] === probeBestX[col]) continue;
-            const trialEval = evalInitProbeMerit(trial);
+            const trialEval = await evalInitProbeMerit(trial);
             if (trialEval.merit + 1e-12 < probeBest.merit) {
               probeBest = trialEval;
               probeBestX = trial;
@@ -8672,6 +8685,7 @@ export async function runOptimizationMVP(options = {}) {
         // 設計変数が変化する経路（stagnation auto-restart）では null に戻して無効化する。
         let iterAcceptedCompositeEval: any = null;
         try {
+          await maybeYieldKktCpu();
           if (shouldStopKKT()) {
             console.log('⏸️  [AL] User stop requested at iter', iter);
             break;
@@ -8687,7 +8701,7 @@ export async function runOptimizationMVP(options = {}) {
           }
 
         // Check current feasibility
-        const preEval = evalSQPAtX(currentX);
+        const preEval = await evalSQPAtX(currentX);
         const preFeasible = preEval.feasible || (preEval.constraints || []).every(c => c <= 1e-3);
         
         // 【追加】現在の最大制約違反を計算（適応的beta用）
@@ -8697,7 +8711,7 @@ export async function runOptimizationMVP(options = {}) {
           : 0;
 
         // --- 1. Compute residuals and Jacobian ---
-        const aug0 = evalAugmentedResiduals(currentX, lambdaVec, mu, currentMaxViol);
+        const aug0 = await evalAugmentedResiduals(currentX, lambdaVec, mu, currentMaxViol);
         const r0 = aug0.residuals;
         const cost0 = r0.reduce((acc, v) => acc + v * v, 0);
         const score0 = Number.isFinite(Number(preEval.objective)) ? Number(preEval.objective) : objectiveForKKT(currentX);
@@ -8877,6 +8891,7 @@ export async function runOptimizationMVP(options = {}) {
           try {
             const fdSteps = new Float64Array(n);
             for (let col = 0; col < n; col++) {
+              if ((col & 7) === 0) await maybeYieldKktCpu();
               const vObj = { id: varIds[col], key: vars[col]?.key, value: currentX[col] };
               let h = finiteDifferenceStepForVar(vObj);
               const xcol = Number(currentX[col]);
@@ -8901,6 +8916,7 @@ export async function runOptimizationMVP(options = {}) {
             const residualsPerturbedFlat = new Float64Array(m * n);
             let fdEvaluatedCols = 0;
             for (let col = 0; col < n; col++) {
+              if ((col & 7) === 0) await maybeYieldKktCpu();
               const base = col * m;
               if (analyticEqualityUsedVarIdxs.has(col)) {
                 // 等式行対応列: FD予測値をスキップ（基準値のまま）
@@ -9233,7 +9249,7 @@ export async function runOptimizationMVP(options = {}) {
         for (const alpha of alphas) {
           const dxStep = dx.map(v => alpha * v);
           const trialX = clampToBounds(currentX.map((x, i) => x + dxStep[i]));
-          const aug1 = evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
+          const aug1 = await evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
           const r1 = aug1.residuals;
           const cost1 = r1.reduce((acc, v) => acc + v * v, 0);
           const score1 = Number.isFinite(Number(aug1?.base?.objective)) ? Number(aug1.base.objective) : objectiveForKKT(trialX);
@@ -9448,7 +9464,7 @@ export async function runOptimizationMVP(options = {}) {
           const prevBestScore = bestScore;
           // 【高速化】evalSQPAtX(currentX) を一度だけ計算し、ベスト更新ログ・bestMerit 計算で共有する
           // （以前は新ベスト達成時に同じ x で 2 回呼んでいた。kktEvalCache はあるが冗長を排除）
-          const acceptedConstraintEval = evalSQPAtX(currentX);
+          const acceptedConstraintEval = await evalSQPAtX(currentX);
           postEvalCached = acceptedConstraintEval;
           const acceptedViolationVector = (acceptedConstraintEval.constraints || []).map(c => Math.max(0, c));
           const acceptedViolationNorm = Math.sqrt(acceptedViolationVector.reduce((acc, v) => acc + v * v, 0));
@@ -9563,7 +9579,7 @@ export async function runOptimizationMVP(options = {}) {
         
         // --- 6. Update Lagrange multipliers and penalty (Delayed Schedule) ---
 
-        const post = postEvalCached || evalSQPAtX(currentX);
+        const post = postEvalCached || await evalSQPAtX(currentX);
         const c = post.constraints || [];
         if (lambdaVec.length !== c.length) lambdaVec = new Array(c.length).fill(0);
         
@@ -10641,7 +10657,9 @@ if (typeof window !== 'undefined') {
           globalThis.__stopOptimization = true;
         }
       } catch (_) {}
-      try { void requestOptimizerStop(); } catch (_) {}
+      try {
+        void requestOptimizerStop().catch(() => {});
+      } catch (_) {}
     }
   };
 }
