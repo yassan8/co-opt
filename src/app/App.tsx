@@ -5046,6 +5046,8 @@ const collectLegacyCrossRays = async (
         let tsBestScore = Number.POSITIVE_INFINITY;
         let tsBestRequirementScore = Number.POSITIVE_INFINITY;
         let renderSyncSequence = 0;
+        let lastRenderSyncAt = 0;
+        const RENDER_SYNC_MIN_INTERVAL_MS = 400;
         const renderSyncQueue: any[][] = [];
         let renderSyncInFlight = false;
         let reqEvalInFlight = false;
@@ -5464,7 +5466,14 @@ const collectLegacyCrossRays = async (
               tsBestRequirementScore = Math.min(tsBestRequirementScore, displayScore);
             }
 
-            requestRenderSync(Array.isArray((ev as any)?.rows) ? (ev as any).rows : undefined);
+            const shouldAutoRenderPhase = phaseLower === 'accept' || phaseLower === 'done';
+            if (shouldAutoRenderPhase) {
+              const now = Date.now();
+              if ((now - lastRenderSyncAt) >= RENDER_SYNC_MIN_INTERVAL_MS || phaseLower === 'done') {
+                lastRenderSyncAt = now;
+                requestRenderSync(Array.isArray((ev as any)?.rows) ? (ev as any).rows : undefined);
+              }
+            }
 
             setOptimizeState((prev: any) => ({
               ...prev,
