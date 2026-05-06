@@ -8,7 +8,7 @@ import {
     calculateFullSystemParaxialTrace
 } from '../raytracing/core/ray-paraxial.ts';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
-import { getPrimaryWavelength } from '../data/glass.ts';
+import { getPrimaryWavelength as getPrimaryWavelengthFallback } from '../data/glass.ts';
 import { calculateSeidelCoefficients, formatSeidelCoefficients } from '../evaluation/aberrations/seidel-coefficients.ts';
 import { getActiveConfiguration } from '../data/table-configuration.ts';
 import { configurationHasBlocks, expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
@@ -21,6 +21,22 @@ const duWarn = (...args) => { if (DATA_UTILS_DEBUG) console.warn(...args); };
 let warnedUsingDummyOpticalSystemData = false;
 let warnedUsingLocalStorageOpticalSystemData = false;
 let warnedUsingBlocksOpticalSystemData = false;
+
+function resolvePrimaryWavelength(): number {
+  try {
+    if (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function') {
+      const liveValue = Number(window.getPrimaryWavelength());
+      if (Number.isFinite(liveValue) && liveValue > 0) return liveValue;
+    }
+  } catch (_) {}
+
+  try {
+    const fallbackValue = Number(getPrimaryWavelengthFallback());
+    if (Number.isFinite(fallbackValue) && fallbackValue > 0) return fallbackValue;
+  } catch (_) {}
+
+  return 0.5876;
+}
 
 function __du_isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -565,7 +581,7 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
     }
     
     // 主波長を取得
-    const primaryWavelength = getPrimaryWavelength();
+    const primaryWavelength = resolvePrimaryWavelength();
     duLog('🌈 Primary wavelength:', primaryWavelength);
     
     // 近軸計算を実行
@@ -854,7 +870,7 @@ export function outputSeidelCoefficientsToDebug() {
     const objectRows = window.tableObject ? window.tableObject.getData() : [];
     
     // 主波長を取得
-    const primaryWavelength = getPrimaryWavelength();
+    const primaryWavelength = resolvePrimaryWavelength();
     duLog('🌈 Primary wavelength:', primaryWavelength);
     
     let debugOutput = "";
