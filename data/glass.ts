@@ -14088,13 +14088,24 @@ export function getPrimaryWavelength() {
   const DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__PSF_DEBUG || globalThis.__OPD_DEBUG));
   if (DEBUG) console.log('🔍 getPrimaryWavelength called from glass.js');
   try {
+    if (typeof window !== 'undefined'
+      && typeof window.getPrimaryWavelength === 'function'
+      && window.getPrimaryWavelength !== getPrimaryWavelength) {
+      const delegatedValue = Number(window.getPrimaryWavelength());
+      if (Number.isFinite(delegatedValue) && delegatedValue > 0) {
+        if (DEBUG) console.log(`✅ Delegated primary wavelength (glass.js): ${delegatedValue} μm`);
+        return delegatedValue;
+      }
+    }
+
     // グローバルのtableSourceオブジェクトを使用
     if (typeof window !== 'undefined' && window.tableSource && typeof window.tableSource.getData === 'function') {
       const sourceData = window.tableSource.getData();
       if (DEBUG) console.log('📊 Source data (glass.js):', sourceData);
       
-      // Primary Wavelengthに設定されているエントリを探す
-      const primaryEntry = sourceData.find(row => row.primary === "Primary Wavelength");
+      // Primary Wavelengthに設定されている最新のエントリを使う
+      const primaryEntries = sourceData.filter(row => row.primary === "Primary Wavelength");
+      const primaryEntry = primaryEntries.length > 0 ? primaryEntries[primaryEntries.length - 1] : null;
       if (DEBUG) console.log('🎯 Primary entry found (glass.js):', primaryEntry);
       
       if (primaryEntry && primaryEntry.wavelength) {
@@ -14121,7 +14132,9 @@ export function getPrimaryWavelength() {
 
 // グローバルに公開（テスト用）
 if (typeof window !== 'undefined') {
-  window['getPrimaryWavelength'] = getPrimaryWavelength;
+  if (typeof window['getPrimaryWavelength'] !== 'function') {
+    window['getPrimaryWavelength'] = getPrimaryWavelength;
+  }
   window['calculateRefractiveIndex'] = calculateRefractiveIndex;
   window['getGlassDataWithSellmeier'] = getGlassDataWithSellmeier;
   window['getAllGlassDatabases'] = getAllGlassDatabases;

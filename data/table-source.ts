@@ -187,7 +187,59 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
     });
   };
 
-  const getData = (): SourceRow[] => safeCloneRows(data);
+  const normalizePrimarySelection = (): void => {
+    const primaryIndices = data
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => row?.primary === 'Primary Wavelength')
+      .map(({ index }) => index);
+
+    if (primaryIndices.length <= 1) return;
+
+    const keepIndex = primaryIndices[primaryIndices.length - 1];
+    data.forEach((row, index) => {
+      if (!row) return;
+      row.primary = index === keepIndex ? 'Primary Wavelength' : '';
+    });
+  };
+
+  const syncDataFromDom = (): void => {
+    if (!container) return;
+    const bodyRows = Array.from(container.querySelectorAll('tbody tr')) as HTMLTableRowElement[];
+    if (bodyRows.length === 0) return;
+
+    bodyRows.forEach((tr, index) => {
+      const rowData = data[index];
+      if (!rowData) return;
+
+      const cells = tr.querySelectorAll('td');
+      const wavelengthInput = cells[1]?.querySelector('input') as HTMLInputElement | null;
+      const weightInput = cells[2]?.querySelector('input') as HTMLInputElement | null;
+      const primaryRadio = cells[3]?.querySelector('input[type="radio"]') as HTMLInputElement | null;
+
+      if (wavelengthInput) {
+        const raw = wavelengthInput.value;
+        rowData.wavelength = raw === '' ? '' : Number(raw);
+        if (raw !== '' && Number.isNaN(rowData.wavelength as number)) rowData.wavelength = raw;
+      }
+
+      if (weightInput) {
+        const raw = weightInput.value;
+        rowData.weight = raw === '' ? '' : Number(raw);
+        if (raw !== '' && Number.isNaN(rowData.weight as number)) rowData.weight = raw;
+      }
+
+      if (primaryRadio) {
+        rowData.primary = primaryRadio.checked ? 'Primary Wavelength' : '';
+      }
+    });
+
+    normalizePrimarySelection();
+  };
+
+  const getData = (): SourceRow[] => {
+    syncDataFromDom();
+    return safeCloneRows(data);
+  };
 
   const getDataCount = (): number => data.length;
 
@@ -268,6 +320,7 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
 
   const rerender = (): void => {
     if (!container) return;
+    normalizePrimarySelection();
     container.innerHTML = '';
 
     const table = document.createElement('table');
@@ -501,21 +554,18 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
 
       // primary
       const tdPrimary = document.createElement('td');
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = rowData.primary === 'Primary Wavelength';
-      checkbox.addEventListener('change', () => {
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'source-primary-wavelength';
+      radio.checked = rowData.primary === 'Primary Wavelength';
+      radio.addEventListener('change', () => {
+        if (!radio.checked) return;
         const oldValue = rowData.primary;
-        if (checkbox.checked) {
-          data.forEach(r => {
-            if (Number(r.id) === Number(rowData.id)) r.primary = 'Primary Wavelength';
-            else r.primary = '';
-          });
-          notifyPrimaryWavelengthChanged();
-        } else {
-          rowData.primary = '';
-          notifyPrimaryWavelengthChanged();
-        }
+        data.forEach(r => {
+          if (Number(r.id) === Number(rowData.id)) r.primary = 'Primary Wavelength';
+          else r.primary = '';
+        });
+        notifyPrimaryWavelengthChanged();
 
         // Record undo command
         if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.primary) {
@@ -536,7 +586,7 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
         rerender();
         emit('cellEdited', createCellEvent('primary', rowData.primary, rowData));
       });
-      tdPrimary.appendChild(checkbox);
+      tdPrimary.appendChild(radio);
       tr.appendChild(tdPrimary);
 
       tbody.appendChild(tr);
@@ -747,23 +797,60 @@ if (hasDocument && !tableContainer && typeof window !== 'undefined') {
 // 主波長を取得する関数
 function getPrimaryWavelength(): number {
   try {
-    if (tableSource && typeof tableSource.getData === 'function') {
-      const sourceData = tableSource.getData();
+    const prefersPersistedSourceData = (() => {
+      try {
+        const url = new URL(window.location.href);
+        return url.searchParams.get('coopt_analysis_window') === '1'
+          || url.searchParams.get('coopt_render_window') === '1';
+      } catch (_) {
+        return false;
+      }
+    })();
+
+    const readPrimaryWavelengthFromRows = (sourceData: SourceRow[] | null | undefined): number | null => {
+      if (!Array.isArray(sourceData) || sourceData.length === 0) return null;
 
       const isPrimaryRow = (raw: any): boolean => {
         if (raw === true || raw === 1) return true;
         const s = String(raw ?? '').trim().toLowerCase();
         return s === 'primary wavelength' || s === 'primary' || s === 'true' || s === 'yes' || s === '1';
       };
-      
-      // Primary Wavelengthに設定されているエントリを探す
-      const primaryEntry = sourceData.find(row => isPrimaryRow(row?.primary));
-      
-      if (primaryEntry && primaryEntry.wavelength) {
-        const wavelength = parseFloat(String(primaryEntry.wavelength));
-        if (!isNaN(wavelength)) {
-          return wavelength;
+
+      const primaryEntries = sourceData.filter(row => isPrimaryRow(row?.primary));
+      const primaryEntry = primaryEntries.length > 0 ? primaryEntries[primaryEntries.length - 1] : null;
+      if (!primaryEntry) return null;
+
+      const wavelength = parseFloat(String(primaryEntry.wavelength));
+      return Number.isFinite(wavelength) ? wavelength : null;
+    };
+
+    if (prefersPersistedSourceData) {
+      const persistedRows = tryLoadPersistedTableData();
+      const persistedWavelength = readPrimaryWavelengthFromRows(persistedRows);
+      if (persistedWavelength && persistedWavelength > 0) {
+        return persistedWavelength;
+      }
+    }
+
+    const activeContainer = tableContainer || (hasDocument ? document.getElementById('table-source') : null);
+    if (activeContainer) {
+      const checkedRadio = activeContainer.querySelector('tbody input[type="radio"][name="source-primary-wavelength"]:checked') as HTMLInputElement | null;
+      const checkedRow = checkedRadio?.closest('tr') as HTMLTableRowElement | null;
+      const wavelengthInput = checkedRow?.querySelectorAll('td')[1]?.querySelector('input') as HTMLInputElement | null;
+      const rawCheckedValue = wavelengthInput?.value?.trim() ?? '';
+      if (rawCheckedValue !== '') {
+        const checkedWavelength = Number(rawCheckedValue);
+        if (Number.isFinite(checkedWavelength) && checkedWavelength > 0) {
+          return checkedWavelength;
         }
+      }
+    }
+
+    if (tableSource && typeof tableSource.getData === 'function') {
+      const sourceData = tableSource.getData();
+      const liveWavelength = readPrimaryWavelengthFromRows(sourceData);
+      if (liveWavelength && liveWavelength > 0) {
+        return liveWavelength;
       }
       
       // 見つからない場合はデフォルト値（d線）

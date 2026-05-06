@@ -5527,6 +5527,8 @@ function setupClearStorageButton(): void {
 function setupParaxialButton(): void {
     const btn = document.getElementById('calculate-paraxial-btn');
     if (!btn) return;
+    if ((btn as any).dataset?.cooptBoundParaxial === '1') return;
+    (btn as any).dataset.cooptBoundParaxial = '1';
     btn.addEventListener('click', async () => {
         try {
             if (typeof w.outputParaxialDataToDebug === 'function') {

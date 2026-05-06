@@ -1260,7 +1260,7 @@ function __coopt_expandPrincipalPointRangeForThinLensBack(opticalSystemData, ran
     return { startIdx, endIdx };
 }
 
-function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins) {
+function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins, wavelengthUm = 0.5876) {
     const blocks = __coopt_getActiveDesignIntentBlocks();
     const surfRangeByBlockId = __coopt_buildSurfRangeByBlockId(opticalSystemData);
     const groups = new Map();
@@ -1336,7 +1336,7 @@ function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surf
         const subsystem = __coopt_buildPrincipalPointSubsystem(opticalSystemData, physicalRange.startIdx, physicalRange.endIdx);
         if (!subsystem) continue;
 
-        const principal = calculatePrincipalPointPositions(subsystem);
+        const principal = calculatePrincipalPointPositions(subsystem, wavelengthUm);
         if (!principal) continue;
 
         const startOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[physicalRange.startIdx]);
@@ -1549,7 +1549,22 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
     if (!scene || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return;
     if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return;
 
-    const descriptors = __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins);
+    let wavelengthUm = Number(options?.wavelengthUm);
+    if (!Number.isFinite(wavelengthUm) || wavelengthUm <= 0) {
+        try {
+            if (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function') {
+                const resolved = Number(window.getPrimaryWavelength());
+                if (Number.isFinite(resolved) && resolved > 0) {
+                    wavelengthUm = resolved;
+                }
+            }
+        } catch (_) {}
+    }
+    if (!Number.isFinite(wavelengthUm) || wavelengthUm <= 0) {
+        wavelengthUm = 0.5876;
+    }
+
+    const descriptors = __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins, wavelengthUm);
     if (!descriptors.length) return;
 
     const axis = (String(options?.axis ?? 'YZ').trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
@@ -2592,6 +2607,9 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                 __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
                     axis: actualCrossSectionDirection,
                     crossSectionOnly,
+                    wavelengthUm: (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function')
+                        ? Number(window.getPrimaryWavelength()) || 0.5876
+                        : 0.5876,
                 });
             }
         } catch (labelErr) {
