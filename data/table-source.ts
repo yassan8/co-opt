@@ -418,6 +418,8 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
         rowData.wavelength = raw === '' ? '' : Number(raw);
         if (raw !== '' && Number.isNaN(rowData.wavelength as number)) rowData.wavelength = raw;
 
+        console.log(`🌊 [TableSource] wavelength changed: "${raw}" → ${rowData.wavelength}`);
+
         // Record undo command
         if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.wavelength) {
           const cfg = w.getActiveConfiguration?.();
