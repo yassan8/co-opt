@@ -9,6 +9,7 @@ import {
 } from '../raytracing/core/ray-paraxial.ts';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
 import { getPrimaryWavelength as getPrimaryWavelengthFallback } from '../data/glass.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedSourceTableData } from '../data/table-source.ts';
 import { calculateSeidelCoefficients, formatSeidelCoefficients } from '../evaluation/aberrations/seidel-coefficients.ts';
 import { getActiveConfiguration } from '../data/table-configuration.ts';
 import { configurationHasBlocks, expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
@@ -22,7 +23,29 @@ let warnedUsingDummyOpticalSystemData = false;
 let warnedUsingLocalStorageOpticalSystemData = false;
 let warnedUsingBlocksOpticalSystemData = false;
 
+function resolvePrimaryWavelengthFromRows(sourceRows: any[] | null | undefined): number | null {
+  if (!Array.isArray(sourceRows) || sourceRows.length === 0) return null;
+
+  const isPrimaryRow = (raw: any): boolean => {
+    if (raw === true || raw === 1) return true;
+    const s = String(raw ?? '').trim().toLowerCase();
+    return s === 'primary wavelength' || s === 'primary' || s === 'true' || s === 'yes' || s === '1';
+  };
+
+  const primaryEntries = sourceRows.filter((row) => isPrimaryRow(row?.primary));
+  const primaryEntry = primaryEntries.length > 0 ? primaryEntries[primaryEntries.length - 1] : null;
+  if (!primaryEntry) return null;
+
+  const wavelength = Number(primaryEntry?.wavelength);
+  return Number.isFinite(wavelength) && wavelength > 0 ? wavelength : null;
+}
+
 function resolvePrimaryWavelength(): number {
+  try {
+    const persistedValue = resolvePrimaryWavelengthFromRows(tryLoadPersistedSourceTableData());
+    if (Number.isFinite(persistedValue) && persistedValue > 0) return persistedValue;
+  } catch (_) {}
+
   try {
     if (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function') {
       const liveValue = Number(window.getPrimaryWavelength());
