@@ -2697,7 +2697,10 @@ export async function runNativeFieldMtfMap(
 
     const isZeroField = !(Math.abs(Number(fieldValue)) > 1e-12);
     const primaryObjectRows = cloneObjectRowsForField(fieldValue, wl);
-    const primaryMode = requestedPupilSamplingMode || ((axisMode === "angle" && !isZeroField) ? "entrance" : undefined);
+    // Use entrance-pupil mode for all off-axis fields (both angle and height axis).
+    // Stop-mode default gives ~15% hit rate because the WASM over-estimates the stop radius,
+    // yielding a sparse OPD grid and therefore a noisy PSF/MTF.
+    const primaryMode = requestedPupilSamplingMode || (!isZeroField ? "entrance" : undefined);
     const primaryRadius = isZeroField ? undefined : fixedPupilRadiusMm;
     const primaryResult = await tryFieldModes({
       objectRowsForCall: primaryObjectRows,
@@ -2923,13 +2926,12 @@ export async function runNativeFieldMtfMap(
           return idx;
         })();
         const shouldAnchorEntranceRadius =
-          axisMode === "angle"
-          && requestedPupilSamplingMode !== "stop"
+          requestedPupilSamplingMode !== "stop"
           && anchorIndex >= 0;
         try {
           const anchorFieldValue = anchorIndex >= 0 ? Number(xAxis[anchorIndex]) : 0;
           const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue, wl);
-          const anchorAutoMode = axisMode === "angle" ? "entrance" : undefined;
+          const anchorAutoMode = "entrance";
           const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
           const anchorRaw = runNativeOpdWasm(JSON.stringify({
             opticalSystemRows,
@@ -3100,13 +3102,12 @@ export async function runNativeFieldMtfMap(
         return idx;
       })();
       const shouldAnchorEntranceRadius =
-        axisMode === "angle"
-        && requestedPupilSamplingMode !== "stop"
+        requestedPupilSamplingMode !== "stop"
         && anchorIndex >= 0;
       try {
         const anchorFieldValue = anchorIndex >= 0 ? Number(xAxis[anchorIndex]) : 0;
           const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue, wl);
-        const anchorAutoMode = axisMode === "angle" ? "entrance" : undefined;
+        const anchorAutoMode = "entrance";
         const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
         const anchorOpdResp: any = await runNativeOpdMap({
           opticalSystemRows,
