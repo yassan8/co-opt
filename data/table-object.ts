@@ -795,13 +795,15 @@ function updateWavefrontObjectOptionsIfAvailable(): void {
  * Design Intent aperture は明示的な Auto-set apertures 操作でのみ更新する。
  */
 function recalculateAutoSemiDiaIfAvailable(): void {
-  try {
-    if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
-      w.calculateImageSemiDiaFromChiefRays();
+  setTimeout(() => {
+    try {
+      if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
+        w.calculateImageSemiDiaFromChiefRays();
+      }
+    } catch (error: any) {
+      console.debug('Semi Dia自動計算スキップ:', error.message);
     }
-  } catch (error: any) {
-    console.debug('Semi Dia自動計算スキップ:', error.message);
-  }
+  }, 0);
 }
 
 bindObjectControls();

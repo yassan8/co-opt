@@ -8537,10 +8537,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
         // Drag-and-drop support (only when blocksInOrder is available)
         if (Array.isArray(blocksInOrder) && blocksInOrder.length > 0 && blockId) {
-            row.draggable = true;
+            dragHandle.draggable = true;
             row.dataset.blockId = blockId;
 
-            row.addEventListener('dragstart', (e: DragEvent) => {
+            dragHandle.addEventListener('dragstart', (e: DragEvent) => {
                 __blocks_draggedBlockId = blockId;
                 row.classList.add('dragging');
                 if (e.dataTransfer) {
@@ -8551,7 +8551,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 e.stopPropagation();
             });
 
-            row.addEventListener('dragend', () => {
+            dragHandle.addEventListener('dragend', () => {
                 __blocks_draggedBlockId = null;
                 row.classList.remove('dragging');
                 row.classList.remove('drag-over-before');

@@ -437,7 +437,6 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
         emit('cellEdited', createCellEvent('wavelength', rowData.wavelength, rowData));
 
         if (rowData.primary === 'Primary Wavelength') {
-          console.log(`🔧 Primary wavelength value changed to: ${rowData.wavelength} μm`);
           notifyPrimaryWavelengthChanged();
           recalculateAutoSemiDiaIfAvailable();
         }
@@ -486,7 +485,6 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
       checkbox.addEventListener('change', () => {
         const oldValue = rowData.primary;
         if (checkbox.checked) {
-          console.log('🔧 Primary Wavelength selected, clearing other primary entries');
           data.forEach(r => {
             if (Number(r.id) === Number(rowData.id)) r.primary = 'Primary Wavelength';
             else r.primary = '';
@@ -761,18 +759,9 @@ function getPrimaryWavelength(): number {
 
 // 主波長変更通知関数
 function notifyPrimaryWavelengthChanged(): void {
-  console.log('🔄 Primary wavelength changed, updating optical system refractive indices');
-  console.log('🔍 Current window.tableSource:', w.tableSource ? 'available' : 'not available');
-  
-  // 現在の主波長を確認
-  const currentWavelength = getPrimaryWavelength();
-  console.log(`📏 Current primary wavelength: ${currentWavelength} μm`);
-  
   // 光学システムの屈折率を更新
   if (typeof w.updateAllRefractiveIndices === 'function') {
     w.updateAllRefractiveIndices();
-  } else {
-    console.warn('⚠️ updateAllRefractiveIndices function not found');
   }
 }
 
@@ -780,17 +769,19 @@ function notifyPrimaryWavelengthChanged(): void {
  * Image面のSemi Dia自動計算を再実行（optimizeSemiDia="A"の場合）
  */
 function recalculateAutoSemiDiaIfAvailable(): void {
-  try {
-    if (typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function') {
-      w.autoSetBlockAperturesFromLargestObjectCondition();
+  // Defer to next task to avoid blocking the main thread during wavelength change.
+  setTimeout(() => {
+    try {
+      if (typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function') {
+        w.autoSetBlockAperturesFromLargestObjectCondition();
+      }
+      if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
+        w.calculateImageSemiDiaFromChiefRays();
+      }
+    } catch (error: any) {
+      console.debug('Semi Dia自動計算スキップ:', error.message);
     }
-    if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
-      console.log('🔄 Source変更検知: Image面のSemi Dia自動計算を再実行');
-      w.calculateImageSemiDiaFromChiefRays();
-    }
-  } catch (error: any) {
-    console.debug('Semi Dia自動計算スキップ:', error.message);
-  }
+  }, 0);
 }
 
 // デバッグ用：主波長変更のテスト関数

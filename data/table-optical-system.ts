@@ -91,6 +91,9 @@ function createNoopOpticalSystemTable() {
 // cellEdited ハンドラ内で参照されるフラグ（重複削除の副作用で未宣言になっていた）
 let isUpdatingFromCellEdit = false;
 
+// updateAllRefractiveIndices の一括更新中は per-row save を抑制するフラグ
+let _isBulkRefractiveIndexUpdate = false;
+
 function withCellEditSuppressed(fn) {
   const prev = isUpdatingFromCellEdit;
   isUpdatingFromCellEdit = true;
@@ -364,8 +367,6 @@ export function tryLoadPersistedTableData() {
 export function saveTableData(data) {
   if (data && Array.isArray(data)) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    // Verify save
-    const verify = localStorage.getItem(STORAGE_KEY);
   } else {
     console.warn('⚠️ [TableOpticalSystem] Invalid data, not saving:', data);
   }
@@ -1323,28 +1324,20 @@ if (typeof window !== 'undefined') {
  */
 export function updateOpticalPropertiesFromMaterial(rowIndex, materialName) {
     try {
-        console.log(`🔧 updateOpticalPropertiesFromMaterial: rowIndex=${rowIndex}, material="${materialName}"`);
-        
         // 1. 表Sourceから主波長を取得する
         const primaryWavelength = getPrimaryWavelength();
-        console.log(`📏 Primary wavelength: ${primaryWavelength} μm`);
         
         // 2. 表System dataから硝材を取得する（すでに引数で受け取っている）
         const cleanMaterialName = materialName ? materialName.trim() : "";
         if (!cleanMaterialName) {
-            console.log('⚠️ Material name is empty, skipping calculation');
             return;
         }
         
         // 3. glass.jsからその硝材の屈折率とアッべ数、セルマイヤ係数を検索、取得する
         const glassData = getGlassDataWithSellmeier(cleanMaterialName);
         if (!glassData) {
-            console.log(`⚠️ Glass data not found for material: ${cleanMaterialName}`);
             return;
         }
-        
-        console.log(`✅ Glass data found: ${glassData.name}`);
-        console.log(`   d-line RI: ${glassData.nd}, Abbe: ${glassData.vd}`);
         
         // 現在の屈折率をチェック
         const allData = tableOpticalSystem.getData();
@@ -1353,11 +1346,8 @@ export function updateOpticalPropertiesFromMaterial(rowIndex, materialName) {
             const currentRindex = parseFloat(currentData.rindex);
             const objectType = currentData["object type"];
             
-            console.log(`🔍 Checking row ${rowIndex + 1} (Surf ${currentData.id}): objectType=${objectType}, rindex=${currentRindex}, material="${cleanMaterialName}"`);
-            
             // Object行やImage行はスキップ
             if (objectType === "Object" || objectType === "Image") {
-                console.log(`🔄 行${rowIndex + 1} (Surf ${currentData.id}): ${objectType}行のため更新をスキップ`);
                 return;
             }
             
@@ -1376,10 +1366,7 @@ export function updateOpticalPropertiesFromMaterial(rowIndex, materialName) {
                 );
                 
                 if (!isValidMaterial) {
-                    console.log(`🔄 行${rowIndex + 1} (Surf ${currentData.id}): 屈折率が1.0で有効なMaterial名がないため更新をスキップ`);
                     return;
-                } else {
-                    console.log(`✅ 行${rowIndex + 1} (Surf ${currentData.id}): 屈折率は1.0だが有効なMaterial名"${cleanMaterialName}"があるため更新を続行`);
                 }
             }
         } else {
@@ -1392,9 +1379,6 @@ export function updateOpticalPropertiesFromMaterial(rowIndex, materialName) {
         
         if (glassData.sellmeier) {
             calculatedRI = calculateRefractiveIndex(glassData.sellmeier, primaryWavelength);
-            console.log(`🧮 Calculated RI at ${primaryWavelength}μm: ${calculatedRI.toFixed(6)}`);
-        } else {
-            console.log(`⚠️ Sellmeier coefficients not available for ${cleanMaterialName}, using d-line RI`);
         }
         
         // 5. 算出した屈折率をRef Indexカラムに出力する
@@ -1448,11 +1432,8 @@ export function updateOpticalPropertiesFromMaterial(rowIndex, materialName) {
                   );
 
             if (rindexEquivalent && abbeEquivalent) {
-              console.log(`✅ Row ${rowIndex + 1} (Surf ${targetData.id}) optical properties already up-to-date; skipping setValue`);
               return;
             }
-
-            console.log(`🎯 Updating row ${rowIndex + 1} (Surf ${targetData.id})`);
 
             runWithCellEditSuppressed(() => {
               if (!rindexEquivalent) {
@@ -1465,24 +1446,8 @@ export function updateOpticalPropertiesFromMaterial(rowIndex, materialName) {
               }
             });
 
-            if (glassData.vd !== undefined && glassData.vd !== null) {
-                console.log(`✅ Updated optical properties for row ${rowIndex + 1} (Surf ${targetData.id}):`);
-                console.log(`   Material: ${cleanMaterialName}`);
-                console.log(`   Ref Index (at ${primaryWavelength}μm): ${calculatedRI.toFixed(6)}`);
-                console.log(`   Abbe Number: ${glassData.vd}`);
-            } else {
-                console.log(`✅ Updated optical properties for row ${rowIndex + 1} (Surf ${targetData.id}):`);
-                console.log(`   Material: ${cleanMaterialName}`);
-                console.log(`   Ref Index (at ${primaryWavelength}μm): ${calculatedRI.toFixed(6)}`);
-                console.log(`   Abbe Number: (not applicable for numeric refractive index)`);
-            }
-            
-            // Avoid save storms during bulk material validation; dataChanged will persist once.
-            try {
-              if (typeof isValidatingMaterials === 'undefined' || !isValidatingMaterials) {
-                saveTableData(tableOpticalSystem.getData());
-              }
-            } catch (_) {
+            // Avoid save storms during bulk updates; caller saves once after the loop.
+            if (!_isBulkRefractiveIndexUpdate) {
               saveTableData(tableOpticalSystem.getData());
             }
         } else {
@@ -1497,6 +1462,7 @@ export function updateOpticalPropertiesFromMaterial(rowIndex, materialName) {
 // テーブル全行の屈折率/アッベ数を現在の主波長で更新
 // (main.js / table-source.js から呼ばれる)
 export function updateAllRefractiveIndices() {
+  _isBulkRefractiveIndexUpdate = true;
   try {
     if (!tableOpticalSystem || typeof tableOpticalSystem.getData !== 'function') {
       return;
@@ -1513,8 +1479,12 @@ export function updateAllRefractiveIndices() {
         updateOpticalPropertiesFromMaterial(rowIndex, material);
       }
     }
+    // Save once after all rows are updated
+    saveTableData(tableOpticalSystem.getData());
   } catch (error) {
     console.error('❌ updateAllRefractiveIndices error:', error);
+  } finally {
+    _isBulkRefractiveIndexUpdate = false;
   }
 }
 
