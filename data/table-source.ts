@@ -412,11 +412,16 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
       inputWl.type = 'text';
       inputWl.value = (rowData.wavelength ?? '') === 0 ? '0' : (rowData.wavelength ?? '').toString();
       inputWl.style.width = '100%';
-      const commitWavelengthChange = () => {
-        const oldValue = rowData.wavelength;
+      let lastCommittedWavelength = rowData.wavelength;
+      let primaryWavelengthPreviewTimer: number | null = null;
+      const syncEditingWavelengthValue = (): void => {
         const raw = inputWl.value;
         rowData.wavelength = raw === '' ? '' : Number(raw);
         if (raw !== '' && Number.isNaN(rowData.wavelength as number)) rowData.wavelength = raw;
+      };
+      const commitWavelengthChange = () => {
+        const oldValue = lastCommittedWavelength;
+        syncEditingWavelengthValue();
 
         // Record undo command
         if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.wavelength) {
@@ -435,11 +440,23 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
 
         saveTableData(getData());
         emit('cellEdited', createCellEvent('wavelength', rowData.wavelength, rowData));
+        lastCommittedWavelength = rowData.wavelength;
 
         if (rowData.primary === 'Primary Wavelength') {
           notifyPrimaryWavelengthChanged();
         }
       };
+      inputWl.addEventListener('input', () => {
+        syncEditingWavelengthValue();
+        if (rowData.primary !== 'Primary Wavelength') return;
+        if (primaryWavelengthPreviewTimer !== null) {
+          window.clearTimeout(primaryWavelengthPreviewTimer);
+        }
+        primaryWavelengthPreviewTimer = window.setTimeout(() => {
+          primaryWavelengthPreviewTimer = null;
+          notifyPrimaryWavelengthChanged();
+        }, 80);
+      });
       inputWl.addEventListener('change', commitWavelengthChange);
       inputWl.addEventListener('keydown', (e: KeyboardEvent) => {
         if (e.key !== 'Enter') return;
