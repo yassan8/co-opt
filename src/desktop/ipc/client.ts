@@ -2697,11 +2697,13 @@ export async function runNativeFieldMtfMap(
 
     const isZeroField = !(Math.abs(Number(fieldValue)) > 1e-12);
     const primaryObjectRows = cloneObjectRowsForField(fieldValue, wl);
-    // Use entrance-pupil mode for all off-axis fields (both angle and height axis).
-    // Stop-mode default gives ~15% hit rate because the WASM over-estimates the stop radius,
-    // yielding a sparse OPD grid and therefore a noisy PSF/MTF.
-    const primaryMode = requestedPupilSamplingMode || (!isZeroField ? "entrance" : undefined);
-    const primaryRadius = isZeroField ? undefined : fixedPupilRadiusMm;
+    // Always use entrance-pupil mode, including on-axis (zero field).
+    // Stop-mode over-estimates the stop radius, causing ~85% ray failure and a sparse OPD grid
+    // which produces a noisy PSF and jagged high-frequency MTF at every field height.
+    // The anchored entrance pupil radius from the max field is a good estimate for on-axis too.
+    const primaryMode = requestedPupilSamplingMode || "entrance";
+    // Use the anchored entrance pupil radius for all fields (including on-axis) for consistency.
+    const primaryRadius = fixedPupilRadiusMm;
     const primaryResult = await tryFieldModes({
       objectRowsForCall: primaryObjectRows,
       primaryMode,
