@@ -412,13 +412,11 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
       inputWl.type = 'text';
       inputWl.value = (rowData.wavelength ?? '') === 0 ? '0' : (rowData.wavelength ?? '').toString();
       inputWl.style.width = '100%';
-      inputWl.addEventListener('change', () => {
+      const commitWavelengthChange = () => {
         const oldValue = rowData.wavelength;
         const raw = inputWl.value;
         rowData.wavelength = raw === '' ? '' : Number(raw);
         if (raw !== '' && Number.isNaN(rowData.wavelength as number)) rowData.wavelength = raw;
-
-        console.log(`🌊 [TableSource] wavelength changed: "${raw}" → ${rowData.wavelength}`);
 
         // Record undo command
         if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.wavelength) {
@@ -441,6 +439,12 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
         if (rowData.primary === 'Primary Wavelength') {
           notifyPrimaryWavelengthChanged();
         }
+      };
+      inputWl.addEventListener('change', commitWavelengthChange);
+      inputWl.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        inputWl.blur();
       });
       tdWl.appendChild(inputWl);
       tr.appendChild(tdWl);
@@ -762,6 +766,27 @@ function notifyPrimaryWavelengthChanged(): void {
   if (typeof w.updateAllRefractiveIndices === 'function') {
     w.updateAllRefractiveIndices();
   }
+
+  // Render uses getPrimaryWavelength() at draw time, so changing the primary
+  // source wavelength must trigger a redraw to pick up the new value.
+  try {
+    if (typeof w.drawOpticalSystem === 'function') {
+      w.drawOpticalSystem();
+    }
+  } catch (_) {}
+
+  try {
+    if (typeof w.__cooptRenderWindowRedraw === 'function') {
+      void Promise.resolve(w.__cooptRenderWindowRedraw());
+    }
+  } catch (_) {}
+
+  try {
+    const popup = w.popup3DWindow;
+    if (popup && !popup.closed && typeof popup.__cooptRenderWindowRedraw === 'function') {
+      void Promise.resolve(popup.__cooptRenderWindowRedraw());
+    }
+  } catch (_) {}
 }
 
 /**
