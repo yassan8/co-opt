@@ -2884,6 +2884,29 @@ export async function runNativeFieldMtfMap(
     return basePixelPitchUm * (samplingSize / requestedFftSize);
   };
 
+  // Compute entrance pupil radius from paraxial data so every OPD call gets a correct
+  // pupilRadiusMm from the start.  The Rust/WASM stop-mode over-estimates the stop radius
+  // by ~2.6x (hitRate ≈ 0.15 for on-axis), producing a sparse OPD grid and a noisy PSF.
+  // By passing the paraxial value the WASM uses it directly instead of its own estimate.
+  const resolveEntrancePupilRadiusMm = async (wl: number): Promise<number> => {
+    try {
+      const { derivePupilAndFocalLengthMmFromParaxial } = await import("../../../evaluation/spot-diagram.ts");
+      const derived: any = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows as any[], wl, true);
+      const d = Number(derived?.pupilDiameterMm);
+      if (Number.isFinite(d) && d > 0) return d / 2;
+    } catch (_) {}
+    try {
+      const { calculateImageSpaceDiffractionParams } = await import("../../../raytracing/core/ray-paraxial.ts");
+      const diffParams: any = calculateImageSpaceDiffractionParams(opticalSystemRows as any[], wl);
+      const fWork = Number(diffParams?.fNumberWorking);
+      const fl = Number(diffParams?.focalLengthMm);
+      if (Number.isFinite(fl) && fl > 0 && Number.isFinite(fWork) && fWork > 0) {
+        return Math.abs(fl) / (2 * fWork);
+      }
+    } catch (_) {}
+    return Number.NaN;
+  };
+
   // Try direct Rust/WASM field sweep first on desktop runtime.
   // On Web this path is usually slower than the legacy route, so skip it.
   if (isTauriRuntime()) {
@@ -2914,7 +2937,13 @@ export async function runNativeFieldMtfMap(
         const pixelSizeUm = await resolvePixelSizeUm(wl);
 
         let fixedTargetSurfaceIndex: number | undefined = undefined;
-        let fixedPupilRadiusMm: number | undefined = undefined;
+        // Pre-initialize from paraxial so every field (including on-axis) gets a
+        // correct pupil radius before the anchor call.  The anchor can still
+        // refine this if it successfully traces the max-field entrance pupil.
+        const paraxialPupilRadiusMm = await resolveEntrancePupilRadiusMm(wl);
+        let fixedPupilRadiusMm: number | undefined = (Number.isFinite(paraxialPupilRadiusMm) && paraxialPupilRadiusMm > 0)
+          ? paraxialPupilRadiusMm
+          : undefined;
         // Choose an anchor field with the largest |value| so the entrance pupil
         // radius is well-defined. On-axis (0 deg) is degenerate for entrance
         // sampling and must not be used as anchor.
@@ -3093,7 +3122,12 @@ export async function runNativeFieldMtfMap(
       const requestedPixelSizeUm = await resolvePixelSizeUm(wl);
 
       let fixedTargetSurfaceIndex: number | undefined = undefined;
-      let fixedPupilRadiusMm: number | undefined = undefined;
+      // Pre-initialize from paraxial so every field (including on-axis) gets a
+      // correct pupil radius before the anchor call.
+      const paraxialPupilRadiusMm = await resolveEntrancePupilRadiusMm(wl);
+      let fixedPupilRadiusMm: number | undefined = (Number.isFinite(paraxialPupilRadiusMm) && paraxialPupilRadiusMm > 0)
+        ? paraxialPupilRadiusMm
+        : undefined;
       const anchorIndex = (() => {
         let idx = -1;
         let best = 0;
