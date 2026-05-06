@@ -767,6 +767,10 @@ function notifyPrimaryWavelengthChanged(): void {
     w.updateAllRefractiveIndices();
   }
 
+  try {
+    w.dispatchEvent?.(new CustomEvent('coopt:primary-wavelength-updated'));
+  } catch (_) {}
+
   // Render uses getPrimaryWavelength() at draw time, so changing the primary
   // source wavelength must trigger a redraw to pick up the new value.
   try {
@@ -785,6 +789,32 @@ function notifyPrimaryWavelengthChanged(): void {
     const popup = w.popup3DWindow;
     if (popup && !popup.closed && typeof popup.__cooptRenderWindowRedraw === 'function') {
       void Promise.resolve(popup.__cooptRenderWindowRedraw());
+    }
+  } catch (_) {}
+
+  // Keep standalone/Tauri render windows in sync even when we do not have
+  // direct access to their window handles.
+  try {
+    const payloadToken = `${Date.now()}-primary-wavelength`;
+    const payload = { ts: payloadToken, token: payloadToken, rows: [] };
+    localStorage.setItem('coopt.renderSyncRequest', JSON.stringify(payload));
+  } catch (_) {}
+
+  try {
+    if (typeof w.__TAURI_INTERNALS__ !== 'undefined') {
+      void (async () => {
+        try {
+          const mod = await import('@tauri-apps/api/event');
+          if (mod && typeof (mod as any).emit === 'function') {
+            const payloadToken = `${Date.now()}-primary-wavelength`;
+            await (mod as any).emit('coopt-render-sync-request', {
+              ts: payloadToken,
+              token: payloadToken,
+              rows: [],
+            });
+          }
+        } catch (_) {}
+      })();
     }
   } catch (_) {}
 }
