@@ -4032,14 +4032,17 @@ export async function runOptimizerStep(payload: OptimizeStepRequest): Promise<Op
 }
 
 export async function requestOptimizerStop(): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
   return invokeCommand<boolean>("optimizer_request_stop");
 }
 
 export async function clearOptimizerStop(): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
   return invokeCommand<boolean>("optimizer_clear_stop");
 }
 
 export async function dropOptimizerSession(sessionId: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
   const payload: OptimizerDropSessionRequest = { sessionId };
   return invokeCommand<OptimizerDropSessionRequest, boolean>("optimizer_drop_session", payload);
 }
