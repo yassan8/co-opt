@@ -438,7 +438,6 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
 
         if (rowData.primary === 'Primary Wavelength') {
           notifyPrimaryWavelengthChanged();
-          recalculateAutoSemiDiaIfAvailable();
         }
       });
       tdWl.appendChild(inputWl);
@@ -490,11 +489,9 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
             else r.primary = '';
           });
           notifyPrimaryWavelengthChanged();
-          recalculateAutoSemiDiaIfAvailable();
         } else {
           rowData.primary = '';
           notifyPrimaryWavelengthChanged();
-          recalculateAutoSemiDiaIfAvailable();
         }
 
         // Record undo command
