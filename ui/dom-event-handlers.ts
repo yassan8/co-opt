@@ -8093,6 +8093,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         menu.style.position = 'fixed';
         menu.style.minWidth = '120px';
         menu.style.maxWidth = '220px';
+        menu.style.display = 'flex';
+        menu.style.flexDirection = 'column';
         menu.style.padding = '6px';
         menu.style.borderRadius = '10px';
         menu.style.border = dark ? '1px solid #374151' : '1px solid #d0d7de';
@@ -8100,8 +8102,19 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         menu.style.boxShadow = '0 18px 40px rgba(0, 0, 0, 0.18)';
 
         const rect = anchor.getBoundingClientRect();
-        menu.style.left = `${Math.max(8, rect.left)}px`;
-        menu.style.top = `${Math.min(window.innerHeight - 8, rect.bottom + 6)}px`;
+        const viewportPadding = 8;
+        const menuGap = 6;
+        const estimatedMenuHeight = Math.min(320, 36 + options.length * 34);
+        const availableBelow = Math.max(120, window.innerHeight - rect.bottom - menuGap - viewportPadding);
+        const availableAbove = Math.max(120, rect.top - menuGap - viewportPadding);
+        const shouldOpenAbove = availableBelow < Math.min(estimatedMenuHeight, 220) && availableAbove > availableBelow;
+        const maxMenuHeight = Math.max(120, Math.min(320, shouldOpenAbove ? availableAbove : availableBelow));
+
+        menu.style.left = `${Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - 240))}px`;
+        menu.style.maxHeight = `${maxMenuHeight}px`;
+        menu.style.top = shouldOpenAbove
+            ? `${Math.max(viewportPadding, rect.top - menuGap - maxMenuHeight)}px`
+            : `${Math.min(window.innerHeight - viewportPadding - maxMenuHeight, rect.bottom + menuGap)}px`;
 
         const titleEl = document.createElement('div');
         titleEl.textContent = title;
@@ -8115,6 +8128,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         list.style.display = 'flex';
         list.style.flexDirection = 'column';
         list.style.gap = '2px';
+        list.style.minHeight = '0';
+        list.style.overflowY = 'auto';
+        list.style.overflowX = 'hidden';
+        list.style.paddingRight = '2px';
 
         options.forEach((optionValue) => {
             const btn = document.createElement('button');
