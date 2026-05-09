@@ -610,6 +610,7 @@ class MeritFunctionEditor {
                 data: this.operands,
                 layout: "fitColumns",
                 height: "100%",
+                editTriggerEvent: "click",
                 placeholder: "オペランドがありません。「Add Operand」ボタンでオペランドを追加してください。",
                 rowHeight: 35,
                 columns: [
@@ -675,8 +676,25 @@ class MeritFunctionEditor {
                     {
                         title: "-",
                         field: "param2",
-                        width: 80,
-                        editor: "input",
+                        width: 100,
+                        editor: "list",
+                        editorParams: {
+                            values: {
+                                '0': '0 (Imaging)',
+                                '1': '1 (Afocal)'
+                            }
+                        },
+                        formatter: (cell: any) => {
+                            const value = String(cell.getValue() || '0');
+                            if (value === '1') return '1 (Afocal)';
+                            return '0 (Imaging)';
+                        },
+                        cellClick: (e: any, cell: any) => {
+                            e?.stopPropagation?.();
+                            try {
+                                cell.edit(true);
+                            } catch (_) {}
+                        },
                         cellEdited: (cell: any) => {
                             this.saveToStorage();
                         }
@@ -684,8 +702,123 @@ class MeritFunctionEditor {
                     {
                         title: "-",
                         field: "param3",
-                        width: 80,
-                        editor: "input",
+                        width: 140,
+                        editor: (cell: any, onRendered: any, success: any, cancel: any) => {
+                            const rowData = cell.getRow().getData();
+                            const options = this.getMeritScopeOptions(rowData);
+                            const input = document.createElement('input');
+                            input.type = 'text';
+                            input.style.width = '100%';
+                            input.style.height = '100%';
+                            input.style.border = 'none';
+                            input.style.padding = '4px';
+                            input.style.boxSizing = 'border-box';
+                            input.value = String(cell.getValue() ?? '');
+
+                            const dropdown = document.createElement('div');
+                            dropdown.style.position = 'fixed';
+                            dropdown.style.zIndex = '10000';
+                            dropdown.style.background = '#fff';
+                            dropdown.style.border = '1px solid #ccc';
+                            dropdown.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
+                            dropdown.style.maxHeight = '240px';
+                            dropdown.style.overflowY = 'auto';
+                            dropdown.style.minWidth = `${Math.max(cell.getElement().getBoundingClientRect().width, 180)}px`;
+
+                            const renderOptions = () => {
+                                const term = input.value.trim().toLowerCase();
+                                dropdown.innerHTML = '';
+
+                                const entries = Object.entries(options).filter(([value, label]) => {
+                                    if (!term) return true;
+                                    return String(value).toLowerCase().includes(term) || String(label).toLowerCase().includes(term);
+                                });
+
+                                if (entries.length === 0) {
+                                    const empty = document.createElement('div');
+                                    empty.textContent = 'No Scope Options';
+                                    empty.style.padding = '8px 10px';
+                                    empty.style.color = '#666';
+                                    dropdown.appendChild(empty);
+                                    return;
+                                }
+
+                                entries.forEach(([value, label]) => {
+                                    const item = document.createElement('div');
+                                    item.textContent = String(label);
+                                    item.style.padding = '8px 10px';
+                                    item.style.cursor = 'pointer';
+                                    item.addEventListener('mouseenter', () => {
+                                        item.style.background = '#f2f4f7';
+                                    });
+                                    item.addEventListener('mouseleave', () => {
+                                        item.style.background = 'transparent';
+                                    });
+                                    item.addEventListener('mousedown', (event: MouseEvent) => {
+                                        event.preventDefault();
+                                        cleanup();
+                                        success(value);
+                                    });
+                                    dropdown.appendChild(item);
+                                });
+                            };
+
+                            const positionDropdown = () => {
+                                const rect = cell.getElement().getBoundingClientRect();
+                                dropdown.style.left = `${rect.left}px`;
+                                dropdown.style.top = `${rect.bottom}px`;
+                            };
+
+                            const cleanup = () => {
+                                dropdown.remove();
+                                window.removeEventListener('scroll', positionDropdown, true);
+                                window.removeEventListener('resize', positionDropdown);
+                            };
+
+                            input.addEventListener('input', () => {
+                                positionDropdown();
+                                renderOptions();
+                            });
+
+                            input.addEventListener('keydown', (event: KeyboardEvent) => {
+                                if (event.key === 'Enter') {
+                                    cleanup();
+                                    success(input.value.trim());
+                                } else if (event.key === 'Escape') {
+                                    cleanup();
+                                    cancel();
+                                }
+                            });
+
+                            input.addEventListener('blur', () => {
+                                window.setTimeout(() => {
+                                    cleanup();
+                                    success(input.value.trim());
+                                }, 120);
+                            });
+
+                            onRendered(() => {
+                                document.body.appendChild(dropdown);
+                                positionDropdown();
+                                renderOptions();
+                                window.addEventListener('scroll', positionDropdown, true);
+                                window.addEventListener('resize', positionDropdown);
+                                input.focus();
+                                input.select();
+                            });
+
+                            return input;
+                        },
+                        formatter: (cell: any) => {
+                            const rowData = cell.getRow().getData();
+                            return this.formatMeritScopeValue(rowData, cell.getValue());
+                        },
+                        cellClick: (e: any, cell: any) => {
+                            e?.stopPropagation?.();
+                            try {
+                                cell.edit(true);
+                            } catch (_) {}
+                        },
                         cellEdited: (cell: any) => {
                             this.saveToStorage();
                         }
@@ -1126,14 +1259,6 @@ class MeritFunctionEditor {
                 return this.calculatePrimarySystemMetric(operand, opticalSystemData, operand.operand);
             
             case 'EFL':
-                // EFL with param2 (Blocks parameter) should use EFFL-style calculation
-                if (operand.param2 !== undefined && operand.param2 !== null) {
-                    const blockLabel = String(operand.param2).trim();
-                    if (blockLabel && blockLabel.toUpperCase() !== 'ALL') {
-                        return this.calculateEFLForBlock(operand, opticalSystemData, blockLabel);
-                    }
-                }
-                // Default: full system EFL
                 return this.calculatePrimarySystemMetric(operand, opticalSystemData, 'EFL');
             case 'PP1':
             case 'PP2':
@@ -1151,6 +1276,8 @@ class MeritFunctionEditor {
                 return this.calculateSeidelTotal(operand, opticalSystemData, 'IV');
             case 'TOT3_DIST':
                 return this.calculateSeidelTotal(operand, opticalSystemData, 'V');
+            case 'TOT3_PETZ':
+                return this.calculateSeidelTotal(operand, opticalSystemData, 'P');
             case 'TOT_LCA':
                 return this.calculateSeidelTotal(operand, opticalSystemData, 'LCA');
             case 'TOT_TCA':
@@ -3691,30 +3818,22 @@ class MeritFunctionEditor {
     calculatePrimarySystemMetric(operand: any, opticalSystemData: any[], key: string): number {
         if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
         
-        // For EFL, check if param2 specifies a specific block
-        if (key === 'EFL' && operand.param2 !== undefined && operand.param2 !== null) {
-            const param2Raw = String(operand.param2).trim();
-            console.log(`[EFL Calculation] param2 = "${param2Raw}"`);
-            
-            if (param2Raw && param2Raw.toUpperCase() !== 'ALL') {
-                // Get block definition and calculate surface range
-                const blockInfo = this._getBlockSurfaceRange(param2Raw, operand.configId);
-                if (blockInfo) {
-                    console.log(`[EFL Calculation] Block "${param2Raw}" → surfaces ${blockInfo.startSurf} to ${blockInfo.endSurf}`);
-
-                    const { source: sourceRows } = this.getConfigTablesByConfigId(operand?.configId);
-                    const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
-                    
-                    // Use EFFL-style calculation with surface range
-                    return this._calculateEFLForSurfaceRange(
-                        opticalSystemData,
-                        blockInfo.startSurf,
-                        blockInfo.endSurf,
-                        wavelength
-                    );
-                } else {
-                    console.warn(`[EFL Calculation] Could not find block "${param2Raw}"`);
-                }
+        if (key === 'EFL') {
+            const rawScope = (() => {
+                const param3 = String(operand?.param3 ?? '').trim();
+                if (param3) return param3;
+                return String(operand?.param2 ?? '').trim();
+            })();
+            const scope = this.resolveMeritScopeSelection(rawScope, opticalSystemData, operand?.configId);
+            if (scope.kind === 'block' || scope.kind === 'zoom') {
+                const { source: sourceRows } = this.getConfigTablesByConfigId(operand?.configId);
+                const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+                return this._calculateEFLForSurfaceRange(
+                    opticalSystemData,
+                    scope.startSurf,
+                    scope.endSurf,
+                    wavelength
+                );
             }
         }
         
@@ -4212,30 +4331,7 @@ class MeritFunctionEditor {
         const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
 
         const modeRaw = (operand?.param2 !== undefined && operand?.param2 !== null) ? String(operand.param2).trim() : '';
-        const modeList = (() => {
-            if (modeRaw === '') return [0];
-            if (modeRaw.includes(',')) {
-                return modeRaw.split(',')
-                    .map((s: string) => parseInt(s.trim(), 10))
-                    .filter((n: number) => n === 0 || n === 1);
-            }
-            const single = parseInt(modeRaw, 10);
-            return (single === 0 || single === 1) ? [single] : [0];
-        })();
-
-        if (modeList.length > 1) {
-            let sumSq = 0;
-            for (const mode of modeList) {
-                const isAfocal = mode === 1;
-                const value = this._calculateSeidelTotalSingleMode(
-                    operand, opticalSystemData, totalKey, sourceRows, objectRows, isAfocal
-                );
-                sumSq += value * value;
-            }
-            return Math.sqrt(sumSq);
-        }
-
-        const mode = modeList[0] || 0;
+        const mode = modeRaw === '1' ? 1 : 0;
         const isAfocal = mode === 1;
         return this._calculateSeidelTotalSingleMode(
             operand, opticalSystemData, totalKey, sourceRows, objectRows, isAfocal
@@ -4243,8 +4339,8 @@ class MeritFunctionEditor {
     }
 
     _calculateSeidelTotalSingleMode(operand: any, opticalSystemData: any[], totalKey: string, sourceRows: any[], objectRows: any[], isAfocal: boolean): number {
-        const s1Num = Number.isFinite(Number(operand?.param3)) ? Math.floor(Number(operand.param3)) : 0;
-        const s1 = (Number.isFinite(s1Num) && s1Num > 0) ? s1Num : 0;
+        const scope = this.resolveMeritScopeSelection(operand?.param3, opticalSystemData, operand?.configId);
+        const s1 = scope.kind === 'surface' ? scope.surface : 0;
 
         const refFLRaw = (operand && operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
         const refFLNum = (refFLRaw === '') ? 0 : Number(refFLRaw);
@@ -4259,9 +4355,19 @@ class MeritFunctionEditor {
             : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
 
         const baseWavelength = (totalKey === 'LCA' || totalKey === 'TCA') ? primaryWavelength : selectedWavelength;
+        const scopedOpticalSystemData = (scope.kind === 'block' || scope.kind === 'zoom')
+            ? (this._buildSubsystemBySurfaceIds(opticalSystemData, scope.startSurf, scope.endSurf) || opticalSystemData)
+            : opticalSystemData;
 
         const cfgKey = operand.configId ? String(operand.configId) : 'active';
-        const cacheKey = `seidel:${cfgKey}:mode=${isAfocal ? 'afocal' : 'imaging'}:wl=${baseWavelength}:s1=${s1}:refFL=${(isAfocal ? (referenceFocalLengthAfocal ?? 'auto') : (referenceFocalLengthOverrideImaging === 0 ? 'auto' : referenceFocalLengthOverrideImaging))}:key=${totalKey}`;
+        const scopeKey = scope.kind === 'surface'
+            ? `surface:${s1}`
+            : scope.kind === 'block'
+                ? `block:${scope.value}`
+                : scope.kind === 'zoom'
+                    ? `zoom:${scope.value}`
+                    : 'total';
+        const cacheKey = `seidel:${cfgKey}:mode=${isAfocal ? 'afocal' : 'imaging'}:wl=${baseWavelength}:scope=${scopeKey}:refFL=${(isAfocal ? (referenceFocalLengthAfocal ?? 'auto') : (referenceFocalLengthOverrideImaging === 0 ? 'auto' : referenceFocalLengthOverrideImaging))}:key=${totalKey}`;
         if (this._runtimeCache && this._runtimeCache.has(cacheKey)) {
             return this._runtimeCache.get(cacheKey);
         }
@@ -4270,14 +4376,14 @@ class MeritFunctionEditor {
             let seidel: any;
 
             if (isAfocal) {
-                let stopIndex = opticalSystemData.findIndex((row: any) => row && (row['object type'] === 'Stop' || row.object === 'Stop'));
+                let stopIndex = scopedOpticalSystemData.findIndex((row: any) => row && (row['object type'] === 'Stop' || row.object === 'Stop'));
                 if (stopIndex === -1) {
-                    const fallback = findStopSurfaceIndex ? findStopSurfaceIndex(opticalSystemData) : -1;
+                    const fallback = findStopSurfaceIndex ? findStopSurfaceIndex(scopedOpticalSystemData) : -1;
                     stopIndex = (fallback >= 0) ? fallback : 1;
                 }
 
                 seidel = calculateAfocalSeidelCoefficientsIntegrated(
-                    opticalSystemData,
+                    scopedOpticalSystemData,
                     baseWavelength,
                     stopIndex,
                     objectRows,
@@ -4285,7 +4391,7 @@ class MeritFunctionEditor {
                 );
             } else {
                 seidel = calculateSeidelCoefficients(
-                    opticalSystemData,
+                    scopedOpticalSystemData,
                     baseWavelength,
                     objectRows as any,
                     { referenceFocalLengthOverride: referenceFocalLengthOverrideImaging }
@@ -4299,7 +4405,7 @@ class MeritFunctionEditor {
                 const coeffs = seidel?.surfaceCoefficients;
                 const c = Array.isArray(coeffs)
                     ? (
-                        coeffs.find((sc: any) => sc && Number(opticalSystemData?.[Number(sc.surfaceIndex)]?.id) === Number(s1))
+                        coeffs.find((sc: any) => sc && Number(scopedOpticalSystemData?.[Number(sc.surfaceIndex)]?.id) === Number(s1))
                         || coeffs.find((sc: any) => sc && Number(sc.surfaceIndex) === Number(s1))
                     )
                     : null;
@@ -4716,6 +4822,117 @@ class MeritFunctionEditor {
         }
     }
 
+    getBlockAndZoomGroupOptions(configId: any): Record<string, string> {
+        try {
+            const systemConfig = tryLoadSystemConfigurations();
+            const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+
+            let config = null;
+            if (configId !== undefined && configId !== null && String(configId).trim() !== '') {
+                const configIdStr = String(configId).trim();
+                config = configs.find((item: any) => item && String(item.id) === configIdStr) || null;
+            }
+            if (!config) {
+                const activeConfigId = (systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null)
+                    ? String(systemConfig.activeConfigId)
+                    : '';
+                config = configs.find((item: any) => item && String(item.id) === activeConfigId) || configs[0] || null;
+            }
+
+            const blocks = Array.isArray(config?.blocks) ? config.blocks : [];
+            const options: Record<string, string> = {};
+            const zoomGroups = new Set<string>();
+
+            for (const block of blocks) {
+                if (this._getSurfaceCountFromBlockType(block) <= 0) continue;
+
+                const blockId = String(block?.blockId ?? '').trim();
+                const blockName = String(block?.name ?? '').trim();
+                if (blockId) {
+                    options[`BLK:${blockId}`] = blockName ? `${blockId} (${blockName})` : `${blockId} (Block)`;
+                }
+
+                const zoomGroup = String(block?.parameters?.zoomGroup ?? '').trim().toUpperCase();
+                if (zoomGroup) zoomGroups.add(zoomGroup);
+            }
+
+            for (const zoomGroup of zoomGroups) {
+                options[`ZG:${zoomGroup}`] = `${zoomGroup} (Zoom Group)`;
+            }
+
+            return options;
+        } catch (error) {
+            console.warn('[Merit Scope] Failed to build block/zoom options:', error);
+            return {};
+        }
+    }
+
+    getMeritScopeOptions(rowData: any): Record<string, string> {
+        const options: Record<string, string> = { '0': '0 (Total)' };
+
+        try {
+            const opticalSystemData = this.getOpticalSystemDataByConfigId(rowData?.configId);
+            if (Array.isArray(opticalSystemData) && opticalSystemData.length > 0) {
+                for (let i = 1; i < opticalSystemData.length; i++) {
+                    const row = opticalSystemData[i];
+                    const surfaceId = Number(row?.id);
+                    if (!Number.isFinite(surfaceId)) continue;
+
+                    const objectType = String(row?.['object type'] ?? row?.objectType ?? row?.object ?? '').trim();
+                    const comment = String(row?.comment ?? '').trim();
+                    const suffix = objectType ? ` ${objectType}` : (comment ? ` ${comment}` : '');
+                    options[String(surfaceId)] = `${surfaceId} (Surface ${surfaceId}${suffix ? `: ${suffix}` : ''})`;
+                }
+            }
+        } catch (error) {
+            console.warn('[Merit Scope] Failed to build surface options:', error);
+        }
+
+        Object.assign(options, this.getBlockAndZoomGroupOptions(rowData?.configId));
+        return options;
+    }
+
+    formatMeritScopeValue(rowData: any, value: any): string {
+        const raw = String(value ?? '0').trim();
+        const options = this.getMeritScopeOptions(rowData);
+        return options[raw] || raw || '0 (Total)';
+    }
+
+    resolveMeritScopeSelection(rawValue: any, opticalSystemData: any[], configId: any): any {
+        const value = String(rawValue ?? '0').trim();
+        if (!value || value === '0' || value.toUpperCase() === 'ALL') {
+            return { kind: 'total', value: '0' };
+        }
+
+        if (/^\d+$/.test(value)) {
+            return { kind: 'surface', value, surface: Math.max(0, Math.floor(Number(value))) };
+        }
+
+        if (value.toUpperCase().startsWith('BLK:')) {
+            const blockValue = value.slice(4).trim();
+            const range = this._getBlockSurfaceRange(blockValue, configId);
+            if (range) return { kind: 'block', value: blockValue, ...range };
+        }
+
+        if (value.toUpperCase().startsWith('ZG:')) {
+            const zoomValue = value.slice(3).trim().toUpperCase();
+            const range = this._getZoomGroupSurfaceRange(opticalSystemData, zoomValue, configId);
+            if (range) return { kind: 'zoom', value: zoomValue, ...range };
+        }
+
+        const blockRange = this._getBlockSurfaceRange(value, configId);
+        if (blockRange) {
+            return { kind: 'block', value, ...blockRange };
+        }
+
+        const zoomRange = this._getZoomGroupSurfaceRange(opticalSystemData, value, configId);
+        if (zoomRange) {
+            return { kind: 'zoom', value: value.toUpperCase(), ...zoomRange };
+        }
+
+        return { kind: 'total', value: '0' };
+    }
+
     getSurfaceList(rowData: any): any {
         const operandType = rowData?.operand || '';
         const isSpotSizeOperand = operandType.startsWith('SPOT_SIZE');
@@ -4792,8 +5009,13 @@ const __cooptInitMeritFunctionEditor = (): boolean => {
     try {
         if (typeof window === 'undefined') return false;
 
+        const container = document.getElementById('table-merit-function');
         if (w.meritFunctionEditor) {
-            // Re-initialize event listeners for React remount
+            if (container) {
+                // Re-initialize the table for React remount / delayed container mount.
+                w.meritFunctionEditor.table = null;
+                w.meritFunctionEditor.initializeTable();
+            }
             w.meritFunctionEditor.initializeEventListeners();
             return true;
         }
@@ -4852,9 +5074,15 @@ const __cooptScheduleMeritFunctionInit = (): void => {
     }
 };
 
-document.addEventListener('DOMContentLoaded', () => {
-    __cooptScheduleMeritFunctionInit();
-});
+if (typeof document !== 'undefined' && document?.addEventListener) {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            __cooptScheduleMeritFunctionInit();
+        });
+    } else {
+        __cooptScheduleMeritFunctionInit();
+    }
+}
 
 export { MeritFunctionEditor, OPERAND_DEFINITIONS };
 

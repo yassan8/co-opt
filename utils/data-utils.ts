@@ -426,22 +426,29 @@ export function getOpticalSystemRows(tableOpticalSystem?) {
  * @param {Object} tableObject - The object table instance
  * @returns {Array} Object data
  */
-export function getObjectRows(tableObject?) {
+export function getObjectRows(tableObject?, options?: { includeDisabled?: boolean }) {
+  const includeDisabled = options?.includeDisabled === true;
+  const filterEnabledRows = (rows) => {
+    if (!Array.isArray(rows)) return [];
+    if (includeDisabled) return rows;
+    return rows.filter((row) => row && row.enabled !== false);
+  };
+
   try {
     if (tableObject && typeof tableObject.getData === 'function') {
-      return tableObject.getData();
+      return filterEnabledRows(tableObject.getData());
     }
     
     // Try window.tableObject (the actual table object)
     if (window.tableObject && typeof window.tableObject.getData === 'function') {
-      return window.tableObject.getData();
+      return filterEnabledRows(window.tableObject.getData());
     }
     
     else if (window.objectTabulator && typeof window.objectTabulator.getData === 'function') {
       duLog('📊 Using window.objectTabulator.getData()');
       const data = window.objectTabulator.getData();
       duLog('📋 window.objectTabulator data:', data);
-      return data;
+      return filterEnabledRows(data);
     }
     else {
       duLog('📊 Trying to get tabulator from table element');
@@ -450,7 +457,7 @@ export function getObjectRows(tableObject?) {
         duLog('📊 Using tableElement.tabulator.getData()');
         const data = tableElement.tabulator.getData();
         duLog('📋 tableElement.tabulator data:', data);
-        return data;
+        return filterEnabledRows(data);
       }
       duWarn('⚠️ No tabulator instance found');
     }

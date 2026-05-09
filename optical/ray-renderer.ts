@@ -1766,17 +1766,9 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
         return;
     }
     
-    // Debug: 光線パスの最初のポイントと最後のポイントを確認
+    // Debug: 光線パスの最初のポイントを確認
     const firstPoint = rayPath[0];
-    const lastPoint = rayPath[rayPath.length - 1];
-    
-    // Diagnostic: log rayPath for cross-beam rays with object/type info
-    if (typeof objectId === 'string' && (objectId.includes('cross-') || objectId.includes('chief-'))) {
-        const objMatch = objectId.match(/obj(\d+)/);
-        const objNum = objMatch ? objMatch[1] : '?';
-        const beamInfo = objectId.includes('cross-vertical') ? 'V' : objectId.includes('cross-horizontal') ? 'H' : 'C';
-        console.log(`[RAY-DEBUG] Ray ${rayNumber} (${beamInfo}-obj${objNum}): pathLen=${rayPath.length} start=(${firstPoint.x.toFixed(1)}, ${firstPoint.y.toFixed(1)}, ${firstPoint.z.toFixed(1)}) → end=(${lastPoint.x.toFixed(1)}, ${lastPoint.y.toFixed(1)}, ${lastPoint.z.toFixed(1)})`);
-    }
+
     // console.log(`🔍 Ray ${rayNumber} start point: (${firstPoint.x}, ${firstPoint.y}, ${firstPoint.z})`);
     // console.log(`🔍 Ray ${rayNumber} end point: (${lastPoint.x}, ${lastPoint.y}, ${lastPoint.z})`);
     
@@ -3894,8 +3886,13 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
 
 // Module loaded confirmation
 if (typeof window !== 'undefined' && (window as any).opener) {
-    console.log('🔍 [ray-renderer.ts] Running in popup window - logs will mirror to parent');
+    const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis as any).__RAYTRACE_DEBUG);
+    if (RAYTRACE_DEBUG) {
+        console.log('🔍 [ray-renderer.ts] Running in popup window - logs will mirror to parent');
+    }
     try {
-        (window as any).opener.console?.log?.('✅ [ray-renderer.ts] Child popup loaded');
+        if (RAYTRACE_DEBUG) {
+            (window as any).opener.console?.log?.('✅ [ray-renderer.ts] Child popup loaded');
+        }
     } catch (_) {}
 }

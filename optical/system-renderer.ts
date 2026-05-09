@@ -349,13 +349,16 @@ function __coopt_isImageSurfaceDiagEnabled() {
         const w = (typeof window !== 'undefined') ? window : null;
         if (w && (w as any).__cooptImageSurfaceDiag === true) return true;
     } catch (_) {}
-    try {
-        if (typeof localStorage !== 'undefined') {
-            const raw = String(localStorage.getItem('coopt.imageSurfaceDiag') ?? '').trim().toLowerCase();
-            return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
-        }
-    } catch (_) {}
     return false;
+}
+
+let __coopt_lastImageSurfaceDiagRunAtMs = 0;
+function __coopt_shouldRunImageSurfaceDiag() {
+    if (!__coopt_isImageSurfaceDiagEnabled()) return false;
+    const now = Date.now();
+    if (now - __coopt_lastImageSurfaceDiagRunAtMs < 1200) return false;
+    __coopt_lastImageSurfaceDiagRunAtMs = now;
+    return true;
 }
 
 function __coopt_getExpectedImageOriginFromPreviousRow(opticalSystemData, surfaceOrigins, imageIndex0) {
@@ -620,6 +623,7 @@ function __coopt_snapImageSurfaceArtifactsToOrigin(scene, imageSurfaceIndex0, ex
 }
 
 function __coopt_logImageRingDiagnostics(scene, imageSurfaceIndex0, expectedOrigin) {
+    if (!__coopt_shouldRunImageSurfaceDiag()) return;
     if (!scene || !Number.isInteger(imageSurfaceIndex0)) return;
 
     const expected = expectedOrigin || { x: 0, y: 0, z: 0 };

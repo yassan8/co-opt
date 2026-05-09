@@ -11,6 +11,7 @@ const STORAGE_KEY = "objectTableData";
 
 interface ObjectRow {
   id: number;
+  enabled?: boolean;
   xHeightAngle: number | string;
   yHeightAngle: number | string;
   position: string;
@@ -51,6 +52,7 @@ interface TableObjectAPI {
 const initialTableData: ObjectRow[] = [
   {
     id: 1,
+    enabled: true,
     xHeightAngle: 0,
     yHeightAngle: 0,
     position: "Rectangle",
@@ -58,6 +60,7 @@ const initialTableData: ObjectRow[] = [
   },
   {
     id: 2,
+    enabled: true,
     xHeightAngle: 0,
     yHeightAngle: 5,
     position: "Rectangle",
@@ -65,6 +68,7 @@ const initialTableData: ObjectRow[] = [
   },
   {
     id: 3,
+    enabled: true,
     xHeightAngle: 0,
     yHeightAngle: 10,
     position: "Rectangle",
@@ -179,6 +183,7 @@ const normalizeRow = (row: Partial<ObjectRow>, fallbackId: number): ObjectRow =>
   if (normalized.position === 'Point') normalized.position = 'Angle';
   if (!['Angle', 'Rectangle', 'ImageHeight'].includes(normalized.position)) normalized.position = 'Angle';
   if (!('angle' in normalized)) normalized.angle = 0;
+  normalized.enabled = (normalized.enabled !== false);
   return normalized as ObjectRow;
 };
 
@@ -301,7 +306,7 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
 
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
-    const headers = ['Object', xTitle, yTitle, 'Position'];
+    const headers = ['Object', 'On', xTitle, yTitle, 'Position'];
     headers.forEach(text => {
       const th = document.createElement('th');
       th.textContent = text;
@@ -411,6 +416,37 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
       idWrap.appendChild(idLabel);
       tdId.appendChild(idWrap);
       tr.appendChild(tdId);
+
+      // enabled (On/Off)
+      const tdEnabled = document.createElement('td');
+      const inputEnabled = document.createElement('input');
+      inputEnabled.type = 'checkbox';
+      inputEnabled.checked = rowData.enabled !== false;
+      inputEnabled.title = 'Enable object for chief-ray related calculations';
+      inputEnabled.addEventListener('change', () => {
+        const oldValue = rowData.enabled !== false;
+        rowData.enabled = inputEnabled.checked;
+
+        if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.enabled) {
+          const cfg = w.getActiveConfiguration?.();
+          if (cfg) {
+            const cmd = new w.SetObjectFieldCommand(
+              cfg.id,
+              rowData.id,
+              'enabled',
+              oldValue,
+              rowData.enabled
+            );
+            w.undoHistory.record(cmd);
+          }
+        }
+
+        saveTableData(getData());
+        emit('cellEdited', createCellEvent('enabled', rowData.enabled, rowData));
+        emit('dataChanged');
+      });
+      tdEnabled.appendChild(inputEnabled);
+      tr.appendChild(tdEnabled);
 
       if (data.length > 1) {
         dragHandle.addEventListener('click', (e) => {
@@ -692,6 +728,7 @@ const bindObjectControls = (): void => {
 
       Promise.resolve(tableObject.addRow({
         id: (typeof tableObject.getDataCount === 'function') ? (tableObject.getDataCount() + 1) : 1,
+        enabled: true,
         xHeightAngle: "",
         yHeightAngle: "",
         position: "Angle"
@@ -797,7 +834,9 @@ function updateWavefrontObjectOptionsIfAvailable(): void {
 function recalculateAutoSemiDiaIfAvailable(): void {
   setTimeout(() => {
     try {
-      if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
+      if (typeof (w as any).scheduleAutoImageSemiDiaFromChiefRays === 'function') {
+        (w as any).scheduleAutoImageSemiDiaFromChiefRays(180);
+      } else if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
         w.calculateImageSemiDiaFromChiefRays();
       }
     } catch (error: any) {

@@ -1,7 +1,7 @@
 // Type definitions for data-utils.js
 
 export function getOpticalSystemRows(tableOpticalSystem?: any): any[];
-export function getObjectRows(tableObject?: any): any[];
+export function getObjectRows(tableObject?: any, options?: { includeDisabled?: boolean }): any[];
 export function getSourceRows(tableSource?: any): any[];
 export function outputParaxialDataToDebug(...args: any[]): void;
 export function outputSeidelCoefficientsToDebug(...args: any[]): void;

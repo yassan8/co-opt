@@ -608,7 +608,11 @@ export async function calculateMagnificationChromaticAberrationData(
             fillMissingLinear(sortedFieldValues, displacements);
             sanitizeDisplacementOutliers(sortedFieldValues, displacements);
             // Skip smoothing for the reference wavelength to keep zero line exact.
+            // Apply 3 passes of [1,2,1]/4 to suppress chief-ray stop-solve noise
+            // without over-blurring real chromatic variation (effective ~7-point kernel).
             if (Math.abs(wl - referenceWavelength) >= 1e-6) {
+                smoothDisplacementSeries(displacements);
+                smoothDisplacementSeries(displacements);
                 smoothDisplacementSeries(displacements);
             }
             return {

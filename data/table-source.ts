@@ -933,7 +933,9 @@ function recalculateAutoSemiDiaIfAvailable(): void {
       if (typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function') {
         w.autoSetBlockAperturesFromLargestObjectCondition();
       }
-      if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
+      if (typeof (w as any).scheduleAutoImageSemiDiaFromChiefRays === 'function') {
+        (w as any).scheduleAutoImageSemiDiaFromChiefRays(180);
+      } else if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
         w.calculateImageSemiDiaFromChiefRays();
       }
     } catch (error: any) {

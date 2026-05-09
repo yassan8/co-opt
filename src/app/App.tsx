@@ -288,12 +288,11 @@ function approximateRenderImageHeightRow(
     return { ...cached };
   }
 
-  const paraxial = getRenderParaxialDataCached(opticalSystemRows, wavelengthUm);
   let approximatedRow = {
     ...row,
     __cooptOriginalPosition: row?.__cooptOriginalPosition ?? row?.position,
     __cooptImageHeightTarget: { x: target.x, y: target.y },
-    __cooptRenderApproxImageHeight: true,
+    __cooptRenderApproxImageHeight: false,
     __cooptRenderApproxDebug: {
       objectIndex: index,
       sourcePosition: row?.position ?? null,
@@ -319,13 +318,24 @@ function approximateRenderImageHeightRow(
     const solvedPosition = String(solvedRow?.position ?? '').trim();
     const solvedX = Number(solvedRow?.xHeightAngle);
     const solvedY = Number(solvedRow?.yHeightAngle);
-    if ((solvedPosition === 'Angle' || solvedPosition === 'Rectangle') && Number.isFinite(solvedX) && Number.isFinite(solvedY)) {
+    const solvedHit = solvedRow?.__cooptImageHeightSolve?.hit;
+    const solvedErrX = solvedHit ? Math.abs(Number(solvedHit.x) - target.x) : Number.POSITIVE_INFINITY;
+    const solvedErrY = solvedHit ? Math.abs(Number(solvedHit.y) - target.y) : Number.POSITIVE_INFINITY;
+    const hasExactSolve = !!(solvedRow?.__cooptImageHeightSolve && Number.isFinite(solvedErrX) && Number.isFinite(solvedErrY));
+    if (
+      (solvedPosition === 'Angle' || solvedPosition === 'Rectangle')
+      && Number.isFinite(solvedX)
+      && Number.isFinite(solvedY)
+      && hasExactSolve
+      && solvedErrX <= 1e-3
+      && solvedErrY <= 1e-3
+    ) {
       approximatedRow = {
         ...approximatedRow,
         ...solvedRow,
         __cooptOriginalPosition: row?.__cooptOriginalPosition ?? row?.position,
         __cooptImageHeightTarget: { x: target.x, y: target.y },
-        __cooptRenderApproxImageHeight: true,
+        __cooptRenderApproxImageHeight: false,
         __cooptRenderApproxDebug: {
           ...approximatedRow.__cooptRenderApproxDebug,
           approxPosition: solvedPosition,
@@ -333,61 +343,24 @@ function approximateRenderImageHeightRow(
           approxY: solvedY,
           solveMode: String(solvedRow?.__cooptImageHeightSolve?.mode ?? 'exact'),
           exactSolve: true,
+          solveErrorX: solvedErrX,
+          solveErrorY: solvedErrY,
         },
       };
       renderImageHeightApproxCache.set(cacheKey, approximatedRow);
       clampRenderCacheSize(renderImageHeightApproxCache);
       return { ...approximatedRow };
     }
+    console.warn('[RenderWindow] Rejecting inexact ImageHeight normalization result.', {
+      objectIndex: index,
+      solvedPosition,
+      solvedErrX,
+      solvedErrY,
+      hasExactSolve,
+      solve: solvedRow?.__cooptImageHeightSolve ?? null,
+    });
   } catch (_) {}
-
-  if (conjugateType === 'infinite') {
-    const focalLength = Number(paraxial?.focalLength);
-    if (Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-9) {
-      approximatedRow = {
-        ...approximatedRow,
-        position: 'Angle',
-        xHeightAngle: Math.atan2(target.x, focalLength) * 180 / Math.PI,
-        yHeightAngle: Math.atan2(target.y, focalLength) * 180 / Math.PI,
-        __cooptRenderApproxDebug: {
-          ...approximatedRow.__cooptRenderApproxDebug,
-          approxPosition: 'Angle',
-          approxX: Math.atan2(target.x, focalLength) * 180 / Math.PI,
-          approxY: Math.atan2(target.y, focalLength) * 180 / Math.PI,
-          focalLength,
-        },
-      };
-    }
-  } else {
-    const imageDistance = Number(paraxial?.imageDistance);
-    const objectDistance = Number(opticalSystemRows?.[0]?.thickness);
-    const magnification = (Number.isFinite(imageDistance) && Number.isFinite(objectDistance) && Math.abs(objectDistance) > 1e-9)
-      ? imageDistance / objectDistance
-      : Number.NaN;
-    const scale = (Number.isFinite(magnification) && Math.abs(magnification) > 1e-9)
-      ? 1 / Math.abs(magnification)
-      : 1;
-    approximatedRow = {
-      ...approximatedRow,
-      position: 'Rectangle',
-      xHeightAngle: target.x * scale,
-      yHeightAngle: target.y * scale,
-      __cooptRenderApproxDebug: {
-        ...approximatedRow.__cooptRenderApproxDebug,
-        approxPosition: 'Rectangle',
-        approxX: target.x * scale,
-        approxY: target.y * scale,
-        imageDistance,
-        objectDistance,
-        magnification,
-        scale,
-      },
-    };
-  }
-
-  renderImageHeightApproxCache.set(cacheKey, approximatedRow);
-  clampRenderCacheSize(renderImageHeightApproxCache);
-  return { ...approximatedRow };
+  return row;
 }
 
 function readRenderSurfaceSemidiaMm(surface: any): number | null {
@@ -1061,16 +1034,16 @@ export default function App() {
   const render3DPrevOriginsRef = useRef<any[] | null>(null);
   const [renderShowDesignIntentLabels, setRenderShowDesignIntentLabels] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(RENDER_SHOW_LABELS_KEY) !== 'false';
+      return localStorage.getItem(RENDER_SHOW_LABELS_KEY) === 'true';
     } catch (_) {
-      return true;
+      return false;
     }
   });
   const [renderShowPrincipalPointLabels, setRenderShowPrincipalPointLabels] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(RENDER_SHOW_PRINCIPAL_POINTS_KEY) !== 'false';
+      return localStorage.getItem(RENDER_SHOW_PRINCIPAL_POINTS_KEY) === 'true';
     } catch (_) {
-      return true;
+      return false;
     }
   });
   const [astigChiefRayDefinition, setAstigChiefRayDefinition] = useState('stop-center');
@@ -6419,9 +6392,9 @@ const collectLegacyCrossRays = async (
     { key: 'configuration', label: 'System', icon: '🧭' },
     { key: 'source', label: 'Sources / Objects', icon: '🔎' },
     { key: 'intent', label: 'Design Intent', icon: '🧩' },
-    { key: 'literature', label: 'Patent', icon: '📚' },
     { key: 'requirements', label: 'Requirements', icon: '📏' },
     { key: 'zoom', label: 'Zoom', icon: '🔭' },
+    { key: 'literature', label: 'Patent', icon: '📚' },
   ];
 
   const variableCountSummary = (() => {

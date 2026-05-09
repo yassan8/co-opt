@@ -62,6 +62,8 @@ import {
 } from '../data/table-system-requirements.ts';
 import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
+import { saveJsonFromNativeDialog } from '../src/desktop/adapters/file.ts';
+import { basenameFromPath } from '../src/desktop/runtime.ts';
 import { clearOptimizerStop } from '../src/desktop/ipc/client.ts';
 
 // Type definitions
@@ -355,6 +357,10 @@ try {
     (window as any).__coordTransConsoleTest = () => {
         const stamp = new Date().toISOString();
         console.log(`[CoordTrans][TEST] console output OK at ${stamp}`);
+            try {
+                if (persistedConfigOk) delete (window as any).__cooptPreferRuntimeSystemConfig;
+                else (window as any).__cooptPreferRuntimeSystemConfig = true;
+            } catch (_) {}
         coordTransDebugLog(`✅ [CoordTrans][TEST] coordTransDebugLog OK at ${stamp}`);
         return stamp;
     };
@@ -2369,13 +2375,76 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         }
     } catch (_) {}
 
-    // Save configurations to localStorage
+    const buildPersistableConfig = (config: any): any => {
+        try {
+            const cloned = JSON.parse(JSON.stringify(config));
+            const cfgs = Array.isArray(cloned?.configurations) ? cloned.configurations : [];
+            for (const cfg of cfgs) {
+                if (!cfg || typeof cfg !== 'object') continue;
+                // Source is persisted globally; per-config duplicates increase storage pressure.
+                try { delete cfg.source; } catch (_) {}
+                // For block-driven designs, expanded optical rows are derivable and can be large.
+                if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0) {
+                    try { delete cfg.opticalSystem; } catch (_) {}
+                }
+            }
+            return cloned;
+        } catch (_) {
+            return config;
+        }
+    };
+
+    const verifyPersistedConfig = (expected: any): boolean => {
+        try {
+            const reloaded = loadSystemConfigurationsFromTableConfig();
+            const expectedCfgs = Array.isArray(expected?.configurations) ? expected.configurations : [];
+            const actualCfgs = Array.isArray(reloaded?.configurations) ? reloaded.configurations : [];
+            if (expectedCfgs.length === 0 || actualCfgs.length === 0) return false;
+            if (actualCfgs.length < expectedCfgs.length) return false;
+
+            const expectedActiveId = expected?.activeConfigId;
+            const actualActiveId = reloaded?.activeConfigId;
+            if (String(expectedActiveId ?? '') !== String(actualActiveId ?? '')) return false;
+
+            const expectedActiveCfg = expectedCfgs.find((c: any) => String(c?.id ?? '') === String(expectedActiveId ?? '')) || expectedCfgs[0];
+            const actualActiveCfg = actualCfgs.find((c: any) => String(c?.id ?? '') === String(actualActiveId ?? '')) || actualCfgs[0];
+            if (!expectedActiveCfg || !actualActiveCfg) return false;
+
+            const expectedBlocks = Array.isArray(expectedActiveCfg.blocks) ? expectedActiveCfg.blocks.length : 0;
+            const actualBlocks = Array.isArray(actualActiveCfg.blocks) ? actualActiveCfg.blocks.length : 0;
+            if (expectedBlocks > 0 && actualBlocks === 0) return false;
+
+            return true;
+        } catch (_) {
+            return false;
+        }
+    };
+
+    // Save configurations to localStorage (with compact fallback) and verify persistence.
+    let persistedConfigOk = false;
     try {
         saveSystemConfigurations(candidateConfig);
+        persistedConfigOk = verifyPersistedConfig(candidateConfig);
+        if (!persistedConfigOk) {
+            const compactConfig = buildPersistableConfig(candidateConfig);
+            saveSystemConfigurations(compactConfig);
+            persistedConfigOk = verifyPersistedConfig(compactConfig);
+        }
     } catch (e) {
         console.error('❌ Failed to save configurations:', e);
-        return false;
+        persistedConfigOk = false;
     }
+    if (!persistedConfigOk) {
+        console.error('❌ [Load] Configuration persistence failed (possible storage quota or blocked storage).');
+    }
+
+    // During an explicit file load, prefer the in-memory configuration immediately.
+    // This prevents any in-flight startup/default config reload from overwriting
+    // the first manual load right after Clear Cache.
+    try {
+        (window as any).__cooptSystemConfig = candidateConfig;
+        (window as any).__cooptPreferRuntimeSystemConfig = true;
+    } catch (_) {}
 
     // Determine effective data for tables
     let effectiveSource = allData.source;
@@ -2387,7 +2456,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     // If blocks exist, use expanded active configuration
     try {
         const activeId = candidateConfig?.activeConfigId || 1;
-        const activeCfg = cfgList.find((c: any) => c.id === activeId) || cfgList[0];
+        const activeCfg = cfgList.find((c: any) => String(c?.id ?? '') === String(activeId)) || cfgList[0];
         if (activeCfg) {
             if (configurationHasBlocks(activeCfg) && Array.isArray(activeCfg.opticalSystem)) {
                 effectiveOpticalSystem = activeCfg.opticalSystem;
@@ -2544,6 +2613,21 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 
                 void runRequirementSyncSequence();
             } catch (_) {}
+
+            // Fallback: when persistent save fails (e.g. storage quota), still render
+            // Design Intent from the currently loaded payload for this session.
+            if (!persistedConfigOk) {
+                try {
+                    (window as any).__cooptSystemConfig = candidateConfig;
+                } catch (_) {}
+                try {
+                    if ((window as any).ConfigurationManager && typeof (window as any).ConfigurationManager.renderBlocksUI === 'function') {
+                        (window as any).ConfigurationManager.renderBlocksUI();
+                    }
+                } catch (_) {}
+                try { refreshBlockInspector(); } catch (_) {}
+                try { requestRefreshBlockInspector(); } catch (_) {}
+            }
             try { refreshBlockInspector(); } catch (_) {}
             try {
                 if (typeof w.updateTransformSurfaceSelect === 'function') {
@@ -2561,8 +2645,18 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 }
             };
             waitForConfigurationUI();
+
+            try {
+                if (persistedConfigOk) {
+                    delete (window as any).__cooptPreferRuntimeSystemConfig;
+                }
+            } catch (_) {}
         }, 0);
     } catch (_) {}
+
+    if (!persistedConfigOk) {
+        alert('Load completed partially: the file was applied to tables, but persistent storage failed.\n\nTry reducing file size or clearing old local data.');
+    }
 
     return true;
 }
@@ -2611,7 +2705,10 @@ function setupLoadAllButton(): void {
             try {
                 const text = await file.text();
                 const parsed = JSON.parse(text);
-                await __loadAllDataObjectIntoApp(parsed, { filename: file.name });
+                const ok = await __loadAllDataObjectIntoApp(parsed, { filename: file.name });
+                if (!ok) {
+                    throw new Error('Load step failed (invalid format or persistence failure).');
+                }
             } catch (err) {
                 console.error('❌ Load failed:', err);
                 alert(`Load failed: ${(err as Error)?.message || String(err)}`);
@@ -3160,6 +3257,21 @@ function setupOptimizeDesignIntentButton(): void {
                 } catch (_) {}
             };
 
+            const getOptimizerGlassManufacturerLabel = (): string => {
+                try {
+                    const raw = JSON.parse(localStorage.getItem('coopt.glassMap.defaultManufacturers') || '[]');
+                    if (!Array.isArray(raw) || raw.length === 0) return 'All manufacturers';
+                    const allow = new Set(['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
+                    const normalized = raw
+                        .map((value: any) => String(value ?? '').trim())
+                        .filter(Boolean)
+                        .filter((value: string) => allow.has(value.toUpperCase()));
+                    return normalized.length > 0 ? normalized.join(', ') : 'All manufacturers';
+                } catch (_) {
+                    return 'All manufacturers';
+                }
+            };
+
             const describeOptimizerActivity = (p: any): string => {
                 const phase = String(p?.phase ?? '').trim().toLowerCase();
                 const iter = Number(p?.iter);
@@ -3356,6 +3468,7 @@ function setupOptimizeDesignIntentButton(): void {
     <div id="opt-decision-row" style="display:flex; align-items:baseline; border-radius:3px; padding:1px 3px 1px 0;"><span style="display:inline-block; width:110px; color:#555;">Accept/Reject</span><span id="opt-decision-count" style="margin-left:8px; font-variant-numeric:tabular-nums;">0 / 0</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Iter</span><span id="opt-iter" style="margin-left:8px;">0</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Vars</span><span id="opt-vars" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Glass Mfr</span><span id="opt-glass-mfr" style="margin-left:8px;">All manufacturers</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Req</span><span id="opt-req" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Res</span><span id="opt-res" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">ReqScore(active)</span><span id="opt-cur" style="margin-left:8px;">-</span></div>
@@ -3470,6 +3583,13 @@ function setupOptimizeDesignIntentButton(): void {
                     } catch (_) {}
 
                     try {
+                        const glassMfrEl = popup.document.getElementById('opt-glass-mfr');
+                        if (glassMfrEl) {
+                            glassMfrEl.textContent = getOptimizerGlassManufacturerLabel();
+                        }
+                    } catch (_) {}
+
+                    try {
                         const stopBtn = popup.document.getElementById('opt-stop') as HTMLButtonElement | null;
                         const runBtn = popup.document.getElementById('opt-run') as HTMLButtonElement | null;
                         const stopState = popup.document.getElementById('opt-stop-state');
@@ -3506,6 +3626,7 @@ function setupOptimizeDesignIntentButton(): void {
                                     if (startupWrap) startupWrap.style.display = 'block';
                                     if (startupBar) startupBar.style.width = '5%';
                                     if (startupLabel) startupLabel.textContent = 'Run clicked. Preparing...';
+                                    setPopupText('opt-glass-mfr', getOptimizerGlassManufacturerLabel());
                                     if (runBtn) runBtn.disabled = true;
                                     if (stopBtn) stopBtn.disabled = false;
                                     refreshPopupRuntimeStatus();
@@ -4104,6 +4225,7 @@ function setupOptimizeDesignIntentButton(): void {
                         setText('opt-decision', lastDecisionText);
                         setText('opt-decision-count', `${acceptCount} / ${rejectCount}`);
                         setText('opt-iter', String(p?.iter ?? '-'));
+                        setText('opt-glass-mfr', getOptimizerGlassManufacturerLabel());
                         setText('opt-req', lastReqText);
                         setText('opt-res', lastResText);
                         setText('opt-cur', Number.isFinite(displayCurrentScore) ? displayCurrentScore.toFixed(6) : '-');
@@ -5146,6 +5268,22 @@ function setupSaveButton(): void {
 
             // Build export data using the same logic as original JS
             const allData = buildAllDataForExport();
+            const serialized = JSON.stringify(allData, null, 2);
+
+            if (isTauriRuntime()) {
+                const savedPath = await saveJsonFromNativeDialog(serialized);
+                if (!savedPath) return;
+                const filename = basenameFromPath(savedPath);
+                try {
+                    const { setLoadedFileName } = await import('./loaded-file-storage.ts');
+                    setLoadedFileName(filename);
+                } catch (_) {}
+                try {
+                    window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
+                } catch (_) {}
+                console.log('✅ データが保存されました:', savedPath);
+                return;
+            }
 
             // Get loaded filename for default
             let loadedFileName: string | null = null;
@@ -5168,7 +5306,7 @@ function setupSaveButton(): void {
             if (!filename) return;
             if (!filename.endsWith('.json')) filename += '.json';
 
-            const blob = new Blob([JSON.stringify(allData, null, 2)], { type: 'application/json' });
+            const blob = new Blob([serialized], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -6039,7 +6177,10 @@ export function saveCurrentToActiveConfiguration(): void {
         saveSourceTableData(globalSource as any);
     } catch (_) {}
     
-    activeConfig.object = w.tableObject ? w.tableObject.getData() : [];
+    // Keep existing object rows if this window does not host Object table.
+    if (w.tableObject && typeof w.tableObject.getData === 'function') {
+        activeConfig.object = w.tableObject.getData();
+    }
     activeConfig.opticalSystem = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
     activeConfig.meritFunction = w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [];
     
@@ -10425,7 +10566,31 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     }
 }
 
+let __cooptBlockInspectorRefreshTimer: number | null = null;
+let __cooptBlockInspectorLastRunAtMs = 0;
+
+function __cooptIsBlockInspectorDiagEnabled(): boolean {
+    try {
+        if (typeof window !== 'undefined' && (window as any).__cooptBlocksDiag === true) return true;
+    } catch (_) {}
+    return false;
+}
+
 export function refreshBlockInspector(): void {
+    const now = Date.now();
+    const minIntervalMs = 140;
+    if (now - __cooptBlockInspectorLastRunAtMs < minIntervalMs) {
+        if (__cooptBlockInspectorRefreshTimer !== null) {
+            clearTimeout(__cooptBlockInspectorRefreshTimer);
+        }
+        __cooptBlockInspectorRefreshTimer = window.setTimeout(() => {
+            __cooptBlockInspectorRefreshTimer = null;
+            refreshBlockInspector();
+        }, minIntervalMs);
+        return;
+    }
+    __cooptBlockInspectorLastRunAtMs = now;
+
     const banner = document.getElementById('import-analyze-mode-banner');
     const setBannerVisible = (isVisible: boolean) => {
         if (!banner) return;
@@ -10474,7 +10639,7 @@ export function refreshBlockInspector(): void {
             }
         }
 
-        if (activeCfg) {
+        if (activeCfg && __cooptIsBlockInspectorDiagEnabled()) {
             console.log('🔍 [Blocks] refreshBlockInspector state:', {
                 activeConfigId: activeCfg?.id,
                 blockCount: Array.isArray(blocks) ? blocks.length : 0,

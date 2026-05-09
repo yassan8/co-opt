@@ -108,6 +108,8 @@ class SystemRequirementsEditor {
   _renderRow: any;
   _paramsExpanded: boolean;
   _paramToggleBtn: HTMLButtonElement | null;
+  _copiedRows: any[];
+  _keydownHandler: ((e: KeyboardEvent) => void) | null;
 
   constructor() {
     this.requirements = [];
@@ -129,6 +131,8 @@ class SystemRequirementsEditor {
     this._evaluationPromise = null;
     this._paramsExpanded = false;
     this._paramToggleBtn = null;
+    this._copiedRows = [];
+    this._keydownHandler = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
     this.loadFromStorage();
@@ -156,23 +160,30 @@ class SystemRequirementsEditor {
       if (!sys) {
         sys = tryLoadSystemConfigurations();
       }
+
       const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
       const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null)
-        ? String(sys.activeConfigId)
+        ? String(sys.activeConfigId).trim()
         : '';
 
-      const hint = (configIdValue === undefined || configIdValue === null) ? '' : String(configIdValue).trim();
-      if (!raw) return '';
+      const hint = (configIdValue === undefined || configIdValue === null)
+        ? ''
+        : String(configIdValue).trim();
+
+      let cfg: any = null;
       if (hint) {
-        cfg = configs.find((c: any) => c && String(c.id) === hint) || configs.find((c: any) => c && String(c.name).trim() === hint) || null;
+        cfg = configs.find((c: any) => c && String(c.id).trim() === hint)
+          || configs.find((c: any) => c && String(c.name).trim() === hint)
+          || null;
       }
       if (!cfg && activeId) {
-        cfg = configs.find((c: any) => c && String(c.id) === activeId) || null;
+        cfg = configs.find((c: any) => c && String(c.id).trim() === activeId) || null;
       }
-      if (!cfg) cfg = configs[0] || null;
+      if (!cfg) {
+        cfg = configs[0] || null;
+      }
 
-      const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
-      return raw;
+      return (cfg && Array.isArray(cfg.blocks)) ? cfg.blocks : [];
     } catch (_) {
       return [];
     }
@@ -372,6 +383,14 @@ class SystemRequirementsEditor {
           dl!.appendChild(o);
         };
         addOpt('ALL');
+        const zoomGroups = Array.from(new Set(
+          (blocks || [])
+            .map((b: any) => String(b?.parameters?.zoomGroup ?? '').trim())
+            .filter(Boolean)
+        ));
+        for (const group of zoomGroups) {
+          addOpt(group);
+        }
         for (const b of blocks || []) {
           const bid = String(b?.blockId ?? '').trim();
           if (!bid) continue;
@@ -422,6 +441,60 @@ class SystemRequirementsEditor {
       } catch (_) {
         return [];
       }
+    };
+
+    const getRequirementScopeOptions = (configIdValue: any): Array<{ value: string; label: string }> => {
+      const options: Array<{ value: string; label: string }> = [
+        { value: '0', label: '0: Total' },
+      ];
+
+      try {
+        const opticalRows = (getOpticalSystemRows as any)(null);
+        if (Array.isArray(opticalRows)) {
+          for (let i = 0; i < opticalRows.length; i++) {
+            const surfRow = opticalRows[i];
+            if (!surfRow) continue;
+
+            const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim();
+            const isObject = objType === 'Object';
+            const isImage = objType === 'Image';
+            const isCT = objType === 'CT' || objType.includes('Coordinate') || objType.includes('CoordTrans');
+            const isGap = objType === 'GAP' || objType.toLowerCase() === 'gap';
+            if (isObject || isImage || isCT || isGap) continue;
+
+            const surfId = surfRow.id !== undefined && surfRow.id !== null ? String(surfRow.id) : String(i);
+            const surfLabel = String(surfRow.comment || surfRow.label || `Surface ${surfId}`);
+            options.push({ value: surfId, label: `${surfId}: ${surfLabel}` });
+          }
+        }
+      } catch (_) {}
+
+      try {
+        const blocks = this._getBlocksForConfigHint(configIdValue);
+        const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
+        const seenZoomGroups = new Set<string>();
+        for (const block of blocks || []) {
+          const blockId = String(block?.blockId ?? '').trim();
+          if (!blockId) continue;
+          const label = displayLabelById.get(blockId) || blockId;
+          options.push({ value: blockId, label: `${label} (Block)` });
+
+          const zoomGroup = String(block?.parameters?.zoomGroup ?? '').trim().toUpperCase();
+          if (zoomGroup && !seenZoomGroups.has(zoomGroup)) {
+            seenZoomGroups.add(zoomGroup);
+            options.push({ value: `ZG:${zoomGroup}`, label: `ZG:${zoomGroup} (Zoom Group)` });
+          }
+        }
+      } catch (_) {}
+
+      return options;
+    };
+
+    const getRequirementScopeLabel = (configIdValue: any, rawValue: any): string => {
+      const raw = String(rawValue ?? '').trim();
+      if (!raw) return '';
+      const match = getRequirementScopeOptions(configIdValue).find((option) => option.value === raw);
+      return match ? match.label : raw;
     };
 
     const container = document.getElementById('table-system-requirements');
@@ -771,6 +844,37 @@ class SystemRequirementsEditor {
         });
       }
 
+      // ── MEMO ROW ─────────────────────────────────────────────────────────────
+      if (row.rowType === 'memo') {
+        tr.style.background = '#fffbeb';
+        const tdMemo = document.createElement('td');
+        tdMemo.colSpan = 100;
+        tdMemo.style.padding = '2px 8px';
+        tdMemo.style.background = '#fffbeb';
+        tdMemo.style.borderBottom = '1px solid #f0e7c0';
+        const memoInput = document.createElement('input');
+        memoInput.type = 'text';
+        memoInput.value = String(row.memo || '');
+        memoInput.placeholder = 'Memo / Note…';
+        memoInput.style.width = '100%';
+        memoInput.style.fontSize = '12px';
+        memoInput.style.border = 'none';
+        memoInput.style.background = 'transparent';
+        memoInput.style.outline = 'none';
+        memoInput.style.color = '#78716c';
+        memoInput.style.fontStyle = 'italic';
+        memoInput.addEventListener('focus', onCellFocus);
+        memoInput.addEventListener('blur', onCellBlur);
+        memoInput.addEventListener('input', () => {
+          row.memo = memoInput.value;
+          this.saveToStorage();
+        });
+        tdMemo.appendChild(memoInput);
+        tr.appendChild(tdMemo);
+        return { tr, editorTr: null };
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       const tdOn = mkTd(widths.enabled, leftPx);
       const onCb = document.createElement('input');
       onCb.type = 'checkbox';
@@ -952,6 +1056,7 @@ class SystemRequirementsEditor {
         const isRaynumParam = paramLabel === 'Raynum';
         const isUnitParam = paramLabel === 'Unit';
         const isModeParam = paramLabel === 'Mode' || paramDesc.includes('0=Imaging, 1=Afocal');
+        const isScopeParam = paramLabel === 'Scope';
         const isNollParam = paramLabel === 'n (Noll)';
         const isSamplingParam = paramLabel === 'Sampling';
         const isS1Param = paramLabel === 'S1' || (paramLabel.startsWith('S') && paramDesc.includes('Surface'));
@@ -1077,7 +1182,7 @@ class SystemRequirementsEditor {
           
           control.value = String(row[field] || semidia);
         } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'CTCT') {
-          // CTCT param1: Element/Gap selection (Lens, Gap) in Design Intent order
+          // CTCT param1: Element/Gap selection (Lens, Doublet, Triplet, Gap) in Design Intent order
           control = document.createElement('select');
           control.style.width = '100%';
           control.style.fontSize = '12px';
@@ -1090,17 +1195,22 @@ class SystemRequirementsEditor {
           try {
             const opticalRows = (getOpticalSystemRows as any)(null);
             if (Array.isArray(opticalRows)) {
-              let lensCount = 0;
+              // First pass: build element groups (consecutive glass = doublet/triplet)
+              type ElemEntry = { surfIndex: number; label: string };
+              const entries: ElemEntry[] = [];
+              let singleLensCount = 0;
+              let doubletCount = 0;
+              let tripletCount = 0;
               let gapCount = 0;
-              
+              const skipIndices = new Set<number>();
+
               for (let i = 0; i < opticalRows.length; i++) {
+                if (skipIndices.has(i)) continue;
                 const surfRow = opticalRows[i];
                 if (!surfRow) continue;
-                
                 const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim().toLowerCase();
                 const material = String(surfRow.material || '').trim().toLowerCase();
                 const thickness = Number(surfRow.thickness);
-                
                 const isObject = objType === 'object';
                 const isImage = objType === 'image';
                 const isCT = objType === 'ct' || objType.includes('coordinate') || objType.includes('coordtrans');
@@ -1109,22 +1219,50 @@ class SystemRequirementsEditor {
                 const isGapType = objType === 'gap' || objType.includes('gap');
                 const hasFiniteThickness = Number.isFinite(thickness);
                 const isGapLike = isGapType || isStop || (!isGlass && hasFiniteThickness);
-                
                 if (isObject || isCT || isImage) continue;
-                
+
                 if (isGapLike) {
                   gapCount++;
-                  const opt = document.createElement('option');
-                  opt.value = String((surfRow.id !== undefined && surfRow.id !== null) ? surfRow.id : (i + 1));
-                  opt.textContent = `Gap ${gapCount}`;
-                  control.appendChild(opt);
+                  entries.push({ surfIndex: i, label: `Gap ${gapCount}` });
                 } else if (isGlass) {
-                  lensCount++;
-                  const opt = document.createElement('option');
-                  opt.value = String((surfRow.id !== undefined && surfRow.id !== null) ? surfRow.id : (i + 1));
-                  opt.textContent = `Lens ${lensCount}`;
-                  control.appendChild(opt);
+                  // Count consecutive glass surfaces starting at i
+                  let consec = 1;
+                  for (let j = i + 1; j < opticalRows.length; j++) {
+                    const ns = opticalRows[j];
+                    if (!ns) break;
+                    const nm = String(ns.material || '').trim().toLowerCase();
+                    const no = String(ns['object type'] || ns.object || ns.surfType || '').trim().toLowerCase();
+                    if (no === 'image' || no === 'stop' || no === 'sto') break;
+                    if (nm && nm !== 'air' && nm !== '') consec++; else break;
+                  }
+                  if (consec >= 3) {
+                    tripletCount++;
+                    const grpName = `Triplet ${tripletCount}`;
+                    for (let k = 0; k < consec; k++) {
+                      entries.push({ surfIndex: i + k, label: `${grpName}_Lens${k + 1}` });
+                      skipIndices.add(i + k);
+                    }
+                  } else if (consec === 2) {
+                    doubletCount++;
+                    const grpName = doubletCount === 1 ? 'Doublet' : `Doublet ${doubletCount}`;
+                    entries.push({ surfIndex: i,     label: `${grpName}_Lens1` });
+                    entries.push({ surfIndex: i + 1, label: `${grpName}_Lens2` });
+                    skipIndices.add(i);
+                    skipIndices.add(i + 1);
+                  } else {
+                    singleLensCount++;
+                    entries.push({ surfIndex: i, label: `Lens ${singleLensCount}` });
+                    skipIndices.add(i);
+                  }
                 }
+              }
+
+              for (const entry of entries) {
+                const surfRow = opticalRows[entry.surfIndex];
+                const opt = document.createElement('option');
+                opt.value = String((surfRow?.id !== undefined && surfRow?.id !== null) ? surfRow.id : (entry.surfIndex + 1));
+                opt.textContent = entry.label;
+                control.appendChild(opt);
               }
             }
           } catch (err) {
@@ -1133,7 +1271,7 @@ class SystemRequirementsEditor {
           
           control.value = String(row[field] || '');
         } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'EDGE') {
-          // EDGE param1: Element selection (Lens, Doublet, Triplet - no Gap)
+          // EDGE param1: Element selection (Lens, Doublet_LensN, Triplet_LensN - no Gap)
           control = document.createElement('select');
           control.style.width = '100%';
           control.style.fontSize = '12px';
@@ -1146,64 +1284,66 @@ class SystemRequirementsEditor {
           try {
             const opticalRows = (getOpticalSystemRows as any)(null);
             if (Array.isArray(opticalRows)) {
-              let lensCount = 0;
+              // First pass: build element groups so doublets/triplets each contribute
+              // individual labeled entries (e.g. Doublet_Lens1, Doublet_Lens2)
+              type EdgeEntry = { surfIndex: number; label: string };
+              const entries: EdgeEntry[] = [];
+              let singleLensCount = 0;
               let doubletCount = 0;
               let tripletCount = 0;
-              
+              const skipIndices = new Set<number>();
+
               for (let i = 0; i < opticalRows.length; i++) {
+                if (skipIndices.has(i)) continue;
                 const surfRow = opticalRows[i];
                 if (!surfRow) continue;
-                
                 const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim().toLowerCase();
                 const material = String(surfRow.material || '').trim().toLowerCase();
-                
                 const isObject = objType === 'object';
                 const isImage = objType === 'image';
                 const isCT = objType === 'ct' || objType.includes('coordinate') || objType.includes('coordtrans');
                 const isStop = objType === 'stop' || objType === 'sto' || objType === 'aperturestop';
                 const isGlass = material && material !== 'air' && material !== '';
-                
                 if (isObject || isImage || isCT || isStop) continue;
-                
-                // Only glass elements (no air gaps for EDGE)
-                if (isGlass) {
-                  // Check if this is part of doublet/triplet by looking at next surface
-                  let elementType = 'Lens';
-                  
-                  // Simple heuristic: if next surface also has glass material (no air gap), it's a doublet/triplet
-                  let consecutiveGlass = 1;
-                  for (let j = i + 1; j < opticalRows.length; j++) {
-                    const nextSurf = opticalRows[j];
-                    if (!nextSurf) break;
-                    const nextMaterial = String(nextSurf.material || '').trim().toLowerCase();
-                    const nextObjType = String(nextSurf['object type'] || nextSurf.object || nextSurf.surfType || '').trim().toLowerCase();
-                    
-                    if (nextObjType === 'image' || nextObjType === 'stop' || nextObjType === 'sto') break;
-                    
-                    if (nextMaterial && nextMaterial !== 'air' && nextMaterial !== '') {
-                      consecutiveGlass++;
-                    } else {
-                      break;
-                    }
-                  }
-                  
-                  if (consecutiveGlass >= 3) {
-                    tripletCount++;
-                    elementType = `Triplet ${tripletCount}`;
-                  } else if (consecutiveGlass >= 2) {
-                    doubletCount++;
-                    elementType = `Doublet ${doubletCount}`;
-                  } else {
-                    lensCount++;
-                    elementType = `Lens ${lensCount}`;
-                  }
-                  
-                  const opt = document.createElement('option');
-                  // Store 1-based surface index from getOpticalSystemRows
-                  opt.value = String(i + 1);
-                  opt.textContent = elementType;
-                  control.appendChild(opt);
+                if (!isGlass) continue;
+
+                // Count consecutive glass surfaces
+                let consec = 1;
+                for (let j = i + 1; j < opticalRows.length; j++) {
+                  const ns = opticalRows[j];
+                  if (!ns) break;
+                  const nm = String(ns.material || '').trim().toLowerCase();
+                  const no = String(ns['object type'] || ns.object || ns.surfType || '').trim().toLowerCase();
+                  if (no === 'image' || no === 'stop' || no === 'sto') break;
+                  if (nm && nm !== 'air' && nm !== '') consec++; else break;
                 }
+
+                if (consec >= 3) {
+                  tripletCount++;
+                  const grpName = tripletCount === 1 ? 'Triplet' : `Triplet ${tripletCount}`;
+                  for (let k = 0; k < consec; k++) {
+                    entries.push({ surfIndex: i + k, label: `${grpName}_Lens${k + 1}` });
+                    skipIndices.add(i + k);
+                  }
+                } else if (consec === 2) {
+                  doubletCount++;
+                  const grpName = doubletCount === 1 ? 'Doublet' : `Doublet ${doubletCount}`;
+                  entries.push({ surfIndex: i,     label: `${grpName}_Lens1` });
+                  entries.push({ surfIndex: i + 1, label: `${grpName}_Lens2` });
+                  skipIndices.add(i);
+                  skipIndices.add(i + 1);
+                } else {
+                  singleLensCount++;
+                  entries.push({ surfIndex: i, label: `Lens ${singleLensCount}` });
+                  skipIndices.add(i);
+                }
+              }
+
+              for (const entry of entries) {
+                const opt = document.createElement('option');
+                opt.value = String(entry.surfIndex + 1); // 1-based surface index
+                opt.textContent = entry.label;
+                control.appendChild(opt);
               }
             }
           } catch (err) {
@@ -1246,6 +1386,23 @@ class SystemRequirementsEditor {
           control.style.boxSizing = 'border-box';
           control.value = '';
           control.disabled = true;
+        } else if (isScopeParam) {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          control.dataset.isScopeParam = '1';
+          const options = getRequirementScopeOptions(row?.configId);
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '0');
         } else if (isS1Param) {
           // S1 (Surface) dropdown: 0=Total, then surfaces from Design Intent
           control = document.createElement('select');
@@ -1495,6 +1652,10 @@ class SystemRequirementsEditor {
             control.appendChild(el);
           }
           control.value = String(row[field] || '');
+          control.addEventListener('focus', () => {
+            // Refresh options so Object count stays in sync with latest table/config state.
+            populateObjectSelect(control as HTMLSelectElement, row?.configId);
+          });
         } else {
           // Standard text input
           control = document.createElement('input');
@@ -1650,6 +1811,12 @@ class SystemRequirementsEditor {
       const updateSummary = (): void => {
         const values = [];
         const operandName = String(row?.operand ?? '').trim();
+        const objectOptions = this._getObjectOptions(row?.configId);
+        const objectCount = Math.max(0, objectOptions.length - 1); // exclude default option
+        const objectLabelByValue = new Map<string, string>();
+        for (const opt of objectOptions) {
+          objectLabelByValue.set(String(opt.value ?? ''), String(opt.label ?? ''));
+        }
         for (let i = 1; i <= paramCount; i++) {
           const val = row[`param${i}`];
           if (val !== undefined && val !== null && String(val).trim() !== '') {
@@ -1658,6 +1825,18 @@ class SystemRequirementsEditor {
             let displayVal = String(val);
             if (operandName === 'CTCT' && i === 1) {
               displayVal = getCtctElementLabelBySurfaceValue(val);
+            } else if (label === 'Scope') {
+              displayVal = getRequirementScopeLabel(row?.configId, val);
+            } else if (label.includes('Field idx') || label.includes('Object idx')) {
+              const selected = String(val).trim();
+              const optLabel = objectLabelByValue.get(selected);
+              if (optLabel && selected !== '') {
+                displayVal = objectCount > 0
+                  ? `${selected}/${objectCount} (${optLabel})`
+                  : optLabel;
+              } else if (objectCount > 0) {
+                displayVal = `${selected}/${objectCount}`;
+              }
             }
             values.push(`${label}=${displayVal}`);
           }
@@ -1718,6 +1897,21 @@ class SystemRequirementsEditor {
           const detailScope = editorTr || tr.parentElement || tr;
           const objSelects = detailScope.querySelectorAll('select[data-is-object-param="1"]');
           for (const sel of objSelects) populateObjectSelect(sel as HTMLSelectElement, row.configId);
+          const scopeSelects = detailScope.querySelectorAll('select[data-is-scope-param="1"]');
+          for (const sel of scopeSelects) {
+            const selectEl = sel as HTMLSelectElement;
+            const prev = String(selectEl.value || row.param3 || '0');
+            selectEl.innerHTML = '';
+            const options = getRequirementScopeOptions(row.configId);
+            for (const opt of options) {
+              const el = document.createElement('option');
+              el.value = opt.value;
+              el.textContent = opt.label;
+              selectEl.appendChild(el);
+            }
+            selectEl.value = options.some((opt) => opt.value === prev) ? prev : '0';
+            row.param3 = selectEl.value;
+          }
         } catch (_) {}
 
         this.scheduleEvaluateAndUpdate();
@@ -1953,6 +2147,99 @@ class SystemRequirementsEditor {
     table.appendChild(tbody);
     wrap.appendChild(table);
     container.appendChild(wrap);
+
+    // ── Keyboard shortcuts (Ctrl/Cmd+C copy, +V paste, +D duplicate, Delete/Backspace delete) ──
+    // Remove previous listener to prevent duplicates when initializeTable() is called again.
+    if (this._keydownHandler) {
+      document.removeEventListener('keydown', this._keydownHandler);
+      this._keydownHandler = null;
+    }
+
+    const onKeyDown = (e: KeyboardEvent): void => {
+      // Ignore when an input/select/textarea has focus (let normal editing happen)
+      const tag = (document.activeElement as HTMLElement | null)?.tagName ?? '';
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+      // Delete / Backspace → delete all selected rows
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const ids = this._getSelectedRequirementIds();
+        if (ids.length === 0) return;
+        e.preventDefault();
+        const storageData = loadSystemRequirementsTableData();
+        const idSet = new Set(ids);
+        const filtered = storageData.filter((r: any) => !idSet.has(String(r?.id ?? '')));
+        filtered.forEach((r: any, idx: number) => { if (r) r.id = idx + 1; });
+        this._selectedId = null;
+        this._selectedIds = [];
+        this.persistRequirementsRows(filtered);
+        this.loadFromStorage();
+        this.renderTable();
+        this.syncRequirementsToSystemConfigFromStorage();
+        return;
+      }
+
+      const isMod = e.ctrlKey || e.metaKey;
+      if (!isMod) return;
+
+      if (e.key === 'c' || e.key === 'C') {
+        // Copy selected rows
+        const ids = this._getSelectedRequirementIds();
+        if (ids.length === 0) return;
+        const rows = loadSystemRequirementsTableData();
+        this._copiedRows = ids
+          .map(id => rows.find((r: any) => String(r?.id) === id))
+          .filter(Boolean)
+          .map((r: any) => JSON.parse(JSON.stringify(r)));
+        e.preventDefault();
+      } else if (e.key === 'v' || e.key === 'V') {
+        // Paste copied rows after selection
+        if (this._copiedRows.length === 0) return;
+        e.preventDefault();
+        const storageData = loadSystemRequirementsTableData();
+        const selectedIndex = this.requirements.findIndex(
+          (r: any) => r && String(r.id) === String(this._selectedId)
+        );
+        let insertIndex = selectedIndex !== -1 ? selectedIndex + 1 : storageData.length;
+        for (const src of this._copiedRows) {
+          const newRow = JSON.parse(JSON.stringify(src));
+          storageData.splice(insertIndex, 0, newRow);
+          insertIndex++;
+        }
+        storageData.forEach((r: any, idx: number) => { if (r) r.id = idx + 1; });
+        this.persistRequirementsRows(storageData);
+        this.loadFromStorage();
+        this.renderTable();
+        this.syncRequirementsToSystemConfigFromStorage();
+      } else if (e.key === 'd' || e.key === 'D') {
+        // Duplicate: copy + paste immediately
+        const ids = this._getSelectedRequirementIds();
+        if (ids.length === 0) return;
+        e.preventDefault();
+        const storageData = loadSystemRequirementsTableData();
+        const rowsToDup = ids
+          .map(id => storageData.find((r: any) => String(r?.id) === id))
+          .filter(Boolean)
+          .map((r: any) => JSON.parse(JSON.stringify(r)));
+        if (rowsToDup.length === 0) return;
+        const selectedIndex = this.requirements.findIndex(
+          (r: any) => r && String(r.id) === String(this._selectedId)
+        );
+        let insertIndex = selectedIndex !== -1 ? selectedIndex + 1 : storageData.length;
+        for (const src of rowsToDup) {
+          const newRow = JSON.parse(JSON.stringify(src));
+          storageData.splice(insertIndex, 0, newRow);
+          insertIndex++;
+        }
+        storageData.forEach((r: any, idx: number) => { if (r) r.id = idx + 1; });
+        this.persistRequirementsRows(storageData);
+        this.loadFromStorage();
+        this.renderTable();
+        this.syncRequirementsToSystemConfigFromStorage();
+      }
+    };
+    this._keydownHandler = onKeyDown;
+    document.addEventListener('keydown', onKeyDown);
+    // ─────────────────────────────────────────────────────────────────────────
 
     const applyParamsExpandedLayout = (): void => {
       if (!this._tbody) return;
@@ -2491,6 +2778,42 @@ class SystemRequirementsEditor {
     };
   }
 
+  createDefaultMemoRow(): any {
+    return {
+      id: this.requirements.length + 1,
+      rowType: 'memo',
+      memo: ''
+    };
+  }
+
+  addMemoRow(): void {
+    const storageData = loadSystemRequirementsTableData();
+    const selectedIndex = this.requirements.findIndex((r: any) => r && String(r.id) === String(this._selectedId));
+    const insertIndex = selectedIndex !== -1 ? selectedIndex + 1 : storageData.length;
+
+    const newRow = this.createDefaultMemoRow();
+    newRow.id = insertIndex + 1;
+
+    try {
+      if (w.undoHistory && w.AddRowCommand && !w.undoHistory.isExecuting) {
+        const cmd = new w.AddRowCommand('requirement', JSON.parse(JSON.stringify(newRow)), insertIndex, false);
+        cmd.execute();
+        w.undoHistory.record(cmd);
+        this.syncRequirementsToSystemConfigFromStorage();
+      } else {
+        storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
+        this.persistRequirementsRows(storageData);
+        this.loadFromStorage();
+        this.renderTable();
+      }
+    } catch (_) {
+      storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
+      this.persistRequirementsRows(storageData);
+      this.loadFromStorage();
+      this.renderTable();
+    }
+  }
+
   addRequirement(): void {
     // Get current data from localStorage to ensure consistency
     const storageData = loadSystemRequirementsTableData();
@@ -3011,6 +3334,9 @@ class SystemRequirementsEditor {
       const row = live[i];
       if (!row || typeof row !== 'object') continue;
 
+      // Skip memo-only rows entirely
+      if (row.rowType === 'memo') continue;
+
       const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
       const operand = String(row.operand || '').trim();
       const op = String(row.op || '=').trim();
@@ -3328,6 +3654,10 @@ class SystemRequirementsEditor {
   _serializeRequirements(rows: any[]): any[] {
     return (Array.isArray(rows) ? rows : []).map((r: any) => {
       if (!r || typeof r !== 'object') return r;
+      if (r.rowType === 'memo') {
+        const { id, rowType, memo } = r;
+        return { id, rowType, memo };
+      }
       const {
         id,
         enabled,
@@ -3393,6 +3723,11 @@ class SystemRequirementsEditor {
     this.requirements = data.map((row: any) => {
       const r = row && typeof row === 'object' ? { ...row } : {};
 
+      if (r.rowType === 'memo') {
+        if (typeof r.memo !== 'string') r.memo = String(r.memo ?? '');
+        return r;
+      }
+
       // Migration: Type (severity) removed.
       try { delete r.severity; } catch (_) {}
 
@@ -3433,6 +3768,11 @@ class SystemRequirementsEditor {
 
       this.requirements = (Array.isArray(data) ? data : []).map((row: any) => {
         const r = row && typeof row === 'object' ? { ...row } : {};
+
+        if (r.rowType === 'memo') {
+          if (typeof r.memo !== 'string') r.memo = String(r.memo ?? '');
+          return r;
+        }
 
         // Migration: Type (severity) removed.
         try { delete r.severity; } catch (_) {}

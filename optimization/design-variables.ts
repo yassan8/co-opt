@@ -33,7 +33,8 @@ function shouldMarkV(variableEntry) {
   if (!isPlainObject(variableEntry)) return false;
   const opt = variableEntry.optimize;
   if (!isPlainObject(opt)) return false;
-  return opt.mode === 'V';
+  const mode = String(opt.mode ?? '').trim().toUpperCase();
+  return mode === 'V' || mode.includes('V');
 }
 
 function isUnsupportedCategoricalKey(key) {

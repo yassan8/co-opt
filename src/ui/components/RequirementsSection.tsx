@@ -53,6 +53,15 @@ export default function RequirementsSection() {
     }
   };
 
+  const handleAddMemo = () => {
+    const editor = (window as any).systemRequirementsEditor;
+    if (editor && typeof editor.addMemoRow === 'function') {
+      editor.addMemoRow();
+    } else {
+      console.error('[RequirementsSection] Editor or addMemoRow method not available');
+    }
+  };
+
   const handleDeleteRequirement = () => {
     const editor = (window as any).systemRequirementsEditor;
     if (editor && typeof editor.deleteRequirement === 'function') {
@@ -143,6 +152,7 @@ export default function RequirementsSection() {
       <h2 className="section-title">Requirements</h2>
       <div className="merit-function-buttons-container ide-toolbar" role="toolbar" aria-label="Requirements controls">
         <button id="add-requirement-btn" type="button" onClick={handleAddRequirement}>Add Requirement</button>
+        <button id="add-memo-btn" type="button" onClick={handleAddMemo} title="Add a memo / note row (not evaluated)">Add Memo</button>
         <button id="delete-requirement-btn" type="button" onClick={handleDeleteRequirement}>Delete Requirement</button>
         <button id="update-requirement-btn" type="button" onClick={handleUpdateRequirement}>Update Requirement</button>
         <button id="set-all-requirement-on-btn" type="button" onClick={handleSetAllRequirementOn}>All On</button>

@@ -40,6 +40,55 @@ function idsEqual(a: any, b: any): boolean {
   return String(a ?? '') === String(b ?? '');
 }
 
+function cloneSystemConfiguration<T>(value: T): T | null {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeLoadedSystemConfiguration(systemConfig: SystemConfiguration | null | undefined): SystemConfiguration | null {
+  if (!systemConfig || typeof systemConfig !== 'object') return null;
+  if (!Array.isArray(systemConfig.configurations)) return null;
+
+  for (const cfg of systemConfig.configurations) {
+    if (!cfg || typeof cfg !== 'object') continue;
+    if (!cfg.metadata || typeof cfg.metadata !== 'object') cfg.metadata = {} as ConfigurationMetadata;
+    if (!cfg.metadata.created) cfg.metadata.created = new Date().toISOString();
+    if (!cfg.metadata.modified) cfg.metadata.modified = cfg.metadata.created;
+    if (cfg.metadata.locked === undefined) cfg.metadata.locked = false;
+    if (!cfg.systemData || typeof cfg.systemData !== 'object') {
+      cfg.systemData = { referenceFocalLength: '' };
+    }
+    if (cfg.name === undefined || cfg.name === null) {
+      cfg.name = `Config ${String(cfg.id ?? '') || ''}`.trim() || 'Config';
+    }
+    normalizeImageSurfaceBlocksForConfiguration(cfg);
+    backfillMissingGlassPropertiesForConfiguration(cfg);
+    interpolateExplicitApertureSemidiaForConfiguration(cfg);
+  }
+
+  return systemConfig;
+}
+
+function loadRuntimeSystemConfigurations(): SystemConfiguration | null {
+  try {
+    const runtimeConfig = cloneSystemConfiguration<SystemConfiguration>(w.__cooptSystemConfig);
+    return normalizeLoadedSystemConfiguration(runtimeConfig);
+  } catch (_) {
+    return null;
+  }
+}
+
+function shouldPreferRuntimeSystemConfigurations(): boolean {
+  try {
+    return !!w.__cooptPreferRuntimeSystemConfig;
+  } catch (_) {
+    return false;
+  }
+}
+
 function hasUsableExplicitApertureSemidia(value: any): boolean {
   const text = String(value ?? '').trim();
   if (!text || text.toLowerCase() === 'auto') return false;
@@ -296,35 +345,28 @@ const defaultSystemConfig: SystemConfiguration = {
 // localStorageからConfiguration全体を読み込み
 export function loadSystemConfigurations(): SystemConfiguration {
   cfgLog('🔵 [Configuration] Loading system configurations from localStorage...');
+  const runtimeConfig = loadRuntimeSystemConfigurations();
+  if (shouldPreferRuntimeSystemConfigurations() && runtimeConfig) {
+    cfgLog('🔵 [Configuration] Using runtime system config override');
+    return runtimeConfig;
+  }
+
   const json = storageGetItem(STORAGE_KEY);
   
   if (json) {
     try {
-      const parsed = JSON.parse(json) as SystemConfiguration;
-      // Normalize legacy configs to avoid UI crashes (missing metadata/systemData).
-      if (parsed && Array.isArray(parsed.configurations)) {
-        for (const cfg of parsed.configurations) {
-          if (!cfg || typeof cfg !== 'object') continue;
-          if (!cfg.metadata || typeof cfg.metadata !== 'object') cfg.metadata = {} as ConfigurationMetadata;
-          if (!cfg.metadata.created) cfg.metadata.created = new Date().toISOString();
-          if (!cfg.metadata.modified) cfg.metadata.modified = cfg.metadata.created;
-          if (cfg.metadata.locked === undefined) cfg.metadata.locked = false;
-          if (!cfg.systemData || typeof cfg.systemData !== 'object') {
-            cfg.systemData = { referenceFocalLength: '' };
-          }
-          if (cfg.name === undefined || cfg.name === null) {
-            cfg.name = `Config ${String(cfg.id ?? '') || ''}`.trim() || 'Config';
-          }
-          normalizeImageSurfaceBlocksForConfiguration(cfg);
-          backfillMissingGlassPropertiesForConfiguration(cfg);
-          interpolateExplicitApertureSemidiaForConfiguration(cfg);
-        }
-      }
+      const parsed = normalizeLoadedSystemConfiguration(JSON.parse(json) as SystemConfiguration);
+      if (!parsed) throw new Error('Invalid persisted system config');
       cfgLog('🔵 [Configuration] Loaded configurations:', parsed.configurations.length);
       return parsed;
     } catch (e) {
       console.error('❌ [Configuration] Parse error; using default system config:', e);
     }
+  }
+
+  if (runtimeConfig) {
+    cfgLog('🔵 [Configuration] Falling back to runtime system config');
+    return runtimeConfig;
   }
   
   cfgLog('🔵 [Configuration] Using default system config');
@@ -341,6 +383,11 @@ export function saveSystemConfigurations(systemConfig: SystemConfiguration): voi
         interpolateExplicitApertureSemidiaForConfiguration(cfg);
       }
     } catch (_) {}
+    try {
+      w.__cooptSystemConfig = cloneSystemConfiguration(systemConfig) ?? systemConfig;
+    } catch (_) {
+      // ignore
+    }
     storageSetItem(STORAGE_KEY, JSON.stringify(systemConfig));
     cfgLog(`💾 [Configuration] Saved ${systemConfig.configurations.length} configurations`);
   } else {
@@ -416,6 +463,10 @@ export function clearAllPersistedState(): void {
   } catch (_) {
     // ignore
   }
+  try { delete w.__cooptSystemConfig; } catch (_) {}
+  try { delete w.__cooptPreferRuntimeSystemConfig; } catch (_) {}
+  try { delete w.__cooptLoadedFileNameRuntime; } catch (_) {}
+  try { delete w.__cooptLoadedFileWarnRuntime; } catch (_) {}
 }
 
 // Legacy/non-module callers (index.html inline scripts)
@@ -491,8 +542,14 @@ export function saveCurrentToActiveConfiguration(): void {
     storageSetItem('sourceTableData', JSON.stringify(globalSource));
   } catch (_) {}
   
-  const objectDataFromTable = w.tableObject ? w.tableObject.getData() : [];
-  activeConfig.object = objectDataFromTable;
+  // Do not wipe object rows when this window does not host the Object table
+  // (e.g. optimize/render child windows).
+  const objectDataFromTable = (w.tableObject && typeof w.tableObject.getData === 'function')
+    ? w.tableObject.getData()
+    : null;
+  if (Array.isArray(objectDataFromTable)) {
+    activeConfig.object = objectDataFromTable;
+  }
 
   // Expanded Optical System is derived from Blocks.
   // When Blocks exist, do NOT overwrite config.opticalSystem from the (disabled/no-op) surface table.

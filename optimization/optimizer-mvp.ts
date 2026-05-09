@@ -16,7 +16,7 @@
 
 import { expandBlocksIntoConfiguration, expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
 import { listDesignVariablesFromBlocks, setDesignVariableValue } from './design-variables.ts';
-import { getGlassDataWithSellmeier } from '../data/glass.ts';
+import { findSimilarGlassesByNdVd, getGlassDataWithSellmeier } from '../data/glass.ts';
 import { loadSystemConfigurations, saveSystemConfigurations } from '../data/table-configuration.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
 import { loadTableData as loadSystemRequirementsTableData } from '../data/table-system-requirements.ts';
@@ -2940,6 +2940,36 @@ function glassExists(name) {
   }
 }
 
+function getPreferredGlassManufacturers() {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = JSON.parse(localStorage.getItem('coopt.glassMap.defaultManufacturers') || '[]');
+    if (!Array.isArray(raw)) return [];
+    const allow = new Set(['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
+    const out = [];
+    for (const value of raw) {
+      const upper = String(value ?? '').trim().toUpperCase();
+      if (!upper || !allow.has(upper)) continue;
+      out.push(upper);
+    }
+    return Array.from(new Set(out));
+  } catch {
+    return [];
+  }
+}
+
+function isGlassAllowedByPreferredManufacturers(name, preferredManufacturers) {
+  if (!Array.isArray(preferredManufacturers) || preferredManufacturers.length === 0) return true;
+  try {
+    const glass = getGlassDataWithSellmeier(name);
+    const manufacturer = String(glass?.manufacturer ?? '').trim().toUpperCase();
+    if (!manufacturer) return false;
+    return preferredManufacturers.includes(manufacturer);
+  } catch {
+    return false;
+  }
+}
+
 function defaultMaterialCandidatesFromConfig(activeCfg) {
   // Conservative defaults: prefer materials already present in the current design,
   // plus a small list of common glasses (only if found in DB).
@@ -2961,8 +2991,13 @@ function defaultMaterialCandidatesFromConfig(activeCfg) {
 
   const common = ['N-BK7', 'FUSED SILICA', 'N-SF11', 'N-F2', 'N-LAK10', 'S-BSL7', 'S-FPL53'];
   const merged = normalizeStringList([...fromDesign, ...common]);
+  const preferredManufacturers = getPreferredGlassManufacturers();
   // NOTE: material(V) discrete optimization must not pick AIR for Lens blocks.
-  return merged.filter(glassExists).filter(m => !isAirMaterialName(m)).slice(0, 40);
+  return merged
+    .filter(glassExists)
+    .filter(m => !isAirMaterialName(m))
+    .filter(m => isGlassAllowedByPreferredManufacturers(m, preferredManufacturers))
+    .slice(0, 40);
 }
 
 function getCategoricalMaterialVariables(activeCfg) {
@@ -3138,12 +3173,7 @@ function setJointDesignVariableValue({ blocksByConfigId, targetConfigIds, active
     const cfgView = { blocks };
     const v2 = clampValueIfNeeded(blocks, newValue);
     const ok = setDesignVariableValue(cfgView, baseId, v2);
-    
-    // Debug: Log conic changes
-    if (ok && baseId && baseId.toLowerCase().includes('conic')) {
-      console.log(`🔄 [Variable Update] ${baseId} = ${v2} (config: ${cid})`);
-    }
-    
+
     if (ok) okAny = true;
     if (cid === activeId) {
       updateActiveOpticalSystemOverrideFromBlocks(blocks);
@@ -3171,6 +3201,7 @@ function getJointVariableEntry({ blocksByConfigId, activeConfigId }, jointVariab
 function getMaterialCandidatesForVar(activeCfg, variableId, currentValue) {
   const entry = getVariableEntryById(activeCfg, variableId);
   let candidates = [];
+  const preferredManufacturers = getPreferredGlassManufacturers();
 
   if (isPlainObject(entry)) {
     // Support either `candidates` or `options` arrays.
@@ -3181,11 +3212,44 @@ function getMaterialCandidatesForVar(activeCfg, variableId, currentValue) {
     candidates = defaultMaterialCandidatesFromConfig(activeCfg);
   }
 
+  try {
+    const id = String(variableId ?? '').trim();
+    const dot = id.indexOf('.');
+    if (dot > 0 && activeCfg && Array.isArray(activeCfg.blocks)) {
+      const blockId = id.slice(0, dot);
+      const key = id.slice(dot + 1);
+      const block = activeCfg.blocks.find(b => isPlainObject(b) && String(b.blockId) === blockId);
+      const params = isPlainObject(block?.parameters) ? block.parameters : null;
+      const materialText = String(currentValue ?? '').trim();
+      const numericMaterial = Number(materialText);
+      const glass = materialText ? getGlassDataWithSellmeier(materialText) : null;
+      const match = key.match(/^material(\d*)$/i);
+      const suffix = match ? String(match[1] ?? '') : '';
+      const abbeKey = suffix ? `abbe${suffix}` : 'abbe';
+      const vdRaw = params && Object.prototype.hasOwnProperty.call(params, abbeKey) ? params[abbeKey] : null;
+      const vdTarget = Number.isFinite(Number(vdRaw)) && Number(vdRaw) > 0
+        ? Number(vdRaw)
+        : (Number.isFinite(Number(glass?.vd)) ? Number(glass.vd) : NaN);
+      const ndTarget = Number.isFinite(numericMaterial) && numericMaterial > 1 && numericMaterial < 4
+        ? numericMaterial
+        : (Number.isFinite(Number(glass?.nd)) ? Number(glass.nd) : NaN);
+
+      if (Number.isFinite(ndTarget) && Number.isFinite(vdTarget)) {
+        const nearby = findSimilarGlassesByNdVd(ndTarget, vdTarget, 24)
+          .filter(g => isGlassAllowedByPreferredManufacturers(g?.name, preferredManufacturers))
+          .map(g => String(g?.name ?? '').trim())
+          .filter(Boolean);
+        candidates = normalizeStringList([...candidates, ...nearby]);
+      }
+    }
+  } catch (_) {}
+
   // Ensure current value is included.
   const cur = String(currentValue ?? '').trim();
   let merged = normalizeStringList([cur, ...candidates])
     .filter(glassExists)
-    .filter(m => !isAirMaterialName(m));
+    .filter(m => !isAirMaterialName(m))
+    .filter(m => m === cur || isGlassAllowedByPreferredManufacturers(m, preferredManufacturers));
 
   // If the variable only offered AIR (or current is AIR), fall back to defaults (still excluding AIR).
   if (merged.length === 0) {
@@ -4122,8 +4186,6 @@ function resetAsphericCoefficientsToZero({ configsById, targetConfigIds }) {
       }
     }
   }
-  
-  console.log(`🔄 [OptimizerMVP] Reset ${resetCount} aspheric coefficients to zero`);
   return resetCount;
 }
 
@@ -4145,7 +4207,7 @@ export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
   const kktUseWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer === true;
   const methodRaw = String(opts.method || '').trim().toLowerCase();
-  const requestedMethod = (methodRaw === 'kkt' || methodRaw === 'sqp')
+  const requestedMethod = (methodRaw === 'kkt' || methodRaw === 'sqp' || methodRaw === 'al' || methodRaw === 'augmentedlagrangian' || methodRaw === 'augmented-lagrangian')
     ? 'kkt'
     : (methodRaw === 'cd' || methodRaw === 'coordinatedescent')
     ? 'cd'
@@ -6276,9 +6338,6 @@ export async function runOptimizationMVP(options = {}) {
           if (!runUntilStopped && stall0 >= stallLimit) break;
         }
 
-        if (iter % logEvery === 0) {
-          console.log(`🔁 [OptimizerMVP] iter ${iter}/${maxIterations}`, { method: 'lm(categorical-only)', best: best0 });
-        }
       }
 
       // Final sync to tables
@@ -6387,21 +6446,8 @@ export async function runOptimizationMVP(options = {}) {
       await nextFrame();
     }
 
-    console.log('🚀 [OptimizerMVP] start', { 
-      method: 'lm', 
-      vars: vars.length, 
-      before: before.toFixed(6), 
-      maxIterations, 
-      stallLimit,
-      stageStallLimit,
-      multiScenario,
-      staged,
-      stages: staged ? stageMaxCoefList.length : 1
-    });
-
     // Reset aspheric coefficients at the start if option is enabled (helps avoid local minima)
     if (resetAsphericCoefs) {
-      console.log('🔄 [OptimizerMVP] Resetting aspheric coefficients to zero to avoid local minima...');
       const resetCount = resetAsphericCoefficientsToZero({ configsById, targetConfigIds });
       if (resetCount > 0) {
         // Sync to tables after reset
@@ -6417,7 +6463,6 @@ export async function runOptimizationMVP(options = {}) {
         before0Eval = await evalStateLM();
         before = before0Eval.cost;
         best = before;
-        console.log(`🔄 [OptimizerMVP] After reset: cost=${before.toFixed(6)}, reset ${resetCount} coefficients`);
       }
     }
 
@@ -6530,11 +6575,6 @@ export async function runOptimizationMVP(options = {}) {
         const xPert = x0.slice();
         xPert[j] = xj + h;
 
-        // Debug: Log step size for conic variables
-        if (keys[j] && keys[j].toLowerCase().includes('conic')) {
-          console.log(`🔬 [Jacobian] ${keys[j]}: value=${xj.toFixed(6)}, step=${h.toFixed(8)}, perturbed=${(xj+h).toFixed(6)}`);
-        }
-
         // apply perturbed
         for (let k = 0; k < n; k++) {
           setJointDesignVariableValue(jointState, ids[k], xPert[k]);
@@ -6563,15 +6603,6 @@ export async function runOptimizationMVP(options = {}) {
           J[i][j] = 0;
         }
         
-        // Debug: Log Jacobian column magnitude for conic variables
-        if (keys[j] && keys[j].toLowerCase().includes('conic')) {
-          const colNorm = Math.sqrt(colMagnitude);
-          console.log(`🔬 [Jacobian] ${keys[j]}: ||J[:,${j}]|| = ${colNorm.toExponential(3)}`);
-          if (colNorm < 1e-6) {
-            console.warn(`⚠️ [Jacobian] ${keys[j]}: Column has very small magnitude - parameter may not affect merit function`);
-          }
-        }
-
         if (onProgress) {
           try { onProgress({ phase: 'jacobian-col', iter, col: j + 1, cols: n, current: baseEval.score, best, lambda, method: 'lm', multiScenario, requirementCount, residualCount: m }); } catch (_) {}
           await nextFrame();
@@ -7160,10 +7191,6 @@ export async function runOptimizationMVP(options = {}) {
         }
       }
 
-      if (iter % logEvery === 0) {
-        const stageInfo = staged ? ` stage=${stageIndex}/${lastStageIndex} stall=${stageNoImprove}/${stageStallLimit}` : '';
-        console.log(`🔁 [OptimizerMVP] iter ${iter}/${maxIterations}${stageInfo}`, { method: 'lm', best, lambda: lambda.toExponential(2) });
-      }
     }
 
     // Final sync to tables (push expanded rows into Tabulator without requiring a reload)
@@ -7197,15 +7224,6 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
 
     const t1 = nowMs();
-    const improvement = before > 0 ? ((before - best) / before * 100).toFixed(2) : '0.00';
-    console.log('✅ [OptimizerMVP] done', { 
-      method: 'lm', 
-      before: before.toFixed(6), 
-      best: best.toFixed(6), 
-      improvement: `${improvement}%`,
-      iterations: completedIterations,
-      ms: Math.round(t1 - t0) 
-    });
 
     const finalEval = getBestEvalSoFar();
     const finalCompositeEval = evalCompositeFromRequirementsProfiled();
@@ -7272,17 +7290,131 @@ export async function runOptimizationMVP(options = {}) {
   }
 
   // KKT-based optimization (method === 'kkt')
-  console.log('[DEBUG] method=', method, 'vars.length=', vars.length);
   if (method === 'kkt') {
     const t0 = nowMs();
-    console.log('[DEBUG] AL block entered. vars.length=', vars.length);
-    
-    // Early return if no continuous variables
+
+    const evalStateKKT = () => evalCompositeFromRequirementsProfiled();
+    const shouldStopKKT = () => shouldStop('AL');
+
+    await sanitizeAirMaterialsInDesignIntent({
+      activeCfg,
+      systemConfig,
+      jointState,
+      categoricalVars: catVars,
+      evalState: evalStateKKT,
+      onProgress,
+      shouldStop,
+      multiScenario,
+      method: 'kkt'
+    });
+
+    if (vars.length === 0 && catVars.length === 0) {
+      return { ok: false, reason: formatNoVariableReason(activeCfg) };
+    }
+
+    // Allow KKT runs with only categorical material variables.
     if (vars.length === 0) {
-      console.log('❌ [AL] No continuous variables to optimize. vars.length = 0');
+      const before0Eval = evalStateKKT();
+      recordEval(before0Eval);
+      const before0 = before0Eval.score;
+      let best0 = (getBestEvalSoFar() || before0Eval).score;
+      let stall0 = 0;
+      let completed0 = 0;
+
+      if (onProgress) {
+        try {
+          onProgress({
+            phase: 'start',
+            iter: 0,
+            current: before0,
+            best: best0,
+            method: 'kkt',
+            multiScenario,
+            requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
+            feasible: before0Eval.feasible,
+            violationScore: before0Eval.violationScore,
+            softPenalty: before0Eval.softPenalty
+          });
+        } catch (_) {}
+        await nextFrame();
+      }
+
+      for (let iter = 1; iter <= maxIterations; iter++) {
+        if (shouldStopKKT()) break;
+        completed0 = iter;
+
+        const sweep = await runCategoricalMaterialSweep({
+          activeCfg,
+          systemConfig,
+          jointState,
+          categoricalVars: catVars,
+          evalState: evalStateKKT,
+          onProgress,
+          shouldStop,
+          iter,
+          multiScenario,
+          bestEval: getBestEvalSoFar() || before0Eval
+        });
+
+        if (sweep && sweep.bestEval) {
+          recordEval(sweep.bestEval);
+          best0 = (getBestEvalSoFar() || sweep.bestEval).score;
+        }
+
+        if (sweep && sweep.changed) {
+          stall0 = 0;
+        } else {
+          stall0++;
+          if (!runUntilStopped && stall0 >= stallLimit) break;
+        }
+      }
+
+      const finalEval0 = getBestScoreEvalSoFar() || getBestEvalSoFar();
+      try {
+        restoreBestSnapshotAndPersist({ finalEval: finalEval0, jointState, systemConfig, configsById, targetConfigIds });
+      } catch (_) {}
+
+      restorePreOptimizationGlobalsForUiSync();
+
+      try {
+        if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+          await window.ConfigurationManager.loadActiveConfigurationToTables({
+            applyToUI: true,
+            suppressOpticalSystemDataChanged: true,
+          });
+        }
+      } catch (_) {}
+
+      try {
+        requestRefreshBlockInspector();
+      } catch (_) {}
+
+      try {
+        if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
+          recalculateMeritIfSurfaceRangesValid();
+        }
+      } catch (_) {}
+
+      try {
+        if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.evaluateAndUpdateNow === 'function') {
+          window.systemRequirementsEditor.evaluateAndUpdateNow();
+        }
+      } catch (_) {}
+
       return {
-        ok: false,
-        reason: 'No continuous design variables found for AL optimization'
+        ok: true,
+        aborted: shouldStopKKT(),
+        before: before0,
+        best: finalEval0 ? finalEval0.score : best0,
+        iterations: completed0,
+        variables: 0,
+        method: 'kkt',
+        feasible: finalEval0 ? finalEval0.feasible : true,
+        violationScore: finalEval0 ? finalEval0.violationScore : 0,
+        softPenalty: finalEval0 ? finalEval0.softPenalty : 0,
+        objectiveScore: finalEval0 ? finalEval0.score : best0,
+        hardViolations: finalEval0?.hardViolations ?? [],
+        softViolations: finalEval0?.softViolations ?? []
       };
     }
     
@@ -7312,11 +7444,31 @@ export async function runOptimizationMVP(options = {}) {
         await nextFrame();
       }
 
-      // Compute initial state before optimization
-      const initialStateEval = evalCompositeFromRequirementsProfiled();
-      const initialScore = initialStateEval?.score ?? 1e9;
+      let initialStateEval = evalStateKKT();
+      recordEval(initialStateEval);
 
-      console.log('🚀 [AL] Starting optimization with', vars.length, 'variables, initial score:', initialScore);
+      if (catVars.length > 0) {
+        const sweep = await runCategoricalMaterialSweep({
+          activeCfg,
+          systemConfig,
+          jointState,
+          categoricalVars: catVars,
+          evalState: evalStateKKT,
+          onProgress,
+          shouldStop,
+          iter: 0,
+          multiScenario,
+          bestEval: getBestEvalSoFar() || initialStateEval
+        });
+
+        if (sweep && sweep.bestEval) {
+          recordEval(sweep.bestEval);
+          initialStateEval = evalStateKKT();
+          recordEval(initialStateEval);
+        }
+      }
+
+      const initialScore = initialStateEval?.score ?? 1e9;
 
       // Refresh start phase with actual initial score once available.
       if (onProgress) {
@@ -7409,6 +7561,9 @@ export async function runOptimizationMVP(options = {}) {
       const kktTaCachePrecision = Number.isFinite(Number(opts?.kktTaCachePrecision))
         ? Math.max(3, Math.min(12, Math.floor(Number(opts.kktTaCachePrecision))))
         : ((spotFastMode || kktUseMatrixFreeCore) ? 4 : 6);
+      const kktCategoricalSweepInterval = Number.isFinite(Number(opts?.kktCategoricalSweepInterval))
+        ? Math.max(1, Math.floor(Number(opts.kktCategoricalSweepInterval)))
+        : 1;
 
       const buildKktXKey = (x: number[]) => {
         const clamped = clampToBounds(x);
@@ -7448,16 +7603,10 @@ export async function runOptimizationMVP(options = {}) {
             const setOk = jointState
               ? setJointDesignVariableValue(jointState, varId, newVal)
               : setDesignVariableValue(activeCfg, varId, newVal);
-            if (evalCallCount <= 3 && i === 0) {
-              console.log(`  [DEBUG] Call#${evalCallCount} Setting ${varId} = ${newVal.toFixed(6)}, result: ${setOk}`);
-            }
           }
           // Evaluate and return score
           const state = evalCompositeFromRequirementsProfiled();
           const score = state?.score ?? 1e9;
-          if (evalCallCount <= 3) {
-            console.log(`  [DEBUG] Call#${evalCallCount} Evaluation: ${score.toFixed(6)}`);
-          }
           return score;
         } finally {
           // Restore to saved state
@@ -7491,8 +7640,6 @@ export async function runOptimizationMVP(options = {}) {
         }
         await nextFrame();
       };
-
-      const shouldStopKKT = () => shouldStop('AL');
 
       const evalSQPAtXUncached = async (x: number[]) => {
         const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
@@ -7662,8 +7809,6 @@ export async function runOptimizationMVP(options = {}) {
         kktEvalCache.set(key, storable);
         return cloneKktEval(storable);
       };
-
-      console.log('🔄 [AL] Starting unified 1-loop SQP (max:', maxIterations, 'iters)');
 
       // Smoothmax function: smooth approximation of Math.max(0, x) for differentiability
       const smoothMax = (val: number, beta: number = 100) => {
@@ -8624,16 +8769,7 @@ export async function runOptimizationMVP(options = {}) {
               recordEval(seededEval);
             }
           } catch (_) {}
-          console.log('[AL] init-probe selected a better starting point', {
-            merit: probeBest.merit,
-            objective: probeBest.objective,
-            violation: probeBest.violation,
-            testedVars: candidateOrder.length
-          });
         }
-      }
-      else if (hasHeavyAsyncRequirementOperands) {
-        console.log('[AL] Skipping KKT startup probe for async-heavy requirement operands');
       }
 
       // 【Broyden準Newton更新】前回のJacobian、変位dx、残差変化drを保存
@@ -8687,16 +8823,13 @@ export async function runOptimizationMVP(options = {}) {
         try {
           await maybeYieldKktCpu();
           if (shouldStopKKT()) {
-            console.log('⏸️  [AL] User stop requested at iter', iter);
             break;
           }
           if (iter >= kktHardIterCap) {
-            console.log('🛑 [AL] Hard iter cap reached', { iter, kktHardIterCap, bestScore });
             break;
           }
           const elapsedMs = nowMs() - t0;
           if (elapsedMs >= kktMaxWallMs) {
-            console.log('🛑 [AL] Max wall time reached', { iter, elapsedMs: Math.round(elapsedMs), kktMaxWallMs, bestScore });
             break;
           }
 
@@ -8767,24 +8900,15 @@ export async function runOptimizationMVP(options = {}) {
             }
             broydenSkipCount++;
             
-            if (iter < 3 || iter % 100 === 0) {
-              console.log(`[Broyden] Iter ${iter}: Using rank-1 update (skip count: ${broydenSkipCount}/${kktBroydenMaxSkips})`);
-            }
           } else {
             // dx too small, fall back to finite difference
             if (hasReusableJacobian) {
               if (shouldRunFiniteDiffRefresh) {
                 if (shouldRunFullJacobianRefresh) {
                   J = await finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
-                  if (iter < 3 || iter % 100 === 0) {
-                    console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
-                  }
                 } else {
                   const refreshCols = pickJacobianRefreshColumns(currentX, prevX, jacobianRefreshMaxCols);
                   J = await finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, prevJ, refreshCols, aug0.base?.residuals?.length || 0);
-                  if (iter < 3 || iter % 100 === 0) {
-                    console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
-                  }
                 }
                 jacobianReuseSinceRefresh = 0;
                 forceJacobianRefreshNextIter = false;
@@ -8808,15 +8932,9 @@ export async function runOptimizationMVP(options = {}) {
             if (shouldRunFiniteDiffRefresh) {
               if (shouldRunFullJacobianRefresh) {
                 J = await finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
-                if (iter < 3 || iter % 100 === 0) {
-                  console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
-                }
               } else {
                 const refreshCols = pickJacobianRefreshColumns(currentX, prevX, jacobianRefreshMaxCols);
                 J = await finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, prevJ, refreshCols, aug0.base?.residuals?.length || 0);
-                if (iter < 3 || iter % 100 === 0) {
-                  console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
-                }
               }
               jacobianReuseSinceRefresh = 0;
               forceJacobianRefreshNextIter = false;
@@ -8834,9 +8952,6 @@ export async function runOptimizationMVP(options = {}) {
           broydenSkipCount = 0;
           lastJ = J;
 
-          if (!hasReusableJacobian && (iter < 3 || iter % 100 === 0)) {
-            console.log(`[Broyden] Iter ${iter}: Full finite-diff Jacobian computed`);
-          }
         }
         
         J = sanitizeJacobianRows(J, m, n);
@@ -8845,23 +8960,6 @@ export async function runOptimizationMVP(options = {}) {
         lastX = currentX.slice();
         lastR = r0.slice();
         
-        // 【最適化】デバッグログを削減
-        if (iter < 3 || iter % 100 === 0) {
-          let jMaxAbs = 0, jMinAbs = Infinity, jZeroCount = 0, jNaNCount = 0;
-          for (let i = 0; i < m; i++) {
-            for (let j = 0; j < n; j++) {
-              const jVal = J[i][j];
-              if (!Number.isFinite(jVal)) jNaNCount++;
-              else if (Math.abs(jVal) < 1e-20) jZeroCount++;
-              else {
-                jMaxAbs = Math.max(jMaxAbs, Math.abs(jVal));
-                jMinAbs = Math.min(jMinAbs, Math.abs(jVal));
-              }
-            }
-          }
-          console.log(`[DEBUG iter${iter}] Jacobian: ${jNaNCount} NaN, ${jZeroCount} ~zero, range [${jMinAbs.toExponential(2)}, ${jMaxAbs.toExponential(2)}]`);
-        }
-
         const useWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer === true;
         let dx: number[] | null = null;
         let predictedReductionPilot = Number.NaN;
@@ -8872,12 +8970,6 @@ export async function runOptimizationMVP(options = {}) {
             if (matrixFree && Array.isArray(matrixFree.dx) && matrixFree.dx.length === n) {
               dx = matrixFree.dx.slice();
               predictedReductionPilot = Number(matrixFree.predictedReduction);
-              if (iter < 3 || iter % 100 === 0) {
-                console.log(`[MATRIX-FREE] Iter ${iter}: step accepted (priority mode)`, {
-                  predictedReduction: predictedReductionPilot,
-                  damping: lmDamp
-                });
-              }
             }
           } catch (_) {
             // reason classification is handled in solveNormalEqMatrixFreeWithOptionalWasm
@@ -8978,14 +9070,6 @@ export async function runOptimizationMVP(options = {}) {
               if (__profile && __profile.counts) {
                 __profile.counts.kktWasmPilotHits = (Number(__profile.counts.kktWasmPilotHits) || 0) + 1;
               }
-              if (iter < 3 || iter % 100 === 0) {
-                console.log(`[WASM-PILOT] Iter ${iter}: step accepted from optimizeSystemOneIterationWasm`, {
-                  predictedReduction: predictedReductionPilot,
-                  damping: pilotResult.usedDamping,
-                  trustRegionRadius: pilotResult.usedTrustRegionRadius,
-                  jacobianShape: pilotResult.jacobianShape
-                });
-              }
             }
           } catch (_) {}
         }
@@ -9019,12 +9103,6 @@ export async function runOptimizationMVP(options = {}) {
             if (matrixFree && Array.isArray(matrixFree.dx) && matrixFree.dx.length === n) {
               dx = matrixFree.dx.slice();
               predictedReductionPilot = Number(matrixFree.predictedReduction);
-              if (iter < 3 || iter % 100 === 0) {
-                console.log(`[MATRIX-FREE] Iter ${iter}: step accepted from kktUseMatrixFreeCore`, {
-                  predictedReduction: predictedReductionPilot,
-                  damping: lmDamp
-                });
-              }
             }
           } catch (_) {
             // reason classification is handled in solveNormalEqMatrixFreeWithOptionalWasm
@@ -9041,18 +9119,6 @@ export async function runOptimizationMVP(options = {}) {
           g = ne.g;
         }
         
-        // Debug: Check gradient g
-        if (g && (iter < 3 || iter % 100 === 0)) {
-          let gMaxAbs = 0, gMinAbs = Infinity, gZeroCount = 0;
-          for (let j = 0; j < n; j++) {
-            if (Math.abs(g[j]) < 1e-20) gZeroCount++;
-            else {
-              gMaxAbs = Math.max(gMaxAbs, Math.abs(g[j]));
-              gMinAbs = Math.min(gMinAbs, Math.abs(g[j]));
-            }
-          }
-          console.log(`[DEBUG iter${iter}] Gradient g: ${gZeroCount}/${n} ~zero, range [${gMinAbs.toExponential(2)}, ${gMaxAbs.toExponential(2)}]`);
-        }
         // 【追加】LM法と同様に、非球面係数の暴走を防ぐティコノフ正則化を導入
         // これにより、高次非球面がノイズに過剰反応してストールするのを防ぎます
         if (!dx && A && asphericRegularization > 0) {
@@ -9063,17 +9129,6 @@ export async function runOptimizationMVP(options = {}) {
           }
         }
         
-        if (!dx && A && (iter < 3 || iter % 100 === 0)) {
-          let aMaxDiag = 0, aMinDiag = Infinity;
-          for (let i = 0; i < n; i++) {
-            const d = Math.abs(A[i][i]);
-            aMaxDiag = Math.max(aMaxDiag, d);
-            aMinDiag = Math.min(aMinDiag, d);
-          }
-          const cond = aMaxDiag / Math.max(1e-30, aMinDiag);
-          console.log(`[DEBUG iter${iter}] Matrix A: diagRange [${aMinDiag.toExponential(2)}, ${aMaxDiag.toExponential(2)}], cond=${cond.toExponential(2)}`);
-        }
-
         // --- 3. Apply Levenberg-Marquardt damping with Jacobi Preconditioning ---
         // 【修正】Aの要素が10^24等になるような場合、浮動小数点精度（約16桁）を完全に超えて破綻するため、
         // 対角成分が1.0になるように行列をスケール（事前処理）してから解く
@@ -9082,15 +9137,6 @@ export async function runOptimizationMVP(options = {}) {
           for (let i = 0; i < n; i++) {
             const d = A![i][i];
             scaleD[i] = (d > 1e-30) ? 1.0 / Math.sqrt(Math.abs(d)) : 1.0;
-          }
-        
-          if (iter < 3 || iter % 100 === 0) {
-            let scaleMinAbs = Infinity, scaleMaxAbs = 0;
-            for (let i = 0; i < n; i++) {
-              scaleMinAbs = Math.min(scaleMinAbs, Math.abs(scaleD[i]));
-              scaleMaxAbs = Math.max(scaleMaxAbs, Math.abs(scaleD[i]));
-            }
-            console.log(`[DEBUG iter${iter}] Preconditioning scales: [${scaleMinAbs.toExponential(2)}, ${scaleMaxAbs.toExponential(2)}]`);
           }
         
           Ad = Array.from({ length: n }, () => Array(n).fill(0));
@@ -9102,17 +9148,6 @@ export async function runOptimizationMVP(options = {}) {
             Ad[i][i] = 1.0 + lmDamp;  
           }
         
-          if (iter < 3 || iter % 100 === 0) {
-            let adMaxDiag = 0, adMinDiag = Infinity;
-            for (let i = 0; i < n; i++) {
-              const d = Math.abs(Ad[i][i]);
-              adMaxDiag = Math.max(adMaxDiag, d);
-              adMinDiag = Math.min(adMinDiag, d);
-            }
-            const adCond = adMaxDiag / Math.max(1e-30, adMinDiag);
-            console.log(`[DEBUG iter${iter}] Precond Matrix Ad: diagRange [${adMinDiag.toExponential(2)}, ${adMaxDiag.toExponential(2)}], cond=${adCond.toExponential(2)}`);
-          }
-
           const b_scaled = g!.map((v, i) => -v * scaleD[i]);
         
           // Validate preconditioned matrix before solving
@@ -9132,9 +9167,6 @@ export async function runOptimizationMVP(options = {}) {
           if (!dx_scaled) {
             // Matrix solver failed: increase damping significantly and retry
             lmDamp = Math.min(1e12, lmDamp * 20);  // Increased multiplier from 10
-            if (iter < 5 || iter % 20 === 0) {
-              console.log(`[DEBUG] Matrix solve failed, increased lmDamp to ${lmDamp.toExponential(2)}`);
-            }
             continue;
           }
 
@@ -9152,9 +9184,6 @@ export async function runOptimizationMVP(options = {}) {
           if (dxHasNaN) {
             // Step contains NaN/Inf: increase damping and retry
             lmDamp = Math.min(1e12, lmDamp * 15);
-            if (iter < 3 || iter % 100 === 0) {
-              console.log(`[DEBUG] Step contains NaN/Inf, increased lmDamp to ${lmDamp.toExponential(2)}`);
-            }
             continue;
           }
         }
@@ -9175,9 +9204,6 @@ export async function runOptimizationMVP(options = {}) {
         // 【修正】ステップが小さすぎる場合は再度damping をリセット
         // これにより、ill-conditioning から逃げることができる
         if (maxAbs < 1e-8 && lmDamp > 1e-3) {
-          if (iter < 3 || iter % 100 === 0) {
-            console.log(`[DEBUG] Step too small (${maxAbs.toExponential(2)}), resetting lmDamp from ${lmDamp.toExponential(2)}`);
-          }
           lmDamp = 5e-4;  // 【最適化】リセット時も初期値に合わせる
           // 【修正】ここで mu を上げると、ストール時に「壁を高くする」悪循環になるので削除
           // The wall (penalty) is the problem when stalled; raising it won't help
@@ -9481,8 +9507,6 @@ export async function runOptimizationMVP(options = {}) {
               const improvement = prevBestScore - bestScore;
               const currentViolation = acceptedViolationNorm;
               const status = currentEval.feasible ? '✓FEAS' : `Viol:${currentViolation.toExponential(2)}`;
-              console.log(`🏆 [AL] Iter ${iter}: NEW BEST! Score: ${bestScore.toFixed(6)} (Δ${improvement.toFixed(3)}), ${status}, α=${lastAlpha.toFixed(3)}, ρ=${acceptedRho.toFixed(3)}`);
-              
               if (onProgress) {
                 try {
                   onProgress({
@@ -9500,6 +9524,50 @@ export async function runOptimizationMVP(options = {}) {
                     rho: acceptedRho
                   });
                 } catch (_) {}
+              }
+            }
+          }
+
+          if (catVars.length > 0 && (iter % kktCategoricalSweepInterval === 0)) {
+            const bestEvalBeforeMaterialSweep = getBestScoreEvalSoFar();
+            const sweep = await runCategoricalMaterialSweep({
+              activeCfg,
+              systemConfig,
+              jointState,
+              categoricalVars: catVars,
+              evalState: evalStateKKT,
+              onProgress,
+              shouldStop,
+              iter,
+              multiScenario,
+              bestEval: bestEvalBeforeMaterialSweep || currentEval
+            });
+
+            if (sweep && sweep.bestEval) {
+              recordEval(sweep.bestEval);
+            }
+
+            if (sweep && sweep.changed) {
+              kktEvalCache.clear();
+              postEvalCached = null;
+              iterAcceptedCompositeEval = null;
+              forceJacobianRefreshNextIter = true;
+              lastJ = null;
+              lastX = null;
+              lastR = null;
+              broydenSkipCount = 0;
+
+              const materialEval = evalStateKKT();
+              recordEval(materialEval);
+              lastAcceptedScore = materialEval?.score ?? lastAcceptedScore;
+
+              const bestEvalAfterMaterialSweep = getBestScoreEvalSoFar();
+              if (bestEvalAfterMaterialSweep) {
+                bestScore = bestEvalAfterMaterialSweep.score;
+                bestEval = bestEvalAfterMaterialSweep;
+                if (!bestEvalBeforeMaterialSweep || compareEval(materialEval, bestEvalBeforeMaterialSweep)) {
+                  bestX = currentX.slice();
+                }
               }
             }
           }
@@ -9565,10 +9633,6 @@ export async function runOptimizationMVP(options = {}) {
               });
             } catch (_) {}
             await nextFrame();
-          }
-
-          if (iter < 3 || iter % 25 === 0) {
-            console.log(`♻️ [AL] Auto restart by stagnation at iter ${iter} (limit=${stagnationIterLimit}, jitter=${jitterScale})`);
           }
 
           if (__profile && __profile.counts) {
@@ -9653,11 +9717,6 @@ export async function runOptimizationMVP(options = {}) {
           lastX = null;
           lastR = null;
           broydenSkipCount = 0;
-        } else {
-          // On iterations where we don't update ALM, keep landscape stable for LM convergence
-          if (iter % 100 === 0) {
-            console.log(`  [AL ALM delayed] Landscape frozen. Updates only when: accepting steps AND kktRejectStreak==0 AND (progress<1e-3 OR iter%20==0)`);
-          }
         }
 
         if (maxViol > kktHighViolThreshold) {
@@ -9691,9 +9750,6 @@ export async function runOptimizationMVP(options = {}) {
             broydenSkipCount = 0;
             highViolRef = maxViol;
             highViolStallIters = 0;
-            if (iter < 3 || iter % 25 === 0) {
-              console.log(`♻️ [AL] High-violation stall restart at iter ${iter} (maxViol=${maxViol.toExponential(2)})`);
-            }
           }
         } else {
           highViolRef = maxViol;
@@ -9722,19 +9778,6 @@ export async function runOptimizationMVP(options = {}) {
           lastX = null;
           lastR = null;
           broydenSkipCount = 0;
-          if (iter < 3 || iter % 25 === 0) {
-            console.log('♻️ [AL] Divergence rollback to best', {
-              iter,
-              divergenceScoreRatio,
-              maxViol,
-              mu
-            });
-          }
-        }
-
-        // Show progress every 10 iterations with current vs best
-        if (iter % 10 === 0) {
-          console.log(`📊 [AL] Iter ${iter}: Current=${lastAcceptedScore.toFixed(4)}, Best=${bestScore.toFixed(4)}, Δ=${(lastAcceptedScore-bestScore).toFixed(2)}, maxViol=${maxViol.toExponential(2)}, mu=${mu.toExponential(2)}, lmDamp=${lmDamp.toExponential(1)}, broyden=${broydenSkipCount}/6`);
         }
 
         // Convergence check: feasible + stable for multiple iterations
@@ -9752,7 +9795,6 @@ export async function runOptimizationMVP(options = {}) {
           }
 
           if (feasibleConvStreak >= 3) {
-            console.log('🎯 [AL] Converged at iter', iter, 'with score', bestScore.toFixed(6), `(stable=${feasibleConvStreak}, Δcost=${costChange.toExponential(2)})`);
             break;
           }
         } else {
@@ -9763,12 +9805,6 @@ export async function runOptimizationMVP(options = {}) {
           && iter >= kktStopWhenBestLeqMinIter
           && Number.isFinite(bestScore)
           && bestScore <= kktStopWhenBestLeq) {
-          console.log('🛑 [AL] Target-best stop at iter', iter, {
-            bestScore,
-            targetBestScore: kktStopWhenBestLeq,
-            minIter: kktStopWhenBestLeqMinIter,
-            maxViol
-          });
           break;
         }
 
@@ -9867,51 +9903,6 @@ export async function runOptimizationMVP(options = {}) {
           );
 
           if (strictPlateauStop || relaxedPlateauStop || tailStop || windowTailStop || windowNoGainStop || goodEnoughStop || noBestImproveStop || postBestDivergenceStop || postBestPatienceStop) {
-            console.log('🛑 [AL] Plateau stop at iter', iter, {
-              bestScore,
-              maxViol,
-              noImproveIters: plateauNoImproveIters,
-              relImproveEps: kktPlateauBestRelImproveEps,
-              violImproveEps: kktPlateauViolImproveEps,
-              tailNoImproveIters,
-              tailRelImproveEps: kktTailStopBestRelImproveEps,
-              tailStopMaxViol: kktTailStopMaxViol,
-              windowTailRelImprove,
-              windowTailRelImproveEps: kktWindowTailStopRelImproveEps,
-              windowTailStopMaxViol: kktWindowTailStopMaxViol,
-              windowNoGainRelImprove,
-              windowNoGainRelImproveEps: kktWindowNoGainRelImproveEps,
-              windowNoGainMaxViol: kktWindowNoGainMaxViol,
-              goodEnoughRecentRelImprove,
-              goodEnoughRecentRelImproveEps: kktGoodEnoughStopRecentRelImproveEps,
-              goodEnoughMaxViol: kktGoodEnoughStopMaxViol,
-              noBestImproveIters,
-              noBestImproveRelEps: kktNoBestImproveRelEps,
-              noBestImproveMaxViol: kktNoBestImproveMaxViol,
-              postBestDivergenceRatio: kktPostBestDivergenceRatio,
-              postBestNoImproveWindow: kktPostBestNoImproveWindow,
-              postBestDivergenceMaxViol: kktPostBestDivergenceMaxViol,
-              postBestPatienceWindow: kktPostBestPatienceWindow,
-              postBestPatienceMaxViol: kktPostBestPatienceMaxViol,
-              postBestRequiredImprovePct: kktPostBestRequiredImprovePct,
-              lastBestIter,
-              divergenceScoreRatio,
-              mode: strictPlateauStop
-                ? 'strict'
-                : (relaxedPlateauStop
-                  ? 'relaxed'
-                  : (tailStop
-                    ? 'tail'
-                    : (windowTailStop
-                      ? 'window-tail'
-                      : (windowNoGainStop
-                        ? 'window-nogain'
-                        : (goodEnoughStop
-                          ? 'good-enough'
-                          : (noBestImproveStop
-                            ? 'no-best-improve'
-                            : (postBestDivergenceStop ? 'post-best-divergence' : 'post-best-patience')))))))
-            });
             break;
           }
         }
@@ -9975,36 +9966,15 @@ export async function runOptimizationMVP(options = {}) {
 
       const totalImprovement = initialScore - bestScore;
       const improvementPercent = (totalImprovement / Math.max(1e-10, initialScore)) * 100;
-      try {
-        const cacheHits = __profile && __profile.counts ? (Number(__profile.counts.kktEvalCacheHits) || 0) : 0;
-        const cacheMisses = __profile && __profile.counts ? (Number(__profile.counts.kktEvalCacheMisses) || 0) : 0;
-        const cacheTotal = cacheHits + cacheMisses;
-        if (cacheTotal > 0) {
-          const hitRate = 100 * cacheHits / cacheTotal;
-          console.log(`🧠 [AL] eval cache: hits=${cacheHits}, misses=${cacheMisses}, hitRate=${hitRate.toFixed(1)}%`);
-        }
-      } catch (_) {}
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log(`📈 [AL] OPTIMIZATION COMPLETE`);
-      console.log(`   Initial Score:  ${initialScore.toFixed(6)}`);
-      console.log(`   🏆 Best Score:  ${bestScore.toFixed(6)}`);
-      console.log(`   Improvement:    ${totalImprovement.toFixed(6)} (${improvementPercent.toFixed(2)}%)`);
-      console.log(`   Best Merit:     ${bestMerit.toFixed(2)}`);
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
       const t1 = nowMs();
       
       // 【修正】LMメソッドと同じパターン：bestX を手動で適用せず、
       // recordEval() で保存された blocksSnapshot を直接復元する
       // これにより、Stop時も確実にベスト解が復元される
-      console.log('🔧 [AL] Restoring best solution from snapshot...');
       try {
         const bestFinalEval = getBestScoreEvalSoFar();
         if (bestFinalEval) {
           restoreBestSnapshotAndPersist({ finalEval: bestFinalEval, jointState, systemConfig, configsById, targetConfigIds });
-          console.log(`✅ [AL] Best solution restored (Score: ${bestFinalEval.score.toFixed(6)})`);
-        } else {
-          console.warn('⚠️  [AL] No best evaluation found - keeping current state');
         }
       } catch (e) {
         console.error('❌ [AL] Error restoring/persisting best state:', e);
@@ -10041,29 +10011,11 @@ export async function runOptimizationMVP(options = {}) {
       // Get final best evaluation for fallback decision (objective-space)
       const bestFinalEval = getBestScoreEvalSoFar();
       const finalScore = bestFinalEval ? bestFinalEval.score : bestScore;
-      const fallbackDepth = Number.isFinite(Number((opts as any)?.__kktFallbackDepth))
-        ? Math.max(0, Math.floor(Number((opts as any).__kktFallbackDepth)))
-        : 0;
-      const allowLmFallbackOnNoImprove = opts?.kktFallbackToLmOnNoImprove !== false;
       const noKktImprovement = Number.isFinite(finalScore)
         && Number.isFinite(initialScore)
         && finalScore >= (initialScore - 1e-12);
-
-      if (!shouldStopKKT() && allowLmFallbackOnNoImprove && fallbackDepth < 1 && noKktImprovement) {
-        console.warn('⚠️ [AL] No improvement detected in KKT path. Falling back to LM warm rescue pass.');
-        const lmFallback = await runOptimizationMVP({
-          ...opts,
-          method: 'lm',
-          maxIterations: Math.max(8, Math.min(maxIterations, 48)),
-          __kktFallbackDepth: fallbackDepth + 1,
-        } as any);
-        if (lmFallback && lmFallback.ok) {
-          return {
-            ...lmFallback,
-            method: 'kkt',
-            kktFallbackToLm: true,
-          };
-        }
+      if (!shouldStopKKT() && noKktImprovement) {
+        console.warn('⚠️ [AL] No improvement detected in KKT path. Keeping KKT result (LM fallback disabled).');
       }
 
       // Re-evaluate after best snapshot restore to keep final reporting consistent with requirement table.
@@ -10273,8 +10225,6 @@ export async function runOptimizationMVP(options = {}) {
   let stall = 0;
   let completedIterations = 0;
 
-  console.log('🚀 [OptimizerMVP] start', { method: 'cd', vars: vars.length, before, maxIterations, stepFraction, minStep, multiScenario });
-
   if (shouldStop && shouldStop()) {
     if (onProgress) {
       try { onProgress({ phase: 'stopped', iter: 0, current: before, best, multiScenario }); } catch (_) {}
@@ -10457,10 +10407,6 @@ export async function runOptimizationMVP(options = {}) {
       break;
     }
 
-    if (iter % logEvery === 0) {
-      console.log(`🔁 [OptimizerMVP] iter ${iter}/${maxIterations}`, { best, improved: improvedThisIter, stall });
-    }
-
     if (improvedThisIter) {
       stall = 0;
     } else {
@@ -10515,7 +10461,6 @@ export async function runOptimizationMVP(options = {}) {
   } catch (_) {}
 
   const t1 = nowMs();
-  console.log('✅ [OptimizerMVP] done', { method: 'cd', before, best, ms: Math.round(t1 - t0) });
 
   const finalEval = getBestEvalSoFar();
   const finalCompositeEval = evalCompositeFromRequirementsProfiled();

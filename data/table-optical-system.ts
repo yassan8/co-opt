@@ -91,6 +91,14 @@ function createNoopOpticalSystemTable() {
 // cellEdited ハンドラ内で参照されるフラグ（重複削除の副作用で未宣言になっていた）
 let isUpdatingFromCellEdit = false;
 
+// Auto-semidia chief-ray tracing can be triggered from multiple editors in short bursts.
+// Keep it single-flight and debounce bursts to avoid render stalls.
+let autoSemiDiaRecalcTimer: number | null = null;
+let autoSemiDiaRecalcInFlight = false;
+let autoSemiDiaRecalcPending = false;
+let autoSemiDiaLastTraceCacheKey = '';
+let autoSemiDiaLastTraceValue: number | null = null;
+
 // updateAllRefractiveIndices の一括更新中は per-row save を抑制するフラグ
 let _isBulkRefractiveIndexUpdate = false;
 
@@ -1315,6 +1323,125 @@ try {
 // グローバルに公開（Node実行ではwindowが無いのでガード）
 if (typeof window !== 'undefined') {
   window['calculateImageSemiDiaFromChiefRays'] = calculateImageSemiDiaFromChiefRays;
+  window['scheduleAutoImageSemiDiaFromChiefRays'] = scheduleAutoImageSemiDiaFromChiefRays;
+}
+
+function hasAutoImageSemiDiaEnabled(): boolean {
+  try {
+    const rows = (typeof window !== 'undefined' && typeof window.getOpticalSystemRows === 'function')
+      ? window.getOpticalSystemRows(tableOpticalSystem)
+      : (tableOpticalSystem?.getData?.() ?? []);
+    if (Array.isArray(rows) && rows.length > 0) {
+      const imageSurface = rows.find((r) => r && (r['object type'] === 'Image' || r.object === 'Image'));
+      const rowOpt = String(imageSurface?.optimizeSemiDia ?? '').trim().toLowerCase();
+      if (rowOpt === 'a' || rowOpt === 'auto') return true;
+    }
+  } catch (_) {}
+
+  try {
+    if (typeof loadSystemConfigurations === 'function') {
+      const systemConfig = loadSystemConfigurations();
+      const activeId = systemConfig?.activeConfigId;
+      const cfg = Array.isArray(systemConfig?.configurations)
+        ? systemConfig.configurations.find((c) => c && c.id === activeId)
+        : null;
+      const blocks = Array.isArray(cfg?.blocks) ? cfg.blocks : null;
+      const imgBlock = blocks ? [...blocks].reverse().find((b) => b && String(b.blockType ?? '') === 'ImageSurface') : null;
+      const blkOpt = String(imgBlock?.parameters?.optimizeSemiDia ?? '').trim().toLowerCase();
+      return blkOpt === 'a' || blkOpt === 'auto';
+    }
+  } catch (_) {}
+
+  return false;
+}
+
+function buildAutoSemiDiaTraceCacheKey(opticalSystemRows, objectRows, imageSurfaceIndex, primaryWavelength, isInfiniteSystem) {
+  const numOrToken = (v) => {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+    const s = String(v ?? '').trim();
+    return s;
+  };
+
+  const opticalSig = Array.isArray(opticalSystemRows)
+    ? opticalSystemRows.map((r) => ({
+        st: String(r?.surfType ?? ''),
+        ot: String(r?.['object type'] ?? r?.object ?? ''),
+        bt: String(r?._blockType ?? ''),
+        ra: numOrToken(r?.radius),
+        th: numOrToken(r?.thickness ?? r?.__cooptGapThickness),
+        sd: numOrToken(r?.semidia),
+        ma: String(r?.material ?? ''),
+        ri: numOrToken(r?.rindex),
+        ab: numOrToken(r?.abbe),
+        co: numOrToken(r?.conic),
+        c1: numOrToken(r?.coef1),
+        c2: numOrToken(r?.coef2),
+        c3: numOrToken(r?.coef3),
+        c4: numOrToken(r?.coef4),
+        c5: numOrToken(r?.coef5),
+        c6: numOrToken(r?.coef6),
+        c7: numOrToken(r?.coef7),
+        c8: numOrToken(r?.coef8),
+        c9: numOrToken(r?.coef9),
+        c10: numOrToken(r?.coef10),
+        dx: numOrToken(r?.decenterX),
+        dy: numOrToken(r?.decenterY),
+        tx: numOrToken(r?.tiltX),
+        ty: numOrToken(r?.tiltY),
+        tz: numOrToken(r?.tiltZ),
+        to: numOrToken(r?.transformOrder)
+      }))
+    : [];
+
+  const objectSig = Array.isArray(objectRows)
+    ? objectRows.map((o) => ({
+        p: String(o?.position ?? ''),
+        xh: numOrToken(o?.xHeightAngle ?? o?.x ?? o?.height ?? o?.heightX),
+        yh: numOrToken(o?.yHeightAngle ?? o?.y ?? o?.height ?? o?.heightY)
+      }))
+    : [];
+
+  return JSON.stringify({
+    s: Number(imageSurfaceIndex) || 0,
+    w: Number(primaryWavelength) || 0.5876,
+    inf: isInfiniteSystem === true,
+    o: objectSig,
+    r: opticalSig
+  });
+}
+
+function scheduleAutoImageSemiDiaFromChiefRays(delayMs = 180) {
+  const run = async () => {
+    if (!hasAutoImageSemiDiaEnabled()) {
+      autoSemiDiaRecalcPending = false;
+      return;
+    }
+    if (autoSemiDiaRecalcInFlight) {
+      autoSemiDiaRecalcPending = true;
+      return;
+    }
+    autoSemiDiaRecalcInFlight = true;
+    try {
+      await calculateImageSemiDiaFromChiefRays();
+    } catch (_) {
+      // Keep scheduler resilient; calculateImageSemiDiaFromChiefRays handles diagnostics.
+    } finally {
+      autoSemiDiaRecalcInFlight = false;
+      if (autoSemiDiaRecalcPending) {
+        autoSemiDiaRecalcPending = false;
+        scheduleAutoImageSemiDiaFromChiefRays(120);
+      }
+    }
+  };
+
+  if (autoSemiDiaRecalcTimer !== null) {
+    clearTimeout(autoSemiDiaRecalcTimer);
+  }
+  autoSemiDiaRecalcTimer = window.setTimeout(() => {
+    autoSemiDiaRecalcTimer = null;
+    void run();
+  }, Math.max(0, Number(delayMs) || 0));
 }
 
 /**
@@ -2471,10 +2598,65 @@ async function calculateImageSemiDiaFromChiefRays() {
         if (!shouldAuto) {
           return false;
         }
+
+        const applyAutoSemidiaValue = (maxHeight) => {
+          const imageId = imageSurface?.id;
+          const currentSemidia = Number(imageSurface?.semidia);
+          const sameAsCurrent = Number.isFinite(currentSemidia) && Math.abs(currentSemidia - Number(maxHeight)) < 1e-9;
+
+          // Also persist into Blocks (Design Intent canonical) when available.
+          try {
+            if (typeof loadSystemConfigurations === 'function') {
+              const systemConfig = loadSystemConfigurations();
+              const activeId = systemConfig?.activeConfigId;
+              const cfgIdx = Array.isArray(systemConfig?.configurations)
+                ? systemConfig.configurations.findIndex(c => c && c.id === activeId)
+                : -1;
+              const activeCfg = cfgIdx >= 0 ? systemConfig.configurations[cfgIdx] : null;
+              if (activeCfg && Array.isArray(activeCfg.blocks)) {
+                const imgBlock = [...activeCfg.blocks].reverse().find(b => b && String(b.blockType ?? '') === 'ImageSurface');
+                if (imgBlock) {
+                  const prev = Number(imgBlock?.parameters?.semidia);
+                  if (!Number.isFinite(prev) || Math.abs(prev - Number(maxHeight)) > 1e-9) {
+                    if (!imgBlock.parameters || typeof imgBlock.parameters !== 'object') imgBlock.parameters = {};
+                    imgBlock.parameters.semidia = maxHeight;
+                    if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+                    activeCfg.metadata.modified = new Date().toISOString();
+                    saveSystemConfigurations(systemConfig);
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('⚠️ Failed to persist auto semidia into blocks:', e);
+          }
+
+          // isUpdatingFromCellEditフラグをオフにして更新
+          isUpdatingFromCellEdit = false;
+
+          if (!sameAsCurrent && imageId !== null && imageId !== undefined) {
+            tableOpticalSystem.updateRow(imageId, { semidia: maxHeight });
+            if (typeof saveTableData === 'function') {
+              saveTableData(tableOpticalSystem.getData());
+            }
+          }
+
+          try {
+            if (typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function') {
+              w.autoSetBlockAperturesFromLargestObjectCondition();
+            }
+          } catch (e) {
+            console.warn('⚠️ Failed to auto-sync block apertures from largest object condition:', e);
+          }
+        };
+
         // 光学系データとObjectデータを取得
-        const objectRows = (typeof window !== 'undefined' && typeof window.getObjectRows === 'function')
+        const objectRowsRaw = (typeof window !== 'undefined' && typeof window.getObjectRows === 'function')
           ? window.getObjectRows(window.tableObject)
           : (window.tableObject ? window.tableObject.getData() : []);
+        const objectRows = Array.isArray(objectRowsRaw)
+          ? objectRowsRaw.filter((row) => row && row.enabled !== false)
+          : [];
         if (!objectRows || objectRows.length === 0) {
             console.warn('⚠️ Objectが設定されていません');
           emitChiefRayDiag('object-rows-empty');
@@ -2520,6 +2702,19 @@ async function calculateImageSemiDiaFromChiefRays() {
         const objectThickness = objectSurface?.thickness;
         const isInfiniteSystem = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
         const allObjectPositions = objectRows.map(obj => normalizeObjectSampleForTrace(obj, isInfiniteSystem));
+        const traceCacheKey = buildAutoSemiDiaTraceCacheKey(
+          opticalSystemRows,
+          objectRows,
+          imageSurfaceIndex,
+          primaryWavelength,
+          isInfiniteSystem
+        );
+
+        if (traceCacheKey === autoSemiDiaLastTraceCacheKey && Number.isFinite(Number(autoSemiDiaLastTraceValue))) {
+          applyAutoSemidiaValue(Number(autoSemiDiaLastTraceValue));
+          return true;
+        }
+
         let crossBeamResult;
         if (isInfiniteSystem) {
           // In Blocks-only mode, ObjectSurface with mode=INF expands to Object row thickness='INF'.
@@ -2774,58 +2969,9 @@ async function calculateImageSemiDiaFromChiefRays() {
               }
             });
             if (computedAny) {
-              const imageId = imageSurface?.id;
-
-              // Also persist into Blocks (Design Intent canonical) when available.
-              try {
-                if (typeof loadSystemConfigurations === 'function') {
-                  const systemConfig = loadSystemConfigurations();
-                  const activeId = systemConfig?.activeConfigId;
-                  const cfgIdx = Array.isArray(systemConfig?.configurations)
-                    ? systemConfig.configurations.findIndex(c => c && c.id === activeId)
-                    : -1;
-                  const activeCfg = cfgIdx >= 0 ? systemConfig.configurations[cfgIdx] : null;
-                  if (activeCfg && Array.isArray(activeCfg.blocks)) {
-                    const imgBlock = [...activeCfg.blocks].reverse().find(b => b && String(b.blockType ?? '') === 'ImageSurface');
-                    if (imgBlock) {
-                      if (!imgBlock.parameters || typeof imgBlock.parameters !== 'object') imgBlock.parameters = {};
-                      imgBlock.parameters.semidia = maxHeight;
-                      if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
-                      activeCfg.metadata.modified = new Date().toISOString();
-                      saveSystemConfigurations(systemConfig);
-                    }
-                  }
-                }
-              } catch (e) {
-                console.warn('⚠️ Failed to persist auto semidia into blocks:', e);
-              }
-
-              // isUpdatingFromCellEditフラグをオフにして更新
-              isUpdatingFromCellEdit = false;
-
-              // 更新前の全データを確認
-              const beforeData = tableOpticalSystem.getData();
-
-              // tableOpticalSystem.updateRowを使って確実に更新（optimizeSemiDiaは"A"のまま残す）
-              if (imageId !== null && imageId !== undefined) {
-                tableOpticalSystem.updateRow(imageId, { semidia: maxHeight });
-              }
-
-              // 更新後の全データを確認
-              const afterData = tableOpticalSystem.getData();
-
-              // テーブルを保存
-              if (typeof saveTableData === 'function') {
-                saveTableData(tableOpticalSystem.getData());
-              }
-
-                try {
-                  if (typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function') {
-                    w.autoSetBlockAperturesFromLargestObjectCondition();
-                  }
-                } catch (e) {
-                  console.warn('⚠️ Failed to auto-sync block apertures from largest object condition:', e);
-                }
+              autoSemiDiaLastTraceCacheKey = traceCacheKey;
+              autoSemiDiaLastTraceValue = Number(maxHeight);
+              applyAutoSemidiaValue(maxHeight);
             } else {
               emitChiefRayDiag('image-hit-computation-failed', {
                 raysCount: rays.length,

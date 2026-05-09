@@ -76,7 +76,7 @@ function sanitizeLcaSeries(displacements: any[], fieldValues: any[]) {
     }
     deltas.sort((a, b) => a - b);
     const medianDelta = deltas.length > 0 ? deltas[Math.floor(deltas.length / 2)] : 0;
-    const spikeThreshold = Math.max(5e-4, medianDelta * 6);
+    const spikeThreshold = Math.max(5e-4, medianDelta * 4);
 
     for (let i = 1; i + 1 < xs.length; i++) {
         const prev = xs[i - 1];
@@ -136,7 +136,17 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
         return { x, y };
     };
 
-    const referencePairs = finitePairs(fieldValues.map(() => 0), fieldValues);
+    const dataByWavelength = Array.isArray(data.dataByWavelength) ? data.dataByWavelength : [];
+
+    const yAxisValues: number[] = fieldValues
+        .map((value) => {
+            const v = Number(value);
+            return Number.isFinite(v) ? v : NaN;
+        });
+    const maxY = Math.max(...yAxisValues.filter(v => Number.isFinite(v)).map(v => Math.abs(v)));
+    const effectiveMaxY = Number.isFinite(maxY) && maxY > 0 ? maxY : maxField;
+
+    const referencePairs = finitePairs(yAxisValues.map(() => 0), yAxisValues);
     const referenceTrace = {
         x: referencePairs.x,
         y: referencePairs.y,
@@ -146,7 +156,6 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
     };
     if (referencePairs.x.length >= 2) traces.push(referenceTrace);
 
-    const dataByWavelength = Array.isArray(data.dataByWavelength) ? data.dataByWavelength : [];
     let globalMaxAbsDisp = 0;
     dataByWavelength.forEach((entry) => {
         const wavelength = Number(entry?.wavelength);
@@ -154,7 +163,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
         if (Math.abs(wavelength - referenceWavelength) < 1e-6) return;
         const displacements = Array.isArray(entry?.displacements) ? entry.displacements : [];
         if (displacements.length === 0) return;
-        const pairs = sanitizeLcaSeries(displacements, fieldValues);
+        const pairs = sanitizeLcaSeries(displacements, yAxisValues);
         if (pairs.x.length < 2) return;
         for (const x of pairs.x) {
             const a = Math.abs(Number(x));
@@ -194,7 +203,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
         },
         yaxis: {
             title: heightMode ? 'Object Height (mm)' : 'Object Angle (deg)',
-            range: [0, maxField]
+            range: [0, effectiveMaxY]
         },
         width: 800,
         height: 600,
@@ -206,7 +215,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
                 x0: 0,
                 x1: 0,
                 y0: 0,
-                y1: maxField,
+                y1: effectiveMaxY,
                 line: { color: '#888', width: 1, dash: 'dot' }
             }
         ]

@@ -577,16 +577,26 @@ export async function handleLoadDefault(): Promise<void> {
     if (isTauriRuntime()) {
       const { project } = await getDefaultProject();
       if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
-        await (window as any).__loadAllDataObjectIntoApp(project, { filename: 'default-load.json' });
+        const ok = await (window as any).__loadAllDataObjectIntoApp(project, { filename: 'default-load.json' });
+        if (!ok) throw new Error('Default project load returned false.');
       }
+      setLoadedFileName('default-load.json');
+      try {
+        window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
+      } catch (_) {}
       return;
     }
 
     const data = await loadBrowserDefaultProjectJson();
     
     if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
-      await (window as any).__loadAllDataObjectIntoApp(data, { filename: 'default-load.json' });
+      const ok = await (window as any).__loadAllDataObjectIntoApp(data, { filename: 'default-load.json' });
+      if (!ok) throw new Error('Default project load returned false.');
     }
+    setLoadedFileName('default-load.json');
+    try {
+      window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
+    } catch (_) {}
   } catch (err) {
     console.error('❌ Failed to load default system:', err);
     alert('Failed to load default optical system. Check console for details.');
@@ -600,9 +610,15 @@ export function handleLoad(): void {
         const picked = await openJsonFromNativeDialog();
         if (!picked) return;
         const data = JSON.parse(picked.content);
+        const loadedFilename = basenameFromPath(picked.path);
         if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
-          await (window as any).__loadAllDataObjectIntoApp(data, { filename: basenameFromPath(picked.path) });
+          const ok = await (window as any).__loadAllDataObjectIntoApp(data, { filename: loadedFilename });
+          if (!ok) throw new Error('App loader returned false.');
         }
+        setLoadedFileName(loadedFilename);
+        try {
+          window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
+        } catch (_) {}
         console.log('✅ File loaded:', picked.path);
       } catch (err) {
         console.error('❌ Failed to load file (native):', err);
@@ -627,8 +643,13 @@ export function handleLoad(): void {
       const data = JSON.parse(text);
       
       if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
-        await (window as any).__loadAllDataObjectIntoApp(data, { filename: file.name });
+        const ok = await (window as any).__loadAllDataObjectIntoApp(data, { filename: file.name });
+        if (!ok) throw new Error('App loader returned false.');
       }
+      setLoadedFileName(file.name);
+      try {
+        window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
+      } catch (_) {}
       console.log('✅ File loaded:', file.name);
     } catch (err) {
       console.error('❌ Failed to load file:', err);

@@ -1,5 +1,7 @@
 declare global {
   interface Window {
+    __cooptLoadedFileNameRuntime?: string | null;
+    __cooptLoadedFileWarnRuntime?: boolean;
     __cooptLoadedFileStorage?: {
       getLoadedFileName: () => string | null;
       getLoadedFileWarn: () => boolean;
@@ -12,27 +14,52 @@ declare global {
 
 import { storageGetItem, storageSetItem, storageRemoveItem } from './ui-storage-gateway.ts';
 
-export function getLoadedFileName(): string | null {
+function getRuntimeLoadedFileName(): string | null {
   try {
-    const v = storageGetItem('loadedFileName');
-    const s = (v ?? '').trim();
+    const s = String(window.__cooptLoadedFileNameRuntime ?? '').trim();
     return s ? s : null;
   } catch (_) {
     return null;
   }
 }
 
-export function getLoadedFileWarn(): boolean {
+function getRuntimeLoadedFileWarn(): boolean {
   try {
-    return !!storageGetItem('loadedFileWarn');
+    return !!window.__cooptLoadedFileWarnRuntime;
   } catch (_) {
     return false;
   }
 }
 
-export function setLoadedFileName(name: string | null): void {
+export function getLoadedFileName(): string | null {
   try {
-    const s = (name ?? '').trim();
+    const v = storageGetItem('loadedFileName');
+    const s = (v ?? '').trim();
+    if (s) return s;
+  } catch (_) {
+    // ignore and fall back to runtime state
+  }
+  return getRuntimeLoadedFileName();
+}
+
+export function getLoadedFileWarn(): boolean {
+  try {
+    const persisted = !!storageGetItem('loadedFileWarn');
+    if (persisted) return true;
+  } catch (_) {
+    // ignore and fall back to runtime state
+  }
+  return getRuntimeLoadedFileWarn();
+}
+
+export function setLoadedFileName(name: string | null): void {
+  const s = (name ?? '').trim();
+  try {
+    window.__cooptLoadedFileNameRuntime = s || null;
+  } catch (_) {
+    // ignore
+  }
+  try {
     if (!s) {
       storageRemoveItem('loadedFileName');
       return;
@@ -44,6 +71,11 @@ export function setLoadedFileName(name: string | null): void {
 }
 
 export function setLoadedFileWarn(warn: boolean): void {
+  try {
+    window.__cooptLoadedFileWarnRuntime = !!warn;
+  } catch (_) {
+    // ignore
+  }
   try {
     if (warn) {
       storageSetItem('loadedFileWarn', '1');

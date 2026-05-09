@@ -46,8 +46,17 @@ export function callWindowFunction(name: string, ...args: any[]): any {
   return callFunctionOnWindow(typeof window !== 'undefined' ? window : null, name, ...args);
 }
 
+let _refreshBlockInspectorTimer: number | null = null;
 export function requestRefreshBlockInspector(targetWindow?: any): void {
-  callFunctionOnWindow(targetWindow ?? (typeof window !== 'undefined' ? window : null), 'refreshBlockInspector');
+  const w = targetWindow ?? (typeof window !== 'undefined' ? window : null);
+  if (!w) return;
+  if (_refreshBlockInspectorTimer !== null) {
+    clearTimeout(_refreshBlockInspectorTimer);
+  }
+  _refreshBlockInspectorTimer = setTimeout(() => {
+    _refreshBlockInspectorTimer = null;
+    callFunctionOnWindow(w, 'refreshBlockInspector');
+  }, 80) as unknown as number;
 }
 
 export function requestUpdateSurfaceNumberSelect(targetWindow?: any): void {
