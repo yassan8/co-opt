@@ -40,6 +40,7 @@ const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordTrans';
 const RENDER_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showDesignIntentLabels';
 const RENDER_PRINCIPAL_POINT_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showPrincipalPointLabels';
+const RENDER_SURFACE_NUMBER_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showSurfaceNumberLabels';
 
 function __coopt_isCoordTransDebugEnabled() {
     try {
@@ -274,6 +275,36 @@ function __coopt_isStopSurface(surface) {
     }
 
     return false;
+}
+
+function __coopt_isObjectSurface(surface) {
+    if (!surface || typeof surface !== 'object') return false;
+    const objType = String(surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type ?? '')
+        .trim()
+        .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+    const blockType = String(surface._blockType ?? surface.blockType ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_-]+/g, '');
+    return objType === 'object' || objType === 'objectsurface' || blockType === 'objectsurface';
+}
+
+function __coopt_isImageSurface(surface) {
+    if (!surface || typeof surface !== 'object') return false;
+    const objType = String(surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_-]+/g, '');
+    const surfType = String(surface.surfType ?? surface.type ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_-]+/g, '');
+    const blockType = String(surface._blockType ?? surface.blockType ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_-]+/g, '');
+    return surfType === 'imagesurface' || objType === 'image' || objType === 'imagesurface' || blockType === 'imagesurface';
 }
 
 function __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMatrix, color) {
@@ -754,6 +785,18 @@ function __coopt_shouldShowPrincipalPointLabels(value) {
     return false;
 }
 
+function __coopt_shouldShowSurfaceNumberLabels(value) {
+    if (typeof value === 'boolean') return value;
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const raw = String(localStorage.getItem(RENDER_SURFACE_NUMBER_LABEL_TOGGLE_STORAGE_KEY) ?? '').trim().toLowerCase();
+            if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+            if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+        }
+    } catch (_) {}
+    return false;
+}
+
 function __coopt_normalizeBlockDisplayType(blockType) {
     const raw = String(blockType ?? '').trim();
     if (!raw) return '';
@@ -1060,15 +1103,17 @@ function __coopt_addDesignIntentLabelSprite(scene, text, position, style = {}) {
     scene.add(sprite);
 }
 
-function __coopt_measureDesignIntentLabelWorldSize(text) {
+function __coopt_measureDesignIntentLabelWorldSize(text, style = {}) {
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
     if (!context) return { width: 24, height: 6 };
 
-    const fontPt = 25;
-    const paddingX = 10;
-    const paddingY = 5;
-    context.font = `600 ${fontPt}pt Arial, sans-serif`;
+    const fontPt = Number(style?.fontPt) > 0 ? Number(style.fontPt) : 25;
+    const paddingX = Number(style?.paddingX) >= 0 ? Number(style.paddingX) : 10;
+    const paddingY = Number(style?.paddingY) >= 0 ? Number(style.paddingY) : 5;
+    const fontWeight = String(style?.fontWeight || '600');
+    const fontFamily = String(style?.fontFamily || 'Arial, sans-serif');
+    context.font = `${fontWeight} ${fontPt}pt ${fontFamily}`;
     const metrics = context.measureText(String(text));
     const textHeight = Math.ceil(fontPt * 1.55);
     const canvasWidth = Math.ceil(metrics.width + paddingX * 2);
@@ -1145,6 +1190,116 @@ function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceO
 
     layoutGroup(primaryEntries, primaryBase, 1);
     layoutGroup(gapEntries, gapBase, -1);
+}
+
+function __coopt_shouldLabelSurfaceNumber(surface) {
+    if (!surface || __coopt_isGapSurface(surface) || __coopt_isCoordTransSurface(surface)) return false;
+    if (__coopt_isThinLensBackSurface(surface)) return false;
+    if (__coopt_isObjectSurface(surface)) return false;
+    if (__coopt_isImageSurface(surface)) return false;
+    if (__coopt_isStopSurface(surface)) return false;
+    return true;
+}
+
+function __coopt_addSurfaceNumberLabelsToScene(scene, opticalSystemData, surfaceOrigins, options = {}) {
+    if (!scene || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return;
+    if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return;
+
+    const axis = (String(options?.axis ?? 'YZ').trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+    const planeOffset = Number(options?.crossSectionCenterOffset) || 0;
+    const getVerticalCoord = (vec) => axis === 'XZ' ? vec.x : vec.y;
+    const getHorizontalCoord = (vec) => vec.z;
+    const projectPointToSectionPlane = (vec) => {
+        return axis === 'XZ'
+            ? new THREE.Vector3(Number(vec?.x || 0), planeOffset, Number(vec?.z || 0))
+            : new THREE.Vector3(planeOffset, Number(vec?.y || 0), Number(vec?.z || 0));
+    };
+    const makePoint = (vertical, horizontal) => {
+        return axis === 'XZ'
+            ? new THREE.Vector3(vertical, planeOffset, horizontal)
+            : new THREE.Vector3(planeOffset, vertical, horizontal);
+    };
+
+    const labeledRows = [];
+    for (let i = 0; i < opticalSystemData.length; i += 1) {
+        const surface = opticalSystemData[i];
+        if (!__coopt_shouldLabelSurfaceNumber(surface)) continue;
+        const anchor = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+        if (!anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !Number.isFinite(anchor.z)) continue;
+        const projectedAnchor = projectPointToSectionPlane(anchor);
+        const semidia = __coopt_getRenderSemidiaMm(surface);
+        const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
+        const halfExtent = axis === 'XZ'
+            ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0)
+            : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
+        labeledRows.push({
+            index0: i,
+            anchor: projectedAnchor,
+            halfExtent,
+            vertical: getVerticalCoord(projectedAnchor),
+            horizontal: getHorizontalCoord(projectedAnchor),
+        });
+    }
+    if (!labeledRows.length) return;
+
+    labeledRows.sort((left, right) => {
+        const horizontalDelta = left.horizontal - right.horizontal;
+        if (Math.abs(horizontalDelta) > 1e-6) return horizontalDelta;
+        return left.index0 - right.index0;
+    });
+
+    const baseVertical = labeledRows.reduce((maxValue, entry) => {
+        return Math.max(maxValue, Number(entry.vertical) + Number(entry.halfExtent));
+    }, Number.NEGATIVE_INFINITY) + 10;
+    const surfaceNumberLabelStyle = {
+        fontPt: 25,
+        paddingX: 2,
+        paddingY: 1,
+        fontWeight: '700',
+    };
+    const layoutEntries = labeledRows.map((entry, visibleIndex) => {
+        const labelText = `S${visibleIndex + 1}`;
+        const worldSize = __coopt_measureDesignIntentLabelWorldSize(labelText, surfaceNumberLabelStyle);
+        return {
+            ...entry,
+            labelText,
+            width: Math.max(5, Number(worldSize?.width || 0)),
+            desiredCenter: Number(entry.horizontal),
+            assignedCenter: Number(entry.horizontal),
+        };
+    });
+
+    const desiredMin = layoutEntries.reduce((minValue, entry) => Math.min(minValue, Number(entry.desiredCenter)), Number.POSITIVE_INFINITY);
+    const desiredMax = layoutEntries.reduce((maxValue, entry) => Math.max(maxValue, Number(entry.desiredCenter)), Number.NEGATIVE_INFINITY);
+    const desiredMid = Number.isFinite(desiredMin) && Number.isFinite(desiredMax)
+        ? (desiredMin + desiredMax) * 0.5
+        : 0;
+    const minLabelGap = 0;
+    const totalPackedWidth = layoutEntries.reduce((sum, entry, index) => {
+        const width = Number(entry.width) || 0;
+        return sum + width + (index > 0 ? minLabelGap : 0);
+    }, 0);
+    let cursor = desiredMid - totalPackedWidth * 0.5;
+    for (let i = 0; i < layoutEntries.length; i += 1) {
+        const entry = layoutEntries[i];
+        const halfWidth = entry.width * 0.5;
+        cursor += halfWidth;
+        entry.assignedCenter = cursor;
+        cursor += halfWidth + minLabelGap;
+    }
+
+    for (let i = 0; i < layoutEntries.length; i += 1) {
+        const entry = layoutEntries[i];
+        const assignedHorizontal = entry.assignedCenter;
+        const labelAnchor = makePoint(baseVertical, assignedHorizontal);
+        __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()], 0x64748b);
+        __coopt_addDesignIntentLabelSprite(scene, entry.labelText, labelAnchor, {
+            ...surfaceNumberLabelStyle,
+            fillStyle: 'rgba(248,250,252,0.94)',
+            strokeStyle: '#94a3b8',
+            textStyle: '#0f172a',
+        });
+    }
 }
 
 function __coopt_getZoomGroupName(block) {
@@ -1781,6 +1936,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
         showMirrorBackText = false,
         showDesignIntentLabels = false,
         showPrincipalPointLabels = false,
+        showSurfaceNumberLabels = false,
         surfaceMeshSegments = 100,
         toricMeshSegments = 256,
         crossSectionDirection = 'YZ',
@@ -2598,8 +2754,9 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
 
     const showDesignLabels = __coopt_shouldShowDesignIntentLabels(showDesignIntentLabels);
     const showPrincipalLabels = __coopt_shouldShowPrincipalPointLabels(showPrincipalPointLabels);
+    const showSurfaceLabels = __coopt_shouldShowSurfaceNumberLabels(showSurfaceNumberLabels);
 
-    if (showDesignLabels || showPrincipalLabels) {
+    if (showDesignLabels || showPrincipalLabels || showSurfaceLabels) {
         const labelsStartMs = performance.now();
         try {
             if (showDesignLabels) {
@@ -2615,6 +2772,12 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                     wavelengthUm: (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function')
                         ? Number(window.getPrimaryWavelength()) || 0.5876
                         : 0.5876,
+                });
+            }
+            if (showSurfaceLabels) {
+                __coopt_addSurfaceNumberLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
+                    axis: actualCrossSectionDirection,
+                    crossSectionOnly,
                 });
             }
         } catch (labelErr) {

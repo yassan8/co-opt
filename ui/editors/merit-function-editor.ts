@@ -4186,6 +4186,131 @@ class MeritFunctionEditor {
         }
     }
 
+    _getBlockSurfaceIdSet(opticalSystemData: any[], blockLabel: string, configId: any): Set<number> | null {
+        try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
+            const sys = tryLoadSystemConfigurations();
+            const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
+
+            let cfg = null;
+            if (configId !== undefined && configId !== null) {
+                const hint = String(configId).trim();
+                cfg = configs.find((c: any) => c && String(c.id) === hint) || null;
+            }
+            if (!cfg) {
+                const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null) ? String(sys.activeConfigId) : '';
+                cfg = configs.find((c: any) => c && String(c.id) === activeId) || configs[0] || null;
+            }
+
+            const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
+            const targetLabel = String(blockLabel ?? '').trim().toUpperCase();
+            if (!targetLabel || !Array.isArray(blocks) || blocks.length === 0) return null;
+
+            const matchingBlockIds = new Set<string>();
+            for (const block of blocks) {
+                const blockId = String(block?.blockId ?? '').trim();
+                const name = String(block?.name ?? '').trim();
+                const type = String(block?.type ?? '').trim();
+                if (!blockId || this._getSurfaceCountFromBlockType(block) <= 0) continue;
+                if (
+                    blockId.toUpperCase() === targetLabel
+                    || name.toUpperCase() === targetLabel
+                    || `${type}-${blockId}`.toUpperCase() === targetLabel
+                ) {
+                    matchingBlockIds.add(blockId);
+                }
+            }
+
+            if (matchingBlockIds.size === 0) return null;
+
+            const surfaceIds = new Set<number>();
+            for (const row of opticalSystemData) {
+                if (!row || isGapOpticalRow(row) || isCoordTransOpticalRow(row)) continue;
+
+                const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+                if (objectType === 'object' || objectType === 'image') continue;
+
+                const blockId = String(row._blockId ?? '').trim();
+                if (!blockId || !matchingBlockIds.has(blockId)) continue;
+
+                const blockType = String(row._blockType ?? row.blockType ?? '').trim().toLowerCase();
+                const surfaceRole = String(row._surfaceRole ?? row.surfaceRole ?? '').trim().toLowerCase();
+                if ((blockType === 'paraxial' || blockType === 'thinlens') && surfaceRole === 'back') continue;
+
+                const surfaceId = Number(row.id);
+                if (!Number.isFinite(surfaceId)) continue;
+                surfaceIds.add(surfaceId);
+            }
+
+            return surfaceIds.size > 0 ? surfaceIds : null;
+        } catch (err) {
+            console.error('[Merit Scope] Error getting block surface ids:', err);
+            return null;
+        }
+    }
+
+    _getZoomGroupSurfaceIdSet(opticalSystemData: any[], zoomGroupLabel: string, configId: any): Set<number> | null {
+        try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
+            const sys = tryLoadSystemConfigurations();
+            const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
+
+            let cfg = null;
+            if (configId !== undefined && configId !== null) {
+                const hint = String(configId).trim();
+                cfg = configs.find((c: any) => c && String(c.id) === hint) || null;
+            }
+            if (!cfg) {
+                const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null) ? String(sys.activeConfigId) : '';
+                cfg = configs.find((c: any) => c && String(c.id) === activeId) || configs[0] || null;
+            }
+
+            const target = String(zoomGroupLabel ?? '').trim().toUpperCase();
+            if (!target) return null;
+
+            const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
+            if (!Array.isArray(blocks) || blocks.length === 0) return null;
+
+            const zoomGroupBlockIds = new Set<string>();
+            for (const block of blocks) {
+                const blockParams = (block?.parameters && typeof block.parameters === 'object') ? block.parameters : null;
+                const zoomGroup = String(blockParams?.zoomGroup ?? '').trim().toUpperCase();
+                const blockId = String(block?.blockId ?? '').trim();
+                if (!blockId || !zoomGroup || zoomGroup !== target) continue;
+                if (this._getSurfaceCountFromBlockType(block) <= 0) continue;
+                zoomGroupBlockIds.add(blockId);
+            }
+
+            if (zoomGroupBlockIds.size === 0) return null;
+
+            const surfaceIds = new Set<number>();
+            for (const row of opticalSystemData) {
+                if (!row || isGapOpticalRow(row) || isCoordTransOpticalRow(row)) continue;
+
+                const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+                if (objectType === 'object' || objectType === 'image') continue;
+
+                const blockId = String(row._blockId ?? '').trim();
+                if (!blockId || !zoomGroupBlockIds.has(blockId)) continue;
+
+                const blockType = String(row._blockType ?? row.blockType ?? '').trim().toLowerCase();
+                const surfaceRole = String(row._surfaceRole ?? row.surfaceRole ?? '').trim().toLowerCase();
+                if ((blockType === 'paraxial' || blockType === 'thinlens') && surfaceRole === 'back') continue;
+
+                const surfaceId = Number(row.id);
+                if (!Number.isFinite(surfaceId)) continue;
+                surfaceIds.add(surfaceId);
+            }
+
+            return surfaceIds.size > 0 ? surfaceIds : null;
+        } catch (err) {
+            console.error('[Merit Scope] Error getting zoom-group surface ids:', err);
+            return null;
+        }
+    }
+
     _calculateEFLForSurfaceRange(opticalSystemData: any[], startSurf: number, endSurf: number, wavelength: number, axis: '' | 'X' | 'Y' = ''): number {
         try {
             const rangeData = this._buildIsolatedSurfaceRangeSystem(opticalSystemData, startSurf, endSurf);
@@ -4510,6 +4635,11 @@ class MeritFunctionEditor {
     _calculateSeidelTotalSingleMode(operand: any, opticalSystemData: any[], totalKey: string, sourceRows: any[], objectRows: any[], isAfocal: boolean): number {
         const scope = this.resolveMeritScopeSelection(operand?.param3, opticalSystemData, operand?.configId);
         const s1 = scope.kind === 'surface' ? scope.surface : 0;
+        const selectedSurfaceIds = scope.kind === 'block'
+            ? this._getBlockSurfaceIdSet(opticalSystemData, scope.value, operand?.configId)
+            : scope.kind === 'zoom'
+                ? this._getZoomGroupSurfaceIdSet(opticalSystemData, scope.value, operand?.configId)
+                : null;
 
         const refFLRaw = (operand && operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
         const refFLNum = (refFLRaw === '') ? 0 : Number(refFLRaw);
@@ -4524,9 +4654,7 @@ class MeritFunctionEditor {
             : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
 
         const baseWavelength = (totalKey === 'LCA' || totalKey === 'TCA') ? primaryWavelength : selectedWavelength;
-        const scopedOpticalSystemData = (scope.kind === 'block' || scope.kind === 'zoom')
-            ? (this._buildSubsystemBySurfaceIds(opticalSystemData, scope.startSurf, scope.endSurf) || opticalSystemData)
-            : opticalSystemData;
+        const scopedOpticalSystemData = opticalSystemData;
 
         const cfgKey = operand.configId ? String(operand.configId) : 'active';
         const scopeKey = scope.kind === 'surface'
@@ -4568,17 +4696,35 @@ class MeritFunctionEditor {
             }
 
             let v = NaN;
-            if (s1 === 0) {
+            if (scope.kind === 'total') {
                 v = seidel?.totals ? Number(seidel.totals[totalKey]) : NaN;
             } else {
                 const coeffs = seidel?.surfaceCoefficients;
-                const c = Array.isArray(coeffs)
-                    ? (
-                        coeffs.find((sc: any) => sc && Number(scopedOpticalSystemData?.[Number(sc.surfaceIndex)]?.id) === Number(s1))
-                        || coeffs.find((sc: any) => sc && Number(sc.surfaceIndex) === Number(s1))
-                    )
-                    : null;
-                v = c ? Number(c[totalKey]) : NaN;
+                if (scope.kind === 'surface') {
+                    const c = Array.isArray(coeffs)
+                        ? (
+                            coeffs.find((sc: any) => sc && Number(scopedOpticalSystemData?.[Number(sc.surfaceIndex)]?.id) === Number(s1))
+                            || coeffs.find((sc: any) => sc && Number(sc.surfaceIndex) === Number(s1))
+                        )
+                        : null;
+                    v = c ? Number(c[totalKey]) : NaN;
+                } else if ((scope.kind === 'block' || scope.kind === 'zoom') && Array.isArray(coeffs) && selectedSurfaceIds && selectedSurfaceIds.size > 0) {
+                    let sum = 0;
+                    let matched = false;
+                    for (const coeff of coeffs) {
+                        if (!coeff) continue;
+                        const surfaceIndex = Number(coeff.surfaceIndex);
+                        const surfaceId = Number(scopedOpticalSystemData?.[surfaceIndex]?.id);
+                        const isSelected = (Number.isFinite(surfaceId) && selectedSurfaceIds.has(surfaceId))
+                            || (Number.isFinite(surfaceIndex) && selectedSurfaceIds.has(surfaceIndex));
+                        if (!isSelected) continue;
+                        const value = Number(coeff[totalKey]);
+                        if (!Number.isFinite(value)) continue;
+                        sum += value;
+                        matched = true;
+                    }
+                    v = matched ? sum : NaN;
+                }
             }
 
             const value = Number.isFinite(v) ? v : 0;

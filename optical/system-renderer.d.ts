@@ -9,9 +9,15 @@ export function drawOpticalSystemSurfaces(options: {
   showSurfaceOrigins?: boolean;
   showSemidiaRing?: boolean;
   showMirrorBackText?: boolean;
+  showDesignIntentLabels?: boolean;
+  showPrincipalPointLabels?: boolean;
+  showSurfaceNumberLabels?: boolean;
   crossSectionDirection?: string;
   crossSectionCenterOffset?: number;
   opticalSystemData: any[];
+  surfaceOrigins?: any[] | null;
+  surfaceMeshSegments?: number;
+  toricMeshSegments?: number;
 }): void;
 
 export function findStopSurface(...args: any[]): any;
