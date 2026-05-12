@@ -1818,6 +1818,13 @@ export function handleRender3D(): void {
         return;
       }
 
+      try {
+        const cm = (window as any).ConfigurationManager;
+        if (cm && typeof cm.saveCurrentToActiveConfiguration === 'function') {
+          cm.saveCurrentToActiveConfiguration();
+        }
+      } catch (_) {}
+
       const url = new URL(window.location.href);
       url.searchParams.delete('coopt_optimize_window');
       url.searchParams.delete('coopt_analysis_window');

@@ -2545,7 +2545,7 @@ fn trace_distortion_chief_y_mm(
     let object_plane_z = packed.row_origins.get(2).copied().unwrap_or(0.0);
     let dir = build_direction_from_field_angles_native(0.0, field_value);
     let dummy_obj = Map::<String, Value>::new();
-    let object_z = resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z);
+    let object_z = resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
 
     let trace_target_y = |origin: [f64; 3]| -> Option<f64> {
         let ray = [origin[0], origin[1], origin[2], dir[0], dir[1], dir[2]];
@@ -2680,7 +2680,7 @@ fn build_perpendicular_basis_native(dir: [f64; 3]) -> ([f64; 3], [f64; 3]) {
     (u, v)
 }
 
-fn resolve_infinite_object_z_native(rows: &[Value], obj: &Map<String, Value>, object_plane_z: f64) -> f64 {
+fn resolve_infinite_object_z_native(rows: &[Value], obj: &Map<String, Value>, object_plane_z: f64, stop_center_z: f64) -> f64 {
     let render_dist_from_rows = rows
         .first()
         .and_then(|row| get_field(row, "objectRenderDistance"))
@@ -2697,7 +2697,17 @@ fn resolve_infinite_object_z_native(rows: &[Value], obj: &Map<String, Value>, ob
     if render_dist.is_finite() && render_dist.abs() > 1e-12 {
         -render_dist.abs()
     } else {
-        object_plane_z - 25.0
+        let mut system_length = 0.0_f64;
+        for row in rows {
+            let thickness = get_safe_thickness(row);
+            if thickness.is_finite() && thickness.abs() < 1.0e6 {
+                system_length += thickness.abs();
+            }
+        }
+
+        let stop_z = if stop_center_z.is_finite() { stop_center_z.abs() } else { object_plane_z.abs() };
+
+        -100.0_f64.max(system_length * 2.0).max(stop_z + 100.0)
     }
 }
 
@@ -3045,10 +3055,10 @@ fn search_entrance_origin_grid_brent_native(
             50,
         );
 
-        if evaluate(refined_x, refined_y, plane_z).is_some() {
+        if evaluate(refined_x, refined_y, plane_z).is_some_and(|err| err <= 5.0e-3) {
             return Some([refined_x, refined_y, plane_z]);
         }
-        if best_err.is_finite() {
+        if best_err.is_finite() && best_err <= 5.0e-3 {
             return Some([best_x, best_y, plane_z]);
         }
     }
@@ -3167,10 +3177,10 @@ fn solve_ray_origin_to_stop_point_fast_native(
         origin = [origin[0] + dx, origin[1] + dy, origin[2]];
     }
 
-    if best_err.is_finite() {
+    if best_err.is_finite() && best_err <= tol_mm.max(5.0e-3) {
         Some(best_origin)
     } else {
-        Some(origin)
+        None
     }
 }
 
@@ -3335,7 +3345,7 @@ fn solve_ray_direction_to_stop_point_fast_native(
         v += dv;
     }
 
-    if best_err.is_finite() {
+    if best_err.is_finite() && best_err <= tol_mm.max(5.0e-3) {
         Some(best_dir)
     } else {
         None
@@ -3355,7 +3365,7 @@ fn trace_image_height_infinite_candidate_local_native(
 ) -> Option<[f64; 3]> {
     let object_plane_z = packed_target.row_origins.get(2).copied().unwrap_or(0.0);
     let dummy_obj = Map::<String, Value>::new();
-    let object_z = resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z);
+    let object_z = resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
     let direction = build_direction_from_field_angles_native(angle_x_deg, angle_y_deg);
 
     let nominal_x = angle_x_deg.to_radians().tan();
@@ -3374,22 +3384,26 @@ fn trace_image_height_infinite_candidate_local_native(
     }
 
     for initial_origin in candidate_origins {
-        let refined_origin = solve_ray_origin_to_stop_point_fast_native(
+        let Some(refined_origin) = solve_ray_origin_to_stop_point_fast_native(
             initial_origin,
             direction,
             stop_center,
             stop_surface_index,
             packed_stop,
             n_start,
-        ).unwrap_or(initial_origin);
-        let refined_direction = solve_ray_direction_to_stop_point_fast_native(
+        ) else {
+            continue;
+        };
+        let Some(refined_direction) = solve_ray_direction_to_stop_point_fast_native(
             refined_origin,
             stop_center,
             stop_surface_index,
             packed_stop,
             n_start,
             direction,
-        ).unwrap_or(direction);
+        ) else {
+            continue;
+        };
 
         if let Some(local_hit) = trace_surface_local_with_packed(
             [
@@ -3403,17 +3417,6 @@ fn trace_image_height_infinite_candidate_local_native(
             return Some(local_hit);
         }
 
-        if let Some(local_hit) = trace_surface_local_with_packed(
-            [
-                initial_origin[0], initial_origin[1], initial_origin[2],
-                refined_direction[0], refined_direction[1], refined_direction[2],
-            ],
-            target_surface_index,
-            n_start,
-            packed_target,
-        ) {
-            return Some(local_hit);
-        }
     }
 
     let entrance_radius = estimate_entrance_radius_from_rows(rows).clamp(0.01, 500.0);
@@ -3427,22 +3430,26 @@ fn trace_image_height_infinite_candidate_local_native(
         n_start,
         entrance_radius,
     ) {
-        let refined_origin = solve_ray_origin_to_stop_point_fast_native(
+        let Some(refined_origin) = solve_ray_origin_to_stop_point_fast_native(
             grid_origin,
             direction,
             stop_center,
             stop_surface_index,
             packed_stop,
             n_start,
-        ).unwrap_or(grid_origin);
-        let refined_direction = solve_ray_direction_to_stop_point_fast_native(
+        ) else {
+            return None;
+        };
+        let Some(refined_direction) = solve_ray_direction_to_stop_point_fast_native(
             refined_origin,
             stop_center,
             stop_surface_index,
             packed_stop,
             n_start,
             direction,
-        ).unwrap_or(direction);
+        ) else {
+            return None;
+        };
 
         if let Some(local_hit) = trace_surface_local_with_packed(
             [
@@ -3486,7 +3493,7 @@ fn trace_image_height_finite_candidate_local_native(
         packed_stop,
         n_start,
         initial_direction,
-    ).unwrap_or(initial_direction);
+    )?;
 
     trace_surface_local_with_packed(
         [
@@ -4106,7 +4113,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
     let object_plane_z = row_origins.get(2).copied().unwrap_or(0.0);
     let infinite_direction = build_direction_from_field_angles_native(used_object_x, used_object_y);
     let (infinite_u_axis, infinite_v_axis) = build_perpendicular_basis_native(infinite_direction);
-    let infinite_object_z = resolve_infinite_object_z_native(&rows, selected_object_map, object_plane_z);
+    let infinite_object_z = resolve_infinite_object_z_native(&rows, selected_object_map, object_plane_z, stop_center[2]);
     let infinite_origin_xy = if used_object_x.abs() < 1e-10 && used_object_y.abs() < 1e-10 {
         [0.0, 0.0]
     } else {

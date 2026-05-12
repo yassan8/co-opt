@@ -8,6 +8,7 @@ declare global {
   }
 }
 const w: Record<string, any> = window;
+const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
 
 // Import statements (all .ts → .js for ESM runtime)
 import { getGlassDataWithSellmeier, findSimilarGlassNames, findSimilarGlassesByNdVd } from '../data/glass.ts';
@@ -7026,6 +7027,66 @@ let __cooptBlockParamPendingRefresh: {
     activeConfigId: string;
 } | null = null;
 
+function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
+    try {
+        if (localStorage.getItem(RENDER_DESIGN_INTENT_SYNC_KEY) !== 'true') {
+            return;
+        }
+    } catch (_) {
+        return;
+    }
+
+    const rows = Array.isArray(rowsSnapshot) ? rowsSnapshot : [];
+
+    try {
+        if (rows.length > 0) {
+            if (typeof w.__cooptRenderWindowRedraw === 'function') {
+                w.__cooptRenderWindowRedraw(rows);
+            } else if (typeof w.drawOpticalSystem === 'function') {
+                const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+                const prevRowsOverride = g ? g.__cooptOpticalSystemRowsOverride : undefined;
+                try {
+                    if (g) g.__cooptOpticalSystemRowsOverride = rows;
+                    w.drawOpticalSystem();
+                } finally {
+                    if (g) g.__cooptOpticalSystemRowsOverride = prevRowsOverride;
+                }
+            }
+        }
+    } catch (_) {}
+
+    try {
+        const popup = w.popup3DWindow;
+        if (popup && !popup.closed) {
+            if (typeof popup.__cooptRenderWindowRedraw === 'function' && rows.length > 0) {
+                popup.__cooptRenderWindowRedraw(rows);
+            } else if (typeof popup.postMessage === 'function') {
+                try { popup.__cooptPendingRenderRows = rows; } catch (_) {}
+                popup.postMessage({ action: 'request-redraw', rows }, '*');
+            }
+        }
+    } catch (_) {}
+
+    try {
+        const token = `${Date.now()}-block-param`;
+        localStorage.setItem('coopt.renderSyncRequest', JSON.stringify({ ts: token, token, rows }));
+    } catch (_) {}
+
+    try {
+        if (isTauriRuntime()) {
+            void (async () => {
+                try {
+                    const mod = await import('@tauri-apps/api/event');
+                    if (mod && typeof (mod as any).emit === 'function') {
+                        const token = `${Date.now()}-block-param`;
+                        await (mod as any).emit('coopt-render-sync-request', { ts: token, token, rows });
+                    }
+                } catch (_) {}
+            })();
+        }
+    } catch (_) {}
+}
+
 function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newValue: any): void {
     const systemConfig = loadSystemConfigurations();
     const activeConfig = systemConfig?.configurations?.find((c: any) => c.id === systemConfig?.activeConfigId)
@@ -7153,26 +7214,7 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
         try { refreshBlockInspector(); } catch (_) {}
         try { refreshZoomControlTab(); } catch (_) {}
 
-        // Request render refresh for both the local render surface and popup render window.
-        try {
-            if (Array.isArray(rowsSnapshot) && rowsSnapshot.length > 0) {
-                if (typeof w.__cooptRenderWindowRedraw === 'function') {
-                    w.__cooptRenderWindowRedraw(rowsSnapshot);
-                } else if (typeof w.drawOpticalSystem === 'function') {
-                    w.drawOpticalSystem();
-                }
-            }
-        } catch (_) {}
-        try {
-            const popup = w.popup3DWindow;
-            if (popup && !popup.closed) {
-                if (typeof popup.__cooptRenderWindowRedraw === 'function' && Array.isArray(rowsSnapshot) && rowsSnapshot.length > 0) {
-                    popup.__cooptRenderWindowRedraw(rowsSnapshot);
-                } else if (typeof popup.postMessage === 'function') {
-                    popup.postMessage({ action: 'request-redraw' }, '*');
-                }
-            }
-        } catch (_) {}
+        __cooptRequestRenderRedrawWithRows(rowsSnapshot);
     }, 80);
 }
 
