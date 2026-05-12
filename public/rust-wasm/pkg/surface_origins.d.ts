@@ -145,6 +145,8 @@ export function run_native_opd_map_wasm_json(req_json: string): any;
  */
 export function run_native_psf_from_opd_wasm_json(req_json: string): any;
 
+export function solve_image_height_component_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, conjugate_mode: number, component_index: number, target_value: number, initial_guess: number, fixed_value: number, initial_step: number, max_step: number): Float64Array;
+
 export function solve_linear_system(a_flat: Float64Array, n: number, b: Float64Array): Float64Array;
 
 /**
@@ -258,6 +260,7 @@ export interface InitOutput {
     readonly run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly solve_image_height_component_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
     readonly solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
     readonly solve_qp_subproblem_unconstrained: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];

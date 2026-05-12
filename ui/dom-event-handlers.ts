@@ -2185,6 +2185,51 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
 async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: string } = {}): Promise<boolean> {
     const displayName = options?.filename || 'shared-link.json';
 
+    // File load must not race an optimizer popup. If optimization is active, block
+    // the load. If the popup is only open/idle, close it and clear its transient
+    // state before rebinding tables/configuration to the new design.
+    try {
+        const g = (typeof globalThis !== 'undefined') ? globalThis as any : null;
+        const popup = g?.__cooptOptimizerSchedulerWindow;
+        const popupClosed = !popup || popup.closed;
+        const popupPhase = popupClosed
+            ? ''
+            : String(popup?.document?.getElementById('opt-phase')?.textContent || '').trim().toLowerCase();
+        const popupRunDisabled = popupClosed
+            ? false
+            : !!popup?.document?.getElementById('opt-run')?.disabled;
+        const popupStopDisabled = popupClosed
+            ? true
+            : !!popup?.document?.getElementById('opt-stop')?.disabled;
+        const popupLooksIdle = popupClosed
+            || popupPhase === ''
+            || popupPhase === '-'
+            || popupPhase === 'ready'
+            || popupPhase === 'done'
+            || popupPhase === 'stopped'
+            || popupPhase === 'error'
+            || (!popupRunDisabled && popupStopDisabled);
+
+        if (g?.__cooptOptimizerIsRunning === true && !popupLooksIdle) {
+            alert('Optimization is still running. Stop it or close the optimize window before loading a file.');
+            return false;
+        }
+
+        if (!popupClosed && popupLooksIdle) {
+            try { popup.close(); } catch (_) {}
+            if (g?.__cooptOptimizerSchedulerWindow === popup) {
+                g.__cooptOptimizerSchedulerWindow = null;
+            }
+        }
+
+        if (g?.__cooptOptimizerIsRunning === true && popupLooksIdle) {
+            g.__cooptOptimizerIsRunning = false;
+        }
+        if (g?.__cooptOptimizerIsRunning !== true) {
+            g.__cooptOpticalSystemRowsOverride = null;
+        }
+    } catch (_) {}
+
     // Normalize design data first
     try {
         if (typeof w.normalizeDesign === 'function') {
@@ -6199,6 +6244,7 @@ export function saveCurrentToActiveConfiguration(): void {
 
 export function loadActiveConfigurationToTables(): void {
     const activeConfig = getActiveConfiguration();
+    const systemConfig = loadSystemConfigurations();
     
     if (!activeConfig) {
         console.error('❌ [Configuration] No active config found');
@@ -6222,6 +6268,9 @@ export function loadActiveConfigurationToTables(): void {
     if (activeConfig.meritFunction) {
         saveMeritFunctionTableData(activeConfig.meritFunction as any);
     }
+    saveSystemRequirementsTableData(
+        Array.isArray(systemConfig?.systemRequirements) ? systemConfig.systemRequirements as any : []
+    );
     
 }
 
@@ -6427,8 +6476,13 @@ function __blocks_setVarScope(blockId: string, key: string, scope: string): void
         const b = activeCfg.blocks.find((x: any) => x && String(x.blockId ?? '') === String(blockId));
         if (!b) return;
 
+        const initialValue = ((String(key ?? '').trim().toLowerCase() === 'bending')
+            && !!cooptGetBendingConfigForBlock(b))
+            ? cooptComputeLensBendingValue(b, String(b?.blockType ?? '').trim())
+            : (cooptGetBlockNumericValue(b, key) ?? '');
+
         if (!b.variables || typeof b.variables !== 'object') b.variables = {};
-        if (!b.variables[key] || typeof b.variables[key] !== 'object') b.variables[key] = { value: b.parameters?.[key] ?? '' };
+        if (!b.variables[key] || typeof b.variables[key] !== 'object') b.variables[key] = { value: initialValue };
         if (!b.variables[key].optimize || typeof b.variables[key].optimize !== 'object') b.variables[key].optimize = {};
         b.variables[key].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
 
@@ -6495,7 +6549,9 @@ function __blocks_setVarMode(blockId: string, key: string, enabled: boolean, sco
                 const b0 = activeCfg0 && Array.isArray(activeCfg0.blocks)
                     ? activeCfg0.blocks.find((x: any) => x && String(x.blockId ?? '') === String(blockId))
                     : null;
-                const raw0 = b0?.parameters?.[key] ?? b0?.variables?.[key]?.value;
+                const raw0 = (String(key ?? '').trim().toLowerCase() === 'bending' && b0)
+                    ? cooptComputeLensBendingValue(b0, String(b0?.blockType ?? '').trim())
+                    : cooptGetBlockNumericValue(b0, key);
                 const n0 = (typeof raw0 === 'number') ? raw0 : Number(String(raw0 ?? '').trim());
                 if (Number.isFinite(n0)) sharedNumericValue = n0;
             } catch (_) {}
@@ -6512,8 +6568,13 @@ function __blocks_setVarMode(blockId: string, key: string, enabled: boolean, sco
                 continue;
             }
 
+            const initialValue = ((String(key ?? '').trim().toLowerCase() === 'bending')
+                && !!cooptGetBendingConfigForBlock(b))
+                ? cooptComputeLensBendingValue(b, String(b?.blockType ?? '').trim())
+                : (cooptGetBlockNumericValue(b, key) ?? '');
+
             if (!b.variables || typeof b.variables !== 'object') b.variables = {};
-            if (!b.variables[key] || typeof b.variables[key] !== 'object') b.variables[key] = { value: b.parameters?.[key] ?? '' };
+            if (!b.variables[key] || typeof b.variables[key] !== 'object') b.variables[key] = { value: initialValue };
             if (!b.variables[key].optimize || typeof b.variables[key].optimize !== 'object') b.variables[key].optimize = {};
             b.variables[key].optimize.mode = enabled ? 'V' : 'F';
             b.variables[key].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
@@ -6795,6 +6856,115 @@ function cooptNormalizeInputValue(raw: string, original: any): any {
     return trimmed;
 }
 
+function cooptParseFiniteRadius(value: any): number | null {
+    const text = String(value ?? '').trim();
+    if (!text || /^inf(inity)?$/i.test(text)) return null;
+    const numeric = Number(text);
+    if (!Number.isFinite(numeric) || Math.abs(numeric) < 1e-12) return null;
+    return numeric;
+}
+
+function cooptParseRadiusCurvature(value: any): number | null {
+    const text = String(value ?? '').trim();
+    if (!text) return null;
+    if (/^inf(inity)?$/i.test(text)) return 0;
+    const numeric = Number(text);
+    if (!Number.isFinite(numeric) || Math.abs(numeric) < 1e-12) return null;
+    return 1 / numeric;
+}
+
+function cooptGetBlockNumericValue(block: any, key: string): any {
+    if (!block || typeof block !== 'object') return undefined;
+    const params = (block.parameters && typeof block.parameters === 'object') ? block.parameters : null;
+    if (params && Object.prototype.hasOwnProperty.call(params, key)) {
+        const value = params[key];
+        if (value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '')) {
+            return value;
+        }
+    }
+    const vars = (block.variables && typeof block.variables === 'object') ? block.variables : null;
+    const entry = vars?.[key];
+    if (entry && typeof entry === 'object' && Object.prototype.hasOwnProperty.call(entry, 'value')) {
+        return entry.value;
+    }
+    return undefined;
+}
+
+function cooptGetBendingConfigForBlock(blockOrType: any): {
+    radiusAKey: string;
+    radiusBKey: string;
+} | null {
+    const blockType = typeof blockOrType === 'string'
+        ? String(blockOrType).trim()
+        : String(blockOrType?.blockType ?? '').trim();
+    if (blockType === 'Lens' || blockType === 'PositiveLens') {
+        return { radiusAKey: 'frontRadius', radiusBKey: 'backRadius' };
+    }
+    if (blockType === 'Doublet') {
+        return { radiusAKey: 'radius1', radiusBKey: 'radius3' };
+    }
+    return null;
+}
+
+function cooptComputeLensBendingValue(blockOrParams: any, blockType: string = 'Lens'): number | '' {
+    const config = cooptGetBendingConfigForBlock(blockType);
+    if (!config) return '';
+    const block = (blockOrParams && typeof blockOrParams === 'object' && (blockOrParams.parameters || blockOrParams.variables))
+        ? blockOrParams
+        : { parameters: blockOrParams };
+    const c1 = cooptParseRadiusCurvature(cooptGetBlockNumericValue(block, config.radiusAKey));
+    const c2 = cooptParseRadiusCurvature(cooptGetBlockNumericValue(block, config.radiusBKey));
+    if (c1 === null || c2 === null) return '';
+
+    const curvatureDiff = c1 - c2;
+    if (!Number.isFinite(curvatureDiff) || Math.abs(curvatureDiff) < 1e-12) return '';
+
+    const bending = (c1 + c2) / curvatureDiff;
+    return Number.isFinite(bending) ? bending : '';
+}
+
+function cooptResolveLensBendingUpdate(block: any, bendingValue: any): {
+    radiusAKey: string;
+    radiusBKey: string;
+    oldRadiusA: any;
+    oldRadiusB: any;
+    newRadiusA: number;
+    newRadiusB: number;
+} | null {
+    const params = (block && typeof block === 'object' && block.parameters && typeof block.parameters === 'object') ? block.parameters : null;
+    if (!params) return null;
+    const config = cooptGetBendingConfigForBlock(block);
+    if (!config) return null;
+
+    const nextBending = Number(bendingValue);
+    if (!Number.isFinite(nextBending)) return null;
+
+    const radiusA = cooptParseFiniteRadius(params[config.radiusAKey]);
+    const radiusB = cooptParseFiniteRadius(params[config.radiusBKey]);
+    if (radiusA === null || radiusB === null) return null;
+
+    const c1 = 1 / radiusA;
+    const c2 = 1 / radiusB;
+    const curvatureDiff = c1 - c2;
+    if (!Number.isFinite(curvatureDiff) || Math.abs(curvatureDiff) < 1e-12) return null;
+
+    const curvatureSum = nextBending * curvatureDiff;
+    const nextC1 = (curvatureSum + curvatureDiff) / 2;
+    const nextC2 = (curvatureSum - curvatureDiff) / 2;
+    if (!Number.isFinite(nextC1) || !Number.isFinite(nextC2)) return null;
+    if (Math.abs(nextC1) < 1e-12 || Math.abs(nextC2) < 1e-12) return null;
+    if (Math.abs(nextC1) > 1e6 || Math.abs(nextC2) > 1e6) return null;
+
+    return {
+        radiusAKey: config.radiusAKey,
+        radiusBKey: config.radiusBKey,
+        oldRadiusA: params[config.radiusAKey],
+        oldRadiusB: params[config.radiusBKey],
+        newRadiusA: 1 / nextC1,
+        newRadiusB: 1 / nextC2,
+    };
+}
+
 function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''): boolean {
     if (!Array.isArray(blocks) || blocks.length === 0) return false;
 
@@ -6865,17 +7035,59 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     const block = blocks.find((b: any) => b && String(b.blockId ?? '') === String(blockId));
     if (!block) return;
 
-    if (oldValue !== newValue) {
+    const blockType = String(block?.blockType ?? '').trim();
+    if ((blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') && String(path) === 'parameters.bending') {
+        const bendingUpdate = cooptResolveLensBendingUpdate(block, newValue);
+        if (!bendingUpdate) {
+            try { refreshBlockInspector(); } catch (_) {}
+            return;
+        }
+
+        const { radiusAKey, radiusBKey, oldRadiusA, oldRadiusB, newRadiusA, newRadiusB } = bendingUpdate;
+        if (oldRadiusA === newRadiusA && oldRadiusB === newRadiusB) {
+            return;
+        }
+
         try {
-            if (w.undoHistory && w.SetBlockParameterCommand && !w.undoHistory.isExecuting) {
-                const cmd = new w.SetBlockParameterCommand(activeConfig.name, String(blockId), String(path), oldValue, newValue);
+            if ((blockType === 'Lens' || blockType === 'PositiveLens') && w.undoHistory && w.SetLensBendingCommand && !w.undoHistory.isExecuting) {
+                const cmd = new w.SetLensBendingCommand(
+                    activeConfig.name,
+                    String(blockId),
+                    oldRadiusA,
+                    oldRadiusB,
+                    newRadiusA,
+                    newRadiusB,
+                );
                 w.undoHistory.record(cmd);
             }
         } catch (_) {}
-    }
 
-    cooptSetNestedValue(block, path, newValue);
-    if (String(block?.blockType ?? '').trim() === 'ImageSurface' && String(path) === 'parameters.semidia') {
+        cooptSetNestedValue(block, `parameters.${radiusAKey}`, newRadiusA);
+        cooptSetNestedValue(block, `parameters.${radiusBKey}`, newRadiusB);
+        cooptSetNestedValue(block, 'parameters.bending', Number(newValue));
+        if (block.variables?.[radiusAKey] && typeof block.variables[radiusAKey] === 'object' && Object.prototype.hasOwnProperty.call(block.variables[radiusAKey], 'value')) {
+            block.variables[radiusAKey].value = newRadiusA;
+        }
+        if (block.variables?.[radiusBKey] && typeof block.variables[radiusBKey] === 'object' && Object.prototype.hasOwnProperty.call(block.variables[radiusBKey], 'value')) {
+            block.variables[radiusBKey].value = newRadiusB;
+        }
+        if (block.variables?.bending && typeof block.variables.bending === 'object' && Object.prototype.hasOwnProperty.call(block.variables.bending, 'value')) {
+            block.variables.bending.value = Number(newValue);
+        }
+    } else {
+
+        if (oldValue !== newValue) {
+            try {
+                if (w.undoHistory && w.SetBlockParameterCommand && !w.undoHistory.isExecuting) {
+                    const cmd = new w.SetBlockParameterCommand(activeConfig.name, String(blockId), String(path), oldValue, newValue);
+                    w.undoHistory.record(cmd);
+                }
+            } catch (_) {}
+        }
+
+        cooptSetNestedValue(block, path, newValue);
+    }
+    if (blockType === 'ImageSurface' && String(path) === 'parameters.semidia') {
         const semidiaText = String(newValue ?? '').trim().toLowerCase();
         if (semidiaText !== '' && semidiaText !== 'auto') {
             if (!block.parameters || typeof block.parameters !== 'object') block.parameters = {};
@@ -6883,7 +7095,7 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
             block.parameters.optimizeSemiDia = '';
         }
     }
-    if (String(block?.blockType ?? '').trim() === 'Paraxial' && /^aperture\./.test(String(path))) {
+    if (blockType === 'Paraxial' && /^aperture\./.test(String(path))) {
         if (!block.aperture || typeof block.aperture !== 'object') block.aperture = {};
         const apertureKey = String(path).slice('aperture.'.length).trim();
         if (apertureKey === 's1' || apertureKey === 'front' || apertureKey === 'back') {
@@ -6940,7 +7152,6 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
 
         try { refreshBlockInspector(); } catch (_) {}
         try { refreshZoomControlTab(); } catch (_) {}
-        try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
 
         // Request render refresh for both the local render surface and popup render window.
         try {
@@ -9008,6 +9219,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (!allParamKeys.includes('focalLengthX')) allParamKeys.push('focalLengthX');
                 if (!allParamKeys.includes('focalLengthY')) allParamKeys.push('focalLengthY');
             }
+            if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') {
+                if (!allParamKeys.includes('bending')) allParamKeys.push('bending');
+            }
             if (blockType === 'Stop') {
                 if (!allParamKeys.includes('semiDiameter')) allParamKeys.push('semiDiameter');
             }
@@ -9073,6 +9287,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (label === 'focalLengthX') return 'Focal Length X';
                     if (label === 'focalLengthY' || label === 'focalLength') return 'Focal Length Y';
                 }
+                if (label === 'bending') return 'Bending';
                 if (label === 'zoomPosition') return 'Zoom Position';
                 if (label === 'zoomGroup') return 'Zoom Group';
                 if (label === 'zoomGroupProfiles') return 'Zoom Group Laws';
@@ -10265,6 +10480,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (key === 'zoomGroup' && (value === undefined || value === null || String(value).trim() === '')) {
                         value = 'Fixed';
                     }
+                    if ((blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') && key === 'bending') {
+                        value = cooptComputeLensBendingValue(expandedBlock, blockType);
+                    }
                     if (blockType === 'ImageSurface' && key === 'semidiaMode' && (value === undefined || value === null || String(value).trim() === '')) {
                         const opt = String((params as any)?.optimizeSemiDia ?? '').trim().toUpperCase();
                         value = (opt === 'A' || opt === 'AUTO') ? 'Auto' : 'Manual';
@@ -10895,9 +11113,9 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
     }
     if (type === 'Doublet') {
         base.parameters = {
-            radius1: 'INF',
-            radius2: 'INF',
-            radius3: 'INF',
+            radius1: 120,
+            radius2: -72,
+            radius3: -180,
             thickness1: 1,
             thickness2: 1,
             material1: 'N-BK7',

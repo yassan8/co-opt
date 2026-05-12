@@ -37,6 +37,7 @@ import { convertImageHeightToEffectiveObject } from "../../optical/ray-renderer.
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
 const RENDER_SHOW_PRINCIPAL_POINTS_KEY = 'coopt.render.showPrincipalPointLabels';
+const OPTIMIZE_PROGRESS_SYNC_KEY = 'coopt.optimizeProgress';
 const RENDER_SCALE_BAR_MIN_WIDTH_PX = 72;
 const RENDER_SCALE_BAR_TARGET_WIDTH_PX = 160;
 const RENDER_SCALE_BAR_MAX_WIDTH_PX = 240;
@@ -184,6 +185,7 @@ const BLOCK_PERF_LABELS: Record<string, string> = {
 const RENDER_3D_SURFACE_MESH_SEGMENTS = 64;
 const RENDER_3D_TORIC_MESH_SEGMENTS = 96;
 const RENDER_IMAGEHEIGHT_APPROX_CACHE_LIMIT = 512;
+const RENDER_LEGACY_CROSS_RAYS_CACHE_LIMIT = 48;
 
 const RENDER_AUTO_APERTURE_MARGIN_FACTOR = 1.10;
 const RENDER_AUTO_APERTURE_MARGIN_MM = 0.05;
@@ -197,8 +199,10 @@ function applyRenderAutoApertureMargin(radiusMm: number): number {
   );
 }
 const renderRowsSignatureCache = new WeakMap<any[], string>();
+const renderObjectRowsSignatureCache = new WeakMap<any[], string>();
 const renderImageHeightApproxCache = new Map<string, any>();
 const renderParaxialDataCache = new Map<string, any>();
+const renderLegacyCrossRaysCache = new Map<string, any[]>();
 
 function clampRenderCacheSize(cache: Map<string, any>, limit = RENDER_IMAGEHEIGHT_APPROX_CACHE_LIMIT): void {
   while (cache.size > limit) {
@@ -248,6 +252,48 @@ function getRenderParaxialDataCached(opticalSystemRows: any[], wavelengthUm: num
   renderParaxialDataCache.set(cacheKey, paraxial);
   clampRenderCacheSize(renderParaxialDataCache, 64);
   return paraxial;
+}
+
+function buildRenderObjectRowsSignature(rows: any[]): string {
+  if (!Array.isArray(rows)) return 'no-object-rows';
+  const cached = renderObjectRowsSignatureCache.get(rows);
+  if (cached) return cached;
+
+  const parts: string[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index] || {};
+    const target = row?.__cooptImageHeightTarget || null;
+    const solve = row?.__cooptImageHeightSolve || null;
+    parts.push([
+      index,
+      String(row?.position ?? ''),
+      String(row?.__cooptOriginalPosition ?? ''),
+      String(row?.objectIndex ?? ''),
+      String(row?.xHeightAngle ?? row?.x ?? row?.height ?? row?.heightX ?? ''),
+      String(row?.yHeightAngle ?? row?.y ?? row?.height ?? row?.heightY ?? ''),
+      String(row?.z ?? ''),
+      Number.isFinite(Number(target?.x)) ? String(target.x) : '',
+      Number.isFinite(Number(target?.y)) ? String(target.y) : '',
+      Number.isFinite(Number(solve?.effectiveObjectX)) ? String(solve.effectiveObjectX) : '',
+      Number.isFinite(Number(solve?.effectiveObjectY)) ? String(solve.effectiveObjectY) : '',
+      Number.isFinite(Number(solve?.targetImageX)) ? String(solve.targetImageX) : '',
+      Number.isFinite(Number(solve?.targetImageY)) ? String(solve.targetImageY) : '',
+    ].join(':'));
+  }
+
+  const signature = parts.join('|');
+  renderObjectRowsSignatureCache.set(rows, signature);
+  return signature;
+}
+
+function cloneRenderLegacyCrossRays(rays: any[]): any[] {
+  if (!Array.isArray(rays) || rays.length === 0) return [];
+  return rays.map((ray: any) => ({
+    ...ray,
+    originalRay: ray?.originalRay && typeof ray.originalRay === 'object'
+      ? { ...ray.originalRay }
+      : ray?.originalRay,
+  }));
 }
 
 function getRenderImageHeightTarget(row: any): { x: number; y: number } | null {
@@ -501,6 +547,12 @@ function getInitial3DLightRayCount(rayCount: number): number {
   return safeRayCount;
 }
 
+function getLiveRenderRayCount(rayCount: number): number {
+  const safeRayCount = Number.isFinite(Number(rayCount)) ? Math.max(1, Math.floor(Number(rayCount))) : 1;
+  if (safeRayCount <= 3) return safeRayCount;
+  return Math.min(3, safeRayCount);
+}
+
 function isPlainObject(v: any): boolean {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
@@ -646,6 +698,56 @@ function chooseRenderScaleBar(mmPerPixel: number): { label: string; widthPx: num
     label: formatRenderScaleLabelMm(bestDistanceMm),
     widthPx: bestWidthPx,
   };
+}
+
+function applyRenderImageHeightDisplaySpacing(
+  opticalSystemRows: any[],
+  objectRows: any[],
+  wavelengthUm = 0.5876,
+): any[] {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return opticalSystemRows;
+  const maxTargetHeight = getMaxRenderImageHeightTargetMm(objectRows);
+  if (!(Number.isFinite(maxTargetHeight) && maxTargetHeight > 0)) return opticalSystemRows;
+
+  const objectSurface = opticalSystemRows[0] || {};
+  const thicknessRaw = objectSurface?.thickness;
+  const thicknessStr = String(thicknessRaw ?? '').trim().toUpperCase();
+  const thicknessVal = Number(thicknessRaw);
+  const isInfiniteSystem = (
+    thicknessRaw === Infinity ||
+    thicknessStr === 'INF' ||
+    thicknessStr === 'INFINITY' ||
+    thicknessStr === '∞' ||
+    (Number.isFinite(thicknessVal) && Math.abs(thicknessVal) > 1e6)
+  );
+  if (!isInfiniteSystem) return opticalSystemRows;
+
+  const currentRenderDistance = Number(objectSurface?.objectRenderDistance);
+  let displayDistance = Number.isFinite(currentRenderDistance) && currentRenderDistance > 0
+    ? currentRenderDistance
+    : 0;
+
+  try {
+    const paraxial = getRenderParaxialDataCached(opticalSystemRows, wavelengthUm);
+    const focalLength = Math.abs(Number(paraxial?.focalLength));
+    if (Number.isFinite(focalLength) && focalLength > 0) {
+      displayDistance = Math.max(displayDistance, focalLength);
+    }
+  } catch (_) {}
+
+  displayDistance = Math.max(displayDistance, Number(maxTargetHeight));
+  if (!(Number.isFinite(displayDistance) && displayDistance > 0)) return opticalSystemRows;
+  if (Number.isFinite(currentRenderDistance) && Math.abs(currentRenderDistance - displayDistance) < 1e-6) {
+    return opticalSystemRows;
+  }
+
+  const nextRows = opticalSystemRows.slice();
+  nextRows[0] = {
+    ...objectSurface,
+    objectRenderDistance: displayDistance,
+    __cooptRenderImageHeightDisplayDistance: displayDistance,
+  };
+  return nextRows;
 }
 
 function isCoordBreakSurface(surface: any): boolean {
@@ -1571,8 +1673,8 @@ export default function App() {
         sceneForDraw.traverse((child: any) => {
           if (child?.userData?.rayType === 'crossBeam' && child.geometry) {
             const positions = child.geometry.attributes?.position;
-            if (positions && Array.isArray(positions.array)) {
-              const posArray = positions.array as any;
+            const posArray = positions?.array as ArrayLike<number> | undefined;
+            if (posArray && typeof posArray.length === 'number' && posArray.length >= verticalIndex + 1) {
               for (let i = verticalIndex; i < posArray.length; i += 3) {
                 const coord = posArray[i];
                 if (Number.isFinite(coord)) {
@@ -2617,6 +2719,7 @@ export default function App() {
     };
 
     let lastRenderSyncStamp = '';
+    let lastOptimizeProgressStamp = '';
     const applyRenderSyncPayload = (payload: any) => {
       try {
         const stamp = String(payload?.ts ?? payload?.token ?? '');
@@ -2627,7 +2730,29 @@ export default function App() {
       } catch (_) {}
     };
 
+    const applyOptimizeProgressPayload = (payload: any) => {
+      try {
+        const stamp = String(payload?.ts ?? payload?.token ?? '');
+        if (stamp && stamp === lastOptimizeProgressStamp) return;
+        if (stamp) lastOptimizeProgressStamp = stamp;
+        const reqSnapshot = Array.isArray(payload?.requirementSnapshots) ? payload.requirementSnapshots : [];
+        if (reqSnapshot.length <= 0) return;
+        const sre = (window as any).systemRequirementsEditor;
+        if (sre && typeof sre.applyOptimizerRequirementSnapshot === 'function') {
+          sre.applyOptimizerRequirementSnapshot(reqSnapshot);
+        }
+      } catch (_) {}
+    };
+
     const onStorage = (ev: StorageEvent) => {
+
+      if (ev.key === OPTIMIZE_PROGRESS_SYNC_KEY && ev.newValue && !isOptimizeWindowMode) {
+        try {
+          const payload = JSON.parse(ev.newValue);
+          applyOptimizeProgressPayload(payload);
+        } catch (_) {}
+        return;
+      }
 
       // Handle live render sync from the optimize window (Tauri WebviewWindow sends rows here)
       if (ev.key === 'coopt.renderSyncRequest' && ev.newValue && !isOptimizeWindowMode) {
@@ -2664,6 +2789,11 @@ export default function App() {
               applyRenderSyncPayload(ev?.payload);
             } catch (_) {}
           });
+          const progressUnlisten = await (mod as any).listen('coopt-optimize-progress', (ev: any) => {
+            try {
+              applyOptimizeProgressPayload(ev?.payload);
+            } catch (_) {}
+          });
           const unlisten = await (mod as any).listen('coopt-optimize-rows-sync', (ev: any) => {
             try {
               const rows = Array.isArray(ev?.payload?.rows) ? ev.payload.rows : [];
@@ -2680,11 +2810,13 @@ export default function App() {
           if (tauriListenerCancelled) {
             try { unlisten(); } catch (_) {}
             try { renderUnlisten(); } catch (_) {}
+            try { progressUnlisten(); } catch (_) {}
             return;
           }
           tauriUnlisten = () => {
             try { unlisten(); } catch (_) {}
             try { renderUnlisten(); } catch (_) {}
+            try { progressUnlisten(); } catch (_) {}
           };
         } catch (_) {}
       })();
@@ -2701,10 +2833,23 @@ export default function App() {
           } catch (_) {}
         }, 180)
       : null;
+    const optimizeProgressPollTimer = !isOptimizeWindowMode
+      ? window.setInterval(() => {
+          try {
+            const raw = localStorage.getItem(OPTIMIZE_PROGRESS_SYNC_KEY);
+            if (!raw) return;
+            const payload = JSON.parse(raw);
+            applyOptimizeProgressPayload(payload);
+          } catch (_) {}
+        }, 180)
+      : null;
     return () => {
       window.removeEventListener('storage', onStorage);
       if (renderSyncPollTimer !== null) {
         try { window.clearInterval(renderSyncPollTimer); } catch (_) {}
+      }
+      if (optimizeProgressPollTimer !== null) {
+        try { window.clearInterval(optimizeProgressPollTimer); } catch (_) {}
       }
       tauriListenerCancelled = true;
       if (tauriUnlisten) {
@@ -2864,11 +3009,19 @@ const collectLegacyCrossRays = async (
       const requestedPupilSamplingMode = readCurrentForceMode() || undefined;
       const normalizedObjectRows = objectRows.map((row: any, index: number) => {
         const posNorm = String(row?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+        const sourcePosNorm = String(row?.__cooptOriginalPosition ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
         const storedTarget = row?.__cooptImageHeightTarget;
         const hasStoredImageHeightTarget = storedTarget
           && Number.isFinite(Number(storedTarget.x))
           && Number.isFinite(Number(storedTarget.y));
         if (posNorm !== 'imageheight' && !hasStoredImageHeightTarget) return row;
+        if (
+          posNorm !== 'imageheight'
+          && sourcePosNorm === 'imageheight'
+          && row?.__cooptImageHeightSolve
+        ) {
+          return row;
+        }
         try {
           return approximateRenderImageHeightRow(row, index, opticalSystemRows, primaryWavelength, isInfiniteSystem ? 'infinite' : 'finite');
         } catch (error) {
@@ -2876,6 +3029,19 @@ const collectLegacyCrossRays = async (
           return row;
         }
       });
+      const cacheKey = [
+        buildRenderRowsSignature(opticalSystemRows),
+        buildRenderObjectRowsSignature(normalizedObjectRows),
+        axis,
+        crossType,
+        effectiveRayCount,
+        Number(primaryWavelength || 0).toFixed(6),
+        requestedPupilSamplingMode || '',
+      ].join('#');
+      const cachedRays = renderLegacyCrossRaysCache.get(cacheKey);
+      if (cachedRays) {
+        return cloneRenderLegacyCrossRays(cachedRays);
+      }
       const generateStartMs = performance.now();
       if (isInfiniteSystem && typeof w.generateInfiniteSystemCrossBeam === 'function') {
         const objectAngles = (normalizedObjectRows.length ? normalizedObjectRows : [{}]).map((row: any) => {
@@ -3046,6 +3212,9 @@ const collectLegacyCrossRays = async (
 
       recordCooptPerfSample('collectLegacyCrossRays.limit', performance.now() - limitStartMs);
       recordCooptPerfSample('collectLegacyCrossRays.total', performance.now() - totalStartMs);
+
+  renderLegacyCrossRaysCache.set(cacheKey, cloneRenderLegacyCrossRays(limitedRays));
+  clampRenderCacheSize(renderLegacyCrossRaysCache, RENDER_LEGACY_CROSS_RAYS_CACHE_LIMIT);
 
       return limitedRays;
     } catch (error) {
@@ -3432,7 +3601,7 @@ const collectLegacyCrossRays = async (
     } catch (_) {}
 
     try {
-      if (typeof w.initializeAllTables === 'function') {
+      if (overrideRows.length === 0 && typeof w.initializeAllTables === 'function') {
         const startMs = performance.now();
         w.initializeAllTables();
         timingStages.push({ label: 'tables', ms: performance.now() - startMs });
@@ -3476,7 +3645,8 @@ const collectLegacyCrossRays = async (
       const sceneForDraw = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
       const renderObjectRows = !compareEnabled ? getRenderObjectRows(hostWindow, rows) : [];
       const imageSemidiaWarning = !compareEnabled ? getRenderImageSemidiaWarning(rows, renderObjectRows) : null;
-      const rowsForRender = !compareEnabled ? applyRenderImageSemidiaWarning(rows, imageSemidiaWarning) : rows;
+      const rowsWithDisplaySpacing = !compareEnabled ? applyRenderImageHeightDisplaySpacing(rows, renderObjectRows) : rows;
+      const rowsForRender = !compareEnabled ? applyRenderImageSemidiaWarning(rowsWithDisplaySpacing, imageSemidiaWarning) : rows;
       renderImageSemidiaWarningRef.current = imageSemidiaWarning;
         let rayCollectMs = 0;
         let rayDrawMs = 0;
@@ -3596,12 +3766,16 @@ const collectLegacyCrossRays = async (
         } catch (_) {}
       }
 
+      const liveRayCount = getLiveRenderRayCount(renderRayCount);
+      const useLightweightLiveRays = overrideRows.length > 0 && liveRayCount < renderRayCount;
+
       if (!compareEnabled) {
         const collectStartMs = performance.now();
         const legacyCrossRays = await collectLegacyCrossRays(
           rowsForRender,
           axis,
-          Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined
+          Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined,
+          useLightweightLiveRays ? { rayCountOverride: liveRayCount } : undefined
         );
         rayCollectMs += performance.now() - collectStartMs;
         try {
@@ -3635,7 +3809,7 @@ const collectLegacyCrossRays = async (
 
         setRenderVisibleDebug('');
       }
-      if (rayCollectMs > 0) timingStages.push({ label: 'rayCollect', ms: rayCollectMs });
+      if (rayCollectMs > 0) timingStages.push({ label: useLightweightLiveRays ? `rayCollectLite(${liveRayCount})` : 'rayCollect', ms: rayCollectMs });
       if (rayDrawMs > 0) timingStages.push({ label: 'rayDraw', ms: rayDrawMs });
 
       const cameraStartMs = performance.now();
@@ -3680,6 +3854,7 @@ const collectLegacyCrossRays = async (
       timingStages.push({ label: 'raf', ms: performance.now() - rafStartMs });
 
       let rows: any[] = [];
+      let hasOverrideRows = false;
       const rowsStartMs = performance.now();
       try {
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
@@ -3688,9 +3863,11 @@ const collectLegacyCrossRays = async (
           : null;
         if (overrideRows) {
           rows = overrideRows;
+          hasOverrideRows = true;
         }
       } catch (_) {
         rows = [];
+        hasOverrideRows = false;
       }
       timingStages.push({ label: 'rows', ms: performance.now() - rowsStartMs });
       try {
@@ -3709,7 +3886,8 @@ const collectLegacyCrossRays = async (
 
       const renderObjectRows = getRenderObjectRows(hostWindow, rows);
       const imageSemidiaWarning = getRenderImageSemidiaWarning(rows, renderObjectRows);
-      const rowsForRender = applyRenderImageSemidiaWarning(rows, imageSemidiaWarning);
+      const rowsWithDisplaySpacing = applyRenderImageHeightDisplaySpacing(rows, renderObjectRows);
+      const rowsForRender = applyRenderImageSemidiaWarning(rowsWithDisplaySpacing, imageSemidiaWarning);
       renderImageSemidiaWarningRef.current = imageSemidiaWarning;
 
       const sceneForDraw = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
@@ -3723,7 +3901,12 @@ const collectLegacyCrossRays = async (
       const allowFastZoomPreview = false;
       const isInitial3DPass = !render3DPrevRowsRef.current && Array.isArray(startupStages) && startupStages.length > 0;
       const lightRayCount = getInitial3DLightRayCount(renderRayCount);
+      const liveRayCount = getLiveRenderRayCount(renderRayCount);
       const useLightweightInitialRays = !isZoomPreviewActive && isInitial3DPass && lightRayCount < renderRayCount;
+      const useLightweightLiveRays = hasOverrideRows && !isZoomPreviewActive && liveRayCount < renderRayCount;
+      const rayCountOverride = useLightweightInitialRays
+        ? lightRayCount
+        : (useLightweightLiveRays ? liveRayCount : null);
       const prevRows = render3DPrevRowsRef.current;
       const prevOrigins = render3DPrevOriginsRef.current;
       let nextSurfaceOrigins: any[] | null = null;
@@ -3809,9 +3992,9 @@ const collectLegacyCrossRays = async (
         rowsForRender,
         'BOTH',
         Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined,
-        useLightweightInitialRays ? { rayCountOverride: lightRayCount } : undefined
+        Number.isFinite(Number(rayCountOverride)) ? { rayCountOverride: Number(rayCountOverride) } : undefined
       );
-      timingStages.push({ label: useLightweightInitialRays ? `rayCollectLite(${lightRayCount})` : 'rayCollect', ms: performance.now() - rayCollectStartMs });
+      timingStages.push({ label: Number.isFinite(Number(rayCountOverride)) ? `rayCollectLite(${Number(rayCountOverride)})` : 'rayCollect', ms: performance.now() - rayCollectStartMs });
       if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
         const rayDrawStartMs = performance.now();
         w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
@@ -3826,8 +4009,8 @@ const collectLegacyCrossRays = async (
           sceneForDraw.traverse((child: any) => {
             if (child?.userData?.rayType === 'crossBeam' && child.geometry) {
               const positions = child.geometry.attributes?.position;
-              if (positions && Array.isArray(positions.array)) {
-                const posArray = positions.array as any;
+              const posArray = positions?.array as ArrayLike<number> | undefined;
+              if (posArray && typeof posArray.length === 'number' && posArray.length >= 2) {
                 for (let i = 1; i < posArray.length; i += 3) {
                   const y = posArray[i];
                   if (Number.isFinite(y)) {
@@ -5342,7 +5525,7 @@ const collectLegacyCrossRays = async (
           return { score: Number.NaN, reqCount: Number.NaN };
         };
 
-        const scheduleRequirementRefresh = () => {
+        const scheduleRequirementRefresh = (progressEvent?: any) => {
           if (optimizeFinalized) return;
           const now = Date.now();
           if (reqEvalInFlight) return;
@@ -5353,7 +5536,22 @@ const collectLegacyCrossRays = async (
           void (async () => {
             try {
               const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
-              if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+              const payloadReqSnapshot = Array.isArray(progressEvent?.requirementSnapshots)
+                ? progressEvent.requirementSnapshots
+                : null;
+              const dbg = (w.__cooptLastOptimizerResidualDebug && typeof w.__cooptLastOptimizerResidualDebug === 'object')
+                ? w.__cooptLastOptimizerResidualDebug
+                : null;
+              const reqSnapshot = (payloadReqSnapshot && payloadReqSnapshot.length > 0)
+                ? payloadReqSnapshot
+                : (Array.isArray(dbg?.requirementsSnapshot) ? dbg.requirementsSnapshot : null);
+
+              let appliedSnapshot = false;
+              if (sre && typeof sre.applyOptimizerRequirementSnapshot === 'function' && reqSnapshot && reqSnapshot.length > 0) {
+                appliedSnapshot = !!sre.applyOptimizerRequirementSnapshot(reqSnapshot);
+              }
+
+              if (!appliedSnapshot && sre && typeof sre.evaluateAndUpdateNow === 'function') {
                 const p = sre.evaluateAndUpdateNow({ reason: 'optimize-progress-live', forceSilent: true, silent: true });
                 if (p && typeof (p as any).then === 'function') {
                   await p;
@@ -5416,7 +5614,31 @@ const collectLegacyCrossRays = async (
             const phaseLower = phase.toLowerCase();
             const progressMethod = String(ev?.method ?? (optMethod || 'kkt')).trim().toLowerCase();
             const iter = Number(ev?.iter ?? 0);
-            scheduleRequirementRefresh();
+            try {
+              const payloadToken = `${Date.now()}-${iter}-${Math.random().toString(36).slice(2, 8)}`;
+              const payload = {
+                ts: payloadToken,
+                token: payloadToken,
+                phase,
+                iter,
+                current: ev?.current,
+                best: ev?.best,
+                violationScore: ev?.violationScore,
+                requirementSnapshots: Array.isArray(ev?.requirementSnapshots) ? ev.requirementSnapshots : [],
+              };
+              localStorage.setItem(OPTIMIZE_PROGRESS_SYNC_KEY, JSON.stringify(payload));
+              if (isTauriRuntime()) {
+                void (async () => {
+                  try {
+                    const mod = await import('@tauri-apps/api/event');
+                    if (mod && typeof (mod as any).emit === 'function') {
+                      await (mod as any).emit('coopt-optimize-progress', payload);
+                    }
+                  } catch (_) {}
+                })();
+              }
+            } catch (_) {}
+            scheduleRequirementRefresh(ev);
             const snap = getRequirementTableScoreSnapshot();
             const progressCurrentScore = Number(ev?.current);
             const progressBestScore = Number(ev?.best);

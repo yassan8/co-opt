@@ -1264,7 +1264,7 @@ function __coopt_expandPrincipalPointRangeForThinLensBack(opticalSystemData, ran
     return { startIdx, endIdx };
 }
 
-function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins, wavelengthUm = 0.5876) {
+function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins, wavelengthUm = 0.5876, axis = 'YZ') {
     const blocks = __coopt_getActiveDesignIntentBlocks();
     const surfRangeByBlockId = __coopt_buildSurfRangeByBlockId(opticalSystemData);
     const groups = new Map();
@@ -1340,7 +1340,8 @@ function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surf
         const subsystem = __coopt_buildPrincipalPointSubsystem(opticalSystemData, physicalRange.startIdx, physicalRange.endIdx);
         if (!subsystem) continue;
 
-        const principal = calculatePrincipalPointPositions(subsystem, wavelengthUm);
+        const meridian = String(axis).trim().toUpperCase() === 'XZ' ? 'sagittal' : 'tangential';
+        const principal = calculatePrincipalPointPositions(subsystem, wavelengthUm, meridian);
         if (!principal) continue;
 
         const startOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[physicalRange.startIdx]);
@@ -1568,7 +1569,7 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
         wavelengthUm = 0.5876;
     }
 
-    const descriptors = __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins, wavelengthUm);
+    const descriptors = __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins, wavelengthUm, options?.axis ?? 'YZ');
     if (!descriptors.length) return;
 
     const axis = (String(options?.axis ?? 'YZ').trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';

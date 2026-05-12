@@ -599,6 +599,26 @@ export function run_native_psf_from_opd_wasm_json(req_json) {
 }
 
 /**
+ * @param {any} optical_system_rows
+ * @param {number} image_surface_index
+ * @param {number} wavelength_um
+ * @param {number} conjugate_mode
+ * @param {number} component_index
+ * @param {number} target_value
+ * @param {number} initial_guess
+ * @param {number} fixed_value
+ * @param {number} initial_step
+ * @param {number} max_step
+ * @returns {Float64Array}
+ */
+export function solve_image_height_component_with_rows(optical_system_rows, image_surface_index, wavelength_um, conjugate_mode, component_index, target_value, initial_guess, fixed_value, initial_step, max_step) {
+    const ret = wasm.solve_image_height_component_with_rows(optical_system_rows, image_surface_index, wavelength_um, conjugate_mode, component_index, target_value, initial_guess, fixed_value, initial_step, max_step);
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
+}
+
+/**
  * @param {Float64Array} a_flat
  * @param {number} n
  * @param {Float64Array} b

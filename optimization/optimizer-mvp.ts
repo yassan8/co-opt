@@ -2641,7 +2641,7 @@ function getNumericVariables(activeCfg) {
 
   return all
     .map(coerceBlankToZero)
-    .filter(v => v && typeof v.value === 'number' && Number.isFinite(v.value));
+    .filter(v => v && !isMaterialKey(v.key) && typeof v.value === 'number' && Number.isFinite(v.value));
 }
 
 function parseJointVariableId(variableId) {
@@ -2840,6 +2840,66 @@ function getVariableEntryFromBlocks(blocks, baseId) {
   return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : null;
 }
 
+function parseFiniteRadiusForOptimizer(value) {
+  const s = String(value ?? '').trim();
+  if (!s || /^inf(inity)?$/i.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || Math.abs(n) < 1e-12) return null;
+  return n;
+}
+
+function parseRadiusCurvatureForOptimizer(value) {
+  const s = String(value ?? '').trim();
+  if (!s) return null;
+  if (/^inf(inity)?$/i.test(s)) return 0;
+  const n = Number(s);
+  if (!Number.isFinite(n) || Math.abs(n) < 1e-12) return null;
+  return 1 / n;
+}
+
+function getBendingConfigForOptimizer(block) {
+  const blockType = String(block?.blockType ?? '').trim();
+  if (blockType === 'Lens' || blockType === 'PositiveLens') {
+    return { radiusAKey: 'frontRadius', radiusBKey: 'backRadius' };
+  }
+  if (blockType === 'Doublet') {
+    return { radiusAKey: 'radius1', radiusBKey: 'radius3' };
+  }
+  return null;
+}
+
+function getOptimizerBlockValue(block, key) {
+  if (!isPlainObject(block)) return undefined;
+  const params = isPlainObject(block.parameters) ? block.parameters : null;
+  if (params && Object.prototype.hasOwnProperty.call(params, key)) {
+    const value = params[key];
+    if (value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '')) {
+      return value;
+    }
+  }
+  const vars = isPlainObject(block.variables) ? block.variables : null;
+  if (vars && isPlainObject(vars[key]) && Object.prototype.hasOwnProperty.call(vars[key], 'value')) {
+    return vars[key].value;
+  }
+  return undefined;
+}
+
+function computeLensBendingValueForOptimizer(block) {
+  if (!isPlainObject(block)) return '';
+  const config = getBendingConfigForOptimizer(block);
+  if (!config) return '';
+
+  const c1 = parseRadiusCurvatureForOptimizer(getOptimizerBlockValue(block, config.radiusAKey));
+  const c2 = parseRadiusCurvatureForOptimizer(getOptimizerBlockValue(block, config.radiusBKey));
+  if (c1 === null || c2 === null) return '';
+
+  const curvatureDiff = c1 - c2;
+  if (!Number.isFinite(curvatureDiff) || Math.abs(curvatureDiff) < 1e-12) return '';
+
+  const bending = (c1 + c2) / curvatureDiff;
+  return Number.isFinite(bending) ? bending : '';
+}
+
 function getCurrentDesignValueFromBlocks(blocks, baseId) {
   if (!Array.isArray(blocks)) return '';
   const id = String(baseId ?? '').trim();
@@ -2851,6 +2911,9 @@ function getCurrentDesignValueFromBlocks(blocks, baseId) {
 
   const block = blocks.find(b => isPlainObject(b) && String(b.blockId) === blockId);
   if (!block) return '';
+  if (String(key ?? '').trim().toLowerCase() === 'bending') {
+    return computeLensBendingValueForOptimizer(block);
+  }
   const params = isPlainObject(block.parameters) ? block.parameters : null;
   if (params && Object.prototype.hasOwnProperty.call(params, key)) {
     const v = params[key];
@@ -2875,6 +2938,9 @@ function getCurrentDesignValueByVariableId(config, variableId) {
   if (!blockId || !key) return '';
   const block = config.blocks.find(b => isPlainObject(b) && String(b.blockId) === blockId);
   if (!block) return '';
+  if (String(key ?? '').trim().toLowerCase() === 'bending') {
+    return computeLensBendingValueForOptimizer(block);
+  }
   const params = isPlainObject(block.parameters) ? block.parameters : null;
   if (params && Object.prototype.hasOwnProperty.call(params, key)) {
     const v = params[key];
@@ -3088,7 +3154,7 @@ function enumerateJointVariables({
       if (isMaterialKey(out.key)) {
         const s = String(out.value ?? '').trim();
         if (s !== '') categoricalMaterial.push(out);
-      } else {
+      } else if (typeof out.value === 'number' && Number.isFinite(out.value)) {
         numeric.push(out);
       }
     }
@@ -3110,7 +3176,7 @@ function enumerateJointVariables({
     if (isMaterialKey(out.key)) {
       const s = String(out.value ?? '').trim();
       if (s !== '') categoricalMaterial.push(out);
-    } else {
+    } else if (typeof out.value === 'number' && Number.isFinite(out.value)) {
       numeric.push(out);
     }
   }
@@ -3865,20 +3931,23 @@ async function runCategoricalMaterialSweep({
     if (shouldStop && shouldStop()) break;
 
     const baseValue = String(v.value ?? '').trim();
+    const forceReplaceNonGlassBase = baseValue !== '' && !isAirMaterialName(baseValue) && !glassExists(baseValue);
   const js = jointState || { blocksByConfigId: null, targetConfigIds: null, activeConfigId: activeCfg?.id };
   const { configId, baseId } = parseJointVariableId(v.id);
   const cidForCandidates = configId ? String(configId) : String(js.activeConfigId ?? '');
   const cfgViewForCandidates = { blocks: (js.blocksByConfigId && js.blocksByConfigId[cidForCandidates]) || activeCfg?.blocks };
   const candidates = getMaterialCandidatesForVar(cfgViewForCandidates, baseId, baseValue);
-    if (candidates.length <= 1) continue;
+    const replacementCandidates = candidates.filter(c => {
+      const materialName = String(c ?? '').trim();
+      return materialName !== '' && materialName !== baseValue && !isAirMaterialName(materialName);
+    });
+    if (replacementCandidates.length === 0) continue;
 
-    let bestLocalValue = baseValue;
-    let bestLocalEval = best;
+    let bestLocalValue = forceReplaceNonGlassBase ? '' : baseValue;
+    let bestLocalEval = forceReplaceNonGlassBase ? null : best;
 
-    for (const cand of candidates) {
+    for (const cand of replacementCandidates) {
       if (shouldStop && shouldStop()) break;
-      if (String(cand).trim() === baseValue) continue;
-      if (isAirMaterialName(cand)) continue;
 
       const okSet = jointState
         ? setJointDesignVariableValue(jointState, v.id, cand)
@@ -3917,7 +3986,7 @@ async function runCategoricalMaterialSweep({
         await nextFrame();
       }
 
-      if (e && compareEval(e, bestLocalEval)) {
+      if (e && (bestLocalEval === null || compareEval(e, bestLocalEval))) {
         bestLocalEval = e;
         bestLocalValue = cand;
       }
@@ -3925,7 +3994,7 @@ async function runCategoricalMaterialSweep({
 
     if (shouldStop && shouldStop()) break;
 
-    if (bestLocalEval && compareEval(bestLocalEval, best)) {
+    if (bestLocalEval && (forceReplaceNonGlassBase || compareEval(bestLocalEval, best))) {
       if (jointState) setJointDesignVariableValue(jointState, v.id, bestLocalValue);
       else setDesignVariableValue(activeCfg, v.id, bestLocalValue);
       best = bestLocalEval;
@@ -3962,8 +4031,10 @@ async function runCategoricalMaterialSweep({
       }
     } else {
       // Restore
-      if (jointState) setJointDesignVariableValue(jointState, v.id, baseValue);
-      else setDesignVariableValue(activeCfg, v.id, baseValue);
+      if (!forceReplaceNonGlassBase) {
+        if (jointState) setJointDesignVariableValue(jointState, v.id, baseValue);
+        else setDesignVariableValue(activeCfg, v.id, baseValue);
+      }
 
       if (onProgress) {
         try {
@@ -4062,6 +4133,7 @@ function isAsphereCoefKey(key) {
 function defaultScaleForKey(key) {
   const s = String(key ?? '').trim();
   if (!s) return 1;
+  if (/bending$/i.test(s)) return 0.25;
   if (isAsphereCoefKey(s)) {
     const idx = parseCoefIndexFromKey(s);
     // Heuristic scale for polynomial coefficients used in aspheric surfaces.

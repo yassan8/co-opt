@@ -206,6 +206,104 @@ export class SetBlockParameterCommand extends Command {
   }
 }
 
+export class SetLensBendingCommand extends Command {
+  configId: string;
+  blockId: string;
+  oldFrontRadius: any;
+  oldBackRadius: any;
+  newFrontRadius: any;
+  newBackRadius: any;
+
+  constructor(configId: string, blockId: string, oldFrontRadius: any, oldBackRadius: any, newFrontRadius: any, newBackRadius: any) {
+    super(`Set ${blockId}.bending`);
+    this.configId = configId;
+    this.blockId = blockId;
+    this.oldFrontRadius = oldFrontRadius;
+    this.oldBackRadius = oldBackRadius;
+    this.newFrontRadius = newFrontRadius;
+    this.newBackRadius = newBackRadius;
+  }
+
+  execute(): void {
+    this.apply(this.newFrontRadius, this.newBackRadius);
+  }
+
+  undo(): void {
+    this.apply(this.oldFrontRadius, this.oldBackRadius);
+  }
+
+  private apply(frontRadius: any, backRadius: any): void {
+    if (w.undoHistory) {
+      w.undoHistory.isExecuting = true;
+    }
+    try {
+      const sysConfig = w.loadSystemConfigurations();
+      const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
+      if (!cfg) {
+        return;
+      }
+      const block = this.findBlock(cfg);
+      this.setNestedValue(block, 'parameters.frontRadius', frontRadius);
+      this.setNestedValue(block, 'parameters.backRadius', backRadius);
+      if (block?.variables?.frontRadius && typeof block.variables.frontRadius === 'object' && Object.prototype.hasOwnProperty.call(block.variables.frontRadius, 'value')) {
+        block.variables.frontRadius.value = frontRadius;
+      }
+      if (block?.variables?.backRadius && typeof block.variables.backRadius === 'object' && Object.prototype.hasOwnProperty.call(block.variables.backRadius, 'value')) {
+        block.variables.backRadius.value = backRadius;
+      }
+      this.refreshSystem(sysConfig, cfg);
+    } finally {
+      if (w.undoHistory) {
+        w.undoHistory.isExecuting = false;
+      }
+    }
+  }
+
+  findBlock(cfg: Configuration): Block {
+    return cfg.blocks?.find((b: Block) => b.blockId === this.blockId)!;
+  }
+
+  setNestedValue(obj: any, path: string, value: any): void {
+    const parts = path.split('.');
+    let current = obj;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!current[parts[i]]) {
+        current[parts[i]] = {};
+      }
+      current = current[parts[i]];
+    }
+    const lastKey = parts[parts.length - 1];
+    if (value === undefined) {
+      delete current[lastKey];
+    } else {
+      current[lastKey] = value;
+    }
+  }
+
+  refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
+    if (w.expandBlocksToOpticalSystemRows) {
+      const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
+      if (expanded && expanded.rows) {
+        cfg.opticalSystemRows = expanded.rows;
+      }
+    }
+
+    if (w.saveSystemConfigurations) {
+      w.saveSystemConfigurations(sysConfig);
+    }
+
+    if (w.refreshBlockInspector) {
+      requestRefreshBlockInspector(w);
+    }
+    if (w.loadActiveConfigurationToTables) {
+      w.loadActiveConfigurationToTables();
+    }
+    if (w.refreshAllUI) {
+      w.refreshAllUI();
+    }
+  }
+}
+
 /**
  * Command for setting a surface field in the Surface Table
  */
@@ -1324,6 +1422,7 @@ if (typeof window !== 'undefined') {
   // Export command classes for use in other modules
   w.Command = Command;
   w.SetBlockParameterCommand = SetBlockParameterCommand;
+  w.SetLensBendingCommand = SetLensBendingCommand;
   w.SetSurfaceFieldCommand = SetSurfaceFieldCommand;
   w.SetRequirementCommand = SetRequirementCommand;
   w.SetRequirementEnabledBulkCommand = SetRequirementEnabledBulkCommand;

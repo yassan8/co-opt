@@ -67,6 +67,49 @@ function cloneJson(v: any): any {
     }
 }
 
+const __meritWarnOnceKeys = new Set<string>();
+
+function meritWarnOnce(key: string, message: string): void {
+    if (!key) return;
+    if (__meritWarnOnceKeys.has(key)) return;
+    __meritWarnOnceKeys.add(key);
+    console.warn(message);
+}
+
+function normalizeParaxialAxisSelection(value: any): '' | 'X' | 'Y' {
+    const s = String(value ?? '').trim().toUpperCase();
+    if (s === 'X') return 'X';
+    if (s === 'Y') return 'Y';
+    return '';
+}
+
+function getParaxialMeridianFromAxis(axis: '' | 'X' | 'Y'): 'average' | 'sagittal' | 'tangential' {
+    if (axis === 'X') return 'sagittal';
+    if (axis === 'Y') return 'tangential';
+    return 'average';
+}
+
+function readParaxialMeridianScalar(value: any, axis: '' | 'X' | 'Y'): number {
+    if (axis === 'X') {
+        const sagittal = Number(value?.sagittal);
+        if (Number.isFinite(sagittal)) return sagittal;
+    }
+    if (axis === 'Y') {
+        const tangential = Number(value?.tangential);
+        if (Number.isFinite(tangential)) return tangential;
+    }
+    if (value && typeof value === 'object') {
+        const average = Number(value?.average);
+        if (Number.isFinite(average)) return average;
+        const tangential = Number(value?.tangential);
+        if (Number.isFinite(tangential)) return tangential;
+        const sagittal = Number(value?.sagittal);
+        if (Number.isFinite(sagittal)) return sagittal;
+    }
+    const direct = Number(value);
+    return Number.isFinite(direct) ? direct : NaN;
+}
+
 function parseZernikeUnit(raw: any): string {
     const s = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
     if (s === 'um' || s === 'µm' || s === 'μm' || s === 'micron' || s === 'microns') {
@@ -170,7 +213,39 @@ function isInfiniteSystemFromRows(opticalSystemRows: any[]): boolean {
 }
 
 function toFieldSettingFromObjectRow(objRow: any, index0: number, isInfiniteSystem: boolean): any {
-    if (!objRow || typeof objRow !== 'object') return { x: 0, y: 0, objectIndex: index0 + 1 };
+    if (!objRow || typeof objRow !== 'object') {
+        return isInfiniteSystem
+            ? {
+                type: 'Angle',
+                position: 'Angle',
+                objectIndex: index0 + 1,
+                displayName: `Object ${index0 + 1}`,
+                x: 0,
+                y: 0,
+                fieldAngle: { x: 0, y: 0 },
+                xFieldAngle: 0,
+                yFieldAngle: 0,
+                xHeightAngle: 0,
+                yHeightAngle: 0,
+                angleX: 0,
+                angleY: 0,
+                xHeight: 0,
+                yHeight: 0
+            }
+            : {
+                type: 'Rectangle',
+                position: 'Rectangle',
+                objectIndex: index0 + 1,
+                displayName: `Object ${index0 + 1}`,
+                x: 0,
+                y: 0,
+                xHeight: 0,
+                yHeight: 0,
+                fieldAngle: { x: 0, y: 0 },
+                fieldX: 0,
+                fieldY: 0
+            };
+    }
     const pickFirstFinite = (values: any[], fallback = 0): number => {
         for (const value of values) {
             const n = toFiniteNumber(value, NaN);
@@ -203,21 +278,26 @@ function toFieldSettingFromObjectRow(objRow: any, index0: number, isInfiniteSyst
 
     if (isInfiniteSystem) {
         return {
+            type: 'Angle',
             position: 'Angle',
             objectIndex: objectIndex1,
             displayName,
             x: fieldX,
             y: fieldY,
+            fieldAngle: { x: fieldX, y: fieldY },
             xFieldAngle: fieldX,
             yFieldAngle: fieldY,
             xHeightAngle: fieldX,
             yHeightAngle: fieldY,
             angleX: fieldX,
-            angleY: fieldY
+            angleY: fieldY,
+            xHeight: 0,
+            yHeight: 0
         };
     }
 
     return {
+        type: 'Rectangle',
         position: 'Rectangle',
         objectIndex: objectIndex1,
         displayName,
@@ -225,6 +305,7 @@ function toFieldSettingFromObjectRow(objRow: any, index0: number, isInfiniteSyst
         y: fieldY,
         xHeight: fieldX,
         yHeight: fieldY,
+        fieldAngle: { x: 0, y: 0 },
         fieldX: fieldX,
         fieldY: fieldY
     };
@@ -330,12 +411,7 @@ function computeZernikeFitLive({
             return null;
         }
 
-        const opdCalc = createOPDCalculator({
-            opticalSystemData,
-            imageSurfaceIndex,
-            wavelengthUm,
-            fieldSetting
-        });
+        const opdCalc = createOPDCalculator(opticalSystemData, wavelengthUm);
 
         if (!opdCalc) {
             console.warn('⚠️ computeZernikeFitLive: OPD calculator creation failed');
@@ -360,7 +436,7 @@ function computeZernikeFitLive({
             const vp: any[] = [];
             const opdVals: number[] = [];
             for (const pt of gridPoints) {
-                const opd = opdCalc.calculateOPD(pt.nx, pt.ny, 0);
+                const opd = opdCalc.calculateOPD(pt.nx, pt.ny, fieldSetting);
                 if (opd !== null && Number.isFinite(opd)) {
                     vp.push(pt);
                     opdVals.push(opd);
@@ -374,13 +450,14 @@ function computeZernikeFitLive({
             return null;
         }
 
-        const analyzer = new WavefrontAberrationAnalyzer(
-            validPoints.map(p => ({ x: p.nx, y: p.ny, opd: opdValues[validPoints.indexOf(p)] }))
-        );
+        const analyzer = new WavefrontAberrationAnalyzer(opdCalc);
+        const fit = analyzer.fitZernikePolynomials({
+            pupilCoordinates: validPoints.map((p) => ({ x: p.nx, y: p.ny })),
+            opds: opdValues
+        }, zernikeMaxNoll) as any;
 
-        const fit = analyzer.fitZernikePolynomials({ maxNoll: zernikeMaxNoll }) as any;
-
-        if (!fit || !fit.coefficients) {
+        if (!fit || ((!fit.coefficientsMicrons || typeof fit.coefficientsMicrons !== 'object')
+            && (!fit.coefficientsWaves || typeof fit.coefficientsWaves !== 'object'))) {
             console.warn('⚠️ computeZernikeFitLive: Zernike fit failed');
             return null;
         }
@@ -1324,26 +1401,87 @@ class MeritFunctionEditor {
                 }
 
                 const surfaceNum = Math.floor(Number(param1Raw));
-                let surface = null;
+                const resolveSurfaceBySelection = (rows: any[]): any => {
+                    if (!Array.isArray(rows) || rows.length === 0 || !Number.isFinite(surfaceNum)) return null;
 
-                // Prefer matching by surface id (stable across filtered/reordered views)
-                if (Number.isFinite(surfaceNum)) {
-                    surface = opticalSystemData.find((row: any) => Number(row?.id) === surfaceNum) || null;
-                }
+                    const byId = rows.find((row: any) => Number(row?.id) === surfaceNum) || null;
+                    if (byId) return byId;
 
-                // Backward compatibility: treat value as 1-based array index if id match is not found
-                if (!surface && Number.isFinite(surfaceNum) && surfaceNum >= 1) {
-                    const surfaceIndex0 = surfaceNum - 1;
-                    if (surfaceIndex0 >= 0 && surfaceIndex0 < opticalSystemData.length) {
-                        surface = opticalSystemData[surfaceIndex0];
+                    if (surfaceNum >= 1) {
+                        const surfaceIndex0 = surfaceNum - 1;
+                        if (surfaceIndex0 >= 0 && surfaceIndex0 < rows.length) {
+                            return rows[surfaceIndex0];
+                        }
                     }
-                }
 
+                    return null;
+                };
+
+                const readCtctThickness = (row: any, rows: any[]): number => {
+                    if (!row || typeof row !== 'object') return NaN;
+
+                    const gapThicknessRaw = row.__cooptGapThickness;
+                    if (gapThicknessRaw !== undefined && gapThicknessRaw !== null && String(gapThicknessRaw).trim() !== '') {
+                        const gapThickness = Number(gapThicknessRaw);
+                        if (Number.isFinite(gapThickness)) return gapThickness;
+                    }
+
+                    const directThickness = Number(row.thickness);
+                    if (Number.isFinite(directThickness) && Math.abs(directThickness) > 1e-12) {
+                        return directThickness;
+                    }
+
+                    const blockId = String(row._blockId ?? '').trim();
+                    if (blockId && Array.isArray(rows)) {
+                        const relatedGapRow = rows.find((candidate: any) => {
+                            if (!candidate || typeof candidate !== 'object') return false;
+                            if (String(candidate._blockId ?? '').trim() !== blockId) return false;
+                            const candidateGapRaw = candidate.__cooptGapThickness;
+                            return candidateGapRaw !== undefined && candidateGapRaw !== null && String(candidateGapRaw).trim() !== '';
+                        });
+                        if (relatedGapRow) {
+                            const relatedGap = Number(relatedGapRow.__cooptGapThickness);
+                            if (Number.isFinite(relatedGap)) return relatedGap;
+                        }
+                    }
+
+                    return Number.isFinite(directThickness) ? directThickness : NaN;
+                };
+
+                let surface = resolveSurfaceBySelection(opticalSystemData);
                 if (!surface) {
                     return 1e9;
                 }
 
-                const thickness = Number(surface.thickness);
+                let thickness = readCtctThickness(surface, opticalSystemData);
+
+                if ((!Number.isFinite(thickness) || Math.abs(thickness) <= 1e-12) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        const liveRows = getOpticalSystemRows(null);
+                        const liveSurface = resolveSurfaceBySelection(liveRows);
+                        const liveThickness = readCtctThickness(liveSurface, liveRows);
+                        if (Number.isFinite(liveThickness)) {
+                            thickness = liveThickness;
+                        }
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+
                 if (!Number.isFinite(thickness)) {
                     return 1e9;
                 }
@@ -1570,8 +1708,12 @@ class MeritFunctionEditor {
 
                 const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
                 const objectIndex1 = (param2Raw === '') ? 1 : Math.max(1, Math.floor(Number(param2Raw)));
-                const objectIndex0 = objectIndex1 - 1;
-                const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+                const requestedObjectIndex0 = objectIndex1 - 1;
+                const resolvedObjectIndex0 = Array.isArray(objectRows) && objectRows.length > 0
+                    ? Math.min(Math.max(requestedObjectIndex0, 0), objectRows.length - 1)
+                    : requestedObjectIndex0;
+                const objectIndex0 = resolvedObjectIndex0;
+                const objRow = Array.isArray(objectRows) ? objectRows[resolvedObjectIndex0] : null;
 
                 const unit = parseZernikeUnit(operand.param3);
 
@@ -1582,8 +1724,15 @@ class MeritFunctionEditor {
                 const nollIndex = (param5Raw === '') ? 0 : Math.floor(Number(param5Raw));
 
                 if (!objRow || typeof objRow !== 'object') {
-                    console.warn('⚠️ ZERN_COEFF: object row not found');
-                    return 1e9;
+                    meritWarnOnce(
+                        `zern-coeff-missing-object:${operand.configId ?? 'active'}:${requestedObjectIndex0}`,
+                        '⚠️ ZERN_COEFF: object row not found, using on-axis fallback field'
+                    );
+                } else if (resolvedObjectIndex0 !== requestedObjectIndex0) {
+                    meritWarnOnce(
+                        `zern-coeff-clamped-object:${operand.configId ?? 'active'}:${requestedObjectIndex0}->${resolvedObjectIndex0}`,
+                        `⚠️ ZERN_COEFF: object ${objectIndex1} not found, using object ${resolvedObjectIndex0 + 1}`
+                    );
                 }
 
                 const isInfiniteSystem = isInfiniteSystemFromRows(opticalSystemData);
@@ -1827,8 +1976,11 @@ class MeritFunctionEditor {
             }
             if (wavefrontPoints.length === 0) return null;
 
-            const analyzer = new WavefrontAberrationAnalyzer(wavefrontPoints);
-            const fit = analyzer.fitZernikePolynomials({ maxNoll: 37 }) as any;
+            const analyzer = new WavefrontAberrationAnalyzer(createOPDCalculator(opticalSystemData, wavelengthUm));
+            const fit = analyzer.fitZernikePolynomials({
+                pupilCoordinates: wavefrontPoints.map((pt) => ({ x: pt.x, y: pt.y })),
+                opds: wavefrontPoints.map((pt) => pt.opd)
+            }, 37) as any;
             if (!fit || !fit.coefficientsWaves) return null;
 
             const nollToNM = (noll: number): { n: number; m: number } => {
@@ -3709,30 +3861,35 @@ class MeritFunctionEditor {
         return Number.isFinite(t) ? t : 0;
     }
 
+    getParaxialAxisSelectionForOperand(operand: any, key: string): '' | 'X' | 'Y' {
+        if (key === 'EFL') return normalizeParaxialAxisSelection(operand?.param3);
+        if (key === 'EFFL') return normalizeParaxialAxisSelection(operand?.param4);
+        if (key === 'FL' || key === 'BFL' || key === 'IMD') return normalizeParaxialAxisSelection(operand?.param2);
+        return '';
+    }
+
     getPrimarySystemMetricsCached(operand: any, opticalSystemData: any[]): any {
         const { source: sourceRows } = this.getConfigTablesByConfigId(operand?.configId);
         const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
         const cfgKey = operand?.configId ? String(operand.configId) : 'active';
         const param2 = operand?.param2 ? String(operand.param2) : '';
-        const cacheKey = `primary-metrics:${cfgKey}:wl=${wavelength}:p2=${param2}`;
+        const axis = this.getParaxialAxisSelectionForOperand(operand, String(operand?.operand ?? '').trim());
+        const cacheKey = `primary-metrics:${cfgKey}:wl=${wavelength}:p2=${param2}:axis=${axis}`;
 
         const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
         if (cached) return cached;
 
         const paraxial = calculateParaxialData(opticalSystemData, wavelength);
+        const meridian = getParaxialMeridianFromAxis(axis);
 
-        const fl = this.safeFiniteNumberOrZero(paraxial?.focalLength);
+        const fl = this.safeFiniteNumberOrZero(readParaxialMeridianScalar(paraxial?.focalLength, axis));
 
-        let bfl: any = paraxial?.backFocalLength;
-        if (bfl && typeof bfl === 'object' && 'tangential' in bfl) {
-            bfl = (bfl as any).tangential;
-        }
-        bfl = this.safeFiniteNumberOrZero(bfl);
+        const bfl = this.safeFiniteNumberOrZero(readParaxialMeridianScalar(paraxial?.backFocalLength, axis));
 
-        const imd = this.safeFiniteNumberOrZero(paraxial?.imageDistance);
+        const imd = this.safeFiniteNumberOrZero(readParaxialMeridianScalar(paraxial?.imageDistance, axis));
         const finalAlpha = Number(paraxial?.finalAlpha);
 
-        const eflTrace = calculateFullSystemParaxialTrace(opticalSystemData, wavelength) as any;
+        const eflTrace = calculateFullSystemParaxialTrace(opticalSystemData, wavelength, meridian) as any;
         const efl = (eflTrace && Number.isFinite(eflTrace.finalAlpha) && Math.abs(eflTrace.finalAlpha) > 1e-12)
             ? (1.0 / eflTrace.finalAlpha)
             : 0;
@@ -3820,21 +3977,32 @@ class MeritFunctionEditor {
         
         if (key === 'EFL') {
             const rawScope = (() => {
-                const param3 = String(operand?.param3 ?? '').trim();
-                if (param3) return param3;
+                const param4 = String(operand?.param4 ?? '').trim();
+                if (param4) return param4;
                 return String(operand?.param2 ?? '').trim();
             })();
             const scope = this.resolveMeritScopeSelection(rawScope, opticalSystemData, operand?.configId);
             if (scope.kind === 'block' || scope.kind === 'zoom') {
                 const { source: sourceRows } = this.getConfigTablesByConfigId(operand?.configId);
                 const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+                const axis = this.getParaxialAxisSelectionForOperand(operand, key);
                 return this._calculateEFLForSurfaceRange(
                     opticalSystemData,
                     scope.startSurf,
                     scope.endSurf,
-                    wavelength
+                    wavelength,
+                    axis
                 );
             }
+        }
+
+        if (key === 'EFFL') {
+            const { source: sourceRows } = this.getConfigTablesByConfigId(operand?.configId);
+            const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+            const axis = this.getParaxialAxisSelectionForOperand(operand, key);
+            const startSurf = parseInt(operand?.param2, 10) || 1;
+            const endSurf = parseInt(operand?.param3, 10) || (opticalSystemData.length - 2);
+            return this._calculateEFLForSurfaceRange(opticalSystemData, startSurf, endSurf, wavelength, axis);
         }
         
         const metrics = this.getPrimarySystemMetricsCached(operand, opticalSystemData);
@@ -4018,21 +4186,17 @@ class MeritFunctionEditor {
         }
     }
 
-    _calculateEFLForSurfaceRange(opticalSystemData: any[], startSurf: number, endSurf: number, wavelength: number): number {
+    _calculateEFLForSurfaceRange(opticalSystemData: any[], startSurf: number, endSurf: number, wavelength: number, axis: '' | 'X' | 'Y' = ''): number {
         try {
             const rangeData = this._buildIsolatedSurfaceRangeSystem(opticalSystemData, startSurf, endSurf);
             if (!rangeData) return 0;
             
-            console.log(`[EFL Range] Calculating EFL for surfaces ${startSurf}-${endSurf} (${rangeData.length - 2} surfaces)`);
-            console.log(`[EFL Range] Built system with ${rangeData.length} surfaces (Object + ${rangeData.length - 2} lens + Image)`);
-            
             // Calculate paraxial trace for this isolated system
-            const eflTrace = calculateFullSystemParaxialTrace(rangeData, wavelength) as any;
+            const meridian = getParaxialMeridianFromAxis(axis);
+            const eflTrace = calculateFullSystemParaxialTrace(rangeData, wavelength, meridian) as any;
             const efl = (eflTrace && Number.isFinite(eflTrace.finalAlpha) && Math.abs(eflTrace.finalAlpha) > 1e-12)
                 ? (1.0 / eflTrace.finalAlpha)
                 : 0;
-            
-            console.log(`[EFL Range] Result: ${efl}`);
             return this.safeFiniteNumberOrZero(efl);
         } catch (err) {
             console.error('[EFL Range] Error calculating EFL:', err);
@@ -4061,9 +4225,14 @@ class MeritFunctionEditor {
     }
 
     _buildIsolatedSurfaceRangeSystem(opticalSystemData: any[], startSurf: number, endSurf: number): any[] | null {
-        const lensSurfaces = opticalSystemData.slice(startSurf, endSurf + 1);
-        if (lensSurfaces.length === 0) return null;
-        return this._buildIsolatedSystemFromLensSurfaces(lensSurfaces, 'surface-range calc');
+        const normalizedRange = this._expandPrincipalPointSurfaceRange(opticalSystemData, startSurf, endSurf);
+        if (!normalizedRange) return null;
+
+        return this._buildSubsystemBySurfaceIds(
+            opticalSystemData,
+            normalizedRange.startSurf,
+            normalizedRange.endSurf
+        );
     }
 
     _calculatePrincipalPointsForSurfaceRange(opticalSystemData: any[], startSurf: number, endSurf: number, wavelength: number): any | null {

@@ -209,6 +209,14 @@ class SystemRequirementsEditor {
     return Array.isArray(this.requirements) ? this.requirements : [];
   }
 
+  _cloneLiveRequirementsRows(): any[] {
+    try {
+      return JSON.parse(JSON.stringify(this._getLiveRequirementsData()));
+    } catch (_) {
+      return Array.isArray(this.requirements) ? this.requirements.slice() : [];
+    }
+  }
+
   _getSelectedRequirementIds(): string[] {
     const rawIds = Array.isArray(this._selectedIds) && this._selectedIds.length > 0
       ? this._selectedIds
@@ -299,7 +307,11 @@ class SystemRequirementsEditor {
           const isGlass = material && material !== 'air' && material !== '';
           const isGapType = objType === 'gap' || objType.includes('gap');
           const hasFiniteThickness = Number.isFinite(thickness);
-          const isGapLike = isGapType || isStop || (!isGlass && hasFiniteThickness);
+          const gapThicknessRaw = surfRow.__cooptGapThickness;
+          const hasAttachedGapThickness = gapThicknessRaw !== undefined
+            && gapThicknessRaw !== null
+            && String(gapThicknessRaw).trim() !== '';
+          const isGapLike = isGapType || isStop || hasAttachedGapThickness || (!isGlass && hasFiniteThickness && Math.abs(thickness) > 1e-12);
 
           if (isObject || isCT || isImage) continue;
 
@@ -960,6 +972,12 @@ class SystemRequirementsEditor {
           row.param2 = '1';  // Object: first row
           row.param3 = '';   // Sampling: default(32)
           row.param4 = '';
+        } else if (row.operand === 'ZERN_COEFF') {
+          row.param1 = '';   // Source: Primary wavelength
+          row.param2 = '1';  // Object: first row
+          row.param3 = '';   // Unit: default waves
+          row.param4 = '';   // Sampling: default(32)
+          row.param5 = '0';  // Noll: RMS over coefficients
         }
         
         // Record undo command
@@ -1064,6 +1082,11 @@ class SystemRequirementsEditor {
         const isPrincipalPointModeParam = isPrincipalPointOperand && field === 'param4';
         const isPrincipalPointZoomGroupParam = isPrincipalPointOperand && field === 'param2' && String(row?.param4 ?? '').trim().toUpperCase() === 'ZG';
         const isPrincipalPointZoomGroupUnusedParam = isPrincipalPointOperand && field === 'param3' && String(row?.param4 ?? '').trim().toUpperCase() === 'ZG';
+        const operandName = String(row?.operand ?? '').trim();
+        const isAxisParam =
+          (operandName === 'FL' || operandName === 'BFL' || operandName === 'IMD') && field === 'param2'
+          || (operandName === 'EFL' && field === 'param3')
+          || (operandName === 'EFFL' && field === 'param4');
         
         // SPOT_SIZE param5: Surface selection (1-based, empty=image)
         const isSpotSizeSurfaceParam = field === 'param5' && String(row?.operand ?? '').startsWith('SPOT_SIZE');
@@ -1109,7 +1132,7 @@ class SystemRequirementsEditor {
           }
           
           control.value = String(row[field] || '');
-        } else if (isEdgeDirectionParam) {
+        } else if (isEdgeDirectionParam || isAxisParam) {
           // EDGE param5: Direction dropdown (Radial/X/Y)
           control = document.createElement('select');
           control.style.width = '100%';
@@ -1120,7 +1143,7 @@ class SystemRequirementsEditor {
           control.style.boxSizing = 'border-box';
           
           const options = [
-            { value: '', label: '(Radial)' },
+            { value: '', label: isAxisParam ? '(Default)' : '(Radial)' },
             { value: 'X', label: 'X' },
             { value: 'Y', label: 'Y' }
           ];
@@ -1218,7 +1241,11 @@ class SystemRequirementsEditor {
                 const isGlass = material && material !== 'air' && material !== '';
                 const isGapType = objType === 'gap' || objType.includes('gap');
                 const hasFiniteThickness = Number.isFinite(thickness);
-                const isGapLike = isGapType || isStop || (!isGlass && hasFiniteThickness);
+                const gapThicknessRaw = surfRow.__cooptGapThickness;
+                const hasAttachedGapThickness = gapThicknessRaw !== undefined
+                  && gapThicknessRaw !== null
+                  && String(gapThicknessRaw).trim() !== '';
+                const isGapLike = isGapType || isStop || hasAttachedGapThickness || (!isGlass && hasFiniteThickness && Math.abs(thickness) > 1e-12);
                 if (isObject || isCT || isImage) continue;
 
                 if (isGapLike) {
@@ -2165,7 +2192,7 @@ class SystemRequirementsEditor {
         const ids = this._getSelectedRequirementIds();
         if (ids.length === 0) return;
         e.preventDefault();
-        const storageData = loadSystemRequirementsTableData();
+        const storageData = this._cloneLiveRequirementsRows();
         const idSet = new Set(ids);
         const filtered = storageData.filter((r: any) => !idSet.has(String(r?.id ?? '')));
         filtered.forEach((r: any, idx: number) => { if (r) r.id = idx + 1; });
@@ -2185,7 +2212,7 @@ class SystemRequirementsEditor {
         // Copy selected rows
         const ids = this._getSelectedRequirementIds();
         if (ids.length === 0) return;
-        const rows = loadSystemRequirementsTableData();
+        const rows = this._cloneLiveRequirementsRows();
         this._copiedRows = ids
           .map(id => rows.find((r: any) => String(r?.id) === id))
           .filter(Boolean)
@@ -2195,19 +2222,24 @@ class SystemRequirementsEditor {
         // Paste copied rows after selection
         if (this._copiedRows.length === 0) return;
         e.preventDefault();
-        const storageData = loadSystemRequirementsTableData();
+        const storageData = this._cloneLiveRequirementsRows();
         const selectedIndex = this.requirements.findIndex(
           (r: any) => r && String(r.id) === String(this._selectedId)
         );
         let insertIndex = selectedIndex !== -1 ? selectedIndex + 1 : storageData.length;
+        const pastedIds: number[] = [];
         for (const src of this._copiedRows) {
           const newRow = JSON.parse(JSON.stringify(src));
           storageData.splice(insertIndex, 0, newRow);
+          pastedIds.push(insertIndex + 1);
           insertIndex++;
         }
         storageData.forEach((r: any, idx: number) => { if (r) r.id = idx + 1; });
         this.persistRequirementsRows(storageData);
         this.loadFromStorage();
+        this._selectedIds = pastedIds.map((id) => String(id));
+        this._selectedId = pastedIds.length > 0 ? pastedIds[pastedIds.length - 1] : this._selectedId;
+        this._selectionAnchorId = pastedIds.length > 0 ? String(pastedIds[0]) : this._selectionAnchorId;
         this.renderTable();
         this.syncRequirementsToSystemConfigFromStorage();
       } else if (e.key === 'd' || e.key === 'D') {
@@ -2215,7 +2247,7 @@ class SystemRequirementsEditor {
         const ids = this._getSelectedRequirementIds();
         if (ids.length === 0) return;
         e.preventDefault();
-        const storageData = loadSystemRequirementsTableData();
+        const storageData = this._cloneLiveRequirementsRows();
         const rowsToDup = ids
           .map(id => storageData.find((r: any) => String(r?.id) === id))
           .filter(Boolean)
@@ -2225,14 +2257,19 @@ class SystemRequirementsEditor {
           (r: any) => r && String(r.id) === String(this._selectedId)
         );
         let insertIndex = selectedIndex !== -1 ? selectedIndex + 1 : storageData.length;
+        const duplicatedIds: number[] = [];
         for (const src of rowsToDup) {
           const newRow = JSON.parse(JSON.stringify(src));
           storageData.splice(insertIndex, 0, newRow);
+          duplicatedIds.push(insertIndex + 1);
           insertIndex++;
         }
         storageData.forEach((r: any, idx: number) => { if (r) r.id = idx + 1; });
         this.persistRequirementsRows(storageData);
         this.loadFromStorage();
+        this._selectedIds = duplicatedIds.map((id) => String(id));
+        this._selectedId = duplicatedIds.length > 0 ? duplicatedIds[duplicatedIds.length - 1] : this._selectedId;
+        this._selectionAnchorId = duplicatedIds.length > 0 ? String(duplicatedIds[0]) : this._selectionAnchorId;
         this.renderTable();
         this.syncRequirementsToSystemConfigFromStorage();
       }

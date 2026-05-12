@@ -2299,7 +2299,7 @@ export class OpticalPathDifferenceCalculator {
         const chiefRay = referenceRay ? null : this.generateChiefRay(fieldSetting);
         referenceRay = referenceRay || chiefRay;
 
-        // ✅ デバッグ: 基準光線が実際にstopを通過しているか確認（常にログ出力）
+        // ✅ デバッグ: 基準光線が実際にstopを通過しているか確認
         if (referenceRay && !this.isFiniteForField(fieldSetting)) {
             const stopPoint = this.getStopPointFromRayData(referenceRay);
             const stopCenter = this.getSurfaceOrigin(this.stopSurfaceIndex);
@@ -2307,8 +2307,10 @@ export class OpticalPathDifferenceCalculator {
                 const dx = stopPoint.x - stopCenter.x;
                 const dy = stopPoint.y - stopCenter.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-                console.log(`✅ [RefRay] Reference ray stop hit: distance from center = ${dist.toFixed(6)} mm, stop=(${stopPoint.x.toFixed(3)}, ${stopPoint.y.toFixed(3)}), center=(${stopCenter.x.toFixed(3)}, ${stopCenter.y.toFixed(3)})`);
-            } else if (!stopPoint) {
+                if (OPD_DEBUG) {
+                    console.log(`✅ [RefRay] Reference ray stop hit: distance from center = ${dist.toFixed(6)} mm, stop=(${stopPoint.x.toFixed(3)}, ${stopPoint.y.toFixed(3)}), center=(${stopCenter.x.toFixed(3)}, ${stopCenter.y.toFixed(3)})`);
+                }
+            } else if (!stopPoint && OPD_DEBUG) {
                 console.warn(`⚠️ [RefRay] Reference ray does NOT pass through stop surface!`);
             }
         }
@@ -9760,7 +9762,9 @@ export class WavefrontAberrationAnalyzer {
             maxOrderFromPoints
         );
         
-        console.log(`🔧 Zernike fitting: maxOrder=${maxOrderForFit} (points=${filteredPoints.length}, requested=${maxOrderRequested})`);
+        if (OPD_DEBUG) {
+            console.log(`🔧 Zernike fitting: maxOrder=${maxOrderForFit} (points=${filteredPoints.length}, requested=${maxOrderRequested})`);
+        }
         
         const fitResult = fitZernikeWeighted(filteredPoints, maxOrderForFit, {
             skipPiston: true,     // j=0をスキップ（既に計算済み）
@@ -9778,7 +9782,7 @@ export class WavefrontAberrationAnalyzer {
         coefficientsMicrons[2] = tiltX_scaled * scaleFactor;  // チルトX
         
         // デバッグ: OPD平均値の確認
-        if (Math.abs(opdMean) > 0.001) {  // 1nm以上の平均値がある場合
+        if (OPD_DEBUG && Math.abs(opdMean) > 0.001) {  // 1nm以上の平均値がある場合
             console.log(`📊 OPD平均値: ${opdMean.toFixed(6)}μm → 係数[0]（ピストン項）に設定`);
         }
         
@@ -9819,7 +9823,7 @@ export class WavefrontAberrationAnalyzer {
             const model = reconstructOPD(removeCoeffs, p.x, p.y);
             
             // デバッグ：最初の数点でモデル値を確認
-            if (i < 5) {
+            if (OPD_DEBUG && i < 5) {
                 console.log(`🔍 Point ${i}: pupil(${p.x.toFixed(3)}, ${p.y.toFixed(3)}), model=${model.toFixed(6)} μm`);
             }
             

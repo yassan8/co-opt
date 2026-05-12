@@ -11,7 +11,7 @@
  * 作成日: 2025/07/15
  */
 
-import { traceRay, traceRayHitPoint, traceRayHitPointBatch, calculateSurfaceOrigins } from '../core/ray-tracing.ts';
+import { traceRay, traceRayHitPoint, traceRayHitPointBatch, solveRayOriginsToStopPointsWithRustMeta, calculateSurfaceOrigins } from '../core/ray-tracing.ts';
 import { getRustRayTracingWasmSync } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
 
@@ -101,6 +101,12 @@ const CHIEF_RUST_TRACE_OPTIONS = {
     requireRustWasm: false
 };
 
+const BOUNDARY_RUST_TRACE_OPTIONS = {
+    allowNonStrict: true,
+    useRustWasm: true,
+    requireRustWasm: false
+};
+
 function traceRayHitPointForChiefSearch(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
     assertRustRenderTracingAvailable();
     return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, CHIEF_RUST_TRACE_OPTIONS as any);
@@ -111,6 +117,16 @@ function traceRayHitPointBatchForChiefSearch(opticalSystemRows, rays, n0 = 1.0, 
     if (!list.length) return [];
     assertRustRenderTracingAvailable();
     return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, CHIEF_RUST_TRACE_OPTIONS as any);
+}
+
+function traceRayHitPointForBoundarySearch(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
+    return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, BOUNDARY_RUST_TRACE_OPTIONS as any);
+}
+
+function traceRayHitPointBatchForBoundarySearch(opticalSystemRows, rays, n0 = 1.0, targetSurfaceIndex = null) {
+    const list = Array.isArray(rays) ? rays : [];
+    if (!list.length) return [];
+    return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, BOUNDARY_RUST_TRACE_OPTIONS as any);
 }
 
 // Runtime build stamp (for cache/stale-module diagnostics)
@@ -802,7 +818,7 @@ function solveStopEdgeDistanceBrent(chiefOrigin, direction, basis, directionSpec
         if (cached) return cached;
         const origin = mkOrigin(distance);
         const ray = { pos: origin, dir: direction, wavelength };
-        const stopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopTraceSurfaceIndex);
+        const stopPoint = traceRayHitPointForBoundarySearch(opticalSystemRows, ray, 1.0, stopTraceSurfaceIndex);
         if (!stopPoint) {
             const result = { valid: false, value: Infinity };
             evaluationCache.set(cacheKey, result);
@@ -836,7 +852,7 @@ function solveStopEdgeDistanceBrent(chiefOrigin, direction, basis, directionSpec
             dir: direction,
             wavelength
         }));
-        const stopPoints = traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, 1.0, stopTraceSurfaceIndex);
+        const stopPoints = traceRayHitPointBatchForBoundarySearch(opticalSystemRows, rays, 1.0, stopTraceSurfaceIndex);
 
         uncachedDistances.forEach((distance, index) => {
             const cacheKey = cacheKeyForDistance(distance);
@@ -2624,7 +2640,119 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             return best.error < 1e-3 ? best : null;
         };
 
+        const solveChiefOriginByRustStopSolver = (seedPoints) => {
+            const seeds = Array.isArray(seedPoints)
+                ? seedPoints.filter((seed) => Number.isFinite(Number(seed?.x)) && Number.isFinite(Number(seed?.y)))
+                : [];
+            if (!seeds.length) return null;
+
+            try {
+                const initialOrigins = seeds.map((seed) => ({
+                    x: Number(seed.x) || 0,
+                    y: Number(seed.y) || 0,
+                    z: initialZ
+                }));
+                const dirVectors = seeds.map(() => ({
+                    x: direction.i,
+                    y: direction.j,
+                    z: direction.k
+                }));
+                const stopTargets = seeds.map(() => ({
+                    x: stopX,
+                    y: stopY,
+                    z: stopCenter.z
+                }));
+                const solvedOrigins = solveRayOriginsToStopPointsWithRustMeta(
+                    opticalSystemRows,
+                    initialOrigins,
+                    dirVectors,
+                    stopTargets,
+                    stopSurfaceIndex,
+                    wavelength,
+                    {
+                        maxIter: 24,
+                        tolMm: 1e-6,
+                        eps: 1e-3,
+                        maxStep: Math.max(1, dynamicHalfRange * 0.1)
+                    }
+                );
+                if (!Array.isArray(solvedOrigins) || solvedOrigins.length !== seeds.length) {
+                    return null;
+                }
+
+                const verifyRays = solvedOrigins.map((origin) => ({
+                    pos: {
+                        x: Number(origin?.x) || 0,
+                        y: Number(origin?.y) || 0,
+                        z: Number(origin?.z) || initialZ
+                    },
+                    dir: { x: direction.i, y: direction.j, z: direction.k },
+                    wavelength: wavelength
+                }));
+                const verifiedHits = traceRayHitPointBatchForChiefSearch(opticalSystemRows, verifyRays, 1.0, stopSurfaceIndex);
+                if (!Array.isArray(verifiedHits) || verifiedHits.length !== seeds.length) {
+                    return null;
+                }
+
+                let bestSolved = null;
+                for (let index = 0; index < solvedOrigins.length; index += 1) {
+                    const solvedOrigin = solvedOrigins[index];
+                    const hit = verifiedHits[index];
+                    if (!solvedOrigin || !hit) continue;
+                    const error = Math.hypot(Number(hit.x) - stopX, Number(hit.y) - stopY);
+                    if (!Number.isFinite(error)) continue;
+                    if (!bestSolved || error < bestSolved.error) {
+                        bestSolved = {
+                            x: Number(solvedOrigin.x) || 0,
+                            y: Number(solvedOrigin.y) || 0,
+                            z: Number(solvedOrigin.z) || initialZ,
+                            error
+                        };
+                    }
+                }
+
+                if (bestSolved && bestSolved.error <= 5e-3) {
+                    return bestSolved;
+                }
+            } catch (_) {}
+
+            return null;
+        };
+
         const nearbySeed = getNearbyChiefRayOriginSeed(familyKey, direction);
+        const rustSeedCandidates = nearbySeed
+            ? [nearbySeed, { x: guessX, y: guessY }]
+            : [{ x: guessX, y: guessY }];
+        const rustSolvedChiefOrigin = solveChiefOriginByRustStopSolver(rustSeedCandidates);
+        if (rustSolvedChiefOrigin) {
+            const result = {
+                x: rustSolvedChiefOrigin.x,
+                y: rustSolvedChiefOrigin.y,
+                z: rustSolvedChiefOrigin.z
+            };
+
+            if (typeof window !== 'undefined') {
+                setLastChiefRayResult({
+                    direction: direction,
+                    optimalX: result.x,
+                    optimalY: result.y,
+                    error: rustSolvedChiefOrigin.error,
+                    method: 'rust-stop-solver'
+                });
+            }
+
+            if (cacheKey) {
+                chiefRayOriginSearchCache.set(cacheKey, { ...result });
+                if (chiefRayOriginSearchCache.size > 256) {
+                    const firstKey = chiefRayOriginSearchCache.keys().next().value;
+                    if (firstKey !== undefined) chiefRayOriginSearchCache.delete(firstKey);
+                }
+            }
+            storeChiefRayOriginSeed(familyKey, direction, result);
+
+            return result;
+        }
+
         const newtonResult = solveChiefOriginByNewton2D(
             nearbySeed?.x ?? guessX,
             nearbySeed?.y ?? guessY

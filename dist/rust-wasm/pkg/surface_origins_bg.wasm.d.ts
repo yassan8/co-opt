@@ -32,6 +32,7 @@ export const run_native_distortion_wasm_json: (a: number, b: number) => [number,
 export const run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
+export const solve_image_height_component_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
 export const solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
 export const solve_qp_subproblem_unconstrained: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];

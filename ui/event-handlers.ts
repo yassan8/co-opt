@@ -6544,17 +6544,8 @@ export function setupAnalysisWindows() {
             try {
                 const el = document.getElementById('popup-spot-stats');
                 if (el) {
-                    const value = String(text || '');
-                    el.textContent = value;
-                    el.style.display = value.trim().length > 0 ? 'block' : 'none';
-                    if (value.trim().length > 0) {
-                        el.style.padding = '8px 12px';
-                        el.style.fontSize = '12px';
-                        el.style.color = '#333';
-                        el.style.borderBottom = '1px solid #eee';
-                        el.style.background = '#fff';
-                        el.style.whiteSpace = 'normal';
-                    }
+                    el.textContent = '';
+                    el.style.display = 'none';
                 }
             } catch (_) {}
         }
@@ -7375,14 +7366,62 @@ export function setupAnalysisWindows() {
                             return { objectLabel: raw, wavelengthLabel: 'Wavelength Primary' };
                         };
 
+                        const getFallbackObjectLabel = (objectIndex) => {
+                            try {
+                                const rows = Array.isArray(objectRowsForNative) ? objectRowsForNative : [];
+                                const row = rows[objectIndex];
+                                if (row && typeof row === 'object') {
+                                    const id = String(row?.id ?? '').trim();
+                                    if (id) return id;
+                                    const name = String(row?.name ?? '').trim();
+                                    if (name) return name;
+                                    const pos = String(row?.position ?? row?.object ?? '').trim();
+                                    if (pos) return 'Object ' + String(objectIndex + 1) + ' (' + pos + ')';
+                                }
+                            } catch (_) {}
+                            return 'Object ' + String(objectIndex + 1);
+                        };
+
                         const groupedByObject = new Map();
                         for (let i = 0; i < series.length; i++) {
                             const s = series[i] || {};
-                            const parsed = parseSeriesLabel(s?.label, 'Object ' + (i + 1));
+                            const parsed = parseSeriesLabel(s?.label, getFallbackObjectLabel(i));
                             if (!groupedByObject.has(parsed.objectLabel)) {
                                 groupedByObject.set(parsed.objectLabel, []);
                             }
                             groupedByObject.get(parsed.objectLabel).push(s);
+                        }
+
+                        const wavelengthCountForGrouping = (() => {
+                            const n = Number(result?.wavelengthCount);
+                            if (Number.isInteger(n) && n > 0) return n;
+                            const keys = new Set();
+                            for (let i = 0; i < series.length; i++) {
+                                const s = series[i] || {};
+                                const parsed = parseSeriesLabel(s?.label, getFallbackObjectLabel(i));
+                                keys.add(wavelengthLabelFromSeries(s, parsed.wavelengthLabel));
+                            }
+                            return Math.max(1, keys.size);
+                        })();
+
+                        // Some native result labels do not round-trip cleanly through parsing,
+                        // which can split one object's wavelengths into separate subplots.
+                        // When that happens, regroup by contiguous wavelength bundles.
+                        if (
+                            groupedByObject.size === series.length
+                            && wavelengthCountForGrouping > 1
+                            && (series.length % wavelengthCountForGrouping) === 0
+                        ) {
+                            groupedByObject.clear();
+                            for (let i = 0; i < series.length; i++) {
+                                const s = series[i] || {};
+                                const objectIndex = Math.floor(i / wavelengthCountForGrouping);
+                                const objectLabel = getFallbackObjectLabel(objectIndex);
+                                if (!groupedByObject.has(objectLabel)) {
+                                    groupedByObject.set(objectLabel, []);
+                                }
+                                groupedByObject.get(objectLabel).push(s);
+                            }
                         }
                         const objectEntries = Array.from(groupedByObject.entries());
 
@@ -7443,13 +7482,19 @@ export function setupAnalysisWindows() {
                         };
 
                         const count = Math.max(1, preparedObjects.length);
-                        const cols = Math.max(1, Math.min(3, Math.ceil(Math.sqrt(count))));
+                        const cols = (() => {
+                            if (count <= 1) return 1;
+                            if (count <= 4) return 2;
+                            if (count <= 9) return 3;
+                            if (count <= 16) return 4;
+                            return 5;
+                        })();
                         const rows = Math.max(1, Math.ceil(count / cols));
-                        const hGap = 0.05;
-                        const vGap = 0.12;
+                        const hGap = count > 16 ? 0.02 : (count > 9 ? 0.03 : 0.05);
+                        const vGap = rows > 6 ? 0.025 : (rows > 4 ? 0.04 : 0.08);
                         const cellW = (1 - (cols - 1) * hGap) / cols;
                         const cellH = (1 - (rows - 1) * vGap) / rows;
-                        layout.height = Math.max(360, rows * 340);
+                        layout.height = Math.max(420, rows * 250 + 110);
 
                         const legendAdded = new Set();
                         const legendColorByLabel = new Map();
@@ -7488,6 +7533,18 @@ export function setupAnalysisWindows() {
                                 scaleanchor: xAxisName,
                                 scaleratio: 1,
                             };
+
+                            layout.annotations.push({
+                                x: (x0 + x1) / 2,
+                                y: Math.min(1.0, y1 + 0.015),
+                                xref: 'paper',
+                                yref: 'paper',
+                                text: String(objectLabel || ('Object ' + String(i + 1))),
+                                showarrow: false,
+                                font: { size: 12, color: '#111827' },
+                                xanchor: 'center',
+                                yanchor: 'bottom',
+                            });
 
                             if (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0) {
                                 layout.shapes.push({
@@ -7552,6 +7609,14 @@ export function setupAnalysisWindows() {
                                 },
                                 hoverinfo: 'skip',
                             });
+                        }
+
+                        const renderablePointCount = traces.reduce((sum, trace) => {
+                            const xs = Array.isArray(trace?.x) ? trace.x : [];
+                            return sum + xs.filter((v) => Number.isFinite(Number(v))).length;
+                        }, 0);
+                        if (renderablePointCount <= 0) {
+                            throw new Error('Native Spot Diagram produced no plottable points.');
                         }
 
                         setProgress(85, 'Rendering Spot Diagram...');
@@ -7726,6 +7791,20 @@ export function setupAnalysisWindows() {
         window.addEventListener('focus', syncAll);
         setInterval(syncAll, 1000);
         syncAll();
+
+        window.addEventListener('load', () => {
+            try {
+                syncAll();
+            } catch (_) {}
+            window.setTimeout(() => {
+                try {
+                    const showBtn = document.getElementById('popup-show-spot-diagram-btn');
+                    if (showBtn && typeof showBtn.click === 'function') {
+                        showBtn.click();
+                    }
+                } catch (_) {}
+            }, 0);
+        });
     </script>
 </body>
 </html>

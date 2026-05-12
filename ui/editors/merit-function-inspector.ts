@@ -30,7 +30,8 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     name: "Focal Length (FL)",
     description: "Paraxial focal length (System Data)",
     parameters: [
-      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "Axis", description: "blank=Default, X=sagittal/XZ, Y=tangential/YZ" }
     ],
     notes: "System Dataの近軸計算と同じ経路でFLを返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -39,7 +40,8 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     description: "EFL = 1/α(final) with h[1]=1 (System Data)",
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
-      { key: "param2", label: "Blocks", description: "blank/ALL = full system, or blockId list (comma/space separated)" }
+      { key: "param2", label: "Blocks", description: "blank/ALL = full system, or blockId list (comma/space separated)" },
+      { key: "param3", label: "Axis", description: "blank=Default, X=sagittal/XZ, Y=tangential/YZ" }
     ],
     notes: "System Dataに表示しているEFL（h[1]=1なのでEFL=1/α[final]）を返します。\n\nBlocks(param2):\n- 空欄 / ALL: 全系EFL\n- blockId: そのブロック単体のEFL（ブロックを空気中のサブシステムとして評価）\n- blockId,blockId,... : 選択ブロック連結サブシステムのEFL（系内順序で抽出）\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -69,7 +71,8 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     name: "Back Focal Length (BFL)",
     description: "Back focal length (System Data)",
     parameters: [
-      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "Axis", description: "blank=Default, X=sagittal/XZ, Y=tangential/YZ" }
     ],
     notes: "System Dataの近軸計算と同じ経路でBFLを返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -79,7 +82,8 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "S1", description: "Start Surface" },
-      { key: "param3", label: "S2", description: "End Surface" }
+      { key: "param3", label: "S2", description: "End Surface" },
+      { key: "param4", label: "Axis", description: "blank=Default, X=sagittal/XZ, Y=tangential/YZ" }
     ],
     notes: "開始面から終了面までの有効焦点距離を計算します。面の指定はOptical SystemテーブルのSurface番号（id値）を使用します。\n\nλ: Sourceテーブルの行番号（1始まり）で波長を指定します。例：λ=1でSource1行目の波長、λ=2でSource2行目の波長を使用。\n\nS1（開始面）: Surface番号で指定。S1=0（Object面）の場合、実際のObject面のthickness値を使用します（有限系または無限系）。S1>0（途中の面から開始）の場合、thickness=Infinityの仮想Object面を作成し、無限共役で計算します。\n\nS2（終了面）: Surface番号で指定。省略時は最終面の1つ前が使用されます。"
   },
@@ -87,7 +91,8 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     name: "Image Distance",
     description: "Paraxial image distance (System Data)",
     parameters: [
-      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "Axis", description: "blank=Default, X=sagittal/XZ, Y=tangential/YZ" }
     ],
     notes: "System DataのImage Distanceを返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },

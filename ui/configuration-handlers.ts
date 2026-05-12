@@ -283,6 +283,11 @@ function initializeConfigurationSystem(): void {
   if (!hasObjectData && config1 && Array.isArray(config1.object) && config1.object.length > 0) {
     saveObjectTableData(config1.object as any);
   }
+  if (!hasRequirementsData) {
+    saveSystemRequirementsTableData(
+      Array.isArray(systemConfig.systemRequirements) ? systemConfig.systemRequirements as any : []
+    );
+  }
 
   // Migration: ensure block-based configs preserve legacy Object row thickness for conjugate detection.
   try {

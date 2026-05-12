@@ -5,6 +5,8 @@
  * Optimizers can use it to enumerate variables and apply updates.
  */
 
+import { getGlassDataWithSellmeier } from '../data/glass.ts';
+
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
@@ -28,6 +30,143 @@ function normalizeMaybeNumber(value) {
   return value;
 }
 
+function parseFiniteRadius(value) {
+  const normalized = normalizeMaybeNumber(value);
+  if (typeof normalized === 'string') {
+    const s = normalized.trim();
+    if (!s || /^inf(inity)?$/i.test(s)) return null;
+    const numeric = Number(s);
+    if (!Number.isFinite(numeric) || Math.abs(numeric) < 1e-12) return null;
+    return numeric;
+  }
+  if (typeof normalized === 'number') {
+    if (!Number.isFinite(normalized) || Math.abs(normalized) < 1e-12) return null;
+    return normalized;
+  }
+  return null;
+}
+
+function parseRadiusCurvature(value) {
+  const normalized = normalizeMaybeNumber(value);
+  if (typeof normalized === 'string') {
+    const s = normalized.trim();
+    if (!s) return null;
+    if (/^inf(inity)?$/i.test(s)) return 0;
+    const numeric = Number(s);
+    if (!Number.isFinite(numeric) || Math.abs(numeric) < 1e-12) return null;
+    return 1 / numeric;
+  }
+  if (typeof normalized === 'number') {
+    if (!Number.isFinite(normalized) || Math.abs(normalized) < 1e-12) return null;
+    return 1 / normalized;
+  }
+  return null;
+}
+
+function isLensBlock(block) {
+  const blockType = String(block?.blockType ?? '').trim();
+  return blockType === 'Lens' || blockType === 'PositiveLens';
+}
+
+function isDoubletBlock(block) {
+  const blockType = String(block?.blockType ?? '').trim();
+  return blockType === 'Doublet';
+}
+
+function getBendingConfig(block) {
+  if (isLensBlock(block)) {
+    return {
+      radiusAKey: 'frontRadius',
+      radiusBKey: 'backRadius',
+      syncKeys: /^(frontRadius|backRadius)$/i
+    };
+  }
+  if (isDoubletBlock(block)) {
+    return {
+      radiusAKey: 'radius1',
+      radiusBKey: 'radius3',
+      syncKeys: /^(radius1|radius3)$/i
+    };
+  }
+  return null;
+}
+
+function getBlockValue(block, key) {
+  if (!isPlainObject(block)) return undefined;
+  const params = isPlainObject(block.parameters) ? block.parameters : null;
+  if (params && Object.prototype.hasOwnProperty.call(params, key)) {
+    const value = params[key];
+    if (value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '')) {
+      return value;
+    }
+  }
+  const vars = isPlainObject(block.variables) ? block.variables : null;
+  if (vars && isPlainObject(vars[key]) && Object.prototype.hasOwnProperty.call(vars[key], 'value')) {
+    return vars[key].value;
+  }
+  return undefined;
+}
+
+function computeLensBendingValue(block) {
+  if (!isPlainObject(block)) return '';
+  const config = getBendingConfig(block);
+  if (!config) return '';
+
+  const c1 = parseRadiusCurvature(getBlockValue(block, config.radiusAKey));
+  const c2 = parseRadiusCurvature(getBlockValue(block, config.radiusBKey));
+  if (c1 === null || c2 === null) return '';
+
+  const curvatureDiff = c1 - c2;
+  if (!Number.isFinite(curvatureDiff) || Math.abs(curvatureDiff) < 1e-12) return '';
+
+  const bending = (c1 + c2) / curvatureDiff;
+  return Number.isFinite(bending) ? bending : '';
+}
+
+function resolveLensBendingUpdate(block, bendingValue) {
+  if (!isPlainObject(block)) return null;
+  const config = getBendingConfig(block);
+  if (!config) return null;
+  const params = isPlainObject(block.parameters) ? block.parameters : null;
+  if (!params) return null;
+
+  const nextBending = Number(bendingValue);
+  if (!Number.isFinite(nextBending)) return null;
+
+  const radiusA = parseFiniteRadius(params[config.radiusAKey]);
+  const radiusB = parseFiniteRadius(params[config.radiusBKey]);
+  if (radiusA === null || radiusB === null) return null;
+
+  const c1 = 1 / radiusA;
+  const c2 = 1 / radiusB;
+  const curvatureDiff = c1 - c2;
+  if (!Number.isFinite(curvatureDiff) || Math.abs(curvatureDiff) < 1e-12) return null;
+
+  const curvatureSum = nextBending * curvatureDiff;
+  const nextC1 = (curvatureSum + curvatureDiff) / 2;
+  const nextC2 = (curvatureSum - curvatureDiff) / 2;
+  if (!Number.isFinite(nextC1) || !Number.isFinite(nextC2)) return null;
+  if (Math.abs(nextC1) < 1e-12 || Math.abs(nextC2) < 1e-12) return null;
+  if (Math.abs(nextC1) > 1e6 || Math.abs(nextC2) > 1e6) return null;
+
+  return {
+    radiusA: 1 / nextC1,
+    radiusB: 1 / nextC2,
+    radiusAKey: config.radiusAKey,
+    radiusBKey: config.radiusBKey,
+    bending: nextBending
+  };
+}
+
+function syncDerivedLensBendingValue(block) {
+  if (!isPlainObject(block) || !getBendingConfig(block)) return;
+  const params = ensureBlockParameters(block);
+  if (!params) return;
+  const bending = computeLensBendingValue(block);
+  params.bending = bending;
+  syncLegacyVariableValue(block, 'bending', bending);
+}
+
 function shouldMarkV(variableEntry) {
   if (variableEntry === true) return true;
   if (!isPlainObject(variableEntry)) return false;
@@ -47,8 +186,23 @@ function isUnsupportedCategoricalKey(key) {
   return false;
 }
 
+function isDerivedGapThicknessVariable(block, key) {
+  if (!isPlainObject(block)) return false;
+  if (String(key ?? '').trim().toLowerCase() !== 'thickness') return false;
+
+  const blockType = String(block.blockType ?? '').trim();
+  if (blockType !== 'Gap' && blockType !== 'AirGap') return false;
+
+  const params = isPlainObject(block.parameters) ? block.parameters : null;
+  const mode = String(params?.thicknessMode ?? '').trim().replace(/\s+/g, '').toUpperCase();
+  return mode === 'IMD' || mode === 'BFL';
+}
+
 function getValueFromBlock(block, key) {
   if (!isPlainObject(block)) return '';
+  if (String(key ?? '').trim().toLowerCase() === 'bending' && getBendingConfig(block)) {
+    return computeLensBendingValue(block);
+  }
   // Canonical source of truth is parameters.* when present.
   // (Legacy blocks may still keep a duplicated value in variables.*.value.)
   const params = isPlainObject(block.parameters) ? block.parameters : null;
@@ -71,6 +225,44 @@ function ensureBlockParameters(block) {
   if (!isPlainObject(block)) return null;
   if (!isPlainObject(block.parameters)) block.parameters = {};
   return block.parameters;
+}
+
+function syncLegacyVariableValue(block, key, value) {
+  if (!isPlainObject(block) || !isPlainObject(block.variables) || !isPlainObject(block.variables[key])) return;
+  const entry = block.variables[key];
+  if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
+    entry.value = value;
+  }
+}
+
+function syncDerivedGlassParameters(block, key, materialValue) {
+  const materialKey = String(key ?? '').trim();
+  const match = materialKey.match(/^material(\d+)?$/i);
+  if (!match) return;
+
+  const materialText = String(materialValue ?? '').trim();
+  if (!materialText || materialText.toUpperCase() === 'AIR') return;
+
+  const glass = getGlassDataWithSellmeier(materialText);
+  if (!glass || typeof glass !== 'object') return;
+
+  const suffix = String(match[1] ?? '').trim();
+  const params = ensureBlockParameters(block);
+  if (!params) return;
+
+  const rindexKey = suffix ? `rindex${suffix}` : 'rindex';
+  const abbeKey = suffix ? `abbe${suffix}` : 'abbe';
+
+  if (Number.isFinite(glass.nd)) {
+    const nd = String(glass.nd);
+    params[rindexKey] = nd;
+    syncLegacyVariableValue(block, rindexKey, nd);
+  }
+  if (Number.isFinite(glass.vd)) {
+    const vd = String(glass.vd);
+    params[abbeKey] = vd;
+    syncLegacyVariableValue(block, abbeKey, vd);
+  }
 }
 
 /**
@@ -100,6 +292,7 @@ export function listDesignVariablesFromBlocks(blocksOrConfig) {
       const entry = vars[key];
       if (!shouldMarkV(entry)) continue;
       if (isUnsupportedCategoricalKey(key)) continue;
+      if (isDerivedGapThicknessVariable(b, key)) continue;
 
       const value = normalizeMaybeNumber(getValueFromBlock(b, key));
       out.push({
@@ -139,15 +332,30 @@ export function setDesignVariableValue(config, variableId, newValue) {
 
   const params = ensureBlockParameters(block);
   if (!params) return false;
+
+  const bendingConfig = getBendingConfig(block);
+
+  if (String(key).trim().toLowerCase() === 'bending' && bendingConfig) {
+    const resolved = resolveLensBendingUpdate(block, newValue);
+    if (!resolved) return false;
+
+    params[resolved.radiusAKey] = resolved.radiusA;
+    params[resolved.radiusBKey] = resolved.radiusB;
+    params.bending = resolved.bending;
+    syncLegacyVariableValue(block, resolved.radiusAKey, resolved.radiusA);
+    syncLegacyVariableValue(block, resolved.radiusBKey, resolved.radiusB);
+    syncLegacyVariableValue(block, 'bending', resolved.bending);
+    return true;
+  }
+
   const normalized = normalizeMaybeNumber(newValue);
   params[key] = normalized;
+  syncDerivedGlassParameters(block, key, normalized);
 
   // Keep legacy duplicated storage in sync, if present.
-  if (isPlainObject(block.variables) && isPlainObject(block.variables[key])) {
-    const entry = block.variables[key];
-    if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
-      entry.value = normalized;
-    }
+  syncLegacyVariableValue(block, key, normalized);
+  if (bendingConfig && (bendingConfig.syncKeys.test(String(key ?? '').trim()) || String(key ?? '').trim().toLowerCase() === 'bending')) {
+    syncDerivedLensBendingValue(block);
   }
 
   return true;
