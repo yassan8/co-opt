@@ -1292,7 +1292,7 @@ function __coopt_addSurfaceNumberLabelsToScene(scene, opticalSystemData, surface
         const entry = layoutEntries[i];
         const assignedHorizontal = entry.assignedCenter;
         const labelAnchor = makePoint(baseVertical, assignedHorizontal);
-        __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()], 0x64748b);
+        __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()], 0x000000);
         __coopt_addDesignIntentLabelSprite(scene, entry.labelText, labelAnchor, {
             ...surfaceNumberLabelStyle,
             fillStyle: 'rgba(248,250,252,0.94)',
