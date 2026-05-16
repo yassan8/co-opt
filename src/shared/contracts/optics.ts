@@ -473,6 +473,9 @@ export interface NativeMagnificationChromaticAberrationRequest {
   wavelengths?: number[];
   referenceWavelength?: number;
   heightMode?: boolean;
+  imageHeightMode?: boolean;
+  rayCount?: number;
+  ringCount?: number;
   chiefRayDefinition?: string;
 }
 
@@ -486,6 +489,7 @@ export interface NativeMagnificationChromaticAberrationResponse {
   backend: string;
   fieldValues: number[];
   heightMode: boolean;
+  imageHeightMode?: boolean;
   referenceWavelength: number;
   imageSurfaceIndex: number;
   dataByWavelength: NativeMagnificationChromaticAberrationSeries[];

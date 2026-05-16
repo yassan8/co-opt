@@ -3435,6 +3435,10 @@ export default function LegacyPanels() {
               <span className="note">(mm)</span>
               <label htmlFor="mca-point-count-input" style={{ marginLeft: 10 }}>Points:</label>
               <input type="number" id="mca-point-count-input" defaultValue={21} min={2} max={201} step={1} />
+              <label htmlFor="mca-ray-count-input" style={{ marginLeft: 10 }}>Rays:</label>
+              <input type="number" id="mca-ray-count-input" defaultValue={101} min={1} max={5001} step={1} />
+              <label htmlFor="mca-ring-count-input" style={{ marginLeft: 10 }}>Rings:</label>
+              <input type="number" id="mca-ring-count-input" defaultValue={3} min={1} max={99} step={1} />
               <button id="show-magnification-chromatic-aberration-btn">Show lateral chromatic aberration</button>
             </div>
             <div id="mca-progress-wrapper" style={{ display: "none", margin: "8px 0" }}>

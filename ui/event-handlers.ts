@@ -8934,15 +8934,17 @@ export function setupAnalysisWindows() {
         const openMagnificationChromaticAberrationWindowBtn = document.getElementById('open-magnification-chromatic-aberration-window-btn');
         if (openMagnificationChromaticAberrationWindowBtn) {
                 openMagnificationChromaticAberrationWindowBtn.addEventListener('click', () => {
-                        if (w.__magnificationChromaticAberrationPopup && !w.__magnificationChromaticAberrationPopup.closed) {
-                                try { w.__magnificationChromaticAberrationPopup.focus(); } catch (_) {}
-                                try {
-                                        if (typeof w.__magnificationChromaticAberrationPopup.renderMagnificationChromaticAberration === 'function') {
-                                                w.__magnificationChromaticAberrationPopup.renderMagnificationChromaticAberration();
-                                        }
-                                } catch (_) {}
-                                return;
-                        }
+            const popupVersion = '2026-05-16-lca-exact-chiefray-v1';
+                try {
+                    const namedPopup = window.open('', 'Lateral Chromatic Aberration');
+                    if (namedPopup && !namedPopup.closed) {
+                        try { namedPopup.close(); } catch (_) {}
+                    }
+                } catch (_) {}
+                if (w.__magnificationChromaticAberrationPopup && !w.__magnificationChromaticAberrationPopup.closed) {
+                    try { w.__magnificationChromaticAberrationPopup.close(); } catch (_) {}
+                }
+                w.__magnificationChromaticAberrationPopup = null;
 
                         const popup = consumePreopenedAnalysisPopup('Lateral Chromatic Aberration', 'width=800,height=600');
                         if (!popup) {
@@ -9025,6 +9027,10 @@ export function setupAnalysisWindows() {
         <span style="font-size:12px;color:#666;">(mm)</span>
         <label for="popup-mca-points" style="margin-left:6px;">Points:</label>
         <input type="number" id="popup-mca-points" value="21" min="2" max="201" step="1" />
+        <label for="popup-mca-rays" style="margin-left:6px;">Rays:</label>
+        <input type="number" id="popup-mca-rays" value="101" min="1" max="5001" step="1" />
+        <label for="popup-mca-rings" style="margin-left:6px;">Rings:</label>
+        <input type="number" id="popup-mca-rings" value="3" min="1" max="99" step="1" />
         <label for="popup-mca-chief-ray" style="margin-left:6px;">Chief ray:</label>
         <select id="popup-mca-chief-ray" style="padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;">
             <option value="stop-center">Stop center</option>
@@ -9042,6 +9048,8 @@ export function setupAnalysisWindows() {
     </div>
 
     <script>
+        window.__cooptMcaPopupVersion = '${popupVersion}';
+
         function getOpenerEl(id) {
             try {
                 return window.opener && window.opener.document ? window.opener.document.getElementById(id) : null;
@@ -9054,12 +9062,18 @@ export function setupAnalysisWindows() {
             const openerMin = getOpenerEl('mca-xmin-input');
             const openerMax = getOpenerEl('mca-xmax-input');
             const openerPoints = getOpenerEl('mca-point-count-input');
+            const openerRays = getOpenerEl('mca-ray-count-input');
+            const openerRings = getOpenerEl('mca-ring-count-input');
             const popupMin = document.getElementById('popup-mca-xmin');
             const popupMax = document.getElementById('popup-mca-xmax');
             const popupPoints = document.getElementById('popup-mca-points');
+            const popupRays = document.getElementById('popup-mca-rays');
+            const popupRings = document.getElementById('popup-mca-rings');
             if (openerMin && popupMin && openerMin.value !== '') popupMin.value = openerMin.value;
             if (openerMax && popupMax && openerMax.value !== '') popupMax.value = openerMax.value;
             if (openerPoints && popupPoints && openerPoints.value !== '') popupPoints.value = openerPoints.value;
+            if (openerRays && popupRays && openerRays.value !== '') popupRays.value = openerRays.value;
+            if (openerRings && popupRings && openerRings.value !== '') popupRings.value = openerRings.value;
         }
 
         window['renderMagnificationChromaticAberration'] = async () => {
@@ -9087,10 +9101,14 @@ export function setupAnalysisWindows() {
             const xMinEl = document.getElementById('popup-mca-xmin');
             const xMaxEl = document.getElementById('popup-mca-xmax');
             const pointEl = document.getElementById('popup-mca-points');
+            const rayEl = document.getElementById('popup-mca-rays');
+            const ringEl = document.getElementById('popup-mca-rings');
             const chiefRayEl = document.getElementById('popup-mca-chief-ray');
             const xMin = xMinEl ? parseFloat(xMinEl.value) : -0.5;
             const xMax = xMaxEl ? parseFloat(xMaxEl.value) : 0.5;
             const pointCount = pointEl ? parseInt(pointEl.value, 10) : 11;
+            const rayCount = rayEl ? parseInt(rayEl.value, 10) : 101;
+            const ringCount = ringEl ? parseInt(ringEl.value, 10) : 3;
             const chiefRayDefinition = (chiefRayEl && chiefRayEl.value) ? chiefRayEl.value : 'stop-center';
 
             try {
@@ -9111,6 +9129,8 @@ export function setupAnalysisWindows() {
                     xMin,
                     xMax,
                     pointCount,
+                    rayCount,
+                    ringCount,
                     chiefRayDefinition,
                     onProgress
                 });

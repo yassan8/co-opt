@@ -4300,6 +4300,9 @@ export async function runNativeMagnificationChromaticAberration(
         ? Number(payload.referenceWavelength)
         : 0.5876,
       heightMode: payload?.heightMode === true,
+      imageHeightMode: payload?.imageHeightMode === true,
+      rayCount: Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : undefined,
+      ringCount: Number.isInteger(payload?.ringCount) ? Number(payload.ringCount) : undefined,
       chiefRayDefinition: payload?.chiefRayDefinition || "stop-center",
       requireRustWasm: true,
       forceWasmInTauri: true,
@@ -4314,6 +4317,7 @@ export async function runNativeMagnificationChromaticAberration(
     executionMode: tauriRuntime ? "tauri-wasm" : "web-wasm",
     nativeTauriInvokeDisabled: true,
   };
+  normalized.imageHeightMode = payload?.imageHeightMode === true || normalized.imageHeightMode === true;
   return normalized;
 }
 

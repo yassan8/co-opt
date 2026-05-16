@@ -1389,6 +1389,84 @@ function traceChiefRayImagePointForFiniteObject(opticalSystemRows, objectX, obje
     return transformPointToSurfaceLocal(hit, imageSurfaceInfo);
 }
 
+export function traceChiefRayLocalImagePointForObject(
+    opticalSystemRows,
+    obj,
+    wavelengthUm,
+    options: {
+        traceBackend?: 'ts' | 'rust';
+        conjugateType?: ConjugateType;
+        skipImageHeightTsValidation?: boolean;
+        imageHeightValidationTraceBackend?: 'ts' | 'rust';
+    } = {}
+) {
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0 || !obj) return null;
+
+    const traceBackend: 'ts' | 'rust' = options?.traceBackend === 'ts' ? 'ts' : 'rust';
+    const conjugateType = options?.conjugateType || detectConjugateType(opticalSystemRows, options);
+    const imageSurfaceIndex = findImageSurfaceIndex(opticalSystemRows);
+    const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+    const imageSurfaceInfo = surfaceOrigins?.[imageSurfaceIndex] || null;
+    const stopInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
+    const stopCenter3d = extractStopCenter3d(stopInfo);
+    const precomputedContext = {
+        surfaceOrigins,
+        stopInfo,
+        stopCenter3d,
+    };
+
+    const posNorm = String(obj?.__cooptEffectivePosition ?? obj?.position ?? '').trim().toLowerCase();
+    if (posNorm === 'imageheight') {
+        const effectiveObj = convertImageHeightToEffectiveObject(
+            obj,
+            opticalSystemRows,
+            wavelengthUm,
+            conjugateType,
+            {
+                skipTsValidation: options?.skipImageHeightTsValidation === true,
+                validationTraceBackend: options?.imageHeightValidationTraceBackend === 'rust' ? 'rust' : 'ts',
+            }
+        );
+        if (!effectiveObj || effectiveObj === obj) return null;
+        return traceChiefRayLocalImagePointForObject(opticalSystemRows, effectiveObj, wavelengthUm, {
+            ...options,
+            conjugateType,
+        });
+    }
+
+    if (posNorm === 'angle') {
+        const angleXDeg = Number(obj?.xHeightAngle ?? obj?.xAngle ?? obj?.x ?? 0);
+        const angleYDeg = Number(obj?.yHeightAngle ?? obj?.yAngle ?? obj?.yFieldAngle ?? obj?.fieldAngle ?? obj?.y ?? 0);
+        return traceChiefRayImagePointForAngle(
+            opticalSystemRows,
+            Number.isFinite(angleXDeg) ? angleXDeg : 0,
+            Number.isFinite(angleYDeg) ? angleYDeg : 0,
+            imageSurfaceIndex,
+            imageSurfaceInfo,
+            wavelengthUm,
+            precomputedContext,
+            traceBackend,
+        );
+    }
+
+    if (posNorm === 'rectangle' || posNorm === 'point') {
+        const objectX = Number(obj?.xHeight ?? obj?.x ?? obj?.['object x'] ?? 0);
+        const objectY = Number(obj?.yHeight ?? obj?.y ?? obj?.['object y'] ?? 0);
+        return traceChiefRayImagePointForFiniteObject(
+            opticalSystemRows,
+            Number.isFinite(objectX) ? objectX : 0,
+            Number.isFinite(objectY) ? objectY : 0,
+            imageSurfaceIndex,
+            imageSurfaceInfo,
+            wavelengthUm,
+            precomputedContext,
+            traceBackend,
+        );
+    }
+
+    return null;
+}
+
 function refineFiniteChiefDirectionToStopCenter(centerPoint, fallbackDirection, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceBackend: 'ts' | 'rust' = 'rust') {
     const refinedDirection = solveRayDirectionToStopPointFast(
         centerPoint,

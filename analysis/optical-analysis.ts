@@ -2966,6 +2966,8 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
                 return (raw ?? '').toString().toLowerCase();
             };
             const tags = rows.map(pickTag).filter(Boolean);
+            const hasImageHeight = tags.some(t => t.includes('imageheight') || t.includes('image height'));
+            if (hasImageHeight) return { mode: 'imageheight' };
             const hasRect = tags.some(t => t.includes('rect') || t.includes('rectangle'));
             const hasHeight = tags.some(t => t.includes('height'));
             if (hasRect || hasHeight) return { mode: 'height' };
@@ -2980,6 +2982,7 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
         };
 
         const fieldMode = inferObjectFieldMode(objectRows);
+        const imageHeightMode = fieldMode.mode === 'imageheight';
         const heightMode = fieldMode.mode === 'height';
 
         const rawFieldValues = (objectRows || [])
@@ -3002,9 +3005,17 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
         }
 
         const pointCountInput = document.getElementById('mca-point-count-input') as HTMLInputElement | null;
+        const rayCountInput = document.getElementById('mca-ray-count-input') as HTMLInputElement | null;
+        const ringCountInput = document.getElementById('mca-ring-count-input') as HTMLInputElement | null;
         const optPointCount = (options && typeof options === 'object') ? Number((options as any).pointCount) : NaN;
+        const optRayCount = (options && typeof options === 'object') ? Number((options as any).rayCount) : NaN;
+        const optRingCount = (options && typeof options === 'object') ? Number((options as any).ringCount) : NaN;
         let pointCount = Number.isFinite(optPointCount) ? Math.round(optPointCount) : Number(pointCountInput?.value);
+        let rayCount = Number.isFinite(optRayCount) ? Math.round(optRayCount) : Number(rayCountInput?.value);
+        let ringCount = Number.isFinite(optRingCount) ? Math.round(optRingCount) : Number(ringCountInput?.value);
         if (!Number.isFinite(pointCount) || pointCount < 2) pointCount = 11;
+        if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = 101;
+        if (!Number.isFinite(ringCount) || ringCount < 1) ringCount = 3;
 
         const fieldValues: number[] = [];
         if (pointCount <= 1) {
@@ -3050,6 +3061,9 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
             wavelengths,
             referenceWavelength,
             heightMode,
+            imageHeightMode,
+            rayCount,
+            ringCount,
             chiefRayDefinition,
         } as any);
         try {

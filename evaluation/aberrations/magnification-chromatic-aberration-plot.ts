@@ -38,67 +38,13 @@ function sanitizeLcaSeries(displacements: any[], fieldValues: any[]) {
     // Keep deterministic ordering on the vertical axis.
     pairs.sort((a, b) => a.y - b.y);
 
-    // Fill missing displacement values by linear interpolation on field axis.
-    for (let i = 0; i < pairs.length; i++) {
-        if (pairs[i].x !== null) continue;
-        let li = i - 1;
-        while (li >= 0 && pairs[li].x === null) li -= 1;
-        let ri = i + 1;
-        while (ri < pairs.length && pairs[ri].x === null) ri += 1;
-
-        if (li >= 0 && ri < pairs.length) {
-            const lx = Number(pairs[li].x);
-            const rx = Number(pairs[ri].x);
-            const ly = pairs[li].y;
-            const ry = pairs[ri].y;
-            const y = pairs[i].y;
-            const dy = ry - ly;
-            if (Number.isFinite(lx) && Number.isFinite(rx) && Number.isFinite(dy) && Math.abs(dy) > 1e-12) {
-                const t = (y - ly) / dy;
-                pairs[i].x = lx + (rx - lx) * t;
-                continue;
-            }
-        }
-
-        if (li >= 0 && Number.isFinite(Number(pairs[li].x))) {
-            pairs[i].x = Number(pairs[li].x);
-        } else if (ri < pairs.length && Number.isFinite(Number(pairs[ri].x))) {
-            pairs[i].x = Number(pairs[ri].x);
-        }
-    }
-
-    // Suppress isolated zig-zag spikes while preserving the overall trend.
-    const xs = pairs.map((p) => (p.x === null ? Number.NaN : Number(p.x)));
-    const deltas: number[] = [];
-    for (let i = 1; i < xs.length; i++) {
-        const d = Math.abs(xs[i] - xs[i - 1]);
-        if (Number.isFinite(d)) deltas.push(d);
-    }
-    deltas.sort((a, b) => a - b);
-    const medianDelta = deltas.length > 0 ? deltas[Math.floor(deltas.length / 2)] : 0;
-    const spikeThreshold = Math.max(5e-4, medianDelta * 4);
-
-    for (let i = 1; i + 1 < xs.length; i++) {
-        const prev = xs[i - 1];
-        const cur = xs[i];
-        const next = xs[i + 1];
-        if (!Number.isFinite(prev) || !Number.isFinite(cur) || !Number.isFinite(next)) continue;
-        const leftJump = cur - prev;
-        const rightJump = next - cur;
-        if (Math.sign(leftJump) !== 0 && Math.sign(rightJump) !== 0 && Math.sign(leftJump) !== Math.sign(rightJump)) {
-            if (Math.abs(leftJump) > spikeThreshold && Math.abs(rightJump) > spikeThreshold) {
-                xs[i] = (prev + next) * 0.5;
-            }
-        }
-    }
-
     const outX: number[] = [];
     const outY: number[] = [];
     for (let i = 0; i < pairs.length; i++) {
-        const x = xs[i];
+        const x = pairs[i].x;
         const y = pairs[i].y;
         if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-        outX.push(x);
+        outX.push(Number(x));
         outY.push(y);
     }
     return { x: outX, y: outY };
@@ -113,6 +59,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
     const fieldValues = data.fieldValues.slice();
     const maxField = Math.max(...fieldValues.map(v => Math.abs(v)));
     const heightMode = !!data.heightMode;
+    const imageHeightMode = !!data.imageHeightMode;
     const referenceWavelength = Number.isFinite(Number(data.referenceWavelength))
         ? Number(data.referenceWavelength)
         : 0.5876;
@@ -202,7 +149,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
             range: [xMinPlot, xMaxPlot]
         },
         yaxis: {
-            title: heightMode ? 'Object Height (mm)' : 'Object Angle (deg)',
+            title: imageHeightMode ? 'Image Height (mm)' : (heightMode ? 'Object Height (mm)' : 'Object Angle (deg)'),
             range: [0, effectiveMaxY]
         },
         width: 800,
