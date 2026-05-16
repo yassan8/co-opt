@@ -146,9 +146,31 @@ const initialData = loadTableData();
 const hasDocument = (typeof document !== 'undefined') && document && typeof document.getElementById === 'function';
 const hasWindow = (typeof window !== 'undefined') && window;
 let tableContainer = hasDocument ? document.getElementById('table-object') : null;
+let derivedEvaluationRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 // 表の構成
 export let tableObject: TableObjectAPI;
+
+const scheduleDerivedEvaluationRefresh = (): void => {
+  try {
+    if (derivedEvaluationRefreshTimer) clearTimeout(derivedEvaluationRefreshTimer);
+  } catch (_) {}
+  derivedEvaluationRefreshTimer = setTimeout(() => {
+    derivedEvaluationRefreshTimer = null;
+    try {
+      const meritEditor = w.meritFunctionEditor;
+      if (meritEditor && typeof meritEditor.calculateMerit === 'function') {
+        meritEditor.calculateMerit();
+      }
+    } catch (_) {}
+    try {
+      const reqEditor = w.systemRequirementsEditor;
+      if (reqEditor && typeof reqEditor.scheduleEvaluateAndUpdate === 'function') {
+        reqEditor.scheduleEvaluateAndUpdate();
+      }
+    } catch (_) {}
+  }, 0);
+};
 
 // ---- Pure DOM Object table (Tabulator-free) --------------------------------
 
@@ -691,22 +713,26 @@ const attachObjectTableListeners = (): void => {
   tableObject.on("dataChanged", function() {
     updatePSFObjectSelectIfAvailable();
     updateWavefrontObjectOptionsIfAvailable();
+    scheduleDerivedEvaluationRefresh();
   });
 
   tableObject.on("rowAdded", function() {
     updatePSFObjectSelectIfAvailable();
     updateWavefrontObjectOptionsIfAvailable();
+    scheduleDerivedEvaluationRefresh();
   });
 
   tableObject.on("rowDeleted", function() {
     updatePSFObjectSelectIfAvailable();
     updateWavefrontObjectOptionsIfAvailable();
+    scheduleDerivedEvaluationRefresh();
   });
 
   tableObject.on("cellEdited", function() {
     updatePSFObjectSelectIfAvailable();
     updateWavefrontObjectOptionsIfAvailable();
     recalculateAutoSemiDiaIfAvailable();
+    scheduleDerivedEvaluationRefresh();
   });
 };
 

@@ -30,7 +30,8 @@ import { calculateAfocalSeidelCoefficientsIntegrated } from '../../evaluation/ab
 import { generateSpotDiagram, generateSpotDiagramAsync, generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
 import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../../evaluation/wavefront/wavefront.ts';
 import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.ts';
-import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern } from '../../optical/ray-renderer.ts';
+import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern, convertImageHeightToEffectiveObject } from '../../optical/ray-renderer.ts';
+import { detectConjugateType } from '../../utils/conjugate-detection.ts';
 import { asphericSurfaceZ, toricSurfaceZ } from '../../optical/surface-math.ts';
 import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.ts';
 import { calculateTransverseAberration } from '../../evaluation/aberrations/transverse-aberration.ts';
@@ -381,7 +382,8 @@ function isInfiniteSystemFromRows(opticalSystemRows: any[]): boolean {
     return (s === 'INF' || s === 'INFINITY');
 }
 
-function toFieldSettingFromObjectRow(objRow: any, index0: number, isInfiniteSystem: boolean): any {
+function toFieldSettingFromObjectRow(objRow: any, index0: number, opticalSystemRows: any[] | null, wavelength = 0.5876): any {
+    const isInfiniteSystem = isInfiniteSystemFromRows(Array.isArray(opticalSystemRows) ? opticalSystemRows : []);
     if (!objRow || typeof objRow !== 'object') {
         return isInfiniteSystem
             ? {
@@ -415,6 +417,34 @@ function toFieldSettingFromObjectRow(objRow: any, index0: number, isInfiniteSyst
                 fieldY: 0
             };
     }
+    let normalizedRow = objRow;
+    const positionRaw = String(objRow.position ?? objRow.fieldType ?? objRow.type ?? '').trim().toLowerCase();
+    if (positionRaw.includes('imageheight') && Array.isArray(opticalSystemRows) && opticalSystemRows.length > 0) {
+        try {
+            const conjugateType = detectConjugateType(opticalSystemRows) === 'finite' ? 'finite' : 'infinite';
+            const effectiveRow = convertImageHeightToEffectiveObject(
+                objRow,
+                opticalSystemRows,
+                wavelength,
+                conjugateType,
+                {
+                    skipTsValidation: true,
+                    validationTraceBackend: 'rust',
+                }
+            );
+            if (effectiveRow && typeof effectiveRow === 'object') {
+                normalizedRow = {
+                    ...objRow,
+                    ...effectiveRow,
+                    position: effectiveRow.__cooptEffectivePosition ?? effectiveRow.position ?? objRow.position,
+                    __cooptOriginalPosition: objRow.position,
+                };
+            }
+        } catch (_) {
+            normalizedRow = objRow;
+        }
+    }
+
     const pickFirstFinite = (values: any[], fallback = 0): number => {
         for (const value of values) {
             const n = toFiniteNumber(value, NaN);
@@ -424,26 +454,26 @@ function toFieldSettingFromObjectRow(objRow: any, index0: number, isInfiniteSyst
     };
 
     const fieldX = pickFirstFinite([
-        objRow.xHeightAngle,
-        objRow.xFieldAngle,
-        objRow.xHeight,
-        objRow.x,
-        objRow.angleX,
-        objRow.Hx
+        normalizedRow.xHeightAngle,
+        normalizedRow.xFieldAngle,
+        normalizedRow.xHeight,
+        normalizedRow.x,
+        normalizedRow.angleX,
+        normalizedRow.Hx
     ], 0);
 
     const fieldY = pickFirstFinite([
-        objRow.yHeightAngle,
-        objRow.yFieldAngle,
-        objRow.fieldAngle,
-        objRow.yHeight,
-        objRow.y,
-        objRow.angleY,
-        objRow.Hy
+        normalizedRow.yHeightAngle,
+        normalizedRow.yFieldAngle,
+        normalizedRow.fieldAngle,
+        normalizedRow.yHeight,
+        normalizedRow.y,
+        normalizedRow.angleY,
+        normalizedRow.Hy
     ], 0);
 
     const objectIndex1 = index0 + 1;
-    const displayName = String(objRow.comment || objRow.name || `Object ${objectIndex1}`);
+    const displayName = String(normalizedRow.comment || normalizedRow.name || `Object ${objectIndex1}`);
 
     if (isInfiniteSystem) {
         return {
@@ -2037,8 +2067,7 @@ class MeritFunctionEditor {
                     );
                 }
 
-                const isInfiniteSystem = isInfiniteSystemFromRows(opticalSystemData);
-                const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, isInfiniteSystem);
+                const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, opticalSystemData, wavelength);
 
                 const existingZernike = (() => {
                     try {
@@ -2181,10 +2210,6 @@ class MeritFunctionEditor {
                 return this.calculateOperandValue(operand);
             }
             case 'TA_RMS_UM': {
-                const nativeVal = await this.calculateTransverseAberrationRmsUmViaNativeAsync(operand, opticalSystemData);
-                if (Number.isFinite(nativeVal as any)) {
-                    return Number(nativeVal);
-                }
                 return this.calculateOperandValue(operand);
             }
             case 'OPD_RMS_WAVES':
@@ -2411,8 +2436,7 @@ class MeritFunctionEditor {
         const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim() : '';
         const sampling = (param3Raw === '') ? 32 : Math.max(8, Math.floor(Number(param3Raw)));
 
-        const isInfiniteSystem = isInfiniteSystemFromRows(opticalSystemData);
-        const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, isInfiniteSystem);
+        const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, opticalSystemData, wavelengthUm);
 
         const calc = createOPDCalculator(opticalSystemData, wavelengthUm);
         if (!calc || typeof (calc as any).setReferenceRay !== 'function' || typeof (calc as any).calculateOPD !== 'function') {
@@ -2573,6 +2597,15 @@ class MeritFunctionEditor {
             const objectIndex0 = objectIndex1 - 1;
             const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
             if (!objRow || typeof objRow !== 'object') return null;
+
+            const positionType = String(objRow?.__cooptOriginalPosition ?? objRow?.position ?? '').trim().toLowerCase();
+            if (positionType === 'imageheight') {
+                // The async IPC TA route still normalizes ImageHeight rows through the object-row path,
+                // which can collapse them to the on-axis field in requirements evaluation.
+                // Use the already-correct local TA path for ImageHeight until the shared async route
+                // is made field-setting aware.
+                return this.calculateTransverseAberrationRmsUm(operand, opticalSystemData);
+            }
 
             const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toLowerCase() : '';
             const component = (() => {
@@ -3098,8 +3131,8 @@ class MeritFunctionEditor {
             return Math.max(0, opticalSystemData.length - 1);
         })();
 
-        const isInfiniteSystem = isInfiniteSystemFromRows(opticalSystemData);
-        const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, isInfiniteSystem);
+        const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, opticalSystemData, wavelength);
+        const fieldKey = fieldSettingCacheKey(fieldSetting);
 
         const cfgKey = (operand?.configId !== undefined && operand?.configId !== null)
             ? String(operand.configId)
@@ -3114,6 +3147,7 @@ class MeritFunctionEditor {
                 String(objectIndex0),
                 String(imageSurfaceIndex),
                 String(rayCount),
+                fieldKey,
                 taCrossEvalCacheEvalXKeyApprox
             ].join('|');
         }
@@ -3125,6 +3159,7 @@ class MeritFunctionEditor {
             String(objectIndex0),
             String(imageSurfaceIndex),
             String(rayCount),
+            fieldKey,
             String(opticalSystemData.length)
         ].join('|');
 
@@ -3386,8 +3421,7 @@ class MeritFunctionEditor {
                 return 1e9;
             }
 
-            const isInfiniteSystem = isInfiniteSystemFromRows(opticalSystemData);
-            const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, isInfiniteSystem);
+            const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, opticalSystemData, wavelength);
 
             // Always use spot-diagram path, but control UI settings usage
             stampSpotDebug({ impl: 'spot-diagram', useUiDefaults });
