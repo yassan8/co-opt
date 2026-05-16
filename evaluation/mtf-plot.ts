@@ -442,7 +442,12 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         try {
             const effectiveObject = convertImageHeightToEffectiveObject(imageHeightCandidate, opticalSystemRows, wl, 'infinite');
             if (effectiveObject && typeof effectiveObject === 'object') {
-                selectedObject = { ...selectedObject, ...effectiveObject };
+                selectedObject = {
+                    ...selectedObject,
+                    ...effectiveObject,
+                    position: effectiveObject?.__cooptEffectivePosition ?? effectiveObject?.position ?? selectedObject?.position,
+                    __cooptOriginalPosition: selectedObject?.position ?? effectiveObject?.__cooptOriginalPosition,
+                };
                 objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? objectTypeRaw);
                 objectTypeLower = objectTypeRaw.toLowerCase();
                 isAngleType = /\bangle\b/.test(objectTypeLower);

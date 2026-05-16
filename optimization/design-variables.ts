@@ -6,6 +6,13 @@
  */
 
 import { getGlassDataWithSellmeier } from '../data/glass.ts';
+import {
+  getDoubletBendingCurrentValue,
+  isDoubletBendingBlock,
+  resolveDoubletBendingUpdate,
+  storeDoubletBendingBaseCurvatures,
+  syncDoubletBendingState,
+} from './doublet-bending.ts';
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -81,13 +88,6 @@ function getBendingConfig(block) {
       syncKeys: /^(frontRadius|backRadius)$/i
     };
   }
-  if (isDoubletBlock(block)) {
-    return {
-      radiusAKey: 'radius1',
-      radiusBKey: 'radius3',
-      syncKeys: /^(radius1|radius3)$/i
-    };
-  }
   return null;
 }
 
@@ -133,12 +133,9 @@ function resolveLensBendingUpdate(block, bendingValue) {
   const nextBending = Number(bendingValue);
   if (!Number.isFinite(nextBending)) return null;
 
-  const radiusA = parseFiniteRadius(params[config.radiusAKey]);
-  const radiusB = parseFiniteRadius(params[config.radiusBKey]);
-  if (radiusA === null || radiusB === null) return null;
-
-  const c1 = 1 / radiusA;
-  const c2 = 1 / radiusB;
+  const c1 = parseRadiusCurvature(params[config.radiusAKey]);
+  const c2 = parseRadiusCurvature(params[config.radiusBKey]);
+  if (c1 === null || c2 === null) return null;
   const curvatureDiff = c1 - c2;
   if (!Number.isFinite(curvatureDiff) || Math.abs(curvatureDiff) < 1e-12) return null;
 
@@ -146,12 +143,22 @@ function resolveLensBendingUpdate(block, bendingValue) {
   const nextC1 = (curvatureSum + curvatureDiff) / 2;
   const nextC2 = (curvatureSum - curvatureDiff) / 2;
   if (!Number.isFinite(nextC1) || !Number.isFinite(nextC2)) return null;
-  if (Math.abs(nextC1) < 1e-12 || Math.abs(nextC2) < 1e-12) return null;
   if (Math.abs(nextC1) > 1e6 || Math.abs(nextC2) > 1e6) return null;
 
+  const curvatureToRadius = (curvature) => {
+    if (!Number.isFinite(curvature) || Math.abs(curvature) > 1e6) return null;
+    if (Math.abs(curvature) < 1e-12) return 'INF';
+    const radius = 1 / curvature;
+    return Number.isFinite(radius) ? radius : null;
+  };
+
+  const nextRadiusA = curvatureToRadius(nextC1);
+  const nextRadiusB = curvatureToRadius(nextC2);
+  if (nextRadiusA === null || nextRadiusB === null) return null;
+
   return {
-    radiusA: 1 / nextC1,
-    radiusB: 1 / nextC2,
+    radiusA: nextRadiusA,
+    radiusB: nextRadiusB,
     radiusAKey: config.radiusAKey,
     radiusBKey: config.radiusBKey,
     bending: nextBending
@@ -159,9 +166,16 @@ function resolveLensBendingUpdate(block, bendingValue) {
 }
 
 function syncDerivedLensBendingValue(block) {
-  if (!isPlainObject(block) || !getBendingConfig(block)) return;
+  if (!isPlainObject(block)) return;
   const params = ensureBlockParameters(block);
   if (!params) return;
+  if (isDoubletBendingBlock(block)) {
+    const bending = syncDoubletBendingState(block);
+    params.bending = bending;
+    syncLegacyVariableValue(block, 'bending', bending);
+    return;
+  }
+  if (!getBendingConfig(block)) return;
   const bending = computeLensBendingValue(block);
   params.bending = bending;
   syncLegacyVariableValue(block, 'bending', bending);
@@ -200,8 +214,13 @@ function isDerivedGapThicknessVariable(block, key) {
 
 function getValueFromBlock(block, key) {
   if (!isPlainObject(block)) return '';
-  if (String(key ?? '').trim().toLowerCase() === 'bending' && getBendingConfig(block)) {
-    return computeLensBendingValue(block);
+  if (String(key ?? '').trim().toLowerCase() === 'bending') {
+    if (isDoubletBendingBlock(block)) {
+      return getDoubletBendingCurrentValue(block);
+    }
+    if (getBendingConfig(block)) {
+      return computeLensBendingValue(block);
+    }
   }
   // Canonical source of truth is parameters.* when present.
   // (Legacy blocks may still keep a duplicated value in variables.*.value.)
@@ -334,6 +353,23 @@ export function setDesignVariableValue(config, variableId, newValue) {
   if (!params) return false;
 
   const bendingConfig = getBendingConfig(block);
+  const isDoubletBending = isDoubletBendingBlock(block);
+
+  if (String(key).trim().toLowerCase() === 'bending' && isDoubletBending) {
+    const resolved = resolveDoubletBendingUpdate(block, newValue);
+    if (!resolved) return false;
+
+    params.radius1 = resolved.newRadius1;
+    params.radius2 = resolved.newRadius2;
+    params.radius3 = resolved.newRadius3;
+    params.bending = resolved.bending;
+    storeDoubletBendingBaseCurvatures(block, resolved.baseCurvatures);
+    syncLegacyVariableValue(block, 'radius1', resolved.newRadius1);
+    syncLegacyVariableValue(block, 'radius2', resolved.newRadius2);
+    syncLegacyVariableValue(block, 'radius3', resolved.newRadius3);
+    syncLegacyVariableValue(block, 'bending', resolved.bending);
+    return true;
+  }
 
   if (String(key).trim().toLowerCase() === 'bending' && bendingConfig) {
     const resolved = resolveLensBendingUpdate(block, newValue);
@@ -354,6 +390,10 @@ export function setDesignVariableValue(config, variableId, newValue) {
 
   // Keep legacy duplicated storage in sync, if present.
   syncLegacyVariableValue(block, key, normalized);
+  if (isDoubletBending && /^(radius1|radius2|radius3)$/i.test(String(key ?? '').trim())) {
+    const bending = syncDoubletBendingState(block);
+    syncLegacyVariableValue(block, 'bending', bending);
+  }
   if (bendingConfig && (bendingConfig.syncKeys.test(String(key ?? '').trim()) || String(key ?? '').trim().toLowerCase() === 'bending')) {
     syncDerivedLensBendingValue(block);
   }

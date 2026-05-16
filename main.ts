@@ -110,7 +110,7 @@ import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } f
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './optical/surface.ts';
 
 // Ray tracing modules
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, transformPointToLocal, calculateAllSurfacesLocalCoordinates, resetToSurfaceCoordinates, shiftToChiefRayOrigin, restoreFromLocalCoordinates, transformToChiefRayLocalCoordinates, calculateChiefRaySurfaceIntersections } from './raytracing/core/ray-tracing.ts';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, transformPointToLocal, calculateAllSurfacesLocalCoordinates, resetToSurfaceCoordinates, shiftToChiefRayOrigin, restoreFromLocalCoordinates, transformToChiefRayLocalCoordinates, calculateChiefRaySurfaceIntersections, clearRayTracingTransientCaches } from './raytracing/core/ray-tracing.ts';
 import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance, calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculateFullSystemParaxialTrace, calculateParaxialData, debugParaxialRayTrace, calculatePupilsByNewSpec, findStopSurfaceIndex, calculateImageSpaceDiffractionParams } from './raytracing/core/ray-paraxial.ts';
 
 // Marginal ray modules
@@ -128,8 +128,8 @@ import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.ts';
 import { showMTFDiagram, showThroughFocusMTFDiagram, showFieldMTFDiagram, showMTFComparisonDiagram } from './evaluation/mtf-plot.ts';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.ts';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.ts';
-import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './raytracing/generation/gen-ray-cross-finite.ts';
-import { generateInfiniteSystemCrossBeam, RayColorSystem as InfiniteRayColorSystem } from './raytracing/generation/gen-ray-cross-infinite.ts';
+import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem, clearFiniteCrossBeamCaches } from './raytracing/generation/gen-ray-cross-finite.ts';
+import { generateInfiniteSystemCrossBeam, RayColorSystem as InfiniteRayColorSystem, clearInfiniteCrossBeamCaches } from './raytracing/generation/gen-ray-cross-infinite.ts';
 // Distortion analysis
 import { calculateDistortionData } from './evaluation/aberrations/distortion.ts';
 import { plotDistortionPercent, generateDistortionPlots, plotGridDistortion, generateGridDistortionPlot } from './evaluation/aberrations/distortion-plot.ts';
@@ -145,7 +145,7 @@ import { generateZMXText, downloadZMX } from './import-export/zemax-export.ts';
 import { parseZMXTextToOpticalSystemRows, parseZMXArrayBufferToOpticalSystemRows } from './import-export/zemax-import.ts';
 
 // Ray rendering modules
-import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors, convertImageHeightToEffectiveObject } from './optical/ray-renderer.ts';
+import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors, convertImageHeightToEffectiveObject, clearRayRendererCaches } from './optical/ray-renderer.ts';
 
 // UI modules
 import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons, setupTransformationControls, updateTransformSurfaceSelect, setupAnalysisWindows } from './ui/event-handlers.ts';
@@ -2078,6 +2078,7 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                     aimThroughStop: !!isAngle,
                     useChiefRayAnalysis: true,
                     allowStopBasedOriginSolve: true,
+                    skipImageHeightTsValidation: true,
                     // Keep this consistent with analysis/spot behavior.
                     disableCrossExtent: true,
                 }
@@ -2315,6 +2316,172 @@ function __cooptGetRayPointAtSurfaceIndex(rayPath, rows, surfaceIndex) {
         }
     }
     return null;
+}
+
+function buildExactDrawCrossRaysForImageHeightObjects(objectRows, opticalSystemRows, wavelengthUm, targetSurfaceIndex, rayCount, isInfiniteSystem) {
+    if (!Array.isArray(objectRows) || objectRows.length === 0) return [];
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return [];
+
+    const traceOptions = {
+        allowNonStrict: true,
+        useRustWasm: true,
+        requireRustWasm: false,
+        disableWasmRayTracing: false,
+        __drawCrossImageHeightRustPreferred: true,
+    };
+    const exactPattern = String(getRayEmissionPattern?.() || '').trim().toLowerCase() === 'grid' ? 'grid' : 'annular';
+    const conjugateType = isInfiniteSystem ? 'infinite' : 'finite';
+    const safeRayCount = Number.isFinite(Number(rayCount)) ? Math.max(1, Math.floor(Number(rayCount))) : 1;
+    const rays = [];
+
+    objectRows.forEach((row, objectIndex) => {
+        const posNorm = String(row?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+        if (posNorm !== 'imageheight') return;
+
+        try {
+            const imageHeightTarget = {
+                x: Number(row?.__cooptImageHeightTarget?.x ?? row?.xHeightAngle ?? row?.x ?? 0) || 0,
+                y: Number(row?.__cooptImageHeightTarget?.y ?? row?.yHeightAngle ?? row?.y ?? 0) || 0,
+            };
+            const resolvedRow = convertImageHeightToEffectiveObject(
+                row,
+                opticalSystemRows,
+                wavelengthUm,
+                conjugateType,
+                { skipTsValidation: false }
+            );
+            const rayStarts = generateRayStartPointsForObject(
+                resolvedRow,
+                opticalSystemRows,
+                safeRayCount,
+                null,
+                {
+                    pattern: exactPattern,
+                    wavelengthUm,
+                    conjugateType,
+                    aimThroughStop: true,
+                    useChiefRayAnalysis: true,
+                    allowStopBasedOriginSolve: true,
+                    originSolveTraceBackend: 'rust',
+                    skipImageHeightTsValidation: false,
+                    preserveChiefNormalEmissionPlane: true,
+                    targetSurfaceIndex,
+                    disableCrossExtent: true,
+                    crossType: 'both',
+                    exactCrossBeamSampling: isInfiniteSystem && exactPattern === 'grid',
+                }
+            );
+            if (!Array.isArray(rayStarts) || rayStarts.length === 0) return;
+
+            const expectedChiefOrigin = rayStarts.expectedChiefOrigin;
+            const chiefIndex = rayStarts.reduce((bestIndex, candidate, candidateIndex) => {
+                const planeU = Number(candidate?.planeCoords?.u);
+                const planeV = Number(candidate?.planeCoords?.v);
+                if (Number.isFinite(planeU) && Number.isFinite(planeV)) {
+                    const score = Math.hypot(planeU, planeV);
+                    const best = rayStarts[bestIndex];
+                    const bestU = Number(best?.planeCoords?.u);
+                    const bestV = Number(best?.planeCoords?.v);
+                    const bestScore = (Number.isFinite(bestU) && Number.isFinite(bestV))
+                        ? Math.hypot(bestU, bestV)
+                        : Number.POSITIVE_INFINITY;
+                    return score < bestScore ? candidateIndex : bestIndex;
+                }
+
+                const sx = Number(candidate?.startP?.x);
+                const sy = Number(candidate?.startP?.y);
+                const sz = Number(candidate?.startP?.z);
+                const ox = Number(expectedChiefOrigin?.x);
+                const oy = Number(expectedChiefOrigin?.y);
+                const oz = Number(expectedChiefOrigin?.z);
+                if ([sx, sy, sz, ox, oy, oz].every(Number.isFinite)) {
+                    const score = Math.hypot(sx - ox, sy - oy, sz - oz);
+                    const best = rayStarts[bestIndex];
+                    const bx = Number(best?.startP?.x);
+                    const by = Number(best?.startP?.y);
+                    const bz = Number(best?.startP?.z);
+                    const bestScore = [bx, by, bz, ox, oy, oz].every(Number.isFinite)
+                        ? Math.hypot(bx - ox, by - oy, bz - oz)
+                        : Number.POSITIVE_INFINITY;
+                    return score < bestScore ? candidateIndex : bestIndex;
+                }
+
+                return bestIndex;
+            }, 0);
+
+            const chiefStart = rayStarts[chiefIndex] || rayStarts[0];
+            const chiefStartP = chiefStart?.startP || { x: 0, y: 0, z: 0 };
+            const chiefPlaneU = Number(chiefStart?.planeCoords?.u);
+            const chiefPlaneV = Number(chiefStart?.planeCoords?.v);
+
+            rayStarts.forEach((rayStart, rayIndex) => {
+                if (!rayStart?.startP || !rayStart?.dir) return;
+                const rayPath = traceRay(
+                    opticalSystemRows,
+                    { pos: rayStart.startP, dir: rayStart.dir, wavelength: wavelengthUm },
+                    1.0,
+                    null,
+                    targetSurfaceIndex,
+                    traceOptions,
+                );
+                if (!Array.isArray(rayPath) || rayPath.length <= 1) return;
+                if (!__cooptGetRayPointAtSurfaceIndex(rayPath, opticalSystemRows, targetSurfaceIndex)) return;
+
+                let type = rayIndex === chiefIndex ? 'chief' : 'marginal';
+                let side = 'center';
+                if (rayIndex !== chiefIndex) {
+                    const planeU = Number(rayStart?.planeCoords?.u);
+                    const planeV = Number(rayStart?.planeCoords?.v);
+                    const deltaX = (Number.isFinite(planeU) && Number.isFinite(chiefPlaneU))
+                        ? planeU - chiefPlaneU
+                        : Number(rayStart.startP.x) - Number(chiefStartP.x);
+                    const deltaY = (Number.isFinite(planeV) && Number.isFinite(chiefPlaneV))
+                        ? planeV - chiefPlaneV
+                        : Number(rayStart.startP.y) - Number(chiefStartP.y);
+
+                    if (Math.abs(deltaY) >= Math.abs(deltaX)) {
+                        type = deltaY >= 0 ? 'upper_marginal' : 'lower_marginal';
+                        side = deltaY >= 0 ? 'upper' : 'lower';
+                    } else {
+                        type = deltaX >= 0 ? 'right_marginal' : 'left_marginal';
+                        side = deltaX >= 0 ? 'right' : 'left';
+                    }
+                }
+
+                rays.push({
+                    success: true,
+                    rayPath,
+                    objectIndex,
+                    __cooptImageHeightExactRender: true,
+                    __cooptImageHeightTarget: imageHeightTarget,
+                    type,
+                    beamType: type === 'chief'
+                        ? 'chief'
+                        : (type.includes('left') || type.includes('right') ? 'horizontal' : 'vertical'),
+                    side,
+                    originalRay: {
+                        type,
+                        beamType: type === 'chief'
+                            ? 'chief'
+                            : (type.includes('left') || type.includes('right') ? 'horizontal' : 'vertical'),
+                        side,
+                        objectIndex,
+                        origin: rayStart.startP,
+                        position: rayStart.startP,
+                        pos: rayStart.startP,
+                        direction: rayStart.dir,
+                        dir: rayStart.dir,
+                        wavelength: wavelengthUm,
+                        description: rayStart.description || (type === 'chief' ? 'Chief draw-cross ray (exact ImageHeight)' : 'Marginal draw-cross ray (exact ImageHeight)'),
+                    },
+                });
+            });
+        } catch (error) {
+            console.warn('⚠️ [DrawCross] Failed to build exact ImageHeight rays; falling back to legacy conversion.', error);
+        }
+    });
+
+    return rays;
 }
 
 function __cooptShowDrawCrossCoordinateReport(rays, opticalSystemRows, objectRows, targetSurfaceIndex, hostWindow = window) {
@@ -2760,9 +2927,15 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
         const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
         const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
 
+        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
+
         // Use actual Y bounds so the system stays vertically centered.
-        let minY = -systemMaxY;
-        let maxY = systemMaxY;
+        let minY = Number.isFinite(sceneBounds?.min?.y) && Number.isFinite(sceneBounds?.max?.y)
+            ? Math.min(Number(sceneBounds.min.y), -systemMaxY)
+            : -systemMaxY;
+        let maxY = Number.isFinite(sceneBounds?.min?.y) && Number.isFinite(sceneBounds?.max?.y)
+            ? Math.max(Number(sceneBounds.max.y), systemMaxY)
+            : systemMaxY;
         let targetCenterY = 0;
         if (options.cameraBoundsOverride) {
             const cbo = options.cameraBoundsOverride as any;
@@ -2889,6 +3062,33 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
         const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
         const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
 
+        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
+        let minX = Number.isFinite(sceneBounds?.min?.x) && Number.isFinite(sceneBounds?.max?.x)
+            ? Math.min(Number(sceneBounds.min.x), -maxY)
+            : -maxY;
+        let maxX = Number.isFinite(sceneBounds?.min?.x) && Number.isFinite(sceneBounds?.max?.x)
+            ? Math.max(Number(sceneBounds.max.x), maxY)
+            : maxY;
+        let targetCenterX = 0;
+        if (options.cameraBoundsOverride) {
+            const cbo = options.cameraBoundsOverride as any;
+            if (Number.isFinite(cbo.minY) && Number.isFinite(cbo.maxY)) {
+                minX = Math.min(minX, cbo.minY);
+                maxX = Math.max(maxX, cbo.maxY);
+                targetCenterX = (minX + maxX) / 2;
+            }
+        }
+        if (!(Number.isFinite(minX) && Number.isFinite(maxX))) {
+            minX = -maxY;
+            maxX = maxY;
+            targetCenterX = 0;
+        }
+        if (maxX < minX) {
+            const swap = minX;
+            minX = maxX;
+            maxX = swap;
+        }
+
         const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
         const preserveDrawCrossBounds = options.preserveDrawCrossBounds === true && savedBounds;
         const targetCenterZ = Number.isFinite(options.centerZOverride)
@@ -2909,7 +3109,7 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
         }
 
         const marginFactor = 1.1;
-        const visibleHeight = maxY * 2 * marginFactor;
+        const visibleHeight = Math.max((maxX - minX) * marginFactor, 1e-6);
         const visibleWidth = effectiveTotalLength * marginFactor;
 
         if (camera.isOrthographicCamera) {
@@ -2938,7 +3138,7 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
         }
 
         const cameraDistance = options.cameraDistance || 300;
-    const targetX = targetOverride ? targetOverride.x : 0;
+    const targetX = targetOverride ? targetOverride.x : targetCenterX;
         const targetY = targetOverride ? targetOverride.y : 0;
         const targetZ = targetOverride ? targetOverride.z : targetCenterZ;
 
@@ -2949,6 +3149,16 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
 
         controls.target.set(targetX, targetY, targetZ);
         controls.update();
+
+        if (options.storeDrawCrossBounds === true && camera.isOrthographicCamera) {
+            camera.userData.__drawCrossOrthoBounds = {
+                left: camera.left,
+                right: camera.right,
+                top: camera.top,
+                bottom: camera.bottom,
+                centerZ: targetZ
+            };
+        }
 
         if (renderer && scene) {
             renderer.render(scene, camera);
@@ -3239,7 +3449,8 @@ const startApplicationOnce = (() => {
                         : 0.5876;
 
                     // 全てのObjectの位置を取得。
-                    // ImageHeight は主光線 solve 済みの等価 Angle/Rectangle に変換してから cross-beam に渡す。
+                    // ImageHeight は exact path を優先しつつ、失敗時のみ legacy cross-beam 用の
+                    // 等価 Angle/Rectangle 変換をフォールバックとして残す。
                     const allObjectPositions = [];
                     objectRows.forEach((obj, index) => {
                         let objectPosition;
@@ -3261,7 +3472,8 @@ const startApplicationOnce = (() => {
                                         obj,
                                         opticalSystemRows,
                                         primaryWavelength,
-                                        isInfiniteSystem ? 'infinite' : 'finite'
+                                        isInfiniteSystem ? 'infinite' : 'finite',
+                                        { skipTsValidation: true }
                                     );
                                 } catch (error) {
                                     console.warn('⚠️ [DrawCross] Failed to convert ImageHeight object; using raw values.', error);
@@ -3275,7 +3487,7 @@ const startApplicationOnce = (() => {
                                 y: yCoord,
                                 z: 0,
                                 objectIndex: index,
-                                __effectivePosition: effectiveObj?.position ?? obj?.position ?? null
+                                __effectivePosition: effectiveObj?.__cooptEffectivePosition ?? effectiveObj?.position ?? obj?.position ?? null
                             };
                         }
 
@@ -3299,6 +3511,20 @@ const startApplicationOnce = (() => {
                     } else {
                         targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
                     }
+
+                    const exactImageHeightRays = buildExactDrawCrossRaysForImageHeightObjects(
+                        objectRows,
+                        opticalSystemRows,
+                        primaryWavelength,
+                        targetSurfaceIndex,
+                        rayCount,
+                        isInfiniteSystem
+                    );
+                    const exactImageHeightObjectIndices = new Set(
+                        exactImageHeightRays
+                            .map((ray: any) => Number(ray?.objectIndex))
+                            .filter((value: number) => Number.isFinite(value))
+                    );
                     
                     // Object Thicknessに基づいて適切な関数を選択
                     let crossBeamResult;
@@ -3393,6 +3619,14 @@ const startApplicationOnce = (() => {
                             processedCount = 1;
                             totalCount = 1;
                         }
+                    }
+
+                    if (exactImageHeightObjectIndices.size > 0) {
+                        allRays = allRays.filter((ray: any) => {
+                            const objectIndex = Number(ray?.objectIndex ?? ray?.originalRay?.objectIndex ?? Number.NaN);
+                            return !Number.isFinite(objectIndex) || !exactImageHeightObjectIndices.has(objectIndex);
+                        });
+                        allRays = allRays.concat(exactImageHeightRays);
                     }
                     
                     const scene = getScene?.();
@@ -3602,9 +3836,30 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             else if (side === 'lower' || side === 'bottom') originalRay.type = 'lower_marginal';
         }
     });
+    const getCrossRayFieldMagnitude = (rayData) => {
+        const objectAngle = rayData?.objectAngle || rayData?.originalRay?.objectAngle;
+        const angleX = Number(objectAngle?.x ?? objectAngle?.xHeightAngle ?? objectAngle?.xAngle);
+        const angleY = Number(objectAngle?.y ?? objectAngle?.yHeightAngle ?? objectAngle?.yAngle);
+        if (Number.isFinite(angleX) || Number.isFinite(angleY)) {
+            return Math.max(Math.abs(angleX || 0), Math.abs(angleY || 0));
+        }
+        return 0;
+    };
+    const getCrossRayOrderPriority = (rayData) => {
+        const type = String(rayData?.originalRay?.type || rayData?.type || '').trim().toLowerCase();
+        const side = String(rayData?.originalRay?.side || rayData?.side || '').trim().toLowerCase();
+        if (type === 'chief') return 0;
+        if (side === 'upper' || side === 'top' || type === 'upper_marginal') return 1;
+        if (side === 'lower' || side === 'bottom' || type === 'lower_marginal') return 2;
+        if (side === 'left' || type === 'left_marginal') return 3;
+        if (side === 'right' || type === 'right_marginal') return 4;
+        if (type === 'vertical_cross') return 5;
+        if (type === 'horizontal_cross') return 6;
+        return 7;
+    };
     const filteredRays = tracedRays.filter(r => {
         const t = String(r?.originalRay?.type || r?.type || '').trim().toLowerCase();
-        const hasUsableTrace = !!(r && (r.success || Array.isArray(r.rayPath) || Array.isArray(r.rayPathToTarget)));
+        const hasUsableTrace = !!(r && r.success === true);
         if (!(hasUsableTrace && t && allowedTypes.has(t))) {
             return false;
         }
@@ -3620,10 +3875,30 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number'
         );
         
-        if (validHits.length === 0) {
+        if (validHits.length < 2) {
             return false; // 描画をスキップ
         }
         return true;
+    }).sort((a, b) => {
+        const fieldMagnitudeA = getCrossRayFieldMagnitude(a);
+        const fieldMagnitudeB = getCrossRayFieldMagnitude(b);
+        if (Math.abs(fieldMagnitudeA - fieldMagnitudeB) > 1e-9) {
+            // Draw larger-field objects last so their rays stay visually dominant near image overlap.
+            return fieldMagnitudeA - fieldMagnitudeB;
+        }
+        const objectIndexA = Number.parseInt(String(a?.objectIndex ?? a?.originalRay?.objectIndex ?? 0), 10);
+        const objectIndexB = Number.parseInt(String(b?.objectIndex ?? b?.originalRay?.objectIndex ?? 0), 10);
+        if (Number.isFinite(objectIndexA) && Number.isFinite(objectIndexB) && objectIndexA !== objectIndexB) {
+            return objectIndexA - objectIndexB;
+        }
+        const priorityDelta = getCrossRayOrderPriority(a) - getCrossRayOrderPriority(b);
+        if (priorityDelta !== 0) return priorityDelta;
+        const ratioA = Number(a?.interpolationRatio ?? a?.originalRay?.interpolationRatio);
+        const ratioB = Number(b?.interpolationRatio ?? b?.originalRay?.interpolationRatio);
+        if (Number.isFinite(ratioA) && Number.isFinite(ratioB) && Math.abs(ratioA - ratioB) > 1e-9) {
+            return ratioA - ratioB;
+        }
+        return 0;
     });
     const fallbackCount = filteredRays.filter(r => r.fallback).length;
     if (fallbackCount > 0) {
@@ -3683,10 +3958,7 @@ function drawCrossBeamRays(tracedRays, targetScene) {
         const successRays = tracedRays.filter(r => r.success);
         
         tracedRays.forEach((rayData, index) => {
-            // success: false でも rayPath が2点以上あれば描画（到達したがフラグが立っていないケース対応）
-            const hasPath = (Array.isArray(rayData.rayPath) && rayData.rayPath.length >= 2) ||
-                            (Array.isArray(rayData.rayPathToTarget) && rayData.rayPathToTarget.length >= 2);
-            if (!rayData.success && !hasPath) {
+            if (!rayData.success) {
                 return;
             }
             
@@ -3695,6 +3967,34 @@ function drawCrossBeamRays(tracedRays, targetScene) {
                 : (Array.isArray(rayData.rayPathToTarget) ? rayData.rayPathToTarget : []);
             if (!rayPath || rayPath.length === 0) {
                 return;
+            }
+
+            const diagOrigType = String(rayData?.originalRay?.type || rayData?.type || '').toLowerCase();
+
+            if (rayData?.__cooptImageHeightExactRender && diagOrigType === 'chief') {
+                try {
+                    (window as any).__COOPT_LAST_IMAGEHEIGHT_DRAW = {
+                        at: new Date().toISOString(),
+                        objectIndex: rayData.objectIndex ?? rayData.originalRay?.objectIndex ?? 0,
+                        pathLen: rayPath.length,
+                        target: rayData.__cooptImageHeightTarget ?? null,
+                        firstPoint: rayPath[0] ? {
+                            x: Number(rayPath[0].x),
+                            y: Number(rayPath[0].y),
+                            z: Number(rayPath[0].z),
+                        } : null,
+                        lastPoint: rayPath[rayPath.length - 1] ? {
+                            x: Number(rayPath[rayPath.length - 1].x),
+                            y: Number(rayPath[rayPath.length - 1].y),
+                            z: Number(rayPath[rayPath.length - 1].z),
+                        } : null,
+                        originalRay: rayData.originalRay ? {
+                            type: rayData.originalRay.type ?? null,
+                            side: rayData.originalRay.side ?? null,
+                            objectIndex: rayData.originalRay.objectIndex ?? null,
+                        } : null,
+                    };
+                } catch (_) {}
             }
             
             // Object識別情報を取得
@@ -3708,6 +4008,14 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             const normalizedObjectIndex = shouldNormalizeOneBasedObjectIndex
                 ? Math.max(0, objectIndex - 1)
                 : objectIndex;
+            const colorSlotRaw =
+                rayData.__cooptColorSlot ??
+                rayData.originalRay?.__cooptColorSlot ??
+                normalizedObjectIndex;
+            const colorSlotNum = Number.parseInt(String(colorSlotRaw), 10);
+            const normalizedColorSlot = Number.isFinite(colorSlotNum)
+                ? Math.max(0, colorSlotNum)
+                : normalizedObjectIndex;
             const objectPosition = rayData.objectPosition;
 
             // beamType/side の正規化（generator由来の originalRay を尊重）
@@ -3770,14 +4078,14 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             // chief も Raynum>=2 のクロスビーム色に合わせて同一Object色へ寄せる
             let objectIdBase;
             if (beamType === 'chief') {
-                objectIdBase = `chief-obj${normalizedObjectIndex}`;
+                objectIdBase = `chief-obj${normalizedColorSlot}`;
             } else if (beamType === 'horizontal') {
-                objectIdBase = `cross-horizontal-obj${normalizedObjectIndex}`;
+                objectIdBase = `cross-horizontal-obj${normalizedColorSlot}`;
             } else if (beamType === 'vertical') {
-                objectIdBase = `cross-vertical-obj${normalizedObjectIndex}`;
+                objectIdBase = `cross-vertical-obj${normalizedColorSlot}`;
             } else {
                 // フォールバック
-                objectIdBase = `cross-vertical-obj${normalizedObjectIndex}`;
+                objectIdBase = `cross-vertical-obj${normalizedColorSlot}`;
             }
             const objectId = `${objectIdBase}-ray${index}`;
             
@@ -3881,6 +4189,15 @@ window['mainDebugFunctions'] = {
 // Distortion helpers
 window['mainDebugFunctions'].generateDistortionPlots = generateDistortionPlots;
 window['mainDebugFunctions'].calculateDistortionData = calculateDistortionData;
+
+window['__cooptClearRenderRayTracingCaches'] = () => {
+    try { clearRayTracingTransientCaches(); } catch (_) {}
+    try { clearRayRendererCaches(); } catch (_) {}
+    try { clearFiniteCrossBeamCaches(); } catch (_) {}
+    try { clearInfiniteCrossBeamCaches(); } catch (_) {}
+    try { delete (window as any).lastChiefRayResult; } catch (_) {}
+    try { delete (window as any).currentDrawCrossRays; } catch (_) {}
+};
 
 // 🔍 Object → FieldSetting変換ヘルパー関数
 function convertObjectToFieldSetting(objectData, index) {

@@ -399,6 +399,7 @@ export interface NativeFieldMtfMapRequest {
   opticalSystemRows: unknown[];
   sourceRows?: unknown[];
   objectRows?: unknown[];
+  sampleFromObjectRows?: boolean;
   objectIndex?: number;
   pupilSamplingMode?: "stop" | "entrance";
   wavelengths?: number[];

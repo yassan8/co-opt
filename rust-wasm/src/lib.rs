@@ -3055,10 +3055,10 @@ fn search_entrance_origin_grid_brent_native(
             50,
         );
 
-        if evaluate(refined_x, refined_y, plane_z).is_some_and(|err| err <= 5.0e-3) {
+        if evaluate(refined_x, refined_y, plane_z).is_some() {
             return Some([refined_x, refined_y, plane_z]);
         }
-        if best_err.is_finite() && best_err <= 5.0e-3 {
+        if best_err.is_finite() {
             return Some([best_x, best_y, plane_z]);
         }
     }
@@ -3177,7 +3177,7 @@ fn solve_ray_origin_to_stop_point_fast_native(
         origin = [origin[0] + dx, origin[1] + dy, origin[2]];
     }
 
-    if best_err.is_finite() && best_err <= tol_mm.max(5.0e-3) {
+    if best_err.is_finite() {
         Some(best_origin)
     } else {
         None
@@ -3345,11 +3345,218 @@ fn solve_ray_direction_to_stop_point_fast_native(
         v += dv;
     }
 
-    if best_err.is_finite() && best_err <= tol_mm.max(5.0e-3) {
+    if best_err.is_finite() {
         Some(best_dir)
     } else {
         None
     }
+}
+
+fn find_infinite_system_chief_ray_origin_exact_native(
+    rows: &[Value],
+    packed_stop: &PackedMeta,
+    n_start: f64,
+    stop_surface_index: usize,
+    stop_center: [f64; 3],
+    direction: [f64; 3],
+) -> Option<[f64; 3]> {
+    let object_plane_z = packed_stop.row_origins.get(2).copied().unwrap_or(0.0);
+    let dummy_obj = Map::<String, Value>::new();
+    let object_z = resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
+    let safe_k = if direction[2].abs() > 1e-12 {
+        direction[2]
+    } else if direction[2].is_sign_negative() {
+        -1e-12
+    } else {
+        1e-12
+    };
+    let dz_to_stop = stop_center[2] - object_z;
+    let guess_x = stop_center[0] - (direction[0] / safe_k) * dz_to_stop;
+    let guess_y = stop_center[1] - (direction[1] / safe_k) * dz_to_stop;
+    let angle_x_deg = direction[0].atan2(direction[2].abs().max(1e-12)) * 180.0 / std::f64::consts::PI;
+    let angle_y_deg = direction[1].atan2(direction[2].abs().max(1e-12)) * 180.0 / std::f64::consts::PI;
+    let optimized_xy = optimize_angle_object_position_native(angle_x_deg, angle_y_deg, stop_center, object_z);
+    let entrance_origin = estimate_entrance_center_origin_native(rows, &packed_stop.row_origins, stop_center, direction);
+
+    let candidate_origins = [
+        [guess_x, guess_y, object_z + compute_object_surface_sag_native(rows, guess_x, guess_y)],
+        [
+            optimized_xy[0],
+            optimized_xy[1],
+            object_z + compute_object_surface_sag_native(rows, optimized_xy[0], optimized_xy[1]),
+        ],
+        entrance_origin,
+    ];
+
+    let mut best_origin: Option<[f64; 3]> = None;
+    let mut best_error = f64::INFINITY;
+
+    for candidate_origin in candidate_origins {
+        if !candidate_origin[0].is_finite() || !candidate_origin[1].is_finite() || !candidate_origin[2].is_finite() {
+            continue;
+        }
+        let Some(refined_origin) = solve_ray_origin_to_stop_point_fast_native(
+            candidate_origin,
+            direction,
+            stop_center,
+            stop_surface_index,
+            packed_stop,
+            n_start,
+        ) else {
+            continue;
+        };
+
+        let Some(hit_xy) = trace_hit_xy_with_packed(
+            [
+                refined_origin[0], refined_origin[1], refined_origin[2],
+                direction[0], direction[1], direction[2],
+            ],
+            stop_surface_index,
+            n_start,
+            packed_stop,
+        ) else {
+            continue;
+        };
+
+        let error = ((hit_xy[0] - stop_center[0]).powi(2) + (hit_xy[1] - stop_center[1]).powi(2)).sqrt();
+        if error < best_error {
+            best_error = error;
+            best_origin = Some(refined_origin);
+        }
+        if error <= 1e-3 {
+            return Some(refined_origin);
+        }
+    }
+
+    if best_error <= 5e-3 {
+        best_origin
+    } else {
+        None
+    }
+}
+
+fn trace_image_height_infinite_candidate_local_exact_native(
+    rows: &[Value],
+    packed_stop: &PackedMeta,
+    packed_target: &PackedMeta,
+    n_start: f64,
+    stop_surface_index: usize,
+    target_surface_index: usize,
+    stop_center: [f64; 3],
+    angle_x_deg: f64,
+    angle_y_deg: f64,
+) -> Option<[f64; 3]> {
+    let nominal_direction = build_direction_from_field_angles_native(angle_x_deg, angle_y_deg);
+    let origin = find_infinite_system_chief_ray_origin_exact_native(
+        rows,
+        packed_stop,
+        n_start,
+        stop_surface_index,
+        stop_center,
+        nominal_direction,
+    )?;
+
+    let refined_direction = solve_ray_direction_to_stop_point_fast_native(
+        origin,
+        stop_center,
+        stop_surface_index,
+        packed_stop,
+        n_start,
+        nominal_direction,
+    ).unwrap_or(nominal_direction);
+
+    let mut trace_origin = find_infinite_system_chief_ray_origin_exact_native(
+        rows,
+        packed_stop,
+        n_start,
+        stop_surface_index,
+        stop_center,
+        refined_direction,
+    ).unwrap_or(origin);
+
+    if let Some(polished_origin) = solve_ray_origin_to_stop_point_fast_native(
+        trace_origin,
+        refined_direction,
+        stop_center,
+        stop_surface_index,
+        packed_stop,
+        n_start,
+    ) {
+        trace_origin = polished_origin;
+    }
+
+    trace_surface_local_with_packed(
+        [
+            trace_origin[0], trace_origin[1], trace_origin[2],
+            refined_direction[0], refined_direction[1], refined_direction[2],
+        ],
+        target_surface_index,
+        n_start,
+        packed_target,
+    )
+}
+
+fn trace_image_height_infinite_chief_ray_exact_native(
+    rows: &[Value],
+    packed_stop: &PackedMeta,
+    packed_target: &PackedMeta,
+    n_start: f64,
+    stop_surface_index: usize,
+    target_surface_index: usize,
+    stop_center: [f64; 3],
+    angle_x_deg: f64,
+    angle_y_deg: f64,
+) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
+    let nominal_direction = build_direction_from_field_angles_native(angle_x_deg, angle_y_deg);
+    let origin = find_infinite_system_chief_ray_origin_exact_native(
+        rows,
+        packed_stop,
+        n_start,
+        stop_surface_index,
+        stop_center,
+        nominal_direction,
+    )?;
+
+    let refined_direction = solve_ray_direction_to_stop_point_fast_native(
+        origin,
+        stop_center,
+        stop_surface_index,
+        packed_stop,
+        n_start,
+        nominal_direction,
+    ).unwrap_or(nominal_direction);
+
+    let mut trace_origin = find_infinite_system_chief_ray_origin_exact_native(
+        rows,
+        packed_stop,
+        n_start,
+        stop_surface_index,
+        stop_center,
+        refined_direction,
+    ).unwrap_or(origin);
+
+    if let Some(polished_origin) = solve_ray_origin_to_stop_point_fast_native(
+        trace_origin,
+        refined_direction,
+        stop_center,
+        stop_surface_index,
+        packed_stop,
+        n_start,
+    ) {
+        trace_origin = polished_origin;
+    }
+
+    let local_hit = trace_surface_local_with_packed(
+        [
+            trace_origin[0], trace_origin[1], trace_origin[2],
+            refined_direction[0], refined_direction[1], refined_direction[2],
+        ],
+        target_surface_index,
+        n_start,
+        packed_target,
+    )?;
+
+    Some((trace_origin, refined_direction, local_hit))
 }
 
 fn trace_image_height_infinite_candidate_local_native(
@@ -3638,6 +3845,257 @@ where
     best_hit.map(|hit| (best_candidate, hit))
 }
 
+fn solve_image_height_pair_component_x_native<F>(
+    target_x: f64,
+    initial_x: f64,
+    fixed_y: f64,
+    initial_step: f64,
+    max_step: f64,
+    evaluate_pair: &mut F,
+) -> Option<(f64, [f64; 3])>
+where
+    F: FnMut(f64, f64) -> Option<[f64; 3]>,
+{
+    solve_image_height_component_native(
+        target_x,
+        initial_x,
+        0,
+        initial_step,
+        max_step,
+        |candidate_x| evaluate_pair(candidate_x, fixed_y),
+    )
+}
+
+fn solve_image_height_pair_component_y_native<F>(
+    target_y: f64,
+    fixed_x: f64,
+    initial_y: f64,
+    initial_step: f64,
+    max_step: f64,
+    evaluate_pair: &mut F,
+) -> Option<(f64, [f64; 3])>
+where
+    F: FnMut(f64, f64) -> Option<[f64; 3]>,
+{
+    solve_image_height_component_native(
+        target_y,
+        initial_y,
+        1,
+        initial_step,
+        max_step,
+        |candidate_y| evaluate_pair(fixed_x, candidate_y),
+    )
+}
+
+fn refine_image_height_pair_native<F>(
+    initial_x: f64,
+    initial_y: f64,
+    target_x: f64,
+    target_y: f64,
+    tolerance: f64,
+    max_iterations: usize,
+    finite_diff_step: f64,
+    max_step: f64,
+    evaluate_pair: &mut F,
+) -> Option<(f64, f64, [f64; 3])>
+where
+    F: FnMut(f64, f64) -> Option<[f64; 3]>,
+{
+    #[derive(Clone, Copy)]
+    struct PairSample {
+        x: f64,
+        y: f64,
+        hit: [f64; 3],
+        err_x: f64,
+        err_y: f64,
+        error: f64,
+    }
+
+    let mut x = if initial_x.is_finite() { initial_x } else { 0.0 };
+    let mut y = if initial_y.is_finite() { initial_y } else { 0.0 };
+    let tol = if tolerance.is_finite() { tolerance.max(1e-8) } else { 1e-6 };
+    let max_iters = max_iterations.max(1);
+    let base_finite_diff_step = if finite_diff_step.is_finite() { finite_diff_step.max(1e-8) } else { 1e-4 };
+    let max_step_norm = if max_step.is_finite() { max_step.max(1e-6) } else { 0.25 };
+    let target_x_value = if target_x.is_finite() { target_x } else { 0.0 };
+    let target_y_value = if target_y.is_finite() { target_y } else { 0.0 };
+    let mut best: Option<PairSample> = None;
+
+    let mut sample = |candidate_x: f64, candidate_y: f64| -> Option<PairSample> {
+        let hit = evaluate_pair(candidate_x, candidate_y)?;
+        let hit_x = hit[0];
+        let hit_y = hit[1];
+        if !hit_x.is_finite() || !hit_y.is_finite() {
+            return None;
+        }
+        let err_x = hit_x - target_x_value;
+        let err_y = hit_y - target_y_value;
+        let error = (err_x * err_x + err_y * err_y).sqrt();
+        let sample = PairSample {
+            x: candidate_x,
+            y: candidate_y,
+            hit,
+            err_x,
+            err_y,
+            error,
+        };
+        if best.map(|current| sample.error < current.error).unwrap_or(true) {
+            best = Some(sample);
+        }
+        Some(sample)
+    };
+
+    if sample(x, y).is_none() {
+        sample(0.0, 0.0);
+    }
+
+    for _ in 0..max_iters {
+        let Some(center) = sample(x, y) else {
+            break;
+        };
+        if center.error <= tol {
+            return Some((center.x, center.y, center.hit));
+        }
+
+        let step_x = base_finite_diff_step.max(x.abs() * 1e-3);
+        let step_y = base_finite_diff_step.max(y.abs() * 1e-3);
+        let Some(sample_dx) = sample(x + step_x, y) else {
+            break;
+        };
+        let Some(sample_dy) = sample(x, y + step_y) else {
+            break;
+        };
+
+        let j11 = (sample_dx.hit[0] - center.hit[0]) / step_x;
+        let j21 = (sample_dx.hit[1] - center.hit[1]) / step_x;
+        let j12 = (sample_dy.hit[0] - center.hit[0]) / step_y;
+        let j22 = (sample_dy.hit[1] - center.hit[1]) / step_y;
+        if !j11.is_finite() || !j12.is_finite() || !j21.is_finite() || !j22.is_finite() {
+            break;
+        }
+
+        let det = j11 * j22 - j12 * j21;
+        if !det.is_finite() || det.abs() < 1e-14 {
+            break;
+        }
+
+        let mut delta_x = (-j22 * center.err_x + j12 * center.err_y) / det;
+        let mut delta_y = (j21 * center.err_x - j11 * center.err_y) / det;
+        if !delta_x.is_finite() || !delta_y.is_finite() {
+            break;
+        }
+
+        let delta_norm = (delta_x * delta_x + delta_y * delta_y).sqrt();
+        if delta_norm > max_step_norm {
+            let scale = max_step_norm / delta_norm;
+            delta_x *= scale;
+            delta_y *= scale;
+        }
+
+        let mut accepted = false;
+        let mut alpha = 1.0;
+        for _ in 0..8 {
+            let Some(next) = sample(x + alpha * delta_x, y + alpha * delta_y) else {
+                alpha *= 0.5;
+                continue;
+            };
+            if next.error < center.error {
+                x = next.x;
+                y = next.y;
+                accepted = true;
+                break;
+            }
+            alpha *= 0.5;
+        }
+        if !accepted {
+            break;
+        }
+    }
+
+    best.map(|sample| (sample.x, sample.y, sample.hit))
+}
+
+fn solve_image_height_pair_native<F>(
+    target_x: f64,
+    target_y: f64,
+    initial_x: f64,
+    initial_y: f64,
+    conjugate_mode: i32,
+    evaluate_pair: &mut F,
+) -> Option<(f64, f64, [f64; 3])>
+where
+    F: FnMut(f64, f64) -> Option<[f64; 3]>,
+{
+    let is_infinite = conjugate_mode == 0;
+    let mut solved_x = if initial_x.is_finite() { initial_x } else { 0.0 };
+    let mut solved_y = if initial_y.is_finite() { initial_y } else { 0.0 };
+
+    let initial_step_x = if is_infinite {
+        0.05_f64.max(initial_x.abs() * 0.05).max(target_x.abs() * 0.005)
+    } else {
+        0.01_f64.max(initial_x.abs() * 0.05).max(target_x.abs() * 0.01)
+    };
+    let max_step_x = if is_infinite {
+        2.0_f64.max(initial_x.abs() * 0.5).max(target_x.abs() * 0.05)
+    } else {
+        1.0_f64.max(initial_x.abs() * 0.5).max(target_x.abs() * 0.25)
+    };
+    let initial_step_y = if is_infinite {
+        0.05_f64.max(initial_y.abs() * 0.05).max(target_y.abs() * 0.005)
+    } else {
+        0.01_f64.max(initial_y.abs() * 0.05).max(target_y.abs() * 0.01)
+    };
+    let max_step_y = if is_infinite {
+        2.0_f64.max(initial_y.abs() * 0.5).max(target_y.abs() * 0.05)
+    } else {
+        1.0_f64.max(initial_y.abs() * 0.5).max(target_y.abs() * 0.25)
+    };
+
+    for iter in 0..4 {
+        if let Some((next_x, _)) = solve_image_height_pair_component_x_native(
+            target_x,
+            solved_x,
+            solved_y,
+            initial_step_x,
+            max_step_x,
+            evaluate_pair,
+        ) {
+            solved_x = next_x;
+        }
+        if let Some((next_y, _)) = solve_image_height_pair_component_y_native(
+            target_y,
+            solved_x,
+            solved_y,
+            initial_step_y,
+            max_step_y,
+            evaluate_pair,
+        ) {
+            solved_y = next_y;
+        }
+
+        let Some(local_hit) = evaluate_pair(solved_x, solved_y) else {
+            continue;
+        };
+        let err_x = (local_hit[0] - target_x).abs();
+        let err_y = (local_hit[1] - target_y).abs();
+        if (err_x < 1e-6 && err_y < 1e-6) || (iter > 0 && err_x < 1e-4 && err_y < 1e-4) {
+            break;
+        }
+    }
+
+    refine_image_height_pair_native(
+        solved_x,
+        solved_y,
+        target_x,
+        target_y,
+        1e-6,
+        10,
+        1e-4,
+        0.1,
+        evaluate_pair,
+    ).or_else(|| evaluate_pair(solved_x, solved_y).map(|hit| (solved_x, solved_y, hit)))
+}
+
 #[wasm_bindgen]
 pub fn solve_image_height_component_with_rows(
     optical_system_rows: JsValue,
@@ -3732,6 +4190,421 @@ pub fn solve_image_height_component_with_rows(
         out[4] = hit[2];
     } else {
         out[0] = 3.0;
+    }
+    out
+}
+
+#[wasm_bindgen]
+pub fn solve_image_height_pair_with_rows(
+    optical_system_rows: JsValue,
+    image_surface_index: usize,
+    wavelength_um: f64,
+    conjugate_mode: i32,
+    target_x: f64,
+    target_y: f64,
+    initial_x: f64,
+    initial_y: f64,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; 6]; // [status, solved_x, solved_y, hit_x, hit_y, hit_z]
+    let Ok(rows_raw) = serde_wasm_bindgen::from_value::<Vec<Value>>(optical_system_rows) else {
+        out[0] = 2.0;
+        return out;
+    };
+    if rows_raw.is_empty() {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
+    let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
+    let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
+    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+
+    let stop_base = stop_surface_index.saturating_mul(3);
+    if stop_base + 2 >= packed_stop.row_origins.len() {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let stop_center = [
+        packed_stop.row_origins[stop_base],
+        packed_stop.row_origins[stop_base + 1],
+        packed_stop.row_origins[stop_base + 2],
+    ];
+    if !stop_center[0].is_finite() || !stop_center[1].is_finite() || !stop_center[2].is_finite() {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let solved = solve_image_height_pair_native(
+        target_x,
+        target_y,
+        initial_x,
+        initial_y,
+        conjugate_mode,
+        &mut |candidate_x, candidate_y| {
+            if conjugate_mode == 0 {
+                trace_image_height_infinite_candidate_local_native(
+                    &rows,
+                    &packed_stop,
+                    &packed_target,
+                    n_start,
+                    stop_surface_index,
+                    target_surface_index,
+                    stop_center,
+                    candidate_x,
+                    candidate_y,
+                )
+            } else {
+                trace_image_height_finite_candidate_local_native(
+                    &rows,
+                    &packed_stop,
+                    &packed_target,
+                    n_start,
+                    stop_surface_index,
+                    target_surface_index,
+                    stop_center,
+                    candidate_x,
+                    candidate_y,
+                )
+            }
+        },
+    );
+
+    let Some((solved_x, solved_y, hit)) = solved else {
+        out[0] = 2.0;
+        return out;
+    };
+
+    out[0] = 1.0;
+    out[1] = solved_x;
+    out[2] = solved_y;
+    out[3] = hit[0];
+    out[4] = hit[1];
+    out[5] = hit[2];
+    out
+}
+
+#[wasm_bindgen]
+pub fn solve_image_height_pair_exact_with_rows(
+    optical_system_rows: JsValue,
+    image_surface_index: usize,
+    wavelength_um: f64,
+    conjugate_mode: i32,
+    target_x: f64,
+    target_y: f64,
+    initial_x: f64,
+    initial_y: f64,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; 6];
+    let Ok(rows_raw) = serde_wasm_bindgen::from_value::<Vec<Value>>(optical_system_rows) else {
+        out[0] = 2.0;
+        return out;
+    };
+    if rows_raw.is_empty() {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
+    let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
+    let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
+    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+
+    let stop_base = stop_surface_index.saturating_mul(3);
+    if stop_base + 2 >= packed_stop.row_origins.len() {
+        out[0] = 2.0;
+        return out;
+    }
+    let stop_center = [
+        packed_stop.row_origins[stop_base],
+        packed_stop.row_origins[stop_base + 1],
+        packed_stop.row_origins[stop_base + 2],
+    ];
+    if !stop_center[0].is_finite() || !stop_center[1].is_finite() || !stop_center[2].is_finite() {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let solved = solve_image_height_pair_native(
+        target_x,
+        target_y,
+        initial_x,
+        initial_y,
+        conjugate_mode,
+        &mut |candidate_x, candidate_y| {
+            if conjugate_mode == 0 {
+                trace_image_height_infinite_candidate_local_exact_native(
+                    &rows,
+                    &packed_stop,
+                    &packed_target,
+                    n_start,
+                    stop_surface_index,
+                    target_surface_index,
+                    stop_center,
+                    candidate_x,
+                    candidate_y,
+                )
+            } else {
+                trace_image_height_finite_candidate_local_native(
+                    &rows,
+                    &packed_stop,
+                    &packed_target,
+                    n_start,
+                    stop_surface_index,
+                    target_surface_index,
+                    stop_center,
+                    candidate_x,
+                    candidate_y,
+                )
+            }
+        },
+    );
+
+    let Some((solved_x, solved_y, hit)) = solved else {
+        out[0] = 2.0;
+        return out;
+    };
+
+    out[0] = 1.0;
+    out[1] = solved_x;
+    out[2] = solved_y;
+    out[3] = hit[0];
+    out[4] = hit[1];
+    out[5] = hit[2];
+    out
+}
+
+#[wasm_bindgen]
+pub fn trace_image_height_infinite_candidate_with_rows(
+    optical_system_rows: JsValue,
+    image_surface_index: usize,
+    wavelength_um: f64,
+    angle_x_deg: f64,
+    angle_y_deg: f64,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; 4]; // [status, hit_x, hit_y, hit_z]
+    let Ok(rows_raw) = serde_wasm_bindgen::from_value::<Vec<Value>>(optical_system_rows) else {
+        return out;
+    };
+    if rows_raw.is_empty() {
+        return out;
+    }
+
+    let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
+    let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
+    let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
+    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+
+    let stop_base = stop_surface_index.saturating_mul(3);
+    if stop_base + 2 >= packed_stop.row_origins.len() {
+        return out;
+    }
+    let stop_center = [
+        packed_stop.row_origins[stop_base],
+        packed_stop.row_origins[stop_base + 1],
+        packed_stop.row_origins[stop_base + 2],
+    ];
+    if !stop_center[0].is_finite() || !stop_center[1].is_finite() || !stop_center[2].is_finite() {
+        return out;
+    }
+
+    if let Some(hit) = trace_image_height_infinite_candidate_local_native(
+        &rows,
+        &packed_stop,
+        &packed_target,
+        n_start,
+        stop_surface_index,
+        target_surface_index,
+        stop_center,
+        angle_x_deg,
+        angle_y_deg,
+    ) {
+        out[0] = 1.0;
+        out[1] = hit[0];
+        out[2] = hit[1];
+        out[3] = hit[2];
+    }
+    out
+}
+
+#[wasm_bindgen]
+pub fn trace_image_height_infinite_candidate_exact_with_rows(
+    optical_system_rows: JsValue,
+    image_surface_index: usize,
+    wavelength_um: f64,
+    angle_x_deg: f64,
+    angle_y_deg: f64,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; 4];
+    let Ok(rows_raw) = serde_wasm_bindgen::from_value::<Vec<Value>>(optical_system_rows) else {
+        out[0] = 2.0;
+        return out;
+    };
+    if rows_raw.is_empty() {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
+    let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
+    let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
+    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+
+    let stop_base = stop_surface_index.saturating_mul(3);
+    if stop_base + 2 >= packed_stop.row_origins.len() {
+        out[0] = 2.0;
+        return out;
+    }
+    let stop_center = [
+        packed_stop.row_origins[stop_base],
+        packed_stop.row_origins[stop_base + 1],
+        packed_stop.row_origins[stop_base + 2],
+    ];
+
+    if let Some(hit) = trace_image_height_infinite_candidate_local_exact_native(
+        &rows,
+        &packed_stop,
+        &packed_target,
+        n_start,
+        stop_surface_index,
+        target_surface_index,
+        stop_center,
+        angle_x_deg,
+        angle_y_deg,
+    ) {
+        out[0] = 1.0;
+        out[1] = hit[0];
+        out[2] = hit[1];
+        out[3] = hit[2];
+    } else {
+        out[0] = 3.0;
+    }
+    out
+}
+
+#[wasm_bindgen]
+pub fn trace_image_height_infinite_chief_ray_exact_with_rows(
+    optical_system_rows: JsValue,
+    image_surface_index: usize,
+    wavelength_um: f64,
+    angle_x_deg: f64,
+    angle_y_deg: f64,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; 10];
+    let Ok(rows_raw) = serde_wasm_bindgen::from_value::<Vec<Value>>(optical_system_rows) else {
+        out[0] = 2.0;
+        return out;
+    };
+    if rows_raw.is_empty() {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
+    let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
+    let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
+    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+
+    let stop_base = stop_surface_index.saturating_mul(3);
+    if stop_base + 2 >= packed_stop.row_origins.len() {
+        out[0] = 2.0;
+        return out;
+    }
+    let stop_center = [
+        packed_stop.row_origins[stop_base],
+        packed_stop.row_origins[stop_base + 1],
+        packed_stop.row_origins[stop_base + 2],
+    ];
+
+    if let Some((origin, direction, hit)) = trace_image_height_infinite_chief_ray_exact_native(
+        &rows,
+        &packed_stop,
+        &packed_target,
+        n_start,
+        stop_surface_index,
+        target_surface_index,
+        stop_center,
+        angle_x_deg,
+        angle_y_deg,
+    ) {
+        out[0] = 1.0;
+        out[1] = origin[0];
+        out[2] = origin[1];
+        out[3] = origin[2];
+        out[4] = direction[0];
+        out[5] = direction[1];
+        out[6] = direction[2];
+        out[7] = hit[0];
+        out[8] = hit[1];
+        out[9] = hit[2];
+    } else {
+        out[0] = 3.0;
+    }
+    out
+}
+
+#[wasm_bindgen]
+pub fn trace_image_height_finite_candidate_with_rows(
+    optical_system_rows: JsValue,
+    image_surface_index: usize,
+    wavelength_um: f64,
+    object_x: f64,
+    object_y: f64,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; 4]; // [status, hit_x, hit_y, hit_z]
+    let Ok(rows_raw) = serde_wasm_bindgen::from_value::<Vec<Value>>(optical_system_rows) else {
+        return out;
+    };
+    if rows_raw.is_empty() {
+        return out;
+    }
+
+    let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
+    let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
+    let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
+    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+
+    let stop_base = stop_surface_index.saturating_mul(3);
+    if stop_base + 2 >= packed_stop.row_origins.len() {
+        return out;
+    }
+    let stop_center = [
+        packed_stop.row_origins[stop_base],
+        packed_stop.row_origins[stop_base + 1],
+        packed_stop.row_origins[stop_base + 2],
+    ];
+    if !stop_center[0].is_finite() || !stop_center[1].is_finite() || !stop_center[2].is_finite() {
+        return out;
+    }
+
+    if let Some(hit) = trace_image_height_finite_candidate_local_native(
+        &rows,
+        &packed_stop,
+        &packed_target,
+        n_start,
+        stop_surface_index,
+        target_surface_index,
+        stop_center,
+        object_x,
+        object_y,
+    ) {
+        out[0] = 1.0;
+        out[1] = hit[0];
+        out[2] = hit[1];
+        out[3] = hit[2];
     }
     out
 }

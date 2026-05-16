@@ -332,6 +332,48 @@ class SystemRequirementsEditor {
       return raw;
     };
 
+
+    const formatOperandLabel = (key: string): string => {
+      const labelOverrides: Record<string, string> = {
+        EDGE: 'Edge Thickness',
+        CTCT: 'Center Thickness',
+        DBLT_K: 'Doublet Bending K',
+        GAP: 'Gap Thickness',
+        THIC: 'All Thickness',
+        SDIST: 'Surface distance',
+        REQMATH: 'Req Arithmetic',
+        GMIN: 'Min Gap Thickness',
+        GMAX: 'Max Gap Thickness'
+      };
+      if (labelOverrides[key]) {
+        return labelOverrides[key];
+      }
+      const def: any = OPERAND_DEFINITIONS[key] || {};
+      const source = String(def.name || def.description || key);
+      const withoutSystemData = source
+        .replace(/\s*\((?:System\s*data|System\s*Data)\)\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const maxLen = 34;
+      if (withoutSystemData.length <= maxLen) return withoutSystemData;
+      return `${withoutSystemData.slice(0, maxLen - 1)}…`;
+    };
+
+    const getRequirementReferenceLabelById = (rowIdValue: any, currentRowId: any = null): string => {
+      const raw = String(rowIdValue ?? '').trim();
+      if (!raw) return '';
+      try {
+        const rows = Array.isArray(this.requirements) ? this.requirements : [];
+        const hit = rows.find((entry: any) => entry && String(entry.id ?? '').trim() === raw) || null;
+        if (!hit) return raw;
+        const operandKey = String(hit.operand ?? '').trim();
+        const operandLabel = operandKey ? formatOperandLabel(operandKey) : 'Requirement';
+        const suffix = (currentRowId !== null && String(currentRowId ?? '').trim() === raw) ? ' (self)' : '';
+        return `${raw}: ${operandLabel}${suffix}`;
+      } catch (_) {
+        return raw;
+      }
+    };
     const makeSpecSummary = (row: any): string => {
       const op = String(row?.op || '=').trim();
       const targetS = formatNumberShort(row?.target ?? 0);
@@ -932,24 +974,6 @@ class SystemRequirementsEditor {
       operandSel.style.fontSize = '12px';
       operandSel.addEventListener('focus', onCellFocus);
       operandSel.addEventListener('blur', onCellBlur);
-      const formatOperandLabel = (key: string): string => {
-        const labelOverrides: Record<string, string> = {
-          EDGE: 'Edge Thickness',
-          CTCT: 'Center Thickness'
-        };
-        if (labelOverrides[key]) {
-          return labelOverrides[key];
-        }
-        const def: any = OPERAND_DEFINITIONS[key] || {};
-        const source = String(def.name || def.description || key);
-        const withoutSystemData = source
-          .replace(/\s*\((?:System\s*data|System\s*Data)\)\s*/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        const maxLen = 34;
-        if (withoutSystemData.length <= maxLen) return withoutSystemData;
-        return `${withoutSystemData.slice(0, maxLen - 1)}…`;
-      };
       for (const key of this._operandKeys) {
         const opt = document.createElement('option');
         opt.value = key;
@@ -1204,6 +1228,137 @@ class SystemRequirementsEditor {
           }
           
           control.value = String(row[field] || semidia);
+        } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'DBLT_K') {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+
+          try {
+            const blocks = this._getBlocksForConfigHint(row?.configId);
+            const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
+            for (const block of blocks || []) {
+              if (!block || typeof block !== 'object') continue;
+              if (String(block?.blockType ?? '').trim() !== 'Doublet') continue;
+              const blockId = String(block?.blockId ?? '').trim();
+              if (!blockId) continue;
+              const opt = document.createElement('option');
+              opt.value = blockId;
+              opt.textContent = displayLabelById.get(blockId) || blockId;
+              control.appendChild(opt);
+            }
+          } catch (err) {
+            console.warn('Failed to populate DBLT_K param1 dropdown:', err);
+          }
+
+          control.value = String(row[field] || '');
+        } else if ((field === 'param1' || field === 'param3') && String(row?.operand ?? '').trim() === 'REQMATH') {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+
+          const emptyOpt = document.createElement('option');
+          emptyOpt.value = '';
+          emptyOpt.textContent = '(select requirement)';
+          control.appendChild(emptyOpt);
+
+          const currentRowId = String(row?.id ?? '').trim();
+          const rows = Array.isArray(this.requirements) ? this.requirements : [];
+          for (const entry of rows) {
+            if (!entry || typeof entry !== 'object') continue;
+            if (entry.rowType === 'memo') continue;
+            const refId = String(entry.id ?? '').trim();
+            if (!refId) continue;
+            const opt = document.createElement('option');
+            opt.value = refId;
+            opt.textContent = getRequirementReferenceLabelById(refId, currentRowId);
+            control.appendChild(opt);
+          }
+
+          control.value = String(row[field] || '');
+        } else if (field === 'param2' && String(row?.operand ?? '').trim() === 'REQMATH') {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+
+          for (const opValue of ['+', '-', '*', '/']) {
+            const el = document.createElement('option');
+            el.value = opValue;
+            el.textContent = opValue;
+            control.appendChild(el);
+          }
+
+          const current = String(row[field] || '').trim();
+          control.value = ['+', '-', '*', '/'].includes(current) ? current : '+';
+        } else if (field === 'param1' && (String(row?.operand ?? '').trim() === 'GAP' || String(row?.operand ?? '').trim() === 'THIC')) {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+
+          const options = [
+            { value: 'MIN', label: 'Min' },
+            { value: 'MAX', label: 'Max' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+
+          const current = String(row[field] || '').trim().toUpperCase();
+          control.value = current === 'MAX' ? 'MAX' : 'MIN';
+        } else if ((field === 'param1' || field === 'param2') && (String(row?.operand ?? '').trim() === 'RADI' || String(row?.operand ?? '').trim() === 'SDIST')) {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+
+          try {
+            const opticalRows = (getOpticalSystemRows as any)(null);
+            if (Array.isArray(opticalRows)) {
+              for (let i = 0; i < opticalRows.length; i++) {
+                const surfRow = opticalRows[i];
+                if (!surfRow) continue;
+
+                const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim();
+                const isObject = objType === 'Object';
+                const isImage = objType === 'Image';
+                const isCT = objType === 'CT' || objType.includes('Coordinate') || objType.includes('CoordTrans');
+                const isGap = objType === 'GAP' || objType.toLowerCase() === 'gap';
+                if (isObject || isImage || isCT || isGap) continue;
+
+                const surfId = surfRow.id !== undefined && surfRow.id !== null ? String(surfRow.id) : String(i + 1);
+                const surfLabel = surfRow.comment || surfRow.label || `Surface ${surfId}`;
+                const opt = document.createElement('option');
+                opt.value = surfId;
+                opt.textContent = `${surfId}: ${surfLabel}`;
+                control.appendChild(opt);
+              }
+            }
+          } catch (err) {
+            console.warn('Failed to populate surface dropdown:', err);
+          }
+
+          control.value = String(row[field] || '');
         } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'CTCT') {
           // CTCT param1: Element/Gap selection (Lens, Doublet, Triplet, Gap) in Design Intent order
           control = document.createElement('select');
@@ -1852,6 +2007,18 @@ class SystemRequirementsEditor {
             let displayVal = String(val);
             if (operandName === 'CTCT' && i === 1) {
               displayVal = getCtctElementLabelBySurfaceValue(val);
+            } else if (operandName === 'SDIST' && (i === 1 || i === 2)) {
+              displayVal = getCtctElementLabelBySurfaceValue(val) || String(val);
+            } else if (operandName === 'REQMATH' && (i === 1 || i === 3)) {
+              displayVal = getRequirementReferenceLabelById(val, row?.id);
+            } else if (operandName === 'REQMATH' && i === 2) {
+              displayVal = String(val || '+').trim() || '+';
+            } else if ((operandName === 'GAP' || operandName === 'THIC') && i === 1) {
+              displayVal = String(val).trim().toUpperCase() === 'MAX' ? 'Max' : 'Min';
+            } else if (operandName === 'DBLT_K' && i === 1) {
+              const blocks = this._getBlocksForConfigHint(row?.configId);
+              const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
+              displayVal = displayLabelById.get(String(val).trim()) || String(val);
             } else if (label === 'Scope') {
               displayVal = getRequirementScopeLabel(row?.configId, val);
             } else if (label.includes('Field idx') || label.includes('Object idx')) {
@@ -3366,6 +3533,7 @@ class SystemRequirementsEditor {
     } catch (_) {}
 
     const updates: any[] = [];
+    const reqCurrentById = new Map<string, number>();
     try {
     for (let i = 0; i < live.length; i++) {
       const row = live[i];
@@ -3393,6 +3561,9 @@ class SystemRequirementsEditor {
         configId,
         __reqRowId: row.id,
         __reqRowIndex: i,
+        __reqEvaluationState: {
+          currentById: reqCurrentById
+        },
         __reqOp: op,
         __reqTarget: target,
         __reqTol: tol,
@@ -3445,6 +3616,13 @@ class SystemRequirementsEditor {
 
       const sanitized = this._sanitizeCurrentForUI(current);
       current = sanitized.current;
+
+      if (sanitized.ok) {
+        const numericCurrent = Number(current);
+        if (Number.isFinite(numericCurrent)) {
+          reqCurrentById.set(String(row.id), numericCurrent);
+        }
+      }
 
       // Violation amount (hinge with tol/op). Used for Status.
       // Keep optimizer-aligned diagnostics in hidden fields, but show raw operand value in the UI.
@@ -3613,13 +3791,21 @@ class SystemRequirementsEditor {
     try {
       if (this._evalTimer) clearTimeout(this._evalTimer);
     } catch (_) {}
+    let delayMs = 50;
+    try {
+      const deferUntil = Number(w.__cooptDeferDerivedUiUntil || 0);
+      const now = Date.now();
+      if (Number.isFinite(deferUntil) && deferUntil > now) {
+        delayMs = Math.max(delayMs, Math.min(1200, (deferUntil - now) + 120));
+      }
+    } catch (_) {}
     this._evalTimer = setTimeout(() => {
       try {
         // Fire-and-forget; evaluation is async.
-        const p = this.evaluateAndUpdateNow({ reason: 'scheduled' });
+        const p = this.evaluateAndUpdateNow({ reason: delayMs > 50 ? 'scheduled-deferred' : 'scheduled' });
         if (p && typeof p.catch === 'function') p.catch(() => {});
       } catch (_) {}
-    }, 50);
+    }, delayMs);
   }
 
   installMeritHook(): void {

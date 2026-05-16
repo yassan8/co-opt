@@ -147,6 +147,10 @@ export function run_native_psf_from_opd_wasm_json(req_json: string): any;
 
 export function solve_image_height_component_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, conjugate_mode: number, component_index: number, target_value: number, initial_guess: number, fixed_value: number, initial_step: number, max_step: number): Float64Array;
 
+export function solve_image_height_pair_exact_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, conjugate_mode: number, target_x: number, target_y: number, initial_x: number, initial_y: number): Float64Array;
+
+export function solve_image_height_pair_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, conjugate_mode: number, target_x: number, target_y: number, initial_x: number, initial_y: number): Float64Array;
+
 export function solve_linear_system(a_flat: Float64Array, n: number, b: Float64Array): Float64Array;
 
 /**
@@ -183,6 +187,14 @@ export function solve_spd_linear_system(a_flat: Float64Array, n: number, b: Floa
 export function surface_normal_aspheric_rt10(pt: Float64Array, params: Float64Array, mode_odd: number): Float64Array;
 
 export function surface_normal_aspheric_rt10_batch(points: Float64Array, count: number, params: Float64Array, mode_odd: number): Float64Array;
+
+export function trace_image_height_finite_candidate_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, object_x: number, object_y: number): Float64Array;
+
+export function trace_image_height_infinite_candidate_exact_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, angle_x_deg: number, angle_y_deg: number): Float64Array;
+
+export function trace_image_height_infinite_candidate_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, angle_x_deg: number, angle_y_deg: number): Float64Array;
+
+export function trace_image_height_infinite_chief_ray_exact_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, angle_x_deg: number, angle_y_deg: number): Float64Array;
 
 export function trace_ray_batch_hit_point_with_meta(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): Float64Array;
 
@@ -261,6 +273,8 @@ export interface InitOutput {
     readonly run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
     readonly solve_image_height_component_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
+    readonly solve_image_height_pair_exact_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly solve_image_height_pair_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
     readonly solve_qp_subproblem_unconstrained: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
@@ -268,6 +282,10 @@ export interface InitOutput {
     readonly solve_spd_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly surface_normal_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly surface_normal_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly trace_image_height_finite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
+    readonly trace_image_height_infinite_candidate_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
+    readonly trace_image_height_infinite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
+    readonly trace_image_height_infinite_chief_ray_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
     readonly trace_ray_batch_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number];
     readonly trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly trace_single_ray_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];

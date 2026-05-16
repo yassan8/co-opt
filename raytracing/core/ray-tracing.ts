@@ -67,6 +67,105 @@ let __wasmTraceBatchCachedRotations = null;
 let __wasmTraceBatchCachedInvRotations = null;
 let __wasmTraceBatchCachedRowCount = 0;
 
+export function clearRayTracingTransientCaches(): void {
+  __wasmTraceBatchCachedSystemHash = null;
+  __wasmTraceBatchRefractiveIndexCache = null;
+  __wasmTraceBatchCachedMetaData = null;
+  __wasmTraceBatchCachedParamsData = null;
+  __wasmTraceBatchCachedOrigins = null;
+  __wasmTraceBatchCachedRotations = null;
+  __wasmTraceBatchCachedInvRotations = null;
+  __wasmTraceBatchCachedRowCount = 0;
+}
+
+function __computeWasmTraceBatchSystemHash(effectiveSystemRows, surfaceData, wavelengthRef) {
+  let h = 2166136261;
+  const mixInt = (n) => {
+    h ^= (n | 0);
+    h = Math.imul(h, 16777619);
+  };
+  const mixNumber = (value, scale = 1e6) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      mixInt(0x7f4a7c15);
+      return;
+    }
+    const scaled = Math.round(num * scale);
+    mixInt(scaled | 0);
+  };
+  const mixString = (value) => {
+    const text = String(value ?? '');
+    mixInt(text.length);
+    for (let i = 0; i < text.length; i += 1) {
+      mixInt(text.charCodeAt(i));
+    }
+  };
+
+  try {
+    const rows = Array.isArray(effectiveSystemRows) ? effectiveSystemRows : [];
+    const infos = Array.isArray(surfaceData) ? surfaceData : [];
+    mixInt(rows.length);
+    mixNumber(wavelengthRef, 1e6);
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i] || {};
+      const sInfo = infos[i] || {};
+      mixString(row?.radius);
+      mixString(row?.conic);
+      mixString(row?.material);
+      mixString(row?.thickness);
+      mixString(row?.type);
+      mixString(row?.surfType);
+      mixString(row?.['object type'] ?? row?.object ?? row?.Object);
+      mixString(row?.apertureShape ?? row?._apertureShape ?? row?.ApertureShape);
+      mixString(row?.sto);
+      mixString(row?.__cooptGapMaterial);
+
+      mixNumber(row?.radius, 1e6);
+      mixNumber(row?.conic, 1e6);
+      mixNumber(row?.coef1, 1e9);
+      mixNumber(row?.coef2, 1e9);
+      mixNumber(row?.coef3, 1e9);
+      mixNumber(row?.coef4, 1e9);
+      mixNumber(row?.coef5, 1e9);
+      mixNumber(row?.coef6, 1e9);
+      mixNumber(row?.coef7, 1e9);
+      mixNumber(row?.coef8, 1e9);
+      mixNumber(row?.coef9, 1e9);
+      mixNumber(row?.coef10, 1e9);
+      mixNumber(row?.__cooptActualSemidia ?? row?.semidia, 1e6);
+      mixNumber(row?.radiusX, 1e6);
+      mixNumber(row?.radiusY ?? row?.radius, 1e6);
+      mixNumber(row?.axis, 1e6);
+      mixNumber(row?.thickness, 1e6);
+      mixNumber(row?.aperture, 1e6);
+      mixNumber(row?.apertureWidth, 1e6);
+      mixNumber(row?.apertureHeight, 1e6);
+      mixNumber(row?.decenterX, 1e6);
+      mixNumber(row?.decenterY, 1e6);
+      mixNumber(row?.decenterZ, 1e6);
+      mixNumber(row?.tiltX, 1e6);
+      mixNumber(row?.tiltY, 1e6);
+      mixNumber(row?.tiltZ, 1e6);
+      mixNumber(row?.order, 1e3);
+
+      const origin = sInfo?.origin ?? null;
+      mixNumber(origin?.x, 1e6);
+      mixNumber(origin?.y, 1e6);
+      mixNumber(origin?.z, 1e6);
+
+      const rot = sInfo?.rotationMatrix;
+      for (let r = 0; r < 3; r += 1) {
+        for (let c = 0; c < 3; c += 1) {
+          mixNumber(rot?.[r]?.[c], 1e9);
+        }
+      }
+    }
+    return (h >>> 0).toString(16);
+  } catch (_) {
+    return null;
+  }
+}
+
 let __rustBatchRefractDirsBuffer = null;
 let __rustBatchRefractNormalsBuffer = null;
 let __rustBatchRefractN1Buffer = null;
@@ -4473,22 +4572,7 @@ function __traceRayEvalBatch_wasmFull(opticalSystemRows, rays, n0, targetSurface
     const wavelengthRef = Number(list[0]?.wavelength) || 0.55;
 
     // Optimization: Compute system hash to enable buffer reuse
-    const systemHash = (() => {
-      try {
-        const parts = [];
-        for (let i = 0; i < rowCount; i++) {
-          const row = effectiveSystemRows[i] || {};
-          parts.push(
-            String(row.radius ?? ''), String(row.conic ?? ''),
-            String(row.material ?? ''), String(row.thickness ?? ''),
-            String(row.type ?? ''), String(row.surfType ?? '')
-          );
-        }
-        return parts.join('|');
-      } catch (_) {
-        return null;
-      }
-    })();
+    const systemHash = __computeWasmTraceBatchSystemHash(effectiveSystemRows, surfaceData, wavelengthRef);
 
     // Optimization: Batch compute refractive indices + system metadata if system changed
     let refractiveIndices = null;

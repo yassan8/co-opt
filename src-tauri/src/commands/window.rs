@@ -1,16 +1,16 @@
 use serde_json::Value;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use std::time::Duration;
+use std::thread::sleep;
 
 /// Open (or focus) the render window from the Rust backend.
 /// Accepts the full URL from the JS caller, so it works in both dev and production.
 #[tauri::command]
 pub async fn open_render_window(app: AppHandle, url: String) -> Result<(), String> {
-    // If the window already exists, show and focus it.
+    // Always recreate the render window to avoid stale runtime state surviving reuse.
     if let Some(window) = app.get_webview_window("render-window") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-        return Ok(());
+        let _ = window.close();
+        sleep(Duration::from_millis(180));
     }
 
     let parsed_url = url

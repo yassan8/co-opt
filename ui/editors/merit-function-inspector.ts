@@ -112,6 +112,14 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "Optical System表のthicknessを合計した全長(mm)を返します。INF/Infinityは合計に含めません。"
   },
+  "DBLT_K": {
+    name: "Doublet Bending K",
+    description: "Common curvature offset K added to C1/C2/C3 of a Doublet",
+    parameters: [
+      { key: "param1", label: "Doublet", description: "Doublet blockId or display label" }
+    ],
+    notes: "For a Doublet, K is defined by C1' = C1 + K, C2' = C2 + K, C3' = C3 + K. This preserves Φ1=(N1-1)(C1-C2) and Φ2=(N2-1)(C2-C3), so thin-lens power split and achromat condition stay unchanged while shape bends." 
+  },
   "BEXP": {
     name: "Exit Pupil Magnification (βexp)",
     description: "Exit pupil magnification (System Data)",
@@ -533,6 +541,61 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
       { key: "param4", label: "Reserved" }
     ],
     notes: "Ensures center thickness stays above minimum. Important for mechanical stability."
+  },
+  "RADI": {
+    name: "RADI",
+    description: "Surface Radius",
+    parameters: [
+      { key: "param1", label: "Surface" }
+    ],
+    notes: "Returns the absolute radius of the selected surface in mm. Use the requirement operator and target to constrain minimum or maximum radius. INF/flat surfaces evaluate as FAIL."
+  },
+  "SDIST": {
+    name: "SDIST",
+    description: "Surface distance",
+    parameters: [
+      { key: "param1", label: "Surface A" },
+      { key: "param2", label: "Surface B" }
+    ],
+    notes: "Returns the signed axial surface distance in mm from Surface A to Surface B by summing finite thickness values from Surface A through the row immediately before Surface B. Object/Image/coordinate rows are ignored. Surface A and Surface B must resolve to real optical surfaces, and A must be before B. Otherwise evaluates as FAIL."
+  },
+  "GAP": {
+    name: "GAP",
+    description: "All Gap Thickness",
+    parameters: [
+      { key: "param1", label: "Mode", description: "MIN or MAX" }
+    ],
+    notes: "Evaluates all Gap/AirGap thicknesses together. Mode=MIN returns the smallest finite gap thickness, so use `>= target` to constrain all gaps from below. Mode=MAX returns the largest finite gap thickness, so use `<= target` to constrain all gaps from above."
+  },
+  "THIC": {
+    name: "THIC",
+    description: "All Thickness",
+    parameters: [
+      { key: "param1", label: "Mode", description: "MIN or MAX" }
+    ],
+    notes: "Evaluates all finite thickness values together, excluding Object thickness and Gap/AirGap thickness. Mode=MIN returns the smallest finite thickness, and Mode=MAX returns the largest finite thickness. Use `>= target` for lower bounds and `<= target` for upper bounds. INF/Infinity entries are ignored."
+  },
+  "REQMATH": {
+    name: "REQMATH",
+    description: "Requirement Current Arithmetic",
+    parameters: [
+      { key: "param1", label: "Left Req", description: "Referenced requirement row id" },
+      { key: "param2", label: "Op", description: "+ - * /" },
+      { key: "param3", label: "Right Req", description: "Referenced requirement row id" }
+    ],
+    notes: "Calculates arithmetic from two existing requirement current values. References are by requirement row id. For safety, REQMATH can only read rows that have already been evaluated above the current row in the same evaluation pass. Self-reference, future-row reference, unresolved reference, or division by zero evaluate as FAIL."
+  },
+  "GMIN": {
+    name: "GMIN",
+    description: "Minimum Gap Thickness",
+    parameters: [],
+    notes: "Returns the minimum finite thickness among all Gap/AirGap entries in mm. Use `>= target` to require every gap to stay above the target thickness. If no finite gaps exist, evaluates as FAIL."
+  },
+  "GMAX": {
+    name: "GMAX",
+    description: "Maximum Gap Thickness",
+    parameters: [],
+    notes: "Returns the maximum finite thickness among all Gap/AirGap entries in mm. Use `<= target` to require every gap to stay below the target thickness. If no finite gaps exist, evaluates as FAIL."
   }
 };
 
@@ -551,7 +614,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
   'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'OPD_RMS_WAVES',
   'ZERN_COEFF',
-  'EDGE', 'CTCT'
+  'EDGE', 'CTCT', 'DBLT_K', 'RADI', 'SDIST', 'GAP', 'THIC', 'REQMATH'
 ]);
 
 /**

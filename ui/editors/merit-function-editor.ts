@@ -40,6 +40,7 @@ import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } f
 import { loadTableData as loadMeritFunctionTableData, saveTableData as saveMeritFunctionTableData } from '../../data/table-merit-function.ts';
 import { loadLastSpotSettings } from '../spot-diagram-settings-storage.ts';
 import { getLastWavefrontMap } from '../../evaluation/wavefront/last-wavefront-runtime.ts';
+import { getDoubletBendingCurrentK } from '../../optimization/doublet-bending.ts';
 
 function tryLoadSystemConfigurations(): any {
     try {
@@ -57,6 +58,27 @@ function isPlainObject(value: any): boolean {
         !Array.isArray(value) &&
         Object.prototype.toString.call(value) === '[object Object]'
     );
+}
+
+function shouldEmitOptimizationWarning(key: string, intervalMs = 1500): boolean {
+    try {
+        if (!(w && w.__cooptOptimizerIsRunning === true)) {
+            return true;
+        }
+        if (!w.__cooptOptimizationWarningThrottle || typeof w.__cooptOptimizationWarningThrottle !== 'object') {
+            w.__cooptOptimizationWarningThrottle = {};
+        }
+        const throttle = w.__cooptOptimizationWarningThrottle as Record<string, number>;
+        const now = Date.now();
+        const prev = Number(throttle[key] || 0);
+        if (Number.isFinite(prev) && now - prev < intervalMs) {
+            return false;
+        }
+        throttle[key] = now;
+        return true;
+    } catch {
+        return true;
+    }
 }
 
 function cloneJson(v: any): any {
@@ -152,6 +174,153 @@ function isCoordTransOpticalRow(row: any): boolean {
             || normalized.includes('coord trans')
             || normalized.includes('coordinate break');
     });
+}
+
+function isRequirementGapLikeRow(row: any): boolean {
+    if (!row || typeof row !== 'object') return false;
+
+    const objType = String(row['object type'] ?? row.object ?? row.surfType ?? row.objectType ?? row.type ?? '').trim().toLowerCase();
+    const material = String(row.material ?? '').trim().toLowerCase();
+    const thickness = Number(row.thickness);
+
+    const isObject = objType === 'object';
+    const isImage = objType === 'image';
+    const isCT = objType === 'ct' || objType.includes('coordinate') || objType.includes('coordtrans');
+    const isStop = objType === 'stop' || objType === 'sto' || objType === 'aperturestop';
+    const isGlass = !!material && material !== 'air';
+    const isGapType = objType === 'gap' || objType.includes('gap') || isGapOpticalRow(row);
+    const hasFiniteThickness = Number.isFinite(thickness);
+    const gapThicknessRaw = row.__cooptGapThickness;
+    const hasAttachedGapThickness = gapThicknessRaw !== undefined
+        && gapThicknessRaw !== null
+        && String(gapThicknessRaw).trim() !== '';
+
+    if (isObject || isImage || isCT) return false;
+    return isGapType || isStop || hasAttachedGapThickness || (!isGlass && hasFiniteThickness && Math.abs(thickness) > 1e-12);
+}
+
+function readRequirementGapThickness(row: any, rows: any[]): number {
+    if (!row || typeof row !== 'object') return NaN;
+
+    const gapThicknessRaw = row.__cooptGapThickness;
+    if (gapThicknessRaw !== undefined && gapThicknessRaw !== null && String(gapThicknessRaw).trim() !== '') {
+        const gapThickness = Number(gapThicknessRaw);
+        if (Number.isFinite(gapThickness)) return gapThickness;
+    }
+
+    const directThickness = Number(row.thickness);
+    if (Number.isFinite(directThickness) && Math.abs(directThickness) > 1e-12) {
+        return directThickness;
+    }
+
+    const blockId = String(row._blockId ?? '').trim();
+    if (blockId && Array.isArray(rows)) {
+        const relatedGapRow = rows.find((candidate: any) => {
+            if (!candidate || typeof candidate !== 'object') return false;
+            if (String(candidate._blockId ?? '').trim() !== blockId) return false;
+            const candidateGapRaw = candidate.__cooptGapThickness;
+            return candidateGapRaw !== undefined && candidateGapRaw !== null && String(candidateGapRaw).trim() !== '';
+        });
+        if (relatedGapRow) {
+            const relatedGap = Number(relatedGapRow.__cooptGapThickness);
+            if (Number.isFinite(relatedGap)) return relatedGap;
+        }
+    }
+
+    return Number.isFinite(directThickness) ? directThickness : NaN;
+}
+
+function collectRequirementGapThicknesses(rows: any[]): number[] {
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const values: number[] = [];
+    for (const row of rows) {
+        if (!isRequirementGapLikeRow(row)) continue;
+        const thickness = readRequirementGapThickness(row, rows);
+        if (Number.isFinite(thickness)) {
+            values.push(thickness);
+        }
+    }
+    return values;
+}
+
+function collectFiniteThicknessValues(rows: any[]): number[] {
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const values: number[] = [];
+    for (const row of rows) {
+        const objectType = String(row?.['object type'] ?? row?.object ?? row?.objectType ?? row?.type ?? '').trim().toLowerCase();
+        if (objectType === 'object') continue;
+        if (isRequirementGapLikeRow(row)) continue;
+        const tRaw = row ? row.thickness : undefined;
+        if (tRaw === undefined || tRaw === null) continue;
+        const s = String(tRaw).trim().toUpperCase();
+        if (s === 'INF' || s === 'INFINITY') continue;
+        const t = Number(tRaw);
+        if (Number.isFinite(t)) values.push(t);
+    }
+    return values;
+}
+
+function resolveRequirementSurfaceBySelection(rows: any[], selectionRaw: any): { row: any; index: number } | null {
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const surfaceNum = Math.floor(Number(selectionRaw));
+    if (!Number.isFinite(surfaceNum) || surfaceNum < 1) return null;
+
+    const byIdIndex = rows.findIndex((row: any) => Number(row?.id) === surfaceNum);
+    if (byIdIndex >= 0) {
+        return { row: rows[byIdIndex], index: byIdIndex };
+    }
+
+    const surfaceIndex0 = surfaceNum - 1;
+    if (surfaceIndex0 >= 0 && surfaceIndex0 < rows.length) {
+        return { row: rows[surfaceIndex0], index: surfaceIndex0 };
+    }
+
+    return null;
+}
+
+function calculateRequirementSurfaceDistance(rows: any[], startSelectionRaw: any, endSelectionRaw: any): number {
+    if (!Array.isArray(rows) || rows.length === 0) return NaN;
+
+    const startHit = resolveRequirementSurfaceBySelection(rows, startSelectionRaw);
+    const endHit = resolveRequirementSurfaceBySelection(rows, endSelectionRaw);
+    if (!startHit || !endHit) return NaN;
+    if (startHit.index >= endHit.index) return NaN;
+
+    let total = 0;
+    let sawFinite = false;
+    for (let index = startHit.index; index < endHit.index; index++) {
+        const row = rows[index];
+        if (!row || typeof row !== 'object') continue;
+
+        const objectType = String(row?.['object type'] ?? row?.object ?? row?.objectType ?? row?.type ?? '').trim().toLowerCase();
+        if (objectType === 'object' || objectType === 'image' || objectType === 'ct' || objectType.includes('coordinate') || objectType.includes('coordtrans')) {
+            continue;
+        }
+
+        const thickness = readRequirementGapThickness(row, rows);
+        if (!Number.isFinite(thickness)) continue;
+
+        total += thickness;
+        sawFinite = true;
+    }
+
+    return sawFinite ? total : NaN;
+}
+
+function resolveRequirementArithmeticRefCurrent(operand: any, refRaw: any): number | null {
+    const refId = String(refRaw ?? '').trim();
+    if (!refId) return null;
+
+    const selfId = String(operand?.__reqRowId ?? '').trim();
+    if (selfId && refId === selfId) return null;
+
+    const state = operand?.__reqEvaluationState;
+    const byId = state?.currentById;
+    if (!byId || typeof byId.get !== 'function') return null;
+
+    const value = byId.get(refId);
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
 }
 
 function resolvePhysicalSurfaceIdRangeFromOrdinals(opticalSystemData: any[], startOrdinal: number, endOrdinal: number): { startSurf: number; endSurf: number } | null {
@@ -1417,43 +1586,12 @@ class MeritFunctionEditor {
                     return null;
                 };
 
-                const readCtctThickness = (row: any, rows: any[]): number => {
-                    if (!row || typeof row !== 'object') return NaN;
-
-                    const gapThicknessRaw = row.__cooptGapThickness;
-                    if (gapThicknessRaw !== undefined && gapThicknessRaw !== null && String(gapThicknessRaw).trim() !== '') {
-                        const gapThickness = Number(gapThicknessRaw);
-                        if (Number.isFinite(gapThickness)) return gapThickness;
-                    }
-
-                    const directThickness = Number(row.thickness);
-                    if (Number.isFinite(directThickness) && Math.abs(directThickness) > 1e-12) {
-                        return directThickness;
-                    }
-
-                    const blockId = String(row._blockId ?? '').trim();
-                    if (blockId && Array.isArray(rows)) {
-                        const relatedGapRow = rows.find((candidate: any) => {
-                            if (!candidate || typeof candidate !== 'object') return false;
-                            if (String(candidate._blockId ?? '').trim() !== blockId) return false;
-                            const candidateGapRaw = candidate.__cooptGapThickness;
-                            return candidateGapRaw !== undefined && candidateGapRaw !== null && String(candidateGapRaw).trim() !== '';
-                        });
-                        if (relatedGapRow) {
-                            const relatedGap = Number(relatedGapRow.__cooptGapThickness);
-                            if (Number.isFinite(relatedGap)) return relatedGap;
-                        }
-                    }
-
-                    return Number.isFinite(directThickness) ? directThickness : NaN;
-                };
-
                 let surface = resolveSurfaceBySelection(opticalSystemData);
                 if (!surface) {
                     return 1e9;
                 }
 
-                let thickness = readCtctThickness(surface, opticalSystemData);
+                let thickness = readRequirementGapThickness(surface, opticalSystemData);
 
                 if ((!Number.isFinite(thickness) || Math.abs(thickness) <= 1e-12) && (isCurrentOperand || isOperandActiveConfig)) {
                     let prevPreferTable: any;
@@ -1464,7 +1602,7 @@ class MeritFunctionEditor {
                         }
                         const liveRows = getOpticalSystemRows(null);
                         const liveSurface = resolveSurfaceBySelection(liveRows);
-                        const liveThickness = readCtctThickness(liveSurface, liveRows);
+                        const liveThickness = readRequirementGapThickness(liveSurface, liveRows);
                         if (Number.isFinite(liveThickness)) {
                             thickness = liveThickness;
                         }
@@ -1487,6 +1625,209 @@ class MeritFunctionEditor {
                 }
 
                 return thickness;
+            }
+
+            case 'GAP':
+            case 'GMIN':
+            case 'GMAX': {
+                const modeRaw = String(operand?.param1 ?? '').trim().toUpperCase();
+                const useMinimum = operand.operand === 'GMIN' || (operand.operand === 'GAP' && modeRaw !== 'MAX');
+                let gapThicknesses = collectRequirementGapThicknesses(opticalSystemData);
+
+                if ((gapThicknesses.length === 0 || gapThicknesses.every((value) => !Number.isFinite(value))) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        const liveRows = getOpticalSystemRows(null);
+                        gapThicknesses = collectRequirementGapThicknesses(liveRows);
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+
+                if (!Array.isArray(gapThicknesses) || gapThicknesses.length === 0) {
+                    return 1e9;
+                }
+
+                const finiteValues = gapThicknesses.filter((value) => Number.isFinite(value));
+                if (finiteValues.length === 0) return 1e9;
+                return useMinimum ? Math.min(...finiteValues) : Math.max(...finiteValues);
+            }
+
+            case 'THIC': {
+                const modeRaw = String(operand?.param1 ?? '').trim().toUpperCase();
+                const useMinimum = modeRaw !== 'MAX';
+                let thicknessValues = collectFiniteThicknessValues(opticalSystemData);
+
+                if ((thicknessValues.length === 0 || thicknessValues.every((value) => !Number.isFinite(value))) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        const liveRows = getOpticalSystemRows(null);
+                        thicknessValues = collectFiniteThicknessValues(liveRows);
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+
+                if (!Array.isArray(thicknessValues) || thicknessValues.length === 0) {
+                    return 1e9;
+                }
+
+                const finiteValues = thicknessValues.filter((value) => Number.isFinite(value));
+                if (finiteValues.length === 0) return 1e9;
+                return useMinimum ? Math.min(...finiteValues) : Math.max(...finiteValues);
+            }
+
+            case 'REQMATH': {
+                const left = resolveRequirementArithmeticRefCurrent(operand, operand?.param1);
+                const right = resolveRequirementArithmeticRefCurrent(operand, operand?.param3);
+                const operator = String(operand?.param2 ?? '').trim();
+
+                if (!Number.isFinite(left) || !Number.isFinite(right)) {
+                    return 1e9;
+                }
+
+                switch (operator) {
+                    case '+':
+                        return left + right;
+                    case '-':
+                        return left - right;
+                    case '*':
+                        return left * right;
+                    case '/':
+                        if (Math.abs(right) <= 1e-12) return 1e9;
+                        return left / right;
+                    default:
+                        return 1e9;
+                }
+            }
+
+            case 'SDIST': {
+                const startRaw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+                const endRaw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+                if (!startRaw || !endRaw || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) {
+                    return 1e9;
+                }
+
+                let distance = calculateRequirementSurfaceDistance(opticalSystemData, startRaw, endRaw);
+
+                if (!Number.isFinite(distance) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        const liveRows = getOpticalSystemRows(null);
+                        distance = calculateRequirementSurfaceDistance(liveRows, startRaw, endRaw);
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+
+                return Number.isFinite(distance) ? distance : 1e9;
+            }
+
+            case 'RADI': {
+                const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+                if (!param1Raw || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) {
+                    return 1e9;
+                }
+
+                const surfaceNum = Math.floor(Number(param1Raw));
+                if (!Number.isFinite(surfaceNum) || surfaceNum < 1) {
+                    return 1e9;
+                }
+
+                const resolveSurfaceBySelection = (rows: any[]): any => {
+                    if (!Array.isArray(rows) || rows.length === 0) return null;
+
+                    const byId = rows.find((row: any) => Number(row?.id) === surfaceNum) || null;
+                    if (byId) return byId;
+
+                    const surfaceIndex0 = surfaceNum - 1;
+                    if (surfaceIndex0 >= 0 && surfaceIndex0 < rows.length) {
+                        return rows[surfaceIndex0];
+                    }
+
+                    return null;
+                };
+
+                const readFiniteRadius = (row: any): number => {
+                    if (!row || typeof row !== 'object') return NaN;
+                    const radiusRaw = row.radius;
+                    const radiusText = String(radiusRaw ?? '').trim().toUpperCase();
+                    if (!radiusText || radiusText === 'INF' || radiusRaw === Infinity) return NaN;
+                    const radius = Number(radiusRaw);
+                    if (!Number.isFinite(radius) || Math.abs(radius) <= 1e-12) return NaN;
+                    return Math.abs(radius);
+                };
+
+                let surface = resolveSurfaceBySelection(opticalSystemData);
+                let radius = readFiniteRadius(surface);
+
+                if ((!Number.isFinite(radius) || radius <= 1e-12) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        const liveRows = getOpticalSystemRows(null);
+                        surface = resolveSurfaceBySelection(liveRows);
+                        const liveRadius = readFiniteRadius(surface);
+                        if (Number.isFinite(liveRadius)) {
+                            radius = liveRadius;
+                        }
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+
+                return Number.isFinite(radius) ? radius : 1e9;
             }
 
             case 'EDGE': {
@@ -1539,168 +1880,129 @@ class MeritFunctionEditor {
                     return 1e9;
                 }
                 
-                const surface = opticalSystemData[surfaceIndex0];
-                if (!surface) {
-                    return 1e9;
-                }
                 
-                const thickness = Number(surface.thickness);
-                if (!Number.isFinite(thickness)) {
-                    return 1e9;
-                }
-                
-                // Determine surface type
-                const surfType = String(surface.surfType || surface.type || '').trim().toLowerCase();
-                const isToric = surfType === 'toric';
-                
-                let sag = 0;
-                
-                // Check if next surface is part of the same lens (for lens pairs)
-                let sag2 = 0;
-                const nextSurfaceIdx = surfaceIndex0 + 1;
-                
-                if (isToric) {
-                    // Toric surface: respect direction parameter
-                    const radiusXRaw = surface.radiusX;
-                    const radiusYRaw = surface.radiusY || surface.radius;
-                    
-                    const radiusXInf = String(radiusXRaw ?? '').trim().toUpperCase() === 'INF' || radiusXRaw === Infinity;
-                    const radiusYInf = String(radiusYRaw ?? '').trim().toUpperCase() === 'INF' || radiusYRaw === Infinity;
-                    
-                    const radiusX = radiusXInf ? Infinity : Number(radiusXRaw);
-                    const radiusY = radiusYInf ? Infinity : Number(radiusYRaw);
-                    
+                const computeEdgeThicknessForRows = (rows: any[]): number => {
+                    if (!Array.isArray(rows)) return Number.NaN;
+                    if (surfaceIndex0 < 0 || surfaceIndex0 >= rows.length) return Number.NaN;
 
-                    
-                    if ((Number.isFinite(radiusX) || radiusX === Infinity) && (Number.isFinite(radiusY) || radiusY === Infinity)) {
-                        const toricParams = {
-                            radiusX,
-                            radiusY,
-                            conic: Number(surface.conic) || 0,
-                            axis: Number(surface.axis) || 0
-                        };
-                        
-                        // Direction: X, Y, or blank (radial)
-                        if (param3Raw === 'X') {
-                            sag = toricSurfaceZ(height, 0, toricParams);
-                        } else if (param3Raw === 'Y') {
-                            sag = toricSurfaceZ(0, height, toricParams);
-                        } else {
-                            // Radial: calculate average or use primary meridian
-                            const sagX = toricSurfaceZ(height, 0, toricParams);
-                            const sagY = toricSurfaceZ(0, height, toricParams);
-                            sag = Number.isFinite(sagX) && Number.isFinite(sagY) ? (sagX + sagY) / 2 : 0;
+                    const surface = rows[surfaceIndex0];
+                    if (!surface) return Number.NaN;
+
+                    const thickness = Number(surface.thickness);
+                    if (!Number.isFinite(thickness)) return Number.NaN;
+
+                    const computeSurfaceSag = (surfaceRow: any): number => {
+                        if (!surfaceRow || typeof surfaceRow !== 'object') return 0;
+                        const surfType = String(surfaceRow.surfType || surfaceRow.type || '').trim().toLowerCase();
+                        const isToric = surfType === 'toric';
+
+                        if (isToric) {
+                            const radiusXRaw = surfaceRow.radiusX;
+                            const radiusYRaw = surfaceRow.radiusY || surfaceRow.radius;
+                            const radiusXInf = String(radiusXRaw ?? '').trim().toUpperCase() === 'INF' || radiusXRaw === Infinity;
+                            const radiusYInf = String(radiusYRaw ?? '').trim().toUpperCase() === 'INF' || radiusYRaw === Infinity;
+                            const radiusX = radiusXInf ? Infinity : Number(radiusXRaw);
+                            const radiusY = radiusYInf ? Infinity : Number(radiusYRaw);
+
+                            if ((Number.isFinite(radiusX) || radiusX === Infinity) && (Number.isFinite(radiusY) || radiusY === Infinity)) {
+                                const toricParams = {
+                                    radiusX,
+                                    radiusY,
+                                    conic: Number(surfaceRow.conic) || 0,
+                                    axis: Number(surfaceRow.axis) || 0
+                                };
+
+                                if (param3Raw === 'X') return toricSurfaceZ(height, 0, toricParams);
+                                if (param3Raw === 'Y') return toricSurfaceZ(0, height, toricParams);
+                                const sagX = toricSurfaceZ(height, 0, toricParams);
+                                const sagY = toricSurfaceZ(0, height, toricParams);
+                                return Number.isFinite(sagX) && Number.isFinite(sagY) ? (sagX + sagY) / 2 : 0;
+                            }
+                            return 0;
                         }
-                    }
-                } else {
-                    // Spherical or aspheric surface: use radial calculation
-                    const radiusRaw = surface.radius;
-                    const radiusInf = String(radiusRaw ?? '').trim().toUpperCase() === 'INF' || radiusRaw === Infinity || radiusRaw === 0;
-                    const radius = radiusInf ? Infinity : Number(radiusRaw);
-                    
 
-                    
-                    if (Number.isFinite(radius) || radius === Infinity) {
+                        const radiusRaw = surfaceRow.radius;
+                        const radiusInf = String(radiusRaw ?? '').trim().toUpperCase() === 'INF' || radiusRaw === Infinity || radiusRaw === 0;
+                        const radius = radiusInf ? Infinity : Number(radiusRaw);
+                        if (!(Number.isFinite(radius) || radius === Infinity)) return 0;
+
                         const asphericParams = {
                             radius,
-                            conic: Number(surface.conic) || 0,
-                            coef1: Number(surface.coef1) || 0,
-                            coef2: Number(surface.coef2) || 0,
-                            coef3: Number(surface.coef3) || 0,
-                            coef4: Number(surface.coef4) || 0,
-                            coef5: Number(surface.coef5) || 0,
-                            coef6: Number(surface.coef6) || 0,
-                            coef7: Number(surface.coef7) || 0,
-                            coef8: Number(surface.coef8) || 0,
-                            coef9: Number(surface.coef9) || 0,
-                            coef10: Number(surface.coef10) || 0
+                            conic: Number(surfaceRow.conic) || 0,
+                            coef1: Number(surfaceRow.coef1) || 0,
+                            coef2: Number(surfaceRow.coef2) || 0,
+                            coef3: Number(surfaceRow.coef3) || 0,
+                            coef4: Number(surfaceRow.coef4) || 0,
+                            coef5: Number(surfaceRow.coef5) || 0,
+                            coef6: Number(surfaceRow.coef6) || 0,
+                            coef7: Number(surfaceRow.coef7) || 0,
+                            coef8: Number(surfaceRow.coef8) || 0,
+                            coef9: Number(surfaceRow.coef9) || 0,
+                            coef10: Number(surfaceRow.coef10) || 0
                         };
-                        
                         const mode = surfType.includes('odd') ? 'odd' : 'even';
-                        sag = asphericSurfaceZ(height, asphericParams, mode);
-                    }
-                }
-                
-                if (!Number.isFinite(sag)) sag = 0;
-                
-                // Calculate sag2 from the next surface if it's the back side of the same lens
-                if (nextSurfaceIdx < opticalSystemData.length) {
-                    const nextSurface = opticalSystemData[nextSurfaceIdx];
-                    if (nextSurface) {
-                        const nextMaterial = String(nextSurface.material || '').trim().toLowerCase();
-                        
-                        // If next surface is AIR, it's the back surface of the current lens
-                        const isNextSurfaceBackSide = nextMaterial === 'air';
-                        
-                        if (isNextSurfaceBackSide) {
-                            // Calculate sag2 from the back surface (nextSurface)
-                            const nextSurfType = String(nextSurface.surfType || nextSurface.type || '').trim().toLowerCase();
-                            const nextIsToric = nextSurfType === 'toric';
-                            
-                            if (nextIsToric) {
-                                const radiusXRaw2 = nextSurface.radiusX;
-                                const radiusYRaw2 = nextSurface.radiusY || nextSurface.radius;
-                                const radiusXInf2 = String(radiusXRaw2 ?? '').trim().toUpperCase() === 'INF' || radiusXRaw2 === Infinity;
-                                const radiusYInf2 = String(radiusYRaw2 ?? '').trim().toUpperCase() === 'INF' || radiusYRaw2 === Infinity;
-                                const radiusX2 = radiusXInf2 ? Infinity : Number(radiusXRaw2);
-                                const radiusY2 = radiusYInf2 ? Infinity : Number(radiusYRaw2);
-                                
-                                if ((Number.isFinite(radiusX2) || radiusX2 === Infinity) && (Number.isFinite(radiusY2) || radiusY2 === Infinity)) {
-                                    const toricParams2 = {
-                                        radiusX: radiusX2,
-                                        radiusY: radiusY2,
-                                        conic: Number(nextSurface.conic) || 0,
-                                        axis: Number(nextSurface.axis) || 0
-                                    };
-                                    
-                                    if (param3Raw === 'X') {
-                                        sag2 = toricSurfaceZ(height, 0, toricParams2);
-                                    } else if (param3Raw === 'Y') {
-                                        sag2 = toricSurfaceZ(0, height, toricParams2);
-                                    } else {
-                                        const sagX2 = toricSurfaceZ(height, 0, toricParams2);
-                                        const sagY2 = toricSurfaceZ(0, height, toricParams2);
-                                        sag2 = Number.isFinite(sagX2) && Number.isFinite(sagY2) ? (sagX2 + sagY2) / 2 : 0;
-                                    }
-                                }
-                            } else {
-                                const radiusRaw2 = nextSurface.radius;
-                                const radiusInf2 = String(radiusRaw2 ?? '').trim().toUpperCase() === 'INF' || radiusRaw2 === Infinity || radiusRaw2 === 0;
-                                const radius2 = radiusInf2 ? Infinity : Number(radiusRaw2);
-                                
-                                if (Number.isFinite(radius2) || radius2 === Infinity) {
-                                    const asphericParams2 = {
-                                        radius: radius2,
-                                        conic: Number(nextSurface.conic) || 0,
-                                        coef1: Number(nextSurface.coef1) || 0,
-                                        coef2: Number(nextSurface.coef2) || 0,
-                                        coef3: Number(nextSurface.coef3) || 0,
-                                        coef4: Number(nextSurface.coef4) || 0,
-                                        coef5: Number(nextSurface.coef5) || 0,
-                                        coef6: Number(nextSurface.coef6) || 0,
-                                        coef7: Number(nextSurface.coef7) || 0,
-                                        coef8: Number(nextSurface.coef8) || 0,
-                                        coef9: Number(nextSurface.coef9) || 0,
-                                        coef10: Number(nextSurface.coef10) || 0
-                                    };
-                                    
-                                    const mode2 = nextSurfType.includes('odd') ? 'odd' : 'even';
-                                    sag2 = asphericSurfaceZ(height, asphericParams2, mode2);
-                                }
-                            }
+                        return asphericSurfaceZ(height, asphericParams, mode);
+                    };
 
+                    let sag = computeSurfaceSag(surface);
+                    if (!Number.isFinite(sag)) sag = 0;
+
+                    let sag2 = 0;
+                    const nextSurfaceIdx = surfaceIndex0 + 1;
+                    if (nextSurfaceIdx < rows.length) {
+                        const nextSurface = rows[nextSurfaceIdx];
+                        const nextObjType = String(nextSurface?.['object type'] || nextSurface?.object || nextSurface?.surfType || '').trim().toLowerCase();
+                        const isNextOpticalSurface = !!nextSurface && !(nextObjType === 'object'
+                            || nextObjType === 'image'
+                            || nextObjType === 'stop'
+                            || nextObjType === 'sto'
+                            || nextObjType === 'aperturestop'
+                            || nextObjType === 'ct'
+                            || nextObjType.includes('coordinate')
+                            || nextObjType.includes('coordtrans'));
+                        if (isNextOpticalSurface) {
+                            sag2 = computeSurfaceSag(nextSurface);
+                            if (!Number.isFinite(sag2)) sag2 = 0;
                         }
                     }
+
+                    return thickness - sag + sag2;
+                };
+
+                let edgeThickness = computeEdgeThicknessForRows(opticalSystemData);
+                if ((!Number.isFinite(edgeThickness) || Math.abs(edgeThickness) >= 1e8) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        const liveRows = getOpticalSystemRows(null);
+                        const liveEdgeThickness = computeEdgeThicknessForRows(liveRows);
+                        if (Number.isFinite(liveEdgeThickness)) {
+                            edgeThickness = liveEdgeThickness;
+                        }
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
                 }
-                
-                // Edge thickness = center thickness - sag1 + sag2 (preserving sign)
-                const edgeThickness = thickness - sag + sag2;
+
                 return Number.isFinite(edgeThickness) ? edgeThickness : 1e9;
             }
 
-            case 'ZERN_COEFF': {
-                const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+            case 'DBLT_K':
+                return this.calculateDoubletBendingK(operand);
 
+            case 'ZERN_COEFF': {
                 const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
                 const wavelength = (param1Raw === '')
                     ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
@@ -2903,24 +3205,28 @@ class MeritFunctionEditor {
         }
 
         if (count <= 0) {
-            console.warn('⚠️ TA_RMS_UM: no transverse aberration data points', {
-                component,
-                meridionalCount: meridionalStats.count,
-                sagittalCount: sagittalStats.count
-            });
+            if (shouldEmitOptimizationWarning('ta-rms-no-data')) {
+                console.warn('⚠️ TA_RMS_UM: no transverse aberration data points', {
+                    component,
+                    meridionalCount: meridionalStats.count,
+                    sagittalCount: sagittalStats.count
+                });
+            }
             // Return NaN so optimizer can treat it as invalid-current penalty,
             // instead of a misleading constant zero landscape.
             return Number.NaN;
         }
 
         if (effectiveComponent !== component) {
-            console.warn('⚠️ TA_RMS_UM: requested component had no data, using fallback', {
-                requested: component,
-                used: effectiveComponent,
-                rayCount,
-                wavelength,
-                objectIndex0
-            });
+            if (shouldEmitOptimizationWarning('ta-rms-fallback')) {
+                console.warn('⚠️ TA_RMS_UM: requested component had no data, using fallback', {
+                    requested: component,
+                    used: effectiveComponent,
+                    rayCount,
+                    wavelength,
+                    objectIndex0
+                });
+            }
         }
 
         const rmsMm = Math.sqrt(sumSq / count);
@@ -4007,6 +4313,42 @@ class MeritFunctionEditor {
         
         const metrics = this.getPrimarySystemMetricsCached(operand, opticalSystemData);
         return this.safeFiniteNumberOrZero(metrics ? metrics[key] : 0);
+    }
+
+    calculateDoubletBendingK(operand: any): number {
+        const rawSelection = String(operand?.param1 ?? '').trim();
+        if (!rawSelection) return 0;
+
+        try {
+            const sys = tryLoadSystemConfigurations();
+            const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
+            const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null)
+                ? String(sys.activeConfigId).trim()
+                : '';
+            const hint = (operand?.configId === undefined || operand?.configId === null)
+                ? ''
+                : String(operand.configId).trim();
+
+            let cfg = null;
+            if (hint) {
+                cfg = configs.find((c: any) => c && String(c.id).trim() === hint)
+                    || configs.find((c: any) => c && String(c.name).trim() === hint)
+                    || null;
+            }
+            if (!cfg && activeId) {
+                cfg = configs.find((c: any) => c && String(c.id).trim() === activeId) || null;
+            }
+            if (!cfg) cfg = configs[0] || null;
+
+            const blockId = this._convertLabelToBlockId(rawSelection, operand?.configId);
+            const blocks = Array.isArray(cfg?.blocks) ? cfg.blocks : [];
+            const block = blocks.find((entry: any) => entry && String(entry.blockId ?? '').trim() === String(blockId).trim()) || null;
+            if (!block || String(block?.blockType ?? '').trim() !== 'Doublet') return 0;
+            return this.safeFiniteNumberOrZero(getDoubletBendingCurrentK(block));
+        } catch (err) {
+            console.error('[DBLT_K] Error calculating doublet bending K:', err);
+            return 0;
+        }
     }
 
     calculateEFLForBlock(operand: any, opticalSystemData: any[], blockLabel: string): number {

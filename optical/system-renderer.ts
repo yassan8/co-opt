@@ -1197,7 +1197,6 @@ function __coopt_shouldLabelSurfaceNumber(surface) {
     if (__coopt_isThinLensBackSurface(surface)) return false;
     if (__coopt_isObjectSurface(surface)) return false;
     if (__coopt_isImageSurface(surface)) return false;
-    if (__coopt_isStopSurface(surface)) return false;
     return true;
 }
 
@@ -1927,6 +1926,7 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
  */
 export function drawOpticalSystemSurfaces(options: any = {}) {
     const totalStartMs = performance.now();
+    const showPlaneCrosshair = false;
     
     const {
         crossSectionOnly = false,
@@ -2239,7 +2239,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             const point = new THREE.Vector3(0, y, z);
                             pointsVertical.push(point);
                         }
-                        if (pointsVertical.length >= 2) {
+                        if (showPlaneCrosshair && pointsVertical.length >= 2) {
                             const geometryV = new THREE.BufferGeometry().setFromPoints(pointsVertical);
                             const materialV = new THREE.LineBasicMaterial({ 
                                 color: 0x000000, 
@@ -2282,7 +2282,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             const point = new THREE.Vector3(x, 0, z);
                             pointsHorizontal.push(point);
                         }
-                        if (pointsHorizontal.length >= 2) {
+                        if (showPlaneCrosshair && pointsHorizontal.length >= 2) {
                             const geometryH = new THREE.BufferGeometry().setFromPoints(pointsHorizontal);
                             const materialH = new THREE.LineBasicMaterial({ 
                                 color: 0xff0000, 
@@ -2498,7 +2498,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             point.z += imgOrigin.z;
                             pointsVertical.push(point);
                         }
-                        if (pointsVertical.length >= 2) {
+                        if (showPlaneCrosshair && pointsVertical.length >= 2) {
                             const geometryV = new THREE.BufferGeometry().setFromPoints(pointsVertical);
                             const materialV = new THREE.LineBasicMaterial({ 
                                 color: 0x000000, 
@@ -2551,7 +2551,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             point.z += imgOrigin.z;
                             pointsHorizontal.push(point);
                         }
-                        if (pointsHorizontal.length >= 2) {
+                        if (showPlaneCrosshair && pointsHorizontal.length >= 2) {
                             const geometryH = new THREE.BufferGeometry().setFromPoints(pointsHorizontal);
                             const materialH = new THREE.LineBasicMaterial({ 
                                 color: 0xff0000, 

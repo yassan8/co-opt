@@ -822,6 +822,7 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
     } else {
       // Re-apply thicknessMode (IMD/BFL) using this config's own paraxial data.
       // Ensures each config gets its own independently computed value on config switch.
+      let expandedRowsForUi: { rows: any[]; issues: LoadIssue[] } | null = null;
       try {
         const hasThicknessMode = Array.isArray(activeConfig.blocks) && (activeConfig.blocks as any[]).some((b: any) => {
           const m = String(b?.parameters?.thicknessMode ?? '').trim().toUpperCase();
@@ -855,12 +856,18 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
               if (mutated) {
                 try { if (!(activeConfig as any).metadata) (activeConfig as any).metadata = {}; (activeConfig as any).metadata.modified = new Date().toISOString(); } catch(_) {}
                 saveSystemConfigurations(systemConfig);
+              } else {
+                expandedRowsForUi = probeExpanded;
               }
+            } else {
+              expandedRowsForUi = probeExpanded;
             }
+          } else {
+            expandedRowsForUi = probeExpanded;
           }
         }
       } catch (_) {}
-      const expanded = expandBlocksToOpticalSystemRows(activeConfig.blocks);
+      const expanded = expandedRowsForUi ?? expandBlocksToOpticalSystemRows(activeConfig.blocks);
       for (const w of expanded.issues.filter(i => i && i.severity === 'warning')) cfgWarn('⚠️ [Configuration] Block expand warning:', w);
       const expandFatals = expanded.issues.filter(i => i && i.severity === 'fatal');
       if (expandFatals.length > 0) {

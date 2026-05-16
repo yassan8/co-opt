@@ -132,7 +132,7 @@ function collectPopupRowsFromMainWindow(): {
             if (snapshotOpticalRows.length > 0) {
                 opticalSystemRows = snapshotOpticalRows;
             }
-            if (snapshotObjectRows.length > 0) {
+            if (snapshotObjectRows.length > 0 && (!Array.isArray(objectRows) || objectRows.length === 0)) {
                 objectRows = snapshotObjectRows;
             }
         }
@@ -3859,14 +3859,25 @@ function ensurePopupMessageHandler(): void {
                 } catch (e) {}
 
                 const isOptimizing = (typeof globalThis !== 'undefined') ? !!w.__cooptOptimizerIsRunning : false;
+                const redrawRows = Array.isArray(data?.rows) && data.rows.length > 0
+                    ? data.rows
+                    : null;
+                let restoreRowsOverride = false;
+                let prevRowsOverride: any = null;
                 
-                if (!isOptimizing) {
+                if (!isOptimizing && !redrawRows) {
                     if (typeof w.loadActiveConfigurationToTables === 'function') {
                         w.loadActiveConfigurationToTables();
                     }
                 }
 
-                if (!isOptimizing) {
+                if (redrawRows) {
+                    try {
+                        prevRowsOverride = w.__cooptOpticalSystemRowsOverride;
+                        w.__cooptOpticalSystemRowsOverride = redrawRows;
+                        restoreRowsOverride = true;
+                    } catch (_) {}
+                } else if (!isOptimizing) {
                     try {
                         if (typeof globalThis !== 'undefined') {
                             w.__cooptOpticalSystemRowsOverride = null;
@@ -4172,6 +4183,11 @@ function ensurePopupMessageHandler(): void {
                 console.error('Error stack:', error.stack);
                 try { w.popup3DWindow.postMessage({ status: 'Error: ' + error.message }, '*'); } catch (_) {}
             } finally {
+                if (restoreRowsOverride) {
+                    try {
+                        w.__cooptOpticalSystemRowsOverride = prevRowsOverride;
+                    } catch (_) {}
+                }
                 w.__cooptDrawCrossInFlight = false;
                 // If a newer request arrived while rendering, dispatch it now
                 const pendingData = w.__cooptDrawCrossLastData;
@@ -5814,10 +5830,17 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                     
                     try {
                         const viewState = getPopupViewState();
+                        const redrawRows = Array.isArray(data?.rows) && data.rows.length > 0
+                            ? data.rows
+                            : undefined;
                         if (status) {
                             status.textContent = 'Redrawing...';
                         }
-                        window.opener.postMessage({ action: 'draw-cross', ...viewState }, '*');
+                        window.opener.postMessage({
+                            action: 'draw-cross',
+                            ...(redrawRows ? { rows: redrawRows } : {}),
+                            ...viewState
+                        }, '*');
                     } catch (e) {}
                     return;
                 }

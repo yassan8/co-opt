@@ -66,7 +66,9 @@ function getRowsFromWindow(w: any): { opticalSystemRows: any[]; sourceRows: any[
         ? activeConfig.object.map((row: any) => (row && typeof row === 'object') ? { ...row } : row)
         : [];
       if (snapshotOpticalRows.length > 0) opticalSystemRows = snapshotOpticalRows;
-      if (snapshotObjectRows.length > 0) objectRows = snapshotObjectRows;
+      if (snapshotObjectRows.length > 0 && (!Array.isArray(objectRows) || objectRows.length === 0)) {
+        objectRows = snapshotObjectRows;
+      }
     }
   } catch (_) {}
 
@@ -121,6 +123,20 @@ function loadPlotly(): Promise<void> {
   return plotlyLoadPromise;
 }
 
+let mtfRuntimeWarmupPromise: Promise<void> | null = null;
+function warmupMtfRuntime(): Promise<void> {
+  if (mtfRuntimeWarmupPromise) return mtfRuntimeWarmupPromise;
+  mtfRuntimeWarmupPromise = (async () => {
+    try {
+      const { preloadRustRayTracingWasm } = await import('../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts');
+      await preloadRustRayTracingWasm();
+    } catch (_) {
+      // Keep first compute path functional even if warmup fails.
+    }
+  })();
+  return mtfRuntimeWarmupPromise;
+}
+
 function getPrimaryWavelength(): number | null {
   for (const w of getWindowCandidates()) {
     if (typeof w?.getPrimaryWavelength !== 'function') continue;
@@ -154,8 +170,13 @@ function buildObjectOptions(): ObjOption[] {
   if (!Array.isArray(objects) || objects.length === 0) return [{ value: '0', label: '0' }];
   return objects.map((obj, i) => {
     const typeRaw = String(obj?.position ?? obj?.object ?? obj?.Object ?? obj?.objectType ?? 'Point');
-    const x = obj?.x ?? obj?.xHeightAngle ?? 0;
-    const y = obj?.y ?? obj?.yHeightAngle ?? 0;
+    const posNorm = typeRaw.trim().toLowerCase();
+    const x = posNorm.includes('imageheight')
+      ? (obj?.__cooptImageHeightTarget?.x ?? obj?.xHeight ?? obj?.x ?? obj?.xHeightAngle ?? 0)
+      : (obj?.x ?? obj?.xHeightAngle ?? 0);
+    const y = posNorm.includes('imageheight')
+      ? (obj?.__cooptImageHeightTarget?.y ?? obj?.yHeight ?? obj?.y ?? obj?.yHeightAngle ?? 0)
+      : (obj?.y ?? obj?.yHeightAngle ?? 0);
     return { value: String(i), label: `${i + 1}: ${typeRaw} (${x}, ${y})` };
   });
 }
@@ -174,6 +195,37 @@ function getColorForWavelength(wl: number): string {
 }
 
 interface AxisInfo { mode: 'angle' | 'height'; label: string; unit: string; max: number; }
+function getObjectFieldMagnitude(obj: any): number {
+  const values = [
+    obj?.__cooptImageHeightTarget?.y,
+    obj?.__cooptImageHeightTarget?.x,
+    obj?.yHeightAngle,
+    obj?.y,
+    obj?.yHeight,
+    obj?.xHeightAngle,
+    obj?.x,
+    obj?.xHeight,
+  ]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (values.length === 0) return 10;
+  return Math.max(1e-6, ...values.map((value) => Math.abs(value)));
+}
+
+function getObjectAxisMax(objects: any[], axisMode: 'angle' | 'height'): number {
+  if (!Array.isArray(objects) || objects.length === 0) return 10;
+  const values = objects
+    .map((obj) => {
+      if (axisMode === 'angle') {
+        return Number(obj?.yHeightAngle ?? obj?.yFieldAngle ?? obj?.fieldAngle ?? obj?.y ?? 0);
+      }
+      return Number(obj?.__cooptImageHeightTarget?.y ?? obj?.yHeight ?? obj?.y ?? obj?.yHeightAngle ?? 0);
+    })
+    .filter((value) => Number.isFinite(value));
+  if (values.length === 0) return 10;
+  return Math.max(1e-6, ...values.map((value) => Math.abs(value)));
+}
+
 function getAxisInfo(): AxisInfo {
   const host = getBestAnalysisWindow();
   let detectedMode: 'angle' | 'height' | null = null;
@@ -207,8 +259,7 @@ function getAxisInfo(): AxisInfo {
   else isAngle = hasAngle && !hasHeight;
   let maxVal = 10;
   if (Array.isArray(objects) && objects.length > 0) {
-    const vals = objects.map((o: any) => Number(o?.yHeightAngle)).filter((v) => Number.isFinite(v));
-    if (vals.length > 0) maxVal = Math.max(1e-6, Math.max(...vals.map(Math.abs)));
+    maxVal = getObjectAxisMax(objects, isAngle ? 'angle' : 'height');
   }
   const axisLabel = isAngle
     ? 'Object Angle (deg)'
@@ -422,7 +473,6 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
   const [progressValue, setProgressValue] = useState(0);
   const [progressText, setProgressText] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [fieldDebugText, setFieldDebugText] = useState('');
 
   // ── Plotly ──
   const chartRef = useRef<HTMLDivElement>(null);
@@ -439,6 +489,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
 
   useEffect(() => {
     loadPlotly().then(() => setPlotlyReady(true)).catch(e => console.error(e));
+    void warmupMtfRuntime();
   }, []);
 
   // ── Sync wavelength/object options ──
@@ -447,17 +498,16 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     if (opts.length < 2) return; // tables not ready yet
     setWlOptions(opts);
     setWavelength(prev => prev && opts.some(o => o.value === prev) ? prev : defaultWavelength(opts));
-    if (type !== 'field-mtf') {
-      const objs = buildObjectOptions();
-      setObjOptions(objs);
-      setObjectIdx(prev => objs.some(o => o.value === prev) ? prev : '0');
-    }
+    const objs = buildObjectOptions();
+    setObjOptions(objs);
+    setObjectIdx(prev => objs.some(o => o.value === prev) ? prev : '0');
     if (type === 'field-mtf' && !fieldMaxInitialized.current) {
       fieldMaxInitialized.current = true;
+      const objects = getRowsFromWindow(getBestAnalysisWindow()).objectRows;
       const axisInfo = getAxisInfo();
-      setFieldMax(String(axisInfo.max || 10));
+      setFieldMax(String(getObjectAxisMax(Array.isArray(objects) ? objects : [], axisInfo.mode) || (axisInfo.max || 10)));
     }
-  }, [type]);
+  }, [type, objectIdx]);
 
   useEffect(() => {
     // Initialize tables in the analysis window context  
@@ -495,6 +545,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     if (!container) return;
     container.innerHTML = '';
     setErrorMsg('');
+    const host = getBestAnalysisWindow();
     const primary = getPrimaryWavelength();
     const wlValue = wavelength;
     if (wlValue !== 'all' && !Number.isFinite(Number(wlValue)) && primary === null) {
@@ -506,14 +557,14 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     const zeroPadTo = computeZeroPadTo(zeroPad, samplingN);
     const opdDisplayMode = removePtd ? 'pistonTiltDefocusRemoved' : 'pistonTiltRemoved';
     const objIdxN = parseInt(objectIdx, 10) || 0;
-    const sourceRows: any[] = typeof w.getSourceRows === 'function'
-      ? safeCall(() => w.getSourceRows(w.tableSource), []) : [];
+    const sourceRows: any[] = typeof host?.getSourceRows === 'function'
+      ? safeCall(() => host.getSourceRows(host.tableSource), []) : [];
     const wavelengthList = buildWavelengthList(wlValue, sourceRows, primary);
     try {
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
-      if (typeof w.runDesktopNativeOpdMapForPopup !== 'function') throw new Error('runDesktopNativeOpdMapForPopup unavailable');
-      if (typeof w.runDesktopNativePsfMapForPopup !== 'function') throw new Error('runDesktopNativePsfMapForPopup unavailable');
-      if (typeof w.runDesktopNativeMtfMapForPopup !== 'function') throw new Error('runDesktopNativeMtfMapForPopup unavailable');
+      if (typeof host?.runDesktopNativeOpdMapForPopup !== 'function') throw new Error('runDesktopNativeOpdMapForPopup unavailable');
+      if (typeof host?.runDesktopNativePsfMapForPopup !== 'function') throw new Error('runDesktopNativePsfMapForPopup unavailable');
+      if (typeof host?.runDesktopNativeMtfMapForPopup !== 'function') throw new Error('runDesktopNativeMtfMapForPopup unavailable');
       const traces: any[] = [];
       let nyquistGlobal = 0;
       const estimateFiniteGridRms = (grid: any): number => {
@@ -536,7 +587,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         const titleNm = (wl * 1000).toFixed(1);
         const baseProgress = (wli / Math.max(1, wavelengthList.length)) * 80;
         setProgress(10 + baseProgress, `λ=${titleNm}nm: OPD...`);
-        const nativeOpdResp = await w.runDesktopNativeOpdMapForPopup({ objectIndex: objIdxN, gridSize: samplingN, wavelengthUm: wl, opdDisplayMode });
+        const nativeOpdResp = await host.runDesktopNativeOpdMapForPopup({ objectIndex: objIdxN, gridSize: samplingN, wavelengthUm: wl, opdDisplayMode });
         const s = samplingN;
         const opdGrid: Float32Array[] = Array.from({ length: s }, () => new Float32Array(s));
         const ampGrid: Float32Array[] = Array.from({ length: s }, () => new Float32Array(s));
@@ -559,13 +610,13 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
             ampGrid[iy][ix] = 1.0;
           }
         }
-        const opticalRows: any[] = typeof w.getOpticalSystemRows === 'function'
-          ? safeCall(() => w.getOpticalSystemRows(w.tableOpticalSystem), []) : [];
+        const opticalRows: any[] = typeof host?.getOpticalSystemRows === 'function'
+          ? safeCall(() => host.getOpticalSystemRows(host.tableOpticalSystem), []) : [];
         let pupilDiameterMm = 10.0;
         let focalLengthMm = NaN;
         try {
-          const diffParams = typeof w.calculateImageSpaceDiffractionParams === 'function'
-            ? w.calculateImageSpaceDiffractionParams(opticalRows, wl) : null;
+          const diffParams = typeof host?.calculateImageSpaceDiffractionParams === 'function'
+            ? host.calculateImageSpaceDiffractionParams(opticalRows, wl) : null;
           const fWork = Number(diffParams?.fNumberWorking);
           const fl = Number(diffParams?.focalLengthMm);
           if (Number.isFinite(fl) && fl > 0 && Number.isFinite(fWork) && fWork > 0) {
@@ -575,7 +626,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         } catch (_) {}
         if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) {
           try {
-            const si = Number(typeof w.findStopSurfaceIndex === 'function' ? w.findStopSurfaceIndex(opticalRows) : -1);
+            const si = Number(typeof host?.findStopSurfaceIndex === 'function' ? host.findStopSurfaceIndex(opticalRows) : -1);
             const stopRow = (Number.isFinite(si) && si >= 0) ? opticalRows?.[si] : null;
             const sdRaw = stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN;
             const sd = Math.abs(parseFloat(sdRaw));
@@ -588,7 +639,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         }
         if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
           try {
-            const fl = Number(typeof w.calculateFocalLength === 'function' ? w.calculateFocalLength(opticalRows, wl) : NaN);
+            const fl = Number(typeof host?.calculateFocalLength === 'function' ? host.calculateFocalLength(opticalRows, wl) : NaN);
             if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) focalLengthMm = Math.abs(fl);
           } catch (_) {}
         }
@@ -599,14 +650,14 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         const basePixelPitchUm = (wl * Math.abs(focalLengthMm)) / Math.max(1e-12, Math.abs(pupilDiameterMm));
         const pixelSizeUm = basePixelPitchUm * (samplingN / requestedFftSize);
         setProgress(20 + baseProgress, `λ=${titleNm}nm: PSF...`);
-        const nativePsfResp = await w.runDesktopNativePsfMapForPopup({
+        const nativePsfResp = await host.runDesktopNativePsfMapForPopup({
           gridOpd: Array.from({ length: s }, (_, iy) => Array.from(opdGrid[iy] || [])),
           gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
           pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
           wavelengthUm: wl, pixelSizeUm, removeTilt: false, zeroPadTo: requestedFftSize, recenterIfWrapped: false,
         });
         setProgress(30 + baseProgress, `λ=${titleNm}nm: MTF...`);
-        const mtfResp = await w.runDesktopNativeMtfMapForPopup({
+        const mtfResp = await host.runDesktopNativeMtfMapForPopup({
           psfData: nativePsfResp?.psfData, pixelSizeUm,
           maxFrequencyLpmm: Number.isFinite(maxFreqN) ? maxFreqN : undefined, points: 121,
         });
@@ -624,7 +675,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         if (showDiffLimit || forceIdealParaxialMtf) {
           try {
             const zeroOpdGrid = Array.from({ length: s }, () => Array(s).fill(0));
-            const idealNativePsfResp = await w.runDesktopNativePsfMapForPopup({
+            const idealNativePsfResp = await host.runDesktopNativePsfMapForPopup({
               gridOpd: zeroOpdGrid,
               gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
               pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
@@ -634,7 +685,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
               zeroPadTo: requestedFftSize,
               recenterIfWrapped: false,
             });
-            const idealMtfResp = await w.runDesktopNativeMtfMapForPopup({
+            const idealMtfResp = await host.runDesktopNativeMtfMapForPopup({
               psfData: idealNativePsfResp?.psfData,
               pixelSizeUm,
               maxFrequencyLpmm: Number.isFinite(maxFreqN) ? maxFreqN : undefined,
@@ -799,7 +850,6 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     if (!container) return;
     container.innerHTML = '';
     setErrorMsg('');
-    setFieldDebugText('');
     const primary = getPrimaryWavelength();
     const wlValue = wavelength;
     if (wlValue !== 'all' && !Number.isFinite(Number(wlValue)) && primary === null) {
@@ -824,7 +874,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       await new Promise(r => setTimeout(r, 0));
       setProgress(20, 'Computing Object MTF via Rust...');
       const commonPayload = {
-        objectIndex: 0,
+        sampleFromObjectRows: false,
         wavelengths: wavelengthList,
         firstFrequencyLpmm: freq1N,
         secondFrequencyLpmm: freq2N,
@@ -859,15 +909,6 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         }
         nativeResp = await portableFieldMtf(commonPayload);
       }
-      const firstSeries = Array.isArray((nativeResp as any)?.series) ? (nativeResp as any).series[0] : null;
-      const firstDiag = firstSeries?.fieldDiagnostics?.[0] ?? null;
-      setFieldDebugText([
-        `backend=${String((nativeResp as any)?.backend || '')}`,
-        `hostRows opt=${opticalSystemRows.length} obj=${objectRows.length} src=${sourceRows.length}`,
-        firstDiag
-          ? `diag0 mode=${String(firstDiag?.effectivePupilSamplingMode || '')} hitRate=${Number(firstDiag?.opdHitRate || 0).toFixed(3)} msg=${String(firstDiag?.opdMessage || '')}`
-          : 'diag0 unavailable',
-      ].join(' | '));
       const xAxis: number[] = Array.isArray((nativeResp as any)?.xAxis) ? (nativeResp as any).xAxis : [];
       const series: any[] = Array.isArray((nativeResp as any)?.series) ? (nativeResp as any).series : [];
       if (!xAxis.length || !series.length) throw new Error('Object MTF did not produce valid data');
@@ -924,9 +965,8 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     } catch (err: any) {
       setProgress(100, 'Failed');
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
-      setFieldDebugText('');
     }
-  }, [w, wavelength, sampling, zeroPad, removePtd, freq1, freq2, fieldMin, fieldMax, fieldSteps, plotlyReady, setProgress, hideProgress]);
+  }, [w, wavelength, objectIdx, sampling, zeroPad, removePtd, freq1, freq2, fieldMin, fieldMax, fieldSteps, plotlyReady, setProgress, hideProgress]);
 
   const handleCompute = type === 'mtf' ? handleComputeMtf
     : type === 'through-focus-mtf' ? handleComputeThroughFocusMtf
@@ -1016,7 +1056,6 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       <div className="mtf-content">
         {errorMsg ? <div className="mtf-error">{errorMsg}</div> : null}
         <div className="mtf-chart" ref={chartRef} />
-        {type === 'field-mtf' && fieldDebugText ? <div className="mtf-debug">{fieldDebugText}</div> : null}
       </div>
     </div>
   );

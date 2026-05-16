@@ -619,6 +619,42 @@ export function solve_image_height_component_with_rows(optical_system_rows, imag
 }
 
 /**
+ * @param {any} optical_system_rows
+ * @param {number} image_surface_index
+ * @param {number} wavelength_um
+ * @param {number} conjugate_mode
+ * @param {number} target_x
+ * @param {number} target_y
+ * @param {number} initial_x
+ * @param {number} initial_y
+ * @returns {Float64Array}
+ */
+export function solve_image_height_pair_exact_with_rows(optical_system_rows, image_surface_index, wavelength_um, conjugate_mode, target_x, target_y, initial_x, initial_y) {
+    const ret = wasm.solve_image_height_pair_exact_with_rows(optical_system_rows, image_surface_index, wavelength_um, conjugate_mode, target_x, target_y, initial_x, initial_y);
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
+}
+
+/**
+ * @param {any} optical_system_rows
+ * @param {number} image_surface_index
+ * @param {number} wavelength_um
+ * @param {number} conjugate_mode
+ * @param {number} target_x
+ * @param {number} target_y
+ * @param {number} initial_x
+ * @param {number} initial_y
+ * @returns {Float64Array}
+ */
+export function solve_image_height_pair_with_rows(optical_system_rows, image_surface_index, wavelength_um, conjugate_mode, target_x, target_y, initial_x, initial_y) {
+    const ret = wasm.solve_image_height_pair_with_rows(optical_system_rows, image_surface_index, wavelength_um, conjugate_mode, target_x, target_y, initial_x, initial_y);
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
+}
+
+/**
  * @param {Float64Array} a_flat
  * @param {number} n
  * @param {Float64Array} b
@@ -790,6 +826,66 @@ export function surface_normal_aspheric_rt10_batch(points, count, params, mode_o
     var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v3;
+}
+
+/**
+ * @param {any} optical_system_rows
+ * @param {number} image_surface_index
+ * @param {number} wavelength_um
+ * @param {number} object_x
+ * @param {number} object_y
+ * @returns {Float64Array}
+ */
+export function trace_image_height_finite_candidate_with_rows(optical_system_rows, image_surface_index, wavelength_um, object_x, object_y) {
+    const ret = wasm.trace_image_height_finite_candidate_with_rows(optical_system_rows, image_surface_index, wavelength_um, object_x, object_y);
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
+}
+
+/**
+ * @param {any} optical_system_rows
+ * @param {number} image_surface_index
+ * @param {number} wavelength_um
+ * @param {number} angle_x_deg
+ * @param {number} angle_y_deg
+ * @returns {Float64Array}
+ */
+export function trace_image_height_infinite_candidate_exact_with_rows(optical_system_rows, image_surface_index, wavelength_um, angle_x_deg, angle_y_deg) {
+    const ret = wasm.trace_image_height_infinite_candidate_exact_with_rows(optical_system_rows, image_surface_index, wavelength_um, angle_x_deg, angle_y_deg);
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
+}
+
+/**
+ * @param {any} optical_system_rows
+ * @param {number} image_surface_index
+ * @param {number} wavelength_um
+ * @param {number} angle_x_deg
+ * @param {number} angle_y_deg
+ * @returns {Float64Array}
+ */
+export function trace_image_height_infinite_candidate_with_rows(optical_system_rows, image_surface_index, wavelength_um, angle_x_deg, angle_y_deg) {
+    const ret = wasm.trace_image_height_infinite_candidate_with_rows(optical_system_rows, image_surface_index, wavelength_um, angle_x_deg, angle_y_deg);
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
+}
+
+/**
+ * @param {any} optical_system_rows
+ * @param {number} image_surface_index
+ * @param {number} wavelength_um
+ * @param {number} angle_x_deg
+ * @param {number} angle_y_deg
+ * @returns {Float64Array}
+ */
+export function trace_image_height_infinite_chief_ray_exact_with_rows(optical_system_rows, image_surface_index, wavelength_um, angle_x_deg, angle_y_deg) {
+    const ret = wasm.trace_image_height_infinite_chief_ray_exact_with_rows(optical_system_rows, image_surface_index, wavelength_um, angle_x_deg, angle_y_deg);
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
 }
 
 /**

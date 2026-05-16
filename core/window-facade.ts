@@ -2,6 +2,7 @@ declare global {
   interface Window {
     [key: string]: any;
     __cooptWindowFacadeInstalled?: boolean;
+    __cooptRenderSyncSenderId?: string;
   }
 }
 
@@ -27,6 +28,21 @@ export function installCooptWindowFacadeMarker(): void {
     window['__cooptWindowFacadeInstalled'] = true;
   } catch (_) {
     // ignore
+  }
+}
+
+export function getOrCreateCooptWindowSyncSenderId(): string {
+  try {
+    if (typeof window === 'undefined') return 'coopt-render-sync-server';
+    const existing = String(window.__cooptRenderSyncSenderId ?? '').trim();
+    if (existing) return existing;
+    const next = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `coopt-render-sync-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    window.__cooptRenderSyncSenderId = next;
+    return next;
+  } catch (_) {
+    return `coopt-render-sync-${Date.now()}`;
   }
 }
 

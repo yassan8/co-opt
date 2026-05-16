@@ -39,6 +39,15 @@ function areTablesReady(): boolean {
   return !!(w.tableSource && w.tableObject && w.tableOpticalSystem);
 }
 
+function shouldSuppressStartupConfigApply(): boolean {
+  try {
+    const until = Number(w.__cooptSuppressStartupConfigApplyUntil || 0);
+    return Number.isFinite(until) && until > Date.now();
+  } catch (_) {
+    return false;
+  }
+}
+
 function ensureActiveConfigAppliedToTables(): void {
   try {
     if (typeof window === 'undefined') return;
@@ -46,6 +55,7 @@ function ensureActiveConfigAppliedToTables(): void {
     w.__configurationApplyPending = true;
 
     const tryApply = (): boolean => {
+      if (shouldSuppressStartupConfigApply()) return false;
       if (!areTablesReady()) return false;
       loadActiveConfigurationToTables({ applyToUI: true }).catch(e => {
         console.error('❌ [Configuration UI] Failed to apply active configuration:', e);
@@ -143,12 +153,9 @@ export function initializeConfigurationUI(): void {
       updateConfigurationSelect();
       updateConfigInfo();
       setupConfigurationEventListeners();
-      // ページリロード後、アクティブなconfigurationをテーブルに読み込む
-      loadActiveConfigurationToTables({ applyToUI: true }).then(() => {
-      }).catch(e => {
-        console.error('❌ [Configuration UI] Failed to load active configuration:', e);
-      });
-      ensureActiveConfigAppliedToTables();
+      if (!areTablesReady()) {
+        ensureActiveConfigAppliedToTables();
+      }
       return;
     }
   } catch (_) {}

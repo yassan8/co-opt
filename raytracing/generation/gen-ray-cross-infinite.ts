@@ -18,10 +18,10 @@ import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
 const RENDER_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     requireWasmRayTracing: false,
-    useRustWasm: false,
+    useRustWasm: true,
     requireRustWasm: false,
-    disableWasmRayTracing: true,  // レンダリング用: JS実装で確実に追跡
-    __renderRayTracingRustPreferred: false
+    disableWasmRayTracing: false,
+    __renderRayTracingRustPreferred: true
 };
 
 const REQUIRE_RUST_CROSS_BEAM = (() => {
@@ -32,6 +32,30 @@ const REQUIRE_RUST_CROSS_BEAM = (() => {
         return false;
     }
 })();
+
+function shouldEmitOptimizationWarning(key: string, intervalMs = 1500): boolean {
+    try {
+        const g = globalThis as typeof globalThis & {
+            __cooptOptimizerIsRunning?: boolean;
+            __cooptOptimizationWarningThrottle?: Record<string, number>;
+        };
+        if (g.__cooptOptimizerIsRunning !== true) {
+            return true;
+        }
+        if (!g.__cooptOptimizationWarningThrottle || typeof g.__cooptOptimizationWarningThrottle !== 'object') {
+            g.__cooptOptimizationWarningThrottle = {};
+        }
+        const now = Date.now();
+        const prev = Number(g.__cooptOptimizationWarningThrottle[key] || 0);
+        if (Number.isFinite(prev) && now - prev < intervalMs) {
+            return false;
+        }
+        g.__cooptOptimizationWarningThrottle[key] = now;
+        return true;
+    } catch (_) {
+        return true;
+    }
+}
 
 type CooptPerfCounter = {
     count: number;
@@ -61,6 +85,46 @@ function recordCooptPerfSample(name: string, durationMs: number): void {
         g.__cooptPerf.samples[name] = current;
     } catch (_) {
     }
+}
+
+function stableCrossBeamCacheValue(value: any, seen = new WeakSet<object>()): string {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+
+    const valueType = typeof value;
+    if (valueType === 'number') {
+        if (Number.isNaN(value)) return 'NaN';
+        if (!Number.isFinite(value)) return value > 0 ? 'Infinity' : '-Infinity';
+        return String(value);
+    }
+    if (valueType === 'string' || valueType === 'boolean' || valueType === 'bigint') {
+        return String(value);
+    }
+    if (valueType === 'function' || valueType === 'symbol') {
+        return valueType;
+    }
+    if (value instanceof Date) {
+        return `Date:${value.toISOString()}`;
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map((item) => stableCrossBeamCacheValue(item, seen)).join(',')}]`;
+    }
+    if (valueType === 'object') {
+        if (seen.has(value)) return '[Circular]';
+        seen.add(value);
+        const keys = Object.keys(value)
+            .sort()
+            .filter((key) => !key.startsWith('__'));
+        const serialized = `{${keys.map((key) => `${key}:${stableCrossBeamCacheValue((value as Record<string, any>)[key], seen)}`).join(',')}}`;
+        seen.delete(value);
+        return serialized;
+    }
+    return String(value);
+}
+
+function buildInfiniteCrossBeamRowsSignature(opticalSystemRows: any[]): string {
+    const rows = Array.isArray(opticalSystemRows) ? opticalSystemRows : [];
+    return fnv1a32(rows.map((row, index) => `${index}:${stableCrossBeamCacheValue(row)}`).join('|'));
 }
 
 function assertRustRenderTracingAvailable() {
@@ -239,6 +303,12 @@ const chiefRayOriginSearchCache = new Map<string, { x: number; y: number; z: num
 const chiefRayOriginSeedCache = new Map<string, Array<{ direction: { i: number; j: number; k: number }; origin: { x: number; y: number; z: number } }>>();
 const infiniteCrossBeamChiefOriginCache = new Map<string, { x: number; y: number; z: number } | null>();
 
+export function clearInfiniteCrossBeamCaches(): void {
+    try { chiefRayOriginSearchCache.clear(); } catch (_) {}
+    try { chiefRayOriginSeedCache.clear(); } catch (_) {}
+    try { infiniteCrossBeamChiefOriginCache.clear(); } catch (_) {}
+}
+
 function buildChiefRayOriginSearchFamilyKey(stopCenter, stopSurfaceIndex, targetSurfaceIndex, opticalSystemRows, wavelength) {
     try {
         const rowsSig = fnv1a32(JSON.stringify((opticalSystemRows || []).map((row) => ({
@@ -315,14 +385,7 @@ function storeChiefRayOriginSeed(familyKey, direction, origin) {
 
 function buildChiefRayOriginSearchCacheKey(direction, stopCenter, stopSurfaceIndex, targetSurfaceIndex, opticalSystemRows, wavelength) {
     try {
-        const rowsSig = fnv1a32(JSON.stringify((opticalSystemRows || []).map((row) => ({
-            t: row?.surfType ?? row?.['object type'] ?? row?.object ?? row?.type,
-            r: row?.radius,
-            th: row?.thickness,
-            k: row?.conic,
-            s: row?.semidia,
-            od: row?.objectRenderDistance
-        }))));
+        const rowsSig = buildInfiniteCrossBeamRowsSignature(opticalSystemRows);
         return [
             rowsSig,
             Number(direction?.i || 0).toFixed(10),
@@ -1146,6 +1209,33 @@ function makeBasis(direction) {
  */
 function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays, rayCount, crossType, debugMode, objectIndex, wavelength = 0.5876) {
     const rays = [];
+    const promoteBoundaryEndpoints = (lineRays, startType, startSide, endType, endSide) => {
+        if (!Array.isArray(lineRays) || lineRays.length === 0) {
+            return [];
+        }
+
+        return lineRays.map((ray, index) => {
+            if (index === 0) {
+                return {
+                    ...ray,
+                    type: startType,
+                    side: startSide,
+                    role: startSide
+                };
+            }
+
+            if (index === 1) {
+                return {
+                    ...ray,
+                    type: endType,
+                    side: endSide,
+                    role: endSide
+                };
+            }
+
+            return ray;
+        });
+    };
     
     // 1. 主光線を追加
     rays.push({
@@ -1191,9 +1281,9 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
         const downRay = verticalRays.find(r => r.direction === 'lower');
         
         if (upRay && downRay) {
-            const verticalCrossRays = generateRaysBetweenBoundaries(
+            const verticalCrossRays = promoteBoundaryEndpoints(generateRaysBetweenBoundaries(
                 upRay, downRay, direction, verticalTargetCount, 'vertical_cross', objectIndex, wavelength
-            );
+            ), 'upper_marginal', 'upper', 'lower_marginal', 'lower');
             rays.push(...verticalCrossRays);
             
             if (debugMode) {
@@ -1208,9 +1298,9 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
         const rightRay = horizontalRays.find(r => r.direction === 'right');
         
         if (leftRay && rightRay) {
-            const horizontalCrossRays = generateRaysBetweenBoundaries(
+            const horizontalCrossRays = promoteBoundaryEndpoints(generateRaysBetweenBoundaries(
                 leftRay, rightRay, direction, horizontalTargetCount, 'horizontal_cross', objectIndex, wavelength
-            );
+            ), 'left_marginal', 'left', 'right_marginal', 'right');
             rays.push(...horizontalCrossRays);
             
             if (debugMode) {
@@ -1293,7 +1383,7 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
         z: base.z + axis.z * s
     });
 
-    const addLineFromOffsets = (lineOffsets, type, roleStart, roleEnd) => {
+    const addLineFromOffsets = (lineOffsets, centerType, roleStart, roleEnd, endpointStartType, endpointEndType, endpointStartSide, endpointEndSide) => {
         if (!Array.isArray(lineOffsets) || lineOffsets.length < 1) return;
 
         const rustPoints = generateParallelPointsFromOffsetsViaRust(centerOrigin, planeU, planeV, lineOffsets);
@@ -1306,16 +1396,26 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
             }));
 
         for (let i = 0; i < points.length; i++) {
-            const role = (points.length === 1)
-                ? `${type}_center`
-                : ((i === 0)
+            const isSingle = points.length === 1;
+            const isStart = !isSingle && i === 0;
+            const isEnd = !isSingle && i === points.length - 1;
+            const type = isStart
+                ? endpointStartType
+                : (isEnd ? endpointEndType : centerType);
+            const side = isStart
+                ? endpointStartSide
+                : (isEnd ? endpointEndSide : undefined);
+            const role = isSingle
+                ? `${centerType}_center`
+                : (isStart
                     ? roleStart
-                    : ((i === points.length - 1) ? roleEnd : `${type}_${i}`));
+                    : (isEnd ? roleEnd : `${centerType}_${i}`));
             rays.push({
                 origin: points[i],
                 direction,
                 type,
                 role,
+                side,
                 objectIndex,
                 wavelength
             });
@@ -1347,7 +1447,7 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
                 verticalOffsets.push({ u: 0, v });
             }
         }
-        addLineFromOffsets(verticalOffsets, 'vertical_cross', 'upper', 'lower');
+        addLineFromOffsets(verticalOffsets, 'vertical_cross', 'upper', 'lower', 'upper_marginal', 'lower_marginal', 'upper', 'lower');
     }
 
     if (horizontalTargetCount > 0) {
@@ -1362,7 +1462,7 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
                 horizontalOffsets.push({ u, v: 0 });
             }
         }
-        addLineFromOffsets(horizontalOffsets, 'horizontal_cross', 'left', 'right');
+        addLineFromOffsets(horizontalOffsets, 'horizontal_cross', 'left', 'right', 'left_marginal', 'right_marginal', 'left', 'right');
     }
 
     return rays;
@@ -2225,9 +2325,9 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             };
             traceRayForRenderTs(Array.isArray(opticalSystemRows) ? opticalSystemRows.slice() : opticalSystemRows, ray0, 1.0, dbg);
             const block = _extractFirstApertureBlockFromDebugLog(dbg);
-            if (block) {
+            if (block && shouldEmitOptimizationWarning('draw-cross-physical-aperture-block')) {
                 console.warn(`🚫 [DrawCrossDiag] Object${actualObjectIndex + 1}: PHYSICAL_APERTURE_BLOCK at Surface ${block.surfaceNumber ?? '?'} (hitRadius=${block.hitRadiusMm ?? '?'}mm > limit=${block.apertureLimitMm ?? '?'}mm)`);
-            } else {
+            } else if (shouldEmitOptimizationWarning('draw-cross-no-rays-reached-target')) {
                 console.warn(`🚫 [DrawCrossDiag] Object${actualObjectIndex + 1}: no rays reached target, but no PHYSICAL_APERTURE_BLOCK found in debugLog`);
             }
         }
@@ -3092,11 +3192,23 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             }
         }
         
-        const result = {
+        let result = {
             x: optimalX,
             y: optimalY,
             z: initialZ
         };
+
+        // Live redraw can fall through to the grid path even when a nearby Newton
+        // solution exists. Re-running Newton from the grid candidate is cheap and
+        // often recovers the same high-accuracy chief origin that a fresh-open draw finds.
+        const polishedNewtonResult = solveChiefOriginByNewton2D(result.x, result.y);
+        if (polishedNewtonResult) {
+            result = {
+                x: polishedNewtonResult.x,
+                y: polishedNewtonResult.y,
+                z: initialZ
+            };
+        }
         
         // 結果を検証
         const verificationRay = {
@@ -3126,7 +3238,7 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
                     optimalX: result.x,
                     optimalY: result.y,
                     error: totalError,
-                    method: 'grid-brent-hybrid'
+                    method: polishedNewtonResult ? 'newton-2d-stop-center' : 'grid-brent-hybrid'
                 });
             }
         }
@@ -4487,66 +4599,35 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
 
             // console.log(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] type=${ray.type} rayPathFull=${rayPathFull ? rayPathFull.length : 'null'} effectiveTargetPointIndex=${effectiveTargetPointIndex} effectiveTargetIndex=${effectiveTargetIndex}`);
 
-            // rayPathFull が null なら詳細デバッグモードで再追跡して失敗原因を調べる
+            // rayPathFull が null なら詳細デバッグモードで再追跡して失敗原因を調べる。
+            // 通常の Render では TS/no-WASM フォールバックを使わない。
+            // live redraw が TS に落ちると遅くなる上に Rust/TS 差分を見えにくくするため。
             if (!rayPathFull) {
-                const diagLog: string[] = [];
-                try {
-                    traceRay(systemRowsForTrace, {
-                        pos: rayPosition,
-                        dir: rayDirection,
-                        wavelength: wavelength
-                    }, 1.0, diagLog, effectiveTargetIndex, { ...RENDER_RUST_TRACE_OPTIONS, isDetailedDebug: true });
-                } catch (_) {}
-                const failLines = diagLog.filter(l => l.includes('❌') || l.includes('BLOCK') || l.includes('INTERSECT') || l.includes('APERTURE') || l.includes('NO_INT'));
-                // console.warn(`[RAY-DEBUG] ray[${i}] traceRay=null diagLines:`, failLines.length > 0 ? failLines : diagLog.slice(-5));
-
-                // フォールバック: Rust WASM なしで再追跡
-                try {
-                    const fallbackPath = traceRay(systemRowsForTrace, {
-                        pos: rayPosition,
-                        dir: rayDirection,
-                        wavelength: wavelength
-                    }, 1.0, null, effectiveTargetIndex, { allowNonStrict: true, requireWasmRayTracing: false, disableWasmRayTracing: true });
-                    if (Array.isArray(fallbackPath) && fallbackPath.length >= 2) {
-                        // console.warn(`[RAY-DEBUG] ray[${i}] fallback (no-WASM) succeeded! length=${fallbackPath.length}`);
-                        // フォールバック成功: このパスを使用
-                        const tracedRayEntry = {
-                            success: true,
-                            rayIndex: i,
-                            originalRay: ray,
-                            rayPath: fallbackPath,
-                            rayPathToTarget: fallbackPath,
-                            beamType: (() => {
-                                const t = ray.type || '';
-                                const s = ray.side || '';
-                                if (t.includes('horizontal') || s === 'left' || s === 'right') return 'horizontal';
-                                if (t.includes('vertical') || s === 'upper' || s === 'lower') return 'vertical';
-                                if (t === 'chief') return 'chief';
-                                return undefined;
-                            })(),
-                            side: ray.side || undefined,
-                            segments: fallbackPath.length - 1
-                        };
-                        tracedRays.push(tracedRayEntry);
-                        continue;
-                    }
-                } catch (_) {}
+                if (debugMode) {
+                    const diagLog: string[] = [];
+                    try {
+                        traceRay(systemRowsForTrace, {
+                            pos: rayPosition,
+                            dir: rayDirection,
+                            wavelength: wavelength
+                        }, 1.0, diagLog, effectiveTargetIndex, { ...RENDER_RUST_TRACE_OPTIONS, isDetailedDebug: true });
+                    } catch (_) {}
+                    const failLines = diagLog.filter(l => l.includes('❌') || l.includes('BLOCK') || l.includes('INTERSECT') || l.includes('APERTURE') || l.includes('NO_INT'));
+                    // console.warn(`[RAY-DEBUG] ray[${i}] traceRay=null diagLines:`, failLines.length > 0 ? failLines : diagLog.slice(-5));
+                }
             }
 
             const rayPathToTarget = (Array.isArray(rayPathFull) && effectiveTargetPointIndex !== null)
                 ? rayPathFull.slice(0, effectiveTargetPointIndex + 1)
                 : rayPathFull;
-            
-            // NOTE: 描画用途では、rayPathが2点以上あれば「成功」として扱う。
-            // effectiveTargetPointIndex は理論上の到達点インデックスだが、
-            // Object行/Gap行のスキップカウントのズレで false negative になることがあるため、
-            // 「rayPathFull が2点以上」を主条件とし、ターゲット面判定は補助として使用する。
             const hasAnyPath = Array.isArray(rayPathFull) && rayPathFull.length >= 2;
-            const reachedTarget = hasAnyPath && (
-                effectiveTargetPointIndex === null ||
-                rayPathFull.length > effectiveTargetPointIndex ||
-                rayPathFull.length >= 2  // 少なくとも2点あれば描画に使用
-            );
+            const targetPoint = hasAnyPath
+                ? (
+                    getRayPointAtSurfaceIndex(rayPathFull, systemRowsForTrace, effectiveTargetIndex)
+                    || rayPathFull.find((point) => Number(point?.surfaceIndex ?? point?.surface ?? point?.surfaceIdx) === effectiveTargetIndex)
+                )
+                : null;
+            const reachedTarget = hasAnyPath && !!targetPoint;
 
             if (reachedTarget) {
                 // メタデータ正規化（描画・集計向け）

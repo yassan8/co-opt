@@ -10,6 +10,41 @@ declare global {
 const w: Record<string, any> = window;
 const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
 
+function __cooptIsRenderDesignIntentLiveSyncEnabled(): boolean {
+    try {
+        const stored = localStorage.getItem(RENDER_DESIGN_INTENT_SYNC_KEY);
+        if (stored === null) {
+            localStorage.setItem(RENDER_DESIGN_INTENT_SYNC_KEY, 'true');
+            return true;
+        }
+        return stored === 'true';
+    } catch (_) {
+        return true;
+    }
+}
+
+function __cooptGetSystemConfig(): any {
+    try {
+        if (typeof w.loadSystemConfigurations === 'function') {
+            return w.loadSystemConfigurations();
+        }
+    } catch (_) {}
+    try {
+        return loadSystemConfigurations();
+    } catch (_) {
+        return null;
+    }
+}
+
+function __cooptCloneSystemConfig(): any {
+    try {
+        const cfg = __cooptGetSystemConfig();
+        return cfg && typeof cfg === 'object' ? JSON.parse(JSON.stringify(cfg)) : null;
+    } catch (_) {
+        return null;
+    }
+}
+
 // Import statements (all .ts → .js for ESM runtime)
 import { getGlassDataWithSellmeier, findSimilarGlassNames, findSimilarGlassesByNdVd } from '../data/glass.ts';
 import { openGlassMapWindow } from '../data/glass-map.ts';
@@ -23,7 +58,7 @@ import {
     BLOCK_SCHEMA_VERSION
 } from '../data/block-schema.ts';
 import { SetBlockParameterCommand } from '../core/undo-history.ts';
-import { requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
+import { getOrCreateCooptWindowSyncSenderId, requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 import { 
     getCompressedStringFromLocation, 
     decodeAllDataFromCompressedString,
@@ -34,6 +69,14 @@ import { getWindowDebugBagValue } from '../utils/window-debug-bag.ts';
 import { setupOpticalSystemChangeListeners, setupAnalysisWindows } from './event-handlers.ts';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
+import {
+    DOUBLET_BENDING_BASE_KEY,
+    getDoubletBendingCurrentValue,
+    isDoubletBendingBlock,
+    resolveDoubletBendingUpdate,
+    storeDoubletBendingBaseCurvatures,
+    syncDoubletBendingState,
+} from '../optimization/doublet-bending.ts';
 import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 import {
     loadSystemConfigurations as loadSystemConfigurationsFromTableConfig,
@@ -2185,6 +2228,27 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
 
 async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: string } = {}): Promise<boolean> {
     const displayName = options?.filename || 'shared-link.json';
+    const loadSessionId = (() => {
+        try {
+            const next = Number((window as any).__cooptFileLoadSessionId || 0) + 1;
+            (window as any).__cooptFileLoadSessionId = next;
+            (window as any).__cooptFileLoadInProgress = true;
+            return next;
+        } catch (_) {
+            return Date.now();
+        }
+    })();
+    const isStaleLoadSession = (): boolean => {
+        try {
+            return Number((window as any).__cooptFileLoadSessionId || 0) !== Number(loadSessionId);
+        } catch (_) {
+            return false;
+        }
+    };
+
+    try {
+        (window as any).__cooptSuppressStartupConfigApplyUntil = Date.now() + 5000;
+    } catch (_) {}
 
     // File load must not race an optimizer popup. If optimization is active, block
     // the load. If the popup is only open/idle, close it and clear its transient
@@ -2440,6 +2504,60 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         }
     };
 
+    const clearTransientStoragePressureKeys = (): void => {
+        try {
+            if (typeof localStorage === 'undefined' || !localStorage) return;
+            const keys = [
+                'lastWavefrontSnapshot',
+                'lastPsfMeta',
+                'lastPsfError',
+                'spotDiagramSettingsByConfigId',
+                'lastSpotDiagramSettings',
+                'lastSpotSettings'
+            ];
+            for (const key of keys) {
+                try { localStorage.removeItem(key); } catch (_) {}
+            }
+        } catch (_) {}
+    };
+
+    const clearTableProjectionKeys = (): void => {
+        try {
+            if (typeof localStorage === 'undefined' || !localStorage) return;
+            const keys = [
+                'sourceTableData',
+                'objectTableData',
+                'OpticalSystemTableData',
+                'systemRequirementsData',
+                'meritFunctionData',
+                'systemData'
+            ];
+            for (const key of keys) {
+                try { localStorage.removeItem(key); } catch (_) {}
+            }
+        } catch (_) {}
+    };
+
+    const scheduleDeferredLoadWork = (work: () => void, delayMs = 120): void => {
+        const run = () => {
+            window.setTimeout(() => {
+                try { work(); } catch (_) {}
+            }, delayMs);
+        };
+        try {
+            const ric = (window as any).requestIdleCallback;
+            if (typeof ric === 'function') {
+                ric(() => run(), { timeout: Math.max(250, delayMs) });
+                return;
+            }
+        } catch (_) {}
+        try {
+            window.requestAnimationFrame(() => run());
+            return;
+        } catch (_) {}
+        run();
+    };
+
     const verifyPersistedConfig = (expected: any): boolean => {
         try {
             const reloaded = loadSystemConfigurationsFromTableConfig();
@@ -2472,6 +2590,8 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         saveSystemConfigurations(candidateConfig);
         persistedConfigOk = verifyPersistedConfig(candidateConfig);
         if (!persistedConfigOk) {
+            clearTransientStoragePressureKeys();
+            try { localStorage.removeItem('systemConfigurations'); } catch (_) {}
             const compactConfig = buildPersistableConfig(candidateConfig);
             saveSystemConfigurations(compactConfig);
             persistedConfigOk = verifyPersistedConfig(compactConfig);
@@ -2522,6 +2642,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 
     // Save to localStorage for table loading
     try {
+        clearTableProjectionKeys();
         if (effectiveSource) {
             saveSourceTableData(effectiveSource as any);
         }
@@ -2580,59 +2701,50 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     } catch (_) {}
 
     try {
-        setTimeout(() => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        if (!isStaleLoadSession()) {
             try {
-                if (typeof loadActiveConfigurationToTables === 'function') {
-                    loadActiveConfigurationToTables();
-                }
-            } catch (_) {}
-            try {
-                const sourceData = loadSourceTableData();
                 const tableSource = w.tableSource;
                 if (tableSource && typeof tableSource.replaceData === 'function') {
-                    tableSource.replaceData(sourceData);
+                    await Promise.resolve(tableSource.replaceData(Array.isArray(effectiveSource) ? effectiveSource : []));
                 } else if (tableSource && typeof tableSource.setData === 'function') {
-                    tableSource.setData(sourceData);
+                    await Promise.resolve(tableSource.setData(Array.isArray(effectiveSource) ? effectiveSource : []));
                 }
             } catch (_) {}
             try {
-                const objectData = loadObjectTableData();
                 const tableObject = w.tableObject;
                 if (tableObject && typeof tableObject.replaceData === 'function') {
-                    tableObject.replaceData(objectData);
+                    await Promise.resolve(tableObject.replaceData(Array.isArray(effectiveObject) ? effectiveObject : []));
                 } else if (tableObject && typeof tableObject.setData === 'function') {
-                    tableObject.setData(objectData);
+                    await Promise.resolve(tableObject.setData(Array.isArray(effectiveObject) ? effectiveObject : []));
                 }
             } catch (_) {}
             try {
-                const opticalData = loadOpticalSystemTableData();
                 const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
                 if (tableOptical && typeof tableOptical.replaceData === 'function') {
-                    tableOptical.replaceData(opticalData);
+                    await Promise.resolve(tableOptical.replaceData(Array.isArray(effectiveOpticalSystem) ? effectiveOpticalSystem : []));
                 } else if (tableOptical && typeof tableOptical.setData === 'function') {
-                    tableOptical.setData(opticalData);
+                    await Promise.resolve(tableOptical.setData(Array.isArray(effectiveOpticalSystem) ? effectiveOpticalSystem : []));
                 }
             } catch (_) {}
             try {
-                const meritData = loadMeritFunctionTableData();
                 const meritEditor = w.meritFunctionEditor;
                 if (meritEditor && typeof meritEditor.setData === 'function') {
-                    meritEditor.setData(meritData);
+                    meritEditor.setData(Array.isArray(effectiveMeritFunction) ? effectiveMeritFunction : []);
                 }
             } catch (_) {}
             try {
                 const runRequirementSyncSequence = async () => {
                     const reqEditor = w.systemRequirementsEditor;
-                    if (!reqEditor) return;
+                    if (!reqEditor || isStaleLoadSession()) return;
 
-                    const reqData = loadSystemRequirementsTableData();
                     if (typeof reqEditor.setData === 'function') {
-                        reqEditor.setData(reqData);
+                        reqEditor.setData(Array.isArray(effectiveSystemRequirements) ? effectiveSystemRequirements : []);
                     }
 
                     const evaluateNow = async (reason: string) => {
                         try {
-                            if (typeof reqEditor.evaluateAndUpdateNow === 'function') {
+                            if (typeof reqEditor.evaluateAndUpdateNow === 'function' && !isStaleLoadSession()) {
                                 const p = reqEditor.evaluateAndUpdateNow({ reason, forceSilent: true, silent: true });
                                 if (p && typeof p.then === 'function') {
                                     await p;
@@ -2643,25 +2755,18 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 
                     await evaluateNow('load-file-seq-initial');
 
-                    if (typeof reqEditor.scheduleEvaluateAndUpdate === 'function') {
-                        reqEditor.scheduleEvaluateAndUpdate();
-                    }
-
-                    for (let i = 0; i < 4; i++) {
-                        await new Promise((resolve) => setTimeout(resolve, 120));
-                        await evaluateNow(`load-file-seq-retry-${i + 1}`);
-                    }
-
                     try {
-                        window.dispatchEvent(new CustomEvent('coopt:requirements-updated'));
+                        if (!isStaleLoadSession()) {
+                            window.dispatchEvent(new CustomEvent('coopt:requirements-updated'));
+                        }
                     } catch (_) {}
                 };
 
-                void runRequirementSyncSequence();
+                scheduleDeferredLoadWork(() => {
+                    void runRequirementSyncSequence();
+                }, 180);
             } catch (_) {}
 
-            // Fallback: when persistent save fails (e.g. storage quota), still render
-            // Design Intent from the currently loaded payload for this session.
             if (!persistedConfigOk) {
                 try {
                     (window as any).__cooptSystemConfig = candidateConfig;
@@ -2671,21 +2776,26 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                         (window as any).ConfigurationManager.renderBlocksUI();
                     }
                 } catch (_) {}
-                try { refreshBlockInspector(); } catch (_) {}
                 try { requestRefreshBlockInspector(); } catch (_) {}
             }
-            try { refreshBlockInspector(); } catch (_) {}
+            scheduleDeferredLoadWork(() => {
+                try { if (!isStaleLoadSession()) requestRefreshBlockInspector(); } catch (_) {}
+            }, 90);
             try {
                 if (typeof w.updateTransformSurfaceSelect === 'function') {
                     w.updateTransformSurfaceSelect();
                 }
             } catch (_) {}
-            
-            // Wait for configuration UI anchor to be available, then initialize Configuration UI
+
             const waitForConfigurationUI = () => {
+                if (isStaleLoadSession()) return;
                 const configListElement = document.getElementById('config-order-list');
-                if (configListElement && typeof w.initializeConfigurationUI === 'function') {
-                    w.initializeConfigurationUI();
+                if (configListElement) {
+                    if (typeof w.refreshConfigurationUI === 'function') {
+                        w.refreshConfigurationUI();
+                    } else if (typeof w.initializeConfigurationUI === 'function') {
+                        w.initializeConfigurationUI();
+                    }
                 } else {
                     setTimeout(waitForConfigurationUI, 100);
                 }
@@ -2697,7 +2807,12 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                     delete (window as any).__cooptPreferRuntimeSystemConfig;
                 }
             } catch (_) {}
-        }, 0);
+        }
+    } catch (_) {}
+    try {
+        if (!isStaleLoadSession()) {
+            delete (window as any).__cooptFileLoadInProgress;
+        }
     } catch (_) {}
 
     if (!persistedConfigOk) {
@@ -3908,9 +4023,21 @@ function setupOptimizeDesignIntentButton(): void {
                         const overrideRows = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0
                             ? g.__cooptOpticalSystemRowsOverride
                             : null;
+                        const token = `${Date.now()}-ensure-render-popup`;
                         const rows = overrideRows
                             ?? (typeof w.getOpticalSystemRows === 'function' ? w.getOpticalSystemRows(w.tableOpticalSystem) : []);
-                        const payload = { ts: Date.now(), rows: Array.isArray(rows) ? rows : [] };
+                        const objectRows = typeof w.getObjectRows === 'function'
+                            ? (w.getObjectRows(w.tableObject) || [])
+                            : [];
+                        const systemConfig = __cooptCloneSystemConfig();
+                        const payload = {
+                            ts: token,
+                            token,
+                            rows: Array.isArray(rows) ? rows : [],
+                            objectRows: Array.isArray(objectRows) ? objectRows : [],
+                            systemConfig,
+                            senderId: getOrCreateCooptWindowSyncSenderId(),
+                        };
                         localStorage.setItem('coopt.renderSyncRequest', JSON.stringify(payload));
                         if (isTauriRuntime()) {
                             void (async () => {
@@ -6399,6 +6526,10 @@ let __blockInspectorExpandedBlockId: string | null = null;
 const __blockInspectorPreferredMaterialKeyByBlockId = new Map<string, string>();
 let __blocks_lastScopeErrors: any[] = [];
 let __blocks_draggedBlockId: string | null = null;
+let __cooptBlockInspectorLastSummary: any[] | null = null;
+let __cooptBlockInspectorLastGroups: any = null;
+let __cooptBlockInspectorLastBlockById: Map<string, any> | null = null;
+let __cooptBlockInspectorLastBlocksInOrder: any[] | null = null;
 const DESIGN_INTENT_QUICK_EDITOR_STORAGE_KEY = 'coopt.blockInspectorQuickEditorEnabled';
 let __designIntentQuickEditorDelegatedBindingInstalled = false;
 
@@ -6422,6 +6553,21 @@ function syncDesignIntentQuickEditorToggle(): void {
     if (toggle) toggle.checked = readDesignIntentQuickEditorEnabled();
 }
 
+function rerenderBlockInspectorFromCache(): boolean {
+    if (!Array.isArray(__cooptBlockInspectorLastSummary)) return false;
+    try {
+        renderBlockInspector(
+            __cooptBlockInspectorLastSummary,
+            __cooptBlockInspectorLastGroups || {},
+            __cooptBlockInspectorLastBlockById,
+            __cooptBlockInspectorLastBlocksInOrder,
+        );
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
 function ensureDesignIntentQuickEditorToggleBinding(): void {
     if (__designIntentQuickEditorDelegatedBindingInstalled) {
         syncDesignIntentQuickEditorToggle();
@@ -6440,7 +6586,9 @@ function ensureDesignIntentQuickEditorToggleBinding(): void {
         if (!target || target.id !== 'design-intent-quick-editor-toggle') return;
         writeDesignIntentQuickEditorEnabled(!!target.checked);
         syncDesignIntentQuickEditorToggle();
-        try { refreshBlockInspector(); } catch (_) {}
+        if (!rerenderBlockInspectorFromCache()) {
+            try { refreshBlockInspector(); } catch (_) {}
+        }
     });
 
     __designIntentQuickEditorDelegatedBindingInstalled = true;
@@ -6691,11 +6839,7 @@ function __blocks_setParameterAndApertureModeBulk(enabled: boolean): { ok: boole
 
         try { refreshBlockInspector(); } catch (_) {}
         try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-        try {
-            if (w.popup3DWindow && !w.popup3DWindow.closed) {
-                w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
-            }
-        } catch (_) {}
+        try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
 
         return { ok: true, changedCount };
     } catch (e: any) {
@@ -6857,6 +7001,30 @@ function cooptNormalizeInputValue(raw: string, original: any): any {
     return trimmed;
 }
 
+function cooptIsStrictNumericQuickInputPath(path: string): boolean {
+    const normalizedPath = String(path ?? '').trim();
+    if (!normalizedPath) return false;
+    return /^(?:parameters\.(?:frontRadius|backRadius|centerThickness|abbe|radius(?:[1-4])?|thickness(?:[1-3])?|semidia)|aperture\.(?:front|back|s[1-4]|semidia))$/.test(normalizedPath);
+}
+
+function cooptNormalizeQuickInputValue(raw: string, original: any, path: string): { valid: boolean; value: any } {
+    const normalizedPath = String(path ?? '').trim();
+    const trimmed = String(raw ?? '').trim();
+    const numericField = cooptIsStrictNumericQuickInputPath(normalizedPath);
+    const radiusField = /(?:^|\.)(?:frontRadius|backRadius|radius(?:[1-4])?|radius)$/.test(normalizedPath);
+
+    if (numericField) {
+        if (trimmed === '') return { valid: true, value: '' };
+        if (radiusField && /^inf(inity)?$/i.test(trimmed)) return { valid: true, value: 'INF' };
+        if (/^[-+]?((\d+\.\d*)|(\d*\.\d+)|(\d+))(e[-+]?\d+)?$/i.test(trimmed)) {
+            return { valid: true, value: Number(trimmed) };
+        }
+        return { valid: false, value: original };
+    }
+
+    return { valid: true, value: cooptNormalizeInputValue(trimmed, original) };
+}
+
 function cooptParseFiniteRadius(value: any): number | null {
     const text = String(value ?? '').trim();
     if (!text || /^inf(inity)?$/i.test(text)) return null;
@@ -6901,13 +7069,16 @@ function cooptGetBendingConfigForBlock(blockOrType: any): {
     if (blockType === 'Lens' || blockType === 'PositiveLens') {
         return { radiusAKey: 'frontRadius', radiusBKey: 'backRadius' };
     }
-    if (blockType === 'Doublet') {
-        return { radiusAKey: 'radius1', radiusBKey: 'radius3' };
-    }
     return null;
 }
 
 function cooptComputeLensBendingValue(blockOrParams: any, blockType: string = 'Lens'): number | '' {
+    if (isDoubletBendingBlock(blockType)) {
+        const block = (blockOrParams && typeof blockOrParams === 'object' && (blockOrParams.parameters || blockOrParams.variables))
+            ? blockOrParams
+            : { blockType, parameters: blockOrParams };
+        return getDoubletBendingCurrentValue(block);
+    }
     const config = cooptGetBendingConfigForBlock(blockType);
     if (!config) return '';
     const block = (blockOrParams && typeof blockOrParams === 'object' && (blockOrParams.parameters || blockOrParams.variables))
@@ -6924,13 +7095,75 @@ function cooptComputeLensBendingValue(blockOrParams: any, blockType: string = 'L
     return Number.isFinite(bending) ? bending : '';
 }
 
+function cooptCloneJsonValue(value: any): any {
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch (_) {
+        return value;
+    }
+}
+
+function cooptPreserveLegacySemidiaIntoExpanded(expandedRows: any[], legacyRows: any[]): void {
+    if (!Array.isArray(expandedRows) || !Array.isArray(legacyRows) || expandedRows.length === 0 || legacyRows.length === 0) return;
+
+    const hasValue = (value: any): boolean => {
+        if (value === null || value === undefined) return false;
+        return String(value).trim() !== '';
+    };
+
+    const getLegacySemidia = (row: any): any => {
+        if (!row || typeof row !== 'object') return null;
+        return row.semidia ?? row['Semi Diameter'] ?? row['semi diameter'] ?? row.semiDiameter ?? row.semiDia;
+    };
+
+    const rowType = (row: any): string => String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+
+    const isSkippableRow = (row: any): boolean => {
+        const type = rowType(row);
+        return type === 'stop' || type === 'sto' || type === 'image' || type === 'object'
+            || type === 'coordtrans' || type === 'coord trans' || type === 'ct';
+    };
+
+    const keyFor = (row: any): string => {
+        if (!row || typeof row !== 'object') return '';
+        const blockId = String(row._blockId ?? '').trim();
+        const role = String(row._surfaceRole ?? '').trim();
+        return (blockId && role) ? `${blockId}|${role}` : '';
+    };
+
+    const legacyByKey = new Map<string, any>();
+    for (const legacyRow of legacyRows) {
+        if (!legacyRow || typeof legacyRow !== 'object' || isSkippableRow(legacyRow)) continue;
+        const key = keyFor(legacyRow);
+        if (key) legacyByKey.set(key, legacyRow);
+    }
+
+    let legacyIndex = 0;
+    for (const expandedRow of expandedRows) {
+        if (!expandedRow || typeof expandedRow !== 'object' || isSkippableRow(expandedRow)) continue;
+
+        let legacyRow: any = null;
+        const key = keyFor(expandedRow);
+        if (key && legacyByKey.has(key)) {
+            legacyRow = legacyByKey.get(key);
+        } else {
+            while (legacyIndex < legacyRows.length && isSkippableRow(legacyRows[legacyIndex])) legacyIndex += 1;
+            legacyRow = legacyIndex < legacyRows.length ? legacyRows[legacyIndex] : null;
+            legacyIndex += 1;
+        }
+
+        const legacySemidia = getLegacySemidia(legacyRow);
+        if (hasValue(legacySemidia)) expandedRow.semidia = legacySemidia;
+    }
+}
+
 function cooptResolveLensBendingUpdate(block: any, bendingValue: any): {
     radiusAKey: string;
     radiusBKey: string;
     oldRadiusA: any;
     oldRadiusB: any;
-    newRadiusA: number;
-    newRadiusB: number;
+    newRadiusA: number | 'INF';
+    newRadiusB: number | 'INF';
 } | null {
     const params = (block && typeof block === 'object' && block.parameters && typeof block.parameters === 'object') ? block.parameters : null;
     if (!params) return null;
@@ -6940,12 +7173,9 @@ function cooptResolveLensBendingUpdate(block: any, bendingValue: any): {
     const nextBending = Number(bendingValue);
     if (!Number.isFinite(nextBending)) return null;
 
-    const radiusA = cooptParseFiniteRadius(params[config.radiusAKey]);
-    const radiusB = cooptParseFiniteRadius(params[config.radiusBKey]);
-    if (radiusA === null || radiusB === null) return null;
-
-    const c1 = 1 / radiusA;
-    const c2 = 1 / radiusB;
+    const c1 = cooptParseRadiusCurvature(params[config.radiusAKey]);
+    const c2 = cooptParseRadiusCurvature(params[config.radiusBKey]);
+    if (c1 === null || c2 === null) return null;
     const curvatureDiff = c1 - c2;
     if (!Number.isFinite(curvatureDiff) || Math.abs(curvatureDiff) < 1e-12) return null;
 
@@ -6953,21 +7183,31 @@ function cooptResolveLensBendingUpdate(block: any, bendingValue: any): {
     const nextC1 = (curvatureSum + curvatureDiff) / 2;
     const nextC2 = (curvatureSum - curvatureDiff) / 2;
     if (!Number.isFinite(nextC1) || !Number.isFinite(nextC2)) return null;
-    if (Math.abs(nextC1) < 1e-12 || Math.abs(nextC2) < 1e-12) return null;
     if (Math.abs(nextC1) > 1e6 || Math.abs(nextC2) > 1e6) return null;
+
+    const curvatureToRadius = (curvature: number): number | 'INF' | null => {
+        if (!Number.isFinite(curvature) || Math.abs(curvature) > 1e6) return null;
+        if (Math.abs(curvature) < 1e-12) return 'INF';
+        const radius = 1 / curvature;
+        return Number.isFinite(radius) ? radius : null;
+    };
+
+    const newRadiusA = curvatureToRadius(nextC1);
+    const newRadiusB = curvatureToRadius(nextC2);
+    if (newRadiusA === null || newRadiusB === null) return null;
 
     return {
         radiusAKey: config.radiusAKey,
         radiusBKey: config.radiusBKey,
         oldRadiusA: params[config.radiusAKey],
         oldRadiusB: params[config.radiusBKey],
-        newRadiusA: 1 / nextC1,
-        newRadiusB: 1 / nextC2,
+        newRadiusA,
+        newRadiusB,
     };
 }
 
-function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''): boolean {
-    if (!Array.isArray(blocks) || blocks.length === 0) return false;
+function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''): { changed: boolean; rows: any[] | null } {
+    if (!Array.isArray(blocks) || blocks.length === 0) return { changed: false, rows: null };
 
     const primaryWavelength = (() => {
         try {
@@ -6978,15 +7218,15 @@ function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''
         } catch (_) {}
         return NaN;
     })();
-    if (!(Number.isFinite(primaryWavelength) && primaryWavelength > 0)) return false;
+    if (!(Number.isFinite(primaryWavelength) && primaryWavelength > 0)) return { changed: false, rows: null };
 
     try {
         const expanded = expandBlocksToOpticalSystemRows(blocks as any);
         const rows = expanded && Array.isArray(expanded.rows) ? expanded.rows : [];
-        if (rows.length === 0) return false;
+        if (rows.length === 0) return { changed: false, rows: null };
 
         const paraxial = calculateParaxialData(rows, primaryWavelength);
-        if (!paraxial) return false;
+        if (!paraxial) return { changed: false, rows: null };
 
         let changed = false;
         for (const block of blocks) {
@@ -7014,77 +7254,250 @@ function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''
             changed = true;
         }
 
-        return changed;
+        return { changed, rows };
     } catch (err) {
         console.warn('⚠️ [DesignIntent] Failed to auto-apply thicknessMode:', err);
-        return false;
+        return { changed: false, rows: null };
     }
 }
 
 let __cooptBlockParamDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let __cooptBlockDerivedUiTimer: ReturnType<typeof setTimeout> | null = null;
+let __cooptBlockOpticalTableTimer: ReturnType<typeof setTimeout> | null = null;
 let __cooptBlockParamPendingRefresh: {
     systemConfig: any;
     activeConfigId: string;
+    changedPath: string;
 } | null = null;
 
-function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
+function cooptHasActiveRenderSyncTarget(): boolean {
     try {
         if (localStorage.getItem(RENDER_DESIGN_INTENT_SYNC_KEY) !== 'true') {
-            return;
+            return false;
         }
     } catch (_) {
+        return false;
+    }
+
+    try {
+        if (typeof w.__cooptRenderWindowRedraw === 'function') return true;
+    } catch (_) {}
+    try {
+        if (w.popup3DWindow && !w.popup3DWindow.closed) return true;
+    } catch (_) {}
+    try {
+        if (isTauriRuntime()) return true;
+    } catch (_) {}
+    return false;
+}
+
+function cooptHasMountedOpticalTable(): boolean {
+    try {
+        const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
+        return !!(tableOptical && (typeof tableOptical.replaceData === 'function' || typeof tableOptical.setData === 'function'));
+    } catch (_) {
+        return false;
+    }
+}
+
+function cooptHasAutoGapThicknessMode(blocks: any[]): boolean {
+    if (!Array.isArray(blocks) || blocks.length === 0) return false;
+    for (const block of blocks) {
+        if (!block || typeof block !== 'object') continue;
+        const blockType = String(block.blockType ?? '').trim();
+        if (blockType !== 'Gap' && blockType !== 'AirGap') continue;
+        const mode = String(block?.parameters?.thicknessMode ?? '').trim().replace(/\s+/g, '').toUpperCase();
+        if (mode === 'IMD' || mode === 'BFL') return true;
+    }
+    return false;
+}
+
+function cooptNeedsExpandedRowsForBlockChange(blocks: any[], changedPath: string): boolean {
+    if (cooptRequiresBlockInspectorRefresh(changedPath)) return true;
+    if (cooptHasAutoGapThicknessMode(blocks)) return true;
+    if (cooptHasMountedOpticalTable()) return true;
+    if (cooptHasActiveRenderSyncTarget()) return true;
+    return false;
+}
+
+function cooptScheduleDeferredOpticalTableSync(rows: any[] | null): void {
+    if (!Array.isArray(rows)) return;
+
+    const schedule = () => {
+        try {
+            saveOpticalSystemTableData(rows as any);
+        } catch (_) {}
+        try {
+            if (typeof w.saveLensTableData === 'function') w.saveLensTableData(rows);
+        } catch (_) {}
+
+        try {
+            const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
+            if (tableOptical && typeof tableOptical.replaceData === 'function') {
+                try { w.__suppressOpticalSystemDataChanged = true; } catch (_) {}
+                tableOptical.replaceData(rows);
+            } else if (tableOptical && typeof tableOptical.setData === 'function') {
+                try { w.__suppressOpticalSystemDataChanged = true; } catch (_) {}
+                tableOptical.setData(rows);
+            }
+        } catch (_) {}
+        try {
+            setTimeout(() => {
+                try { delete w.__suppressOpticalSystemDataChanged; } catch (_) {}
+            }, 0);
+        } catch (_) {}
+    };
+
+    if (__cooptBlockOpticalTableTimer !== null) clearTimeout(__cooptBlockOpticalTableTimer);
+    __cooptBlockOpticalTableTimer = setTimeout(() => {
+        __cooptBlockOpticalTableTimer = null;
+        try {
+            const requestIdle = (w as any).requestIdleCallback;
+            if (typeof requestIdle === 'function') {
+                requestIdle(() => schedule(), { timeout: 800 });
+                return;
+            }
+        } catch (_) {}
+        schedule();
+    }, 900);
+}
+
+function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
+    if (!__cooptIsRenderDesignIntentLiveSyncEnabled()) {
         return;
     }
 
-    const rows = Array.isArray(rowsSnapshot) ? rowsSnapshot : [];
-
+    let rows = Array.isArray(rowsSnapshot) ? rowsSnapshot : [];
+    let objectRows: any[] = [];
     try {
-        if (rows.length > 0) {
-            if (typeof w.__cooptRenderWindowRedraw === 'function') {
-                w.__cooptRenderWindowRedraw(rows);
-            } else if (typeof w.drawOpticalSystem === 'function') {
-                const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-                const prevRowsOverride = g ? g.__cooptOpticalSystemRowsOverride : undefined;
-                try {
-                    if (g) g.__cooptOpticalSystemRowsOverride = rows;
-                    w.drawOpticalSystem();
-                } finally {
-                    if (g) g.__cooptOpticalSystemRowsOverride = prevRowsOverride;
+        if (typeof w.getObjectRows === 'function') {
+            const liveTableRows = w.getObjectRows(w.tableObject);
+            if (Array.isArray(liveTableRows) && liveTableRows.length > 0) {
+                objectRows = liveTableRows.slice();
+            }
+        }
+    } catch (_) {}
+    try {
+        const runtimeSystemConfig = __cooptGetSystemConfig();
+        const activeConfig = runtimeSystemConfig?.configurations?.find((cfg: any) => cfg && String(cfg.id) === String(runtimeSystemConfig?.activeConfigId))
+            || runtimeSystemConfig?.configurations?.[0]
+            || null;
+        if (objectRows.length === 0 && Array.isArray(activeConfig?.object) && activeConfig.object.length > 0) {
+            objectRows = activeConfig.object.slice();
+        }
+        if (rows.length === 0) {
+            const activeBlocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
+            if (Array.isArray(activeConfig?.opticalSystem) && activeConfig.opticalSystem.length > 0) {
+                rows = activeConfig.opticalSystem.slice();
+            } else if (activeBlocks.length > 0) {
+                const legacyRows = Array.isArray(activeConfig?.opticalSystem) ? activeConfig.opticalSystem : [];
+                const autoGapResult = cooptAutoApplyGapThicknessModes(activeBlocks, '');
+                const expandedRows = Array.isArray(autoGapResult?.rows)
+                    ? autoGapResult.rows
+                    : (() => {
+                        const expanded = expandBlocksToOpticalSystemRows(activeBlocks as any);
+                        return expanded && Array.isArray(expanded.rows) ? expanded.rows : [];
+                    })();
+                if (expandedRows.length > 0) {
+                    cooptPreserveLegacySemidiaIntoExpanded(expandedRows, legacyRows);
+                    rows = expandedRows.slice();
+                    try {
+                        activeConfig.opticalSystem = expandedRows;
+                    } catch (_) {}
                 }
             }
         }
     } catch (_) {}
+    if (objectRows.length === 0) {
+        try {
+            if (typeof w.getObjectRows === 'function') {
+                const tableRows = w.getObjectRows(w.tableObject);
+                if (Array.isArray(tableRows) && tableRows.length > 0) {
+                    objectRows = tableRows.slice();
+                }
+            }
+        } catch (_) {}
+    }
+    const systemConfig = __cooptCloneSystemConfig();
+    const renderRowsPayload = Array.isArray(rows) ? (cooptCloneJsonValue(rows) || []) : [];
+    const renderObjectRowsPayload = Array.isArray(objectRows) ? (cooptCloneJsonValue(objectRows) || []) : [];
+    const token = `${Date.now()}-block-param`;
+    const popup = (() => {
+        try {
+            return w.popup3DWindow && !w.popup3DWindow.closed ? w.popup3DWindow : null;
+        } catch (_) {
+            return null;
+        }
+    })();
+    const hasLocalRenderTarget = typeof w.__cooptRenderWindowRedraw === 'function';
+    const canUseTauriRenderSync = isTauriRuntime();
+
+    if (renderRowsPayload.length === 0) {
+        return;
+    }
 
     try {
-        const popup = w.popup3DWindow;
-        if (popup && !popup.closed) {
-            if (typeof popup.__cooptRenderWindowRedraw === 'function' && rows.length > 0) {
-                popup.__cooptRenderWindowRedraw(rows);
-            } else if (typeof popup.postMessage === 'function') {
-                try { popup.__cooptPendingRenderRows = rows; } catch (_) {}
-                popup.postMessage({ action: 'request-redraw', rows }, '*');
+        if (renderRowsPayload.length > 0 && hasLocalRenderTarget) {
+            if (typeof w.__cooptRenderWindowRedraw === 'function') {
+                try {
+                    if (systemConfig && typeof systemConfig === 'object') {
+                        w.__cooptPendingRenderSystemConfig = systemConfig;
+                        w.__cooptSystemConfig = systemConfig;
+                        w.__cooptPreferRuntimeSystemConfig = true;
+                    }
+                } catch (_) {}
+                w.__cooptRenderWindowRedraw(renderRowsPayload, token, renderObjectRowsPayload);
             }
         }
     } catch (_) {}
 
     try {
-        const token = `${Date.now()}-block-param`;
-        localStorage.setItem('coopt.renderSyncRequest', JSON.stringify({ ts: token, token, rows }));
+        if (popup && !popup.closed) {
+            if (typeof popup.__cooptRenderWindowRedraw === 'function' && renderRowsPayload.length > 0) {
+                try {
+                    if (systemConfig && typeof systemConfig === 'object') {
+                        popup.__cooptPendingRenderSystemConfig = systemConfig;
+                        popup.__cooptSystemConfig = systemConfig;
+                        popup.__cooptPreferRuntimeSystemConfig = true;
+                    }
+                } catch (_) {}
+                popup.__cooptRenderWindowRedraw(renderRowsPayload, token, renderObjectRowsPayload);
+            } else if (typeof popup.postMessage === 'function') {
+                try { popup.__cooptPendingRenderRows = renderRowsPayload; } catch (_) {}
+                try { popup.__cooptPendingRenderObjectRows = renderObjectRowsPayload; } catch (_) {}
+                popup.postMessage({ action: 'request-redraw', rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig, ts: token, token }, '*');
+            }
+        }
     } catch (_) {}
 
     try {
-        if (isTauriRuntime()) {
+        localStorage.setItem('coopt.renderSyncRequest', JSON.stringify({ ts: token, token, rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig, senderId: getOrCreateCooptWindowSyncSenderId() }));
+    } catch (_) {}
+
+    try {
+        if (canUseTauriRenderSync) {
             void (async () => {
                 try {
                     const mod = await import('@tauri-apps/api/event');
                     if (mod && typeof (mod as any).emit === 'function') {
-                        const token = `${Date.now()}-block-param`;
-                        await (mod as any).emit('coopt-render-sync-request', { ts: token, token, rows });
+                        await (mod as any).emit('coopt-render-sync-request', { ts: token, token, rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig });
                     }
                 } catch (_) {}
             })();
         }
     } catch (_) {}
+}
+
+function cooptRequiresBlockInspectorRefresh(path: string): boolean {
+    const normalizedPath = String(path ?? '').trim();
+    if (!normalizedPath) return false;
+    return /parameters\.(?:surfType|frontSurfType|backSurfType|surf1SurfType|surf2SurfType|surf3SurfType|thicknessMode|objectDistanceMode|semidiaMode|optimizeSemiDia|apertureShape|coordBreakOrder|transformOrder|position|zoomGroup|zoomLaw|linkedZoomGroups|zoomLaws)|^aperture\.|^variables\./.test(normalizedPath);
+}
+
+function cooptRequiresZoomUiRefresh(path: string): boolean {
+    const normalizedPath = String(path ?? '').trim();
+    if (!normalizedPath) return false;
+    return /parameters\.(?:zoom(Position|Group|Law)|linkedZoomGroups|zoomLaws|compensationStroke|compensationSamples)/.test(normalizedPath);
 }
 
 function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newValue: any): void {
@@ -7098,42 +7511,83 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
 
     const blockType = String(block?.blockType ?? '').trim();
     if ((blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') && String(path) === 'parameters.bending') {
-        const bendingUpdate = cooptResolveLensBendingUpdate(block, newValue);
-        if (!bendingUpdate) {
-            try { refreshBlockInspector(); } catch (_) {}
-            return;
-        }
-
-        const { radiusAKey, radiusBKey, oldRadiusA, oldRadiusB, newRadiusA, newRadiusB } = bendingUpdate;
-        if (oldRadiusA === newRadiusA && oldRadiusB === newRadiusB) {
-            return;
-        }
-
-        try {
-            if ((blockType === 'Lens' || blockType === 'PositiveLens') && w.undoHistory && w.SetLensBendingCommand && !w.undoHistory.isExecuting) {
-                const cmd = new w.SetLensBendingCommand(
-                    activeConfig.name,
-                    String(blockId),
-                    oldRadiusA,
-                    oldRadiusB,
-                    newRadiusA,
-                    newRadiusB,
-                );
-                w.undoHistory.record(cmd);
+        if (blockType === 'Doublet') {
+            const bendingUpdate = resolveDoubletBendingUpdate(block, newValue);
+            if (!bendingUpdate) {
+                try { refreshBlockInspector(); } catch (_) {}
+                return;
             }
-        } catch (_) {}
 
-        cooptSetNestedValue(block, `parameters.${radiusAKey}`, newRadiusA);
-        cooptSetNestedValue(block, `parameters.${radiusBKey}`, newRadiusB);
-        cooptSetNestedValue(block, 'parameters.bending', Number(newValue));
-        if (block.variables?.[radiusAKey] && typeof block.variables[radiusAKey] === 'object' && Object.prototype.hasOwnProperty.call(block.variables[radiusAKey], 'value')) {
-            block.variables[radiusAKey].value = newRadiusA;
+            const oldBase = cooptCloneJsonValue(block?.metadata?.[DOUBLET_BENDING_BASE_KEY]);
+            try {
+                if (w.undoHistory && w.CompoundCommand && w.SetBlockParameterCommand && !w.undoHistory.isExecuting) {
+                    const cmd = new w.CompoundCommand(`Set ${String(blockId)}.bending`);
+                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), 'parameters.radius1', bendingUpdate.oldRadius1, bendingUpdate.newRadius1));
+                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), 'parameters.radius2', bendingUpdate.oldRadius2, bendingUpdate.newRadius2));
+                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), 'parameters.radius3', bendingUpdate.oldRadius3, bendingUpdate.newRadius3));
+                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), 'parameters.bending', block?.parameters?.bending, bendingUpdate.bending));
+                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), `metadata.${DOUBLET_BENDING_BASE_KEY}`, oldBase, cooptCloneJsonValue(bendingUpdate.baseCurvatures)));
+                    w.undoHistory.record(cmd);
+                }
+            } catch (_) {}
+
+            cooptSetNestedValue(block, 'parameters.radius1', bendingUpdate.newRadius1);
+            cooptSetNestedValue(block, 'parameters.radius2', bendingUpdate.newRadius2);
+            cooptSetNestedValue(block, 'parameters.radius3', bendingUpdate.newRadius3);
+            cooptSetNestedValue(block, 'parameters.bending', bendingUpdate.bending);
+            cooptSetNestedValue(block, `metadata.${DOUBLET_BENDING_BASE_KEY}`, cooptCloneJsonValue(bendingUpdate.baseCurvatures));
+            if (block.variables?.radius1 && typeof block.variables.radius1 === 'object' && Object.prototype.hasOwnProperty.call(block.variables.radius1, 'value')) {
+                block.variables.radius1.value = bendingUpdate.newRadius1;
+            }
+            if (block.variables?.radius2 && typeof block.variables.radius2 === 'object' && Object.prototype.hasOwnProperty.call(block.variables.radius2, 'value')) {
+                block.variables.radius2.value = bendingUpdate.newRadius2;
+            }
+            if (block.variables?.radius3 && typeof block.variables.radius3 === 'object' && Object.prototype.hasOwnProperty.call(block.variables.radius3, 'value')) {
+                block.variables.radius3.value = bendingUpdate.newRadius3;
+            }
+            if (block.variables?.bending && typeof block.variables.bending === 'object' && Object.prototype.hasOwnProperty.call(block.variables.bending, 'value')) {
+                block.variables.bending.value = bendingUpdate.bending;
+            }
         }
-        if (block.variables?.[radiusBKey] && typeof block.variables[radiusBKey] === 'object' && Object.prototype.hasOwnProperty.call(block.variables[radiusBKey], 'value')) {
-            block.variables[radiusBKey].value = newRadiusB;
-        }
-        if (block.variables?.bending && typeof block.variables.bending === 'object' && Object.prototype.hasOwnProperty.call(block.variables.bending, 'value')) {
-            block.variables.bending.value = Number(newValue);
+
+        if (blockType !== 'Doublet') {
+            const bendingUpdate = cooptResolveLensBendingUpdate(block, newValue);
+            if (!bendingUpdate) {
+                try { refreshBlockInspector(); } catch (_) {}
+                return;
+            }
+
+            const { radiusAKey, radiusBKey, oldRadiusA, oldRadiusB, newRadiusA, newRadiusB } = bendingUpdate;
+            if (oldRadiusA === newRadiusA && oldRadiusB === newRadiusB) {
+                return;
+            }
+
+            try {
+                if (w.undoHistory && w.SetLensBendingCommand && !w.undoHistory.isExecuting) {
+                    const cmd = new w.SetLensBendingCommand(
+                        activeConfig.name,
+                        String(blockId),
+                        oldRadiusA,
+                        oldRadiusB,
+                        newRadiusA,
+                        newRadiusB,
+                    );
+                    w.undoHistory.record(cmd);
+                }
+            } catch (_) {}
+
+            cooptSetNestedValue(block, `parameters.${radiusAKey}`, newRadiusA);
+            cooptSetNestedValue(block, `parameters.${radiusBKey}`, newRadiusB);
+            cooptSetNestedValue(block, 'parameters.bending', Number(newValue));
+            if (block.variables?.[radiusAKey] && typeof block.variables[radiusAKey] === 'object' && Object.prototype.hasOwnProperty.call(block.variables[radiusAKey], 'value')) {
+                block.variables[radiusAKey].value = newRadiusA;
+            }
+            if (block.variables?.[radiusBKey] && typeof block.variables[radiusBKey] === 'object' && Object.prototype.hasOwnProperty.call(block.variables[radiusBKey], 'value')) {
+                block.variables[radiusBKey].value = newRadiusB;
+            }
+            if (block.variables?.bending && typeof block.variables.bending === 'object' && Object.prototype.hasOwnProperty.call(block.variables.bending, 'value')) {
+                block.variables.bending.value = Number(newValue);
+            }
         }
     } else {
 
@@ -7147,6 +7601,16 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
         }
 
         cooptSetNestedValue(block, path, newValue);
+    }
+    if (blockType === 'Doublet' && /^parameters\.radius[123]$/.test(String(path))) {
+        const bending = syncDoubletBendingState(block);
+        if (block.variables?.bending && typeof block.variables.bending === 'object' && Object.prototype.hasOwnProperty.call(block.variables.bending, 'value')) {
+            block.variables.bending.value = bending;
+        }
+        const baseCurvatures = cooptCloneJsonValue(block?.metadata?.[DOUBLET_BENDING_BASE_KEY]);
+        if (baseCurvatures) {
+            storeDoubletBendingBaseCurvatures(block, baseCurvatures);
+        }
     }
     if (blockType === 'ImageSurface' && String(path) === 'parameters.semidia') {
         const semidiaText = String(newValue ?? '').trim().toLowerCase();
@@ -7165,16 +7629,21 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
             block.aperture.back = newValue;
         }
     }
-    cooptAutoApplyGapThicknessModes(blocks, path);
-
     try {
         if (activeConfig.metadata) activeConfig.metadata.modified = new Date().toISOString();
     } catch (_) {}
-    try { saveSystemConfigurations(systemConfig); } catch (_) {}
+    try {
+        w.__cooptDeferDerivedUiUntil = Date.now() + 1400;
+    } catch (_) {}
+    try {
+        w.__cooptSystemConfig = systemConfig;
+        w.__cooptPreferRuntimeSystemConfig = true;
+    } catch (_) {}
 
     __cooptBlockParamPendingRefresh = {
         systemConfig,
-        activeConfigId: String(systemConfig?.activeConfigId ?? activeConfig?.id ?? '')
+        activeConfigId: String(systemConfig?.activeConfigId ?? activeConfig?.id ?? ''),
+        changedPath: String(path ?? '')
     };
 
     // Debounce heavy UI refresh so rapid input (e.g. typing digits) does not freeze the page.
@@ -7182,48 +7651,69 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     __cooptBlockParamDebounceTimer = setTimeout(() => {
         __cooptBlockParamDebounceTimer = null;
         let rowsSnapshot: any[] | null = null;
+        const pending = __cooptBlockParamPendingRefresh;
 
         try {
-            const pending = __cooptBlockParamPendingRefresh;
             __cooptBlockParamPendingRefresh = null;
             const latestSystemConfig = pending?.systemConfig || loadSystemConfigurations();
             const latestActiveConfig = latestSystemConfig?.configurations?.find((c: any) => String(c?.id ?? '') === String(pending?.activeConfigId ?? ''))
                 || latestSystemConfig?.configurations?.find((c: any) => c.id === latestSystemConfig?.activeConfigId)
                 || latestSystemConfig?.configurations?.[0];
             const latestBlocks = Array.isArray(latestActiveConfig?.blocks) ? latestActiveConfig.blocks : [];
-            const expanded = expandBlocksToOpticalSystemRows(latestBlocks as any);
-            if (expanded && Array.isArray(expanded.rows)) {
-                rowsSnapshot = expanded.rows.slice();
-                latestActiveConfig.opticalSystem = expanded.rows;
-                try { saveOpticalSystemTableData(expanded.rows as any); } catch (_) {}
-                try { if (typeof w.saveLensTableData === 'function') w.saveLensTableData(expanded.rows); } catch (_) {}
+            const legacyRows = Array.isArray(latestActiveConfig?.opticalSystem) ? latestActiveConfig.opticalSystem : [];
+            const changedPath = String(pending?.changedPath ?? '');
+            if (cooptNeedsExpandedRowsForBlockChange(latestBlocks, changedPath)) {
+                const autoGapResult = cooptAutoApplyGapThicknessModes(latestBlocks, changedPath);
+                const expandedRows = Array.isArray(autoGapResult.rows)
+                    ? autoGapResult.rows
+                    : (() => {
+                        const expanded = expandBlocksToOpticalSystemRows(latestBlocks as any);
+                        return expanded && Array.isArray(expanded.rows) ? expanded.rows : null;
+                    })();
+                if (Array.isArray(expandedRows)) {
+                    cooptPreserveLegacySemidiaIntoExpanded(expandedRows, legacyRows);
+                    rowsSnapshot = expandedRows.slice();
+                    latestActiveConfig.opticalSystem = expandedRows;
+                    cooptScheduleDeferredOpticalTableSync(expandedRows);
 
-                try {
-                    const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
-                    if (tableOptical && typeof tableOptical.replaceData === 'function') {
-                        tableOptical.replaceData(expanded.rows);
-                    } else if (tableOptical && typeof tableOptical.setData === 'function') {
-                        tableOptical.setData(expanded.rows);
-                    }
-                } catch (_) {}
-
-                try { saveSystemConfigurations(latestSystemConfig); } catch (_) {}
+                    try {
+                        saveSystemConfigurations(latestSystemConfig);
+                        delete w.__cooptPreferRuntimeSystemConfig;
+                    } catch (_) {}
+                }
             }
         } catch (_) {}
 
-        try { refreshBlockInspector(); } catch (_) {}
-        try { refreshZoomControlTab(); } catch (_) {}
-
-        __cooptRequestRenderRedrawWithRows(rowsSnapshot);
-    }, 80);
+        if (__cooptBlockDerivedUiTimer !== null) clearTimeout(__cooptBlockDerivedUiTimer);
+        __cooptBlockDerivedUiTimer = setTimeout(() => {
+            __cooptBlockDerivedUiTimer = null;
+            const changedPath = String(pending?.changedPath ?? '');
+            if (cooptRequiresBlockInspectorRefresh(changedPath)) {
+                try {
+                    __cooptBlockInspectorExpandedRowsOverride = Array.isArray(rowsSnapshot) ? rowsSnapshot.slice() : null;
+                    __cooptBlockInspectorSkipOpticalTableSync = Array.isArray(rowsSnapshot);
+                    requestRefreshBlockInspector();
+                } catch (_) {}
+            }
+            if (cooptRequiresZoomUiRefresh(changedPath)) {
+                try { refreshZoomControlTab(); } catch (_) {}
+            }
+            __cooptRequestRenderRedrawWithRows(rowsSnapshot);
+            try { delete w.__cooptDeferDerivedUiUntil; } catch (_) {}
+        }, 650);
+    }, 420);
 }
 
 const ZOOM_GROUP_OPTIONS = ['Fixed', ...Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index))];
 const ZOOM_PREVIEW_COMMIT_DELAY_MS = 140;
+const ZOOM_PREVIEW_RENDER_INTERVAL_MS = 180;
 
 let __zoomPreviewCommitTimer: number | null = null;
 let __zoomPreviewRafId: number | null = null;
 let __zoomPreviewQueuedValue: number | null = null;
+let __zoomPreviewPrevPreferRuntime: boolean | null = null;
+let __zoomPreviewPrevRuntimeConfig: any = null;
+let __zoomPreviewLastRenderAt = 0;
 let __zoomPreviewPendingCommit: {
     blockId: string;
     oldValue: number;
@@ -7234,28 +7724,51 @@ let __zoomPreviewPendingCommit: {
     blocks: any[];
 } | null = null;
 
-function __zoom_requestRenderRefresh(expandedRowsForRender: any[] | null): void {
+function __zoom_stageRuntimePreviewConfig(systemConfig: any): void {
     try {
-    if (Array.isArray(expandedRowsForRender) && expandedRowsForRender.length > 0) {
-        if (typeof w.__cooptRenderWindowRedraw === 'function') {
-        w.__cooptRenderWindowRedraw(expandedRowsForRender);
-        } else if (typeof w.drawOpticalSystem === 'function') {
-        w.drawOpticalSystem();
+        if (__zoomPreviewPrevPreferRuntime === null) {
+            __zoomPreviewPrevPreferRuntime = !!w.__cooptPreferRuntimeSystemConfig;
+            __zoomPreviewPrevRuntimeConfig = w.__cooptSystemConfig;
         }
-    }
     } catch (_) {}
     try {
-    const popup = w.popup3DWindow;
-    if (popup && !popup.closed) {
-        try {
-        popup.__cooptZoomPreviewActive = !!(globalThis as any).__cooptZoomPreviewActive;
-        } catch (_) {}
-        if (typeof popup.__cooptRenderWindowRedraw === 'function' && Array.isArray(expandedRowsForRender) && expandedRowsForRender.length > 0) {
-        popup.__cooptRenderWindowRedraw(expandedRowsForRender);
-        } else if (typeof popup.postMessage === 'function') {
-        popup.postMessage({ action: 'request-redraw' }, '*');
+        w.__cooptSystemConfig = systemConfig;
+        w.__cooptPreferRuntimeSystemConfig = true;
+    } catch (_) {}
+}
+
+function __zoom_restoreRuntimePreviewConfig(): void {
+    try {
+        if (__zoomPreviewPrevPreferRuntime) {
+            w.__cooptSystemConfig = __zoomPreviewPrevRuntimeConfig;
+            w.__cooptPreferRuntimeSystemConfig = true;
+        } else {
+            delete w.__cooptPreferRuntimeSystemConfig;
+            if (__zoomPreviewPrevRuntimeConfig === undefined) delete w.__cooptSystemConfig;
+            else w.__cooptSystemConfig = __zoomPreviewPrevRuntimeConfig;
         }
-    }
+    } catch (_) {}
+    __zoomPreviewPrevPreferRuntime = null;
+    __zoomPreviewPrevRuntimeConfig = null;
+}
+
+function __zoom_requestRenderRefresh(expandedRowsForRender: any[] | null): void {
+    const popup = (() => {
+        try {
+            return w.popup3DWindow && !w.popup3DWindow.closed ? w.popup3DWindow : null;
+        } catch (_) {
+            return null;
+        }
+    })();
+    if (!popup && typeof w.__cooptRenderWindowRedraw !== 'function') return;
+
+    try {
+        if (popup && !popup.closed) {
+            try {
+                popup.__cooptZoomPreviewActive = !!(globalThis as any).__cooptZoomPreviewActive;
+            } catch (_) {}
+        }
+        __cooptRequestRenderRedrawWithRows(Array.isArray(expandedRowsForRender) ? expandedRowsForRender : null);
     } catch (_) {}
 }
 
@@ -7274,6 +7787,26 @@ function __zoom_applyPreviewPosition(nextValue: number): void {
     if (!pending.activeConfig.metadata || typeof pending.activeConfig.metadata !== 'object') pending.activeConfig.metadata = {};
     pending.activeConfig.metadata.modified = new Date().toISOString();
 
+    // Keep runtime config in sync, but do not expand/redraw on every slider frame.
+    // Zoom preview is intentionally degraded to a throttled preview to avoid freezing the UI.
+    __zoom_stageRuntimePreviewConfig(pending.systemConfig);
+
+    const hasRenderTarget = (() => {
+        try {
+            if (typeof w.__cooptRenderWindowRedraw === 'function') return true;
+        } catch (_) {}
+        try {
+            return !!(w.popup3DWindow && !w.popup3DWindow.closed);
+        } catch (_) {
+            return false;
+        }
+    })();
+    if (!hasRenderTarget) return;
+
+    const now = Date.now();
+    if ((now - __zoomPreviewLastRenderAt) < ZOOM_PREVIEW_RENDER_INTERVAL_MS) return;
+    __zoomPreviewLastRenderAt = now;
+
     let expandedRowsForRender: any[] | null = null;
     try {
         const expanded = expandBlocksToOpticalSystemRows(pending.blocks as any);
@@ -7282,9 +7815,6 @@ function __zoom_applyPreviewPosition(nextValue: number): void {
             pending.activeConfig.opticalSystem = expanded.rows;
         }
     } catch (_) {}
-
-    // Keep React/web analysis views in sync during lightweight zoom preview.
-    try { saveSystemConfigurations(pending.systemConfig); } catch (_) {}
 
     __zoom_requestRenderRefresh(expandedRowsForRender);
 }
@@ -7359,6 +7889,7 @@ function __zoom_flushPreviewCommit(): any {
 
     const pending = __zoomPreviewPendingCommit;
     __zoomPreviewPendingCommit = null;
+    __zoomPreviewLastRenderAt = 0;
     try {
         (globalThis as any).__cooptZoomPreviewActive = false;
     } catch (_) {}
@@ -7368,10 +7899,17 @@ function __zoom_flushPreviewCommit(): any {
             popup.__cooptZoomPreviewActive = false;
         }
     } catch (_) {}
-    if (!pending || !pending.blockId) return __zoom_collectState();
-    if (pending.oldValue === pending.latestValue) return __zoom_collectState();
+    if (!pending || !pending.blockId) {
+        __zoom_restoreRuntimePreviewConfig();
+        return __zoom_collectState();
+    }
+    if (pending.oldValue === pending.latestValue) {
+        __zoom_restoreRuntimePreviewConfig();
+        return __zoom_collectState();
+    }
 
     cooptApplyBlockValue(pending.blockId, 'parameters.zoomPosition', pending.oldValue, pending.latestValue);
+    __zoom_restoreRuntimePreviewConfig();
     return __zoom_collectState();
 }
 
@@ -8094,6 +8632,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     const container = document.getElementById('block-inspector');
     if (!container) return;
 
+    __cooptBlockInspectorLastSummary = Array.isArray(summary) ? summary : [];
+    __cooptBlockInspectorLastGroups = groups || {};
+    __cooptBlockInspectorLastBlockById = blockById instanceof Map ? blockById : null;
+    __cooptBlockInspectorLastBlocksInOrder = Array.isArray(blocksInOrder) ? blocksInOrder : null;
+
     container.innerHTML = '';
     syncDesignIntentQuickEditorToggle();
     const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
@@ -8589,7 +9132,12 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             input.placeholder = label;
             styleQuickInput(input, widthPx);
             const commit = () => {
-                const nextValue = cooptNormalizeInputValue(input.value, currentValue);
+                const normalized = cooptNormalizeQuickInputValue(input.value, currentValue, path);
+                if (!normalized.valid) {
+                    input.value = currentValue === undefined || currentValue === null ? '' : String(currentValue);
+                    return;
+                }
+                const nextValue = normalized.value;
                 if (nextValue !== currentValue) {
                     cooptApplyBlockValue(blockId, path, currentValue, nextValue);
                 }
@@ -8660,7 +9208,12 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             input.placeholder = 'Glass';
             styleQuickInput(input, 96);
             const commitMaterial = () => {
-                const nextValue = cooptNormalizeInputValue(input.value, materialValue);
+                const normalized = cooptNormalizeQuickInputValue(input.value, materialValue, materialPath);
+                if (!normalized.valid) {
+                    input.value = materialValue === undefined || materialValue === null ? '' : String(materialValue);
+                    return;
+                }
+                const nextValue = normalized.value;
                 if (nextValue !== materialValue) {
                     cooptApplyBlockValue(blockId, materialPath, materialValue, nextValue);
                 }
@@ -10828,6 +11381,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
 let __cooptBlockInspectorRefreshTimer: number | null = null;
 let __cooptBlockInspectorLastRunAtMs = 0;
+let __cooptBlockInspectorExpandedRowsOverride: any[] | null = null;
+let __cooptBlockInspectorSkipOpticalTableSync = false;
 
 function __cooptIsBlockInspectorDiagEnabled(): boolean {
     try {
@@ -10920,29 +11475,32 @@ export function refreshBlockInspector(): void {
             const countById = new Map<string, number>();
             let expandedRowsForUI: any = null;
             try {
-                if (typeof expandBlocksToOpticalSystemRows === 'function') {
-                    const exp = expandBlocksToOpticalSystemRows(blocks);
-                    const rows = exp && Array.isArray(exp.rows) ? exp.rows : [];
-                    expandedRowsForUI = rows;
-                    for (const r of rows) {
-                        const bid = r?._blockId;
-                        if (bid === null || bid === undefined) continue;
-                        const id = String(bid).trim();
-                        if (!id || id === '(none)') continue;
-                        const rowBlockType = String(r?._blockType ?? '').trim();
-                        if (rowBlockType === 'Gap' || rowBlockType === 'CoordTrans') continue;
-                        if (rowBlockType === 'ObjectSurface' || rowBlockType === 'ObjectPlane' || rowBlockType === 'Object') continue;
-                        if (rowBlockType === 'Paraxial') {
-                            if (!countById.has(id)) countById.set(id, 1);
-                            continue;
-                        }
-                        countById.set(id, (countById.get(id) || 0) + 1);
+                const rows = Array.isArray(__cooptBlockInspectorExpandedRowsOverride)
+                    ? __cooptBlockInspectorExpandedRowsOverride
+                    : (() => {
+                        if (typeof expandBlocksToOpticalSystemRows !== 'function') return [];
+                        const exp = expandBlocksToOpticalSystemRows(blocks);
+                        return exp && Array.isArray(exp.rows) ? exp.rows : [];
+                    })();
+                expandedRowsForUI = rows;
+                for (const r of rows) {
+                    const bid = r?._blockId;
+                    if (bid === null || bid === undefined) continue;
+                    const id = String(bid).trim();
+                    if (!id || id === '(none)') continue;
+                    const rowBlockType = String(r?._blockType ?? '').trim();
+                    if (rowBlockType === 'Gap' || rowBlockType === 'CoordTrans') continue;
+                    if (rowBlockType === 'ObjectSurface' || rowBlockType === 'ObjectPlane' || rowBlockType === 'Object') continue;
+                    if (rowBlockType === 'Paraxial') {
+                        if (!countById.has(id)) countById.set(id, 1);
+                        continue;
                     }
+                    countById.set(id, (countById.get(id) || 0) + 1);
                 }
             } catch (_) {}
 
             try {
-                if (Array.isArray(expandedRowsForUI) && expandedRowsForUI.length > 0) {
+                if (!__cooptBlockInspectorSkipOpticalTableSync && Array.isArray(expandedRowsForUI) && expandedRowsForUI.length > 0) {
                     const rowsForTable = expandedRowsForUI.map((r: any, idx: number) => {
                         const row = (r && typeof r === 'object') ? { ...r } : {};
                         row.id = idx;
@@ -10997,6 +11555,9 @@ export function refreshBlockInspector(): void {
         }
     } catch (e) {
         console.warn('⚠️ [Blocks] Failed to refresh block inspector:', e);
+    } finally {
+        __cooptBlockInspectorExpandedRowsOverride = null;
+        __cooptBlockInspectorSkipOpticalTableSync = false;
     }
 }
 
@@ -11071,13 +11632,8 @@ function setupApplyToDesignIntentButton(): void {
 
             try { refreshBlockInspector(); } catch (_) {}
             try { w.__pendingSurfaceEdits = {}; } catch (_) {}
-            
-            try {
-                const popup = w.popup3DWindow;
-                if (popup && !popup.closed && typeof popup.postMessage === 'function') {
-                    popup.postMessage({ action: 'request-redraw' }, '*');
-                }
-            } catch (_) {}
+
+            try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
         } catch (e) {
             console.error('❌ Apply to Design Intent failed:', e);
             alert(`Apply failed: ${(e as Error)?.message || String(e)}`);
@@ -11581,11 +12137,7 @@ function setupDesignIntentButtons(): void {
 
                 try { refreshBlockInspector(); } catch (_) {}
                 try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-                try {
-                    if (w.popup3DWindow && !w.popup3DWindow.closed) {
-                        w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
-                    }
-                } catch (_) {}
+                try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
             } catch (e) {
                 console.error('❌ Failed to add block:', e);
                 alert(`Failed to add block: ${(e as Error)?.message || String(e)}`);
@@ -11625,11 +12177,7 @@ function setupDesignIntentButtons(): void {
                 __blockInspectorExpandedBlockId = null;
                 try { refreshBlockInspector(); } catch (_) {}
                 try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-                try {
-                    if (w.popup3DWindow && !w.popup3DWindow.closed) {
-                        w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
-                    }
-                } catch (_) {}
+                try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
             } catch (e) {
                 console.error('❌ Failed to delete block:', e);
                 alert(`Failed to delete block: ${(e as Error)?.message || String(e)}`);
@@ -11676,11 +12224,7 @@ function setupDesignIntentButtons(): void {
                 }
                 try { refreshBlockInspector(); } catch (_) {}
                 try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-                try {
-                    if (w.popup3DWindow && !w.popup3DWindow.closed) {
-                        w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
-                    }
-                } catch (_) {}
+                try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
             } catch (err) {
                 console.error('❌ Failed to auto-set apertures:', err);
                 alert(`Failed to auto-set apertures: ${(err as Error)?.message || String(err)}`);
@@ -11701,11 +12245,7 @@ function setupDesignIntentButtons(): void {
                 }
                 try { refreshBlockInspector(); } catch (_) {}
                 try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-                try {
-                    if (w.popup3DWindow && !w.popup3DWindow.closed) {
-                        w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
-                    }
-                } catch (_) {}
+                try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
             } catch (e) {
                 console.error('❌ Failed to generate zoom scenarios:', e);
                 alert(`Failed to generate zoom scenarios: ${(e as Error)?.message || String(e)}`);

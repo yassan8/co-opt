@@ -16,6 +16,7 @@
 
 import { expandBlocksIntoConfiguration, expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
 import { listDesignVariablesFromBlocks, setDesignVariableValue } from './design-variables.ts';
+import { getDoubletBendingCurrentValue, isDoubletBendingBlock } from './doublet-bending.ts';
 import { findSimilarGlassesByNdVd, getGlassDataWithSellmeier } from '../data/glass.ts';
 import { loadSystemConfigurations, saveSystemConfigurations } from '../data/table-configuration.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
@@ -2862,9 +2863,6 @@ function getBendingConfigForOptimizer(block) {
   if (blockType === 'Lens' || blockType === 'PositiveLens') {
     return { radiusAKey: 'frontRadius', radiusBKey: 'backRadius' };
   }
-  if (blockType === 'Doublet') {
-    return { radiusAKey: 'radius1', radiusBKey: 'radius3' };
-  }
   return null;
 }
 
@@ -2886,6 +2884,9 @@ function getOptimizerBlockValue(block, key) {
 
 function computeLensBendingValueForOptimizer(block) {
   if (!isPlainObject(block)) return '';
+  if (isDoubletBendingBlock(block)) {
+    return getDoubletBendingCurrentValue(block);
+  }
   const config = getBendingConfigForOptimizer(block);
   if (!config) return '';
 

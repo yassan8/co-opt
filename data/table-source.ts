@@ -6,6 +6,8 @@ declare global {
 }
 const w: Record<string, any> = window;
 
+import { getOrCreateCooptWindowSyncSenderId } from '../core/window-facade.ts';
+
 // メモ　物体高だけでなく画角も扱えるようにする
 
 interface SourceRow {
@@ -900,7 +902,7 @@ function notifyPrimaryWavelengthChanged(): void {
   // direct access to their window handles.
   try {
     const payloadToken = `${Date.now()}-primary-wavelength`;
-    const payload = { ts: payloadToken, token: payloadToken, rows: [] };
+    const payload = { ts: payloadToken, token: payloadToken, rows: [], senderId: getOrCreateCooptWindowSyncSenderId() };
     localStorage.setItem('coopt.renderSyncRequest', JSON.stringify(payload));
   } catch (_) {}
 

@@ -1166,6 +1166,14 @@ export class UndoHistory {
 
   private logOptimizationUndoDebug(reason: string): void {
     try {
+      const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+      if (!(g && g.__COOPT_DEBUG_OPTIMIZATION_UNDO === true)) {
+        return;
+      }
+    } catch (_) {
+      return;
+    }
+    try {
       const recentUndo = this.undoStack.slice(-4).map((command, index) => ({
         index: this.undoStack.length - Math.min(4, this.undoStack.length) + index,
         ...this.describeCommand(command),

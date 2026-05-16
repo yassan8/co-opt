@@ -87,6 +87,7 @@ function normalizeAstigmatismObjectRowsForImageHeight(objectRows: any[], optical
                     return {
                         ...normalizedRow,
                         ...effective,
+                        position: effective?.__cooptEffectivePosition ?? effective?.position ?? normalizedRow.position,
                         __cooptOriginalPosition: normalizedRow.position,
                     };
                 }

@@ -10,6 +10,7 @@ import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
 import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, readDesktopSetting, recommendWavefrontGrid, runAnalysisPreview, writeDesktopSetting } from '../src/desktop/ipc/client.ts';
+import { getOrCreateCooptWindowSyncSenderId } from '../core/window-facade.ts';
 import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.ts';
 import { buildShareUrlFromCompressedString, encodeAllDataToCompressedString } from '../utils/url-share.ts';
 
@@ -22,6 +23,106 @@ const w: Record<string, any> = window;
 
 const FORCE_INFINITE_PUPIL_MODE_KEY = 'coopt.forceInfinitePupilMode';
 const FORCE_INFINITE_PUPIL_MODE_EVENT = 'coopt-force-infinite-pupil-mode-changed';
+const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
+
+function buildLiveRenderSyncPayload(reason = 'render-open') {
+  let rows: any[] = [];
+  let objectRows: any[] = [];
+  let systemConfig: any = null;
+
+  try {
+    const runtimeSystemConfig = typeof w.loadSystemConfigurations === 'function'
+      ? w.loadSystemConfigurations()
+      : loadSystemConfigurations();
+    try {
+      systemConfig = JSON.parse(JSON.stringify(runtimeSystemConfig));
+    } catch (_) {
+      systemConfig = runtimeSystemConfig ?? null;
+    }
+    const activeConfig = Array.isArray(runtimeSystemConfig?.configurations)
+      ? (runtimeSystemConfig.configurations.find((cfg: any) => String(cfg?.id ?? '') === String(runtimeSystemConfig?.activeConfigId ?? ''))
+        || runtimeSystemConfig.configurations[0]
+        || null)
+      : null;
+
+    if (Array.isArray(activeConfig?.object) && activeConfig.object.length > 0) {
+      objectRows = activeConfig.object.slice();
+    }
+
+    const activeBlocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
+    if (activeBlocks.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
+      const expanded = w.expandBlocksToOpticalSystemRows(activeBlocks);
+      const expandedRows = expanded && Array.isArray(expanded.rows) ? expanded.rows : [];
+      if (expandedRows.length > 0) {
+        rows = expandedRows.slice();
+      }
+    }
+
+    if (rows.length === 0 && Array.isArray(activeConfig?.opticalSystem) && activeConfig.opticalSystem.length > 0) {
+      rows = activeConfig.opticalSystem.slice();
+    }
+  } catch (_) {}
+
+  if (rows.length === 0) {
+    rows = (window as any).getOpticalSystemRows && typeof (window as any).getOpticalSystemRows === 'function'
+      ? ((window as any).getOpticalSystemRows((window as any).tableOpticalSystem) || [])
+      : [];
+  }
+
+  if (objectRows.length === 0) {
+    objectRows = (window as any).tableObject && typeof (window as any).tableObject.getData === 'function'
+      ? ((window as any).tableObject.getData() || [])
+      : [];
+  }
+
+  const token = `${Date.now()}-${reason}`;
+  return {
+    ts: token,
+    token,
+    rows: Array.isArray(rows) ? rows : [],
+    objectRows: Array.isArray(objectRows) ? objectRows : [],
+    systemConfig,
+    senderId: getOrCreateCooptWindowSyncSenderId(),
+  };
+}
+
+async function requestRenderWindowRefresh(targetWindow?: any, reason = 'render-open'): Promise<void> {
+  const payload = buildLiveRenderSyncPayload(reason);
+
+  try { localStorage.setItem(RENDER_DESIGN_INTENT_SYNC_KEY, 'true'); } catch (_) {}
+
+  try {
+    if (targetWindow && !targetWindow.closed) {
+      try { targetWindow.__cooptPendingRenderRows = payload.rows; } catch (_) {}
+      try { targetWindow.__cooptPendingRenderObjectRows = payload.objectRows; } catch (_) {}
+      try {
+        if (payload.systemConfig && typeof payload.systemConfig === 'object') {
+          targetWindow.__cooptPendingRenderSystemConfig = payload.systemConfig;
+          targetWindow.__cooptSystemConfig = payload.systemConfig;
+          targetWindow.__cooptPreferRuntimeSystemConfig = true;
+        }
+      } catch (_) {}
+      if (typeof targetWindow.__cooptRenderWindowRedraw === 'function') {
+        await Promise.resolve(targetWindow.__cooptRenderWindowRedraw(payload.rows, payload.token, payload.objectRows));
+      } else if (typeof targetWindow.postMessage === 'function') {
+        targetWindow.postMessage({ action: 'request-redraw', rows: payload.rows, objectRows: payload.objectRows, systemConfig: payload.systemConfig, ts: payload.token, token: payload.token }, '*');
+      }
+    }
+  } catch (_) {}
+
+  try {
+    localStorage.setItem('coopt.renderSyncRequest', JSON.stringify(payload));
+  } catch (_) {}
+
+  if (!isTauriRuntime()) return;
+
+  try {
+    const mod = await import('@tauri-apps/api/event');
+    if (mod && typeof (mod as any).emit === 'function') {
+      await (mod as any).emit('coopt-render-sync-request', payload);
+    }
+  } catch (_) {}
+}
 
 function sanitizeForceInfinitePupilMode(v: any): 'stop' | 'entrance' | '' {
   const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
@@ -628,15 +729,55 @@ export function handleLoad(): void {
     return;
   }
 
+  try {
+    if ((window as any).__cooptFileLoadInProgress) {
+      console.warn('⚠️ [Load] File load already in progress');
+      return;
+    }
+  } catch (_) {}
+
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.json';
   input.style.display = 'none';
+  let cleanedUp = false;
+
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    try {
+      input.value = '';
+    } catch (_) {}
+    try {
+      if (input.parentNode) {
+        input.parentNode.removeChild(input);
+      }
+    } catch (_) {}
+    try {
+      window.removeEventListener('focus', onWindowFocusAfterPicker, true);
+    } catch (_) {}
+  };
+
+  const onWindowFocusAfterPicker = () => {
+    window.setTimeout(() => {
+      try {
+        const hasFile = !!(input.files && input.files.length > 0);
+        if (!hasFile) {
+          cleanup();
+        }
+      } catch (_) {
+        cleanup();
+      }
+    }, 0);
+  };
   
   input.onchange = async (e: Event) => {
     const target = e.target as HTMLInputElement;
     const file = target?.files?.[0];
-    if (!file) return;
+    if (!file) {
+      cleanup();
+      return;
+    }
     
     try {
       const text = await file.text();
@@ -654,12 +795,14 @@ export function handleLoad(): void {
     } catch (err) {
       console.error('❌ Failed to load file:', err);
       alert(`Load failed: ${(err as Error)?.message || String(err)}`);
+    } finally {
+      cleanup();
     }
   };
   
   document.body.appendChild(input);
+  window.addEventListener('focus', onWindowFocusAfterPicker, true);
   input.click();
-  document.body.removeChild(input);
 }
 
 export function handleClearStorage(): void {
@@ -1688,6 +1831,8 @@ export function handleOptimize(): void {
 async function openRenderWindowDesktop(): Promise<void> {
   if (!isTauriRuntime()) return;
 
+  try { localStorage.setItem(RENDER_DESIGN_INTENT_SYNC_KEY, 'true'); } catch (_) {}
+
   console.log('[Render3D][Desktop] openRenderWindowDesktop() called');
 
   const url = new URL(window.location.href);
@@ -1727,6 +1872,7 @@ async function openRenderWindowDesktop(): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('open_render_window', { url: finalUrl });
     if (await ensureRenderWindowVisible()) {
+      await requestRenderWindowRefresh(undefined, 'render-open-desktop');
       console.log('✅ [Render3D][Desktop] open_render_window invoke succeeded');
       return;
     }
@@ -1745,12 +1891,12 @@ async function openRenderWindowDesktop(): Promise<void> {
 
     if (existing) {
       try {
-        if (typeof existing.show === 'function') await existing.show();
-        if (typeof existing.unminimize === 'function') await existing.unminimize();
-        await existing.setFocus();
-        return;
+        if (typeof existing.close === 'function') {
+          await existing.close();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 180));
       } catch (e) {
-        console.warn('[Render3D][Desktop] focus existing failed:', e);
+        console.warn('[Render3D][Desktop] close existing failed:', e);
         try { await existing.close(); } catch (_) {}
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
@@ -1765,6 +1911,7 @@ async function openRenderWindowDesktop(): Promise<void> {
       focus: true,
     });
     created.once('tauri://created', () => {
+      void requestRenderWindowRefresh(undefined, 'render-open-desktop-created');
       console.log('✅ [Render3D][Desktop] render window created via WebviewWindow');
     });
     created.once('tauri://error', (error) => {
@@ -1787,6 +1934,8 @@ export function handleRender3D(): void {
     return;
   }
   w.__render3DInProgress = true;
+
+  try { localStorage.setItem(RENDER_DESIGN_INTENT_SYNC_KEY, 'true'); } catch (_) {}
 
   try {
     if (isTauriRuntime()) {
@@ -1814,8 +1963,14 @@ export function handleRender3D(): void {
 
     try {
       if (w.popup3DWindow && !w.popup3DWindow.closed) {
-        try { w.popup3DWindow.focus(); } catch (_) {}
-        return;
+        try {
+          const cm = (window as any).ConfigurationManager;
+          if (cm && typeof cm.saveCurrentToActiveConfiguration === 'function') {
+            cm.saveCurrentToActiveConfiguration();
+          }
+        } catch (_) {}
+        try { w.popup3DWindow.close(); } catch (_) {}
+        w.popup3DWindow = null;
       }
 
       try {
@@ -1831,13 +1986,15 @@ export function handleRender3D(): void {
       url.searchParams.delete('coopt_analysis');
       url.searchParams.delete('coopt_settings_window');
       url.searchParams.set('coopt_render_window', '1');
+      url.searchParams.set('coopt_render_boot', String(Date.now()));
 
-      const popup = window.open(url.toString(), '3D Optical System', 'width=1100,height=760,resizable=yes,scrollbars=yes');
+      const popup = window.open(url.toString(), `3D Optical System ${Date.now()}`, 'width=1100,height=760,resizable=yes,scrollbars=yes');
       if (!popup) {
         alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
         return;
       }
       w.popup3DWindow = popup;
+      void requestRenderWindowRefresh(popup, 'render-open-popup-created');
       return;
     } catch (err) {
       console.error('❌ [Render3D] Failed to open popup render window:', err);

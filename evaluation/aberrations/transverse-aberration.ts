@@ -20,6 +20,28 @@ import { calculateEntrancePupilDiameter, calculateParaxialData } from '../../ray
 
 const TRANSVERSE_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__TRANSVERSE_DEBUG || globalThis.__OPD_DEBUG || globalThis.__PSF_DEBUG));
 
+function shouldEmitOptimizationWarning(key, intervalMs = 1500) {
+    try {
+        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        if (!(g && g.__cooptOptimizerIsRunning === true)) {
+            return true;
+        }
+        if (!g.__cooptOptimizationWarningThrottle || typeof g.__cooptOptimizationWarningThrottle !== 'object') {
+            g.__cooptOptimizationWarningThrottle = {};
+        }
+        const throttle = g.__cooptOptimizationWarningThrottle;
+        const now = Date.now();
+        const prev = Number(throttle[key] || 0);
+        if (Number.isFinite(prev) && now - prev < intervalMs) {
+            return false;
+        }
+        throttle[key] = now;
+        return true;
+    } catch (_) {
+        return true;
+    }
+}
+
 
 
 // Helper function to detect mirror surfaces
@@ -712,7 +734,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     
     if (!chiefRay) {
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-        if (!(g && g.__cooptRequirementRustProbe === true)) {
+        if (!(g && g.__cooptRequirementRustProbe === true) && shouldEmitOptimizationWarning('transverse-chief-ray-missing')) {
             console.warn('⚠️ 主光線が見つかりません');
         }
         return {
@@ -1099,7 +1121,9 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     if (!chiefRay) {
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
         if (!(g && g.__cooptRequirementRustProbe === true)) {
-            console.warn('⚠️ 主光線が見つかりません');
+            if (shouldEmitOptimizationWarning('transverse-chief-ray-missing')) {
+                console.warn('⚠️ 主光線が見つかりません');
+            }
         }
         return {
             fieldSetting: fieldSetting,
@@ -2954,7 +2978,9 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
                 }
             }
             if (!(g && g.__cooptRequirementRustProbe === true)) {
-                console.warn('⚠️ 主光線が見つかりません');
+                if (shouldEmitOptimizationWarning('transverse-chief-ray-missing')) {
+                    console.warn('⚠️ 主光線が見つかりません');
+                }
             }
             return { 
                 success: false,

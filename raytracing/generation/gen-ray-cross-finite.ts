@@ -43,18 +43,57 @@ function fnv1a32(str) {
     return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+function stableCrossBeamCacheValue(value, seen = new WeakSet()) {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+
+    const valueType = typeof value;
+    if (valueType === 'number') {
+        if (Number.isNaN(value)) return 'NaN';
+        if (!Number.isFinite(value)) return value > 0 ? 'Infinity' : '-Infinity';
+        return String(value);
+    }
+    if (valueType === 'string' || valueType === 'boolean' || valueType === 'bigint') {
+        return String(value);
+    }
+    if (valueType === 'function' || valueType === 'symbol') {
+        return valueType;
+    }
+    if (value instanceof Date) {
+        return `Date:${value.toISOString()}`;
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map((item) => stableCrossBeamCacheValue(item, seen)).join(',')}]`;
+    }
+    if (valueType === 'object') {
+        if (seen.has(value)) return '[Circular]';
+        seen.add(value);
+        const keys = Object.keys(value)
+            .sort()
+            .filter((key) => !key.startsWith('__'));
+        const serialized = `{${keys.map((key) => `${key}:${stableCrossBeamCacheValue(value[key], seen)}`).join(',')}}`;
+        seen.delete(value);
+        return serialized;
+    }
+    return String(value);
+}
+
+function buildFiniteCrossBeamRowsSignature(opticalSystemRows) {
+    const rows = Array.isArray(opticalSystemRows) ? opticalSystemRows : [];
+    return fnv1a32(rows.map((row, index) => `${index}:${stableCrossBeamCacheValue(row)}`).join('|'));
+}
+
 const finiteChiefDirectionCache = new Map<string, { i: number; j: number; k: number } | null>();
+
+export function clearFiniteCrossBeamCaches(): void {
+    try {
+        finiteChiefDirectionCache.clear();
+    } catch (_) {}
+}
 
 function buildFiniteChiefDirectionCacheKey(objectPosition, stopCenter, stopSurfaceIndex, opticalSystemRows, wavelength) {
     try {
-        const rowsSig = fnv1a32(JSON.stringify((opticalSystemRows || []).map((row) => ({
-            t: row?.surfType ?? row?.['object type'] ?? row?.object ?? row?.type,
-            r: row?.radius,
-            th: row?.thickness,
-            k: row?.conic,
-            s: row?.semidia,
-            od: row?.objectRenderDistance
-        }))));
+        const rowsSig = buildFiniteCrossBeamRowsSignature(opticalSystemRows);
         return [
             rowsSig,
             Number(objectPosition?.x || 0).toFixed(10),
@@ -1378,6 +1417,18 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
         const allResults = [];
         const allTracedRays = [];
         const allCrossBeamRays = [];
+        const resolvedTargetSurfaceIndex = (() => {
+            const rows = Array.isArray(opticalSystemRows) ? opticalSystemRows : [];
+            if (Number.isInteger(Number(targetSurfaceIndex))) {
+                return Math.max(0, Math.min(Number(targetSurfaceIndex), Math.max(0, rows.length - 1)));
+            }
+            const imageIndex = rows.findIndex((row) => {
+                const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+                const normalized = String(raw ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+                return normalized === 'image' || normalized.startsWith('image');
+            });
+            return imageIndex >= 0 ? imageIndex : Math.max(0, rows.length - 1);
+        })();
 
         if (actualDebugMode) {
             console.log(`   Object数: ${objectPositions.length}, 光線数: ${rayCount}, クロスタイプ: ${crossType}`);
@@ -2093,9 +2144,13 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         pos: ray.position,
                         dir: ray.direction,
                         wavelength: wavelength
-                    }, 1.0);
+                    }, 1.0, null, resolvedTargetSurfaceIndex);
 
-                    if (Array.isArray(rayPath) && rayPath.length > 1) {
+                    const targetPoint = Array.isArray(rayPath)
+                        ? getRayPointAtSurfaceIndex(rayPath, opticalSystemRows, resolvedTargetSurfaceIndex)
+                        : null;
+
+                    if (Array.isArray(rayPath) && rayPath.length > 1 && targetPoint) {
                         if (actualDebugMode) {
                             console.log(`   → 成功: パス長${rayPath.length}点, 開始(${rayPath[0].x.toFixed(3)}, ${rayPath[0].y.toFixed(3)}, ${rayPath[0].z.toFixed(3)}) → 終了(${rayPath[rayPath.length-1].x.toFixed(3)}, ${rayPath[rayPath.length-1].y.toFixed(3)}, ${rayPath[rayPath.length-1].z.toFixed(3)})`);
                         }
@@ -2117,7 +2172,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         tracedRays.push({
                             success: false,
                             originalRay: ray,
-                            error: `Ray path too short: ${rayPathLength(rayPath)} points`,
+                            error: targetPoint ? `Ray path too short: ${rayPathLength(rayPath)} points` : 'Ray did not reach target surface',
                             objectIndex: actualObjectIndex
                         });
                     }

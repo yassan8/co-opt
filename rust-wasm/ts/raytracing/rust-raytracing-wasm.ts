@@ -80,6 +80,54 @@ export type RustRayTracingWasm = {
     initialStep: number,
     maxStep: number,
   ) => Float64Array | number[];
+  solve_image_height_pair_with_rows?: (
+    opticalSystemRows: any[],
+    imageSurfaceIndex: number,
+    wavelengthUm: number,
+    conjugateMode: number,
+    targetX: number,
+    targetY: number,
+    initialX: number,
+    initialY: number,
+  ) => Float64Array | number[];
+  solve_image_height_pair_exact_with_rows?: (
+    opticalSystemRows: any[],
+    imageSurfaceIndex: number,
+    wavelengthUm: number,
+    conjugateMode: number,
+    targetX: number,
+    targetY: number,
+    initialX: number,
+    initialY: number,
+  ) => Float64Array | number[];
+  trace_image_height_infinite_candidate_with_rows?: (
+    opticalSystemRows: any[],
+    imageSurfaceIndex: number,
+    wavelengthUm: number,
+    angleXDeg: number,
+    angleYDeg: number,
+  ) => Float64Array | number[];
+  trace_image_height_infinite_candidate_exact_with_rows?: (
+    opticalSystemRows: any[],
+    imageSurfaceIndex: number,
+    wavelengthUm: number,
+    angleXDeg: number,
+    angleYDeg: number,
+  ) => Float64Array | number[];
+  trace_image_height_infinite_chief_ray_exact_with_rows?: (
+    opticalSystemRows: any[],
+    imageSurfaceIndex: number,
+    wavelengthUm: number,
+    angleXDeg: number,
+    angleYDeg: number,
+  ) => Float64Array | number[];
+  trace_image_height_finite_candidate_with_rows?: (
+    opticalSystemRows: any[],
+    imageSurfaceIndex: number,
+    wavelengthUm: number,
+    objectX: number,
+    objectY: number,
+  ) => Float64Array | number[];
   fft_2d_forward: (realPtr: number, imagPtr: number, rows: number, cols: number, realOutPtr: number, imagOutPtr: number) => any;
   fft_2d_inverse: (realPtr: number, imagPtr: number, rows: number, cols: number, realOutPtr: number, imagOutPtr: number) => any;
   fft_2d_forward_arrays?: (real: Float64Array, imag: Float64Array, rows: number, cols: number) => { real: Float64Array; imag: Float64Array; meta?: any };
@@ -305,6 +353,12 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           trace_ray_batch_hit_point_with_meta: mod.trace_ray_batch_hit_point_with_meta,
           solve_ray_origins_to_stop_points_with_meta_batch: mod.solve_ray_origins_to_stop_points_with_meta_batch,
           solve_image_height_component_with_rows: mod.solve_image_height_component_with_rows,
+          solve_image_height_pair_with_rows: mod.solve_image_height_pair_with_rows,
+          solve_image_height_pair_exact_with_rows: mod.solve_image_height_pair_exact_with_rows,
+          trace_image_height_infinite_candidate_with_rows: mod.trace_image_height_infinite_candidate_with_rows,
+          trace_image_height_infinite_candidate_exact_with_rows: mod.trace_image_height_infinite_candidate_exact_with_rows,
+          trace_image_height_infinite_chief_ray_exact_with_rows: mod.trace_image_height_infinite_chief_ray_exact_with_rows,
+          trace_image_height_finite_candidate_with_rows: mod.trace_image_height_finite_candidate_with_rows,
           fft_2d_forward: mod.fft_2d_forward,
           fft_2d_inverse: mod.fft_2d_inverse,
           fft_2d_forward_arrays: mod.fft_2d_forward_arrays,

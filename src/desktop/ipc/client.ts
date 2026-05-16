@@ -147,16 +147,26 @@ async function normalizeTransverseObjectRowsForImageHeight(
   objectRows: any[],
   explicitWavelength?: number,
 ): Promise<any[]> {
+  const parseFiniteNumber = (value: unknown): number | null => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
   const rows = Array.isArray(objectRows) ? objectRows : [];
   if (rows.length === 0) return [];
 
   const normalizedRows = rows.map((row) => {
     if (!row || typeof row !== "object") return row;
     const normalizedRow = { ...row } as any;
+    const targetX = normalizedRow?.__cooptImageHeightTarget?.x;
+    const targetY = normalizedRow?.__cooptImageHeightTarget?.y;
     if (normalizedRow.xHeightAngle == null && normalizedRow["object x"] != null) normalizedRow.xHeightAngle = normalizedRow["object x"];
     if (normalizedRow.yHeightAngle == null && normalizedRow["object y"] != null) normalizedRow.yHeightAngle = normalizedRow["object y"];
+    if (normalizedRow.xHeightAngle == null && normalizedRow.xHeight != null) normalizedRow.xHeightAngle = normalizedRow.xHeight;
+    if (normalizedRow.yHeightAngle == null && normalizedRow.yHeight != null) normalizedRow.yHeightAngle = normalizedRow.yHeight;
     if (normalizedRow.xHeightAngle == null && normalizedRow.x != null) normalizedRow.xHeightAngle = normalizedRow.x;
     if (normalizedRow.yHeightAngle == null && normalizedRow.y != null) normalizedRow.yHeightAngle = normalizedRow.y;
+    if (normalizedRow.xHeightAngle == null && targetX != null) normalizedRow.xHeightAngle = targetX;
+    if (normalizedRow.yHeightAngle == null && targetY != null) normalizedRow.yHeightAngle = targetY;
     if (normalizedRow.position == null && normalizedRow.objectType != null) normalizedRow.position = normalizedRow.objectType;
     return normalizedRow;
   });
@@ -179,12 +189,27 @@ async function normalizeTransverseObjectRowsForImageHeight(
     const posNorm = String((row as any)?.position ?? "").trim().toLowerCase();
     if (posNorm !== "imageheight") return row;
 
+    const preservedTarget = {
+      x: parseFiniteNumber((row as any)?.__cooptImageHeightTarget?.x)
+        ?? parseFiniteNumber((row as any)?.xHeight)
+        ?? parseFiniteNumber((row as any)?.x)
+        ?? parseFiniteNumber((row as any)?.["object x"])
+        ?? 0,
+      y: parseFiniteNumber((row as any)?.__cooptImageHeightTarget?.y)
+        ?? parseFiniteNumber((row as any)?.yHeight)
+        ?? parseFiniteNumber((row as any)?.y)
+        ?? parseFiniteNumber((row as any)?.["object y"])
+        ?? 0,
+    };
+
     try {
       const effective = convertImageHeightToEffectiveObject(row, opticalSystemRows, wavelength, conjugateType);
       if (effective && typeof effective === "object") {
         return {
           ...row,
           ...effective,
+          __cooptImageHeightTarget: preservedTarget,
+          position: (effective as any)?.__cooptEffectivePosition ?? (effective as any)?.position ?? (row as any)?.position,
           __cooptOriginalPosition: row.position,
         };
       }
@@ -192,7 +217,11 @@ async function normalizeTransverseObjectRowsForImageHeight(
       // Fall through to the original row so the existing path still runs.
     }
 
-    return row;
+    return {
+      ...row,
+      __cooptImageHeightTarget: preservedTarget,
+      __cooptOriginalPosition: row.position,
+    };
   });
 }
 
@@ -1470,7 +1499,13 @@ export async function runNativeOpdMap(
     if (opticalSystemRows.length === 0) throw new Error("runNativeOpdMap(web): opticalSystemRows is empty");
 
     const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
-    const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
+    const inputObjectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
+    const objectRows = await normalizeTransverseObjectRowsForImageHeight(
+      opticalSystemRows,
+      sourceRows,
+      inputObjectRows,
+      Number(payload?.wavelengthUm),
+    );
     const objectIndex = Number.isInteger(payload?.objectIndex) ? Math.max(0, Number(payload.objectIndex)) : 0;
     const selectedObject = objectRows[objectIndex] || objectRows[0] || {};
 
@@ -2399,6 +2434,7 @@ export async function runNativeThroughFocusMtfMap(
 export async function runNativeFieldMtfMap(
   payload: NativeFieldMtfMapRequest,
 ): Promise<NativeFieldMtfMapResponse> {
+  const preferSharedFieldMtfRoute = true;
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
   const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
@@ -2406,14 +2442,21 @@ export async function runNativeFieldMtfMap(
   const normalizedInputObjectRows = objectRows.map((row) => {
     if (!row || typeof row !== "object") return row;
     const normalizedRow = { ...row } as any;
+    const targetX = normalizedRow?.__cooptImageHeightTarget?.x;
+    const targetY = normalizedRow?.__cooptImageHeightTarget?.y;
     if (normalizedRow.xHeightAngle == null && normalizedRow["object x"] != null) normalizedRow.xHeightAngle = normalizedRow["object x"];
     if (normalizedRow.yHeightAngle == null && normalizedRow["object y"] != null) normalizedRow.yHeightAngle = normalizedRow["object y"];
+    if (normalizedRow.xHeightAngle == null && normalizedRow.xHeight != null) normalizedRow.xHeightAngle = normalizedRow.xHeight;
+    if (normalizedRow.yHeightAngle == null && normalizedRow.yHeight != null) normalizedRow.yHeightAngle = normalizedRow.yHeight;
     if (normalizedRow.xHeightAngle == null && normalizedRow.x != null) normalizedRow.xHeightAngle = normalizedRow.x;
     if (normalizedRow.yHeightAngle == null && normalizedRow.y != null) normalizedRow.yHeightAngle = normalizedRow.y;
+    if (normalizedRow.xHeightAngle == null && targetX != null) normalizedRow.xHeightAngle = targetX;
+    if (normalizedRow.yHeightAngle == null && targetY != null) normalizedRow.yHeightAngle = targetY;
     if (normalizedRow.position == null && normalizedRow.objectType != null) normalizedRow.position = normalizedRow.objectType;
     return normalizedRow;
   });
   const hasImageHeightObjectRows = normalizedInputObjectRows.some((row) => String((row as any)?.position ?? "").trim().toLowerCase() === "imageheight");
+  const sampleFromObjectRows = payload?.sampleFromObjectRows === true && normalizedInputObjectRows.length > 0;
 
   const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 256;
   const zeroPadToRaw = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : 0;
@@ -2435,37 +2478,13 @@ export async function runNativeFieldMtfMap(
   const fieldMax = Math.max(fieldMinRaw, fieldMaxRaw);
   const steps = Number.isFinite(Number(payload?.steps)) ? Math.max(3, Math.floor(Number(payload?.steps))) : 21;
   const opdDisplayMode = String(payload?.opdDisplayMode || "pistonTiltRemoved");
-  let requestedPupilSamplingMode = (payload?.pupilSamplingMode === "stop" || payload?.pupilSamplingMode === "entrance")
+  const hasExplicitPupilSamplingMode = payload?.pupilSamplingMode === "stop" || payload?.pupilSamplingMode === "entrance";
+  const requestedPupilSamplingMode = hasExplicitPupilSamplingMode
     ? payload.pupilSamplingMode
-    : undefined;
-  if (!(requestedPupilSamplingMode === "stop" || requestedPupilSamplingMode === "entrance")) {
-    try {
-      const getter = (globalThis as any)?.__cooptGetForceInfinitePupilMode;
-      const fromGetter = typeof getter === "function" ? String(getter() || "").trim().toLowerCase() : "";
-      if (fromGetter === "stop" || fromGetter === "entrance") {
-        requestedPupilSamplingMode = fromGetter as ("stop" | "entrance");
-      }
-    } catch (_) {}
-  }
-  if (!(requestedPupilSamplingMode === "stop" || requestedPupilSamplingMode === "entrance")) {
-    try {
-      const fromGlobal = String((globalThis as any)?.__COOPT_FORCE_INFINITE_PUPIL_MODE || (globalThis as any)?.COOPT_FORCE_INFINITE_PUPIL_MODE || "").trim().toLowerCase();
-      if (fromGlobal === "stop" || fromGlobal === "entrance") {
-        requestedPupilSamplingMode = fromGlobal as ("stop" | "entrance");
-      }
-    } catch (_) {}
-  }
-  if (!(requestedPupilSamplingMode === "stop" || requestedPupilSamplingMode === "entrance")) {
-    try {
-      const fromStorage = String(localStorage.getItem("coopt.forceInfinitePupilMode") || "").trim().toLowerCase();
-      if (fromStorage === "stop" || fromStorage === "entrance") {
-        requestedPupilSamplingMode = fromStorage as ("stop" | "entrance");
-      }
-    } catch (_) {}
-  }
+    : "entrance";
   const onProgress = typeof (payload as any)?.onProgress === "function" ? (payload as any).onProgress : null;
 
-  if (isTauriRuntime() && !hasImageHeightObjectRows) {
+  if (!preferSharedFieldMtfRoute && isTauriRuntime() && !hasImageHeightObjectRows) {
     try {
       return await invokeCommand<NativeFieldMtfMapRequest, NativeFieldMtfMapResponse>(
         "run_native_field_mtf_map",
@@ -2517,7 +2536,64 @@ export async function runNativeFieldMtfMap(
     }
   };
 
-  const xAxis = Array.from({ length: steps }, (_, i) => {
+  let lastProgressYieldAt = 0;
+  const maybeYieldForProgressPaint = async () => {
+    const now = (typeof performance !== "undefined" && typeof performance.now === "function")
+      ? performance.now()
+      : Date.now();
+    if ((now - lastProgressYieldAt) < 12) return;
+    lastProgressYieldAt = now;
+    await new Promise<void>((resolve) => {
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => resolve());
+        return;
+      }
+      setTimeout(resolve, 0);
+    });
+  };
+
+  const suppressFieldCurveOutliersInPlace = ({
+    diagnostics,
+    curves,
+  }: {
+    diagnostics: any[];
+    curves: number[][];
+  }): number => {
+    if (!Array.isArray(curves) || curves.length === 0) return 0;
+    const usableCurves = curves.filter((curve) => Array.isArray(curve) && curve.length >= 3);
+    if (usableCurves.length === 0) return 0;
+    let suppressed = 0;
+    const annotateSuppressed = (index: number, reason: string, curveIndex: number) => {
+      const diag = diagnostics[index];
+      if (!diag || typeof diag !== "object") return;
+      diag.outlierSuppressed = true;
+      const existingReason = Array.isArray(diag.outlierReasons) ? diag.outlierReasons.slice() : [];
+      existingReason.push(`${curveIndex}:${reason}`);
+      diag.outlierReasons = existingReason;
+    };
+
+    for (let curveIndex = 0; curveIndex < usableCurves.length; curveIndex += 1) {
+      const curve = usableCurves[curveIndex];
+      for (let index = 1; index < curve.length - 1; index += 1) {
+        const prev = Number(curve[index - 1]);
+        const cur = Number(curve[index]);
+        const next = Number(curve[index + 1]);
+        if (!(Number.isFinite(prev) && Number.isFinite(cur) && Number.isFinite(next))) continue;
+        const neighborMax = Math.max(prev, next);
+        const neighborMin = Math.min(prev, next);
+        const neighborSpread = Math.abs(prev - next);
+        const isolatedPeak = (cur - neighborMax) > 0.18 && neighborSpread <= 0.04;
+        const isolatedDip = (neighborMin - cur) > 0.18 && neighborSpread <= 0.04;
+        if (!(isolatedPeak || isolatedDip)) continue;
+        curve[index] = Number.NaN;
+        annotateSuppressed(index, isolatedPeak ? "single-point-peak" : "single-point-dip", curveIndex);
+        suppressed += 1;
+      }
+    }
+    return suppressed;
+  };
+
+  const syntheticXAxis = Array.from({ length: steps }, (_, i) => {
     if (steps <= 1) return fieldMin;
     const t = i / (steps - 1);
     return fieldMin + t * (fieldMax - fieldMin);
@@ -2530,6 +2606,85 @@ export async function runNativeFieldMtfMap(
     if (out.length > 0) return out;
     return [getPrimaryWavelengthUm(sourceRows as any[], 0.5876)];
   })();
+
+  const cloneObjectRowsForCall = (rows: any[]): any[] => rows.map((r: any) => {
+    try { return JSON.parse(JSON.stringify(r)); } catch (_) { return { ...(r || {}) }; }
+  });
+
+  const getFieldValueFromObjectRow = (row: any): number => {
+    const setting = buildTransverseFieldSettingsFromObjectRows([row])?.[0] || {};
+    const raw = axisMode === "angle"
+      ? Number(setting?.yFieldAngle ?? setting?.fieldAngle)
+      : Number(setting?.yHeight);
+    return Number.isFinite(raw) ? raw : 0;
+  };
+
+  const buildObjectRowSamples = async (wavelengthUm: number): Promise<Array<{ fieldValue: number; objectRowIndex: number; objectRowsForCall: any[]; fieldVector: { x: number; y: number } }>> => {
+    const normalizedRows = await normalizeTransverseObjectRowsForImageHeight(
+      opticalSystemRows,
+      sourceRows,
+      normalizedInputObjectRows,
+      wavelengthUm,
+    );
+    if (normalizedRows.length === 0) {
+      return syntheticXAxis.map((fieldValue) => ({
+        fieldValue,
+        objectRowIndex: 0,
+        objectRowsForCall: cloneObjectRowsForCall(cloneObjectRowsForField(fieldValue, wavelengthUm, axisMode, 0)),
+        fieldVector: { x: 0, y: fieldValue },
+      }));
+    }
+    return normalizedRows
+      .map((row, index) => {
+        const sourceRow = normalizedInputObjectRows[index] && typeof normalizedInputObjectRows[index] === "object"
+          ? normalizedInputObjectRows[index]
+          : row;
+        const sourcePosNorm = String((sourceRow as any)?.position ?? (sourceRow as any)?.object ?? (sourceRow as any)?.objectType ?? "").trim().toLowerCase();
+        const imageHeightFieldX = Number(
+          (sourceRow as any)?.__cooptImageHeightTarget?.x
+          ?? (sourceRow as any)?.xHeight
+          ?? (sourceRow as any)?.x
+          ?? (sourceRow as any)?.["object x"]
+          ?? 0,
+        ) || 0;
+        const imageHeightFieldY = Number(
+          (sourceRow as any)?.__cooptImageHeightTarget?.y
+          ?? (sourceRow as any)?.yHeight
+          ?? (sourceRow as any)?.y
+          ?? (sourceRow as any)?.["object y"]
+          ?? 0,
+        ) || 0;
+        const fieldValue = axisMode === "height" && sourcePosNorm === "imageheight"
+          ? imageHeightFieldY
+          : getFieldValueFromObjectRow(row);
+        const fieldX = axisMode === "height" && sourcePosNorm === "imageheight"
+          ? imageHeightFieldX
+          : (Number((row as any)?.__cooptImageHeightTarget?.x ?? (row as any)?.xHeight ?? (row as any)?.x ?? (row as any)?.xHeightAngle ?? 0) || 0);
+        const fieldY = axisMode === "height" && sourcePosNorm === "imageheight"
+          ? imageHeightFieldY
+          : (Number((row as any)?.__cooptImageHeightTarget?.y ?? (row as any)?.yHeight ?? (row as any)?.y ?? (row as any)?.yHeightAngle ?? fieldValue) || fieldValue);
+        return {
+          fieldValue,
+          objectRowIndex: index,
+          objectRowsForCall: cloneObjectRowsForCall(normalizedRows),
+          fieldVector: { x: fieldX, y: fieldY },
+        };
+      })
+      .filter((sample) => Number.isFinite(sample.fieldValue))
+      .sort((a, b) => a.fieldValue - b.fieldValue || a.objectRowIndex - b.objectRowIndex);
+  };
+
+  const objectRowSamples = sampleFromObjectRows
+    ? await buildObjectRowSamples(wavelengths[0])
+    : [];
+  const xAxis = sampleFromObjectRows ? syntheticXAxis : syntheticXAxis;
+
+  const resampleCurveOntoXAxis = (sourceAxis: number[], sourceValues: number[], targetAxis: number[]): number[] => {
+    if (!Array.isArray(sourceAxis) || !Array.isArray(sourceValues) || sourceAxis.length === 0 || sourceAxis.length !== sourceValues.length) {
+      return targetAxis.map(() => Number.NaN);
+    }
+    return targetAxis.map((target) => interpolateAxisValue(sourceAxis, sourceValues, target));
+  };
 
   let imageHeightConjugateType: "finite" | "infinite" | null = null;
   let convertImageHeightToEffectiveObjectFn: null | ((obj: any, opticalRows: any[], wavelengthUm: number, conjugateType: "finite" | "infinite") => any) = null;
@@ -2544,7 +2699,7 @@ export async function runNativeFieldMtfMap(
     convertImageHeightToEffectiveObjectFn = convertImageHeightToEffectiveObject;
   }
 
-  const cloneObjectRowsForField = (fieldValue: number, wavelengthUm?: number, axisModeOverride: "angle" | "height" = axisMode): any[] => {
+  const cloneObjectRowsForField = (fieldValue: number, wavelengthUm?: number, axisModeOverride: "angle" | "height" = axisMode, targetObjectIndex: number = objectIndex): any[] => {
     const cloned = Array.isArray(normalizedInputObjectRows)
       ? normalizedInputObjectRows.map((r: any) => {
           try { return JSON.parse(JSON.stringify(r)); } catch (_) { return { ...(r || {}) }; }
@@ -2555,7 +2710,7 @@ export async function runNativeFieldMtfMap(
         ? { name: "AutoField0", position: "Angle", xHeightAngle: 0, yHeightAngle: fieldValue, x: 0, y: fieldValue }
         : { name: "AutoField0", position: "Rectangle", xHeight: 0, yHeight: fieldValue, x: 0, y: fieldValue });
     }
-    const idx = Math.max(0, Math.min(objectIndex, cloned.length - 1));
+    const idx = Math.max(0, Math.min(targetObjectIndex, cloned.length - 1));
     const row: any = cloned[idx] && typeof cloned[idx] === "object" ? cloned[idx] : {};
     const sourceRow: any = normalizedInputObjectRows[idx] && typeof normalizedInputObjectRows[idx] === "object" ? normalizedInputObjectRows[idx] : row;
     const originalPosNorm = String(sourceRow?.__cooptOriginalPosition ?? sourceRow?.position ?? sourceRow?.object ?? sourceRow?.objectType ?? "").trim().toLowerCase();
@@ -2613,19 +2768,48 @@ export async function runNativeFieldMtfMap(
     return /entrance.*fail|entrance pupil|entrance unreachable|No valid OPD samples|trace to eval failed/i.test(String(message || ""));
   };
 
+  const summarizeOpdCoverage = (response: any): { hitRate: number; hitCount: number; sampleCount: number } => {
+    const sampleCount = Number(response?.sampleCount || 0);
+    const hitCount = Number(response?.hitCount || 0);
+    const hitRate = sampleCount > 0 ? (hitCount / sampleCount) : 0;
+    return { hitRate, hitCount, sampleCount };
+  };
+
+  const isSparseOpdResponse = (response: any): boolean => {
+    const { hitRate, hitCount, sampleCount } = summarizeOpdCoverage(response);
+    if (!(sampleCount > 0) || !(hitCount > 0)) return true;
+    if (hitRate < 0.05) return true;
+    if (hitRate < 0.12 && hitCount < 4096) return true;
+    return false;
+  };
+
+  const withCoverageNote = (response: any, label: string): any => {
+    if (!response || typeof response !== "object") return response;
+    const { hitRate, hitCount, sampleCount } = summarizeOpdCoverage(response);
+    return {
+      ...response,
+      message: `${String(response?.message || "")}${response?.message ? " | " : ""}${label} (hit-rate=${hitRate.toFixed(3)}, hits=${hitCount}, samples=${sampleCount})`,
+    };
+  };
+
   const runFieldOpdWithRetry = async ({
     wl,
     fieldValue,
+    requestedObjectIndex,
+    objectRowsOverride,
     fixedTargetSurfaceIndex,
     fixedPupilRadiusMm,
     runNativeOpdWasmJson,
   }: {
     wl: number;
     fieldValue: number;
+    requestedObjectIndex?: number;
+    objectRowsOverride?: any[];
     fixedTargetSurfaceIndex?: number;
     fixedPupilRadiusMm?: number;
     runNativeOpdWasmJson?: ((json: string) => unknown) | null;
   }): Promise<{ response: any | null; errorMessage: string }> => {
+    const activeObjectIndex = Number.isFinite(Number(requestedObjectIndex)) ? Math.max(0, Math.floor(Number(requestedObjectIndex))) : objectIndex;
     const executeOpd = async ({
       objectRowsForCall,
       pupilSamplingMode,
@@ -2639,7 +2823,7 @@ export async function runNativeFieldMtfMap(
         opticalSystemRows,
         sourceRows,
         objectRows: objectRowsForCall,
-        objectIndex,
+        objectIndex: activeObjectIndex,
         surfaceIndex: fixedTargetSurfaceIndex,
         gridSize: samplingSize,
         wavelengthUm: wl,
@@ -2664,39 +2848,67 @@ export async function runNativeFieldMtfMap(
       pupilRadiusMm?: number;
     }): Promise<{ response: any | null; errorMessage: string }> => {
       const errors: string[] = [];
-      const primaryLabel = primaryMode || "auto";
-      try {
-        const response = await executeOpd({ objectRowsForCall, pupilSamplingMode: primaryMode, pupilRadiusMm });
-        return { response, errorMessage: "" };
-      } catch (err: any) {
-        errors.push(`${primaryLabel}=${String(err?.message || err || "field failed")}`);
+      let bestSparseResponse: any = null;
+      let bestSparseHitRate = -1;
+      const trySingleMode = async (mode: "stop" | "entrance" | undefined): Promise<any | null> => {
+        const label = mode || "auto";
+        try {
+          const response = await executeOpd({ objectRowsForCall, pupilSamplingMode: mode, pupilRadiusMm });
+          if (!isSparseOpdResponse(response)) {
+            return response;
+          }
+          const { hitRate } = summarizeOpdCoverage(response);
+          const sparseResponse = withCoverageNote(response, `sparse ${label} OPD samples`);
+          if (hitRate > bestSparseHitRate) {
+            bestSparseHitRate = hitRate;
+            bestSparseResponse = sparseResponse;
+          }
+          errors.push(`${label}=sparse(hitRate=${hitRate.toFixed(3)})`);
+          return null;
+        } catch (err: any) {
+          errors.push(`${label}=${String(err?.message || err || "field failed")}`);
+          return null;
+        }
+      };
+
+      const primaryResponse = await trySingleMode(primaryMode);
+      if (primaryResponse) {
+        return { response: primaryResponse, errorMessage: "" };
       }
 
-      if (!(requestedPupilSamplingMode === "stop" || requestedPupilSamplingMode === "entrance")) {
+      if (!hasExplicitPupilSamplingMode) {
         const fallbackModes: Array<"entrance" | "stop"> = [];
         if (primaryMode === "entrance") {
-          if (shouldRetryWithStop(errors[0])) fallbackModes.push("stop");
+          fallbackModes.push("stop");
         } else if (primaryMode === "stop") {
           fallbackModes.push("entrance");
         } else {
           fallbackModes.push("entrance", "stop");
         }
+        if (primaryMode === "entrance" && errors.length > 0 && !shouldRetryWithStop(errors[0])) {
+          fallbackModes.length = 0;
+          fallbackModes.push("stop");
+        }
 
         for (const fallbackMode of fallbackModes) {
-          try {
-            const response = await executeOpd({ objectRowsForCall, pupilSamplingMode: fallbackMode, pupilRadiusMm });
-            return { response, errorMessage: "" };
-          } catch (err: any) {
-            errors.push(`${fallbackMode}=${String(err?.message || err || "field failed")}`);
+          const fallbackResponse = await trySingleMode(fallbackMode);
+          if (fallbackResponse) {
+            return { response: fallbackResponse, errorMessage: "" };
           }
         }
+      }
+
+      if (bestSparseResponse) {
+        return { response: bestSparseResponse, errorMessage: errors.join(" ; ") || "field sparse" };
       }
 
       return { response: null, errorMessage: errors.join(" ; ") || "field failed" };
     };
 
     const isZeroField = !(Math.abs(Number(fieldValue)) > 1e-12);
-    const primaryObjectRows = cloneObjectRowsForField(fieldValue, wl);
+    const primaryObjectRows = Array.isArray(objectRowsOverride) && objectRowsOverride.length > 0
+      ? objectRowsOverride
+      : cloneObjectRowsForField(fieldValue, wl, axisMode, activeObjectIndex);
     // Always use entrance-pupil mode, including on-axis (zero field).
     // Stop-mode over-estimates the stop radius, causing ~85% ray failure and a sparse OPD grid
     // which produces a noisy PSF and jagged high-frequency MTF at every field height.
@@ -2713,7 +2925,7 @@ export async function runNativeFieldMtfMap(
 
     if (axisMode === "angle" && isZeroField) {
       const finiteResult = await tryFieldModes({
-        objectRowsForCall: cloneObjectRowsForField(0, wl, "height"),
+        objectRowsForCall: cloneObjectRowsForField(0, wl, "height", activeObjectIndex),
         primaryMode: requestedPupilSamplingMode,
         pupilRadiusMm: undefined,
       });
@@ -2728,16 +2940,28 @@ export async function runNativeFieldMtfMap(
     return primaryResult;
   };
 
-  const inferTanAxis = (fieldValue: number): "x" | "y" => (Math.abs(Number(fieldValue)) > 0 ? "y" : "x");
+  const inferTanAxis = (fieldValue: number, fieldVector?: { x?: number; y?: number }): "x" | "y" => {
+    const vx = Number(fieldVector?.x);
+    const vy = Number(fieldVector?.y);
+    if (Number.isFinite(vx) || Number.isFinite(vy)) {
+      const ax = Math.abs(Number.isFinite(vx) ? vx : 0);
+      const ay = Math.abs(Number.isFinite(vy) ? vy : 0);
+      if (ax > ay) return "x";
+      if (ay > ax) return "y";
+    }
+    return Math.abs(Number(fieldValue)) > 0 ? "y" : "x";
+  };
 
   const computeFieldCurveSamples = async ({
     psfData,
     pixelSizeUm,
     fieldValue,
+    fieldVector,
   }: {
     psfData: number[][];
     pixelSizeUm: number;
     fieldValue: number;
+    fieldVector?: { x?: number; y?: number };
   }): Promise<{
     firstM: number;
     firstS: number;
@@ -2757,7 +2981,7 @@ export async function runNativeFieldMtfMap(
     const freqAxis = Array.isArray((mtfResp as any)?.frequencyAxis) ? (mtfResp as any).frequencyAxis : [];
     const mtfTangential = Array.isArray((mtfResp as any)?.mtfTangential) ? (mtfResp as any).mtfTangential : [];
     const mtfSagittal = Array.isArray((mtfResp as any)?.mtfSagittal) ? (mtfResp as any).mtfSagittal : [];
-    const tanAxis = inferTanAxis(fieldValue);
+    const tanAxis = inferTanAxis(fieldValue, fieldVector);
     const tanVals = tanAxis === "x" ? mtfSagittal : mtfTangential;
     const sagVals = tanAxis === "x" ? mtfTangential : mtfSagittal;
 
@@ -2909,7 +3133,7 @@ export async function runNativeFieldMtfMap(
 
   // Try direct Rust/WASM field sweep first on desktop runtime.
   // On Web this path is usually slower than the legacy route, so skip it.
-  if (isTauriRuntime()) {
+  if (!preferSharedFieldMtfRoute && isTauriRuntime()) {
   try {
     const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
@@ -2929,17 +3153,20 @@ export async function runNativeFieldMtfMap(
       let completedPoints = 0;
 
       for (const wl of wavelengths) {
-        const meridionalFirst: number[] = [];
-        const sagittalFirst: number[] = [];
-        const meridionalSecond: number[] = [];
-        const sagittalSecond: number[] = [];
+        const activeSamples = sampleFromObjectRows ? await buildObjectRowSamples(wl) : xAxis.map((fieldValue) => ({ fieldValue, objectRowIndex: objectIndex, objectRowsForCall: [] as any[], fieldVector: { x: 0, y: fieldValue } }));
+        const sampleAxis = sampleFromObjectRows ? activeSamples.map((sample) => sample.fieldValue) : xAxis.slice();
+        const meridionalFirstRaw: number[] = [];
+        const sagittalFirstRaw: number[] = [];
+        const meridionalSecondRaw: number[] = [];
+        const sagittalSecondRaw: number[] = [];
         const fieldDiagnostics: any[] = [];
         const pixelSizeUm = await resolvePixelSizeUm(wl);
 
         let fixedTargetSurfaceIndex: number | undefined = undefined;
         // Pre-initialize from paraxial so every field (including on-axis) gets a
-        // correct pupil radius before the anchor call.  The anchor can still
-        // refine this if it successfully traces the max-field entrance pupil.
+        // stable entrance pupil estimate before the anchor call. Object-row
+        // sampling needs the same radius; otherwise off-axis fields often fall
+        // back to sparse OPD grids and collapse the MTF curve toward zero.
         const paraxialPupilRadiusMm = await resolveEntrancePupilRadiusMm(wl);
         let fixedPupilRadiusMm: number | undefined = (Number.isFinite(paraxialPupilRadiusMm) && paraxialPupilRadiusMm > 0)
           ? paraxialPupilRadiusMm
@@ -2950,8 +3177,8 @@ export async function runNativeFieldMtfMap(
         const anchorIndex = (() => {
           let idx = -1;
           let best = 0;
-          for (let i = 0; i < xAxis.length; i++) {
-            const v = Math.abs(Number(xAxis[i]));
+          for (let i = 0; i < activeSamples.length; i++) {
+            const v = Math.abs(Number(activeSamples[i]?.fieldValue));
             if (Number.isFinite(v) && v > best) { best = v; idx = i; }
           }
           return idx;
@@ -2960,15 +3187,18 @@ export async function runNativeFieldMtfMap(
           requestedPupilSamplingMode !== "stop"
           && anchorIndex >= 0;
         try {
-          const anchorFieldValue = anchorIndex >= 0 ? Number(xAxis[anchorIndex]) : 0;
-          const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue, wl);
+          const anchorSample = anchorIndex >= 0 ? activeSamples[anchorIndex] : null;
+          const anchorFieldValue = anchorSample ? Number(anchorSample.fieldValue) : 0;
+          const anchorObjectRows = anchorSample && anchorSample.objectRowsForCall.length > 0
+            ? anchorSample.objectRowsForCall
+            : cloneObjectRowsForField(anchorFieldValue, wl, axisMode, anchorSample?.objectRowIndex ?? objectIndex);
           const anchorAutoMode = "entrance";
           const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
           const anchorRaw = runNativeOpdWasm(JSON.stringify({
             opticalSystemRows,
             sourceRows,
             objectRows: anchorObjectRows,
-            objectIndex,
+            objectIndex: anchorSample?.objectRowIndex ?? objectIndex,
             surfaceIndex: undefined,
             gridSize: samplingSize,
             wavelengthUm: wl,
@@ -2986,16 +3216,18 @@ export async function runNativeFieldMtfMap(
           // keep sweep without fixed anchor
         }
 
-        for (let fieldIndex = 0; fieldIndex < xAxis.length; fieldIndex++) {
-          const fieldValue = xAxis[fieldIndex];
+        for (let fieldIndex = 0; fieldIndex < activeSamples.length; fieldIndex++) {
+          const sample = activeSamples[fieldIndex];
+          const fieldValue = sample.fieldValue;
           const overallIndex = completedPoints + 1;
           if (onProgress) {
             const pct = 5 + (overallIndex / totalPoints) * 90;
             const unit = axisMode === "height" ? "mm" : "deg";
             onProgress({
               percent: Math.max(5, Math.min(95, pct)),
-              message: `Computing Object MTF: λ=${(wl * 1000).toFixed(1)}nm, point ${fieldIndex + 1}/${xAxis.length} (${Number(fieldValue).toFixed(3)} ${unit})`,
+              message: `Computing Object MTF: λ=${(wl * 1000).toFixed(1)}nm, point ${fieldIndex + 1}/${activeSamples.length} (${Number(fieldValue).toFixed(3)} ${unit})`,
             });
+            await maybeYieldForProgressPaint();
           }
 
           let firstM = Number.NaN, firstS = Number.NaN, secondM = Number.NaN, secondS = Number.NaN;
@@ -3004,6 +3236,8 @@ export async function runNativeFieldMtfMap(
             const opdResult = await runFieldOpdWithRetry({
               wl,
               fieldValue,
+              requestedObjectIndex: sample.objectRowIndex,
+              objectRowsOverride: sample.objectRowsForCall,
               fixedTargetSurfaceIndex,
               fixedPupilRadiusMm,
               runNativeOpdWasmJson: runNativeOpdWasm,
@@ -3028,6 +3262,7 @@ export async function runNativeFieldMtfMap(
               psfData: psfResp?.psfData,
               pixelSizeUm,
               fieldValue,
+              fieldVector: sample.fieldVector,
             });
             firstM = samples.firstM;
             firstS = samples.firstS;
@@ -3037,10 +3272,10 @@ export async function runNativeFieldMtfMap(
             opdRespAny = { error: String(fieldErr?.message || fieldErr || "field failed") };
           }
 
-          meridionalFirst.push(Number.isFinite(firstM) ? firstM : Number.NaN);
-          sagittalFirst.push(Number.isFinite(firstS) ? firstS : Number.NaN);
-          meridionalSecond.push(Number.isFinite(secondM) ? secondM : Number.NaN);
-          sagittalSecond.push(Number.isFinite(secondS) ? secondS : Number.NaN);
+          meridionalFirstRaw.push(Number.isFinite(firstM) ? firstM : Number.NaN);
+          sagittalFirstRaw.push(Number.isFinite(firstS) ? firstS : Number.NaN);
+          meridionalSecondRaw.push(Number.isFinite(secondM) ? secondM : Number.NaN);
+          sagittalSecondRaw.push(Number.isFinite(secondS) ? secondS : Number.NaN);
 
           const sampleCount = Number(opdRespAny?.sampleCount || 0);
           const hitCount = Number(opdRespAny?.hitCount || 0);
@@ -3066,6 +3301,18 @@ export async function runNativeFieldMtfMap(
           completedPoints += 1;
         }
 
+        const meridionalFirst = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, meridionalFirstRaw, xAxis) : meridionalFirstRaw;
+        const sagittalFirst = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalFirstRaw, xAxis) : sagittalFirstRaw;
+        const meridionalSecond = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, meridionalSecondRaw, xAxis) : meridionalSecondRaw;
+        const sagittalSecond = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalSecondRaw, xAxis) : sagittalSecondRaw;
+
+        if (!sampleFromObjectRows) {
+          suppressFieldCurveOutliersInPlace({
+            diagnostics: fieldDiagnostics,
+            curves: [meridionalFirst, sagittalFirst, meridionalSecond, sagittalSecond],
+          });
+        }
+
         series.push({
           wavelengthUm: wl,
           label: `${(wl * 1000).toFixed(1)}nm`,
@@ -3076,10 +3323,12 @@ export async function runNativeFieldMtfMap(
           fieldDiagnostics,
         });
 
-        fillNaNGapsInPlace(meridionalFirst);
-        fillNaNGapsInPlace(sagittalFirst);
-        fillNaNGapsInPlace(meridionalSecond);
-        fillNaNGapsInPlace(sagittalSecond);
+        if (!sampleFromObjectRows) {
+          fillNaNGapsInPlace(meridionalFirst);
+          fillNaNGapsInPlace(sagittalFirst);
+          fillNaNGapsInPlace(meridionalSecond);
+          fillNaNGapsInPlace(sagittalSecond);
+        }
       }
 
       return {
@@ -3100,7 +3349,7 @@ export async function runNativeFieldMtfMap(
     // Pure paraxial/ThinLens systems must skip the raw WASM OPD path because the Rust fast path
     // does not apply the ideal thin-lens bend and returns incorrect (large) OPD values.
     // Force null so runFieldOpdWithRetry falls back to runNativeOpdMap which handles paraxial correctly.
-    if (!isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows)) try {
+    if (!preferSharedFieldMtfRoute && !isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows)) try {
       const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
       const rust = await preloadRustRayTracingWasm();
       const fn = (rust as any)?.run_native_opd_map_wasm_json;
@@ -3114,16 +3363,20 @@ export async function runNativeFieldMtfMap(
     let completedPoints = 0;
 
     for (const wl of wavelengths) {
-      const meridionalFirst: number[] = [];
-      const sagittalFirst: number[] = [];
-      const meridionalSecond: number[] = [];
-      const sagittalSecond: number[] = [];
+      const activeSamples = sampleFromObjectRows ? await buildObjectRowSamples(wl) : xAxis.map((fieldValue) => ({ fieldValue, objectRowIndex: objectIndex, objectRowsForCall: [] as any[], fieldVector: { x: 0, y: fieldValue } }));
+      const sampleAxis = sampleFromObjectRows ? activeSamples.map((sample) => sample.fieldValue) : xAxis.slice();
+      const meridionalFirstRaw: number[] = [];
+      const sagittalFirstRaw: number[] = [];
+      const meridionalSecondRaw: number[] = [];
+      const sagittalSecondRaw: number[] = [];
       const fieldDiagnostics: any[] = [];
       const requestedPixelSizeUm = await resolvePixelSizeUm(wl);
 
       let fixedTargetSurfaceIndex: number | undefined = undefined;
       // Pre-initialize from paraxial so every field (including on-axis) gets a
-      // correct pupil radius before the anchor call.
+      // stable entrance pupil estimate before the anchor call. Object-row
+      // sampling needs the same radius; otherwise off-axis fields often fall
+      // back to sparse OPD grids and collapse the MTF curve toward zero.
       const paraxialPupilRadiusMm = await resolveEntrancePupilRadiusMm(wl);
       let fixedPupilRadiusMm: number | undefined = (Number.isFinite(paraxialPupilRadiusMm) && paraxialPupilRadiusMm > 0)
         ? paraxialPupilRadiusMm
@@ -3131,8 +3384,8 @@ export async function runNativeFieldMtfMap(
       const anchorIndex = (() => {
         let idx = -1;
         let best = 0;
-        for (let i = 0; i < xAxis.length; i++) {
-          const v = Math.abs(Number(xAxis[i]));
+        for (let i = 0; i < activeSamples.length; i++) {
+          const v = Math.abs(Number(activeSamples[i]?.fieldValue));
           if (Number.isFinite(v) && v > best) { best = v; idx = i; }
         }
         return idx;
@@ -3141,15 +3394,18 @@ export async function runNativeFieldMtfMap(
         requestedPupilSamplingMode !== "stop"
         && anchorIndex >= 0;
       try {
-        const anchorFieldValue = anchorIndex >= 0 ? Number(xAxis[anchorIndex]) : 0;
-          const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue, wl);
+        const anchorSample = anchorIndex >= 0 ? activeSamples[anchorIndex] : null;
+        const anchorFieldValue = anchorSample ? Number(anchorSample.fieldValue) : 0;
+        const anchorObjectRows = anchorSample && anchorSample.objectRowsForCall.length > 0
+          ? anchorSample.objectRowsForCall
+          : cloneObjectRowsForField(anchorFieldValue, wl, axisMode, anchorSample?.objectRowIndex ?? objectIndex);
         const anchorAutoMode = "entrance";
         const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
         const anchorOpdResp: any = await runNativeOpdMap({
           opticalSystemRows,
           sourceRows,
           objectRows: anchorObjectRows,
-          objectIndex,
+          objectIndex: anchorSample?.objectRowIndex ?? objectIndex,
           surfaceIndex: undefined,
           gridSize: samplingSize,
           wavelengthUm: wl,
@@ -3166,16 +3422,18 @@ export async function runNativeFieldMtfMap(
         // Anchor is best-effort in web path.
       }
 
-      for (let fieldIndex = 0; fieldIndex < xAxis.length; fieldIndex++) {
-        const fieldValue = xAxis[fieldIndex];
+      for (let fieldIndex = 0; fieldIndex < activeSamples.length; fieldIndex++) {
+        const sample = activeSamples[fieldIndex];
+        const fieldValue = sample.fieldValue;
         const overallIndex = completedPoints + 1;
         if (onProgress) {
           const pct = 5 + (overallIndex / totalPoints) * 90;
           const unit = axisMode === "height" ? "mm" : "deg";
           onProgress({
             percent: Math.max(5, Math.min(95, pct)),
-            message: `Computing Object MTF: λ=${(wl * 1000).toFixed(1)}nm, point ${fieldIndex + 1}/${xAxis.length} (${Number(fieldValue).toFixed(3)} ${unit})`,
+            message: `Computing Object MTF: λ=${(wl * 1000).toFixed(1)}nm, point ${fieldIndex + 1}/${activeSamples.length} (${Number(fieldValue).toFixed(3)} ${unit})`,
           });
+          await maybeYieldForProgressPaint();
         }
 
         let firstM = Number.NaN;
@@ -3192,6 +3450,8 @@ export async function runNativeFieldMtfMap(
           const opdResult = await runFieldOpdWithRetry({
             wl,
             fieldValue,
+            requestedObjectIndex: sample.objectRowIndex,
+            objectRowsOverride: sample.objectRowsForCall,
             fixedTargetSurfaceIndex,
             fixedPupilRadiusMm,
             runNativeOpdWasmJson: runNativeOpdWasmDirect,
@@ -3241,6 +3501,7 @@ export async function runNativeFieldMtfMap(
             psfData: (psfResp as any)?.psfData,
             pixelSizeUm: effectivePixelSizeUm,
             fieldValue,
+              fieldVector: sample.fieldVector,
           });
           firstM = samples.firstM;
           firstS = samples.firstS;
@@ -3276,10 +3537,10 @@ export async function runNativeFieldMtfMap(
           opdRespAny = { error: String(fieldErr?.message || fieldErr || "field failed") };
         }
 
-        meridionalFirst.push(Number.isFinite(firstM) ? firstM : Number.NaN);
-        sagittalFirst.push(Number.isFinite(firstS) ? firstS : Number.NaN);
-        meridionalSecond.push(Number.isFinite(secondM) ? secondM : Number.NaN);
-        sagittalSecond.push(Number.isFinite(secondS) ? secondS : Number.NaN);
+        meridionalFirstRaw.push(Number.isFinite(firstM) ? firstM : Number.NaN);
+        sagittalFirstRaw.push(Number.isFinite(firstS) ? firstS : Number.NaN);
+        meridionalSecondRaw.push(Number.isFinite(secondM) ? secondM : Number.NaN);
+        sagittalSecondRaw.push(Number.isFinite(secondS) ? secondS : Number.NaN);
 
         const sampleCount = Number(opdRespAny?.sampleCount || 0);
         const hitCount = Number(opdRespAny?.hitCount || 0);
@@ -3310,10 +3571,22 @@ export async function runNativeFieldMtfMap(
         completedPoints += 1;
       }
 
-      fillNaNGapsInPlace(meridionalFirst);
-      fillNaNGapsInPlace(sagittalFirst);
-      fillNaNGapsInPlace(meridionalSecond);
-      fillNaNGapsInPlace(sagittalSecond);
+      const meridionalFirst = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, meridionalFirstRaw, xAxis) : meridionalFirstRaw;
+      const sagittalFirst = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalFirstRaw, xAxis) : sagittalFirstRaw;
+      const meridionalSecond = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, meridionalSecondRaw, xAxis) : meridionalSecondRaw;
+      const sagittalSecond = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalSecondRaw, xAxis) : sagittalSecondRaw;
+
+      if (!sampleFromObjectRows) {
+        suppressFieldCurveOutliersInPlace({
+          diagnostics: fieldDiagnostics,
+          curves: [meridionalFirst, sagittalFirst, meridionalSecond, sagittalSecond],
+        });
+
+        fillNaNGapsInPlace(meridionalFirst);
+        fillNaNGapsInPlace(sagittalFirst);
+        fillNaNGapsInPlace(meridionalSecond);
+        fillNaNGapsInPlace(sagittalSecond);
+      }
 
       series.push({
         wavelengthUm: wl,

@@ -84,7 +84,12 @@ function normalizeDistortionObjectRows(objectRows: any[], opticalSystemRows: any
         if (w && typeof w.convertImageHeightToEffectiveObject === 'function') {
           const effective = w.convertImageHeightToEffectiveObject(normalized, opticalSystemRows, wavelength, conjugateType);
           if (effective && typeof effective === 'object') {
-            return { ...normalized, ...effective, __cooptOriginalPosition: normalized.position };
+            return {
+              ...normalized,
+              ...effective,
+              position: effective?.__cooptEffectivePosition ?? effective?.position ?? normalized.position,
+              __cooptOriginalPosition: normalized.position,
+            };
           }
         }
       }
