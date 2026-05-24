@@ -11,12 +11,30 @@ export interface OptimizeStepRequest {
   maxIterations?: number;
   method?: OptimizerMethod;
   emitProgress?: boolean;
+  profile?: boolean;
   penaltyParameter?: number;
   penaltyIncreaseFactor?: number;
   lineSearchC?: number;
   lineSearchRho?: number;
   lineSearchMaxBacktrack?: number;
   dryRun?: boolean;
+}
+
+export interface OptimizeOperandProfileEntry {
+  key: string;
+  operand: string;
+  count: number;
+  cacheHits: number;
+  cacheMisses: number;
+  totalMs: number;
+  avgMs: number;
+  maxMs: number;
+}
+
+export interface OptimizeProfileReport {
+  evaluateStateCalls: number;
+  requirementPasses: number;
+  operandEntries: OptimizeOperandProfileEntry[];
 }
 
 export interface OptimizeProgressEvent {
@@ -49,6 +67,7 @@ export interface OptimizeStepResponse {
   optimizedRows: unknown[];
   progressEvents: OptimizeProgressEvent[];
   message: string;
+  profile?: OptimizeProfileReport | null;
 }
 
 export interface OptimizerDropSessionRequest {

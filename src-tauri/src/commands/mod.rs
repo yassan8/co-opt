@@ -4,6 +4,7 @@ pub mod gpu_fft;
 pub mod io;
 pub mod optics;
 pub mod optimizer;
+pub mod power;
 pub mod project;
 pub mod settings;
 pub mod window;

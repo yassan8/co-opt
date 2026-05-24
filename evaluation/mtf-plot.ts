@@ -68,7 +68,7 @@ function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []) {
 type MtfPlotOptions = {
     wavelengthMicrons?: number | string;
     objectIndex?: number;
-    objectOverride?: { xHeightAngle?: number; yHeightAngle?: number; position?: string; x?: number; y?: number } | null;
+    objectOverride?: Record<string, any> | null;
     maxFrequencyLpmm?: number;
     samplingSize?: number;
     samplingPoints?: number;
@@ -100,6 +100,7 @@ type ThroughFocusMtfOptions = {
 
 type FieldMtfOptions = {
     wavelengthMicrons?: number | string;
+    objectIndex?: number;
     firstFrequencyLpmm?: number;
     secondFrequencyLpmm?: number;
     fieldMin?: number;
@@ -1668,6 +1669,7 @@ async function showThroughFocusMTFDiagram({
 
 async function showFieldMTFDiagram({
     wavelengthMicrons,
+    objectIndex,
     firstFrequencyLpmm,
     secondFrequencyLpmm,
     fieldMin,
@@ -1764,6 +1766,73 @@ async function showFieldMTFDiagram({
 
     const axisUnit = (axisMode === 'angle') ? 'deg' : 'mm';
     const axisLabel = (axisMode === 'angle') ? 'Object Angle (deg)' : 'Object Height (mm)';
+    const objectRows = getObjectRows(window.tableObject);
+    const selectedObjectIndexRaw = Number.isFinite(Number(objectIndex)) ? Math.floor(Number(objectIndex)) : 0;
+    const selectedObjectIndex = Math.max(0, Math.min(selectedObjectIndexRaw, Math.max(0, objectRows.length - 1)));
+    const selectedObjectRow = (Array.isArray(objectRows) && objectRows[selectedObjectIndex])
+        ? objectRows[selectedObjectIndex]
+        : (objectRows?.[0] || null);
+
+    const cloneObjectRow = (row) => {
+        if (!row || typeof row !== 'object') return {};
+        try {
+            return JSON.parse(JSON.stringify(row));
+        } catch (_) {
+            return { ...row };
+        }
+    };
+
+    const buildFieldObjectOverride = (fieldValue) => {
+        const base = cloneObjectRow(selectedObjectRow);
+        const originalPosition = String(base?.__cooptOriginalPosition ?? base?.position ?? base?.object ?? base?.objectType ?? '').trim();
+        const originalPositionLower = originalPosition.toLowerCase();
+
+        if (axisMode === 'angle') {
+            return {
+                ...base,
+                position: 'Angle',
+                objectType: 'Angle',
+                x: 0,
+                y: fieldValue,
+                xHeightAngle: 0,
+                yHeightAngle: fieldValue,
+                __cooptOriginalPosition: originalPosition || base?.position || base?.object || base?.objectType || 'Angle'
+            };
+        }
+
+        if (originalPositionLower === 'imageheight') {
+            return {
+                ...base,
+                position: 'ImageHeight',
+                objectType: 'ImageHeight',
+                x: 0,
+                y: fieldValue,
+                xHeight: 0,
+                yHeight: fieldValue,
+                xHeightAngle: 0,
+                yHeightAngle: fieldValue,
+                __cooptOriginalPosition: originalPosition || 'ImageHeight',
+                __cooptImageHeightTarget: {
+                    ...(base?.__cooptImageHeightTarget && typeof base.__cooptImageHeightTarget === 'object' ? base.__cooptImageHeightTarget : {}),
+                    x: 0,
+                    y: fieldValue,
+                },
+            };
+        }
+
+        return {
+            ...base,
+            position: 'Rectangle',
+            objectType: 'Rectangle',
+            x: 0,
+            y: fieldValue,
+            xHeight: 0,
+            yHeight: fieldValue,
+            xHeightAngle: 0,
+            yHeightAngle: fieldValue,
+            __cooptOriginalPosition: originalPosition || base?.position || base?.object || base?.objectType || 'Rectangle'
+        };
+    };
 
     // 🔍 DEBUG: Log function entry
     ensureConsoleLog(`========== 🔍 showFieldMTFDiagram EXECUTION START ==========`);
@@ -1832,9 +1901,7 @@ async function showFieldMTFDiagram({
                     }
                 };
 
-                const objectOverride = (axisMode === 'angle')
-                    ? { x: 0, y: fieldValue, xHeightAngle: 0, yHeightAngle: fieldValue, position: 'Angle' }
-                    : { x: 0, y: fieldValue, xHeight: 0, yHeight: fieldValue, position: 'Rectangle' };
+                const objectOverride = buildFieldObjectOverride(fieldValue);
 
                 ensureConsoleLog(`\n🔄 [Object MTF] ===== ITERATION START =====`);
                 ensureConsoleLog(`📍 Batch ${batchNum}/${batchTotal}, Step ${index + 1}/${fieldValues.length}`);
@@ -1845,7 +1912,7 @@ async function showFieldMTFDiagram({
                     ensureConsoleLog(`   → Calling showMTFDiagram with objectOverride, expecting NEW OPD calculation`);
                     const result = await showMTFDiagram({
                         wavelengthMicrons,
-                        objectIndex: 0,
+                        objectIndex: selectedObjectIndex,
                         objectOverride,
                         maxFrequencyLpmm: Math.max(firstFreq, secondFreq) * 2,
                         samplingSize: sampling,

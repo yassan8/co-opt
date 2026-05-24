@@ -270,6 +270,39 @@ export interface NativeOpdMapResponse {
   message: string;
 }
 
+export interface NativeOpdRmsWavesRequest {
+  jobId?: string;
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+  objectIndex?: number;
+  surfaceIndex?: number;
+  gridSize?: number;
+  wavelengthUm?: number;
+  pupilRadiusMm?: number;
+  pupilSamplingMode?: "stop" | "entrance";
+  opdDisplayMode?: "raw" | "pistonTiltRemoved" | "pistonTiltDefocusRemoved";
+}
+
+export interface NativeOpdRmsWavesResponse {
+  backend: string;
+  chiefReferenceMode?: string;
+  targetSurface: number;
+  stopSurface: number;
+  requestedObjectIndex?: number;
+  usedObjectIndex: number;
+  usedObjectPosition: string;
+  usedObjectX: number;
+  usedObjectY: number;
+  wavelengthUm: number;
+  gridSize: number;
+  sampleCount: number;
+  hitCount: number;
+  pupilSamplingMode: "stop" | "entrance";
+  rmsWaves: number;
+  message: string;
+}
+
 export interface NativePsfMapRequest {
   jobId?: string;
   gridOpd: number[][];

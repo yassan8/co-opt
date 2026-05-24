@@ -570,6 +570,20 @@ export function run_native_opd_map_wasm_json(req_json) {
 }
 
 /**
+ * @param {string} req_json
+ * @returns {any}
+ */
+export function run_native_opd_rms_waves_wasm_json(req_json) {
+    const ptr0 = passStringToWasm0(req_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.run_native_opd_rms_waves_wasm_json(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * Compute PSF from an OPD map grid (grids are in *waves*, nulls = outside pupil).
  * Matches the Tauri-native `run_native_psf_map` logic.
  *
@@ -1139,6 +1153,10 @@ function __wbg_get_imports() {
             const ret = typeof(arg0) === 'string';
             return ret;
         },
+        __wbg___wbindgen_is_undefined_9e4d92534c42d778: function(arg0) {
+            const ret = arg0 === undefined;
+            return ret;
+        },
         __wbg___wbindgen_jsval_eq_11888390b0186270: function(arg0, arg1) {
             const ret = arg0 === arg1;
             return ret;
@@ -1188,6 +1206,10 @@ function __wbg_get_imports() {
             const ret = Reflect.get(arg0, arg1);
             return ret;
         }, arguments); },
+        __wbg_get_with_ref_key_6550b2c093d2eb18: function(arg0, arg1) {
+            const ret = arg0[arg1];
+            return ret;
+        },
         __wbg_instanceof_ArrayBuffer_c367199e2fa2aa04: function(arg0) {
             let result;
             try {

@@ -126,6 +126,8 @@ export function run_native_mtf_from_psf_wasm_json(req_json: string): any;
 
 export function run_native_opd_map_wasm_json(req_json: string): any;
 
+export function run_native_opd_rms_waves_wasm_json(req_json: string): any;
+
 /**
  * Compute PSF from an OPD map grid (grids are in *waves*, nulls = outside pupil).
  * Matches the Tauri-native `run_native_psf_map` logic.
@@ -271,6 +273,7 @@ export interface InitOutput {
     readonly run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_opd_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
     readonly solve_image_height_component_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
     readonly solve_image_height_pair_exact_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];

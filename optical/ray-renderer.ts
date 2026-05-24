@@ -180,6 +180,7 @@ type RayGenerationOptions = {
     exactCrossBeamSampling?: boolean;
     displayAxisAlignedSampling?: boolean;
     skipImageHeightTsValidation?: boolean;
+    imageHeightValidationTraceBackend?: 'ts' | 'rust';
     preserveChiefNormalEmissionPlane?: boolean;
 };
 
@@ -206,11 +207,18 @@ const rayStartGenerationCache = new Map<string, RayStartDataArray>();
 const RAY_START_GENERATION_CACHE_LIMIT = 128;
 const imageHeightEffectiveObjectCache = new Map<string, any>();
 const IMAGE_HEIGHT_EFFECTIVE_OBJECT_CACHE_LIMIT = 64;
+const imageHeightPairSolveCache = new Map<string, any>();
+const IMAGE_HEIGHT_PAIR_SOLVE_CACHE_LIMIT = 128;
+const imageHeightWarmStartCache = new Map<string, any[]>();
+const IMAGE_HEIGHT_WARM_START_BUCKET_LIMIT = 12;
+const IMAGE_HEIGHT_WARM_START_SCOPE_LIMIT = 24;
 
 export function clearRayRendererCaches(): void {
     try { chiefRayOriginSolveCache.clear(); } catch (_) {}
     try { rayStartGenerationCache.clear(); } catch (_) {}
     try { imageHeightEffectiveObjectCache.clear(); } catch (_) {}
+    try { imageHeightPairSolveCache.clear(); } catch (_) {}
+    try { imageHeightWarmStartCache.clear(); } catch (_) {}
 }
 
 function buildOpticalRowsSignature(opticalSystemRows) {
@@ -274,6 +282,8 @@ function buildRayStartGenerationCacheKey(obj, opticalSystemRows, rayCount, apert
         exactCrossBeamSampling: options?.exactCrossBeamSampling,
         displayAxisAlignedSampling: options?.displayAxisAlignedSampling,
         skipImageHeightTsValidation: options?.skipImageHeightTsValidation,
+        imageHeightValidationTraceBackend: options?.imageHeightValidationTraceBackend,
+        preserveChiefNormalEmissionPlane: options?.preserveChiefNormalEmissionPlane,
     };
 
     return [
@@ -286,6 +296,111 @@ function buildRayStartGenerationCacheKey(obj, opticalSystemRows, rayCount, apert
         Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : 0.5876,
         stableSerializeForCache(optionsSignature),
     ].join('||');
+}
+
+function buildImageHeightSolveScopeKey(opticalSystemRows, wavelengthUm, conjugateType, validationMode) {
+    return [
+        buildOpticalRowsSignature(opticalSystemRows),
+        Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : 0.5876,
+        String(conjugateType || ''),
+        String(validationMode || ''),
+    ].join('||');
+}
+
+function buildImageHeightPairSolveCacheKey(scopeKey, targetX, targetY) {
+    return [
+        scopeKey,
+        Number(targetX || 0).toFixed(9),
+        Number(targetY || 0).toFixed(9),
+    ].join('||');
+}
+
+function getCachedImageHeightPairSolve(scopeKey, targetX, targetY) {
+    if (!scopeKey) return null;
+    const key = buildImageHeightPairSolveCacheKey(scopeKey, targetX, targetY);
+    return imageHeightPairSolveCache.get(key) || null;
+}
+
+function setCachedImageHeightPairSolve(scopeKey, targetX, targetY, value) {
+    if (!scopeKey || !value || typeof value !== 'object') return value;
+    const key = buildImageHeightPairSolveCacheKey(scopeKey, targetX, targetY);
+    imageHeightPairSolveCache.set(key, value);
+    if (imageHeightPairSolveCache.size > IMAGE_HEIGHT_PAIR_SOLVE_CACHE_LIMIT) {
+        const firstKey = imageHeightPairSolveCache.keys().next().value;
+        if (firstKey !== undefined) imageHeightPairSolveCache.delete(firstKey);
+    }
+    return value;
+}
+
+function getImageHeightWarmStart(scopeKey, targetX, targetY, fallbackX, fallbackY, explicitSolved = null) {
+    const explicitX = Number(explicitSolved?.x);
+    const explicitY = Number(explicitSolved?.y);
+    if (Number.isFinite(explicitX) && Number.isFinite(explicitY)) {
+        return { x: explicitX, y: explicitY, source: 'object-solved' };
+    }
+
+    const bucket = scopeKey ? imageHeightWarmStartCache.get(scopeKey) : null;
+    if (Array.isArray(bucket) && bucket.length > 0) {
+        const nextTargetX = Number(targetX) || 0;
+        const nextTargetY = Number(targetY) || 0;
+        let bestEntry = null;
+        let bestScore = Number.POSITIVE_INFINITY;
+        for (const entry of bucket) {
+            const entryTargetX = Number(entry?.targetX);
+            const entryTargetY = Number(entry?.targetY);
+            const entrySolvedX = Number(entry?.solvedX);
+            const entrySolvedY = Number(entry?.solvedY);
+            if (![entryTargetX, entryTargetY, entrySolvedX, entrySolvedY].every(Number.isFinite)) continue;
+            const score = Math.hypot(entryTargetX - nextTargetX, entryTargetY - nextTargetY);
+            if (score < bestScore) {
+                bestScore = score;
+                bestEntry = entry;
+            }
+        }
+        if (bestEntry) {
+            return {
+                x: Number(bestEntry.solvedX),
+                y: Number(bestEntry.solvedY),
+                source: 'continuation-cache',
+            };
+        }
+    }
+
+    return {
+        x: Number.isFinite(Number(fallbackX)) ? Number(fallbackX) : 0,
+        y: Number.isFinite(Number(fallbackY)) ? Number(fallbackY) : 0,
+        source: 'paraxial',
+    };
+}
+
+function storeImageHeightWarmStart(scopeKey, targetX, targetY, solvedX, solvedY, hit = null) {
+    if (!scopeKey) return;
+    if (![targetX, targetY, solvedX, solvedY].every((value) => Number.isFinite(Number(value)))) return;
+    const nextEntry = {
+        targetX: Number(targetX),
+        targetY: Number(targetY),
+        solvedX: Number(solvedX),
+        solvedY: Number(solvedY),
+        hit: hit && Number.isFinite(Number(hit?.x)) && Number.isFinite(Number(hit?.y))
+            ? { x: Number(hit.x), y: Number(hit.y), z: Number.isFinite(Number(hit?.z)) ? Number(hit.z) : 0 }
+            : null,
+    };
+    const previous = Array.isArray(imageHeightWarmStartCache.get(scopeKey))
+        ? imageHeightWarmStartCache.get(scopeKey)
+        : [];
+    const filtered = previous.filter((entry) => {
+        const sameTarget = Math.abs(Number(entry?.targetX) - nextEntry.targetX) < 1e-9
+            && Math.abs(Number(entry?.targetY) - nextEntry.targetY) < 1e-9;
+        return !sameTarget;
+    });
+    filtered.push(nextEntry);
+    while (filtered.length > IMAGE_HEIGHT_WARM_START_BUCKET_LIMIT) filtered.shift();
+    imageHeightWarmStartCache.set(scopeKey, filtered);
+    while (imageHeightWarmStartCache.size > IMAGE_HEIGHT_WARM_START_SCOPE_LIMIT) {
+        const firstKey = imageHeightWarmStartCache.keys().next().value;
+        if (firstKey !== undefined) imageHeightWarmStartCache.delete(firstKey);
+        else break;
+    }
 }
 
 function normalizeAnnularRingCount(value) {
@@ -2486,12 +2601,14 @@ export function convertImageHeightToEffectiveObject(
     const paraxialOnlyModel = isParaxialOnlyImageHeightModel(opticalSystemRows);
     const skipTsValidation = options?.skipTsValidation === true;
     const validationTraceBackend: 'ts' | 'rust' = options?.validationTraceBackend === 'rust' ? 'rust' : 'ts';
+    const validationMode = skipTsValidation ? 'rust-only' : `rust-${validationTraceBackend}-validated`;
+    const solveScopeKey = buildImageHeightSolveScopeKey(opticalSystemRows, wavelengthUm, conjugateType, validationMode);
     const cacheKey = [
         buildOpticalRowsSignature(opticalSystemRows),
         stableSerializeForCache(obj),
         Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : 0.5876,
         String(conjugateType || ''),
-        skipTsValidation ? 'rust-only' : `rust-${validationTraceBackend}-validated`
+        validationMode
     ].join('||');
     if (cacheKey && imageHeightEffectiveObjectCache.has(cacheKey)) {
         return imageHeightEffectiveObjectCache.get(cacheKey);
@@ -2529,8 +2646,56 @@ export function convertImageHeightToEffectiveObject(
 
             const paraxialAngleXDeg = Math.atan2(targetX, efl) * (180 / Math.PI);
             const paraxialAngleYDeg = Math.atan2(targetY, efl) * (180 / Math.PI);
-            let solvedAngleXDeg = paraxialAngleXDeg;
-            let solvedAngleYDeg = paraxialAngleYDeg;
+            const warmStart = getImageHeightWarmStart(
+                solveScopeKey,
+                targetX,
+                targetY,
+                paraxialAngleXDeg,
+                paraxialAngleYDeg,
+                obj?.__cooptImageHeightSolve?.solved,
+            );
+            let solvedAngleXDeg = warmStart.x;
+            let solvedAngleYDeg = warmStart.y;
+
+            const cachedPairSolve = getCachedImageHeightPairSolve(solveScopeKey, targetX, targetY);
+            if (cachedPairSolve) {
+                solvedAngleXDeg = Number.isFinite(Number(cachedPairSolve?.solved?.x)) ? Number(cachedPairSolve.solved.x) : solvedAngleXDeg;
+                solvedAngleYDeg = Number.isFinite(Number(cachedPairSolve?.solved?.y)) ? Number(cachedPairSolve.solved.y) : solvedAngleYDeg;
+                const cachedChiefRay = cachedPairSolve?.chiefRay;
+                const cachedHit = cachedPairSolve?.hit;
+                return storeResult({
+                    ...obj,
+                    position: obj?.position ?? 'ImageHeight',
+                    __cooptEffectivePosition: 'Angle',
+                    xHeightAngle: solvedAngleXDeg,
+                    yHeightAngle: solvedAngleYDeg,
+                    __cooptImageHeightTarget: { x: targetX, y: targetY },
+                    __cooptImageHeightSolve: {
+                        conjugateType,
+                        mode: paraxialOnlyModel ? 'infinite-angle-paraxial' : 'infinite-angle',
+                        validation: validationMode,
+                        solver: String(cachedPairSolve?.solver || 'cache'),
+                        warmStart: warmStart.source,
+                        paraxial: { x: paraxialAngleXDeg, y: paraxialAngleYDeg },
+                        solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
+                        hit: cachedHit ? { x: Number(cachedHit.x), y: Number(cachedHit.y) } : null,
+                        chiefRay: cachedChiefRay?.origin && cachedChiefRay?.dir ? {
+                            origin: {
+                                x: Number(cachedChiefRay.origin.x),
+                                y: Number(cachedChiefRay.origin.y),
+                                z: Number(cachedChiefRay.origin.z),
+                            },
+                            dir: {
+                                x: Number(cachedChiefRay.dir.x),
+                                y: Number(cachedChiefRay.dir.y),
+                                z: Number(cachedChiefRay.dir.z),
+                            },
+                        } : null,
+                        imageSurfaceIndex,
+                        wavelengthUm,
+                    },
+                });
+            }
 
             const rustPairResult = solveImageHeightPairExactWithRust(
                 opticalSystemRows,
@@ -2539,8 +2704,8 @@ export function convertImageHeightToEffectiveObject(
                 conjugateType,
                 targetX,
                 targetY,
-                paraxialAngleXDeg,
-                paraxialAngleYDeg,
+                solvedAngleXDeg,
+                solvedAngleYDeg,
             ) || solveImageHeightPairWithRust(
                 opticalSystemRows,
                 imageSurfaceIndex,
@@ -2548,8 +2713,8 @@ export function convertImageHeightToEffectiveObject(
                 conjugateType,
                 targetX,
                 targetY,
-                paraxialAngleXDeg,
-                paraxialAngleYDeg,
+                solvedAngleXDeg,
+                solvedAngleYDeg,
             );
             const acceptedRustPair = skipTsValidation
                 ? acceptRustImageHeightPair(rustPairResult, targetX, targetY)
@@ -2586,6 +2751,7 @@ export function convertImageHeightToEffectiveObject(
                     objectId: obj?.id ?? null,
                     conjugateType,
                     wavelengthUm,
+                    warmStart: warmStart.source,
                     target: { x: targetX, y: targetY },
                     paraxial: { x: paraxialAngleXDeg, y: paraxialAngleYDeg },
                     solvedField: { x: solvedAngleXDeg, y: solvedAngleYDeg, mode: 'angle-deg' },
@@ -2598,6 +2764,25 @@ export function convertImageHeightToEffectiveObject(
                     solver: 'rust-pair'
                 });
 
+                setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
+                    solver: 'rust-pair',
+                    solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
+                    hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
+                    chiefRay: solvedChief?.origin && solvedChief?.dir ? {
+                        origin: {
+                            x: Number(solvedChief.origin.x),
+                            y: Number(solvedChief.origin.y),
+                            z: Number(solvedChief.origin.z),
+                        },
+                        dir: {
+                            x: Number(solvedChief.dir.x),
+                            y: Number(solvedChief.dir.y),
+                            z: Number(solvedChief.dir.z),
+                        },
+                    } : null,
+                });
+                storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
+
                 return storeResult({
                     ...obj,
                     position: obj?.position ?? 'ImageHeight',
@@ -2608,8 +2793,9 @@ export function convertImageHeightToEffectiveObject(
                     __cooptImageHeightSolve: {
                         conjugateType,
                         mode: paraxialOnlyModel ? 'infinite-angle-paraxial' : 'infinite-angle',
-                        validation: skipTsValidation ? 'rust-only' : `rust-${validationTraceBackend}-validated`,
+                        validation: validationMode,
                         solver: 'rust-pair',
+                        warmStart: warmStart.source,
                         paraxial: { x: paraxialAngleXDeg, y: paraxialAngleYDeg },
                         solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
                         hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y) } : null,
@@ -2778,6 +2964,7 @@ export function convertImageHeightToEffectiveObject(
                 objectId: obj?.id ?? null,
                 conjugateType,
                 wavelengthUm,
+                warmStart: warmStart.source,
                 target: { x: targetX, y: targetY },
                 paraxial: { x: paraxialAngleXDeg, y: paraxialAngleYDeg },
                 solvedField: { x: solvedAngleXDeg, y: solvedAngleYDeg, mode: 'angle-deg' },
@@ -2789,6 +2976,25 @@ export function convertImageHeightToEffectiveObject(
                 imageSurfaceIndex
             });
 
+            setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
+                solver: 'ts-refine',
+                solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
+                hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
+                chiefRay: solvedChief?.origin && solvedChief?.dir ? {
+                    origin: {
+                        x: Number(solvedChief.origin.x),
+                        y: Number(solvedChief.origin.y),
+                        z: Number(solvedChief.origin.z),
+                    },
+                    dir: {
+                        x: Number(solvedChief.dir.x),
+                        y: Number(solvedChief.dir.y),
+                        z: Number(solvedChief.dir.z),
+                    },
+                } : null,
+            });
+            storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
+
             return storeResult({
                 ...obj,
                 position: obj?.position ?? 'ImageHeight',
@@ -2799,7 +3005,9 @@ export function convertImageHeightToEffectiveObject(
                 __cooptImageHeightSolve: {
                     conjugateType,
                     mode: paraxialOnlyModel ? 'infinite-angle-paraxial' : 'infinite-angle',
-                    validation: skipTsValidation ? 'rust-only' : 'rust-ts-validated',
+                        validation: validationMode,
+                        solver: 'ts-refine',
+                        warmStart: warmStart.source,
                     paraxial: { x: paraxialAngleXDeg, y: paraxialAngleYDeg },
                     solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
                     hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y) } : null,
@@ -2833,8 +3041,43 @@ export function convertImageHeightToEffectiveObject(
             const scale = absMag > 1e-12 ? 1 / absMag : 1;
             const paraxialObjectX = targetX * scale;
             const paraxialObjectY = targetY * scale;
-            let solvedObjectX = paraxialObjectX;
-            let solvedObjectY = paraxialObjectY;
+            const warmStart = getImageHeightWarmStart(
+                solveScopeKey,
+                targetX,
+                targetY,
+                paraxialObjectX,
+                paraxialObjectY,
+                obj?.__cooptImageHeightSolve?.solved,
+            );
+            let solvedObjectX = warmStart.x;
+            let solvedObjectY = warmStart.y;
+
+            const cachedPairSolve = getCachedImageHeightPairSolve(solveScopeKey, targetX, targetY);
+            if (cachedPairSolve) {
+                solvedObjectX = Number.isFinite(Number(cachedPairSolve?.solved?.x)) ? Number(cachedPairSolve.solved.x) : solvedObjectX;
+                solvedObjectY = Number.isFinite(Number(cachedPairSolve?.solved?.y)) ? Number(cachedPairSolve.solved.y) : solvedObjectY;
+                const cachedHit = cachedPairSolve?.hit;
+                return storeResult({
+                    ...obj,
+                    position: obj?.position ?? 'ImageHeight',
+                    __cooptEffectivePosition: 'Rectangle',
+                    xHeightAngle: solvedObjectX,
+                    yHeightAngle: solvedObjectY,
+                    __cooptImageHeightTarget: { x: targetX, y: targetY },
+                    __cooptImageHeightSolve: {
+                        conjugateType,
+                        mode: paraxialOnlyModel ? 'finite-rectangle-paraxial' : 'finite-rectangle',
+                        validation: validationMode,
+                        solver: String(cachedPairSolve?.solver || 'cache'),
+                        warmStart: warmStart.source,
+                        paraxial: { x: paraxialObjectX, y: paraxialObjectY },
+                        solved: { x: solvedObjectX, y: solvedObjectY },
+                        hit: cachedHit ? { x: Number(cachedHit.x), y: Number(cachedHit.y) } : null,
+                        imageSurfaceIndex,
+                        wavelengthUm
+                    },
+                });
+            }
 
             const rustPairResult = solveImageHeightPairExactWithRust(
                 opticalSystemRows,
@@ -2843,8 +3086,8 @@ export function convertImageHeightToEffectiveObject(
                 conjugateType,
                 targetX,
                 targetY,
-                paraxialObjectX,
-                paraxialObjectY,
+                solvedObjectX,
+                solvedObjectY,
             ) || solveImageHeightPairWithRust(
                 opticalSystemRows,
                 imageSurfaceIndex,
@@ -2852,8 +3095,8 @@ export function convertImageHeightToEffectiveObject(
                 conjugateType,
                 targetX,
                 targetY,
-                paraxialObjectX,
-                paraxialObjectY,
+                solvedObjectX,
+                solvedObjectY,
             );
             const acceptedRustPair = skipTsValidation
                 ? acceptRustImageHeightPair(rustPairResult, targetX, targetY)
@@ -2880,6 +3123,7 @@ export function convertImageHeightToEffectiveObject(
                     objectId: obj?.id ?? null,
                     conjugateType,
                     wavelengthUm,
+                    warmStart: warmStart.source,
                     target: { x: targetX, y: targetY },
                     paraxial: { x: paraxialObjectX, y: paraxialObjectY },
                     solvedField: { x: solvedObjectX, y: solvedObjectY, mode: 'object-mm' },
@@ -2892,6 +3136,13 @@ export function convertImageHeightToEffectiveObject(
                     solver: 'rust-pair'
                 });
 
+                setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
+                    solver: 'rust-pair',
+                    solved: { x: solvedObjectX, y: solvedObjectY },
+                    hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
+                });
+                storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
+
                 return storeResult({
                     ...obj,
                     position: obj?.position ?? 'ImageHeight',
@@ -2902,8 +3153,9 @@ export function convertImageHeightToEffectiveObject(
                     __cooptImageHeightSolve: {
                         conjugateType,
                         mode: paraxialOnlyModel ? 'finite-rectangle-paraxial' : 'finite-rectangle',
-                        validation: skipTsValidation ? 'rust-only' : `rust-${validationTraceBackend}-validated`,
+                        validation: validationMode,
                         solver: 'rust-pair',
+                        warmStart: warmStart.source,
                         paraxial: { x: paraxialObjectX, y: paraxialObjectY },
                         solved: { x: solvedObjectX, y: solvedObjectY },
                         hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y) } : null,
@@ -3059,6 +3311,7 @@ export function convertImageHeightToEffectiveObject(
                 objectId: obj?.id ?? null,
                 conjugateType,
                 wavelengthUm,
+                warmStart: warmStart.source,
                 target: { x: targetX, y: targetY },
                 paraxial: { x: paraxialObjectX, y: paraxialObjectY },
                 solvedField: { x: solvedObjectX, y: solvedObjectY, mode: 'object-mm' },
@@ -3070,6 +3323,13 @@ export function convertImageHeightToEffectiveObject(
                 imageSurfaceIndex
             });
 
+            setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
+                solver: 'ts-refine',
+                solved: { x: solvedObjectX, y: solvedObjectY },
+                hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
+            });
+            storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
+
             return storeResult({
                 ...obj,
                 position: obj?.position ?? 'ImageHeight',
@@ -3080,7 +3340,9 @@ export function convertImageHeightToEffectiveObject(
                 __cooptImageHeightSolve: {
                     conjugateType,
                     mode: paraxialOnlyModel ? 'finite-rectangle-paraxial' : 'finite-rectangle',
-                    validation: skipTsValidation ? 'rust-only' : 'rust-ts-validated',
+                        validation: validationMode,
+                        solver: 'ts-refine',
+                        warmStart: warmStart.source,
                     paraxial: { x: paraxialObjectX, y: paraxialObjectY },
                     solved: { x: solvedObjectX, y: solvedObjectY },
                     hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y) } : null,

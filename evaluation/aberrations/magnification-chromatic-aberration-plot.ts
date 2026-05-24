@@ -50,6 +50,15 @@ function sanitizeLcaSeries(displacements: any[], fieldValues: any[]) {
     return { x: outX, y: outY };
 }
 
+function formatLcaBackendLabel(data: any): string {
+    const backend = String(data?.backend || data?.meta?.backend || '').trim();
+    const executionMode = String(data?.meta?.executionMode || '').trim();
+    if (backend && executionMode) return `${backend} / ${executionMode}`;
+    if (backend) return backend;
+    if (executionMode) return executionMode;
+    return 'unknown-backend';
+}
+
 export function plotMagnificationChromaticAberration(data, targetDivId = 'magnification-chromatic-aberration-container', options: any = {}) {
     if (!data || !Array.isArray(data.fieldValues) || data.fieldValues.length === 0) {
         console.warn('No valid data for magnification chromatic aberration plot');
@@ -63,6 +72,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
     const referenceWavelength = Number.isFinite(Number(data.referenceWavelength))
         ? Number(data.referenceWavelength)
         : 0.5876;
+    const backendLabel = formatLcaBackendLabel(data);
 
     const xMin = Number.isFinite(Number(options.xMin)) ? Number(options.xMin) : -0.05;
     const xMax = Number.isFinite(Number(options.xMax)) ? Number(options.xMax) : 0.05;
@@ -143,7 +153,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
     }
 
     const layout: any = {
-        title: 'Lateral Chromatic Aberration (d-line reference)',
+        title: `Lateral Chromatic Aberration (d-line reference) [${backendLabel}]`,
         xaxis: {
             title: 'Lateral Displacement (mm)',
             range: [xMinPlot, xMaxPlot]

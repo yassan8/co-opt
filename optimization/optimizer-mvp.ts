@@ -43,10 +43,44 @@ import { runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOpti
 
 let __optimizerStopRequested = false;
 
+function shouldProfileNativeOptimizer(): boolean {
+  try {
+    const g = (typeof window !== 'undefined') ? (window as any) : null;
+    return !!(g && (g.__COOPT_PROFILE_OPTIMIZER === true || g.__OPD_DEBUG === true));
+  } catch (_) {
+    return false;
+  }
+}
+
+function logNativeOptimizerProfile(resp: any, context: { method: string; iterStart: number; iterDone: number }): void {
+  const profile = resp?.profile;
+  const entries = Array.isArray(profile?.operandEntries) ? profile.operandEntries : [];
+  if (!profile || entries.length === 0) return;
+  const topEntries = entries.slice(0, 8).map((entry: any) => ({
+    key: entry?.key,
+    operand: entry?.operand,
+    count: Number(entry?.count) || 0,
+    cacheHits: Number(entry?.cacheHits) || 0,
+    cacheMisses: Number(entry?.cacheMisses) || 0,
+    totalMs: Number(entry?.totalMs) || 0,
+    avgMs: Number(entry?.avgMs) || 0,
+    maxMs: Number(entry?.maxMs) || 0,
+  }));
+  console.info('[OptimizerProfile]', {
+    method: context.method,
+    iterStart: context.iterStart,
+    iterDone: context.iterDone,
+    evaluateStateCalls: Number(profile?.evaluateStateCalls) || 0,
+    requirementPasses: Number(profile?.requirementPasses) || 0,
+    topOperands: topEntries,
+  });
+}
+
 async function runOptimizationMvpnative(options = {}) {
   const opts = isPlainObject(options) ? options : {};
   const onProgress = (typeof opts.onProgress === 'function') ? opts.onProgress : null;
   const userShouldStop = (typeof opts.shouldStop === 'function') ? opts.shouldStop : null;
+  const enableOptimizerProfiling = shouldProfileNativeOptimizer();
 
   // Ensure stale native stop state from previous runs does not abort immediately.
   try { await clearOptimizerStop(); } catch (_) {}
@@ -250,6 +284,7 @@ async function runOptimizationMvpnative(options = {}) {
           maxIterations: iterBudget,
           method,
           emitProgress: true,
+          profile: enableOptimizerProfiling,
           penaltyParameter: 1.0,
           penaltyIncreaseFactor: 1.5,
           lineSearchC: 0.1,
@@ -282,6 +317,14 @@ async function runOptimizationMvpnative(options = {}) {
       const iterDone = Number.isFinite(Number(resp?.iterations))
         ? Math.max(0, Math.floor(Number(resp.iterations)))
         : iterBudget;
+
+      if (enableOptimizerProfiling) {
+        logNativeOptimizerProfile(resp, {
+          method: String(resp?.modeUsed || method),
+          iterStart: consumedIterations,
+          iterDone,
+        });
+      }
 
       if (Array.isArray(resp?.optimizedRows) && resp.optimizedRows.length > 0) {
         rowsWorking = resp.optimizedRows;
@@ -2682,6 +2725,58 @@ function restoreBlocksByConfigId(blocksByConfigId, snapshot) {
   }
 }
 
+function preserveBlockVariableMetadata(originalBlocks, nextBlocks) {
+  if (!Array.isArray(originalBlocks) || !Array.isArray(nextBlocks)) return nextBlocks;
+
+  const nextByBlockId = new Map();
+  for (const block of nextBlocks) {
+    const blockId = String(block?.blockId ?? '').trim();
+    if (blockId) nextByBlockId.set(blockId, block);
+  }
+
+  for (const originalBlock of originalBlocks) {
+    const blockId = String(originalBlock?.blockId ?? '').trim();
+    if (!blockId) continue;
+    const nextBlock = nextByBlockId.get(blockId);
+    if (!nextBlock) continue;
+
+    const originalVars = isPlainObject(originalBlock?.variables) ? originalBlock.variables : null;
+    if (!originalVars) continue;
+
+    if (!isPlainObject(nextBlock.variables)) nextBlock.variables = {};
+    const nextVars = nextBlock.variables;
+    const nextParams = isPlainObject(nextBlock.parameters) ? nextBlock.parameters : null;
+
+    for (const [key, originalEntry] of Object.entries(originalVars)) {
+      if (!isPlainObject(originalEntry)) continue;
+
+      const nextEntry = isPlainObject(nextVars[key]) ? nextVars[key] : {};
+      const mergedEntry = { ...originalEntry, ...nextEntry };
+
+      const originalOptimize = isPlainObject(originalEntry.optimize) ? originalEntry.optimize : null;
+      const nextOptimize = isPlainObject(nextEntry.optimize) ? nextEntry.optimize : null;
+      if (originalOptimize || nextOptimize) {
+        mergedEntry.optimize = {
+          ...(originalOptimize || {}),
+          ...(nextOptimize || {}),
+        };
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(mergedEntry, 'value')) {
+        if (nextParams && Object.prototype.hasOwnProperty.call(nextParams, key)) {
+          mergedEntry.value = nextParams[key];
+        } else if (Object.prototype.hasOwnProperty.call(originalEntry, 'value')) {
+          mergedEntry.value = originalEntry.value;
+        }
+      }
+
+      nextVars[key] = mergedEntry;
+    }
+  }
+
+  return nextBlocks;
+}
+
 function persistBlocksByConfigIdToSystemConfig({ systemConfig, configsById, targetConfigIds, blocksByConfigId }) {
   try {
     const ids = Array.isArray(targetConfigIds) ? targetConfigIds.map(id => String(id)) : [];
@@ -2689,7 +2784,15 @@ function persistBlocksByConfigIdToSystemConfig({ systemConfig, configsById, targ
       const cfg = configsById ? configsById[String(cid)] : null;
       const blocks = blocksByConfigId ? blocksByConfigId[String(cid)] : null;
       if (!cfg || !Array.isArray(blocks)) continue;
-      const persistedBlocks = materializeGapThicknessModesForPersistence(blocks);
+      const baselineBlocks = (() => {
+        const fromState = arguments[0]?.baselineBlocksByConfigId;
+        const baseline = fromState && typeof fromState === 'object' ? fromState[String(cid)] : null;
+        return Array.isArray(baseline) ? baseline : (Array.isArray(cfg.blocks) ? cfg.blocks : []);
+      })();
+      const persistedBlocks = preserveBlockVariableMetadata(
+        baselineBlocks,
+        materializeGapThicknessModesForPersistence(blocks),
+      );
       cfg.blocks = Array.isArray(persistedBlocks)
         ? persistedBlocks
         : JSON.parse(JSON.stringify(blocks));
@@ -2758,7 +2861,8 @@ function restoreBestSnapshotAndPersist({
       systemConfig,
       configsById,
       targetConfigIds,
-      blocksByConfigId: jointState?.blocksByConfigId
+      blocksByConfigId: jointState?.blocksByConfigId,
+      baselineBlocksByConfigId: jointState?.baselineBlocksByConfigId
     });
   } catch {
     return false;
@@ -3485,6 +3589,19 @@ function compareEval(a, b) {
   return aS < bS - 1e-12;
 }
 
+function isEvalTie(a, b) {
+  if (!a || !b) return false;
+  if (!!a.feasible !== !!b.feasible) return false;
+
+  const aV = toFiniteNumber(a.violationScore, Infinity);
+  const bV = toFiniteNumber(b.violationScore, Infinity);
+  if (Math.abs(aV - bV) > 1e-12) return false;
+
+  const aS = toFiniteNumber(a.score, Infinity);
+  const bS = toFiniteNumber(b.score, Infinity);
+  return Math.abs(aS - bS) <= 1e-12;
+}
+
 function snapshotBlocks(activeCfg) {
   try {
     return JSON.parse(JSON.stringify(activeCfg.blocks));
@@ -4169,9 +4286,11 @@ function defaultScaleForKey(key) {
     return (Number.isFinite(sc) && sc > 0) ? sc : 1e-18;
   }
   if (/conic$/i.test(s)) return 1;
-  if (/radius$/i.test(s)) return 100;
-  if (/thickness$/i.test(s)) return 10;
-  if (/semidiameter$/i.test(s) || /semidia$/i.test(s)) return 10;
+  if (/^rindex\d*$/i.test(s) || /^nd\d*$/i.test(s)) return 0.05;
+  if (/^(abbe|vd)\d*$/i.test(s)) return 5;
+  if (/radius$/i.test(s) || /^radius\d+$/i.test(s)) return 100;
+  if (/thickness$/i.test(s) || /^thickness\d+$/i.test(s)) return 10;
+  if (/semidiameter$/i.test(s) || /semidia$/i.test(s) || /^s\d+$/i.test(s)) return 10;
   return 1;
 }
 
@@ -5270,6 +5389,16 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
   };
 
+  const publishLatestSystemConfigForUiSync = () => {
+    try {
+      if (typeof window === 'undefined' || !systemConfig || typeof systemConfig !== 'object') return;
+      const cloned = JSON.parse(JSON.stringify(systemConfig));
+      window.__cooptSystemConfig = cloned;
+      window.__cooptPreferRuntimeSystemConfig = true;
+      window.__cooptDeferDerivedUiUntil = Date.now() + 1500;
+    } catch (_) {}
+  };
+
   const recalculateMeritIfSurfaceRangesValid = () => {
     try {
       if (!window.meritFunctionEditor || typeof window.meritFunctionEditor.calculateMerit !== 'function') {
@@ -5440,6 +5569,7 @@ export async function runOptimizationMVP(options = {}) {
 
   const jointState = {
     blocksByConfigId,
+    baselineBlocksByConfigId: snapshotBlocksByConfigId(blocksByConfigId),
     targetConfigIds,
     activeConfigId
   };
@@ -5451,15 +5581,19 @@ export async function runOptimizationMVP(options = {}) {
     if (!e) return;
     const snap = snapshotBlocksByConfigId(blocksByConfigId);
     const scoredEval = { ...e, blocksSnapshot: snap };
-    if (!bestScoreEval || toFiniteNumber(e.score, Infinity) < (toFiniteNumber(bestScoreEval.score, Infinity) - 1e-12)) {
+    if (
+      !bestScoreEval ||
+      toFiniteNumber(e.score, Infinity) < (toFiniteNumber(bestScoreEval.score, Infinity) - 1e-12) ||
+      isEvalTie(e, bestScoreEval)
+    ) {
       bestScoreEval = scoredEval;
     }
     if (e.feasible) {
-      if (!bestFeasibleEval || compareEval(e, bestFeasibleEval)) {
+      if (!bestFeasibleEval || compareEval(e, bestFeasibleEval) || isEvalTie(e, bestFeasibleEval)) {
         bestFeasibleEval = scoredEval;
       }
     } else {
-      if (!bestInfeasibleEval || compareEval(e, bestInfeasibleEval)) {
+      if (!bestInfeasibleEval || compareEval(e, bestInfeasibleEval) || isEvalTie(e, bestInfeasibleEval)) {
         bestInfeasibleEval = scoredEval;
       }
     }
@@ -6415,11 +6549,12 @@ export async function runOptimizationMVP(options = {}) {
 
       // Final sync to tables
       try {
-        const finalEval = getBestEvalSoFar();
+        const finalEval = getBestScoreEvalSoFar() || getBestEvalSoFar();
         restoreBestSnapshotAndPersist({ finalEval, jointState, systemConfig, configsById, targetConfigIds });
       } catch (_) {}
 
       restorePreOptimizationGlobalsForUiSync();
+      publishLatestSystemConfigForUiSync();
 
       try {
         if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
@@ -6444,7 +6579,7 @@ export async function runOptimizationMVP(options = {}) {
       } catch (_) {}
 
       const aborted0 = shouldStop ? !!shouldStop() : false;
-      const finalEval = getBestEvalSoFar();
+      const finalEval = getBestScoreEvalSoFar() || getBestEvalSoFar();
       const finalCompositeEval0 = evalCompositeFromRequirementsProfiled();
       const finalViolationScore0 = Number.isFinite(finalCompositeEval0?.violationScore)
         ? finalCompositeEval0.violationScore
@@ -7268,11 +7403,12 @@ export async function runOptimizationMVP(options = {}) {
 
     // Final sync to tables (push expanded rows into Tabulator without requiring a reload)
     try {
-      const finalEval = getBestEvalSoFar();
+      const finalEval = getBestScoreEvalSoFar() || getBestEvalSoFar();
       restoreBestSnapshotAndPersist({ finalEval, jointState, systemConfig, configsById, targetConfigIds });
     } catch (_) {}
 
     restorePreOptimizationGlobalsForUiSync();
+    publishLatestSystemConfigForUiSync();
 
     try {
       if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
@@ -7298,7 +7434,7 @@ export async function runOptimizationMVP(options = {}) {
 
     const t1 = nowMs();
 
-    const finalEval = getBestEvalSoFar();
+    const finalEval = getBestScoreEvalSoFar() || getBestEvalSoFar();
     const finalCompositeEval = evalCompositeFromRequirementsProfiled();
     const finalViolationScore = Number.isFinite(finalCompositeEval?.violationScore)
       ? finalCompositeEval.violationScore
@@ -7448,6 +7584,7 @@ export async function runOptimizationMVP(options = {}) {
       } catch (_) {}
 
       restorePreOptimizationGlobalsForUiSync();
+      publishLatestSystemConfigForUiSync();
 
       try {
         if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
@@ -10054,6 +10191,7 @@ export async function runOptimizationMVP(options = {}) {
       }
 
       restorePreOptimizationGlobalsForUiSync();
+      publishLatestSystemConfigForUiSync();
 
       // Final sync to tables - this is critical to reflect values in UI
       try {
@@ -10242,6 +10380,7 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
 
     restorePreOptimizationGlobalsForUiSync();
+    publishLatestSystemConfigForUiSync();
 
     // Final sync to tables
     try {
@@ -10507,6 +10646,7 @@ export async function runOptimizationMVP(options = {}) {
   } catch (_) {}
 
   restorePreOptimizationGlobalsForUiSync();
+  publishLatestSystemConfigForUiSync();
 
   try {
     if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {

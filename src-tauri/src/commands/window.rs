@@ -10,7 +10,12 @@ pub async fn open_render_window(app: AppHandle, url: String) -> Result<(), Strin
     // Always recreate the render window to avoid stale runtime state surviving reuse.
     if let Some(window) = app.get_webview_window("render-window") {
         let _ = window.close();
-        sleep(Duration::from_millis(180));
+        for _ in 0..6 {
+            if app.get_webview_window("render-window").is_none() {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+        }
     }
 
     let parsed_url = url

@@ -13,6 +13,7 @@ import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText
 import { getOrCreateCooptWindowSyncSenderId } from '../core/window-facade.ts';
 import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.ts';
 import { buildShareUrlFromCompressedString, encodeAllDataToCompressedString } from '../utils/url-share.ts';
+import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
 
 declare global {
   interface Window {
@@ -25,19 +26,28 @@ const FORCE_INFINITE_PUPIL_MODE_KEY = 'coopt.forceInfinitePupilMode';
 const FORCE_INFINITE_PUPIL_MODE_EVENT = 'coopt-force-infinite-pupil-mode-changed';
 const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
 
+function shouldIncludeSystemConfigInRenderPayload(reason: string): boolean {
+  const normalizedReason = String(reason || '').trim().toLowerCase();
+  return normalizedReason ? !normalizedReason.startsWith('render-open') : true;
+}
+
 function buildLiveRenderSyncPayload(reason = 'render-open') {
   let rows: any[] = [];
   let objectRows: any[] = [];
   let systemConfig: any = null;
+  const includeSystemConfig = shouldIncludeSystemConfigInRenderPayload(reason);
+  const preferLiveTableRows = !includeSystemConfig;
 
   try {
     const runtimeSystemConfig = typeof w.loadSystemConfigurations === 'function'
       ? w.loadSystemConfigurations()
       : loadSystemConfigurations();
-    try {
-      systemConfig = JSON.parse(JSON.stringify(runtimeSystemConfig));
-    } catch (_) {
-      systemConfig = runtimeSystemConfig ?? null;
+    if (includeSystemConfig) {
+      try {
+        systemConfig = JSON.parse(JSON.stringify(runtimeSystemConfig));
+      } catch (_) {
+        systemConfig = runtimeSystemConfig ?? null;
+      }
     }
     const activeConfig = Array.isArray(runtimeSystemConfig?.configurations)
       ? (runtimeSystemConfig.configurations.find((cfg: any) => String(cfg?.id ?? '') === String(runtimeSystemConfig?.activeConfigId ?? ''))
@@ -49,8 +59,15 @@ function buildLiveRenderSyncPayload(reason = 'render-open') {
       objectRows = activeConfig.object.slice();
     }
 
+    if (preferLiveTableRows && typeof (window as any).getOpticalSystemRows === 'function') {
+      const liveRows = (window as any).getOpticalSystemRows((window as any).tableOpticalSystem);
+      if (Array.isArray(liveRows) && liveRows.length > 0) {
+        rows = liveRows.slice();
+      }
+    }
+
     const activeBlocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
-    if (activeBlocks.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
+    if (rows.length === 0 && activeBlocks.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
       const expanded = w.expandBlocksToOpticalSystemRows(activeBlocks);
       const expandedRows = expanded && Array.isArray(expanded.rows) ? expanded.rows : [];
       if (expandedRows.length > 0) {
@@ -1480,9 +1497,57 @@ export function handleOptimize(): void {
     } catch (_) {}
   };
 
+  const persistCurrentDesignIntent = () => {
+    try {
+      const cm = (window as any).ConfigurationManager;
+      if (cm && typeof cm.saveCurrentToActiveConfiguration === 'function') {
+        cm.saveCurrentToActiveConfiguration();
+      }
+    } catch (_) {}
+  };
+
+  const persistCurrentSystemConfigSnapshot = () => {
+    try {
+      const currentConfig = typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function'
+        ? (window as any).loadSystemConfigurationsFromTableConfig()
+        : (typeof (window as any).loadSystemConfigurations === 'function'
+          ? (window as any).loadSystemConfigurations()
+          : null);
+      if (!currentConfig || typeof currentConfig !== 'object') return;
+
+      const cloned = JSON.parse(JSON.stringify(currentConfig));
+      if (typeof (window as any).saveSystemConfigurationsFromTableConfig === 'function') {
+        (window as any).saveSystemConfigurationsFromTableConfig(cloned);
+      } else if (typeof (window as any).saveSystemConfigurations === 'function') {
+        (window as any).saveSystemConfigurations(cloned);
+      }
+    } catch (_) {}
+  };
+
+  const persistCurrentRequirements = async () => {
+    try {
+      const reqEditor = (window as any).systemRequirementsEditor;
+      if (reqEditor && typeof reqEditor.flushPendingEdits === 'function') {
+        const flushResult = reqEditor.flushPendingEdits();
+        if (flushResult && typeof flushResult.then === 'function') {
+          await flushResult;
+        }
+      }
+      if (reqEditor && typeof reqEditor.saveToStorage === 'function') {
+        reqEditor.saveToStorage();
+      } else if (reqEditor && typeof reqEditor.syncRequirementsToSystemConfigFromStorage === 'function') {
+        reqEditor.syncRequirementsToSystemConfigFromStorage();
+      }
+    } catch (_) {}
+  };
+
   if (!isOptimizeWindowContext) {
     (async () => {
       try {
+        persistCurrentDesignIntent();
+        await persistCurrentRequirements();
+        persistCurrentSystemConfigSnapshot();
+
         // Keep Optimize Progress score aligned with the main UI by forcing
         // one explicit "Update Requirement" evaluation before opening.
         const runRequirementUpdateBeforeOpen = async (): Promise<void> => {
@@ -1591,16 +1656,51 @@ export function handleOptimize(): void {
 
   (async () => {
     try {
+      const systemConfig = (() => {
+        try {
+          return (typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function')
+            ? (window as any).loadSystemConfigurationsFromTableConfig()
+            : (typeof (window as any).loadSystemConfigurations === 'function' ? (window as any).loadSystemConfigurations() : loadSystemConfigurations());
+        } catch (_) {
+          return loadSystemConfigurations();
+        }
+      })();
+      const activeConfig = Array.isArray(systemConfig?.configurations)
+        ? (systemConfig.configurations.find((cfg: any) => String(cfg?.id ?? '') === String(systemConfig?.activeConfigId ?? ''))
+          || systemConfig.configurations[0]
+          || null)
+        : null;
+      const preRunVariableCount = (() => {
+        try {
+          const vars = listDesignVariablesFromBlocks(activeConfig || {});
+          return Array.isArray(vars) ? vars.length : 0;
+        } catch (_) {
+          return 0;
+        }
+      })();
+
       publishOptimizeProgress({
         phase: 'starting',
         modeUsed: 'kkt',
         status: 'running',
+        variableCount: preRunVariableCount,
         percent: 5,
       });
 
-      const opticalSystemRows = (window as any).getOpticalSystemRows
-        ? (window as any).getOpticalSystemRows((window as any).tableOpticalSystem)
-        : [];
+      const opticalSystemRows = (() => {
+        try {
+          const blocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
+          if (blocks.length > 0 && typeof (window as any).expandBlocksToOpticalSystemRows === 'function') {
+            const expanded = (window as any).expandBlocksToOpticalSystemRows(blocks);
+            if (expanded && Array.isArray(expanded.rows) && expanded.rows.length > 0) {
+              return expanded.rows;
+            }
+          }
+        } catch (_) {}
+        return (window as any).getOpticalSystemRows
+          ? (window as any).getOpticalSystemRows((window as any).tableOpticalSystem)
+          : [];
+      })();
 
       if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
         publishOptimizeProgress({
@@ -1634,11 +1734,8 @@ export function handleOptimize(): void {
         : [];
       const activeConfigId = (() => {
         try {
-          const cfg = (typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function')
-            ? (window as any).loadSystemConfigurationsFromTableConfig()
-            : (typeof (window as any).loadSystemConfigurations === 'function' ? (window as any).loadSystemConfigurations() : null);
-          if (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null) {
-            return String(cfg.activeConfigId).trim();
+          if (systemConfig && systemConfig.activeConfigId !== undefined && systemConfig.activeConfigId !== null) {
+            return String(systemConfig.activeConfigId).trim();
           }
         } catch (_) {}
         return '';
@@ -1658,11 +1755,23 @@ export function handleOptimize(): void {
         return;
       }
 
+      const cloneJsonLocal = (value: any) => {
+        try { return JSON.parse(JSON.stringify(value)); } catch (_) { return null; }
+      };
+
+      const frozenRunSystemConfig = cloneJsonLocal(systemConfig) || systemConfig || null;
+      try {
+        if (frozenRunSystemConfig) {
+          (window as any).__cooptSystemConfig = cloneJsonLocal(frozenRunSystemConfig) || frozenRunSystemConfig;
+          (window as any).__cooptPreferRuntimeSystemConfig = true;
+          (window as any).__cooptDeferDerivedUiUntil = Date.now() + 60000;
+        }
+      } catch (_) {}
+
       // Capture state before optimization for undo recording
       let beforeOptimizationState: any = null;
       try {
-        const sys = loadSystemConfigurations();
-        beforeOptimizationState = sys ? JSON.parse(JSON.stringify(sys)) : null;
+        beforeOptimizationState = cloneJsonLocal(frozenRunSystemConfig);
       } catch (_) {}
 
       const progressEvents: any[] = [];
@@ -1683,12 +1792,15 @@ export function handleOptimize(): void {
 
       const modeUsed = String(result?.method || 'kkt');
       const meritBefore = Number(result?.before ?? Number.NaN);
+      const requirementScoreBefore = Number(
+        result?.requirementScoreBefore ?? result?.violationScoreBefore ?? Number.NaN
+      );
       const requirementScoreAfter = Number(result?.violationScore ?? Number.NaN);
       const meritAfter = Number.isFinite(requirementScoreAfter)
         ? requirementScoreAfter
         : Number(result?.best ?? Number.NaN);
       const iterations = Number(result?.iterations ?? 0);
-      const variableCount = Number(result?.variables ?? 0);
+      const variableCount = Number(result?.variables ?? preRunVariableCount ?? 0);
       const converged = !result?.aborted;
 
       publishOptimizeProgress({
@@ -1761,6 +1873,13 @@ export function handleOptimize(): void {
         }
       } catch (_) {}
 
+      try {
+        delete (window as any).__cooptPreferRuntimeSystemConfig;
+      } catch (_) {}
+      try {
+        delete (window as any).__cooptSystemConfig;
+      } catch (_) {}
+
       console.log('✅ [Optimize][TS]', result);
       if (Array.isArray(progressEvents) && progressEvents.length > 0) {
         console.log('📈 [Optimize][TS][Progress]', progressEvents.slice(-8));
@@ -1824,6 +1943,13 @@ export function handleOptimize(): void {
           ].filter(Boolean).join('\n')
         );
       }
+    } finally {
+      try {
+        delete (window as any).__cooptPreferRuntimeSystemConfig;
+      } catch (_) {}
+      try {
+        delete (window as any).__cooptSystemConfig;
+      } catch (_) {}
     }
   })();
 }
@@ -1867,6 +1993,16 @@ async function openRenderWindowDesktop(): Promise<void> {
     return false;
   };
 
+  const waitForRenderWindowClosed = async (WebviewWindow: any, label: string, timeoutMs = 120): Promise<void> => {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    while (Date.now() < deadline) {
+      let current: any = null;
+      try { current = await WebviewWindow.getByLabel(label); } catch (_) {}
+      if (!current) return;
+      await new Promise((resolve) => setTimeout(resolve, 24));
+    }
+  };
+
   // Primary: use Rust backend command (bypasses frontend IPC issues)
   try {
     const { invoke } = await import('@tauri-apps/api/core');
@@ -1894,11 +2030,11 @@ async function openRenderWindowDesktop(): Promise<void> {
         if (typeof existing.close === 'function') {
           await existing.close();
         }
-        await new Promise((resolve) => setTimeout(resolve, 180));
+        await waitForRenderWindowClosed(WebviewWindow, label);
       } catch (e) {
         console.warn('[Render3D][Desktop] close existing failed:', e);
         try { await existing.close(); } catch (_) {}
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await waitForRenderWindowClosed(WebviewWindow, label, 160);
       }
     }
 

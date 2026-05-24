@@ -69,6 +69,16 @@ export class Command {
   }
 }
 
+function requestDesignIntentUiRefresh(options: any = {}): boolean {
+  try {
+    if (typeof w.__cooptScheduleDesignIntentUiRefresh === 'function') {
+      w.__cooptScheduleDesignIntentUiRefresh(options);
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
 // ============================================================================
 // Specific Command Types
 // ============================================================================
@@ -169,31 +179,30 @@ export class SetBlockParameterCommand extends Command {
   }
   
   refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
-    // Re-expand blocks to optical system
+    // Debug: Check value before save
+    const cfgInSysConfig = sysConfig.configurations.find((c: Configuration) => c.name === cfg.name);
+    const blockInSysConfig = cfgInSysConfig?.blocks?.find((b: Block) => b.blockId === this.blockId);
+    this.getNestedValue(blockInSysConfig, this.parameterPath);
+
+    if (requestDesignIntentUiRefresh({
+      systemConfig: sysConfig,
+      activeConfigId: String((sysConfig as any)?.activeConfigId ?? (cfg as any)?.id ?? ''),
+      changedPath: this.parameterPath,
+      triggerRender: true,
+      debounceMs: 80,
+    })) {
+      return;
+    }
+
     if (w.expandBlocksToOpticalSystemRows) {
       const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
       if (expanded && expanded.rows) {
         cfg.opticalSystemRows = expanded.rows;
       }
     }
-    
-    // Debug: Check value before save
-    const cfgInSysConfig = sysConfig.configurations.find((c: Configuration) => c.name === cfg.name);
-    const blockInSysConfig = cfgInSysConfig?.blocks?.find((b: Block) => b.blockId === this.blockId);
-    this.getNestedValue(blockInSysConfig, this.parameterPath);
-    
-    // Save to localStorage (sysConfig already contains the changes made to cfg)
     if (w.saveSystemConfigurations) {
       w.saveSystemConfigurations(sysConfig);
-      
-      // Verify save
-      const reloaded = w.loadSystemConfigurations();
-      const reloadedCfg = reloaded.configurations.find((c: Configuration) => c.name === cfg.name);
-      const reloadedBlock = reloadedCfg?.blocks.find((b: Block) => b.blockId === this.blockId);
-      this.getNestedValue(reloadedBlock, this.parameterPath);
     }
-    
-    // Refresh UI
     if (w.refreshBlockInspector) {
       requestRefreshBlockInspector(w);
     }
@@ -673,6 +682,17 @@ export class SetDesignIntentOptimizeBulkCommand extends Command {
 
       cfg.blocks = Array.isArray(blocksSnapshot) ? JSON.parse(JSON.stringify(blocksSnapshot)) : [];
 
+      if (requestDesignIntentUiRefresh({
+        systemConfig: sysConfig,
+        activeConfigId: this.configId,
+        forceExpandedRows: true,
+        refreshBlockInspector: true,
+        triggerRender: true,
+        debounceMs: 60,
+      })) {
+        return;
+      }
+
       if (w.expandBlocksToOpticalSystemRows) {
         const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
         if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;
@@ -883,6 +903,17 @@ export class AddBlockCommand extends Command {
   }
   
   refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
+    if (requestDesignIntentUiRefresh({
+      systemConfig: sysConfig,
+      activeConfigId: String((sysConfig as any)?.activeConfigId ?? (cfg as any)?.id ?? ''),
+      forceExpandedRows: true,
+      refreshBlockInspector: true,
+      triggerRender: true,
+      debounceMs: 60,
+    })) {
+      return;
+    }
+
     if (w.expandBlocksToOpticalSystemRows) {
       const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
       if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;
@@ -938,6 +969,17 @@ export class DeleteBlockCommand extends Command {
   }
   
   refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
+    if (requestDesignIntentUiRefresh({
+      systemConfig: sysConfig,
+      activeConfigId: String((sysConfig as any)?.activeConfigId ?? (cfg as any)?.id ?? ''),
+      forceExpandedRows: true,
+      refreshBlockInspector: true,
+      triggerRender: true,
+      debounceMs: 60,
+    })) {
+      return;
+    }
+
     if (w.expandBlocksToOpticalSystemRows) {
       const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
       if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;

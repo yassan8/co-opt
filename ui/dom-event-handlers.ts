@@ -108,6 +108,11 @@ import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.t
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { saveJsonFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath } from '../src/desktop/runtime.ts';
+import {
+    requiresExpandedRowsForDesignIntentChange,
+    requiresBlockInspectorRefreshForDesignIntentChange,
+    requiresZoomUiRefreshForDesignIntentChange
+} from './design-intent-refresh-policy.ts';
 import { clearOptimizerStop } from '../src/desktop/ipc/client.ts';
 
 // Type definitions
@@ -6610,6 +6615,20 @@ function __blocks_getVarScope(v: any): string {
     return 'perConfig';
 }
 
+function __blocks_getMutuallyExclusiveGlassVarKeys(key: string): string[] {
+    const normalizedKey = String(key ?? '').trim().toLowerCase();
+    const match = normalizedKey.match(/^(material|rindex|abbe|vd|nd)(\d*)$/);
+    if (!match) return [];
+
+    const family = match[1];
+    const suffix = match[2] || '';
+    if (family === 'material') {
+        return [`rindex${suffix}`, `abbe${suffix}`, `vd${suffix}`, `nd${suffix}`];
+    }
+
+    return [`material${suffix}`];
+}
+
 function __blocks_setVarScope(blockId: string, key: string, scope: string): void {
     try {
         const systemConfig = loadSystemConfigurations();
@@ -6683,6 +6702,10 @@ function __blocks_setVarMode(blockId: string, key: string, enabled: boolean, sco
         const systemConfig = loadSystemConfigurations();
         if (!systemConfig || !Array.isArray(systemConfig.configurations)) return;
 
+        const mutuallyExclusiveKeys = enabled
+            ? __blocks_getMutuallyExclusiveGlassVarKeys(key)
+            : [];
+
         const missing: Array<{configId: string, configName?: string}> = [];
 
         const activeId = systemConfig.activeConfigId;
@@ -6728,6 +6751,15 @@ function __blocks_setVarMode(blockId: string, key: string, enabled: boolean, sco
             b.variables[key].optimize.mode = enabled ? 'V' : 'F';
             b.variables[key].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
 
+            if (enabled && mutuallyExclusiveKeys.length > 0) {
+                for (const excludedKey of mutuallyExclusiveKeys) {
+                    const existing = b.variables?.[excludedKey];
+                    if (!existing || typeof existing !== 'object') continue;
+                    if (!existing.optimize || typeof existing.optimize !== 'object') existing.optimize = {};
+                    existing.optimize.mode = 'F';
+                }
+            }
+
             // Sync numeric value when switching to global.
             if (sharedNumericValue !== null && scope === 'global') {
                 try {
@@ -6752,6 +6784,19 @@ function __blocks_setVarMode(blockId: string, key: string, enabled: boolean, sco
         try {
             saveSystemConfigurations(systemConfig);
         } catch (_) {}
+
+        try {
+            __cooptScheduleDesignIntentUiRefresh({
+                systemConfig,
+                activeConfigId: systemConfig.activeConfigId,
+                refreshBlockInspector: true,
+                triggerRender: false,
+                skipOpticalTableSync: true,
+                debounceMs: 40,
+            });
+        } catch (_) {
+            try { requestRefreshBlockInspector(); } catch (_) {}
+        }
     } catch (_) {}
 }
 
@@ -6835,11 +6880,13 @@ function __blocks_setParameterAndApertureModeBulk(enabled: boolean): { ok: boole
             }
         } catch (_) {}
 
-        saveSystemConfigurations(systemConfig);
-
-        try { refreshBlockInspector(); } catch (_) {}
-        try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-        try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
+        __cooptScheduleDesignIntentUiRefresh({
+            systemConfig,
+            activeConfigId: String(activeCfg.id ?? activeId ?? ''),
+            refreshBlockInspector: true,
+            triggerRender: true,
+            debounceMs: 80,
+        });
 
         return { ok: true, changedCount };
     } catch (e: any) {
@@ -7264,6 +7311,12 @@ function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''
 let __cooptBlockParamDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let __cooptBlockDerivedUiTimer: ReturnType<typeof setTimeout> | null = null;
 let __cooptBlockOpticalTableTimer: ReturnType<typeof setTimeout> | null = null;
+let __cooptRenderSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let __cooptPendingRenderSyncRequest: {
+    rows: any[];
+    objectRows: any[];
+    systemConfig: any;
+} | null = null;
 let __cooptBlockParamPendingRefresh: {
     systemConfig: any;
     activeConfigId: string;
@@ -7313,11 +7366,24 @@ function cooptHasAutoGapThicknessMode(blocks: any[]): boolean {
 }
 
 function cooptNeedsExpandedRowsForBlockChange(blocks: any[], changedPath: string): boolean {
-    if (cooptRequiresBlockInspectorRefresh(changedPath)) return true;
+    if (requiresExpandedRowsForDesignIntentChange(changedPath)) return true;
     if (cooptHasAutoGapThicknessMode(blocks)) return true;
-    if (cooptHasMountedOpticalTable()) return true;
-    if (cooptHasActiveRenderSyncTarget()) return true;
     return false;
+}
+
+function cooptSuppressOpticalSystemDataChanged(enabled: boolean): void {
+    try {
+        const key = '__suppressOpticalSystemDataChangedDepth';
+        const depth = Number(w[key] || 0);
+        if (enabled) {
+            w[key] = depth + 1;
+            w.__suppressOpticalSystemDataChanged = true;
+            return;
+        }
+        const next = Math.max(0, depth - 1);
+        w[key] = next;
+        w.__suppressOpticalSystemDataChanged = next > 0;
+    } catch (_) {}
 }
 
 function cooptScheduleDeferredOpticalTableSync(rows: any[] | null): void {
@@ -7334,16 +7400,19 @@ function cooptScheduleDeferredOpticalTableSync(rows: any[] | null): void {
         try {
             const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
             if (tableOptical && typeof tableOptical.replaceData === 'function') {
-                try { w.__suppressOpticalSystemDataChanged = true; } catch (_) {}
+                cooptSuppressOpticalSystemDataChanged(true);
                 tableOptical.replaceData(rows);
             } else if (tableOptical && typeof tableOptical.setData === 'function') {
-                try { w.__suppressOpticalSystemDataChanged = true; } catch (_) {}
+                cooptSuppressOpticalSystemDataChanged(true);
                 tableOptical.setData(rows);
             }
         } catch (_) {}
         try {
+            requestUpdateSurfaceNumberSelect(w);
+        } catch (_) {}
+        try {
             setTimeout(() => {
-                try { delete w.__suppressOpticalSystemDataChanged; } catch (_) {}
+                cooptSuppressOpticalSystemDataChanged(false);
             }, 0);
         } catch (_) {}
     };
@@ -7418,27 +7487,49 @@ function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
             }
         } catch (_) {}
     }
-    const systemConfig = __cooptCloneSystemConfig();
-    const renderRowsPayload = Array.isArray(rows) ? (cooptCloneJsonValue(rows) || []) : [];
-    const renderObjectRowsPayload = Array.isArray(objectRows) ? (cooptCloneJsonValue(objectRows) || []) : [];
-    const token = `${Date.now()}-block-param`;
-    const popup = (() => {
-        try {
-            return w.popup3DWindow && !w.popup3DWindow.closed ? w.popup3DWindow : null;
-        } catch (_) {
-            return null;
-        }
-    })();
-    const hasLocalRenderTarget = typeof w.__cooptRenderWindowRedraw === 'function';
-    const canUseTauriRenderSync = isTauriRuntime();
-
-    if (renderRowsPayload.length === 0) {
+    if (!Array.isArray(rows) || rows.length === 0) {
         return;
     }
 
-    try {
-        if (renderRowsPayload.length > 0 && hasLocalRenderTarget) {
-            if (typeof w.__cooptRenderWindowRedraw === 'function') {
+    __cooptPendingRenderSyncRequest = {
+        rows: Array.isArray(rows) ? rows.slice() : [],
+        objectRows: Array.isArray(objectRows) ? objectRows.slice() : [],
+        systemConfig: __cooptGetSystemConfig(),
+    };
+
+    if (__cooptRenderSyncTimer !== null) {
+        clearTimeout(__cooptRenderSyncTimer);
+    }
+
+    __cooptRenderSyncTimer = setTimeout(() => {
+        __cooptRenderSyncTimer = null;
+        const pending = __cooptPendingRenderSyncRequest;
+        __cooptPendingRenderSyncRequest = null;
+        if (!pending || !Array.isArray(pending.rows) || pending.rows.length === 0) {
+            return;
+        }
+
+        const renderRowsPayload = cooptCloneJsonValue(pending.rows) || [];
+        const renderObjectRowsPayload = Array.isArray(pending.objectRows) ? (cooptCloneJsonValue(pending.objectRows) || []) : [];
+        const systemConfig = (pending.systemConfig && typeof pending.systemConfig === 'object')
+            ? (cooptCloneJsonValue(pending.systemConfig) || pending.systemConfig)
+            : null;
+        const token = `${Date.now()}-block-param`;
+        const popup = (() => {
+            try {
+                return w.popup3DWindow && !w.popup3DWindow.closed ? w.popup3DWindow : null;
+            } catch (_) {
+                return null;
+            }
+        })();
+        const hasLocalRenderTarget = typeof w.__cooptRenderWindowRedraw === 'function';
+        const canUseTauriRenderSync = isTauriRuntime();
+        const hasPopupDirectRedraw = !!(popup && typeof popup.__cooptRenderWindowRedraw === 'function');
+        const hasPopupMessageTarget = !!(popup && typeof popup.postMessage === 'function');
+        const needsExternalSync = canUseTauriRenderSync || (!hasLocalRenderTarget && !hasPopupDirectRedraw && !hasPopupMessageTarget);
+
+        try {
+            if (hasLocalRenderTarget && typeof w.__cooptRenderWindowRedraw === 'function') {
                 try {
                     if (systemConfig && typeof systemConfig === 'object') {
                         w.__cooptPendingRenderSystemConfig = systemConfig;
@@ -7448,57 +7539,157 @@ function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
                 } catch (_) {}
                 w.__cooptRenderWindowRedraw(renderRowsPayload, token, renderObjectRowsPayload);
             }
-        }
-    } catch (_) {}
+        } catch (_) {}
 
-    try {
-        if (popup && !popup.closed) {
-            if (typeof popup.__cooptRenderWindowRedraw === 'function' && renderRowsPayload.length > 0) {
-                try {
-                    if (systemConfig && typeof systemConfig === 'object') {
-                        popup.__cooptPendingRenderSystemConfig = systemConfig;
-                        popup.__cooptSystemConfig = systemConfig;
-                        popup.__cooptPreferRuntimeSystemConfig = true;
-                    }
-                } catch (_) {}
-                popup.__cooptRenderWindowRedraw(renderRowsPayload, token, renderObjectRowsPayload);
-            } else if (typeof popup.postMessage === 'function') {
-                try { popup.__cooptPendingRenderRows = renderRowsPayload; } catch (_) {}
-                try { popup.__cooptPendingRenderObjectRows = renderObjectRowsPayload; } catch (_) {}
-                popup.postMessage({ action: 'request-redraw', rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig, ts: token, token }, '*');
+        try {
+            if (popup && !popup.closed) {
+                if (hasPopupDirectRedraw) {
+                    try {
+                        if (systemConfig && typeof systemConfig === 'object') {
+                            popup.__cooptPendingRenderSystemConfig = systemConfig;
+                            popup.__cooptSystemConfig = systemConfig;
+                            popup.__cooptPreferRuntimeSystemConfig = true;
+                        }
+                    } catch (_) {}
+                    popup.__cooptRenderWindowRedraw(renderRowsPayload, token, renderObjectRowsPayload);
+                } else if (hasPopupMessageTarget) {
+                    try { popup.__cooptPendingRenderRows = renderRowsPayload; } catch (_) {}
+                    try { popup.__cooptPendingRenderObjectRows = renderObjectRowsPayload; } catch (_) {}
+                    popup.postMessage({ action: 'request-redraw', rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig, ts: token, token }, '*');
+                }
             }
-        }
-    } catch (_) {}
+        } catch (_) {}
 
-    try {
-        localStorage.setItem('coopt.renderSyncRequest', JSON.stringify({ ts: token, token, rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig, senderId: getOrCreateCooptWindowSyncSenderId() }));
-    } catch (_) {}
+        try {
+            if (needsExternalSync) {
+                localStorage.setItem('coopt.renderSyncRequest', JSON.stringify({ ts: token, token, rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig, senderId: getOrCreateCooptWindowSyncSenderId() }));
+            }
+        } catch (_) {}
 
-    try {
-        if (canUseTauriRenderSync) {
-            void (async () => {
-                try {
-                    const mod = await import('@tauri-apps/api/event');
-                    if (mod && typeof (mod as any).emit === 'function') {
-                        await (mod as any).emit('coopt-render-sync-request', { ts: token, token, rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig });
-                    }
-                } catch (_) {}
-            })();
-        }
-    } catch (_) {}
+        try {
+            if (canUseTauriRenderSync) {
+                void (async () => {
+                    try {
+                        const mod = await import('@tauri-apps/api/event');
+                        if (mod && typeof (mod as any).emit === 'function') {
+                            await (mod as any).emit('coopt-render-sync-request', { ts: token, token, rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig });
+                        }
+                    } catch (_) {}
+                })();
+            }
+        } catch (_) {}
+    }, 90);
 }
 
 function cooptRequiresBlockInspectorRefresh(path: string): boolean {
-    const normalizedPath = String(path ?? '').trim();
-    if (!normalizedPath) return false;
-    return /parameters\.(?:surfType|frontSurfType|backSurfType|surf1SurfType|surf2SurfType|surf3SurfType|thicknessMode|objectDistanceMode|semidiaMode|optimizeSemiDia|apertureShape|coordBreakOrder|transformOrder|position|zoomGroup|zoomLaw|linkedZoomGroups|zoomLaws)|^aperture\.|^variables\./.test(normalizedPath);
+    return requiresBlockInspectorRefreshForDesignIntentChange(path);
 }
 
 function cooptRequiresZoomUiRefresh(path: string): boolean {
-    const normalizedPath = String(path ?? '').trim();
-    if (!normalizedPath) return false;
-    return /parameters\.(?:zoom(Position|Group|Law)|linkedZoomGroups|zoomLaws|compensationStroke|compensationSamples)/.test(normalizedPath);
+    return requiresZoomUiRefreshForDesignIntentChange(path);
 }
+
+let __cooptDesignIntentUiRefreshTimer: number | null = null;
+let __cooptPendingDesignIntentUiRefresh: any = null;
+
+function __cooptScheduleDesignIntentUiRefresh(options: any = {}): void {
+    const next = (options && typeof options === 'object') ? options : {};
+    const prev = (__cooptPendingDesignIntentUiRefresh && typeof __cooptPendingDesignIntentUiRefresh === 'object')
+        ? __cooptPendingDesignIntentUiRefresh
+        : {};
+
+    __cooptPendingDesignIntentUiRefresh = {
+        systemConfig: next.systemConfig || prev.systemConfig || null,
+        activeConfigId: next.activeConfigId ?? prev.activeConfigId ?? null,
+        changedPath: String(next.changedPath ?? prev.changedPath ?? ''),
+        forceExpandedRows: prev.forceExpandedRows === true || next.forceExpandedRows === true,
+        refreshBlockInspector: prev.refreshBlockInspector === true || next.refreshBlockInspector === true,
+        refreshZoomUi: prev.refreshZoomUi === true || next.refreshZoomUi === true,
+        triggerRender: next.triggerRender === false ? false : (prev.triggerRender === false ? false : true),
+        skipOpticalTableSync: prev.skipOpticalTableSync === true || next.skipOpticalTableSync === true,
+        debounceMs: Number.isFinite(Number(next.debounceMs)) ? Math.max(0, Number(next.debounceMs)) : (Number.isFinite(Number(prev.debounceMs)) ? Math.max(0, Number(prev.debounceMs)) : 120),
+    };
+
+    if (__cooptDesignIntentUiRefreshTimer !== null) {
+        clearTimeout(__cooptDesignIntentUiRefreshTimer);
+    }
+
+    __cooptDesignIntentUiRefreshTimer = window.setTimeout(() => {
+        __cooptDesignIntentUiRefreshTimer = null;
+        const pending = (__cooptPendingDesignIntentUiRefresh && typeof __cooptPendingDesignIntentUiRefresh === 'object')
+            ? __cooptPendingDesignIntentUiRefresh
+            : {};
+        __cooptPendingDesignIntentUiRefresh = null;
+
+        try {
+            const systemConfig = pending.systemConfig || loadSystemConfigurations();
+            const activeConfigId = String(pending.activeConfigId ?? systemConfig?.activeConfigId ?? '');
+            const activeConfig = systemConfig?.configurations?.find((cfg: any) => String(cfg?.id ?? '') === activeConfigId)
+                || systemConfig?.configurations?.find((cfg: any) => String(cfg?.id ?? '') === String(systemConfig?.activeConfigId ?? ''))
+                || systemConfig?.configurations?.[0]
+                || null;
+            if (!activeConfig) return;
+
+            const changedPath = String(pending.changedPath ?? '');
+            const blocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
+            const legacyRows = Array.isArray(activeConfig?.opticalSystem) ? activeConfig.opticalSystem : [];
+            const shouldRefreshBlockInspector = pending.refreshBlockInspector === true || cooptRequiresBlockInspectorRefresh(changedPath);
+            const shouldRefreshZoomUi = pending.refreshZoomUi === true || cooptRequiresZoomUiRefresh(changedPath);
+            const shouldExpandRows = pending.forceExpandedRows === true || cooptNeedsExpandedRowsForBlockChange(blocks, changedPath);
+
+            let rowsSnapshot: any[] | null = null;
+
+            try {
+                w.__cooptSystemConfig = systemConfig;
+                w.__cooptPreferRuntimeSystemConfig = true;
+            } catch (_) {}
+
+            if (shouldExpandRows) {
+                const autoGapResult = cooptAutoApplyGapThicknessModes(blocks, changedPath);
+                const expandedRows = Array.isArray(autoGapResult?.rows)
+                    ? autoGapResult.rows
+                    : (() => {
+                        const expanded = expandBlocksToOpticalSystemRows(blocks as any);
+                        return expanded && Array.isArray(expanded.rows) ? expanded.rows : null;
+                    })();
+                if (Array.isArray(expandedRows)) {
+                    cooptPreserveLegacySemidiaIntoExpanded(expandedRows, legacyRows);
+                    rowsSnapshot = expandedRows.slice();
+                    activeConfig.opticalSystem = expandedRows;
+                    if (pending.skipOpticalTableSync !== true) {
+                        cooptScheduleDeferredOpticalTableSync(expandedRows);
+                    }
+                }
+            }
+
+            try {
+                saveSystemConfigurations(systemConfig);
+                delete w.__cooptPreferRuntimeSystemConfig;
+            } catch (_) {}
+
+            if (shouldRefreshBlockInspector) {
+                try {
+                    __cooptBlockInspectorExpandedRowsOverride = Array.isArray(rowsSnapshot) ? rowsSnapshot.slice() : null;
+                    __cooptBlockInspectorSkipOpticalTableSync = Array.isArray(rowsSnapshot);
+                    requestRefreshBlockInspector();
+                } catch (_) {}
+            }
+            if (shouldRefreshZoomUi) {
+                try { refreshZoomControlTab(); } catch (_) {}
+            }
+            if (pending.triggerRender !== false) {
+                __cooptRequestRenderRedrawWithRows(rowsSnapshot);
+            }
+        } catch (_) {
+        } finally {
+            try { delete w.__cooptDeferDerivedUiUntil; } catch (_) {}
+        }
+    }, __cooptPendingDesignIntentUiRefresh.debounceMs);
+}
+
+try {
+    w.__cooptScheduleDesignIntentUiRefresh = __cooptScheduleDesignIntentUiRefresh;
+} catch (_) {}
 
 function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newValue: any): void {
     const systemConfig = loadSystemConfigurations();
@@ -7651,6 +7842,7 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     __cooptBlockParamDebounceTimer = setTimeout(() => {
         __cooptBlockParamDebounceTimer = null;
         let rowsSnapshot: any[] | null = null;
+        let didPersistSystemConfig = false;
         const pending = __cooptBlockParamPendingRefresh;
 
         try {
@@ -7678,9 +7870,18 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
 
                     try {
                         saveSystemConfigurations(latestSystemConfig);
+                        didPersistSystemConfig = true;
                         delete w.__cooptPreferRuntimeSystemConfig;
                     } catch (_) {}
                 }
+            }
+
+            if (!didPersistSystemConfig) {
+                try {
+                    saveSystemConfigurations(latestSystemConfig);
+                    didPersistSystemConfig = true;
+                    delete w.__cooptPreferRuntimeSystemConfig;
+                } catch (_) {}
             }
         } catch (_) {}
 
@@ -9202,6 +9403,26 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             const group = document.createElement('span');
             group.className = 'block-inspector-quick-material';
 
+            const applyGlassDerivedFields = (nextMaterialValue: any, selectedGlass?: any) => {
+                const glass = (selectedGlass && typeof selectedGlass === 'object')
+                    ? selectedGlass
+                    : getGlassDataWithSellmeier(String(nextMaterialValue ?? '').trim());
+                if (!glass) return;
+
+                const rindexPath = materialPath.replace(/material/i, 'rindex');
+                if (rindexPath !== materialPath && Number.isFinite(Number(glass.nd))) {
+                    try {
+                        cooptApplyBlockValue(blockId, rindexPath, undefined, String(glass.nd));
+                    } catch (_) {}
+                }
+
+                if (abbePath && Number.isFinite(Number(glass.vd))) {
+                    try {
+                        cooptApplyBlockValue(blockId, abbePath, abbeValue, String(glass.vd));
+                    } catch (_) {}
+                }
+            };
+
             const input = document.createElement('input');
             input.type = 'text';
             input.value = materialValue === undefined || materialValue === null ? '' : String(materialValue);
@@ -9216,6 +9437,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const nextValue = normalized.value;
                 if (nextValue !== materialValue) {
                     cooptApplyBlockValue(blockId, materialPath, materialValue, nextValue);
+                    applyGlassDerivedFields(nextValue);
                 }
             };
             input.addEventListener('keydown', (event) => {
@@ -9235,12 +9457,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (nextMaterial !== materialValue) {
                     cooptApplyBlockValue(blockId, materialPath, materialValue, nextMaterial);
                 }
-                if (abbePath && Number.isFinite(Number(glass.vd))) {
-                    const nextAbbe = Number(glass.vd);
-                    if (nextAbbe !== abbeValue) {
-                        cooptApplyBlockValue(blockId, abbePath, abbeValue, nextAbbe);
-                    }
-                }
+                applyGlassDerivedFields(nextMaterial, glass);
             };
 
             const searchBtn = document.createElement('button');
@@ -9294,6 +9511,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             appendTextField('R2', 'parameters.backRadius', params.backRadius, 62);
             appendTextField('CT', 'parameters.centerThickness', params.centerThickness, 54);
             appendMaterialField('parameters.material', params.material, 'parameters.abbe', params.abbe);
+            appendTextField('n', 'parameters.rindex', params.rindex, 54);
             appendTextField('Abbe', 'parameters.abbe', params.abbe, 54);
             appendTextField('SD1', 'aperture.front', aperture.front, 50);
             appendTextField('SD2', 'aperture.back', aperture.back, 50);
@@ -9306,6 +9524,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             appendTextField('R2', 'parameters.radius2', params.radius2, 62, row1);
             appendTextField('CT', 'parameters.thickness1', params.thickness1, 54, row1);
             appendMaterialField('parameters.material1', params.material1, 'parameters.abbe1', params.abbe1, 'G1', row1);
+            appendTextField('n1', 'parameters.rindex1', params.rindex1, 60, row1);
             appendTextField('Abbe1', 'parameters.abbe1', params.abbe1, 60, row1);
             appendTextField('SD1', 'aperture.s1', aperture.s1, 50, row1);
             appendTextField('SD2', 'aperture.s2', aperture.s2, 50, row1);
@@ -9314,6 +9533,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             appendTextField('R3', 'parameters.radius3', params.radius3, 62, row2);
             appendTextField('CT', 'parameters.thickness2', params.thickness2, 54, row2);
             appendMaterialField('parameters.material2', params.material2, 'parameters.abbe2', params.abbe2, 'G2', row2);
+            appendTextField('n2', 'parameters.rindex2', params.rindex2, 60, row2);
             appendTextField('Abbe2', 'parameters.abbe2', params.abbe2, 60, row2);
             appendSpacerField('SD1', 50, row2);
             appendTextField('SD3', 'aperture.s3', aperture.s3, 50, row2);
@@ -9330,6 +9550,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             appendTextField('R2', 'parameters.radius2', params.radius2, 62, row1);
             appendTextField('CT', 'parameters.thickness1', params.thickness1, 54, row1);
             appendMaterialField('parameters.material1', params.material1, 'parameters.abbe1', params.abbe1, 'G1', row1);
+            appendTextField('n1', 'parameters.rindex1', params.rindex1, 60, row1);
             appendTextField('Abbe1', 'parameters.abbe1', params.abbe1, 60, row1);
             appendTextField('SD1', 'aperture.s1', aperture.s1, 50, row1);
             appendTextField('SD2', 'aperture.s2', aperture.s2, 50, row1);
@@ -9338,6 +9559,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             appendTextField('R3', 'parameters.radius3', params.radius3, 62, row2);
             appendTextField('CT', 'parameters.thickness2', params.thickness2, 54, row2);
             appendMaterialField('parameters.material2', params.material2, 'parameters.abbe2', params.abbe2, 'G2', row2);
+            appendTextField('n2', 'parameters.rindex2', params.rindex2, 60, row2);
             appendTextField('Abbe2', 'parameters.abbe2', params.abbe2, 60, row2);
             appendSpacerField('SD1', 50, row2);
             appendTextField('SD3', 'aperture.s3', aperture.s3, 50, row2);
@@ -9347,6 +9569,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             appendTextField('R4', 'parameters.radius4', params.radius4, 62, row3);
             appendTextField('CT', 'parameters.thickness3', params.thickness3, 54, row3);
             appendMaterialField('parameters.material3', params.material3, 'parameters.abbe3', params.abbe3, 'G3', row3);
+            appendTextField('n3', 'parameters.rindex3', params.rindex3, 60, row3);
             appendTextField('Abbe3', 'parameters.abbe3', params.abbe3, 60, row3);
             appendSpacerField('SD1', 50, row3);
             appendSpacerField('SD2', 50, row3);
@@ -9608,15 +9831,17 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     }
 
-                    // Doublet display priority: material1 → abbe1/vd1 → material2 → abbe2/vd2
+                    // Doublet display priority: material1 → rindex1 → abbe1/vd1 → material2 → rindex2 → abbe2/vd2
                     const rank = (k: string): number => {
                         switch (k) {
                             case 'material1': return 0;
+                            case 'rindex1': return 1;
                             case 'abbe1':
-                            case 'vd1': return 1;
-                            case 'material2': return 2;
+                            case 'vd1': return 2;
+                            case 'material2': return 3;
+                            case 'rindex2': return 4;
                             case 'abbe2':
-                            case 'vd2': return 3;
+                            case 'vd2': return 5;
                             default: return 100;
                         }
                     };
@@ -9633,6 +9858,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (aLower.includes('material') && !bLower.includes('material')) return -1;
                     if (bLower.includes('material') && !aLower.includes('material')) return 1;
                     
+                    if (a === 'rindex') return -1;
+                    if (b === 'rindex') return 1;
+
                     // Abbe/vd second
                     if (a === 'abbe' || a === 'vd') return -1;
                     if (b === 'abbe' || b === 'vd') return 1;
@@ -9762,12 +9990,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             };
             
             const blockType = String(expandedBlock.blockType || expandedBlock.type || 'unknown');
-            const hideLegacyRindexParams =
-                blockType === 'Lens'
-                || blockType === 'PositiveLens'
-                || blockType === 'Doublet'
-                || blockType === 'Triplet';
-            
             // For Gap blocks, ensure material/thicknessMode are always in paramKeys even if not set
             const allParamKeys = Object.keys(params || {}).filter(k => {
                 // chiefRayShiftX/Y/Z は廃止フィールド。表示しない
@@ -9775,7 +9997,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (kl === 'chiefrayshiftx' || kl === 'chiefrayshifty' || kl === 'chiefrayshiftz') return false;
                 if (kl === 'zoomgroupaprofile' || kl === 'zoomgroupbprofile') return false;
                 if ((blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && (kl === 'zoomposition' || kl === 'zoomgroupprofiles')) return false;
-                if (hideLegacyRindexParams && /^rindex\d*$/.test(kl)) return false;
                 if (blockType === 'Paraxial') {
                     if (kl === 'material' || kl === 'abbe' || kl === 'vd' || kl === 'nd' || kl === 'rindex' || kl === 'bending') return false;
                     if (kl === 'frontradius' || kl === 'backradius' || kl === 'centerthickness' || kl === 'radiusx') return false;
@@ -9817,6 +10038,18 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') {
                 if (!allParamKeys.includes('bending')) allParamKeys.push('bending');
             }
+            if ((blockType === 'Lens' || blockType === 'PositiveLens') && !allParamKeys.includes('rindex')) {
+                allParamKeys.push('rindex');
+            }
+            if (blockType === 'Doublet') {
+                if (!allParamKeys.includes('rindex1')) allParamKeys.push('rindex1');
+                if (!allParamKeys.includes('rindex2')) allParamKeys.push('rindex2');
+            }
+            if (blockType === 'Triplet') {
+                if (!allParamKeys.includes('rindex1')) allParamKeys.push('rindex1');
+                if (!allParamKeys.includes('rindex2')) allParamKeys.push('rindex2');
+                if (!allParamKeys.includes('rindex3')) allParamKeys.push('rindex3');
+            }
             if (blockType === 'Stop') {
                 if (!allParamKeys.includes('semiDiameter')) allParamKeys.push('semiDiameter');
             }
@@ -9835,7 +10068,33 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 }
             }
             const paramKeys = sortParameterKeys(allParamKeys);
-            const varKeys = Object.keys(vars || {}).sort();
+            const sortVariableKeys = (keys: string[]): string[] => {
+                const rank = (key: string): number => {
+                    const lower = String(key ?? '').trim().toLowerCase();
+                    if (lower === 'material') return 0;
+                    if (lower === 'rindex') return 1;
+                    if (lower === 'abbe' || lower === 'vd' || lower === 'nd') return 2;
+
+                    const materialMatch = lower.match(/^material(\d+)$/);
+                    if (materialMatch) return 10 + (Number(materialMatch[1]) * 10);
+
+                    const rindexMatch = lower.match(/^rindex(\d+)$/);
+                    if (rindexMatch) return 11 + (Number(rindexMatch[1]) * 10);
+
+                    const abbeMatch = lower.match(/^(abbe|vd|nd)(\d+)$/);
+                    if (abbeMatch) return 12 + (Number(abbeMatch[2]) * 10);
+
+                    return 1000;
+                };
+
+                return keys.slice().sort((a, b) => {
+                    const rankA = rank(a);
+                    const rankB = rank(b);
+                    if (rankA !== rankB) return rankA - rankB;
+                    return a.localeCompare(b);
+                });
+            };
+            const varKeys = sortVariableKeys(Object.keys(vars || {}));
 
             const normalizeSurfTypeLabel = (value: any) => {
                 return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '');
@@ -9945,8 +10204,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const isCoordOrder = blockType === 'CoordTrans' && label === 'order';
                 const isCoordToSurf = blockType === 'CoordTrans' && label === 'toSurf';
                 const isZoomGroup = label === 'zoomGroup';
-                // Exclude nd, vd, abbe from slider display - they should be text input only
-                const isGlassProperty = label === 'nd' || label === 'vd' || label === 'abbe';
+                // Exclude refractive-index / dispersion fields from slider display.
+                const isGlassProperty = /^(?:rindex|nd|vd|abbe)\d*$/i.test(label);
                 const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isGapThicknessMode && !isObjectDistanceMode && !isImageSemidiaMode && !isApertureShape && !isCoordReturn && !isCoordOrder && !isCoordToSurf && !isZoomGroup && !isNaN(parseFloat(String(value)));
                 
                 // Determine if this parameter should show coef parameters based on surfType
@@ -10648,6 +10907,27 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     container.style.flexWrap = 'nowrap';
                     container.style.minHeight = '28px';
 
+                    const applyMaterialDerivedFields = (nextMaterialValue: any, selectedGlass?: any) => {
+                        const glass = (selectedGlass && typeof selectedGlass === 'object')
+                            ? selectedGlass
+                            : getGlassDataWithSellmeier(String(nextMaterialValue ?? '').trim());
+                        if (!glass) return;
+
+                        const rindexFieldPath = path.replace(/material/i, 'rindex');
+                        if (rindexFieldPath !== path && Number.isFinite(Number(glass.nd))) {
+                            try {
+                                cooptApplyBlockValue(blockId, rindexFieldPath, undefined, String(glass.nd));
+                            } catch (_) {}
+                        }
+
+                        const abbeFieldPath = path.replace(/material/i, 'abbe');
+                        if (abbeFieldPath !== path && Number.isFinite(Number(glass.vd))) {
+                            try {
+                                cooptApplyBlockValue(blockId, abbeFieldPath, undefined, String(glass.vd));
+                            } catch (_) {}
+                        }
+                    };
+
                     const input = document.createElement('input');
                     input.type = 'text';
                     input.value = value === undefined || value === null ? '' : String(value);
@@ -10691,12 +10971,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                             cooptApplyBlockValue(blockId, path, value, newValue);
                                         }
 
-                                        const abbeFieldPath = path.replace(/material/i, 'abbe');
-                                        if (abbeFieldPath !== path && Number.isFinite(glass.vd)) {
-                                            try {
-                                                cooptApplyBlockValue(blockId, abbeFieldPath, undefined, String(glass.vd));
-                                            } catch (_) {}
-                                        }
+                                        applyMaterialDerivedFields(newValue, glass);
                                         return true;
                                     }
                                     return false;
@@ -10877,15 +11152,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                 if (newValue !== value) {
                                     cooptApplyBlockValue(blockId, path, value, newValue);
                                 }
-                                
-                                // Set abbe field to the glass's Vd value when glass is selected
-                                const abbeFieldPath = path.replace(/material/i, 'abbe');
-                                if (abbeFieldPath !== path && glass.vd !== undefined) {
-                                    try {
-                                        // Set abbe to the Vd value of the selected glass
-                                        cooptApplyBlockValue(blockId, abbeFieldPath, undefined, String(glass.vd));
-                                    } catch (_) {}
-                                }
+
+                                applyMaterialDerivedFields(newValue, glass);
                                 
                                 document.body.removeChild(overlay);
                             };
@@ -10921,6 +11189,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         const newValue = cooptNormalizeInputValue(input.value, value);
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
+                            applyMaterialDerivedFields(newValue);
                         }
                     });
 
@@ -11124,7 +11393,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         e.stopPropagation();
                         try { scopeSel.disabled = !cb.checked; } catch (_) {}
                         __blocks_setVarMode(blockId, key, cb.checked, String(scopeSel.value));
-                        try { refreshBlockInspector(); } catch (_) {}
                     });
 
                     scopeSel.addEventListener('change', (e) => {
@@ -11134,7 +11402,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         if (cb.checked) {
                             __blocks_setVarMode(blockId, key, true, newScope);
                         }
-                        try { refreshBlockInspector(); } catch (_) {}
                     });
 
                     const innerRow = createRow(key, value, `parameters.${key}`);
@@ -11252,6 +11519,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
 
                 for (const { rawKey, displayKey, value } of apertureEntries) {
+                    const apertureEntry = (vars as any)[rawKey];
                     
                     // Create row with optimize checkbox and scope selector
                     const apertureRow = document.createElement('div');
@@ -11265,20 +11533,35 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     const cb = document.createElement('input');
                     cb.type = 'checkbox';
                     cb.style.flex = '0 0 auto';
+                    cb.style.width = '16px';
                     cb.style.height = '16px';
                     cb.style.margin = '0 4px 0 0';
+                    cb.checked = __blocks_shouldMarkVar(apertureEntry);
                     cb.addEventListener('click', (e) => e.stopPropagation());
 
                     // Scope select (Per-config / Shared)
                     const scopeSel = document.createElement('select');
+                    scopeSel.style.flex = '0 0 110px';
                     scopeSel.style.fontSize = '12px';
                     scopeSel.style.padding = '2px 4px';
                     scopeSel.innerHTML = '<option value="perConfig">Per-config</option><option value="global">Shared (all configs)</option>';
-                    scopeSel.value = 'perConfig';
+                    scopeSel.value = __blocks_getVarScope(apertureEntry);
+                    scopeSel.disabled = !cb.checked;
                     scopeSel.addEventListener('click', (e) => e.stopPropagation());
+
                     cb.addEventListener('change', (e) => {
                         e.stopPropagation();
                         try { scopeSel.disabled = !cb.checked; } catch (_) {}
+                        __blocks_setVarMode(blockId, rawKey, cb.checked, String(scopeSel.value));
+                    });
+
+                    scopeSel.addEventListener('change', (e) => {
+                        e.stopPropagation();
+                        const newScope = String(scopeSel.value);
+                        __blocks_setVarScope(blockId, rawKey, newScope);
+                        if (cb.checked) {
+                            __blocks_setVarMode(blockId, rawKey, true, newScope);
+                        }
                     });
 
                     const innerRow = createRow(displayKey, value, `aperture.${rawKey}`);
@@ -11340,7 +11623,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         e.stopPropagation();
                         try { scopeSel.disabled = !cb.checked; } catch (_) {}
                         __blocks_setVarMode(blockId, key, cb.checked, String(scopeSel.value));
-                        try { refreshBlockInspector(); } catch (_) {}
+                        updateOptimizeChip();
                     });
 
                     scopeSel.addEventListener('change', (e) => {
@@ -11350,7 +11633,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         if (cb.checked) {
                             __blocks_setVarMode(blockId, key, true, newScope);
                         }
-                        try { refreshBlockInspector(); } catch (_) {}
+                        updateOptimizeChip();
                     });
 
                     // Build the standard createRow content but embed in this container
@@ -11358,6 +11641,13 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     const innerRow = createRow(key, value, `variables.${key}.value`, badge);
                     innerRow.style.flex = '1';
                     innerRow.style.marginBottom = '0';
+                    const chip = innerRow.lastElementChild as HTMLDivElement | null;
+                    const updateOptimizeChip = () => {
+                        if (!chip) return;
+                        chip.textContent = cb.checked ? 'V:V' : 'V:F';
+                        chip.style.border = isDarkMode ? '1px solid #374151' : '1px solid #e5e7eb';
+                        chip.style.visibility = 'visible';
+                    };
 
                     varRow.appendChild(cb);
                     varRow.appendChild(scopeSel);
@@ -11516,10 +11806,17 @@ export function refreshBlockInspector(): void {
                             : null;
 
                     if (tab) {
-                        if (typeof tab.replaceData === 'function') {
-                            tab.replaceData(rowsForTable);
-                        } else if (typeof tab.setData === 'function') {
-                            tab.setData(rowsForTable);
+                        try {
+                            cooptSuppressOpticalSystemDataChanged(true);
+                            if (typeof tab.replaceData === 'function') {
+                                tab.replaceData(rowsForTable);
+                            } else if (typeof tab.setData === 'function') {
+                                tab.setData(rowsForTable);
+                            }
+                        } finally {
+                            window.setTimeout(() => {
+                                cooptSuppressOpticalSystemDataChanged(false);
+                            }, 0);
                         }
                     }
 
@@ -11686,7 +11983,7 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             focalLengthY: 100
         };
         base.aperture = {
-            front: 10
+            front: ''
         };
         return base;
     }
@@ -11697,6 +11994,7 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             backRadius: 'INF',
             centerThickness: 1,
             material: 'N-BK7',
+            rindex: '',
             abbe: '',
             frontSurfType: 'Spherical',
             backSurfType: 'Spherical',
@@ -11704,8 +12002,8 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             backConic: 0
         };
         base.aperture = {
-            front: 10,
-            back: 10
+            front: '',
+            back: ''
         };
         return base;
     }
@@ -11717,7 +12015,9 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             thickness1: 1,
             thickness2: 1,
             material1: 'N-BK7',
+            rindex1: '',
             material2: 'N-F2',
+            rindex2: '',
             abbe1: '',
             abbe2: '',
             surf1SurfType: 'Spherical',
@@ -11728,9 +12028,9 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             surf3Conic: 0
         };
         base.aperture = {
-            s1: 10,
-            s2: 10,
-            s3: 10
+            s1: '',
+            s2: '',
+            s3: ''
         };
         return base;
     }
@@ -11744,8 +12044,11 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             thickness2: 1,
             thickness3: 1,
             material1: 'N-BK7',
+            rindex1: '',
             material2: 'N-F2',
+            rindex2: '',
             material3: 'N-BK7',
+            rindex3: '',
             abbe1: '',
             abbe2: '',
             abbe3: '',
@@ -11759,10 +12062,10 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             surf4Conic: 0
         };
         base.aperture = {
-            s1: 10,
-            s2: 10,
-            s3: 10,
-            s4: 10
+            s1: '',
+            s2: '',
+            s3: '',
+            s4: ''
         };
         return base;
     }
@@ -11802,7 +12105,7 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             coef9: 0,
             coef10: 0,
             apertureShape: 'Circular',
-            semidia: 10,
+            semidia: '',
             apertureWidth: 20,
             apertureHeight: 20
         };
@@ -11840,7 +12143,7 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             coef9: 0,
             coef10: 0,
             apertureShape: 'Circular',
-            semidia: 10,
+            semidia: '',
             apertureWidth: 20,
             apertureHeight: 20
         };
@@ -12005,20 +12308,6 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
     } catch (_) {}
 
     try {
-        const expanded = expandBlocksToOpticalSystemRows(activeCfg.blocks);
-        if (expanded && Array.isArray(expanded.rows)) {
-            activeCfg.opticalSystem = expanded.rows;
-            try { saveOpticalSystemTableData(expanded.rows as any); } catch (_) {}
-            try { if (typeof w.saveLensTableData === 'function') w.saveLensTableData(expanded.rows); } catch (_) {}
-            try {
-                if (w.tableOpticalSystem && typeof w.tableOpticalSystem.setData === 'function') {
-                    w.tableOpticalSystem.setData(expanded.rows);
-                }
-            } catch (_) {}
-        }
-    } catch (_) {}
-
-    try {
         saveSystemConfigurations(systemConfig);
     } catch (e) {
         return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
@@ -12135,9 +12424,14 @@ function setupDesignIntentButtons(): void {
                 } catch (undoError) {
                 }
 
-                try { refreshBlockInspector(); } catch (_) {}
-                try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-                try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
+                try {
+                    __cooptScheduleDesignIntentUiRefresh({
+                        forceExpandedRows: true,
+                        refreshBlockInspector: true,
+                        triggerRender: true,
+                        debounceMs: 40,
+                    });
+                } catch (_) {}
             } catch (e) {
                 console.error('❌ Failed to add block:', e);
                 alert(`Failed to add block: ${(e as Error)?.message || String(e)}`);
@@ -12175,9 +12469,14 @@ function setupDesignIntentButtons(): void {
                 }
 
                 __blockInspectorExpandedBlockId = null;
-                try { refreshBlockInspector(); } catch (_) {}
-                try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-                try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
+                try {
+                    __cooptScheduleDesignIntentUiRefresh({
+                        forceExpandedRows: true,
+                        refreshBlockInspector: true,
+                        triggerRender: true,
+                        debounceMs: 40,
+                    });
+                } catch (_) {}
             } catch (e) {
                 console.error('❌ Failed to delete block:', e);
                 alert(`Failed to delete block: ${(e as Error)?.message || String(e)}`);
@@ -12222,9 +12521,14 @@ function setupDesignIntentButtons(): void {
                     alert('Failed to auto-set apertures.');
                     return;
                 }
-                try { refreshBlockInspector(); } catch (_) {}
-                try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-                try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
+                try {
+                    __cooptScheduleDesignIntentUiRefresh({
+                        forceExpandedRows: true,
+                        refreshBlockInspector: true,
+                        triggerRender: true,
+                        debounceMs: 40,
+                    });
+                } catch (_) {}
             } catch (err) {
                 console.error('❌ Failed to auto-set apertures:', err);
                 alert(`Failed to auto-set apertures: ${(err as Error)?.message || String(err)}`);
@@ -12243,9 +12547,15 @@ function setupDesignIntentButtons(): void {
                     alert(`Failed to generate zoom scenarios: ${res?.reason || 'unknown error'}`);
                     return;
                 }
-                try { refreshBlockInspector(); } catch (_) {}
-                try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-                try { __cooptRequestRenderRedrawWithRows(null); } catch (_) {}
+                try {
+                    __cooptScheduleDesignIntentUiRefresh({
+                        forceExpandedRows: true,
+                        refreshBlockInspector: true,
+                        refreshZoomUi: true,
+                        triggerRender: true,
+                        debounceMs: 40,
+                    });
+                } catch (_) {}
             } catch (e) {
                 console.error('❌ Failed to generate zoom scenarios:', e);
                 alert(`Failed to generate zoom scenarios: ${(e as Error)?.message || String(e)}`);

@@ -105,6 +105,31 @@ function getBestAnalysisWindow(): any {
   return bestWindow;
 }
 
+function sanitizeForceInfinitePupilMode(value: unknown): 'stop' | 'entrance' | '' {
+  const mode = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return mode === 'stop' || mode === 'entrance' ? mode : '';
+}
+
+function getForcedInfinitePupilMode(): 'stop' | 'entrance' | '' {
+  for (const candidate of getWindowCandidates()) {
+    try {
+      if (typeof candidate?.__cooptGetForceInfinitePupilMode === 'function') {
+        const mode = sanitizeForceInfinitePupilMode(candidate.__cooptGetForceInfinitePupilMode());
+        if (mode) return mode;
+      }
+    } catch (_) {}
+    try {
+      const mode = sanitizeForceInfinitePupilMode(candidate?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? candidate?.COOPT_FORCE_INFINITE_PUPIL_MODE);
+      if (mode) return mode;
+    } catch (_) {}
+  }
+  try {
+    return sanitizeForceInfinitePupilMode(localStorage.getItem('coopt.forceInfinitePupilMode'));
+  } catch (_) {
+    return '';
+  }
+}
+
 // Dynamically inject the Plotly CDN script if not already loaded.
 let plotlyLoadPromise: Promise<void> | null = null;
 function loadPlotly(): Promise<void> {
@@ -863,6 +888,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     const { opticalSystemRows, sourceRows, objectRows } = getRowsFromWindow(host);
     const wavelengthList = buildWavelengthList(wlValue, sourceRows, primary);
     const axisInfo = getAxisInfo();
+    const forcedPupilSamplingMode = getForcedInfinitePupilMode();
     const fieldMinN = Number(fieldMin);
     const fieldMaxN = Number(fieldMax) || 10;
     const stepsN = Number(fieldSteps) || 21;
@@ -884,6 +910,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         samplingSize: samplingN,
         zeroPadTo,
         opdDisplayMode,
+        pupilSamplingMode: forcedPupilSamplingMode || undefined,
         fieldAxisMode: axisInfo.mode,
         onProgress: (evt: any) => {
           const p = Number(evt?.percent);

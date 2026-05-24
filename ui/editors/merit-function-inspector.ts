@@ -543,12 +543,20 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     notes: "Ensures center thickness stays above minimum. Important for mechanical stability."
   },
   "RADI": {
-    name: "RADI",
+    name: "Radius",
     description: "Surface Radius",
     parameters: [
       { key: "param1", label: "Surface" }
     ],
     notes: "Returns the absolute radius of the selected surface in mm. Use the requirement operator and target to constrain minimum or maximum radius. INF/flat surfaces evaluate as FAIL."
+  },
+  "RADI_ALL": {
+    name: "All Radius",
+    description: "All Surface Radius",
+    parameters: [
+      { key: "param1", label: "Mode", description: "MIN or MAX" }
+    ],
+    notes: "Evaluates all real optical surface radii together. Mode=MIN returns the smallest finite absolute radius, so use `>= target` to constrain every surface from below. Mode=MAX returns the largest absolute radius, so use `<= target` to constrain every surface from above. Flat/INF surfaces cause MAX to evaluate as FAIL."
   },
   "SDIST": {
     name: "SDIST",
@@ -614,7 +622,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
   'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'OPD_RMS_WAVES',
   'ZERN_COEFF',
-  'EDGE', 'CTCT', 'DBLT_K', 'RADI', 'SDIST', 'GAP', 'THIC', 'REQMATH'
+  'EDGE', 'CTCT', 'DBLT_K', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
 ]);
 
 /**

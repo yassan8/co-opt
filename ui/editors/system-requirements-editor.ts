@@ -1002,6 +1002,12 @@ class SystemRequirementsEditor {
           row.param3 = '';   // Unit: default waves
           row.param4 = '';   // Sampling: default(32)
           row.param5 = '0';  // Noll: RMS over coefficients
+        } else if (row.operand === 'RADI_ALL') {
+          row.param1 = 'MIN';
+          row.param2 = '';
+          row.param3 = '';
+          row.param4 = '';
+          row.param5 = '';
         }
         
         // Record undo command
@@ -1302,6 +1308,28 @@ class SystemRequirementsEditor {
           const current = String(row[field] || '').trim();
           control.value = ['+', '-', '*', '/'].includes(current) ? current : '+';
         } else if (field === 'param1' && (String(row?.operand ?? '').trim() === 'GAP' || String(row?.operand ?? '').trim() === 'THIC')) {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+
+          const options = [
+            { value: 'MIN', label: 'Min' },
+            { value: 'MAX', label: 'Max' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+
+          const current = String(row[field] || '').trim().toUpperCase();
+          control.value = current === 'MAX' ? 'MAX' : 'MIN';
+        } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'RADI_ALL') {
           control = document.createElement('select');
           control.style.width = '100%';
           control.style.fontSize = '12px';

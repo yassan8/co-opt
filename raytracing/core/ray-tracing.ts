@@ -338,6 +338,52 @@ function __getWasmIntersectRt10Fn() {
       return fn;
     }
   } catch (_) {}
+  try {
+    const rust = getRustRayTracingWasmSync();
+    if (rust && typeof rust.intersect_aspheric_rt10 === 'function') {
+      const adapter = (
+        ox, oy, oz,
+        dx, dy, dz,
+        semidia, radius, conic,
+        coef1, coef2, coef3, coef4, coef5,
+        coef6, coef7, coef8, coef9, coef10,
+        modeOdd, maxIter, tol
+      ) => {
+        try {
+          const rayArr = new Float64Array([
+            Number(ox), Number(oy), Number(oz),
+            Number(dx), Number(dy), Number(dz)
+          ]);
+          const paramsArr = new Float64Array([
+            Number(semidia) || 0,
+            Number(radius) || 0,
+            Number(conic) || 0,
+            Number(coef1) || 0,
+            Number(coef2) || 0,
+            Number(coef3) || 0,
+            Number(coef4) || 0,
+            Number(coef5) || 0,
+            Number(coef6) || 0,
+            Number(coef7) || 0,
+            Number(coef8) || 0,
+            Number(coef9) || 0,
+            Number(coef10) || 0,
+          ]);
+          return rust.intersect_aspheric_rt10(
+            rayArr,
+            paramsArr,
+            Number(modeOdd) | 0,
+            Number(maxIter) | 0,
+            Number(tol) || 1e-7,
+          );
+        } catch (_) {
+          return Number.NaN;
+        }
+      };
+      __wasmIntersectRt10Fn = adapter;
+      return adapter;
+    }
+  } catch (_) {}
   return null;
 }
 

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use wasm_bindgen::prelude::*;
 use js_sys::{Float64Array, Function};
@@ -36,6 +36,52 @@ fn value_to_string(v: &Value) -> Option<String> {
         Value::Bool(b) => Some(b.to_string()),
         _ => None,
     }
+}
+
+fn compute_finite_opd_grid_rms_waves(grid: &[Vec<Option<f64>>]) -> Option<f64> {
+    let mut count = 0usize;
+    let mut sum = 0.0_f64;
+    let mut sum_sq = 0.0_f64;
+    for row in grid {
+        for value in row {
+            let v = value.unwrap_or(0.0);
+            if !v.is_finite() {
+                continue;
+            }
+            sum += v;
+            sum_sq += v * v;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    let mean = sum / count as f64;
+    let variance = ((sum_sq / count as f64) - (mean * mean)).max(0.0);
+    Some(variance.sqrt())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeOpdMapWasmResponseForScalar {
+    backend: String,
+    #[serde(default)]
+    chief_reference_mode: Option<String>,
+    target_surface: usize,
+    stop_surface: usize,
+    #[serde(default)]
+    requested_object_index: Option<usize>,
+    used_object_index: usize,
+    used_object_position: String,
+    used_object_x: f64,
+    used_object_y: f64,
+    wavelength_um: f64,
+    grid_size: usize,
+    sample_count: usize,
+    hit_count: usize,
+    pupil_sampling_mode: String,
+    display_opd_grid: Vec<Vec<Option<f64>>>,
+    message: String,
 }
 
 fn get_field<'a>(row: &'a Value, key: &str) -> Option<&'a Value> {
@@ -4889,22 +4935,16 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         row_rots[stop_rot_base + 7],
     );
 
-    let packed_target = PackedMeta {
-        row_meta: row_meta.clone(),
-        row_params: row_params.clone(),
-        row_origins: row_origins.clone(),
-        row_inv_rots: row_inv_rots.clone(),
-        row_rots: row_rots.clone(),
+    let packed_meta = PackedMeta {
+        row_meta,
+        row_params,
+        row_origins,
+        row_inv_rots,
+        row_rots,
         row_count: rows.len(),
     };
-    let packed_stop = PackedMeta {
-        row_meta: row_meta.clone(),
-        row_params: row_params.clone(),
-        row_origins: row_origins.clone(),
-        row_inv_rots: row_inv_rots.clone(),
-        row_rots: row_rots.clone(),
-        row_count: rows.len(),
-    };
+    let packed_target = &packed_meta;
+    let packed_stop = &packed_meta;
 
     let mut object_rows = req_obj
         .get("objectRows")
@@ -4964,7 +5004,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         if t0.is_finite() && t0 > 1e-9 {
             t0
         } else {
-            let z0 = row_origins.get(2).copied().unwrap_or(0.0).abs();
+            let z0 = packed_meta.row_origins.get(2).copied().unwrap_or(0.0).abs();
             if z0.is_finite() && z0 > 1e-9 {
                 z0.max(1.0)
             } else {
@@ -4983,7 +5023,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         && matches!(requested_pupil_sampling_mode.as_deref(), Some("entrance"));
     let mut effective_pupil_sampling_mode = if prefer_entrance_sampling { "entrance" } else { "stop" };
 
-    let object_plane_z = row_origins.get(2).copied().unwrap_or(0.0);
+    let object_plane_z = packed_meta.row_origins.get(2).copied().unwrap_or(0.0);
     let infinite_direction = build_direction_from_field_angles_native(used_object_x, used_object_y);
     let (infinite_u_axis, infinite_v_axis) = build_perpendicular_basis_native(infinite_direction);
     let infinite_object_z = resolve_infinite_object_z_native(&rows, selected_object_map, object_plane_z, stop_center[2]);
@@ -5049,15 +5089,15 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
     let stop_center_for_sampling = if use_infinite_mode { effective_stop_center } else { stop_center };
 
     let stop_inv = [
-        row_inv_rots[stop_rot_base],
-        row_inv_rots[stop_rot_base + 1],
-        row_inv_rots[stop_rot_base + 2],
-        row_inv_rots[stop_rot_base + 3],
-        row_inv_rots[stop_rot_base + 4],
-        row_inv_rots[stop_rot_base + 5],
-        row_inv_rots[stop_rot_base + 6],
-        row_inv_rots[stop_rot_base + 7],
-        row_inv_rots[stop_rot_base + 8],
+        packed_meta.row_inv_rots[stop_rot_base],
+        packed_meta.row_inv_rots[stop_rot_base + 1],
+        packed_meta.row_inv_rots[stop_rot_base + 2],
+        packed_meta.row_inv_rots[stop_rot_base + 3],
+        packed_meta.row_inv_rots[stop_rot_base + 4],
+        packed_meta.row_inv_rots[stop_rot_base + 5],
+        packed_meta.row_inv_rots[stop_rot_base + 6],
+        packed_meta.row_inv_rots[stop_rot_base + 7],
+        packed_meta.row_inv_rots[stop_rot_base + 8],
     ];
 
     let build_marginal_ray = |u: f64, v: f64, sample_radius: f64, launch_origin: [f64; 3]| -> Option<[f64; 6]> {
@@ -5194,7 +5234,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
     if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON && use_infinite_mode {
         let entrance_origin = search_entrance_origin_grid_brent_native(
             &rows,
-            &row_origins,
+            &packed_meta.row_origins,
             stop_center_for_sampling,
             infinite_direction,
             stop_surface_index,
@@ -5205,7 +5245,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         .unwrap_or_else(|| {
             estimate_entrance_center_origin_native(
                 &rows,
-                &row_origins,
+                &packed_meta.row_origins,
                 stop_center_for_sampling,
                 infinite_direction,
             )
@@ -5252,7 +5292,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
     if (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON && !prefer_entrance_sampling && use_infinite_mode {
         if let Some(grid_brent_origin) = search_entrance_origin_grid_brent_native(
             &rows,
-            &row_origins,
+            &packed_meta.row_origins,
             stop_center_for_sampling,
             infinite_direction,
             stop_surface_index,
@@ -5363,7 +5403,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
             effective_emission_origin = apply_symmetry_axis_lock(
                 search_entrance_origin_grid_brent_native(
                     &rows,
-                    &row_origins,
+                    &packed_meta.row_origins,
                     stop_center_for_sampling,
                     infinite_direction,
                     stop_surface_index,
@@ -5374,7 +5414,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
                 .unwrap_or_else(|| {
                     estimate_entrance_center_origin_native(
                         &rows,
-                        &row_origins,
+                        &packed_meta.row_origins,
                         stop_center_for_sampling,
                         infinite_direction,
                     )
@@ -5544,6 +5584,37 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
     response
         .serialize(&serializer)
         .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
+}
+
+#[wasm_bindgen]
+pub fn run_native_opd_rms_waves_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
+    let map_value = run_native_opd_map_wasm_json(req_json)?;
+    let map_response: NativeOpdMapWasmResponseForScalar = serde_wasm_bindgen::from_value(map_value)
+        .map_err(|e| JsValue::from_str(&format!("run_native_opd_rms_waves_wasm_json: decode error: {}", e)))?;
+    let rms_waves = compute_finite_opd_grid_rms_waves(&map_response.display_opd_grid)
+        .ok_or_else(|| JsValue::from_str("run_native_opd_rms_waves_wasm_json: no finite OPD samples"))?;
+
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    serde_json::json!({
+        "backend": format!("{}+scalar-rms", map_response.backend),
+        "chiefReferenceMode": map_response.chief_reference_mode,
+        "targetSurface": map_response.target_surface,
+        "stopSurface": map_response.stop_surface,
+        "requestedObjectIndex": map_response.requested_object_index,
+        "usedObjectIndex": map_response.used_object_index,
+        "usedObjectPosition": map_response.used_object_position,
+        "usedObjectX": map_response.used_object_x,
+        "usedObjectY": map_response.used_object_y,
+        "wavelengthUm": map_response.wavelength_um,
+        "gridSize": map_response.grid_size,
+        "sampleCount": map_response.sample_count,
+        "hitCount": map_response.hit_count,
+        "pupilSamplingMode": map_response.pupil_sampling_mode,
+        "rmsWaves": rms_waves,
+        "message": format!("{} [native scalar RMS]", map_response.message),
+    })
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("run_native_opd_rms_waves_wasm_json: serialize error: {}", e)))
 }
 
 #[wasm_bindgen]

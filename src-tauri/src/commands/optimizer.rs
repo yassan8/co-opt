@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use crate::commands::analysis::{
     run_system_data_report,
@@ -39,6 +41,10 @@ const KKT_PENALTY_INCREASE_FACTOR: f64 = 1.5;
 static OPTIMIZER_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static OPTIMIZER_SESSIONS: LazyLock<Mutex<HashMap<String, OptimizerSessionState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+thread_local! {
+    static OPTIMIZER_PROFILE: RefCell<Option<OptimizerProfileAccumulator>> = const { RefCell::new(None) };
+}
 
 #[derive(Clone, Default)]
 struct KktRuntimeState {
@@ -101,6 +107,7 @@ pub struct OptimizeStepRequest {
     pub max_iterations: Option<u32>,
     pub method: Option<String>,
     pub emit_progress: Option<bool>,
+    pub profile: Option<bool>,
     pub penalty_parameter: Option<f64>,
     pub penalty_increase_factor: Option<f64>,
     pub line_search_c: Option<f64>,
@@ -151,6 +158,135 @@ pub struct OptimizeStepResponse {
     pub optimized_rows: Vec<Value>,
     pub progress_events: Vec<OptimizeProgressEvent>,
     pub message: String,
+    pub profile: Option<OptimizeProfileReport>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimizeOperandProfileEntry {
+    pub key: String,
+    pub operand: String,
+    pub count: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub total_ms: f64,
+    pub avg_ms: f64,
+    pub max_ms: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimizeProfileReport {
+    pub evaluate_state_calls: u64,
+    pub requirement_passes: u64,
+    pub operand_entries: Vec<OptimizeOperandProfileEntry>,
+}
+
+#[derive(Clone, Default)]
+struct OptimizeOperandProfileAccum {
+    operand: String,
+    count: u64,
+    cache_hits: u64,
+    cache_misses: u64,
+    total_nanos: u128,
+    max_nanos: u128,
+}
+
+#[derive(Default)]
+struct OptimizerProfileAccumulator {
+    evaluate_state_calls: u64,
+    requirement_passes: u64,
+    operand_entries: HashMap<String, OptimizeOperandProfileAccum>,
+}
+
+impl OptimizerProfileAccumulator {
+    fn into_report(self) -> OptimizeProfileReport {
+        let mut operand_entries = self.operand_entries.into_iter().map(|(key, entry)| {
+            let total_ms = entry.total_nanos as f64 / 1_000_000.0;
+            let avg_ms = if entry.count > 0 {
+                total_ms / entry.count as f64
+            } else {
+                0.0
+            };
+            OptimizeOperandProfileEntry {
+                key,
+                operand: entry.operand,
+                count: entry.count,
+                cache_hits: entry.cache_hits,
+                cache_misses: entry.cache_misses,
+                total_ms,
+                avg_ms,
+                max_ms: entry.max_nanos as f64 / 1_000_000.0,
+            }
+        }).collect::<Vec<_>>();
+        operand_entries.sort_by(|a, b| {
+            b.total_ms
+                .partial_cmp(&a.total_ms)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        OptimizeProfileReport {
+            evaluate_state_calls: self.evaluate_state_calls,
+            requirement_passes: self.requirement_passes,
+            operand_entries,
+        }
+    }
+}
+
+fn optimizer_profile_begin(enabled: bool) {
+    OPTIMIZER_PROFILE.with(|slot| {
+        *slot.borrow_mut() = if enabled {
+            Some(OptimizerProfileAccumulator::default())
+        } else {
+            None
+        };
+    });
+}
+
+fn optimizer_profile_finish() -> Option<OptimizeProfileReport> {
+    OPTIMIZER_PROFILE.with(|slot| slot.borrow_mut().take().map(OptimizerProfileAccumulator::into_report))
+}
+
+fn optimizer_profile_record_evaluate_state() {
+    OPTIMIZER_PROFILE.with(|slot| {
+        if let Some(accum) = slot.borrow_mut().as_mut() {
+            accum.evaluate_state_calls += 1;
+        }
+    });
+}
+
+fn optimizer_profile_record_requirement_pass() {
+    OPTIMIZER_PROFILE.with(|slot| {
+        if let Some(accum) = slot.borrow_mut().as_mut() {
+            accum.requirement_passes += 1;
+        }
+    });
+}
+
+fn optimizer_profile_record_cache_hit(cache_key: &str, operand: &str) {
+    OPTIMIZER_PROFILE.with(|slot| {
+        if let Some(accum) = slot.borrow_mut().as_mut() {
+            let entry = accum.operand_entries.entry(cache_key.to_string()).or_default();
+            if entry.operand.is_empty() {
+                entry.operand = operand.to_string();
+            }
+            entry.cache_hits += 1;
+        }
+    });
+}
+
+fn optimizer_profile_record_operand_eval(cache_key: &str, operand: &str, elapsed_nanos: u128) {
+    OPTIMIZER_PROFILE.with(|slot| {
+        if let Some(accum) = slot.borrow_mut().as_mut() {
+            let entry = accum.operand_entries.entry(cache_key.to_string()).or_default();
+            if entry.operand.is_empty() {
+                entry.operand = operand.to_string();
+            }
+            entry.count += 1;
+            entry.cache_misses += 1;
+            entry.total_nanos += elapsed_nanos;
+            entry.max_nanos = entry.max_nanos.max(elapsed_nanos);
+        }
+    });
 }
 
 #[derive(Clone)]
@@ -190,6 +326,9 @@ struct EvalState {
 
 #[tauri::command]
 pub fn run_optimizer_step(req: OptimizeStepRequest) -> Result<OptimizeStepResponse, String> {
+    let enable_profile = req.profile.unwrap_or(false);
+    optimizer_profile_begin(enable_profile);
+
     if req.optical_system_rows.is_empty() {
         return Err("optimizer: opticalSystemRows is empty".to_string());
     }
@@ -328,6 +467,7 @@ pub fn run_optimizer_step(req: OptimizeStepRequest) -> Result<OptimizeStepRespon
             optimized_rows: rows,
             progress_events: events,
             message: "optimizer dry-run".to_string(),
+            profile: optimizer_profile_finish(),
         });
     }
 
@@ -344,6 +484,7 @@ pub fn run_optimizer_step(req: OptimizeStepRequest) -> Result<OptimizeStepRespon
             optimized_rows: rows,
             progress_events: events,
             message: "optimizer stopped by user".to_string(),
+            profile: optimizer_profile_finish(),
         });
     }
 
@@ -481,6 +622,7 @@ pub fn run_optimizer_step(req: OptimizeStepRequest) -> Result<OptimizeStepRespon
         optimized_rows: rows,
         progress_events: events,
         message,
+        profile: optimizer_profile_finish(),
     })
 }
 
@@ -1595,6 +1737,7 @@ fn evaluate_state(
     vars: &[VariableSpec],
     requirements: &[RequirementSpec],
 ) -> EvalState {
+    optimizer_profile_record_evaluate_state();
     let geometry_merit = estimate_geometry_merit(rows, vars);
     if requirements.is_empty() {
         return EvalState {
@@ -1688,6 +1831,7 @@ fn estimate_geometry_merit(rows: &[Value], vars: &[VariableSpec]) -> f64 {
 }
 
 fn evaluate_requirements(rows: &[Value], source_rows: &[Value], object_rows: &[Value], requirements: &[RequirementSpec]) -> (f64, f64) {
+    optimizer_profile_record_requirement_pass();
     let mut score = 0.0_f64;
     let mut violation_score = 0.0_f64;
     let mut operand_cache: HashMap<String, Option<f64>> = HashMap::new();
@@ -1705,9 +1849,12 @@ fn evaluate_requirements(rows: &[Value], source_rows: &[Value], object_rows: &[V
             req.operand, req.param1, req.param2, req.param3, req.param4, req.param5, req.op
         );
         let raw_current = if let Some(v) = operand_cache.get(&cache_key) {
+            optimizer_profile_record_cache_hit(&cache_key, &req.operand);
             *v
         } else {
+            let t0 = Instant::now();
             let v = evaluate_operand_value(rows, source_rows, object_rows, req);
+            optimizer_profile_record_operand_eval(&cache_key, &req.operand, t0.elapsed().as_nanos());
             operand_cache.insert(cache_key, v);
             v
         };

@@ -261,6 +261,62 @@ function collectFiniteThicknessValues(rows: any[]): number[] {
     return values;
 }
 
+function isRequirementRealSurfaceRow(row: any): boolean {
+    if (!row || typeof row !== 'object') return false;
+
+    const objectType = String(row['object type'] ?? row.object ?? row.objectType ?? row.type ?? '').trim().toLowerCase();
+    if (objectType === 'object' || objectType === 'image') return false;
+    if (isCoordTransOpticalRow(row)) return false;
+    if (isGapOpticalRow(row)) return false;
+    return true;
+}
+
+function readRequirementRadiusState(row: any): { kind: 'finite'; value: number } | { kind: 'infinite' } | { kind: 'invalid' } {
+    if (!row || typeof row !== 'object') return { kind: 'invalid' };
+
+    const radiusRaw = row.radius;
+    const radiusText = String(radiusRaw ?? '').trim().toUpperCase();
+    if (!radiusText) return { kind: 'invalid' };
+    if (radiusText === 'INF' || radiusText === 'INFINITY' || radiusRaw === Infinity) {
+        return { kind: 'infinite' };
+    }
+
+    const radius = Number(radiusRaw);
+    if (!Number.isFinite(radius) || Math.abs(radius) <= 1e-12) {
+        return { kind: 'invalid' };
+    }
+
+    return { kind: 'finite', value: Math.abs(radius) };
+}
+
+function collectRequirementSurfaceRadiusStates(rows: any[]): { finiteValues: number[]; hasInfinite: boolean; hasInvalid: boolean } {
+    const finiteValues: number[] = [];
+    let hasInfinite = false;
+    let hasInvalid = false;
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+        return { finiteValues, hasInfinite, hasInvalid: true };
+    }
+
+    for (const row of rows) {
+        if (!isRequirementRealSurfaceRow(row)) continue;
+        const state = readRequirementRadiusState(row);
+        if (state.kind === 'finite') {
+            finiteValues.push(state.value);
+        } else if (state.kind === 'infinite') {
+            hasInfinite = true;
+        } else {
+            hasInvalid = true;
+        }
+    }
+
+    if (finiteValues.length === 0 && !hasInfinite) {
+        hasInvalid = true;
+    }
+
+    return { finiteValues, hasInfinite, hasInvalid };
+}
+
 function resolveRequirementSurfaceBySelection(rows: any[], selectionRaw: any): { row: any; index: number } | null {
     if (!Array.isArray(rows) || rows.length === 0) return null;
     const surfaceNum = Math.floor(Number(selectionRaw));
@@ -1803,32 +1859,9 @@ class MeritFunctionEditor {
                     return 1e9;
                 }
 
-                const resolveSurfaceBySelection = (rows: any[]): any => {
-                    if (!Array.isArray(rows) || rows.length === 0) return null;
-
-                    const byId = rows.find((row: any) => Number(row?.id) === surfaceNum) || null;
-                    if (byId) return byId;
-
-                    const surfaceIndex0 = surfaceNum - 1;
-                    if (surfaceIndex0 >= 0 && surfaceIndex0 < rows.length) {
-                        return rows[surfaceIndex0];
-                    }
-
-                    return null;
-                };
-
-                const readFiniteRadius = (row: any): number => {
-                    if (!row || typeof row !== 'object') return NaN;
-                    const radiusRaw = row.radius;
-                    const radiusText = String(radiusRaw ?? '').trim().toUpperCase();
-                    if (!radiusText || radiusText === 'INF' || radiusRaw === Infinity) return NaN;
-                    const radius = Number(radiusRaw);
-                    if (!Number.isFinite(radius) || Math.abs(radius) <= 1e-12) return NaN;
-                    return Math.abs(radius);
-                };
-
-                let surface = resolveSurfaceBySelection(opticalSystemData);
-                let radius = readFiniteRadius(surface);
+                let surface = resolveRequirementSurfaceBySelection(opticalSystemData, surfaceNum)?.row || null;
+                let radiusState = readRequirementRadiusState(surface);
+                let radius = radiusState.kind === 'finite' ? radiusState.value : NaN;
 
                 if ((!Number.isFinite(radius) || radius <= 1e-12) && (isCurrentOperand || isOperandActiveConfig)) {
                     let prevPreferTable: any;
@@ -1838,11 +1871,54 @@ class MeritFunctionEditor {
                             (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
                         }
                         const liveRows = getOpticalSystemRows(null);
-                        surface = resolveSurfaceBySelection(liveRows);
-                        const liveRadius = readFiniteRadius(surface);
-                        if (Number.isFinite(liveRadius)) {
-                            radius = liveRadius;
+                        surface = resolveRequirementSurfaceBySelection(liveRows, surfaceNum)?.row || null;
+                        radiusState = readRequirementRadiusState(surface);
+                        if (radiusState.kind === 'finite') {
+                            radius = radiusState.value;
                         }
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+
+                return Number.isFinite(radius) ? radius : 1e9;
+            }
+
+            case 'RADI_ALL': {
+                const mode = String(operand.param1 ?? '').trim().toUpperCase() === 'MAX' ? 'MAX' : 'MIN';
+                if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) {
+                    return 1e9;
+                }
+
+                const evaluateRows = (rows: any[]): number => {
+                    const summary = collectRequirementSurfaceRadiusStates(rows);
+                    if (summary.hasInvalid) return 1e9;
+                    if (mode === 'MAX') {
+                        if (summary.hasInfinite || summary.finiteValues.length === 0) return 1e9;
+                        return Math.max(...summary.finiteValues);
+                    }
+                    if (summary.finiteValues.length === 0) return 1e9;
+                    return Math.min(...summary.finiteValues);
+                };
+
+                let radius = evaluateRows(opticalSystemData);
+                if ((!Number.isFinite(radius) || radius >= 1e8) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        radius = evaluateRows(getOpticalSystemRows(null));
                     } catch (_) {
                     } finally {
                         try {
@@ -2419,62 +2495,66 @@ class MeritFunctionEditor {
     }
 
     calculateOpdRmsWaves(operand: any, opticalSystemData: any[]): number {
-        if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return Number.NaN;
+        try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return Number.NaN;
 
-        const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
-        const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
-        const wavelengthUm = (param1Raw === '')
-            ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
-            : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+            const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+            const wavelengthUm = (param1Raw === '')
+                ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+                : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
 
-        const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
-        const objectIndex1 = (param2Raw === '') ? 1 : Math.max(1, Math.floor(Number(param2Raw)));
-        const objectIndex0 = objectIndex1 - 1;
-        const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
-        if (!objRow || typeof objRow !== 'object') return Number.NaN;
+            const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+            const objectIndex1 = (param2Raw === '') ? 1 : Math.max(1, Math.floor(Number(param2Raw)));
+            const objectIndex0 = objectIndex1 - 1;
+            const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+            if (!objRow || typeof objRow !== 'object') return Number.NaN;
 
-        const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim() : '';
-        const sampling = (param3Raw === '') ? 32 : Math.max(8, Math.floor(Number(param3Raw)));
+            const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim() : '';
+            const sampling = (param3Raw === '') ? 32 : Math.max(8, Math.floor(Number(param3Raw)));
 
-        const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, opticalSystemData, wavelengthUm);
+            const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, opticalSystemData, wavelengthUm);
 
-        const calc = createOPDCalculator(opticalSystemData, wavelengthUm);
-        if (!calc || typeof (calc as any).setReferenceRay !== 'function' || typeof (calc as any).calculateOPD !== 'function') {
+            const calc = createOPDCalculator(opticalSystemData, wavelengthUm);
+            if (!calc || typeof (calc as any).setReferenceRay !== 'function' || typeof (calc as any).calculateOPD !== 'function') {
+                return Number.NaN;
+            }
+
+            (calc as any).setReferenceRay(fieldSetting);
+
+            let count = 0;
+            let sum = 0;
+            let sumSq = 0;
+            for (let iy = 0; iy < sampling; iy++) {
+                const py = -1 + (2 * iy) / (sampling - 1);
+                for (let ix = 0; ix < sampling; ix++) {
+                    const px = -1 + (2 * ix) / (sampling - 1);
+                    if ((px * px + py * py) > 1.000001) continue;
+
+                    const opdUm = Number((calc as any).calculateOPD(px, py, fieldSetting));
+                    if (!Number.isFinite(opdUm)) continue;
+                    const opdWaves = opdUm / wavelengthUm;
+                    if (!Number.isFinite(opdWaves)) continue;
+
+                    sum += opdWaves;
+                    sumSq += opdWaves * opdWaves;
+                    count += 1;
+                }
+            }
+
+            if (count <= 0) return Number.NaN;
+            const mean = sum / count;
+            const variance = Math.max(0, (sumSq / count) - (mean * mean));
+            return Math.sqrt(variance);
+        } catch {
             return Number.NaN;
         }
-
-        (calc as any).setReferenceRay(fieldSetting);
-
-        let count = 0;
-        let sum = 0;
-        let sumSq = 0;
-        for (let iy = 0; iy < sampling; iy++) {
-            const py = -1 + (2 * iy) / (sampling - 1);
-            for (let ix = 0; ix < sampling; ix++) {
-                const px = -1 + (2 * ix) / (sampling - 1);
-                if ((px * px + py * py) > 1.000001) continue;
-
-                const opdUm = Number((calc as any).calculateOPD(px, py, fieldSetting));
-                if (!Number.isFinite(opdUm)) continue;
-                const opdWaves = opdUm / wavelengthUm;
-                if (!Number.isFinite(opdWaves)) continue;
-
-                sum += opdWaves;
-                sumSq += opdWaves * opdWaves;
-                count += 1;
-            }
-        }
-
-        if (count <= 0) return Number.NaN;
-        const mean = sum / count;
-        const variance = Math.max(0, (sumSq / count) - (mean * mean));
-        return Math.sqrt(variance);
     }
 
     async calculateOpdRmsWavesViaNativeAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
         try {
             const ipcMod = await import('../../src/desktop/ipc/client.ts');
-            if (!ipcMod || typeof ipcMod.runNativeOpdMap !== 'function') {
+            if (!ipcMod || typeof ipcMod.runNativeOpdRmsWaves !== 'function') {
                 return null;
             }
 
@@ -2507,7 +2587,7 @@ class MeritFunctionEditor {
                 return Math.max(0, opticalSystemData.length - 1);
             })();
 
-            const opdResp = await ipcMod.runNativeOpdMap({
+            const opdResp = await ipcMod.runNativeOpdRmsWaves({
                 opticalSystemRows: opticalSystemData,
                 sourceRows,
                 objectRows,
@@ -2517,30 +2597,8 @@ class MeritFunctionEditor {
                 wavelengthUm,
                 opdDisplayMode: 'pistonTiltRemoved'
             });
-
-            const grid = Array.isArray(opdResp?.displayOpdGrid)
-                ? opdResp.displayOpdGrid
-                : (Array.isArray(opdResp?.rawOpdGrid) ? opdResp.rawOpdGrid : null);
-            if (!Array.isArray(grid) || grid.length === 0) return null;
-
-            let count = 0;
-            let sumWaves = 0;
-            let sumSqWaves = 0;
-            for (const row of grid) {
-                if (!Array.isArray(row)) continue;
-                for (const v of row) {
-                    const opdWaves = Number(v);
-                    if (!Number.isFinite(opdWaves)) continue;
-                    sumWaves += opdWaves;
-                    sumSqWaves += opdWaves * opdWaves;
-                    count += 1;
-                }
-            }
-
-            if (count <= 0) return null;
-            const meanWaves = sumWaves / count;
-            const varianceWaves2 = Math.max(0, (sumSqWaves / count) - (meanWaves * meanWaves));
-            return Math.sqrt(varianceWaves2);
+            const rmsWaves = Number(opdResp?.rmsWaves);
+            return Number.isFinite(rmsWaves) ? rmsWaves : null;
         } catch {
             return null;
         }
@@ -4428,6 +4486,7 @@ class MeritFunctionEditor {
             case 'Stop':
                 return 1;
             case 'SingleSurface':
+            case 'ImageSurface':
                 return 1;
             default:
                 if (Array.isArray(block?.surfaces)) {

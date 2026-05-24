@@ -34,6 +34,9 @@ fn emit_native_analysis_progress(
     message: &str,
     percent: Option<f64>,
 ) {
+    if !should_emit_native_analysis_events(job_id) {
+        return;
+    }
     let payload = NativeAnalysisProgressEvent {
         job_id: job_id.to_string(),
         kind: kind.to_string(),
@@ -49,7 +52,33 @@ fn emit_native_analysis_progress(
     }
 }
 
+fn compute_finite_opd_grid_rms_waves(grid: &[Vec<Option<f64>>]) -> Option<f64> {
+    let mut count = 0usize;
+    let mut sum = 0.0_f64;
+    let mut sum_sq = 0.0_f64;
+    for row in grid {
+        for value in row {
+            let v = value.unwrap_or(0.0);
+            if !v.is_finite() {
+                continue;
+            }
+            sum += v;
+            sum_sq += v * v;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    let mean = sum / count as f64;
+    let variance = ((sum_sq / count as f64) - (mean * mean)).max(0.0);
+    Some(variance.sqrt())
+}
+
 fn emit_native_analysis_done(app: &AppHandle, job_id: &str, kind: &str, message: &str) {
+    if !should_emit_native_analysis_events(job_id) {
+        return;
+    }
     let payload = NativeAnalysisProgressEvent {
         job_id: job_id.to_string(),
         kind: kind.to_string(),
@@ -66,6 +95,9 @@ fn emit_native_analysis_done(app: &AppHandle, job_id: &str, kind: &str, message:
 }
 
 fn emit_native_analysis_error(app: &AppHandle, job_id: &str, kind: &str, message: &str) {
+    if !should_emit_native_analysis_events(job_id) {
+        return;
+    }
     let payload = NativeAnalysisProgressEvent {
         job_id: job_id.to_string(),
         kind: kind.to_string(),
@@ -79,6 +111,16 @@ fn emit_native_analysis_error(app: &AppHandle, job_id: &str, kind: &str, message
     if let Err(err) = app.emit("analysis-progress", payload) {
         eprintln!("[analysis-progress] native error emit failed: {err}");
     }
+}
+
+fn should_emit_native_analysis_events(job_id: &str) -> bool {
+    let is_nested_through_focus_job = job_id.starts_with("native-tfmtf-")
+        && job_id.contains("-w")
+        && job_id.contains("-s");
+    let is_nested_field_mtf_job = job_id.starts_with("native-field-mtf-")
+        && ((job_id.contains("-w") && job_id.contains("-s"))
+            || job_id.ends_with("-ref-radius"));
+    !(is_nested_through_focus_job || is_nested_field_mtf_job)
 }
 
 fn build_native_job_id(prefix: &str) -> String {
@@ -395,6 +437,44 @@ pub struct NativeOpdMapResponse {
     pub raw_opd_grid: Vec<Vec<Option<f64>>>,
     pub display_opd_grid: Vec<Vec<Option<f64>>>,
     pub effective_pupil_radius_mm: f64,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOpdRmsWavesRequest {
+    pub job_id: Option<String>,
+    pub optical_system_rows: Vec<Value>,
+    #[serde(default)]
+    pub source_rows: Vec<Value>,
+    #[serde(default)]
+    pub object_rows: Vec<Value>,
+    pub object_index: Option<usize>,
+    pub surface_index: Option<usize>,
+    pub grid_size: Option<u32>,
+    pub wavelength_um: Option<f64>,
+    pub pupil_radius_mm: Option<f64>,
+    pub pupil_sampling_mode: Option<String>,
+    pub opd_display_mode: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOpdRmsWavesResponse {
+    pub backend: String,
+    pub target_surface: usize,
+    pub stop_surface: usize,
+    pub requested_object_index: Option<usize>,
+    pub used_object_index: usize,
+    pub used_object_position: String,
+    pub used_object_x: f64,
+    pub used_object_y: f64,
+    pub wavelength_um: f64,
+    pub grid_size: usize,
+    pub sample_count: usize,
+    pub hit_count: usize,
+    pub pupil_sampling_mode: String,
+    pub rms_waves: f64,
     pub message: String,
 }
 
@@ -1250,7 +1330,6 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         .unwrap_or_else(|| build_native_job_id("native-opd"));
     let kind = "opd-native";
     emit_native_analysis_progress(&app, &job_id, kind, "prepare", "Preparing native OPD inputs...", Some(5.0));
-
     let result: Result<NativeOpdMapResponse, String> = (|| {
     if req.optical_system_rows.is_empty() {
         return Err("run_native_opd_map: opticalSystemRows is empty".to_string());
@@ -2440,6 +2519,44 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
             Err(err)
         }
     }
+}
+
+#[tauri::command]
+pub fn run_native_opd_rms_waves(req: NativeOpdRmsWavesRequest, app: AppHandle) -> Result<NativeOpdRmsWavesResponse, String> {
+    let map_req = NativeOpdMapRequest {
+        job_id: req.job_id,
+        optical_system_rows: req.optical_system_rows,
+        source_rows: req.source_rows,
+        object_rows: req.object_rows,
+        object_index: req.object_index,
+        surface_index: req.surface_index,
+        grid_size: req.grid_size,
+        wavelength_um: req.wavelength_um,
+        pupil_radius_mm: req.pupil_radius_mm,
+        pupil_sampling_mode: req.pupil_sampling_mode,
+        opd_display_mode: req.opd_display_mode,
+    };
+    let map_resp = run_native_opd_map(map_req, app)?;
+    let rms_waves = compute_finite_opd_grid_rms_waves(&map_resp.display_opd_grid)
+        .ok_or_else(|| "run_native_opd_rms_waves: no finite OPD samples".to_string())?;
+
+    Ok(NativeOpdRmsWavesResponse {
+        backend: format!("{}+scalar-rms", map_resp.backend),
+        target_surface: map_resp.target_surface,
+        stop_surface: map_resp.stop_surface,
+        requested_object_index: map_resp.requested_object_index,
+        used_object_index: map_resp.used_object_index,
+        used_object_position: map_resp.used_object_position,
+        used_object_x: map_resp.used_object_x,
+        used_object_y: map_resp.used_object_y,
+        wavelength_um: map_resp.wavelength_um,
+        grid_size: map_resp.grid_size,
+        sample_count: map_resp.sample_count,
+        hit_count: map_resp.hit_count,
+        pupil_sampling_mode: map_resp.pupil_sampling_mode,
+        rms_waves,
+        message: format!("{} [native scalar RMS]", map_resp.message),
+    })
 }
 
 fn find_evaluation_surface_index_native(rows: &[Value]) -> usize {

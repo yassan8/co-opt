@@ -8,6 +8,8 @@ import type {
   NativeTransverseAberrationResponse,
   NativeOpdMapRequest,
   NativeOpdMapResponse,
+  NativeOpdRmsWavesRequest,
+  NativeOpdRmsWavesResponse,
   NativePsfMapRequest,
   NativePsfMapResponse,
   NativeMtfMapRequest,
@@ -89,6 +91,26 @@ export async function writeDesktopSetting(key: string, value: string | null): Pr
   }
 }
 
+export async function startPreventDisplaySleep(token: string): Promise<boolean> {
+  const key = String(token ?? "").trim();
+  if (!key || !isTauriRuntime()) return false;
+  try {
+    return !!(await invoke<boolean>("start_prevent_display_sleep", { token: key }));
+  } catch (_) {
+    return false;
+  }
+}
+
+export async function stopPreventDisplaySleep(token: string): Promise<boolean> {
+  const key = String(token ?? "").trim();
+  if (!key || !isTauriRuntime()) return false;
+  try {
+    return !!(await invoke<boolean>("stop_prevent_display_sleep", { token: key }));
+  } catch (_) {
+    return false;
+  }
+}
+
 function invokeCommand<TResponse>(command: string): Promise<TResponse>;
 function invokeCommand<TRequest, TResponse>(command: string, payload: TRequest): Promise<TResponse>;
 function invokeCommand<TRequest, TResponse>(command: string, payload?: TRequest): Promise<TResponse> {
@@ -115,6 +137,30 @@ function isOpdDebugEnabled(): boolean {
     // ignore
   }
   return false;
+}
+
+function sanitizePupilSamplingMode(value: unknown): "stop" | "entrance" | "" {
+  const mode = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return mode === "stop" || mode === "entrance" ? mode : "";
+}
+
+function readForcedInfinitePupilMode(): "stop" | "entrance" | "" {
+  try {
+    const g = (typeof globalThis !== "undefined") ? (globalThis as any) : null;
+    const direct = sanitizePupilSamplingMode(g?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? g?.COOPT_FORCE_INFINITE_PUPIL_MODE);
+    if (direct) return direct;
+    const openerDirect = sanitizePupilSamplingMode(g?.opener?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? g?.opener?.COOPT_FORCE_INFINITE_PUPIL_MODE);
+    if (openerDirect) return openerDirect;
+  } catch (_) {
+    // ignore global lookup errors
+  }
+  try {
+    const persisted = sanitizePupilSamplingMode(localStorage.getItem("coopt.forceInfinitePupilMode"));
+    if (persisted) return persisted;
+  } catch (_) {
+    // ignore storage lookup errors
+  }
+  return "";
 }
 
 // Session-scoped guard: once direct distortion WASM export is known-missing,
@@ -1484,6 +1530,26 @@ function clampIdealParaxialNativeOpdResponse(
   } as NativeOpdMapResponse;
 }
 
+function clampIdealParaxialNativeOpdRmsResponse(
+  opticalSystemRows: any[] = [],
+  response: NativeOpdRmsWavesResponse,
+): NativeOpdRmsWavesResponse {
+  if (!isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows) || !response || typeof response !== "object") {
+    return response;
+  }
+
+  const displayRms = Number((response as any).rmsWaves);
+  if (!(Number.isFinite(displayRms) && displayRms <= 2e-2)) {
+    return response;
+  }
+
+  return {
+    ...response,
+    rmsWaves: 0,
+    message: String((response as any).message || "") + " [ideal-paraxial-display-normalized]",
+  } as NativeOpdRmsWavesResponse;
+}
+
 export async function runNativeOpdMap(
   payload: NativeOpdMapRequest,
 ): Promise<NativeOpdMapResponse> {
@@ -2078,6 +2144,80 @@ export async function runNativeOpdMap(
   );
 }
 
+export async function runNativeOpdRmsWaves(
+  payload: NativeOpdRmsWavesRequest,
+): Promise<NativeOpdRmsWavesResponse> {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const requiresThinLensJsFallback = isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows);
+
+  if (!isTauriRuntime()) {
+    if (!requiresThinLensJsFallback) {
+      const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+      const rust = await preloadRustRayTracingWasm();
+      const runNativeWasm = (rust as any)?.run_native_opd_rms_waves_wasm_json;
+      if (typeof runNativeWasm === "function") {
+        const raw = runNativeWasm(JSON.stringify(payload || {}));
+        const response = (typeof raw === "string") ? JSON.parse(raw) : raw;
+        return clampIdealParaxialNativeOpdRmsResponse(opticalSystemRows, response as NativeOpdRmsWavesResponse);
+      }
+      const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
+      throw new Error(
+        initError
+          ? `runNativeOpdRmsWaves(web): missing export run_native_opd_rms_waves_wasm_json (initError=${initError})`
+          : "runNativeOpdRmsWaves(web): missing export run_native_opd_rms_waves_wasm_json"
+      );
+    }
+
+    const opdMap = await runNativeOpdMap(payload as NativeOpdMapRequest);
+    let count = 0;
+    let sum = 0;
+    let sumSq = 0;
+    const grid = Array.isArray(opdMap?.displayOpdGrid) ? opdMap.displayOpdGrid : [];
+    for (const row of grid) {
+      if (!Array.isArray(row)) continue;
+      for (const value of row) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) continue;
+        sum += n;
+        sumSq += n * n;
+        count += 1;
+      }
+    }
+    const mean = count > 0 ? (sum / count) : Number.NaN;
+    const variance = count > 0 ? Math.max(0, (sumSq / count) - (mean * mean)) : Number.NaN;
+    return clampIdealParaxialNativeOpdRmsResponse(opticalSystemRows, {
+      backend: String(opdMap?.backend || "web-js-opd-rms"),
+      chiefReferenceMode: String(opdMap?.chiefReferenceMode || ""),
+      targetSurface: Number(opdMap?.targetSurface || 0),
+      stopSurface: Number(opdMap?.stopSurface || 0),
+      requestedObjectIndex: opdMap?.requestedObjectIndex,
+      usedObjectIndex: Number(opdMap?.usedObjectIndex || 0),
+      usedObjectPosition: String(opdMap?.usedObjectPosition || ""),
+      usedObjectX: Number(opdMap?.usedObjectX || 0),
+      usedObjectY: Number(opdMap?.usedObjectY || 0),
+      wavelengthUm: Number(opdMap?.wavelengthUm || payload?.wavelengthUm || 0.5876),
+      gridSize: Number(opdMap?.gridSize || 0),
+      sampleCount: Number(opdMap?.sampleCount || 0),
+      hitCount: Number(opdMap?.hitCount || 0),
+      pupilSamplingMode: (opdMap?.pupilSamplingMode === "entrance") ? "entrance" : "stop",
+      rmsWaves: Number.isFinite(variance) ? Math.sqrt(variance) : Number.NaN,
+      message: String(opdMap?.message || "Computed via native OPD map + JS RMS reduction"),
+    } as NativeOpdRmsWavesResponse);
+  }
+
+  const normalizedPayload: NativeOpdRmsWavesRequest = {
+    ...(payload || {} as any),
+    surfaceIndex: Number.isInteger((payload as any)?.surfaceIndex)
+      ? Math.max(0, Number((payload as any).surfaceIndex))
+      : pickImageSurfaceIndexNativeLike(Array.isArray((payload as any)?.opticalSystemRows) ? (payload as any).opticalSystemRows : []),
+  } as NativeOpdRmsWavesRequest;
+  const nativeResponse = await invokeCommand<NativeOpdRmsWavesRequest, NativeOpdRmsWavesResponse>("run_native_opd_rms_waves", normalizedPayload);
+  return clampIdealParaxialNativeOpdRmsResponse(
+    Array.isArray(normalizedPayload?.opticalSystemRows) ? normalizedPayload.opticalSystemRows : [],
+    nativeResponse,
+  );
+}
+
 export async function runNativePsfMap(
   payload: NativePsfMapRequest,
 ): Promise<NativePsfMapResponse> {
@@ -2434,7 +2574,6 @@ export async function runNativeThroughFocusMtfMap(
 export async function runNativeFieldMtfMap(
   payload: NativeFieldMtfMapRequest,
 ): Promise<NativeFieldMtfMapResponse> {
-  const preferSharedFieldMtfRoute = true;
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
   const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
@@ -2456,6 +2595,10 @@ export async function runNativeFieldMtfMap(
     return normalizedRow;
   });
   const hasImageHeightObjectRows = normalizedInputObjectRows.some((row) => String((row as any)?.position ?? "").trim().toLowerCase() === "imageheight");
+  // Desktop can use the dedicated native field-MTF command for faster execution.
+  // Keep the shared route for ImageHeight rows because that path depends on the
+  // JS-side normalization/preservation logic added for parity with the popup flow.
+  const preferSharedFieldMtfRoute = !isTauriRuntime() || hasImageHeightObjectRows;
   const sampleFromObjectRows = payload?.sampleFromObjectRows === true && normalizedInputObjectRows.length > 0;
 
   const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 256;
@@ -2479,9 +2622,10 @@ export async function runNativeFieldMtfMap(
   const steps = Number.isFinite(Number(payload?.steps)) ? Math.max(3, Math.floor(Number(payload?.steps))) : 21;
   const opdDisplayMode = String(payload?.opdDisplayMode || "pistonTiltRemoved");
   const hasExplicitPupilSamplingMode = payload?.pupilSamplingMode === "stop" || payload?.pupilSamplingMode === "entrance";
+  const forcedPupilSamplingMode = readForcedInfinitePupilMode();
   const requestedPupilSamplingMode = hasExplicitPupilSamplingMode
     ? payload.pupilSamplingMode
-    : "entrance";
+    : (forcedPupilSamplingMode || "entrance");
   const onProgress = typeof (payload as any)?.onProgress === "function" ? (payload as any).onProgress : null;
 
   if (!preferSharedFieldMtfRoute && isTauriRuntime() && !hasImageHeightObjectRows) {
@@ -4287,6 +4431,17 @@ export async function runNativeMagnificationChromaticAberration(
   payload: NativeMagnificationChromaticAberrationRequest,
 ): Promise<NativeMagnificationChromaticAberrationResponse> {
   const tauriRuntime = isTauriRuntime();
+  if (tauriRuntime) {
+    try {
+      return await invokeCommand<NativeMagnificationChromaticAberrationRequest, NativeMagnificationChromaticAberrationResponse>(
+        "run_native_magnification_chromatic_aberration",
+        payload,
+      );
+    } catch (error) {
+      console.warn("[LCA] Native Rust backend failed; falling back to Rust/WASM wrapper", error);
+    }
+  }
+
   const { calculateMagnificationChromaticAberrationData } = await import(
     "../../../evaluation/aberrations/magnification-chromatic-aberration.ts"
   );

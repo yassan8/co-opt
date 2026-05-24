@@ -557,6 +557,12 @@ export function saveCurrentToActiveConfiguration(): void {
   if (!configurationHasBlocks(activeConfig)) {
     activeConfig.opticalSystem = opticalRowsFromTable;
   } else {
+    try {
+      if (Array.isArray(opticalRowsFromTable) && opticalRowsFromTable.length > 0 && typeof w.__cooptSyncRowsBackToActiveBlocks === 'function') {
+        w.__cooptSyncRowsBackToActiveBlocks(opticalRowsFromTable, Array.isArray(objectDataFromTable) ? objectDataFromTable : undefined);
+      }
+    } catch (_) {}
+
     // Even in Blocks mode, we still need a persisted legacy Object row thickness for conjugate detection
     // in non-active config evaluations (e.g., Requirements Spot Size).
     try {
