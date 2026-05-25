@@ -40,6 +40,8 @@ export function cholesky_factorization(a_flat: Float64Array, n: number): Float64
 
 export function compute_lca_series_from_image_heights(field_values: Float64Array, wavelengths: Float64Array, reference_wavelength: number, image_heights_flat: Float64Array): any;
 
+export function compute_native_opd_grid_rms_waves_wasm_json(req_json: string): any;
+
 /**
  *
  * * High-performance 2D FFT for PSF calculation
@@ -253,6 +255,7 @@ export interface InitOutput {
     readonly calculate_surface_origins: (a: number, b: number) => [number, number, number];
     readonly cholesky_factorization: (a: number, b: number, c: number) => [number, number];
     readonly compute_lca_series_from_image_heights: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
+    readonly compute_native_opd_grid_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
     readonly fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly fft_2d_inverse: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly free: (a: number, b: number) => void;

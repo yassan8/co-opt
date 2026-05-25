@@ -11,6 +11,7 @@ export const build_normal_equations: (a: number, b: number, c: number, d: number
 export const calculate_surface_origins: (a: number, b: number) => [number, number, number];
 export const cholesky_factorization: (a: number, b: number, c: number) => [number, number];
 export const compute_lca_series_from_image_heights: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
+export const compute_native_opd_grid_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
 export const fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const fft_2d_inverse: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const free: (a: number, b: number) => void;

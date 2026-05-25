@@ -27,6 +27,7 @@ export type RustRayTracingWasm = {
   trace_ray_batch_with_system_json: (rayArrayPtr: number, systemMetaJSON: string, rowCount: number, nStart: number) => any;
   run_native_opd_map_wasm_json?: (reqJson: string) => any;
   run_native_opd_rms_waves_wasm_json?: (reqJson: string) => any;
+  compute_native_opd_grid_rms_waves_wasm_json?: (reqJson: string) => any;
   trace_single_ray_hit_point_with_meta?: (
     ray: Float64Array,
     targetSurfaceIndex: number,
@@ -351,6 +352,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           trace_ray_batch_with_system_json: mod.trace_ray_batch_with_system_json,
           run_native_opd_map_wasm_json: mod.run_native_opd_map_wasm_json,
           run_native_opd_rms_waves_wasm_json: mod.run_native_opd_rms_waves_wasm_json,
+          compute_native_opd_grid_rms_waves_wasm_json: mod.compute_native_opd_grid_rms_waves_wasm_json,
           trace_single_ray_hit_point_with_meta: mod.trace_single_ray_hit_point_with_meta,
           trace_ray_batch_hit_point_with_meta: mod.trace_ray_batch_hit_point_with_meta,
           solve_ray_origins_to_stop_points_with_meta_batch: mod.solve_ray_origins_to_stop_points_with_meta_batch,

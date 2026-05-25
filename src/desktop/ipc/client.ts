@@ -2252,6 +2252,43 @@ export async function runNativeOpdRmsWaves(
 
   if (!isTauriRuntime() || shouldUseLegacyWavefrontOpdRoute()) {
     const opdMap = await runNativeOpdMap(payload as NativeOpdMapRequest);
+    if (!requiresThinLensJsFallback) {
+      try {
+        const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+        const rust = await preloadRustRayTracingWasm();
+        const runGridRmsWasm = (rust as any)?.compute_native_opd_grid_rms_waves_wasm_json;
+        if (typeof runGridRmsWasm === "function") {
+          const wasmOutRaw = runGridRmsWasm(JSON.stringify({
+            displayOpdGrid: Array.isArray(opdMap?.displayOpdGrid) ? opdMap.displayOpdGrid : [],
+          }));
+          const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
+          const rmsWaves = Number(wasmOut?.rmsWaves);
+          if (Number.isFinite(rmsWaves)) {
+            return clampIdealParaxialNativeOpdRmsResponse(opticalSystemRows, {
+              backend: `${String(opdMap?.backend || "web-opd-map")}+rust-wasm-grid-scalar-rms`,
+              chiefReferenceMode: String(opdMap?.chiefReferenceMode || ""),
+              targetSurface: Number.isFinite(Number(opdMap?.targetSurface)) ? Number(opdMap.targetSurface) : Number(normalizedPayload.surfaceIndex),
+              stopSurface: Number.isFinite(Number(opdMap?.stopSurface)) ? Number(opdMap.stopSurface) : 0,
+              requestedObjectIndex: opdMap?.requestedObjectIndex,
+              usedObjectIndex: Number.isFinite(Number(opdMap?.usedObjectIndex)) ? Number(opdMap.usedObjectIndex) : 0,
+              usedObjectPosition: String(opdMap?.usedObjectPosition || ""),
+              usedObjectX: Number(opdMap?.usedObjectX || 0),
+              usedObjectY: Number(opdMap?.usedObjectY || 0),
+              wavelengthUm: Number.isFinite(Number(opdMap?.wavelengthUm)) ? Number(opdMap.wavelengthUm) : 0,
+              gridSize: Number.isFinite(Number(opdMap?.gridSize)) ? Number(opdMap.gridSize) : 0,
+              sampleCount: Number.isFinite(Number(opdMap?.sampleCount)) ? Number(opdMap.sampleCount) : 0,
+              hitCount: Number.isFinite(Number(opdMap?.hitCount)) ? Number(opdMap.hitCount) : 0,
+              pupilSamplingMode: opdMap?.pupilSamplingMode === "entrance" ? "entrance" : "stop",
+              rmsWaves,
+              message: `${String(opdMap?.message || "Computed via OPD map")}` + " [rust-wasm-grid-scalar-rms]",
+            } as NativeOpdRmsWavesResponse);
+          }
+        }
+      } catch (_wasmErr) {
+        console.warn("[runNativeOpdRmsWaves(web)] Rust-WASM grid RMS failed; falling back to JS reduction:", _wasmErr);
+      }
+    }
+
     let count = 0;
     let sum = 0;
     let sumSq = 0;

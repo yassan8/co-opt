@@ -202,6 +202,20 @@ export function compute_lca_series_from_image_heights(field_values, wavelengths,
 }
 
 /**
+ * @param {string} req_json
+ * @returns {any}
+ */
+export function compute_native_opd_grid_rms_waves_wasm_json(req_json) {
+    const ptr0 = passStringToWasm0(req_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.compute_native_opd_grid_rms_waves_wasm_json(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  *
  * * High-performance 2D FFT for PSF calculation
  * * Input: real[rows*cols], imag[rows*cols] (WASM memory pointers)

@@ -84,6 +84,12 @@ struct NativeOpdMapWasmResponseForScalar {
     message: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeOpdGridScalarRmsRequest {
+    display_opd_grid: Vec<Vec<Option<f64>>>,
+}
+
 fn get_field<'a>(row: &'a Value, key: &str) -> Option<&'a Value> {
     match row {
         Value::Object(map) => map.get(key),
@@ -5615,6 +5621,22 @@ pub fn run_native_opd_rms_waves_wasm_json(req_json: String) -> Result<JsValue, J
     })
         .serialize(&serializer)
         .map_err(|e| JsValue::from_str(&format!("run_native_opd_rms_waves_wasm_json: serialize error: {}", e)))
+}
+
+#[wasm_bindgen]
+pub fn compute_native_opd_grid_rms_waves_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
+    let req: NativeOpdGridScalarRmsRequest = serde_json::from_str(&req_json)
+        .map_err(|e| JsValue::from_str(&format!("compute_native_opd_grid_rms_waves_wasm_json: JSON parse: {}", e)))?;
+    let rms_waves = compute_finite_opd_grid_rms_waves(&req.display_opd_grid)
+        .ok_or_else(|| JsValue::from_str("compute_native_opd_grid_rms_waves_wasm_json: no finite OPD samples"))?;
+
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    serde_json::json!({
+        "backend": "rust-wasm-grid-scalar-rms",
+        "rmsWaves": rms_waves,
+    })
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("compute_native_opd_grid_rms_waves_wasm_json: serialize error: {}", e)))
 }
 
 #[wasm_bindgen]
