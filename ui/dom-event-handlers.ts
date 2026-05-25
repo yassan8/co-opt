@@ -2624,6 +2624,21 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     let effectiveMeritFunction = allData.meritFunction;
     let effectiveSystemRequirements = allData.systemRequirements;
 
+    const stripDerivedRequirementFieldsForLoad = (rows: any): any => {
+        if (!Array.isArray(rows)) return rows;
+        return rows.map((row: any) => {
+            if (!row || typeof row !== 'object') return row;
+            const next = { ...row };
+            if (next.rowType === 'memo') return next;
+            try { delete next.current; } catch (_) {}
+            try { delete next.status; } catch (_) {}
+            try { delete next._violation; } catch (_) {}
+            try { delete next._contribution; } catch (_) {}
+            try { delete next.score; } catch (_) {}
+            return next;
+        });
+    };
+
     // If blocks exist, use expanded active configuration
     try {
         const activeId = candidateConfig?.activeConfigId || 1;
@@ -2644,6 +2659,8 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         if (!effectiveMeritFunction && candidateConfig?.meritFunction) effectiveMeritFunction = candidateConfig.meritFunction;
         if (!effectiveSystemRequirements && candidateConfig?.systemRequirements) effectiveSystemRequirements = candidateConfig.systemRequirements;
     } catch (_) {}
+
+    effectiveSystemRequirements = stripDerivedRequirementFieldsForLoad(effectiveSystemRequirements);
 
     // Save to localStorage for table loading
     try {

@@ -3519,6 +3519,9 @@ class SystemRequirementsEditor {
       this._isEvaluating = false;
       return;
     }
+    const prevRuntimeCache = Object.prototype.hasOwnProperty.call(editor, '_runtimeCache')
+      ? editor._runtimeCache
+      : undefined;
 
     try {
       w.__cooptLastRequirementsEval = { at: Date.now(), stage: 'running' };
@@ -3552,6 +3555,9 @@ class SystemRequirementsEditor {
     const prevFast = g ? g.__cooptMeritFastMode : null;
     const prevReqFlag = g ? g.__COOPT_EVALUATING_REQUIREMENTS : undefined;
     try {
+      if (editor && typeof editor === 'object') {
+        editor._runtimeCache = new Map();
+      }
       if (g && prevFast && typeof prevFast === 'object') {
         g.__cooptMeritFastMode = { ...prevFast, enabled: false };
       }
@@ -3579,7 +3585,7 @@ class SystemRequirementsEditor {
 
       const configId = this._normalizeConfigId(row.configId, systemConfig, activeConfigId);
 
-      if (!enabled || !operand) {
+      if (!operand) {
         updates.push({ id: row.id, current: null, status: '—' });
         continue;
       }
@@ -3656,13 +3662,13 @@ class SystemRequirementsEditor {
       // Keep optimizer-aligned diagnostics in hidden fields, but show raw operand value in the UI.
       const amount = sanitized.ok ? this.computeViolationAmount(op, current, target, tol) : Number.POSITIVE_INFINITY;
       const wEff = Math.max(0, Number.isFinite(weight) ? weight : 1);
-      const contribution = Number.isFinite(amount) ? (wEff * Math.max(0, amount)) : null;
+      const contribution = (enabled && Number.isFinite(amount)) ? (wEff * Math.max(0, amount)) : null;
 
       let status = 'OK';
 
       // IMPORTANT: The optimizer treats weight<=0 as disabled (it filters those requirements out).
       // To avoid confusing mismatches like "Status NG but Optimize Score 0", reflect that here.
-      if (wEff <= 0) {
+      if (!enabled || wEff <= 0) {
         status = 'OFF';
       } else if (!sanitized.ok) {
         status = 'NG';
@@ -3683,13 +3689,18 @@ class SystemRequirementsEditor {
         if (g) g.__cooptMeritFastMode = prevFast;
         if (g) g.__COOPT_EVALUATING_REQUIREMENTS = prevReqFlag;
       } catch (_) {}
+      try {
+        if (editor && typeof editor === 'object') {
+          editor._runtimeCache = prevRuntimeCache === undefined ? null : prevRuntimeCache;
+        }
+      } catch (_) {}
 
     }
 
     try {
       if (Array.isArray(updates) && updates.length > 0) {
         for (const u of updates) {
-          const r = this.requirements.find((x: any) => x && x.id === u.id);
+          const r = this.requirements.find((x: any) => x && String(x.id) === String(u.id));
           if (r) {
             r.current = u.current;
             r.status = u.status;
