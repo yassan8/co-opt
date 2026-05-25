@@ -428,7 +428,7 @@ export async function calculateMagnificationChromaticAberrationData(
         const perWavelengthHeights = new Map<number, Array<number | null>>();
         const stopCenterMode = chiefRayMode.startsWith('stop-center');
         const beamAveragedMode = chiefRayMode.startsWith('beam-centroid') || chiefRayMode.startsWith('beam-midpoint');
-        const stopCenterExactOnly = stopCenterMode && requestedRayCount === null && requestedRingCount === null;
+        const stopCenterExactOnly = stopCenterMode;
         const defaultRayCount = stopCenterMode ? 101 : (beamAveragedMode ? 1001 : 101);
         const defaultRingCount = stopCenterMode ? 3 : (beamAveragedMode ? 7 : 1);
         const lcaRayCount = requestedRayCount ?? defaultRayCount;
