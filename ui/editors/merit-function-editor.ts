@@ -2870,7 +2870,15 @@ class MeritFunctionEditor {
                 : [];
             if (!Array.isArray(hits) || hits.length <= 0) return 1e9;
 
-            let chief = hits.find((h: any) => h && h.isChiefRay) || null;
+            const exactChief = this.resolveExactChiefSpotPoint(
+                ctx.opticalSystemData,
+                ctx.objectRow,
+                ctx.wavelength,
+                ctx.targetSurfaceIndex,
+            );
+            let chief = exactChief
+                ? { x: exactChief.x, y: exactChief.y }
+                : (hits.find((h: any) => h && h.isChiefRay) || null);
             if (!chief) chief = hits[0];
             if (!chief) return 1e9;
 
@@ -2948,7 +2956,16 @@ class MeritFunctionEditor {
             const points = Array.isArray(firstSeries?.points) ? firstSeries.points : [];
             if (points.length <= 0) return null;
 
+            const exactChief = this.resolveExactChiefSpotPoint(
+                ctx.opticalSystemData,
+                ctx.objectRow,
+                ctx.wavelength,
+                ctx.targetSurfaceIndex,
+            );
             const chief = (() => {
+                if (exactChief) {
+                    return { xUm: exactChief.x * 1000, yUm: exactChief.y * 1000 };
+                }
                 const cp = firstSeries?.chiefPointUm;
                 if (cp && Number.isFinite(Number(cp?.xUm)) && Number.isFinite(Number(cp?.yUm))) {
                     return { xUm: Number(cp.xUm), yUm: Number(cp.yUm) };
@@ -3790,8 +3807,16 @@ class MeritFunctionEditor {
                         continue;
                     }
 
+                    const exactChief = this.resolveExactChiefSpotPoint(
+                        spotOpticalRows,
+                        obj2,
+                        wavelength,
+                        targetSurfaceIndex,
+                    );
                     // Fix: spot-diagram.ts saves as 'isChiefRay', not 'isChief'
-                    let chief = hits.find((h: any) => h.isChiefRay) || null;
+                    let chief = exactChief
+                        ? { x: exactChief.x, y: exactChief.y }
+                        : (hits.find((h: any) => h.isChiefRay) || null);
                     if (!chief) {
                         const cx = hits.reduce((sum: number, h: any) => sum + h.x, 0) / hits.length;
                         const cy = hits.reduce((sum: number, h: any) => sum + h.y, 0) / hits.length;
@@ -3943,6 +3968,72 @@ class MeritFunctionEditor {
         const hit = p[surfaceIndex + 1];
         if (!hit) return null;
         return hit;
+    }
+
+    resolveExactChiefSpotPoint(opticalSystemData: any[], objectRow: any, wavelength: number, targetSurfaceIndex: number): { x: number; y: number } | null {
+        try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+            if (!objectRow || typeof objectRow !== 'object') return null;
+            if (!Number.isFinite(wavelength) || wavelength <= 0) return null;
+            if (!Number.isInteger(targetSurfaceIndex) || targetSurfaceIndex < 0 || targetSurfaceIndex >= opticalSystemData.length) return null;
+
+            const rayStarts = generateRayStartPointsForObject(
+                objectRow,
+                opticalSystemData,
+                1,
+                null,
+                {
+                    pattern: 'annular',
+                    annularRingCount: 1,
+                    wavelengthUm: wavelength,
+                    aimThroughStop: true,
+                    useChiefRayAnalysis: true,
+                    allowStopBasedOriginSolve: true,
+                    originSolveTraceBackend: 'rust',
+                    strictChiefDirectionSolve: true,
+                    targetSurfaceIndex,
+                    imageHeightValidationTraceBackend: 'rust',
+                }
+            ) as any;
+
+            const chiefOrigin = rayStarts?.expectedChiefOrigin ?? rayStarts?.[0]?.startP ?? null;
+            const chiefDir = rayStarts?.expectedChiefDir ?? rayStarts?.[0]?.dir ?? null;
+            if (!chiefOrigin || !chiefDir) return null;
+
+            const hitGlobal = traceRayHitPoint(
+                opticalSystemData,
+                {
+                    pos: {
+                        x: Number(chiefOrigin.x),
+                        y: Number(chiefOrigin.y),
+                        z: Number(chiefOrigin.z),
+                    },
+                    dir: {
+                        x: Number(chiefDir.x),
+                        y: Number(chiefDir.y),
+                        z: Number(chiefDir.z),
+                    },
+                    wavelength,
+                },
+                1.0,
+                targetSurfaceIndex,
+                {
+                    useRustWasm: true,
+                    requireRustWasm: false,
+                    allowNonStrict: true,
+                }
+            ) as any;
+            if (!hitGlobal) return null;
+
+            const surfaceInfo = calculateSurfaceOrigins(opticalSystemData)?.[targetSurfaceIndex] || null;
+            const hitLocal = surfaceInfo ? transformPointToLocal(hitGlobal, surfaceInfo) : hitGlobal;
+            const x = Number(hitLocal?.x);
+            const y = Number(hitLocal?.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            return { x, y };
+        } catch {
+            return null;
+        }
     }
 
     solveCrossRayToStopEdgeY(opticalSystemData: any[], stopIndex: number, stopRadius: number, wavelength: number): any {
