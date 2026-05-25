@@ -2522,26 +2522,55 @@ class MeritFunctionEditor {
 
             (calc as any).setReferenceRay(fieldSetting);
 
-            let count = 0;
-            let sum = 0;
-            let sumSq = 0;
+            const pupilCoordinates: Array<{ x: number; y: number }> = [];
+            const opdsMicrons: number[] = [];
             for (let iy = 0; iy < sampling; iy++) {
                 const py = -1 + (2 * iy) / (sampling - 1);
                 for (let ix = 0; ix < sampling; ix++) {
                     const px = -1 + (2 * ix) / (sampling - 1);
                     if ((px * px + py * py) > 1.000001) continue;
 
-                    const opdUm = Number((calc as any).calculateOPD(px, py, fieldSetting));
+                    const opdUm = Number(
+                        typeof (calc as any).calculateOPDReferenceSphere === 'function'
+                            ? (calc as any).calculateOPDReferenceSphere(px, py, fieldSetting, false)
+                            : (calc as any).calculateOPD(px, py, fieldSetting)
+                    );
                     if (!Number.isFinite(opdUm)) continue;
-                    const opdWaves = opdUm / wavelengthUm;
-                    if (!Number.isFinite(opdWaves)) continue;
 
-                    sum += opdWaves;
-                    sumSq += opdWaves * opdWaves;
-                    count += 1;
+                    pupilCoordinates.push({ x: px, y: py });
+                    opdsMicrons.push(opdUm);
                 }
             }
 
+            if (opdsMicrons.length <= 0) return Number.NaN;
+
+            const fit = (typeof (calc as any)._removeBestFitPlane === 'function')
+                ? (calc as any)._removeBestFitPlane(pupilCoordinates, opdsMicrons)
+                : null;
+            if (fit && Array.isArray(fit.residualWaves) && fit.residualWaves.length > 0) {
+                let count = 0;
+                let sumSq = 0;
+                for (const value of fit.residualWaves) {
+                    const opdWaves = Number(value);
+                    if (!Number.isFinite(opdWaves)) continue;
+                    sumSq += opdWaves * opdWaves;
+                    count += 1;
+                }
+                if (count > 0) {
+                    return Math.sqrt(sumSq / count);
+                }
+            }
+
+            let count = 0;
+            let sum = 0;
+            let sumSq = 0;
+            for (const opdUm of opdsMicrons) {
+                const opdWaves = opdUm / wavelengthUm;
+                if (!Number.isFinite(opdWaves)) continue;
+                sum += opdWaves;
+                sumSq += opdWaves * opdWaves;
+                count += 1;
+            }
             if (count <= 0) return Number.NaN;
             const mean = sum / count;
             const variance = Math.max(0, (sumSq / count) - (mean * mean));

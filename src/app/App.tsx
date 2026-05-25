@@ -4039,10 +4039,8 @@ export default function App() {
           return;
         }
 
-        // Blocks are canonical. Do not reconstruct or mutate them from expanded rows.
-        if (Array.isArray(active.blocks) && active.blocks.length > 0) {
-          return;
-        }
+        // Blocks are canonical, so optimized rows must be written back into the
+        // active block graph instead of stopping at the expanded table rows.
 
         const cloneValue = (value: any) => {
           try {
