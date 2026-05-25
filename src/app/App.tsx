@@ -2018,9 +2018,11 @@ function applyRenderImageHeightDisplaySpacing(
   if (!isInfiniteSystem) return opticalSystemRows;
 
   const currentRenderDistance = Number(objectSurface?.objectRenderDistance);
-  let displayDistance = Number.isFinite(currentRenderDistance) && currentRenderDistance > 0
-    ? currentRenderDistance
-    : 0;
+  if (Number.isFinite(currentRenderDistance) && currentRenderDistance > 0) {
+    return opticalSystemRows;
+  }
+
+  let displayDistance = 0;
 
   try {
     const paraxial = getRenderParaxialDataCached(opticalSystemRows, wavelengthUm);
@@ -2030,10 +2032,6 @@ function applyRenderImageHeightDisplaySpacing(
     }
   } catch (_) {}
 
-  // 3D Render for infinite systems needs a sufficiently distant emission plane.
-  // Very small ObjectDistance values make Angle objects look distorted even though
-  // the underlying field direction is correct. Keep the render-only display plane
-  // at least 100 mm away while preserving larger user-specified distances.
   displayDistance = Math.max(displayDistance, 100);
 
   displayDistance = Math.max(displayDistance, Number(maxTargetHeight));
