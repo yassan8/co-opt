@@ -1355,7 +1355,7 @@ class MeritFunctionEditor {
             const newCalcBtn = calculateBtn.cloneNode(true) as HTMLElement;
             calculateBtn.parentNode?.replaceChild(newCalcBtn, calculateBtn);
             newCalcBtn.addEventListener('click', () => {
-                this.calculateMerit();
+                void this.calculateMerit();
             });
         }
     }
@@ -1430,7 +1430,7 @@ class MeritFunctionEditor {
         });
     }
 
-    calculateMerit(): void {
+    async calculateMerit(): Promise<void> {
         if (!this.table) return;
 
         this._runtimeCache = new Map();
@@ -1438,44 +1438,46 @@ class MeritFunctionEditor {
         let totalMerit = 0;
         const terms: any[] = [];
 
-        for (const operand of this.operands) {
-            const calculatedValue = this.calculateOperandValue(operand);
-            const target = Number(operand.target) || 0;
-            const weight = Number(operand.weight) || 0;
+        try {
+            for (const operand of this.operands) {
+                const calculatedValue = await this.calculateOperandValueAsync(operand);
+                const target = Number(operand.target) || 0;
+                const weight = Number(operand.weight) || 0;
 
-            const error = calculatedValue - target;
-            const weightedError = error * error * weight;
+                const error = calculatedValue - target;
+                const weightedError = error * error * weight;
 
-            operand.result = calculatedValue;
-            totalMerit += weightedError;
+                operand.result = calculatedValue;
+                totalMerit += weightedError;
 
-            terms.push({
-                id: operand.id,
-                value: calculatedValue,
-                target,
-                weight,
-                error,
-                term: weightedError
+                terms.push({
+                    id: operand.id,
+                    value: calculatedValue,
+                    target,
+                    weight,
+                    error,
+                    term: weightedError
+                });
+            }
+
+            for (let i = 0; i < terms.length; i++) {
+                const contribution = totalMerit > 0 ? (terms[i].term / totalMerit) * 100 : 0;
+                this.operands[i].impact = contribution;
+            }
+
+            this.table.setData(this.operands);
+
+            if (this.totalMeritValue) {
+                this.totalMeritValue.textContent = totalMerit.toFixed(6);
+            }
+
+            console.log('✅ Merit Function 計算完了:', {
+                totalMerit: totalMerit.toFixed(6),
+                terms: terms.length
             });
+        } finally {
+            this._runtimeCache = null;
         }
-
-        for (let i = 0; i < terms.length; i++) {
-            const contribution = totalMerit > 0 ? (terms[i].term / totalMerit) * 100 : 0;
-            this.operands[i].impact = contribution;
-        }
-
-        this._runtimeCache = null;
-
-        this.table.setData(this.operands);
-
-        if (this.totalMeritValue) {
-            this.totalMeritValue.textContent = totalMerit.toFixed(6);
-        }
-
-        console.log('✅ Merit Function 計算完了:', {
-            totalMerit: totalMerit.toFixed(6),
-            terms: terms.length
-        });
 
         requestAnimationFrame(() => {
             if (this.table && this.table.element) {
@@ -2522,55 +2524,26 @@ class MeritFunctionEditor {
 
             (calc as any).setReferenceRay(fieldSetting);
 
-            const pupilCoordinates: Array<{ x: number; y: number }> = [];
-            const opdsMicrons: number[] = [];
+            let count = 0;
+            let sum = 0;
+            let sumSq = 0;
             for (let iy = 0; iy < sampling; iy++) {
                 const py = -1 + (2 * iy) / (sampling - 1);
                 for (let ix = 0; ix < sampling; ix++) {
                     const px = -1 + (2 * ix) / (sampling - 1);
                     if ((px * px + py * py) > 1.000001) continue;
 
-                    const opdUm = Number(
-                        typeof (calc as any).calculateOPDReferenceSphere === 'function'
-                            ? (calc as any).calculateOPDReferenceSphere(px, py, fieldSetting, false)
-                            : (calc as any).calculateOPD(px, py, fieldSetting)
-                    );
+                    const opdUm = Number((calc as any).calculateOPD(px, py, fieldSetting));
                     if (!Number.isFinite(opdUm)) continue;
-
-                    pupilCoordinates.push({ x: px, y: py });
-                    opdsMicrons.push(opdUm);
-                }
-            }
-
-            if (opdsMicrons.length <= 0) return Number.NaN;
-
-            const fit = (typeof (calc as any)._removeBestFitPlane === 'function')
-                ? (calc as any)._removeBestFitPlane(pupilCoordinates, opdsMicrons)
-                : null;
-            if (fit && Array.isArray(fit.residualWaves) && fit.residualWaves.length > 0) {
-                let count = 0;
-                let sumSq = 0;
-                for (const value of fit.residualWaves) {
-                    const opdWaves = Number(value);
+                    const opdWaves = opdUm / wavelengthUm;
                     if (!Number.isFinite(opdWaves)) continue;
+
+                    sum += opdWaves;
                     sumSq += opdWaves * opdWaves;
                     count += 1;
                 }
-                if (count > 0) {
-                    return Math.sqrt(sumSq / count);
-                }
             }
 
-            let count = 0;
-            let sum = 0;
-            let sumSq = 0;
-            for (const opdUm of opdsMicrons) {
-                const opdWaves = opdUm / wavelengthUm;
-                if (!Number.isFinite(opdWaves)) continue;
-                sum += opdWaves;
-                sumSq += opdWaves * opdWaves;
-                count += 1;
-            }
             if (count <= 0) return Number.NaN;
             const mean = sum / count;
             const variance = Math.max(0, (sumSq / count) - (mean * mean));

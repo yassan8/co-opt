@@ -139,6 +139,11 @@ function isOpdDebugEnabled(): boolean {
   return false;
 }
 
+function shouldUseLegacyWavefrontOpdRoute(): boolean {
+  // Keep OPD requirement numerics aligned with the current browser wavefront route.
+  return true;
+}
+
 function sanitizePupilSamplingMode(value: unknown): "stop" | "entrance" | "" {
   const mode = typeof value === "string" ? value.trim().toLowerCase() : "";
   return mode === "stop" || mode === "entrance" ? mode : "";
@@ -1368,18 +1373,24 @@ function isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows: any[] = []): bool
 
 function computeFiniteGridRmsNativeLike(grid: any): number {
   if (!Array.isArray(grid) || grid.length === 0) return Number.NaN;
+  let sum = 0;
   let sumSq = 0;
   let count = 0;
   for (const row of grid) {
     if (!Array.isArray(row)) continue;
     for (const value of row) {
       const numeric = Number(value);
+      if (numeric === 0) continue;
       if (!Number.isFinite(numeric)) continue;
+      sum += numeric;
       sumSq += numeric * numeric;
       count += 1;
     }
   }
-  return count > 0 ? Math.sqrt(sumSq / count) : Number.NaN;
+  if (count === 0) return Number.NaN;
+  const mean = sum / count;
+  const variance = Math.max(0, (sumSq / count) - (mean * mean));
+  return Math.sqrt(variance);
 }
 
 function parseThinLensFocalValueNativeLike(value: unknown): number {
@@ -1553,13 +1564,20 @@ function clampIdealParaxialNativeOpdRmsResponse(
 export async function runNativeOpdMap(
   payload: NativeOpdMapRequest,
 ): Promise<NativeOpdMapResponse> {
+  const normalizedPayload: NativeOpdMapRequest = {
+    ...(payload || {} as any),
+    surfaceIndex: Number.isInteger((payload as any)?.surfaceIndex)
+      ? Math.max(0, Number((payload as any).surfaceIndex))
+      : pickImageSurfaceIndexNativeLike(Array.isArray((payload as any)?.opticalSystemRows) ? (payload as any).opticalSystemRows : []),
+  } as NativeOpdMapRequest;
+  payload = normalizedPayload;
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   // Only force the JS thin-lens fallback for pure ideal-paraxial systems.
   // Mixed systems may contain paraxial helper rows, but they should still use
   // the Rust/WASM OPD path for the real surfaces instead of being downgraded.
   const requiresThinLensJsFallback = isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows);
 
-  if (!isTauriRuntime() || requiresThinLensJsFallback) {
+  if (!isTauriRuntime() || requiresThinLensJsFallback || shouldUseLegacyWavefrontOpdRoute()) {
     const opdDebug = isOpdDebugEnabled();
     const { createOPDCalculator, createWavefrontAnalyzer } = await import("../../../evaluation/wavefront/wavefront.ts");
     if (opticalSystemRows.length === 0) throw new Error("runNativeOpdMap(web): opticalSystemRows is empty");
@@ -1634,6 +1652,87 @@ export async function runNativeOpdMap(
 
     const calculator = createOPDCalculator(opticalSystemRows, wavelengthUm);
     const analyzer = createWavefrontAnalyzer(calculator);
+
+    try {
+      const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, "circular", {
+        forceRustWasm: false,
+        skipZernikeFit: true,
+        opdDisplayMode,
+        traceOptions: {
+          useRustWasm: false,
+          requireRustWasm: false,
+          allowNonStrict: true,
+        },
+      });
+
+      const n = Math.max(1, Number(wavefrontMap?.gridSize) || gridSize);
+      const rawValues = Array.isArray(wavefrontMap?.raw?.opdsInWavelengths)
+        ? wavefrontMap.raw.opdsInWavelengths
+        : (Array.isArray(wavefrontMap?.opdsInWavelengths) ? wavefrontMap.opdsInWavelengths : []);
+      const displayValues = Array.isArray(wavefrontMap?.display?.opdsInWavelengths)
+        ? wavefrontMap.display.opdsInWavelengths
+        : rawValues;
+      const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+
+      if (coords.length > 0 && rawValues.length > 0) {
+        const rawOpdGrid: Array<Array<number | null>> = Array.from({ length: n }, () => Array.from({ length: n }, () => null));
+        const displayOpdGrid: Array<Array<number | null>> = Array.from({ length: n }, () => Array.from({ length: n }, () => null));
+        let hitCount = 0;
+        const m = Math.min(coords.length, rawValues.length, displayValues.length);
+        for (let i = 0; i < m; i++) {
+          const p = coords[i] || {};
+          const ix = Number.isInteger((p as any).ix)
+            ? Number((p as any).ix)
+            : Math.round(((Number((p as any).x) + 1) * 0.5) * (n - 1));
+          const iy = Number.isInteger((p as any).iy)
+            ? Number((p as any).iy)
+            : Math.round(((Number((p as any).y) + 1) * 0.5) * (n - 1));
+          if (ix < 0 || iy < 0 || ix >= n || iy >= n) continue;
+          const rv = Number(rawValues[i]);
+          const dv = Number(displayValues[i]);
+          if (Number.isFinite(rv)) {
+            rawOpdGrid[iy][ix] = rv;
+            hitCount += 1;
+          }
+          if (Number.isFinite(dv)) displayOpdGrid[iy][ix] = dv;
+        }
+
+        let targetSurface = Number(payload?.surfaceIndex);
+        if (!Number.isInteger(targetSurface) || targetSurface < 0) {
+          targetSurface = Math.max(0, opticalSystemRows.findIndex((r: any) => String(r?.["object type"] ?? r?.object ?? "").toLowerCase() === "image"));
+          if (targetSurface <= 0) targetSurface = Math.max(0, opticalSystemRows.length - 1);
+        }
+
+        const effectivePupilSamplingMode = (() => {
+          const mode = String((wavefrontMap as any)?.pupilSamplingMode || "").toLowerCase();
+          if (mode === "stop" || mode === "entrance") return mode;
+          return requestedPupilSamplingMode;
+        })();
+
+        return clampIdealParaxialNativeOpdResponse(opticalSystemRows, {
+          backend: "web-js-wavefront",
+          targetSurface,
+          stopSurface: Number((calculator as any)?.stopSurfaceIndex ?? 0),
+          requestedObjectIndex: objectIndex,
+          usedObjectIndex: objectIndex,
+          usedObjectPosition: isAngle ? "angle" : "height",
+          usedObjectX: xVal,
+          usedObjectY: yVal,
+          wavelengthUm,
+          gridSize: n,
+          sampleCount: n * n,
+          hitCount,
+          pupilSamplingMode: effectivePupilSamplingMode,
+          rawOpdGrid,
+          displayOpdGrid,
+          message: "Computed via legacy Web wavefront OPD route",
+        } as NativeOpdMapResponse);
+      }
+    } catch (legacyWavefrontErr) {
+      if (opdDebug) {
+        console.warn("[runNativeOpdMap(web)] legacy wavefront OPD route failed; trying native route", legacyWavefrontErr);
+      }
+    }
 
     // Prefer native Rust-WASM OPD API when available to reduce JS/Rust algorithm drift.
     // Paraxial/ThinLens systems must stay on the JS wavefront path because the Rust fast path
@@ -2131,12 +2230,6 @@ export async function runNativeOpdMap(
       message: "Computed via Web Rust/WASM OPD API",
     } as NativeOpdMapResponse);
   }
-  const normalizedPayload: NativeOpdMapRequest = {
-    ...(payload || {} as any),
-    surfaceIndex: Number.isInteger((payload as any)?.surfaceIndex)
-      ? Math.max(0, Number((payload as any).surfaceIndex))
-      : pickImageSurfaceIndexNativeLike(Array.isArray((payload as any)?.opticalSystemRows) ? (payload as any).opticalSystemRows : []),
-  } as NativeOpdMapRequest;
   const nativeResponse = await invokeCommand<NativeOpdMapRequest, NativeOpdMapResponse>("run_native_opd_map", normalizedPayload);
   return clampIdealParaxialNativeOpdResponse(
     Array.isArray(normalizedPayload?.opticalSystemRows) ? normalizedPayload.opticalSystemRows : [],
@@ -2147,27 +2240,17 @@ export async function runNativeOpdMap(
 export async function runNativeOpdRmsWaves(
   payload: NativeOpdRmsWavesRequest,
 ): Promise<NativeOpdRmsWavesResponse> {
+  const normalizedPayload: NativeOpdRmsWavesRequest = {
+    ...(payload || {} as any),
+    surfaceIndex: Number.isInteger((payload as any)?.surfaceIndex)
+      ? Math.max(0, Number((payload as any).surfaceIndex))
+      : pickImageSurfaceIndexNativeLike(Array.isArray((payload as any)?.opticalSystemRows) ? (payload as any).opticalSystemRows : []),
+  } as NativeOpdRmsWavesRequest;
+  payload = normalizedPayload;
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const requiresThinLensJsFallback = isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows);
 
-  if (!isTauriRuntime()) {
-    if (!requiresThinLensJsFallback) {
-      const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
-      const rust = await preloadRustRayTracingWasm();
-      const runNativeWasm = (rust as any)?.run_native_opd_rms_waves_wasm_json;
-      if (typeof runNativeWasm === "function") {
-        const raw = runNativeWasm(JSON.stringify(payload || {}));
-        const response = (typeof raw === "string") ? JSON.parse(raw) : raw;
-        return clampIdealParaxialNativeOpdRmsResponse(opticalSystemRows, response as NativeOpdRmsWavesResponse);
-      }
-      const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
-      throw new Error(
-        initError
-          ? `runNativeOpdRmsWaves(web): missing export run_native_opd_rms_waves_wasm_json (initError=${initError})`
-          : "runNativeOpdRmsWaves(web): missing export run_native_opd_rms_waves_wasm_json"
-      );
-    }
-
+  if (!isTauriRuntime() || shouldUseLegacyWavefrontOpdRoute()) {
     const opdMap = await runNativeOpdMap(payload as NativeOpdMapRequest);
     let count = 0;
     let sum = 0;
@@ -2205,12 +2288,6 @@ export async function runNativeOpdRmsWaves(
     } as NativeOpdRmsWavesResponse);
   }
 
-  const normalizedPayload: NativeOpdRmsWavesRequest = {
-    ...(payload || {} as any),
-    surfaceIndex: Number.isInteger((payload as any)?.surfaceIndex)
-      ? Math.max(0, Number((payload as any).surfaceIndex))
-      : pickImageSurfaceIndexNativeLike(Array.isArray((payload as any)?.opticalSystemRows) ? (payload as any).opticalSystemRows : []),
-  } as NativeOpdRmsWavesRequest;
   const nativeResponse = await invokeCommand<NativeOpdRmsWavesRequest, NativeOpdRmsWavesResponse>("run_native_opd_rms_waves", normalizedPayload);
   return clampIdealParaxialNativeOpdRmsResponse(
     Array.isArray(normalizedPayload?.opticalSystemRows) ? normalizedPayload.opticalSystemRows : [],
