@@ -30,7 +30,7 @@ import { listDesignVariablesFromBlocks } from "../../optimization/design-variabl
 import { clearOptimizerStop, readDesktopSetting, startPreventDisplaySleep, stopPreventDisplaySleep, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 import { getOrCreateCooptWindowSyncSenderId, requestRefreshBlockInspector } from "../../core/window-facade.ts";
-import { calculateSurfaceOrigins, transformPointToLocal, traceRay } from "../../raytracing/core/ray-tracing.ts";
+import { calculateSurfaceOrigins, transformPointToGlobal, transformPointToLocal, traceRay, traceRayHitPoint } from "../../raytracing/core/ray-tracing.ts";
 import { calculateParaxialData } from "../../raytracing/core/ray-paraxial.ts";
 import { convertImageHeightToEffectiveObject, generateRayStartPointsForObject } from "../../optical/ray-renderer.ts";
 
@@ -329,6 +329,53 @@ function compareCrossRayDrawOrder(a: any, b: any): number {
   return 0;
 }
 
+function isHorizontalCrossRay(ray: any): boolean {
+  const type = String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
+  const side = String(ray?.originalRay?.side ?? ray?.side ?? '').trim().toLowerCase();
+  return type === 'left_marginal'
+    || type === 'right_marginal'
+    || type === 'horizontal_cross'
+    || side === 'left'
+    || side === 'right';
+}
+
+function isVerticalCrossRay(ray: any): boolean {
+  const type = String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
+  const side = String(ray?.originalRay?.side ?? ray?.side ?? '').trim().toLowerCase();
+  return type === 'upper_marginal'
+    || type === 'lower_marginal'
+    || type === 'vertical_cross'
+    || side === 'upper'
+    || side === 'lower'
+    || side === 'top'
+    || side === 'bottom';
+}
+
+function selectCrossRaysForAxis(rays: any[], desiredCount: number, axis: 'YZ' | 'XZ' | 'BOTH'): any[] {
+  const ordered = Array.isArray(rays) ? [...rays].sort(compareCrossRayDrawOrder) : [];
+  if (desiredCount <= 0 || ordered.length === 0) return [];
+  if (axis !== 'BOTH' || desiredCount < 3) return ordered.slice(0, desiredCount);
+
+  const selected: any[] = [];
+  const remaining = [...ordered];
+  const takeFirst = (predicate: (ray: any) => boolean) => {
+    const index = remaining.findIndex(predicate);
+    if (index < 0) return;
+    selected.push(remaining.splice(index, 1)[0]);
+  };
+
+  takeFirst((ray) => String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase() === 'chief');
+  takeFirst(isVerticalCrossRay);
+  takeFirst(isHorizontalCrossRay);
+
+  for (const ray of remaining) {
+    if (selected.length >= desiredCount) break;
+    selected.push(ray);
+  }
+
+  return selected.slice(0, desiredCount);
+}
+
 function buildRenderLegacyCrossRayCacheKey(
   opticalSystemRows: any[],
   normalizedObjectRows: any[],
@@ -430,6 +477,94 @@ function getRenderTargetPointFromRayPath(rayPath: any[], opticalSystemRows: any[
   return null;
 }
 
+function isFiniteRenderPoint(point: any): boolean {
+  return Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y)) && Number.isFinite(Number(point?.z));
+}
+
+function replaceRenderTargetPointInRayPath(rayPath: any[], opticalSystemRows: any[], targetSurfaceIndex: number, targetPoint: any): any[] {
+  if (!Array.isArray(rayPath) || !isFiniteRenderPoint(targetPoint)) return rayPath;
+  let replaceIndex = -1;
+  for (let index = rayPath.length - 1; index >= 0; index -= 1) {
+    const pointSurfaceIndex = Number(rayPath[index]?.surfaceIndex ?? rayPath[index]?.surface ?? rayPath[index]?.surfaceIdx);
+    if (Number.isInteger(pointSurfaceIndex) && pointSurfaceIndex === targetSurfaceIndex) {
+      replaceIndex = index;
+      break;
+    }
+  }
+  if (replaceIndex < 0) {
+    const targetRayPathIndex = getRenderRayPathPointIndexForSurfaceIndex(opticalSystemRows, targetSurfaceIndex);
+    if (targetRayPathIndex !== null && targetRayPathIndex >= 0 && targetRayPathIndex < rayPath.length) {
+      replaceIndex = targetRayPathIndex;
+    }
+  }
+  if (replaceIndex < 0) return rayPath;
+  const nextPath = rayPath.slice();
+  nextPath[replaceIndex] = {
+    ...(nextPath[replaceIndex] || null),
+    ...targetPoint,
+    surfaceIndex: targetSurfaceIndex,
+  };
+  return nextPath;
+}
+
+function buildRenderGlobalPointFromLocal(localPoint: any, surfaceInfo: any): any {
+  if (!surfaceInfo || !isFiniteRenderPoint({
+    x: localPoint?.x,
+    y: localPoint?.y,
+    z: Number.isFinite(Number(localPoint?.z)) ? localPoint.z : 0,
+  })) return null;
+  return transformPointToGlobal({
+    x: Number(localPoint.x),
+    y: Number(localPoint.y),
+    z: Number.isFinite(Number(localPoint.z)) ? Number(localPoint.z) : 0,
+  }, surfaceInfo, true);
+}
+
+function normalizeRenderVector3(vector: any, fallback: any = { x: 0, y: 0, z: 1 }): any {
+  const x = Number(vector?.x);
+  const y = Number(vector?.y);
+  const z = Number(vector?.z);
+  const length = Math.hypot(x, y, z);
+  if (!Number.isFinite(length) || length <= 1e-12) return fallback;
+  return { x: x / length, y: y / length, z: z / length };
+}
+
+function crossRenderVector3(a: any, b: any): any {
+  return {
+    x: Number(a?.y) * Number(b?.z) - Number(a?.z) * Number(b?.y),
+    y: Number(a?.z) * Number(b?.x) - Number(a?.x) * Number(b?.z),
+    z: Number(a?.x) * Number(b?.y) - Number(a?.y) * Number(b?.x),
+  };
+}
+
+function buildRenderEmissionBasisFromChief(dir: any): { dir: any; u: any; v: any } | null {
+  const unitDir = normalizeRenderVector3(dir);
+  if (!isFiniteRenderPoint(unitDir)) return null;
+  const reference = Math.abs(Number(unitDir.y)) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+  const u = normalizeRenderVector3(crossRenderVector3(reference, unitDir), { x: 1, y: 0, z: 0 });
+  const v = normalizeRenderVector3(crossRenderVector3(unitDir, u), { x: 0, y: 1, z: 0 });
+  return { dir: unitDir, u, v };
+}
+
+function buildRenderRayStartOnChiefPlane(chiefStart: any, candidate: any): any | null {
+  if (!chiefStart?.startP || !chiefStart?.dir) return null;
+  const basis = buildRenderEmissionBasisFromChief(chiefStart.dir);
+  if (!basis) return null;
+  const offsetU = Number(candidate?.planeCoords?.u) || 0;
+  const offsetV = Number(candidate?.planeCoords?.v) || 0;
+  const origin = chiefStart.startP;
+  return {
+    ...candidate,
+    startP: {
+      x: Number(origin.x) + offsetU * basis.u.x + offsetV * basis.v.x,
+      y: Number(origin.y) + offsetU * basis.u.y + offsetV * basis.v.y,
+      z: Number(origin.z) + offsetU * basis.u.z + offsetV * basis.v.z,
+    },
+    dir: basis.dir,
+    description: candidate?.description,
+  };
+}
+
 function buildExactRenderRaysForImageHeightObjects(
   objectRows: any[],
   opticalSystemRows: any[],
@@ -468,6 +603,10 @@ function buildExactRenderRaysForImageHeightObjects(
 
   const rays: any[] = [];
   const objectDebug: any[] = [];
+  const overlappingImageHeightSolveEntries: Array<{ objectIndex: number; targetX: number; targetY: number; solvedX: number; solvedY: number }> = [];
+  const imageHeightRenderRayCount = Number.isFinite(Number(rayCount)) && Number(rayCount) <= 5
+    ? 1
+    : Math.max(1, Math.floor(Number(rayCount) || 1));
   objectRows.forEach((row: any, objectIndex: number) => {
     if (!isRenderImageHeightObjectRow(row)) return;
     try {
@@ -486,25 +625,58 @@ function buildExactRenderRaysForImageHeightObjects(
         {
           skipTsValidation: true,
           validationTraceBackend: 'rust',
+          disableSolveCache: true,
+          disableWarmStartCache: true,
         }
+      );
+      const separatedResolvedRow = separateOverlappingRenderImageHeightSolvedField(
+        resolvedRow,
+        row,
+        axis,
+        resolvedObjectIndex,
+        overlappingImageHeightSolveEntries,
       );
       const objectDiag = {
         objectIndex: resolvedObjectIndex,
         requested: rayCount,
+        effectiveRequested: imageHeightRenderRayCount,
         starts: 0,
         kept: 0,
         keptPartialNoTarget: 0,
         droppedMissingStart: 0,
         droppedShortPath: 0,
         droppedNoTarget: 0,
-        effectivePosition: String(resolvedRow?.__cooptEffectivePosition ?? resolvedRow?.position ?? ''),
-        solveMode: String(resolvedRow?.__cooptImageHeightSolve?.mode ?? ''),
+        effectivePosition: String(separatedResolvedRow?.__cooptEffectivePosition ?? separatedResolvedRow?.position ?? ''),
+        solveMode: String(separatedResolvedRow?.__cooptImageHeightSolve?.mode ?? ''),
         chiefResidualMm: null as number | null,
       };
-      const rayStarts = generateRayStartPointsForObject(
-        resolvedRow,
+      const chiefOnlyRayStarts = generateRayStartPointsForObject(
+        separatedResolvedRow,
         opticalSystemRows,
-        rayCount,
+        1,
+        null,
+        {
+          pattern: exactPattern,
+          wavelengthUm,
+          conjugateType,
+          pupilScale: 1,
+          aimThroughStop: true,
+          useChiefRayAnalysis: true,
+          allowStopBasedOriginSolve: true,
+          originSolveTraceBackend: 'rust',
+          imageHeightValidationTraceBackend: 'rust',
+          targetSurfaceIndex,
+          disableCrossExtent: true,
+          crossType,
+          exactCrossBeamSampling: true,
+          displayAxisAlignedSampling: true,
+          preserveChiefNormalEmissionPlane: true,
+        }
+      );
+      const rayStarts = generateRayStartPointsForObject(
+        separatedResolvedRow,
+        opticalSystemRows,
+        imageHeightRenderRayCount,
         null,
         {
           pattern: exactPattern,
@@ -566,13 +738,65 @@ function buildExactRenderRaysForImageHeightObjects(
 
         return bestIndex;
       }, 0);
-
-      const chiefStart = renderRayStarts[chiefIndex] || renderRayStarts[0];
+      const chiefStartCandidate = (Array.isArray(chiefOnlyRayStarts) && chiefOnlyRayStarts[0])
+        ? chiefOnlyRayStarts[0]
+        : (renderRayStarts[chiefIndex] || renderRayStarts[0]);
+      const chiefStart = getExactImageHeightChiefStart(
+        separatedResolvedRow,
+        chiefStartCandidate,
+        'Chief render ray (exact ImageHeight solver)'
+      );
+      const canUseExactChiefEmissionPlane = !!(
+        chiefStart?.startP
+        && chiefStart?.dir
+        && separatedResolvedRow?.__cooptImageHeightSolve?.chiefRay
+      );
+      const tracedRayStarts = renderRayStarts.map((candidate: any, candidateIndex: number) => {
+        if (candidateIndex === chiefIndex && chiefStart?.startP && chiefStart?.dir) {
+          return {
+            ...candidate,
+            ...chiefStart,
+            startP: chiefStart.startP,
+            dir: chiefStart.dir,
+            description: chiefStart.description || candidate?.description,
+          };
+        }
+        if (canUseExactChiefEmissionPlane) {
+          const exactPlaneStart = buildRenderRayStartOnChiefPlane(chiefStart, candidate);
+          if (exactPlaneStart?.startP && exactPlaneStart?.dir) return exactPlaneStart;
+        }
+        return candidate;
+      });
       const chiefStartP = chiefStart?.startP || { x: 0, y: 0, z: 0 };
-      const chiefPlaneU = Number(chiefStart?.planeCoords?.u);
-      const chiefPlaneV = Number(chiefStart?.planeCoords?.v);
+      const chiefPlaneU = Number(chiefStartCandidate?.planeCoords?.u ?? chiefStart?.planeCoords?.u);
+      const chiefPlaneV = Number(chiefStartCandidate?.planeCoords?.v ?? chiefStart?.planeCoords?.v);
+      const solvedChiefLocalHit = separatedResolvedRow?.__cooptImageHeightSolve?.hit || null;
+      let imageHeightTargetLocalOffset: { x: number; y: number } | null = null;
+      const marginalReferenceStart = tracedRayStarts[chiefIndex]?.startP && tracedRayStarts[chiefIndex]?.dir
+        ? tracedRayStarts[chiefIndex]
+        : (chiefStartCandidate?.startP && chiefStartCandidate?.dir ? chiefStartCandidate : (renderRayStarts[chiefIndex] || null));
+      if (targetSurfaceInfo && marginalReferenceStart?.startP && marginalReferenceStart?.dir && solvedChiefLocalHit) {
+        const tracedChiefTargetPoint = traceRayHitPoint(
+          opticalSystemRows,
+          { pos: marginalReferenceStart.startP, dir: marginalReferenceStart.dir, wavelength: wavelengthUm },
+          1.0,
+          targetSurfaceIndex,
+          traceOptions,
+        );
+        const tracedChiefLocalHit = tracedChiefTargetPoint ? transformPointToLocal(tracedChiefTargetPoint, targetSurfaceInfo) : null;
+        const solvedX = Number(solvedChiefLocalHit?.x);
+        const solvedY = Number(solvedChiefLocalHit?.y);
+        const tracedX = Number(tracedChiefLocalHit?.x);
+        const tracedY = Number(tracedChiefLocalHit?.y);
+        if ([solvedX, solvedY, tracedX, tracedY].every(Number.isFinite)) {
+          imageHeightTargetLocalOffset = {
+            x: solvedX - tracedX,
+            y: solvedY - tracedY,
+          };
+        }
+      }
 
-      renderRayStarts.forEach((rayStart: any, rayIndex: number) => {
+      tracedRayStarts.forEach((rayStart: any, rayIndex: number) => {
         if (!rayStart?.startP || !rayStart?.dir) {
           objectDiag.droppedMissingStart += 1;
           return;
@@ -585,7 +809,37 @@ function buildExactRenderRaysForImageHeightObjects(
           targetSurfaceIndex,
           traceOptions,
         );
-        let targetPoint = getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, targetSurfaceIndex);
+        const tracedTargetPoint = traceRayHitPoint(
+          opticalSystemRows,
+          { pos: rayStart.startP, dir: rayStart.dir, wavelength: wavelengthUm },
+          1.0,
+          targetSurfaceIndex,
+          traceOptions,
+        );
+        const solvedChiefTargetPoint = rayIndex === chiefIndex && solvedChiefLocalHit
+          ? buildRenderGlobalPointFromLocal(solvedChiefLocalHit, targetSurfaceInfo)
+          : null;
+        let correctedMarginalTargetPoint = null;
+        if (rayIndex !== chiefIndex && imageHeightTargetLocalOffset && tracedTargetPoint && targetSurfaceInfo) {
+          const tracedLocalPoint = transformPointToLocal(tracedTargetPoint, targetSurfaceInfo);
+          const correctedLocalPoint = tracedLocalPoint ? {
+            x: Number(tracedLocalPoint.x) + imageHeightTargetLocalOffset.x,
+            y: Number(tracedLocalPoint.y) + imageHeightTargetLocalOffset.y,
+            z: Number.isFinite(Number(tracedLocalPoint.z)) ? Number(tracedLocalPoint.z) : 0,
+          } : null;
+          correctedMarginalTargetPoint = correctedLocalPoint
+            ? buildRenderGlobalPointFromLocal(correctedLocalPoint, targetSurfaceInfo)
+            : null;
+        }
+        const preciseTargetPoint = isFiniteRenderPoint(solvedChiefTargetPoint)
+          ? solvedChiefTargetPoint
+          : (isFiniteRenderPoint(correctedMarginalTargetPoint) ? correctedMarginalTargetPoint : tracedTargetPoint);
+        if (isFiniteRenderPoint(preciseTargetPoint)) {
+          rayPath = replaceRenderTargetPointInRayPath(rayPath, opticalSystemRows, targetSurfaceIndex, preciseTargetPoint);
+        }
+        let targetPoint = isFiniteRenderPoint(preciseTargetPoint)
+          ? preciseTargetPoint
+          : getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, targetSurfaceIndex);
         if (!Array.isArray(rayPath) || rayPath.length <= 1) {
           objectDiag.droppedShortPath += 1;
           return;
@@ -623,7 +877,7 @@ function buildExactRenderRaysForImageHeightObjects(
                 z: Number(targetLocalPoint.z),
               } : null,
               residualMm: rustResidual,
-              solve: resolvedRow?.__cooptImageHeightSolve ?? row?.__cooptImageHeightSolve ?? null,
+              solve: separatedResolvedRow?.__cooptImageHeightSolve ?? row?.__cooptImageHeightSolve ?? null,
             };
           } catch (_) {}
           if (Number.isFinite(rustResidual) && rustResidual > 1e-4) {
@@ -635,6 +889,10 @@ function buildExactRenderRaysForImageHeightObjects(
                 target: imageHeightTarget,
               };
             } catch (_) {}
+          } else {
+            try { delete (window as any).__COOPT_LAST_IMAGEHEIGHT_RUST_RESIDUAL; } catch (_) {
+              (window as any).__COOPT_LAST_IMAGEHEIGHT_RUST_RESIDUAL = null;
+            }
           }
         }
 
@@ -751,7 +1009,7 @@ function buildExactLowCountRenderRaysForObjects(
     }
     return Number.POSITIVE_INFINITY;
   };
-  const traceExactRayToTarget = (startP: any, dir: any) => {
+  const traceExactRayForRender = (startP: any, dir: any, requireTargetHit = false) => {
     let rayPath = traceRay(
       opticalSystemRows,
       { pos: startP, dir, wavelength: wavelengthUm },
@@ -760,12 +1018,15 @@ function buildExactLowCountRenderRaysForObjects(
       targetSurfaceIndex,
       traceOptions,
     );
-    let targetPoint = getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, targetSurfaceIndex);
-    if (!Array.isArray(rayPath) || rayPath.length <= 1 || !targetPoint) return null;
+    if (!Array.isArray(rayPath) || rayPath.length <= 1) return null;
+    if (requireTargetHit && !getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, targetSurfaceIndex)) {
+      return null;
+    }
     return rayPath;
   };
 
   const rays: any[] = [];
+  const overlappingImageHeightSolveEntries: Array<{ objectIndex: number; targetX: number; targetY: number; solvedX: number; solvedY: number }> = [];
   objectRows.forEach((row: any, objectIndex: number) => {
     try {
       const scopedRow = isRenderImageHeightObjectRow(row)
@@ -780,11 +1041,45 @@ function buildExactLowCountRenderRaysForObjects(
             {
               skipTsValidation: true,
               validationTraceBackend: 'rust',
+              disableSolveCache: true,
+              disableWarmStartCache: true,
             }
           )
         : row;
-      const rayStarts = generateRayStartPointsForObject(
+      const separatedResolvedRow = separateOverlappingRenderImageHeightSolvedField(
         resolvedRow,
+        row,
+        axis,
+        objectIndex,
+        overlappingImageHeightSolveEntries,
+      );
+      const chiefOnlyRayStarts = isRenderImageHeightObjectRow(row)
+        ? generateRayStartPointsForObject(
+            separatedResolvedRow,
+            opticalSystemRows,
+            1,
+            null,
+            {
+              pattern: exactPattern,
+              wavelengthUm,
+              conjugateType,
+              pupilScale: 1,
+              aimThroughStop: true,
+              useChiefRayAnalysis: true,
+              allowStopBasedOriginSolve: true,
+              originSolveTraceBackend: 'rust',
+              imageHeightValidationTraceBackend: 'rust',
+              targetSurfaceIndex,
+              disableCrossExtent: true,
+              crossType,
+              exactCrossBeamSampling: true,
+              displayAxisAlignedSampling: true,
+              preserveChiefNormalEmissionPlane: true,
+            }
+          )
+        : null;
+      const rayStarts = generateRayStartPointsForObject(
+        separatedResolvedRow,
         opticalSystemRows,
         generationRayCount,
         null,
@@ -808,27 +1103,35 @@ function buildExactLowCountRenderRaysForObjects(
       );
       const renderRayStarts = Array.isArray(rayStarts) ? rayStarts : [];
       if (renderRayStarts.length === 0) return;
+      const isImageHeight = isRenderImageHeightObjectRow(row);
+      const imageHeightTarget = isImageHeight ? getRenderImageHeightTargetForAxis(row, axis) : null;
       const expectedChiefOrigin = rayStarts?.expectedChiefOrigin;
       const chiefIndex = renderRayStarts.reduce((bestIndex: number, candidate: any, candidateIndex: number) => {
         const score = getCandidateScore(candidate, expectedChiefOrigin);
         const bestScore = getCandidateScore(renderRayStarts[bestIndex], expectedChiefOrigin);
         return score < bestScore ? candidateIndex : bestIndex;
       }, 0);
-      const chiefStart = renderRayStarts[chiefIndex] || renderRayStarts[0];
+      const chiefStartCandidate = isImageHeight && Array.isArray(chiefOnlyRayStarts) && chiefOnlyRayStarts[0]
+        ? chiefOnlyRayStarts[0]
+        : (renderRayStarts[chiefIndex] || renderRayStarts[0]);
+      const chiefStart = isImageHeight
+        ? getExactImageHeightChiefStart(
+            separatedResolvedRow,
+            chiefStartCandidate,
+            'Chief render ray (exact ImageHeight solver)'
+          )
+        : chiefStartCandidate;
       if (!chiefStart?.startP || !chiefStart?.dir) return;
-      const chiefRayPath = traceExactRayToTarget(chiefStart.startP, chiefStart.dir);
+      const chiefRayPath = traceExactRayForRender(chiefStart.startP, chiefStart.dir, isRenderImageHeightObjectRow(row));
       if (!chiefRayPath) return;
-
-      const isImageHeight = isRenderImageHeightObjectRow(row);
-      const imageHeightTarget = isImageHeight ? getRenderImageHeightTargetForAxis(row, axis) : null;
       const objectPosition = {
         x: Number(scopedRow?.xHeightAngle ?? scopedRow?.x ?? 0) || 0,
         y: Number(scopedRow?.yHeightAngle ?? scopedRow?.y ?? 0) || 0,
         z: 0,
       };
 
-      const chiefPlaneU = Number(chiefStart?.planeCoords?.u);
-      const chiefPlaneV = Number(chiefStart?.planeCoords?.v);
+      const chiefPlaneU = Number(chiefStartCandidate?.planeCoords?.u ?? chiefStart?.planeCoords?.u);
+      const chiefPlaneV = Number(chiefStartCandidate?.planeCoords?.v ?? chiefStart?.planeCoords?.v);
       const chiefStartP = chiefStart?.startP || { x: 0, y: 0, z: 0 };
 
       const pushExactRay = (rayStart: any, type: string, side: string, rayPath: any[]) => {
@@ -879,11 +1182,11 @@ function buildExactLowCountRenderRaysForObjects(
           return indexA - indexB;
         });
 
+      const candidateExactRays: Array<{ rayStart: any; type: string; side: string; rayPath: any[] }> = [];
       for (const rayIndex of additionalIndices) {
-        if (rays.filter((candidate: any) => Number(candidate?.objectIndex) === objectIndex).length >= desiredRayCount) break;
         const rayStart = renderRayStarts[rayIndex];
         if (!rayStart?.startP || !rayStart?.dir) continue;
-        const rayPath = traceExactRayToTarget(rayStart.startP, rayStart.dir);
+        const rayPath = traceExactRayForRender(rayStart.startP, rayStart.dir, isImageHeight);
         if (!rayPath) continue;
 
         const planeU = Number(rayStart?.planeCoords?.u);
@@ -911,8 +1214,25 @@ function buildExactLowCountRenderRaysForObjects(
           side = deltaX >= 0 ? 'right' : 'left';
         }
 
-        pushExactRay(rayStart, type, side, rayPath);
+        candidateExactRays.push({ rayStart, type, side, rayPath });
       }
+
+      const selectedExactRays = selectCrossRaysForAxis(
+        candidateExactRays.map((entry) => ({
+          ...entry,
+          originalRay: {
+            type: entry.type,
+            side: entry.side,
+          },
+        })),
+        Math.max(0, desiredRayCount - 1),
+        axis,
+      );
+
+      selectedExactRays.forEach((entry: any) => {
+        pushExactRay(entry.rayStart, entry.type, entry.side, entry.rayPath);
+      });
+      return;
     } catch (error) {
       console.warn('[RenderWindow] Failed to build exact low-count render rays:', error);
     }
@@ -944,6 +1264,7 @@ function replaceImageHeightChiefRaysWithExactRenderTrace(
     requireRustWasm: true,
     disableWasmRayTracing: false,
   };
+  const overlappingImageHeightSolveEntries: Array<{ objectIndex: number; targetX: number; targetY: number; solvedX: number; solvedY: number }> = [];
 
   const replacedRays = rays.map((ray: any) => {
     const type = String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
@@ -985,11 +1306,20 @@ function replaceImageHeightChiefRaysWithExactRenderTrace(
             {
               skipTsValidation: true,
               validationTraceBackend: 'rust',
+              disableSolveCache: true,
+              disableWarmStartCache: true,
             }
           )
         : objectRow;
-      const rayStarts = generateRayStartPointsForObject(
+      const separatedResolvedObjectRow = separateOverlappingRenderImageHeightSolvedField(
         resolvedObjectRow,
+        objectRow,
+        'BOTH',
+        objectIndex,
+        overlappingImageHeightSolveEntries,
+      );
+      const rayStarts = generateRayStartPointsForObject(
+          separatedResolvedObjectRow,
         opticalSystemRows,
         1,
         null,
@@ -1006,7 +1336,11 @@ function replaceImageHeightChiefRaysWithExactRenderTrace(
           disableCrossExtent: true,
         }
       );
-      const chiefStart = Array.isArray(rayStarts) ? rayStarts[0] : null;
+      const chiefStart = getExactImageHeightChiefStart(
+        separatedResolvedObjectRow,
+        Array.isArray(rayStarts) ? rayStarts[0] : null,
+        'Chief render ray (exact ImageHeight solver)'
+      );
       if (!chiefStart?.startP || !chiefStart?.dir) return dropFallbackChiefRay('no-chief-start');
 
       const rayPath = traceRay(
@@ -1018,7 +1352,8 @@ function replaceImageHeightChiefRaysWithExactRenderTrace(
         traceOptions,
       );
       if (!Array.isArray(rayPath) || rayPath.length <= 1) return dropFallbackChiefRay('invalid-ray-path');
-      if (!getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, targetSurfaceIndex)) {
+      const reachedTarget = !!getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, targetSurfaceIndex);
+      if (!reachedTarget) {
         return dropFallbackChiefRay('did-not-reach-target');
       }
 
@@ -1055,14 +1390,19 @@ function replaceImageHeightChiefRaysWithExactRenderTrace(
 }
 
 function getRenderImageHeightTarget(row: any): { x: number; y: number } | null {
-  const originalPosNorm = String(row?.__cooptOriginalPosition ?? row?.position ?? '')
+  const positionNorm = String(row?.position ?? '')
     .trim()
     .toLowerCase()
     .replace(/[\s_-]+/g, '');
-  const currentX = Number(row?.xHeightAngle);
-  const currentY = Number(row?.yHeightAngle);
-  if (originalPosNorm === 'imageheight' && Number.isFinite(currentX) && Number.isFinite(currentY)) {
-    return { x: currentX, y: currentY };
+  const effectivePositionNorm = String(row?.__cooptEffectivePosition ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+  const isRawImageHeightRow = positionNorm === 'imageheight' && !effectivePositionNorm;
+  const tableX = Number(row?.xHeightAngle);
+  const tableY = Number(row?.yHeightAngle);
+  if (isRawImageHeightRow && Number.isFinite(tableX) && Number.isFinite(tableY)) {
+    return { x: tableX, y: tableY };
   }
 
   const storedTarget = row?.__cooptImageHeightTarget;
@@ -1070,8 +1410,14 @@ function getRenderImageHeightTarget(row: any): { x: number; y: number } | null {
     return { x: Number(storedTarget.x), y: Number(storedTarget.y) };
   }
 
-  if (Number.isFinite(currentX) && Number.isFinite(currentY)) {
-    return { x: currentX, y: currentY };
+  const heightX = Number(row?.xHeight ?? row?.heightX ?? row?.['object x']);
+  const heightY = Number(row?.yHeight ?? row?.heightY ?? row?.['object y']);
+  if (Number.isFinite(heightX) && Number.isFinite(heightY)) {
+    return { x: heightX, y: heightY };
+  }
+
+  if (Number.isFinite(tableX) && Number.isFinite(tableY)) {
+    return { x: tableX, y: tableY };
   }
   return null;
 }
@@ -1085,6 +1431,100 @@ function getRenderImageHeightTargetForAxis(
   if (axis === 'XZ') return { x: target.x, y: 0 };
   if (axis === 'YZ') return { x: 0, y: target.y };
   return target;
+}
+
+function getExactImageHeightChiefStart(resolvedRow: any, fallbackRayStart: any, label: string): any {
+  const chiefOrigin = resolvedRow?.__cooptImageHeightSolve?.chiefRay?.origin;
+  const chiefDir = resolvedRow?.__cooptImageHeightSolve?.chiefRay?.dir;
+  const ox = Number(chiefOrigin?.x);
+  const oy = Number(chiefOrigin?.y);
+  const oz = Number(chiefOrigin?.z);
+  const dx = Number(chiefDir?.x);
+  const dy = Number(chiefDir?.y);
+  const dz = Number(chiefDir?.z);
+  if (![ox, oy, oz, dx, dy, dz].every(Number.isFinite)) return fallbackRayStart;
+
+  return {
+    ...(fallbackRayStart && typeof fallbackRayStart === 'object' ? fallbackRayStart : {}),
+    startP: { x: ox, y: oy, z: oz },
+    dir: { x: dx, y: dy, z: dz },
+    planeCoords: fallbackRayStart?.planeCoords ?? { u: 0, v: 0 },
+    description: fallbackRayStart?.description || label,
+  };
+}
+
+function separateOverlappingRenderImageHeightSolvedField(
+  resolvedRow: any,
+  sourceRow: any,
+  axis: 'YZ' | 'XZ' | 'BOTH',
+  objectIndex: number,
+  seenEntries: Array<{ objectIndex: number; targetX: number; targetY: number; solvedX: number; solvedY: number }>,
+): any {
+  if (!resolvedRow || typeof resolvedRow !== 'object') return resolvedRow;
+  if (!isRenderImageHeightObjectRow(sourceRow)) return resolvedRow;
+
+  const target = getRenderImageHeightTarget(sourceRow);
+  if (!target) return resolvedRow;
+
+  const solvedX = Number(resolvedRow?.xHeightAngle ?? resolvedRow?.xHeight ?? resolvedRow?.x);
+  const solvedY = Number(resolvedRow?.yHeightAngle ?? resolvedRow?.yHeight ?? resolvedRow?.y);
+  if (!Number.isFinite(solvedX) || !Number.isFinite(solvedY)) return resolvedRow;
+
+  const overlappingEntries = seenEntries.filter((entry) => (
+    Math.abs(entry.solvedX - solvedX) <= 1e-9
+    && Math.abs(entry.solvedY - solvedY) <= 1e-9
+    && (Math.abs(entry.targetX - target.x) > 1e-6 || Math.abs(entry.targetY - target.y) > 1e-6)
+  ));
+
+  let adjustedRow = resolvedRow;
+  if (overlappingEntries.length > 0) {
+    const firstOverlap = overlappingEntries[0];
+    const deltaTargetX = target.x - firstOverlap.targetX;
+    const deltaTargetY = target.y - firstOverlap.targetY;
+    const splitOrdinal = overlappingEntries.length;
+    const baseMagnitude = Math.max(Math.abs(deltaTargetX), Math.abs(deltaTargetY), 1);
+    const splitStep = Math.min(5e-3, Math.max(1e-4, baseMagnitude * 1e-4));
+    const fallbackSign = (objectIndex - firstOverlap.objectIndex) >= 0 ? 1 : -1;
+
+    let offsetX = 0;
+    let offsetY = 0;
+    if (axis === 'YZ') {
+      offsetY = splitStep * splitOrdinal * (Math.sign(deltaTargetY) || Math.sign(deltaTargetX) || fallbackSign);
+    } else if (axis === 'XZ') {
+      offsetX = splitStep * splitOrdinal * (Math.sign(deltaTargetX) || Math.sign(deltaTargetY) || fallbackSign);
+    } else if (Math.abs(deltaTargetX) >= Math.abs(deltaTargetY)) {
+      offsetX = splitStep * splitOrdinal * (Math.sign(deltaTargetX) || fallbackSign);
+      offsetY = splitStep * 0.35 * splitOrdinal * (Math.sign(deltaTargetY) || Math.sign(deltaTargetX) || fallbackSign);
+    } else {
+      offsetY = splitStep * splitOrdinal * (Math.sign(deltaTargetY) || fallbackSign);
+      offsetX = splitStep * 0.35 * splitOrdinal * (Math.sign(deltaTargetX) || Math.sign(deltaTargetY) || fallbackSign);
+    }
+
+    adjustedRow = {
+      ...resolvedRow,
+      xHeightAngle: solvedX + offsetX,
+      yHeightAngle: solvedY + offsetY,
+      x: Number.isFinite(Number(resolvedRow?.x)) ? Number(resolvedRow.x) + offsetX : solvedX + offsetX,
+      y: Number.isFinite(Number(resolvedRow?.y)) ? Number(resolvedRow.y) + offsetY : solvedY + offsetY,
+      __cooptRenderImageHeightSplit: {
+        objectIndex,
+        splitOrdinal,
+        offsetX,
+        offsetY,
+        baseSolved: { x: solvedX, y: solvedY },
+        target: { x: target.x, y: target.y },
+      },
+    };
+  }
+
+  seenEntries.push({
+    objectIndex,
+    targetX: target.x,
+    targetY: target.y,
+    solvedX,
+    solvedY,
+  });
+  return adjustedRow;
 }
 
 function buildAxisScopedRenderImageHeightRow(
@@ -1590,6 +2030,12 @@ function applyRenderImageHeightDisplaySpacing(
     }
   } catch (_) {}
 
+  // 3D Render for infinite systems needs a sufficiently distant emission plane.
+  // Very small ObjectDistance values make Angle objects look distorted even though
+  // the underlying field direction is correct. Keep the render-only display plane
+  // at least 100 mm away while preserving larger user-specified distances.
+  displayDistance = Math.max(displayDistance, 100);
+
   displayDistance = Math.max(displayDistance, Number(maxTargetHeight));
   if (!(Number.isFinite(displayDistance) && displayDistance > 0)) return opticalSystemRows;
   if (Number.isFinite(currentRenderDistance) && Math.abs(currentRenderDistance - displayDistance) < 1e-6) {
@@ -2007,6 +2453,8 @@ export default function App() {
   const renderDrawRequestSeqRef = useRef(0);
   const renderImageSemidiaWarningRef = useRef<RenderImageSemidiaWarning | null>(null);
   const renderLastTimingRef = useRef<{ mode: string; summary: string; stages: RenderTimingStage[]; blockPerf: Array<{ name: string; countDelta: number; totalMsDelta: number }> } | null>(null);
+  const renderActiveRowsRef = useRef<any[] | null>(null);
+  const renderActiveObjectRowsRef = useRef<any[] | null>(null);
   const renderPendingRowsRef = useRef<any[] | null>(null);
   const renderPendingObjectRowsRef = useRef<any[] | null>(null);
   const renderPendingSyncStampRef = useRef('');
@@ -3076,11 +3524,19 @@ export default function App() {
             requirementCount: activeRows.length,
             variableCount: variableCount > 0 ? variableCount : prev.variableCount,
             requirementScoreBefore: safeScore,
-            requirementScoreAfter: safeScore,
-            requirementScoreTable: tableScore,
             meritBefore: safeScore,
-            meritAfter: safeScore,
-            best: Number.isFinite(safeScore) ? safeScore : prev.best,
+            requirementScoreAfter: optimizeStatus === 'idle'
+              ? safeScore
+              : prev.requirementScoreAfter,
+            requirementScoreTable: optimizeStatus === 'idle'
+              ? tableScore
+              : prev.requirementScoreTable,
+            meritAfter: optimizeStatus === 'idle'
+              ? safeScore
+              : prev.meritAfter,
+            best: optimizeStatus === 'idle'
+              ? (Number.isFinite(safeScore) ? safeScore : prev.best)
+              : prev.best,
           }));
         }
         return Number.isFinite(safeScore) || Number.isFinite(tableScore);
@@ -3181,11 +3637,19 @@ export default function App() {
         setOptimizeState((prev: any) => ({
           ...prev,
           requirementScoreBefore: score,
-          requirementScoreAfter: score,
-          requirementScoreTable: score,
           meritBefore: score,
-          meritAfter: score,
-          best: Number.isFinite(score) ? score : prev.best,
+          requirementScoreAfter: optimizeStatus === 'idle'
+            ? score
+            : prev.requirementScoreAfter,
+          requirementScoreTable: optimizeStatus === 'idle'
+            ? score
+            : prev.requirementScoreTable,
+          meritAfter: optimizeStatus === 'idle'
+            ? score
+            : prev.meritAfter,
+          best: optimizeStatus === 'idle'
+            ? (Number.isFinite(score) ? score : prev.best)
+            : prev.best,
         }));
       } catch (_) {}
     };
@@ -3325,6 +3789,68 @@ export default function App() {
       block.parameters[key] = parseMaybeNumber(value);
     };
 
+    const setParamAndLegacyVar = (block: any, key: string, value: any) => {
+      setParam(block, key, value);
+      if (!block || typeof block !== 'object' || !block.variables || typeof block.variables !== 'object') return;
+      const entry = block.variables[key];
+      if (!entry || typeof entry !== 'object') return;
+      if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
+        entry.value = parseMaybeNumber(value);
+      }
+    };
+
+    const shouldMarkV = (entry: any) => {
+      const mode = String(entry?.optimize?.mode ?? '').trim().toUpperCase();
+      return mode === 'V' || mode === 'TRUE';
+    };
+
+    const sanitizeExclusiveGlassVarFamily = (block: any, suffix = '') => {
+      if (!block || typeof block !== 'object' || !block.variables || typeof block.variables !== 'object') return;
+      const materialKey = `material${suffix}`;
+      const familyKeys = [materialKey, `rindex${suffix}`, `abbe${suffix}`, `vd${suffix}`, `nd${suffix}`];
+      const enabledKeys = familyKeys.filter((key) => shouldMarkV(block.variables?.[key]));
+      if (enabledKeys.length <= 1) return;
+
+      const keepKey = enabledKeys.includes(materialKey) ? materialKey : enabledKeys[0];
+      for (const key of familyKeys) {
+        if (key === keepKey) continue;
+        const entry = block.variables?.[key];
+        if (!entry || typeof entry !== 'object') continue;
+        if (!entry.optimize || typeof entry.optimize !== 'object') entry.optimize = {};
+        entry.optimize.mode = 'F';
+      }
+    };
+
+    const mergeBlockVariablesFromSnapshot = (block: any, snapshotVars: any) => {
+      if (!block || typeof block !== 'object' || !snapshotVars || typeof snapshotVars !== 'object') return;
+      if (!block.variables || typeof block.variables !== 'object') {
+        block.variables = cloneJson(snapshotVars) || snapshotVars;
+        return;
+      }
+
+      const currentParams = (block.parameters && typeof block.parameters === 'object') ? block.parameters : {};
+      for (const [key, snapshotEntry] of Object.entries(snapshotVars)) {
+        if (!snapshotEntry || typeof snapshotEntry !== 'object') continue;
+        const currentEntry = (block.variables && typeof block.variables[key] === 'object') ? block.variables[key] : {};
+        const mergedEntry: any = {
+          ...snapshotEntry,
+          ...currentEntry,
+        };
+        const snapshotOptimize = (snapshotEntry as any).optimize;
+        const currentOptimize = currentEntry.optimize;
+        if ((snapshotOptimize && typeof snapshotOptimize === 'object') || (currentOptimize && typeof currentOptimize === 'object')) {
+          mergedEntry.optimize = {
+            ...(snapshotOptimize && typeof snapshotOptimize === 'object' ? snapshotOptimize : {}),
+            ...(currentOptimize && typeof currentOptimize === 'object' ? currentOptimize : {}),
+          };
+        }
+        if (!Object.prototype.hasOwnProperty.call(mergedEntry, 'value') && Object.prototype.hasOwnProperty.call(currentParams, key)) {
+          mergedEntry.value = currentParams[key];
+        }
+        block.variables[key] = mergedEntry;
+      }
+    };
+
     const syncCoefSeries = (block: any, targetPrefix: string, row: any) => {
       let sawCoefKey = false;
       for (let i = 1; i <= 10; i++) {
@@ -3353,74 +3879,95 @@ export default function App() {
 
       if (blockType === 'Lens') {
         if (r === 'front') {
-          setParam(block, 'frontRadius', radius);
-          setParam(block, 'centerThickness', thickness);
-          setParam(block, 'material', material);
-          setParam(block, 'frontConic', conic);
-          if (surfType) setParam(block, 'frontSurfType', surfType);
-          if (row?.radiusX !== undefined && row?.radiusX !== '') setParam(block, 'frontRadiusX', row.radiusX);
-          if (row?.axis !== undefined && row?.axis !== '') setParam(block, 'frontAxis', row.axis);
+          setParamAndLegacyVar(block, 'frontRadius', radius);
+          setParamAndLegacyVar(block, 'centerThickness', thickness);
+          setParamAndLegacyVar(block, 'material', material);
+          if (row?.rindex !== undefined) setParamAndLegacyVar(block, 'rindex', row.rindex);
+          if (row?.abbe !== undefined) setParamAndLegacyVar(block, 'abbe', row.abbe);
+          setParamAndLegacyVar(block, 'frontConic', conic);
+          if (surfType) setParamAndLegacyVar(block, 'frontSurfType', surfType);
+          if (row?.radiusX !== undefined && row?.radiusX !== '') setParamAndLegacyVar(block, 'frontRadiusX', row.radiusX);
+          if (row?.axis !== undefined && row?.axis !== '') setParamAndLegacyVar(block, 'frontAxis', row.axis);
           syncCoefSeries(block, 'frontCoef', row);
+          sanitizeExclusiveGlassVarFamily(block);
         } else if (r === 'back') {
-          setParam(block, 'backRadius', radius);
-          setParam(block, 'backConic', conic);
-          if (surfType) setParam(block, 'backSurfType', surfType);
-          if (row?.radiusX !== undefined && row?.radiusX !== '') setParam(block, 'backRadiusX', row.radiusX);
-          if (row?.axis !== undefined && row?.axis !== '') setParam(block, 'backAxis', row.axis);
+          setParamAndLegacyVar(block, 'backRadius', radius);
+          setParamAndLegacyVar(block, 'backConic', conic);
+          if (surfType) setParamAndLegacyVar(block, 'backSurfType', surfType);
+          if (row?.radiusX !== undefined && row?.radiusX !== '') setParamAndLegacyVar(block, 'backRadiusX', row.radiusX);
+          if (row?.axis !== undefined && row?.axis !== '') setParamAndLegacyVar(block, 'backAxis', row.axis);
           syncCoefSeries(block, 'backCoef', row);
         }
       } else if (blockType === 'SingleSurface') {
-        setParam(block, 'radius', radius);
-        setParam(block, 'thickness', thickness);
-        setParam(block, 'material', material);
-        setParam(block, 'conic', conic);
-        if (surfType) setParam(block, 'surfType', surfType);
-        if (row?.radiusX !== undefined && row?.radiusX !== '') setParam(block, 'radiusX', row.radiusX);
-        if (row?.radiusY !== undefined && row?.radiusY !== '') setParam(block, 'radiusY', row.radiusY);
-        if (row?.axis !== undefined && row?.axis !== '') setParam(block, 'axis', row.axis);
+        setParamAndLegacyVar(block, 'radius', radius);
+        setParamAndLegacyVar(block, 'thickness', thickness);
+        setParamAndLegacyVar(block, 'material', material);
+        if (row?.rindex !== undefined) setParamAndLegacyVar(block, 'rindex', row.rindex);
+        if (row?.abbe !== undefined) setParamAndLegacyVar(block, 'abbe', row.abbe);
+        setParamAndLegacyVar(block, 'conic', conic);
+        if (surfType) setParamAndLegacyVar(block, 'surfType', surfType);
+        if (row?.radiusX !== undefined && row?.radiusX !== '') setParamAndLegacyVar(block, 'radiusX', row.radiusX);
+        if (row?.radiusY !== undefined && row?.radiusY !== '') setParamAndLegacyVar(block, 'radiusY', row.radiusY);
+        if (row?.axis !== undefined && row?.axis !== '') setParamAndLegacyVar(block, 'axis', row.axis);
         syncCoefSeries(block, 'coef', row);
+        sanitizeExclusiveGlassVarFamily(block);
       } else if (blockType === 'Mirror') {
-        setParam(block, 'radius', radius);
-        setParam(block, 'thickness', thickness);
-        setParam(block, 'conic', conic);
-        if (surfType) setParam(block, 'surfType', surfType);
+        setParamAndLegacyVar(block, 'radius', radius);
+        setParamAndLegacyVar(block, 'thickness', thickness);
+        setParamAndLegacyVar(block, 'conic', conic);
+        if (surfType) setParamAndLegacyVar(block, 'surfType', surfType);
         syncCoefSeries(block, 'coef', row);
       } else if (blockType === 'Doublet') {
         const idx = r === 's1' ? '1' : (r === 's2' ? '2' : (r === 's3' ? '3' : ''));
         if (!idx) return;
-        setParam(block, `radius${idx}`, radius);
-        setParam(block, `surf${idx}Conic`, conic);
-        if (surfType) setParam(block, `surf${idx}SurfType`, surfType);
+        setParamAndLegacyVar(block, `radius${idx}`, radius);
+        setParamAndLegacyVar(block, `surf${idx}Conic`, conic);
+        if (surfType) setParamAndLegacyVar(block, `surf${idx}SurfType`, surfType);
         if (idx === '1') {
-          setParam(block, 'thickness1', thickness);
-          setParam(block, 'material1', material);
+          setParamAndLegacyVar(block, 'thickness1', thickness);
+          setParamAndLegacyVar(block, 'material1', material);
+          if (row?.rindex !== undefined) setParamAndLegacyVar(block, 'rindex1', row.rindex);
+          if (row?.abbe !== undefined) setParamAndLegacyVar(block, 'abbe1', row.abbe);
+          sanitizeExclusiveGlassVarFamily(block, '1');
         }
         if (idx === '2') {
-          setParam(block, 'thickness2', thickness);
-          setParam(block, 'material2', material);
+          setParamAndLegacyVar(block, 'thickness2', thickness);
+          setParamAndLegacyVar(block, 'material2', material);
+          if (row?.rindex !== undefined) setParamAndLegacyVar(block, 'rindex2', row.rindex);
+          if (row?.abbe !== undefined) setParamAndLegacyVar(block, 'abbe2', row.abbe);
+          sanitizeExclusiveGlassVarFamily(block, '2');
         }
         syncCoefSeries(block, `surf${idx}Coef`, row);
       } else if (blockType === 'Triplet') {
         const idx = r === 's1' ? '1' : (r === 's2' ? '2' : (r === 's3' ? '3' : (r === 's4' ? '4' : '')));
         if (!idx) return;
-        setParam(block, `radius${idx}`, radius);
-        setParam(block, `surf${idx}Conic`, conic);
-        if (surfType) setParam(block, `surf${idx}SurfType`, surfType);
+        setParamAndLegacyVar(block, `radius${idx}`, radius);
+        setParamAndLegacyVar(block, `surf${idx}Conic`, conic);
+        if (surfType) setParamAndLegacyVar(block, `surf${idx}SurfType`, surfType);
         if (idx === '1') {
-          setParam(block, 'thickness1', thickness);
-          setParam(block, 'material1', material);
+          setParamAndLegacyVar(block, 'thickness1', thickness);
+          setParamAndLegacyVar(block, 'material1', material);
+          if (row?.rindex !== undefined) setParamAndLegacyVar(block, 'rindex1', row.rindex);
+          if (row?.abbe !== undefined) setParamAndLegacyVar(block, 'abbe1', row.abbe);
+          sanitizeExclusiveGlassVarFamily(block, '1');
         }
         if (idx === '2') {
-          setParam(block, 'thickness2', thickness);
-          setParam(block, 'material2', material);
+          setParamAndLegacyVar(block, 'thickness2', thickness);
+          setParamAndLegacyVar(block, 'material2', material);
+          if (row?.rindex !== undefined) setParamAndLegacyVar(block, 'rindex2', row.rindex);
+          if (row?.abbe !== undefined) setParamAndLegacyVar(block, 'abbe2', row.abbe);
+          sanitizeExclusiveGlassVarFamily(block, '2');
         }
         if (idx === '3') {
-          setParam(block, 'thickness3', thickness);
-          setParam(block, 'material3', material);
+          setParamAndLegacyVar(block, 'thickness3', thickness);
+          setParamAndLegacyVar(block, 'material3', material);
+          if (row?.rindex !== undefined) setParamAndLegacyVar(block, 'rindex3', row.rindex);
+          if (row?.abbe !== undefined) setParamAndLegacyVar(block, 'abbe3', row.abbe);
+          sanitizeExclusiveGlassVarFamily(block, '3');
         }
         syncCoefSeries(block, `surf${idx}Coef`, row);
       } else if (blockType === 'Stop' && (r === 'stop' || r === 'single')) {
-        setParam(block, 'semiDiameter', row?.semidia);
+        setParamAndLegacyVar(block, 'semiDiameter', row?.semidia);
       }
 
       if (row?.semidia !== undefined && row?.semidia !== '' && r) {
@@ -3470,9 +4017,11 @@ export default function App() {
         const gapId = String(gb?.blockId ?? '').trim();
         const row = pickRowForGap(gapId);
         if (!row) continue;
-        setParam(gb, 'thickness', row?.thickness);
-        if (row?.material !== undefined) setParam(gb, 'material', row?.material);
-        if (row?.abbe !== undefined && row?.abbe !== '') setParam(gb, 'abbe', row?.abbe);
+        setParamAndLegacyVar(gb, 'thickness', row?.thickness);
+        if (row?.material !== undefined) setParamAndLegacyVar(gb, 'material', row?.material);
+        if (row?.rindex !== undefined) setParamAndLegacyVar(gb, 'rindex', row?.rindex);
+        if (row?.abbe !== undefined && row?.abbe !== '') setParamAndLegacyVar(gb, 'abbe', row?.abbe);
+        sanitizeExclusiveGlassVarFamily(gb);
         touched += 1;
       }
       return touched;
@@ -3489,6 +4038,11 @@ export default function App() {
         const activeId = cfg.activeConfigId;
         const active = cfg.configurations.find((c: any) => String(c?.id) === String(activeId));
         if (!active) {
+          return;
+        }
+
+        // Blocks are canonical. Do not reconstruct or mutate them from expanded rows.
+        if (Array.isArray(active.blocks) && active.blocks.length > 0) {
           return;
         }
 
@@ -3517,9 +4071,15 @@ export default function App() {
         }
 
         const blockById = new Map<string, any>();
+        const blockVariableSnapshots = new Map<string, any>();
         for (const b of active.blocks) {
           const id = String(b?.blockId ?? '').trim();
-          if (id) blockById.set(id, b);
+          if (id) {
+            blockById.set(id, b);
+            if (b?.variables && typeof b.variables === 'object') {
+              blockVariableSnapshots.set(id, cloneJson(b.variables) || b.variables);
+            }
+          }
         }
 
         let touched = 0;
@@ -3534,6 +4094,12 @@ export default function App() {
         }
 
         touched += syncGapBlocksFromRows(rows, active.blocks);
+
+        for (const block of active.blocks) {
+          const blockId = String(block?.blockId ?? '').trim();
+          if (!blockId) continue;
+          mergeBlockVariablesFromSnapshot(block, blockVariableSnapshots.get(blockId));
+        }
 
         if (touched > 0) {
           if (typeof w.expandBlocksIntoConfiguration === 'function') {
@@ -4180,7 +4746,7 @@ const collectLegacyCrossRays = async (
         }
       });
 
-      const cacheHasExactRows = effectiveRayCount <= 3 || normalizedObjectRows.some((row: any) => isRenderImageHeightObjectRow(row));
+      const cacheHasExactRows = effectiveRayCount <= 5 || normalizedObjectRows.some((row: any) => isRenderImageHeightObjectRow(row));
       const cacheKey = buildRenderLegacyCrossRayCacheKey(
         opticalSystemRows,
         normalizedObjectRows,
@@ -4195,20 +4761,35 @@ const collectLegacyCrossRays = async (
         return attachRenderObjectColorSlots(cloneRenderLegacyCrossRays(cachedRays), normalizedObjectRows);
       }
 
-      if (effectiveRayCount <= 3) {
-        const exactLowCountRays = buildExactLowCountRenderRaysForObjects(
-          normalizedObjectRows,
+      const hasExactImageHeightRows = normalizedObjectRows.some((row: any) => isRenderImageHeightObjectRow(row));
+      if (effectiveRayCount <= 5 || hasExactImageHeightRows) {
+        const exactImageHeightRows = normalizedObjectRows.filter((row: any) => isRenderImageHeightObjectRow(row));
+        const exactNonImageHeightRows = normalizedObjectRows.filter((row: any) => !isRenderImageHeightObjectRow(row));
+        const exactImageHeightRays = buildExactRenderRaysForImageHeightObjects(
+          exactImageHeightRows,
           opticalSystemRows,
           primaryWavelength,
           isInfiniteSystem ? 'infinite' : 'finite',
           axis,
           effectiveRayCount,
         );
-        if (Array.isArray(exactLowCountRays) && exactLowCountRays.length > 0) {
-          const colorizedExactLowCountRays = attachRenderObjectColorSlots(exactLowCountRays, normalizedObjectRows);
-          renderLegacyCrossRaysCache.set(cacheKey, cloneRenderLegacyCrossRays(colorizedExactLowCountRays));
+        const exactLowCountRays = buildExactLowCountRenderRaysForObjects(
+          exactNonImageHeightRows,
+          opticalSystemRows,
+          primaryWavelength,
+          isInfiniteSystem ? 'infinite' : 'finite',
+          axis,
+          effectiveRayCount,
+        );
+        const mergedExactRays = [
+          ...(Array.isArray(exactImageHeightRays) ? exactImageHeightRays : []),
+          ...(Array.isArray(exactLowCountRays) ? exactLowCountRays : []),
+        ];
+        if (mergedExactRays.length > 0) {
+          const colorizedMergedExactRays = attachRenderObjectColorSlots(mergedExactRays, normalizedObjectRows);
+          renderLegacyCrossRaysCache.set(cacheKey, cloneRenderLegacyCrossRays(colorizedMergedExactRays));
           clampRenderCacheSize(renderLegacyCrossRaysCache, RENDER_LEGACY_CROSS_RAYS_CACHE_LIMIT);
-          return colorizedExactLowCountRays;
+          return colorizedMergedExactRays;
         }
       }
 
@@ -4429,15 +5010,21 @@ const collectLegacyCrossRays = async (
 
       const desiredCount = effectiveRayCount;
       const limitStartMs = performance.now();
+      const exactImageHeightRaysOnly = normalizedAllRays.filter((ray: any) => ray?.__cooptImageHeightExactRender === true);
+      const limitCandidateRays = normalizedAllRays.filter((ray: any) => ray?.__cooptImageHeightExactRender !== true);
       const grouped = new Map<number, any[]>();
-      normalizedAllRays.forEach((ray: any) => {
+      limitCandidateRays.forEach((ray: any) => {
         const objectIndex = Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : 0;
         if (!grouped.has(objectIndex)) grouped.set(objectIndex, []);
         grouped.get(objectIndex)!.push(ray);
       });
 
-      const limitedRays: any[] = [];
+      const limitedRays: any[] = [...exactImageHeightRaysOnly];
       const perObjectCount = {};
+      exactImageHeightRaysOnly.forEach((ray: any) => {
+        const objectIndex = Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : 0;
+        perObjectCount[objectIndex] = (Number(perObjectCount[objectIndex]) || 0) + 1;
+      });
       grouped.forEach((rays, objectIndex) => {
         const chief = rays.filter((r: any) => String(r?.originalRay?.type || r?.type || '').toLowerCase() === 'chief');
         const nonChief = rays.filter((r: any) => String(r?.originalRay?.type || r?.type || '').toLowerCase() !== 'chief');
@@ -4455,8 +5042,10 @@ const collectLegacyCrossRays = async (
           }
           }));
 
-        const limited = ordered.slice(0, desiredCount);
-        perObjectCount[objectIndex] = limited.length;
+        const alreadyKept = Number(perObjectCount[objectIndex]) || 0;
+        const remainingSlots = Math.max(0, desiredCount - alreadyKept);
+        const limited = remainingSlots > 0 ? selectCrossRaysForAxis(ordered, remainingSlots, axis) : [];
+        perObjectCount[objectIndex] = alreadyKept + limited.length;
         limitedRays.push(...limited);
       });
 
@@ -4849,6 +5438,17 @@ const collectLegacyCrossRays = async (
       return Math.max(1, Math.floor(quickOverride));
     }
     return undefined;
+  };
+
+  const clearRenderRedrawCaches = (): void => {
+    const w = window as any;
+    try { renderParaxialDataCache.clear(); } catch (_) {}
+    try { renderLegacyCrossRaysCache.clear(); } catch (_) {}
+    try {
+      if (typeof w.__cooptClearRenderRayTracingCaches === 'function') {
+        w.__cooptClearRenderRayTracingCaches();
+      }
+    } catch (_) {}
   };
 
   const scheduleDeferredFullRenderPass = (requestId?: number): void => {
@@ -5586,11 +6186,29 @@ const collectLegacyCrossRays = async (
       : beginRenderDrawRequest();
     const nextMode = modeOverride ?? renderViewModeRef.current;
     const nextAxis = (axisOverride ?? renderViewAxisRef.current) === 'XZ' ? 'XZ' : 'YZ';
-    if (nextMode === '3D') {
-      await drawRender3DView(undefined, effectiveRequestId, redrawOptions);
-      return;
+    const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+    const hasRowsOverride = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0;
+    const shouldApplyActiveRows = !hasRowsOverride && Array.isArray(renderActiveRowsRef.current) && renderActiveRowsRef.current.length > 0;
+    const prevRowsOverride = g ? g.__cooptOpticalSystemRowsOverride : undefined;
+    const prevObjectRowsOverride = g ? g.__cooptRenderObjectRowsOverride : undefined;
+    if (g && shouldApplyActiveRows) {
+      g.__cooptOpticalSystemRowsOverride = renderActiveRowsRef.current;
+      if (Array.isArray(renderActiveObjectRowsRef.current)) {
+        g.__cooptRenderObjectRowsOverride = renderActiveObjectRowsRef.current;
+      }
     }
-    await drawCrossSectionView(nextAxis, effectiveRequestId, redrawOptions);
+    try {
+      if (nextMode === '3D') {
+        await drawRender3DView(undefined, effectiveRequestId, redrawOptions);
+        return;
+      }
+      await drawCrossSectionView(nextAxis, effectiveRequestId, redrawOptions);
+    } finally {
+      if (g && shouldApplyActiveRows) {
+        g.__cooptOpticalSystemRowsOverride = prevRowsOverride;
+        g.__cooptRenderObjectRowsOverride = prevObjectRowsOverride;
+      }
+    }
   };
 
   const scheduleRenderRedraw = (
@@ -5675,6 +6293,7 @@ const collectLegacyCrossRays = async (
       clearTimeout(renderRayCountDebounceRef.current);
       renderRayCountDebounceRef.current = null;
     }
+    clearRenderRedrawCaches();
     const requestId = beginRenderDrawRequest();
     renderRayCountDebounceRef.current = window.setTimeout(() => {
       renderRayCountDebounceRef.current = null;
@@ -5753,14 +6372,14 @@ const collectLegacyCrossRays = async (
   useEffect(() => {
     if (!isRenderWindowMode) return;
     const w = window as any;
-    const clearRenderRedrawCaches = () => {
-      try { renderParaxialDataCache.clear(); } catch (_) {}
-      try { renderLegacyCrossRaysCache.clear(); } catch (_) {}
+    const shouldDeferRenderRedrawWhileInactive = () => {
       try {
-        if (typeof w.__cooptClearRenderRayTracingCaches === 'function') {
-          w.__cooptClearRenderRayTracingCaches();
-        }
+        if (document.visibilityState === 'hidden') return true;
       } catch (_) {}
+      try {
+        if (typeof document.hasFocus === 'function' && !document.hasFocus()) return true;
+      } catch (_) {}
+      return false;
     };
     w.__cooptRenderWindowRedraw = async (rows?: any[], syncStamp?: string, objectRows?: any[]) => {
       const normalizedSyncStamp = String(syncStamp ?? '').trim();
@@ -5783,15 +6402,17 @@ const collectLegacyCrossRays = async (
         try { delete w.__cooptPendingRenderSystemConfig; } catch (_) {}
       }
       if (Array.isArray(objectRows)) {
+        renderActiveObjectRowsRef.current = objectRows.length > 0 ? objectRows : [];
         renderPendingObjectRowsRef.current = objectRows.length > 0 ? objectRows : [];
       }
       if (Array.isArray(rows) && rows.length > 0) {
+        renderActiveRowsRef.current = rows;
         if (normalizedSyncStamp) {
           renderPendingSyncStampRef.current = normalizedSyncStamp;
         }
         clearRenderRedrawCaches();
         renderLastCompletedSyncSignatureRef.current = '';
-        if (document.visibilityState === 'hidden') {
+        if (shouldDeferRenderRedrawWhileInactive()) {
           renderPendingRowsRef.current = rows;
           renderNeedsVisibilityReplayRef.current = true;
           return;
@@ -5814,10 +6435,14 @@ const collectLegacyCrossRays = async (
           const queuedSyncStamp = String(renderPendingSyncStampRef.current ?? '').trim();
           const queuedRows = Array.isArray(renderPendingRowsRef.current) && renderPendingRowsRef.current.length > 0
             ? renderPendingRowsRef.current
-            : null;
+            : (shouldDrawCurrentView && Array.isArray(renderActiveRowsRef.current) && renderActiveRowsRef.current.length > 0
+              ? renderActiveRowsRef.current
+              : null);
           const queuedObjectRows = Array.isArray(renderPendingObjectRowsRef.current)
             ? renderPendingObjectRowsRef.current
-            : null;
+            : (shouldDrawCurrentView && Array.isArray(renderActiveObjectRowsRef.current)
+              ? renderActiveObjectRowsRef.current
+              : null);
           renderPendingRowsRef.current = null;
           renderPendingObjectRowsRef.current = null;
           shouldDrawCurrentView = false;
@@ -5926,6 +6551,8 @@ const collectLegacyCrossRays = async (
       window.removeEventListener('pageshow', onVisibilityChange);
       renderPendingRowsRef.current = null;
       renderPendingObjectRowsRef.current = null;
+      renderActiveRowsRef.current = null;
+      renderActiveObjectRowsRef.current = null;
       renderPendingSyncStampRef.current = '';
       renderNeedsVisibilityReplayRef.current = false;
       renderLastCompletedSyncSignatureRef.current = '';
@@ -6608,8 +7235,13 @@ const collectLegacyCrossRays = async (
       phase: 'before' | 'after',
       rowsForScore?: any[]
     ) => {
+      const shouldReloadTables = !(
+        phase === 'after'
+        && /^optimize-(finished|stopped)-(reload|sync)$/i.test(String(reason ?? '').trim())
+      );
+
       try {
-        if (phase === 'after' && targetWindow && targetWindow !== window) {
+        if (shouldReloadTables && phase === 'after' && targetWindow && targetWindow !== window) {
           try { delete targetWindow.__cooptPreferRuntimeSystemConfig; } catch (_) {}
           try { delete targetWindow.__cooptSystemConfig; } catch (_) {}
           try { targetWindow.__cooptDeferDerivedUiUntil = Date.now() + 1500; } catch (_) {}
@@ -6620,12 +7252,12 @@ const collectLegacyCrossRays = async (
           const flushPromise = reqEditor.flushPendingEdits();
           if (flushPromise && typeof flushPromise.then === 'function') await flushPromise;
         }
-        if (cm && typeof cm.loadActiveConfigurationToTables === 'function') {
+        if (shouldReloadTables && cm && typeof cm.loadActiveConfigurationToTables === 'function') {
           await Promise.resolve(cm.loadActiveConfigurationToTables({
             applyToUI: true,
             suppressOpticalSystemDataChanged: true,
           }));
-        } else if (targetWindow && typeof targetWindow.loadActiveConfigurationToTables === 'function') {
+        } else if (shouldReloadTables && targetWindow && typeof targetWindow.loadActiveConfigurationToTables === 'function') {
           await Promise.resolve(targetWindow.loadActiveConfigurationToTables({
             applyToUI: true,
             suppressOpticalSystemDataChanged: true,
@@ -6729,6 +7361,27 @@ const collectLegacyCrossRays = async (
 
       const cloneJsonLocal = (v: any) => {
         try { return JSON.parse(JSON.stringify(v)); } catch (_) { return null; }
+      };
+
+      const publishRuntimeSystemConfigForOptimizeSync = (nextConfig: any, deferMs = 1500) => {
+        const clonedConfig = nextConfig && typeof nextConfig === 'object'
+          ? (cloneJsonLocal(nextConfig) || nextConfig)
+          : null;
+        const applyToWindow = (target: any) => {
+          if (!target) return;
+          try {
+            if (clonedConfig) {
+              target.__cooptSystemConfig = cloneJsonLocal(clonedConfig) || clonedConfig;
+              target.__cooptPreferRuntimeSystemConfig = true;
+              target.__cooptDeferDerivedUiUntil = Date.now() + Math.max(0, Number(deferMs) || 0);
+            } else {
+              delete target.__cooptPreferRuntimeSystemConfig;
+              delete target.__cooptSystemConfig;
+            }
+          } catch (_) {}
+        };
+        applyToWindow(hostWindow);
+        if (w !== hostWindow) applyToWindow(w);
       };
 
       let frozenHostConfigForRun: any = null;
@@ -7574,6 +8227,7 @@ const collectLegacyCrossRays = async (
         try {
           afterHostConfigSnapshot = loadHostConfigSnapshot();
           afterHostRowsSnapshot = loadHostRowsSnapshot();
+          publishRuntimeSystemConfigForOptimizeSync(afterHostConfigSnapshot, 60000);
           if (typeof hostWindow.__cooptRecordOptimizationUndoFromSnapshots === 'function') {
             hostWindow.__cooptRecordOptimizationUndoFromSnapshots(
               beforeHostConfigSnapshot,
@@ -8124,6 +8778,7 @@ const collectLegacyCrossRays = async (
       renderViewModeRef.current = 'XZ';
       setRenderViewAxis('XZ');
       setRenderViewMode('XZ');
+      clearRenderRedrawCaches();
       refreshRenderLensTargets();
       scheduleRenderRedraw('XZ', 'XZ').catch(() => {
         setRenderWindowStatus('Draw failed');
@@ -8135,6 +8790,7 @@ const collectLegacyCrossRays = async (
       renderViewModeRef.current = 'YZ';
       setRenderViewAxis('YZ');
       setRenderViewMode('YZ');
+      clearRenderRedrawCaches();
       refreshRenderLensTargets();
       scheduleRenderRedraw('YZ', 'YZ').catch(() => {
         setRenderWindowStatus('Draw failed');

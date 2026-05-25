@@ -187,6 +187,8 @@ type RayGenerationOptions = {
 type ImageHeightSolveOptions = {
     skipTsValidation?: boolean;
     validationTraceBackend?: 'ts' | 'rust';
+    disableSolveCache?: boolean;
+    disableWarmStartCache?: boolean;
 };
 
 // Helper function to normalize hit points
@@ -1444,6 +1446,20 @@ function traceChiefRayImagePointForAngle(opticalSystemRows, angleXDeg, angleYDeg
 }
 
 function traceChiefRayImagePointForFiniteObject(opticalSystemRows, objectX, objectY, imageSurfaceIndex, imageSurfaceInfo, wavelengthUm, precomputedContext: any = null, traceBackend: 'ts' | 'rust' = 'rust') {
+    const details = traceChiefRayForFiniteObjectDetails(
+        opticalSystemRows,
+        objectX,
+        objectY,
+        imageSurfaceIndex,
+        imageSurfaceInfo,
+        wavelengthUm,
+        precomputedContext,
+        traceBackend,
+    );
+    return details?.localHit ?? null;
+}
+
+function traceChiefRayForFiniteObjectDetails(opticalSystemRows, objectX, objectY, imageSurfaceIndex, imageSurfaceInfo, wavelengthUm, precomputedContext: any = null, traceBackend: 'ts' | 'rust' = 'rust') {
     if (traceBackend === 'rust') {
         const localHit = traceImageHeightFiniteCandidateLocalWithRust(
             opticalSystemRows,
@@ -1452,7 +1468,45 @@ function traceChiefRayImagePointForFiniteObject(opticalSystemRows, objectX, obje
             objectX,
             objectY,
         );
-        if (localHit) return localHit;
+        if (localHit) {
+            const surfacePoint = resolveFiniteObjectSurfacePoint(opticalSystemRows, objectX, objectY);
+            const surfaceOrigins = Array.isArray(precomputedContext?.surfaceOrigins)
+                ? precomputedContext.surfaceOrigins
+                : calculateSurfaceOrigins(opticalSystemRows);
+            const stopInfo = precomputedContext?.stopInfo || findStopSurface(opticalSystemRows, surfaceOrigins);
+            const stopCenter3d = precomputedContext?.stopCenter3d || extractStopCenter3d(stopInfo);
+            let traceDirection = null;
+            if (stopInfo && stopCenter3d && Number.isInteger(stopInfo.index)) {
+                const chiefDirection = findFiniteSystemChiefRayDirection(
+                    surfacePoint,
+                    stopCenter3d,
+                    stopInfo.index,
+                    opticalSystemRows,
+                    false,
+                    wavelengthUm,
+                );
+                if (chiefDirection) {
+                    traceDirection = refineFiniteChiefDirectionToStopCenter(
+                        surfacePoint,
+                        {
+                            x: chiefDirection.i,
+                            y: chiefDirection.j,
+                            z: chiefDirection.k,
+                        },
+                        stopCenter3d,
+                        stopInfo.index,
+                        opticalSystemRows,
+                        wavelengthUm,
+                        traceBackend,
+                    );
+                }
+            }
+            return {
+                localHit,
+                origin: surfacePoint,
+                dir: traceDirection,
+            };
+        }
     }
 
     const surfaceOrigins = Array.isArray(precomputedContext?.surfaceOrigins)
@@ -1501,7 +1555,11 @@ function traceChiefRayImagePointForFiniteObject(opticalSystemRows, objectX, obje
     if (!hit || !Number.isFinite(Number(hit.x)) || !Number.isFinite(Number(hit.y)) || !Number.isFinite(Number(hit.z))) {
         return null;
     }
-    return transformPointToSurfaceLocal(hit, imageSurfaceInfo);
+    return {
+        localHit: transformPointToSurfaceLocal(hit, imageSurfaceInfo),
+        origin: objectPoint,
+        dir: traceDirection,
+    };
 }
 
 export function traceChiefRayLocalImagePointForObject(
@@ -1778,7 +1836,7 @@ function acceptRustImageHeightCandidate(
     rustResult,
     componentIndex: 0 | 1,
     targetValue: number,
-    tolerance = 1e-4,
+    tolerance = 1e-6,
 ): number | null {
     const candidate = Number(rustResult?.candidate);
     if (!Number.isFinite(candidate)) return null;
@@ -1794,7 +1852,7 @@ function acceptRustImageHeightCandidateWithValidation(
     componentIndex: 0 | 1,
     targetValue: number,
     evaluateCandidate,
-    tolerance = 1e-4,
+    tolerance = 1e-6,
 ): number | null {
     const accepted = acceptRustImageHeightCandidate(rustResult, componentIndex, targetValue, tolerance);
     if (accepted === null) return null;
@@ -1810,7 +1868,7 @@ function acceptRustImageHeightPair(
     rustResult,
     targetX: number,
     targetY: number,
-    tolerance = 1e-4,
+    tolerance = 1e-6,
 ): { x: number; y: number; hit: { x: number; y: number; z: number } | null } | null {
     const solvedX = Number(rustResult?.x);
     const solvedY = Number(rustResult?.y);
@@ -1833,7 +1891,7 @@ function acceptRustImageHeightPairWithValidation(
     targetX: number,
     targetY: number,
     evaluatePair,
-    tolerance = 1e-4,
+    tolerance = 1e-6,
 ): { x: number; y: number; hit: { x: number; y: number; z: number } | null } | null {
     const accepted = acceptRustImageHeightPair(rustResult, targetX, targetY, tolerance);
     if (!accepted) return null;
@@ -2570,13 +2628,19 @@ export function convertImageHeightToEffectiveObject(
     conjugateType: ConjugateType,
     options: ImageHeightSolveOptions = {}
 ): any {
+    const positionNorm = String(obj?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    const effectivePositionNorm = String(obj?.__cooptEffectivePosition ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    const isRawImageHeightRow = positionNorm === 'imageheight' && !effectivePositionNorm;
     const targetX = (() => {
+        const tableValue = Number(obj?.xHeightAngle);
+        if (isRawImageHeightRow && Number.isFinite(tableValue)) return tableValue;
         const candidates = [
             obj?.__cooptImageHeightTarget?.x,
             obj?.xHeight,
-            obj?.x,
+            obj?.heightX,
             obj?.['object x'],
-            obj?.xHeightAngle,
+            obj?.x,
+            tableValue,
         ];
         for (const candidate of candidates) {
             const value = Number(candidate);
@@ -2585,12 +2649,15 @@ export function convertImageHeightToEffectiveObject(
         return 0;
     })();
     const targetY = (() => {
+        const tableValue = Number(obj?.yHeightAngle);
+        if (isRawImageHeightRow && Number.isFinite(tableValue)) return tableValue;
         const candidates = [
             obj?.__cooptImageHeightTarget?.y,
             obj?.yHeight,
-            obj?.y,
+            obj?.heightY,
             obj?.['object y'],
-            obj?.yHeightAngle,
+            obj?.y,
+            tableValue,
         ];
         for (const candidate of candidates) {
             const value = Number(candidate);
@@ -2601,9 +2668,11 @@ export function convertImageHeightToEffectiveObject(
     const paraxialOnlyModel = isParaxialOnlyImageHeightModel(opticalSystemRows);
     const skipTsValidation = options?.skipTsValidation === true;
     const validationTraceBackend: 'ts' | 'rust' = options?.validationTraceBackend === 'rust' ? 'rust' : 'ts';
+    const disableSolveCache = options?.disableSolveCache === true;
+    const disableWarmStartCache = options?.disableWarmStartCache === true;
     const validationMode = skipTsValidation ? 'rust-only' : `rust-${validationTraceBackend}-validated`;
     const solveScopeKey = buildImageHeightSolveScopeKey(opticalSystemRows, wavelengthUm, conjugateType, validationMode);
-    const cacheKey = [
+    const cacheKey = disableSolveCache ? null : [
         buildOpticalRowsSignature(opticalSystemRows),
         stableSerializeForCache(obj),
         Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : 0.5876,
@@ -2646,18 +2715,24 @@ export function convertImageHeightToEffectiveObject(
 
             const paraxialAngleXDeg = Math.atan2(targetX, efl) * (180 / Math.PI);
             const paraxialAngleYDeg = Math.atan2(targetY, efl) * (180 / Math.PI);
-            const warmStart = getImageHeightWarmStart(
-                solveScopeKey,
-                targetX,
-                targetY,
-                paraxialAngleXDeg,
-                paraxialAngleYDeg,
-                obj?.__cooptImageHeightSolve?.solved,
-            );
+            const warmStart = disableWarmStartCache
+                ? {
+                    x: paraxialAngleXDeg,
+                    y: paraxialAngleYDeg,
+                    source: 'paraxial',
+                }
+                : getImageHeightWarmStart(
+                    solveScopeKey,
+                    targetX,
+                    targetY,
+                    paraxialAngleXDeg,
+                    paraxialAngleYDeg,
+                    obj?.__cooptImageHeightSolve?.solved,
+                );
             let solvedAngleXDeg = warmStart.x;
             let solvedAngleYDeg = warmStart.y;
 
-            const cachedPairSolve = getCachedImageHeightPairSolve(solveScopeKey, targetX, targetY);
+            const cachedPairSolve = disableSolveCache ? null : getCachedImageHeightPairSolve(solveScopeKey, targetX, targetY);
             if (cachedPairSolve) {
                 solvedAngleXDeg = Number.isFinite(Number(cachedPairSolve?.solved?.x)) ? Number(cachedPairSolve.solved.x) : solvedAngleXDeg;
                 solvedAngleYDeg = Number.isFinite(Number(cachedPairSolve?.solved?.y)) ? Number(cachedPairSolve.solved.y) : solvedAngleYDeg;
@@ -2764,24 +2839,28 @@ export function convertImageHeightToEffectiveObject(
                     solver: 'rust-pair'
                 });
 
-                setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
-                    solver: 'rust-pair',
-                    solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
-                    hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
-                    chiefRay: solvedChief?.origin && solvedChief?.dir ? {
-                        origin: {
-                            x: Number(solvedChief.origin.x),
-                            y: Number(solvedChief.origin.y),
-                            z: Number(solvedChief.origin.z),
-                        },
-                        dir: {
-                            x: Number(solvedChief.dir.x),
-                            y: Number(solvedChief.dir.y),
-                            z: Number(solvedChief.dir.z),
-                        },
-                    } : null,
-                });
-                storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
+                if (!disableSolveCache) {
+                    setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
+                        solver: 'rust-pair',
+                        solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
+                        hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
+                        chiefRay: solvedChief?.origin && solvedChief?.dir ? {
+                            origin: {
+                                x: Number(solvedChief.origin.x),
+                                y: Number(solvedChief.origin.y),
+                                z: Number(solvedChief.origin.z),
+                            },
+                            dir: {
+                                x: Number(solvedChief.dir.x),
+                                y: Number(solvedChief.dir.y),
+                                z: Number(solvedChief.dir.z),
+                            },
+                        } : null,
+                    });
+                }
+                if (!disableWarmStartCache) {
+                    storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
+                }
 
                 return storeResult({
                     ...obj,
@@ -2894,7 +2973,7 @@ export function convertImageHeightToEffectiveObject(
                 return solveImageHeightComponent(targetY, initialGuess, evaluateCandidate, solverOptions);
             };
 
-            for (let iter = 0; iter < 4; iter++) {
+            for (let iter = 0; iter < 8; iter++) {
                 const nextX = solveAngleX(solvedAngleXDeg, solvedAngleYDeg);
                 const nextY = solveAngleY(solvedAngleYDeg, nextX);
                 const localHit = traceChiefRayImagePointForAngle(
@@ -2913,7 +2992,7 @@ export function convertImageHeightToEffectiveObject(
 
                 const errX = Math.abs((Number(localHit?.x) || 0) - targetX);
                 const errY = Math.abs((Number(localHit?.y) || 0) - targetY);
-                if ((errX < 1e-6 && errY < 1e-6) || (iter > 0 && errX < 1e-4 && errY < 1e-4)) {
+                if ((errX < 1e-6 && errY < 1e-6) || (iter > 1 && errX < 1e-5 && errY < 1e-5)) {
                     break;
                 }
             }
@@ -2937,8 +3016,8 @@ export function convertImageHeightToEffectiveObject(
                     ),
                     {
                         tolerance: 1e-6,
-                        maxIterations: 10,
-                        finiteDiffStep: 1e-4,
+                        maxIterations: 16,
+                        finiteDiffStep: 5e-5,
                         maxStep: 0.1,
                     }
                 );
@@ -2976,24 +3055,28 @@ export function convertImageHeightToEffectiveObject(
                 imageSurfaceIndex
             });
 
-            setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
-                solver: 'ts-refine',
-                solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
-                hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
-                chiefRay: solvedChief?.origin && solvedChief?.dir ? {
-                    origin: {
-                        x: Number(solvedChief.origin.x),
-                        y: Number(solvedChief.origin.y),
-                        z: Number(solvedChief.origin.z),
-                    },
-                    dir: {
-                        x: Number(solvedChief.dir.x),
-                        y: Number(solvedChief.dir.y),
-                        z: Number(solvedChief.dir.z),
-                    },
-                } : null,
-            });
-            storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
+            if (!disableSolveCache) {
+                setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
+                    solver: 'ts-refine',
+                    solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
+                    hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
+                    chiefRay: solvedChief?.origin && solvedChief?.dir ? {
+                        origin: {
+                            x: Number(solvedChief.origin.x),
+                            y: Number(solvedChief.origin.y),
+                            z: Number(solvedChief.origin.z),
+                        },
+                        dir: {
+                            x: Number(solvedChief.dir.x),
+                            y: Number(solvedChief.dir.y),
+                            z: Number(solvedChief.dir.z),
+                        },
+                    } : null,
+                });
+            }
+            if (!disableWarmStartCache) {
+                storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
+            }
 
             return storeResult({
                 ...obj,
@@ -3041,22 +3124,29 @@ export function convertImageHeightToEffectiveObject(
             const scale = absMag > 1e-12 ? 1 / absMag : 1;
             const paraxialObjectX = targetX * scale;
             const paraxialObjectY = targetY * scale;
-            const warmStart = getImageHeightWarmStart(
-                solveScopeKey,
-                targetX,
-                targetY,
-                paraxialObjectX,
-                paraxialObjectY,
-                obj?.__cooptImageHeightSolve?.solved,
-            );
+            const warmStart = disableWarmStartCache
+                ? {
+                    x: paraxialObjectX,
+                    y: paraxialObjectY,
+                    source: 'paraxial',
+                }
+                : getImageHeightWarmStart(
+                    solveScopeKey,
+                    targetX,
+                    targetY,
+                    paraxialObjectX,
+                    paraxialObjectY,
+                    obj?.__cooptImageHeightSolve?.solved,
+                );
             let solvedObjectX = warmStart.x;
             let solvedObjectY = warmStart.y;
 
-            const cachedPairSolve = getCachedImageHeightPairSolve(solveScopeKey, targetX, targetY);
+            const cachedPairSolve = disableSolveCache ? null : getCachedImageHeightPairSolve(solveScopeKey, targetX, targetY);
             if (cachedPairSolve) {
                 solvedObjectX = Number.isFinite(Number(cachedPairSolve?.solved?.x)) ? Number(cachedPairSolve.solved.x) : solvedObjectX;
                 solvedObjectY = Number.isFinite(Number(cachedPairSolve?.solved?.y)) ? Number(cachedPairSolve.solved.y) : solvedObjectY;
                 const cachedHit = cachedPairSolve?.hit;
+                const cachedChiefRay = cachedPairSolve?.chiefRay;
                 return storeResult({
                     ...obj,
                     position: obj?.position ?? 'ImageHeight',
@@ -3073,6 +3163,18 @@ export function convertImageHeightToEffectiveObject(
                         paraxial: { x: paraxialObjectX, y: paraxialObjectY },
                         solved: { x: solvedObjectX, y: solvedObjectY },
                         hit: cachedHit ? { x: Number(cachedHit.x), y: Number(cachedHit.y) } : null,
+                        chiefRay: cachedChiefRay?.origin && cachedChiefRay?.dir ? {
+                            origin: {
+                                x: Number(cachedChiefRay.origin.x),
+                                y: Number(cachedChiefRay.origin.y),
+                                z: Number(cachedChiefRay.origin.z),
+                            },
+                            dir: {
+                                x: Number(cachedChiefRay.dir.x),
+                                y: Number(cachedChiefRay.dir.y),
+                                z: Number(cachedChiefRay.dir.z),
+                            },
+                        } : null,
                         imageSurfaceIndex,
                         wavelengthUm
                     },
@@ -3118,7 +3220,17 @@ export function convertImageHeightToEffectiveObject(
             if (acceptedRustPair) {
                 solvedObjectX = acceptedRustPair.x;
                 solvedObjectY = acceptedRustPair.y;
-                const resolvedHit = acceptedRustPair.hit;
+                const solvedChief = traceChiefRayForFiniteObjectDetails(
+                    opticalSystemRows,
+                    solvedObjectX,
+                    solvedObjectY,
+                    imageSurfaceIndex,
+                    imageSurfaceInfo,
+                    wavelengthUm,
+                    imageHeightSolveContext,
+                    'rust',
+                );
+                const resolvedHit = solvedChief?.localHit ?? acceptedRustPair.hit;
                 logImageHeightDiagnostics('solve-finite', {
                     objectId: obj?.id ?? null,
                     conjugateType,
@@ -3136,12 +3248,28 @@ export function convertImageHeightToEffectiveObject(
                     solver: 'rust-pair'
                 });
 
-                setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
-                    solver: 'rust-pair',
-                    solved: { x: solvedObjectX, y: solvedObjectY },
-                    hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
-                });
-                storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
+                if (!disableSolveCache) {
+                    setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
+                        solver: 'rust-pair',
+                        solved: { x: solvedObjectX, y: solvedObjectY },
+                        hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
+                        chiefRay: solvedChief?.origin && solvedChief?.dir ? {
+                            origin: {
+                                x: Number(solvedChief.origin.x),
+                                y: Number(solvedChief.origin.y),
+                                z: Number(solvedChief.origin.z),
+                            },
+                            dir: {
+                                x: Number(solvedChief.dir.x),
+                                y: Number(solvedChief.dir.y),
+                                z: Number(solvedChief.dir.z),
+                            },
+                        } : null,
+                    });
+                }
+                if (!disableWarmStartCache) {
+                    storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
+                }
 
                 return storeResult({
                     ...obj,
@@ -3159,6 +3287,18 @@ export function convertImageHeightToEffectiveObject(
                         paraxial: { x: paraxialObjectX, y: paraxialObjectY },
                         solved: { x: solvedObjectX, y: solvedObjectY },
                         hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y) } : null,
+                        chiefRay: solvedChief?.origin && solvedChief?.dir ? {
+                            origin: {
+                                x: Number(solvedChief.origin.x),
+                                y: Number(solvedChief.origin.y),
+                                z: Number(solvedChief.origin.z),
+                            },
+                            dir: {
+                                x: Number(solvedChief.dir.x),
+                                y: Number(solvedChief.dir.y),
+                                z: Number(solvedChief.dir.z),
+                            },
+                        } : null,
                         imageSurfaceIndex,
                         wavelengthUm
                     },
@@ -3242,7 +3382,7 @@ export function convertImageHeightToEffectiveObject(
                 return solveImageHeightComponent(targetY, initialGuess, evaluateCandidate, solverOptions);
             };
 
-            for (let iter = 0; iter < 4; iter++) {
+            for (let iter = 0; iter < 8; iter++) {
                 const nextX = solveObjectX(solvedObjectX, solvedObjectY);
                 const nextY = solveObjectY(solvedObjectY, nextX);
                 const localHit = traceChiefRayImagePointForFiniteObject(
@@ -3261,7 +3401,7 @@ export function convertImageHeightToEffectiveObject(
 
                 const errX = Math.abs((Number(localHit?.x) || 0) - targetX);
                 const errY = Math.abs((Number(localHit?.y) || 0) - targetY);
-                if ((errX < 1e-6 && errY < 1e-6) || (iter > 0 && errX < 1e-4 && errY < 1e-4)) {
+                if ((errX < 1e-6 && errY < 1e-6) || (iter > 1 && errX < 1e-5 && errY < 1e-5)) {
                     break;
                 }
             }
@@ -3285,8 +3425,8 @@ export function convertImageHeightToEffectiveObject(
                     ),
                     {
                         tolerance: 1e-6,
-                        maxIterations: 10,
-                        finiteDiffStep: 1e-4,
+                        maxIterations: 16,
+                        finiteDiffStep: 5e-5,
                         maxStep: 0.25,
                     }
                 );
@@ -3294,7 +3434,7 @@ export function convertImageHeightToEffectiveObject(
                 solvedObjectY = refined.y;
             }
 
-            const solvedHit = traceChiefRayImagePointForFiniteObject(
+            const solvedChief = traceChiefRayForFiniteObjectDetails(
                 opticalSystemRows,
                 solvedObjectX,
                 solvedObjectY,
@@ -3304,8 +3444,8 @@ export function convertImageHeightToEffectiveObject(
                 imageHeightSolveContext,
                 'rust',
             );
-            const resolvedHit = (solvedHit && Number.isFinite(Number(solvedHit.x)) && Number.isFinite(Number(solvedHit.y)))
-                ? solvedHit
+            const resolvedHit = (solvedChief?.localHit && Number.isFinite(Number(solvedChief.localHit.x)) && Number.isFinite(Number(solvedChief.localHit.y)))
+                ? solvedChief.localHit
                 : (paraxialOnlyModel ? { x: targetX, y: targetY, z: Number(imageSurfaceInfo?.origin?.z) || 0 } : null);
             logImageHeightDiagnostics('solve-finite', {
                 objectId: obj?.id ?? null,
@@ -3323,12 +3463,28 @@ export function convertImageHeightToEffectiveObject(
                 imageSurfaceIndex
             });
 
-            setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
-                solver: 'ts-refine',
-                solved: { x: solvedObjectX, y: solvedObjectY },
-                hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
-            });
-            storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
+            if (!disableSolveCache) {
+                setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
+                    solver: 'ts-refine',
+                    solved: { x: solvedObjectX, y: solvedObjectY },
+                    hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
+                    chiefRay: solvedChief?.origin && solvedChief?.dir ? {
+                        origin: {
+                            x: Number(solvedChief.origin.x),
+                            y: Number(solvedChief.origin.y),
+                            z: Number(solvedChief.origin.z),
+                        },
+                        dir: {
+                            x: Number(solvedChief.dir.x),
+                            y: Number(solvedChief.dir.y),
+                            z: Number(solvedChief.dir.z),
+                        },
+                    } : null,
+                });
+            }
+            if (!disableWarmStartCache) {
+                storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
+            }
 
             return storeResult({
                 ...obj,
@@ -3346,6 +3502,18 @@ export function convertImageHeightToEffectiveObject(
                     paraxial: { x: paraxialObjectX, y: paraxialObjectY },
                     solved: { x: solvedObjectX, y: solvedObjectY },
                     hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y) } : null,
+                    chiefRay: solvedChief?.origin && solvedChief?.dir ? {
+                        origin: {
+                            x: Number(solvedChief.origin.x),
+                            y: Number(solvedChief.origin.y),
+                            z: Number(solvedChief.origin.z),
+                        },
+                        dir: {
+                            x: Number(solvedChief.dir.x),
+                            y: Number(solvedChief.dir.y),
+                            z: Number(solvedChief.dir.z),
+                        },
+                    } : null,
                     imageSurfaceIndex,
                     wavelengthUm
                 },
@@ -4409,11 +4577,13 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             }
             : null;
 
-        // Keep direction defined by the field angle by default, but when we are in
-        // aim-through-stop mode the ImageHeight solver refines direction as well as origin.
-        // Match that here so Render draws the same chief ray that the solve validated.
+        // Keep direction defined by the field angle by default.
+        // For ordinary Angle objects, aim-through-stop must solve the emission origin only;
+        // overriding direction here collapses the requested field angle and makes Angle edits
+        // appear ineffective. ImageHeight is the only mode that intentionally carries an
+        // explicit chief-ray direction override from its solve result.
         let chiefDirUsed = chiefDirOverride || chiefDir;
-        if (!chiefDirOverride && aimThroughStop && chiefRayOrigin && stopSurfaceCenter3d && Number.isInteger(stopSurfaceIndex)) {
+        if (chiefDirOverride && aimThroughStop && chiefRayOrigin && stopSurfaceCenter3d && Number.isInteger(stopSurfaceIndex)) {
             const useStrictChiefDirectionSolve = options?.strictChiefDirectionSolve === true;
             const chiefDirectionTraceBackend = originSolveTraceBackend;
             const refinedChiefDir = solveRayDirectionToStopPointFast(
@@ -4883,6 +5053,18 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
             ? Number(objectRow.objectRenderDistance)
             : 0;
         const objectZ = isInfiniteObject ? resolveInfiniteObjectZ(opticalSystemRows, renderDist) : finiteObjectZ;
+        const imageHeightChiefRayOverride = !isInfiniteObject
+            ? obj?.__cooptImageHeightSolve?.chiefRay
+            : null;
+        const hasImageHeightChiefRayOverride = !!(
+            imageHeightChiefRayOverride
+            && Number.isFinite(Number(imageHeightChiefRayOverride?.origin?.x))
+            && Number.isFinite(Number(imageHeightChiefRayOverride?.origin?.y))
+            && Number.isFinite(Number(imageHeightChiefRayOverride?.origin?.z))
+            && Number.isFinite(Number(imageHeightChiefRayOverride?.dir?.x))
+            && Number.isFinite(Number(imageHeightChiefRayOverride?.dir?.y))
+            && Number.isFinite(Number(imageHeightChiefRayOverride?.dir?.z))
+        );
 
         if (isInfiniteObject && options?.rectangleAsAngleWhenInfinite !== false) {
             const refDist = Math.max(1e-6, Math.abs(objectZ));
@@ -4928,7 +5110,9 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
         }
         
         // Apply sag to object Z position for finite objects only
-        const actualObjectZ = isInfiniteObject ? objectZ : objectZ + objectSag;
+        const actualObjectZ = hasImageHeightChiefRayOverride
+            ? Number(imageHeightChiefRayOverride.origin.z)
+            : (isInfiniteObject ? objectZ : objectZ + objectSag);
         
         // console.log(`📍 Rectangle object position: (${centerX}, ${centerY}, ${objectZ})`);
         const apertureRadius = Number(surf.semidia) || Number(surf.thickness) || 10;
@@ -4945,6 +5129,13 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
 
         const resolveRectangleChiefDirection = () => {
             const fallbackDeltaZ = Number(surf.thickness) || 10.0;
+            if (hasImageHeightChiefRayOverride) {
+                return {
+                    x: Number(imageHeightChiefRayOverride.dir.x),
+                    y: Number(imageHeightChiefRayOverride.dir.y),
+                    z: Number(imageHeightChiefRayOverride.dir.z),
+                };
+            }
             if (isInfiniteObject) {
                 return { x: 0, y: 0, z: 1 };
             }
@@ -4991,7 +5182,13 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
 
         if (rayCount === 1) {
             // Single-ray render should still use the chief ray so it passes the stop center.
-            const startP = { x: centerX, y: centerY, z: actualObjectZ };
+            const startP = hasImageHeightChiefRayOverride
+                ? {
+                    x: Number(imageHeightChiefRayOverride.origin.x),
+                    y: Number(imageHeightChiefRayOverride.origin.y),
+                    z: Number(imageHeightChiefRayOverride.origin.z),
+                }
+                : { x: centerX, y: centerY, z: actualObjectZ };
             const chiefDirection = resolveRectangleChiefDirection();
             const chiefLength = Math.sqrt(
                 chiefDirection.x * chiefDirection.x
@@ -5018,9 +5215,21 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
             const chiefDirection = resolveRectangleChiefDirection();
             
             const { dir: unitChief, u, v } = buildPerpendicularBasis(chiefDirection);
-            rayStartData.expectedChiefOrigin = { x: centerX, y: centerY, z: actualObjectZ };
+            rayStartData.expectedChiefOrigin = hasImageHeightChiefRayOverride
+                ? {
+                    x: Number(imageHeightChiefRayOverride.origin.x),
+                    y: Number(imageHeightChiefRayOverride.origin.y),
+                    z: Number(imageHeightChiefRayOverride.origin.z),
+                }
+                : { x: centerX, y: centerY, z: actualObjectZ };
             rayStartData.expectedChiefDir = { x: unitChief.x, y: unitChief.y, z: unitChief.z };
-            const centerPoint = { x: centerX, y: centerY, z: actualObjectZ };
+            const centerPoint = hasImageHeightChiefRayOverride
+                ? {
+                    x: Number(imageHeightChiefRayOverride.origin.x),
+                    y: Number(imageHeightChiefRayOverride.origin.y),
+                    z: Number(imageHeightChiefRayOverride.origin.z),
+                }
+                : { x: centerX, y: centerY, z: actualObjectZ };
             let effectiveRadius = Number.isFinite(stopRadiusLimited) && stopRadiusLimited > 0
                 ? Math.min(stopRadiusLimited, apertureRadius)
                 : apertureRadius;
@@ -5181,12 +5390,24 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
                 y: chiefDirection.y / chiefLength,
                 z: chiefDirection.z / chiefLength
             };
-            rayStartData.expectedChiefOrigin = { x: centerX, y: centerY, z: actualObjectZ };
+            rayStartData.expectedChiefOrigin = hasImageHeightChiefRayOverride
+                ? {
+                    x: Number(imageHeightChiefRayOverride.origin.x),
+                    y: Number(imageHeightChiefRayOverride.origin.y),
+                    z: Number(imageHeightChiefRayOverride.origin.z),
+                }
+                : { x: centerX, y: centerY, z: actualObjectZ };
             rayStartData.expectedChiefDir = { x: unitChiefDir.x, y: unitChiefDir.y, z: unitChiefDir.z };
             
             // Add chief ray
             rayStartData.push({
-                startP: { x: centerX, y: centerY, z: actualObjectZ },
+                startP: hasImageHeightChiefRayOverride
+                    ? {
+                        x: Number(imageHeightChiefRayOverride.origin.x),
+                        y: Number(imageHeightChiefRayOverride.origin.y),
+                        z: Number(imageHeightChiefRayOverride.origin.z),
+                    }
+                    : { x: centerX, y: centerY, z: actualObjectZ },
                 dir: unitChiefDir,
                 description: `Chief Rectangle ray from center (${centerX}, ${centerY})`
             });

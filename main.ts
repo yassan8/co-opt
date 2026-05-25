@@ -2057,6 +2057,21 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
             return;
         }
+
+        const toRemoveBeforeNewDraw: any[] = [];
+        scene.traverse((child: any) => {
+            if (child?.userData?.rayType === 'accurate' || child?.userData?.accurateRayTracing === true) {
+                toRemoveBeforeNewDraw.push(child);
+            }
+        });
+        toRemoveBeforeNewDraw.forEach((obj: any) => {
+            scene.remove(obj);
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+                if (Array.isArray(obj.material)) obj.material.forEach((m: any) => m.dispose());
+                else obj.material.dispose();
+            }
+        });
         
         // 正確な光線追跡を実行（generateRayStartPointsForObject を使用して Angle も正しく扱う）
         objectRows.forEach((obj, objIndex) => {
@@ -2076,6 +2091,10 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                 {
                     // For Angle objects, aim the chief ray through stop center by solving origin.
                     aimThroughStop: !!isAngle,
+                    // In Open Render, keep the chief-ray origin solve but sample peripheral rays
+                    // on the normal emission plane. Solving every peripheral origin to stop offsets
+                    // makes off-axis Angle objects fragile and can drop surrounding rays.
+                    preserveChiefNormalEmissionPlane: !!isAngle,
                     useChiefRayAnalysis: true,
                     allowStopBasedOriginSolve: true,
                     skipImageHeightTsValidation: true,
@@ -2088,10 +2107,60 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                 return;
             }
 
+            const orderedRayStartPoints = (() => {
+                const starts = Array.isArray(rayStartPoints) ? [...rayStartPoints] : [];
+                const expectedChiefOrigin = rayStartPoints.expectedChiefOrigin;
+                const expectedChiefDir = rayStartPoints.expectedChiefDir;
+                const hasExpectedChief = !!(
+                    expectedChiefOrigin
+                    && expectedChiefDir
+                    && Number.isFinite(Number(expectedChiefOrigin.x))
+                    && Number.isFinite(Number(expectedChiefOrigin.y))
+                    && Number.isFinite(Number(expectedChiefOrigin.z))
+                    && Number.isFinite(Number(expectedChiefDir.x))
+                    && Number.isFinite(Number(expectedChiefDir.y))
+                    && Number.isFinite(Number(expectedChiefDir.z))
+                );
+                if (!hasExpectedChief) return starts;
+
+                const sameStart = (entry: any) => {
+                    const start = entry?.startP;
+                    const dir = entry?.dir;
+                    if (!start || !dir) return false;
+                    return (
+                        Math.abs(Number(start.x) - Number(expectedChiefOrigin.x)) < 1e-9
+                        && Math.abs(Number(start.y) - Number(expectedChiefOrigin.y)) < 1e-9
+                        && Math.abs(Number(start.z) - Number(expectedChiefOrigin.z)) < 1e-9
+                        && Math.abs(Number(dir.x) - Number(expectedChiefDir.x)) < 1e-9
+                        && Math.abs(Number(dir.y) - Number(expectedChiefDir.y)) < 1e-9
+                        && Math.abs(Number(dir.z) - Number(expectedChiefDir.z)) < 1e-9
+                    );
+                };
+
+                const existingChiefIndex = starts.findIndex(sameStart);
+                const chiefEntry = existingChiefIndex >= 0
+                    ? starts.splice(existingChiefIndex, 1)[0]
+                    : {
+                        startP: {
+                            x: Number(expectedChiefOrigin.x),
+                            y: Number(expectedChiefOrigin.y),
+                            z: Number(expectedChiefOrigin.z),
+                        },
+                        dir: {
+                            x: Number(expectedChiefDir.x),
+                            y: Number(expectedChiefDir.y),
+                            z: Number(expectedChiefDir.z),
+                        },
+                        description: 'Expected chief ray',
+                    };
+                return [chiefEntry, ...starts];
+            })();
+
             let rayIndex = 0;
-            for (const rayStart of rayStartPoints) {
+            let successfulRayCount = 0;
+            for (const rayStart of orderedRayStartPoints) {
                 if (!rayStart || !rayStart.startP || !rayStart.dir) continue;
-                if (rayIndex >= rayCount) break;
+                if (successfulRayCount >= rayCount) break;
 
                 try {
                     const ray = {
@@ -2100,7 +2169,7 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                     };
 
                     console.log(
-                        `🔍 正確光線${rayIndex} for object ${objIndex}: start=(${ray.pos.x}, ${ray.pos.y}, ${ray.pos.z}), dir=(${ray.dir.x}, ${ray.dir.y}, ${ray.dir.z})`
+                        `🔍 正確光線${successfulRayCount} for object ${objIndex}: start=(${ray.pos.x}, ${ray.pos.y}, ${ray.pos.z}), dir=(${ray.dir.x}, ${ray.dir.y}, ${ray.dir.z})`
                     );
 
                     // window.traceRayと同じ呼び出し方法
@@ -2131,12 +2200,13 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                         line.userData = {
                             type: 'optical-ray',  // 正確な光線追跡識別子
                             objectId: objIndex,
-                            rayNumber: rayIndex,
+                            rayNumber: successfulRayCount,
                             rayType: 'accurate',  // 正確な光線追跡識別子
                             isRayLine: true,
                             accurateRayTracing: true  // 正確な光線追跡であることを示す
                         };
                         scene.add(line);
+                        successfulRayCount++;
 
                     } else {
                     }
@@ -2340,8 +2410,8 @@ function buildExactDrawCrossRaysForImageHeightObjects(objectRows, opticalSystemR
 
         try {
             const imageHeightTarget = {
-                x: Number(row?.__cooptImageHeightTarget?.x ?? row?.xHeightAngle ?? row?.x ?? 0) || 0,
-                y: Number(row?.__cooptImageHeightTarget?.y ?? row?.yHeightAngle ?? row?.y ?? 0) || 0,
+                x: Number(row?.xHeightAngle ?? row?.__cooptImageHeightTarget?.x ?? row?.xHeight ?? row?.heightX ?? row?.['object x'] ?? row?.x ?? 0) || 0,
+                y: Number(row?.yHeightAngle ?? row?.__cooptImageHeightTarget?.y ?? row?.yHeight ?? row?.heightY ?? row?.['object y'] ?? row?.y ?? 0) || 0,
             };
             const resolvedRow = convertImageHeightToEffectiveObject(
                 row,
