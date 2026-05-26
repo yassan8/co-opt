@@ -85,6 +85,7 @@ async function runOptimizationMvpnative(options = {}) {
   // Ensure stale native stop state from previous runs does not abort immediately.
   try { await clearOptimizerStop(); } catch (_) {}
 
+  let shouldRestorePreviousOpticalRowsOverride = true;
   const shouldStopNow = () => {
     if (__optimizerStopRequested) return true;
     try {
@@ -2110,6 +2111,9 @@ function yieldViaMessageChannel(callback: () => void): void {
   }
 }
 
+let __cooptLastOptimizerUiYieldAt = 0;
+const COOPT_OPTIMIZER_UI_YIELD_MIN_INTERVAL_MS = 32;
+
 function nextFrame() {
   const prof = (() => {
     try {
@@ -2167,6 +2171,12 @@ function nextFrame() {
       return false;
     }
   })();
+
+  const now = nowMs();
+  if ((now - __cooptLastOptimizerUiYieldAt) < COOPT_OPTIMIZER_UI_YIELD_MIN_INTERVAL_MS) {
+    return Promise.resolve();
+  }
+  __cooptLastOptimizerUiYieldAt = now;
 
   if (!prof) {
     return new Promise((resolve) => {
@@ -2862,7 +2872,7 @@ function restoreBestSnapshotAndPersist({
       systemConfig,
       configsById,
       targetConfigIds,
-      blocksByConfigId: jointState?.blocksByConfigId,
+      blocksByConfigId: restoredBlocksByConfigId,
       baselineBlocksByConfigId: jointState?.baselineBlocksByConfigId
     });
   } catch {
@@ -3169,7 +3179,7 @@ function defaultMaterialCandidatesFromConfig(activeCfg) {
     .filter(glassExists)
     .filter(m => !isAirMaterialName(m))
     .filter(m => isGlassAllowedByPreferredManufacturers(m, preferredManufacturers))
-    .slice(0, 40);
+    .slice(0, 10);
 }
 
 function getCategoricalMaterialVariables(activeCfg) {
@@ -3397,17 +3407,21 @@ function getMaterialCandidatesForVar(activeCfg, variableId, currentValue) {
       const glass = materialText ? getGlassDataWithSellmeier(materialText) : null;
       const match = key.match(/^material(\d*)$/i);
       const suffix = match ? String(match[1] ?? '') : '';
+      const rindexKey = suffix ? `rindex${suffix}` : 'rindex';
       const abbeKey = suffix ? `abbe${suffix}` : 'abbe';
+      const ndRaw = params && Object.prototype.hasOwnProperty.call(params, rindexKey) ? params[rindexKey] : null;
       const vdRaw = params && Object.prototype.hasOwnProperty.call(params, abbeKey) ? params[abbeKey] : null;
       const vdTarget = Number.isFinite(Number(vdRaw)) && Number(vdRaw) > 0
         ? Number(vdRaw)
         : (Number.isFinite(Number(glass?.vd)) ? Number(glass.vd) : NaN);
-      const ndTarget = Number.isFinite(numericMaterial) && numericMaterial > 1 && numericMaterial < 4
+      const ndTarget = Number.isFinite(Number(ndRaw)) && Number(ndRaw) > 1 && Number(ndRaw) < 4
+        ? Number(ndRaw)
+        : (Number.isFinite(numericMaterial) && numericMaterial > 1 && numericMaterial < 4
         ? numericMaterial
-        : (Number.isFinite(Number(glass?.nd)) ? Number(glass.nd) : NaN);
+        : (Number.isFinite(Number(glass?.nd)) ? Number(glass.nd) : NaN));
 
       if (Number.isFinite(ndTarget) && Number.isFinite(vdTarget)) {
-        const nearby = findSimilarGlassesByNdVd(ndTarget, vdTarget, 24)
+        const nearby = findSimilarGlassesByNdVd(ndTarget, vdTarget, 8)
           .filter(g => isGlassAllowedByPreferredManufacturers(g?.name, preferredManufacturers))
           .map(g => String(g?.name ?? '').trim())
           .filter(Boolean);
@@ -3421,7 +3435,8 @@ function getMaterialCandidatesForVar(activeCfg, variableId, currentValue) {
   let merged = normalizeStringList([cur, ...candidates])
     .filter(glassExists)
     .filter(m => !isAirMaterialName(m))
-    .filter(m => m === cur || isGlassAllowedByPreferredManufacturers(m, preferredManufacturers));
+    .filter(m => m === cur || isGlassAllowedByPreferredManufacturers(m, preferredManufacturers))
+    .slice(0, 12);
 
   // If the variable only offered AIR (or current is AIR), fall back to defaults (still excluding AIR).
   if (merged.length === 0) {
@@ -3432,8 +3447,6 @@ function getMaterialCandidatesForVar(activeCfg, variableId, currentValue) {
 }
 
 function toFiniteNumber(value, fallback = 0) {
-  if (value === undefined || value === null) return fallback;
-
   if (typeof value === 'string') {
     const s = value.trim();
     if (s === '') return fallback;
@@ -4045,6 +4058,20 @@ async function runCategoricalMaterialSweep({
 
   let best = bestEval;
   let changed = false;
+  const snapshotCurrentSweepBlocks = () => {
+    try {
+      if (jointState?.blocksByConfigId) return snapshotBlocksByConfigId(jointState.blocksByConfigId);
+      const cid = String(jointState?.activeConfigId ?? activeCfg?.id ?? 'active').trim() || 'active';
+      return { [cid]: JSON.parse(JSON.stringify(activeCfg?.blocks || [])) };
+    } catch (_) {
+      return null;
+    }
+  };
+  const withCurrentSweepSnapshot = (evalResult) => {
+    if (!evalResult || typeof evalResult !== 'object') return evalResult;
+    const snap = snapshotCurrentSweepBlocks();
+    return snap ? { ...evalResult, blocksSnapshot: snap } : evalResult;
+  };
 
   for (const v of catVars) {
     if (shouldStop && shouldStop()) break;
@@ -4073,7 +4100,7 @@ async function runCategoricalMaterialSweep({
         : setDesignVariableValue(activeCfg, v.id, cand);
       if (!okSet) continue;
 
-      const e = evalState ? evalState() : null;
+      const e = evalState ? withCurrentSweepSnapshot(evalState()) : null;
 
       let materialIssue = null;
       try {
@@ -5314,6 +5341,7 @@ export async function runOptimizationMVP(options = {}) {
   let __prevDisableRayTraceDebug;
   let __prevDisablePersistedTableFallback;
   let __prevTaEvalRunId;
+  let __persistedOptimizerResultForUi = false;
   try { __prevBlocksOverride = (typeof window !== 'undefined') ? window.__cooptBlocksOverride : undefined; } catch (_) { __prevBlocksOverride = undefined; }
   try { __prevOpticalRowsOverride = (typeof globalThis !== 'undefined') ? globalThis.__cooptOpticalSystemRowsOverride : undefined; } catch (_) { __prevOpticalRowsOverride = undefined; }
   try { __prevScenarioOverride = (typeof window !== 'undefined') ? window.__cooptScenarioOverride : undefined; } catch (_) { __prevScenarioOverride = undefined; }
@@ -5325,7 +5353,7 @@ export async function runOptimizationMVP(options = {}) {
 
   const restorePreOptimizationGlobalsForUiSync = () => {
     try {
-      setBlocksOverrideGlobal(__prevBlocksOverride);
+      setBlocksOverrideGlobal(__persistedOptimizerResultForUi ? undefined : __prevBlocksOverride);
     } catch (_) {}
     try {
       if (typeof window !== 'undefined') {
@@ -5335,8 +5363,12 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
     try {
       if (typeof globalThis !== 'undefined') {
-        try { delete globalThis.__cooptOpticalSystemRowsOverride; } catch (_) {
-          globalThis.__cooptOpticalSystemRowsOverride = null;
+        if (__persistedOptimizerResultForUi) {
+          try { delete globalThis.__cooptOpticalSystemRowsOverride; } catch (_) {
+            globalThis.__cooptOpticalSystemRowsOverride = null;
+          }
+        } else {
+          globalThis.__cooptOpticalSystemRowsOverride = __prevOpticalRowsOverride;
         }
       }
     } catch (_) {}
@@ -5575,26 +5607,80 @@ export async function runOptimizationMVP(options = {}) {
     activeConfigId
   };
 
+  const cloneForOptimizerResult = (value) => {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const buildOptimizerResultSnapshotForUi = () => {
+    try {
+      const systemConfigSnapshot = cloneForOptimizerResult(systemConfig);
+      if (!systemConfigSnapshot || typeof systemConfigSnapshot !== 'object') return null;
+      try {
+        const snapshotConfigs = Array.isArray(systemConfigSnapshot.configurations) ? systemConfigSnapshot.configurations : [];
+        for (const cfg of snapshotConfigs) {
+          const cid = String(cfg?.id ?? '').trim();
+          const blocks = cid && blocksByConfigId ? blocksByConfigId[cid] : null;
+          if (!cfg || !Array.isArray(blocks)) continue;
+          const clonedBlocks = cloneForOptimizerResult(blocks) || blocks;
+          cfg.blocks = clonedBlocks;
+          try {
+            const expanded = expandBlocksIntoConfiguration(cfg);
+            if (expanded && Array.isArray(expanded.expandedOpticalSystem)) {
+              cfg.opticalSystem = expanded.expandedOpticalSystem;
+            }
+          } catch (_) {
+            try {
+              const expandedRows = expandBlocksToOpticalSystemRows(clonedBlocks);
+              if (expandedRows && Array.isArray(expandedRows.rows)) cfg.opticalSystem = expandedRows.rows;
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      const activeId = String(systemConfigSnapshot.activeConfigId ?? jointState?.activeConfigId ?? '').trim();
+      const configs = Array.isArray(systemConfigSnapshot.configurations) ? systemConfigSnapshot.configurations : [];
+      const activeConfig = configs.find(c => c && String(c.id ?? '') === activeId) || configs[0] || null;
+      const opticalSystemRowsSnapshot = Array.isArray(activeConfig?.opticalSystem)
+        ? cloneForOptimizerResult(activeConfig.opticalSystem)
+        : [];
+      return {
+        systemConfigSnapshot,
+        opticalSystemRowsSnapshot: Array.isArray(opticalSystemRowsSnapshot) ? opticalSystemRowsSnapshot : [],
+        activeConfigId: activeId,
+      };
+    } catch (_) {
+      return null;
+    }
+  };
+
+  let __lastOptimizerResultSnapshotForUi = null;
+
   let bestFeasibleEval = null;
   let bestInfeasibleEval = null;
   let bestScoreEval = null;
+  let bestScoreBlocksSnapshot = null;
   const recordEval = (e) => {
     if (!e) return;
-    const snap = snapshotBlocksByConfigId(blocksByConfigId);
+    const snap = (e.blocksSnapshot && typeof e.blocksSnapshot === 'object')
+      ? snapshotBlocksByConfigId(e.blocksSnapshot)
+      : snapshotBlocksByConfigId(blocksByConfigId);
     const scoredEval = { ...e, blocksSnapshot: snap };
     if (
       !bestScoreEval ||
-      toFiniteNumber(e.score, Infinity) < (toFiniteNumber(bestScoreEval.score, Infinity) - 1e-12) ||
-      isEvalTie(e, bestScoreEval)
+      toFiniteNumber(e.score, Infinity) < (toFiniteNumber(bestScoreEval.score, Infinity) - 1e-12)
     ) {
       bestScoreEval = scoredEval;
+      bestScoreBlocksSnapshot = snap;
     }
     if (e.feasible) {
-      if (!bestFeasibleEval || compareEval(e, bestFeasibleEval) || isEvalTie(e, bestFeasibleEval)) {
+      if (!bestFeasibleEval || compareEval(e, bestFeasibleEval)) {
         bestFeasibleEval = scoredEval;
       }
     } else {
-      if (!bestInfeasibleEval || compareEval(e, bestInfeasibleEval) || isEvalTie(e, bestInfeasibleEval)) {
+      if (!bestInfeasibleEval || compareEval(e, bestInfeasibleEval)) {
         bestInfeasibleEval = scoredEval;
       }
     }
@@ -7774,7 +7860,7 @@ export async function runOptimizationMVP(options = {}) {
         : ((spotFastMode || kktUseMatrixFreeCore) ? 4 : 6);
       const kktCategoricalSweepInterval = Number.isFinite(Number(opts?.kktCategoricalSweepInterval))
         ? Math.max(1, Math.floor(Number(opts.kktCategoricalSweepInterval)))
-        : 1;
+        : 3;
 
       const buildKktXKey = (x: number[]) => {
         const clamped = clampToBounds(x);
@@ -8621,8 +8707,66 @@ export async function runOptimizationMVP(options = {}) {
       let bestX = clampToBounds(initialX.slice());
       let bestScore = initialScore;
       let bestEval = initialStateEval || null;
+      let bestScoreXSnapshot = bestX.slice();
       let currentX = bestX.slice();
       let completedIterations = 0;
+
+      const applyXToDesignState = (x: number[] | null | undefined) => {
+        if (!Array.isArray(x)) return false;
+        try {
+          for (let k = 0; k < n && k < x.length; k++) {
+            if (jointState && varIds && k < varIds.length) {
+              setJointDesignVariableValue(jointState, varIds[k], x[k]);
+            } else if (activeCfg && varIds && k < varIds.length) {
+              setDesignVariableValue(activeCfg, varIds[k], x[k]);
+            }
+          }
+          try {
+            const activeId = String(jointState?.activeConfigId ?? activeConfigId ?? '').trim();
+            const activeBlocks = activeId && jointState?.blocksByConfigId ? jointState.blocksByConfigId[activeId] : null;
+            if (Array.isArray(activeBlocks)) updateActiveOpticalSystemOverrideFromBlocks(activeBlocks);
+          } catch (_) {}
+          return true;
+        } catch (_) {
+          return false;
+        }
+      };
+
+      const restoreBestStateAndPersist = (sourceEval: any) => {
+        try {
+          if (bestScoreBlocksSnapshot && typeof bestScoreBlocksSnapshot === 'object') {
+            const snapshot = snapshotBlocksByConfigId(bestScoreBlocksSnapshot);
+            const restored = restoreBlocksByConfigId(blocksByConfigId, snapshot);
+            if (restored) {
+              try {
+                const activeId = String(jointState?.activeConfigId ?? activeConfigId ?? '').trim();
+                const activeBlocks = activeId && blocksByConfigId ? blocksByConfigId[activeId] : null;
+                if (Array.isArray(activeBlocks)) updateActiveOpticalSystemOverrideFromBlocks(activeBlocks);
+              } catch (_) {}
+            } else if (!applyXToDesignState(bestX)) {
+              return sourceEval || null;
+            }
+          } else if (!applyXToDesignState(bestX)) {
+            return sourceEval || null;
+          }
+          const restoredEval = evalCompositeFromRequirementsProfiled();
+          const scoreEval = restoredEval || sourceEval;
+          const finalEval = {
+            ...scoreEval,
+            restoredBestScore: Number.isFinite(Number(restoredEval?.score)) ? Number(restoredEval.score) : undefined,
+            sourceBestScore: Number.isFinite(Number(sourceEval?.score)) ? Number(sourceEval.score) : undefined,
+            blocksSnapshot: snapshotBlocksByConfigId(blocksByConfigId)
+          };
+          const persisted = restoreBestSnapshotAndPersist({ finalEval, jointState, systemConfig, configsById, targetConfigIds });
+          if (persisted) {
+            __persistedOptimizerResultForUi = true;
+            __lastOptimizerResultSnapshotForUi = buildOptimizerResultSnapshotForUi();
+          }
+          return finalEval;
+        } catch (_) {
+          return sourceEval || null;
+        }
+      };
 
       const calibrateAnalyticEqualityCtctRows = async (xRef: number[]) => {
         if (!kktUseAnalyticEqualityCtctJacobian) {
@@ -8994,8 +9138,10 @@ export async function runOptimizationMVP(options = {}) {
         if (probeBest.merit + 1e-12 < bestMerit) {
           currentX = probeBestX.slice();
           bestX = probeBestX.slice();
+          bestScoreXSnapshot = probeBestX.slice();
           bestMerit = probeBest.merit;
           try {
+            applyXToDesignState(probeBestX);
             const seededEval = evalCompositeFromRequirementsProfiled();
             if (seededEval) {
               bestEval = seededEval;
@@ -9732,8 +9878,9 @@ export async function runOptimizationMVP(options = {}) {
           if (bestEvalNow) {
             bestScore = bestEvalNow.score;
             bestEval = bestEvalNow;
-            if (!prevBestEval || compareEval(currentEval, prevBestEval)) {
+            if (!prevBestEval || currentScore < (prevBestScore - 1e-12)) {
               bestX = currentX.slice();
+              bestScoreXSnapshot = currentX.slice();
             }
             
             if (bestScore < prevBestScore) {
@@ -9801,6 +9948,7 @@ export async function runOptimizationMVP(options = {}) {
                 bestEval = bestEvalAfterMaterialSweep;
                 if (!bestEvalBeforeMaterialSweep || compareEval(materialEval, bestEvalBeforeMaterialSweep)) {
                   bestX = currentX.slice();
+                  bestScoreXSnapshot = currentX.slice();
                 }
               }
             }
@@ -10136,7 +10284,7 @@ export async function runOptimizationMVP(options = {}) {
             && maxViol <= kktPostBestPatienceMaxViol
           );
 
-          if (strictPlateauStop || relaxedPlateauStop || tailStop || windowTailStop || windowNoGainStop || goodEnoughStop || noBestImproveStop || postBestDivergenceStop || postBestPatienceStop) {
+          if (kktAutoStopEnabled && (strictPlateauStop || relaxedPlateauStop || tailStop || windowTailStop || windowNoGainStop || goodEnoughStop || noBestImproveStop || postBestDivergenceStop || postBestPatienceStop)) {
             break;
           }
         }
@@ -10208,10 +10356,31 @@ export async function runOptimizationMVP(options = {}) {
       try {
         const bestFinalEval = getBestScoreEvalSoFar();
         if (bestFinalEval) {
-          restoreBestSnapshotAndPersist({ finalEval: bestFinalEval, jointState, systemConfig, configsById, targetConfigIds });
+          restoreBestStateAndPersist(bestFinalEval);
         }
       } catch (e) {
         console.error('❌ [AL] Error restoring/persisting best state:', e);
+      }
+
+      if (shouldStopKKT()) {
+        const stoppedFinalEval = getBestScoreEvalSoFar() || getBestEvalSoFar();
+        const stoppedBestScore = Number.isFinite(stoppedFinalEval?.score) ? stoppedFinalEval.score : bestScore;
+        return {
+          ok: true,
+          aborted: true,
+          before: initialScore,
+          best: stoppedBestScore,
+          iterations: completedIterations,
+          variables: vars.length,
+          method: 'kkt',
+          feasible: stoppedFinalEval?.feasible ?? false,
+          violationScore: Number.isFinite(stoppedFinalEval?.violationScore) ? stoppedFinalEval.violationScore : stoppedBestScore,
+          softPenalty: Number.isFinite(stoppedFinalEval?.softPenalty) ? stoppedFinalEval.softPenalty : 0,
+          objectiveScore: stoppedBestScore,
+          hardViolations: stoppedFinalEval?.hardViolations ?? [],
+          softViolations: stoppedFinalEval?.softViolations ?? [],
+          ...(__lastOptimizerResultSnapshotForUi || buildOptimizerResultSnapshotForUi() || {})
+        };
       }
 
       restorePreOptimizationGlobalsForUiSync();
@@ -10303,25 +10472,33 @@ export async function runOptimizationMVP(options = {}) {
         softPenalty: finalSoftPenalty,
         objectiveScore: finalObjectiveScore,
         hardViolations: bestFinalEval?.hardViolations ?? [],
-        softViolations: bestFinalEval?.softViolations ?? []
+        softViolations: bestFinalEval?.softViolations ?? [],
+        ...(__lastOptimizerResultSnapshotForUi || buildOptimizerResultSnapshotForUi() || {})
       };
     } catch (e: any) {
       if (e?.__cooptStop) {
-        // Stop was requested mid-Jacobian — treat as a clean aborted stop.
+        // Stop was requested mid-Jacobian. Restore/persist the best snapshot before
+        // returning so the host optical system and requirement tables stay aligned.
+        let stoppedFinalEval = getBestScoreEvalSoFar() || getBestEvalSoFar();
+        try {
+          stoppedFinalEval = restoreBestStateAndPersist(stoppedFinalEval) || stoppedFinalEval;
+        } catch (_) {}
+        const stoppedBestScore = Number.isFinite(stoppedFinalEval?.score) ? stoppedFinalEval.score : bestScore;
         return {
           ok: true,
           aborted: true,
           before: initialScore,
-          best: bestScore,
+          best: stoppedBestScore,
           iterations: completedIterations,
           variables: vars.length,
           method: 'kkt',
-          feasible: false,
-          violationScore: bestScore,
-          softPenalty: 0,
-          objectiveScore: bestScore,
-          hardViolations: [],
-          softViolations: []
+          feasible: stoppedFinalEval?.feasible ?? false,
+          violationScore: Number.isFinite(stoppedFinalEval?.violationScore) ? stoppedFinalEval.violationScore : stoppedBestScore,
+          softPenalty: Number.isFinite(stoppedFinalEval?.softPenalty) ? stoppedFinalEval.softPenalty : 0,
+          objectiveScore: stoppedBestScore,
+          hardViolations: stoppedFinalEval?.hardViolations ?? [],
+          softViolations: stoppedFinalEval?.softViolations ?? [],
+          ...(__lastOptimizerResultSnapshotForUi || buildOptimizerResultSnapshotForUi() || {})
         };
       }
       console.error('❌ [AL Optimizer] Fatal error:', e);
@@ -10745,11 +10922,17 @@ export async function runOptimizationMVP(options = {}) {
   } finally {
     // Always restore global overrides, even on early return/errors.
     try {
-      setBlocksOverrideGlobal(__prevBlocksOverride);
+      setBlocksOverrideGlobal(__persistedOptimizerResultForUi ? undefined : __prevBlocksOverride);
     } catch (_) {}
     try {
       if (typeof globalThis !== 'undefined') {
-        globalThis.__cooptOpticalSystemRowsOverride = __prevOpticalRowsOverride;
+        if (__persistedOptimizerResultForUi) {
+          try { delete globalThis.__cooptOpticalSystemRowsOverride; } catch (_) {
+            globalThis.__cooptOpticalSystemRowsOverride = null;
+          }
+        } else {
+          globalThis.__cooptOpticalSystemRowsOverride = __prevOpticalRowsOverride;
+        }
       }
     } catch (_) {}
     try {
