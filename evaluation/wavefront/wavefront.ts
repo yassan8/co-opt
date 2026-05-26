@@ -3834,6 +3834,75 @@ ${surfaceTypeList}
      */
     _estimateAxisIntersectionZFromProbe(fieldSetting, options = undefined) {
         try {
+            const cloneProbeField = (dx, dy) => {
+                const base = (fieldSetting && typeof fieldSetting === 'object') ? fieldSetting : {};
+                const fieldAngle = (base.fieldAngle && typeof base.fieldAngle === 'object') ? base.fieldAngle : {};
+                const x = dx;
+                const y = dy;
+                return {
+                    ...base,
+                    x,
+                    y,
+                    fieldAngle: { ...fieldAngle, x, y },
+                    xFieldAngle: x,
+                    yFieldAngle: y,
+                    xHeightAngle: x,
+                    yHeightAngle: y,
+                    angleX: x,
+                    angleY: y,
+                    xHeight: 0,
+                    yHeight: 0,
+                    objectIndex: base.objectIndex ?? -1,
+                    displayName: `${base.displayName || 'On-axis'} probe`
+                };
+            };
+
+            const traceAxisIntersectionFromRay = (ray) => {
+                const path = this.getPathData(ray);
+                if (!Array.isArray(path) || path.length < 2) return null;
+                const last = path[path.length - 1];
+                const prev = path[path.length - 2];
+                if (!last || !prev) return null;
+
+                const dirX = prev.x - last.x;
+                const dirY = prev.y - last.y;
+                const dirZ = prev.z - last.z;
+
+                let t = null;
+                if (Math.abs(dirX) > 1e-12) {
+                    t = -last.x / dirX;
+                } else if (Math.abs(dirY) > 1e-12) {
+                    t = -last.y / dirY;
+                } else {
+                    return null;
+                }
+
+                const axisIntersectionZ = last.z + t * dirZ;
+                return Number.isFinite(axisIntersectionZ) ? axisIntersectionZ : null;
+            };
+
+            const fieldProbes = [
+                { x: 0, y: 0.05 },
+                { x: 0.05, y: 0 },
+                { x: 0, y: 0.1 },
+                { x: 0.1, y: 0 }
+            ];
+            for (const p of fieldProbes) {
+                let ray = null;
+                try {
+                    ray = this.generateMarginalRay(0, 0, cloneProbeField(p.x, p.y), options);
+                } catch (_) {
+                    ray = null;
+                }
+                const axisIntersectionZ = traceAxisIntersectionFromRay(ray);
+                if (Number.isFinite(axisIntersectionZ)) {
+                    return {
+                        axisIntersectionZ,
+                        probeField: { x: p.x, y: p.y }
+                    };
+                }
+            }
+
             const probePairs = [
                 { x: 1e-3, y: 0 },
                 { x: 0, y: 1e-3 },
@@ -3847,26 +3916,7 @@ ${surfaceTypeList}
                 } catch (_) {
                     ray = null;
                 }
-                const path = this.getPathData(ray);
-                if (!Array.isArray(path) || path.length < 2) continue;
-                const last = path[path.length - 1];
-                const prev = path[path.length - 2];
-                if (!last || !prev) continue;
-
-                const dirX = prev.x - last.x;
-                const dirY = prev.y - last.y;
-                const dirZ = prev.z - last.z;
-
-                let t = null;
-                if (Math.abs(dirX) > 1e-12) {
-                    t = -last.x / dirX;
-                } else if (Math.abs(dirY) > 1e-12) {
-                    t = -last.y / dirY;
-                } else {
-                    continue;
-                }
-
-                const axisIntersectionZ = last.z + t * dirZ;
+                const axisIntersectionZ = traceAxisIntersectionFromRay(ray);
                 if (Number.isFinite(axisIntersectionZ)) {
                     return {
                         axisIntersectionZ,

@@ -38,27 +38,273 @@ fn value_to_string(v: &Value) -> Option<String> {
     }
 }
 
+fn solve_augmented_3x3(mut a: [[f64; 4]; 3]) -> Option<(f64, f64, f64)> {
+    for col in 0..3 {
+        let mut pivot_row = col;
+        let mut pivot_abs = a[col][col].abs();
+        for r in (col + 1)..3 {
+            let v = a[r][col].abs();
+            if v > pivot_abs {
+                pivot_abs = v;
+                pivot_row = r;
+            }
+        }
+        if !pivot_abs.is_finite() || pivot_abs < 1.0e-18 {
+            return None;
+        }
+        if pivot_row != col {
+            a.swap(col, pivot_row);
+        }
+
+        let piv = a[col][col];
+        for c in col..4 {
+            a[col][c] /= piv;
+        }
+        for r in 0..3 {
+            if r == col {
+                continue;
+            }
+            let f = a[r][col];
+            if !f.is_finite() || f.abs() < 1.0e-18 {
+                continue;
+            }
+            for c in col..4 {
+                a[r][c] -= f * a[col][c];
+            }
+        }
+    }
+
+    let a0 = a[0][3];
+    let b0 = a[1][3];
+    let c0 = a[2][3];
+    if a0.is_finite() && b0.is_finite() && c0.is_finite() {
+        Some((a0, b0, c0))
+    } else {
+        None
+    }
+}
+
 fn compute_finite_opd_grid_rms_waves(grid: &[Vec<Option<f64>>]) -> Option<f64> {
+    let height = grid.len();
+    if height == 0 {
+        return None;
+    }
+    let width = grid.iter().map(|row| row.len()).max().unwrap_or(0);
+    if width == 0 {
+        return None;
+    }
+
+    let map_coord = |index: usize, len: usize| -> f64 {
+        if len <= 1 {
+            0.0
+        } else {
+            -1.0 + 2.0 * (index as f64) / ((len - 1) as f64)
+        }
+    };
+
     let mut count = 0usize;
-    let mut sum = 0.0_f64;
-    let mut sum_sq = 0.0_f64;
-    for row in grid {
-        for value in row {
-            let v = value.unwrap_or(0.0);
+    let mut sum_x = 0.0_f64;
+    let mut sum_y = 0.0_f64;
+    let mut sum_xx = 0.0_f64;
+    let mut sum_xy = 0.0_f64;
+    let mut sum_yy = 0.0_f64;
+    let mut sum_z = 0.0_f64;
+    let mut sum_xz = 0.0_f64;
+    let mut sum_yz = 0.0_f64;
+    let mut fallback_sum = 0.0_f64;
+    let mut fallback_sum_sq = 0.0_f64;
+
+    for (iy, row) in grid.iter().enumerate() {
+        let y = map_coord(iy, height);
+        for (ix, value) in row.iter().enumerate() {
+            let Some(v) = *value else {
+                continue;
+            };
             if !v.is_finite() {
                 continue;
             }
-            sum += v;
-            sum_sq += v * v;
+            let x = map_coord(ix, width);
+
             count += 1;
+            sum_x += x;
+            sum_y += y;
+            sum_xx += x * x;
+            sum_xy += x * y;
+            sum_yy += y * y;
+            sum_z += v;
+            sum_xz += x * v;
+            sum_yz += y * v;
+
+            fallback_sum += v;
+            fallback_sum_sq += v * v;
         }
     }
+
     if count == 0 {
         return None;
     }
-    let mean = sum / count as f64;
-    let variance = ((sum_sq / count as f64) - (mean * mean)).max(0.0);
+
+    if count >= 6 {
+        let system = [
+            [count as f64, sum_x, sum_y, sum_z],
+            [sum_x, sum_xx, sum_xy, sum_xz],
+            [sum_y, sum_xy, sum_yy, sum_yz],
+        ];
+        if let Some((a0, b0, c0)) = solve_augmented_3x3(system) {
+            let mut residual_count = 0usize;
+            let mut residual_sum_sq = 0.0_f64;
+            for (iy, row) in grid.iter().enumerate() {
+                let y = map_coord(iy, height);
+                for (ix, value) in row.iter().enumerate() {
+                    let Some(v) = *value else {
+                        continue;
+                    };
+                    if !v.is_finite() {
+                        continue;
+                    }
+                    let x = map_coord(ix, width);
+                    let residual = v - (a0 + b0 * x + c0 * y);
+                    if !residual.is_finite() {
+                        continue;
+                    }
+                    residual_sum_sq += residual * residual;
+                    residual_count += 1;
+                }
+            }
+            if residual_count > 0 {
+                return Some((residual_sum_sq / residual_count as f64).sqrt());
+            }
+        }
+    }
+
+    let mean = fallback_sum / count as f64;
+    let variance = ((fallback_sum_sq / count as f64) - (mean * mean)).max(0.0);
     Some(variance.sqrt())
+}
+
+fn distance3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    let dz = a[2] - b[2];
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+fn compute_reference_sphere_geometry(
+    chief_prev_point: [f64; 3],
+    chief_image_point: [f64; 3],
+) -> Option<([f64; 3], f64)> {
+    let dir = [
+        chief_prev_point[0] - chief_image_point[0],
+        chief_prev_point[1] - chief_image_point[1],
+        chief_prev_point[2] - chief_image_point[2],
+    ];
+    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    if !len.is_finite() || len <= 0.0 {
+        return None;
+    }
+
+    let nd = [dir[0] / len, dir[1] / len, dir[2] / len];
+    let t = if nd[0].abs() > 1.0e-10 {
+        -chief_image_point[0] / nd[0]
+    } else if nd[1].abs() > 1.0e-10 {
+        -chief_image_point[1] / nd[1]
+    } else {
+        return None;
+    };
+    if !t.is_finite() {
+        return None;
+    }
+
+    let axis_intersection_z = chief_image_point[2] + t * nd[2];
+    if !axis_intersection_z.is_finite() {
+        return None;
+    }
+
+    let dz = chief_image_point[2] - axis_intersection_z;
+    let radius = (
+        chief_image_point[0] * chief_image_point[0]
+            + chief_image_point[1] * chief_image_point[1]
+            + dz * dz
+    )
+    .sqrt();
+    if !radius.is_finite() {
+        return None;
+    }
+
+    Some(([0.0, 0.0, axis_intersection_z], radius))
+}
+
+fn compute_reference_sphere_corrected_opd_waves(
+    chief_image_point: [f64; 3],
+    chief_prev_point: Option<[f64; 3]>,
+    reference_sphere_geometry: Option<([f64; 3], f64)>,
+    chief_opl_um: f64,
+    marginal_image_point: [f64; 3],
+    marginal_opl_um: f64,
+    wavelength_um: f64,
+    image_space_n: f64,
+) -> Option<f64> {
+    if !chief_opl_um.is_finite()
+        || !marginal_opl_um.is_finite()
+        || !wavelength_um.is_finite()
+        || wavelength_um <= 0.0
+    {
+        return None;
+    }
+
+    let n_img = if image_space_n.is_finite() && image_space_n > 0.0 {
+        image_space_n
+    } else {
+        1.0
+    };
+
+    const MIN_RADIUS_MM: f64 = 1.0e-6;
+    const MAX_RADIUS_MM: f64 = 1.0e6;
+
+    let geometry = reference_sphere_geometry.or_else(|| {
+        chief_prev_point.and_then(|prev_point| compute_reference_sphere_geometry(prev_point, chief_image_point))
+    });
+
+    if let Some((reference_sphere_center, reference_sphere_radius)) = geometry {
+        if reference_sphere_radius.is_finite()
+            && reference_sphere_radius >= MIN_RADIUS_MM
+            && reference_sphere_radius <= MAX_RADIUS_MM
+        {
+            let chief_dist = distance3(chief_image_point, reference_sphere_center);
+            let marginal_dist = distance3(marginal_image_point, reference_sphere_center);
+            if chief_dist.is_finite() && marginal_dist.is_finite() {
+                let chief_geometric_correction_um =
+                    (chief_dist - reference_sphere_radius) * n_img * 1000.0;
+                let marginal_geometric_correction_um =
+                    (marginal_dist - reference_sphere_radius) * n_img * 1000.0;
+                let opd_um = (marginal_opl_um - marginal_geometric_correction_um)
+                    - (chief_opl_um - chief_geometric_correction_um);
+                if opd_um.is_finite() {
+                    let opd_waves = opd_um / wavelength_um;
+                    if opd_waves.is_finite() {
+                        return Some(opd_waves);
+                    }
+                }
+            }
+        }
+    }
+
+    let image_plane_distance_mm = distance3(marginal_image_point, chief_image_point);
+    if !image_plane_distance_mm.is_finite() {
+        return None;
+    }
+    let geometric_correction_um = image_plane_distance_mm * n_img * 1000.0;
+    let opd_um = (marginal_opl_um - chief_opl_um) - geometric_correction_um;
+    if !opd_um.is_finite() {
+        return None;
+    }
+
+    let opd_waves = opd_um / wavelength_um;
+    if opd_waves.is_finite() {
+        Some(opd_waves)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -5388,6 +5634,8 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
                 if (candidate_target_hit[0] - 1.0).abs() <= f64::EPSILON
                     && (candidate_stop_hit[0] - 1.0).abs() <= f64::EPSILON
                 {
+                    chief_start_dir = candidate_chief;
+                    chief_start_dir = candidate_chief;
                     chief_target_hit = candidate_target_hit;
                     chief_stop_hit = candidate_stop_hit;
                     chief_reference_mode = "newton-stop-chief".to_string();
@@ -5401,9 +5649,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
             stop_sampling_fallback_to_entrance = true;
         }
         effective_pupil_sampling_mode = "entrance";
-        let field_mag = (used_object_x * used_object_x + used_object_y * used_object_y).sqrt();
-        let entrance_radius_scale = (0.92_f64 - 0.012_f64 * field_mag).clamp(0.76, 0.92);
-        effective_sampling_radius = (entrance_radius * entrance_radius_scale).max(0.01);
+        effective_sampling_radius = stop_radius.max(0.01);
 
         if use_infinite_mode {
             effective_emission_origin = apply_symmetry_axis_lock(
@@ -5442,21 +5688,216 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
                     packed_target.row_count,
                 );
                 if (entrance_target_hit[0] - 1.0).abs() <= f64::EPSILON {
+                    chief_start_dir = entrance_chief_ray;
                     chief_target_hit = entrance_target_hit;
                 }
             }
         }
 
         chief_reference_mode = if prefer_entrance_sampling {
-            format!("entrance-chief-requested(grid-brent,r={:.3})", entrance_radius_scale)
+            format!("entrance-chief-requested(grid-brent,r={:.3})", effective_sampling_radius)
         } else {
-            format!("entrance-chief-fallback(grid-brent,r={:.3})", entrance_radius_scale)
+            format!("entrance-chief-fallback(grid-brent,r={:.3})", effective_sampling_radius)
         };
     }
 
     let chief_opl = chief_target_hit[1];
     if !chief_opl.is_finite() {
         return Err(JsValue::from_str("run_native_opd_map_wasm_json: chief OPL is invalid"));
+    }
+
+    let chief_image_point = [chief_target_hit[2], chief_target_hit[3], chief_target_hit[4]];
+    let chief_prev_point = if target_surface_index > 0 {
+        let prev_hit = trace_single_ray_hit_point_with_meta_core(
+            &chief_start_dir,
+            target_surface_index - 1,
+            object_space_n,
+            &packed_target.row_meta,
+            &packed_target.row_params,
+            &packed_target.row_origins,
+            &packed_target.row_inv_rots,
+            &packed_target.row_rots,
+            packed_target.row_count,
+        );
+        if (prev_hit[0] - 1.0).abs() <= f64::EPSILON
+            && prev_hit[2].is_finite()
+            && prev_hit[3].is_finite()
+            && prev_hit[4].is_finite()
+        {
+            Some([prev_hit[2], prev_hit[3], prev_hit[4]])
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let image_space_n = if target_surface_index > 0 {
+        let n = get_correct_refractive_index(&rows[target_surface_index - 1], wavelength_um);
+        if n.is_finite() && n > 0.0 { n } else { 1.0 }
+    } else {
+        1.0
+    };
+
+    let mut reference_sphere_geometry = chief_prev_point
+        .and_then(|prev_point| compute_reference_sphere_geometry(prev_point, chief_image_point));
+    let reference_geometry_invalid = match reference_sphere_geometry {
+        Some((_, radius)) => !radius.is_finite() || radius < 1.0e-6 || radius > 1.0e6,
+        None => true,
+    };
+    if reference_geometry_invalid {
+        if use_infinite_mode {
+            let field_probe_pairs = [(0.0, 0.05), (0.05, 0.0), (0.0, 0.1), (0.1, 0.0)];
+            for (probe_x, probe_y) in field_probe_pairs {
+                let probe_direction = build_direction_from_field_angles_native(probe_x, probe_y);
+                let probe_origin_xy = optimize_angle_object_position_native(
+                    probe_x,
+                    probe_y,
+                    stop_center,
+                    infinite_object_z,
+                );
+                let probe_origin_sag = compute_object_surface_sag_native(&rows, probe_origin_xy[0], probe_origin_xy[1]);
+                let probe_ray = [
+                    probe_origin_xy[0],
+                    probe_origin_xy[1],
+                    infinite_object_z + probe_origin_sag,
+                    probe_direction[0],
+                    probe_direction[1],
+                    probe_direction[2],
+                ];
+                let probe_hit = trace_single_ray_hit_point_with_meta_core(
+                    &probe_ray,
+                    target_surface_index,
+                    object_space_n,
+                    &packed_target.row_meta,
+                    &packed_target.row_params,
+                    &packed_target.row_origins,
+                    &packed_target.row_inv_rots,
+                    &packed_target.row_rots,
+                    packed_target.row_count,
+                );
+                if (probe_hit[0] - 1.0).abs() > f64::EPSILON
+                    || !probe_hit[2].is_finite()
+                    || !probe_hit[3].is_finite()
+                    || !probe_hit[4].is_finite()
+                    || target_surface_index == 0
+                {
+                    continue;
+                }
+                let probe_prev_hit = trace_single_ray_hit_point_with_meta_core(
+                    &probe_ray,
+                    target_surface_index - 1,
+                    object_space_n,
+                    &packed_target.row_meta,
+                    &packed_target.row_params,
+                    &packed_target.row_origins,
+                    &packed_target.row_inv_rots,
+                    &packed_target.row_rots,
+                    packed_target.row_count,
+                );
+                if (probe_prev_hit[0] - 1.0).abs() > f64::EPSILON
+                    || !probe_prev_hit[2].is_finite()
+                    || !probe_prev_hit[3].is_finite()
+                    || !probe_prev_hit[4].is_finite()
+                {
+                    continue;
+                }
+                let last = [probe_hit[2], probe_hit[3], probe_hit[4]];
+                let prev = [probe_prev_hit[2], probe_prev_hit[3], probe_prev_hit[4]];
+                let dir = [prev[0] - last[0], prev[1] - last[1], prev[2] - last[2]];
+                let t = if dir[0].abs() > 1.0e-12 {
+                    -last[0] / dir[0]
+                } else if dir[1].abs() > 1.0e-12 {
+                    -last[1] / dir[1]
+                } else {
+                    continue;
+                };
+                if !t.is_finite() {
+                    continue;
+                }
+                let axis_intersection_z = last[2] + t * dir[2];
+                if !axis_intersection_z.is_finite() {
+                    continue;
+                }
+                let center = [0.0, 0.0, axis_intersection_z];
+                let radius = distance3(chief_image_point, center);
+                if radius.is_finite() && radius >= 1.0e-6 && radius <= 1.0e6 {
+                    reference_sphere_geometry = Some((center, radius));
+                    break;
+                }
+            }
+        }
+
+        let probe_pairs = [(1.0e-3, 0.0), (0.0, 1.0e-3), (1.0e-2, 0.0), (0.0, 1.0e-2)];
+        for (probe_u, probe_v) in probe_pairs {
+            if reference_sphere_geometry.is_some() {
+                break;
+            }
+            let Some(probe_ray) = build_marginal_ray(probe_u, probe_v, effective_sampling_radius, effective_emission_origin) else {
+                continue;
+            };
+            let probe_hit = trace_single_ray_hit_point_with_meta_core(
+                &probe_ray,
+                target_surface_index,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            if (probe_hit[0] - 1.0).abs() > f64::EPSILON
+                || !probe_hit[2].is_finite()
+                || !probe_hit[3].is_finite()
+                || !probe_hit[4].is_finite()
+            {
+                continue;
+            }
+            if target_surface_index == 0 {
+                continue;
+            }
+            let probe_prev_hit = trace_single_ray_hit_point_with_meta_core(
+                &probe_ray,
+                target_surface_index - 1,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            if (probe_prev_hit[0] - 1.0).abs() > f64::EPSILON
+                || !probe_prev_hit[2].is_finite()
+                || !probe_prev_hit[3].is_finite()
+                || !probe_prev_hit[4].is_finite()
+            {
+                continue;
+            }
+            let last = [probe_hit[2], probe_hit[3], probe_hit[4]];
+            let prev = [probe_prev_hit[2], probe_prev_hit[3], probe_prev_hit[4]];
+            let dir = [prev[0] - last[0], prev[1] - last[1], prev[2] - last[2]];
+            let t = if dir[0].abs() > 1.0e-12 {
+                -last[0] / dir[0]
+            } else if dir[1].abs() > 1.0e-12 {
+                -last[1] / dir[1]
+            } else {
+                continue;
+            };
+            if !t.is_finite() {
+                continue;
+            }
+            let axis_intersection_z = last[2] + t * dir[2];
+            if !axis_intersection_z.is_finite() {
+                continue;
+            }
+            let center = [0.0, 0.0, axis_intersection_z];
+            let radius = distance3(chief_image_point, center);
+            if radius.is_finite() {
+                reference_sphere_geometry = Some((center, radius));
+                break;
+            }
+        }
     }
 
     let mut sample_count = 0usize;
@@ -5503,7 +5944,18 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
             if !ray_opl.is_finite() {
                 continue;
             }
-            let opd_waves = (ray_opl - chief_opl) / wavelength_um;
+            let marginal_image_point = [target_hit[2], target_hit[3], target_hit[4]];
+            let opd_waves = compute_reference_sphere_corrected_opd_waves(
+                chief_image_point,
+                chief_prev_point,
+                reference_sphere_geometry,
+                chief_opl,
+                marginal_image_point,
+                ray_opl,
+                wavelength_um,
+                image_space_n,
+            )
+            .unwrap_or_else(|| (ray_opl - chief_opl) / wavelength_um);
             if !opd_waves.is_finite() {
                 continue;
             }

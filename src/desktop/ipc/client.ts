@@ -140,8 +140,7 @@ function isOpdDebugEnabled(): boolean {
 }
 
 function shouldUseLegacyWavefrontOpdRoute(): boolean {
-  // Keep OPD requirement numerics aligned with the current browser wavefront route.
-  return true;
+  return false;
 }
 
 function sanitizePupilSamplingMode(value: unknown): "stop" | "entrance" | "" {
@@ -190,6 +189,14 @@ function getPrimaryWavelengthFromSourceRows(sourceRows: any[] = []): number {
   }
 
   return fallback;
+}
+
+function isInfiniteConjugateRows(opticalSystemRows: any[] = []): boolean {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
+  const thickness = (opticalSystemRows[0] as any)?.thickness;
+  if (thickness === Infinity) return true;
+  const text = String(thickness ?? '').trim().toUpperCase();
+  return text === 'INF' || text === 'INFINITY';
 }
 
 async function normalizeTransverseObjectRowsForImageHeight(
@@ -254,7 +261,10 @@ async function normalizeTransverseObjectRowsForImageHeight(
     };
 
     try {
-      const effective = convertImageHeightToEffectiveObject(row, opticalSystemRows, wavelength, conjugateType);
+      const effective = convertImageHeightToEffectiveObject(row, opticalSystemRows, wavelength, conjugateType, {
+        skipTsValidation: true,
+        validationTraceBackend: 'rust',
+      });
       if (effective && typeof effective === "object") {
         return {
           ...row,
@@ -1572,14 +1582,7 @@ export async function runNativeOpdMap(
   } as NativeOpdMapRequest;
   payload = normalizedPayload;
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
-  // Only force the JS thin-lens fallback for pure ideal-paraxial systems.
-  // Mixed systems may contain paraxial helper rows, but they should still use
-  // the Rust/WASM OPD path for the real surfaces instead of being downgraded.
-  const requiresThinLensJsFallback = isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows);
-
-  if (!isTauriRuntime() || requiresThinLensJsFallback || shouldUseLegacyWavefrontOpdRoute()) {
-    const opdDebug = isOpdDebugEnabled();
-    const { createOPDCalculator, createWavefrontAnalyzer } = await import("../../../evaluation/wavefront/wavefront.ts");
+  if (!isTauriRuntime()) {
     if (opticalSystemRows.length === 0) throw new Error("runNativeOpdMap(web): opticalSystemRows is empty");
 
     const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
@@ -1592,12 +1595,9 @@ export async function runNativeOpdMap(
     );
     const objectIndex = Number.isInteger(payload?.objectIndex) ? Math.max(0, Number(payload.objectIndex)) : 0;
     const selectedObject = objectRows[objectIndex] || objectRows[0] || {};
-
     const wavelengthUm = (() => {
       const explicit = Number(payload?.wavelengthUm);
       if (Number.isFinite(explicit) && explicit > 0) return explicit;
-
-      // Prefer source row explicitly marked as primary.
       for (const row of sourceRows) {
         const primaryRaw = String((row as any)?.primary ?? '').trim().toLowerCase();
         const primaryBool = Boolean((row as any)?.primary === true || (row as any)?.isPrimary === true);
@@ -1606,628 +1606,75 @@ export async function runNativeOpdMap(
           return wl;
         }
       }
-
       for (const row of sourceRows) {
         const wl = Number((row as any)?.wavelength);
         if (Number.isFinite(wl) && wl > 0) return wl;
       }
       return 0.5876;
     })();
-
     const objectType = String((selectedObject as any)?.position ?? (selectedObject as any)?.object ?? '').toLowerCase();
     const isAngle = objectType.includes("angle") || objectType === "point";
     const xVal = Number((selectedObject as any)?.xHeightAngle ?? (selectedObject as any)?.xFieldAngle ?? (selectedObject as any)?.xHeight ?? (selectedObject as any)?.x ?? 0) || 0;
     const yVal = Number((selectedObject as any)?.yHeightAngle ?? (selectedObject as any)?.yFieldAngle ?? (selectedObject as any)?.fieldAngle ?? (selectedObject as any)?.yHeight ?? (selectedObject as any)?.y ?? 0) || 0;
-    const fieldSetting = isAngle
-      ? { type: "angle", fieldAngle: { x: xVal, y: yVal }, wavelength: wavelengthUm, objectIndex }
-      : {
-          type: "height",
-          xHeight: xVal,
-          yHeight: yVal,
-          objectHeight: { x: xVal, y: yVal },
-          wavelength: wavelengthUm,
-          objectIndex,
-        };
-
     const gridSize = Number.isFinite(Number(payload?.gridSize)) ? Math.max(17, Math.floor(Number(payload.gridSize))) : 129;
     const requestedPupilSamplingMode = (payload?.pupilSamplingMode === "stop" || payload?.pupilSamplingMode === "entrance")
       ? payload.pupilSamplingMode
-      : "stop";
+      : (isInfiniteConjugateRows(opticalSystemRows) ? "entrance" : "stop");
     const opdDisplayMode = String(payload?.opdDisplayMode || "pistonTiltRemoved");
+    const targetSurface = Number.isInteger(payload?.surfaceIndex) && Number(payload.surfaceIndex) >= 0
+      ? Number(payload.surfaceIndex)
+      : pickImageSurfaceIndexNativeLike(opticalSystemRows);
 
-    const idealParaxialAnalyticResponse = buildIdealParaxialAnalyticOpdResponse(
-      opticalSystemRows,
-      payload,
-      wavelengthUm,
-      gridSize,
-      opdDisplayMode,
-      objectIndex,
-      isAngle,
-      xVal,
-      yVal,
-    );
-    if (idealParaxialAnalyticResponse) {
-      return idealParaxialAnalyticResponse;
-    }
-
-    const calculator = createOPDCalculator(opticalSystemRows, wavelengthUm);
-    const analyzer = createWavefrontAnalyzer(calculator);
-
-    try {
-      const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, "circular", {
-        forceRustWasm: false,
-        skipZernikeFit: true,
-        opdDisplayMode,
-        traceOptions: {
-          useRustWasm: false,
-          requireRustWasm: false,
-          allowNonStrict: true,
-        },
-      });
-
-      const n = Math.max(1, Number(wavefrontMap?.gridSize) || gridSize);
-      const rawValues = Array.isArray(wavefrontMap?.raw?.opdsInWavelengths)
-        ? wavefrontMap.raw.opdsInWavelengths
-        : (Array.isArray(wavefrontMap?.opdsInWavelengths) ? wavefrontMap.opdsInWavelengths : []);
-      const displayValues = Array.isArray(wavefrontMap?.display?.opdsInWavelengths)
-        ? wavefrontMap.display.opdsInWavelengths
-        : rawValues;
-      const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
-
-      if (coords.length > 0 && rawValues.length > 0) {
-        const rawOpdGrid: Array<Array<number | null>> = Array.from({ length: n }, () => Array.from({ length: n }, () => null));
-        const displayOpdGrid: Array<Array<number | null>> = Array.from({ length: n }, () => Array.from({ length: n }, () => null));
-        let hitCount = 0;
-        const m = Math.min(coords.length, rawValues.length, displayValues.length);
-        for (let i = 0; i < m; i++) {
-          const p = coords[i] || {};
-          const ix = Number.isInteger((p as any).ix)
-            ? Number((p as any).ix)
-            : Math.round(((Number((p as any).x) + 1) * 0.5) * (n - 1));
-          const iy = Number.isInteger((p as any).iy)
-            ? Number((p as any).iy)
-            : Math.round(((Number((p as any).y) + 1) * 0.5) * (n - 1));
-          if (ix < 0 || iy < 0 || ix >= n || iy >= n) continue;
-          const rv = Number(rawValues[i]);
-          const dv = Number(displayValues[i]);
-          if (Number.isFinite(rv)) {
-            rawOpdGrid[iy][ix] = rv;
-            hitCount += 1;
-          }
-          if (Number.isFinite(dv)) displayOpdGrid[iy][ix] = dv;
-        }
-
-        let targetSurface = Number(payload?.surfaceIndex);
-        if (!Number.isInteger(targetSurface) || targetSurface < 0) {
-          targetSurface = Math.max(0, opticalSystemRows.findIndex((r: any) => String(r?.["object type"] ?? r?.object ?? "").toLowerCase() === "image"));
-          if (targetSurface <= 0) targetSurface = Math.max(0, opticalSystemRows.length - 1);
-        }
-
-        const effectivePupilSamplingMode = (() => {
-          const mode = String((wavefrontMap as any)?.pupilSamplingMode || "").toLowerCase();
-          if (mode === "stop" || mode === "entrance") return mode;
-          return requestedPupilSamplingMode;
-        })();
-
-        return clampIdealParaxialNativeOpdResponse(opticalSystemRows, {
-          backend: "web-js-wavefront",
-          targetSurface,
-          stopSurface: Number((calculator as any)?.stopSurfaceIndex ?? 0),
-          requestedObjectIndex: objectIndex,
-          usedObjectIndex: objectIndex,
-          usedObjectPosition: isAngle ? "angle" : "height",
-          usedObjectX: xVal,
-          usedObjectY: yVal,
-          wavelengthUm,
-          gridSize: n,
-          sampleCount: n * n,
-          hitCount,
-          pupilSamplingMode: effectivePupilSamplingMode,
-          rawOpdGrid,
-          displayOpdGrid,
-          message: "Computed via legacy Web wavefront OPD route",
-        } as NativeOpdMapResponse);
-      }
-    } catch (legacyWavefrontErr) {
-      if (opdDebug) {
-        console.warn("[runNativeOpdMap(web)] legacy wavefront OPD route failed; trying native route", legacyWavefrontErr);
-      }
-    }
-
-    // Prefer native Rust-WASM OPD API when available to reduce JS/Rust algorithm drift.
-    // Paraxial/ThinLens systems must stay on the JS wavefront path because the Rust fast path
-    // currently does not apply the ideal thin-lens bend and would incorrectly look focus-invariant.
-    let wasmOpdFailureReason = "";
-    if (!requiresThinLensJsFallback) try {
-      const targetSurfaceWasm = (() => {
-        const v = Number(payload?.surfaceIndex);
-        if (Number.isInteger(v) && v >= 0) return v;
-        const imageIdx = opticalSystemRows.findIndex((r: any) => String(r?.["object type"] ?? r?.object ?? "").toLowerCase() === "image");
-        return imageIdx > 0 ? imageIdx : Math.max(0, opticalSystemRows.length - 1);
-      })();
-      const stopSurfaceWasm = Number((calculator as any)?.stopSurfaceIndex ?? 0);
-
-      const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
-      const rust = await preloadRustRayTracingWasm();
-      const runNativeWasm = (rust as any)?.run_native_opd_map_wasm_json;
-      if (opdDebug) {
-        console.log("[runNativeOpdMap(web)] WASM function available:", typeof runNativeWasm === "function");
-      }
-      if (typeof runNativeWasm !== "function") {
-        const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
-        wasmOpdFailureReason = initError
-          ? `missing export run_native_opd_map_wasm_json (initError=${initError})`
-          : "missing export run_native_opd_map_wasm_json";
-      }
-      if (typeof runNativeWasm === "function") {
-        const reqForWasm = {
-          opticalSystemRows,
-          sourceRows,
-          objectRows,
-          objectIndex,
-          surfaceIndex: targetSurfaceWasm,
-          stopSurfaceIndex: stopSurfaceWasm,
-          gridSize,
-          wavelengthUm,
-          pupilSamplingMode: requestedPupilSamplingMode,
-          opdDisplayMode,
-        };
-        if (opdDebug) {
-          console.log("[runNativeOpdMap(web)] Calling WASM with:", {
-            gridSize, wavelengthUm, pupilSamplingMode: requestedPupilSamplingMode, opdDisplayMode,
-            targetSurface: targetSurfaceWasm, stopSurface: stopSurfaceWasm,
-            objectIndex, rowCount: opticalSystemRows.length,
-          });
-        }
-        const wasmOutRaw = runNativeWasm(JSON.stringify(reqForWasm));
-        const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
-        const rawOpdGrid = Array.isArray(wasmOut?.rawOpdGrid) ? wasmOut.rawOpdGrid : null;
-        const displayOpdGrid = Array.isArray(wasmOut?.displayOpdGrid) ? wasmOut.displayOpdGrid : rawOpdGrid;
-        const wasmMessage = String(wasmOut?.message || "");
-        const usedChiefFallback = wasmMessage.includes("fallback to nearest successful sample");
-        if (opdDebug) {
-          console.log("[runNativeOpdMap(web)] WASM returned:", {
-            hasRawGrid: !!rawOpdGrid, hasDisplayGrid: !!displayOpdGrid,
-            sampleCount: wasmOut?.sampleCount, hitCount: wasmOut?.hitCount,
-            hitRate: wasmOut?.sampleCount > 0 ? (wasmOut.hitCount / wasmOut.sampleCount * 100).toFixed(1) + '%' : 'n/a',
-            usedChiefFallback, message: wasmMessage,
-          });
-        }
-        if (usedChiefFallback) {
-          // Chief fallback means center ray failed; nearest-sample OPL used as reference.
-          // Since display mode is pistonTiltRemoved, the constant OPL offset is corrected automatically.
-          // Accept the result — do NOT fall through to the TypeScript OPD path.
-          if (opdDebug) {
-            try {
-              console.warn("[runNativeOpdMap(web)] Chief ray fallback used; accepting WASM result (piston/tilt removal compensates)", {
-                backend: wasmOut?.backend,
-                message: wasmMessage,
-                chiefHitStatus: wasmOut?.chiefHitStatus,
-                sampleCount: wasmOut?.sampleCount,
-                hitCount: wasmOut?.hitCount,
-              });
-            } catch (_) {}
-          }
-        }
-        if (rawOpdGrid && displayOpdGrid) {
-          return clampIdealParaxialNativeOpdResponse(opticalSystemRows, {
-            backend: String(wasmOut?.backend || "web-rust-wasm-native-api"),
-            chiefReferenceMode: String(wasmOut?.chiefReferenceMode || ""),
-            targetSurface: targetSurfaceWasm,
-            stopSurface: stopSurfaceWasm,
-            requestedObjectIndex: objectIndex,
-            usedObjectIndex: objectIndex,
-            usedObjectPosition: isAngle ? "angle" : "height",
-            usedObjectX: xVal,
-            usedObjectY: yVal,
-            wavelengthUm,
-            gridSize: Number.isFinite(Number(wasmOut?.gridSize)) ? Number(wasmOut.gridSize) : gridSize,
-            sampleCount: Number.isFinite(Number(wasmOut?.sampleCount)) ? Number(wasmOut.sampleCount) : 0,
-            hitCount: Number.isFinite(Number(wasmOut?.hitCount)) ? Number(wasmOut.hitCount) : 0,
-            pupilSamplingMode: String(wasmOut?.pupilSamplingMode || requestedPupilSamplingMode),
-            rawOpdGrid,
-            displayOpdGrid,
-            message: String(wasmOut?.message || "Computed via Rust-WASM native OPD API"),
-          } as NativeOpdMapResponse);
-        }
-        wasmOpdFailureReason = wasmMessage.length > 0
-          ? `WASM returned no OPD grids (message=${wasmMessage})`
-          : "WASM returned no OPD grids";
-      }
-    } catch (_wasmErr) {
-      // WASM OPD call failed — likely missing chief ray or JSON parse error.
-      // Will fall back to existing TS web path when native WASM OPD API is unavailable.
-      wasmOpdFailureReason = String((_wasmErr as any)?.message || _wasmErr || "unknown wasm exception");
-      if (opdDebug) {
-        console.error("[runNativeOpdMap(web)] ❌ WASM OPD block threw exception. Error:", _wasmErr);
-      }
-    }
-
-    const isInfiniteField = !(calculator as any)?.isFiniteForField?.(fieldSetting);
-    if (isInfiniteField && !requiresThinLensJsFallback) {
-      // For general angle/infinite fields, keep preferring the native WASM OPD API to avoid
-      // strict-mode tracing failures. ThinLens/Paraxial systems explicitly bypass this gate.
-      if (wasmOpdFailureReason.length > 0) {
-        console.error("[runNativeOpdMap(web)] native OPD WASM unavailable:", wasmOpdFailureReason);
-      }
+    const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+    const rust = await preloadRustRayTracingWasm();
+    const runNativeWasm = (rust as any)?.run_native_opd_map_wasm_json;
+    if (typeof runNativeWasm !== "function") {
+      const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
       throw new Error(
-        "runNativeOpdMap(web): native Rust-WASM OPD API is required for infinite/angle fields. "
-        + `Reason=${wasmOpdFailureReason || "unknown"}. `
-        + "Rebuild and sync wasm package (npm run wasm:rebuild), then hard-reload the web app.",
+        "runNativeOpdMap(web): Rust-WASM OPD API is unavailable. "
+        + `Reason=${initError || "missing export run_native_opd_map_wasm_json"}`,
       );
     }
 
-    if (isInfiniteField) {
-      const shouldUsePreferredWavefrontRoute = requestedPupilSamplingMode !== "stop";
-      let preferredWavefrontMap: any = null;
-      let preferredCoords: any[] = [];
-      let preferredRawValues: any[] = [];
-      let preferredDisplayValues: any[] = [];
-      if (shouldUsePreferredWavefrontRoute) {
-        const prevForcedModeForPreferred = (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE;
-        try {
-          (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = requestedPupilSamplingMode;
-          preferredWavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, "circular", {
-            forceRustWasm: !requiresThinLensJsFallback,
-            skipZernikeFit: true,
-            opdDisplayMode,
-            traceOptions: {
-              useRustWasm: !requiresThinLensJsFallback,
-              requireRustWasm: false,
-              allowNonStrict: true,
-            },
-          });
-        } catch (_) {
-          preferredWavefrontMap = null;
-        } finally {
-          try {
-            if (prevForcedModeForPreferred === undefined) {
-              delete (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE;
-            } else {
-              (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = prevForcedModeForPreferred;
-            }
-          } catch (_) {
-            // Just cleanup errors, don't interfere with parsing
-          }
-        }
-
-        preferredCoords = Array.isArray(preferredWavefrontMap?.pupilCoordinates)
-          ? preferredWavefrontMap.pupilCoordinates
-          : [];
-        preferredRawValues = Array.isArray(preferredWavefrontMap?.raw?.opdsInWavelengths)
-          ? preferredWavefrontMap.raw.opdsInWavelengths
-          : (Array.isArray(preferredWavefrontMap?.opdsInWavelengths) ? preferredWavefrontMap.opdsInWavelengths : []);
-        preferredDisplayValues = Array.isArray(preferredWavefrontMap?.display?.opdsInWavelengths)
-          ? preferredWavefrontMap.display.opdsInWavelengths
-          : preferredRawValues;
-      }
-
-      if (preferredRawValues.length > 0) {
-        try {
-          const allVals = preferredRawValues.map(Number).filter(Number.isFinite);
-          if (allVals.length > 0) {
-            const rms = Math.sqrt(allVals.reduce((s, v) => s + v * v, 0) / allVals.length);
-            const mn = Math.min(...allVals);
-            const mx = Math.max(...allVals);
-            console.log('[runNativeOpdMap] wavefront route opdsInWavelengths: count=', allVals.length, 'rms=', rms.toFixed(4), 'λ  min=', mn.toFixed(4), 'max=', mx.toFixed(4), '  (if rms>>10 λ, OPD calculation itself is the issue)');
-          }
-        } catch (_) {}
-      }
-
-      if (preferredWavefrontMap && preferredCoords.length > 0 && preferredRawValues.length > 0) {
-        const nPreferred = Math.max(1, Number(preferredWavefrontMap?.gridSize) || gridSize);
-        const rawOpdGridPreferred: Array<Array<number | null>> = Array.from({ length: nPreferred }, () => Array.from({ length: nPreferred }, () => null));
-        const displayOpdGridPreferred: Array<Array<number | null>> = Array.from({ length: nPreferred }, () => Array.from({ length: nPreferred }, () => null));
-
-        let hitCountPreferred = 0;
-        const mPreferred = Math.min(preferredCoords.length, preferredRawValues.length, preferredDisplayValues.length);
-        for (let i = 0; i < mPreferred; i++) {
-          const p = preferredCoords[i] || {};
-          const ix = Number.isInteger((p as any).ix)
-            ? Number((p as any).ix)
-            : Math.round(((Number((p as any).x) + 1) * 0.5) * (nPreferred - 1));
-          const iy = Number.isInteger((p as any).iy)
-            ? Number((p as any).iy)
-            : Math.round(((Number((p as any).y) + 1) * 0.5) * (nPreferred - 1));
-          if (ix < 0 || iy < 0 || ix >= nPreferred || iy >= nPreferred) continue;
-          const rv = Number(preferredRawValues[i]);
-          const dv = Number(preferredDisplayValues[i]);
-          if (Number.isFinite(rv)) {
-            rawOpdGridPreferred[iy][ix] = rv;
-            hitCountPreferred += 1;
-          }
-          if (Number.isFinite(dv)) displayOpdGridPreferred[iy][ix] = dv;
-        }
-
-        let targetSurfacePreferred = Number(payload?.surfaceIndex);
-        if (!Number.isInteger(targetSurfacePreferred) || targetSurfacePreferred < 0) {
-          targetSurfacePreferred = Math.max(0, opticalSystemRows.findIndex((r: any) => String(r?.["object type"] ?? r?.object ?? "").toLowerCase() === "image"));
-          if (targetSurfacePreferred <= 0) targetSurfacePreferred = Math.max(0, opticalSystemRows.length - 1);
-        }
-
-        const effectivePupilSamplingModePreferred = (() => {
-          const mode = String((preferredWavefrontMap as any)?.pupilSamplingMode || "").toLowerCase();
-          if (mode === "stop" || mode === "entrance") return mode;
-          return requestedPupilSamplingMode;
-        })();
-
-        return {
-          backend: "web-rust-wasm",
-          targetSurface: targetSurfacePreferred,
-          stopSurface: Number((calculator as any)?.stopSurfaceIndex ?? 0),
-          requestedObjectIndex: objectIndex,
-          usedObjectIndex: objectIndex,
-          usedObjectPosition: isAngle ? "angle" : "height",
-          usedObjectX: xVal,
-          usedObjectY: yVal,
-          wavelengthUm,
-          gridSize: nPreferred,
-          sampleCount: nPreferred * nPreferred,
-          hitCount: hitCountPreferred,
-          pupilSamplingMode: effectivePupilSamplingModePreferred,
-          rawOpdGrid: rawOpdGridPreferred,
-          displayOpdGrid: displayOpdGridPreferred,
-          message: "Computed via Web Rust/WASM OPD API (wavefront route)",
-        };
-      }
-
-      const prevForcedMode = (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE;
-      const wasmTraceOptions = {
-        useRustWasm: true,
-        requireRustWasm: false,
-        allowNonStrict: true,
-      };
-
-      try {
-        (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = requestedPupilSamplingMode;
-        (calculator as any).referenceOpticalPath = null;
-        (calculator as any).setReferenceRay(fieldSetting);
-      } finally {
-        try {
-          if (prevForcedMode === undefined) {
-            delete (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE;
-          } else {
-            (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = prevForcedMode;
-          }
-        } catch (_) {}
-      }
-
-      const effectivePupilSamplingMode = (() => {
-        const mode = String((calculator as any)?._getInfinitePupilMode?.(fieldSetting) || requestedPupilSamplingMode).toLowerCase();
-        return mode === "entrance" ? "entrance" : "stop";
-      })();
-      let targetSurface = Number(payload?.surfaceIndex);
-      if (!Number.isInteger(targetSurface) || targetSurface < 0) {
-        targetSurface = Math.max(0, opticalSystemRows.findIndex((r: any) => String(r?.["object type"] ?? r?.object ?? "").toLowerCase() === "image"));
-        if (targetSurface <= 0) targetSurface = Math.max(0, opticalSystemRows.length - 1);
-      }
-
-      // Infinite field direction computed from field angle — matches native Rust's infinite_direction.
-      const _angleXr = ((fieldSetting as any).fieldAngle?.x || 0) * Math.PI / 180;
-      const _angleYr = ((fieldSetting as any).fieldAngle?.y || 0) * Math.PI / 180;
-      const _dxInf = Math.sin(_angleXr) * Math.cos(_angleYr);
-      const _dyInf = Math.sin(_angleYr) * Math.cos(_angleXr);
-      const _dzInf = Math.cos(_angleXr) * Math.cos(_angleYr);
-      const _dirMag = Math.hypot(_dxInf, _dyInf, _dzInf) || 1;
-      const chiefDirection = { x: _dxInf / _dirMag, y: _dyInf / _dirMag, z: _dzInf / _dirMag };
-
-      const n0Obj = Number((calculator as any)?.getObjectSpaceRefractiveIndex?.()) || 1.0;
-      const stopSurfaceIndex = Number((calculator as any)?.stopSurfaceIndex ?? 0);
-      const stopCenterRaw = (calculator as any)?.getSurfaceOrigin?.(stopSurfaceIndex) || { x: 0, y: 0, z: 0 };
-      const stopCenter = {
-        x: Number(stopCenterRaw?.x) || 0,
-        y: Number(stopCenterRaw?.y) || 0,
-        z: Number(stopCenterRaw?.z) || 0,
-      };
-      const objectPlaneOrigin = (calculator as any)?.getSurfaceOrigin?.(0) || { x: 0, y: 0, z: 0 };
-      const objectPlaneZ = Number(objectPlaneOrigin?.z) || 0;
-      const infiniteObjectZ = resolveInfiniteObjectZNativeLike(opticalSystemRows, selectedObject, objectPlaneZ);
-      const safeK = Math.abs(chiefDirection.z) > 1e-12 ? chiefDirection.z : (chiefDirection.z >= 0 ? 1e-12 : -1e-12);
-      const dz = stopCenter.z - infiniteObjectZ;
-      const baseOriginX = stopCenter.x - (chiefDirection.x / safeK) * dz;
-      const baseOriginY = stopCenter.y - (chiefDirection.y / safeK) * dz;
-      const originSag = computeObjectSurfaceSagNativeLike(opticalSystemRows, baseOriginX, baseOriginY);
-      const emissionOrigin: { x: number; y: number; z: number } = {
-        x: baseOriginX,
-        y: baseOriginY,
-        z: infiniteObjectZ + originSag,
-      };
-
-      const chiefProbeRay = {
-        pos: { x: emissionOrigin.x, y: emissionOrigin.y, z: emissionOrigin.z },
-        dir: chiefDirection,
-        wavelength: wavelengthUm,
-      };
-      const chiefTraced = (calculator as any)?.traceRayToEval?.(chiefProbeRay, n0Obj, wasmTraceOptions)
-        || (calculator as any)?.generateInfiniteChiefRay?.(fieldSetting)
-        || (calculator as any)?.referenceChiefRay
-        || (calculator as any)?.referenceRay
-        || null;
-
-      // Perpendicular basis — same algorithm as native Rust build_perpendicular_basis_native.
-      const _parallelAxes = (calculator as any)?._buildPerpendicularAxes?.(chiefDirection)
-        || { ex: { x: 0, y: 1, z: 0 }, ey: { x: 0, y: 0, z: 1 } };
-      const _pEx = _parallelAxes.ex;
-      const _pEy = _parallelAxes.ey;
-
-      const stopRadius = Number((calculator as any)?._getCachedStopRadiusMm?.());
-      const entranceRadius = Number((calculator as any)?._getCachedEntranceRadiusMm?.());
-      const fieldMagnitude = Math.hypot(xVal, yVal);
-      const entranceRadiusScale = Math.max(0.76, Math.min(0.92, 0.92 - 0.012 * fieldMagnitude));
-      // Match native Rust: sampling_radius = stop_radius.min(entrance_radius) for stop mode.
-      const samplingRadiusMm = effectivePupilSamplingMode === "entrance"
-        ? Math.max(0.01, (Number.isFinite(entranceRadius) && entranceRadius > 0 ? entranceRadius : Number.isFinite(stopRadius) && stopRadius > 0 ? stopRadius : 1) * entranceRadiusScale)
-        : Math.max(0.01,
-            (Number.isFinite(stopRadius) && stopRadius > 0 && Number.isFinite(entranceRadius) && entranceRadius > 0)
-              ? Math.min(stopRadius, entranceRadius)
-              : (Number.isFinite(stopRadius) && stopRadius > 0 ? stopRadius : 1));
-      const chiefOpl = Number((calculator as any)?.calculateOpticalPath?.(chiefTraced));
-      if (!(Number.isFinite(chiefOpl) && chiefOpl > 0)) {
-        throw new Error("runNativeOpdMap(web): chief optical path is invalid");
-      }
-
-      let launchOrigin = emissionOrigin;
-      try {
-        const chiefPath = (calculator as any)?.extractPathData?.(chiefTraced);
-        const p0 = Array.isArray(chiefPath) ? chiefPath[0] : null;
-        const x0 = Number((p0 as any)?.x);
-        const y0 = Number((p0 as any)?.y);
-        const z0 = Number((p0 as any)?.z);
-        if (Number.isFinite(x0) && Number.isFinite(y0) && Number.isFinite(z0)) {
-          launchOrigin = { x: x0, y: y0, z: z0 };
-        }
-      } catch (_) {}
-
-      const n = gridSize;
-      const pupilCoordinates: Array<{ x: number; y: number; ix: number; iy: number; r: number }> = [];
-      const rawOpdsMicrons: number[] = [];
-      const rawOpdsWaves: number[] = [];
-      let sampleCount = 0;
-      for (let iy = 0; iy < n; iy++) {
-        const v = n > 1 ? -1 + (2 * iy) / (n - 1) : 0;
-        for (let ix = 0; ix < n; ix++) {
-          const u = n > 1 ? -1 + (2 * ix) / (n - 1) : 0;
-          const radius = Math.hypot(u, v);
-          if (!(Number.isFinite(radius) && radius <= 1.0 + 1e-9)) continue;
-          sampleCount += 1;
-
-          // Parallel-shift approach matching native Rust build_marginal_ray in infinite mode:
-          //   origin = effective_emission_origin + u_axis * u * sampling_radius
-          //                                      + v_axis * v * sampling_radius
-          // No Newton iteration for marginal rays — native does the same for infinite conjugates.
-          if (!launchOrigin) continue;
-          const ox = launchOrigin.x + _pEx.x * u * samplingRadiusMm + _pEy.x * v * samplingRadiusMm;
-          const oy = launchOrigin.y + _pEx.y * u * samplingRadiusMm + _pEy.y * v * samplingRadiusMm;
-          const oz = launchOrigin.z + _pEx.z * u * samplingRadiusMm + _pEy.z * v * samplingRadiusMm;
-          const marginalRay = { pos: { x: ox, y: oy, z: oz }, dir: chiefDirection, wavelength: wavelengthUm };
-          const traced = (calculator as any)?.traceRayToEval?.(marginalRay, n0Obj, wasmTraceOptions);
-          const opl = Number((calculator as any)?.calculateOpticalPath?.(traced));
-          if (!Number.isFinite(opl)) continue;
-
-          const opdMicrons = opl - chiefOpl;
-          const opdWaves = opdMicrons / wavelengthUm;
-          if (!(Number.isFinite(opdMicrons) && Number.isFinite(opdWaves))) continue;
-
-          pupilCoordinates.push({ x: u, y: v, ix, iy, r: radius });
-          rawOpdsMicrons.push(opdMicrons);
-          rawOpdsWaves.push(opdWaves);
-        }
-      }
-
-      const rawOpdGrid = buildOpdGridFromSamples(n, pupilCoordinates, rawOpdsWaves);
-      const displayOpdGrid = applyOpdDisplayModeGridNativeLike(rawOpdGrid, opdDisplayMode);
-
-      const chiefReferenceMode = effectivePupilSamplingMode === "entrance"
-        ? (requestedPupilSamplingMode === "entrance"
-          ? `entrance-chief-requested(web,r=${entranceRadiusScale.toFixed(3)})`
-          : `entrance-chief-fallback(web,r=${entranceRadiusScale.toFixed(3)})`)
-        : "center-chief";
-
-      return {
-        backend: "web-rust-wasm",
-        targetSurface,
-        stopSurface: Number((calculator as any)?.stopSurfaceIndex ?? 0),
-        requestedObjectIndex: objectIndex,
-        usedObjectIndex: objectIndex,
-        usedObjectPosition: isAngle ? "angle" : "height",
-        usedObjectX: xVal,
-        usedObjectY: yVal,
-        wavelengthUm,
-        gridSize: n,
-        sampleCount,
-        hitCount: pupilCoordinates.length,
-        pupilSamplingMode: effectivePupilSamplingMode,
-        rawOpdGrid,
-        displayOpdGrid,
-        message: `Computed via Web Rust/WASM OPD API (chief reference mode=${chiefReferenceMode})`,
-      };
+    const wasmOutRaw = runNativeWasm(JSON.stringify({
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+      objectIndex,
+      surfaceIndex: targetSurface,
+      gridSize,
+      wavelengthUm,
+      pupilSamplingMode: requestedPupilSamplingMode,
+      opdDisplayMode,
+    }));
+    const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
+    const rawOpdGrid = Array.isArray(wasmOut?.rawOpdGrid) ? wasmOut.rawOpdGrid : null;
+    const displayOpdGrid = Array.isArray(wasmOut?.displayOpdGrid) ? wasmOut.displayOpdGrid : rawOpdGrid;
+    if (!rawOpdGrid || !displayOpdGrid) {
+      throw new Error(
+        "runNativeOpdMap(web): Rust-WASM OPD API returned no OPD grid. "
+        + `Message=${String(wasmOut?.message || "unknown")}`,
+      );
     }
-
-    let wavefrontMap: any;
-    const prevForcedMode = (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE;
-    try {
-      // Native parity: default should stay stop-sampling unless explicitly entrance.
-      (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = requestedPupilSamplingMode;
-      wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, "circular", {
-        forceRustWasm: !requiresThinLensJsFallback,
-        skipZernikeFit: true,
-        opdDisplayMode,
-        traceOptions: {
-          useRustWasm: !requiresThinLensJsFallback,
-          requireRustWasm: false,
-          allowNonStrict: true,
-        },
-      });
-    } finally {
-      try {
-        if (prevForcedMode === undefined) {
-          delete (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE;
-        } else {
-          (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = prevForcedMode;
-        }
-      } catch (_) {}
-    }
-
-    const n = Math.max(1, Number(wavefrontMap?.gridSize) || gridSize);
-    const rawValues = Array.isArray(wavefrontMap?.raw?.opdsInWavelengths)
-      ? wavefrontMap.raw.opdsInWavelengths
-      : (Array.isArray(wavefrontMap?.opdsInWavelengths) ? wavefrontMap.opdsInWavelengths : []);
-    const displayValues = Array.isArray(wavefrontMap?.display?.opdsInWavelengths)
-      ? wavefrontMap.display.opdsInWavelengths
-      : rawValues;
-    const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
-
-    const rawOpdGrid: Array<Array<number | null>> = Array.from({ length: n }, () => Array.from({ length: n }, () => null));
-    const displayOpdGrid: Array<Array<number | null>> = Array.from({ length: n }, () => Array.from({ length: n }, () => null));
-    let hitCount = 0;
-    const m = Math.min(coords.length, rawValues.length, displayValues.length);
-    for (let i = 0; i < m; i++) {
-      const p = coords[i] || {};
-      const ix = Number.isInteger((p as any).ix)
-        ? Number((p as any).ix)
-        : Math.round(((Number((p as any).x) + 1) * 0.5) * (n - 1));
-      const iy = Number.isInteger((p as any).iy)
-        ? Number((p as any).iy)
-        : Math.round(((Number((p as any).y) + 1) * 0.5) * (n - 1));
-      if (ix < 0 || iy < 0 || ix >= n || iy >= n) continue;
-      const rv = Number(rawValues[i]);
-      const dv = Number(displayValues[i]);
-      if (Number.isFinite(rv)) {
-        rawOpdGrid[iy][ix] = rv;
-        hitCount += 1;
-      }
-      if (Number.isFinite(dv)) displayOpdGrid[iy][ix] = dv;
-    }
-
-    let targetSurface = Number(payload?.surfaceIndex);
-    if (!Number.isInteger(targetSurface) || targetSurface < 0) {
-      targetSurface = Math.max(0, opticalSystemRows.findIndex((r: any) => String(r?.["object type"] ?? r?.object ?? "").toLowerCase() === "image"));
-      if (targetSurface <= 0) targetSurface = Math.max(0, opticalSystemRows.length - 1);
-    }
-
-    const effectivePupilSamplingMode = (() => {
-      const mode = String((wavefrontMap as any)?.pupilSamplingMode || "").toLowerCase();
-      if (mode === "stop" || mode === "entrance") return mode;
-      return requestedPupilSamplingMode;
-    })();
 
     return clampIdealParaxialNativeOpdResponse(opticalSystemRows, {
-      backend: requiresThinLensJsFallback ? "web-js-thinlens-fallback" : "web-rust-wasm",
-      targetSurface,
-      stopSurface: Number((calculator as any)?.stopSurfaceIndex ?? 0),
+      backend: String(wasmOut?.backend || "web-rust-wasm-native-api"),
+      chiefReferenceMode: String(wasmOut?.chiefReferenceMode || ""),
+      targetSurface: Number.isFinite(Number(wasmOut?.targetSurface)) ? Number(wasmOut.targetSurface) : targetSurface,
+      stopSurface: Number.isFinite(Number(wasmOut?.stopSurface)) ? Number(wasmOut.stopSurface) : 0,
       requestedObjectIndex: objectIndex,
-      usedObjectIndex: objectIndex,
-      usedObjectPosition: isAngle ? "angle" : "height",
-      usedObjectX: xVal,
-      usedObjectY: yVal,
+      usedObjectIndex: Number.isFinite(Number(wasmOut?.usedObjectIndex)) ? Number(wasmOut.usedObjectIndex) : objectIndex,
+      usedObjectPosition: String(wasmOut?.usedObjectPosition || (isAngle ? "angle" : "height")),
+      usedObjectX: Number.isFinite(Number(wasmOut?.usedObjectX)) ? Number(wasmOut.usedObjectX) : xVal,
+      usedObjectY: Number.isFinite(Number(wasmOut?.usedObjectY)) ? Number(wasmOut.usedObjectY) : yVal,
       wavelengthUm,
-      gridSize: n,
-      sampleCount: n * n,
-      hitCount,
-      pupilSamplingMode: effectivePupilSamplingMode,
+      gridSize: Number.isFinite(Number(wasmOut?.gridSize)) ? Number(wasmOut.gridSize) : gridSize,
+      sampleCount: Number.isFinite(Number(wasmOut?.sampleCount)) ? Number(wasmOut.sampleCount) : 0,
+      hitCount: Number.isFinite(Number(wasmOut?.hitCount)) ? Number(wasmOut.hitCount) : 0,
+      pupilSamplingMode: String(wasmOut?.pupilSamplingMode || requestedPupilSamplingMode),
       rawOpdGrid,
       displayOpdGrid,
-      message: "Computed via Web Rust/WASM OPD API",
+      message: String(wasmOut?.message || "Computed via Rust-WASM native OPD API"),
     } as NativeOpdMapResponse);
   }
   const nativeResponse = await invokeCommand<NativeOpdMapRequest, NativeOpdMapResponse>("run_native_opd_map", normalizedPayload);
@@ -2248,80 +1695,87 @@ export async function runNativeOpdRmsWaves(
   } as NativeOpdRmsWavesRequest;
   payload = normalizedPayload;
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
-  const requiresThinLensJsFallback = isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows);
-
-  if (!isTauriRuntime() || shouldUseLegacyWavefrontOpdRoute()) {
-    const opdMap = await runNativeOpdMap(payload as NativeOpdMapRequest);
-    if (!requiresThinLensJsFallback) {
-      try {
-        const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
-        const rust = await preloadRustRayTracingWasm();
-        const runGridRmsWasm = (rust as any)?.compute_native_opd_grid_rms_waves_wasm_json;
-        if (typeof runGridRmsWasm === "function") {
-          const wasmOutRaw = runGridRmsWasm(JSON.stringify({
-            displayOpdGrid: Array.isArray(opdMap?.displayOpdGrid) ? opdMap.displayOpdGrid : [],
-          }));
-          const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
-          const rmsWaves = Number(wasmOut?.rmsWaves);
-          if (Number.isFinite(rmsWaves)) {
-            return clampIdealParaxialNativeOpdRmsResponse(opticalSystemRows, {
-              backend: `${String(opdMap?.backend || "web-opd-map")}+rust-wasm-grid-scalar-rms`,
-              chiefReferenceMode: String(opdMap?.chiefReferenceMode || ""),
-              targetSurface: Number.isFinite(Number(opdMap?.targetSurface)) ? Number(opdMap.targetSurface) : Number(normalizedPayload.surfaceIndex),
-              stopSurface: Number.isFinite(Number(opdMap?.stopSurface)) ? Number(opdMap.stopSurface) : 0,
-              requestedObjectIndex: opdMap?.requestedObjectIndex,
-              usedObjectIndex: Number.isFinite(Number(opdMap?.usedObjectIndex)) ? Number(opdMap.usedObjectIndex) : 0,
-              usedObjectPosition: String(opdMap?.usedObjectPosition || ""),
-              usedObjectX: Number(opdMap?.usedObjectX || 0),
-              usedObjectY: Number(opdMap?.usedObjectY || 0),
-              wavelengthUm: Number.isFinite(Number(opdMap?.wavelengthUm)) ? Number(opdMap.wavelengthUm) : 0,
-              gridSize: Number.isFinite(Number(opdMap?.gridSize)) ? Number(opdMap.gridSize) : 0,
-              sampleCount: Number.isFinite(Number(opdMap?.sampleCount)) ? Number(opdMap.sampleCount) : 0,
-              hitCount: Number.isFinite(Number(opdMap?.hitCount)) ? Number(opdMap.hitCount) : 0,
-              pupilSamplingMode: opdMap?.pupilSamplingMode === "entrance" ? "entrance" : "stop",
-              rmsWaves,
-              message: `${String(opdMap?.message || "Computed via OPD map")}` + " [rust-wasm-grid-scalar-rms]",
-            } as NativeOpdRmsWavesResponse);
-          }
+  if (!isTauriRuntime()) {
+    const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
+    const inputObjectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
+    const objectRows = await normalizeTransverseObjectRowsForImageHeight(
+      opticalSystemRows,
+      sourceRows,
+      inputObjectRows,
+      Number(payload?.wavelengthUm),
+    );
+    const objectIndex = Number.isInteger(payload?.objectIndex) ? Math.max(0, Number(payload.objectIndex)) : 0;
+    const requestedObject = objectRows[objectIndex] || objectRows[0] || {};
+    const wavelengthUm = (() => {
+      const explicit = Number(payload?.wavelengthUm);
+      if (Number.isFinite(explicit) && explicit > 0) return explicit;
+      for (const row of sourceRows) {
+        const primaryRaw = String((row as any)?.primary ?? '').trim().toLowerCase();
+        const primaryBool = Boolean((row as any)?.primary === true || (row as any)?.isPrimary === true);
+        const wl = Number((row as any)?.wavelength);
+        if ((primaryBool || primaryRaw.includes('primary')) && Number.isFinite(wl) && wl > 0) {
+          return wl;
         }
-      } catch (_wasmErr) {
-        console.warn("[runNativeOpdRmsWaves(web)] Rust-WASM grid RMS failed; falling back to JS reduction:", _wasmErr);
       }
+      for (const row of sourceRows) {
+        const wl = Number((row as any)?.wavelength);
+        if (Number.isFinite(wl) && wl > 0) return wl;
+      }
+      return 0.5876;
+    })();
+    const objectType = String((requestedObject as any)?.position ?? (requestedObject as any)?.object ?? '').toLowerCase();
+    const isAngle = objectType.includes("angle") || objectType === "point";
+    const xVal = Number((requestedObject as any)?.xHeightAngle ?? (requestedObject as any)?.xFieldAngle ?? (requestedObject as any)?.xHeight ?? (requestedObject as any)?.x ?? 0) || 0;
+    const yVal = Number((requestedObject as any)?.yHeightAngle ?? (requestedObject as any)?.yFieldAngle ?? (requestedObject as any)?.fieldAngle ?? (requestedObject as any)?.yHeight ?? (requestedObject as any)?.y ?? 0) || 0;
+    const gridSize = Number.isFinite(Number(payload?.gridSize)) ? Math.max(17, Math.floor(Number(payload.gridSize))) : 129;
+    const requestedPupilSamplingMode = (payload?.pupilSamplingMode === "stop" || payload?.pupilSamplingMode === "entrance")
+      ? payload.pupilSamplingMode
+      : (isInfiniteConjugateRows(opticalSystemRows) ? "entrance" : "stop");
+    const opdDisplayMode = String(payload?.opdDisplayMode || "pistonTiltRemoved");
+    const targetSurface = Number.isInteger(payload?.surfaceIndex) && Number(payload.surfaceIndex) >= 0
+      ? Number(payload.surfaceIndex)
+      : pickImageSurfaceIndexNativeLike(opticalSystemRows);
+
+    const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+    const rust = await preloadRustRayTracingWasm();
+    const runNativeWasm = (rust as any)?.run_native_opd_rms_waves_wasm_json;
+    if (typeof runNativeWasm !== "function") {
+      const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
+      throw new Error(
+        "runNativeOpdRmsWaves(web): Rust-WASM OPD RMS API is unavailable. "
+        + `Reason=${initError || "missing export run_native_opd_rms_waves_wasm_json"}`,
+      );
     }
 
-    let count = 0;
-    let sum = 0;
-    let sumSq = 0;
-    const grid = Array.isArray(opdMap?.displayOpdGrid) ? opdMap.displayOpdGrid : [];
-    for (const row of grid) {
-      if (!Array.isArray(row)) continue;
-      for (const value of row) {
-        const n = Number(value);
-        if (!Number.isFinite(n)) continue;
-        sum += n;
-        sumSq += n * n;
-        count += 1;
-      }
-    }
-    const mean = count > 0 ? (sum / count) : Number.NaN;
-    const variance = count > 0 ? Math.max(0, (sumSq / count) - (mean * mean)) : Number.NaN;
+    const wasmOutRaw = runNativeWasm(JSON.stringify({
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+      objectIndex,
+      surfaceIndex: targetSurface,
+      gridSize,
+      wavelengthUm,
+      pupilSamplingMode: requestedPupilSamplingMode,
+      opdDisplayMode,
+    }));
+    const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
     return clampIdealParaxialNativeOpdRmsResponse(opticalSystemRows, {
-      backend: String(opdMap?.backend || "web-js-opd-rms"),
-      chiefReferenceMode: String(opdMap?.chiefReferenceMode || ""),
-      targetSurface: Number(opdMap?.targetSurface || 0),
-      stopSurface: Number(opdMap?.stopSurface || 0),
-      requestedObjectIndex: opdMap?.requestedObjectIndex,
-      usedObjectIndex: Number(opdMap?.usedObjectIndex || 0),
-      usedObjectPosition: String(opdMap?.usedObjectPosition || ""),
-      usedObjectX: Number(opdMap?.usedObjectX || 0),
-      usedObjectY: Number(opdMap?.usedObjectY || 0),
-      wavelengthUm: Number(opdMap?.wavelengthUm || payload?.wavelengthUm || 0.5876),
-      gridSize: Number(opdMap?.gridSize || 0),
-      sampleCount: Number(opdMap?.sampleCount || 0),
-      hitCount: Number(opdMap?.hitCount || 0),
-      pupilSamplingMode: (opdMap?.pupilSamplingMode === "entrance") ? "entrance" : "stop",
-      rmsWaves: Number.isFinite(variance) ? Math.sqrt(variance) : Number.NaN,
-      message: String(opdMap?.message || "Computed via native OPD map + JS RMS reduction"),
+      backend: String(wasmOut?.backend || "web-rust-wasm-native-api"),
+      chiefReferenceMode: String(wasmOut?.chiefReferenceMode || ""),
+      targetSurface: Number.isFinite(Number(wasmOut?.targetSurface)) ? Number(wasmOut.targetSurface) : targetSurface,
+      stopSurface: Number.isFinite(Number(wasmOut?.stopSurface)) ? Number(wasmOut.stopSurface) : 0,
+      requestedObjectIndex: objectIndex,
+      usedObjectIndex: Number.isFinite(Number(wasmOut?.usedObjectIndex)) ? Number(wasmOut.usedObjectIndex) : objectIndex,
+      usedObjectPosition: String(wasmOut?.usedObjectPosition || (isAngle ? "angle" : "height")),
+      usedObjectX: Number.isFinite(Number(wasmOut?.usedObjectX)) ? Number(wasmOut.usedObjectX) : xVal,
+      usedObjectY: Number.isFinite(Number(wasmOut?.usedObjectY)) ? Number(wasmOut.usedObjectY) : yVal,
+      wavelengthUm,
+      gridSize: Number.isFinite(Number(wasmOut?.gridSize)) ? Number(wasmOut.gridSize) : gridSize,
+      sampleCount: Number.isFinite(Number(wasmOut?.sampleCount)) ? Number(wasmOut.sampleCount) : 0,
+      hitCount: Number.isFinite(Number(wasmOut?.hitCount)) ? Number(wasmOut.hitCount) : 0,
+      pupilSamplingMode: wasmOut?.pupilSamplingMode === "entrance" ? "entrance" : "stop",
+      rmsWaves: Number(wasmOut?.rmsWaves),
+      message: String(wasmOut?.message || "Computed via Rust-WASM native OPD RMS API"),
     } as NativeOpdRmsWavesResponse);
   }
 

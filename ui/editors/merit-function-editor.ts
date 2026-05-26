@@ -2257,7 +2257,22 @@ class MeritFunctionEditor {
         if (!operand || !operand.operand) return 0;
 
         const opticalSystemData = this.getOpticalSystemDataByConfigId(operand.configId);
+        const disableRequirementRustFirst = (() => {
+            try {
+                return typeof window !== 'undefined' && (window as any).__cooptDisableRequirementRustFirst === true;
+            } catch {
+                return false;
+            }
+        })();
         const runSpotWithFallback = async (pattern: 'annular' | 'grid'): Promise<number> => {
+            if (disableRequirementRustFirst) {
+                const syncVal = withRequirementRustRayTracing(
+                    () => this.calculateSpotSizeUm(operand, opticalSystemData, { pattern, useUiDefaults: false }),
+                    REQUIREMENT_SPOT_TRACE_OVERRIDE
+                );
+                const syncNum = Number(syncVal);
+                return Number.isFinite(syncNum) ? syncNum : 1e9;
+            }
             const asyncVal = await withRequirementRustRayTracing(
                 () => this.calculateSpotSizeUmAsync(operand, opticalSystemData, { pattern, useUiDefaults: false }),
                 REQUIREMENT_SPOT_TRACE_OVERRIDE
@@ -2281,6 +2296,7 @@ class MeritFunctionEditor {
             case 'SPOT_SIZE_CURRENT':
                 return runSpotWithFallback('annular');
             case 'ZERN_COEFF': {
+                if (disableRequirementRustFirst) return this.calculateOperandValue(operand);
                 const nativeVal = await this.calculateZernikeCoeffViaNativeAsync(operand, opticalSystemData);
                 if (Number.isFinite(nativeVal as any)) {
                     return Number(nativeVal);
@@ -2292,6 +2308,7 @@ class MeritFunctionEditor {
             }
             case 'OPD_RMS_WAVES':
             case 'OPD_RMS_UM': {
+                if (disableRequirementRustFirst) return this.calculateOperandValue(operand);
                 const nativeVal = await this.calculateOpdRmsWavesViaNativeAsync(operand, opticalSystemData);
                 if (Number.isFinite(nativeVal as any)) {
                     return Number(nativeVal);
@@ -2299,6 +2316,7 @@ class MeritFunctionEditor {
                 return this.calculateOperandValue(operand);
             }
             case 'SA': {
+                if (disableRequirementRustFirst) return this.calculateOperandValue(operand);
                 const nativeVal = await this.calculateSphericalAberrationUmViaNativeAsync(operand, opticalSystemData);
                 if (Number.isFinite(nativeVal as any)) {
                     return Number(nativeVal);
@@ -2524,26 +2542,55 @@ class MeritFunctionEditor {
 
             (calc as any).setReferenceRay(fieldSetting);
 
-            let count = 0;
-            let sum = 0;
-            let sumSq = 0;
+            const pupilCoordinates: Array<{ x: number; y: number }> = [];
+            const opdsMicrons: number[] = [];
             for (let iy = 0; iy < sampling; iy++) {
                 const py = -1 + (2 * iy) / (sampling - 1);
                 for (let ix = 0; ix < sampling; ix++) {
                     const px = -1 + (2 * ix) / (sampling - 1);
                     if ((px * px + py * py) > 1.000001) continue;
 
-                    const opdUm = Number((calc as any).calculateOPD(px, py, fieldSetting));
+                    const opdUm = Number(
+                        typeof (calc as any).calculateOPDReferenceSphere === 'function'
+                            ? (calc as any).calculateOPDReferenceSphere(px, py, fieldSetting, false)
+                            : (calc as any).calculateOPD(px, py, fieldSetting)
+                    );
                     if (!Number.isFinite(opdUm)) continue;
-                    const opdWaves = opdUm / wavelengthUm;
-                    if (!Number.isFinite(opdWaves)) continue;
 
-                    sum += opdWaves;
-                    sumSq += opdWaves * opdWaves;
-                    count += 1;
+                    pupilCoordinates.push({ x: px, y: py });
+                    opdsMicrons.push(opdUm);
                 }
             }
 
+            if (opdsMicrons.length <= 0) return Number.NaN;
+
+            const fit = (typeof (calc as any)._removeBestFitPlane === 'function')
+                ? (calc as any)._removeBestFitPlane(pupilCoordinates, opdsMicrons)
+                : null;
+            if (fit && Array.isArray(fit.residualWaves) && fit.residualWaves.length > 0) {
+                let count = 0;
+                let sumSq = 0;
+                for (const value of fit.residualWaves) {
+                    const opdWaves = Number(value);
+                    if (!Number.isFinite(opdWaves)) continue;
+                    sumSq += opdWaves * opdWaves;
+                    count += 1;
+                }
+                if (count > 0) {
+                    return Math.sqrt(sumSq / count);
+                }
+            }
+
+            let count = 0;
+            let sum = 0;
+            let sumSq = 0;
+            for (const opdUm of opdsMicrons) {
+                const opdWaves = opdUm / wavelengthUm;
+                if (!Number.isFinite(opdWaves)) continue;
+                sum += opdWaves;
+                sumSq += opdWaves * opdWaves;
+                count += 1;
+            }
             if (count <= 0) return Number.NaN;
             const mean = sum / count;
             const variance = Math.max(0, (sumSq / count) - (mean * mean));
@@ -2577,6 +2624,11 @@ class MeritFunctionEditor {
             const objRow = objectRows[objectIndex0];
             if (!objRow || typeof objRow !== 'object') return null;
 
+            const positionType = String(objRow?.__cooptOriginalPosition ?? objRow?.position ?? '').trim().toLowerCase();
+            if (positionType === 'imageheight') {
+                return this.calculateOpdRmsWaves(operand, opticalSystemData);
+            }
+
             const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim() : '';
             const gridSize = (param3Raw === '') ? 32 : Math.max(8, Math.floor(Number(param3Raw)));
 
@@ -2591,7 +2643,7 @@ class MeritFunctionEditor {
 
             const opdResp = await ipcMod.runNativeOpdRmsWaves({
                 opticalSystemRows: opticalSystemData,
-                sourceRows,
+                sourceRows: __cooptBuildPrimaryOnlySourceRows(sourceRows, wavelengthUm),
                 objectRows,
                 objectIndex: objectIndex0,
                 surfaceIndex: imageSurfaceIndex,
