@@ -2845,14 +2845,15 @@ function restoreBestSnapshotAndPersist({
 }) {
   try {
     if (!finalEval || !finalEval.blocksSnapshot) return false;
-    const okRestore = restoreBlocksByConfigId(jointState?.blocksByConfigId, finalEval.blocksSnapshot);
+    const restoredBlocksByConfigId = snapshotBlocksByConfigId(finalEval.blocksSnapshot);
+    const okRestore = restoreBlocksByConfigId(jointState?.blocksByConfigId, restoredBlocksByConfigId);
     if (!okRestore) return false;
 
     // Keep the active-config evaluator consistent with the restored blocks.
     try {
       const activeId = String(jointState?.activeConfigId ?? '').trim();
       if (activeId) {
-        const ab = jointState?.blocksByConfigId ? jointState.blocksByConfigId[activeId] : null;
+        const ab = restoredBlocksByConfigId ? restoredBlocksByConfigId[activeId] : null;
         if (Array.isArray(ab)) updateActiveOpticalSystemOverrideFromBlocks(ab);
       }
     } catch (_) {}
