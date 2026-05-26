@@ -5486,6 +5486,67 @@ const collectLegacyCrossRays = async (
     ].join('#');
   };
 
+  const hydrateRenderRowsFromLatestSyncPayload = (): boolean => {
+    const w = window as any;
+    const hasActiveRows = Array.isArray(renderActiveRowsRef.current) && renderActiveRowsRef.current.length > 0;
+    let rows: any[] = [];
+    let objectRows: any[] = [];
+    let systemConfig: any = null;
+    let syncStamp = '';
+
+    try {
+      if (Array.isArray(w.__cooptPendingRenderRows) && w.__cooptPendingRenderRows.length > 0) {
+        rows = w.__cooptPendingRenderRows;
+      }
+      if (Array.isArray(w.__cooptPendingRenderObjectRows) && w.__cooptPendingRenderObjectRows.length > 0) {
+        objectRows = w.__cooptPendingRenderObjectRows;
+      }
+      if (w.__cooptPendingRenderSystemConfig && typeof w.__cooptPendingRenderSystemConfig === 'object') {
+        systemConfig = w.__cooptPendingRenderSystemConfig;
+      }
+      syncStamp = String(w.__cooptPendingRenderSyncStamp ?? '').trim();
+    } catch (_) {}
+
+    if (rows.length === 0 && !hasActiveRows) {
+      try {
+        const raw = localStorage.getItem('coopt.renderSyncRequest');
+        if (raw) {
+          const payload = JSON.parse(raw);
+          syncStamp = String(payload?.ts ?? payload?.token ?? '').trim();
+          rows = Array.isArray(payload?.rows) ? payload.rows : [];
+          objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : objectRows;
+          systemConfig = payload?.systemConfig && typeof payload.systemConfig === 'object' ? payload.systemConfig : systemConfig;
+        }
+      } catch (_) {}
+    }
+
+    if (hasActiveRows && rows.length > 0) {
+      const handledStamp = String(w.__cooptLastRenderSyncStamp ?? '').trim();
+      if (!syncStamp || syncStamp === handledStamp) {
+        return false;
+      }
+    }
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return false;
+    }
+
+    renderActiveRowsRef.current = rows;
+    renderPendingRowsRef.current = rows;
+    renderNeedsVisibilityReplayRef.current = false;
+    if (Array.isArray(objectRows)) {
+      renderActiveObjectRowsRef.current = objectRows;
+      renderPendingObjectRowsRef.current = objectRows;
+    }
+    if (systemConfig && typeof systemConfig === 'object') {
+      try { w.__cooptPendingRenderSystemConfig = systemConfig; } catch (_) {}
+    }
+    try {
+      w.__cooptPendingRenderSyncStamp = syncStamp || '';
+    } catch (_) {}
+    return true;
+  };
+
   const drawCrossSectionView = async (axis: 'YZ' | 'XZ', requestId?: number, redrawOptions?: RenderRedrawOptions): Promise<boolean> => {
     const w = window as any;
     const timingStages: RenderTimingStage[] = [];
@@ -6387,9 +6448,6 @@ const collectLegacyCrossRays = async (
       try {
         if (document.visibilityState === 'hidden') return true;
       } catch (_) {}
-      try {
-        if (typeof document.hasFocus === 'function' && !document.hasFocus()) return true;
-      } catch (_) {}
       return false;
     };
     w.__cooptRenderWindowRedraw = async (rows?: any[], syncStamp?: string, objectRows?: any[]) => {
@@ -6433,6 +6491,11 @@ const collectLegacyCrossRays = async (
           return;
         }
         renderPendingRowsRef.current = rows;
+        try {
+          w.__cooptPendingRenderRows = [];
+          w.__cooptPendingRenderObjectRows = [];
+          w.__cooptPendingRenderSyncStamp = normalizedSyncStamp;
+        } catch (_) {}
       } else if (normalizedSyncStamp) {
         try { w.__cooptLastRenderSyncStamp = normalizedSyncStamp; } catch (_) {}
       }
@@ -6504,9 +6567,6 @@ const collectLegacyCrossRays = async (
     const canReplayPendingRenderSync = () => {
       try {
         if (document.visibilityState === 'visible') return true;
-      } catch (_) {}
-      try {
-        if (typeof document.hasFocus === 'function' && document.hasFocus()) return true;
       } catch (_) {}
       return false;
     };
@@ -6673,6 +6733,38 @@ const collectLegacyCrossRays = async (
         return false;
       }
     };
+    const replayPendingRenderStartupSync = (): boolean => {
+      try {
+        const pendingRows = Array.isArray(w.__cooptPendingRenderRows) ? w.__cooptPendingRenderRows : [];
+        const pendingObjectRows = Array.isArray(w.__cooptPendingRenderObjectRows) ? w.__cooptPendingRenderObjectRows : [];
+        if (pendingRows.length > 0 && typeof w.__cooptRenderWindowRedraw === 'function') {
+          void Promise.resolve(w.__cooptRenderWindowRedraw(pendingRows, undefined, pendingObjectRows));
+          return true;
+        }
+      } catch (_) {}
+      try {
+        const raw = localStorage.getItem('coopt.renderSyncRequest');
+        if (!raw) return false;
+        const payload = JSON.parse(raw);
+        const stamp = String(payload?.ts ?? payload?.token ?? '').trim();
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
+        const systemConfig = payload?.systemConfig && typeof payload.systemConfig === 'object' ? payload.systemConfig : null;
+        const handledStamp = String(w.__cooptLastRenderSyncStamp ?? '').trim();
+        if (rows.length === 0 || (stamp && stamp === handledStamp) || typeof w.__cooptRenderWindowRedraw !== 'function') {
+          return false;
+        }
+        if (systemConfig) {
+          try { w.__cooptPendingRenderSystemConfig = systemConfig; } catch (_) {}
+        }
+        try { w.__cooptPendingRenderRows = rows; } catch (_) {}
+        try { w.__cooptPendingRenderObjectRows = objectRows; } catch (_) {}
+        void Promise.resolve(w.__cooptRenderWindowRedraw(rows, stamp || undefined, objectRows));
+        return true;
+      } catch (_) {
+        return false;
+      }
+    };
     
     const initializeAfterMainTS = (_mode: "main-ready" | "module-loaded" | "fallback") => {
       if (isRenderWindowMode) {
@@ -6782,6 +6874,13 @@ const collectLegacyCrossRays = async (
         setRenderViewportVisible(false);
         if (hasPendingRenderStartupSync()) {
           setRenderWindowStatus('Waiting for render data...');
+          window.setTimeout(() => {
+            if (!replayPendingRenderStartupSync()) {
+              drawWithPreparedData().catch(() => {
+                setRenderWindowStatus('Draw unavailable');
+              });
+            }
+          }, 0);
         } else {
           setRenderWindowStatus('Initializing...');
           drawWithPreparedData().catch(() => {

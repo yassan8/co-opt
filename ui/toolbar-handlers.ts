@@ -4,7 +4,7 @@
  */
 
 import { BLOCK_SCHEMA_VERSION, deriveBlocksFromLegacyOpticalSystemRows } from '../data/block-schema.ts';
-import { loadSystemConfigurations, saveSystemConfigurations, clearAllPersistedState } from '../data/table-configuration.ts';
+import { loadSystemConfigurations, loadPersistedSystemConfigurations, saveSystemConfigurations, clearAllPersistedState } from '../data/table-configuration.ts';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
@@ -14,6 +14,7 @@ import { getOrCreateCooptWindowSyncSenderId } from '../core/window-facade.ts';
 import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.ts';
 import { buildShareUrlFromCompressedString, encodeAllDataToCompressedString } from '../utils/url-share.ts';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
+import { createOptimizationActivityGuard } from '../utils/optimization-activity-guard.ts';
 
 declare global {
   interface Window {
@@ -25,6 +26,43 @@ const w: Record<string, any> = window;
 const FORCE_INFINITE_PUPIL_MODE_KEY = 'coopt.forceInfinitePupilMode';
 const FORCE_INFINITE_PUPIL_MODE_EVENT = 'coopt-force-infinite-pupil-mode-changed';
 const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
+
+function cloneRuntimeSystemConfig(): any {
+  try {
+    const runtimeSystemConfig = typeof w.loadSystemConfigurations === 'function'
+      ? w.loadSystemConfigurations()
+      : loadSystemConfigurations();
+    return runtimeSystemConfig && typeof runtimeSystemConfig === 'object'
+      ? JSON.parse(JSON.stringify(runtimeSystemConfig))
+      : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function cloneCanonicalSystemConfig(): any {
+  try {
+    const persistedSystemConfig = typeof loadPersistedSystemConfigurations === 'function'
+      ? loadPersistedSystemConfigurations()
+      : null;
+    if (persistedSystemConfig && typeof persistedSystemConfig === 'object' && Array.isArray(persistedSystemConfig.configurations) && persistedSystemConfig.configurations.length > 0) {
+      return JSON.parse(JSON.stringify(persistedSystemConfig));
+    }
+  } catch (_) {}
+  return cloneRuntimeSystemConfig();
+}
+
+function publishRuntimeSystemConfigSnapshot(systemConfig: any, deferMs = 1500): void {
+  try {
+    const cloned = systemConfig && typeof systemConfig === 'object'
+      ? JSON.parse(JSON.stringify(systemConfig))
+      : null;
+    if (!cloned) return;
+    (window as any).__cooptSystemConfig = cloned;
+    (window as any).__cooptPreferRuntimeSystemConfig = true;
+    (window as any).__cooptDeferDerivedUiUntil = Date.now() + Math.max(0, Number(deferMs) || 0);
+  } catch (_) {}
+}
 
 function shouldIncludeSystemConfigInRenderPayload(reason: string): boolean {
   const normalizedReason = String(reason || '').trim().toLowerCase();
@@ -107,13 +145,23 @@ async function requestRenderWindowRefresh(targetWindow?: any, reason = 'render-o
   const payload = buildLiveRenderSyncPayload(reason);
 
   try { localStorage.setItem(RENDER_DESIGN_INTENT_SYNC_KEY, 'true'); } catch (_) {}
+  try {
+    (window as any).__cooptRenderSnapshotRows = payload.rows;
+    (window as any).__cooptRenderSnapshotObjectRows = payload.objectRows;
+    if (payload.systemConfig && typeof payload.systemConfig === 'object') {
+      (window as any).__cooptRenderSnapshotSystemConfig = payload.systemConfig;
+    }
+  } catch (_) {}
 
   try {
     if (targetWindow && !targetWindow.closed) {
+      try { targetWindow.__cooptRenderSnapshotRows = payload.rows; } catch (_) {}
+      try { targetWindow.__cooptRenderSnapshotObjectRows = payload.objectRows; } catch (_) {}
       try { targetWindow.__cooptPendingRenderRows = payload.rows; } catch (_) {}
       try { targetWindow.__cooptPendingRenderObjectRows = payload.objectRows; } catch (_) {}
       try {
         if (payload.systemConfig && typeof payload.systemConfig === 'object') {
+          targetWindow.__cooptRenderSnapshotSystemConfig = payload.systemConfig;
           targetWindow.__cooptPendingRenderSystemConfig = payload.systemConfig;
           targetWindow.__cooptSystemConfig = payload.systemConfig;
           targetWindow.__cooptPreferRuntimeSystemConfig = true;
@@ -268,6 +316,7 @@ function installDesktopForceInfinitePupilModeBridge(): void {
   };
 
   (async () => {
+    let shouldKeepRuntimeSnapshot = false;
     try {
       const mod = await import('@tauri-apps/api/event');
       if (!mod || typeof (mod as any).listen !== 'function') return;
@@ -1655,16 +1704,9 @@ export function handleOptimize(): void {
   };
 
   (async () => {
+    let shouldKeepRuntimeSnapshot = false;
     try {
-      const systemConfig = (() => {
-        try {
-          return (typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function')
-            ? (window as any).loadSystemConfigurationsFromTableConfig()
-            : (typeof (window as any).loadSystemConfigurations === 'function' ? (window as any).loadSystemConfigurations() : loadSystemConfigurations());
-        } catch (_) {
-          return loadSystemConfigurations();
-        }
-      })();
+      const systemConfig = cloneCanonicalSystemConfig();
       const activeConfig = Array.isArray(systemConfig?.configurations)
         ? (systemConfig.configurations.find((cfg: any) => String(cfg?.id ?? '') === String(systemConfig?.activeConfigId ?? ''))
           || systemConfig.configurations[0]
@@ -1771,26 +1813,34 @@ export function handleOptimize(): void {
       // Capture state before optimization for undo recording
       let beforeOptimizationState: any = null;
       try {
-        beforeOptimizationState = cloneJsonLocal(frozenRunSystemConfig);
+        beforeOptimizationState = cloneCanonicalSystemConfig() || cloneJsonLocal(frozenRunSystemConfig);
       } catch (_) {}
 
       const progressEvents: any[] = [];
-      const result = await opt.run({
-        opticalSystemRows,
-        sourceRows,
-        objectRows,
-        activeConfigId,
-        systemRequirementsRows,
-        method: 'kkt',
-        maxIterations: 24,
-        preferNative: isTauriRuntime(),
-        onProgress: (ev: any) => {
-          if (!ev || typeof ev !== 'object') return;
-          progressEvents.push(ev);
-        },
-      });
+      const optimizationActivityGuard = createOptimizationActivityGuard('toolbar-optimize');
+      let result: any = null;
+      try {
+        await optimizationActivityGuard.acquire();
+        result = await opt.run({
+          opticalSystemRows,
+          sourceRows,
+          objectRows,
+          activeConfigId,
+          systemRequirementsRows,
+          method: 'kkt',
+          maxIterations: 24,
+          preferNative: isTauriRuntime(),
+          onProgress: (ev: any) => {
+            if (!ev || typeof ev !== 'object') return;
+            progressEvents.push(ev);
+          },
+        });
+      } finally {
+        await optimizationActivityGuard.release();
+      }
 
       const modeUsed = String(result?.method || 'kkt');
+      shouldKeepRuntimeSnapshot = !!result?.ok;
       const meritBefore = Number(result?.before ?? Number.NaN);
       const requirementScoreBefore = Number(
         result?.requirementScoreBefore ?? result?.violationScoreBefore ?? Number.NaN
@@ -1834,8 +1884,8 @@ export function handleOptimize(): void {
       // Record undo command for optimization
       try {
         if (beforeOptimizationState && w.undoHistory && result?.ok) {
-          const sys = loadSystemConfigurations();
-          const afterOptimizationState = sys ? JSON.parse(JSON.stringify(sys)) : null;
+          const afterOptimizationState = cloneCanonicalSystemConfig();
+          publishRuntimeSystemConfigSnapshot(afterOptimizationState, 60000);
           if (afterOptimizationState && JSON.stringify(beforeOptimizationState) !== JSON.stringify(afterOptimizationState)) {
             const before = beforeOptimizationState;
             const after = afterOptimizationState;
@@ -1873,12 +1923,7 @@ export function handleOptimize(): void {
         }
       } catch (_) {}
 
-      try {
-        delete (window as any).__cooptPreferRuntimeSystemConfig;
-      } catch (_) {}
-      try {
-        delete (window as any).__cooptSystemConfig;
-      } catch (_) {}
+      publishRuntimeSystemConfigSnapshot(cloneCanonicalSystemConfig(), 60000);
 
       console.log('✅ [Optimize][TS]', result);
       if (Array.isArray(progressEvents) && progressEvents.length > 0) {
@@ -1944,12 +1989,14 @@ export function handleOptimize(): void {
         );
       }
     } finally {
-      try {
-        delete (window as any).__cooptPreferRuntimeSystemConfig;
-      } catch (_) {}
-      try {
-        delete (window as any).__cooptSystemConfig;
-      } catch (_) {}
+      if (!shouldKeepRuntimeSnapshot) {
+        try {
+          delete (window as any).__cooptPreferRuntimeSystemConfig;
+        } catch (_) {}
+        try {
+          delete (window as any).__cooptSystemConfig;
+        } catch (_) {}
+      }
     }
   })();
 }

@@ -3940,6 +3940,36 @@ function ensurePopupMessageHandler(): void {
             return;
         }
         
+        const resolveRenderSnapshotRows = (messageData: any, popupWindow?: any): any[] | null => {
+            const messageRows = Array.isArray(messageData?.rows) && messageData.rows.length > 0 ? messageData.rows : null;
+            if (messageRows) return messageRows;
+
+            const popupRows = Array.isArray(popupWindow?.__cooptRenderSnapshotRows) && popupWindow.__cooptRenderSnapshotRows.length > 0
+                ? popupWindow.__cooptRenderSnapshotRows
+                : null;
+            if (popupRows) return popupRows;
+
+            const localRows = Array.isArray((w as any).__cooptRenderSnapshotRows) && (w as any).__cooptRenderSnapshotRows.length > 0
+                ? (w as any).__cooptRenderSnapshotRows
+                : null;
+            return localRows;
+        };
+
+        const resolveRenderSnapshotObjectRows = (messageData: any, popupWindow?: any): any[] | null => {
+            const messageRows = Array.isArray(messageData?.objectRows) ? messageData.objectRows : null;
+            if (messageRows && messageRows.length > 0) return messageRows;
+
+            const popupRows = Array.isArray(popupWindow?.__cooptRenderSnapshotObjectRows)
+                ? popupWindow.__cooptRenderSnapshotObjectRows
+                : null;
+            if (popupRows && popupRows.length > 0) return popupRows;
+
+            const localRows = Array.isArray((w as any).__cooptRenderSnapshotObjectRows)
+                ? (w as any).__cooptRenderSnapshotObjectRows
+                : null;
+            return localRows && localRows.length > 0 ? localRows : null;
+        };
+
         // Handle draw-cross message
         if (data.action === 'draw-cross') {
             // Guard against concurrent renders: if one is already in flight, save the latest
@@ -3976,11 +4006,12 @@ function ensurePopupMessageHandler(): void {
                 } catch (e) {}
 
                 const isOptimizing = (typeof globalThis !== 'undefined') ? !!w.__cooptOptimizerIsRunning : false;
-                const redrawRows = Array.isArray(data?.rows) && data.rows.length > 0
-                    ? data.rows
-                    : null;
+                const redrawRows = resolveRenderSnapshotRows(data, popupWindow);
+                const redrawObjectRows = resolveRenderSnapshotObjectRows(data, popupWindow);
                 let restoreRowsOverride = false;
                 let prevRowsOverride: any = null;
+                let restoreObjectRowsOverride = false;
+                let prevObjectRowsOverride: any = null;
                 
                 if (!isOptimizing && !redrawRows) {
                     if (typeof w.loadActiveConfigurationToTables === 'function') {
@@ -3999,6 +4030,14 @@ function ensurePopupMessageHandler(): void {
                         if (typeof globalThis !== 'undefined') {
                             w.__cooptOpticalSystemRowsOverride = null;
                         }
+                    } catch (_) {}
+                }
+
+                if (redrawObjectRows) {
+                    try {
+                        prevObjectRowsOverride = w.__cooptRenderObjectRowsOverride;
+                        w.__cooptRenderObjectRowsOverride = redrawObjectRows;
+                        restoreObjectRowsOverride = true;
                     } catch (_) {}
                 }
                 
@@ -4072,9 +4111,9 @@ function ensurePopupMessageHandler(): void {
                     harmonizeSceneGeometry(popupScene);
                 }
 
-                let objectRows: any[] = [];
+                let objectRows: any[] = Array.isArray(redrawObjectRows) ? redrawObjectRows : [];
                 try {
-                    if (typeof getObjectRows === 'function') {
+                    if ((!Array.isArray(objectRows) || objectRows.length === 0) && typeof getObjectRows === 'function') {
                         objectRows = getObjectRows() || [];
                     }
                 } catch (error) {}
@@ -4305,6 +4344,11 @@ function ensurePopupMessageHandler(): void {
                         w.__cooptOpticalSystemRowsOverride = prevRowsOverride;
                     } catch (_) {}
                 }
+                if (restoreObjectRowsOverride) {
+                    try {
+                        w.__cooptRenderObjectRowsOverride = prevObjectRowsOverride;
+                    } catch (_) {}
+                }
                 w.__cooptDrawCrossInFlight = false;
                 // If a newer request arrived while rendering, dispatch it now
                 const pendingData = w.__cooptDrawCrossLastData;
@@ -4492,7 +4536,7 @@ function ensurePopupMessageHandler(): void {
                                 }
                             });
                         };
-                        const opticalSystemRows = getOpticalSystemRows();
+                        const opticalSystemRows = resolveRenderSnapshotRows(data, popupWindow) || getOpticalSystemRows();
                         if (Array.isArray(opticalSystemRows) && opticalSystemRows.length > 0) {
                             drawOpticalSystemSurfaces({
                                 opticalSystemData: opticalSystemRows,
@@ -4620,6 +4664,7 @@ function executeCrossSectionView(options: {
     
     try {
         const isOptimizing = !!w.__cooptOptimizerIsRunning;
+        const hasRowsOverride = Array.isArray(w.__cooptOpticalSystemRowsOverride) && w.__cooptOpticalSystemRowsOverride.length > 0;
         
         if (!isOptimizing) {
             try {
@@ -4630,16 +4675,9 @@ function executeCrossSectionView(options: {
             } catch (_) {}
 
             const loadActiveConfigurationToTables = w.loadActiveConfigurationToTables;
-            if (typeof loadActiveConfigurationToTables === 'function') {
+            if (!hasRowsOverride && typeof loadActiveConfigurationToTables === 'function') {
                 loadActiveConfigurationToTables();
             }
-        }
-        
-        // Keep override rows during optimization so Render reflects accept updates.
-        if (!isOptimizing) {
-            try {
-                w.__cooptOpticalSystemRowsOverride = null;
-            } catch (_) {}
         }
         
         const {
@@ -5957,12 +5995,27 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                         const redrawRows = Array.isArray(data?.rows) && data.rows.length > 0
                             ? data.rows
                             : undefined;
+                        const redrawObjectRows = Array.isArray(data?.objectRows)
+                            ? data.objectRows
+                            : undefined;
+                        try {
+                            if (redrawRows) {
+                                (window as any).__cooptRenderSnapshotRows = redrawRows;
+                            }
+                            if (redrawObjectRows) {
+                                (window as any).__cooptRenderSnapshotObjectRows = redrawObjectRows;
+                            }
+                            if (data?.systemConfig && typeof data.systemConfig === 'object') {
+                                (window as any).__cooptRenderSnapshotSystemConfig = data.systemConfig;
+                            }
+                        } catch (_) {}
                         if (status) {
                             status.textContent = 'Redrawing...';
                         }
                         window.opener.postMessage({
                             action: 'draw-cross',
                             ...(redrawRows ? { rows: redrawRows } : {}),
+                            ...(redrawObjectRows ? { objectRows: redrawObjectRows } : {}),
                             ...viewState
                         }, '*');
                     } catch (e) {}
@@ -6002,9 +6055,11 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             if (drawBtn) {
                 drawBtn.addEventListener('click', () => {
                     const viewState = getPopupViewState();
-                    console.log('📤 Sending message to parent:', { action: 'draw-cross', ...viewState });
+                    const rows = Array.isArray((window as any).__cooptRenderSnapshotRows) ? (window as any).__cooptRenderSnapshotRows : [];
+                    const objectRows = Array.isArray((window as any).__cooptRenderSnapshotObjectRows) ? (window as any).__cooptRenderSnapshotObjectRows : [];
+                    console.log('📤 Sending message to parent:', { action: 'draw-cross', rowsCount: rows.length, objectRowsCount: objectRows.length, ...viewState });
                     if (window.opener) {
-                        window.opener.postMessage({ action: 'draw-cross', ...viewState }, '*');
+                        window.opener.postMessage({ action: 'draw-cross', rows, objectRows, ...viewState }, '*');
                         status.textContent = 'Drawing...';
                     }
                 });
@@ -6016,7 +6071,9 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                     setCurrentViewAxis('XZ');
                     if (window.opener) {
                         const viewState = getPopupViewState();
-                        window.opener.postMessage({ action: 'view-xz', ...viewState }, '*');
+                        const rows = Array.isArray((window as any).__cooptRenderSnapshotRows) ? (window as any).__cooptRenderSnapshotRows : [];
+                        const objectRows = Array.isArray((window as any).__cooptRenderSnapshotObjectRows) ? (window as any).__cooptRenderSnapshotObjectRows : [];
+                        window.opener.postMessage({ action: 'view-xz', rows, objectRows, ...viewState }, '*');
                         status.textContent = 'Switching to X-Z view...';
                     }
                 });
@@ -6028,7 +6085,9 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                     setCurrentViewAxis('YZ');
                     if (window.opener) {
                         const viewState = getPopupViewState();
-                        window.opener.postMessage({ action: 'view-yz', ...viewState }, '*');
+                        const rows = Array.isArray((window as any).__cooptRenderSnapshotRows) ? (window as any).__cooptRenderSnapshotRows : [];
+                        const objectRows = Array.isArray((window as any).__cooptRenderSnapshotObjectRows) ? (window as any).__cooptRenderSnapshotObjectRows : [];
+                        window.opener.postMessage({ action: 'view-yz', rows, objectRows, ...viewState }, '*');
                         status.textContent = 'Switching to Y-Z view...';
                     }
                 });

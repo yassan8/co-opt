@@ -648,7 +648,21 @@ export function saveCurrentToActiveConfiguration(): void {
 
   // Expanded Optical System is derived from Blocks.
   // When Blocks exist, do NOT overwrite config.opticalSystem from the (disabled/no-op) surface table.
-  const opticalRowsFromTable = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
+  const opticalRowsFromTable = (() => {
+    try {
+      if (typeof w.getOpticalSystemRows === 'function') {
+        const rows = w.getOpticalSystemRows(w.tableOpticalSystem);
+        if (Array.isArray(rows)) return rows;
+      }
+    } catch (_) {}
+    try {
+      if (w.tableOpticalSystem && typeof w.tableOpticalSystem.getData === 'function') {
+        const rows = w.tableOpticalSystem.getData();
+        if (Array.isArray(rows)) return rows;
+      }
+    } catch (_) {}
+    return [];
+  })();
   if (!configurationHasBlocks(activeConfig)) {
     activeConfig.opticalSystem = opticalRowsFromTable;
   } else {
