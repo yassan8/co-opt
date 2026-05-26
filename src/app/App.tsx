@@ -8287,11 +8287,26 @@ const collectLegacyCrossRays = async (
           } catch (_) {}
         } else {
           try {
-            const latestRowsBeforeReload = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
-            if (Array.isArray(latestRowsBeforeReload) && latestRowsBeforeReload.length > 0) {
+            try {
+              const cm = hostWindow?.ConfigurationManager;
+              if (cm && typeof cm.loadActiveConfigurationToTables === 'function') {
+                await Promise.resolve(cm.loadActiveConfigurationToTables({
+                  applyToUI: true,
+                  suppressOpticalSystemDataChanged: true,
+                }));
+              } else if (hostWindow && typeof hostWindow.loadActiveConfigurationToTables === 'function') {
+                await Promise.resolve(hostWindow.loadActiveConfigurationToTables({
+                  applyToUI: true,
+                  suppressOpticalSystemDataChanged: true,
+                }));
+              }
+            } catch (_) {}
+
+            const rowsAfterStop = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+            if (Array.isArray(rowsAfterStop) && rowsAfterStop.length > 0) {
               const finalizeRowsFn = hostWindow.__cooptRefreshRequirementTableScoreForOptimize;
               if (typeof finalizeRowsFn === 'function') {
-                await finalizeRowsFn(latestRowsBeforeReload, 'optimize-stopped-finalize', { syncBlocks: true });
+                await finalizeRowsFn(rowsAfterStop, 'optimize-stopped-finalize', { syncBlocks: true });
               }
             }
 
