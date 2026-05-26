@@ -49,6 +49,7 @@ import { calculateFocalLength, calculateParaxialData, findStopSurfaceIndex, calc
 import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
 import { loadSystemConfigurations } from '../data/table-configuration.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
+import { showThroughFocusMTFDiagram } from '../evaluation/mtf-plot.ts';
 import { readDesktopSetting, runAnalysisCompute, runNativeDistortion, runNativeFieldMtfMap, runNativeGridDistortion, runNativeMtfMap, runNativeOpdMap, runNativePsfMap, runNativeSphericalAberration, runNativeSpotRaytrace, runNativeThroughFocusMtfMap } from '../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { listen } from '@tauri-apps/api/event';
@@ -586,6 +587,122 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
 }
 
 w.runDesktopNativeThroughFocusMtfForPopup = runDesktopNativeThroughFocusMtfForPopup;
+
+async function runPortableThroughFocusMtfForPopup(payload: {
+    objectIndex?: number;
+    wavelengths?: number[];
+    targetFrequencyLpmm?: number;
+    defocusMinMm?: number;
+    defocusMaxMm?: number;
+    steps?: number;
+    samplingSize?: number;
+    zeroPadTo?: number;
+    opdDisplayMode?: string;
+    onProgress?: (evt: { percent?: number; message?: string }) => void;
+}) {
+    const hostDoc = typeof document !== 'undefined' ? document : null;
+    if (!hostDoc?.body) {
+        throw new Error('Portable Through-Focus MTF host document is unavailable');
+    }
+
+    const scratch = hostDoc.createElement('div');
+    scratch.style.cssText = 'position:fixed;left:-99999px;top:-99999px;width:900px;height:680px;overflow:hidden;pointer-events:none;opacity:0;';
+    hostDoc.body.appendChild(scratch);
+
+    try {
+        const wavelengths = (Array.isArray(payload?.wavelengths) ? payload.wavelengths : [])
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value) && value > 0);
+        const uniqueWavelengths: number[] = [];
+        for (const value of wavelengths) {
+            if (!uniqueWavelengths.some((existing) => Math.abs(existing - value) < 1e-9)) {
+                uniqueWavelengths.push(value);
+            }
+        }
+        const wavelengthMicrons: number | 'all' = uniqueWavelengths.length <= 1
+            ? (uniqueWavelengths[0] ?? 0.5876)
+            : 'all';
+
+        const result: any = await showThroughFocusMTFDiagram({
+            wavelengthMicrons,
+            objectIndex: Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload?.objectIndex))) : 0,
+            targetFrequencyLpmm: Number.isFinite(Number(payload?.targetFrequencyLpmm)) ? Number(payload?.targetFrequencyLpmm) : 10,
+            defocusMinMm: Number.isFinite(Number(payload?.defocusMinMm)) ? Number(payload?.defocusMinMm) : -0.5,
+            defocusMaxMm: Number.isFinite(Number(payload?.defocusMaxMm)) ? Number(payload?.defocusMaxMm) : 0.5,
+            steps: Number.isFinite(Number(payload?.steps)) ? Math.max(3, Math.floor(Number(payload?.steps))) : 21,
+            samplingSize: Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 256,
+            zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : 0,
+            containerElement: scratch,
+            onProgress: payload?.onProgress as any,
+            opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
+        });
+
+        const traces = Array.isArray(result?.traces) ? result.traces : [];
+        const seriesMap = new Map<string, { wavelengthUm: number; label: string; mtfTangential: number[]; mtfSagittal: number[]; xAxis: number[] }>();
+        let fallbackXAxis: number[] = [];
+
+        for (const trace of traces) {
+            const rawName = String(trace?.name ?? '').trim();
+            const axisMatch = rawName.match(/^(Meridional|Tangential|Sagittal)\b/i);
+            const wavelengthMatch = rawName.match(/\(([0-9]+(?:\.[0-9]+)?)\s*nm\)/i);
+            if (!axisMatch || !wavelengthMatch) continue;
+
+            const axisKey = /^sagittal$/i.test(axisMatch[1]) ? 'mtfSagittal' : 'mtfTangential';
+            const wavelengthNm = Number(wavelengthMatch[1]);
+            const wavelengthUm = wavelengthNm / 1000;
+            if (!Number.isFinite(wavelengthUm) || wavelengthUm <= 0) continue;
+
+            const xAxis = (Array.isArray(trace?.x) ? trace.x : [])
+                .map((value: any) => Number(value))
+                .filter((value: number) => Number.isFinite(value));
+            const yAxis = (Array.isArray(trace?.y) ? trace.y : []).map((value: any) => {
+                const numeric = Number(value);
+                return Number.isFinite(numeric) ? numeric : NaN;
+            });
+            if (xAxis.length === 0 || yAxis.length === 0) continue;
+
+            const key = wavelengthUm.toFixed(9);
+            const existing = seriesMap.get(key) || {
+                wavelengthUm,
+                label: `${wavelengthNm.toFixed(1)}nm`,
+                mtfTangential: [],
+                mtfSagittal: [],
+                xAxis,
+            };
+            existing.xAxis = xAxis;
+            (existing as any)[axisKey] = yAxis;
+            seriesMap.set(key, existing);
+            if (xAxis.length > fallbackXAxis.length) {
+                fallbackXAxis = xAxis;
+            }
+        }
+
+        const series = Array.from(seriesMap.values())
+            .sort((left, right) => left.wavelengthUm - right.wavelengthUm)
+            .map((entry) => ({
+                wavelengthUm: entry.wavelengthUm,
+                label: entry.label,
+                mtfTangential: Array.isArray(entry.mtfTangential) ? entry.mtfTangential : [],
+                mtfSagittal: Array.isArray(entry.mtfSagittal) ? entry.mtfSagittal : [],
+            }));
+        const xAxis = Array.from(seriesMap.values()).find((entry) => Array.isArray(entry.xAxis) && entry.xAxis.length > 0)?.xAxis || fallbackXAxis;
+
+        if (!xAxis.length || !series.length) {
+            throw new Error('Portable Through-Focus MTF did not produce valid data');
+        }
+
+        return {
+            backend: 'portable-through-focus-mtf',
+            xAxis,
+            series,
+            message: 'Portable Through-Focus MTF completed',
+        };
+    } finally {
+        try { scratch.remove(); } catch (_) {}
+    }
+}
+
+w.runPortableThroughFocusMtfForPopup = runPortableThroughFocusMtfForPopup;
 
 async function runDesktopNativeCompareMtfVsTfmtfForPopup(payload: {
     objectIndex?: number;
@@ -4505,6 +4622,13 @@ function executeCrossSectionView(options: {
         const isOptimizing = !!w.__cooptOptimizerIsRunning;
         
         if (!isOptimizing) {
+            try {
+                const cm = w.ConfigurationManager;
+                if (cm && typeof cm.saveCurrentToActiveConfiguration === 'function') {
+                    cm.saveCurrentToActiveConfiguration();
+                }
+            } catch (_) {}
+
             const loadActiveConfigurationToTables = w.loadActiveConfigurationToTables;
             if (typeof loadActiveConfigurationToTables === 'function') {
                 loadActiveConfigurationToTables();
@@ -12680,18 +12804,28 @@ export function setupAnalysisWindows() {
                     };
                     const estimateFiniteGridRms = (grid) => {
                         if (!Array.isArray(grid) || grid.length === 0) return NaN;
+                        let sum = 0;
                         let sumSq = 0;
+                        let min = Infinity;
+                        let max = -Infinity;
                         let count = 0;
                         for (const row of grid) {
                             if (!Array.isArray(row)) continue;
                             for (const value of row) {
                                 const n = Number(value);
+                                if (n === 0) continue;
                                 if (!Number.isFinite(n)) continue;
+                                sum += n;
                                 sumSq += n * n;
+                                if (n < min) min = n;
+                                if (n > max) max = n;
                                 count += 1;
                             }
                         }
-                        return count > 0 ? Math.sqrt(sumSq / count) : NaN;
+                        if (count === 0) return NaN;
+                        const mean = sum / count;
+                        const variance = Math.max(0, (sumSq / count) - (mean * mean));
+                        return Math.sqrt(variance);
                     };
                     const opticalRowsForIdealCheck = (typeof opener.getOpticalSystemRows === 'function')
                         ? (opener.getOpticalSystemRows(opener.tableOpticalSystem) || [])
@@ -14037,8 +14171,23 @@ export function setupAnalysisWindows() {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
 
-                if (typeof opener.runDesktopNativeThroughFocusMtfForPopup !== 'function') {
-                    throw new Error('runDesktopNativeThroughFocusMtfForPopup is not available on opener');
+                const throughFocusRunner = (() => {
+                    const canUseNative = typeof opener.isTauriRuntime === 'function'
+                        ? !!opener.isTauriRuntime()
+                        : false;
+                    if (!canUseNative && typeof opener.runPortableThroughFocusMtfForPopup === 'function') {
+                        return opener.runPortableThroughFocusMtfForPopup;
+                    }
+                    if (typeof opener.runDesktopNativeThroughFocusMtfForPopup === 'function') {
+                        return opener.runDesktopNativeThroughFocusMtfForPopup;
+                    }
+                    if (typeof opener.runPortableThroughFocusMtfForPopup === 'function') {
+                        return opener.runPortableThroughFocusMtfForPopup;
+                    }
+                    return null;
+                })();
+                if (typeof throughFocusRunner !== 'function') {
+                    throw new Error('Through-Focus MTF runner is not available on opener');
                 }
 
                 const sourceRows = (typeof opener.getSourceRows === 'function')
@@ -14069,8 +14218,8 @@ export function setupAnalysisWindows() {
                 })();
 
                 let lastProgress = 20;
-                setProgress(lastProgress, 'Computing Through-Focus MTF (Rust/WASM)...');
-                const nativeResp = await opener.runDesktopNativeThroughFocusMtfForPopup({
+                setProgress(lastProgress, 'Computing Through-Focus MTF...');
+                const nativeResp = await throughFocusRunner({
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
                     wavelengths: wavelengthList,
                     targetFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm : 10,

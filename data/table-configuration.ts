@@ -48,6 +48,89 @@ function cloneSystemConfiguration<T>(value: T): T | null {
   }
 }
 
+function isPlainObjectRecord(value: any): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeVariableEntriesFromBaseline(currentVars: any, baselineVars: any, currentParams?: any): Record<string, any> {
+  const current = isPlainObjectRecord(currentVars) ? currentVars : {};
+  const baseline = isPlainObjectRecord(baselineVars) ? baselineVars : {};
+  const params = isPlainObjectRecord(currentParams) ? currentParams : {};
+  const merged: Record<string, any> = { ...baseline, ...current };
+
+  for (const [key, baselineEntry] of Object.entries(baseline)) {
+    const currentEntry = current[key];
+    if (!isPlainObjectRecord(baselineEntry) || !isPlainObjectRecord(currentEntry)) continue;
+
+    const mergedEntry: Record<string, any> = { ...baselineEntry, ...currentEntry };
+    if (isPlainObjectRecord(baselineEntry.optimize) || isPlainObjectRecord(currentEntry.optimize)) {
+      mergedEntry.optimize = {
+        ...(isPlainObjectRecord(baselineEntry.optimize) ? baselineEntry.optimize : {}),
+        ...(isPlainObjectRecord(currentEntry.optimize) ? currentEntry.optimize : {}),
+      };
+    }
+    if (!Object.prototype.hasOwnProperty.call(mergedEntry, 'value') && Object.prototype.hasOwnProperty.call(params, key)) {
+      mergedEntry.value = params[key];
+    }
+    merged[key] = mergedEntry;
+  }
+
+  return merged;
+}
+
+function mergeBlockVariablesFromBaselineConfig(targetConfig: any, baselineConfig: any): void {
+  if (!targetConfig || !baselineConfig) return;
+  const targetBlocks = Array.isArray(targetConfig.blocks) ? targetConfig.blocks : null;
+  const baselineBlocks = Array.isArray(baselineConfig.blocks) ? baselineConfig.blocks : null;
+  if (!targetBlocks || !baselineBlocks || targetBlocks.length === 0 || baselineBlocks.length === 0) return;
+
+  const baselineBlocksById = new Map<string, any>();
+  for (const block of baselineBlocks) {
+    const blockId = String(block?.blockId ?? '').trim();
+    if (blockId) baselineBlocksById.set(blockId, block);
+  }
+
+  for (const block of targetBlocks) {
+    const blockId = String(block?.blockId ?? '').trim();
+    if (!blockId) continue;
+    const baselineBlock = baselineBlocksById.get(blockId);
+    if (!baselineBlock || !isPlainObjectRecord(baselineBlock.variables)) continue;
+    block.variables = mergeVariableEntriesFromBaseline(block.variables, baselineBlock.variables, block.parameters);
+  }
+}
+
+function mergeBlockVariablesFromBaselineSystemConfig(targetSystemConfig: any, baselineSystemConfig: any): void {
+  const targetConfigs = Array.isArray(targetSystemConfig?.configurations) ? targetSystemConfig.configurations : null;
+  const baselineConfigs = Array.isArray(baselineSystemConfig?.configurations) ? baselineSystemConfig.configurations : null;
+  if (!targetConfigs || !baselineConfigs || targetConfigs.length === 0 || baselineConfigs.length === 0) return;
+
+  const baselineConfigById = new Map<string, any>();
+  for (const cfg of baselineConfigs) {
+    const configId = String(cfg?.id ?? '').trim();
+    if (configId) baselineConfigById.set(configId, cfg);
+  }
+
+  for (const cfg of targetConfigs) {
+    const configId = String(cfg?.id ?? '').trim();
+    if (!configId) continue;
+    mergeBlockVariablesFromBaselineConfig(cfg, baselineConfigById.get(configId));
+  }
+}
+
+function loadPersistedSystemConfigurationsFromStorage(): SystemConfiguration | null {
+  try {
+    const json = storageGetItem(STORAGE_KEY);
+    if (!json) return null;
+    return normalizeLoadedSystemConfiguration(JSON.parse(json) as SystemConfiguration);
+  } catch (_) {
+    return null;
+  }
+}
+
+export function loadPersistedSystemConfigurations(): SystemConfiguration | null {
+  return loadPersistedSystemConfigurationsFromStorage();
+}
+
 function normalizeLoadedSystemConfiguration(systemConfig: SystemConfiguration | null | undefined): SystemConfiguration | null {
   if (!systemConfig || typeof systemConfig !== 'object') return null;
   if (!Array.isArray(systemConfig.configurations)) return null;
@@ -378,6 +461,18 @@ export function saveSystemConfigurations(systemConfig: SystemConfiguration): voi
   cfgLog('🔵 [Configuration] Saving system configurations...');
   if (systemConfig && systemConfig.configurations) {
     try {
+      const runtimeConfig = loadRuntimeSystemConfigurations();
+      if (runtimeConfig) mergeBlockVariablesFromBaselineSystemConfig(systemConfig, runtimeConfig);
+    } catch (_) {
+      // ignore
+    }
+    try {
+      const persistedConfig = loadPersistedSystemConfigurationsFromStorage();
+      if (persistedConfig) mergeBlockVariablesFromBaselineSystemConfig(systemConfig, persistedConfig);
+    } catch (_) {
+      // ignore
+    }
+    try {
       for (const cfg of systemConfig.configurations) {
         normalizeImageSurfaceBlocksForConfiguration(cfg);
         interpolateExplicitApertureSemidiaForConfiguration(cfg);
@@ -526,8 +621,8 @@ export function setActiveConfiguration(configId: number | string): boolean {
 export function saveCurrentToActiveConfiguration(): void {
   cfgLog('🔵 [Configuration] Saving current table data to active configuration...');
   
-  const systemConfig = loadSystemConfigurations();
-  const activeConfig = systemConfig.configurations.find(c => idsEqual(c?.id, systemConfig.activeConfigId));
+  let systemConfig = loadSystemConfigurations();
+  let activeConfig = systemConfig.configurations.find(c => idsEqual(c?.id, systemConfig.activeConfigId));
   
   if (!activeConfig) {
     console.error('❌ [Configuration] Active config not found');
@@ -559,25 +654,21 @@ export function saveCurrentToActiveConfiguration(): void {
   } else {
     try {
       if (Array.isArray(opticalRowsFromTable) && opticalRowsFromTable.length > 0 && typeof w.__cooptSyncRowsBackToActiveBlocks === 'function') {
-        w.__cooptSyncRowsBackToActiveBlocks(opticalRowsFromTable, Array.isArray(objectDataFromTable) ? objectDataFromTable : undefined);
+        const clonedRows = cloneSystemConfiguration<any[]>(opticalRowsFromTable) ?? opticalRowsFromTable;
+        const clonedObjectRows = Array.isArray(objectDataFromTable)
+          ? (cloneSystemConfiguration<any[]>(objectDataFromTable) ?? objectDataFromTable)
+          : undefined;
+        w.__cooptSyncRowsBackToActiveBlocks(clonedRows, clonedObjectRows);
+        systemConfig = loadSystemConfigurations();
+        activeConfig = systemConfig.configurations.find(c => idsEqual(c?.id, systemConfig.activeConfigId));
+        if (!activeConfig) {
+          console.error('❌ [Configuration] Active config not found after sync');
+          return;
+        }
       }
-    } catch (_) {}
-
-    // Even in Blocks mode, we still need a persisted legacy Object row thickness for conjugate detection
-    // in non-active config evaluations (e.g., Requirements Spot Size).
-    try {
-      const objectRow0 = Array.isArray(opticalRowsFromTable) ? opticalRowsFromTable[0] : null;
-      if (objectRow0 && typeof objectRow0 === 'object') {
-        if (!Array.isArray(activeConfig.opticalSystem)) activeConfig.opticalSystem = [] as any;
-        const existing0 = (activeConfig.opticalSystem as any[])[0];
-        (activeConfig.opticalSystem as any[])[0] = {
-          ...(existing0 && typeof existing0 === 'object' ? existing0 : {}),
-          thickness: objectRow0.thickness,
-          objectRenderDistance: (objectRow0 as any).objectRenderDistance,
-          fieldX: (objectRow0 as any).fieldX,
-          fieldY: (objectRow0 as any).fieldY,
-          semidia: (objectRow0 as any).semidia
-        };
+      const expanded = expandBlocksToOpticalSystemRows(activeConfig.blocks);
+      if (Array.isArray(expanded?.rows)) {
+        activeConfig.opticalSystem = expanded.rows;
       }
     } catch (_) {}
   }
@@ -643,129 +734,12 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
   // If the active config uses blocks, deterministically expand to legacy surface rows for UI/evaluation.
   let effectiveOpticalSystem = activeConfig.opticalSystem;
   if (configurationHasBlocks(activeConfig)) {
-    const overlayProvenance = (legacyRows: any[], expandedRows: any[]): void => {
-      if (!Array.isArray(legacyRows) || !Array.isArray(expandedRows)) return;
-      const n = Math.min(legacyRows.length, expandedRows.length);
-      for (let i = 0; i < n; i++) {
-        const src = expandedRows[i];
-        const dst = legacyRows[i];
-        if (!src || typeof src !== 'object' || !dst || typeof dst !== 'object') continue;
-        if ('_blockId' in src) dst._blockId = src._blockId;
-        if ('_blockType' in src) dst._blockType = src._blockType;
-        if ('_surfaceRole' in src) dst._surfaceRole = src._surfaceRole;
-      }
-    };
-
-    const preserveLegacySemidiaIntoExpanded = (expandedRows: any[], legacyRows: any[]): void => {
-      if (!Array.isArray(expandedRows) || !Array.isArray(legacyRows)) return;
-      const hasValue = (v: any): boolean => {
-        if (v === null || v === undefined) return false;
-        const s = String(v).trim();
-        return s !== '';
-      };
-      const getLegacySemidia = (row: any): any => {
-        if (!row || typeof row !== 'object') return null;
-        return row.semidia ?? row['Semi Diameter'] ?? row['semi diameter'] ?? row.semiDiameter ?? row.semiDia;
-      };
-      const rowType = (row: any): string => {
-        const t = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
-        return t;
-      };
-
-      const isSkippableRow = (row: any): boolean => {
-        const t = rowType(row);
-        return t === 'stop' || t === 'sto' || t === 'image' || t === 'object'
-          || t === 'coordtrans' || t === 'coord trans' || t === 'ct';
-      };
-      const keyFor = (row: any): string => {
-        if (!row || typeof row !== 'object') return '';
-        const bid = String(row._blockId ?? '').trim();
-        const role = String(row._surfaceRole ?? '').trim();
-        return (bid && role) ? `${bid}|${role}` : '';
-      };
-
-      const legacyByKey = new Map<string, any>();
-      try {
-        for (const l of legacyRows) {
-          if (!l || typeof l !== 'object') continue;
-          if (isSkippableRow(l)) continue;
-          const k = keyFor(l);
-          if (k) legacyByKey.set(k, l);
-        }
-      } catch (_) {}
-
-      let li = 0;
-      for (let ei = 0; ei < expandedRows.length; ei++) {
-        const e = expandedRows[ei];
-        if (!e || typeof e !== 'object') continue;
-
-        // Blocks only model Stop.semiDiameter; per-surface semidia is a table-level detail.
-        // Therefore, preserve legacy semidia only for physical surfaces.
-        if (isSkippableRow(e)) continue;
-
-        let l = null;
-        try {
-          const k = keyFor(e);
-          if (k && legacyByKey.has(k)) l = legacyByKey.get(k);
-        } catch (_) {
-          l = null;
-        }
-        if (!l) {
-          while (li < legacyRows.length && isSkippableRow(legacyRows[li])) li++;
-          l = (li < legacyRows.length) ? legacyRows[li] : null;
-          li++;
-        }
-        if (!l || typeof l !== 'object') continue;
-
-        const lsRaw = getLegacySemidia(l);
-        if (hasValue(lsRaw)) e.semidia = lsRaw;
-      }
-    };
-
     const normalizeIdsInPlace = (rows: any[]): void => {
       if (!Array.isArray(rows)) return;
       for (let i = 0; i < rows.length; i++) {
         if (rows[i] && typeof rows[i] === 'object') rows[i].id = i;
       }
     };
-
-    const blocksHaveObjectSurface = ((): boolean => {
-      try { return Array.isArray(activeConfig?.blocks) && activeConfig.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface'); } catch (_) { return false; }
-    })();
-
-    const pickPreservedObjectThickness = (): any => {
-      // ObjectSurface is canonical for object distance in Blocks-only mode.
-      if (blocksHaveObjectSurface) return null;
-
-      try {
-        const v = activeConfig?.opticalSystem?.[0]?.thickness;
-        if (typeof v === 'number' && Number.isFinite(v)) return v;
-        const s = String(v ?? '').trim();
-        if (s && /^inf(inity)?$/i.test(s)) return 'INF';
-        if (s && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(s)) {
-          const n = Number(s);
-          if (Number.isFinite(n)) return n;
-        }
-      } catch (_) {}
-
-      try {
-        const json = storageGetItem('OpticalSystemTableData');
-        if (!json) return null;
-        const rows = JSON.parse(json);
-        const v = rows?.[0]?.thickness;
-        if (typeof v === 'number' && Number.isFinite(v)) return v;
-        const s = String(v ?? '').trim();
-        if (s && /^inf(inity)?$/i.test(s)) return 'INF';
-        if (s && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(s)) {
-          const n = Number(s);
-          if (Number.isFinite(n)) return n;
-        }
-      } catch (_) {}
-
-      return null;
-    };
-
-    const preservedObjectThickness = pickPreservedObjectThickness();
 
     // Ensure every block has a stable id so expanded rows carry provenance (_blockId).
     const ensureBlocksHaveBlockIdsInPlace = (blocks: Block[]): number => {
@@ -879,19 +853,7 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
       if (expandFatals.length > 0) {
         for (const f of expandFatals) console.error('❌ [Configuration] Block expand error:', f);
       } else {
-        const legacyRows = Array.isArray(activeConfig.opticalSystem) ? activeConfig.opticalSystem : null;
-
-        // Prefer expanded rows so block edits are reflected in the UI deterministically.
-        // Preserve user-entered legacy semidia where the expanded row doesn't specify it.
-        if (legacyRows && legacyRows.length > 0) {
-          preserveLegacySemidiaIntoExpanded(expanded.rows, legacyRows);
-        }
-        if (preservedObjectThickness !== null && expanded.rows[0] && typeof expanded.rows[0] === 'object') {
-          expanded.rows[0].thickness = preservedObjectThickness;
-        }
         normalizeIdsInPlace(expanded.rows);
-        // Ensure provenance keys are present even if expand implementation changes.
-        try { overlayProvenance(expanded.rows, expanded.rows); } catch (_) {}
         effectiveOpticalSystem = expanded.rows;
       }
     }
