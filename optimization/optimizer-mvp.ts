@@ -7959,9 +7959,9 @@ export async function runOptimizationMVP(options = {}) {
               residuals.push(Math.sqrt(w) * residual);
               // 【修正】等式制約は residuals で処理済みなので constraints に追加しない
             } else if (r.op === '<=') {
-              constraints.push(current - target - tol);
+              constraints.push(Math.sqrt(w) * (current - target - tol));
             } else if (r.op === '>=') {
-              constraints.push((target - tol) - current);
+              constraints.push(Math.sqrt(w) * ((target - tol) - current));
             }
             // 【削除】else で等式制約を2つの不等式として重複登録するのを削除しました
           }
@@ -8747,6 +8747,29 @@ export async function runOptimizationMVP(options = {}) {
       const stagnationImproveEps = Number.isFinite(Number(opts?.kktStagnationImproveEps))
         ? Math.max(1e-10, Number(opts.kktStagnationImproveEps))
         : 1e-6;
+      const kktAutoStopConfigKeys = [
+        'kktPlateauStopMinIter',
+        'kktPlateauStopWindow',
+        'kktPlateauRelaxedMinIter',
+        'kktTailStopMinIter',
+        'kktTailStopWindow',
+        'kktWindowTailStopMinIter',
+        'kktWindowTailStopWindow',
+        'kktWindowNoGainMinIter',
+        'kktWindowNoGainWindow',
+        'kktGoodEnoughStopMinIter',
+        'kktGoodEnoughStopWindow',
+        'kktHardIterCap',
+        'kktMaxWallMs',
+        'kktNoBestImproveMinIter',
+        'kktNoBestImproveWindow',
+        'kktPostBestDivergenceMinIter',
+        'kktPostBestNoImproveWindow',
+        'kktPostBestPatienceMinIter',
+        'kktPostBestPatienceWindow'
+      ];
+      const hasExplicitKktAutoStopConfig = kktAutoStopConfigKeys.some((key) => opts?.[key] != null);
+      const kktAutoStopEnabled = opts?.kktAutoStop === true || hasExplicitKktAutoStopConfig;
       const kktPlateauStopMinIter = Number.isFinite(Number(opts?.kktPlateauStopMinIter))
         ? Math.max(5, Math.floor(Number(opts.kktPlateauStopMinIter)))
         : 45;
@@ -8834,10 +8857,10 @@ export async function runOptimizationMVP(options = {}) {
         : 20;
       const kktHardIterCap = Number.isFinite(Number(opts?.kktHardIterCap))
         ? Math.max(20, Math.floor(Number(opts.kktHardIterCap)))
-        : 320;
+        : maxIterations;
       const kktMaxWallMs = Number.isFinite(Number(opts?.kktMaxWallMs))
         ? Math.max(1000, Math.floor(Number(opts.kktMaxWallMs)))
-        : 240000;
+        : Number.POSITIVE_INFINITY;
       const kktNoBestImproveMinIter = Number.isFinite(Number(opts?.kktNoBestImproveMinIter))
         ? Math.max(20, Math.floor(Number(opts.kktNoBestImproveMinIter)))
         : 180;
@@ -9035,11 +9058,11 @@ export async function runOptimizationMVP(options = {}) {
           if (shouldStopKKT()) {
             break;
           }
-          if (iter >= kktHardIterCap) {
+          if (kktAutoStopEnabled && iter >= kktHardIterCap) {
             break;
           }
           const elapsedMs = nowMs() - t0;
-          if (elapsedMs >= kktMaxWallMs) {
+          if (kktAutoStopEnabled && elapsedMs >= kktMaxWallMs) {
             break;
           }
 

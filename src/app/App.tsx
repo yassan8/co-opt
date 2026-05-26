@@ -2561,7 +2561,6 @@ export default function App() {
   })();
   const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd'>('kkt');
   const [optMaxIterations, setOptMaxIterations] = useState(5000);
-  const [optConvergenceProfile, setOptConvergenceProfile] = useState<'fast' | 'balanced' | 'deep'>('balanced');
   const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(false);
   const [optRunning, setOptRunning] = useState(false);
   const [optStopRequested, setOptStopRequested] = useState(false);
@@ -8490,14 +8489,6 @@ const collectLegacyCrossRays = async (
               }}
               style={{ width: 100, padding: '4px 6px' }}
             />
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            Convergence
-            <select value={optConvergenceProfile} disabled={optRunning} onChange={(e) => setOptConvergenceProfile(e.target.value as 'fast' | 'balanced' | 'deep')} style={{ padding: '4px 6px' }}>
-              <option value="fast">Fast</option>
-              <option value="balanced">Balanced</option>
-              <option value="deep">Deep</option>
-            </select>
           </label>
           <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
             <input type="checkbox" checked={optAutoRenderOnAccept} disabled={optRunning} onChange={(e) => setOptAutoRenderOnAccept(!!e.target.checked)} style={{ width: 16, height: 16 }} />

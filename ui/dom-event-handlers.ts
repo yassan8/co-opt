@@ -3632,14 +3632,6 @@ function setupOptimizeDesignIntentButton(): void {
         <input id="opt-max-iter" type="number" min="1" step="1" value="5000" style="width:100px; padding:4px 6px;" />
     </label>
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
-        Convergence
-        <select id="opt-convergence-profile" style="padding:4px 6px;">
-            <option value="fast">Fast</option>
-            <option value="balanced" selected>Balanced</option>
-            <option value="deep">Deep</option>
-        </select>
-    </label>
-    <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         <input id="opt-auto-render" type="checkbox" checked style="width:16px; height:16px;" />
         Auto-render on Accept
     </label>
@@ -3889,7 +3881,6 @@ function setupOptimizeDesignIntentButton(): void {
             let bestRequirementScore = Number.POSITIVE_INFINITY;
             let acceptCount = 0;
             let rejectCount = 0;
-            let currentConvergenceProfile = 'balanced';
             let __lastReqRefreshAt = 0;
             let __lastReqDeepRefreshAt = 0;
             const __reqRefreshThrottleMs = 250;
@@ -4661,76 +4652,8 @@ function setupOptimizeDesignIntentButton(): void {
                             } catch (_) {}
                             return v;
                         };
-                        const readSelect = (id: string, fallback: string): string => {
-                            let v = fallback;
-                            try {
-                                if (popup && !popup.closed) {
-                                    const el = popup.document.getElementById(id) as HTMLSelectElement | null;
-                                    const s = el ? String(el.value).trim().toLowerCase() : '';
-                                    if (s) v = s;
-                                }
-                            } catch (_) {}
-                            return v;
-                        };
-
                         const trustRegionDelta = readNum('opt-trust-region-delta', 0.05);
                         const trustRegionDeltaMax = Math.max(trustRegionDelta, readNum('opt-trust-region-delta-max', 1.0));
-                        const convergenceProfile = readSelect('opt-convergence-profile', 'balanced');
-
-                        const kktPreset = (() => {
-                            if (convergenceProfile === 'fast') {
-                                return {
-                                    kktPlateauStopMinIter: 30,
-                                    kktPlateauStopWindow: 30,
-                                    kktTailStopMinIter: 80,
-                                    kktTailStopWindow: 40,
-                                    kktWindowNoGainMinIter: 70,
-                                    kktWindowNoGainWindow: 30,
-                                    kktGoodEnoughStopMinIter: 55,
-                                    kktGoodEnoughStopWindow: 20,
-                                    kktNoBestImproveMinIter: 120,
-                                    kktNoBestImproveWindow: 80,
-                                    kktPostBestNoImproveWindow: 10,
-                                    kktPostBestPatienceWindow: 10,
-                                    kktHardIterCap: 180,
-                                    kktMaxWallMs: 120000
-                                };
-                            }
-                            if (convergenceProfile === 'deep') {
-                                return {
-                                    kktPlateauStopMinIter: 70,
-                                    kktPlateauStopWindow: 70,
-                                    kktTailStopMinIter: 180,
-                                    kktTailStopWindow: 90,
-                                    kktWindowNoGainMinIter: 170,
-                                    kktWindowNoGainWindow: 90,
-                                    kktGoodEnoughStopMinIter: 130,
-                                    kktGoodEnoughStopWindow: 70,
-                                    kktNoBestImproveMinIter: 260,
-                                    kktNoBestImproveWindow: 180,
-                                    kktPostBestNoImproveWindow: 24,
-                                    kktPostBestPatienceWindow: 24,
-                                    kktHardIterCap: 520,
-                                    kktMaxWallMs: 360000
-                                };
-                            }
-                            return {
-                                kktPlateauStopMinIter: 45,
-                                kktPlateauStopWindow: 45,
-                                kktTailStopMinIter: 120,
-                                kktTailStopWindow: 60,
-                                kktWindowNoGainMinIter: 110,
-                                kktWindowNoGainWindow: 50,
-                                kktGoodEnoughStopMinIter: 90,
-                                kktGoodEnoughStopWindow: 35,
-                                kktNoBestImproveMinIter: 180,
-                                kktNoBestImproveWindow: 120,
-                                kktPostBestNoImproveWindow: 16,
-                                kktPostBestPatienceWindow: 16,
-                                kktHardIterCap: 320,
-                                kktMaxWallMs: 240000
-                            };
-                        })();
 
                         return {
                             stepFraction: readNum('opt-step-fraction', 0.02),
@@ -4754,8 +4677,6 @@ function setupOptimizeDesignIntentButton(): void {
                             restartJitterScaled: Math.max(0, readNum('opt-restart-jitter-scaled', 0.035)),
                             lmExploreWhenFlat: readBool('opt-lm-explore-when-flat', false),
                             lmExploreTries: Math.max(1, Math.floor(readNum('opt-lm-explore-tries', 3))),
-                            convergenceProfile,
-                            ...kktPreset,
                             useWasmLinearSolve: true,
                             profile: false
                         };
