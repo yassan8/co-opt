@@ -3,6 +3,36 @@ import { loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigura
 import { configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from './block-schema.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 
+let __cooptPersistEditedRowsToBlocksTimer: ReturnType<typeof setTimeout> | null = null;
+
+function schedulePersistEditedOpticalRowsToBlocks(): void {
+  try {
+    const activeConfig = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
+    if (!activeConfig || !configurationHasBlocks(activeConfig)) {
+      return;
+    }
+  } catch (_) {
+    return;
+  }
+
+  if (__cooptPersistEditedRowsToBlocksTimer !== null) {
+    clearTimeout(__cooptPersistEditedRowsToBlocksTimer);
+  }
+
+  __cooptPersistEditedRowsToBlocksTimer = setTimeout(() => {
+    __cooptPersistEditedRowsToBlocksTimer = null;
+    try {
+      const rows = (tableOpticalSystem && typeof tableOpticalSystem.getData === 'function')
+        ? tableOpticalSystem.getData()
+        : [];
+      if (!Array.isArray(rows) || rows.length === 0) return;
+      if (typeof window.__cooptSyncRowsBackToActiveBlocks === 'function') {
+        window.__cooptSyncRowsBackToActiveBlocks(rows);
+      }
+    } catch (_) {}
+  }, 120);
+}
+
 function shouldDisableExpandedOpticalSystemUI() {
   try {
     // Blocks are canonical. When present, do not generate Expanded Optical System UI.
@@ -1734,6 +1764,8 @@ tableOpticalSystem.on("cellEdited", function(cell){
     const row = cell.getRow();
     const rowData = row.getData();
     const value = cell.getValue();
+
+    schedulePersistEditedOpticalRowsToBlocks();
 
     // If a user switches an existing surface to Coord Break, the row often already has
     // semidia/material/etc from a refractive surface. Because Coord Break reuses these
