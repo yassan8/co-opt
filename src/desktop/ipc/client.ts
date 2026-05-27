@@ -590,6 +590,39 @@ function deriveMaxFieldAngleNativeLike(objectRows: any[]): number {
   return maxAngle > 0 ? maxAngle : 20;
 }
 
+function isSkippableRayPathRowNativeLike(row: any): boolean {
+  if (!row || typeof row !== "object") return true;
+  const objectType = String(row?.["object type"] ?? row?.object ?? row?.Object ?? row?.type ?? "").trim().toLowerCase();
+  if (!objectType) return false;
+  if (objectType === "object") return true;
+  if (objectType === "gap" || objectType.includes("gap")) return true;
+  if (objectType === "ct" || objectType.includes("coordinate") || objectType.includes("coordtrans")) return true;
+
+  const blockType = String(row?._blockType ?? row?.blockType ?? "").trim().toLowerCase();
+  if (blockType === "paraxial" || blockType === "thinlens") {
+    const surfaceRole = String(row?._surfaceRole ?? row?.surfaceRole ?? "").trim().toLowerCase();
+    if (surfaceRole === "back") return true;
+  }
+
+  return false;
+}
+
+function surfaceIndexToRayPathPointIndexNativeLike(opticalSystemRows: any[], surfaceIndex: number | null | undefined): number | null {
+  const rows = Array.isArray(opticalSystemRows) ? opticalSystemRows : [];
+  if (!rows.length || surfaceIndex === null || surfaceIndex === undefined || !Number.isFinite(Number(surfaceIndex))) {
+    return null;
+  }
+  const sIdx = Math.max(0, Math.min(Number(surfaceIndex), rows.length - 1));
+  if (isSkippableRayPathRowNativeLike(rows[sIdx])) return null;
+
+  let pointCount = 0;
+  for (let index = 0; index <= sIdx; index += 1) {
+    if (isSkippableRayPathRowNativeLike(rows[index])) continue;
+    pointCount += 1;
+  }
+  return pointCount > 0 ? pointCount : null;
+}
+
 function normalizeDirectionVector(x: number, y: number, z: number): { x: number; y: number; z: number } {
   const mag = Math.hypot(x, y, z) || 1;
   return { x: x / mag, y: y / mag, z: z / mag };
@@ -3857,7 +3890,55 @@ export async function runNativeGridDistortion(
     const objectDistance = getObjectDistanceMmNativeLike(opticalSystemRows);
     const maxFieldAngle = deriveMaxFieldAngleNativeLike(Array.isArray(payload?.objectRows) ? payload.objectRows : []);
     const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
-    const focalLength = Number(paraxial?.focalLength);
+    let focalLength = Number(paraxial?.focalLength);
+    try {
+      const thetaDeg = 0.1;
+      const thetaRad = thetaDeg * Math.PI / 180;
+      const focalProbeObjectRows = finiteSystem
+        ? [{
+          id: "Field-0",
+          name: "Field-0",
+          position: "Rectangle",
+          xHeight: 0,
+          yHeight: objectDistance * Math.tan(thetaRad),
+          x: 0,
+          y: objectDistance * Math.tan(thetaRad),
+        }]
+        : [{
+          id: "Field-0",
+          name: "Field-0",
+          position: "Angle",
+          xHeightAngle: 0,
+          yHeightAngle: thetaDeg,
+          x: 0,
+          y: thetaDeg,
+        }];
+      const focalProbeResp = await runNativeSpotRaytrace({
+        opticalSystemRows,
+        sourceRows,
+        objectRows: focalProbeObjectRows,
+        surfaceIndex,
+        rayCount: 51,
+        ringCount: 1,
+        pattern: "cross",
+        wavelengthMode: "primary",
+        forceRustWasm: false,
+      });
+      const focalProbeSeries = Array.isArray(focalProbeResp?.series) ? focalProbeResp.series : [];
+      const focalProbeRow = focalProbeSeries[0] as any;
+      const focalChiefYUm = Number(
+        (focalProbeRow?.chiefPointUm && typeof focalProbeRow.chiefPointUm === "object" ? focalProbeRow.chiefPointUm.yUm : undefined)
+        ?? (Array.isArray(focalProbeRow?.points) ? focalProbeRow.points[0]?.yUm : undefined)
+      );
+      if (Number.isFinite(focalChiefYUm) && Math.abs(thetaRad) > 1e-12) {
+        const focalFromChief = Math.abs((focalChiefYUm / 1000) / Math.tan(thetaRad));
+        if (Number.isFinite(focalFromChief) && Math.abs(focalFromChief) > 1e-9) {
+          focalLength = focalFromChief;
+        }
+      }
+    } catch {
+      // Keep paraxial focal length fallback.
+    }
     const hasFiniteFocalLength = Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12;
     // Match distortion behavior: continue with a normalized focal length instead of hard-failing.
     const focalLengthForGrid = hasFiniteFocalLength ? focalLength : 1.0;
@@ -3904,59 +3985,42 @@ export async function runNativeGridDistortion(
       }
     }
 
-    const { calculateChiefRayNewton } = await import("../../../evaluation/aberrations/transverse-aberration.ts");
     const realX = new Array(idealX.length).fill(null) as Array<number | null>;
     const realY = new Array(idealY.length).fill(null) as Array<number | null>;
     let directChiefRayCount = 0;
-    const g = (typeof globalThis !== "undefined") ? (globalThis as any) : null;
-    const prevTraceOverride = g ? g.__cooptTraceOptionsOverride : undefined;
 
-    try {
-      if (g) {
-        g.__cooptTraceOptionsOverride = {
-          ...(prevTraceOverride && typeof prevTraceOverride === "object" ? prevTraceOverride : {}),
-          useRustWasm: true,
-          requireRustWasm: false,
-          requireForwardHit: true,
-        };
-      }
+    const spotResponse = await runNativeSpotRaytrace({
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+      surfaceIndex,
+      rayCount: 51,
+      ringCount: 1,
+      pattern: "cross",
+      wavelengthMode: "primary",
+      forceRustWasm: false,
+    });
 
-      for (let index = 0; index < objectRows.length; index++) {
-        const field = objectRows[index] || {};
-        const chief = calculateChiefRayNewton(
-          opticalSystemRows,
-          {
-            ...field,
-            displayName: String(field?.name || field?.id || `Field-${index}`),
-          },
-          wavelength,
-          "unified",
-          {
-            targetSurfaceIndex: surfaceIndex,
-            chiefRayDefinition: "stop-center",
-            requireRustWasm: false,
-            rayCount: 51,
-          },
-        );
-
-        const segs = Array.isArray(chief?.rayData?.segments)
-          ? chief.rayData.segments
-          : (Array.isArray(chief?.segments) ? chief.segments : []);
-        if (!segs.length) continue;
-
-        const hitIdx = Math.max(0, Math.min(surfaceIndex, segs.length - 1));
-        const p = segs[hitIdx] || segs[segs.length - 1] || null;
-        const x = Number(p?.x);
-        const y = Number(p?.y);
-        if (Number.isFinite(x) && Number.isFinite(y) && index >= 0 && index < realX.length) {
-          realX[index] = x;
-          realY[index] = y;
-          directChiefRayCount += 1;
-        }
-      }
-    } finally {
-      if (g) {
-        g.__cooptTraceOptionsOverride = prevTraceOverride;
+    const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
+    for (const row of series as any[]) {
+      const match = String(row?.label || "").match(/Field-(\d+)/);
+      if (!match) continue;
+      const index = Number(match[1]);
+      if (!Number.isInteger(index) || index < 0 || index >= realX.length) continue;
+      const chiefPointUm = row?.chiefPointUm;
+      const fallbackPoint = Array.isArray(row?.points) ? row.points[0] : null;
+      const xMm = Number(
+        (chiefPointUm && typeof chiefPointUm === "object" ? chiefPointUm.xUm : undefined)
+        ?? fallbackPoint?.xUm
+      ) / 1000;
+      const yMm = Number(
+        (chiefPointUm && typeof chiefPointUm === "object" ? chiefPointUm.yUm : undefined)
+        ?? fallbackPoint?.yUm
+      ) / 1000;
+      if (Number.isFinite(xMm) && Number.isFinite(yMm)) {
+        realX[index] = xMm;
+        realY[index] = yMm;
+        directChiefRayCount += 1;
       }
     }
 
@@ -3965,8 +4029,8 @@ export async function runNativeGridDistortion(
       const rx = Number(realX[i]);
       const ry = Number(realY[i]);
       if (!Number.isFinite(rx) || !Number.isFinite(ry)) {
-        realX[i] = Number.isFinite(Number(idealX[i])) ? Number(idealX[i]) : 0;
-        realY[i] = Number.isFinite(Number(idealY[i])) ? Number(idealY[i]) : 0;
+        realX[i] = null;
+        realY[i] = null;
         missingFieldFallbackCount += 1;
       }
     }

@@ -128,6 +128,35 @@ function isFiniteSystem(opticalSystemRows) {
   return !!first.isObjectSpace && typeof first.thickness === 'number' && isFinite(first.thickness) && first.thickness > 0;
 }
 
+function isSkippableRayPathRowLocal(row) {
+  if (!row || typeof row !== 'object') return true;
+  const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '').trim().toLowerCase();
+  if (!objectType) return false;
+  if (objectType === 'object') return true;
+  if (objectType === 'gap' || objectType.includes('gap')) return true;
+  if (objectType === 'ct' || objectType.includes('coordinate') || objectType.includes('coordtrans')) return true;
+
+  const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+  if (blockType === 'paraxial' || blockType === 'thinlens') {
+    const surfaceRole = String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase();
+    if (surfaceRole === 'back') return true;
+  }
+
+  return false;
+}
+
+function surfaceIndexToRayPathPointIndexLocal(opticalSystemRows, surfaceIndex) {
+  if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) return null;
+  const sIdx = Math.max(0, Math.min(Number(surfaceIndex), opticalSystemRows.length - 1));
+  if (!Number.isFinite(sIdx) || isSkippableRayPathRowLocal(opticalSystemRows[sIdx])) return null;
+  let count = 0;
+  for (let i = 0; i <= sIdx; i++) {
+    if (isSkippableRayPathRowLocal(opticalSystemRows[i])) continue;
+    count += 1;
+  }
+  return count > 0 ? count : null;
+}
+
 async function tryCalculateDistortionDataNative(opticalSystemRows, fieldSamples, wavelength, heightMode, imageSurfaceIndex, onProgress = null) {
   try {
     const runtime = await import('../../src/desktop/runtime.ts');
@@ -340,7 +369,10 @@ export async function calculateDistortionData(opticalSystemRows, fieldSamples, w
       ? chief.rayData.segments
       : (Array.isArray(chief?.segments) ? chief.segments : []);
     if (!segs.length) return null;
-    const idx = Math.max(0, Math.min(imageSurfaceIndex, segs.length - 1));
+    const mappedIdx = surfaceIndexToRayPathPointIndexLocal(opticalSystemRows, imageSurfaceIndex);
+    const idx = Number.isInteger(mappedIdx)
+      ? Math.max(0, Math.min(mappedIdx, segs.length - 1))
+      : (segs.length - 1);
     const p = segs[idx] || segs[segs.length - 1] || null;
     const y = Number(p?.y);
     return Number.isFinite(y) ? Math.abs(y) : null;
@@ -487,7 +519,10 @@ export async function calculateGridDistortion(opticalSystemRows, gridSize = 20, 
       ? chief.rayData.segments
       : (Array.isArray(chief?.segments) ? chief.segments : []);
     if (!segs.length) return null;
-    const idx = Math.max(0, Math.min(imageSurfaceIndex, segs.length - 1));
+          const mappedIdx = surfaceIndexToRayPathPointIndexLocal(opticalSystemRows, imageSurfaceIndex);
+          const idx = Number.isInteger(mappedIdx)
+            ? Math.max(0, Math.min(mappedIdx, segs.length - 1))
+            : (segs.length - 1);
     const p = segs[idx] || segs[segs.length - 1] || null;
     const x = Number(p?.x);
     const y = Number(p?.y);
