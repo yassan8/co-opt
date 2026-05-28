@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use wasm_bindgen::prelude::*;
 use js_sys::{Float64Array, Function};
+use std::cell::RefCell;
 
 const EPS_R: f64 = 1e-10;
 const OPT_STATUS_OK: u32 = 0;
@@ -11,6 +12,106 @@ const OPT_STATUS_JACOBIAN_FAILURE: u32 = 3;
 const OPT_STATUS_NORMAL_EQ_FAILURE: u32 = 4;
 const OPT_STATUS_LINEAR_SOLVE_FAILURE: u32 = 5;
 const OPT_STATUS_INTERNAL_ERROR: u32 = 6;
+
+#[derive(Clone)]
+struct ChiefRayOriginSeedEntryNative {
+    direction: [f64; 3],
+    origin: [f64; 3],
+}
+
+#[derive(Clone)]
+struct ChiefRayOriginSeedFamilyNative {
+    key: String,
+    entries: Vec<ChiefRayOriginSeedEntryNative>,
+}
+
+thread_local! {
+    static CHIEF_RAY_ORIGIN_SEED_CACHE_NATIVE: RefCell<Vec<ChiefRayOriginSeedFamilyNative>> = RefCell::new(Vec::new());
+}
+
+fn build_chief_ray_origin_seed_family_key_native(
+    stop_center: [f64; 3],
+    stop_surface_index: usize,
+    row_count: usize,
+    wavelength_um: f64,
+) -> String {
+    format!(
+        "{}#{:.10}#{:.10}#{:.10}#{}#{:.10}",
+        row_count,
+        stop_center[0],
+        stop_center[1],
+        stop_center[2],
+        stop_surface_index,
+        wavelength_um,
+    )
+}
+
+fn get_nearby_chief_ray_origin_seed_native(
+    family_key: &str,
+    direction: [f64; 3],
+) -> Option<[f64; 3]> {
+    CHIEF_RAY_ORIGIN_SEED_CACHE_NATIVE.with(|cache| {
+        let families = cache.borrow();
+        let family = families.iter().find(|entry| entry.key == family_key)?;
+        let mut best_origin: Option<[f64; 3]> = None;
+        let mut best_distance = f64::INFINITY;
+        for entry in &family.entries {
+            let di = entry.direction[0] - direction[0];
+            let dj = entry.direction[1] - direction[1];
+            let dk = entry.direction[2] - direction[2];
+            let distance = (di * di + dj * dj + dk * dk).sqrt();
+            if distance < best_distance {
+                best_distance = distance;
+                best_origin = Some(entry.origin);
+            }
+        }
+        if best_distance <= 0.15 {
+            best_origin
+        } else {
+            None
+        }
+    })
+}
+
+fn store_chief_ray_origin_seed_native(
+    family_key: &str,
+    direction: [f64; 3],
+    origin: [f64; 3],
+) {
+    CHIEF_RAY_ORIGIN_SEED_CACHE_NATIVE.with(|cache| {
+        let mut families = cache.borrow_mut();
+        let family_index = families.iter().position(|entry| entry.key == family_key);
+        let next_entry = ChiefRayOriginSeedEntryNative { direction, origin };
+        if let Some(index) = family_index {
+            let family = &mut families[index];
+            family.entries.retain(|entry| {
+                let di = entry.direction[0] - direction[0];
+                let dj = entry.direction[1] - direction[1];
+                let dk = entry.direction[2] - direction[2];
+                (di * di + dj * dj + dk * dk).sqrt() > 1.0e-6
+            });
+            family.entries.insert(0, next_entry);
+            if family.entries.len() > 16 {
+                family.entries.truncate(16);
+            }
+            if index != 0 {
+                let family = families.remove(index);
+                families.insert(0, family);
+            }
+        } else {
+            families.insert(
+                0,
+                ChiefRayOriginSeedFamilyNative {
+                    key: family_key.to_string(),
+                    entries: vec![next_entry],
+                },
+            );
+            if families.len() > 128 {
+                families.truncate(128);
+            }
+        }
+    });
+}
 
 fn get_param(params: &[f64], idx: usize, default: f64) -> f64 {
     if idx < params.len() {
@@ -574,6 +675,13 @@ fn calculate_refractive_index_schott(coeffs: &Map<String, Value>, wavelength_um:
 }
 
 fn get_correct_refractive_index(row: &Value, wavelength_um: f64) -> f64 {
+    if let Some(m) = get_field(row, "material").and_then(value_to_string) {
+        let n = parse_refractive_index_from_material(&m);
+        if n > 0.0 {
+            return n;
+        }
+    }
+
     if let Some(obj) = row.as_object() {
         if let Some(sell) = obj
             .get("sellmeier")
@@ -624,14 +732,7 @@ fn get_correct_refractive_index(row: &Value, wavelength_um: f64) -> f64 {
         }
     }
 
-    if let Some(m) = get_field(row, "material").and_then(value_to_string) {
-        let n = parse_refractive_index_from_material(&m);
-        if n > 0.0 {
-            return n;
-        }
-    }
-
-    0.0
+    1.0
 }
 
 fn parse_coord_trans_params(row: &Value) -> (f64, f64, f64, f64, f64, f64, i32) {
@@ -3101,7 +3202,15 @@ fn estimate_entrance_center_origin_native(
         }
     }
 
-    let plane_z = (first_surface_z - 50.0).min(stop_center[2] - 10.0);
+    // Match the JS OPD entrance-pupil path: it first tries a launch plane only 10 mm
+    // in front of the first physical surface, then falls back to farther planes.
+    // Starting 50 mm away here over-expands the effective pupil for fast lenses and
+    // drives large OPD errors even on-axis for ImageHeight-derived fields.
+    let plane_z = if first_surface_z.is_finite() {
+        first_surface_z - 10.0
+    } else {
+        stop_center[2] - 10.0
+    };
     let dir = normalize3(dir_vector[0], dir_vector[1], dir_vector[2]);
     let safe_k = if dir[2].abs() > 1e-12 {
         dir[2]
@@ -3482,6 +3591,110 @@ fn solve_ray_origin_to_stop_point_fast_native(
     }
 }
 
+fn solve_chief_ray_origin_by_newton2d_native(
+    initial_origin: [f64; 3],
+    direction: [f64; 3],
+    stop_target: [f64; 3],
+    stop_surface_index: usize,
+    packed: &PackedMeta,
+    n_start: f64,
+    dynamic_half_range: f64,
+) -> Option<[f64; 3]> {
+    let dir = normalize3(direction[0], direction[1], direction[2]);
+    if !dir[0].is_finite() || !dir[1].is_finite() || !dir[2].is_finite() {
+        return None;
+    }
+
+    let mut x = initial_origin[0];
+    let mut y = initial_origin[1];
+    let z = initial_origin[2];
+    if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+        return None;
+    }
+
+    let mut best = [x, y, z];
+    let mut best_error = f64::INFINITY;
+    let tol = 1.0e-6;
+
+    for _ in 0..40 {
+        let Some(hit0) = trace_hit_xy_with_packed([x, y, z, dir[0], dir[1], dir[2]], stop_surface_index, n_start, packed) else {
+            return None;
+        };
+
+        let fx = hit0[0] - stop_target[0];
+        let fy = hit0[1] - stop_target[1];
+        let center_error = (fx * fx + fy * fy).sqrt();
+        if center_error < best_error {
+            best_error = center_error;
+            best = [x, y, z];
+        }
+        if center_error <= tol {
+            return Some(best);
+        }
+
+        let eps = (1.0e-3 * (1.0 + center_error)).max(1.0e-4);
+        let Some(hit_x) = trace_hit_xy_with_packed([x + eps, y, z, dir[0], dir[1], dir[2]], stop_surface_index, n_start, packed) else {
+            return if best_error < 1.0e-3 { Some(best) } else { None };
+        };
+        let Some(hit_y) = trace_hit_xy_with_packed([x, y + eps, z, dir[0], dir[1], dir[2]], stop_surface_index, n_start, packed) else {
+            return if best_error < 1.0e-3 { Some(best) } else { None };
+        };
+
+        let j11 = (hit_x[0] - hit0[0]) / eps;
+        let j21 = (hit_x[1] - hit0[1]) / eps;
+        let j12 = (hit_y[0] - hit0[0]) / eps;
+        let j22 = (hit_y[1] - hit0[1]) / eps;
+        let det = j11 * j22 - j12 * j21;
+
+        let (mut dx, mut dy) = if !det.is_finite() || det.abs() < 1.0e-14 {
+            (-0.25 * fx, -0.25 * fy)
+        } else {
+            ((-j22 * fx + j12 * fy) / det, (j21 * fx - j11 * fy) / det)
+        };
+
+        if !dx.is_finite() || !dy.is_finite() {
+            return if best_error < 1.0e-3 { Some(best) } else { None };
+        }
+
+        let max_step = 0.5_f64.max(dynamic_half_range * 0.05);
+        let step_norm = (dx * dx + dy * dy).sqrt();
+        if step_norm > max_step {
+            let scale = max_step / step_norm;
+            dx *= scale;
+            dy *= scale;
+        }
+
+        let mut accepted = false;
+        let mut alpha = 1.0;
+        for _ in 0..10 {
+            let nx = x + alpha * dx;
+            let ny = y + alpha * dy;
+            if let Some(next_hit) = trace_hit_xy_with_packed([nx, ny, z, dir[0], dir[1], dir[2]], stop_surface_index, n_start, packed) {
+                let ex = next_hit[0] - stop_target[0];
+                let ey = next_hit[1] - stop_target[1];
+                let next_error = (ex * ex + ey * ey).sqrt();
+                if next_error < center_error {
+                    x = nx;
+                    y = ny;
+                    accepted = true;
+                    break;
+                }
+            }
+            alpha *= 0.5;
+        }
+
+        if !accepted {
+            return if best_error < 1.0e-3 { Some(best) } else { None };
+        }
+    }
+
+    if best_error < 1.0e-3 {
+        Some(best)
+    } else {
+        None
+    }
+}
+
 fn trace_surface_local_with_packed(
     ray: [f64; 6],
     target_surface_index: usize,
@@ -3654,10 +3867,17 @@ fn find_infinite_system_chief_ray_origin_exact_native(
     rows: &[Value],
     packed_stop: &PackedMeta,
     n_start: f64,
+    wavelength_um: f64,
     stop_surface_index: usize,
     stop_center: [f64; 3],
     direction: [f64; 3],
 ) -> Option<[f64; 3]> {
+    let family_key = build_chief_ray_origin_seed_family_key_native(
+        stop_center,
+        stop_surface_index,
+        packed_stop.row_count,
+        wavelength_um,
+    );
     let object_plane_z = packed_stop.row_origins.get(2).copied().unwrap_or(0.0);
     let dummy_obj = Map::<String, Value>::new();
     let object_z = resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
@@ -3671,25 +3891,150 @@ fn find_infinite_system_chief_ray_origin_exact_native(
     let dz_to_stop = stop_center[2] - object_z;
     let guess_x = stop_center[0] - (direction[0] / safe_k) * dz_to_stop;
     let guess_y = stop_center[1] - (direction[1] / safe_k) * dz_to_stop;
+    let guess_origin = [
+        guess_x,
+        guess_y,
+        object_z + compute_object_surface_sag_native(rows, guess_x, guess_y),
+    ];
     let angle_x_deg = direction[0].atan2(direction[2].abs().max(1e-12)) * 180.0 / std::f64::consts::PI;
     let angle_y_deg = direction[1].atan2(direction[2].abs().max(1e-12)) * 180.0 / std::f64::consts::PI;
+    let stop_radius_guess = estimate_stop_radius_from_row(&rows[stop_surface_index]).max(10.0);
+    let guess_abs = guess_x.abs().max(guess_y.abs());
+    let dynamic_half_range = 50.0_f64.max(guess_abs + 2.0 * stop_radius_guess + 10.0);
     let optimized_xy = optimize_angle_object_position_native(angle_x_deg, angle_y_deg, stop_center, object_z);
     let entrance_origin = estimate_entrance_center_origin_native(rows, &packed_stop.row_origins, stop_center, direction);
-
-    let candidate_origins = [
-        [guess_x, guess_y, object_z + compute_object_surface_sag_native(rows, guess_x, guess_y)],
-        [
-            optimized_xy[0],
-            optimized_xy[1],
-            object_z + compute_object_surface_sag_native(rows, optimized_xy[0], optimized_xy[1]),
-        ],
-        entrance_origin,
-    ];
+    let nearby_seed = get_nearby_chief_ray_origin_seed_native(&family_key, direction);
+    let mut candidate_origins = Vec::with_capacity(4);
+    if let Some(seed) = nearby_seed {
+        candidate_origins.push(seed);
+    }
+    candidate_origins.push(guess_origin);
+    candidate_origins.push([
+        optimized_xy[0],
+        optimized_xy[1],
+        object_z + compute_object_surface_sag_native(rows, optimized_xy[0], optimized_xy[1]),
+    ]);
+    candidate_origins.push(entrance_origin);
 
     let mut best_origin: Option<[f64; 3]> = None;
     let mut best_error = f64::INFINITY;
 
-    for candidate_origin in candidate_origins {
+    let mut batch_initial_origins = Vec::with_capacity(candidate_origins.len() * 3);
+    let mut batch_dirs = Vec::with_capacity(candidate_origins.len() * 3);
+    let mut batch_targets = Vec::with_capacity(candidate_origins.len() * 3);
+    let mut batch_count = 0usize;
+
+    for &candidate_origin in &candidate_origins {
+        if !candidate_origin[0].is_finite() || !candidate_origin[1].is_finite() || !candidate_origin[2].is_finite() {
+            continue;
+        }
+        batch_initial_origins.extend_from_slice(&candidate_origin);
+        batch_dirs.extend_from_slice(&direction);
+        batch_targets.extend_from_slice(&stop_center);
+        batch_count += 1;
+    }
+
+    if batch_count > 0 {
+        let solved_batch = solve_ray_origins_to_stop_points_with_meta_batch(
+            &batch_initial_origins,
+            &batch_dirs,
+            &batch_targets,
+            batch_count,
+            stop_surface_index,
+            wavelength_um,
+            n_start,
+            &packed_stop.row_meta,
+            &packed_stop.row_params,
+            &packed_stop.row_origins,
+            &packed_stop.row_inv_rots,
+            &packed_stop.row_rots,
+            packed_stop.row_count,
+            24,
+            1.0e-6,
+            1.0e-3,
+            10.0,
+        );
+
+        for i in 0..batch_count {
+            let b = i * 4;
+            if solved_batch.len() < b + 4 || (solved_batch[b + 3] - 1.0).abs() > f64::EPSILON {
+                continue;
+            }
+            let solved_origin = [solved_batch[b], solved_batch[b + 1], solved_batch[b + 2]];
+            let Some(hit_xy) = trace_hit_xy_with_packed(
+                [
+                    solved_origin[0], solved_origin[1], solved_origin[2],
+                    direction[0], direction[1], direction[2],
+                ],
+                stop_surface_index,
+                n_start,
+                packed_stop,
+            ) else {
+                continue;
+            };
+            let error = ((hit_xy[0] - stop_center[0]).powi(2) + (hit_xy[1] - stop_center[1]).powi(2)).sqrt();
+            if error < best_error {
+                best_error = error;
+                best_origin = Some(solved_origin);
+            }
+            if error <= 1.0e-3 {
+                store_chief_ray_origin_seed_native(&family_key, direction, solved_origin);
+                return Some(solved_origin);
+            }
+        }
+    }
+
+    if let Some(seed) = nearby_seed {
+        if let Some(newton_origin) = solve_chief_ray_origin_by_newton2d_native(
+            seed,
+            direction,
+            stop_center,
+            stop_surface_index,
+            packed_stop,
+            n_start,
+            dynamic_half_range,
+        ) {
+            store_chief_ray_origin_seed_native(&family_key, direction, newton_origin);
+            return Some(newton_origin);
+        }
+    }
+    if let Some(newton_origin) = solve_chief_ray_origin_by_newton2d_native(
+        guess_origin,
+        direction,
+        stop_center,
+        stop_surface_index,
+        packed_stop,
+        n_start,
+        dynamic_half_range,
+    ) {
+        store_chief_ray_origin_seed_native(&family_key, direction, newton_origin);
+        return Some(newton_origin);
+    }
+    if let Some(grid_origin) = search_entrance_origin_grid_brent_native(
+        rows,
+        &packed_stop.row_origins,
+        stop_center,
+        direction,
+        stop_surface_index,
+        packed_stop,
+        n_start,
+        stop_radius_guess,
+    ) {
+        if let Some(refined_grid_origin) = solve_chief_ray_origin_by_newton2d_native(
+            grid_origin,
+            direction,
+            stop_center,
+            stop_surface_index,
+            packed_stop,
+            n_start,
+            dynamic_half_range,
+        ).or(Some(grid_origin)) {
+            store_chief_ray_origin_seed_native(&family_key, direction, refined_grid_origin);
+            return Some(refined_grid_origin);
+        }
+    }
+
+    for &candidate_origin in &candidate_origins {
         if !candidate_origin[0].is_finite() || !candidate_origin[1].is_finite() || !candidate_origin[2].is_finite() {
             continue;
         }
@@ -3722,11 +4067,15 @@ fn find_infinite_system_chief_ray_origin_exact_native(
             best_origin = Some(refined_origin);
         }
         if error <= 1e-3 {
+            store_chief_ray_origin_seed_native(&family_key, direction, refined_origin);
             return Some(refined_origin);
         }
     }
 
     if best_error <= 5e-3 {
+        if let Some(origin) = best_origin {
+            store_chief_ray_origin_seed_native(&family_key, direction, origin);
+        }
         best_origin
     } else {
         None
@@ -3738,6 +4087,7 @@ fn trace_image_height_infinite_candidate_local_exact_native(
     packed_stop: &PackedMeta,
     packed_target: &PackedMeta,
     n_start: f64,
+    wavelength_um: f64,
     stop_surface_index: usize,
     target_surface_index: usize,
     stop_center: [f64; 3],
@@ -3749,6 +4099,7 @@ fn trace_image_height_infinite_candidate_local_exact_native(
         rows,
         packed_stop,
         n_start,
+        wavelength_um,
         stop_surface_index,
         stop_center,
         nominal_direction,
@@ -3767,6 +4118,7 @@ fn trace_image_height_infinite_candidate_local_exact_native(
         rows,
         packed_stop,
         n_start,
+        wavelength_um,
         stop_surface_index,
         stop_center,
         refined_direction,
@@ -3799,6 +4151,7 @@ fn trace_image_height_infinite_chief_ray_exact_native(
     packed_stop: &PackedMeta,
     packed_target: &PackedMeta,
     n_start: f64,
+    wavelength_um: f64,
     stop_surface_index: usize,
     target_surface_index: usize,
     stop_center: [f64; 3],
@@ -3810,6 +4163,7 @@ fn trace_image_height_infinite_chief_ray_exact_native(
         rows,
         packed_stop,
         n_start,
+        wavelength_um,
         stop_surface_index,
         stop_center,
         nominal_direction,
@@ -3828,6 +4182,7 @@ fn trace_image_height_infinite_chief_ray_exact_native(
         rows,
         packed_stop,
         n_start,
+        wavelength_um,
         stop_surface_index,
         stop_center,
         refined_direction,
@@ -4641,6 +4996,7 @@ pub fn solve_image_height_pair_exact_with_rows(
                     &packed_stop,
                     &packed_target,
                     n_start,
+                    wavelength_um,
                     stop_surface_index,
                     target_surface_index,
                     stop_center,
@@ -4773,6 +5129,7 @@ pub fn trace_image_height_infinite_candidate_exact_with_rows(
         &packed_stop,
         &packed_target,
         n_start,
+        wavelength_um,
         stop_surface_index,
         target_surface_index,
         stop_center,
@@ -4830,6 +5187,7 @@ pub fn trace_image_height_infinite_chief_ray_exact_with_rows(
         &packed_stop,
         &packed_target,
         n_start,
+        wavelength,
         stop_surface_index,
         target_surface_index,
         stop_center,
@@ -5221,6 +5579,14 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         .and_then(|v| v.as_object())
         .ok_or_else(|| JsValue::from_str("invalid objectRows entry"))?;
 
+    let original_object_position = selected_object_map
+        .get("__cooptOriginalPosition")
+        .or_else(|| selected_object_map.get("position"))
+        .or_else(|| selected_object_map.get("object"))
+        .or_else(|| selected_object_map.get("objectType"))
+        .or_else(|| selected_object_map.get("type"))
+        .and_then(value_to_string)
+        .unwrap_or_else(|| "Point".to_string());
     let used_object_position = selected_object_map
         .get("position")
         .or_else(|| selected_object_map.get("object"))
@@ -5228,7 +5594,9 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         .or_else(|| selected_object_map.get("type"))
         .and_then(value_to_string)
         .unwrap_or_else(|| "Point".to_string());
+    let original_pos_lower = original_object_position.trim().to_lowercase();
     let pos_lower = used_object_position.trim().to_lowercase();
+    let is_original_image_height = original_pos_lower == "imageheight";
     let use_infinite_mode = is_infinite_conjugate_native(&rows);
     let is_angle_object = if use_infinite_mode {
         true
@@ -5240,6 +5608,35 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
     let angle_object_y = get_object_numeric(selected_object_map, &["yHeightAngle", "yFieldAngle", "fieldAngle", "yAngle", "angle", "y", "Y", "yHeight"]).unwrap_or(0.0);
     let height_object_x = get_object_numeric(selected_object_map, &["xHeight", "x", "X"]).unwrap_or(0.0);
     let height_object_y = get_object_numeric(selected_object_map, &["yHeight", "y", "Y", "height"]).unwrap_or(0.0);
+
+    let image_height_target = selected_object_map
+        .get("__cooptImageHeightTarget")
+        .and_then(|v| v.as_object());
+    let reported_object_position = if is_original_image_height {
+        "ImageHeight".to_string()
+    } else {
+        used_object_position.clone()
+    };
+    let reported_object_x = if is_original_image_height {
+        image_height_target
+            .and_then(|v| v.get("x"))
+            .and_then(value_to_f64)
+            .unwrap_or(height_object_x)
+    } else if use_infinite_mode {
+        angle_object_x
+    } else {
+        height_object_x
+    };
+    let reported_object_y = if is_original_image_height {
+        image_height_target
+            .and_then(|v| v.get("y"))
+            .and_then(value_to_f64)
+            .unwrap_or(height_object_y)
+    } else if use_infinite_mode {
+        angle_object_y
+    } else {
+        height_object_y
+    };
 
     let (used_object_x, used_object_y) = if use_infinite_mode {
         if is_angle_object { (angle_object_x, angle_object_y) } else { (0.0, 0.0) }
@@ -5275,25 +5672,91 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         && matches!(requested_pupil_sampling_mode.as_deref(), Some("entrance"));
     let mut effective_pupil_sampling_mode = if prefer_entrance_sampling { "entrance" } else { "stop" };
 
+    let image_height_chief_ray = selected_object_map
+        .get("__cooptImageHeightSolve")
+        .and_then(|v| v.get("chiefRay"))
+        .and_then(|v| v.as_object());
+    let image_height_chief_origin = image_height_chief_ray
+        .and_then(|v| v.get("origin"))
+        .and_then(|v| v.as_object())
+        .and_then(|origin| {
+            let x = origin.get("x").and_then(value_to_f64)?;
+            let y = origin.get("y").and_then(value_to_f64)?;
+            let z = origin.get("z").and_then(value_to_f64)?;
+            if x.is_finite() && y.is_finite() && z.is_finite() {
+                Some([x, y, z])
+            } else {
+                None
+            }
+        });
+    let image_height_chief_dir = image_height_chief_ray
+        .and_then(|v| v.get("dir"))
+        .and_then(|v| v.as_object())
+        .and_then(|dir| {
+            let x = dir.get("x").and_then(value_to_f64)?;
+            let y = dir.get("y").and_then(value_to_f64)?;
+            let z = dir.get("z").and_then(value_to_f64)?;
+            let norm = normalize3(x, y, z);
+            if norm[0].is_finite() && norm[1].is_finite() && norm[2].is_finite() {
+                Some(norm)
+            } else {
+                None
+            }
+        });
+    let has_image_height_chief_override = use_infinite_mode
+        && is_original_image_height
+        && image_height_chief_origin.is_some()
+        && image_height_chief_dir.is_some();
+
     let object_plane_z = packed_meta.row_origins.get(2).copied().unwrap_or(0.0);
-    let infinite_direction = build_direction_from_field_angles_native(used_object_x, used_object_y);
+    let mut infinite_direction = build_direction_from_field_angles_native(used_object_x, used_object_y);
+    if let Some(dir) = image_height_chief_dir {
+        if has_image_height_chief_override {
+            infinite_direction = dir;
+        }
+    }
     let (infinite_u_axis, infinite_v_axis) = build_perpendicular_basis_native(infinite_direction);
-    let infinite_object_z = resolve_infinite_object_z_native(&rows, selected_object_map, object_plane_z, stop_center[2]);
+    let mut infinite_object_z = resolve_infinite_object_z_native(&rows, selected_object_map, object_plane_z, stop_center[2]);
+    if let Some(origin) = image_height_chief_origin {
+        if has_image_height_chief_override {
+            infinite_object_z = origin[2];
+        }
+    }
     let infinite_origin_xy = if used_object_x.abs() < 1e-10 && used_object_y.abs() < 1e-10 {
         [0.0, 0.0]
+    } else if let Some(origin) = image_height_chief_origin {
+        if has_image_height_chief_override {
+            [origin[0], origin[1]]
+        } else {
+            optimize_angle_object_position_native(used_object_x, used_object_y, stop_center, infinite_object_z)
+        }
     } else {
         optimize_angle_object_position_native(used_object_x, used_object_y, stop_center, infinite_object_z)
     };
     let infinite_origin_sag = compute_object_surface_sag_native(&rows, infinite_origin_xy[0], infinite_origin_xy[1]);
-    let mut infinite_emission_origin = [
-        infinite_origin_xy[0],
-        infinite_origin_xy[1],
-        infinite_object_z + infinite_origin_sag,
-    ];
+    let mut infinite_emission_origin = if let Some(origin) = image_height_chief_origin {
+        if has_image_height_chief_override {
+            origin
+        } else {
+            [
+                infinite_origin_xy[0],
+                infinite_origin_xy[1],
+                infinite_object_z + infinite_origin_sag,
+            ]
+        }
+    } else {
+        [
+            infinite_origin_xy[0],
+            infinite_origin_xy[1],
+            infinite_object_z + infinite_origin_sag,
+        ]
+    };
     let lock_emission_x_for_symmetry = use_infinite_mode
+        && !has_image_height_chief_override
         && used_object_x.abs() <= 1.0e-12
         && used_object_y.abs() > 1.0e-12;
     let lock_emission_y_for_symmetry = use_infinite_mode
+        && !has_image_height_chief_override
         && used_object_y.abs() <= 1.0e-12
         && used_object_x.abs() > 1.0e-12;
     let apply_symmetry_axis_lock = |origin: [f64; 3]| -> [f64; 3] {
@@ -5468,6 +5931,82 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         ])
     };
 
+    let estimate_effective_entrance_radius = |center_origin: [f64; 3], max_radius: f64| -> f64 {
+        if !use_infinite_mode || !max_radius.is_finite() || max_radius <= 1.0e-9 {
+            return max_radius.max(0.01);
+        }
+
+        let trace_ok = |origin: [f64; 3]| -> bool {
+            let ray = [
+                origin[0],
+                origin[1],
+                origin[2],
+                infinite_direction[0],
+                infinite_direction[1],
+                infinite_direction[2],
+            ];
+            let hit = trace_single_ray_hit_point_with_meta_core(
+                &ray,
+                target_surface_index,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            (hit[0] - 1.0).abs() <= f64::EPSILON
+        };
+
+        let add_scaled = |base: [f64; 3], axis: [f64; 3], scale: f64| -> [f64; 3] {
+            [
+                base[0] + axis[0] * scale,
+                base[1] + axis[1] * scale,
+                base[2] + axis[2] * scale,
+            ]
+        };
+
+        let find_max_along = |axis: [f64; 3]| -> f64 {
+            let mut lo = 0.0_f64;
+            let mut hi = max_radius.max(0.0);
+            if hi <= 0.0 {
+                return 0.0;
+            }
+            if trace_ok(add_scaled(center_origin, axis, hi)) {
+                return hi;
+            }
+            for _ in 0..12 {
+                let mid = 0.5 * (lo + hi);
+                if trace_ok(add_scaled(center_origin, axis, mid)) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            lo
+        };
+
+        if !trace_ok(center_origin) {
+            return max_radius.max(0.01);
+        }
+
+        let r_pos_u = find_max_along(infinite_u_axis);
+        let r_neg_u = find_max_along([-infinite_u_axis[0], -infinite_u_axis[1], -infinite_u_axis[2]]);
+        let r_pos_v = find_max_along(infinite_v_axis);
+        let r_neg_v = find_max_along([-infinite_v_axis[0], -infinite_v_axis[1], -infinite_v_axis[2]]);
+        let r_min = r_pos_u.min(r_neg_u).min(r_pos_v).min(r_neg_v);
+        let r_max = r_pos_u.max(r_neg_u).max(r_pos_v).max(r_neg_v);
+        let eps = 1.0e-9;
+        if r_min > eps {
+            r_min
+        } else if r_max > eps {
+            r_max
+        } else {
+            max_radius.max(0.01)
+        }
+    };
+
     let mut chief_start_dir = build_marginal_ray(0.0, 0.0, sampling_radius, effective_emission_origin)
         .ok_or_else(|| JsValue::from_str("run_native_opd_map_wasm_json: chief ray not found"))?;
     let mut chief_reference_mode = "center-chief".to_string();
@@ -5484,24 +6023,30 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
     );
 
     if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON && use_infinite_mode {
-        let entrance_origin = search_entrance_origin_grid_brent_native(
+        let estimated_entrance_origin = estimate_entrance_center_origin_native(
             &rows,
             &packed_meta.row_origins,
             stop_center_for_sampling,
             infinite_direction,
-            stop_surface_index,
-            &packed_stop,
-            object_space_n,
-            entrance_radius,
-        )
-        .unwrap_or_else(|| {
-            estimate_entrance_center_origin_native(
+        );
+        let entrance_origin = if estimated_entrance_origin[0].is_finite()
+            && estimated_entrance_origin[1].is_finite()
+            && estimated_entrance_origin[2].is_finite()
+        {
+            estimated_entrance_origin
+        } else {
+            search_entrance_origin_grid_brent_native(
                 &rows,
                 &packed_meta.row_origins,
                 stop_center_for_sampling,
                 infinite_direction,
+                stop_surface_index,
+                &packed_stop,
+                object_space_n,
+                entrance_radius,
             )
-        });
+            .unwrap_or(estimated_entrance_origin)
+        };
         if let Some(entrance_chief_ray) = build_marginal_ray(0.0, 0.0, entrance_radius.max(0.01), entrance_origin) {
             let entrance_target_hit = trace_single_ray_hit_point_with_meta_core(
                 &entrance_chief_ray,
@@ -5518,7 +6063,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
                 chief_start_dir = entrance_chief_ray;
                 chief_target_hit = entrance_target_hit;
                 effective_emission_origin = apply_symmetry_axis_lock(entrance_origin);
-                chief_reference_mode = "entrance-chief-target(grid-brent)".to_string();
+                chief_reference_mode = "entrance-chief-target(estimate-first)".to_string();
             }
         }
     }
@@ -5649,28 +6194,38 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
             stop_sampling_fallback_to_entrance = true;
         }
         effective_pupil_sampling_mode = "entrance";
-        effective_sampling_radius = stop_radius.max(0.01);
+        effective_sampling_radius = entrance_radius.max(0.01);
 
         if use_infinite_mode {
+            let estimated_entrance_origin = estimate_entrance_center_origin_native(
+                &rows,
+                &packed_meta.row_origins,
+                stop_center_for_sampling,
+                infinite_direction,
+            );
             effective_emission_origin = apply_symmetry_axis_lock(
-                search_entrance_origin_grid_brent_native(
-                    &rows,
-                    &packed_meta.row_origins,
-                    stop_center_for_sampling,
-                    infinite_direction,
-                    stop_surface_index,
-                    &packed_stop,
-                    object_space_n,
-                    entrance_radius,
-                )
-                .unwrap_or_else(|| {
-                    estimate_entrance_center_origin_native(
+                if estimated_entrance_origin[0].is_finite()
+                    && estimated_entrance_origin[1].is_finite()
+                    && estimated_entrance_origin[2].is_finite()
+                {
+                    estimated_entrance_origin
+                } else {
+                    search_entrance_origin_grid_brent_native(
                         &rows,
                         &packed_meta.row_origins,
                         stop_center_for_sampling,
                         infinite_direction,
+                        stop_surface_index,
+                        &packed_stop,
+                        object_space_n,
+                        entrance_radius,
                     )
-                }),
+                    .unwrap_or(estimated_entrance_origin)
+                }
+            );
+            effective_sampling_radius = estimate_effective_entrance_radius(
+                effective_emission_origin,
+                entrance_radius.max(0.01),
             );
 
             if let Some(entrance_chief_ray) =
@@ -5695,9 +6250,9 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         }
 
         chief_reference_mode = if prefer_entrance_sampling {
-            format!("entrance-chief-requested(grid-brent,r={:.3})", effective_sampling_radius)
+            format!("entrance-chief-requested(estimate-first,r={:.3})", effective_sampling_radius)
         } else {
-            format!("entrance-chief-fallback(grid-brent,r={:.3})", effective_sampling_radius)
+            format!("entrance-chief-fallback(estimate-first,r={:.3})", effective_sampling_radius)
         };
     }
 
@@ -5746,20 +6301,79 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
     };
     if reference_geometry_invalid {
         if use_infinite_mode {
+            let _ = trace_image_height_infinite_chief_ray_exact_native(
+                &rows,
+                &packed_stop,
+                &packed_target,
+                object_space_n,
+                wavelength_um,
+                stop_surface_index,
+                target_surface_index,
+                stop_center,
+                used_object_x,
+                used_object_y,
+            );
             let field_probe_pairs = [(0.0, 0.05), (0.05, 0.0), (0.0, 0.1), (0.1, 0.0)];
             for (probe_x, probe_y) in field_probe_pairs {
-                let probe_direction = build_direction_from_field_angles_native(probe_x, probe_y);
-                let probe_origin_xy = optimize_angle_object_position_native(
+                let Some((mut probe_origin, mut probe_direction, _)) = trace_image_height_infinite_chief_ray_exact_native(
+                    &rows,
+                    &packed_stop,
+                    &packed_target,
+                    object_space_n,
+                    wavelength_um,
+                    stop_surface_index,
+                    target_surface_index,
+                    stop_center,
                     probe_x,
                     probe_y,
-                    stop_center,
-                    infinite_object_z,
+                ) else {
+                    continue;
+                };
+                let initial_probe_ray = [
+                    probe_origin[0],
+                    probe_origin[1],
+                    probe_origin[2],
+                    probe_direction[0],
+                    probe_direction[1],
+                    probe_direction[2],
+                ];
+                let probe_stop_hit = trace_single_ray_hit_point_with_meta_core(
+                    &initial_probe_ray,
+                    stop_surface_index,
+                    object_space_n,
+                    &packed_stop.row_meta,
+                    &packed_stop.row_params,
+                    &packed_stop.row_origins,
+                    &packed_stop.row_inv_rots,
+                    &packed_stop.row_rots,
+                    packed_stop.row_count,
                 );
-                let probe_origin_sag = compute_object_surface_sag_native(&rows, probe_origin_xy[0], probe_origin_xy[1]);
+                if (probe_stop_hit[0] - 1.0).abs() <= f64::EPSILON
+                    && probe_stop_hit[2].is_finite()
+                    && probe_stop_hit[3].is_finite()
+                    && probe_stop_hit[4].is_finite()
+                {
+                    let probe_stop_center = [probe_stop_hit[2], probe_stop_hit[3], probe_stop_hit[4]];
+                    if let Some((rerun_origin, rerun_direction, _)) = trace_image_height_infinite_chief_ray_exact_native(
+                        &rows,
+                        &packed_stop,
+                        &packed_target,
+                        object_space_n,
+                        wavelength_um,
+                        stop_surface_index,
+                        target_surface_index,
+                        probe_stop_center,
+                        probe_x,
+                        probe_y,
+                    ) {
+                        probe_origin = rerun_origin;
+                        probe_direction = rerun_direction;
+                    }
+                }
                 let probe_ray = [
-                    probe_origin_xy[0],
-                    probe_origin_xy[1],
-                    infinite_object_z + probe_origin_sag,
+                    probe_origin[0],
+                    probe_origin[1],
+                    probe_origin[2],
                     probe_direction[0],
                     probe_direction[1],
                     probe_direction[2],
@@ -6009,9 +6623,9 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         "stopSurface": stop_surface_index,
         "requestedObjectIndex": requested_object_index,
         "usedObjectIndex": used_object_index,
-        "usedObjectPosition": used_object_position,
-        "usedObjectX": used_object_x,
-        "usedObjectY": used_object_y,
+        "usedObjectPosition": reported_object_position,
+        "usedObjectX": reported_object_x,
+        "usedObjectY": reported_object_y,
         "gridSize": grid_size,
         "sampleCount": sample_count,
         "hitCount": hit_count,

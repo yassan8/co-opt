@@ -167,6 +167,239 @@ function readForcedInfinitePupilMode(): "stop" | "entrance" | "" {
   return "";
 }
 
+function isImageHeightNativeObjectRow(row: any): boolean {
+  const position = String(
+    row?.__cooptOriginalPosition
+    ?? row?.position
+    ?? row?.objectType
+    ?? row?.type
+    ?? "",
+  ).trim().toLowerCase();
+  return position.includes("imageheight");
+}
+
+function toWavefrontFieldSettingFromObjectRow(objRow: any, index0: number, opticalSystemRows: any[]): any {
+  const isInfiniteSystem = isInfiniteConjugateRows(opticalSystemRows);
+  const pickFirstFinite = (values: any[], fallback = 0): number => {
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return fallback;
+  };
+
+  if (!objRow || typeof objRow !== "object") {
+    return isInfiniteSystem
+      ? {
+        type: "Angle",
+        position: "Angle",
+        objectIndex: index0 + 1,
+        displayName: `Object ${index0 + 1}`,
+        x: 0,
+        y: 0,
+        fieldAngle: { x: 0, y: 0 },
+        xFieldAngle: 0,
+        yFieldAngle: 0,
+        xHeightAngle: 0,
+        yHeightAngle: 0,
+        angleX: 0,
+        angleY: 0,
+        xHeight: 0,
+        yHeight: 0,
+      }
+      : {
+        type: "Rectangle",
+        position: "Rectangle",
+        objectIndex: index0 + 1,
+        displayName: `Object ${index0 + 1}`,
+        x: 0,
+        y: 0,
+        xHeight: 0,
+        yHeight: 0,
+        fieldAngle: { x: 0, y: 0 },
+        fieldX: 0,
+        fieldY: 0,
+      };
+  }
+
+  const fieldX = pickFirstFinite([
+    objRow?.xHeightAngle,
+    objRow?.xFieldAngle,
+    objRow?.xHeight,
+    objRow?.x,
+    objRow?.angleX,
+    objRow?.Hx,
+  ], 0);
+  const fieldY = pickFirstFinite([
+    objRow?.yHeightAngle,
+    objRow?.yFieldAngle,
+    objRow?.fieldAngle,
+    objRow?.yHeight,
+    objRow?.y,
+    objRow?.angleY,
+    objRow?.Hy,
+  ], 0);
+  const objectIndex1 = index0 + 1;
+  const displayName = String(objRow?.comment || objRow?.name || `Object ${objectIndex1}`);
+
+  if (isInfiniteSystem) {
+    return {
+      type: "Angle",
+      position: "Angle",
+      objectIndex: objectIndex1,
+      displayName,
+      x: fieldX,
+      y: fieldY,
+      fieldAngle: { x: fieldX, y: fieldY },
+      xFieldAngle: fieldX,
+      yFieldAngle: fieldY,
+      xHeightAngle: fieldX,
+      yHeightAngle: fieldY,
+      angleX: fieldX,
+      angleY: fieldY,
+      xHeight: 0,
+      yHeight: 0,
+    };
+  }
+
+  return {
+    type: "Rectangle",
+    position: "Rectangle",
+    objectIndex: objectIndex1,
+    displayName,
+    x: fieldX,
+    y: fieldY,
+    xHeight: fieldX,
+    yHeight: fieldY,
+    fieldAngle: { x: 0, y: 0 },
+    fieldX,
+    fieldY,
+  };
+}
+
+async function computeReferenceOpdMapViaRustTracedJsMath(
+  opticalSystemRows: any[],
+  objectRows: any[],
+  objectIndex: number,
+  wavelengthUm: number,
+  gridSize: number,
+  requestedPupilSamplingMode: "stop" | "entrance",
+  opdDisplayMode: string,
+): Promise<NativeOpdMapResponse> {
+  const [{ createOPDCalculator }] = await Promise.all([
+    import("../../../evaluation/wavefront/wavefront.ts"),
+  ]);
+
+  const selectedObject = objectRows[objectIndex] || objectRows[0] || {};
+  const fieldSetting = toWavefrontFieldSettingFromObjectRow(selectedObject, objectIndex, opticalSystemRows);
+  const calc = createOPDCalculator(opticalSystemRows, wavelengthUm) as any;
+  const globalScope = (typeof globalThis !== "undefined") ? (globalThis as any) : null;
+  const overrideKey = "__cooptTraceOptionsOverride";
+  const prevOverride = globalScope ? globalScope[overrideKey] : undefined;
+  const prevOverrideObj = (prevOverride && typeof prevOverride === "object" && !Array.isArray(prevOverride)) ? prevOverride : null;
+
+  if (globalScope) {
+    globalScope[overrideKey] = {
+      ...(prevOverrideObj || {}),
+      useRustWasm: true,
+      requireRustWasm: true,
+      allowNonStrict: false,
+      requireForwardHit: true,
+      pupilSamplingMode: requestedPupilSamplingMode,
+    };
+  }
+
+  try {
+    if (typeof calc?.setReferenceRay === "function") {
+      calc.setReferenceRay(fieldSetting);
+    }
+
+    const rawOpdGrid = Array.from({ length: gridSize }, () => Array.from({ length: gridSize }, () => null as number | null));
+    const displayOpdGrid = Array.from({ length: gridSize }, () => Array.from({ length: gridSize }, () => null as number | null));
+    const pupilCoordinates: Array<{ x: number; y: number }> = [];
+    const opdsMicrons: number[] = [];
+    const sampleIndices: Array<{ gridX: number; gridY: number }> = [];
+
+    for (let gridY = 0; gridY < gridSize; gridY++) {
+      const pupilY = gridSize > 1 ? -1 + (2 * gridY) / (gridSize - 1) : 0;
+      for (let gridX = 0; gridX < gridSize; gridX++) {
+        const pupilX = gridSize > 1 ? -1 + (2 * gridX) / (gridSize - 1) : 0;
+        if ((pupilX * pupilX + pupilY * pupilY) > 1.000001) continue;
+
+        const opdUm = Number(
+          typeof calc?.calculateOPDReferenceSphere === "function"
+            ? calc.calculateOPDReferenceSphere(pupilX, pupilY, fieldSetting, false, { pupilSamplingMode: requestedPupilSamplingMode })
+            : calc?.calculateOPD?.(pupilX, pupilY, fieldSetting)
+        );
+        if (!Number.isFinite(opdUm)) continue;
+
+        const opdWaves = opdUm / wavelengthUm;
+        rawOpdGrid[gridY][gridX] = opdWaves;
+        displayOpdGrid[gridY][gridX] = opdWaves;
+        pupilCoordinates.push({ x: pupilX, y: pupilY });
+        opdsMicrons.push(opdUm);
+        sampleIndices.push({ gridX, gridY });
+      }
+    }
+
+    if (typeof calc?._removeBestFitPlane === "function" && opdDisplayMode !== "raw") {
+      const fit = calc._removeBestFitPlane(pupilCoordinates, opdsMicrons);
+      if (Array.isArray(fit?.residualWaves) && fit.residualWaves.length === sampleIndices.length) {
+        for (let i = 0; i < sampleIndices.length; i++) {
+          const value = Number(fit.residualWaves[i]);
+          if (!Number.isFinite(value)) continue;
+          const sample = sampleIndices[i];
+          displayOpdGrid[sample.gridY][sample.gridX] = value;
+        }
+      }
+    } else if (opdDisplayMode === "pistonRemoved" && sampleIndices.length > 0) {
+      let sum = 0;
+      let count = 0;
+      for (const sample of sampleIndices) {
+        const value = Number(rawOpdGrid[sample.gridY][sample.gridX]);
+        if (!Number.isFinite(value)) continue;
+        sum += value;
+        count += 1;
+      }
+      const mean = count > 0 ? sum / count : 0;
+      for (const sample of sampleIndices) {
+        const value = Number(rawOpdGrid[sample.gridY][sample.gridX]);
+        if (!Number.isFinite(value)) continue;
+        displayOpdGrid[sample.gridY][sample.gridX] = value - mean;
+      }
+    }
+
+    const hitCount = sampleIndices.length;
+    return {
+      backend: "web-rust-wasm-js-reference",
+      chiefReferenceMode: `js-reference-sphere(${requestedPupilSamplingMode})`,
+      targetSurface: pickImageSurfaceIndexNativeLike(opticalSystemRows),
+      stopSurface: 0,
+      requestedObjectIndex: objectIndex,
+      usedObjectIndex: objectIndex,
+      usedObjectPosition: String(selectedObject?.__cooptOriginalPosition ?? selectedObject?.position ?? ""),
+      usedObjectX: Number(selectedObject?.__cooptImageHeightTarget?.x ?? selectedObject?.xHeight ?? selectedObject?.x ?? 0) || 0,
+      usedObjectY: Number(selectedObject?.__cooptImageHeightTarget?.y ?? selectedObject?.yHeight ?? selectedObject?.y ?? 0) || 0,
+      wavelengthUm,
+      gridSize,
+      sampleCount: hitCount,
+      hitCount,
+      pupilSamplingMode: requestedPupilSamplingMode,
+      rawOpdGrid,
+      displayOpdGrid,
+      message: "Computed via JS reference-sphere math with Rust/WASM ray tracing",
+    } as NativeOpdMapResponse;
+  } finally {
+    if (globalScope) {
+      if (prevOverride === undefined) {
+        delete globalScope[overrideKey];
+      } else {
+        globalScope[overrideKey] = prevOverride;
+      }
+    }
+  }
+}
+
 // Session-scoped guard: once direct distortion WASM export is known-missing,
 // skip repeated attempts to reduce console noise and extra overhead.
 let directDistortionWasmUnavailableInSession = false;
@@ -566,28 +799,72 @@ function pickPrimarySourceRowsNativeLike(sourceRows: any[], wavelengthMode?: str
   return picked ? [picked] : [rows[0]];
 }
 
-function deriveMaxFieldAngleNativeLike(objectRows: any[]): number {
+function getObjectPositionTagNativeLike(row: any): string {
+  return String(row?.position ?? row?.object ?? row?.objectType ?? row?.type ?? "").trim().toLowerCase();
+}
+
+function deriveGridFieldModeNativeLike(objectRows: any[]): "angle" | "height" | "imageheight" {
   const rows = Array.isArray(objectRows) ? objectRows : [];
-  if (rows.length === 0) return 20;
-  let maxAngle = 0;
-  for (const row of rows) {
-    const candidates = [
-      row?.yFieldAngle,
-      row?.yAngle,
-      row?.fieldAngle,
-      row?.xFieldAngle,
-      row?.xAngle,
-      row?.xHeightAngle,
-      row?.yHeightAngle,
-    ];
+  if (rows.some((row) => getObjectPositionTagNativeLike(row).includes("imageheight"))) return "imageheight";
+  if (rows.some((row) => {
+    const tag = getObjectPositionTagNativeLike(row);
+    return tag.includes("rectangle") || tag.includes("rect") || tag.includes("height");
+  })) {
+    return "height";
+  }
+  if (rows.some((row) => getObjectPositionTagNativeLike(row).includes("angle"))) return "angle";
+
+  const hasNumericHeight = rows.some((row) => {
+    const value = Number(row?.yHeight ?? row?.y ?? row?.height ?? row?.["object y"]);
+    return Number.isFinite(value);
+  });
+  return hasNumericHeight ? "height" : "angle";
+}
+
+function readGridFieldVectorNativeLike(row: any, mode: "angle" | "height" | "imageheight"): { x: number; y: number } {
+  const pick = (...candidates: any[]): number => {
     for (const candidate of candidates) {
       const value = Number(candidate);
-      if (Number.isFinite(value)) {
-        maxAngle = Math.max(maxAngle, Math.abs(value));
-      }
+      if (Number.isFinite(value)) return value;
     }
+    return 0;
+  };
+
+  if (mode === "imageheight") {
+    return {
+      x: pick(row?.__cooptImageHeightTarget?.x, row?.xHeight, row?.x, row?.["object x"], row?.xHeightAngle),
+      y: pick(row?.__cooptImageHeightTarget?.y, row?.yHeight, row?.y, row?.["object y"], row?.yHeightAngle),
+    };
   }
-  return maxAngle > 0 ? maxAngle : 20;
+
+  if (mode === "height") {
+    return {
+      x: pick(row?.xHeight, row?.x, row?.["object x"], row?.xHeightAngle),
+      y: pick(row?.yHeight, row?.y, row?.["object y"], row?.yHeightAngle),
+    };
+  }
+
+  return {
+    x: pick(row?.xFieldAngle, row?.xAngle, row?.xHeightAngle, row?.x),
+    y: pick(row?.yFieldAngle, row?.fieldAngle, row?.yAngle, row?.yHeightAngle, row?.y),
+  };
+}
+
+function deriveGridAxisExtentsNativeLike(objectRows: any[], mode: "angle" | "height" | "imageheight"): { x: number; y: number } {
+  const rows = Array.isArray(objectRows) ? objectRows : [];
+  if (rows.length === 0) return { x: 20, y: 20 };
+
+  let maxX = 0;
+  let maxY = 0;
+  for (const row of rows) {
+    const vector = readGridFieldVectorNativeLike(row, mode);
+    if (Number.isFinite(vector.x)) maxX = Math.max(maxX, Math.abs(vector.x));
+    if (Number.isFinite(vector.y)) maxY = Math.max(maxY, Math.abs(vector.y));
+  }
+  if (!(maxX > 0) && maxY > 0) maxX = maxY;
+  if (!(maxY > 0) && maxX > 0) maxY = maxX;
+  if (!(maxX > 0) && !(maxY > 0)) return { x: 20, y: 20 };
+  return { x: maxX, y: maxY };
 }
 
 function isSkippableRayPathRowNativeLike(row: any): boolean {
@@ -1658,6 +1935,21 @@ export async function runNativeOpdMap(
       ? Number(payload.surfaceIndex)
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
 
+    if (isImageHeightNativeObjectRow(selectedObject)) {
+      return clampIdealParaxialNativeOpdResponse(
+        opticalSystemRows,
+        await computeReferenceOpdMapViaRustTracedJsMath(
+          opticalSystemRows,
+          objectRows,
+          objectIndex,
+          wavelengthUm,
+          gridSize,
+          requestedPupilSamplingMode,
+          opdDisplayMode,
+        ),
+      );
+    }
+
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const runNativeWasm = (rust as any)?.run_native_opd_map_wasm_json;
@@ -1768,6 +2060,36 @@ export async function runNativeOpdRmsWaves(
     const targetSurface = Number.isInteger(payload?.surfaceIndex) && Number(payload.surfaceIndex) >= 0
       ? Number(payload.surfaceIndex)
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
+
+    if (isImageHeightNativeObjectRow(requestedObject)) {
+      const mapResponse = await computeReferenceOpdMapViaRustTracedJsMath(
+        opticalSystemRows,
+        objectRows,
+        objectIndex,
+        wavelengthUm,
+        gridSize,
+        requestedPupilSamplingMode,
+        opdDisplayMode,
+      );
+      return clampIdealParaxialNativeOpdRmsResponse(opticalSystemRows, {
+        backend: String(mapResponse?.backend || "web-rust-wasm-js-reference"),
+        chiefReferenceMode: String(mapResponse?.chiefReferenceMode || ""),
+        targetSurface: Number.isFinite(Number(mapResponse?.targetSurface)) ? Number(mapResponse.targetSurface) : targetSurface,
+        stopSurface: Number.isFinite(Number(mapResponse?.stopSurface)) ? Number(mapResponse.stopSurface) : 0,
+        requestedObjectIndex: objectIndex,
+        usedObjectIndex: Number.isFinite(Number(mapResponse?.usedObjectIndex)) ? Number(mapResponse.usedObjectIndex) : objectIndex,
+        usedObjectPosition: String(mapResponse?.usedObjectPosition || (isAngle ? "angle" : "height")),
+        usedObjectX: Number.isFinite(Number(mapResponse?.usedObjectX)) ? Number(mapResponse.usedObjectX) : xVal,
+        usedObjectY: Number.isFinite(Number(mapResponse?.usedObjectY)) ? Number(mapResponse.usedObjectY) : yVal,
+        wavelengthUm,
+        gridSize: Number.isFinite(Number(mapResponse?.gridSize)) ? Number(mapResponse.gridSize) : gridSize,
+        sampleCount: Number.isFinite(Number(mapResponse?.sampleCount)) ? Number(mapResponse.sampleCount) : 0,
+        hitCount: Number.isFinite(Number(mapResponse?.hitCount)) ? Number(mapResponse.hitCount) : 0,
+        pupilSamplingMode: mapResponse?.pupilSamplingMode === "entrance" ? "entrance" : "stop",
+        rmsWaves: computeFiniteGridRmsNativeLike(Array.isArray(mapResponse?.displayOpdGrid) ? mapResponse.displayOpdGrid : []),
+        message: String(mapResponse?.message || "Computed via JS reference-sphere math with Rust/WASM ray tracing"),
+      } as NativeOpdRmsWavesResponse);
+    }
 
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
@@ -3888,9 +4210,12 @@ export async function runNativeGridDistortion(
       : buildDefaultDistortionSourceRows(wavelength);
     const finiteSystem = isFiniteConjugateNativeLike(opticalSystemRows);
     const objectDistance = getObjectDistanceMmNativeLike(opticalSystemRows);
-    const maxFieldAngle = deriveMaxFieldAngleNativeLike(Array.isArray(payload?.objectRows) ? payload.objectRows : []);
+    const inputObjectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
+    const gridFieldMode = deriveGridFieldModeNativeLike(inputObjectRows);
+    const gridFieldExtents = deriveGridAxisExtentsNativeLike(inputObjectRows, gridFieldMode);
     const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
     let focalLength = Number(paraxial?.focalLength);
+    let magnification = -1;
     try {
       const thetaDeg = 0.1;
       const thetaRad = thetaDeg * Math.PI / 180;
@@ -3939,27 +4264,103 @@ export async function runNativeGridDistortion(
     } catch {
       // Keep paraxial focal length fallback.
     }
+    if (gridFieldMode === "height" && finiteSystem) {
+      try {
+        const magProbeResp = await runNativeSpotRaytrace({
+          opticalSystemRows,
+          sourceRows,
+          objectRows: [{
+            id: "Field-0",
+            name: "Field-0",
+            position: "Rectangle",
+            xHeight: 0,
+            yHeight: 1,
+            x: 0,
+            y: 1,
+          }],
+          surfaceIndex,
+          rayCount: 51,
+          ringCount: 1,
+          pattern: "cross",
+          wavelengthMode: "primary",
+          forceRustWasm: false,
+        });
+        const magProbeSeries = Array.isArray(magProbeResp?.series) ? magProbeResp.series : [];
+        const magProbeRow = magProbeSeries[0] as any;
+        const magChiefYUm = Number(
+          (magProbeRow?.chiefPointUm && typeof magProbeRow.chiefPointUm === "object" ? magProbeRow.chiefPointUm.yUm : undefined)
+          ?? (Array.isArray(magProbeRow?.points) ? magProbeRow.points[0]?.yUm : undefined)
+        );
+        if (Number.isFinite(magChiefYUm)) {
+          const magFromChief = Math.abs(magChiefYUm / 1000);
+          if (Number.isFinite(magFromChief) && Math.abs(magFromChief) > 1e-9) {
+            magnification = magFromChief;
+          }
+        }
+      } catch {
+        // Keep default magnification fallback.
+      }
+    }
     const hasFiniteFocalLength = Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12;
     // Match distortion behavior: continue with a normalized focal length instead of hard-failing.
     const focalLengthForGrid = hasFiniteFocalLength ? focalLength : 1.0;
-    const maxImageHeight = focalLengthForGrid * Math.tan((maxFieldAngle * Math.PI) / 180);
-    const step = (2 * maxImageHeight) / Math.max(1, gridSize - 1);
+    const imageScaleForHeight = (gridFieldMode === "height" && finiteSystem && Number.isFinite(magnification) && Math.abs(magnification) > 1e-9)
+      ? Math.abs(magnification)
+      : 1.0;
+    const maxImageX = gridFieldMode === "angle"
+      ? focalLengthForGrid * Math.tan((gridFieldExtents.x * Math.PI) / 180)
+      : gridFieldMode === "height"
+        ? gridFieldExtents.x * imageScaleForHeight
+        : gridFieldExtents.x;
+    const maxImageY = gridFieldMode === "angle"
+      ? focalLengthForGrid * Math.tan((gridFieldExtents.y * Math.PI) / 180)
+      : gridFieldMode === "height"
+        ? gridFieldExtents.y * imageScaleForHeight
+        : gridFieldExtents.y;
+    const stepX = (2 * maxImageX) / Math.max(1, gridSize - 1);
+    const stepY = (2 * maxImageY) / Math.max(1, gridSize - 1);
 
     const idealX: number[] = [];
     const idealY: number[] = [];
     const objectRows: any[] = [];
     for (let yi = 0; yi < gridSize; yi++) {
-      const imageY = -maxImageHeight + yi * step;
+      const imageY = -maxImageY + yi * stepY;
       const thetaYRad = Math.atan(imageY / focalLengthForGrid);
       const thetaY = (thetaYRad * 180) / Math.PI;
       for (let xi = 0; xi < gridSize; xi++) {
-        const imageX = -maxImageHeight + xi * step;
+        const imageX = -maxImageX + xi * stepX;
         const thetaXRad = Math.atan(imageX / focalLengthForGrid);
         const thetaX = (thetaXRad * 180) / Math.PI;
         const index = yi * gridSize + xi;
         idealX.push(imageX);
         idealY.push(imageY);
-        if (finiteSystem) {
+        if (gridFieldMode === "imageheight") {
+          objectRows.push({
+            id: `Field-${index}`,
+            name: `Field-${index}`,
+            position: "ImageHeight",
+            objectType: "ImageHeight",
+            xHeightAngle: imageX,
+            yHeightAngle: imageY,
+            xHeight: imageX,
+            yHeight: imageY,
+            x: imageX,
+            y: imageY,
+            __cooptImageHeightTarget: { x: imageX, y: imageY },
+          });
+        } else if (gridFieldMode === "height") {
+          const objectX = finiteSystem && imageScaleForHeight > 1e-9 ? (imageX / imageScaleForHeight) : imageX;
+          const objectY = finiteSystem && imageScaleForHeight > 1e-9 ? (imageY / imageScaleForHeight) : imageY;
+          objectRows.push({
+            id: `Field-${index}`,
+            name: `Field-${index}`,
+            position: "Rectangle",
+            xHeight: objectX,
+            yHeight: objectY,
+            x: objectX,
+            y: objectY,
+          });
+        } else if (finiteSystem) {
           const objectX = objectDistance * Math.tan(thetaXRad);
           const objectY = objectDistance * Math.tan(thetaYRad);
           objectRows.push({
@@ -3985,6 +4386,10 @@ export async function runNativeGridDistortion(
       }
     }
 
+    const traceObjectRows = gridFieldMode === "imageheight"
+      ? await normalizeTransverseObjectRowsForImageHeight(opticalSystemRows, sourceRows, objectRows, wavelength)
+      : objectRows;
+
     const realX = new Array(idealX.length).fill(null) as Array<number | null>;
     const realY = new Array(idealY.length).fill(null) as Array<number | null>;
     let directChiefRayCount = 0;
@@ -3992,7 +4397,7 @@ export async function runNativeGridDistortion(
     const spotResponse = await runNativeSpotRaytrace({
       opticalSystemRows,
       sourceRows,
-      objectRows,
+      objectRows: traceObjectRows,
       surfaceIndex,
       rayCount: 51,
       ringCount: 1,
@@ -4042,13 +4447,16 @@ export async function runNativeGridDistortion(
       realX,
       realY,
       gridSize,
-      maxFieldAngle,
+      maxFieldAngle: gridFieldMode === "angle" ? Math.max(gridFieldExtents.x, gridFieldExtents.y) : NaN,
       meta: {
         wavelength,
         focalLength: hasFiniteFocalLength ? focalLength : NaN,
         focalLengthFallbackUsed: !hasFiniteFocalLength,
         focalLengthForGrid,
         finiteSystem,
+        gridFieldMode,
+        maxImageX,
+        maxImageY,
         surfaceIndex,
         directChiefRayCount,
         missingFieldFallbackCount,
