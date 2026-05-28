@@ -12,6 +12,7 @@ const w: Record<string, any> = window;
  */
 
 import type { Block, Configuration } from '../types/index.ts';
+import { loadPersistedSystemConfigurations } from '../data/table-configuration.ts';
 import { loadTableData as loadSourceTableData, saveTableData as saveSourceTableData } from '../data/table-source.ts';
 import { loadTableData as loadObjectTableData, saveTableData as saveObjectTableData } from '../data/table-object.ts';
 import { loadTableData as loadSystemRequirementsTableData, saveTableData as saveSystemRequirementsTableData } from '../data/table-system-requirements.ts';
@@ -77,6 +78,20 @@ function requestDesignIntentUiRefresh(options: any = {}): boolean {
     }
   } catch (_) {}
   return false;
+}
+
+function loadCanonicalDesignIntentSystemConfig(): any {
+  try {
+    const persistedConfig = loadPersistedSystemConfigurations();
+    if (persistedConfig && Array.isArray(persistedConfig.configurations) && persistedConfig.configurations.length > 0) {
+      return persistedConfig;
+    }
+  } catch (_) {}
+  try {
+    return w.loadSystemConfigurations?.();
+  } catch (_) {
+    return null;
+  }
 }
 
 // ============================================================================
@@ -674,13 +689,17 @@ export class SetDesignIntentOptimizeBulkCommand extends Command {
   private applyBlocks(blocksSnapshot: any[]): void {
     if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
-      const sysConfig = w.loadSystemConfigurations?.();
+      const sysConfig = loadCanonicalDesignIntentSystemConfig();
       if (!sysConfig || !Array.isArray(sysConfig.configurations)) return;
 
       const cfg = sysConfig.configurations.find((c: any) => c && (String(c.id) === this.configId || String(c.name) === this.configId));
       if (!cfg) return;
 
       cfg.blocks = Array.isArray(blocksSnapshot) ? JSON.parse(JSON.stringify(blocksSnapshot)) : [];
+
+      if (w.saveSystemConfigurations) {
+        w.saveSystemConfigurations(sysConfig);
+      }
 
       if (requestDesignIntentUiRefresh({
         systemConfig: sysConfig,

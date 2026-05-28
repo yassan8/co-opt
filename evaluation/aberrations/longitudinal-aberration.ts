@@ -1021,9 +1021,14 @@ export function calculateLongitudinalAberration(
                 chiefFocusZ = chiefIntersection;
             }
         }
-        if (Number.isFinite(chiefFocusZ)) {
+        // Keep spherical / longitudinal chromatic evaluation referenced to the
+        // same-wavelength paraxial image point. Unconditionally switching to the
+        // traced chief-ray focus exaggerates chromatic shift when third-order
+        // aberration is otherwise small, because the chief ray is not a paraxial
+        // reference and depends on sampling/aiming details.
+        if (!Number.isFinite(referenceFocusOffset) && Number.isFinite(chiefFocusZ)) {
             referenceFocusOffset = chiefFocusZ;
-            console.log(`  基準像点位置（chief ray）: ${chiefFocusZ.toFixed(6)} mm`);
+            console.log(`  基準像点位置（chief ray fallback）: ${chiefFocusZ.toFixed(6)} mm`);
         }
         
         const stopPlaneCenter3d = surfaceOrigins?.[stopSurfaceIndex]?.origin || null;
@@ -1544,11 +1549,11 @@ export function calculateLongitudinalAberration(
         };
 
         const referenceRay = selectReferenceRay(meridionalRays) || selectReferenceRay(successfulRays);
-        if (referenceRay) {
+        if (!Number.isFinite(referenceFocusOffset) && referenceRay) {
             const refFocus = findRayAxisIntersection(referenceRay, lastSurfaceZ);
             if (Number.isFinite(refFocus)) {
                 referenceFocusOffset = refFocus;
-                console.log(`  基準像点位置（reference ray）: ${refFocus.toFixed(6)} mm`);
+                console.log(`  基準像点位置（reference ray fallback）: ${refFocus.toFixed(6)} mm`);
             }
         }
         

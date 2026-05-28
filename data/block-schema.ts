@@ -84,6 +84,14 @@ function normalizeOptionalNumberToRowValue(value: any): string {
   return '';
 }
 
+function cloneJsonValue<T>(value: T): T | null {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    return null;
+  }
+}
+
 function inferThinLensReferenceIndex(material: any, rindex: any): number {
   const explicitRindex = Number(String(rindex ?? '').trim());
   if (Number.isFinite(explicitRindex) && explicitRindex > 1.0) return explicitRindex;
@@ -3143,11 +3151,27 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
         // If material is not specified or is AIR, preserve any manually-set rindex/abbe (synthetic glass)
         if (!glassName || glassName.toUpperCase() === 'AIR') return;
         const glass = getGlassDataWithSellmeier(glassName);
+        const hasExplicitRindex = row.rindex !== undefined && row.rindex !== null && String(row.rindex).trim() !== '';
+        const hasExplicitAbbe = row.abbe !== undefined && row.abbe !== null && String(row.abbe).trim() !== '';
+        if (glass?.sellmeier && typeof glass.sellmeier === 'object') {
+          row.sellmeier = { ...glass.sellmeier };
+          row.__cooptSellmeier = { ...glass.sellmeier };
+        } else {
+          try { delete row.sellmeier; } catch (_) {}
+          try { delete row.__cooptSellmeier; } catch (_) {}
+        }
+        if (glass?.schott && typeof glass.schott === 'object') {
+          row.schott = { ...glass.schott };
+          row.__cooptSchott = { ...glass.schott };
+        } else {
+          try { delete row.schott; } catch (_) {}
+          try { delete row.__cooptSchott; } catch (_) {}
+        }
         // Only update if glass data is found; otherwise preserve existing rindex/abbe
-        if (glass && typeof glass.nd === 'number' && Number.isFinite(glass.nd)) {
+        if (!hasExplicitRindex && glass && typeof glass.nd === 'number' && Number.isFinite(glass.nd)) {
           row.rindex = String(glass.nd);
         }
-        if (glass && typeof glass.vd === 'number' && Number.isFinite(glass.vd)) {
+        if (!hasExplicitAbbe && glass && typeof glass.vd === 'number' && Number.isFinite(glass.vd)) {
           row.abbe = String(glass.vd);
         }
       } catch (_) {
@@ -3358,6 +3382,12 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       }
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
         applyVFlag(front, 'optimizeMaterial');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'rindex') && shouldMarkV(vars.rindex)) {
+        applyVFlag(front, 'optimizeRI');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'abbe') && shouldMarkV(vars.abbe)) {
+        applyVFlag(front, 'optimizeAbbe');
       }
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'frontConic') && shouldMarkV(vars.frontConic)) {
         applyVFlag(front, 'optimizeConic');
@@ -3628,6 +3658,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       const thickness2 = getParamOrVarValue(params, vars, 'thickness2');
       const material1 = getParamOrVarValue(params, vars, 'material1');
       const material2 = getParamOrVarValue(params, vars, 'material2');
+      const rindex1 = getParamOrVarValue(params, vars, 'rindex1');
+      const rindex2 = getParamOrVarValue(params, vars, 'rindex2');
       const abbe1 = getParamOrVarValue(params, vars, 'abbe1');
       const abbe2 = getParamOrVarValue(params, vars, 'abbe2');
 
@@ -3651,6 +3683,9 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       
       // Apply rindex/abbe only if material was user-specified
       if (!usedDefaultMaterial1) {
+        if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
+          s1.rindex = String(rindex1);
+        }
         if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
           s1.abbe = String(abbe1);
         }
@@ -3677,6 +3712,9 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       
       // Apply rindex/abbe only if material was user-specified
       if (!usedDefaultMaterial2) {
+        if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
+          s2.rindex = String(rindex2);
+        }
         if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
           s2.abbe = String(abbe2);
         }
@@ -3716,6 +3754,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material1') && shouldMarkV(vars.material1)) applyVFlag(s1, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'rindex1') && shouldMarkV(vars.rindex1)) applyVFlag(s1, 'optimizeRI');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'abbe1') && shouldMarkV(vars.abbe1)) applyVFlag(s1, 'optimizeAbbe');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf1Conic') && shouldMarkV(vars.surf1Conic)) applyVFlag(s1, 'optimizeConic');
       for (let i = 1; i <= 10; i++) {
         const key = `surf1Coef${i}`;
@@ -3726,6 +3766,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius2') && shouldMarkV(vars.radius2)) applyVFlag(s2, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness2') && shouldMarkV(vars.thickness2)) applyVFlag(s2, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material2') && shouldMarkV(vars.material2)) applyVFlag(s2, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'rindex2') && shouldMarkV(vars.rindex2)) applyVFlag(s2, 'optimizeRI');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'abbe2') && shouldMarkV(vars.abbe2)) applyVFlag(s2, 'optimizeAbbe');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf2Conic') && shouldMarkV(vars.surf2Conic)) applyVFlag(s2, 'optimizeConic');
       for (let i = 1; i <= 10; i++) {
         const key = `surf2Coef${i}`;
@@ -3805,6 +3847,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       const material2 = getParamOrVarValue(params, vars, 'material2');
       const material3 = getParamOrVarValue(params, vars, 'material3');
       const abbe1 = getParamOrVarValue(params, vars, 'abbe1');
+      const rindex1 = getParamOrVarValue(params, vars, 'rindex1');
+      const rindex2 = getParamOrVarValue(params, vars, 'rindex2');
       const abbe2 = getParamOrVarValue(params, vars, 'abbe2');
       const rindex3 = getParamOrVarValue(params, vars, 'rindex3');
       const abbe3 = getParamOrVarValue(params, vars, 'abbe3');
@@ -3829,6 +3873,9 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       
       // Apply rindex/abbe only if material was user-specified
       if (!usedDefaultMaterial1) {
+        if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
+          s1.rindex = String(rindex1);
+        }
         if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
           s1.abbe = String(abbe1);
         }
@@ -3855,6 +3902,9 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       
       // Apply rindex/abbe only if material was user-specified
       if (!usedDefaultMaterial2) {
+        if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
+          s2.rindex = String(rindex2);
+        }
         if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
           s2.abbe = String(abbe2);
         }
@@ -3930,6 +3980,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material1') && shouldMarkV(vars.material1)) applyVFlag(s1, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'rindex1') && shouldMarkV(vars.rindex1)) applyVFlag(s1, 'optimizeRI');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'abbe1') && shouldMarkV(vars.abbe1)) applyVFlag(s1, 'optimizeAbbe');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf1Conic') && shouldMarkV(vars.surf1Conic)) applyVFlag(s1, 'optimizeConic');
       for (let i = 1; i <= 10; i++) {
         const key = `surf1Coef${i}`;
@@ -3940,6 +3992,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius2') && shouldMarkV(vars.radius2)) applyVFlag(s2, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness2') && shouldMarkV(vars.thickness2)) applyVFlag(s2, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material2') && shouldMarkV(vars.material2)) applyVFlag(s2, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'rindex2') && shouldMarkV(vars.rindex2)) applyVFlag(s2, 'optimizeRI');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'abbe2') && shouldMarkV(vars.abbe2)) applyVFlag(s2, 'optimizeAbbe');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf2Conic') && shouldMarkV(vars.surf2Conic)) applyVFlag(s2, 'optimizeConic');
       for (let i = 1; i <= 10; i++) {
         const key = `surf2Coef${i}`;
@@ -3950,6 +4004,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius3') && shouldMarkV(vars.radius3)) applyVFlag(s3, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness3') && shouldMarkV(vars.thickness3)) applyVFlag(s3, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material3') && shouldMarkV(vars.material3)) applyVFlag(s3, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'rindex3') && shouldMarkV(vars.rindex3)) applyVFlag(s3, 'optimizeRI');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'abbe3') && shouldMarkV(vars.abbe3)) applyVFlag(s3, 'optimizeAbbe');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf3Conic') && shouldMarkV(vars.surf3Conic)) applyVFlag(s3, 'optimizeConic');
       for (let i = 1; i <= 10; i++) {
         const key = `surf3Coef${i}`;
@@ -4291,6 +4347,13 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
   };
 
   const legacyVarV = (value) => ({ value, optimize: { mode: 'V' } });
+
+  const appendLegacyVar = (target, rowObj, legacyKey, blockKey, value) => {
+    if (!target || !rowObj || !blockKey) return;
+    if (legacyHasV(rowObj, legacyKey)) {
+      target[blockKey] = legacyVarV(value);
+    }
+  };
 
   const isLegacyParaxialRow = (rowObj) => {
     if (!rowObj || typeof rowObj !== 'object') return false;
@@ -4673,9 +4736,34 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
       if (elementCount === 2) {
         doubletCount++;
         const id = `Doublet-${doubletCount}`;
+        const surface1 = readSurfaceAsphere(chain[0], 1);
+        const surface2 = readSurfaceAsphere(chain[1], 2);
+        const surface3 = readSurfaceAsphere(chain[2], 3);
+        const rindex1 = String(chain[0]?.rindex ?? '').trim();
+        const rindex2 = String(chain[1]?.rindex ?? '').trim();
         // Preserve Abbe/Vd from Zemax ___BLANK import for each element
         const abbe1 = String(chain[0]?.abbe ?? '').trim();
         const abbe2 = String(chain[1]?.abbe ?? '').trim();
+        const variables: any = {};
+        appendLegacyVar(variables, chain[0], 'optimizeR', 'radius1', radii[0]);
+        appendLegacyVar(variables, chain[0], 'optimizeT', 'thickness1', thicknesses[0]);
+        appendLegacyVar(variables, chain[0], 'optimizeMaterial', 'material1', glasses[0]);
+        appendLegacyVar(variables, chain[0], 'optimizeRI', 'rindex1', rindex1);
+        appendLegacyVar(variables, chain[0], 'optimizeAbbe', 'abbe1', abbe1);
+        appendLegacyVar(variables, chain[0], 'optimizeConic', 'surf1Conic', surface1.surf1Conic);
+        appendLegacyVar(variables, chain[1], 'optimizeR', 'radius2', radii[1]);
+        appendLegacyVar(variables, chain[1], 'optimizeT', 'thickness2', thicknesses[1]);
+        appendLegacyVar(variables, chain[1], 'optimizeMaterial', 'material2', glasses[1]);
+        appendLegacyVar(variables, chain[1], 'optimizeRI', 'rindex2', rindex2);
+        appendLegacyVar(variables, chain[1], 'optimizeAbbe', 'abbe2', abbe2);
+        appendLegacyVar(variables, chain[1], 'optimizeConic', 'surf2Conic', surface2.surf2Conic);
+        appendLegacyVar(variables, chain[2], 'optimizeR', 'radius3', radii[2]);
+        appendLegacyVar(variables, chain[2], 'optimizeConic', 'surf3Conic', surface3.surf3Conic);
+        for (let coefIndex = 1; coefIndex <= 10; coefIndex++) {
+          appendLegacyVar(variables, chain[0], `optimizeCoef${coefIndex}`, `surf1Coef${coefIndex}`, surface1[`surf1Coef${coefIndex}`]);
+          appendLegacyVar(variables, chain[1], `optimizeCoef${coefIndex}`, `surf2Coef${coefIndex}`, surface2[`surf2Coef${coefIndex}`]);
+          appendLegacyVar(variables, chain[2], `optimizeCoef${coefIndex}`, `surf3Coef${coefIndex}`, surface3[`surf3Coef${coefIndex}`]);
+        }
         const params = {
           radius1: radii[0],
           radius2: radii[1],
@@ -4684,11 +4772,13 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
           thickness2: thicknesses[1],
           material1: glasses[0],
           material2: glasses[1],
+          ...(rindex1 !== '' ? { rindex1 } : {}),
+          ...(rindex2 !== '' ? { rindex2 } : {}),
           ...(abbe1 !== '' ? { abbe1 } : {}),
           ...(abbe2 !== '' ? { abbe2 } : {}),
-          ...readSurfaceAsphere(chain[0], 1),
-          ...readSurfaceAsphere(chain[1], 2),
-          ...readSurfaceAsphere(chain[2], 3),
+          ...surface1,
+          ...surface2,
+          ...surface3,
         };
         blocks.push({
           blockId: id,
@@ -4701,7 +4791,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
             s2: getLegacySemidiaRaw(chain[1]),
             s3: getLegacySemidiaRaw(chain[2]),
           },
-          variables: {},
+          variables,
           metadata: { source: 'legacy-opticalSystem' }
         });
 
@@ -4732,10 +4822,44 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
       if (elementCount === 3) {
         tripletCount++;
         const id = `Triplet-${tripletCount}`;
+        const surface1 = readSurfaceAsphere(chain[0], 1);
+        const surface2 = readSurfaceAsphere(chain[1], 2);
+        const surface3 = readSurfaceAsphere(chain[2], 3);
+        const surface4 = readSurfaceAsphere(chain[3], 4);
+        const rindex1 = String(chain[0]?.rindex ?? '').trim();
+        const rindex2 = String(chain[1]?.rindex ?? '').trim();
+        const rindex3 = String(chain[2]?.rindex ?? '').trim();
         // Preserve Abbe/Vd from Zemax ___BLANK import for each element
         const abbe1 = String(chain[0]?.abbe ?? '').trim();
         const abbe2 = String(chain[1]?.abbe ?? '').trim();
         const abbe3 = String(chain[2]?.abbe ?? '').trim();
+        const variables: any = {};
+        appendLegacyVar(variables, chain[0], 'optimizeR', 'radius1', radii[0]);
+        appendLegacyVar(variables, chain[0], 'optimizeT', 'thickness1', thicknesses[0]);
+        appendLegacyVar(variables, chain[0], 'optimizeMaterial', 'material1', glasses[0]);
+        appendLegacyVar(variables, chain[0], 'optimizeRI', 'rindex1', rindex1);
+        appendLegacyVar(variables, chain[0], 'optimizeAbbe', 'abbe1', abbe1);
+        appendLegacyVar(variables, chain[0], 'optimizeConic', 'surf1Conic', surface1.surf1Conic);
+        appendLegacyVar(variables, chain[1], 'optimizeR', 'radius2', radii[1]);
+        appendLegacyVar(variables, chain[1], 'optimizeT', 'thickness2', thicknesses[1]);
+        appendLegacyVar(variables, chain[1], 'optimizeMaterial', 'material2', glasses[1]);
+        appendLegacyVar(variables, chain[1], 'optimizeRI', 'rindex2', rindex2);
+        appendLegacyVar(variables, chain[1], 'optimizeAbbe', 'abbe2', abbe2);
+        appendLegacyVar(variables, chain[1], 'optimizeConic', 'surf2Conic', surface2.surf2Conic);
+        appendLegacyVar(variables, chain[2], 'optimizeR', 'radius3', radii[2]);
+        appendLegacyVar(variables, chain[2], 'optimizeT', 'thickness3', thicknesses[2]);
+        appendLegacyVar(variables, chain[2], 'optimizeMaterial', 'material3', glasses[2]);
+        appendLegacyVar(variables, chain[2], 'optimizeRI', 'rindex3', rindex3);
+        appendLegacyVar(variables, chain[2], 'optimizeAbbe', 'abbe3', abbe3);
+        appendLegacyVar(variables, chain[2], 'optimizeConic', 'surf3Conic', surface3.surf3Conic);
+        appendLegacyVar(variables, chain[3], 'optimizeR', 'radius4', radii[3]);
+        appendLegacyVar(variables, chain[3], 'optimizeConic', 'surf4Conic', surface4.surf4Conic);
+        for (let coefIndex = 1; coefIndex <= 10; coefIndex++) {
+          appendLegacyVar(variables, chain[0], `optimizeCoef${coefIndex}`, `surf1Coef${coefIndex}`, surface1[`surf1Coef${coefIndex}`]);
+          appendLegacyVar(variables, chain[1], `optimizeCoef${coefIndex}`, `surf2Coef${coefIndex}`, surface2[`surf2Coef${coefIndex}`]);
+          appendLegacyVar(variables, chain[2], `optimizeCoef${coefIndex}`, `surf3Coef${coefIndex}`, surface3[`surf3Coef${coefIndex}`]);
+          appendLegacyVar(variables, chain[3], `optimizeCoef${coefIndex}`, `surf4Coef${coefIndex}`, surface4[`surf4Coef${coefIndex}`]);
+        }
         const params = {
           radius1: radii[0],
           radius2: radii[1],
@@ -4747,13 +4871,16 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
           material1: glasses[0],
           material2: glasses[1],
           material3: glasses[2],
+          ...(rindex1 !== '' ? { rindex1 } : {}),
+          ...(rindex2 !== '' ? { rindex2 } : {}),
+          ...(rindex3 !== '' ? { rindex3 } : {}),
           ...(abbe1 !== '' ? { abbe1 } : {}),
           ...(abbe2 !== '' ? { abbe2 } : {}),
           ...(abbe3 !== '' ? { abbe3 } : {}),
-          ...readSurfaceAsphere(chain[0], 1),
-          ...readSurfaceAsphere(chain[1], 2),
-          ...readSurfaceAsphere(chain[2], 3),
-          ...readSurfaceAsphere(chain[3], 4),
+          ...surface1,
+          ...surface2,
+          ...surface3,
+          ...surface4,
         };
         blocks.push({
           blockId: id,
@@ -4767,7 +4894,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
             s3: getLegacySemidiaRaw(chain[2]),
             s4: getLegacySemidiaRaw(chain[3]),
           },
-          variables: {},
+          variables,
           metadata: { source: 'legacy-opticalSystem' }
         });
 
@@ -4834,12 +4961,15 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     const backSurfType = inferLegacySurfType(back, backConic, backCoefs);
 
     // Preserve Abbe/Vd from Zemax ___BLANK import (stored in row.abbe by zemax-import.ts)
+    const legacyRindex = String(r?.rindex ?? '').trim() || String(back?.rindex ?? '').trim();
     const legacyAbbe = String(r?.abbe ?? '').trim() || String(back?.abbe ?? '').trim();
 
     const lensVariables: any = {};
     if (legacyHasV(r, 'optimizeR')) lensVariables.frontRadius = legacyVarV(frontRadius);
     if (legacyHasV(r, 'optimizeT')) lensVariables.centerThickness = legacyVarV(centerThickness);
     if (legacyHasV(r, 'optimizeMaterial')) lensVariables.material = legacyVarV(material);
+    if (legacyHasV(r, 'optimizeRI')) lensVariables.rindex = legacyVarV(legacyRindex);
+    if (legacyHasV(r, 'optimizeAbbe')) lensVariables.abbe = legacyVarV(legacyAbbe);
     if (legacyHasV(r, 'optimizeConic')) lensVariables.frontConic = legacyVarV(frontConic);
     for (let i = 1; i <= 10; i++) {
       if (legacyHasV(r, `optimizeCoef${i}`)) lensVariables[`frontCoef${i}`] = legacyVarV(frontCoefs[i - 1]);
@@ -4860,6 +4990,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
         backRadius,
         centerThickness,
         material,
+        ...(legacyRindex !== '' ? { rindex: legacyRindex } : {}),
         ...(legacyAbbe !== '' ? { abbe: legacyAbbe } : {}),
 
         frontSurfType,
@@ -4923,13 +5054,20 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
  * @param {any} config
  * @returns {{ expandedOpticalSystem: any[]|null, issues: LoadIssue[] }}
  */
-export function expandBlocksIntoConfiguration(config: any): { expandedOpticalSystem: any[] | null; issues: LoadIssue[] } | undefined {
+export function expandBlocksIntoConfiguration(config: any, options?: { captureLegacyAperture?: boolean }): { expandedOpticalSystem: any[] | null; issues: LoadIssue[] } | undefined {
   if (!configurationHasBlocks(config)) {
     return { expandedOpticalSystem: null, issues: [] };
   }
 
+  const captureLegacyAperture = options?.captureLegacyAperture === true;
+  const workingBlocks = cloneJsonValue(config?.blocks) ?? config?.blocks;
+  const workingConfig = {
+    ...config,
+    blocks: workingBlocks
+  };
+
   const issues = [];
-  issues.push(...validateBlocksConfiguration(config));
+  issues.push(...validateBlocksConfiguration(workingConfig));
   if (issues.some(i => i.severity === 'fatal')) {
     return { expandedOpticalSystem: null, issues };
   }
@@ -4938,15 +5076,18 @@ export function expandBlocksIntoConfiguration(config: any): { expandedOpticalSys
   // Blocks only model Stop.semiDiameter; other semidia values are surface-table details.
   const legacyRows = Array.isArray(config?.opticalSystem) ? config.opticalSystem : null;
 
-  // Persist semidia in Design Intent (blocks) keyed by provenance (blockId + surfaceRole).
-  try { __captureBlockApertureFromLegacyRows(config.blocks, legacyRows); } catch (_) {}
+  // Persist semidia in Design Intent (blocks) keyed by provenance (blockId + surfaceRole)
+  // only for import/recovery paths that explicitly request it.
+  if (captureLegacyAperture) {
+    try { __captureBlockApertureFromLegacyRows(workingBlocks, legacyRows); } catch (_) {}
+  }
 
   // Persist semidia as configuration-level overrides so it survives any regeneration.
   try {
     config.semidiaOverrides = __captureSemidiaOverridesFromRows(legacyRows, config?.semidiaOverrides);
   } catch (_) {}
 
-  const expanded = expandBlocksToOpticalSystemRows(config.blocks);
+  const expanded = expandBlocksToOpticalSystemRows(workingBlocks);
   issues.push(...expanded.issues);
   if (expanded.issues.some(i => i.severity === 'fatal')) return { expandedOpticalSystem: null, issues };
 
@@ -4982,6 +5123,9 @@ export function expandBlocksIntoConfiguration(config: any): { expandedOpticalSys
   // Apply persisted overrides last (provenance-keyed when possible).
   try { __applySemidiaOverridesToRows(expanded?.rows, config?.semidiaOverrides); } catch (_) {}
 
+  if (captureLegacyAperture && Array.isArray(workingBlocks)) {
+    config.blocks = workingBlocks;
+  }
   config.opticalSystem = expanded.rows;
   return { expandedOpticalSystem: expanded.rows, issues };
 }

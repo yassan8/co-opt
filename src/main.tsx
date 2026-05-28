@@ -109,35 +109,32 @@ const notifyMainModuleFailed = (error: unknown) => {
   }
 };
 
-// Dynamically import main.ts to ensure it loads before React
-import("../main.ts").then(() => {
-  notifyMainModuleLoaded();
-  
+const bootReactApp = () => {
   const container = document.getElementById("react-root");
 
   if (!container) {
     throw new Error("Missing #react-root container in index.html");
   }
 
+  const w = window as any;
+  if (w.__cooptReactRootMounted) return;
+  w.__cooptReactRootMounted = true;
+
   ReactDOM.createRoot(container).render(<App />);
   installProductionAnalytics();
   installVersionUpdatePrompt();
 
   // Notify main.ts that React has been mounted
-  (window as any).__cooptReactMounted = true;
+  w.__cooptReactMounted = true;
   window.dispatchEvent(new CustomEvent('coopt:react-mounted'));
+};
+
+bootReactApp();
+
+// Load the legacy main module after first paint so startup UI is not blocked.
+import("../main.ts").then(() => {
+  notifyMainModuleLoaded();
 }).catch(error => {
   console.error("[src/main.tsx] Failed to load main.ts:", error);
   notifyMainModuleFailed(error);
-  
-  // Still try to mount React even if main.ts fails
-  const container = document.getElementById("react-root");
-  if (container) {
-    ReactDOM.createRoot(container).render(<App />);
-    installProductionAnalytics();
-    installVersionUpdatePrompt();
-    // Notify main.ts that React has been mounted (fallback path)
-    (window as any).__cooptReactMounted = true;
-    window.dispatchEvent(new CustomEvent('coopt:react-mounted'));
-  }
 });

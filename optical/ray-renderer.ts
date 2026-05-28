@@ -2479,6 +2479,73 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
         ? colorObjectId.match(/^(chief|cross-horizontal|cross-vertical)-obj(\d+)$/)
         : null;
 
+    const resolveLineColor = () => {
+        let color;
+        if (rayColorMode === 'segment') {
+            return segmentColors[0];
+        }
+        if (crossBeamColors[colorObjectId]) {
+            color = crossBeamColors[colorObjectId];
+        } else if (genericCrossBeamMatch) {
+            const paletteIndex = Number.parseInt(genericCrossBeamMatch[2], 10);
+            if (Number.isFinite(paletteIndex)) {
+                color = objectColors[Math.abs(paletteIndex) % objectColors.length];
+            }
+        } else if (typeof colorObjectId === 'string' && colorObjectId.startsWith('chief-obj')) {
+            const objIndex = colorObjectId.replace('chief-obj', '');
+            const fallbackId = `cross-horizontal-obj${objIndex}`;
+            if (crossBeamColors[fallbackId]) {
+                color = crossBeamColors[fallbackId];
+            }
+        }
+        if (color === undefined) {
+            let colorIndex;
+            if (typeof objectId === 'string') {
+                colorIndex = objectId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % objectColors.length;
+            } else {
+                colorIndex = (objectId || 0) % objectColors.length;
+            }
+            color = objectColors[colorIndex];
+        }
+        return color;
+    };
+
+    if (rayColorMode !== 'segment') {
+        const validPoints = [];
+        for (const point of rayPath) {
+            if (!isFinite(point?.x) || !isFinite(point?.y) || !isFinite(point?.z)) {
+                continue;
+            }
+            validPoints.push(new THREE.Vector3(point.x, point.y, point.z));
+        }
+        if (validPoints.length < 2) {
+            return;
+        }
+
+        const geometry = new THREE.BufferGeometry().setFromPoints(validPoints);
+        const material = new THREE.LineBasicMaterial({
+            color: resolveLineColor(),
+            linewidth: 2,
+            transparent: false,
+            opacity: 1.0,
+            depthTest: false,
+            depthWrite: false
+        });
+        const line = new THREE.Line(geometry, material);
+        line.renderOrder = 100000;
+        line.frustumCulled = false;
+        line.userData = {
+            type: 'optical-ray',
+            objectId: objectId,
+            rayNumber: rayNumber,
+            rayType: 'crossBeam',
+            colorMode: rayColorMode,
+            isRayLine: true
+        };
+        scene.add(line);
+        return;
+    }
+
     for (let i = 0; i < segmentsToShow; i++) {
         const startPoint = rayPath[i];
         const endPoint = rayPath[i + 1];
@@ -2504,42 +2571,7 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
         
         // Choose color based on color mode
-        let color;
-        if (rayColorMode === 'segment') {
-            // Color by segment: each segment gets a different color
-            color = segmentColors[i % segmentColors.length];
-            // console.log(`🎨 Segment color for ray ${rayNumber}, segment ${i}: 0x${color.toString(16)}`);
-        } else {
-            // Color by object: all segments of this object get the same color
-            if (crossBeamColors[colorObjectId]) {
-                // クロスビーム専用の色を使用
-                color = crossBeamColors[colorObjectId];
-                // console.log(`🎨 CrossBeam color for ${objectId}: 0x${color.toString(16)}`);
-            } else if (genericCrossBeamMatch) {
-                const paletteIndex = Number.parseInt(genericCrossBeamMatch[2], 10);
-                if (Number.isFinite(paletteIndex)) {
-                    color = objectColors[Math.abs(paletteIndex) % objectColors.length];
-                }
-            } else if (typeof colorObjectId === 'string' && colorObjectId.startsWith('chief-obj')) {
-                // 主光線は同一Objectのクロス光線色に合わせる
-                const objIndex = colorObjectId.replace('chief-obj', '');
-                const fallbackId = `cross-horizontal-obj${objIndex}`;
-                if (crossBeamColors[fallbackId]) {
-                    color = crossBeamColors[fallbackId];
-                }
-            }
-            if (color === undefined) {
-                // 通常のオブジェクト色を使用
-                let colorIndex;
-                if (typeof objectId === 'string') {
-                    colorIndex = objectId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % objectColors.length;
-                } else {
-                    colorIndex = (objectId || 0) % objectColors.length;
-                }
-                color = objectColors[colorIndex];
-                // console.log(`🎨 Object color for objectId ${objectId} (index ${colorIndex}): 0x${color.toString(16)}`);
-            }
-        }
+        const color = segmentColors[i % segmentColors.length];
         
         const material = new THREE.LineBasicMaterial({ 
             color: color,

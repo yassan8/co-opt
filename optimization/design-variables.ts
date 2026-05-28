@@ -254,6 +254,12 @@ function syncLegacyVariableValue(block, key, value) {
   }
 }
 
+function shouldSyncDerivedGlassField(block, key) {
+  if (!isPlainObject(block) || !isPlainObject(block.variables)) return true;
+  const entry = block.variables[key];
+  return !shouldMarkV(entry);
+}
+
 function syncDerivedGlassParameters(block, key, materialValue) {
   const materialKey = String(key ?? '').trim();
   const match = materialKey.match(/^material(\d+)?$/i);
@@ -272,12 +278,12 @@ function syncDerivedGlassParameters(block, key, materialValue) {
   const rindexKey = suffix ? `rindex${suffix}` : 'rindex';
   const abbeKey = suffix ? `abbe${suffix}` : 'abbe';
 
-  if (Number.isFinite(glass.nd)) {
+  if (shouldSyncDerivedGlassField(block, rindexKey) && Number.isFinite(glass.nd)) {
     const nd = String(glass.nd);
     params[rindexKey] = nd;
     syncLegacyVariableValue(block, rindexKey, nd);
   }
-  if (Number.isFinite(glass.vd)) {
+  if (shouldSyncDerivedGlassField(block, abbeKey) && Number.isFinite(glass.vd)) {
     const vd = String(glass.vd);
     params[abbeKey] = vd;
     syncLegacyVariableValue(block, abbeKey, vd);

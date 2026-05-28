@@ -21,6 +21,269 @@ import { loadSystemConfigurations } from '../../data/table-configuration.ts';
 import { saveLastWavefrontSnapshot } from './wavefront-snapshot-storage.ts';
 import { setLastWavefrontState, getLastWavefrontMeta } from './last-wavefront-runtime.ts';
 import { createOPDCalculator, createWavefrontAnalyzer } from './wavefront.ts';
+import { detectConjugateType } from '../../utils/conjugate-detection.ts';
+import { convertImageHeightToEffectiveObject } from '../../optical/ray-renderer.ts';
+
+function toFiniteNumber(value, fallback = 0) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+}
+
+function isInfiniteSystemFromRows(opticalSystemRows) {
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
+    const thickness = opticalSystemRows[0]?.thickness;
+    if (thickness === Infinity) return true;
+    const normalized = (thickness === undefined || thickness === null) ? '' : String(thickness).trim().toUpperCase();
+    return normalized === 'INF' || normalized === 'INFINITY';
+}
+
+function toWavefrontFieldSettingFromObjectRow(objRow, index0, opticalSystemRows, wavelength = 0.5876) {
+    const isInfiniteSystem = isInfiniteSystemFromRows(Array.isArray(opticalSystemRows) ? opticalSystemRows : []);
+    if (!objRow || typeof objRow !== 'object') {
+        return isInfiniteSystem
+            ? {
+                type: 'Angle',
+                position: 'Angle',
+                objectIndex: index0,
+                displayName: `Object ${index0 + 1}`,
+                x: 0,
+                y: 0,
+                fieldAngle: { x: 0, y: 0 },
+                xFieldAngle: 0,
+                yFieldAngle: 0,
+                xHeightAngle: 0,
+                yHeightAngle: 0,
+                angleX: 0,
+                angleY: 0,
+                xHeight: 0,
+                yHeight: 0,
+                wavelength
+            }
+            : {
+                type: 'Rectangle',
+                position: 'Rectangle',
+                objectIndex: index0,
+                displayName: `Object ${index0 + 1}`,
+                x: 0,
+                y: 0,
+                xHeight: 0,
+                yHeight: 0,
+                fieldAngle: { x: 0, y: 0 },
+                fieldX: 0,
+                fieldY: 0,
+                wavelength
+            };
+    }
+
+    let normalizedRow = objRow;
+    const positionRaw = String(objRow.position ?? objRow.fieldType ?? objRow.type ?? '').trim().toLowerCase();
+    if (positionRaw.includes('imageheight') && Array.isArray(opticalSystemRows) && opticalSystemRows.length > 0) {
+        try {
+            const conjugateType = detectConjugateType(opticalSystemRows) === 'finite' ? 'finite' : 'infinite';
+            const effectiveRow = convertImageHeightToEffectiveObject(
+                objRow,
+                opticalSystemRows,
+                wavelength,
+                conjugateType,
+                {
+                    skipTsValidation: true,
+                    validationTraceBackend: 'rust',
+                }
+            );
+            if (effectiveRow && typeof effectiveRow === 'object') {
+                normalizedRow = {
+                    ...objRow,
+                    ...effectiveRow,
+                    position: effectiveRow.__cooptEffectivePosition ?? effectiveRow.position ?? objRow.position,
+                    __cooptOriginalPosition: objRow.position,
+                };
+            }
+        } catch (_) {
+            normalizedRow = objRow;
+        }
+    }
+
+    const pickFirstFinite = (values, fallback = 0) => {
+        for (const value of values) {
+            const num = toFiniteNumber(value, NaN);
+            if (Number.isFinite(num)) return num;
+        }
+        return fallback;
+    };
+
+    const fieldX = pickFirstFinite([
+        normalizedRow.xHeightAngle,
+        normalizedRow.xFieldAngle,
+        normalizedRow.xHeight,
+        normalizedRow.x,
+        normalizedRow.angleX,
+        normalizedRow.Hx,
+    ], 0);
+    const fieldY = pickFirstFinite([
+        normalizedRow.yHeightAngle,
+        normalizedRow.yFieldAngle,
+        normalizedRow.fieldAngle,
+        normalizedRow.yHeight,
+        normalizedRow.y,
+        normalizedRow.angleY,
+        normalizedRow.Hy,
+    ], 0);
+
+    const objectIndex1 = index0 + 1;
+    const displayName = String(normalizedRow.comment || normalizedRow.name || `Object ${objectIndex1}`);
+
+    if (isInfiniteSystem) {
+        return {
+            id: normalizedRow?.id || objectIndex1,
+            type: 'Angle',
+            position: 'Angle',
+            objectIndex: index0,
+            displayName,
+            x: fieldX,
+            y: fieldY,
+            fieldAngle: { x: fieldX, y: fieldY },
+            xFieldAngle: fieldX,
+            yFieldAngle: fieldY,
+            xHeightAngle: fieldX,
+            yHeightAngle: fieldY,
+            angleX: fieldX,
+            angleY: fieldY,
+            xHeight: 0,
+            yHeight: 0,
+            wavelength
+        };
+    }
+
+    return {
+        id: normalizedRow?.id || objectIndex1,
+        type: 'Rectangle',
+        position: 'Rectangle',
+        objectIndex: index0,
+        displayName,
+        x: fieldX,
+        y: fieldY,
+        xHeight: fieldX,
+        yHeight: fieldY,
+        fieldAngle: { x: 0, y: 0 },
+        fieldX,
+        fieldY,
+        wavelength
+    };
+}
+
+function solveAugmented3x3(matrix) {
+    if (!Array.isArray(matrix) || matrix.length !== 3) return null;
+    const a = matrix.map((row) => Array.isArray(row) ? row.slice(0, 4).map((value) => Number(value) || 0) : [0, 0, 0, 0]);
+    for (let col = 0; col < 3; col++) {
+        let pivotRow = col;
+        let pivotAbs = Math.abs(a[col][col]);
+        for (let r = col + 1; r < 3; r++) {
+            const candidate = Math.abs(a[r][col]);
+            if (candidate > pivotAbs) {
+                pivotAbs = candidate;
+                pivotRow = r;
+            }
+        }
+        if (!Number.isFinite(pivotAbs) || pivotAbs < 1.0e-18) return null;
+        if (pivotRow !== col) {
+            const tmp = a[col];
+            a[col] = a[pivotRow];
+            a[pivotRow] = tmp;
+        }
+
+        const pivot = a[col][col];
+        for (let c = col; c < 4; c++) a[col][c] /= pivot;
+        for (let r = 0; r < 3; r++) {
+            if (r === col) continue;
+            const factor = a[r][col];
+            if (!Number.isFinite(factor) || Math.abs(factor) < 1.0e-18) continue;
+            for (let c = col; c < 4; c++) {
+                a[r][c] -= factor * a[col][c];
+            }
+        }
+    }
+
+    const a0 = a[0][3];
+    const b0 = a[1][3];
+    const c0 = a[2][3];
+    return (Number.isFinite(a0) && Number.isFinite(b0) && Number.isFinite(c0))
+        ? { a: a0, b: b0, c: c0 }
+        : null;
+}
+
+function computeFiniteGridRmsNativeLike(grid) {
+    if (!Array.isArray(grid) || grid.length === 0) return Number.NaN;
+    const height = grid.length;
+    const width = grid.reduce((max, row) => Math.max(max, Array.isArray(row) ? row.length : 0), 0);
+    if (width === 0) return Number.NaN;
+
+    const mapCoord = (index, len) => (len <= 1 ? 0 : (-1 + (2 * index) / (len - 1)));
+
+    let count = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let sumXX = 0;
+    let sumXY = 0;
+    let sumYY = 0;
+    let sumZ = 0;
+    let sumXZ = 0;
+    let sumYZ = 0;
+    let fallbackSum = 0;
+    let fallbackSumSq = 0;
+
+    for (let iy = 0; iy < height; iy++) {
+        const row = Array.isArray(grid[iy]) ? grid[iy] : [];
+        const y = mapCoord(iy, height);
+        for (let ix = 0; ix < row.length; ix++) {
+            const value = Number(row[ix]);
+            if (!Number.isFinite(value)) continue;
+            const x = mapCoord(ix, width);
+            count += 1;
+            sumX += x;
+            sumY += y;
+            sumXX += x * x;
+            sumXY += x * y;
+            sumYY += y * y;
+            sumZ += value;
+            sumXZ += x * value;
+            sumYZ += y * value;
+            fallbackSum += value;
+            fallbackSumSq += value * value;
+        }
+    }
+
+    if (count === 0) return Number.NaN;
+
+    if (count >= 6) {
+        const fit = solveAugmented3x3([
+            [count, sumX, sumY, sumZ],
+            [sumX, sumXX, sumXY, sumXZ],
+            [sumY, sumXY, sumYY, sumYZ],
+        ]);
+        if (fit) {
+            let residualCount = 0;
+            let residualSumSq = 0;
+            for (let iy = 0; iy < height; iy++) {
+                const row = Array.isArray(grid[iy]) ? grid[iy] : [];
+                const y = mapCoord(iy, height);
+                for (let ix = 0; ix < row.length; ix++) {
+                    const value = Number(row[ix]);
+                    if (!Number.isFinite(value)) continue;
+                    const x = mapCoord(ix, width);
+                    const residual = value - (fit.a + fit.b * x + fit.c * y);
+                    if (!Number.isFinite(residual)) continue;
+                    residualSumSq += residual * residual;
+                    residualCount += 1;
+                }
+            }
+            if (residualCount > 0) return Math.sqrt(residualSumSq / residualCount);
+        }
+    }
+
+    const mean = fallbackSum / count;
+    const variance = Math.max(0, (fallbackSumSq / count) - (mean * mean));
+    return Math.sqrt(variance);
+}
 
 export class WavefrontPlotter {
     constructor(containerElementIdOrElement) {
@@ -88,32 +351,58 @@ export class WavefrontPlotter {
             }
         }
 
-        const stats = (values) => {
+        const stats = (values, options = {}) => {
             if (!Array.isArray(values) || values.length === 0) {
-                return { count: 0, sampleCount: 0, mean: NaN, rms: NaN, peakToPeak: NaN, min: NaN, max: NaN };
+                return { count: 0, sampleCount: 0, mean: 0, rms: 0, peakToPeak: 0, min: 0, max: 0 };
             }
+
+            const removePiston = !!options.removePiston;
             let sum = 0;
             let sumSq = 0;
             let min = Infinity;
             let max = -Infinity;
             let count = 0;
-            for (const v of values) {
-                if (!Number.isFinite(v)) continue;
-                sum += v;
-                sumSq += v * v;
-                if (v < min) min = v;
-                if (v > max) max = v;
+
+            for (const rawValue of values) {
+                const value = Number(rawValue);
+                if (value === 0) continue;
+                if (!Number.isFinite(value)) continue;
+                sum += value;
+                sumSq += value * value;
+                if (value < min) min = value;
+                if (value > max) max = value;
                 count += 1;
             }
+
             if (count === 0) {
-                return { count: 0, sampleCount: 0, mean: NaN, rms: NaN, peakToPeak: NaN, min: NaN, max: NaN };
+                return { count: 0, sampleCount: 0, mean: 0, rms: 0, peakToPeak: 0, min: 0, max: 0 };
             }
+
             const mean = sum / count;
+            if (removePiston && Math.abs(mean) > 1e-10) {
+                sum = 0;
+                sumSq = 0;
+                min = Infinity;
+                max = -Infinity;
+                for (const rawValue of values) {
+                    const value = Number(rawValue);
+                    if (value === 0) continue;
+                    if (!Number.isFinite(value)) continue;
+                    const centered = value - mean;
+                    sum += centered;
+                    sumSq += centered * centered;
+                    if (centered < min) min = centered;
+                    if (centered > max) max = centered;
+                }
+            }
+
+            const meanFinal = removePiston ? 0 : mean;
+            const variance = Math.max(0, (sumSq / count) - (meanFinal * meanFinal));
             return {
                 count,
                 sampleCount: count,
-                mean,
-                rms: Math.sqrt(Math.max(0, sumSq / count)),
+                mean: meanFinal,
+                rms: Math.sqrt(variance),
                 peakToPeak: max - min,
                 min,
                 max,
@@ -122,6 +411,12 @@ export class WavefrontPlotter {
 
         const statsWaves = stats(opdsWaves);
         const statsMicrons = stats(opdsMicrons);
+        const wavefrontStatsWaves = stats(opdsWaves, { removePiston: true });
+        const nativeLikeRmsWaves = computeFiniteGridRmsNativeLike(opdGrid);
+        if (Number.isFinite(nativeLikeRmsWaves)) {
+            statsWaves.rms = nativeLikeRmsWaves;
+            statsMicrons.rms = nativeLikeRmsWaves * wavelength;
+        }
 
         return {
             pupilCoordinates,
@@ -144,7 +439,7 @@ export class WavefrontPlotter {
                 opdGrid,
             },
             statistics: {
-                wavefront: statsWaves,
+                wavefront: wavefrontStatsWaves,
                 opdMicrons: statsMicrons,
                 opdWavelengths: statsWaves,
                 raw: {
@@ -2595,81 +2890,11 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
             throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
         })();
         
-        const isInfiniteSystem = (() => {
-            const objectSurface = opticalSystemRows?.[0];
-            const t = objectSurface?.thickness;
-            return t === 'INF' || t === 'Infinity' || t === Infinity;
-        })();
-
-        const toNumber = (v) => {
-            const n = typeof v === 'number' ? v : parseFloat(v);
-            return Number.isFinite(n) ? n : 0;
-        };
-
-        const toFieldSettingFromObject = (obj, index) => {
-            const pos = String(obj?.position ?? obj?.Position ?? obj?.type ?? '').toLowerCase();
-            const xVal = toNumber(obj?.xHeightAngle);
-            const yVal = toNumber(obj?.yHeightAngle);
-
-            // IMPORTANT: Do not populate both angle and height with the same value.
-            // This caused ambiguous semantics (deg vs mm) and can mis-route solvers.
-            // Keep semantics aligned with popup/native paths:
-            // Point rows store field angles in xHeightAngle/yHeightAngle.
-            const isAngleMode = pos === 'angle' || pos === 'field angle' || pos === 'angles' || pos === 'point';
-            const isHeightMode = pos === 'rectangle' || pos === 'height';
-
-            let fieldAngle = { x: 0, y: 0 };
-            let xHeight = 0;
-            let yHeight = 0;
-            let type = obj?.position ?? obj?.type ?? '';
-
-            if (isAngleMode) {
-                fieldAngle = { x: xVal, y: yVal };
-                xHeight = 0;
-                yHeight = 0;
-                type = 'Angle';
-            } else if (isHeightMode) {
-                fieldAngle = { x: 0, y: 0 };
-                xHeight = xVal;
-                yHeight = yVal;
-                type = 'Rectangle';
-            } else {
-                // Fallback: infer from system type.
-                // Infinite systems typically use angles; finite systems use heights.
-                if (isInfiniteSystem) {
-                    fieldAngle = { x: xVal, y: yVal };
-                    xHeight = 0;
-                    yHeight = 0;
-                    type = 'Angle';
-                } else {
-                    fieldAngle = { x: 0, y: 0 };
-                    xHeight = xVal;
-                    yHeight = yVal;
-                    type = 'Rectangle';
-                }
-            }
-
-            const labelValue = type === 'Angle'
-                ? `(${fieldAngle.x || 0}°, ${fieldAngle.y || 0}°)`
-                : `(${xHeight || 0}mm, ${yHeight || 0}mm)`;
-
-            return {
-                id: obj?.id || index + 1,
-                displayName: `Object ${index + 1} ${labelValue}`,
-                type,
-                fieldAngle,
-                xHeight,
-                yHeight,
-                objectIndex: index,
-                wavelength // 🔧 キャッシュキー生成に必要
-            };
-        };
-
         // フィールド設定を作成（選択されたObjectのみ）
-        const fieldSetting = toFieldSettingFromObject(selectedObject, selectedObjectIndex);
+        const fieldSetting = toWavefrontFieldSettingFromObjectRow(selectedObject, selectedObjectIndex, opticalSystemRows, wavelength);
 
         // マルチフィールド比較の場合は全Objectを使用
-        const fieldSettings = objectRows.map((obj, index) => toFieldSettingFromObject(obj, index));
+        const fieldSettings = objectRows.map((obj, index) => toWavefrontFieldSettingFromObjectRow(obj, index, opticalSystemRows, wavelength));
         
         // プロッターを作成
         const plotter = new WavefrontPlotter(options?.containerElement || 'wavefront-container');

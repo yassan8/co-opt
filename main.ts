@@ -3979,8 +3979,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
         return;
     }
     
-    const segmentCountBefore = scene.children.filter((c: any) => c.userData?.rayType === 'crossBeam').length;
-    
     // Clear existing crossBeam rays from scene before drawing new ones
     const toRemoveBeforeNewDraw: any[] = [];
     scene.traverse((child: any) => {
@@ -4003,14 +4001,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             try { setRayColorMode('object'); } catch (_) {}
         }
 
-        // Object毎の光線数を集計
-        const objectRayCount = {};
-        tracedRays.forEach(rayData => {
-            const objIndex = rayData.objectIndex || 0;
-            objectRayCount[objIndex] = (objectRayCount[objIndex] || 0) + 1;
-        });
-        
-        
         // 全ての光線を描画
         const rawObjectIndices = tracedRays
             .map((rayData) => Number.parseInt(String(
@@ -4025,8 +4015,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             !rawObjectIndices.includes(0) &&
             rawObjectIndices.every((value) => value >= 1);
 
-        const successRays = tracedRays.filter(r => r.success);
-        
         tracedRays.forEach((rayData, index) => {
             if (!rayData.success) {
                 return;
@@ -4086,8 +4074,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             const normalizedColorSlot = Number.isFinite(colorSlotNum)
                 ? Math.max(0, colorSlotNum)
                 : normalizedObjectIndex;
-            const objectPosition = rayData.objectPosition;
-
             // beamType/side の正規化（generator由来の originalRay を尊重）
             const original = {
                 ...(rayData.originalRay || {}),
@@ -4117,29 +4103,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
                     beamType = 'vertical';
                 }
             }
-            // sideも表示用に正規化
-            const side = (origSide.toLowerCase() === 'top') ? 'upper' : (origSide.toLowerCase() === 'bottom') ? 'lower' : (origSide || 'center');
-            
-            // 光線の実際の開始位置を確認
-            // 色分けモードを取得
-            const currentColorMode = getRayColorMode(); // 'object' または 'segment'
-            
-            // 光線の色を設定
-            let rayColor;
-            const colorSystem = RayColorSystem; // 有限系・無限系共通
-            
-            if (currentColorMode === 'object') {
-                // Object別色分け
-                rayColor = colorSystem.getColor(colorSystem.MODE.OBJECT, normalizedObjectIndex, null);
-            } else if (currentColorMode === 'segment') {
-                // Segment別色分け（光線タイプに基づく）
-                const segmentType = rayData.segmentType || 'chief';
-                rayColor = colorSystem.getColor(colorSystem.MODE.SEGMENT, 0, segmentType);
-            } else {
-                // デフォルト色
-                rayColor = 0xffffff;
-            }
-            
             // LM最適化済み光線の表示
             if (rayData.optimized) {
             }
@@ -4162,36 +4125,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             // 光線パスを描画（正しいパラメータで呼び出し）
             drawRayWithSegmentColors(rayPath, objectId, index, scene);
         });
-        
-        const segmentCountAfter = scene.children.filter((c: any) => c.userData?.rayType === 'crossBeam').length;
-        
-        // Recalculate camera bounds to include all drawn rays
-        if (segmentCountAfter > 0) {
-            const rayBounds = { minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity };
-            scene.traverse((child: any) => {
-                if (child?.userData?.rayType === 'crossBeam' && child.geometry) {
-                    const positions = child.geometry.attributes?.position;
-                    if (positions) {
-                        const posArray = positions.array as any;
-                        for (let i = 0; i < posArray.length; i += 3) {
-                            const y = posArray[i + 1];
-                            const z = posArray[i + 2];
-                            if (Number.isFinite(y)) {
-                                rayBounds.minY = Math.min(rayBounds.minY, y);
-                                rayBounds.maxY = Math.max(rayBounds.maxY, y);
-                            }
-                            if (Number.isFinite(z)) {
-                                rayBounds.minZ = Math.min(rayBounds.minZ, z);
-                                rayBounds.maxZ = Math.max(rayBounds.maxZ, z);
-                            }
-                        }
-                    }
-                }
-            });
-            
-            if (Number.isFinite(rayBounds.minY) && Number.isFinite(rayBounds.maxY)) {
-            }
-        }
 
     } catch (error) {
     } finally {

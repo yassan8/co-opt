@@ -292,7 +292,7 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
       { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto).\n\nNote: これは 3rd-order の longitudinal chromatic coefficient です。値がほぼ 0 でも、オフ軸の lateral/magnification chromatic は残り得ます。倍率色収差を抑えたい場合は TOT_TCA か Lateral Chromatic Aberration 解析を併用してください。"
   },
   "TOT_TCA": {
     name: "Transverse Chromatic",
@@ -302,7 +302,7 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
       { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto).\n\nNote: オフ軸の lateral / magnification chromatic を merit で直接抑えるなら、TOT_LCA よりこちらの方が対応づけやすいです。"
   },
   
   // ===== Analysis (解析関連) =====
@@ -356,6 +356,15 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
       { key: "param4", label: "Raynum", description: "Ray count (default 51, odd recommended)" }
     ],
     notes: "横収差図（Transverse Aberration）を内部計算し、指定 Source/Object の評価で RMS を返します。\n\n定義:\n- 評価面: Image面\n- Component=total: meridional + sagittal の transverseAberration を合算して RMS = sqrt(mean(T^2))\n- Component=meridional: メリジオナルのみで RMS\n- Component=sagittal: サジタルのみで RMS\n- 単位: µm（計算値 mm を ×1000）"
+  },
+  "CRA_DEG": {
+    name: "Chief Ray Angle (deg)",
+    description: "Absolute chief ray angle at the image surface relative to the global optical axis (Z).",
+    parameters: [
+      { key: "param1", label: "Object idx/id", description: "Object row selector for the target field (blank=1st object)" },
+      { key: "param2", label: "λ idx", description: "Source row (1-based) or wavelength in µm (blank=Primary)" }
+    ],
+    notes: "実光線追跡で、絞り中心を通る主光線を求めて像面まで追跡します。\n\n返り値:\n- 像面到達時の主光線方向と光軸 Z のなす角の絶対値\n- 単位: deg\n\nparam1 は評価対象の Object 行です。数値 index に加えて object id 文字列も受け付けます。\nparam2 は任意の波長指定です。空欄なら Primary wavelength を使います。"
   },
   "OPD_RMS_WAVES": {
     name: "Wavefront RMS OPD (waves)",
@@ -620,7 +629,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'TOT3_SPH', 'TOT3_COMA', 'TOT3_ASTI', 'TOT3_FCUR', 'TOT3_DIST', 'TOT3_PETZ',
   'TOT_LCA', 'TOT_TCA',
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
-  'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'OPD_RMS_WAVES',
+  'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'CRA_DEG', 'OPD_RMS_WAVES',
   'ZERN_COEFF',
   'EDGE', 'CTCT', 'DBLT_K', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
 ]);

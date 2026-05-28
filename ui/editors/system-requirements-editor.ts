@@ -255,6 +255,52 @@ class SystemRequirementsEditor {
   }
 
   initializeTable(): void {
+    let cachedConfigurationList: Record<string, string> | null = null;
+    const cachedBlocksByConfig = new Map<string, any[]>();
+    const cachedObjectOptionsByConfig = new Map<string, Array<{ value: string; label: string }>>();
+    const cachedScopeOptionsByConfig = new Map<string, Array<{ value: string; label: string }>>();
+
+    const getCacheKeyForConfig = (configIdValue: any): string => {
+      const raw = String(configIdValue ?? '').trim();
+      return raw || '__active__';
+    };
+
+    const resetRenderCaches = (): void => {
+      cachedConfigurationList = null;
+      cachedBlocksByConfig.clear();
+      cachedObjectOptionsByConfig.clear();
+      cachedScopeOptionsByConfig.clear();
+    };
+
+    const getCachedBlocksForConfigHint = (configIdValue: any): any[] => {
+      const cacheKey = getCacheKeyForConfig(configIdValue);
+      if (cachedBlocksByConfig.has(cacheKey)) {
+        return cachedBlocksByConfig.get(cacheKey) || [];
+      }
+      const blocks = this._getBlocksForConfigHint(configIdValue);
+      const normalized = Array.isArray(blocks) ? blocks : [];
+      cachedBlocksByConfig.set(cacheKey, normalized);
+      return normalized;
+    };
+
+    const getCachedObjectOptions = (configIdValue: any): Array<{ value: string; label: string }> => {
+      const cacheKey = getCacheKeyForConfig(configIdValue);
+      if (cachedObjectOptionsByConfig.has(cacheKey)) {
+        return cachedObjectOptionsByConfig.get(cacheKey) || [{ value: '', label: '(default 1)' }];
+      }
+      const options = this._getObjectOptions(configIdValue);
+      const normalized = Array.isArray(options) ? options : [{ value: '', label: '(default 1)' }];
+      cachedObjectOptionsByConfig.set(cacheKey, normalized);
+      return normalized;
+    };
+
+    const getCachedConfigurationList = (): Record<string, string> => {
+      if (!cachedConfigurationList) {
+        cachedConfigurationList = this.getConfigurationList();
+      }
+      return cachedConfigurationList;
+    };
+
     this._operandKeys = (() => {
       try {
         const keys = InspectorManager.getAvailableOperands?.();
@@ -524,7 +570,7 @@ class SystemRequirementsEditor {
       } catch (_) {}
 
       try {
-        const blocks = this._getBlocksForConfigHint(configIdValue);
+        const blocks = getCachedBlocksForConfigHint(configIdValue);
         const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
         const seenZoomGroups = new Set<string>();
         for (const block of blocks || []) {
@@ -544,10 +590,21 @@ class SystemRequirementsEditor {
       return options;
     };
 
+    const getCachedRequirementScopeOptions = (configIdValue: any): Array<{ value: string; label: string }> => {
+      const cacheKey = getCacheKeyForConfig(configIdValue);
+      if (cachedScopeOptionsByConfig.has(cacheKey)) {
+        return cachedScopeOptionsByConfig.get(cacheKey) || [{ value: '0', label: '0: Total' }];
+      }
+      const options = getRequirementScopeOptions(configIdValue);
+      const normalized = Array.isArray(options) ? options : [{ value: '0', label: '0: Total' }];
+      cachedScopeOptionsByConfig.set(cacheKey, normalized);
+      return normalized;
+    };
+
     const getRequirementScopeLabel = (configIdValue: any, rawValue: any): string => {
       const raw = String(rawValue ?? '').trim();
       if (!raw) return '';
-      const match = getRequirementScopeOptions(configIdValue).find((option) => option.value === raw);
+      const match = getCachedRequirementScopeOptions(configIdValue).find((option) => option.value === raw);
       return match ? match.label : raw;
     };
 
@@ -1002,6 +1059,12 @@ class SystemRequirementsEditor {
           row.param3 = '';   // Unit: default waves
           row.param4 = '';   // Sampling: default(32)
           row.param5 = '0';  // Noll: RMS over coefficients
+        } else if (row.operand === 'CRA_DEG') {
+          row.param1 = '1';  // Object: first row
+          row.param2 = '';   // Source: Primary wavelength
+          row.param3 = '';
+          row.param4 = '';
+          row.param5 = '';
         } else if (row.operand === 'RADI_ALL') {
           row.param1 = 'MIN';
           row.param2 = '';
@@ -1054,7 +1117,7 @@ class SystemRequirementsEditor {
       // Collapsed summary + inline details editor
       let editorTr: HTMLTableRowElement | null = null;
 
-      const cfgValues = this.getConfigurationList();
+      const cfgValues = getCachedConfigurationList();
       const cfgSel = document.createElement('select');
       cfgSel.style.width = '100%';
       cfgSel.style.fontSize = '12px';
@@ -1074,7 +1137,7 @@ class SystemRequirementsEditor {
       const populateObjectSelect = (selectEl: HTMLSelectElement | null, cfgId: string): void => {
         if (!selectEl) return;
         const prev = selectEl.value;
-        const objects = this._getObjectOptions(cfgId);
+        const objects = getCachedObjectOptions(cfgId);
         while (selectEl.firstChild) selectEl.removeChild(selectEl.firstChild);
         for (const opt of objects) {
           const el = document.createElement('option');
@@ -1244,7 +1307,7 @@ class SystemRequirementsEditor {
           control.style.boxSizing = 'border-box';
 
           try {
-            const blocks = this._getBlocksForConfigHint(row?.configId);
+            const blocks = getCachedBlocksForConfigHint(row?.configId);
             const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
             for (const block of blocks || []) {
               if (!block || typeof block !== 'object') continue;
@@ -1574,7 +1637,7 @@ class SystemRequirementsEditor {
           emptyOpt.textContent = '(select zoom group)';
           control.appendChild(emptyOpt);
           try {
-            const blocks = this._getBlocksForConfigHint(row?.configId);
+            const blocks = getCachedBlocksForConfigHint(row?.configId);
             const zoomGroups = getPrincipalPointZoomGroups(blocks);
             for (const group of zoomGroups) {
               const opt = document.createElement('option');
@@ -1605,7 +1668,7 @@ class SystemRequirementsEditor {
           control.style.padding = '2px 4px';
           control.style.boxSizing = 'border-box';
           control.dataset.isScopeParam = '1';
-          const options = getRequirementScopeOptions(row?.configId);
+          const options = getCachedRequirementScopeOptions(row?.configId);
           for (const opt of options) {
             const el = document.createElement('option');
             el.value = opt.value;
@@ -1854,7 +1917,7 @@ class SystemRequirementsEditor {
           control.style.padding = '2px 4px';
           control.style.boxSizing = 'border-box';
           control.dataset.isObjectParam = '1';
-          const objects = this._getObjectOptions(row?.configId);
+          const objects = getCachedObjectOptions(row?.configId);
           for (const opt of objects) {
             const el = document.createElement('option');
             el.value = opt.value;
@@ -1886,11 +1949,11 @@ class SystemRequirementsEditor {
           control.addEventListener('focus', () => {
             try {
               if (String(row?.operand ?? '').trim() === 'EFL' && control.tagName === 'INPUT') {
-                const blocks = this._getBlocksForConfigHint(row?.configId);
+                const blocks = getCachedBlocksForConfigHint(row?.configId);
                 const dlId = ensureEflBlocksDatalist(blocks);
                 if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
               } else if (isPrincipalPointZoomGroupParam && control.tagName === 'INPUT') {
-                const blocks = this._getBlocksForConfigHint(row?.configId);
+                const blocks = getCachedBlocksForConfigHint(row?.configId);
                 const dlId = ensurePrincipalPointZoomGroupsDatalist(blocks);
                 if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
               }
@@ -1950,7 +2013,7 @@ class SystemRequirementsEditor {
             let nextVal = control.value;
             try {
               if (field === 'param2' && String(row?.operand ?? '').trim() === 'EFL') {
-                const blocks = this._getBlocksForConfigHint(row?.configId);
+                const blocks = getCachedBlocksForConfigHint(row?.configId);
                 const displayLabelById = getEflDisplayLabelByBlockId(blocks);
                 const labelToId = new Map<string, string>();
                 for (const [id, label] of displayLabelById.entries()) {
@@ -2021,7 +2084,7 @@ class SystemRequirementsEditor {
       const updateSummary = (): void => {
         const values = [];
         const operandName = String(row?.operand ?? '').trim();
-        const objectOptions = this._getObjectOptions(row?.configId);
+        const objectOptions = getCachedObjectOptions(row?.configId);
         const objectCount = Math.max(0, objectOptions.length - 1); // exclude default option
         const objectLabelByValue = new Map<string, string>();
         for (const opt of objectOptions) {
@@ -2044,7 +2107,7 @@ class SystemRequirementsEditor {
             } else if ((operandName === 'GAP' || operandName === 'THIC') && i === 1) {
               displayVal = String(val).trim().toUpperCase() === 'MAX' ? 'Max' : 'Min';
             } else if (operandName === 'DBLT_K' && i === 1) {
-              const blocks = this._getBlocksForConfigHint(row?.configId);
+              const blocks = getCachedBlocksForConfigHint(row?.configId);
               const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
               displayVal = displayLabelById.get(String(val).trim()) || String(val);
             } else if (label === 'Scope') {
@@ -2108,7 +2171,7 @@ class SystemRequirementsEditor {
 
         try {
           if (String(row?.operand ?? '').trim() === 'EFL') {
-            const blocks = this._getBlocksForConfigHint(row?.configId);
+            const blocks = getCachedBlocksForConfigHint(row?.configId);
             const dlId = ensureEflBlocksDatalist(blocks);
             const detailScope = editorTr || tr.parentElement || tr;
             const p2Input = detailScope.querySelector('input[data-role="param2"]') as HTMLInputElement | null;
@@ -2124,7 +2187,7 @@ class SystemRequirementsEditor {
             const selectEl = sel as HTMLSelectElement;
             const prev = String(selectEl.value || row.param3 || '0');
             selectEl.innerHTML = '';
-            const options = getRequirementScopeOptions(row.configId);
+            const options = getCachedRequirementScopeOptions(row.configId);
             for (const opt of options) {
               const el = document.createElement('option');
               el.value = opt.value;
@@ -2176,7 +2239,7 @@ class SystemRequirementsEditor {
         if (operand === 'EFL' && i === 2 && control.tagName === 'INPUT') {
           try {
             const configIdHint = row?.configId;
-            const blocks = this._getBlocksForConfigHint(configIdHint);
+            const blocks = getCachedBlocksForConfigHint(configIdHint);
             const dlId = ensureEflBlocksDatalist(blocks);
             if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
             (control as HTMLInputElement).placeholder = 'ALL or blockId (comma separated allowed)';
@@ -2185,7 +2248,7 @@ class SystemRequirementsEditor {
           try {
             if (String(row?.param4 ?? '').trim().toUpperCase() === 'ZG') {
               const configIdHint = row?.configId;
-              const blocks = this._getBlocksForConfigHint(configIdHint);
+              const blocks = getCachedBlocksForConfigHint(configIdHint);
               const dlId = ensurePrincipalPointZoomGroupsDatalist(blocks);
               if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
               (control as HTMLInputElement).placeholder = 'Zoom Group (A-Z)';
@@ -2331,6 +2394,7 @@ class SystemRequirementsEditor {
 
     this._renderBody = (specFn: any, ratPrevFn: any, ensureDl: any): void => {
       if (!this._tbody) return;
+      resetRenderCaches();
       this._tbody.innerHTML = '';
       
       // Show placeholder if no requirements
@@ -3566,6 +3630,11 @@ class SystemRequirementsEditor {
       }
     } catch (_) {}
 
+    const reason = String(options?.reason ?? '').trim().toLowerCase();
+    const shouldEvaluateOffRows = options?.evaluateDisabled === true
+      || reason.startsWith('load-file')
+      || reason.startsWith('update-button');
+
     const updates: any[] = [];
     const reqCurrentById = new Map<string, number>();
     try {
@@ -3582,11 +3651,23 @@ class SystemRequirementsEditor {
       const tol = (row.tol === undefined || row.tol === null || String(row.tol).trim() === '') ? 0 : Number(row.tol);
       const target = (row.target === undefined || row.target === null || String(row.target).trim() === '') ? 0 : Number(row.target);
       const weight = (row.weight === undefined || row.weight === null || String(row.weight).trim() === '') ? 1 : Number(row.weight);
+      const wEff = Math.max(0, Number.isFinite(weight) ? weight : 1);
 
       const configId = this._normalizeConfigId(row.configId, systemConfig, activeConfigId);
 
       if (!operand) {
         updates.push({ id: row.id, current: null, status: '—' });
+        continue;
+      }
+
+      if ((!enabled || wEff <= 0) && !shouldEvaluateOffRows) {
+        updates.push({
+          id: row.id,
+          current: row.current ?? null,
+          status: 'OFF',
+          _violation: null,
+          _contribution: null,
+        });
         continue;
       }
 
@@ -3661,7 +3742,6 @@ class SystemRequirementsEditor {
       // Violation amount (hinge with tol/op). Used for Status.
       // Keep optimizer-aligned diagnostics in hidden fields, but show raw operand value in the UI.
       const amount = sanitized.ok ? this.computeViolationAmount(op, current, target, tol) : Number.POSITIVE_INFINITY;
-      const wEff = Math.max(0, Number.isFinite(weight) ? weight : 1);
       const contribution = (enabled && Number.isFinite(amount)) ? (wEff * Math.max(0, amount)) : null;
 
       let status = 'OK';

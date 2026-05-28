@@ -2624,11 +2624,6 @@ class MeritFunctionEditor {
             const objRow = objectRows[objectIndex0];
             if (!objRow || typeof objRow !== 'object') return null;
 
-            const positionType = String(objRow?.__cooptOriginalPosition ?? objRow?.position ?? '').trim().toLowerCase();
-            if (positionType === 'imageheight') {
-                return this.calculateOpdRmsWaves(operand, opticalSystemData);
-            }
-
             const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim() : '';
             const gridSize = (param3Raw === '') ? 32 : Math.max(8, Math.floor(Number(param3Raw)));
 

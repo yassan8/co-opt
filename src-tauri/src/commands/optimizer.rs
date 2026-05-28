@@ -12,6 +12,7 @@ use crate::commands::analysis::{
     compute_paraxial_metrics,
 };
 use crate::commands::optics::{
+    compute_native_chief_ray_angle_deg,
     run_native_spot_raytrace,
     run_native_transverse_aberration,
     NativeTransverseAberrationSeries,
@@ -1922,6 +1923,7 @@ fn evaluate_operand_value(rows: &[Value], source_rows: &[Value], object_rows: &[
         "SPOT_SIZE_ANNULAR" => native_spot_size_um(rows, source_rows, object_rows, req, "annular"),
         "SPOT_SIZE_RECT" => native_spot_size_um(rows, source_rows, object_rows, req, "grid"),
         "SPOT_SIZE_CURRENT" => native_spot_size_um(rows, source_rows, object_rows, req, "annular"),
+        "CRA_DEG" => native_chief_ray_angle_deg(rows, source_rows, object_rows, req),
         "TA_RMS_UM" => native_transverse_rms_um(rows, source_rows, object_rows, req),
         "TOT3_SPH" => native_seidel_operand(rows, source_rows, object_rows, req, "i"),
         "TOT3_COMA" => native_seidel_operand(rows, source_rows, object_rows, req, "ii"),
@@ -2216,6 +2218,20 @@ fn native_transverse_rms_um(
     }
     let rms_mm = (sum_sq_mm / count as f64).sqrt();
     Some(rms_mm * 1000.0)
+}
+
+fn native_chief_ray_angle_deg(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    req_spec: &RequirementSpec,
+) -> Option<f64> {
+    let object_rows_effective = select_object_rows_for_requirement(object_rows, &req_spec.param1);
+    if object_rows_effective.is_empty() {
+        return None;
+    }
+    let source_rows_effective = source_rows_for_wavelength_param(source_rows, &req_spec.param2);
+    compute_native_chief_ray_angle_deg(rows, &source_rows_effective, &object_rows_effective)
 }
 
 fn normalize_ta_component(raw: &str) -> &'static str {
@@ -2533,10 +2549,23 @@ fn parse_ta_rms_ray_count(param4: &str) -> u32 {
 }
 
 fn select_object_rows_for_requirement(object_rows: &[Value], param2: &str) -> Vec<Value> {
-    let idx = parse_usize_str(param2).unwrap_or(1);
     if object_rows.is_empty() {
         return Vec::new();
     }
+    let raw = param2.trim();
+    if raw.is_empty() {
+        return vec![object_rows[0].clone()];
+    }
+    for row in object_rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let row_id = value_to_string(obj.get("id"));
+        if !row_id.is_empty() && row_id == raw {
+            return vec![row.clone()];
+        }
+    }
+    let idx = parse_usize_str(raw).unwrap_or(1);
     if idx == 0 {
         return object_rows.to_vec();
     }
@@ -2654,6 +2683,12 @@ fn optimize_key_to_target_field(key: &str) -> String {
     }
     if upper == "T" || upper == "THICKNESS" {
         return "thickness".to_string();
+    }
+    if upper == "RI" || upper == "RINDEX" || upper == "ND" {
+        return "rindex".to_string();
+    }
+    if upper == "ABBE" || upper == "VD" {
+        return "abbe".to_string();
     }
     if upper == "CONIC" {
         return "conic".to_string();

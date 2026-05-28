@@ -13,6 +13,87 @@ use crate::commands::gpu_fft;
 const EPS_R: f64 = 1e-10;
 const MAX_NATIVE_PSF_FFT_SIZE: usize = 4096;
 
+pub(crate) fn compute_native_chief_ray_angle_deg(
+    optical_system_rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+) -> Option<f64> {
+    if optical_system_rows.is_empty() || object_rows.is_empty() {
+        return None;
+    }
+
+    let rows: Vec<Value> = optical_system_rows
+        .iter()
+        .map(normalize_coord_trans_row)
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+
+    let resolved_source_rows: Vec<Value> = if source_rows.is_empty() {
+        vec![serde_json::json!({
+            "id": "NativeCraSource",
+            "name": "NativeCraSource",
+            "wavelength": 0.5875618,
+            "color": "#2563eb",
+            "isPrimary": true,
+            "primary": "Primary",
+            "intensity": 1,
+        })]
+    } else {
+        source_rows.to_vec()
+    };
+
+    let surface_data = calculate_surface_data(&rows);
+    if surface_data.len() != rows.len() {
+        return None;
+    }
+
+    let target_surface_index = find_evaluation_surface_index_native(&rows)
+        .min(rows.len().saturating_sub(1));
+    let generated_series = build_native_object_ray_series(
+        &rows,
+        &surface_data,
+        object_rows,
+        target_surface_index,
+        5,
+        "annular",
+        1,
+        &resolved_source_rows,
+        "primary",
+        false,
+    );
+
+    for (_series_label, _series_color, _has_field_angle, rays, wavelength_um) in generated_series {
+        if rays.is_empty() {
+            continue;
+        }
+
+        let packed_target = match build_packed_meta(&rows, &surface_data, target_surface_index, wavelength_um) {
+            Ok(packed) => packed,
+            Err(_) => continue,
+        };
+        let chief = rays.iter().find(|ray| ray.is_chief).unwrap_or(&rays[0]);
+        let chief_vec = [
+            chief.start_p.x,
+            chief.start_p.y,
+            chief.start_p.z,
+            chief.dir.x,
+            chief.dir.y,
+            chief.dir.z,
+        ];
+        let (_hx, _hy, _hz, dx, dy, dz) = trace_target_with_packed_native(chief_vec, target_surface_index, &packed_target)?;
+        let dir = normalize3(dx, dy, dz);
+        let transverse = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt();
+        let angle_deg = transverse.atan2(dir[2].abs()) * 180.0 / PI;
+        if angle_deg.is_finite() {
+            return Some(angle_deg.abs());
+        }
+    }
+
+    None
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeAnalysisProgressEvent {
@@ -4964,6 +5045,7 @@ pub fn run_native_spherical_aberration(req: NativeSphericalAberrationRequest) ->
         wavelength: f64,
         meridional: Vec<(f64, f64, f64, f64)>,
         sagittal: Vec<(f64, f64, f64, f64)>,
+        paraxial_reference: Option<f64>,
         current_reference: Option<f64>,
         chief_reference: Option<f64>,
     }
@@ -4975,6 +5057,7 @@ pub fn run_native_spherical_aberration(req: NativeSphericalAberrationRequest) ->
             Ok(p) => p,
             Err(_) => continue,
         };
+        let paraxial_reference = calculate_back_focal_length_native(&rows, wavelength_um);
 
         let chief_ray = build_sa_axis_ray_native(
             0.0,
@@ -5006,11 +5089,13 @@ pub fn run_native_spherical_aberration(req: NativeSphericalAberrationRequest) ->
             );
             if let Some((focus, hit_x, hit_y)) = trace_focus_with_packed_native(mr, surface_index, target_surface.origin, &packed) {
                 meridional.push((*p, focus, hit_x, hit_y));
-                let score = p * p;
-                match best_ref {
-                    None => best_ref = Some((score, focus)),
-                    Some((best_score, _)) if score < best_score => best_ref = Some((score, focus)),
-                    _ => {}
+                if *p > 1.0e-6 {
+                    let score = p * p;
+                    match best_ref {
+                        None => best_ref = Some((score, focus)),
+                        Some((best_score, _)) if score < best_score => best_ref = Some((score, focus)),
+                        _ => {}
+                    }
                 }
             }
 
@@ -5033,6 +5118,7 @@ pub fn run_native_spherical_aberration(req: NativeSphericalAberrationRequest) ->
             wavelength: wavelength_um,
             meridional,
             sagittal,
+            paraxial_reference,
             current_reference: best_ref.map(|(_, f)| f),
             chief_reference,
         });
@@ -5052,21 +5138,22 @@ pub fn run_native_spherical_aberration(req: NativeSphericalAberrationRequest) ->
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
     let primary_reference = primary_entry
-        .and_then(|v| v.current_reference.or(v.chief_reference));
+        .and_then(|v| v.paraxial_reference.or(v.chief_reference).or(v.current_reference));
 
     let mut pupil_renormalized = false;
     let mut max_observed_pupil_global = 0.0_f64;
 
     for entry in all_temp {
         let ref_focus = if reference_mode == "chief-ray" {
-            entry.chief_reference.or(entry.current_reference).unwrap_or(0.0)
+            entry.chief_reference.or(entry.paraxial_reference).or(entry.current_reference).unwrap_or(0.0)
         } else if reference_mode == "primary-paraxial" {
             primary_reference
+                .or(entry.paraxial_reference)
                 .or(entry.current_reference)
                 .or(entry.chief_reference)
                 .unwrap_or(0.0)
         } else {
-            entry.current_reference.or(entry.chief_reference).unwrap_or(0.0)
+            entry.paraxial_reference.or(entry.chief_reference).or(entry.current_reference).unwrap_or(0.0)
         };
 
         let mut mer_points = entry
@@ -6842,6 +6929,26 @@ fn run_native_magnification_chromatic_aberration_impl(
     let chief_ray_definition = req
         .chief_ray_definition
         .unwrap_or_else(|| "stop-center".to_string());
+    let chief_mode = chief_ray_definition.to_lowercase();
+    let stop_center_mode = chief_mode.starts_with("stop-center");
+    let beam_averaged_mode = chief_mode.starts_with("beam-centroid") || chief_mode.starts_with("beam-midpoint");
+    let lca_pattern = if stop_center_mode || beam_averaged_mode {
+        "annular"
+    } else {
+        "cross"
+    };
+    let lca_ray_count = if beam_averaged_mode {
+        1001
+    } else {
+        101
+    };
+    let lca_ring_count = if beam_averaged_mode {
+        7
+    } else if stop_center_mode {
+        3
+    } else {
+        1
+    };
     let height_mode = req.height_mode.unwrap_or(false);
     let mirror_sign = distortion_mirror_sign(&rows);
     let finite = !is_infinite_conjugate_native(&rows);
@@ -6903,9 +7010,9 @@ fn run_native_magnification_chromatic_aberration_impl(
             source_rows,
             object_rows: object_rows.clone(),
             surface_index: Some(image_surface_index),
-            ray_count: Some(101),
-            ring_count: Some(1),
-            pattern: Some("cross".to_string()),
+            ray_count: Some(lca_ray_count),
+            ring_count: Some(lca_ring_count),
+            pattern: Some(lca_pattern.to_string()),
             wavelength_mode: Some("primary".to_string()),
             ray_series: Vec::new(),
         })?;
@@ -6953,6 +7060,9 @@ fn run_native_magnification_chromatic_aberration_impl(
     meta.insert("heightMode".to_string(), Value::from(height_mode));
     meta.insert("chiefRayDefinition".to_string(), Value::from(chief_ray_definition));
     meta.insert("mirrorSign".to_string(), Value::from(mirror_sign));
+    meta.insert("pattern".to_string(), Value::from(lca_pattern));
+    meta.insert("rayCount".to_string(), Value::from(lca_ray_count as i64));
+    meta.insert("ringCount".to_string(), Value::from(lca_ring_count as i64));
 
     Ok(NativeMagnificationChromaticAberrationResponse {
         backend: "native-rust-lateral-chromatic-aberration".to_string(),
@@ -8477,6 +8587,103 @@ fn get_safe_thickness(row: &Value) -> f64 {
     }
 
     0.0
+}
+
+fn get_safe_radius_native(row: &Value) -> f64 {
+    if let Some(v) = get_field(row, "radius")
+        .or_else(|| get_field(row, "Radius"))
+        .or_else(|| get_field(row, "curvature"))
+    {
+        if let Some(s) = value_to_string(v) {
+            let t = s.trim();
+            if t.eq_ignore_ascii_case("inf") || t.eq_ignore_ascii_case("infinity") {
+                return f64::INFINITY;
+            }
+            if let Ok(n) = t.parse::<f64>() {
+                return n;
+            }
+        }
+        return value_to_f64(v).unwrap_or(f64::NAN);
+    }
+
+    f64::NAN
+}
+
+fn is_image_row_native(row: &Value) -> bool {
+    let s = norm_string(row, &["object type", "objectType", "object", "Object", "type"]);
+    let c = compact(&s);
+    c == "image" || c.starts_with("image")
+}
+
+fn is_stop_row_native(row: &Value) -> bool {
+    let s = norm_string(row, &["object type", "objectType", "object", "Object", "type"]);
+    compact(&s) == "stop"
+}
+
+fn calculate_back_focal_length_native(rows: &[Value], wavelength_um: f64) -> Option<f64> {
+    if rows.len() < 2 {
+        return None;
+    }
+
+    let object_distance_mm = rows
+        .first()
+        .and_then(|row| get_field(row, "thickness"))
+        .and_then(value_to_f64)
+        .filter(|v| v.is_finite() && *v != 0.0);
+    let initial_alpha = object_distance_mm.map(|d0| -1.0 / d0).unwrap_or(0.0);
+
+    let trace_core = |initial_alpha: f64| -> Option<(f64, f64)> {
+        let mut h = 1.0_f64;
+        let mut alpha = initial_alpha;
+        let mut prev_n = 1.0_f64;
+
+        for row in rows.iter().skip(1) {
+            if is_image_row_native(row) {
+                break;
+            }
+            if is_coord_trans_row(row) {
+                continue;
+            }
+
+            let radius = get_safe_radius_native(row);
+            let thickness = get_safe_thickness(row);
+            let next_n = if is_mirror_row_native(row) {
+                -prev_n
+            } else if is_stop_row_native(row) {
+                prev_n
+            } else {
+                get_correct_refractive_index(row, wavelength_um)
+            };
+
+            let phi = if radius.is_finite() && radius.abs() > 1.0e-12 {
+                (next_n - prev_n) / radius
+            } else {
+                0.0
+            };
+            alpha += phi * h;
+
+            if thickness.is_finite() && thickness > 0.0 && next_n.abs() > 1.0e-12 {
+                h -= thickness * alpha / next_n;
+            }
+
+            prev_n = next_n;
+        }
+
+        Some((h, alpha))
+    };
+
+    let (h, alpha) = trace_core(initial_alpha)?;
+    let (efl_h, efl_alpha) = if object_distance_mm.is_some() {
+        trace_core(0.0).unwrap_or((h, alpha))
+    } else {
+        (h, alpha)
+    };
+
+    if efl_alpha.abs() > 1.0e-10 {
+        Some(efl_h / efl_alpha)
+    } else {
+        None
+    }
 }
 
 fn identity3() -> [f64; 9] {

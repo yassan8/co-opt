@@ -441,6 +441,8 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
   let validPointCount = 0;
   const realX = [];
   const realY = [];
+  const blockedX = [];
+  const blockedY = [];
   const totalPoints = Math.max(1, realGrid.x.length);
   
   for (let i = 0; i < realGrid.x.length; i++) {
@@ -459,6 +461,9 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
       realY.push(y);
       
       validPointCount++;
+    } else if (isFinite(idealX) && isFinite(idealY)) {
+      blockedX.push(idealX);
+      blockedY.push(idealY);
     }
 
     const pct = ((i + 1) / totalPoints) * 100;
@@ -491,12 +496,33 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
     hovertemplate: 'Real: (%{x:.3f}, %{y:.3f}) mm<extra></extra>'
   });
 
+  if (blockedX.length > 0) {
+    traces.push({
+      x: blockedX,
+      y: blockedY,
+      mode: 'markers',
+      marker: {
+        color: '#ef4444',
+        size: 7,
+        symbol: 'x',
+        opacity: 0.8,
+        line: {
+          width: 1,
+          color: '#991b1b'
+        }
+      },
+      showlegend: true,
+      name: 'Blocked/Vignetted Samples',
+      hovertemplate: 'Blocked target: (%{x:.3f}, %{y:.3f}) mm<extra></extra>'
+    });
+  }
+
   const maxAbsIdealX = idealGrid.x.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
   const maxAbsIdealY = idealGrid.y.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
   const equalRangeHalf = Math.max(maxAbsIdealX, maxAbsIdealY, 1e-9);
 
   const layout = {
-    title: `Grid Distortion (${gridSize}×${gridSize}, λ=${meta.wavelength.toFixed(4)} μm)`,
+    title: `Grid Distortion (${gridSize}×${gridSize}, λ=${meta.wavelength.toFixed(4)} μm, valid=${validPointCount}/${realGrid.x.length})`,
     xaxis: { 
       title: 'Image Height X (mm)',
       scaleanchor: 'y',

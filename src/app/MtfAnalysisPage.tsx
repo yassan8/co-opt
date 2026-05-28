@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { runNativeFieldMtfMap } from '../../src/desktop/ipc/client.ts';
+import { isTauriRuntime } from '../../src/desktop/runtime.ts';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -594,18 +595,28 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       let nyquistGlobal = 0;
       const estimateFiniteGridRms = (grid: any): number => {
         if (!Array.isArray(grid) || grid.length === 0) return Number.NaN;
+        let sum = 0;
         let sumSq = 0;
+        let min = Infinity;
+        let max = -Infinity;
         let count = 0;
         for (const row of grid) {
           if (!Array.isArray(row)) continue;
           for (const value of row) {
             const n = Number(value);
+            if (n === 0) continue;
             if (!Number.isFinite(n)) continue;
+            sum += n;
             sumSq += n * n;
+            if (n < min) min = n;
+            if (n > max) max = n;
             count += 1;
           }
         }
-        return count > 0 ? Math.sqrt(sumSq / count) : Number.NaN;
+        if (count === 0) return Number.NaN;
+        const mean = sum / count;
+        const variance = Math.max(0, (sumSq / count) - (mean * mean));
+        return Math.sqrt(variance);
       };
       for (let wli = 0; wli < wavelengthList.length; wli++) {
         const wl = wavelengthList[wli];
@@ -823,12 +834,17 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     const objIdxN = parseInt(objectIdx, 10) || 0;
     try {
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
-      if (typeof w.runDesktopNativeThroughFocusMtfForPopup !== 'function') throw new Error('runDesktopNativeThroughFocusMtfForPopup unavailable');
+      const throughFocusRunner = (!isTauriRuntime() && typeof w.runPortableThroughFocusMtfForPopup === 'function')
+        ? w.runPortableThroughFocusMtfForPopup
+        : (typeof w.runDesktopNativeThroughFocusMtfForPopup === 'function'
+          ? w.runDesktopNativeThroughFocusMtfForPopup
+          : (typeof w.runPortableThroughFocusMtfForPopup === 'function' ? w.runPortableThroughFocusMtfForPopup : null));
+      if (typeof throughFocusRunner !== 'function') throw new Error('Through-Focus MTF runner unavailable');
       setProgress(0, 'Starting...');
       await new Promise(r => setTimeout(r, 0));
       let lastProgress = 20;
       setProgress(lastProgress, 'Computing Through-Focus MTF...');
-      const nativeResp = await w.runDesktopNativeThroughFocusMtfForPopup({
+      const nativeResp = await throughFocusRunner({
         objectIndex: objIdxN, wavelengths: wavelengthList,
         targetFrequencyLpmm: targetFreqN, defocusMinMm: defocusMinN, defocusMaxMm: defocusMaxN,
         steps: stepsN, samplingSize: samplingN, zeroPadTo, opdDisplayMode,
