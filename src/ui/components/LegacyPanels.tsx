@@ -3251,7 +3251,7 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
         <input type="text" id="reference-focal-length" placeholder="Auto" style={{ width: '80px' }} />
         <button id="coord-transform-btn">Coord Transform</button>
       </div>
-      <textarea id="system-data" rows={15} cols={100} placeholder="System information will appear here..."></textarea>
+      <textarea id="system-data" rows={15} cols={100}></textarea>
     </div>
   );
 }

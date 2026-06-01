@@ -6341,7 +6341,7 @@ export function setupAnalysisWindows() {
             <div id="popup-transform-progress-text">Calculating...</div>
             <progress id="popup-transform-progressbar" max="100" value="0" style="width:100%; margin-top:4px;"></progress>
         </div>
-        <textarea id="popup-system-data" placeholder="System information will appear here..."></textarea>
+        <textarea id="popup-system-data"></textarea>
     </div>
 
     <script>
