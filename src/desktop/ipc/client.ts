@@ -286,7 +286,7 @@ async function computeReferenceOpdMapViaRustTracedJsMath(
   requestedPupilSamplingMode: "stop" | "entrance",
   opdDisplayMode: string,
 ): Promise<NativeOpdMapResponse> {
-  const [{ createOPDCalculator }] = await Promise.all([
+  const [{ createOPDCalculator, createWavefrontAnalyzer }] = await Promise.all([
     import("../../../evaluation/wavefront/wavefront.ts"),
   ]);
 
@@ -312,6 +312,67 @@ async function computeReferenceOpdMapViaRustTracedJsMath(
   try {
     if (typeof calc?.setReferenceRay === "function") {
       calc.setReferenceRay(fieldSetting);
+    }
+
+    if (typeof createWavefrontAnalyzer === "function") {
+      const analyzer = createWavefrontAnalyzer(calc) as any;
+      if (analyzer && typeof analyzer.generateWavefrontMap === "function") {
+        const map = await analyzer.generateWavefrontMap(fieldSetting, gridSize, "circular", {
+          recordRays: false,
+          progressEvery: 0,
+          opdMode: "referenceSphere",
+          opdDisplayMode,
+          renderFromZernike: false,
+          skipZernikeFit: true,
+          fullBatchTraceExperimental: false,
+        });
+        if (map && !map.error && Array.isArray(map.pupilCoordinates)) {
+          const rawValues = Array.isArray(map?.raw?.opdsInWavelengths)
+            ? map.raw.opdsInWavelengths
+            : (Array.isArray(map?.opdsInWavelengths) ? map.opdsInWavelengths : []);
+          const displayValues = Array.isArray(map?.display?.opdsInWavelengths)
+            ? map.display.opdsInWavelengths
+            : rawValues;
+          const rawOpdGrid = Array.from({ length: gridSize }, () => Array.from({ length: gridSize }, () => null as number | null));
+          const displayOpdGrid = Array.from({ length: gridSize }, () => Array.from({ length: gridSize }, () => null as number | null));
+          let hitCount = 0;
+          const count = Math.min(map.pupilCoordinates.length, rawValues.length);
+          for (let i = 0; i < count; i++) {
+            const coord = map.pupilCoordinates[i] || {};
+            const ix = Number(coord.ix);
+            const iy = Number(coord.iy);
+            if (!Number.isInteger(ix) || !Number.isInteger(iy) || ix < 0 || iy < 0 || ix >= gridSize || iy >= gridSize) continue;
+            const rawValue = Number(rawValues[i]);
+            if (!Number.isFinite(rawValue)) continue;
+            rawOpdGrid[iy][ix] = rawValue;
+            const displayValue = Number(displayValues[i]);
+            displayOpdGrid[iy][ix] = Number.isFinite(displayValue) ? displayValue : rawValue;
+            hitCount += 1;
+          }
+          if (hitCount > 0) {
+            return {
+              backend: "web-rust-wasm-js-reference",
+              chiefReferenceMode: `js-reference-sphere(${requestedPupilSamplingMode})`,
+              targetSurface: pickImageSurfaceIndexNativeLike(opticalSystemRows),
+              stopSurface: 0,
+              requestedObjectIndex: objectIndex,
+              usedObjectIndex: objectIndex,
+              usedObjectPosition: String(selectedObject?.__cooptOriginalPosition ?? selectedObject?.position ?? ""),
+              usedObjectX: Number(selectedObject?.__cooptImageHeightTarget?.x ?? selectedObject?.xHeightAngle ?? selectedObject?.xHeight ?? selectedObject?.x ?? 0) || 0,
+              usedObjectY: Number(selectedObject?.__cooptImageHeightTarget?.y ?? selectedObject?.yHeightAngle ?? selectedObject?.yHeight ?? selectedObject?.y ?? 0) || 0,
+              wavelengthUm,
+              gridSize,
+              sampleCount: hitCount,
+              hitCount,
+              pupilSamplingMode: requestedPupilSamplingMode,
+              rawOpdGrid,
+              displayOpdGrid,
+              referenceSphereOpdGrid: rawOpdGrid,
+              message: "Computed via JS reference-sphere math with Rust/WASM ray tracing",
+            } as NativeOpdMapResponse;
+          }
+        }
+      }
     }
 
     const rawOpdGrid = Array.from({ length: gridSize }, () => Array.from({ length: gridSize }, () => null as number | null));
@@ -387,6 +448,7 @@ async function computeReferenceOpdMapViaRustTracedJsMath(
       pupilSamplingMode: requestedPupilSamplingMode,
       rawOpdGrid,
       displayOpdGrid,
+      referenceSphereOpdGrid: rawOpdGrid,
       message: "Computed via JS reference-sphere math with Rust/WASM ray tracing",
     } as NativeOpdMapResponse;
   } finally {
@@ -1935,7 +1997,7 @@ export async function runNativeOpdMap(
       ? Number(payload.surfaceIndex)
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
 
-    if (isImageHeightNativeObjectRow(selectedObject)) {
+    if (isImageHeightNativeObjectRow(selectedObject) || isAngle) {
       return clampIdealParaxialNativeOpdResponse(
         opticalSystemRows,
         await computeReferenceOpdMapViaRustTracedJsMath(
@@ -1975,6 +2037,9 @@ export async function runNativeOpdMap(
     const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
     const rawOpdGrid = Array.isArray(wasmOut?.rawOpdGrid) ? wasmOut.rawOpdGrid : null;
     const displayOpdGrid = Array.isArray(wasmOut?.displayOpdGrid) ? wasmOut.displayOpdGrid : rawOpdGrid;
+    const referenceSphereOpdGrid = Array.isArray(wasmOut?.referenceSphereOpdGrid)
+      ? wasmOut.referenceSphereOpdGrid
+      : rawOpdGrid;
     if (!rawOpdGrid || !displayOpdGrid) {
       throw new Error(
         "runNativeOpdMap(web): Rust-WASM OPD API returned no OPD grid. "
@@ -1999,6 +2064,7 @@ export async function runNativeOpdMap(
       pupilSamplingMode: String(wasmOut?.pupilSamplingMode || requestedPupilSamplingMode),
       rawOpdGrid,
       displayOpdGrid,
+      referenceSphereOpdGrid,
       message: String(wasmOut?.message || "Computed via Rust-WASM native OPD API"),
     } as NativeOpdMapResponse);
   }

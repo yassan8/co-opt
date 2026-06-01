@@ -427,6 +427,8 @@ struct NativeOpdMapWasmResponseForScalar {
     sample_count: usize,
     hit_count: usize,
     pupil_sampling_mode: String,
+    #[serde(default)]
+    reference_sphere_opd_grid: Option<Vec<Vec<Option<f64>>>>,
     display_opd_grid: Vec<Vec<Option<f64>>>,
     message: String,
 }
@@ -6634,6 +6636,7 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
         "pupilSamplingMode": effective_pupil_sampling_mode,
         "chiefReferenceMode": chief_reference_mode,
         "rawOpdGrid": to_json_grid(&raw_grid),
+        "referenceSphereOpdGrid": to_json_grid(&raw_grid),
         "displayOpdGrid": to_json_grid(&display_grid),
         "message": if let Some(warn) = sparse_entrance_warning.as_deref() {
             if prefer_entrance_sampling {
