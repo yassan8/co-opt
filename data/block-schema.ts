@@ -4149,34 +4149,60 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
 
       const thickness = getParamOrVarValue(params, vars, 'thickness');
       const signedThickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
+      const thicknessModeRaw = getParamOrVarValue(params, vars, 'thicknessMode');
+      const thicknessModeKey = String(thicknessModeRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
+      const gapThicknessMode = (thicknessModeKey === 'IMD' || thicknessModeKey === 'BFL') ? thicknessModeKey : '';
+      const gapRindexRaw = getParamOrVarValue(params, vars, 'rindex');
+      const gapRindex = String(gapRindexRaw ?? '').trim();
 
       const matRaw = getParamOrVarValue(params, vars, 'material');
       const mat = String(matRaw ?? '').trim();
       const matKey = mat.replace(/\s+/g, '').toUpperCase();
-      const gapMaterial = (mat === '' || matKey === 'AIR') ? 'AIR' : mat;
+      const gapMaterial = (mat === '' || mat === '0')
+        ? (gapRindex !== '' ? '' : 'AIR')
+        : (matKey === 'AIR' ? 'AIR' : mat);
 
       const abbeRaw = getParamOrVarValue(params, vars, 'abbe');
       const abbeStr = String(abbeRaw ?? '').trim();
 
+      const assignGapProvenance = (targetRow: any) => {
+        if (!targetRow || typeof targetRow !== 'object') return;
+        targetRow.__cooptGapBlockType = type === 'AirGap' ? 'AirGap' : 'Gap';
+        targetRow.__cooptGapThickness = signedThickness;
+        targetRow.__cooptGapMaterial = gapMaterial;
+        if (gapRindex !== '') targetRow.__cooptGapRindex = gapRindex;
+        if (gapThicknessMode) targetRow.__cooptGapThicknessMode = gapThicknessMode;
+        if (abbeStr !== '') targetRow.__cooptGapAbbe = abbeStr;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
+          targetRow.__cooptGapOptimizeT = 'V';
+        }
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
+          targetRow.__cooptGapOptimizeMaterial = 'V';
+        }
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'rindex') && shouldMarkV(vars.rindex)) {
+          targetRow.__cooptGapOptimizeRI = 'V';
+        }
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'abbe') && shouldMarkV(vars.abbe)) {
+          targetRow.__cooptGapOptimizeAbbe = 'V';
+        }
+      };
+
       if (prev && isCoordTransRow(prev)) {
         // Coord Trans rows reuse thickness/material for decenter parameters;
         // store gap spacing separately to avoid clobbering CT fields.
-        prev.__cooptGapThickness = signedThickness;
-        prev.__cooptGapMaterial = gapMaterial;
+        assignGapProvenance(prev);
         prev.__cooptGapApplied = true;
-        if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
-          prev.__cooptGapOptimizeT = 'V';
-        }
-        if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
-          prev.__cooptGapOptimizeMaterial = 'V';
-        }
       } else {
         prev.thickness = signedThickness;
         prev.material = gapMaterial;
+        assignGapProvenance(prev);
+        if (gapRindex !== '') {
+          prev.rindex = gapRindex;
+        }
         
         // Handle abbe number: manual for numeric materials, auto-fetch for glass names
         const isNumericMaterial = __isNumericMaterialName(gapMaterial);
-        if (isNumericMaterial && abbeStr !== '') {
+        if ((isNumericMaterial || gapRindex !== '') && abbeStr !== '') {
           // Numeric material (synthetic glass) with manual abbe value
           prev.abbe = abbeStr;
         } else if (!isNumericMaterial && gapMaterial.toUpperCase() !== 'AIR') {
@@ -4194,6 +4220,9 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
         }
         if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
           applyVFlag(prev, 'optimizeMaterial');
+        }
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'rindex') && shouldMarkV(vars.rindex)) {
+          applyVFlag(prev, 'optimizeRI');
         }
         if (vars && Object.prototype.hasOwnProperty.call(vars, 'abbe') && shouldMarkV(vars.abbe)) {
           applyVFlag(prev, 'optimizeAbbe');
@@ -4295,6 +4324,23 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
   const normalizeMaterialName = (m) => String(m ?? '').trim();
   const isAirName = (m) => normalizeMaterialName(m).toUpperCase() === 'AIR';
   const isEmptyMaterial = (m) => normalizeMaterialName(m) === '';
+  const normalizeGapMaterialName = (m, rindexValue) => {
+    const raw = normalizeMaterialName(m);
+    const key = raw.replace(/\s+/g, '').toUpperCase();
+    const manualRindex = String(rindexValue ?? '').trim();
+    if (raw === '' || raw === '0') return manualRindex !== '' ? '' : 'AIR';
+    return key === 'AIR' ? 'AIR' : raw;
+  };
+  const resolveDerivedGapMaterial = (rowObj, fallbackMaterial, blockedMaterialKeys: Set<string> = new Set()) => {
+    if (rowObj && typeof rowObj === 'object' && Object.prototype.hasOwnProperty.call(rowObj, '__cooptGapMaterial')) {
+      return normalizeMaterialName((rowObj as any).__cooptGapMaterial);
+    }
+
+    const raw = normalizeMaterialName(fallbackMaterial);
+    const key = raw.replace(/\s+/g, '').toUpperCase();
+    if (raw === '' || raw === '0' || key === 'AIR' || blockedMaterialKeys.has(key)) return 'AIR';
+    return raw;
+  };
   const asNumberOrInfOrZero = (v) => {
     if (v === null || v === undefined) return 0;
     if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -4353,6 +4399,130 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     if (legacyHasV(rowObj, legacyKey)) {
       target[blockKey] = legacyVarV(value);
     }
+  };
+  const getGapThicknessMode = (rowObj) => {
+    const raw = String(rowObj?.__cooptGapThicknessMode ?? '').trim().replace(/\s+/g, '').toUpperCase();
+    return (raw === 'IMD' || raw === 'BFL') ? raw : '';
+  };
+  const shouldEmitGapBlock = (rowObj, thicknessValue) => {
+    if (thicknessValue === 'INF') return true;
+    if (typeof thicknessValue === 'number' && Math.abs(thicknessValue) > 1e-12) return true;
+    if (getGapThicknessMode(rowObj) !== '') return true;
+    return String(rowObj?.__cooptGapBlockType ?? '').trim() !== '';
+  };
+  const fallbackGapBlocks = (() => {
+    try {
+      const globalObj: any = (typeof globalThis !== 'undefined') ? globalThis : null;
+      const runtimeConfig = globalObj?.__cooptSystemConfig;
+      const runtimeConfigs = Array.isArray(runtimeConfig?.configurations) ? runtimeConfig.configurations : [];
+      const runtimeActiveId = runtimeConfig?.activeConfigId;
+      const runtimeActiveCfg = runtimeConfigs.find((cfg: any) => String(cfg?.id ?? '') === String(runtimeActiveId ?? '')) || runtimeConfigs[0];
+      const runtimeBlocks = Array.isArray(runtimeActiveCfg?.blocks) ? runtimeActiveCfg.blocks : [];
+      if (runtimeBlocks.length > 0) {
+        return runtimeBlocks.filter((block: any) => {
+          const blockType = String(block?.blockType ?? '').trim();
+          return blockType === 'Gap' || blockType === 'AirGap';
+        });
+      }
+    } catch (_) {}
+    try {
+      if (typeof localStorage === 'undefined' || !localStorage) return [];
+      const raw = localStorage.getItem('systemConfigurations');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      const configs = Array.isArray(parsed?.configurations) ? parsed.configurations : [];
+      const activeId = parsed?.activeConfigId;
+      const activeCfg = configs.find((cfg: any) => String(cfg?.id ?? '') === String(activeId ?? '')) || configs[0];
+      const parsedBlocks = Array.isArray(activeCfg?.blocks) ? activeCfg.blocks : [];
+      return parsedBlocks.filter((block: any) => {
+        const blockType = String(block?.blockType ?? '').trim();
+        return blockType === 'Gap' || blockType === 'AirGap';
+      });
+    } catch (_) {
+      return [];
+    }
+  })();
+  let fallbackGapIndex = 0;
+  const resolveFallbackGapParameters = (rowObj, gapMaterial, gapRindex, gapAbbe) => {
+    const explicitGapMaterial = String(rowObj?.__cooptGapMaterial ?? '').trim();
+    const rowBlockType = String(rowObj?._blockType ?? rowObj?.blockType ?? '').trim();
+    const explicitRowMaterial = (rowBlockType === 'CoordTrans')
+      ? ''
+      : String(rowObj?.material ?? '').trim();
+    const normalizedGapMaterial = String(gapMaterial ?? '').trim();
+    const shouldConsiderFallback = explicitGapMaterial === ''
+      && (normalizedGapMaterial === '' || normalizedGapMaterial.toUpperCase() === 'AIR')
+      && (explicitRowMaterial === '' || explicitRowMaterial === '0' || explicitRowMaterial.toUpperCase() === 'AIR');
+    if (!shouldConsiderFallback) {
+      return { material: gapMaterial, rindex: gapRindex, abbe: gapAbbe };
+    }
+
+    const fallbackBlock = fallbackGapBlocks[fallbackGapIndex];
+    if (!fallbackBlock || typeof fallbackBlock !== 'object') {
+      return { material: gapMaterial, rindex: gapRindex, abbe: gapAbbe };
+    }
+
+    const fallbackParams = (fallbackBlock.parameters && typeof fallbackBlock.parameters === 'object')
+      ? fallbackBlock.parameters
+      : {};
+    const fallbackMaterial = String(fallbackParams.material ?? '').trim();
+    const fallbackRindex = String(fallbackParams.rindex ?? '').trim();
+    const fallbackAbbe = String(fallbackParams.abbe ?? '').trim();
+    const hasFallbackMedium = (fallbackMaterial !== '' && fallbackMaterial !== '0' && fallbackMaterial.toUpperCase() !== 'AIR')
+      || fallbackRindex !== ''
+      || fallbackAbbe !== '';
+    if (!hasFallbackMedium) {
+      return { material: gapMaterial, rindex: gapRindex, abbe: gapAbbe };
+    }
+
+    return {
+      material: fallbackMaterial !== '' ? fallbackMaterial : gapMaterial,
+      rindex: gapRindex !== '' ? gapRindex : fallbackRindex,
+      abbe: gapAbbe !== '' ? gapAbbe : fallbackAbbe,
+    };
+  };
+  const appendDerivedGapBlock = (rowObj, thicknessValue, materialValue, metadata) => {
+    if (!shouldEmitGapBlock(rowObj, thicknessValue)) return;
+    gapCount++;
+    const gapRindexRaw = String(rowObj?.__cooptGapRindex ?? rowObj?.rindex ?? '').trim();
+    const gapThicknessMode = getGapThicknessMode(rowObj);
+    const gapAbbeRaw = String(rowObj?.__cooptGapAbbe ?? '').trim();
+    const restoredGap = resolveFallbackGapParameters(
+      rowObj,
+      normalizeGapMaterialName(materialValue, gapRindexRaw),
+      gapRindexRaw,
+      gapAbbeRaw,
+    );
+    const gapMaterial = normalizeGapMaterialName(restoredGap.material, restoredGap.rindex);
+    const gapRindex = String(restoredGap.rindex ?? '').trim();
+    const gapAbbe = String(restoredGap.abbe ?? '').trim();
+    const parameters: any = { thickness: thicknessValue, material: gapMaterial };
+    if (gapRindex !== '') parameters.rindex = gapRindex;
+    if (gapThicknessMode) parameters.thicknessMode = gapThicknessMode;
+    if (gapAbbe !== '') parameters.abbe = gapAbbe;
+    const variables: any = {};
+    if (legacyHasV(rowObj, '__cooptGapOptimizeT') || legacyHasV(rowObj, 'optimizeT')) {
+      variables.thickness = legacyVarV(thicknessValue);
+    }
+    if (legacyHasV(rowObj, '__cooptGapOptimizeMaterial') || legacyHasV(rowObj, 'optimizeMaterial')) {
+      variables.material = legacyVarV(gapMaterial);
+    }
+    if (gapRindex !== '' && (legacyHasV(rowObj, '__cooptGapOptimizeRI') || legacyHasV(rowObj, 'optimizeRI'))) {
+      variables.rindex = legacyVarV(gapRindex);
+    }
+    if (gapAbbe !== '' && (legacyHasV(rowObj, '__cooptGapOptimizeAbbe') || legacyHasV(rowObj, 'optimizeAbbe'))) {
+      variables.abbe = legacyVarV(gapAbbe);
+    }
+    blocks.push({
+      blockId: `Gap-${gapCount}`,
+      blockType: String(rowObj?.__cooptGapBlockType ?? '').trim() === 'AirGap' ? 'AirGap' : 'Gap',
+      role: null,
+      constraints: {},
+      parameters,
+      variables,
+      metadata
+    });
+    fallbackGapIndex++;
   };
 
   const isLegacyParaxialRow = (rowObj) => {
@@ -4483,6 +4653,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
         variables: {},
         metadata: { source: 'legacy-opticalSystem' }
       });
+
+      const gapThickness = asNumberOrInfOrZero((r as any).__cooptGapThickness);
+      appendDerivedGapBlock(r, gapThickness, (r as any).__cooptGapMaterial, { source: 'legacy-opticalSystem', from: 'CoordTrans.__cooptGapThickness', rowIndex: i });
       continue;
     }
 
@@ -4496,7 +4669,8 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     }
 
     const material = __normalizeLegacyMaterialForBlocks(r, i, issues);
-    const stopRowHasGlass = isStopRow(r) && material !== '' && !isAirName(material);
+    const stopHasExplicitGapProvenance = isStopRow(r) && String((r as any)?.__cooptGapBlockType ?? '').trim() !== '';
+    const stopRowHasGlass = isStopRow(r) && !stopHasExplicitGapProvenance && material !== '' && !isAirName(material);
     if (isStopRow(r) && !stopRowHasGlass) {
       stopCount++;
       const blockId = `Stop-${stopCount}`;
@@ -4516,21 +4690,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
 
       // Preserve spacing after Stop as a Gap block (Gap attaches to the previous surface on expand).
       const t = asNumberOrInfOrZero(r.thickness);
-      if ((typeof t === 'number' && Math.abs(t) > 1e-12) || t === 'INF') {
-        gapCount++;
-        const mRaw = normalizeMaterialName(r.material);
-        const mKey = mRaw.replace(/\s+/g, '').toUpperCase();
-        const gapMat = (mRaw === '' || mKey === 'AIR') ? 'AIR' : mRaw;
-        blocks.push({
-          blockId: `Gap-${gapCount}`,
-          blockType: 'Gap',
-          role: null,
-          constraints: {},
-          parameters: { thickness: t, material: gapMat },
-          variables: legacyHasV(r, 'optimizeT') ? { thickness: legacyVarV(t) } : {},
-          metadata: { source: 'legacy-opticalSystem', from: 'Stop.thickness', rowIndex: i }
-        });
-      }
+      appendDerivedGapBlock(r, t, (r as any).__cooptGapMaterial ?? r.material, { source: 'legacy-opticalSystem', from: 'Stop.thickness', rowIndex: i });
       continue;
     }
 
@@ -4603,22 +4763,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
       });
 
       const gapT = asNumberOrInfOrZero(back.thickness);
-      if ((typeof gapT === 'number' && Math.abs(gapT) > 1e-12) || gapT === 'INF') {
-        gapCount++;
-        const bmRaw = normalizeMaterialName(back.material);
-        const bmKey = bmRaw.replace(/\s+/g, '').toUpperCase();
-        const matKey = String(materialForParaxial ?? '').trim().replace(/\s+/g, '').toUpperCase();
-        const gapMat = (bmRaw === '' || bmKey === 'AIR' || bmKey === matKey) ? 'AIR' : bmRaw;
-        blocks.push({
-          blockId: `Gap-${gapCount}`,
-          blockType: 'Gap',
-          role: null,
-          constraints: {},
-          parameters: { thickness: gapT, material: gapMat },
-          variables: legacyHasV(back, 'optimizeT') ? { thickness: legacyVarV(gapT) } : {},
-          metadata: { source: 'legacy-opticalSystem' }
-        });
-      }
+      const matKey = String(materialForParaxial ?? '').trim().replace(/\s+/g, '').toUpperCase();
+      const gapMat = resolveDerivedGapMaterial(back, back.material, new Set([matKey]));
+      appendDerivedGapBlock(back, gapT, gapMat, { source: 'legacy-opticalSystem' });
 
       i++;
       continue;
@@ -4798,22 +4945,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
         // Spacing after the last surface becomes a Gap block.
         const lastSurf = chain[2];
         const gapT = asNumberOrInfOrZero(lastSurf.thickness);
-        if ((typeof gapT === 'number' && Math.abs(gapT) > 1e-12) || gapT === 'INF') {
-          gapCount++;
-          const mRaw = normalizeMaterialName(lastSurf.material);
-          const mKey = mRaw.replace(/\s+/g, '').toUpperCase();
-          const gKeys = new Set(glasses.map(g => String(g ?? '').replace(/\s+/g, '').toUpperCase()).filter(Boolean));
-          const gapMat = (mRaw === '' || mKey === 'AIR' || gKeys.has(mKey)) ? 'AIR' : mRaw;
-          blocks.push({
-            blockId: `Gap-${gapCount}`,
-            blockType: 'Gap',
-            role: null,
-            constraints: {},
-            parameters: { thickness: gapT, material: gapMat },
-            variables: legacyHasV(lastSurf, 'optimizeT') ? { thickness: legacyVarV(gapT) } : {},
-            metadata: { source: 'legacy-opticalSystem' }
-          });
-        }
+        const gKeys = new Set(glasses.map(g => String(g ?? '').replace(/\s+/g, '').toUpperCase()).filter(Boolean));
+        const gapMat = resolveDerivedGapMaterial(lastSurf, lastSurf.material, gKeys);
+        appendDerivedGapBlock(lastSurf, gapT, gapMat, { source: 'legacy-opticalSystem' });
 
         i += 2; // consumed up to surface 3 (i, i+1, i+2)
         continue;
@@ -4900,22 +5034,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
 
         const lastSurf = chain[3];
         const gapT = asNumberOrInfOrZero(lastSurf.thickness);
-        if ((typeof gapT === 'number' && Math.abs(gapT) > 1e-12) || gapT === 'INF') {
-          gapCount++;
-          const mRaw = normalizeMaterialName(lastSurf.material);
-          const mKey = mRaw.replace(/\s+/g, '').toUpperCase();
-          const gKeys = new Set(glasses.map(g => String(g ?? '').replace(/\s+/g, '').toUpperCase()).filter(Boolean));
-          const gapMat = (mRaw === '' || mKey === 'AIR' || gKeys.has(mKey)) ? 'AIR' : mRaw;
-          blocks.push({
-            blockId: `Gap-${gapCount}`,
-            blockType: 'Gap',
-            role: null,
-            constraints: {},
-            parameters: { thickness: gapT, material: gapMat },
-            variables: legacyHasV(lastSurf, 'optimizeT') ? { thickness: legacyVarV(gapT) } : {},
-            metadata: { source: 'legacy-opticalSystem' }
-          });
-        }
+        const gKeys = new Set(glasses.map(g => String(g ?? '').replace(/\s+/g, '').toUpperCase()).filter(Boolean));
+        const gapMat = resolveDerivedGapMaterial(lastSurf, lastSurf.material, gKeys);
+        appendDerivedGapBlock(lastSurf, gapT, gapMat, { source: 'legacy-opticalSystem' });
 
         i += 3; // consumed up to surface 4
         continue;
@@ -5011,22 +5132,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
 
     // Spacing after the lens back surface becomes a Gap block.
     const gapT = asNumberOrInfOrZero(back.thickness);
-    if ((typeof gapT === 'number' && Math.abs(gapT) > 1e-12) || gapT === 'INF') {
-      gapCount++;
-      const bmRaw = normalizeMaterialName(back.material);
-      const bmKey = bmRaw.replace(/\s+/g, '').toUpperCase();
-      const matKey = String(material ?? '').trim().replace(/\s+/g, '').toUpperCase();
-      const gapMat = (bmRaw === '' || bmKey === 'AIR' || bmKey === matKey) ? 'AIR' : bmRaw;
-      blocks.push({
-        blockId: `Gap-${gapCount}`,
-        blockType: 'Gap',
-        role: null,
-        constraints: {},
-        parameters: { thickness: gapT, material: gapMat },
-        variables: legacyHasV(back, 'optimizeT') ? { thickness: legacyVarV(gapT) } : {},
-        metadata: { source: 'legacy-opticalSystem' }
-      });
-    }
+    const matKey = String(material ?? '').trim().replace(/\s+/g, '').toUpperCase();
+    const gapMat = resolveDerivedGapMaterial(back, back.material, new Set([matKey]));
+    appendDerivedGapBlock(back, gapT, gapMat, { source: 'legacy-opticalSystem' });
 
     i++; // consumed back row
   }

@@ -23,6 +23,32 @@ let warnedUsingDummyOpticalSystemData = false;
 let warnedUsingLocalStorageOpticalSystemData = false;
 let warnedUsingBlocksOpticalSystemData = false;
 
+function pushSystemDataText(text) {
+  const value = String(text ?? '');
+  try {
+    if (typeof window !== 'undefined') {
+      window.__cooptSystemDataText = value;
+    }
+  } catch (_) {}
+  try {
+    localStorage.setItem('coopt.systemDataText', value);
+  } catch (_) {}
+  try {
+    if (typeof window !== 'undefined' && typeof window.__cooptPushSystemDataText === 'function') {
+      window.__cooptPushSystemDataText(value);
+      return true;
+    }
+  } catch (_) {}
+  try {
+    const systemTextarea = document.getElementById('system-data');
+    if (systemTextarea) {
+      systemTextarea.value = value;
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
 function resolvePrimaryWavelengthFromRows(sourceRows: any[] | null | undefined): number | null {
   if (!Array.isArray(sourceRows) || sourceRows.length === 0) return null;
 
@@ -869,9 +895,7 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
     duLog('📝 Debug output sample:', debugOutput.substring(0, 500) + '...');
     
     // System Dataエリアに出力
-    const systemTextarea = document.getElementById('system-data');
-    if (systemTextarea) {
-      systemTextarea.value = debugOutput;
+    if (pushSystemDataText(debugOutput)) {
       duLog('✅ Paraxial data output to system data - length:', debugOutput.length);
     } else {
       console.error('❌ System data textarea not found');
@@ -929,9 +953,7 @@ export function outputSeidelCoefficientsToDebug() {
     duLog('📝 Final Seidel output length:', debugOutput.length);
     
     // System Dataエリアに出力
-    const systemTextarea = document.getElementById('system-data');
-    if (systemTextarea) {
-      systemTextarea.value = debugOutput;
+    if (pushSystemDataText(debugOutput)) {
       duLog('✅ Seidel coefficients output to system data');
     } else {
       console.error('❌ System data textarea not found');
@@ -1332,9 +1354,7 @@ export function outputDebugSystemData(tableOpticalSystem, tableObject, tableSour
     duLog(debugOutput);
     
     // Output to textarea if available
-    const systemDataTextarea = document.getElementById('system-data');
-    if (systemDataTextarea) {
-      systemDataTextarea.value = debugOutput;
+    if (pushSystemDataText(debugOutput)) {
       duLog('✅ System debug data output to textarea');
     } else {
       duLog('ℹ️ System data textarea not found, console output only');

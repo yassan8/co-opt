@@ -26,6 +26,31 @@ const w: Record<string, any> = window;
 const FORCE_INFINITE_PUPIL_MODE_KEY = 'coopt.forceInfinitePupilMode';
 const FORCE_INFINITE_PUPIL_MODE_EVENT = 'coopt-force-infinite-pupil-mode-changed';
 const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
+const SYSTEM_DATA_STORAGE_KEY = 'coopt.systemDataText';
+
+function clearSystemDataCache(): void {
+  try {
+    w.__cooptSystemDataText = '';
+  } catch (_) {}
+  try {
+    localStorage.removeItem(SYSTEM_DATA_STORAGE_KEY);
+  } catch (_) {}
+  try {
+    if (typeof w.__cooptPushSystemDataText === 'function') {
+      w.__cooptPushSystemDataText('');
+      return;
+    }
+  } catch (_) {}
+  try {
+    const ids = ['system-data', 'systemData', 'popup-system-data'];
+    for (const id of ids) {
+      const ta = document.getElementById(id) as HTMLTextAreaElement | null;
+      if (ta && typeof ta.value === 'string') {
+        ta.value = '';
+      }
+    }
+  } catch (_) {}
+}
 
 function cloneRuntimeSystemConfig(): any {
   try {
@@ -741,6 +766,7 @@ export async function handleLoadDefault(): Promise<void> {
   if (!isTauriRuntime() && !confirm('Load default optical system? Current data will be replaced.')) return;
   
   try {
+    clearSystemDataCache();
     if (isTauriRuntime()) {
       const { project } = await getDefaultProject();
       if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
@@ -776,6 +802,7 @@ export function handleLoad(): void {
       try {
         const picked = await openJsonFromNativeDialog();
         if (!picked) return;
+        clearSystemDataCache();
         const data = JSON.parse(picked.content);
         const loadedFilename = basenameFromPath(picked.path);
         if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
@@ -846,6 +873,7 @@ export function handleLoad(): void {
     }
     
     try {
+      clearSystemDataCache();
       const text = await file.text();
       const data = JSON.parse(text);
       
@@ -2321,14 +2349,36 @@ function isRenderWindowContext(): boolean {
   }
 }
 
+function isModernSystemDataPopup(popup: any): boolean {
+  try {
+    if (!popup || popup.closed) return false;
+    const href = String(popup.location?.href || '');
+    if (href.includes('coopt_analysis_window=1') && href.includes('coopt_analysis=system-data')) {
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
 function openWebAnalysisPopup(kind: AnalysisWindowKey): boolean {
   try {
+    if (kind === 'system-data') {
+      try {
+        const existing = (w as any).__systemDataPopup;
+        if (existing && !existing.closed && !isModernSystemDataPopup(existing)) {
+          existing.close();
+          (w as any).__systemDataPopup = null;
+        }
+      } catch (_) {}
+    }
+
     const url = new URL(window.location.href);
     url.searchParams.delete('coopt_render_window');
     url.searchParams.delete('coopt_optimize_window');
     url.searchParams.delete('coopt_settings_window');
     url.searchParams.set('coopt_analysis_window', '1');
     url.searchParams.set('coopt_analysis', kind);
+    url.searchParams.set('v', String(Date.now()));
 
     const cfg = ANALYSIS_WINDOW_SIZE_MAP[kind] || { width: 980, height: 760, title: 'Analysis' };
     const left = Math.max(0, Math.floor((window.screenX || 0) + (window.outerWidth - cfg.width) / 2));
@@ -2347,6 +2397,9 @@ function openWebAnalysisPopup(kind: AnalysisWindowKey): boolean {
       alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
       return false;
     }
+    if (kind === 'system-data') {
+      try { (w as any).__systemDataPopup = popup; } catch (_) {}
+    }
     try { popup.focus(); } catch (_) {}
     return true;
   } catch (err) {
@@ -2354,6 +2407,36 @@ function openWebAnalysisPopup(kind: AnalysisWindowKey): boolean {
     return false;
   }
 }
+
+w.__cooptOpenSystemDataWindow = (text?: string): boolean => {
+  const value = typeof text === 'string' ? text : '';
+  if (typeof text === 'string') {
+    try {
+      w.__cooptSystemDataText = value;
+    } catch (_) {}
+    try {
+      if (typeof w.__cooptPushSystemDataText === 'function') {
+        w.__cooptPushSystemDataText(value);
+      }
+    } catch (_) {}
+    try {
+      localStorage.setItem(SYSTEM_DATA_STORAGE_KEY, value);
+    } catch (_) {}
+  }
+
+  if (isTauriRuntime() && !isAnalysisWindowContext()) {
+    void openDesktopAnalysisWindow('system-data').catch((err) => {
+      console.error('❌ [SystemData][Desktop] WebviewWindow error:', err);
+    });
+    return true;
+  }
+
+  if (isAnalysisWindowContext()) {
+    return false;
+  }
+
+  return openWebAnalysisPopup('system-data');
+};
 
 export function handleSystemData(): void {
   console.log('[SystemData] Button clicked');
@@ -2373,7 +2456,7 @@ export function handleSystemData(): void {
     return;
   }
 
-  openWebAnalysisPopup('system-data');
+  w.__cooptOpenSystemDataWindow();
 }
 
 export function handleAnalysisSelect(selectedValue: string): void {

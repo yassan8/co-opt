@@ -493,6 +493,7 @@ export class WavefrontPlotter {
             wavefrontMap.zernike = analyzer.fitZernikePolynomials({
                 pupilCoordinates: wavefrontMap.pupilCoordinates,
                 opds: wavefrontMap.raw.opds,
+                pupilRange: wavefrontMap?.pupilRange,
             }, zernikeMaxNoll);
         }
 
@@ -792,6 +793,7 @@ export class WavefrontPlotter {
 
         const displayGridRaw = Array.isArray(response?.displayOpdGrid) ? response.displayOpdGrid : [];
         const rawGridRaw = Array.isArray(response?.rawOpdGrid) ? response.rawOpdGrid : [];
+        const referenceSphereGridRaw = Array.isArray(response?.referenceSphereOpdGrid) ? response.referenceSphereOpdGrid : [];
 
         const zeroFiniteInGrid = (src) => {
             if (!Array.isArray(src)) return src;
@@ -860,6 +862,24 @@ export class WavefrontPlotter {
             opdDisplayModeRequested: options?.opdDisplayMode || 'pistonTiltRemoved',
             skipZernikeFit: true,
         };
+        const hasReferenceSphereGrid = hasFiniteInGrid(referenceSphereGridRaw);
+        if (hasReferenceSphereGrid) {
+            const referenceSphereMap = this._buildWavefrontMapFromOpdGrid(referenceSphereGridRaw, wavelength);
+            map.referenceSphereReport = {
+                ...referenceSphereMap,
+                fieldSetting,
+                gridSize: map.gridSize,
+                gridSizeRequested: map.gridSizeRequested,
+                pupilSamplingMode: map.pupilSamplingMode || null,
+                opdMode: 'referenceSphere',
+                opdDisplayModeRequested: 'raw',
+                skipZernikeFit: false,
+                nativeMeta: {
+                    ...(map.nativeMeta || {}),
+                    gridSource: 'referenceSphereOpdGrid',
+                },
+            };
+        }
         try {
             const mode = options?.opdDisplayMode || 'pistonTiltRemoved';
             const responseMode = String(response?.pupilSamplingMode || '').toLowerCase();
@@ -886,6 +906,49 @@ export class WavefrontPlotter {
                 if (chiefReferenceMode) st.chiefReferenceMode = chiefReferenceMode;
                 if (backend) st.backend = backend;
                 // Add diagnostic metadata from WASM response
+                if (Number.isFinite(Number(response?.wavelengthUm))) {
+                    st.wavelengthUm = Number(response.wavelengthUm);
+                    st.wavelengthNm = Number(response.wavelengthUm) * 1000;
+                }
+                if (Number.isFinite(Number(response?.gridSize))) {
+                    st.gridSize = Number(response.gridSize);
+                }
+                if (Number.isInteger(Number(response?.targetSurface))) {
+                    st.targetSurface = Number(response.targetSurface);
+                }
+                if (Number.isInteger(Number(response?.stopSurface))) {
+                    st.stopSurface = Number(response.stopSurface);
+                }
+                if (Number.isFinite(Number(response?.usedObjectX))) {
+                    st.usedObjectX = Number(response.usedObjectX);
+                }
+                if (Number.isFinite(Number(response?.usedObjectY))) {
+                    st.usedObjectY = Number(response.usedObjectY);
+                }
+                if (response?.usedObjectPosition) {
+                    st.usedObjectPosition = String(response.usedObjectPosition);
+                }
+                st.hitCount = Number(response?.hitCount ?? 0);
+                st.sampleCount = Number(response?.sampleCount ?? 0);
+            }
+            const referenceStatsTargets = hasReferenceSphereGrid
+                ? [
+                    map?.referenceSphereReport?.statistics?.wavefront,
+                    map?.referenceSphereReport?.statistics?.opdMicrons,
+                    map?.referenceSphereReport?.statistics?.opdWavelengths,
+                    map?.referenceSphereReport?.statistics?.raw?.wavefront,
+                    map?.referenceSphereReport?.statistics?.raw?.opdMicrons,
+                    map?.referenceSphereReport?.statistics?.raw?.opdWavelengths,
+                    map?.referenceSphereReport?.statistics?.display?.opdMicrons,
+                    map?.referenceSphereReport?.statistics?.display?.opdWavelengths,
+                ]
+                : [];
+            for (const st of referenceStatsTargets) {
+                if (!st || typeof st !== 'object') continue;
+                st.pupilSamplingMode = pupilSamplingMode;
+                st.opdMode = 'referenceSphere';
+                if (chiefReferenceMode) st.chiefReferenceMode = chiefReferenceMode;
+                if (backend) st.backend = backend;
                 if (Number.isFinite(Number(response?.wavelengthUm))) {
                     st.wavelengthUm = Number(response.wavelengthUm);
                     st.wavelengthNm = Number(response.wavelengthUm) * 1000;
@@ -1040,12 +1103,27 @@ export class WavefrontPlotter {
     }
 
     _setSystemDataText(text) {
+        const value = typeof text === 'string' ? text : String(text ?? '');
+        try {
+            if (typeof window !== 'undefined') {
+                window.__cooptSystemDataText = value;
+            }
+        } catch (_) {}
+        try {
+            localStorage.setItem('coopt.systemDataText', value);
+        } catch (_) {}
+        try {
+            if (typeof window !== 'undefined' && typeof window.__cooptPushSystemDataText === 'function') {
+                window.__cooptPushSystemDataText(value);
+                return;
+            }
+        } catch (_) {}
         const trySet = (doc) => {
             const ids = ['system-data', 'systemData', 'popup-system-data'];
             for (const id of ids) {
                 const ta = doc?.getElementById?.(id);
                 if (ta && typeof ta.value === 'string') {
-                    ta.value = text;
+                    ta.value = value;
                     return true;
                 }
             }
@@ -1061,10 +1139,58 @@ export class WavefrontPlotter {
         } catch (_) {}
     }
 
-    _updateSystemDataWithZernike(analyzer, wavefrontMap, maxNoll = 37) {
+    async _updateSystemDataWithZernike(analyzer, wavefrontMap, maxNoll = 37) {
         try {
             if (!analyzer || typeof analyzer.formatZernikeReportText !== 'function') return;
-            const text = analyzer.formatZernikeReportText(wavefrontMap, { maxNoll });
+            let reportMap = wavefrontMap?.referenceSphereReport || wavefrontMap;
+            if (
+                reportMap?.opdMode === 'native-grid' &&
+                !reportMap?.zernike &&
+                typeof analyzer.generateWavefrontMap === 'function' &&
+                reportMap?.fieldSetting
+            ) {
+                try {
+                    const reportGridSize = Number.isFinite(Number(reportMap?.gridSizeRequested))
+                        ? Math.max(4, Math.floor(Number(reportMap.gridSizeRequested)))
+                        : (Number.isFinite(Number(reportMap?.gridSize)) ? Math.max(4, Math.floor(Number(reportMap.gridSize))) : 64);
+                    const referenceReportMap = await analyzer.generateWavefrontMap(
+                        reportMap.fieldSetting,
+                        reportGridSize,
+                        'circular',
+                        {
+                            recordRays: false,
+                            progressEvery: 1024,
+                            opdMode: 'referenceSphere',
+                            opdDisplayMode: 'pistonTiltRemoved',
+                            zernikeMaxNoll: maxNoll,
+                            renderFromZernike: false,
+                            skipZernikeFit: false,
+                            suppressReferenceRayError: false,
+                        }
+                    );
+                    if (referenceReportMap?.zernike?.coefficientsMicrons) {
+                        reportMap = referenceReportMap;
+                    }
+                } catch (_) {}
+            }
+            if (!reportMap?.zernike && typeof analyzer.fitZernikePolynomials === 'function') {
+                const pupilCoordinates = Array.isArray(reportMap?.pupilCoordinates) ? reportMap.pupilCoordinates : [];
+                const rawOpds = Array.isArray(reportMap?.raw?.opds) ? reportMap.raw.opds : [];
+                const sampleCount = Math.min(pupilCoordinates.length, rawOpds.length);
+                if (sampleCount > 0) {
+                    const fitMaxNoll = Math.max(1, Math.min(maxNoll, sampleCount));
+                    const zernikeFit = analyzer.fitZernikePolynomials({
+                        pupilCoordinates,
+                        opds: rawOpds,
+                        pupilRange: reportMap?.pupilRange,
+                    }, fitMaxNoll);
+                    reportMap = {
+                        ...reportMap,
+                        zernike: zernikeFit,
+                    };
+                }
+            }
+            const text = analyzer.formatZernikeReportText(reportMap, { maxNoll });
             // Always write something so the user can see whether the report is missing.
             this._setSystemDataText(typeof text === 'string' ? text : String(text ?? ''));
         } catch (_) {}
@@ -1081,6 +1207,7 @@ export class WavefrontPlotter {
     async plotOPDSurface(opticalSystemRows, fieldSetting, wavelength = 0.5876, gridSize = 16, options = {}) {
         try {
             console.log('🌊 OPD 3Dサーフェスプロット生成開始...');
+            const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
             const emitProgress = (percent, message) => {
                 try {
                     if (typeof options?.onProgress === 'function') {
@@ -1128,6 +1255,11 @@ export class WavefrontPlotter {
                 });
                 return wavefrontMap;
             }
+
+            // Publish the Zernike report as soon as valid OPD samples exist.
+            // Rendering can still fail later if the plot container is missing,
+            // but the numeric coefficients should remain available in System Data.
+            await this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
 
             // Debug: report effective pupil coverage.
             try {
@@ -1407,10 +1539,8 @@ export class WavefrontPlotter {
             }
 
             // Keep System Data consistent with Heatmap mode
-            // Do not write System Data by default for OPD.
-            // (OPD popup has an explicit checkbox that pushes Zernike report.)
             if (options?.updateSystemData === true) {
-                this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
+                await this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
             }
 
             // Plotly用のデータに変換
@@ -1551,6 +1681,7 @@ export class WavefrontPlotter {
     async plotOPDHeatmap(opticalSystemRows, fieldSetting, wavelength = 0.5876, gridSize = 31, options = {}) {
         try {
             console.log('🌊 OPD ヒートマップ生成開始...');
+            const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
             const emitProgress = (percent, message) => {
                 try {
                     if (typeof options?.onProgress === 'function') {
@@ -1571,6 +1702,7 @@ export class WavefrontPlotter {
             if (!wavefrontMap || !wavefrontMap.pupilCoordinates || wavefrontMap.pupilCoordinates.length === 0) {
                 throw new Error('有効な光線データがありません。光学系設定を確認してください。');
             }
+            await this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
             const opdGridDisplay = Array.isArray(wavefrontMap?.display?.opdGrid) ? wavefrontMap.display.opdGrid : [];
             const opdGridRaw = Array.isArray(wavefrontMap?.raw?.opdGrid) ? wavefrontMap.raw.opdGrid : [];
             const opdGridForRender = (Array.isArray(opdGridDisplay) && opdGridDisplay.length && Array.isArray(opdGridDisplay[0]))
@@ -1672,7 +1804,7 @@ export class WavefrontPlotter {
                 zernikeMaxNoll: 37,
                 renderFromZernike: true
             });
-            this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
+            await this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
 
             if (!wavefrontMap || !wavefrontMap.pupilCoordinates || wavefrontMap.pupilCoordinates.length === 0) {
                 throw new Error('有効な光線データがありません。光学系設定を確認してください。');

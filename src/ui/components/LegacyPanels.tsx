@@ -3066,6 +3066,15 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
 
     const w = window as any;
     const storageKey = 'coopt.systemDataText';
+    const hasLiveWavefrontRuntime = () => {
+      try {
+        const runtime = w.__cooptLastWavefrontRuntime;
+        const map = runtime && typeof runtime === 'object' ? runtime.map : null;
+        return !!(map && typeof map === 'object' && !map.error);
+      } catch (_) {
+        return false;
+      }
+    };
 
     const applySystemDataText = (text: any) => {
       const next = String(text ?? '');
@@ -3084,20 +3093,34 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
     const prev = w.__cooptPushSystemDataText;
     w.__cooptPushSystemDataText = applySystemDataText;
 
-    // Bootstrap from runtime cache, then localStorage as a fallback.
+    // Only bootstrap cached System Data when there is a live wavefront runtime.
+    // Otherwise stale Zernike text can survive file loads and look like fresh output.
     let initial = '';
-    try {
-      if (typeof w.__cooptSystemDataText === 'string') initial = w.__cooptSystemDataText;
-    } catch (_) {}
-    if (!initial) {
+    if (hasLiveWavefrontRuntime()) {
       try {
-        const cached = localStorage.getItem(storageKey);
-        if (typeof cached === 'string') initial = cached;
+        if (typeof w.__cooptSystemDataText === 'string') initial = w.__cooptSystemDataText;
       } catch (_) {}
+      if (!initial) {
+        try {
+          const cached = localStorage.getItem(storageKey);
+          if (typeof cached === 'string') initial = cached;
+        } catch (_) {}
+      }
     }
-    if (!visible && initial) applySystemDataText(initial);
+
+    if (initial) applySystemDataText(initial);
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== storageKey) return;
+      applySystemDataText(event.newValue ?? '');
+    };
+
+    window.addEventListener('storage', handleStorage);
 
     return () => {
+      try {
+        window.removeEventListener('storage', handleStorage);
+      } catch (_) {}
       try {
         if (w.__cooptPushSystemDataText === applySystemDataText) {
           if (typeof prev === 'function') w.__cooptPushSystemDataText = prev;
@@ -3111,9 +3134,55 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
     if (!visible || typeof window === 'undefined') return;
 
     const w = window as any;
+    const hasLiveWavefrontRuntime = () => {
+      try {
+        const runtime = w.__cooptLastWavefrontRuntime;
+        const map = runtime && typeof runtime === 'object' ? runtime.map : null;
+        return !!(map && typeof map === 'object' && !map.error);
+      } catch (_) {
+        return false;
+      }
+    };
     let cancelled = false;
     let attempts = 0;
     let timer: number | null = null;
+    const hasExistingSystemDataText = () => {
+      const hasLiveRuntime = hasLiveWavefrontRuntime();
+      try {
+        const ta = document.getElementById('system-data') as HTMLTextAreaElement | null;
+        if (ta && String(ta.value || '').trim().length > 0) return hasLiveRuntime;
+      } catch (_) {}
+      if (!hasLiveRuntime) {
+        return false;
+      }
+      try {
+        if (typeof w.__cooptSystemDataText === 'string' && w.__cooptSystemDataText.trim().length > 0) {
+          return true;
+        }
+      } catch (_) {}
+      try {
+        const cached = localStorage.getItem('coopt.systemDataText');
+        if (typeof cached === 'string' && cached.trim().length > 0) return true;
+      } catch (_) {}
+      return false;
+    };
+
+    if (!hasLiveWavefrontRuntime()) {
+      try {
+        w.__cooptSystemDataText = '';
+      } catch (_) {}
+      try {
+        localStorage.removeItem('coopt.systemDataText');
+      } catch (_) {}
+      try {
+        const ta = document.getElementById('system-data') as HTMLTextAreaElement | null;
+        if (ta) ta.value = '';
+      } catch (_) {}
+    }
+
+    if (hasExistingSystemDataText()) {
+      return;
+    }
 
     const runInitialParaxial = () => {
       if (cancelled) return;
@@ -3127,8 +3196,8 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
       } catch (_) {}
 
       try {
-        if (typeof w.outputParaxialDataToDebug === 'function' && w.tableOpticalSystem) {
-          w.outputParaxialDataToDebug(w.tableOpticalSystem);
+        if (typeof w.outputParaxialDataToDebug === 'function') {
+          w.outputParaxialDataToDebug(w.tableOpticalSystem ?? null);
           return;
         }
       } catch (_) {}

@@ -117,7 +117,7 @@ import {
     storeDoubletBendingBaseCurvatures,
     syncDoubletBendingState,
 } from '../optimization/doublet-bending.ts';
-import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
+import { calculateParaxialData, getRefractiveIndex } from '../raytracing/core/ray-paraxial.ts';
 import {
     loadSystemConfigurations as loadSystemConfigurationsFromTableConfig,
     loadPersistedSystemConfigurations as loadPersistedSystemConfigurationsFromTableConfig,
@@ -158,6 +158,8 @@ import {
     requiresZoomUiRefreshForDesignIntentChange
 } from './design-intent-refresh-policy.ts';
 import { clearOptimizerStop } from '../src/desktop/ipc/client.ts';
+import { createOPDCalculator, createWavefrontAnalyzer } from '../evaluation/wavefront/wavefront.ts';
+import { getLastWavefrontMap, getLastWavefrontMeta, patchLastWavefrontMap } from '../evaluation/wavefront/last-wavefront-runtime.ts';
 
 // Type definitions
 type BlockType = string;
@@ -194,6 +196,29 @@ function __cooptAppendImageHeightDiagToSystemData(record: any): void {
         if (!textarea) return;
         const line = `[ImageHeightDiag] ${String(record?.label ?? 'unknown')} ${JSON.stringify(record)}`;
         textarea.value = textarea.value ? `${textarea.value}\n${line}` : line;
+    } catch (_) {}
+}
+
+function __cooptSetSystemDataText(text: string): void {
+    const value = String(text ?? '');
+    try {
+        w.__cooptSystemDataText = value;
+    } catch (_) {}
+    try {
+        localStorage.setItem('coopt.systemDataText', value);
+    } catch (_) {}
+    try {
+        if (typeof w.__cooptPushSystemDataText === 'function') {
+            w.__cooptPushSystemDataText(value);
+            return;
+        }
+    } catch (_) {}
+    try {
+        const textarea = (document.getElementById('system-data')
+            || document.getElementById('systemData')
+            || document.querySelector('textarea[data-system-data]')
+            || document.querySelector('#system-data, #systemData, textarea.system-data')) as HTMLTextAreaElement | null;
+        if (textarea) textarea.value = value;
     } catch (_) {}
 }
 
@@ -2486,30 +2511,15 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         const activeId = candidateConfig?.activeConfigId || 1;
         const activeCfg = cfgList.find((c: any) => c.id === activeId) || cfgList[0];
         if (activeCfg && configurationHasBlocks(activeCfg)) {
-            const legacyBeforeExpand = Array.isArray(activeCfg.opticalSystem) ? activeCfg.opticalSystem : null;
-            
-            if (typeof w.expandBlocksToOpticalSystemRows === 'function') {
+            const refreshed = (typeof expandBlocksIntoConfiguration === 'function')
+                ? expandBlocksIntoConfiguration(activeCfg, { captureLegacyAperture: true })
+                : ((typeof w.expandBlocksIntoConfiguration === 'function')
+                    ? w.expandBlocksIntoConfiguration(activeCfg, { captureLegacyAperture: true })
+                    : null);
+
+            if (!Array.isArray(refreshed?.expandedOpticalSystem) && typeof w.expandBlocksToOpticalSystemRows === 'function') {
                 const expanded = w.expandBlocksToOpticalSystemRows(activeCfg.blocks);
-                
-                if (Array.isArray(legacyBeforeExpand) && legacyBeforeExpand.length > 0) {
-                    // Preserve legacy surface data and overlay provenance
-                    try {
-                        if (typeof w.__blocks_overlayExpandedProvenanceIntoLegacyRows === 'function') {
-                            w.__blocks_overlayExpandedProvenanceIntoLegacyRows(legacyBeforeExpand, expanded.rows);
-                        }
-                    } catch (_) {}
-                    
-                    // Normalize IDs
-                    try {
-                        for (let ii = 0; ii < legacyBeforeExpand.length; ii++) {
-                            if (legacyBeforeExpand[ii] && typeof legacyBeforeExpand[ii] === 'object') {
-                                legacyBeforeExpand[ii].id = ii;
-                            }
-                        }
-                    } catch (_) {}
-                    
-                    activeCfg.opticalSystem = legacyBeforeExpand;
-                } else if (Array.isArray(expanded?.rows)) {
+                if (Array.isArray(expanded?.rows)) {
                     activeCfg.opticalSystem = expanded.rows;
                 }
             }
@@ -5895,23 +5905,119 @@ function setupSeidelAfocalButton(): void {
                 return;
             }
 
-            const systemDataTextarea = document.getElementById('system-data') as HTMLTextAreaElement | null;
-            if (systemDataTextarea) {
-                systemDataTextarea.value = formatSeidelCoefficients(result);
+            __cooptSetSystemDataText(formatSeidelCoefficients(result));
 
-                if (typeof w.renderBlockContributionSummaryFromSeidel === 'function') {
-                    try {
-                        w.renderBlockContributionSummaryFromSeidel(result, opticalSystemRows);
-                    } catch (e) {
-                        console.warn('⚠️ Block contribution summary render failed (afocal):', e);
-                    }
+            if (typeof w.renderBlockContributionSummaryFromSeidel === 'function') {
+                try {
+                    w.renderBlockContributionSummaryFromSeidel(result, opticalSystemRows);
+                } catch (e) {
+                    console.warn('⚠️ Block contribution summary render failed (afocal):', e);
                 }
-            } else {
-                console.error('❌ System Data textarea not found');
             }
         } catch (error: any) {
             console.error('❌ アフォーカル系Seidel係数計算ボタンエラー:', error);
             alert(`エラーが発生しました: ${error.message}`);
+        }
+    });
+}
+
+function setupZernikeFitButton(): void {
+    const btn = document.getElementById('zernike-fit-btn');
+    if (!btn) return;
+    if ((btn as any).dataset?.cooptBoundZernike === '1') return;
+    (btn as any).dataset.cooptBoundZernike = '1';
+
+    btn.addEventListener('click', async () => {
+        try {
+            const wavefrontMap = getLastWavefrontMap(w);
+            const wavefrontMeta = getLastWavefrontMeta(w);
+            if (!wavefrontMap || wavefrontMap?.error) {
+                alert('Zernike fitting 用の波面データがありません。先に Show wavefront diagram を実行してください。');
+                return;
+            }
+
+            const opticalSystemRows = (typeof w.getOpticalSystemRows === 'function')
+                ? w.getOpticalSystemRows()
+                : w.tableOpticalSystem;
+            if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+                alert('光学系データがありません。');
+                return;
+            }
+
+            const wavelength = (() => {
+                const fromMeta = Number(wavefrontMeta?.wavelength);
+                if (Number.isFinite(fromMeta) && fromMeta > 0) return fromMeta;
+                if (typeof w.getPrimaryWavelength === 'function') {
+                    const wl = Number(w.getPrimaryWavelength());
+                    if (Number.isFinite(wl) && wl > 0) return wl;
+                }
+                return NaN;
+            })();
+            if (!Number.isFinite(wavelength) || wavelength <= 0) {
+                alert('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+                return;
+            }
+
+            const calculator = createOPDCalculator(opticalSystemRows, wavelength);
+            const analyzer = createWavefrontAnalyzer(calculator);
+            let reportWavefrontMap = wavefrontMap?.referenceSphereReport || wavefrontMap;
+
+            if (
+                reportWavefrontMap?.opdMode === 'native-grid' &&
+                reportWavefrontMap?.fieldSetting &&
+                typeof analyzer?.generateWavefrontMap === 'function'
+            ) {
+                try {
+                    const reportGridSize = Number.isFinite(Number(reportWavefrontMap?.gridSizeRequested))
+                        ? Math.max(4, Math.floor(Number(reportWavefrontMap.gridSizeRequested)))
+                        : (Number.isFinite(Number(reportWavefrontMap?.gridSize)) ? Math.max(4, Math.floor(Number(reportWavefrontMap.gridSize))) : 64);
+                    const referenceReportMap = await analyzer.generateWavefrontMap(
+                        reportWavefrontMap.fieldSetting,
+                        reportGridSize,
+                        'circular',
+                        {
+                            recordRays: false,
+                            progressEvery: 1024,
+                            opdMode: 'referenceSphere',
+                            opdDisplayMode: 'pistonTiltRemoved',
+                            zernikeMaxNoll: 37,
+                            renderFromZernike: false,
+                            skipZernikeFit: false,
+                            suppressReferenceRayError: false,
+                        }
+                    );
+                    if (referenceReportMap?.zernike?.coefficientsMicrons) {
+                        reportWavefrontMap = referenceReportMap;
+                    }
+                } catch (_) {}
+            }
+
+            if (!reportWavefrontMap?.zernike && Array.isArray(reportWavefrontMap?.pupilCoordinates) && Array.isArray(reportWavefrontMap?.raw?.opds)) {
+                const sampleCount = reportWavefrontMap.raw.opds.length;
+                const maxNoll = Math.max(1, Math.min(37, sampleCount));
+                if (sampleCount > 0 && typeof analyzer?.fitZernikePolynomials === 'function') {
+                    const fitted = analyzer.fitZernikePolynomials({
+                        pupilCoordinates: reportWavefrontMap.pupilCoordinates,
+                        opds: reportWavefrontMap.raw.opds,
+                        pupilRange: reportWavefrontMap?.pupilRange,
+                    }, maxNoll);
+                    if (reportWavefrontMap === wavefrontMap) {
+                        patchLastWavefrontMap((map) => {
+                            map.zernike = fitted;
+                        }, { host: w, fallbackMap: reportWavefrontMap });
+                    }
+                    reportWavefrontMap = {
+                        ...reportWavefrontMap,
+                        zernike: fitted,
+                    };
+                }
+            }
+
+            const reportText = analyzer.formatZernikeReportText(reportWavefrontMap, { maxNoll: 37 });
+            __cooptSetSystemDataText(typeof reportText === 'string' ? reportText : String(reportText ?? ''));
+        } catch (error: any) {
+            console.error('❌ Zernike fitting button error:', error);
+            alert(`Zernike fitting failed: ${error?.message || String(error)}`);
         }
     });
 }
@@ -7115,9 +7221,17 @@ function formatBlockPreview(block: any): string {
     if (type === 'Gap' || type === 'AirGap') {
         const th = pick('thickness');
         const mat = pick('material');
+        const rindex = pick('rindex');
+        const thicknessModeRaw = pick('thicknessMode');
+        const thicknessMode = String(thicknessModeRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
+        const matText = String(mat ?? '').trim();
+        const matKey = matText.replace(/\s+/g, '').toUpperCase();
+        const rindexText = String(rindex ?? '').trim();
         const parts = [];
-        if (String(th) !== '') parts.push(`T=${String(th)}`);
-        if (String(mat) !== '' && String(mat).trim().toUpperCase() !== 'AIR') parts.push(`M=${String(mat)}`);
+        if (thicknessMode === 'IMD' || thicknessMode === 'BFL') parts.push(`T=${thicknessMode}`);
+        else if (String(th) !== '') parts.push(`T=${String(th)}`);
+        if (matText !== '' && matText !== '0' && matKey !== 'AIR') parts.push(`M=${matText}`);
+        else if (rindexText !== '' && rindexText !== '0') parts.push(`M=${rindexText}`);
         return parts.join(' ');
     }
 
@@ -7143,9 +7257,18 @@ function cooptSetNestedValue(obj: any, path: string, value: any): void {
     current[lastKey] = value;
 }
 
-function cooptNormalizeInputValue(raw: string, original: any): any {
+function cooptIsMaterialLikePath(path: string): boolean {
+    const normalizedPath = String(path ?? '').trim().toLowerCase();
+    if (!normalizedPath) return false;
+    return /(?:^|\.)(?:material|material1|material2|material3)$/.test(normalizedPath);
+}
+
+function cooptNormalizeInputValue(raw: string, original: any, path: string = ''): any {
     const trimmed = String(raw ?? '').trim();
     if (trimmed === '') return '';
+    if (cooptIsMaterialLikePath(path)) {
+        return trimmed;
+    }
     if (/^[-+]?((\d+\.\d*)|(\d*\.\d+)|(\d+))(e[-+]?\d+)?$/i.test(trimmed)) {
         return Number(trimmed);
     }
@@ -7174,7 +7297,7 @@ function cooptNormalizeQuickInputValue(raw: string, original: any, path: string)
         return { valid: false, value: original };
     }
 
-    return { valid: true, value: cooptNormalizeInputValue(trimmed, original) };
+    return { valid: true, value: cooptNormalizeInputValue(trimmed, original, normalizedPath) };
 }
 
 function cooptParseFiniteRadius(value: any): number | null {
@@ -7312,6 +7435,16 @@ function cooptResolveLensBendingUpdate(block: any, bendingValue: any): {
 function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''): { changed: boolean; rows: any[] | null } {
     if (!Array.isArray(blocks) || blocks.length === 0) return { changed: false, rows: null };
 
+    const getBlockParamValue = (block: any, key: string): any => {
+        const vars = block?.variables;
+        const variableEntry = vars && typeof vars === 'object' ? vars[key] : undefined;
+        if (variableEntry && typeof variableEntry === 'object' && Object.prototype.hasOwnProperty.call(variableEntry, 'value')) {
+            return variableEntry.value;
+        }
+        const params = block?.parameters;
+        return params && typeof params === 'object' ? params[key] : undefined;
+    };
+
     const primaryWavelength = (() => {
         try {
             if (typeof w.getPrimaryWavelength === 'function') {
@@ -7319,9 +7452,8 @@ function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''
                 if (Number.isFinite(wl) && wl > 0) return wl;
             }
         } catch (_) {}
-        return NaN;
+        return 0.5875618;
     })();
-    if (!(Number.isFinite(primaryWavelength) && primaryWavelength > 0)) return { changed: false, rows: null };
 
     try {
         const expanded = expandBlocksToOpticalSystemRows(blocks as any);
@@ -7340,11 +7472,58 @@ function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''
             const params = (block.parameters && typeof block.parameters === 'object') ? block.parameters : null;
             if (!params) continue;
 
+            const materialText = String(params.material ?? '').trim();
+            const rindexText = String(params.rindex ?? '').trim();
+            const hasManualRindex = rindexText !== '' && rindexText !== '0';
+            if (materialText === '' || materialText === '0') {
+                const normalizedMaterial = hasManualRindex ? '' : 'AIR';
+                if (String(params.material ?? '') !== normalizedMaterial) {
+                    params.material = normalizedMaterial;
+                    changed = true;
+                }
+                if (String(params.rindex ?? '').trim() === '0') {
+                    delete params.rindex;
+                    changed = true;
+                }
+                if (String(params.abbe ?? '').trim() === '0') {
+                    delete params.abbe;
+                    changed = true;
+                }
+                if (block.variables && typeof block.variables === 'object') {
+                    const materialVar = block.variables.material;
+                    if (materialVar && typeof materialVar === 'object' && Object.prototype.hasOwnProperty.call(materialVar, 'value') && String(materialVar.value ?? '').trim() === '0') {
+                        materialVar.value = 'AIR';
+                        changed = true;
+                    }
+                    const rindexVar = block.variables.rindex;
+                    if (rindexVar && typeof rindexVar === 'object' && Object.prototype.hasOwnProperty.call(rindexVar, 'value') && String(rindexVar.value ?? '').trim() === '0') {
+                        delete block.variables.rindex;
+                        changed = true;
+                    }
+                    const abbeVar = block.variables.abbe;
+                    if (abbeVar && typeof abbeVar === 'object' && Object.prototype.hasOwnProperty.call(abbeVar, 'value') && String(abbeVar.value ?? '').trim() === '0') {
+                        delete block.variables.abbe;
+                        changed = true;
+                    }
+                }
+            }
+
             const mode = String(params.thicknessMode ?? '').trim().replace(/\s+/g, '').toUpperCase();
             if (mode !== 'IMD' && mode !== 'BFL') continue;
 
             const target = mode === 'IMD' ? paraxial.imageDistance : paraxial.backFocalLength;
-            const numeric = Number(target);
+            const reducedDistance = Number(target);
+            if (!Number.isFinite(reducedDistance)) continue;
+
+            const gapRefractiveIndex = Number(getRefractiveIndex({
+                material: getBlockParamValue(block, 'material'),
+                rindex: getBlockParamValue(block, 'rindex'),
+                abbe: getBlockParamValue(block, 'abbe'),
+            }, primaryWavelength));
+            const mediumScale = (Number.isFinite(gapRefractiveIndex) && gapRefractiveIndex > 0)
+                ? gapRefractiveIndex
+                : 1;
+            const numeric = reducedDistance * mediumScale;
             if (!Number.isFinite(numeric)) continue;
 
             const current = Number(params.thickness);
@@ -9532,7 +9711,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             const applyGlass = (glass: any) => {
                 if (!glass || !glass.name) return;
                 input.value = String(glass.name);
-                const nextMaterial = cooptNormalizeInputValue(String(glass.name), materialValue);
+                const nextMaterial = cooptNormalizeInputValue(String(glass.name), materialValue, materialPath);
                 if (nextMaterial !== materialValue) {
                     cooptApplyBlockValue(blockId, materialPath, materialValue, nextMaterial);
                 }
@@ -10401,12 +10580,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                         if (Number.isFinite(wl) && wl > 0) return wl;
                                     }
                                 } catch (_) {}
-                                return NaN;
+                                return 0.5875618;
                             })();
-                            if (!(Number.isFinite(primaryWavelength) && primaryWavelength > 0)) {
-                                console.warn('⚠️ [DesignIntent] Primary wavelength is unavailable. thicknessMode auto-apply is skipped.');
-                                return;
-                            }
 
                             const paraxial = calculateParaxialData(rows, primaryWavelength);
                             const target = mode === 'IMD' ? paraxial?.imageDistance : paraxial?.backFocalLength;
@@ -11054,7 +11229,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                 (glass) => {
                                     if (glass && glass.name) {
                                         input.value = glass.name;
-                                        const newValue = cooptNormalizeInputValue(glass.name, value);
+                                        const newValue = cooptNormalizeInputValue(glass.name, value, path);
                                         if (newValue !== value) {
                                             cooptApplyBlockValue(blockId, path, value, newValue);
                                         }
@@ -11255,7 +11430,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             };
                             item.onclick = () => {
                                 input.value = glass.name;
-                                const newValue = cooptNormalizeInputValue(glass.name, value);
+                                const newValue = cooptNormalizeInputValue(glass.name, value, path);
                                 if (newValue !== value) {
                                     cooptApplyBlockValue(blockId, path, value, newValue);
                                 }
@@ -11293,7 +11468,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     };
 
                     input.addEventListener('blur', () => {
-                        const newValue = cooptNormalizeInputValue(input.value, value);
+                        const newValue = cooptNormalizeInputValue(input.value, value, path);
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
                             applyMaterialDerivedFields(newValue);
@@ -11373,7 +11548,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.boxSizing = 'border-box';
 
                     input.addEventListener('blur', () => {
-                        const newValue = cooptNormalizeInputValue(input.value, value);
+                        const newValue = cooptNormalizeInputValue(input.value, value, path);
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
                         }
@@ -11909,6 +12084,20 @@ export function refreshBlockInspector(): void {
             || ((typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null);
         let blocks = activeCfg && Array.isArray(activeCfg.blocks) ? activeCfg.blocks : null;
         const activeConfigId = String(activeCfg?.id ?? systemConfig?.activeConfigId ?? '').trim();
+
+        if (activeCfg && Array.isArray(blocks) && blocks.length > 0) {
+            try {
+                const autoGapResult = cooptAutoApplyGapThicknessModes(blocks, '');
+                if (autoGapResult?.changed) {
+                    if (activeCfg.metadata && typeof activeCfg.metadata === 'object') {
+                        activeCfg.metadata.modified = new Date().toISOString();
+                    }
+                    if (systemConfig && typeof saveSystemConfigurations === 'function') {
+                        saveSystemConfigurations(systemConfig);
+                    }
+                }
+            } catch (_) {}
+        }
 
         if (Array.isArray(blocks) && blocks.length > 0 && activeConfigId) {
             const restoredCount = __cooptRestoreBlockVariablesFromCache(activeConfigId, blocks);
@@ -12781,6 +12970,7 @@ export function setupDOMEventHandlers(): void {
         setupParaxialButton();
         setupSeidelButton();
         setupSeidelAfocalButton();
+        setupZernikeFitButton();
         setupCoordinateTransformButton();
         setupSpotDiagramButton();
         setupLongitudinalAberrationButton();

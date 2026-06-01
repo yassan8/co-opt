@@ -517,6 +517,7 @@ pub struct NativeOpdMapResponse {
     pub pupil_sampling_mode: String,
     pub raw_opd_grid: Vec<Vec<Option<f64>>>,
     pub display_opd_grid: Vec<Vec<Option<f64>>>,
+    pub reference_sphere_opd_grid: Vec<Vec<Option<f64>>>,
     pub effective_pupil_radius_mm: f64,
     pub message: String,
 }
@@ -1401,6 +1402,131 @@ fn apply_opd_display_mode_grid(
     }
 
     out
+}
+
+fn distance3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    let dz = a[2] - b[2];
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+fn compute_reference_sphere_geometry(
+    chief_prev_point: [f64; 3],
+    chief_image_point: [f64; 3],
+) -> Option<([f64; 3], f64)> {
+    let dir = [
+        chief_prev_point[0] - chief_image_point[0],
+        chief_prev_point[1] - chief_image_point[1],
+        chief_prev_point[2] - chief_image_point[2],
+    ];
+    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    if !len.is_finite() || len <= 0.0 {
+        return None;
+    }
+
+    let nd = [dir[0] / len, dir[1] / len, dir[2] / len];
+    let t = if nd[0].abs() > 1.0e-10 {
+        -chief_image_point[0] / nd[0]
+    } else if nd[1].abs() > 1.0e-10 {
+        -chief_image_point[1] / nd[1]
+    } else {
+        return None;
+    };
+    if !t.is_finite() {
+        return None;
+    }
+
+    let axis_intersection_z = chief_image_point[2] + t * nd[2];
+    if !axis_intersection_z.is_finite() {
+        return None;
+    }
+
+    let dz = chief_image_point[2] - axis_intersection_z;
+    let radius = (
+        chief_image_point[0] * chief_image_point[0]
+            + chief_image_point[1] * chief_image_point[1]
+            + dz * dz
+    )
+    .sqrt();
+    if !radius.is_finite() {
+        return None;
+    }
+
+    Some(([0.0, 0.0, axis_intersection_z], radius))
+}
+
+fn compute_reference_sphere_corrected_opd_waves(
+    chief_image_point: [f64; 3],
+    chief_prev_point: Option<[f64; 3]>,
+    reference_sphere_geometry: Option<([f64; 3], f64)>,
+    chief_opl_um: f64,
+    marginal_image_point: [f64; 3],
+    marginal_opl_um: f64,
+    wavelength_um: f64,
+    image_space_n: f64,
+) -> Option<f64> {
+    if !chief_opl_um.is_finite()
+        || !marginal_opl_um.is_finite()
+        || !wavelength_um.is_finite()
+        || wavelength_um <= 0.0
+    {
+        return None;
+    }
+
+    let n_img = if image_space_n.is_finite() && image_space_n > 0.0 {
+        image_space_n
+    } else {
+        1.0
+    };
+
+    const MIN_RADIUS_MM: f64 = 1.0e-6;
+    const MAX_RADIUS_MM: f64 = 1.0e6;
+
+    let geometry = reference_sphere_geometry.or_else(|| {
+        chief_prev_point.and_then(|prev_point| compute_reference_sphere_geometry(prev_point, chief_image_point))
+    });
+
+    if let Some((reference_sphere_center, reference_sphere_radius)) = geometry {
+        if reference_sphere_radius.is_finite()
+            && reference_sphere_radius >= MIN_RADIUS_MM
+            && reference_sphere_radius <= MAX_RADIUS_MM
+        {
+            let chief_dist = distance3(chief_image_point, reference_sphere_center);
+            let marginal_dist = distance3(marginal_image_point, reference_sphere_center);
+            if chief_dist.is_finite() && marginal_dist.is_finite() {
+                let chief_geometric_correction_um =
+                    (chief_dist - reference_sphere_radius) * n_img * 1000.0;
+                let marginal_geometric_correction_um =
+                    (marginal_dist - reference_sphere_radius) * n_img * 1000.0;
+                let opd_um = (marginal_opl_um - marginal_geometric_correction_um)
+                    - (chief_opl_um - chief_geometric_correction_um);
+                if opd_um.is_finite() {
+                    let opd_waves = opd_um / wavelength_um;
+                    if opd_waves.is_finite() {
+                        return Some(opd_waves);
+                    }
+                }
+            }
+        }
+    }
+
+    let image_plane_distance_mm = distance3(marginal_image_point, chief_image_point);
+    if !image_plane_distance_mm.is_finite() {
+        return None;
+    }
+    let geometric_correction_um = image_plane_distance_mm * n_img * 1000.0;
+    let opd_um = (marginal_opl_um - chief_opl_um) - geometric_correction_um;
+    if !opd_um.is_finite() {
+        return None;
+    }
+
+    let opd_waves = opd_um / wavelength_um;
+    if opd_waves.is_finite() {
+        Some(opd_waves)
+    } else {
+        None
+    }
 }
 
 #[tauri::command]
@@ -2340,6 +2466,99 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
     }
 
     let chief_opl = chief_target_hit[1];
+    let chief_image_point = [chief_target_hit[2], chief_target_hit[3], chief_target_hit[4]];
+    let chief_prev_point = if target_surface_index > 0 {
+        let prev_hit = trace_single_ray_hit_point_with_meta_core(
+            &chief_start_dir,
+            target_surface_index - 1,
+            object_space_n,
+            &packed_target.row_meta,
+            &packed_target.row_params,
+            &packed_target.row_origins,
+            &packed_target.row_inv_rots,
+            &packed_target.row_rots,
+            packed_target.row_count,
+        );
+        if (prev_hit[0] - 1.0).abs() <= f64::EPSILON
+            && prev_hit[2].is_finite()
+            && prev_hit[3].is_finite()
+            && prev_hit[4].is_finite()
+        {
+            Some([prev_hit[2], prev_hit[3], prev_hit[4]])
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let image_space_n = if target_surface_index > 0 {
+        let n = get_correct_refractive_index(&rows[target_surface_index - 1], wavelength_um);
+        if n.is_finite() && n > 0.0 { n } else { 1.0 }
+    } else {
+        1.0
+    };
+    let mut reference_sphere_geometry = chief_prev_point
+        .and_then(|prev_point| compute_reference_sphere_geometry(prev_point, chief_image_point));
+    let reference_geometry_invalid = match reference_sphere_geometry {
+        Some((_, radius)) => !radius.is_finite() || radius < 1.0e-6 || radius > 1.0e6,
+        None => true,
+    };
+    if reference_geometry_invalid {
+        let probe_pairs = [(1.0e-3, 0.0), (0.0, 1.0e-3), (1.0e-2, 0.0), (0.0, 1.0e-2)];
+        for (probe_u, probe_v) in probe_pairs {
+            if reference_sphere_geometry.is_some() {
+                break;
+            }
+            let Some(probe_ray) = build_marginal_ray(probe_u, probe_v, effective_sampling_radius, effective_emission_origin) else {
+                continue;
+            };
+            let probe_hit = trace_single_ray_hit_point_with_meta_core(
+                &probe_ray,
+                target_surface_index,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            if (probe_hit[0] - 1.0).abs() > f64::EPSILON
+                || !probe_hit[2].is_finite()
+                || !probe_hit[3].is_finite()
+                || !probe_hit[4].is_finite()
+                || target_surface_index == 0
+            {
+                continue;
+            }
+            let probe_prev_hit = trace_single_ray_hit_point_with_meta_core(
+                &probe_ray,
+                target_surface_index - 1,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            if (probe_prev_hit[0] - 1.0).abs() > f64::EPSILON
+                || !probe_prev_hit[2].is_finite()
+                || !probe_prev_hit[3].is_finite()
+                || !probe_prev_hit[4].is_finite()
+            {
+                continue;
+            }
+            let last = [probe_hit[2], probe_hit[3], probe_hit[4]];
+            let prev = [probe_prev_hit[2], probe_prev_hit[3], probe_prev_hit[4]];
+            if let Some((center, radius)) = compute_reference_sphere_geometry(prev, last) {
+                if radius.is_finite() && radius >= 1.0e-6 && radius <= 1.0e6 {
+                    reference_sphere_geometry = Some((center, radius));
+                    break;
+                }
+            }
+        }
+    }
 
         // Refine effective_sampling_radius for entrance mode by bisecting along the 4
         // principal directions in the entrance pupil plane.  This mirrors the
@@ -2450,12 +2669,13 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         return Err("run_native_opd_map: chief OPL is invalid".to_string());
     }
 
-    let row_results: Vec<(usize, usize, Vec<Option<f64>>)> = (0..grid_size)
+    let row_results: Vec<(usize, usize, Vec<Option<f64>>, Vec<Option<f64>>)> = (0..grid_size)
         .into_par_iter()
         .map(|y| {
             let mut attempted_samples = 0usize;
             let mut hit_count = 0usize;
             let mut row = vec![None::<f64>; grid_size];
+            let mut reference_row = vec![None::<f64>; grid_size];
 
             for x in 0..grid_size {
                 let u = if grid_size > 1 {
@@ -2501,19 +2721,31 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
                 if !opd_waves.is_finite() {
                     continue;
                 }
+                let marginal_image_point = [target_hit[2], target_hit[3], target_hit[4]];
                 row[x] = Some(opd_waves);
+                reference_row[x] = compute_reference_sphere_corrected_opd_waves(
+                    chief_image_point,
+                    chief_prev_point,
+                    reference_sphere_geometry,
+                    chief_opl,
+                    marginal_image_point,
+                    ray_opl,
+                    wavelength_um,
+                    image_space_n,
+                ).or(Some(opd_waves));
                 hit_count += 1;
             }
 
-            (attempted_samples, hit_count, row)
+            (attempted_samples, hit_count, row, reference_row)
         })
         .collect();
 
     emit_native_analysis_progress(&app, &job_id, kind, "finalize", "Applying OPD display mode...", Some(90.0));
 
-    let attempted_samples: usize = row_results.iter().map(|(attempted, _, _)| *attempted).sum();
-    let hit_count: usize = row_results.iter().map(|(_, hits, _)| *hits).sum();
-    let raw_grid: Vec<Vec<Option<f64>>> = row_results.into_iter().map(|(_, _, row)| row).collect();
+    let attempted_samples: usize = row_results.iter().map(|(attempted, _, _, _)| *attempted).sum();
+    let hit_count: usize = row_results.iter().map(|(_, hits, _, _)| *hits).sum();
+    let raw_grid: Vec<Vec<Option<f64>>> = row_results.iter().map(|(_, _, row, _)| row.clone()).collect();
+    let reference_sphere_grid: Vec<Vec<Option<f64>>> = row_results.into_iter().map(|(_, _, _, row)| row).collect();
 
     let hit_rate = if attempted_samples > 0 {
         hit_count as f64 / attempted_samples as f64
@@ -2560,6 +2792,7 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         pupil_sampling_mode: effective_pupil_sampling_mode.to_string(),
         raw_opd_grid: raw_grid,
         display_opd_grid: display_grid,
+        reference_sphere_opd_grid: reference_sphere_grid,
         effective_pupil_radius_mm: effective_sampling_radius,
         message: {
             let mut notes: Vec<String> = Vec::new();

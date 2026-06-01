@@ -1676,8 +1676,8 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
   // For CoordTrans rows, use preserved gap material (the medium AFTER the CoordTrans)
   // or actual material from previous surface
   const effectiveMaterial = surface.__cooptGapMaterial ?? surface.__cooptActualMaterial ?? surface.material;
-  const effectiveRindex = surface.__cooptActualRindex ?? surface.rindex;
-  const effectiveAbbe = surface.__cooptActualAbbe ?? surface.abbe;
+  const effectiveRindex = surface.__cooptGapRindex ?? surface.__cooptActualRindex ?? surface.rindex;
+  const effectiveAbbe = surface.__cooptGapAbbe ?? surface.__cooptActualAbbe ?? surface.abbe;
   
   // Check if effectiveMaterial is a numeric string (e.g., "1.336")
   // If so, treat it as nd and, when Abbe is available, apply wavelength dispersion approximation.

@@ -3989,6 +3989,28 @@ export default function App() {
       if (!Array.isArray(rows) || !Array.isArray(blocks)) return 0;
 
       const normalizeType = (t: any) => String(t ?? '').trim().toLowerCase();
+      const resolveGapMaterialFromRow = (row: any): any => {
+        if (!row || typeof row !== 'object') return row?.material;
+        const explicitGapMaterial = row.__cooptGapMaterial;
+        if (explicitGapMaterial !== undefined) return explicitGapMaterial;
+        const rowBlockType = String(row?._blockType ?? row?.blockType ?? '').trim();
+        if (rowBlockType === 'CoordTrans') return undefined;
+        return row?.material;
+      };
+      const resolveGapRindexFromRow = (row: any): any => {
+        if (!row || typeof row !== 'object') return row?.rindex;
+        if (row.__cooptGapRindex !== undefined) return row.__cooptGapRindex;
+        const rowBlockType = String(row?._blockType ?? row?.blockType ?? '').trim();
+        if (rowBlockType === 'CoordTrans') return undefined;
+        return row?.rindex;
+      };
+      const resolveGapAbbeFromRow = (row: any): any => {
+        if (!row || typeof row !== 'object') return row?.abbe;
+        if (row.__cooptGapAbbe !== undefined) return row.__cooptGapAbbe;
+        const rowBlockType = String(row?._blockType ?? row?.blockType ?? '').trim();
+        if (rowBlockType === 'CoordTrans') return undefined;
+        return row?.abbe;
+      };
       const gapBlocks = blocks.filter((b: any) => {
         const t = normalizeType(b?.blockType);
         return t === 'gap' || t === 'airgap';
@@ -4026,10 +4048,13 @@ export default function App() {
         const gapId = String(gb?.blockId ?? '').trim();
         const row = pickRowForGap(gapId);
         if (!row) continue;
-        setParamAndLegacyVar(gb, 'thickness', row?.thickness);
-        if (row?.material !== undefined) setParamAndLegacyVar(gb, 'material', row?.material);
-        if (row?.rindex !== undefined) setParamAndLegacyVar(gb, 'rindex', row?.rindex);
-        if (row?.abbe !== undefined && row?.abbe !== '') setParamAndLegacyVar(gb, 'abbe', row?.abbe);
+        setParamAndLegacyVar(gb, 'thickness', row?.__cooptGapThickness ?? row?.thickness);
+        const gapMaterial = resolveGapMaterialFromRow(row);
+        const gapRindex = resolveGapRindexFromRow(row);
+        const gapAbbe = resolveGapAbbeFromRow(row);
+        if (gapMaterial !== undefined) setParamAndLegacyVar(gb, 'material', gapMaterial);
+        if (gapRindex !== undefined) setParamAndLegacyVar(gb, 'rindex', gapRindex);
+        if (gapAbbe !== undefined && gapAbbe !== '') setParamAndLegacyVar(gb, 'abbe', gapAbbe);
         sanitizeExclusiveGlassVarFamily(gb);
         touched += 1;
       }

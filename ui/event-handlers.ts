@@ -6219,9 +6219,30 @@ export function setupAnalysisWindows() {
             const isReactHandled = (openSystemDataWindowBtn as HTMLElement).getAttribute('data-react-handled') === '1';
             if (!isReactHandled) {
             openSystemDataWindowBtn.addEventListener('click', () => {
-                        if (w.__systemDataPopup && !w.__systemDataPopup.closed) {
-                                try { w.__systemDataPopup.focus(); } catch (_) {}
+                        try {
+                            if (typeof w.__cooptOpenSystemDataWindow === 'function') {
+                                w.__cooptOpenSystemDataWindow();
                                 return;
+                            }
+                        } catch (_) {}
+                        const isModernSystemDataPopup = (popup) => {
+                            try {
+                                if (!popup || popup.closed) return false;
+                                const href = String(popup.location?.href || '');
+                                if (href.includes('coopt_analysis_window=1') && href.includes('coopt_analysis=system-data')) {
+                                    return true;
+                                }
+                            } catch (_) {}
+                            return false;
+                        };
+
+                        if (w.__systemDataPopup && !w.__systemDataPopup.closed) {
+                                if (isModernSystemDataPopup(w.__systemDataPopup)) {
+                                    try { w.__systemDataPopup.focus(); } catch (_) {}
+                                    return;
+                                }
+                                try { w.__systemDataPopup.close(); } catch (_) {}
+                                w.__systemDataPopup = null;
                         }
 
                         const popup = consumePreopenedAnalysisPopup('System Data', 'width=1200,height=600');
@@ -10103,6 +10124,8 @@ export function setupAnalysisWindows() {
                                     throw new Error('Wavefront analyzer is not available for Zernike fitting');
                                 }
 
+                                let reportWavefrontMap = map?.referenceSphereReport || map;
+
                                 const objectRows = (typeof opener?.getObjectRows === 'function')
                                     ? opener.getObjectRows()
                                     : [];
@@ -10147,22 +10170,50 @@ export function setupAnalysisWindows() {
                                     ? Math.max(16, Math.floor(Number(gridSize)))
                                     : 256;
                                 const maxNoll = 37;
-                                const legacyWavefrontMap = await analyzer.generateWavefrontMap(fitFieldSetting, fitGridSize, 'circular', {
-                                    recordRays: false,
-                                    progressEvery: 0,
-                                    opdMode: 'simple',
-                                    opdDisplayMode,
-                                    renderFromZernike: false,
-                                    skipZernikeFit: false,
-                                    zernikeMaxNoll: maxNoll
-                                });
-                                if (!legacyWavefrontMap || legacyWavefrontMap?.error) {
-                                    throw new Error(String(legacyWavefrontMap?.error?.message || 'Legacy Zernike wavefront generation failed'));
+
+                                if (
+                                    reportWavefrontMap?.opdMode === 'native-grid'
+                                    && reportWavefrontMap?.fieldSetting
+                                ) {
+                                    const referenceReportMap = await analyzer.generateWavefrontMap(fitFieldSetting, fitGridSize, 'circular', {
+                                        recordRays: false,
+                                        progressEvery: 0,
+                                        opdMode: 'referenceSphere',
+                                        opdDisplayMode: 'pistonTiltRemoved',
+                                        renderFromZernike: false,
+                                        skipZernikeFit: false,
+                                        zernikeMaxNoll: maxNoll
+                                    });
+                                    if (!referenceReportMap || referenceReportMap?.error) {
+                                        throw new Error(String(referenceReportMap?.error?.message || 'Reference-sphere Zernike wavefront generation failed'));
+                                    }
+                                    reportWavefrontMap = referenceReportMap;
                                 }
 
-                                const fit = legacyWavefrontMap?.zernike;
+                                if (
+                                    !reportWavefrontMap?.zernike
+                                    && Array.isArray(reportWavefrontMap?.pupilCoordinates)
+                                    && Array.isArray(reportWavefrontMap?.raw?.opds)
+                                    && typeof analyzer.fitZernikePolynomials === 'function'
+                                ) {
+                                    const sampleCount = reportWavefrontMap.raw.opds.length;
+                                    const fitOrder = Math.max(1, Math.min(maxNoll, sampleCount));
+                                    if (sampleCount > 0) {
+                                        const fitted = analyzer.fitZernikePolynomials({
+                                            pupilCoordinates: reportWavefrontMap.pupilCoordinates,
+                                            opds: reportWavefrontMap.raw.opds,
+                                            pupilRange: reportWavefrontMap?.pupilRange,
+                                        }, fitOrder);
+                                        reportWavefrontMap = {
+                                            ...reportWavefrontMap,
+                                            zernike: fitted,
+                                        };
+                                    }
+                                }
+
+                                const fit = reportWavefrontMap?.zernike;
                                 if (!fit || !fit.coefficientsMicrons) {
-                                    throw new Error('Legacy Zernike fit did not produce coefficients');
+                                    throw new Error('Reference-sphere Zernike fit did not produce coefficients');
                                 }
 
                                 // Store coefficients for the main window Zernike Fit button
@@ -10173,14 +10224,17 @@ export function setupAnalysisWindows() {
                                         : { map: (map && typeof map === 'object') ? map : {}, meta: meta || null };
                                     const current = (base.map && typeof base.map === 'object') ? base.map : {};
                                     current.zernike = fit;
-                                    current.statistics = legacyWavefrontMap.statistics || current.statistics || (map?.statistics || {});
-                                    current.raw = legacyWavefrontMap.raw || current.raw || (map?.raw || {});
+                                    current.statistics = reportWavefrontMap.statistics || current.statistics || (map?.statistics || {});
+                                    current.raw = reportWavefrontMap.raw || current.raw || (map?.raw || {});
                                     current.statistics.skipZernikeFit = false;
+                                    if (reportWavefrontMap !== current) {
+                                        current.referenceSphereReport = reportWavefrontMap;
+                                    }
                                     base.map = current;
                                     if (opener) opener[key] = base;
                                 } catch (_) {}
 
-                                const reportText = analyzer.formatZernikeReportText(legacyWavefrontMap, { maxNoll });
+                                const reportText = analyzer.formatZernikeReportText(reportWavefrontMap, { maxNoll });
 
                                 const pushSystemData = (text) => {
                                     const value = String(text || '');
@@ -10225,6 +10279,15 @@ export function setupAnalysisWindows() {
 
                                 const tryOpenSystemDataWindow = (text) => {
                                     const value = String(text || '');
+                                    const isModernSystemDataPopup = (popup) => {
+                                        try {
+                                            if (!popup || popup.closed) return false;
+                                            const href = String(popup.location?.href || '');
+                                            return href.includes('coopt_analysis_window=1') && href.includes('coopt_analysis=system-data');
+                                        } catch (_) {
+                                            return false;
+                                        }
+                                    };
                                     const tryWriteTextarea = (doc, id) => {
                                         try {
                                             const ta = doc?.getElementById?.(id);
@@ -10239,8 +10302,10 @@ export function setupAnalysisWindows() {
                                     try {
                                         const w = opener?.__systemDataPopup;
                                         if (w && !w.closed) {
-                                            // Existing popup may use either legacy (#popup-system-data)
-                                            // or app route (#system-data) textarea id.
+                                            if (!isModernSystemDataPopup(w)) {
+                                                try { w.close(); } catch (_) {}
+                                                try { opener.__systemDataPopup = null; } catch (_) {}
+                                            } else {
                                             tryWriteTextarea(w.document, 'popup-system-data');
                                             tryWriteTextarea(w.document, 'system-data');
                                             try {
@@ -10250,76 +10315,29 @@ export function setupAnalysisWindows() {
                                             } catch (_) {}
                                             try { w.focus(); } catch (_) {}
                                             return true;
-                                        }
-                                    } catch (_) {}
-
-                                    // Some browsers block popups triggered by synthetic clicks.
-                                    // We still try the main-window button first, but fall back to
-                                    // opening the System Data window directly from this user action.
-                                    try {
-                                        const btn = opener?.document?.getElementById?.('open-system-data-window-btn');
-                                        if (btn) {
-                                            btn.click();
-                                            // If the click worked, the opener should set __systemDataPopup.
-                                            try {
-                                                const w = opener?.__systemDataPopup;
-                                                if (w && !w.closed) {
-                                                    tryWriteTextarea(w.document, 'popup-system-data');
-                                                    tryWriteTextarea(w.document, 'system-data');
-                                                    try {
-                                                        if (typeof w.__cooptPushSystemDataText === 'function') {
-                                                            w.__cooptPushSystemDataText(value);
-                                                        }
-                                                    } catch (_) {}
-                                                    try { w.focus(); } catch (_) {}
-                                                    return true;
-                                                }
-                                            } catch (_) {}
-                                        }
-                                    } catch (_) {}
-
-                                    // Fallback: open and render a minimal System Data popup directly.
-                                    try {
-                                        const popup = opener?.open?.('', 'System Data', 'width=1200,height=600');
-                                        if (!popup) return false;
-                                        try { opener.__systemDataPopup = popup; } catch (_) {}
-                                        try { popup.document.open(); } catch (_) {}
-
-                                        const html = [
-                                            '<!DOCTYPE html>',
-                                            '<html>',
-                                            '<head>',
-                                            '  <meta charset="UTF-8" />',
-                                            '  <title>System Data</title>',
-                                            '  <style>',
-                                            '    html, body { height: 100%; }',
-                                            '    body { margin: 0; font-family: Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; background: #f4f4f4; }',
-                                            '    .header { padding: 10px 12px; background: white; color: #333; font-weight: 600; border-bottom: 1px solid #ddd; }',
-                                            '    .content { flex: 1 1 auto; padding: 10px 12px; min-height: 0; display: flex; }',
-                                            '    textarea { flex: 1 1 auto; width: 100%; resize: none; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; line-height: 1.4; border: 1px solid #bbb; border-radius: 4px; padding: 10px; box-sizing: border-box; min-height: 0; background: white; }',
-                                            '  </style>',
-                                            '</head>',
-                                            '<body onload="(function(){function getOpenerEl(id){try{return window.opener&&window.opener.document?window.opener.document.getElementById(id):null;}catch(e){return null;}}function sync(){var src=getOpenerEl(\\\'system-data\\\');var dst=document.getElementById(\\\'popup-system-data\\\');if(dst&&src&&dst.value!==src.value){dst.value=src.value;}}setInterval(sync,500);window.addEventListener(\\\'focus\\\',sync);sync();})();">',
-                                            '  <div class="header">System Data</div>',
-                                            '  <div class="content">',
-                                            '    <textarea id="popup-system-data" placeholder="System information will appear here..."></textarea>',
-                                            '  </div>',
-                                            '</body>',
-                                            '</html>'
-                                        ].join('\\n');
-
-                                        popup.document.write(html);
-                                        try { popup.document.close(); } catch (_) {}
-                                        // Prime the fallback popup immediately without waiting for sync tick.
-                                        tryWriteTextarea(popup.document, 'popup-system-data');
-                                        tryWriteTextarea(popup.document, 'system-data');
-                                        try {
-                                            if (typeof popup.__cooptPushSystemDataText === 'function') {
-                                                popup.__cooptPushSystemDataText(value);
                                             }
-                                        } catch (_) {}
-                                        try { popup.focus(); } catch (_) {}
-                                        return true;
+                                        }
+                                    } catch (_) {}
+
+                                    try {
+                                        if (typeof opener?.__cooptOpenSystemDataWindow === 'function') {
+                                            const opened = opener.__cooptOpenSystemDataWindow(value);
+                                            if (opened) {
+                                                try {
+                                                    const w = opener?.__systemDataPopup;
+                                                    if (w && !w.closed) {
+                                                        tryWriteTextarea(w.document, 'system-data');
+                                                        try {
+                                                            if (typeof w.__cooptPushSystemDataText === 'function') {
+                                                                w.__cooptPushSystemDataText(value);
+                                                            }
+                                                        } catch (_) {}
+                                                        try { w.focus(); } catch (_) {}
+                                                    }
+                                                } catch (_) {}
+                                                return true;
+                                            }
+                                        }
                                     } catch (_) {}
 
                                     return false;

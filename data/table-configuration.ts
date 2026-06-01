@@ -11,7 +11,7 @@ const w: Record<string, any> = window;
 
 import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows } from './block-schema.ts';
 import { storageGetItem, storageSetItem, storageRemoveItem } from '../utils/local-storage-gateway.ts';
-import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
+import { calculateParaxialData, getRefractiveIndex } from '../raytracing/core/ray-paraxial.ts';
 import { getGlassDataWithSellmeier, getPrimaryWavelength } from './glass.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedSystemRequirementsTableData } from './table-system-requirements.ts';
 
@@ -830,6 +830,15 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
             const paraxial = calculateParaxialData(probeRows, wl);
             if (paraxial) {
               let mutated = false;
+              const getBlockParamValue = (block: any, key: string): any => {
+                const vars = block?.variables;
+                const variableEntry = vars && typeof vars === 'object' ? vars[key] : undefined;
+                if (variableEntry && typeof variableEntry === 'object' && Object.prototype.hasOwnProperty.call(variableEntry, 'value')) {
+                  return variableEntry.value;
+                }
+                const params = block?.parameters;
+                return params && typeof params === 'object' ? params[key] : undefined;
+              };
               for (const block of activeConfig.blocks as any[]) {
                 if (!block || typeof block !== 'object') continue;
                 const bt = String((block as any).blockType ?? '').trim();
@@ -838,7 +847,17 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
                 if (!params) continue;
                 const mode = String(params.thicknessMode ?? '').trim().toUpperCase();
                 if (mode !== 'IMD' && mode !== 'BFL') continue;
-                const target = Number(mode === 'IMD' ? paraxial.imageDistance : paraxial.backFocalLength);
+                const reducedDistance = Number(mode === 'IMD' ? paraxial.imageDistance : paraxial.backFocalLength);
+                if (!Number.isFinite(reducedDistance)) continue;
+                const gapRefractiveIndex = Number(getRefractiveIndex({
+                  material: getBlockParamValue(block, 'material'),
+                  rindex: getBlockParamValue(block, 'rindex'),
+                  abbe: getBlockParamValue(block, 'abbe'),
+                }, wl));
+                const mediumScale = (Number.isFinite(gapRefractiveIndex) && gapRefractiveIndex > 0)
+                  ? gapRefractiveIndex
+                  : 1;
+                const target = reducedDistance * mediumScale;
                 if (!Number.isFinite(target)) continue;
                 if (Number.isFinite(Number(params.thickness)) && Math.abs(Number(params.thickness) - target) <= 1e-9) continue;
                 params.thickness = target;

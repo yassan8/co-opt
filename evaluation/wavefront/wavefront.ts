@@ -9615,6 +9615,9 @@ export class WavefrontAberrationAnalyzer {
         const pupilCoordinates = wavefrontMap?.pupilCoordinates || [];
         const opds = wavefrontMap?.opds || [];
         const maxOrderRequested = Math.max(3, Number(maxOrder) || 6);
+        const pupilRange = (Number.isFinite(wavefrontMap?.pupilRange) && Number(wavefrontMap.pupilRange) > 0)
+            ? Number(wavefrontMap.pupilRange)
+            : 1.0;
 
         // ビネッティング検出用に重み付きポイント配列を作成
         const points = [];
@@ -9622,15 +9625,19 @@ export class WavefrontAberrationAnalyzer {
             const p = pupilCoordinates[i];
             const opd = opds[i];
             if (!p) continue;
+
+            const x = Number(p.x) / pupilRange;
+            const y = Number(p.y) / pupilRange;
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
             
-            const r = Math.sqrt(p.x * p.x + p.y * p.y);
+            const r = Math.sqrt(x * x + y * y);
             if (r > 1.0 + 1e-9) continue;
             
             // 有効なOPD値には重み1、無効（ビネッティング）には重み0
-            const weight = (isFinite(p.x) && isFinite(p.y) && isFinite(opd)) ? 1 : 0;
+            const weight = Number.isFinite(opd) ? 1 : 0;
             points.push({ 
-                x: p.x, 
-                y: p.y, 
+                x,
+                y,
                 opd: weight > 0 ? opd : 0,  // 無効点は0として扱う
                 weight 
             });
@@ -9856,7 +9863,9 @@ export class WavefrontAberrationAnalyzer {
                 removedModelMicrons.push(NaN);
                 continue;
             }
-            const rho = Math.sqrt(p.x * p.x + p.y * p.y);
+            const xn = Number(p.x) / pupilRange;
+            const yn = Number(p.y) / pupilRange;
+            const rho = Math.sqrt(xn * xn + yn * yn);
             if (rho > 1.0 + 1e-9) {
                 removedModelMicrons.push(NaN);
                 continue;
@@ -9870,11 +9879,11 @@ export class WavefrontAberrationAnalyzer {
                     removeCoeffs[j] = coefficientsMicrons[j];
                 }
             }
-            const model = reconstructOPD(removeCoeffs, p.x, p.y);
+            const model = reconstructOPD(removeCoeffs, xn, yn);
             
             // デバッグ：最初の数点でモデル値を確認
             if (OPD_DEBUG && i < 5) {
-                console.log(`🔍 Point ${i}: pupil(${p.x.toFixed(3)}, ${p.y.toFixed(3)}), model=${model.toFixed(6)} μm`);
+                console.log(`🔍 Point ${i}: pupil(${xn.toFixed(3)}, ${yn.toFixed(3)}), model=${model.toFixed(6)} μm`);
             }
             
             removedModelMicrons.push(model);
@@ -9953,7 +9962,7 @@ export class WavefrontAberrationAnalyzer {
 
             const displayRemovedNoll = Array.isArray(wavefrontMap?.zernikeModel?.displayRemovedNoll)
                 ? wavefrontMap.zernikeModel.displayRemovedNoll
-                : [1, 2, 3];
+                : [0, 1, 2];
 
             if (!fitCoeffs) {
                 const lines = [];
@@ -9966,7 +9975,7 @@ export class WavefrontAberrationAnalyzer {
             const wavelength = Number.isFinite(this.opdCalculator?.wavelength) ? this.opdCalculator.wavelength : NaN;
             const maxNoll = Number.isFinite(options?.maxNoll) ? Math.max(1, Math.floor(options.maxNoll)) : (z?.maxNoll || 0);
             const maxUsed = Math.max(1, Math.min(wavefrontMap?.zernikeModel?.maxNollUsed || maxNoll, maxNoll));
-            const usedCoeffs = fitCoeffs;
+            const usedCoeffs = displayCoeffs;
 
             const calcStatsWaves = (arr) => {
                 if (!Array.isArray(arr) || arr.length === 0) {
@@ -10014,9 +10023,9 @@ export class WavefrontAberrationAnalyzer {
                 const dmode = wavefrontMap?.statistics?.display?.opdWavelengths?.opdDisplayMode || wavefrontMap?.opdDisplayModeRequested;
                 lines.push(`OPD display mode: ${dmode}`);
             }
-            lines.push(`Basis: Normalized Zernike (Noll indexing)`);
-            lines.push(`Max Noll used: ${maxUsed}`);
-            lines.push(`OPD display removal: piston/tilt only (Noll ${displayRemovedNoll.join(', ')})`);
+            lines.push('Basis: Normalized Zernike (OSA/ANSI indexing)');
+            lines.push(`Max OSA terms used: ${maxUsed}`);
+            lines.push(`OPD display removal: piston/tilt only (OSA ${displayRemovedNoll.join(', ')})`);
             if (z?.stats?.full?.rmsResidual !== undefined) {
                 lines.push(`Fit RMS residual: ${Number.isFinite(z.stats.full.rmsResidual) ? z.stats.full.rmsResidual.toFixed(6) : z.stats.full.rmsResidual} μm`);
             }
@@ -10055,7 +10064,7 @@ export class WavefrontAberrationAnalyzer {
             lines.push('');
             lines.push('Fitting / Rendering equation:');
             lines.push('  ρ = sqrt(x^2 + y^2) / pupilRange,  θ = atan2(y, x)');
-            lines.push('  W(ρ,θ) [μm] = Σ_{j=1..J} c_j · Z_j(ρ,θ),   J = max Noll used');
+            lines.push('  W(ρ,θ) [μm] = Σ_{j=0..J} c_j · Z_j(ρ,θ),   J = max OSA j used');
             lines.push('');
             lines.push('Normalized Zernike definition (n,m):');
             lines.push('  Z_n^0(ρ,θ)   = sqrt(n+1) · R_n^{0}(ρ)');
@@ -10063,16 +10072,15 @@ export class WavefrontAberrationAnalyzer {
             lines.push('  Z_n^{-m}(ρ,θ)  = sqrt(2(n+1)) · R_n^{m}(ρ) · sin(mθ)');
             lines.push('');
             lines.push('Coefficients (fitted):');
-            lines.push('  j\t(n,m)\tc_j [μm]\tc_j [waves]');
+            lines.push('  OSA j\t(n,m)\tc_j [μm]\tc_j [waves]');
 
-            for (let j = 1; j <= maxUsed; j++) {
-                const nm = nollToNM(j);
-                const osaIndex = nollToOSA(j);
+            for (let osaIndex = 0; osaIndex < maxUsed; osaIndex++) {
+                const nm = jToNM(osaIndex);
                 const c = Number(usedCoeffs?.[osaIndex] ?? 0);
                 const cw = (Number.isFinite(c) && Number.isFinite(wavelength) && wavelength > 0) ? (c / wavelength) : NaN;
                 const cStr = Number.isFinite(c) ? c.toExponential(6) : String(c);
                 const wStr = Number.isFinite(cw) ? cw.toExponential(6) : String(cw);
-                lines.push(`  ${j}\t(${nm.n},${nm.m})\t${cStr}\t${wStr}`);
+                lines.push(`  ${osaIndex}\t(${nm.n},${nm.m})\t${cStr}\t${wStr}`);
             }
 
             // RMS comparison
@@ -10142,9 +10150,15 @@ export class WavefrontAberrationAnalyzer {
                 ? Number(wavefrontMap.pupilRange)
                 : 1.0;
             const pupilCoords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
-            const buildSampledModelWaves = (coeffsMicrons, removedNoll = []) => {
+            const buildSampledModelWaves = (coeffsMicrons, removedOsa = []) => {
                 if (!coeffsMicrons || !pupilCoords.length || !Number.isFinite(wavelength) || wavelength <= 0) return null;
-                const removedSet = new Set((Array.isArray(removedNoll) ? removedNoll : []).map(v => Math.floor(Number(v))));
+                const removedSet = new Set((Array.isArray(removedOsa) ? removedOsa : []).map(v => Math.floor(Number(v))));
+                const coeffsArray = new Array(maxUsed).fill(0);
+                for (let j = 0; j < maxUsed; j++) {
+                    if (removedSet.has(j)) continue;
+                    const c = Number(coeffsMicrons?.[j] ?? 0);
+                    coeffsArray[j] = Number.isFinite(c) ? c : 0;
+                }
                 const model = [];
                 for (let i = 0; i < pupilCoords.length; i++) {
                     const p = pupilCoords[i];
@@ -10157,14 +10171,7 @@ export class WavefrontAberrationAnalyzer {
                         model.push(NaN);
                         continue;
                     }
-                    const theta = Math.atan2(p.y, p.x);
-                    let opdMicrons = 0;
-                    for (let j = 1; j <= maxUsed; j++) {
-                        if (removedSet.has(j)) continue;
-                        const c = Number(coeffsMicrons?.[j] ?? 0);
-                        if (!Number.isFinite(c) || c === 0) continue;
-                        opdMicrons += c * zernikeNoll(j, rho, theta);
-                    }
+                    const opdMicrons = reconstructOPD(coeffsArray, p.x / pr, p.y / pr);
                     model.push(opdMicrons / wavelength);
                 }
                 return model;
@@ -10184,7 +10191,7 @@ export class WavefrontAberrationAnalyzer {
                 if (Array.isArray(modelWavesDisplayRemoved) && modelWavesDisplayRemoved.length) {
                     const stRemoved = calcStatsWaves(modelWavesDisplayRemoved);
                     stModelRemovedForSummary = stRemoved;
-                    lines.push(`  ${fmtStatsLine(`piston/tilt removed (Noll ${displayRemovedNoll.join(', ')})`, stRemoved)}`);
+                    lines.push(`  ${fmtStatsLine(`piston/tilt removed (OSA ${displayRemovedNoll.join(', ')})`, stRemoved)}`);
                 }
             }
 
@@ -10193,7 +10200,7 @@ export class WavefrontAberrationAnalyzer {
             let sum2All = 0;
             let sum2Removed = 0;
             const removedSet = new Set(displayRemovedNoll.map(v => Math.floor(Number(v))));
-            for (let j = 1; j <= maxUsed; j++) {
+            for (let j = 0; j < maxUsed; j++) {
                 const c = Number(usedCoeffs?.[j] ?? 0);
                 if (!Number.isFinite(c)) continue;
                 sum2All += c * c;
@@ -10213,7 +10220,7 @@ export class WavefrontAberrationAnalyzer {
                 `  area-mean RMS from coefficients (all terms): rms=${Number.isFinite(rmsCoeffAllWaves) ? rmsCoeffAllWaves.toFixed(6) : rmsCoeffAllWaves} λ  (${Number.isFinite(rmsCoeffAllMicrons) ? rmsCoeffAllMicrons.toFixed(6) : rmsCoeffAllMicrons} μm)`
             );
             lines.push(
-                `  area-mean RMS excluding piston/tilt (Noll ${displayRemovedNoll.join(', ')}): rms=${Number.isFinite(rmsCoeffRemovedWaves) ? rmsCoeffRemovedWaves.toFixed(6) : rmsCoeffRemovedWaves} λ  (${Number.isFinite(rmsCoeffRemovedMicrons) ? rmsCoeffRemovedMicrons.toFixed(6) : rmsCoeffRemovedMicrons} μm)`
+                `  area-mean RMS excluding piston/tilt (OSA ${displayRemovedNoll.join(', ')}): rms=${Number.isFinite(rmsCoeffRemovedWaves) ? rmsCoeffRemovedWaves.toFixed(6) : rmsCoeffRemovedWaves} λ  (${Number.isFinite(rmsCoeffRemovedMicrons) ? rmsCoeffRemovedMicrons.toFixed(6) : rmsCoeffRemovedMicrons} μm)`
             );
 
             // Fill the summary line now that everything is computed.

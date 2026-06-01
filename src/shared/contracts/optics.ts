@@ -267,6 +267,7 @@ export interface NativeOpdMapResponse {
   pupilSamplingMode: "stop" | "entrance";
   rawOpdGrid: Array<Array<number | null>>;
   displayOpdGrid: Array<Array<number | null>>;
+  referenceSphereOpdGrid?: Array<Array<number | null>>;
   message: string;
 }
 
