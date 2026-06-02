@@ -3066,6 +3066,15 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
 
     const w = window as any;
     const storageKey = 'coopt.systemDataText';
+    const getOpenerSystemDataText = () => {
+      try {
+        const opener = w.opener;
+        if (!opener || opener.closed) return '';
+        return typeof opener.__cooptSystemDataText === 'string' ? opener.__cooptSystemDataText : '';
+      } catch (_) {
+        return '';
+      }
+    };
     const hasLiveWavefrontRuntime = () => {
       try {
         const runtime = w.__cooptLastWavefrontRuntime;
@@ -3106,6 +3115,8 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
           if (typeof cached === 'string') initial = cached;
         } catch (_) {}
       }
+    } else {
+      initial = getOpenerSystemDataText();
     }
 
     if (initial) applySystemDataText(initial);
@@ -3134,6 +3145,15 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
     if (!visible || typeof window === 'undefined') return;
 
     const w = window as any;
+    const getOpenerSystemDataText = () => {
+      try {
+        const opener = w.opener;
+        if (!opener || opener.closed) return '';
+        return typeof opener.__cooptSystemDataText === 'string' ? opener.__cooptSystemDataText : '';
+      } catch (_) {
+        return '';
+      }
+    };
     const hasLiveWavefrontRuntime = () => {
       try {
         const runtime = w.__cooptLastWavefrontRuntime;
@@ -3148,10 +3168,14 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
     let timer: number | null = null;
     const hasExistingSystemDataText = () => {
       const hasLiveRuntime = hasLiveWavefrontRuntime();
+      const openerText = getOpenerSystemDataText();
       try {
         const ta = document.getElementById('system-data') as HTMLTextAreaElement | null;
         if (ta && String(ta.value || '').trim().length > 0) return hasLiveRuntime;
       } catch (_) {}
+      if (openerText.trim().length > 0) {
+        return true;
+      }
       if (!hasLiveRuntime) {
         return false;
       }
@@ -3167,7 +3191,7 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
       return false;
     };
 
-    if (!hasLiveWavefrontRuntime()) {
+    if (!hasLiveWavefrontRuntime() && getOpenerSystemDataText().trim().length === 0) {
       try {
         w.__cooptSystemDataText = '';
       } catch (_) {}
