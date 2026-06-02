@@ -3171,7 +3171,9 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
       const openerText = getOpenerSystemDataText();
       try {
         const ta = document.getElementById('system-data') as HTMLTextAreaElement | null;
-        if (ta && String(ta.value || '').trim().length > 0) return hasLiveRuntime;
+        if (ta && String(ta.value || '').trim().length > 0) {
+          return hasLiveRuntime || openerText.trim().length > 0;
+        }
       } catch (_) {}
       if (openerText.trim().length > 0) {
         return true;
