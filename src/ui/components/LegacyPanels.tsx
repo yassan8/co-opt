@@ -3145,6 +3145,16 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
     if (!visible || typeof window === 'undefined') return;
 
     const w = window as any;
+    const hasOpener = (() => {
+      try {
+        return !!(w.opener && !w.opener.closed);
+      } catch (_) {
+        return false;
+      }
+    })();
+    if (hasOpener) {
+      return;
+    }
     const getOpenerSystemDataText = () => {
       try {
         const opener = w.opener;
