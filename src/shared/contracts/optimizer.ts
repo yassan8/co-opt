@@ -5,6 +5,7 @@ export interface OptimizeStepRequest {
   sourceRows?: unknown[];
   objectRows?: unknown[];
   activeConfigId?: string | number;
+  systemConfigSnapshot?: unknown;
   systemRequirementsRows?: unknown[];
   sessionId?: string;
   resetSession?: boolean;

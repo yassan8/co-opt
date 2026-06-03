@@ -104,6 +104,92 @@ export interface NativeSpotRaytraceResponse {
   message: string;
 }
 
+export interface NativeChiefRayAngleRequest {
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+}
+
+export interface NativeChiefRayAngleResponse {
+  backend: string;
+  chiefRayAngleDeg: number;
+  message: string;
+}
+
+export interface NativeParaxialMetrics {
+  FL: number;
+  EFL: number;
+  BFL: number;
+  IMD: number;
+  OBJD: number;
+  TSL: number;
+  BEXP: number;
+  EXPD: number;
+  EXPP: number;
+  ENPD: number;
+  ENPP: number;
+  ENPM: number;
+  PMAG: number;
+  FNO_OBJ: number;
+  FNO_IMG: number;
+  FNO_WRK: number;
+  NA_OBJ: number;
+  NA_IMG: number;
+}
+
+export interface NativeParaxialMetricsRequest {
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+}
+
+export interface NativeParaxialMetricsResponse {
+  backend: string;
+  metrics: NativeParaxialMetrics;
+  message: string;
+}
+
+export interface NativeSeidelSurfaceCoefficient {
+  surfaceIndex: number;
+  objectLabel: string;
+  I: number;
+  II: number;
+  III: number;
+  P: number;
+  IV: number;
+  V: number;
+  LCA: number;
+  TCA: number;
+}
+
+export interface NativeSeidelTotals {
+  I: number;
+  II: number;
+  III: number;
+  P: number;
+  IV: number;
+  V: number;
+  LCA: number;
+  TCA: number;
+}
+
+export interface NativeSeidelRequest {
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+  afocal?: boolean;
+  referenceWavelengthUm?: number;
+}
+
+export interface NativeSeidelResponse {
+  backend: string;
+  totals: NativeSeidelTotals;
+  surfaceCoefficients: NativeSeidelSurfaceCoefficient[];
+  stopSurfaceIndex: number;
+  wavelengthUm: number;
+  message: string;
+}
+
 export interface NativeSphericalAberrationRequest {
   opticalSystemRows: unknown[];
   sourceRows?: unknown[];

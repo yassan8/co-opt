@@ -215,6 +215,48 @@ pub struct RunSystemDataReportResponse {
     pub summary: Value,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeParaxialMetricsRequest {
+    pub optical_system_rows: Vec<Value>,
+    #[serde(default)]
+    pub source_rows: Vec<Value>,
+    #[serde(default)]
+    pub object_rows: Vec<Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeParaxialMetricsResponse {
+    pub backend: String,
+    pub metrics: Value,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeSeidelRequest {
+    pub optical_system_rows: Vec<Value>,
+    #[serde(default)]
+    pub source_rows: Vec<Value>,
+    #[serde(default)]
+    pub object_rows: Vec<Value>,
+    #[serde(default)]
+    pub afocal: bool,
+    pub reference_wavelength_um: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeSeidelResponse {
+    pub backend: String,
+    pub totals: SeidelTotals,
+    pub surface_coefficients: Vec<SeidelSurfaceCoeff>,
+    pub stop_surface_index: usize,
+    pub wavelength_um: f64,
+    pub message: String,
+}
+
 #[tauri::command]
 pub fn recommend_wavefront_grid(req: RecommendWavefrontGridRequest) -> Result<GridRecommendation, String> {
     let field_angle = req.field_angle_deg.unwrap_or(0.0);
@@ -627,6 +669,79 @@ pub fn run_system_data_report(
     Ok(RunSystemDataReportResponse { kind, text, summary })
 }
 
+#[tauri::command]
+pub fn run_native_paraxial_metrics(
+    req: NativeParaxialMetricsRequest,
+) -> Result<NativeParaxialMetricsResponse, String> {
+    if req.optical_system_rows.is_empty() {
+        return Err("run_native_paraxial_metrics: opticalSystemRows is empty".to_string());
+    }
+
+    let metrics = compute_paraxial_metrics(
+        &req.optical_system_rows,
+        &req.source_rows,
+        &req.object_rows,
+    );
+
+    Ok(NativeParaxialMetricsResponse {
+        backend: "tauri-native".to_string(),
+        metrics: json!({
+            "FL": metrics.fl,
+            "EFL": metrics.efl,
+            "BFL": metrics.bfl,
+            "IMD": metrics.imd,
+            "OBJD": metrics.objd,
+            "TSL": metrics.tsl,
+            "BEXP": metrics.bexp,
+            "EXPD": metrics.expd,
+            "EXPP": metrics.expp,
+            "ENPD": metrics.enpd,
+            "ENPP": metrics.enpp,
+            "ENPM": metrics.enpm,
+            "PMAG": metrics.pmag,
+            "FNO_OBJ": metrics.fno_obj,
+            "FNO_IMG": metrics.fno_img,
+            "FNO_WRK": metrics.fno_wrk,
+            "NA_OBJ": metrics.na_obj,
+            "NA_IMG": metrics.na_img,
+        }),
+        message: "Computed via native paraxial metrics API".to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn run_native_seidel(
+    req: NativeSeidelRequest,
+) -> Result<NativeSeidelResponse, String> {
+    if req.optical_system_rows.is_empty() {
+        return Err("run_native_seidel: opticalSystemRows is empty".to_string());
+    }
+
+    let wavelength_um = req
+        .reference_wavelength_um
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or_else(|| detect_primary_wavelength(&req.source_rows).unwrap_or(0.587_561_8));
+    let stop_surface_index = detect_stop_surface_index(&req.optical_system_rows).unwrap_or(1);
+    let wavelength_range = detect_wavelength_range(&req.source_rows);
+    let _ = req.object_rows.len();
+    let (surface_coefficients, totals) = compute_seidel_surface_coefficients(
+        &req.optical_system_rows,
+        stop_surface_index,
+        req.afocal,
+        wavelength_um,
+        wavelength_range,
+    );
+
+    Ok(NativeSeidelResponse {
+        backend: "tauri-native".to_string(),
+        totals,
+        surface_coefficients,
+        stop_surface_index,
+        wavelength_um,
+        message: "Computed via native Seidel API".to_string(),
+    })
+}
+
 fn field_factor(field_angle_deg: f64) -> f64 {
     (1.0 + field_angle_deg.abs() / 30.0).max(1.0)
 }
@@ -691,30 +806,32 @@ struct PupilEstimate {
     magnification: f64,
 }
 
-#[derive(Debug, Clone)]
-struct SeidelSurfaceCoeff {
-    surface_index: usize,
-    object_label: String,
-    i: f64,
-    ii: f64,
-    iii: f64,
-    p: f64,
-    iv: f64,
-    v: f64,
-    lca: f64,
-    tca: f64,
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SeidelSurfaceCoeff {
+    pub(crate) surface_index: usize,
+    pub(crate) object_label: String,
+    pub(crate) i: f64,
+    pub(crate) ii: f64,
+    pub(crate) iii: f64,
+    pub(crate) p: f64,
+    pub(crate) iv: f64,
+    pub(crate) v: f64,
+    pub(crate) lca: f64,
+    pub(crate) tca: f64,
 }
 
-#[derive(Debug, Clone)]
-struct SeidelTotals {
-    i: f64,
-    ii: f64,
-    iii: f64,
-    p: f64,
-    iv: f64,
-    v: f64,
-    lca: f64,
-    tca: f64,
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SeidelTotals {
+    pub(crate) i: f64,
+    pub(crate) ii: f64,
+    pub(crate) iii: f64,
+    pub(crate) p: f64,
+    pub(crate) iv: f64,
+    pub(crate) v: f64,
+    pub(crate) lca: f64,
+    pub(crate) tca: f64,
 }
 
 #[derive(Debug, Clone)]

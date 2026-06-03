@@ -142,6 +142,7 @@ const run = async () => {
   const runtime = {
     opdParity: { pass: false, output: null, error: null },
     taMode: { pass: false, output: null, analysis: null, error: null },
+    zernikeParity: { pass: false, output: null, error: null },
     spotSmoke: { skipped: true, reason: 'covered by static routing checks', pass: true },
     saSmoke: { skipped: true, reason: 'covered by static routing checks', pass: true }
   };
@@ -183,10 +184,27 @@ const run = async () => {
     runtime.taMode.error = String(e?.message || e);
   }
 
+  try {
+    const zernOutRel = path.join('diagnostics/results', `zernike-optimizer-parity-native-operands-${stamp}.json`);
+    await runNode('diagnostics/zernike-optimizer-parity.mjs', [
+      '--out', zernOutRel,
+      '--object', '1',
+      '--sampling', '32',
+      '--max-index', '37',
+      '--fail-max-diff-waves', '0.002',
+      '--fail-rms-diff-waves', '0.001'
+    ], { label: 'zernike-optimizer-parity(native-operands)', mode: 'tsx' });
+    runtime.zernikeParity.pass = true;
+    runtime.zernikeParity.output = zernOutRel;
+  } catch (e) {
+    runtime.zernikeParity.error = String(e?.message || e);
+  }
+
   const failedChecks = [];
   if (!staticRouting.passed) failedChecks.push('staticRouting');
   if (!runtime.opdParity.pass) failedChecks.push('opdParity');
   if (!runtime.taMode.pass) failedChecks.push('taMode');
+  if (!runtime.zernikeParity.pass) failedChecks.push('zernikeParity');
 
   const summary = {
     timestamp: new Date().toISOString(),

@@ -2578,6 +2578,7 @@ export default function App() {
     requirementScoreAfter: NaN,
     requirementScoreTable: NaN,
     best: NaN,
+    bestRequirementScore: NaN,
     acceptCount: 0,
     rejectCount: 0,
     issue: '-',
@@ -3556,6 +3557,9 @@ export default function App() {
             best: optimizeStatus === 'idle'
               ? (Number.isFinite(safeScore) ? safeScore : prev.best)
               : prev.best,
+            bestRequirementScore: optimizeStatus === 'idle'
+              ? (Number.isFinite(tableScore) ? tableScore : (Number.isFinite(safeScore) ? safeScore : prev.bestRequirementScore))
+              : prev.bestRequirementScore,
           }));
         }
         return Number.isFinite(safeScore) || Number.isFinite(tableScore);
@@ -3669,6 +3673,9 @@ export default function App() {
           best: optimizeStatus === 'idle'
             ? (Number.isFinite(score) ? score : prev.best)
             : prev.best,
+          bestRequirementScore: optimizeStatus === 'idle'
+            ? (Number.isFinite(score) ? score : prev.bestRequirementScore)
+            : prev.bestRequirementScore,
         }));
       } catch (_) {}
     };
@@ -7428,12 +7435,16 @@ const collectLegacyCrossRays = async (
           next.meritBefore = Number.isFinite(effectiveScore) ? effectiveScore : prev.meritBefore;
           next.meritAfter = Number.isFinite(effectiveScore) ? effectiveScore : prev.meritAfter;
           next.best = Number.isFinite(effectiveScore) ? effectiveScore : prev.best;
+          next.bestRequirementScore = Number.isFinite(effectiveScore) ? effectiveScore : prev.bestRequirementScore;
         } else {
           next.requirementScoreAfter = Number.isFinite(effectiveScore) ? effectiveScore : prev.requirementScoreAfter;
           next.requirementScoreTable = Number.isFinite(effectiveScore) ? effectiveScore : prev.requirementScoreTable;
           next.meritAfter = Number.isFinite(effectiveScore) ? effectiveScore : prev.meritAfter;
           if (Number.isFinite(effectiveScore)) {
             next.best = Number.isFinite(prev.best) ? Math.min(prev.best, effectiveScore) : effectiveScore;
+            next.bestRequirementScore = Number.isFinite(prev.bestRequirementScore)
+              ? Math.min(prev.bestRequirementScore, effectiveScore)
+              : effectiveScore;
           }
         }
 
@@ -8207,6 +8218,9 @@ const collectLegacyCrossRays = async (
                   : (Number.isFinite(tsBestRequirementScore)
                     ? tsBestRequirementScore
                     : prev.best),
+                bestRequirementScore: Number.isFinite(tsBestRequirementScore)
+                  ? tsBestRequirementScore
+                  : prev.bestRequirementScore,
               }));
             } catch (_) {
               // ignore live refresh failures and keep progress loop running
@@ -8240,7 +8254,8 @@ const collectLegacyCrossRays = async (
           systemRequirementsRows,
           method: optMethod,
           maxIterations,
-          forceTs: true,
+          preferNative: isTauriRuntime(),
+          kktUseWasmPilotOptimizer: true,
           shouldStop: () => !!(window as any).__cooptOptimizeStopRequested,
           onProgress: (ev: any) => {
             const phase = String(ev?.phase ?? 'running');
@@ -8288,14 +8303,19 @@ const collectLegacyCrossRays = async (
               : (Number.isFinite(progressViolationScore)
                 ? progressViolationScore
                 : (Number.isFinite(tableScore) ? tableScore : Number.NaN));
+            const requirementDisplayScore = Number.isFinite(tableScore)
+              ? tableScore
+              : (Number.isFinite(progressViolationScore)
+                ? progressViolationScore
+                : displayScore);
 
             if (phaseLower === 'accept') tsAcceptCount += 1;
             if (phaseLower === 'reject') tsRejectCount += 1;
             if (Number.isFinite(progressBestScore)) {
               tsBestScore = Math.min(tsBestScore, progressBestScore);
             }
-            if (Number.isFinite(displayScore)) {
-              tsBestRequirementScore = Math.min(tsBestRequirementScore, displayScore);
+            if (Number.isFinite(requirementDisplayScore)) {
+              tsBestRequirementScore = Math.min(tsBestRequirementScore, requirementDisplayScore);
             }
 
             const shouldAutoRenderPhase = phaseLower === 'accept' || phaseLower === 'done';
@@ -8319,8 +8339,8 @@ const collectLegacyCrossRays = async (
               meritBefore: prev.meritBefore,
               meritAfter: Number.isFinite(displayScore) ? displayScore : prev.meritAfter,
               requirementScoreBefore: prev.requirementScoreBefore,
-              requirementScoreAfter: Number.isFinite(displayScore) ? displayScore : prev.requirementScoreAfter,
-              requirementScoreTable: Number.isFinite(displayScore) ? displayScore : prev.requirementScoreTable,
+              requirementScoreAfter: Number.isFinite(requirementDisplayScore) ? requirementDisplayScore : prev.requirementScoreAfter,
+              requirementScoreTable: Number.isFinite(requirementDisplayScore) ? requirementDisplayScore : prev.requirementScoreTable,
               acceptCount: tsAcceptCount,
               rejectCount: tsRejectCount,
               issue: '-',
@@ -8330,6 +8350,9 @@ const collectLegacyCrossRays = async (
                 : (Number.isFinite(tsBestRequirementScore)
                   ? tsBestRequirementScore
                   : prev.best),
+              bestRequirementScore: Number.isFinite(tsBestRequirementScore)
+                ? tsBestRequirementScore
+                : prev.bestRequirementScore,
             }));
           },
         });
@@ -8580,6 +8603,11 @@ const collectLegacyCrossRays = async (
           meritAfter: Number.isFinite(finalTableScore) ? finalTableScore
             : (Number.isFinite(finalScore) ? finalScore : prev.meritAfter),
           best: Number.isFinite(finalBest) ? finalBest : prev.best,
+          bestRequirementScore: Number.isFinite(tsBestRequirementScore)
+            ? tsBestRequirementScore
+            : (Number.isFinite(finalTableScore)
+              ? finalTableScore
+              : (Number.isFinite(finalScore) ? finalScore : prev.bestRequirementScore)),
           percent: 100,
         }));
 
@@ -8628,6 +8656,15 @@ const collectLegacyCrossRays = async (
         } catch (_) {}
       }
     };
+
+    const optimizeDisplayScore = Number.isFinite(Number(optimizeState?.requirementScoreTable))
+      ? Number(optimizeState.requirementScoreTable)
+      : (Number.isFinite(Number(optimizeState?.requirementScoreAfter))
+        ? Number(optimizeState.requirementScoreAfter)
+        : (Number.isFinite(Number(optimizeState?.meritAfter)) ? Number(optimizeState.meritAfter) : Number.NaN));
+    const optimizeDisplayBest = Number.isFinite(Number(optimizeState?.bestRequirementScore))
+      ? Number(optimizeState.bestRequirementScore)
+      : (Number.isFinite(Number(optimizeState?.best)) ? Number(optimizeState.best) : Number.NaN);
 
     return (
       <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#f4f4f4', color: '#222', padding: 12, boxSizing: 'border-box', gap: 10 }}>
@@ -8694,8 +8731,8 @@ const collectLegacyCrossRays = async (
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Iter</span><span>{String(optimizeState?.iterations ?? 0)}</span></div>
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Vars</span><span>{String(optimizeState?.variableCount ?? 0)}</span></div>
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Req</span><span>{String(optimizeState?.requirementCount ?? '-')}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Score</span><span>{Number.isFinite(Number(optimizeState?.meritAfter)) ? Number(optimizeState.meritAfter).toFixed(6) : '-'}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Best</span><span>{Number.isFinite(Number(optimizeState?.best)) ? Number(optimizeState.best).toFixed(6) : '-'}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Score</span><span>{Number.isFinite(optimizeDisplayScore) ? optimizeDisplayScore.toFixed(6) : '-'}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Best</span><span>{Number.isFinite(optimizeDisplayBest) ? optimizeDisplayBest.toFixed(6) : '-'}</span></div>
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Issue</span><span>{String(optimizeState?.issue || '-')}</span></div>
         </div>
       </div>

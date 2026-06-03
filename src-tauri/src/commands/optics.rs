@@ -133,7 +133,7 @@ fn emit_native_analysis_progress(
     }
 }
 
-fn compute_finite_opd_grid_rms_waves(grid: &[Vec<Option<f64>>]) -> Option<f64> {
+pub(crate) fn compute_finite_opd_grid_rms_waves(grid: &[Vec<Option<f64>>]) -> Option<f64> {
     let mut count = 0usize;
     let mut sum = 0.0_f64;
     let mut sum_sq = 0.0_f64;
@@ -333,6 +333,24 @@ pub struct NativeSpotSeries {
     pub points: Vec<SpotPoint>,
     pub chief_point_um: Option<SpotPoint>,
     pub has_field_angle: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeChiefRayAngleRequest {
+    pub optical_system_rows: Vec<Value>,
+    #[serde(default)]
+    pub source_rows: Vec<Value>,
+    #[serde(default)]
+    pub object_rows: Vec<Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeChiefRayAngleResponse {
+    pub backend: String,
+    pub chief_ray_angle_deg: f64,
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5196,6 +5214,28 @@ fn select_axis_hits_from_successful_rays_by_stop_plane_native(
         out.push(candidates[idx].2);
     }
     out
+}
+
+#[tauri::command]
+pub fn run_native_chief_ray_angle(req: NativeChiefRayAngleRequest) -> Result<NativeChiefRayAngleResponse, String> {
+    if req.optical_system_rows.is_empty() {
+        return Err("run_native_chief_ray_angle: opticalSystemRows is empty".to_string());
+    }
+    if req.object_rows.is_empty() {
+        return Err("run_native_chief_ray_angle: objectRows is empty".to_string());
+    }
+
+    let angle_deg = compute_native_chief_ray_angle_deg(
+        &req.optical_system_rows,
+        &req.source_rows,
+        &req.object_rows,
+    ).ok_or_else(|| "run_native_chief_ray_angle: chief ray angle calculation failed".to_string())?;
+
+    Ok(NativeChiefRayAngleResponse {
+        backend: "tauri-native".to_string(),
+        chief_ray_angle_deg: angle_deg,
+        message: "Computed via Tauri native chief ray angle API".to_string(),
+    })
 }
 
 #[tauri::command]

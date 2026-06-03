@@ -3,6 +3,7 @@ use serde_json::{Map, Value};
 use wasm_bindgen::prelude::*;
 use js_sys::{Float64Array, Function};
 use std::cell::RefCell;
+use std::f64::consts::PI;
 
 const EPS_R: f64 = 1e-10;
 const OPT_STATUS_OK: u32 = 0;
@@ -137,6 +138,1226 @@ fn value_to_string(v: &Value) -> Option<String> {
         Value::Bool(b) => Some(b.to_string()),
         _ => None,
     }
+}
+
+fn parse_numeric_json(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => {
+            let t = s.trim();
+            if t.eq_ignore_ascii_case("inf") || t.eq_ignore_ascii_case("infinity") {
+                Some(f64::INFINITY)
+            } else {
+                t.parse::<f64>().ok()
+            }
+        }
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WasmParaxialTraceResult {
+    focal_length_mm: f64,
+    back_focal_length_mm: f64,
+    image_distance_mm: f64,
+    final_alpha: f64,
+    object_distance_mm: Option<f64>,
+    total_system_length_mm: f64,
+}
+
+#[derive(Debug, Clone)]
+struct WasmStopRayTraceResult {
+    image_distance_mm: f64,
+    final_alpha: f64,
+    initial_alpha: f64,
+}
+
+#[derive(Debug, Clone)]
+struct WasmPupilEstimate {
+    position_mm: f64,
+    diameter_mm: f64,
+    magnification: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WasmParaxialMetrics {
+    #[serde(rename = "FL")]
+    fl: f64,
+    #[serde(rename = "EFL")]
+    efl: f64,
+    #[serde(rename = "BFL")]
+    bfl: f64,
+    #[serde(rename = "IMD")]
+    imd: f64,
+    #[serde(rename = "OBJD")]
+    objd: f64,
+    #[serde(rename = "TSL")]
+    tsl: f64,
+    #[serde(rename = "BEXP")]
+    bexp: f64,
+    #[serde(rename = "EXPD")]
+    expd: f64,
+    #[serde(rename = "EXPP")]
+    expp: f64,
+    #[serde(rename = "ENPD")]
+    enpd: f64,
+    #[serde(rename = "ENPP")]
+    enpp: f64,
+    #[serde(rename = "ENPM")]
+    enpm: f64,
+    #[serde(rename = "PMAG")]
+    pmag: f64,
+    #[serde(rename = "FNO_OBJ")]
+    fno_obj: f64,
+    #[serde(rename = "FNO_IMG")]
+    fno_img: f64,
+    #[serde(rename = "FNO_WRK")]
+    fno_wrk: f64,
+    #[serde(rename = "NA_OBJ")]
+    na_obj: f64,
+    #[serde(rename = "NA_IMG")]
+    na_img: f64,
+}
+
+fn value_to_lower_json(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.trim().to_lowercase(),
+        Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Value::Number(n) => n.to_string().to_lowercase(),
+        _ => String::new(),
+    }
+}
+
+fn is_image_surface_json(row: &Value) -> bool {
+    let Some(obj) = row.as_object() else {
+        return false;
+    };
+    let object_type = obj
+        .get("object type")
+        .or_else(|| obj.get("object"))
+        .or_else(|| obj.get("Object"))
+        .map(value_to_lower_json)
+        .unwrap_or_default();
+    let comment = obj
+        .get("comment")
+        .or_else(|| obj.get("Comment"))
+        .map(value_to_lower_json)
+        .unwrap_or_default();
+    object_type == "image" || comment == "image"
+}
+
+fn is_coord_trans_surface_json(row: &Value) -> bool {
+    let Some(obj) = row.as_object() else {
+        return false;
+    };
+    let st = obj
+        .get("surfType")
+        .or_else(|| obj.get("surface_type"))
+        .or_else(|| obj.get("type"))
+        .map(value_to_lower_json)
+        .unwrap_or_default();
+    st == "coord trans" || st == "coordinate break" || st == "ct" || st == "coordtrans"
+}
+
+fn detect_stop_surface_index_json(rows: &[Value]) -> Option<usize> {
+    for (i, row) in rows.iter().enumerate() {
+        let obj = match row.as_object() {
+            Some(v) => v,
+            None => continue,
+        };
+        let object_type = obj
+            .get("object type")
+            .or_else(|| obj.get("object"))
+            .or_else(|| obj.get("Object"))
+            .map(value_to_lower_json)
+            .unwrap_or_default();
+        if object_type.contains("stop") || object_type == "sto" {
+            return Some(i);
+        }
+    }
+
+    let mut valid = Vec::<usize>::new();
+    for (i, row) in rows.iter().enumerate().skip(1).take(rows.len().saturating_sub(2)) {
+        if is_image_surface_json(row) || is_coord_trans_surface_json(row) {
+            continue;
+        }
+        valid.push(i);
+    }
+
+    if valid.is_empty() {
+        None
+    } else {
+        Some(valid[valid.len() / 2])
+    }
+}
+
+fn parse_finite_numeric_json(v: Option<&Value>) -> Option<f64> {
+    v.and_then(parse_numeric_json).filter(|n| n.is_finite())
+}
+
+fn get_safe_radius_json(row: &Value) -> f64 {
+    let Some(obj) = row.as_object() else {
+        return f64::INFINITY;
+    };
+    let r = parse_numeric_json(
+        obj.get("radius")
+            .or_else(|| obj.get("Radius"))
+            .or_else(|| obj.get("curvature"))
+            .unwrap_or(&Value::Null),
+    );
+    match r {
+        Some(v) if v.is_finite() && v.abs() >= 1e-10 => v,
+        _ => f64::INFINITY,
+    }
+}
+
+fn get_safe_thickness_json(row: &Value) -> f64 {
+    let Some(obj) = row.as_object() else {
+        return 0.0;
+    };
+
+    if is_coord_trans_surface_json(row) {
+        let gap = parse_numeric_json(obj.get("__cooptGapThickness").unwrap_or(&Value::Null));
+        return match gap {
+            Some(v) if v.is_finite() => v,
+            Some(v) if v.is_infinite() => f64::INFINITY,
+            _ => 0.0,
+        };
+    }
+
+    let t = parse_numeric_json(
+        obj.get("thickness")
+            .or_else(|| obj.get("Thickness"))
+            .unwrap_or(&Value::Null),
+    );
+    match t {
+        Some(v) if v.is_finite() => v,
+        Some(v) if v.is_infinite() => f64::INFINITY,
+        _ => 0.0,
+    }
+}
+
+fn get_refractive_index_json(row: &Value) -> f64 {
+    let Some(obj) = row.as_object() else {
+        return 1.0;
+    };
+
+    if let Some(v) = parse_finite_numeric_json(
+        obj.get("__cooptActualRindex")
+            .or_else(|| obj.get("rindex"))
+            .or_else(|| obj.get("ref index"))
+            .or_else(|| obj.get("refIndex"))
+            .or_else(|| obj.get("Ref Index")),
+    ) {
+        if v > 0.0 {
+            return v;
+        }
+    }
+
+    let material = obj
+        .get("__cooptGapMaterial")
+        .or_else(|| obj.get("__cooptActualMaterial"))
+        .or_else(|| obj.get("material"))
+        .map(value_to_lower_json)
+        .unwrap_or_default();
+
+    if material.is_empty() || material == "air" || material == "empty" || material == "0" {
+        return 1.0;
+    }
+
+    if let Ok(v) = material.parse::<f64>() {
+        if v > 1.0 {
+            return v;
+        }
+    }
+
+    1.0
+}
+
+fn is_stop_surface_json(row: &Value) -> bool {
+    let Some(obj) = row.as_object() else {
+        return false;
+    };
+    let object = obj
+        .get("object")
+        .or_else(|| obj.get("object type"))
+        .or_else(|| obj.get("Object"))
+        .map(value_to_lower_json)
+        .unwrap_or_default();
+    object == "stop" || object == "sto" || object.contains("stop")
+}
+
+fn is_mirror_surface_json(row: &Value) -> bool {
+    let Some(obj) = row.as_object() else {
+        return false;
+    };
+    let material = obj
+        .get("material")
+        .map(value_to_lower_json)
+        .unwrap_or_default();
+    material == "mirror"
+}
+
+fn calculate_marginal_alpha_at_stop_json(rows: &[Value], stop_index: usize) -> f64 {
+    let stop_row = match rows.get(stop_index) {
+        Some(v) => v,
+        None => return 0.0,
+    };
+    let stop_thickness = get_safe_thickness_json(stop_row);
+    let stop_n = get_refractive_index_json(stop_row);
+    let effective_thickness = if stop_thickness.abs() <= 1e-15 { 1e-18 } else { stop_thickness };
+    if !stop_n.is_finite() || stop_n.abs() <= 1e-12 {
+        return 0.0;
+    }
+    1.0 / (-effective_thickness * stop_n)
+}
+
+fn trace_paraxial_ray_from_stop_json(rows: &[Value], stop_index: usize) -> Option<WasmStopRayTraceResult> {
+    if rows.is_empty() || stop_index >= rows.len() {
+        return None;
+    }
+
+    let mut h = 1.0_f64;
+    let mut alpha = calculate_marginal_alpha_at_stop_json(rows, stop_index);
+    let initial_alpha = alpha;
+
+    for i in (stop_index + 1)..rows.len() {
+        let surface = &rows[i];
+        if is_image_surface_json(surface) {
+            break;
+        }
+        if is_coord_trans_surface_json(surface) {
+            continue;
+        }
+
+        let prev_surface = rows.get(i.saturating_sub(1));
+        let current_n = prev_surface.map(get_refractive_index_json).unwrap_or(1.0);
+        let next_n = get_refractive_index_json(surface);
+        let radius = get_safe_radius_json(surface);
+        let thickness = get_safe_thickness_json(surface);
+
+        if radius.is_finite() && radius.abs() > 1e-12 {
+            let phi = (next_n - current_n) / radius;
+            alpha += phi * h;
+        }
+
+        if i < rows.len().saturating_sub(2) {
+            let effective_thickness = if thickness.abs() <= 1e-15 { 1e-18 } else { thickness };
+            if effective_thickness > 0.0 && next_n.abs() > 1e-12 {
+                h -= effective_thickness * alpha / next_n;
+            }
+        }
+    }
+
+    let image_distance_mm = if alpha.abs() > 1e-10 { h / alpha } else { f64::INFINITY };
+
+    Some(WasmStopRayTraceResult {
+        image_distance_mm,
+        final_alpha: alpha,
+        initial_alpha,
+    })
+}
+
+fn build_reversed_system_for_entrance_json(rows: &[Value], stop_index: usize) -> Vec<Value> {
+    let mut reversed = Vec::<Value>::new();
+
+    for i in (0..=stop_index).rev() {
+        let Some(src_obj) = rows.get(i).and_then(Value::as_object) else {
+            continue;
+        };
+        if is_coord_trans_surface_json(rows.get(i).unwrap_or(&Value::Null)) {
+            continue;
+        }
+
+        let mut map = src_obj.clone();
+
+        if let Some(r) = parse_numeric_json(map.get("radius").unwrap_or(&Value::Null)) {
+            if r.is_finite() && r.abs() > 1e-12 {
+                map.insert("radius".to_string(), Value::from(-r));
+            }
+        }
+
+        if i > 0 {
+            if let Some(prev) = rows.get(i - 1).and_then(Value::as_object) {
+                if let Some(v) = prev.get("thickness") {
+                    map.insert("thickness".to_string(), v.clone());
+                }
+                if let Some(v) = prev.get("material") {
+                    map.insert("material".to_string(), v.clone());
+                }
+                let prev_row = Value::Object(prev.clone());
+                map.insert("rindex".to_string(), Value::from(get_refractive_index_json(&prev_row)));
+            }
+        } else {
+            map.insert("thickness".to_string(), Value::from(0.0));
+            map.insert("material".to_string(), Value::from(""));
+            map.insert("rindex".to_string(), Value::from(1.0));
+        }
+
+        reversed.push(Value::Object(map));
+    }
+
+    reversed
+}
+
+fn estimate_entrance_pupil_json(rows: &[Value], stop_index: usize, stop_diameter: f64) -> Option<WasmPupilEstimate> {
+    if stop_diameter <= 0.0 {
+        return None;
+    }
+
+    if stop_index == 1 {
+        return Some(WasmPupilEstimate {
+            position_mm: 0.0,
+            diameter_mm: stop_diameter,
+            magnification: 1.0,
+        });
+    }
+
+    let reversed = build_reversed_system_for_entrance_json(rows, stop_index);
+    if reversed.is_empty() {
+        return None;
+    }
+
+    let trace = trace_paraxial_ray_from_stop_json(&reversed, 0)?;
+    let beta = if trace.final_alpha.abs() > 1e-10 {
+        trace.initial_alpha / trace.final_alpha
+    } else {
+        0.0
+    };
+
+    let position_mm = if trace.final_alpha.abs() > 1e-10 {
+        -(1.0 / trace.final_alpha)
+    } else {
+        0.0
+    };
+
+    Some(WasmPupilEstimate {
+        position_mm,
+        diameter_mm: beta.abs() * stop_diameter,
+        magnification: beta,
+    })
+}
+
+fn calculate_paraxial_trace_core_json(rows: &[Value], initial_alpha: f64) -> Option<(f64, f64)> {
+    if rows.len() < 2 {
+        return None;
+    }
+
+    let mut h = 1.0_f64;
+    let mut alpha = initial_alpha;
+    let mut prev_n = 1.0_f64;
+
+    for j in 1..rows.len().saturating_sub(1) {
+        let row = &rows[j];
+        if is_image_surface_json(row) {
+            break;
+        }
+        if is_coord_trans_surface_json(row) {
+            continue;
+        }
+
+        let radius = get_safe_radius_json(row);
+        let thickness = get_safe_thickness_json(row);
+        let is_stop = is_stop_surface_json(row);
+        let is_mirror = is_mirror_surface_json(row);
+
+        let next_n = if is_mirror {
+            -prev_n
+        } else if is_stop {
+            prev_n
+        } else {
+            get_refractive_index_json(row)
+        };
+
+        let phi = if radius.is_finite() && radius.abs() > 1e-12 {
+            (next_n - prev_n) / radius
+        } else {
+            0.0
+        };
+        alpha += phi * h;
+
+        if j < rows.len().saturating_sub(2) && thickness.is_finite() && thickness > 0.0 && next_n.abs() > 1e-12 {
+            h -= thickness * alpha / next_n;
+        }
+
+        prev_n = next_n;
+    }
+
+    Some((h, alpha))
+}
+
+fn calculate_full_system_paraxial_trace_json(rows: &[Value]) -> Option<WasmParaxialTraceResult> {
+    if rows.is_empty() {
+        return None;
+    }
+
+    let object_thickness = rows
+        .first()
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("thickness"));
+    let object_distance_mm = parse_numeric_json(object_thickness.unwrap_or(&Value::Null))
+        .filter(|v| v.is_finite() && *v != 0.0);
+
+    let initial_alpha = if let Some(d0) = object_distance_mm {
+        -1.0 / d0
+    } else {
+        0.0
+    };
+
+    let (h, alpha) = calculate_paraxial_trace_core_json(rows, initial_alpha)?;
+    let (efl_h, efl_alpha) = if object_distance_mm.is_some() {
+        calculate_paraxial_trace_core_json(rows, 0.0).unwrap_or((h, alpha))
+    } else {
+        (h, alpha)
+    };
+
+    let focal_length_mm = if efl_alpha.abs() > 1e-10 {
+        1.0 / efl_alpha
+    } else {
+        f64::INFINITY
+    };
+
+    let back_focal_length_mm = if efl_alpha.abs() > 1e-10 {
+        efl_h / efl_alpha
+    } else {
+        f64::INFINITY
+    };
+
+    let image_distance_mm = if alpha.abs() > 1e-10 {
+        h / alpha
+    } else {
+        f64::INFINITY
+    };
+
+    let total_system_length_mm = rows
+        .iter()
+        .map(get_safe_thickness_json)
+        .filter(|t| t.is_finite())
+        .sum::<f64>();
+
+    Some(WasmParaxialTraceResult {
+        focal_length_mm,
+        back_focal_length_mm,
+        image_distance_mm,
+        final_alpha: alpha,
+        object_distance_mm,
+        total_system_length_mm,
+    })
+}
+
+fn safe0_json(v: f64) -> f64 {
+    if v.is_finite() { v } else { 0.0 }
+}
+
+fn compute_native_paraxial_metrics_wasm(rows: &[Value], source_rows: &[Value], object_rows: &[Value]) -> WasmParaxialMetrics {
+    let zero = WasmParaxialMetrics {
+        fl: 0.0, efl: 0.0, bfl: 0.0, imd: 0.0, objd: 0.0, tsl: 0.0,
+        bexp: 0.0, expd: 0.0, expp: 0.0, enpd: 0.0, enpp: 0.0, enpm: 0.0,
+        pmag: 0.0, fno_obj: 0.0, fno_img: 0.0, fno_wrk: 0.0, na_obj: 0.0, na_img: 0.0,
+    };
+    if rows.is_empty() {
+        return zero;
+    }
+
+    let trace = calculate_full_system_paraxial_trace_json(rows);
+    let stop_index = detect_stop_surface_index_json(rows).unwrap_or(1);
+    let stop_diameter = rows
+        .get(stop_index)
+        .and_then(Value::as_object)
+        .and_then(|o| parse_numeric_json(o.get("semidia").unwrap_or(&Value::Null)))
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|r| r * 2.0)
+        .unwrap_or(0.0);
+    let stop_trace = trace_paraxial_ray_from_stop_json(rows, stop_index);
+    let entrance = estimate_entrance_pupil_json(rows, stop_index, stop_diameter);
+
+    let (exit_pupil_mag, exit_pupil_diameter) = if let Some(st) = stop_trace.as_ref() {
+        let beta = if st.final_alpha.abs() > 1e-10 {
+            st.initial_alpha / st.final_alpha
+        } else {
+            0.0
+        };
+        let ex_pd = (beta.abs() * stop_diameter).max(0.0);
+        (beta, ex_pd)
+    } else {
+        (1.0_f64, stop_diameter)
+    };
+
+    let Some(t) = trace else {
+        return zero;
+    };
+
+    let fl = safe0_json(t.focal_length_mm);
+    let bfl = safe0_json(t.back_focal_length_mm);
+    let imd = safe0_json(t.image_distance_mm);
+    let tsl = safe0_json(t.total_system_length_mm);
+    let objd = safe0_json(t.object_distance_mm.unwrap_or(0.0));
+    let efl = fl;
+
+    let bexp = safe0_json(exit_pupil_mag);
+    let expd = safe0_json(exit_pupil_diameter);
+
+    let exit_pos_from_image = stop_trace
+        .as_ref()
+        .map(|st| st.image_distance_mm - t.image_distance_mm)
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0);
+    let expp = safe0_json(exit_pos_from_image);
+
+    let entrance_diameter = entrance
+        .as_ref()
+        .map(|v| v.diameter_mm)
+        .filter(|v| v.is_finite() && *v > 1e-12)
+        .unwrap_or(stop_diameter);
+
+    let enpd = safe0_json(entrance.as_ref().map(|v| v.diameter_mm).unwrap_or(stop_diameter));
+    let enpp = safe0_json(entrance.as_ref().map(|v| v.position_mm).unwrap_or(0.0));
+    let enpm = safe0_json(entrance.as_ref().map(|v| v.magnification).unwrap_or(1.0));
+
+    let beta = if let Some(d0) = t.object_distance_mm {
+        if t.final_alpha.abs() > 1e-10 { (-1.0 / d0) / t.final_alpha } else { 0.0 }
+    } else {
+        0.0
+    };
+    let pmag = safe0_json(beta);
+
+    let fno_wrk = if expd > 0.0 && t.image_distance_mm.is_finite() {
+        safe0_json(t.image_distance_mm.abs() / expd)
+    } else {
+        0.0
+    };
+
+    let fno_obj = if beta.abs() > 1e-10 && fno_wrk.is_finite() {
+        safe0_json((fno_wrk / beta).abs())
+    } else {
+        0.0
+    };
+
+    let fno_img = if fl > 0.0 && entrance_diameter > 0.0 {
+        safe0_json(fl / entrance_diameter)
+    } else {
+        0.0
+    };
+
+    let na_img = if fno_wrk.is_finite() && fno_wrk.abs() > 1e-12 {
+        safe0_json(1.0 / (2.0 * fno_wrk))
+    } else {
+        0.0
+    };
+
+    let na_obj = if na_img.is_finite() && beta.is_finite() {
+        safe0_json((na_img * beta).abs())
+    } else {
+        0.0
+    };
+
+    let _ = source_rows;
+    let _ = object_rows;
+
+    WasmParaxialMetrics {
+        fl, efl, bfl, imd, objd, tsl,
+        bexp, expd, expp, enpd, enpp, enpm, pmag,
+        fno_obj, fno_img, fno_wrk, na_obj, na_img,
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WasmSeidelSurfaceCoeff {
+    #[serde(rename = "surfaceIndex")]
+    surface_index: usize,
+    #[serde(rename = "objectLabel")]
+    object_label: String,
+    #[serde(rename = "I")]
+    i: f64,
+    #[serde(rename = "II")]
+    ii: f64,
+    #[serde(rename = "III")]
+    iii: f64,
+    #[serde(rename = "P")]
+    p: f64,
+    #[serde(rename = "IV")]
+    iv: f64,
+    #[serde(rename = "V")]
+    v: f64,
+    #[serde(rename = "LCA")]
+    lca: f64,
+    #[serde(rename = "TCA")]
+    tca: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WasmSeidelTotals {
+    #[serde(rename = "I")]
+    i: f64,
+    #[serde(rename = "II")]
+    ii: f64,
+    #[serde(rename = "III")]
+    iii: f64,
+    #[serde(rename = "P")]
+    p: f64,
+    #[serde(rename = "IV")]
+    iv: f64,
+    #[serde(rename = "V")]
+    v: f64,
+    #[serde(rename = "LCA")]
+    lca: f64,
+    #[serde(rename = "TCA")]
+    tca: f64,
+}
+
+#[derive(Debug, Clone)]
+struct WasmRaySurfaceState {
+    surface_index: usize,
+    height: f64,
+    alpha_before: f64,
+    alpha_after: f64,
+    n_before: f64,
+    n_after: f64,
+}
+
+fn initial_alpha_for_marginal_json(rows: &[Value]) -> f64 {
+    rows.first()
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("thickness"))
+        .and_then(parse_numeric_json)
+        .filter(|v| v.is_finite() && *v != 0.0)
+        .map(|d0| -1.0 / d0)
+        .unwrap_or(0.0)
+}
+
+fn initial_alpha_for_chief_json(rows: &[Value], stop_index: usize) -> f64 {
+    let stop_radius = rows
+        .get(stop_index)
+        .and_then(Value::as_object)
+        .and_then(|o| parse_numeric_json(o.get("semidia").unwrap_or(&Value::Null)))
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.0);
+
+    let object_distance = rows
+        .first()
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("thickness"))
+        .and_then(parse_numeric_json)
+        .filter(|v| v.is_finite() && *v != 0.0)
+        .map(f64::abs)
+        .unwrap_or(1000.0);
+
+    (stop_radius / object_distance).clamp(0.0001, 0.2)
+}
+
+fn trace_ray_surface_states_with_wavelength_json(rows: &[Value], mut alpha: f64, wavelength_um: f64) -> Vec<WasmRaySurfaceState> {
+    let mut states = Vec::new();
+    if rows.is_empty() {
+        return states;
+    }
+
+    let mut prev_n = 1.0_f64;
+    let mut h = 1.0_f64;
+
+    for j in 1..rows.len() {
+        let row = &rows[j];
+        if is_coord_trans_surface_json(row) {
+            continue;
+        }
+
+        let radius = get_safe_radius_json(row);
+        let thickness = get_safe_thickness_json(row);
+        let is_stop = is_stop_surface_json(row);
+        let is_mirror = is_mirror_surface_json(row);
+
+        let next_n = if is_mirror {
+            -prev_n
+        } else if is_stop {
+            prev_n
+        } else {
+            get_refractive_index_for_wavelength_json(row, wavelength_um)
+        };
+
+        let phi = if radius.is_finite() && radius.abs() > 1e-12 {
+            (next_n - prev_n) / radius
+        } else {
+            0.0
+        };
+
+        let alpha_before = alpha;
+        alpha += phi * h;
+        let alpha_after = alpha;
+
+        states.push(WasmRaySurfaceState {
+            surface_index: j,
+            height: h,
+            alpha_before,
+            alpha_after,
+            n_before: prev_n,
+            n_after: next_n,
+        });
+
+        if j < rows.len().saturating_sub(1) && thickness.is_finite() && thickness > 0.0 && next_n.abs() > 1e-12 {
+            h -= thickness * alpha / next_n;
+        }
+
+        prev_n = next_n;
+    }
+
+    states
+}
+
+fn estimate_refractive_index_from_nd_vd_json(nd: f64, vd: f64, wavelength_um: f64) -> f64 {
+    if !(nd.is_finite() && vd.is_finite()) || vd.abs() <= 1e-12 || nd <= 0.0 {
+        return nd.max(1.0);
+    }
+
+    let lambda_d = 0.587_561_8_f64;
+    let lambda_f = 0.486_132_7_f64;
+    let lambda_c = 0.656_272_5_f64;
+
+    let dispersion = (nd - 1.0) / vd;
+    let n_f = nd + dispersion / 2.0;
+    let n_c = nd - dispersion / 2.0;
+
+    if wavelength_um >= lambda_f && wavelength_um <= lambda_c {
+        if wavelength_um <= lambda_d {
+            let t = (wavelength_um - lambda_f) / (lambda_d - lambda_f);
+            return n_f + t * (nd - n_f);
+        }
+        let t = (wavelength_um - lambda_d) / (lambda_c - lambda_d);
+        return nd + t * (n_c - nd);
+    }
+
+    let lambda_d_sq = lambda_d * lambda_d;
+    let lambda_f_sq = lambda_f * lambda_f;
+    let b = (n_f - nd) / (1.0 / lambda_f_sq - 1.0 / lambda_d_sq);
+    let a = nd - b / lambda_d_sq;
+    let n_est = a + b / (wavelength_um * wavelength_um);
+    if n_est < 1.0 || n_est > 3.0 || !n_est.is_finite() {
+        nd
+    } else {
+        n_est
+    }
+}
+
+fn calculate_refractive_index_sellmeier_json(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+    if wavelength_um <= 0.0 {
+        return None;
+    }
+    let a1 = parse_finite_numeric_json(coeffs.get("A1"))?;
+    let a2 = parse_finite_numeric_json(coeffs.get("A2"))?;
+    let a3 = parse_finite_numeric_json(coeffs.get("A3"))?;
+    let b1 = parse_finite_numeric_json(coeffs.get("B1"))?;
+    let b2 = parse_finite_numeric_json(coeffs.get("B2"))?;
+    let b3 = parse_finite_numeric_json(coeffs.get("B3"))?;
+
+    let lambda2 = wavelength_um * wavelength_um;
+    let n2 = 1.0
+        + (a1 * lambda2) / (lambda2 - b1)
+        + (a2 * lambda2) / (lambda2 - b2)
+        + (a3 * lambda2) / (lambda2 - b3);
+    let n = n2.sqrt();
+    if n.is_finite() && (1.0..=3.0).contains(&n) {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+fn calculate_refractive_index_schott_json(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+    if wavelength_um <= 0.0 {
+        return None;
+    }
+    let a0 = parse_finite_numeric_json(coeffs.get("A0"))?;
+    let a1 = parse_finite_numeric_json(coeffs.get("A1"))?;
+    let a2 = parse_finite_numeric_json(coeffs.get("A2"))?;
+    let a3 = parse_finite_numeric_json(coeffs.get("A3"))?;
+    let a4 = parse_finite_numeric_json(coeffs.get("A4"))?;
+    let a5 = parse_finite_numeric_json(coeffs.get("A5"))?;
+
+    let lambda2 = wavelength_um * wavelength_um;
+    if lambda2.abs() <= 1e-18 {
+        return None;
+    }
+    let lambda_minus2 = 1.0 / lambda2;
+    let lambda_minus4 = lambda_minus2 * lambda_minus2;
+    let lambda_minus6 = lambda_minus4 * lambda_minus2;
+    let lambda_minus8 = lambda_minus4 * lambda_minus4;
+
+    let n2 = a0
+        + a1 * lambda2
+        + a2 * lambda_minus2
+        + a3 * lambda_minus4
+        + a4 * lambda_minus6
+        + a5 * lambda_minus8;
+    let n = n2.sqrt();
+    if n.is_finite() && (1.0..=3.0).contains(&n) {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+fn get_refractive_index_for_wavelength_json(row: &Value, wavelength_um: f64) -> f64 {
+    let Some(obj) = row.as_object() else {
+        return 1.0;
+    };
+
+    if let Some(sell) = obj
+        .get("sellmeier")
+        .or_else(|| obj.get("__cooptSellmeier"))
+        .and_then(Value::as_object)
+    {
+        if let Some(n) = calculate_refractive_index_sellmeier_json(sell, wavelength_um) {
+            return n;
+        }
+    }
+    if let Some(schott) = obj
+        .get("schott")
+        .or_else(|| obj.get("__cooptSchott"))
+        .and_then(Value::as_object)
+    {
+        if let Some(n) = calculate_refractive_index_schott_json(schott, wavelength_um) {
+            return n;
+        }
+    }
+
+    let effective_material = obj
+        .get("__cooptGapMaterial")
+        .or_else(|| obj.get("__cooptActualMaterial"))
+        .or_else(|| obj.get("material"));
+
+    if let Some(v) = effective_material.and_then(Value::as_str) {
+        let m = v.trim().to_lowercase();
+        if !m.is_empty() && m != "air" && m != "empty" {
+            if let Ok(num) = m.parse::<f64>() {
+                if num > 1.0 {
+                    return num;
+                }
+            }
+        }
+    }
+
+    let nd = parse_finite_numeric_json(
+        obj.get("__cooptActualRindex")
+            .or_else(|| obj.get("rindex"))
+            .or_else(|| obj.get("ref index"))
+            .or_else(|| obj.get("refIndex"))
+            .or_else(|| obj.get("Ref Index")),
+    );
+
+    let vd = parse_finite_numeric_json(
+        obj.get("__cooptActualAbbe")
+            .or_else(|| obj.get("abbe"))
+            .or_else(|| obj.get("Abbe"))
+            .or_else(|| obj.get("vd"))
+            .or_else(|| obj.get("Vd")),
+    );
+
+    if let Some(nd_val) = nd {
+        if let Some(vd_val) = vd {
+            if vd_val > 0.0 {
+                return estimate_refractive_index_from_nd_vd_json(nd_val, vd_val, wavelength_um);
+            }
+        }
+        if nd_val > 0.0 {
+            return nd_val;
+        }
+    }
+
+    get_refractive_index_json(row)
+}
+
+fn detect_wavelength_range_json(source_rows: &[Value]) -> Option<(f64, f64)> {
+    if source_rows.is_empty() {
+        return None;
+    }
+
+    let mut min_w = f64::INFINITY;
+    let mut max_w = -f64::INFINITY;
+
+    for row in source_rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let w = parse_numeric_json(
+            obj.get("wavelength")
+                .or_else(|| obj.get("Wavelength"))
+                .unwrap_or(&Value::Null),
+        );
+        if let Some(v) = w.filter(|x| x.is_finite()) {
+            if v < min_w {
+                min_w = v;
+            }
+            if v > max_w {
+                max_w = v;
+            }
+        }
+    }
+
+    if min_w.is_finite() && max_w.is_finite() {
+        Some((min_w, max_w))
+    } else {
+        None
+    }
+}
+
+fn get_nd_abbe_from_row_json(row: Option<&Map<String, Value>>) -> (Option<f64>, Option<f64>) {
+    let Some(obj) = row else {
+        return (None, None);
+    };
+
+    let mut nd = parse_finite_numeric_json(
+        obj.get("__cooptActualRindex")
+            .or_else(|| obj.get("Ref Index"))
+            .or_else(|| obj.get("refIndex"))
+            .or_else(|| obj.get("ref index"))
+            .or_else(|| obj.get("rindex"))
+            .or_else(|| obj.get("n"))
+            .or_else(|| obj.get("nd")),
+    );
+
+    if nd.is_none() {
+        nd = obj
+            .get("Material")
+            .or_else(|| obj.get("material"))
+            .and_then(|v| parse_finite_numeric_json(Some(v)));
+    }
+
+    let abbe = parse_finite_numeric_json(
+        obj.get("__cooptActualAbbe")
+            .or_else(|| obj.get("Abbe"))
+            .or_else(|| obj.get("abbe"))
+            .or_else(|| obj.get("Vd"))
+            .or_else(|| obj.get("vd"))
+            .or_else(|| obj.get("abbeNumber"))
+            .or_else(|| obj.get("abbe_number")),
+    );
+
+    (nd, abbe)
+}
+
+fn get_dispersion_fallback_json(row: Option<&Map<String, Value>>) -> Option<f64> {
+    let (nd, abbe) = get_nd_abbe_from_row_json(row);
+    match (nd, abbe) {
+        (Some(n), Some(v)) if v.abs() > 1e-12 => Some((n - 1.0) / v),
+        _ => None,
+    }
+}
+
+fn compute_chromatic_lca_tca_for_surface_json(
+    rows: &[Value],
+    surface_index: usize,
+    h_marginal: f64,
+    hq_marginal: f64,
+    j_factor: f64,
+    ref_state: &WasmRaySurfaceState,
+    short_state: Option<&WasmRaySurfaceState>,
+    long_state: Option<&WasmRaySurfaceState>,
+) -> (f64, f64) {
+    let row = rows.get(surface_index).and_then(Value::as_object);
+    let prev_row = surface_index
+        .checked_sub(1)
+        .and_then(|idx| rows.get(idx))
+        .and_then(Value::as_object);
+
+    let mut n_d = ref_state.n_after;
+    let mut n_d_prev = ref_state.n_before;
+
+    let mut delta_n_prime = match (short_state, long_state) {
+        (Some(s), Some(l)) => s.n_after - l.n_after,
+        _ => 0.0,
+    };
+    let mut delta_n = match (short_state, long_state) {
+        (Some(s), Some(l)) => s.n_before - l.n_before,
+        _ => 0.0,
+    };
+
+    let (nd_prime, _) = get_nd_abbe_from_row_json(row);
+    let (nd_prev_val, _) = get_nd_abbe_from_row_json(prev_row);
+
+    if (delta_n_prime.abs() < 1e-12 || !delta_n_prime.is_finite()) && nd_prime.is_some() {
+        delta_n_prime = get_dispersion_fallback_json(row).unwrap_or(0.0);
+        if (n_d - 1.0).abs() < 1e-6 {
+            n_d = nd_prime.unwrap_or(n_d);
+        }
+    }
+    if (delta_n.abs() < 1e-12 || !delta_n.is_finite()) && nd_prev_val.is_some() {
+        delta_n = get_dispersion_fallback_json(prev_row).unwrap_or(0.0);
+        if (n_d_prev - 1.0).abs() < 1e-6 {
+            n_d_prev = nd_prev_val.unwrap_or(n_d_prev);
+        }
+    }
+
+    let mut delta_dn_over_n = 0.0;
+    if n_d.abs() > 1e-12 {
+        delta_dn_over_n += delta_n_prime / n_d;
+    }
+    if n_d_prev.abs() > 1e-12 {
+        delta_dn_over_n -= delta_n / n_d_prev;
+    }
+
+    let lca = h_marginal * hq_marginal * delta_dn_over_n;
+    let tca = j_factor * lca;
+    (lca, tca)
+}
+
+fn compute_seidel_surface_coefficients_json(
+    rows: &[Value],
+    stop_index: usize,
+    afocal: bool,
+    reference_wavelength_um: f64,
+    wavelength_range: Option<(f64, f64)>,
+) -> (Vec<WasmSeidelSurfaceCoeff>, WasmSeidelTotals) {
+    let marginal = trace_ray_surface_states_with_wavelength_json(rows, initial_alpha_for_marginal_json(rows), reference_wavelength_um);
+    let chief = trace_ray_surface_states_with_wavelength_json(rows, initial_alpha_for_chief_json(rows, stop_index), reference_wavelength_um);
+    let (short_wl, long_wl) = wavelength_range.unwrap_or((0.486_132_7, 0.656_272_5));
+    let marginal_short = trace_ray_surface_states_with_wavelength_json(rows, initial_alpha_for_marginal_json(rows), short_wl);
+    let marginal_long = trace_ray_surface_states_with_wavelength_json(rows, initial_alpha_for_marginal_json(rows), long_wl);
+
+    let mut totals = WasmSeidelTotals {
+        i: 0.0,
+        ii: 0.0,
+        iii: 0.0,
+        p: 0.0,
+        iv: 0.0,
+        v: 0.0,
+        lca: 0.0,
+        tca: 0.0,
+    };
+    let mut out = Vec::<WasmSeidelSurfaceCoeff>::new();
+    let scale = if afocal { 1.0 } else { 1.0 };
+
+    for m in &marginal {
+        let row = rows.get(m.surface_index).and_then(Value::as_object);
+        let is_image = rows
+            .get(m.surface_index)
+            .map(is_image_surface_json)
+            .unwrap_or(false);
+        if is_image {
+            break;
+        }
+
+        let is_gap = row
+            .and_then(|o| o.get("_blockType").or_else(|| o.get("blockType")))
+            .map(value_to_lower_json)
+            .map(|s| s == "gap")
+            .unwrap_or(false);
+        let is_mirror = rows.get(m.surface_index).map(is_mirror_surface_json).unwrap_or(false);
+        if is_gap && !is_mirror {
+            continue;
+        }
+
+        let Some(c) = chief.iter().find(|x| x.surface_index == m.surface_index) else {
+            continue;
+        };
+
+        let radius = rows
+            .get(m.surface_index)
+            .map(get_safe_radius_json)
+            .unwrap_or(f64::INFINITY);
+
+        let h = m.height;
+        let h_chief = c.height;
+        let n_before = m.n_before;
+        let n_after = m.n_after;
+
+        let hq = if radius.is_finite() && radius.abs() > 1e-12 {
+            h * n_before / radius - m.alpha_before
+        } else {
+            -m.alpha_before
+        };
+        let hq_chief = if radius.is_finite() && radius.abs() > 1e-12 {
+            h_chief * n_before / radius - c.alpha_before
+        } else {
+            -c.alpha_before
+        };
+        let j = if hq.abs() > 1e-12 { hq_chief / hq } else { 0.0 };
+
+        let h_delta_1_ns = if n_before.abs() > 1e-12 && n_after.abs() > 1e-12 {
+            m.alpha_after / (n_after * n_after) - m.alpha_before / (n_before * n_before)
+        } else {
+            0.0
+        };
+        let h_delta_1_ns_chief = if n_before.abs() > 1e-12 && n_after.abs() > 1e-12 {
+            c.alpha_after / (n_after * n_after) - c.alpha_before / (n_before * n_before)
+        } else {
+            0.0
+        };
+
+        let phi = if radius.is_finite() && radius.abs() > 1e-12 {
+            (n_after - n_before) / radius
+        } else {
+            0.0
+        };
+        let p = if n_before.abs() > 1e-12 && n_after.abs() > 1e-12 {
+            phi / (n_before * n_after)
+        } else {
+            0.0
+        };
+
+        let i = scale * h * hq * hq * h_delta_1_ns;
+        let ii = scale * i * j;
+        let iii = scale * h * hq_chief * hq_chief * h_delta_1_ns;
+        let iv = scale * (iii + p);
+        let v = if hq.abs() < 1e-12 {
+            scale * h_delta_1_ns_chief
+        } else {
+            scale * j * iv
+        };
+
+        let short_state = marginal_short.iter().find(|x| x.surface_index == m.surface_index);
+        let long_state = marginal_long.iter().find(|x| x.surface_index == m.surface_index);
+        let (lca, tca) = compute_chromatic_lca_tca_for_surface_json(
+            rows,
+            m.surface_index,
+            h,
+            hq,
+            j,
+            m,
+            short_state,
+            long_state,
+        );
+
+        let object_label = if m.surface_index == 1 {
+            "OBJ".to_string()
+        } else if m.surface_index == stop_index {
+            "STOP".to_string()
+        } else if is_mirror {
+            "MIRROR".to_string()
+        } else {
+            row
+                .and_then(|o| {
+                    o.get("object type")
+                        .or_else(|| o.get("object"))
+                        .or_else(|| o.get("surf type"))
+                })
+                .and_then(Value::as_str)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default()
+        };
+
+        totals.i += i;
+        totals.ii += ii;
+        totals.iii += iii;
+        totals.p += p;
+        totals.iv += iv;
+        totals.v += v;
+        totals.lca += lca;
+        totals.tca += tca;
+
+        out.push(WasmSeidelSurfaceCoeff {
+            surface_index: m.surface_index,
+            object_label,
+            i,
+            ii,
+            iii,
+            p,
+            iv,
+            v,
+            lca,
+            tca,
+        });
+    }
+
+    (out, totals)
 }
 
 fn solve_augmented_3x3(mut a: [[f64; 4]; 3]) -> Option<(f64, f64, f64)> {
@@ -2256,6 +3477,261 @@ fn trace_single_ray_hit_point_with_meta_core(
     out
 }
 
+fn trace_single_ray_hit_state_with_meta_core(
+    ray: &[f64],
+    target_surface_index: usize,
+    n_start: f64,
+    row_meta: &[i32],
+    row_params: &[f64],
+    row_origins: &[f64],
+    row_inv_rots: &[f64],
+    row_rots: &[f64],
+    row_count: usize,
+) -> [f64; 8] {
+    let mut out = [0.0_f64; 8];
+    if ray.len() < 6 || row_count == 0 || target_surface_index >= row_count {
+        out[0] = 2.0;
+        return out;
+    }
+    if row_meta.len() < row_count * 4
+        || row_params.len() < row_count * 24
+        || row_origins.len() < row_count * 3
+        || row_inv_rots.len() < row_count * 9
+        || row_rots.len() < row_count * 9
+    {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let mut px = ray[0];
+    let mut py = ray[1];
+    let mut pz = ray[2];
+    let mut dx = ray[3];
+    let mut dy = ray[4];
+    let mut dz = ray[5];
+    if !px.is_finite() || !py.is_finite() || !pz.is_finite() || !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let dn = normalize3(dx, dy, dz);
+    dx = dn[0];
+    dy = dn[1];
+    dz = dn[2];
+
+    let mut n_cur = if n_start.is_finite() && n_start > 0.0 { n_start } else { 1.0 };
+    let mut opl = 0.0_f64;
+
+    for i in 0..=target_surface_index {
+        let m = i * 4;
+        let kind = row_meta[m + 0];
+        let flags = row_meta[m + 1];
+        let is_mirror = (flags & 1) != 0;
+        let is_plane = (flags & 2) != 0;
+        let is_toric = (flags & 4) != 0;
+        let is_rect_ap = (flags & 16) != 0;
+        let is_odd_asphere = (flags & 32) != 0;
+
+        let p = i * 24;
+        let radius = row_params[p + 0];
+        let conic = row_params[p + 1];
+        let coefs = [
+            row_params[p + 2], row_params[p + 3], row_params[p + 4], row_params[p + 5], row_params[p + 6],
+            row_params[p + 7], row_params[p + 8], row_params[p + 9], row_params[p + 10], row_params[p + 11],
+        ];
+        let semidia = row_params[p + 12];
+        let radius_x = row_params[p + 13];
+        let radius_y = row_params[p + 14];
+        let toric_axis = row_params[p + 15];
+        let aperture_limit = row_params[p + 17];
+        let rect_half_w = row_params[p + 18];
+        let rect_half_h = row_params[p + 19];
+        let n2 = row_params[p + 20];
+
+        if kind == 1 || kind == 2 || kind == 3 {
+            if i == target_surface_index {
+                out[0] = 1.0;
+                out[1] = opl;
+                out[2] = px;
+                out[3] = py;
+                out[4] = pz;
+                out[5] = dx;
+                out[6] = dy;
+                out[7] = dz;
+                return out;
+            }
+            if (kind == 2 || kind == 3) && n2.is_finite() && n2 > 0.0 {
+                n_cur = n2;
+            }
+            continue;
+        }
+
+        let o = i * 3;
+        let ox = row_origins[o + 0];
+        let oy = row_origins[o + 1];
+        let oz = row_origins[o + 2];
+
+        let ir = i * 9;
+        let im00 = row_inv_rots[ir + 0];
+        let im01 = row_inv_rots[ir + 1];
+        let im02 = row_inv_rots[ir + 2];
+        let im10 = row_inv_rots[ir + 3];
+        let im11 = row_inv_rots[ir + 4];
+        let im12 = row_inv_rots[ir + 5];
+        let im20 = row_inv_rots[ir + 6];
+        let im21 = row_inv_rots[ir + 7];
+        let im22 = row_inv_rots[ir + 8];
+
+        let relx = px - ox;
+        let rely = py - oy;
+        let relz = pz - oz;
+
+        let lpx = im00 * relx + im01 * rely + im02 * relz;
+        let lpy = im10 * relx + im11 * rely + im12 * relz;
+        let lpz = im20 * relx + im21 * rely + im22 * relz;
+
+        let ldx = im00 * dx + im01 * dy + im02 * dz;
+        let ldy = im10 * dx + im11 * dy + im12 * dz;
+        let ldz = im20 * dx + im21 * dy + im22 * dz;
+
+        let t = if is_toric {
+            intersect_toric_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], radius_x, radius_y, conic, toric_axis, 20, 1e-7)
+        } else if is_plane {
+            if ldz.abs() < EPS_R { f64::NAN } else { -lpz / ldz }
+        } else {
+            let mut ip = vec![0.0_f64; 13];
+            ip[0] = semidia;
+            ip[1] = radius;
+            ip[2] = conic;
+            for k in 0..10 {
+                ip[3 + k] = coefs[k];
+            }
+            intersect_aspheric_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], &ip, is_odd_asphere, 20, 1e-7)
+        };
+
+        if !t.is_finite() {
+            out[0] = 3.0;
+            out[1] = opl;
+            return out;
+        }
+
+        let hx = lpx + ldx * t;
+        let hy = lpy + ldy * t;
+        let hz = lpz + ldz * t;
+        opl += t.abs() * 1000.0 * n_cur;
+
+        if is_rect_ap && rect_half_w.is_finite() && rect_half_h.is_finite() {
+            if hx.abs() > rect_half_w || hy.abs() > rect_half_h {
+                out[0] = 4.0;
+                out[1] = opl;
+                return out;
+            }
+        } else if aperture_limit.is_finite() {
+            let hr = (hx * hx + hy * hy).sqrt();
+            if hr > aperture_limit {
+                out[0] = 4.0;
+                out[1] = opl;
+                return out;
+            }
+        }
+
+        let rr = i * 9;
+        let rm00 = row_rots[rr + 0];
+        let rm01 = row_rots[rr + 1];
+        let rm02 = row_rots[rr + 2];
+        let rm10 = row_rots[rr + 3];
+        let rm11 = row_rots[rr + 4];
+        let rm12 = row_rots[rr + 5];
+        let rm20 = row_rots[rr + 6];
+        let rm21 = row_rots[rr + 7];
+        let rm22 = row_rots[rr + 8];
+
+        let ghx = rm00 * hx + rm01 * hy + rm02 * hz + ox;
+        let ghy = rm10 * hx + rm11 * hy + rm12 * hz + oy;
+        let ghz = rm20 * hx + rm21 * hy + rm22 * hz + oz;
+
+        let (mut nx, mut ny, mut nz) = if is_plane {
+            if ldz > 0.0 { (0.0, 0.0, -1.0) } else { (0.0, 0.0, 1.0) }
+        } else if is_toric {
+            let (dz_dx, dz_dy) = toric_sag_derivatives(hx, hy, radius_x, radius_y, conic, toric_axis);
+            let nvec = normalize3(-dz_dx, -dz_dy, 1.0);
+            (nvec[0], nvec[1], nvec[2])
+        } else {
+            let mut np = vec![0.0_f64; 13];
+            np[0] = semidia;
+            np[1] = radius;
+            np[2] = conic;
+            for k in 0..10 {
+                np[3 + k] = coefs[k];
+            }
+            let nvec = surface_normal_aspheric_rt10(&[hx, hy, hz], &np, 0);
+            if nvec.len() >= 3 { (nvec[0], nvec[1], nvec[2]) } else { (0.0, 0.0, 1.0) }
+        };
+
+        let d_dot_n = ldx * nx + ldy * ny + ldz * nz;
+        if d_dot_n > 0.0 {
+            nx = -nx;
+            ny = -ny;
+            nz = -nz;
+        }
+
+        let (ndx, ndy, ndz, n_next) = if is_mirror {
+            let dotn = ldx * nx + ldy * ny + ldz * nz;
+            let rx = ldx - 2.0 * dotn * nx;
+            let ry = ldy - 2.0 * dotn * ny;
+            let rz = ldz - 2.0 * dotn * nz;
+            let nn = normalize3(rx, ry, rz);
+            (nn[0], nn[1], nn[2], n_cur)
+        } else if n2.is_finite() && n2 > 0.0 && (n_cur - n2).abs() > EPS_R {
+            let cos_i = -(nx * ldx + ny * ldy + nz * ldz);
+            let eta = n_cur / n2;
+            let k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+            if k < 0.0 {
+                out[0] = 5.0;
+                out[1] = opl;
+                return out;
+            }
+            let sqrt_k = k.sqrt();
+            let rx = eta * ldx + (eta * cos_i - sqrt_k) * nx;
+            let ry = eta * ldy + (eta * cos_i - sqrt_k) * ny;
+            let rz = eta * ldz + (eta * cos_i - sqrt_k) * nz;
+            let nn = normalize3(rx, ry, rz);
+            (nn[0], nn[1], nn[2], n2)
+        } else {
+            (ldx, ldy, ldz, n_cur)
+        };
+
+        let gdx = rm00 * ndx + rm01 * ndy + rm02 * ndz;
+        let gdy = rm10 * ndx + rm11 * ndy + rm12 * ndz;
+        let gdz = rm20 * ndx + rm21 * ndy + rm22 * ndz;
+        let gnorm = normalize3(gdx, gdy, gdz);
+
+        if i == target_surface_index {
+            out[0] = 1.0;
+            out[1] = opl;
+            out[2] = ghx;
+            out[3] = ghy;
+            out[4] = ghz;
+            out[5] = gnorm[0];
+            out[6] = gnorm[1];
+            out[7] = gnorm[2];
+            return out;
+        }
+
+        px = ghx;
+        py = ghy;
+        pz = ghz;
+        dx = gnorm[0];
+        dy = gnorm[1];
+        dz = gnorm[2];
+        n_cur = n_next;
+    }
+
+    out[0] = 6.0;
+    out[1] = opl;
+    out
+}
+
 #[wasm_bindgen]
 pub fn trace_ray_batch_hit_point_with_meta(
     rays: &[f64],
@@ -2418,6 +3894,165 @@ fn find_eval_surface_index(rows: &[Value]) -> usize {
         }
     }
     rows.len().saturating_sub(1)
+}
+
+fn compute_native_chief_ray_angle_deg_wasm(
+    optical_system_rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+) -> Option<f64> {
+    if optical_system_rows.is_empty() || object_rows.is_empty() {
+        return None;
+    }
+
+    let rows: Vec<Value> = optical_system_rows
+        .iter()
+        .map(normalize_coord_trans_row)
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+
+    let source_rows_effective: Vec<Value> = if source_rows.is_empty() {
+        vec![serde_json::json!({
+            "id": "NativeCraSource",
+            "name": "NativeCraSource",
+            "wavelength": 0.5875618,
+            "color": "#2563eb",
+            "isPrimary": true,
+            "primary": "Primary",
+            "intensity": 1,
+        })]
+    } else {
+        source_rows.to_vec()
+    };
+
+    let target_surface_index = find_eval_surface_index(&rows).min(rows.len().saturating_sub(1));
+    let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
+    let wavelength = get_primary_wavelength_um_native(&source_rows_effective, 0.5876);
+    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+
+    let stop_base = stop_surface_index.saturating_mul(3);
+    if stop_base + 2 >= packed_stop.row_origins.len() {
+        return None;
+    }
+    let stop_center = [
+        packed_stop.row_origins[stop_base],
+        packed_stop.row_origins[stop_base + 1],
+        packed_stop.row_origins[stop_base + 2],
+    ];
+
+    let object_map = object_rows.first()?.as_object()?;
+    let object_position = object_map
+        .get("__cooptOriginalPosition")
+        .or_else(|| object_map.get("position"))
+        .or_else(|| object_map.get("object"))
+        .or_else(|| object_map.get("objectType"))
+        .or_else(|| object_map.get("type"))
+        .and_then(value_to_string)
+        .unwrap_or_else(|| if is_infinite_conjugate_native(&rows) { "Angle".to_string() } else { "Rectangle".to_string() })
+        .trim()
+        .to_ascii_lowercase();
+
+    let pick_first_finite = |values: &[Option<f64>], fallback: f64| -> f64 {
+        for value in values {
+            if let Some(v) = value {
+                if v.is_finite() {
+                    return *v;
+                }
+            }
+        }
+        fallback
+    };
+
+    let ray_state = if is_infinite_conjugate_native(&rows) || object_position.contains("angle") || object_position == "point" {
+        let angle_x = pick_first_finite(&[
+            object_map.get("xHeightAngle").and_then(value_to_f64),
+            object_map.get("xFieldAngle").and_then(value_to_f64),
+            object_map.get("x").and_then(value_to_f64),
+            object_map.get("xHeight").and_then(value_to_f64),
+        ], 0.0);
+        let angle_y = pick_first_finite(&[
+            object_map.get("yHeightAngle").and_then(value_to_f64),
+            object_map.get("yFieldAngle").and_then(value_to_f64),
+            object_map.get("fieldAngle").and_then(value_to_f64),
+            object_map.get("y").and_then(value_to_f64),
+            object_map.get("yHeight").and_then(value_to_f64),
+        ], 0.0);
+        let (origin, direction, _) = trace_image_height_infinite_chief_ray_exact_native(
+            &rows,
+            &packed_stop,
+            &packed_target,
+            n_start,
+            wavelength,
+            stop_surface_index,
+            target_surface_index,
+            stop_center,
+            angle_x,
+            angle_y,
+        )?;
+        trace_single_ray_hit_state_with_meta_core(
+            &[origin[0], origin[1], origin[2], direction[0], direction[1], direction[2]],
+            target_surface_index,
+            n_start,
+            &packed_target.row_meta,
+            &packed_target.row_params,
+            &packed_target.row_origins,
+            &packed_target.row_inv_rots,
+            &packed_target.row_rots,
+            packed_target.row_count,
+        )
+    } else {
+        let object_x = pick_first_finite(&[
+            object_map.get("xHeight").and_then(value_to_f64),
+            object_map.get("x").and_then(value_to_f64),
+        ], 0.0);
+        let object_y = pick_first_finite(&[
+            object_map.get("yHeight").and_then(value_to_f64),
+            object_map.get("y").and_then(value_to_f64),
+            object_map.get("height").and_then(value_to_f64),
+        ], 0.0);
+        let first_surface_z = packed_target.row_origins.get(2).copied().unwrap_or(0.0);
+        let object_sag = compute_object_surface_sag_native(&rows, object_x, object_y);
+        let object_point = [object_x, object_y, first_surface_z + object_sag];
+        let initial_direction = normalize3(
+            stop_center[0] - object_point[0],
+            stop_center[1] - object_point[1],
+            stop_center[2] - object_point[2],
+        );
+        let direction = solve_ray_direction_to_stop_point_fast_native(
+            object_point,
+            stop_center,
+            stop_surface_index,
+            &packed_stop,
+            n_start,
+            initial_direction,
+        )?;
+        trace_single_ray_hit_state_with_meta_core(
+            &[object_point[0], object_point[1], object_point[2], direction[0], direction[1], direction[2]],
+            target_surface_index,
+            n_start,
+            &packed_target.row_meta,
+            &packed_target.row_params,
+            &packed_target.row_origins,
+            &packed_target.row_inv_rots,
+            &packed_target.row_rots,
+            packed_target.row_count,
+        )
+    };
+
+    if (ray_state[0] - 1.0).abs() > f64::EPSILON {
+        return None;
+    }
+    let dir = normalize3(ray_state[5], ray_state[6], ray_state[7]);
+    let transverse = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt();
+    let angle_deg = transverse.atan2(dir[2].abs()) * 180.0 / PI;
+    if angle_deg.is_finite() {
+        Some(angle_deg.abs())
+    } else {
+        None
+    }
 }
 
 fn solve_linear(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
@@ -6690,6 +8325,158 @@ pub fn run_native_opd_rms_waves_wasm_json(req_json: String) -> Result<JsValue, J
     })
         .serialize(&serializer)
         .map_err(|e| JsValue::from_str(&format!("run_native_opd_rms_waves_wasm_json: serialize error: {}", e)))
+}
+
+#[wasm_bindgen]
+pub fn run_native_chief_ray_angle_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
+    let req: Value = serde_json::from_str(&req_json)
+        .map_err(|e| JsValue::from_str(&format!("run_native_chief_ray_angle_wasm_json: invalid request json: {}", e)))?;
+    let req_obj = req.as_object().ok_or_else(|| JsValue::from_str("run_native_chief_ray_angle_wasm_json: request must be an object"))?;
+
+    let optical_system_rows = req_obj
+        .get("opticalSystemRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .ok_or_else(|| JsValue::from_str("run_native_chief_ray_angle_wasm_json: opticalSystemRows is required"))?;
+    if optical_system_rows.is_empty() {
+        return Err(JsValue::from_str("run_native_chief_ray_angle_wasm_json: opticalSystemRows is empty"));
+    }
+
+    let source_rows = req_obj
+        .get("sourceRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let object_rows = req_obj
+        .get("objectRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if object_rows.is_empty() {
+        return Err(JsValue::from_str("run_native_chief_ray_angle_wasm_json: objectRows is empty"));
+    }
+
+    let angle_deg = compute_native_chief_ray_angle_deg_wasm(&optical_system_rows, &source_rows, &object_rows)
+        .ok_or_else(|| JsValue::from_str("run_native_chief_ray_angle_wasm_json: chief ray angle calculation failed"))?;
+
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    serde_json::json!({
+        "backend": "web-rust-wasm",
+        "chiefRayAngleDeg": angle_deg,
+        "message": "Computed via Web Rust/WASM chief ray angle API",
+    })
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("run_native_chief_ray_angle_wasm_json: serialize error: {}", e)))
+}
+
+#[wasm_bindgen]
+pub fn run_native_paraxial_metrics_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
+    let req: Value = serde_json::from_str(&req_json)
+        .map_err(|e| JsValue::from_str(&format!("run_native_paraxial_metrics_wasm_json: invalid request json: {}", e)))?;
+    let req_obj = req.as_object().ok_or_else(|| JsValue::from_str("run_native_paraxial_metrics_wasm_json: request must be an object"))?;
+
+    let optical_system_rows = req_obj
+        .get("opticalSystemRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .ok_or_else(|| JsValue::from_str("run_native_paraxial_metrics_wasm_json: opticalSystemRows is required"))?;
+    if optical_system_rows.is_empty() {
+        return Err(JsValue::from_str("run_native_paraxial_metrics_wasm_json: opticalSystemRows is empty"));
+    }
+
+    let source_rows = req_obj
+        .get("sourceRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let object_rows = req_obj
+        .get("objectRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let metrics = compute_native_paraxial_metrics_wasm(&optical_system_rows, &source_rows, &object_rows);
+
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    serde_json::json!({
+        "backend": "web-rust-wasm",
+        "metrics": metrics,
+        "message": "Computed via Web Rust/WASM paraxial metrics API",
+    })
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("run_native_paraxial_metrics_wasm_json: serialize error: {}", e)))
+}
+
+#[wasm_bindgen]
+pub fn run_native_seidel_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
+    let req: Value = serde_json::from_str(&req_json)
+        .map_err(|e| JsValue::from_str(&format!("run_native_seidel_wasm_json: invalid request json: {}", e)))?;
+    let req_obj = req.as_object().ok_or_else(|| JsValue::from_str("run_native_seidel_wasm_json: request must be an object"))?;
+
+    let optical_system_rows = req_obj
+        .get("opticalSystemRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .ok_or_else(|| JsValue::from_str("run_native_seidel_wasm_json: opticalSystemRows is required"))?;
+    if optical_system_rows.is_empty() {
+        return Err(JsValue::from_str("run_native_seidel_wasm_json: opticalSystemRows is empty"));
+    }
+
+    let source_rows = req_obj
+        .get("sourceRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let object_rows = req_obj
+        .get("objectRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let afocal = req_obj
+        .get("afocal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let wavelength_um = req_obj
+        .get("referenceWavelengthUm")
+        .and_then(parse_numeric_json)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or_else(|| {
+            source_rows
+                .iter()
+                .filter_map(|row| row.as_object())
+                .find_map(|obj| {
+                    parse_numeric_json(
+                        obj.get("wavelength")
+                            .or_else(|| obj.get("Wavelength"))
+                            .unwrap_or(&Value::Null),
+                    )
+                    .filter(|v| v.is_finite() && *v > 0.0)
+                })
+                .unwrap_or(0.587_561_8)
+        });
+
+    let stop_surface_index = detect_stop_surface_index_json(&optical_system_rows).unwrap_or(1);
+    let wavelength_range = detect_wavelength_range_json(&source_rows);
+    let (surface_coefficients, totals) = compute_seidel_surface_coefficients_json(
+        &optical_system_rows,
+        stop_surface_index,
+        afocal,
+        wavelength_um,
+        wavelength_range,
+    );
+    let _ = object_rows;
+
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    serde_json::json!({
+        "backend": "web-rust-wasm",
+        "totals": totals,
+        "surfaceCoefficients": surface_coefficients,
+        "stopSurfaceIndex": stop_surface_index,
+        "wavelengthUm": wavelength_um,
+        "message": "Computed via Web Rust/WASM Seidel API",
+    })
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("run_native_seidel_wasm_json: serialize error: {}", e)))
 }
 
 #[wasm_bindgen]

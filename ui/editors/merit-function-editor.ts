@@ -35,6 +35,7 @@ import { detectConjugateType } from '../../utils/conjugate-detection.ts';
 import { asphericSurfaceZ, toricSurfaceZ } from '../../optical/surface-math.ts';
 import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.ts';
 import { calculateTransverseAberration } from '../../evaluation/aberrations/transverse-aberration.ts';
+import { calculateChiefRayNewton } from '../../evaluation/aberrations/transverse-aberration.ts';
 import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.ts';
 import { loadSystemConfigurations } from '../../data/table-configuration.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../../data/table-optical-system.ts';
@@ -1639,6 +1640,9 @@ class MeritFunctionEditor {
             case 'SA':
                 return this.calculateSphericalAberrationUm(operand, opticalSystemData);
 
+            case 'CRA_DEG':
+                return withRequirementRustRayTracing(() => this.calculateChiefRayAngleDeg(operand, opticalSystemData));
+
             case 'TA_RMS_UM':
                 return withRequirementRustRayTracing(() => this.calculateTransverseAberrationRmsUm(operand, opticalSystemData));
 
@@ -2111,6 +2115,7 @@ class MeritFunctionEditor {
                 return this.calculateDoubletBendingK(operand);
 
             case 'ZERN_COEFF': {
+                const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
                 const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
                 const wavelength = (param1Raw === '')
                     ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
@@ -2289,6 +2294,46 @@ class MeritFunctionEditor {
             return Number.isFinite(syncNum) ? syncNum : 1e9;
         };
         switch (operand.operand) {
+            case 'TOT3_SPH':
+            case 'TOT3_COMA':
+            case 'TOT3_ASTI':
+            case 'TOT3_FCUR':
+            case 'TOT3_DIST':
+            case 'TOT3_PETZ':
+            case 'TOT_LCA':
+            case 'TOT_TCA': {
+                if (disableRequirementRustFirst) return this.calculateOperandValue(operand);
+                const nativeVal = await this.calculateSeidelTotalViaNativeAsync(operand, opticalSystemData, operand.operand);
+                if (Number.isFinite(nativeVal as any)) {
+                    return Number(nativeVal);
+                }
+                return this.calculateOperandValue(operand);
+            }
+            case 'FL':
+            case 'EFL':
+            case 'BFL':
+            case 'IMD':
+            case 'OBJD':
+            case 'TSL':
+            case 'BEXP':
+            case 'EXPD':
+            case 'EXPP':
+            case 'ENPD':
+            case 'ENPP':
+            case 'ENPM':
+            case 'PMAG':
+            case 'FNO_OBJ':
+            case 'FNO_IMG':
+            case 'FNO_WRK':
+            case 'NA_OBJ':
+            case 'NA_IMG': {
+                if (disableRequirementRustFirst) return this.calculateOperandValue(operand);
+                const nativeVal = await this.calculatePrimarySystemMetricViaNativeAsync(operand, opticalSystemData, operand.operand);
+                if (Number.isFinite(nativeVal as any)) {
+                    return Number(nativeVal);
+                }
+                return this.calculateOperandValue(operand);
+            }
             case 'SPOT_SIZE_ANNULAR':
                 return runSpotWithFallback('annular');
             case 'SPOT_SIZE_RECT':
@@ -2304,7 +2349,23 @@ class MeritFunctionEditor {
                 return this.calculateOperandValue(operand);
             }
             case 'TA_RMS_UM': {
+                if (disableRequirementRustFirst) return this.calculateOperandValue(operand);
+                const nativeVal = await this.calculateTransverseAberrationRmsUmViaNativeAsync(operand, opticalSystemData);
+                if (Number.isFinite(nativeVal as any)) {
+                    return Number(nativeVal);
+                }
                 return this.calculateOperandValue(operand);
+            }
+            case 'LA_RMS_UM': {
+                if (disableRequirementRustFirst) return this.calculateOperandValue(operand);
+                const nativeVal = await this.calculateLongitudinalAberrationRmsUmViaNativeAsync(operand, opticalSystemData);
+                if (Number.isFinite(nativeVal as any)) {
+                    return Number(nativeVal);
+                }
+                return this.calculateOperandValue(operand);
+            }
+            case 'CRA_DEG': {
+                return withRequirementRustRayTracing(() => this.calculateChiefRayAngleDeg(operand, opticalSystemData));
             }
             case 'OPD_RMS_WAVES':
             case 'OPD_RMS_UM': {
@@ -2330,10 +2391,6 @@ class MeritFunctionEditor {
 
     async calculateZernikeCoeffViaNativeAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
         try {
-            const runtimeMod = await import('../../src/desktop/runtime.ts');
-            if (!runtimeMod || typeof runtimeMod.isTauriRuntime !== 'function' || !runtimeMod.isTauriRuntime()) {
-                return null;
-            }
             const ipcMod = await import('../../src/desktop/ipc/client.ts');
             if (!ipcMod || typeof ipcMod.runNativeOpdMap !== 'function') {
                 return null;
@@ -2458,10 +2515,6 @@ class MeritFunctionEditor {
 
     async calculateSphericalAberrationUmViaNativeAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
         try {
-            const runtimeMod = await import('../../src/desktop/runtime.ts');
-            if (!runtimeMod || typeof runtimeMod.isTauriRuntime !== 'function' || !runtimeMod.isTauriRuntime()) {
-                return null;
-            }
             const ipcMod = await import('../../src/desktop/ipc/client.ts');
             if (!ipcMod || typeof ipcMod.runNativeSphericalAberration !== 'function') {
                 return null;
@@ -2509,6 +2562,68 @@ class MeritFunctionEditor {
             const marginal = points[points.length - 1].longitudinalAberration;
             const lsaMm = Math.abs(marginal - paraxial);
             return lsaMm * 1000;
+        } catch {
+            return null;
+        }
+    }
+
+    async calculateLongitudinalAberrationRmsUmViaNativeAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
+        try {
+            const ipcMod = await import('../../src/desktop/ipc/client.ts');
+            if (!ipcMod || typeof ipcMod.runNativeSphericalAberration !== 'function') {
+                return null;
+            }
+
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+
+            const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+            const wavelength = (param1Raw === '')
+                ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+                : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+
+            const imageSurfaceIndex = (() => {
+                for (let i = opticalSystemData.length - 1; i >= 0; i--) {
+                    const row = opticalSystemData[i];
+                    const ot = String(row?.['object type'] || row?.objectType || row?.object || '').trim().toLowerCase();
+                    if (ot === 'image') return i;
+                }
+                return Math.max(0, opticalSystemData.length - 1);
+            })();
+
+            const resp = await ipcMod.runNativeSphericalAberration({
+                opticalSystemRows: opticalSystemData,
+                sourceRows,
+                objectRows,
+                surfaceIndex: imageSurfaceIndex,
+                wavelengthMode: 'primary'
+            });
+
+            const list = Array.isArray(resp?.meridionalData) ? resp.meridionalData : [];
+            if (list.length === 0) return null;
+            const series = list.find((d: any) => Math.abs(Number(d?.wavelength) - Number(wavelength)) < 1e-9) || list[0];
+            const data = Array.isArray(series?.points) ? series.points : [];
+            if (data.length === 0) return null;
+
+            let sumWeightedL = 0;
+            let sumWeightedL2 = 0;
+            let sumWeight = 0;
+
+            for (let i = 1; i < data.length; i++) {
+                const d = data[i];
+                const r = toFiniteNumber(d?.pupilCoordinate, 0);
+                const L = toFiniteNumber(d?.longitudinalAberration, 0);
+                const rPrev = toFiniteNumber(data[i - 1]?.pupilCoordinate, 0);
+                const weight = 2 * r * (r - rPrev);
+                sumWeightedL += weight * L;
+                sumWeightedL2 += weight * L * L;
+                sumWeight += weight;
+            }
+
+            if (sumWeight === 0) return 0;
+            const meanL = sumWeightedL / sumWeight;
+            const variance = sumWeightedL2 / sumWeight - meanL * meanL;
+            return Math.sqrt(Math.max(0, variance)) * 1000;
         } catch {
             return null;
         }
@@ -2653,7 +2768,7 @@ class MeritFunctionEditor {
         }
     }
 
-    private stampRequirementBackend(kind: 'spot' | 'ta', payload: Record<string, any>): void {
+    private stampRequirementBackend(kind: 'spot' | 'ta' | 'cra' | 'paraxial' | 'seidel', payload: Record<string, any>): void {
         try {
             if (typeof window === 'undefined') return;
 
@@ -2661,7 +2776,11 @@ class MeritFunctionEditor {
             const route = String(payload?.route || 'unknown');
             const storeKey = kind === 'spot'
                 ? '__cooptLastSpotSizeDebug'
-                : '__cooptLastTransverseAberrationDebug';
+                : (kind === 'ta'
+                    ? '__cooptLastTransverseAberrationDebug'
+                    : (kind === 'cra'
+                        ? '__cooptLastChiefRayDebug'
+                        : (kind === 'paraxial' ? '__cooptLastParaxialMetricsDebug' : '__cooptLastSeidelDebug')));
             const currentStore = (w as any)[storeKey];
             const nextStore = (currentStore && typeof currentStore === 'object') ? currentStore : {};
             Object.assign(nextStore, {
@@ -2671,7 +2790,6 @@ class MeritFunctionEditor {
                 ...payload,
             });
             (w as any)[storeKey] = nextStore;
-
             if (!(w as any).__cooptRequirementBackendLogState || typeof (w as any).__cooptRequirementBackendLogState !== 'object') {
                 (w as any).__cooptRequirementBackendLogState = {};
             }
@@ -2690,7 +2808,6 @@ class MeritFunctionEditor {
             if (!ipcMod || typeof ipcMod.runNativeTransverseAberration !== 'function') {
                 return null;
             }
-
             if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
             const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
 
@@ -2920,10 +3037,10 @@ class MeritFunctionEditor {
             if (!Array.isArray(hits) || hits.length <= 0) return 1e9;
 
             const exactChief = this.resolveExactChiefSpotPoint(
-                ctx.opticalSystemData,
-                ctx.objectRow,
-                ctx.wavelength,
-                ctx.targetSurfaceIndex,
+                opticalSystemData,
+                objectRow,
+                wavelength,
+                targetSurfaceIndex,
             );
             let chief = exactChief
                 ? { x: exactChief.x, y: exactChief.y }
@@ -3191,7 +3308,6 @@ class MeritFunctionEditor {
 
     calculateTransverseAberrationRmsUm(operand: any, opticalSystemData: any[]): number {
         if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
-
         const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
 
         const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
@@ -3391,6 +3507,240 @@ class MeritFunctionEditor {
         const rmsMm = Math.sqrt(sumSq / count);
         const resultUm = rmsMm * 1000;
         return resultUm;
+    }
+
+    calculateChiefRayAngleDeg(operand: any, opticalSystemData: any[]): number {
+        if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
+
+        const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+
+        const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+        const objectIndex1 = (param1Raw === '') ? 1 : Math.max(1, Math.floor(Number(param1Raw)));
+        const objectIndex0 = objectIndex1 - 1;
+
+        const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+        const wavelength = (param2Raw === '')
+            ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+            : this.getSystemWavelengthFromOperandOrPrimary({ ...operand, param1: operand?.param2 }, sourceRows);
+
+        const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
+        let rayCount = (param4Raw === '') ? 51 : Math.floor(Number(param4Raw));
+        if (!Number.isFinite(rayCount) || rayCount < 3) rayCount = 51;
+        if (rayCount > 5000) rayCount = 5000;
+
+        const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+        const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, opticalSystemData, wavelength);
+        const chiefResult = calculateChiefRayNewton(opticalSystemData, fieldSetting, wavelength, 'unified', { rayCount });
+
+        const dir = chiefResult?.rayData?.dir || chiefResult?.dir;
+        const dx = toFiniteNumber(dir?.x, NaN);
+        const dy = toFiniteNumber(dir?.y, NaN);
+        const dz = toFiniteNumber(dir?.z, NaN);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) {
+            return 1e9;
+        }
+
+        const transverse = Math.sqrt(dx * dx + dy * dy);
+        const angleDeg = Math.atan2(transverse, Math.abs(dz)) * 180 / Math.PI;
+        return Number.isFinite(angleDeg) ? Math.abs(angleDeg) : 1e9;
+    }
+
+    async calculateChiefRayAngleDegViaNativeAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
+        try {
+            const ipcMod = await import('../../src/desktop/ipc/client.ts');
+            if (!ipcMod || typeof ipcMod.runNativeChiefRayAngle !== 'function') {
+                return null;
+            }
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+
+            const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+            const objectIndex1 = (param1Raw === '') ? 1 : Math.max(1, Math.floor(Number(param1Raw)));
+            const objectIndex0 = objectIndex1 - 1;
+            const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+            if (!objRow || typeof objRow !== 'object') return null;
+
+            const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+            const wavelength = (param2Raw === '')
+                ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+                : this.getSystemWavelengthFromOperandOrPrimary({ ...operand, param1: operand?.param2 }, sourceRows);
+
+            const resp = await ipcMod.runNativeChiefRayAngle({
+                opticalSystemRows: opticalSystemData,
+                sourceRows: __cooptBuildPrimaryOnlySourceRows(sourceRows, wavelength),
+                objectRows: [objRow],
+            });
+
+            this.stampRequirementBackend('cra', {
+                backend: String(resp?.backend || 'unknown'),
+                route: 'ipc-wrapper',
+                operand: 'CRA_DEG',
+                configId: operand?.configId ?? '',
+                objectIndex0,
+                wavelength,
+            });
+
+            const value = Number(resp?.chiefRayAngleDeg);
+            return Number.isFinite(value) ? value : null;
+        } catch {
+            return null;
+        }
+    }
+
+    async calculatePrimarySystemMetricViaNativeAsync(operand: any, opticalSystemData: any[], key: string): Promise<number | null> {
+        try {
+            const normalizedKey = String(key ?? '').trim().toUpperCase();
+            const supported = new Set([
+                'FL', 'EFL', 'BFL', 'IMD', 'OBJD', 'TSL',
+                'BEXP', 'EXPD', 'EXPP', 'ENPD', 'ENPP', 'ENPM',
+                'PMAG', 'FNO_OBJ', 'FNO_IMG', 'FNO_WRK', 'NA_OBJ', 'NA_IMG',
+            ]);
+            if (!supported.has(normalizedKey)) return null;
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
+            const axis = this.getParaxialAxisSelectionForOperand(operand, normalizedKey);
+            if (axis === 'X') return null;
+
+            const ipcMod = await import('../../src/desktop/ipc/client.ts');
+            if (!ipcMod || typeof ipcMod.runNativeParaxialMetrics !== 'function') {
+                return null;
+            }
+
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand?.configId);
+            const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+            const cfgKey = operand?.configId ? String(operand.configId) : 'active';
+            const cacheKey = `primary-metrics-native:${cfgKey}:wl=${wavelength}`;
+            const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
+            let metrics = cached;
+            if (!metrics) {
+                const resp = await ipcMod.runNativeParaxialMetrics({
+                    opticalSystemRows: opticalSystemData,
+                    sourceRows: __cooptBuildPrimaryOnlySourceRows(sourceRows, wavelength),
+                    objectRows,
+                });
+                metrics = (resp && typeof resp.metrics === 'object' && resp.metrics)
+                    ? resp.metrics
+                    : null;
+                if (!metrics) return null;
+                this.stampRequirementBackend('paraxial', {
+                    backend: String(resp?.backend || 'unknown'),
+                    route: 'ipc-wrapper',
+                    operand: normalizedKey,
+                    configId: operand?.configId ?? '',
+                    wavelength,
+                });
+                if (this._runtimeCache) this._runtimeCache.set(cacheKey, metrics);
+            }
+
+            const value = Number(metrics?.[normalizedKey]);
+            return Number.isFinite(value) ? value : null;
+        } catch {
+            return null;
+        }
+    }
+
+    async calculateSeidelTotalViaNativeAsync(operand: any, opticalSystemData: any[], key: string): Promise<number | null> {
+        try {
+            const normalizedKey = String(key ?? '').trim().toUpperCase();
+            const supported = new Set([
+                'TOT3_SPH', 'TOT3_COMA', 'TOT3_ASTI', 'TOT3_FCUR',
+                'TOT3_DIST', 'TOT3_PETZ', 'TOT_LCA', 'TOT_TCA',
+            ]);
+            if (!supported.has(normalizedKey)) return null;
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length < 2) return null;
+
+            const ipcMod = await import('../../src/desktop/ipc/client.ts');
+            if (!ipcMod || typeof ipcMod.runNativeSeidel !== 'function') {
+                return null;
+            }
+
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand?.configId);
+            const modeRaw = (operand?.param2 !== undefined && operand?.param2 !== null) ? String(operand.param2).trim() : '';
+            const afocal = modeRaw === '1';
+            const refFLRaw = (operand?.param4 !== undefined && operand?.param4 !== null) ? String(operand.param4).trim() : '';
+            const refFLNum = (refFLRaw === '') ? NaN : Number(refFLRaw);
+            const primaryWavelength = this.getPrimaryWavelengthFromSourceRows(sourceRows);
+            const param1Raw = (operand?.param1 !== undefined && operand?.param1 !== null) ? String(operand.param1).trim() : '';
+            const selectedWavelength = (param1Raw === '')
+                ? primaryWavelength
+                : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+            const referenceWavelengthUm = (normalizedKey === 'TOT_LCA' || normalizedKey === 'TOT_TCA') ? primaryWavelength : selectedWavelength;
+
+            const cfgKey = operand?.configId ? String(operand.configId) : 'active';
+            const cacheKey = `seidel-native:${cfgKey}:mode=${afocal ? 'afocal' : 'imaging'}:wl=${referenceWavelengthUm}:refFL=${Number.isFinite(refFLNum) && refFLNum !== 0 ? refFLNum : 'auto'}`;
+            const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
+            let response = cached;
+            if (!response) {
+                response = await ipcMod.runNativeSeidel({
+                    opticalSystemRows: opticalSystemData,
+                    sourceRows: __cooptBuildPrimaryOnlySourceRows(sourceRows, referenceWavelengthUm),
+                    objectRows,
+                    afocal,
+                    referenceWavelengthUm: Number.isFinite(referenceWavelengthUm) ? referenceWavelengthUm : undefined,
+                });
+                if (!response || typeof response !== 'object') return null;
+                this.stampRequirementBackend('seidel', {
+                    backend: String((response as any)?.backend || 'unknown'),
+                    route: 'ipc-wrapper',
+                    operand: normalizedKey,
+                    configId: operand?.configId ?? '',
+                    wavelengthUm: referenceWavelengthUm,
+                    afocal,
+                });
+                if (this._runtimeCache) this._runtimeCache.set(cacheKey, response);
+            }
+
+            const totals = (response as any)?.totals;
+            const coeffs = Array.isArray((response as any)?.surfaceCoefficients) ? (response as any).surfaceCoefficients : [];
+            const scope = this.resolveMeritScopeSelection(operand?.param3, opticalSystemData, operand?.configId);
+            const selectedSurfaceIds = scope.kind === 'block'
+                ? this._getBlockSurfaceIdSet(opticalSystemData, scope.value, operand?.configId)
+                : scope.kind === 'zoom'
+                    ? this._getZoomGroupSurfaceIdSet(opticalSystemData, scope.value, operand?.configId)
+                    : null;
+
+            const fieldKey = normalizedKey === 'TOT3_SPH' ? 'I'
+                : normalizedKey === 'TOT3_COMA' ? 'II'
+                : normalizedKey === 'TOT3_ASTI' ? 'III'
+                : normalizedKey === 'TOT3_PETZ' ? 'P'
+                : normalizedKey === 'TOT3_FCUR' ? 'IV'
+                : normalizedKey === 'TOT3_DIST' ? 'V'
+                : normalizedKey === 'TOT_LCA' ? 'LCA'
+                : 'TCA';
+
+            let value = NaN;
+            if (scope.kind === 'total') {
+                value = Number(totals?.[fieldKey]);
+            } else if (scope.kind === 'surface') {
+                const selectedSurface = Number(scope.surface);
+                const coeff = coeffs.find((entry: any) => {
+                    if (!entry) return false;
+                    const surfaceIndex = Number(entry.surfaceIndex);
+                    const surfaceId = Number(opticalSystemData?.[surfaceIndex]?.id);
+                    return surfaceId === selectedSurface || surfaceIndex === selectedSurface;
+                });
+                value = coeff ? Number(coeff[fieldKey]) : NaN;
+            } else if ((scope.kind === 'block' || scope.kind === 'zoom') && selectedSurfaceIds && selectedSurfaceIds.size > 0) {
+                let sum = 0;
+                let matched = false;
+                for (const coeff of coeffs) {
+                    if (!coeff) continue;
+                    const surfaceIndex = Number(coeff.surfaceIndex);
+                    const surfaceId = Number(opticalSystemData?.[surfaceIndex]?.id);
+                    if (!(selectedSurfaceIds.has(surfaceId) || selectedSurfaceIds.has(surfaceIndex))) continue;
+                    const coeffValue = Number(coeff[fieldKey]);
+                    if (!Number.isFinite(coeffValue)) continue;
+                    sum += coeffValue;
+                    matched = true;
+                }
+                value = matched ? sum : NaN;
+            }
+
+            return Number.isFinite(value) ? value : null;
+        } catch {
+            return null;
+        }
     }
 
     calculateSpotSizeUm(operand: any, opticalSystemData: any[], options: any = {}): number {

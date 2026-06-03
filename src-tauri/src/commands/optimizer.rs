@@ -5,16 +5,24 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+use tauri::AppHandle;
 
 use crate::commands::analysis::{
-    run_system_data_report,
-    RunSystemDataReportRequest,
+    run_native_seidel,
+    NativeSeidelRequest,
     compute_paraxial_metrics,
 };
 use crate::commands::optics::{
     compute_native_chief_ray_angle_deg,
+    compute_finite_opd_grid_rms_waves,
+    run_native_opd_map,
+    run_native_spherical_aberration,
+    NativeOpdMapRequest,
     run_native_spot_raytrace,
     run_native_transverse_aberration,
+    NativeSphericalAberrationPoint,
+    NativeSphericalAberrationRequest,
+    NativeSphericalAberrationSeries,
     NativeTransverseAberrationSeries,
     NativeSpotRaytraceRequest,
     NativeTransverseAberrationRequest,
@@ -45,6 +53,53 @@ static OPTIMIZER_SESSIONS: LazyLock<Mutex<HashMap<String, OptimizerSessionState>
 
 thread_local! {
     static OPTIMIZER_PROFILE: RefCell<Option<OptimizerProfileAccumulator>> = const { RefCell::new(None) };
+    static OPTIMIZER_APP_HANDLE: RefCell<Option<AppHandle>> = const { RefCell::new(None) };
+    static OPTIMIZER_SYSTEM_CONFIG: RefCell<Option<Value>> = const { RefCell::new(None) };
+}
+
+struct OptimizerAppHandleGuard;
+struct OptimizerSystemConfigGuard;
+
+impl OptimizerAppHandleGuard {
+    fn install(app: AppHandle) -> Self {
+        OPTIMIZER_APP_HANDLE.with(|slot| {
+            *slot.borrow_mut() = Some(app);
+        });
+        Self
+    }
+}
+
+impl Drop for OptimizerAppHandleGuard {
+    fn drop(&mut self) {
+        OPTIMIZER_APP_HANDLE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+}
+
+impl OptimizerSystemConfigGuard {
+    fn install(system_config: Option<Value>) -> Self {
+        OPTIMIZER_SYSTEM_CONFIG.with(|slot| {
+            *slot.borrow_mut() = system_config;
+        });
+        Self
+    }
+}
+
+impl Drop for OptimizerSystemConfigGuard {
+    fn drop(&mut self) {
+        OPTIMIZER_SYSTEM_CONFIG.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+}
+
+fn with_optimizer_app_handle<R>(f: impl FnOnce(&AppHandle) -> R) -> Option<R> {
+    OPTIMIZER_APP_HANDLE.with(|slot| slot.borrow().as_ref().map(f))
+}
+
+fn with_optimizer_system_config<R>(f: impl FnOnce(&Value) -> R) -> Option<R> {
+    OPTIMIZER_SYSTEM_CONFIG.with(|slot| slot.borrow().as_ref().map(f))
 }
 
 #[derive(Clone, Default)]
@@ -102,6 +157,7 @@ pub struct OptimizeStepRequest {
     pub source_rows: Option<Vec<Value>>,
     pub object_rows: Option<Vec<Value>>,
     pub active_config_id: Option<Value>,
+    pub system_config_snapshot: Option<Value>,
     pub system_requirements_rows: Option<Vec<Value>>,
     pub session_id: Option<String>,
     pub reset_session: Option<bool>,
@@ -326,7 +382,9 @@ struct EvalState {
 }
 
 #[tauri::command]
-pub fn run_optimizer_step(req: OptimizeStepRequest) -> Result<OptimizeStepResponse, String> {
+pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<OptimizeStepResponse, String> {
+    let _app_guard = OptimizerAppHandleGuard::install(app);
+    let _system_config_guard = OptimizerSystemConfigGuard::install(req.system_config_snapshot.clone());
     let enable_profile = req.profile.unwrap_or(false);
     optimizer_profile_begin(enable_profile);
 
@@ -1890,14 +1948,13 @@ fn evaluate_operand_value(rows: &[Value], source_rows: &[Value], object_rows: &[
             .and_then(|(_, obj)| obj.get("thickness").and_then(parse_number)),
 
         // ── Paraxial metrics (proper ray tracing via analysis.rs) ──
-        "FL" | "EFL" | "EFFL" | "BFL" | "IMD"
+        "FL" | "EFL" | "BFL" | "IMD"
         | "BEXP" | "EXPD" | "EXPP" | "ENPD" | "ENPP" | "ENPM"
         | "PMAG" | "FNO_OBJ" | "FNO_IMG" | "FNO_WRK" | "NA_OBJ" | "NA_IMG" => {
             let m = compute_paraxial_metrics(rows, source_rows, object_rows);
             let v = match req.operand.as_str() {
                 "FL"      => m.fl,
                 "EFL"     => m.efl,
-                "EFFL"    => m.efl,
                 "BFL"     => m.bfl,
                 "IMD"     => m.imd,
                 "BEXP"    => m.bexp,
@@ -1917,6 +1974,10 @@ fn evaluate_operand_value(rows: &[Value], source_rows: &[Value], object_rows: &[
             Some(v)
         }
 
+        "EFFL" => native_effective_focal_length_for_range(rows, source_rows, object_rows, req),
+        "PP1" => native_principal_point_for_range(rows, source_rows, object_rows, req, "pp1"),
+        "PP2" => native_principal_point_for_range(rows, source_rows, object_rows, req, "pp2"),
+
         // ── Edge thickness: thickness - sag_front - sag_back (TS parity) ──
         "EDGE" => evaluate_edge_thickness(rows, req),
 
@@ -1925,11 +1986,16 @@ fn evaluate_operand_value(rows: &[Value], source_rows: &[Value], object_rows: &[
         "SPOT_SIZE_CURRENT" => native_spot_size_um(rows, source_rows, object_rows, req, "annular"),
         "CRA_DEG" => native_chief_ray_angle_deg(rows, source_rows, object_rows, req),
         "TA_RMS_UM" => native_transverse_rms_um(rows, source_rows, object_rows, req),
+        "OPD_RMS_WAVES" | "OPD_RMS_UM" => native_opd_rms_waves(rows, source_rows, object_rows, req),
+        "ZERN_COEFF" => native_zernike_coeff(rows, source_rows, object_rows, req),
+        "SA" => native_spherical_aberration_um(rows, source_rows, object_rows, req),
+        "LA_RMS_UM" => native_longitudinal_aberration_rms_um(rows, source_rows, object_rows, req),
         "TOT3_SPH" => native_seidel_operand(rows, source_rows, object_rows, req, "i"),
         "TOT3_COMA" => native_seidel_operand(rows, source_rows, object_rows, req, "ii"),
         "TOT3_ASTI" => native_seidel_operand(rows, source_rows, object_rows, req, "iii"),
         "TOT3_FCUR" => native_seidel_operand(rows, source_rows, object_rows, req, "iv"),
         "TOT3_DIST" => native_seidel_operand(rows, source_rows, object_rows, req, "v"),
+        "TOT3_PETZ" => native_seidel_operand(rows, source_rows, object_rows, req, "p"),
         "TOT_LCA" => native_seidel_operand(rows, source_rows, object_rows, req, "lca"),
         "TOT_TCA" => native_seidel_operand(rows, source_rows, object_rows, req, "tca"),
 
@@ -2052,18 +2118,53 @@ fn native_seidel_operand(
 ) -> Option<f64> {
     let source_rows_effective = select_source_rows_for_requirement(source_rows, &req_spec.param1);
     let afocal = seidel_mode_is_afocal(&req_spec.param2);
-    let kind = if afocal { "seidel-afocal" } else { "seidel" }.to_string();
-    let ref_fl = parse_number_from_str(&req_spec.param4);
-    let req = RunSystemDataReportRequest {
-        kind,
+    let reference_wavelength_um = source_rows_effective
+        .iter()
+        .filter_map(|row| row.as_object())
+        .find_map(|obj| {
+            obj.get("wavelength")
+                .or_else(|| obj.get("Wavelength"))
+                .and_then(parse_number)
+                .filter(|v| v.is_finite() && *v > 0.0)
+        });
+    let req = NativeSeidelRequest {
         optical_system_rows: rows.to_vec(),
         source_rows: source_rows_effective,
         object_rows: object_rows.to_vec(),
-        reference_focal_length: ref_fl,
+        afocal,
+        reference_wavelength_um,
     };
-    let resp = run_system_data_report(req).ok()?;
+    let resp = run_native_seidel(req).ok()?;
     let surface_target = parse_usize_str(&req_spec.param3).unwrap_or(0);
-    parse_seidel_term_from_report(&resp.text, surface_target, term)
+    if surface_target == 0 {
+        return match term {
+            "lca" => Some(resp.totals.lca),
+            "tca" => Some(resp.totals.tca),
+            "i" => Some(resp.totals.i),
+            "ii" => Some(resp.totals.ii),
+            "iii" => Some(resp.totals.iii),
+            "p" => Some(resp.totals.p),
+            "iv" => Some(resp.totals.iv),
+            "v" => Some(resp.totals.v),
+            _ => None,
+        };
+    }
+
+    let coeff = resp
+        .surface_coefficients
+        .into_iter()
+        .find(|entry| entry.surface_index == surface_target)?;
+    match term {
+        "lca" => Some(coeff.lca),
+        "tca" => Some(coeff.tca),
+        "i" => Some(coeff.i),
+        "ii" => Some(coeff.ii),
+        "iii" => Some(coeff.iii),
+        "p" => Some(coeff.p),
+        "iv" => Some(coeff.iv),
+        "v" => Some(coeff.v),
+        _ => None,
+    }
 }
 
 fn seidel_mode_is_afocal(param2: &str) -> bool {
@@ -2076,43 +2177,6 @@ fn seidel_mode_is_afocal(param2: &str) -> bool {
     }
     // If list mode contains afocal (1), prefer afocal for parity with common usage.
     t.split(',').any(|v| v.trim() == "1")
-}
-
-fn parse_seidel_term_from_report(text: &str, surface_target: usize, term: &str) -> Option<f64> {
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let cols: Vec<&str> = line.split('\t').collect();
-        if cols.len() < 10 {
-            continue;
-        }
-
-        let is_total_row = cols[0].trim().eq_ignore_ascii_case("TOTAL");
-        let is_surface_row = cols[0].trim().parse::<usize>().ok();
-        let row_match = if surface_target == 0 {
-            is_total_row
-        } else {
-            matches!(is_surface_row, Some(v) if v == surface_target)
-        };
-        if !row_match {
-            continue;
-        }
-
-        let col_idx = match term {
-            "lca" => 2,
-            "tca" => 3,
-            "i" => 4,
-            "ii" => 5,
-            "iii" => 6,
-            "iv" => 8,
-            "v" => 9,
-            _ => return None,
-        };
-        return cols.get(col_idx).and_then(|s| parse_number_from_str(s.trim()));
-    }
-    None
 }
 
 fn native_spot_size_um(
@@ -2218,6 +2282,987 @@ fn native_transverse_rms_um(
     }
     let rms_mm = (sum_sq_mm / count as f64).sqrt();
     Some(rms_mm * 1000.0)
+}
+
+fn native_spherical_aberration_um(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    req_spec: &RequirementSpec,
+) -> Option<f64> {
+    let wavelength = resolve_requirement_wavelength_um(source_rows, &req_spec.param1);
+    let series = run_native_spherical_aberration_for_requirement(rows, source_rows, object_rows, req_spec)?;
+    let points = series_points_for_wavelength(&series, wavelength)?;
+    let paraxial = points.first()?.longitudinal_aberration;
+    let marginal = points.last()?.longitudinal_aberration;
+    Some((marginal - paraxial).abs() * 1000.0)
+}
+
+fn native_longitudinal_aberration_rms_um(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    req_spec: &RequirementSpec,
+) -> Option<f64> {
+    let wavelength = resolve_requirement_wavelength_um(source_rows, &req_spec.param1);
+    let series = run_native_spherical_aberration_for_requirement(rows, source_rows, object_rows, req_spec)?;
+    let points = series_points_for_wavelength(&series, wavelength)?;
+    if points.len() < 2 {
+        return None;
+    }
+
+    let mut sum_weighted_l = 0.0;
+    let mut sum_weighted_l2 = 0.0;
+    let mut sum_weight = 0.0;
+    for i in 1..points.len() {
+        let r = points[i].pupil_coordinate;
+        let l = points[i].longitudinal_aberration;
+        let r_prev = points[i - 1].pupil_coordinate;
+        let weight = 2.0 * r * (r - r_prev);
+        sum_weighted_l += weight * l;
+        sum_weighted_l2 += weight * l * l;
+        sum_weight += weight;
+    }
+
+    if !sum_weight.is_finite() || sum_weight.abs() <= 1e-12 {
+        return Some(0.0);
+    }
+
+    let mean_l = sum_weighted_l / sum_weight;
+    let variance = (sum_weighted_l2 / sum_weight) - mean_l * mean_l;
+    Some(variance.max(0.0).sqrt() * 1000.0)
+}
+
+fn native_opd_rms_waves(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    req_spec: &RequirementSpec,
+) -> Option<f64> {
+    let app = with_optimizer_app_handle(Clone::clone)?;
+    let wavelength_um = resolve_requirement_wavelength_um(source_rows, &req_spec.param1);
+    let object_index1 = parse_usize_str(&req_spec.param2).unwrap_or(1).max(1);
+    let object_index0 = object_index1.saturating_sub(1);
+    if object_rows.get(object_index0).is_none() {
+        return None;
+    }
+    let grid_size = parse_usize_str(&req_spec.param3)
+        .map(|v| v.max(8).min(512) as u32)
+        .unwrap_or(32);
+    let req = NativeOpdMapRequest {
+        job_id: None,
+        optical_system_rows: rows.to_vec(),
+        source_rows: source_rows_for_wavelength_param(source_rows, &req_spec.param1),
+        object_rows: object_rows.to_vec(),
+        object_index: Some(object_index0),
+        surface_index: Some(image_surface_index(rows)),
+        grid_size: Some(grid_size),
+        wavelength_um: Some(wavelength_um),
+        pupil_radius_mm: None,
+        pupil_sampling_mode: None,
+        opd_display_mode: Some("pistonTiltRemoved".to_string()),
+    };
+    let resp = run_native_opd_map(req, app).ok()?;
+    compute_finite_opd_grid_rms_waves(&resp.display_opd_grid)
+}
+
+fn native_zernike_coeff(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    req_spec: &RequirementSpec,
+) -> Option<f64> {
+    let app = with_optimizer_app_handle(Clone::clone)?;
+    let wavelength_um = resolve_requirement_wavelength_um(source_rows, &req_spec.param1);
+    let object_index1 = parse_usize_str(&req_spec.param2).unwrap_or(1).max(1);
+    let object_index0 = object_index1.saturating_sub(1);
+    if object_rows.get(object_index0).is_none() {
+        return None;
+    }
+    let unit = parse_zernike_unit(&req_spec.param3);
+    let grid_size = parse_usize_str(&req_spec.param4)
+        .map(|v| v.max(8).min(512) as u32)
+        .unwrap_or(32);
+    let noll_index = parse_usize_str(&req_spec.param5).unwrap_or(0);
+    let req = NativeOpdMapRequest {
+        job_id: None,
+        optical_system_rows: rows.to_vec(),
+        source_rows: source_rows.to_vec(),
+        object_rows: object_rows.to_vec(),
+        object_index: Some(object_index0),
+        surface_index: Some(image_surface_index(rows)),
+        grid_size: Some(grid_size),
+        wavelength_um: Some(wavelength_um),
+        pupil_radius_mm: None,
+        pupil_sampling_mode: None,
+        opd_display_mode: Some("raw".to_string()),
+    };
+    let resp = run_native_opd_map(req, app).ok()?;
+    let points = zernike_points_from_opd_grid(&resp.display_opd_grid)?;
+    let coeffs_waves = fit_zernike_weighted(&points, 8)?;
+
+    if noll_index == 0 {
+        let mut sum_sq = 0.0;
+        for (j, coeff) in coeffs_waves.iter().enumerate() {
+            if j < 4 {
+                continue;
+            }
+            let value = if unit == "um" { coeff * wavelength_um } else { *coeff };
+            sum_sq += value * value;
+        }
+        return Some(sum_sq.sqrt());
+    }
+
+    let (n, m) = noll_to_nm(noll_index)?;
+    let osa_index = osa_index_from_nm(n, m)?;
+    let coeff = *coeffs_waves.get(osa_index).unwrap_or(&0.0);
+    Some(if unit == "um" { coeff * wavelength_um } else { coeff })
+}
+
+fn zernike_points_from_opd_grid(grid: &[Vec<Option<f64>>]) -> Option<Vec<(f64, f64, f64)>> {
+    if grid.len() < 4 {
+        return None;
+    }
+    let size = grid.len();
+    let mut points = Vec::<(f64, f64, f64)>::new();
+    for (iy, row) in grid.iter().enumerate() {
+        for (ix, opd_opt) in row.iter().enumerate() {
+            let Some(opd) = opd_opt.filter(|v| v.is_finite()) else {
+                continue;
+            };
+            let nx = (2.0 * ix as f64) / ((size - 1) as f64) - 1.0;
+            let ny = (2.0 * iy as f64) / ((size - 1) as f64) - 1.0;
+            if (nx * nx + ny * ny).sqrt() > 1.0 + 1.0e-9 {
+                continue;
+            }
+            points.push((nx, ny, opd));
+        }
+    }
+    if points.is_empty() { None } else { Some(points) }
+}
+
+fn fit_zernike_weighted(points: &[(f64, f64, f64)], max_order: usize) -> Option<Vec<f64>> {
+    let mut valid_points = Vec::<(f64, f64, f64)>::new();
+    for (x, y, opd) in points {
+        let rho = (x * x + y * y).sqrt();
+        if !rho.is_finite() || rho > 1.0 + 1.0e-9 || !opd.is_finite() {
+            continue;
+        }
+        valid_points.push((*x, *y, *opd));
+    }
+    if valid_points.len() < 6 {
+        return None;
+    }
+
+    let opd_mean = valid_points.iter().map(|(_, _, opd)| *opd).sum::<f64>() / valid_points.len() as f64;
+    for (_, _, opd) in &mut valid_points {
+        *opd -= opd_mean;
+    }
+
+    let mut opd_min = f64::INFINITY;
+    let mut opd_max = f64::NEG_INFINITY;
+    for (_, _, opd) in &valid_points {
+        opd_min = opd_min.min(*opd);
+        opd_max = opd_max.max(*opd);
+    }
+    let opd_range = if opd_min.is_finite() && opd_max.is_finite() {
+        opd_max - opd_min
+    } else {
+        0.0
+    };
+    let scale_factor = opd_range.max(1.0);
+    for (_, _, opd) in &mut valid_points {
+        *opd /= scale_factor;
+    }
+
+    let mut sum_x2 = 0.0;
+    let mut sum_y2 = 0.0;
+    let mut sum_xy = 0.0;
+    let mut sum_opd_x = 0.0;
+    let mut sum_opd_y = 0.0;
+    for (x, y, opd) in &valid_points {
+        sum_x2 += x * x;
+        sum_y2 += y * y;
+        sum_xy += x * y;
+        sum_opd_x += opd * x;
+        sum_opd_y += opd * y;
+    }
+
+    let det = sum_x2 * sum_y2 - sum_xy * sum_xy;
+    let (mut tilt_y_scaled, mut tilt_x_scaled) = (0.0, 0.0);
+    if det.abs() > 1.0e-10 {
+        let two_c2 = (sum_opd_x * sum_y2 - sum_opd_y * sum_xy) / det;
+        let two_c1 = (sum_x2 * sum_opd_y - sum_xy * sum_opd_x) / det;
+        tilt_y_scaled = two_c1 / 2.0;
+        tilt_x_scaled = two_c2 / 2.0;
+    }
+    for (x, y, opd) in &mut valid_points {
+        *opd -= tilt_y_scaled * 2.0 * *y + tilt_x_scaled * 2.0 * *x;
+    }
+
+    let filtered_points = maybe_remove_zernike_outliers(valid_points);
+    if filtered_points.len() < 10 {
+        return None;
+    }
+
+    let max_order_from_points = ((filtered_points.len() as f64) / 3.0).sqrt().floor() as usize;
+    let max_order_for_fit = max_order.min(8).min(max_order_from_points.max(1));
+    let num_terms = (max_order_for_fit + 1) * (max_order_for_fit + 2) / 2;
+    let active_terms = num_terms.saturating_sub(3);
+    if active_terms == 0 {
+        let mut coeffs = vec![0.0; num_terms.max(3)];
+        coeffs[0] = opd_mean;
+        coeffs[1] = tilt_y_scaled * scale_factor;
+        coeffs[2] = tilt_x_scaled * scale_factor;
+        return Some(coeffs);
+    }
+
+    let mut a = Vec::<Vec<f64>>::new();
+    let mut b = Vec::<f64>::new();
+    let mut weights = Vec::<f64>::new();
+    for (x, y, opd) in &filtered_points {
+        let rho = (x * x + y * y).sqrt();
+        if rho > 1.0 {
+            continue;
+        }
+        let theta = y.atan2(*x);
+        let mut row = Vec::<f64>::with_capacity(active_terms);
+        for j in 3..num_terms {
+            let (n, m) = j_to_nm(j);
+            row.push(zernike_polynomial(n, m, rho, theta));
+        }
+        a.push(row);
+        b.push(*opd);
+        weights.push(1.0);
+    }
+    if a.is_empty() {
+        return None;
+    }
+
+    let solved = solve_weighted_least_squares(&a, &b, &weights);
+    let mut coeffs = vec![0.0; num_terms.max(3)];
+    coeffs[0] = opd_mean;
+    coeffs[1] = tilt_y_scaled * scale_factor;
+    coeffs[2] = tilt_x_scaled * scale_factor;
+    for (offset, coeff) in solved.into_iter().enumerate() {
+        let target = offset + 3;
+        if target < coeffs.len() {
+            coeffs[target] = coeff * scale_factor;
+        }
+    }
+    Some(coeffs)
+}
+
+fn maybe_remove_zernike_outliers(points: Vec<(f64, f64, f64)>) -> Vec<(f64, f64, f64)> {
+    if points.len() < 20 {
+        return points;
+    }
+    let mut values = points.iter().map(|(_, _, opd)| *opd).collect::<Vec<_>>();
+    let Some(median) = median_finite(&mut values) else {
+        return points;
+    };
+    let mut abs_dev = values.iter().map(|v| (v - median).abs()).collect::<Vec<_>>();
+    let Some(mad) = median_finite(&mut abs_dev) else {
+        return points;
+    };
+    let robust_sigma = 1.4826 * mad;
+    if !robust_sigma.is_finite() || robust_sigma <= 0.0 {
+        return points;
+    }
+    let threshold = 6.0 * robust_sigma;
+    let filtered = points
+        .clone()
+        .into_iter()
+        .filter(|(_, _, opd)| (*opd - median).abs() <= threshold)
+        .collect::<Vec<_>>();
+    if filtered.len() < 10 {
+        return points;
+    }
+    filtered
+}
+
+fn median_finite(values: &mut Vec<f64>) -> Option<f64> {
+    values.retain(|v| v.is_finite());
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        Some((values[mid - 1] + values[mid]) / 2.0)
+    } else {
+        Some(values[mid])
+    }
+}
+
+fn solve_weighted_least_squares(a: &[Vec<f64>], b: &[f64], weights: &[f64]) -> Vec<f64> {
+    let m = a.len();
+    let n = a.first().map(Vec::len).unwrap_or(0);
+    let mut atwa = vec![0.0; n * n];
+    let mut atwb = vec![0.0; n];
+
+    for k in 0..m {
+        let row = &a[k];
+        let wk = weights.get(k).copied().unwrap_or(0.0);
+        let bk = b.get(k).copied().unwrap_or(0.0);
+        if !wk.is_finite() || wk == 0.0 {
+            continue;
+        }
+        for i in 0..n {
+            let ai = row.get(i).copied().unwrap_or(0.0);
+            if !ai.is_finite() || ai == 0.0 {
+                continue;
+            }
+            let wai = wk * ai;
+            atwb[i] += wai * bk;
+            let i_base = i * n;
+            for j in 0..=i {
+                let aj = row.get(j).copied().unwrap_or(0.0);
+                if !aj.is_finite() || aj == 0.0 {
+                    continue;
+                }
+                atwa[i_base + j] += wai * aj;
+            }
+        }
+    }
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            atwa[i * n + j] = atwa[j * n + i];
+        }
+    }
+
+    solve_symmetric_system_flat(&atwa, &atwb, n)
+}
+
+fn solve_symmetric_system_flat(a_flat: &[f64], b: &[f64], n: usize) -> Vec<f64> {
+    let mut l = vec![0.0; n * n];
+    for i in 0..n {
+        let i_base = i * n;
+        for j in 0..=i {
+            let j_base = j * n;
+            let mut sum = 0.0;
+            for k in 0..j {
+                sum += l[i_base + k] * l[j_base + k];
+            }
+            if i == j {
+                l[i_base + j] = (a_flat[i_base + i] - sum).max(0.0).sqrt();
+            } else {
+                let ljj = l[j_base + j];
+                if ljj != 0.0 {
+                    l[i_base + j] = (a_flat[i_base + j] - sum) / ljj;
+                }
+            }
+        }
+    }
+
+    let mut y = vec![0.0; n];
+    for i in 0..n {
+        let i_base = i * n;
+        let mut sum = 0.0;
+        for j in 0..i {
+            sum += l[i_base + j] * y[j];
+        }
+        let lii = l[i_base + i];
+        y[i] = if lii != 0.0 { (b[i] - sum) / lii } else { 0.0 };
+    }
+
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut sum = 0.0;
+        for j in (i + 1)..n {
+            sum += l[j * n + i] * x[j];
+        }
+        let lii = l[i * n + i];
+        x[i] = if lii != 0.0 { (y[i] - sum) / lii } else { 0.0 };
+    }
+    x
+}
+
+fn zernike_polynomial(n: usize, m: isize, rho: f64, theta: f64) -> f64 {
+    if !(0.0..=1.0).contains(&rho) {
+        return 0.0;
+    }
+    let radial = zernike_radial(n, m.unsigned_abs(), rho);
+    let delta_m0 = if m == 0 { 1.0 } else { 0.0 };
+    let norm = (2.0 * ((n + 1) as f64) / (1.0 + delta_m0)).sqrt();
+    if m >= 0 {
+        norm * radial * ((m as f64) * theta).cos()
+    } else {
+        norm * radial * ((m.abs() as f64) * theta).sin()
+    }
+}
+
+fn zernike_radial(n: usize, m_abs: usize, rho: f64) -> f64 {
+    if (n as isize - m_abs as isize) % 2 != 0 || m_abs > n {
+        return 0.0;
+    }
+    let k_max = (n - m_abs) / 2;
+    let mut radial = 0.0;
+    for k in 0..=k_max {
+        let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+        let coeff = sign * (factorial((n - k) as u64) as f64)
+            / ((factorial(k as u64) * factorial(((n + m_abs) / 2 - k) as u64) * factorial(((n - m_abs) / 2 - k) as u64)) as f64);
+        radial += coeff * rho.powi((n - 2 * k) as i32);
+    }
+    radial
+}
+
+fn factorial(n: u64) -> u64 {
+    if n <= 1 {
+        return 1;
+    }
+    (2..=n).product()
+}
+
+fn j_to_nm(j: usize) -> (usize, isize) {
+    let n = (((1.0 + 8.0 * j as f64).sqrt() - 1.0) / 2.0).floor() as usize;
+    let j0 = n * (n + 1) / 2;
+    let offset = j.saturating_sub(j0);
+    let m = -(n as isize) + 2 * offset as isize;
+    (n, m)
+}
+
+fn noll_to_nm(noll: usize) -> Option<(usize, isize)> {
+    let mut j = 1usize;
+    for n in 0..=100usize {
+        for m_abs in 0..=n {
+            if (n - m_abs) % 2 != 0 {
+                continue;
+            }
+            if m_abs == 0 {
+                if j == noll {
+                    return Some((n, 0));
+                }
+                j += 1;
+                continue;
+            }
+            for m in [-(m_abs as isize), m_abs as isize] {
+                if j == noll {
+                    return Some((n, m));
+                }
+                j += 1;
+            }
+        }
+    }
+    None
+}
+
+fn osa_index_from_nm(n: usize, m: isize) -> Option<usize> {
+    let value = (n as isize) * ((n + 2) as isize) / 2 + m;
+    if value < 0 { None } else { Some(value as usize) }
+}
+
+fn parse_zernike_unit(raw: &str) -> &'static str {
+    let s = raw.trim().to_ascii_lowercase();
+    if s == "um" || s == "micron" || s == "microns" || s == "µm" || s == "μm" {
+        "um"
+    } else {
+        "waves"
+    }
+}
+
+fn native_effective_focal_length_for_range(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    req_spec: &RequirementSpec,
+) -> Option<f64> {
+    let (start_surf, end_surf) = resolve_subsystem_surface_range(rows, req_spec, false)?;
+    let subsystem = build_isolated_surface_range_system(rows, start_surf, end_surf)?;
+    let metrics = compute_paraxial_metrics(&subsystem, source_rows, object_rows);
+    Some(metrics.efl)
+}
+
+fn native_principal_point_for_range(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    req_spec: &RequirementSpec,
+    which: &str,
+) -> Option<f64> {
+    let (start_surf, end_surf) = resolve_subsystem_surface_range(rows, req_spec, true)?;
+    let subsystem = build_isolated_surface_range_system(rows, start_surf, end_surf)?;
+
+    let effective_surfaces = subsystem
+        .iter()
+        .skip(1)
+        .take(subsystem.len().saturating_sub(2))
+        .filter(|row| !is_gap_optical_row(row) && !is_coord_trans_optical_row(row))
+        .collect::<Vec<_>>();
+    if effective_surfaces.len() == 1 && effective_surfaces.first().map(|row| is_thin_lens_surface_row(row)).unwrap_or(false) {
+        return Some(0.0);
+    }
+
+    let metrics = compute_paraxial_metrics(&subsystem, source_rows, object_rows);
+    if which == "pp2" {
+        return Some(metrics.bfl - metrics.efl);
+    }
+
+    let reverse_system = create_reversed_isolated_optical_system(&subsystem)?;
+    let reverse_metrics = compute_paraxial_metrics(&reverse_system, source_rows, object_rows);
+    Some(reverse_metrics.bfl - reverse_metrics.efl)
+}
+
+fn resolve_subsystem_surface_range(rows: &[Value], req_spec: &RequirementSpec, allow_zoom_group: bool) -> Option<(usize, usize)> {
+    let param2_raw = req_spec.param2.trim();
+    let param3_raw = req_spec.param3.trim();
+    let mode_raw = req_spec.param4.trim().to_ascii_uppercase();
+
+    if param2_raw.is_empty() || param2_raw.eq_ignore_ascii_case("ALL") || param2_raw == "0" {
+        return Some((1, rows.len().saturating_sub(2)));
+    }
+
+    let wants_zoom_group = allow_zoom_group
+        && (mode_raw == "ZG"
+            || param2_raw.to_ascii_uppercase().starts_with("ZG:")
+            || (parse_usize_str(param2_raw).is_none() && param3_raw.is_empty()));
+    if wants_zoom_group {
+        let zoom_label = param2_raw
+            .strip_prefix("ZG:")
+            .or_else(|| param2_raw.strip_prefix("zg:"))
+            .unwrap_or(param2_raw)
+            .trim();
+        if let Some(surface_ids) = zoom_group_surface_ids(rows, req_spec, zoom_label) {
+            return min_max_surface_ids(&surface_ids);
+        }
+    }
+
+    if let Some(start_surf) = parse_usize_str(param2_raw) {
+        let end_surf = parse_usize_str(param3_raw).unwrap_or(rows.len().saturating_sub(2));
+        return Some((start_surf, end_surf));
+    }
+
+    let surface_ids = block_scope_surface_ids(rows, req_spec, param2_raw)?;
+    min_max_surface_ids(&surface_ids)
+}
+
+fn min_max_surface_ids(surface_ids: &[usize]) -> Option<(usize, usize)> {
+    Some((surface_ids.iter().copied().min()?, surface_ids.iter().copied().max()?))
+}
+
+fn block_scope_surface_ids(rows: &[Value], req_spec: &RequirementSpec, raw_scope: &str) -> Option<Vec<usize>> {
+    let tokens = raw_scope
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut matched_block_ids = Vec::<String>::new();
+    for token in tokens {
+        let mut ids = block_ids_for_scope_token(req_spec, token);
+        if ids.is_empty() {
+            ids.push(token.to_string());
+        }
+        for id in ids {
+            if !matched_block_ids.iter().any(|existing| existing == &id) {
+                matched_block_ids.push(id);
+            }
+        }
+    }
+
+    collect_surface_ids_for_block_ids(rows, &matched_block_ids)
+}
+
+fn zoom_group_surface_ids(rows: &[Value], req_spec: &RequirementSpec, zoom_label: &str) -> Option<Vec<usize>> {
+    let target = zoom_label.trim().to_ascii_uppercase();
+    if target.is_empty() {
+        return None;
+    }
+
+    let block_ids = with_optimizer_system_config(|cfg| {
+        blocks_for_requirement_config(cfg, req_spec)
+            .into_iter()
+            .filter_map(Value::as_object)
+            .filter_map(|block| {
+                let block_id = value_to_string(block.get("blockId")).trim().to_string();
+                if block_id.is_empty() {
+                    return None;
+                }
+                let block_type = value_to_string(block.get("blockType"));
+                let zoom_group = block
+                    .get("parameters")
+                    .and_then(Value::as_object)
+                    .map(|params| value_to_string(params.get("zoomGroup")).trim().to_ascii_uppercase())
+                    .unwrap_or_default();
+                if zoom_group == target && surface_count_from_block_type(&block_type) > 0 {
+                    Some(block_id)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    }).unwrap_or_default();
+
+    collect_surface_ids_for_block_ids(rows, &block_ids)
+}
+
+fn block_ids_for_scope_token(req_spec: &RequirementSpec, token: &str) -> Vec<String> {
+    let target = token.trim().to_ascii_uppercase();
+    if target.is_empty() {
+        return Vec::new();
+    }
+
+    with_optimizer_system_config(|cfg| {
+        blocks_for_requirement_config(cfg, req_spec)
+            .into_iter()
+            .filter_map(Value::as_object)
+            .filter_map(|block| {
+                let block_id = value_to_string(block.get("blockId")).trim().to_string();
+                if block_id.is_empty() {
+                    return None;
+                }
+                let name = value_to_string(block.get("name")).trim().to_ascii_uppercase();
+                let block_type = value_to_string(block.get("type").or_else(|| block.get("blockType"))).trim().to_ascii_uppercase();
+                let candidate = format!("{}-{}", block_type, block_id.to_ascii_uppercase());
+                if block_id.to_ascii_uppercase() == target || name == target || candidate == target {
+                    Some(block_id)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    }).unwrap_or_default()
+}
+
+fn blocks_for_requirement_config<'a>(cfg: &'a Value, req_spec: &RequirementSpec) -> Vec<&'a Value> {
+    let configs = cfg.get("configurations").and_then(Value::as_array);
+    let Some(configs) = configs else {
+        return Vec::new();
+    };
+
+    let req_config_id = req_spec.config_id.trim();
+    let active_id = value_to_string(cfg.get("activeConfigId"));
+    let config = configs
+        .iter()
+        .find(|entry| value_to_string(entry.get("id")).trim() == req_config_id)
+        .or_else(|| configs.iter().find(|entry| value_to_string(entry.get("id")).trim() == active_id.trim()))
+        .or_else(|| configs.first());
+
+    config
+        .and_then(|entry| entry.get("blocks"))
+        .and_then(Value::as_array)
+        .map(|blocks| blocks.iter().collect::<Vec<_>>())
+        .unwrap_or_default()
+}
+
+fn collect_surface_ids_for_block_ids(rows: &[Value], block_ids: &[String]) -> Option<Vec<usize>> {
+    if block_ids.is_empty() {
+        return None;
+    }
+
+    let mut surface_ids = Vec::<usize>::new();
+    for row in rows {
+        if is_gap_optical_row(row) || is_coord_trans_optical_row(row) {
+            continue;
+        }
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let object_type = value_to_string(obj.get("object type").or_else(|| obj.get("object"))).trim().to_ascii_lowercase();
+        if object_type == "object" || object_type == "image" {
+            continue;
+        }
+        let block_id = value_to_string(obj.get("_blockId")).trim().to_string();
+        if block_id.is_empty() || !block_ids.iter().any(|id| id == &block_id) {
+            continue;
+        }
+        let block_type = value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType"))).trim().to_ascii_lowercase();
+        let surface_role = value_to_string(obj.get("_surfaceRole").or_else(|| obj.get("surfaceRole"))).trim().to_ascii_lowercase();
+        if (block_type == "paraxial" || block_type == "thinlens") && surface_role == "back" {
+            continue;
+        }
+        let surface_id = obj.get("id").and_then(parse_usize_value)?;
+        if !surface_ids.iter().any(|id| id == &surface_id) {
+            surface_ids.push(surface_id);
+        }
+    }
+
+    if surface_ids.is_empty() {
+        None
+    } else {
+        surface_ids.sort_unstable();
+        Some(surface_ids)
+    }
+}
+
+fn surface_count_from_block_type(block_type_raw: &str) -> usize {
+    match block_type_raw.trim().to_ascii_lowercase().as_str() {
+        "gap" | "coordbreak" | "coordtrans" | "coordtransform" => 0,
+        "objectsurface" | "objectplane" | "stop" | "imagesurface" | "planarmirror" | "surface" | "paraxial" | "thinlens" => 1,
+        "lens" | "toriclens" | "cementedlens" => 2,
+        "doublet" | "triplet" | "prismgroup" | "group3" => 3,
+        _ => 1,
+    }
+}
+
+fn build_isolated_surface_range_system(rows: &[Value], start_surf: usize, end_surf: usize) -> Option<Vec<Value>> {
+    let (start_surf, end_surf) = expand_principal_point_surface_range(rows, start_surf, end_surf)?;
+    build_subsystem_by_surface_ids(rows, start_surf, end_surf)
+}
+
+fn expand_principal_point_surface_range(rows: &[Value], start_surf: usize, end_surf: usize) -> Option<(usize, usize)> {
+    if rows.is_empty() || end_surf < start_surf {
+        return None;
+    }
+    let mut normalized_end = end_surf;
+    let end_row = rows.iter().find_map(|row| {
+        let obj = row.as_object()?;
+        let id = obj.get("id").and_then(parse_usize_value)?;
+        if id == end_surf { Some(obj) } else { None }
+    });
+    let end_block_id = end_row.map(|obj| value_to_string(obj.get("_blockId"))).unwrap_or_default();
+    let end_block_type = end_row
+        .map(|obj| value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType"))).trim().to_ascii_lowercase())
+        .unwrap_or_default();
+
+    if (end_block_type == "paraxial" || end_block_type == "thinlens") && !end_block_id.is_empty() {
+        for row in rows {
+            if is_gap_optical_row(row) || is_coord_trans_optical_row(row) {
+                continue;
+            }
+            let Some(obj) = row.as_object() else {
+                continue;
+            };
+            if value_to_string(obj.get("_blockId")).trim() != end_block_id {
+                continue;
+            }
+            let block_type = value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType"))).trim().to_ascii_lowercase();
+            let surface_role = value_to_string(obj.get("_surfaceRole").or_else(|| obj.get("surfaceRole"))).trim().to_ascii_lowercase();
+            if (block_type == "paraxial" || block_type == "thinlens") && surface_role == "back" {
+                if let Some(back_surface_id) = obj.get("id").and_then(parse_usize_value) {
+                    normalized_end = normalized_end.max(back_surface_id);
+                }
+                break;
+            }
+        }
+    }
+    Some((start_surf, normalized_end))
+}
+
+fn build_subsystem_by_surface_ids(rows: &[Value], start_surf: usize, end_surf: usize) -> Option<Vec<Value>> {
+    if rows.is_empty() || end_surf < start_surf {
+        return None;
+    }
+
+    let normalized_start = start_surf;
+    let normalized_end = end_surf;
+    let object_surface_id = rows
+        .first()
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("id"))
+        .and_then(parse_usize_value)
+        .unwrap_or(1);
+
+    let mut subsystem = Vec::<Value>::new();
+    if normalized_start == object_surface_id {
+        subsystem.push(rows[0].clone());
+    } else {
+        subsystem.push(serde_json::json!({
+            "surface": 0,
+            "object type": "Object",
+            "thickness": "Infinity",
+            "radius": "Infinity",
+            "comment": "Virtual Object"
+        }));
+    }
+
+    for row in rows.iter().skip(1).take(rows.len().saturating_sub(2)) {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let Some(surface_id) = obj.get("id").and_then(parse_usize_value) else {
+            continue;
+        };
+        if surface_id < normalized_start || surface_id > normalized_end {
+            continue;
+        }
+        let mut cloned = obj.clone();
+        cloned.insert("id".to_string(), Value::from(surface_id as i64));
+        subsystem.push(Value::Object(cloned));
+    }
+
+    if subsystem.len() <= 1 {
+        return None;
+    }
+
+    subsystem.push(serde_json::json!({
+        "surface": subsystem.len(),
+        "object type": "Image",
+        "thickness": 0,
+        "radius": "Infinity",
+        "comment": "Image"
+    }));
+    Some(subsystem)
+}
+
+fn create_reversed_isolated_optical_system(rows: &[Value]) -> Option<Vec<Value>> {
+    if rows.len() < 3 {
+        return None;
+    }
+
+    let mut reversed_surfaces = Vec::<Value>::new();
+    for i in (1..rows.len().saturating_sub(1)).rev() {
+        let row = &rows[i];
+        if is_coord_trans_optical_row(row) {
+            continue;
+        }
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let mut reversed = obj.clone();
+        let combined_power = obj.get("__cooptCombinedPower").and_then(parse_number);
+        if combined_power.map(|v| v.is_finite()).unwrap_or(false) {
+            reversed.insert("__cooptCombinedPower".to_string(), Value::from(combined_power.unwrap_or(0.0)));
+            reversed.insert("radius".to_string(), Value::String("Infinity".to_string()));
+        } else if let Some(radius) = obj.get("radius").and_then(parse_number) {
+            if radius.is_finite() {
+                reversed.insert("radius".to_string(), Value::from(-radius));
+            }
+        }
+
+        if i > 1 {
+            if let Some(prev_obj) = rows[i - 1].as_object() {
+                reversed.insert("thickness".to_string(), prev_obj.get("thickness").cloned().unwrap_or(Value::from(0.0)));
+                reversed.insert("material".to_string(), prev_obj.get("material").cloned().unwrap_or(Value::String(String::new())));
+                if let Some(rindex) = prev_obj.get("rindex").cloned() {
+                    reversed.insert("rindex".to_string(), rindex);
+                }
+                if let Some(abbe) = prev_obj.get("abbe").or_else(|| prev_obj.get("Abbe")).or_else(|| prev_obj.get("vd")).or_else(|| prev_obj.get("Vd")).cloned() {
+                    reversed.insert("abbe".to_string(), abbe);
+                }
+            }
+        } else {
+            reversed.insert("thickness".to_string(), Value::from(0.0));
+            reversed.insert("material".to_string(), Value::String(String::new()));
+            reversed.insert("rindex".to_string(), Value::from(1.0));
+            reversed.insert("abbe".to_string(), Value::String(String::new()));
+        }
+
+        reversed_surfaces.push(Value::Object(reversed));
+    }
+
+    if reversed_surfaces.is_empty() {
+        return None;
+    }
+
+    let mut out = Vec::<Value>::new();
+    out.push(serde_json::json!({
+        "object type": "Object",
+        "thickness": "Infinity",
+        "radius": "Infinity",
+        "comment": "Virtual Object for reverse principal-point calc"
+    }));
+    out.extend(reversed_surfaces);
+    out.push(serde_json::json!({
+        "object type": "Image",
+        "thickness": 0,
+        "radius": "Infinity",
+        "comment": "Virtual Image for reverse principal-point calc"
+    }));
+    Some(out)
+}
+
+fn is_coord_trans_optical_row(row: &Value) -> bool {
+    let Some(obj) = row.as_object() else {
+        return false;
+    };
+    let fields = [
+        obj.get("surfType"),
+        obj.get("type"),
+        obj.get("surfaceType"),
+        obj.get("surface_type"),
+        obj.get("surfTypeName"),
+        obj.get("object type"),
+        obj.get("object"),
+        obj.get("Object"),
+        obj.get("comment"),
+        obj.get("Comment"),
+        obj.get("blockType"),
+        obj.get("block_type"),
+        obj.get("blockTypeName"),
+    ];
+    fields.into_iter().flatten().any(|value| {
+        let s = value_to_string(Some(value)).trim().to_ascii_lowercase();
+        s == "ct" || s == "coordtrans" || s == "coordinatebreak" || s == "coord trans" || s == "coordinate break"
+            || s.contains("coord trans") || s.contains("coordinate break")
+    })
+}
+
+fn is_gap_optical_row(row: &Value) -> bool {
+    let Some(obj) = row.as_object() else {
+        return false;
+    };
+    let fields = [
+        obj.get("_blockType"),
+        obj.get("blockType"),
+        obj.get("block_type"),
+        obj.get("blockTypeName"),
+        obj.get("surfType"),
+        obj.get("type"),
+        obj.get("surfaceType"),
+        obj.get("surface_type"),
+        obj.get("object type"),
+        obj.get("object"),
+        obj.get("Object"),
+        obj.get("_surfaceRole"),
+        obj.get("comment"),
+        obj.get("Comment"),
+    ];
+    fields.into_iter().flatten().any(|value| {
+        let s = value_to_string(Some(value)).trim().to_ascii_lowercase().replace([' ', '_', '-'], "");
+        s == "gap" || s == "airgap"
+    })
+}
+
+fn is_thin_lens_surface_row(row: &Value) -> bool {
+    let Some(obj) = row.as_object() else {
+        return false;
+    };
+    let block_type = value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType")).or_else(|| obj.get("block_type")).or_else(|| obj.get("blockTypeName")))
+        .trim()
+        .to_ascii_lowercase();
+    block_type == "thinlens" || block_type == "paraxial"
+}
+
+fn run_native_spherical_aberration_for_requirement(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    req_spec: &RequirementSpec,
+) -> Option<Vec<NativeSphericalAberrationSeries>> {
+    let source_rows_effective = source_rows_for_wavelength_param(source_rows, &req_spec.param1);
+    let req = NativeSphericalAberrationRequest {
+        optical_system_rows: rows.to_vec(),
+        source_rows: source_rows_effective,
+        object_rows: object_rows.to_vec(),
+        surface_index: Some(image_surface_index(rows)),
+        ray_count: None,
+        reference_focus_mode: Some("primary-paraxial".to_string()),
+        wavelength_mode: Some("primary".to_string()),
+    };
+    let resp = run_native_spherical_aberration(req).ok()?;
+    Some(resp.meridional_data)
+}
+
+fn series_points_for_wavelength<'a>(
+    series_list: &'a [NativeSphericalAberrationSeries],
+    wavelength: f64,
+) -> Option<Vec<&'a NativeSphericalAberrationPoint>> {
+    let series = series_list
+        .iter()
+        .find(|entry| (entry.wavelength - wavelength).abs() < 1e-9)
+        .or_else(|| series_list.first())?;
+    let mut points = series
+        .points
+        .iter()
+        .filter(|point| point.pupil_coordinate.is_finite() && point.longitudinal_aberration.is_finite())
+        .collect::<Vec<_>>();
+    points.sort_by(|a, b| a.pupil_coordinate.partial_cmp(&b.pupil_coordinate).unwrap_or(std::cmp::Ordering::Equal));
+    Some(points)
 }
 
 fn native_chief_ray_angle_deg(
@@ -2787,6 +3832,79 @@ fn parse_number_from_str(s: &str) -> Option<f64> {
         return None;
     }
     t.parse::<f64>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_requirement(param2: &str, param3: &str, param4: &str) -> RequirementSpec {
+        RequirementSpec {
+            id: "req-1".to_string(),
+            config_id: "cfg-1".to_string(),
+            enabled: true,
+            operand: "PP1".to_string(),
+            op: "=".to_string(),
+            target: 0.0,
+            tol: 0.0,
+            weight: 1.0,
+            param1: "".to_string(),
+            param2: param2.to_string(),
+            param3: param3.to_string(),
+            param4: param4.to_string(),
+            param5: "".to_string(),
+        }
+    }
+
+    fn sample_rows() -> Vec<Value> {
+        vec![
+            serde_json::json!({ "id": 0, "object": "object" }),
+            serde_json::json!({ "id": 1, "_blockId": "L1", "_blockType": "lens", "_surfaceRole": "front" }),
+            serde_json::json!({ "id": 2, "_blockId": "L1", "_blockType": "lens", "_surfaceRole": "back" }),
+            serde_json::json!({ "id": 3, "object": "gap", "_blockId": "G1", "_blockType": "gap" }),
+            serde_json::json!({ "id": 4, "_blockId": "L2", "_blockType": "lens", "_surfaceRole": "front" }),
+            serde_json::json!({ "id": 5, "_blockId": "L2", "_blockType": "lens", "_surfaceRole": "back" }),
+            serde_json::json!({ "id": 6, "object": "image" }),
+        ]
+    }
+
+    fn sample_system_config() -> Value {
+        serde_json::json!({
+            "activeConfigId": "cfg-1",
+            "configurations": [
+                {
+                    "id": "cfg-1",
+                    "blocks": [
+                        { "blockId": "L1", "name": "Lens Alpha", "type": "lens", "blockType": "lens", "parameters": { "zoomGroup": "A" } },
+                        { "blockId": "G1", "name": "Gap 1", "type": "gap", "blockType": "gap", "parameters": {} },
+                        { "blockId": "L2", "name": "Lens Beta", "type": "lens", "blockType": "lens", "parameters": { "zoomGroup": "B" } }
+                    ]
+                }
+            ]
+        })
+    }
+
+    #[test]
+    fn resolves_zoom_group_scope_to_surface_range() {
+        let rows = sample_rows();
+        let req = make_requirement("A", "", "ZG");
+        let _guard = OptimizerSystemConfigGuard::install(Some(sample_system_config()));
+
+        let range = resolve_subsystem_surface_range(&rows, &req, true);
+
+        assert_eq!(range, Some((1, 2)));
+    }
+
+    #[test]
+    fn resolves_block_label_scope_to_surface_range() {
+        let rows = sample_rows();
+        let req = make_requirement("Lens Beta", "", "");
+        let _guard = OptimizerSystemConfigGuard::install(Some(sample_system_config()));
+
+        let range = resolve_subsystem_surface_range(&rows, &req, false);
+
+        assert_eq!(range, Some((4, 5)));
+    }
 }
 
 fn value_to_f64(v: &Value) -> Option<f64> {

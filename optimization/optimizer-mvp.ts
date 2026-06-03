@@ -184,6 +184,23 @@ async function runOptimizationMvpnative(options = {}) {
 
   const methodRaw = String(opts.method || 'kkt').trim().toLowerCase();
   const method = (methodRaw === 'cd' || methodRaw === 'lm' || methodRaw === 'kkt') ? methodRaw : 'kkt';
+
+  const systemConfigSnapshot = (() => {
+    if (opts.systemConfigSnapshot && typeof opts.systemConfigSnapshot === 'object') {
+      try { return JSON.parse(JSON.stringify(opts.systemConfigSnapshot)); } catch (_) {}
+      return opts.systemConfigSnapshot;
+    }
+    try {
+      const w = window as any;
+      const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+        ? w.loadSystemConfigurationsFromTableConfig()
+        : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+      if (cfg && typeof cfg === 'object') {
+        try { return JSON.parse(JSON.stringify(cfg)); } catch (_) { return cfg; }
+      }
+    } catch (_) {}
+    return null;
+  })();
   const maxIterations = Number.isFinite(Number(opts.maxIterations))
     ? Math.max(1, Math.floor(Number(opts.maxIterations)))
     : 24;
@@ -279,6 +296,7 @@ async function runOptimizationMvpnative(options = {}) {
           sourceRows,
           objectRows,
           activeConfigId,
+          systemConfigSnapshot,
           systemRequirementsRows,
           sessionId,
           resetSession: consumedIterations === 0,
@@ -471,13 +489,51 @@ function findUnsupportedNativeRequirementOperands(requirementRows = []) {
 }
 
 function hasAsyncPreferredRequirementOperands(requirementRows = []) {
+  const asyncPreferredOperands = new Set([
+    'TOT3_SPH',
+    'TOT3_COMA',
+    'TOT3_ASTI',
+    'TOT3_FCUR',
+    'TOT3_DIST',
+    'TOT3_PETZ',
+    'TOT_LCA',
+    'TOT_TCA',
+    'FL',
+    'EFL',
+    'BFL',
+    'IMD',
+    'OBJD',
+    'TSL',
+    'BEXP',
+    'EXPD',
+    'EXPP',
+    'ENPD',
+    'ENPP',
+    'ENPM',
+    'PMAG',
+    'FNO_OBJ',
+    'FNO_IMG',
+    'FNO_WRK',
+    'NA_OBJ',
+    'NA_IMG',
+    'SPOT_SIZE_ANNULAR',
+    'SPOT_SIZE_RECT',
+    'SPOT_SIZE_CURRENT',
+    'CRA_DEG',
+    'LA_RMS_UM',
+    'TA_RMS_UM',
+    'OPD_RMS_WAVES',
+    'OPD_RMS_UM',
+    'ZERN_COEFF',
+    'SA',
+  ]);
   for (const row of Array.isArray(requirementRows) ? requirementRows : []) {
     if (!row || typeof row !== 'object') continue;
     const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
     const operand = String(row.operand ?? '').trim();
     const weight = Number(row.weight ?? 1);
     if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
-    if (operand === 'OPD_RMS_WAVES' || operand === 'OPD_RMS_UM') {
+    if (asyncPreferredOperands.has(operand)) {
       return true;
     }
   }
@@ -2112,7 +2168,7 @@ function yieldViaMessageChannel(callback: () => void): void {
 }
 
 let __cooptLastOptimizerUiYieldAt = 0;
-const COOPT_OPTIMIZER_UI_YIELD_MIN_INTERVAL_MS = 32;
+const COOPT_OPTIMIZER_UI_YIELD_MIN_INTERVAL_MS = 120;
 
 function nextFrame() {
   const prof = (() => {

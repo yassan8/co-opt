@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  NativeChiefRayAngleRequest,
+  NativeChiefRayAngleResponse,
+  NativeParaxialMetrics,
+  NativeParaxialMetricsRequest,
+  NativeParaxialMetricsResponse,
+  NativeSeidelRequest,
+  NativeSeidelResponse,
   NativeAstigmatismRequest,
   NativeAstigmatismResponse,
   NativeAstigmatismDebugRequest,
@@ -1575,6 +1582,184 @@ export async function runNativeSphericalAberration(
     } as NativeSphericalAberrationResponse;
   }
   return invokeCommand<NativeSphericalAberrationRequest, NativeSphericalAberrationResponse>("run_native_spherical_aberration", payload);
+}
+
+export async function runNativeChiefRayAngle(
+  payload: NativeChiefRayAngleRequest,
+): Promise<NativeChiefRayAngleResponse> {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
+  const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
+
+  if (!isTauriRuntime()) {
+    if (opticalSystemRows.length === 0) throw new Error("runNativeChiefRayAngle(web): opticalSystemRows is empty");
+    if (objectRows.length === 0) throw new Error("runNativeChiefRayAngle(web): objectRows is empty");
+
+    const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+    const rust = await preloadRustRayTracingWasm();
+    const runNativeWasm = (rust as any)?.run_native_chief_ray_angle_wasm_json;
+    if (typeof runNativeWasm !== "function") {
+      const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
+      throw new Error(
+        "runNativeChiefRayAngle(web): Rust-WASM chief ray angle API is unavailable. "
+        + `Reason=${initError || "missing export run_native_chief_ray_angle_wasm_json"}`,
+      );
+    }
+
+    const wasmOutRaw = runNativeWasm(JSON.stringify({
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+    }));
+    const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
+    const chiefRayAngleDeg = Number((wasmOut as any)?.chiefRayAngleDeg);
+    if (!Number.isFinite(chiefRayAngleDeg)) {
+      throw new Error(
+        "runNativeChiefRayAngle(web): Rust-WASM chief ray angle API returned no finite value. "
+        + `Message=${String((wasmOut as any)?.message || "unknown")}`,
+      );
+    }
+
+    return {
+      backend: String((wasmOut as any)?.backend || "web-rust-wasm"),
+      chiefRayAngleDeg,
+      message: String((wasmOut as any)?.message || "Computed via Web Rust/WASM chief ray angle API"),
+    } as NativeChiefRayAngleResponse;
+  }
+
+  return invokeCommand<NativeChiefRayAngleRequest, NativeChiefRayAngleResponse>(
+    "run_native_chief_ray_angle",
+    {
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+    },
+  );
+}
+
+export async function runNativeParaxialMetrics(
+  payload: NativeParaxialMetricsRequest,
+): Promise<NativeParaxialMetricsResponse> {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
+  const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
+
+  if (!isTauriRuntime()) {
+    if (opticalSystemRows.length === 0) throw new Error("runNativeParaxialMetrics(web): opticalSystemRows is empty");
+
+    const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+    const rust = await preloadRustRayTracingWasm();
+    const runNativeWasm = (rust as any)?.run_native_paraxial_metrics_wasm_json;
+    if (typeof runNativeWasm !== "function") {
+      const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
+      throw new Error(
+        "runNativeParaxialMetrics(web): Rust-WASM paraxial metrics API is unavailable. "
+        + `Reason=${initError || "missing export run_native_paraxial_metrics_wasm_json"}`,
+      );
+    }
+
+    const wasmOutRaw = runNativeWasm(JSON.stringify({
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+    }));
+    const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
+    const rawMetrics = ((wasmOut as any)?.metrics && typeof (wasmOut as any).metrics === "object")
+      ? (wasmOut as any).metrics
+      : {};
+    const toMetric = (key: keyof NativeParaxialMetrics): number => {
+      const value = Number((rawMetrics as any)?.[key]);
+      return Number.isFinite(value) ? value : 0;
+    };
+    const metrics: NativeParaxialMetrics = {
+      FL: toMetric("FL"),
+      EFL: toMetric("EFL"),
+      BFL: toMetric("BFL"),
+      IMD: toMetric("IMD"),
+      OBJD: toMetric("OBJD"),
+      TSL: toMetric("TSL"),
+      BEXP: toMetric("BEXP"),
+      EXPD: toMetric("EXPD"),
+      EXPP: toMetric("EXPP"),
+      ENPD: toMetric("ENPD"),
+      ENPP: toMetric("ENPP"),
+      ENPM: toMetric("ENPM"),
+      PMAG: toMetric("PMAG"),
+      FNO_OBJ: toMetric("FNO_OBJ"),
+      FNO_IMG: toMetric("FNO_IMG"),
+      FNO_WRK: toMetric("FNO_WRK"),
+      NA_OBJ: toMetric("NA_OBJ"),
+      NA_IMG: toMetric("NA_IMG"),
+    };
+
+    return {
+      backend: String((wasmOut as any)?.backend || "web-rust-wasm"),
+      metrics,
+      message: String((wasmOut as any)?.message || "Computed via Web Rust/WASM paraxial metrics API"),
+    } as NativeParaxialMetricsResponse;
+  }
+
+  return invokeCommand<NativeParaxialMetricsRequest, NativeParaxialMetricsResponse>(
+    "run_native_paraxial_metrics",
+    {
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+    },
+  );
+}
+
+export async function runNativeSeidel(
+  payload: NativeSeidelRequest,
+): Promise<NativeSeidelResponse> {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
+  const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
+  const afocal = payload?.afocal === true;
+  const referenceWavelengthUm = Number(payload?.referenceWavelengthUm);
+
+  if (!isTauriRuntime()) {
+    if (opticalSystemRows.length === 0) throw new Error("runNativeSeidel(web): opticalSystemRows is empty");
+
+    const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+    const rust = await preloadRustRayTracingWasm();
+    const runNativeWasm = (rust as any)?.run_native_seidel_wasm_json;
+    if (typeof runNativeWasm !== "function") {
+      const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
+      throw new Error(
+        "runNativeSeidel(web): Rust-WASM Seidel API is unavailable. "
+        + `Reason=${initError || "missing export run_native_seidel_wasm_json"}`,
+      );
+    }
+
+    const wasmOutRaw = runNativeWasm(JSON.stringify({
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+      afocal,
+      referenceWavelengthUm: Number.isFinite(referenceWavelengthUm) ? referenceWavelengthUm : undefined,
+    }));
+    const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
+    return {
+      backend: String((wasmOut as any)?.backend || "web-rust-wasm"),
+      totals: ((wasmOut as any)?.totals && typeof (wasmOut as any).totals === "object") ? (wasmOut as any).totals : {},
+      surfaceCoefficients: Array.isArray((wasmOut as any)?.surfaceCoefficients) ? (wasmOut as any).surfaceCoefficients : [],
+      stopSurfaceIndex: Number((wasmOut as any)?.stopSurfaceIndex) || 0,
+      wavelengthUm: Number((wasmOut as any)?.wavelengthUm) || 0,
+      message: String((wasmOut as any)?.message || "Computed via Web Rust/WASM Seidel API"),
+    } as NativeSeidelResponse;
+  }
+
+  return invokeCommand<NativeSeidelRequest, NativeSeidelResponse>(
+    "run_native_seidel",
+    {
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+      afocal,
+      referenceWavelengthUm: Number.isFinite(referenceWavelengthUm) ? referenceWavelengthUm : undefined,
+    },
+  );
 }
 
 export async function logNativeAstigmatismDebug(

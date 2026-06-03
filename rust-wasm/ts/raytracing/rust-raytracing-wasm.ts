@@ -25,6 +25,9 @@ export type RustRayTracingWasm = {
     count: number
   ) => Float64Array | number[];
   trace_ray_batch_with_system_json: (rayArrayPtr: number, systemMetaJSON: string, rowCount: number, nStart: number) => any;
+  run_native_chief_ray_angle_wasm_json?: (reqJson: string) => any;
+  run_native_paraxial_metrics_wasm_json?: (reqJson: string) => any;
+  run_native_seidel_wasm_json?: (reqJson: string) => any;
   run_native_opd_map_wasm_json?: (reqJson: string) => any;
   run_native_opd_rms_waves_wasm_json?: (reqJson: string) => any;
   compute_native_opd_grid_rms_waves_wasm_json?: (reqJson: string) => any;
@@ -350,6 +353,9 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           generate_centered_grid_offsets_flat: mod.generate_centered_grid_offsets_flat,
           generate_parallel_start_points_flat: mod.generate_parallel_start_points_flat,
           trace_ray_batch_with_system_json: mod.trace_ray_batch_with_system_json,
+          run_native_chief_ray_angle_wasm_json: mod.run_native_chief_ray_angle_wasm_json,
+          run_native_paraxial_metrics_wasm_json: mod.run_native_paraxial_metrics_wasm_json,
+          run_native_seidel_wasm_json: mod.run_native_seidel_wasm_json,
           run_native_opd_map_wasm_json: mod.run_native_opd_map_wasm_json,
           run_native_opd_rms_waves_wasm_json: mod.run_native_opd_rms_waves_wasm_json,
           compute_native_opd_grid_rms_waves_wasm_json: mod.compute_native_opd_grid_rms_waves_wasm_json,
