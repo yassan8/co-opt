@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use rayon::prelude::*;
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -51,56 +50,56 @@ const KKT_PENALTY_INCREASE_FACTOR: f64 = 1.5;
 static OPTIMIZER_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static OPTIMIZER_SESSIONS: LazyLock<Mutex<HashMap<String, OptimizerSessionState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-
-thread_local! {
-    static OPTIMIZER_PROFILE: RefCell<Option<OptimizerProfileAccumulator>> = const { RefCell::new(None) };
-    static OPTIMIZER_APP_HANDLE: RefCell<Option<AppHandle>> = const { RefCell::new(None) };
-    static OPTIMIZER_SYSTEM_CONFIG: RefCell<Option<Value>> = const { RefCell::new(None) };
-}
+static OPTIMIZER_PROFILE: LazyLock<Mutex<Option<OptimizerProfileAccumulator>>> =
+    LazyLock::new(|| Mutex::new(None));
+static OPTIMIZER_APP_HANDLE: LazyLock<Mutex<Option<AppHandle>>> =
+    LazyLock::new(|| Mutex::new(None));
+static OPTIMIZER_SYSTEM_CONFIG: LazyLock<Mutex<Option<Value>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 struct OptimizerAppHandleGuard;
 struct OptimizerSystemConfigGuard;
 
 impl OptimizerAppHandleGuard {
     fn install(app: AppHandle) -> Self {
-        OPTIMIZER_APP_HANDLE.with(|slot| {
-            *slot.borrow_mut() = Some(app);
-        });
+        if let Ok(mut slot) = OPTIMIZER_APP_HANDLE.lock() {
+            *slot = Some(app);
+        }
         Self
     }
 }
 
 impl Drop for OptimizerAppHandleGuard {
     fn drop(&mut self) {
-        OPTIMIZER_APP_HANDLE.with(|slot| {
-            *slot.borrow_mut() = None;
-        });
+        if let Ok(mut slot) = OPTIMIZER_APP_HANDLE.lock() {
+            *slot = None;
+        }
     }
 }
 
 impl OptimizerSystemConfigGuard {
     fn install(system_config: Option<Value>) -> Self {
-        OPTIMIZER_SYSTEM_CONFIG.with(|slot| {
-            *slot.borrow_mut() = system_config;
-        });
+        if let Ok(mut slot) = OPTIMIZER_SYSTEM_CONFIG.lock() {
+            *slot = system_config;
+        }
         Self
     }
 }
 
 impl Drop for OptimizerSystemConfigGuard {
     fn drop(&mut self) {
-        OPTIMIZER_SYSTEM_CONFIG.with(|slot| {
-            *slot.borrow_mut() = None;
-        });
+        if let Ok(mut slot) = OPTIMIZER_SYSTEM_CONFIG.lock() {
+            *slot = None;
+        }
     }
 }
 
 fn with_optimizer_app_handle<R>(f: impl FnOnce(&AppHandle) -> R) -> Option<R> {
-    OPTIMIZER_APP_HANDLE.with(|slot| slot.borrow().as_ref().map(f))
+    OPTIMIZER_APP_HANDLE.lock().ok().and_then(|slot| slot.as_ref().map(f))
 }
 
 fn with_optimizer_system_config<R>(f: impl FnOnce(&Value) -> R) -> Option<R> {
-    OPTIMIZER_SYSTEM_CONFIG.with(|slot| slot.borrow().as_ref().map(f))
+    OPTIMIZER_SYSTEM_CONFIG.lock().ok().and_then(|slot| slot.as_ref().map(f))
 }
 
 #[derive(Clone, Default)]
@@ -291,50 +290,53 @@ impl OptimizerProfileAccumulator {
 }
 
 fn optimizer_profile_begin(enabled: bool) {
-    OPTIMIZER_PROFILE.with(|slot| {
-        *slot.borrow_mut() = if enabled {
+    if let Ok(mut slot) = OPTIMIZER_PROFILE.lock() {
+        *slot = if enabled {
             Some(OptimizerProfileAccumulator::default())
         } else {
             None
         };
-    });
+    }
 }
 
 fn optimizer_profile_finish() -> Option<OptimizeProfileReport> {
-    OPTIMIZER_PROFILE.with(|slot| slot.borrow_mut().take().map(OptimizerProfileAccumulator::into_report))
+    OPTIMIZER_PROFILE
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take().map(OptimizerProfileAccumulator::into_report))
 }
 
 fn optimizer_profile_record_evaluate_state() {
-    OPTIMIZER_PROFILE.with(|slot| {
-        if let Some(accum) = slot.borrow_mut().as_mut() {
+    if let Ok(mut slot) = OPTIMIZER_PROFILE.lock() {
+        if let Some(accum) = slot.as_mut() {
             accum.evaluate_state_calls += 1;
         }
-    });
+    }
 }
 
 fn optimizer_profile_record_requirement_pass() {
-    OPTIMIZER_PROFILE.with(|slot| {
-        if let Some(accum) = slot.borrow_mut().as_mut() {
+    if let Ok(mut slot) = OPTIMIZER_PROFILE.lock() {
+        if let Some(accum) = slot.as_mut() {
             accum.requirement_passes += 1;
         }
-    });
+    }
 }
 
 fn optimizer_profile_record_cache_hit(cache_key: &str, operand: &str) {
-    OPTIMIZER_PROFILE.with(|slot| {
-        if let Some(accum) = slot.borrow_mut().as_mut() {
+    if let Ok(mut slot) = OPTIMIZER_PROFILE.lock() {
+        if let Some(accum) = slot.as_mut() {
             let entry = accum.operand_entries.entry(cache_key.to_string()).or_default();
             if entry.operand.is_empty() {
                 entry.operand = operand.to_string();
             }
             entry.cache_hits += 1;
         }
-    });
+    }
 }
 
 fn optimizer_profile_record_operand_eval(cache_key: &str, operand: &str, elapsed_nanos: u128) {
-    OPTIMIZER_PROFILE.with(|slot| {
-        if let Some(accum) = slot.borrow_mut().as_mut() {
+    if let Ok(mut slot) = OPTIMIZER_PROFILE.lock() {
+        if let Some(accum) = slot.as_mut() {
             let entry = accum.operand_entries.entry(cache_key.to_string()).or_default();
             if entry.operand.is_empty() {
                 entry.operand = operand.to_string();
@@ -344,7 +346,7 @@ fn optimizer_profile_record_operand_eval(cache_key: &str, operand: &str, elapsed
             entry.total_nanos += elapsed_nanos;
             entry.max_nanos = entry.max_nanos.max(elapsed_nanos);
         }
-    });
+    }
 }
 
 #[derive(Clone)]
@@ -1955,6 +1957,8 @@ fn evaluate_requirements(rows: &[Value], source_rows: &[Value], object_rows: &[V
     let mut score = 0.0_f64;
     let mut violation_score = 0.0_f64;
     let mut operand_cache: HashMap<&str, Option<f64>> = HashMap::with_capacity(requirements.len());
+    let mut prefetched_cache_keys = prefill_batched_transverse_rms_cache(rows, source_rows, object_rows, requirements, &mut operand_cache);
+    prefetched_cache_keys.extend(prefill_parallel_opd_rms_cache(rows, source_rows, object_rows, requirements, &mut operand_cache));
 
     for req in requirements {
         if is_stop_requested() {
@@ -1966,7 +1970,9 @@ fn evaluate_requirements(rows: &[Value], source_rows: &[Value], object_rows: &[V
 
         let cache_key = req.cache_key.as_str();
         let raw_current = if let Some(v) = operand_cache.get(cache_key) {
-            optimizer_profile_record_cache_hit(cache_key, &req.operand);
+            if !prefetched_cache_keys.contains(cache_key) {
+                optimizer_profile_record_cache_hit(cache_key, &req.operand);
+            }
             *v
         } else {
             let t0 = Instant::now();
@@ -2340,6 +2346,174 @@ fn native_transverse_rms_um(
     }
     let rms_mm = (sum_sq_mm / count as f64).sqrt();
     Some(rms_mm * 1000.0)
+}
+
+fn transverse_rms_um_from_series(
+    meridional_series: Option<&NativeTransverseAberrationSeries>,
+    sagittal_series: Option<&NativeTransverseAberrationSeries>,
+    component: &str,
+) -> Option<f64> {
+    let meridional_stats = meridional_series
+        .map(|series| collect_ta_stats(std::slice::from_ref(series)))
+        .unwrap_or((0.0, 0));
+    let sagittal_stats = sagittal_series
+        .map(|series| collect_ta_stats(std::slice::from_ref(series)))
+        .unwrap_or((0.0, 0));
+
+    let (sum_sq_mm, count) = if component == "meridional" {
+        if meridional_stats.1 > 0 {
+            meridional_stats
+        } else {
+            sagittal_stats
+        }
+    } else if component == "sagittal" {
+        if sagittal_stats.1 > 0 {
+            sagittal_stats
+        } else {
+            meridional_stats
+        }
+    } else {
+        (
+            meridional_stats.0 + sagittal_stats.0,
+            meridional_stats.1 + sagittal_stats.1,
+        )
+    };
+
+    if count == 0 {
+        return None;
+    }
+    Some((sum_sq_mm / count as f64).sqrt() * 1000.0)
+}
+
+fn evaluate_batched_transverse_rms<'a>(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    requirements: &[&'a RequirementSpec],
+) -> Option<Vec<(&'a RequirementSpec, Option<f64>)>> {
+    let first = *requirements.first()?;
+    let surface_index = image_surface_index(rows);
+    let ray_count = parse_ta_rms_ray_count(&first.param4);
+    let source_rows_effective = source_rows_for_wavelength_param(source_rows, &first.param1);
+    let wavelength = resolve_requirement_wavelength_um(source_rows, &first.param1);
+    let mut batched_object_rows = Vec::with_capacity(requirements.len());
+
+    for req in requirements {
+        let selected = select_object_rows_for_requirement(object_rows, &req.param2);
+        if selected.len() != 1 {
+            return None;
+        }
+        batched_object_rows.push(selected[0].clone());
+    }
+
+    let req = NativeTransverseAberrationRequest {
+        optical_system_rows: rows.to_vec(),
+        source_rows: source_rows_effective,
+        object_rows: batched_object_rows,
+        surface_index: Some(surface_index),
+        ray_count: Some(ray_count),
+        ring_count: Some(10),
+        pattern: Some("cross".to_string()),
+        wavelength_mode: Some("primary".to_string()),
+        wavelength: Some(wavelength),
+    };
+
+    let resp = run_native_transverse_aberration(req).ok()?;
+    if resp.meridional_data.len() < requirements.len() || resp.sagittal_data.len() < requirements.len() {
+        return None;
+    }
+
+    Some(
+        requirements
+            .iter()
+            .enumerate()
+            .map(|(idx, req_spec)| {
+                (
+                    *req_spec,
+                    transverse_rms_um_from_series(
+                        resp.meridional_data.get(idx),
+                        resp.sagittal_data.get(idx),
+                        normalize_ta_component(&req_spec.param3),
+                    ),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn prefill_batched_transverse_rms_cache<'a>(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    requirements: &'a [RequirementSpec],
+    operand_cache: &mut HashMap<&'a str, Option<f64>>,
+) -> HashSet<&'a str> {
+    let mut prefetched = HashSet::new();
+    let mut groups: HashMap<String, Vec<&RequirementSpec>> = HashMap::new();
+
+    for req in requirements {
+        if !req.enabled || req.operand != "TA_RMS_UM" {
+            continue;
+        }
+        let group_key = format!("{}|{}", req.param1, req.param4);
+        groups.entry(group_key).or_default().push(req);
+    }
+
+    for group in groups.into_values() {
+        if group.len() < 2 {
+            continue;
+        }
+        let t0 = Instant::now();
+        let Some(results) = evaluate_batched_transverse_rms(rows, source_rows, object_rows, &group) else {
+            continue;
+        };
+        let elapsed_nanos = t0.elapsed().as_nanos();
+        let share_nanos = elapsed_nanos / (results.len().max(1) as u128);
+
+        for (req, value) in results {
+            let cache_key = req.cache_key.as_str();
+            operand_cache.insert(cache_key, value);
+            prefetched.insert(cache_key);
+            optimizer_profile_record_operand_eval(cache_key, &req.operand, share_nanos);
+        }
+    }
+
+    prefetched
+}
+
+fn prefill_parallel_opd_rms_cache<'a>(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    requirements: &'a [RequirementSpec],
+    operand_cache: &mut HashMap<&'a str, Option<f64>>,
+) -> HashSet<&'a str> {
+    let opd_requirements: Vec<&RequirementSpec> = requirements
+        .iter()
+        .filter(|req| req.enabled && (req.operand == "OPD_RMS_WAVES" || req.operand == "OPD_RMS_UM"))
+        .collect();
+    if opd_requirements.len() < 2 {
+        return HashSet::new();
+    }
+
+    let results: Vec<(&RequirementSpec, Option<f64>, u128)> = opd_requirements
+        .par_iter()
+        .map(|req| {
+            let t0 = Instant::now();
+            let value = native_opd_rms_waves(rows, source_rows, object_rows, req);
+            (*req, value, t0.elapsed().as_nanos())
+        })
+        .collect();
+
+    let mut prefetched = HashSet::with_capacity(results.len());
+    for (req, value, elapsed_nanos) in results {
+        let cache_key = req.cache_key.as_str();
+        operand_cache.insert(cache_key, value);
+        prefetched.insert(cache_key);
+        optimizer_profile_record_operand_eval(cache_key, &req.operand, elapsed_nanos);
+    }
+
+    prefetched
 }
 
 fn native_spherical_aberration_um(
