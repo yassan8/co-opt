@@ -63,18 +63,34 @@ fn build_request(project: &Value, max_iterations: u32) -> OptimizeStepRequest {
     }
 }
 
-fn parse_args() -> Result<(String, u32), String> {
+fn parse_args() -> Result<(String, u32, u32), String> {
     let mut args = env::args().skip(1);
     let input = args
         .next()
-        .ok_or_else(|| "usage: cargo run --bin optimizer_profile -- <project.json> [iterations]".to_string())?;
+        .ok_or_else(|| "usage: cargo run --bin optimizer_profile -- <project.json> [iterations] [repeat]".to_string())?;
     let iterations = args
         .next()
         .map(|value| value.parse::<u32>().map_err(|err| format!("invalid iterations '{}': {}", value, err)))
         .transpose()?
         .unwrap_or(1)
         .max(1);
-    Ok((input, iterations))
+    let repeat = args
+        .next()
+        .map(|value| value.parse::<u32>().map_err(|err| format!("invalid repeat '{}': {}", value, err)))
+        .transpose()?
+        .unwrap_or(1)
+        .max(1);
+    Ok((input, iterations, repeat))
+}
+
+fn median(values: &mut [f64]) -> f64 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        (values[mid - 1] + values[mid]) * 0.5
+    } else {
+        values[mid]
+    }
 }
 
 fn main() {
@@ -91,30 +107,61 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let (input_path, iterations) = parse_args()?;
+    let (input_path, iterations, repeat) = parse_args()?;
     let project = load_project(&input_path)?;
-    let req = build_request(&project, iterations);
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .build(tauri::generate_context!())
         .map_err(|err| format!("failed to build tauri app: {}", err))?;
 
-    let started_at = Instant::now();
-    let resp = run_optimizer_step(app.handle().clone(), req)?;
-    let elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0;
-    let profile = resp.profile.ok_or_else(|| "missing optimizer profile report".to_string())?;
-    let total_operand_ms: f64 = profile.operand_entries.iter().map(|entry| entry.total_ms).sum();
+    let mut elapsed_runs = Vec::with_capacity(repeat as usize);
+    let mut operand_totals = Vec::with_capacity(repeat as usize);
+    let mut final_response = None;
+    let mut final_profile = None;
+
+    for run_index in 0..repeat {
+        let req = build_request(&project, iterations);
+        let started_at = Instant::now();
+        let mut resp = run_optimizer_step(app.handle().clone(), req)?;
+        let elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0;
+        let profile = resp.profile.take().ok_or_else(|| "missing optimizer profile report".to_string())?;
+        let total_operand_ms: f64 = profile.operand_entries.iter().map(|entry| entry.total_ms).sum();
+        println!(
+            "optimizer-profile run={} vars={} iter={} merit_before={:.6} merit_after={:.6} eval_calls={} req_passes={} elapsed_ms={:.3} operand_total_ms={:.3}",
+            run_index + 1,
+            resp.variable_count,
+            resp.iterations,
+            resp.merit_before,
+            resp.merit_after,
+            profile.evaluate_state_calls,
+            profile.requirement_passes,
+            elapsed_ms,
+            total_operand_ms,
+        );
+        elapsed_runs.push(elapsed_ms);
+        operand_totals.push(total_operand_ms);
+        final_response = Some(resp);
+        final_profile = Some(profile);
+    }
+
+    let resp = final_response.ok_or_else(|| "optimizer profile produced no runs".to_string())?;
+    let profile = final_profile.ok_or_else(|| "optimizer profile produced no report".to_string())?;
+    let elapsed_min = elapsed_runs.iter().copied().fold(f64::INFINITY, f64::min);
+    let elapsed_median = median(&mut elapsed_runs);
+    let operand_min = operand_totals.iter().copied().fold(f64::INFINITY, f64::min);
+    let operand_median = median(&mut operand_totals);
 
     println!(
-        "optimizer-profile summary vars={} iter={} merit_before={:.6} merit_after={:.6} eval_calls={} req_passes={} elapsed_ms={:.3} operand_total_ms={:.3}",
+        "optimizer-profile summary runs={} vars={} iter={} merit_before={:.6} merit_after={:.6} elapsed_min_ms={:.3} elapsed_median_ms={:.3} operand_min_ms={:.3} operand_median_ms={:.3}",
+        repeat,
         resp.variable_count,
         resp.iterations,
         resp.merit_before,
         resp.merit_after,
-        profile.evaluate_state_calls,
-        profile.requirement_passes,
-        elapsed_ms,
-        total_operand_ms,
+        elapsed_min,
+        elapsed_median,
+        operand_min,
+        operand_median,
     );
     for entry in profile.operand_entries.iter().take(16) {
         println!(

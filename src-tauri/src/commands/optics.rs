@@ -578,6 +578,199 @@ pub struct NativeOpdRmsWavesResponse {
     pub message: String,
 }
 
+struct NativeOpdPreparedContext {
+    rows: Vec<Value>,
+    grid_size: usize,
+    requested_target_surface_index: usize,
+    target_surface_index: usize,
+    surface_data: Vec<SurfaceInfo>,
+    stop_surface_index: usize,
+    stop_surface: SurfaceInfo,
+    explicit_pupil_radius: Option<f64>,
+    entrance_radius: f64,
+    sampling_radius: f64,
+    source_rows: Vec<Value>,
+    object_rows: Vec<Value>,
+    requested_object_index: Option<usize>,
+    used_object_index: usize,
+    used_object_position: String,
+    is_angle_object: bool,
+    angle_object_x: f64,
+    angle_object_y: f64,
+    height_object_x: f64,
+    height_object_y: f64,
+    wavelength_um: f64,
+    object_space_n: f64,
+    packed_target: PackedMeta,
+    packed_stop: PackedMeta,
+}
+
+fn prepare_native_opd_context(req: &NativeOpdMapRequest) -> Result<NativeOpdPreparedContext, String> {
+    if req.optical_system_rows.is_empty() {
+        return Err("run_native_opd_map: opticalSystemRows is empty".to_string());
+    }
+
+    let rows: Vec<Value> = req
+        .optical_system_rows
+        .iter()
+        .map(normalize_coord_trans_row)
+        .collect();
+    if rows.is_empty() {
+        return Err("run_native_opd_map: normalized rows are empty".to_string());
+    }
+
+    let grid_size = req.grid_size.unwrap_or(129).max(17) as usize;
+    let default_eval_surface_index = find_evaluation_surface_index_native(&rows);
+    let requested_target_surface_index = req
+        .surface_index
+        .unwrap_or(default_eval_surface_index)
+        .min(rows.len().saturating_sub(1));
+    let target_surface_index = requested_target_surface_index;
+
+    let surface_data = calculate_surface_data(&rows);
+    if surface_data.len() != rows.len() {
+        return Err("run_native_opd_map: failed to calculate surface origins".to_string());
+    }
+
+    let stop_surface_index = find_stop_surface_index_native(&rows)
+        .unwrap_or_else(|| rows.len().saturating_sub(1))
+        .min(rows.len().saturating_sub(1));
+    let stop_surface = surface_data
+        .get(stop_surface_index)
+        .copied()
+        .unwrap_or(surface_data[surface_data.len().saturating_sub(1)]);
+
+    let explicit_pupil_radius = req.pupil_radius_mm.filter(|r| r.is_finite() && *r > 0.0);
+    let requested_pupil_sampling_mode_for_radius = req
+        .pupil_sampling_mode
+        .as_ref()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| s == "stop" || s == "entrance");
+    let mut stop_radius = estimate_stop_radius_mm(&rows);
+    if matches!(requested_pupil_sampling_mode_for_radius.as_deref(), Some("stop")) {
+        if let Some(req_r) = explicit_pupil_radius {
+            stop_radius = req_r;
+        }
+    }
+    let entrance_radius = estimate_entrance_radius_mm(&rows).clamp(0.01, 500.0);
+    let sampling_radius = match requested_pupil_sampling_mode_for_radius.as_deref() {
+        Some("stop") if stop_radius.is_finite() && stop_radius > 0.0 => stop_radius.max(0.01),
+        Some("stop") => entrance_radius,
+        Some("entrance") => explicit_pupil_radius.unwrap_or(entrance_radius).max(0.01),
+        _ if stop_radius.is_finite() && stop_radius > 0.0 => stop_radius.min(entrance_radius).max(0.01),
+        _ => entrance_radius,
+    };
+
+    let mut source_rows = req.source_rows.clone();
+    if let Some(wl) = req.wavelength_um.filter(|w| w.is_finite() && *w > 0.0) {
+        source_rows = vec![serde_json::json!({
+            "id": "NativeOpdSource",
+            "name": "NativeOpdSource",
+            "wavelength": wl,
+            "isPrimary": true,
+            "primary": "Primary",
+            "intensity": 1,
+            "color": "#2563eb"
+        })];
+    }
+
+    let mut object_rows = req.object_rows.clone();
+    if object_rows.is_empty() {
+        object_rows.push(serde_json::json!({
+            "id": "Object-0",
+            "name": "Object-0",
+            "position": "Angle",
+            "xHeightAngle": 0.0,
+            "yHeightAngle": 0.0,
+            "x": 0.0,
+            "y": 0.0
+        }));
+    }
+    let requested_object_index = req.object_index;
+    let mut used_object_index: usize = 0;
+    if let Some(idx) = req.object_index {
+        if idx < object_rows.len() {
+            used_object_index = idx;
+            object_rows = vec![object_rows[idx].clone()];
+        }
+    }
+
+    let selected_object = object_rows.get(0).and_then(|v| v.as_object());
+    let used_object_position = selected_object
+        .and_then(|o| {
+            o.get("position")
+                .or_else(|| o.get("object"))
+                .or_else(|| o.get("objectType"))
+                .or_else(|| o.get("type"))
+                .and_then(value_to_string)
+        })
+        .unwrap_or_else(|| "Point".to_string());
+    let pos_lower = used_object_position.trim().to_lowercase();
+    let is_angle_object = pos_lower.contains("angle") || pos_lower == "point";
+
+    let angle_object_x = selected_object
+        .and_then(|o| {
+            get_object_numeric(o, &["xHeightAngle", "xFieldAngle", "xAngle", "x", "X", "xHeight"])
+        })
+        .unwrap_or(0.0);
+    let angle_object_y = selected_object
+        .and_then(|o| {
+            get_object_numeric(o, &["yHeightAngle", "yFieldAngle", "fieldAngle", "yAngle", "angle", "y", "Y", "yHeight"])
+        })
+        .unwrap_or(0.0);
+    let height_object_x = selected_object
+        .and_then(|o| get_object_numeric(o, &["xHeight", "x", "X"]))
+        .unwrap_or(0.0);
+    let height_object_y = selected_object
+        .and_then(|o| get_object_numeric(o, &["yHeight", "y", "Y", "height"]))
+        .unwrap_or(0.0);
+
+    let wl_series = collect_spot_wavelengths(&source_rows, "primary");
+    let wl_um_raw = wl_series.first().map(|w| w.wavelength_um).unwrap_or(0.5876);
+    let wavelength_um = req
+        .wavelength_um
+        .filter(|w| w.is_finite() && *w > 0.0)
+        .unwrap_or(wl_um_raw);
+    if !wavelength_um.is_finite() || wavelength_um <= 0.0 {
+        return Err("run_native_opd_map: invalid wavelength".to_string());
+    }
+    let object_space_n = rows
+        .first()
+        .map(|r| get_correct_refractive_index(r, wavelength_um))
+        .filter(|n| n.is_finite() && *n > 0.0)
+        .unwrap_or(1.0);
+
+    let packed_target = build_packed_meta(&rows, &surface_data, target_surface_index, wavelength_um)?;
+    let packed_stop = build_packed_meta(&rows, &surface_data, stop_surface_index, wavelength_um)?;
+
+    Ok(NativeOpdPreparedContext {
+        rows,
+        grid_size,
+        requested_target_surface_index,
+        target_surface_index,
+        surface_data,
+        stop_surface_index,
+        stop_surface,
+        explicit_pupil_radius,
+        entrance_radius,
+        sampling_radius,
+        source_rows,
+        object_rows,
+        requested_object_index,
+        used_object_index,
+        used_object_position,
+        is_angle_object,
+        angle_object_x,
+        angle_object_y,
+        height_object_x,
+        height_object_y,
+        wavelength_um,
+        object_space_n,
+        packed_target,
+        packed_stop,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativePsfMapRequest {
@@ -1556,171 +1749,34 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
     let kind = "opd-native";
     emit_native_analysis_progress(&app, &job_id, kind, "prepare", "Preparing native OPD inputs...", Some(5.0));
     let result: Result<NativeOpdMapResponse, String> = (|| {
-    if req.optical_system_rows.is_empty() {
-        return Err("run_native_opd_map: opticalSystemRows is empty".to_string());
-    }
-
-    let rows: Vec<Value> = req
-        .optical_system_rows
-        .iter()
-        .map(normalize_coord_trans_row)
-        .collect();
-    if rows.is_empty() {
-        return Err("run_native_opd_map: normalized rows are empty".to_string());
-    }
+    let NativeOpdPreparedContext {
+        rows,
+        grid_size,
+        requested_target_surface_index,
+        mut target_surface_index,
+        surface_data,
+        stop_surface_index,
+        stop_surface,
+        explicit_pupil_radius,
+        entrance_radius,
+        sampling_radius,
+        source_rows: _source_rows,
+        object_rows,
+        requested_object_index,
+        used_object_index,
+        used_object_position,
+        is_angle_object,
+        angle_object_x,
+        angle_object_y,
+        height_object_x,
+        height_object_y,
+        wavelength_um,
+        object_space_n,
+        mut packed_target,
+        packed_stop,
+    } = prepare_native_opd_context(&req)?;
     emit_native_analysis_progress(&app, &job_id, kind, "prepare", "Resolving pupil and field setup...", Some(18.0));
-
-    let grid_size = req.grid_size.unwrap_or(129).max(17) as usize;
-    let default_eval_surface_index = find_evaluation_surface_index_native(&rows);
-    let requested_target_surface_index = req
-        .surface_index
-        .unwrap_or(default_eval_surface_index)
-        .min(rows.len().saturating_sub(1));
-    let mut target_surface_index = requested_target_surface_index;
-
-    let surface_data = calculate_surface_data(&rows);
-    if surface_data.len() != rows.len() {
-        return Err("run_native_opd_map: failed to calculate surface origins".to_string());
-    }
-
-    let stop_surface_index = find_stop_surface_index_native(&rows)
-        .unwrap_or_else(|| rows.len().saturating_sub(1))
-        .min(rows.len().saturating_sub(1));
-    let stop_surface = surface_data
-        .get(stop_surface_index)
-        .copied()
-        .unwrap_or(surface_data[surface_data.len().saturating_sub(1)]);
-
-    let explicit_pupil_radius = req.pupil_radius_mm.filter(|r| r.is_finite() && *r > 0.0);
-    let requested_pupil_sampling_mode_for_radius = req
-        .pupil_sampling_mode
-        .as_ref()
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| s == "stop" || s == "entrance");
-    let mut stop_radius = estimate_stop_radius_mm(&rows);
-    if matches!(requested_pupil_sampling_mode_for_radius.as_deref(), Some("stop")) {
-        if let Some(req_r) = explicit_pupil_radius {
-            stop_radius = req_r;
-        }
-    }
-    let entrance_radius = estimate_entrance_radius_mm(&rows).clamp(0.01, 500.0);
-    let sampling_radius = match requested_pupil_sampling_mode_for_radius.as_deref() {
-        Some("stop") if stop_radius.is_finite() && stop_radius > 0.0 => stop_radius.max(0.01),
-        Some("stop") => entrance_radius,
-        Some("entrance") => explicit_pupil_radius.unwrap_or(entrance_radius).max(0.01),
-        _ if stop_radius.is_finite() && stop_radius > 0.0 => stop_radius.min(entrance_radius).max(0.01),
-        _ => entrance_radius,
-    };
-
-    let mut source_rows = req.source_rows.clone();
-    if let Some(wl) = req.wavelength_um.filter(|w| w.is_finite() && *w > 0.0) {
-        source_rows = vec![serde_json::json!({
-            "id": "NativeOpdSource",
-            "name": "NativeOpdSource",
-            "wavelength": wl,
-            "isPrimary": true,
-            "primary": "Primary",
-            "intensity": 1,
-            "color": "#2563eb"
-        })];
-    }
-
-    let mut object_rows = req.object_rows.clone();
-    if object_rows.is_empty() {
-        object_rows.push(serde_json::json!({
-            "id": "Object-0",
-            "name": "Object-0",
-            "position": "Angle",
-            "xHeightAngle": 0.0,
-            "yHeightAngle": 0.0,
-            "x": 0.0,
-            "y": 0.0
-        }));
-    }
-    let requested_object_index = req.object_index;
-    let mut used_object_index: usize = 0;
-    if let Some(idx) = req.object_index {
-        if idx < object_rows.len() {
-            used_object_index = idx;
-            object_rows = vec![object_rows[idx].clone()];
-        }
-    }
-
-    let selected_object = object_rows
-        .get(0)
-        .and_then(|v| v.as_object());
-    let used_object_position = selected_object
-        .and_then(|o| {
-            o.get("position")
-                .or_else(|| o.get("object"))
-                .or_else(|| o.get("objectType"))
-                .or_else(|| o.get("type"))
-                .and_then(value_to_string)
-        })
-        .unwrap_or_else(|| "Point".to_string());
-    let pos_lower = used_object_position.trim().to_lowercase();
-    let is_angle_object = pos_lower.contains("angle") || pos_lower == "point";
-
-    let angle_object_x = selected_object
-        .and_then(|o| {
-            get_object_numeric(
-                o,
-                &[
-                    "xHeightAngle",
-                    "xFieldAngle",
-                    "xAngle",
-                    "x",
-                    "X",
-                    "xHeight",
-                ],
-            )
-        })
-        .unwrap_or(0.0);
-    let angle_object_y = selected_object
-        .and_then(|o| {
-            get_object_numeric(
-                o,
-                &[
-                    "yHeightAngle",
-                    "yFieldAngle",
-                    "fieldAngle",
-                    "yAngle",
-                    "angle",
-                    "y",
-                    "Y",
-                    "yHeight",
-                ],
-            )
-        })
-        .unwrap_or(0.0);
-
-    let height_object_x = selected_object
-        .and_then(|o| get_object_numeric(o, &["xHeight", "x", "X"]))
-        .unwrap_or(0.0);
-    let height_object_y = selected_object
-        .and_then(|o| get_object_numeric(o, &["yHeight", "y", "Y", "height"]))
-        .unwrap_or(0.0);
-
-    let wl_series = collect_spot_wavelengths(&source_rows, "primary");
-    let wl_um_raw = wl_series
-        .first()
-        .map(|w| w.wavelength_um)
-        .unwrap_or(0.5876);
-    let wavelength_um = req
-        .wavelength_um
-        .filter(|w| w.is_finite() && *w > 0.0)
-        .unwrap_or(wl_um_raw);
-    if !wavelength_um.is_finite() || wavelength_um <= 0.0 {
-        return Err("run_native_opd_map: invalid wavelength".to_string());
-    }
-    let object_space_n = rows
-        .first()
-        .map(|r| get_correct_refractive_index(r, wavelength_um))
-        .filter(|n| n.is_finite() && *n > 0.0)
-        .unwrap_or(1.0);
-
-    let mut packed_target = build_packed_meta(&rows, &surface_data, target_surface_index, wavelength_um)?;
-    let packed_stop = build_packed_meta(&rows, &surface_data, stop_surface_index, wavelength_um)?;
+    let selected_object = object_rows.get(0).and_then(|v| v.as_object());
     let mut chief_target_fallback_from: Option<usize> = None;
     emit_native_analysis_progress(&app, &job_id, kind, "trace", "Tracing chief ray and target surface...", Some(36.0));
 
