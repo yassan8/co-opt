@@ -363,6 +363,7 @@ struct RequirementSpec {
     config_id: String,
     enabled: bool,
     operand: String,
+    cache_key: String,
     op: String,
     target: f64,
     tol: f64,
@@ -1789,23 +1790,42 @@ fn collect_requirements(rows: &[Value], active_config_id: &str) -> Vec<Requireme
             if !enabled || weight <= 0.0 || operand.trim().is_empty() {
                 return None;
             }
+            let op = normalize_op(value_to_string(r.get("op")));
+            let param1 = value_to_string(r.get("param1"));
+            let param2 = value_to_string(r.get("param2"));
+            let param3 = value_to_string(r.get("param3"));
+            let param4 = value_to_string(r.get("param4"));
+            let param5 = value_to_string(r.get("param5"));
             Some(RequirementSpec {
                 id: value_to_string(r.get("id")),
                 config_id: req_config_id,
                 enabled,
+                cache_key: build_requirement_cache_key(&operand, &param1, &param2, &param3, &param4, &param5, &op),
                 operand,
-                op: normalize_op(value_to_string(r.get("op"))),
+                op,
                 target: to_finite_number(r.get("target"), 0.0),
                 tol: to_finite_number(r.get("tol"), 0.0).max(0.0),
                 weight,
-                param1: value_to_string(r.get("param1")),
-                param2: value_to_string(r.get("param2")),
-                param3: value_to_string(r.get("param3")),
-                param4: value_to_string(r.get("param4")),
-                param5: value_to_string(r.get("param5")),
+                param1,
+                param2,
+                param3,
+                param4,
+                param5,
             })
         })
         .collect()
+}
+
+fn build_requirement_cache_key(
+    operand: &str,
+    param1: &str,
+    param2: &str,
+    param3: &str,
+    param4: &str,
+    param5: &str,
+    op: &str,
+) -> String {
+    format!("{}|{}|{}|{}|{}|{}|{}", operand, param1, param2, param3, param4, param5, op)
 }
 
 fn normalize_operand(raw: String) -> String {
@@ -1934,7 +1954,7 @@ fn evaluate_requirements(rows: &[Value], source_rows: &[Value], object_rows: &[V
     optimizer_profile_record_requirement_pass();
     let mut score = 0.0_f64;
     let mut violation_score = 0.0_f64;
-    let mut operand_cache: HashMap<String, Option<f64>> = HashMap::new();
+    let mut operand_cache: HashMap<&str, Option<f64>> = HashMap::with_capacity(requirements.len());
 
     for req in requirements {
         if is_stop_requested() {
@@ -1944,17 +1964,14 @@ fn evaluate_requirements(rows: &[Value], source_rows: &[Value], object_rows: &[V
             continue;
         }
 
-        let cache_key = format!(
-            "{}|{}|{}|{}|{}|{}|{}",
-            req.operand, req.param1, req.param2, req.param3, req.param4, req.param5, req.op
-        );
-        let raw_current = if let Some(v) = operand_cache.get(&cache_key) {
-            optimizer_profile_record_cache_hit(&cache_key, &req.operand);
+        let cache_key = req.cache_key.as_str();
+        let raw_current = if let Some(v) = operand_cache.get(cache_key) {
+            optimizer_profile_record_cache_hit(cache_key, &req.operand);
             *v
         } else {
             let t0 = Instant::now();
             let v = evaluate_operand_value(rows, source_rows, object_rows, req);
-            optimizer_profile_record_operand_eval(&cache_key, &req.operand, t0.elapsed().as_nanos());
+            optimizer_profile_record_operand_eval(cache_key, &req.operand, t0.elapsed().as_nanos());
             operand_cache.insert(cache_key, v);
             v
         };
@@ -3880,20 +3897,28 @@ mod tests {
     use super::*;
 
     fn make_requirement(param2: &str, param3: &str, param4: &str) -> RequirementSpec {
+        let operand = "PP1".to_string();
+        let op = "=".to_string();
+        let param1 = "".to_string();
+        let param2_string = param2.to_string();
+        let param3_string = param3.to_string();
+        let param4_string = param4.to_string();
+        let param5 = "".to_string();
         RequirementSpec {
             id: "req-1".to_string(),
             config_id: "cfg-1".to_string(),
             enabled: true,
-            operand: "PP1".to_string(),
-            op: "=".to_string(),
+            cache_key: build_requirement_cache_key(&operand, &param1, &param2_string, &param3_string, &param4_string, &param5, &op),
+            operand,
+            op,
             target: 0.0,
             tol: 0.0,
             weight: 1.0,
-            param1: "".to_string(),
-            param2: param2.to_string(),
-            param3: param3.to_string(),
-            param4: param4.to_string(),
-            param5: "".to_string(),
+            param1,
+            param2: param2_string,
+            param3: param3_string,
+            param4: param4_string,
+            param5,
         }
     }
 
