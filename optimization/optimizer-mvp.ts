@@ -4481,7 +4481,7 @@ function resetAsphericCoefficientsToZero({ configsById, targetConfigIds }) {
  */
 export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
-  const kktUseWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer === true;
+  const kktUseWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer !== false;
   const methodRaw = String(opts.method || '').trim().toLowerCase();
   const requestedMethod = (methodRaw === 'kkt' || methodRaw === 'sqp' || methodRaw === 'al' || methodRaw === 'augmentedlagrangian' || methodRaw === 'augmented-lagrangian')
     ? 'kkt'
@@ -4968,7 +4968,7 @@ export async function runOptimizationMVP(options = {}) {
           wasmToObjectiveRatio: objectiveMs > 0 ? Math.round((wasmMs / objectiveMs) * 1000) / 1000 : null,
           objectiveToWasmRatio: wasmMs > 0 ? Math.round((objectiveMs / wasmMs) * 1000) / 1000 : null,
           kktWasmPilotEnabled: kktUseWasmPilotOptimizer,
-          kktMatrixFreeEnabled: opts?.kktUseMatrixFreeCore === true,
+          kktMatrixFreeEnabled: kktUseMatrixFreeCore,
           kktWasmPilotHitRatePct: Math.round(pilotHitRatePct * 10) / 10,
           kktWasmPilotLastReason: pilotLastReason,
           kktWasmBufferHitRatePct: Math.round(bufferHitRatePct * 10) / 10
@@ -5114,7 +5114,9 @@ export async function runOptimizationMVP(options = {}) {
   const lmExploreWhenFlat = (opts.lmExploreWhenFlat === undefined) ? false : !!opts.lmExploreWhenFlat;
   const lmExploreTries = Number.isFinite(Number(opts.lmExploreTries)) ? Math.max(1, Math.floor(Number(opts.lmExploreTries))) : 3;
   const useWasmLinearSolve = true;
-  const kktUseMatrixFreeCore = opts?.kktUseMatrixFreeCore === true;
+  // Default to Rust/WASM kernels for TS KKT runs. Every call site still keeps
+  // the existing fallback path, so explicit `false` remains the escape hatch.
+  const kktUseMatrixFreeCore = opts?.kktUseMatrixFreeCore !== false;
   const kktMatrixFreePriority = opts?.kktMatrixFreePriority === true;
   const phaseCDebug = opts?.phaseCDebug === true;
   let kktWasmPilotFallbackLogged = false;
@@ -9396,7 +9398,7 @@ export async function runOptimizationMVP(options = {}) {
         lastX = currentX.slice();
         lastR = r0.slice();
         
-        const useWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer === true;
+        const useWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer !== false;
         let dx: number[] | null = null;
         let predictedReductionPilot = Number.NaN;
 

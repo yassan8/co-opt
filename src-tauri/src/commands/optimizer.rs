@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -1388,31 +1389,54 @@ fn compute_sqp_like_direction(
         };
     }
 
-    let mut a = vec![vec![0.0_f64; n]; m];
-    for (ri, &ci) in active.iter().enumerate() {
-        if is_stop_requested() {
-            restore_values(rows, vars, base_values);
-            return Err("sqp-stop-requested");
-        }
-        for vi in 0..n {
+    let active_residuals = active
+        .iter()
+        .map(|&idx| residuals.get(idx).copied().unwrap_or(f64::MAX / 8.0))
+        .collect::<Vec<_>>();
+
+    let columns = (0..n)
+        .into_par_iter()
+        .map(|vi| {
+            if is_stop_requested() {
+                return vec![0.0_f64; m];
+            }
             let v = &vars[vi];
             let x0 = base_values.get(vi).copied().unwrap_or(v.baseline);
             let h = (v.scale * 1e-3).max(MIN_STEP);
-            set_numeric_field(rows, v.row_index, &v.field_key, x0 + h);
-            let r1 = evaluate_constraint_residual_for_requirement(
-                rows,
+            let mut trial_rows = rows.to_vec();
+            set_numeric_field(&mut trial_rows, v.row_index, &v.field_key, x0 + h);
+            let perturbed = evaluate_active_constraint_residuals(
+                &trial_rows,
                 source_rows,
                 object_rows,
-                requirements.get(ci).ok_or("sqp-active-index-invalid")?,
+                requirements,
+                &active,
             );
-            set_numeric_field(rows, v.row_index, &v.field_key, x0);
-            let r0 = residuals.get(ci).copied().unwrap_or(f64::MAX / 8.0);
-            let dr = (r1 - r0) / h;
-            a[ri][vi] = if dr.is_finite() { dr } else { 0.0 };
-        }
-    }
+            perturbed
+                .iter()
+                .enumerate()
+                .map(|(ri, &r1)| {
+                    let r0 = active_residuals.get(ri).copied().unwrap_or(f64::MAX / 8.0);
+                    let dr = (r1 - r0) / h;
+                    if dr.is_finite() { dr } else { 0.0 }
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
 
     restore_values(rows, vars, base_values);
+
+    if is_stop_requested() {
+        return Err("sqp-stop-requested");
+    }
+
+    let mut a = vec![vec![0.0_f64; n]; m];
+    for vi in 0..n {
+        let col = columns.get(vi).ok_or("sqp-jacobian-column-missing")?;
+        for ri in 0..m {
+            a[ri][vi] = col.get(ri).copied().unwrap_or(0.0);
+        }
+    }
 
     let k = n + m;
     let mut mat = vec![vec![0.0_f64; k]; k];
@@ -1485,6 +1509,24 @@ fn evaluate_constraint_residuals(
         out.push(evaluate_constraint_residual_for_requirement(rows, source_rows, object_rows, req));
     }
     out
+}
+
+fn evaluate_active_constraint_residuals(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    requirements: &[RequirementSpec],
+    active_indices: &[usize],
+) -> Vec<f64> {
+    active_indices
+        .iter()
+        .map(|&idx| {
+            requirements
+                .get(idx)
+                .map(|req| evaluate_constraint_residual_for_requirement(rows, source_rows, object_rows, req))
+                .unwrap_or(f64::MAX / 8.0)
+        })
+        .collect()
 }
 
 fn evaluate_constraint_residual_for_requirement(
@@ -1657,31 +1699,30 @@ fn approximate_augmented_gradient(
     requirements: &[RequirementSpec],
     rho: f64,
 ) -> Vec<f64> {
-    let mut grad = vec![0.0; vars.len()];
     let e0 = evaluate_state(rows, source_rows, object_rows, vars, requirements);
     let f0 = e0.score + rho * e0.violation_score * e0.violation_score;
-    for i in 0..vars.len() {
-        if is_stop_requested() {
-            break;
-        }
-        let v = &vars[i];
-        let x0 = get_numeric_field(rows, v.row_index, &v.field_key).unwrap_or(v.baseline);
-        let h = (v.scale * 1e-3).max(MIN_STEP);
+    let base_values = current_values(rows, vars);
 
-        set_numeric_field(rows, v.row_index, &v.field_key, x0 + h);
-        let e1 = evaluate_state(rows, source_rows, object_rows, vars, requirements);
-        let f1 = e1.score + rho * e1.violation_score * e1.violation_score;
-
-        set_numeric_field(rows, v.row_index, &v.field_key, x0);
-
-        let g = if f1.is_finite() && f0.is_finite() {
-            (f1 - f0) / h
-        } else {
-            0.0
-        };
-        grad[i] = if g.is_finite() { g } else { 0.0 };
-    }
-    grad
+    vars.par_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            if is_stop_requested() {
+                return 0.0;
+            }
+            let x0 = base_values.get(i).copied().unwrap_or(v.baseline);
+            let h = (v.scale * 1e-3).max(MIN_STEP);
+            let mut trial_rows = rows.to_vec();
+            set_numeric_field(&mut trial_rows, v.row_index, &v.field_key, x0 + h);
+            let e1 = evaluate_state(&trial_rows, source_rows, object_rows, vars, requirements);
+            let f1 = e1.score + rho * e1.violation_score * e1.violation_score;
+            let g = if f1.is_finite() && f0.is_finite() {
+                (f1 - f0) / h
+            } else {
+                0.0
+            };
+            if g.is_finite() { g } else { 0.0 }
+        })
+        .collect()
 }
 
 fn collect_optimizable_variables(rows: &[Value]) -> Vec<VariableSpec> {
