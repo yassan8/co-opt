@@ -2488,29 +2488,36 @@ fn prefill_parallel_opd_rms_cache<'a>(
     requirements: &'a [RequirementSpec],
     operand_cache: &mut HashMap<&'a str, Option<f64>>,
 ) -> HashSet<&'a str> {
-    let opd_requirements: Vec<&RequirementSpec> = requirements
-        .iter()
-        .filter(|req| req.enabled && (req.operand == "OPD_RMS_WAVES" || req.operand == "OPD_RMS_UM"))
-        .collect();
-    if opd_requirements.len() < 2 {
-        return HashSet::new();
+    let mut prefetched = HashSet::new();
+    let mut groups: HashMap<String, Vec<&RequirementSpec>> = HashMap::new();
+
+    for req in requirements {
+        if !req.enabled || (req.operand != "OPD_RMS_WAVES" && req.operand != "OPD_RMS_UM") {
+            continue;
+        }
+        let group_key = format!("{}|{}", req.param1, req.param3);
+        groups.entry(group_key).or_default().push(req);
     }
 
-    let results: Vec<(&RequirementSpec, Option<f64>, u128)> = opd_requirements
-        .par_iter()
-        .map(|req| {
-            let t0 = Instant::now();
-            let value = native_opd_rms_waves(rows, source_rows, object_rows, req);
-            (*req, value, t0.elapsed().as_nanos())
-        })
-        .collect();
+    for group in groups.into_values() {
+        if group.len() < 2 {
+            continue;
+        }
+        let results: Vec<(&RequirementSpec, Option<f64>, u128)> = group
+            .par_iter()
+            .map(|req| {
+                let t0 = Instant::now();
+                let value = native_opd_rms_waves(rows, source_rows, object_rows, req);
+                (*req, value, t0.elapsed().as_nanos())
+            })
+            .collect();
 
-    let mut prefetched = HashSet::with_capacity(results.len());
-    for (req, value, elapsed_nanos) in results {
-        let cache_key = req.cache_key.as_str();
-        operand_cache.insert(cache_key, value);
-        prefetched.insert(cache_key);
-        optimizer_profile_record_operand_eval(cache_key, &req.operand, elapsed_nanos);
+        for (req, value, elapsed_nanos) in results {
+            let cache_key = req.cache_key.as_str();
+            operand_cache.insert(cache_key, value);
+            prefetched.insert(cache_key);
+            optimizer_profile_record_operand_eval(cache_key, &req.operand, elapsed_nanos);
+        }
     }
 
     prefetched

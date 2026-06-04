@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::time::Instant;
 
 use co_opt_pro_lib::commands::optimizer::run_optimizer_step;
 use co_opt_pro_lib::commands::optimizer::OptimizeStepRequest;
@@ -98,17 +99,22 @@ fn run() -> Result<(), String> {
         .build(tauri::generate_context!())
         .map_err(|err| format!("failed to build tauri app: {}", err))?;
 
+    let started_at = Instant::now();
     let resp = run_optimizer_step(app.handle().clone(), req)?;
+    let elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0;
     let profile = resp.profile.ok_or_else(|| "missing optimizer profile report".to_string())?;
+    let total_operand_ms: f64 = profile.operand_entries.iter().map(|entry| entry.total_ms).sum();
 
     println!(
-        "optimizer-profile summary vars={} iter={} merit_before={:.6} merit_after={:.6} eval_calls={} req_passes={}",
+        "optimizer-profile summary vars={} iter={} merit_before={:.6} merit_after={:.6} eval_calls={} req_passes={} elapsed_ms={:.3} operand_total_ms={:.3}",
         resp.variable_count,
         resp.iterations,
         resp.merit_before,
         resp.merit_after,
         profile.evaluate_state_calls,
         profile.requirement_passes,
+        elapsed_ms,
+        total_operand_ms,
     );
     for entry in profile.operand_entries.iter().take(16) {
         println!(
