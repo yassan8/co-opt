@@ -29,6 +29,25 @@ function __cooptGetSystemConfig(): any {
             return w.loadSystemConfigurations();
         }
     } catch (_) {}
+
+    const rowsMateriallyDiffer = (a: any[], b: any[]): boolean => {
+        if (!Array.isArray(a) || !Array.isArray(b)) return true;
+        if (a.length !== b.length) return true;
+        const keys = [
+            'id', 'object type', 'surfType', 'radius', 'radiusX', 'radiusY', 'thickness', 'semidia',
+            'material', 'conic', 'coef1', 'coef2', 'coef3', 'coef4', 'coef5', 'coef6', 'coef7', 'coef8', 'coef9', 'coef10'
+        ];
+        for (let i = 0; i < a.length; i++) {
+            const left = a[i] || {};
+            const right = b[i] || {};
+            for (const key of keys) {
+                const lv = String(left?.[key] ?? '').trim();
+                const rv = String(right?.[key] ?? '').trim();
+                if (lv !== rv) return true;
+            }
+        }
+        return false;
+    };
     try {
         return loadSystemConfigurations();
     } catch (_) {
@@ -2473,6 +2492,53 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         }
     } catch (_) {}
 
+    // If the loaded file includes explicit optical rows that disagree with stored/design-intent
+    // block expansion, treat the explicit rows as canonical for this import and refresh blocks.
+    try {
+        const activeId = candidateConfig?.activeConfigId;
+        const cfgs = Array.isArray(candidateConfig?.configurations) ? candidateConfig.configurations : [];
+        const activeCfg = cfgs.find((c: any) => String(c?.id ?? '') === String(activeId ?? '')) || cfgs[0];
+        const explicitRows = Array.isArray(allData?.opticalSystem) ? allData.opticalSystem : null;
+        const configRows = Array.isArray(activeCfg?.opticalSystem) ? activeCfg.opticalSystem : null;
+        const hasBlocks = !!(activeCfg && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0);
+
+        if (activeCfg && explicitRows && explicitRows.length > 0 && hasBlocks && rowsMateriallyDiffer(explicitRows, configRows || [])) {
+            try {
+                const derived = deriveBlocksFromLegacyOpticalSystemRows(explicitRows);
+                const fatals = Array.isArray(derived?.issues)
+                    ? derived.issues.filter((issue: any) => issue?.severity === 'fatal')
+                    : [];
+                if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0) {
+                    activeCfg.blocks = derived.blocks;
+                    activeCfg.opticalSystem = JSON.parse(JSON.stringify(explicitRows));
+                    if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+                    activeCfg.metadata.modified = new Date().toISOString();
+                    activeCfg.metadata.importRowsPreferred = true;
+                    activeCfg.metadata.importRowsPreferredReason = 'explicit-opticalSystem-mismatch';
+                    console.warn('⚠️ [Load] Re-derived blocks from explicit opticalSystem because imported rows differed from block expansion.');
+                } else {
+                    activeCfg.blocks = [];
+                    activeCfg.opticalSystem = JSON.parse(JSON.stringify(explicitRows));
+                    if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+                    activeCfg.metadata.modified = new Date().toISOString();
+                    activeCfg.metadata.importAnalyzeMode = true;
+                    activeCfg.metadata.importRowsPreferred = true;
+                    activeCfg.metadata.importRowsPreferredReason = 'explicit-opticalSystem-mismatch-derive-failed';
+                    console.warn('⚠️ [Load] Explicit opticalSystem differed from blocks and block derivation failed; falling back to surface-row workflow.', fatals);
+                }
+            } catch (e) {
+                activeCfg.blocks = [];
+                activeCfg.opticalSystem = JSON.parse(JSON.stringify(explicitRows));
+                if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+                activeCfg.metadata.modified = new Date().toISOString();
+                activeCfg.metadata.importAnalyzeMode = true;
+                activeCfg.metadata.importRowsPreferred = true;
+                activeCfg.metadata.importRowsPreferredReason = 'explicit-opticalSystem-mismatch-exception';
+                console.warn('⚠️ [Load] Failed to re-derive blocks from explicit opticalSystem; using explicit rows directly.', e);
+            }
+        }
+    } catch (_) {}
+
     // Process blocks in blocks-only mode. Legacy optical rows are no longer used
     // to reconstruct Design Intent blocks.
     const cfgList = Array.isArray(candidateConfig?.configurations) ? candidateConfig.configurations : [];
@@ -3657,6 +3723,7 @@ function setupOptimizeDesignIntentButton(): void {
         Method
         <select id="opt-method" style="padding:4px 6px;">
             <option value="kkt" selected>Augmented Lagrangian (AL)</option>
+            <option value="global">Global (Escape Function)</option>
             <option value="lm">Levenberg-Marquardt (LM)</option>
             <option value="cd">Coordinate Descent (CD)</option>
         </select>
@@ -4742,7 +4809,7 @@ function setupOptimizeDesignIntentButton(): void {
                             if (popup && !popup.closed) {
                                 const el = popup.document.getElementById('opt-method') as HTMLSelectElement | null;
                                 const v = el ? String(el.value).toLowerCase().trim() : '';
-                                if (v === 'cd' || v === 'lm' || v === 'kkt') {
+                                if (v === 'cd' || v === 'lm' || v === 'kkt' || v === 'global') {
                                     method = v;
                                 }
                             }
@@ -6612,6 +6679,90 @@ function __blocks_shouldMarkVar(v: any): boolean {
     return mode === 'V' || mode === true;
 }
 
+function __blocks_getVarEntryForKey(vars: any, key: string): any {
+    if (!vars || typeof vars !== 'object') return undefined;
+    const rawKey = String(key ?? '').trim();
+    if (!rawKey) return undefined;
+    const directEntry = Object.prototype.hasOwnProperty.call(vars, rawKey) ? vars[rawKey] : undefined;
+
+    const lower = rawKey.toLowerCase();
+    const materialMatch = lower.match(/^(material|rindex|nd|abbe|vd)(\d*)$/);
+    if (!materialMatch) return directEntry;
+
+    const family = materialMatch[1];
+    const suffix = materialMatch[2] || '';
+    const aliasKeys = family === 'abbe'
+        ? [`vd${suffix}`]
+        : family === 'vd'
+            ? [`abbe${suffix}`]
+            : family === 'rindex'
+                ? [`nd${suffix}`]
+                : family === 'nd'
+                    ? [`rindex${suffix}`]
+                    : [];
+
+            // Keep glass family aliases (abbe<->vd, rindex<->nd) logically in sync for UI state.
+            // If either side is marked optimize=V, prefer that entry so checkbox state is stable.
+            const directMarked = __blocks_shouldMarkVar(directEntry);
+            if (directMarked) return directEntry;
+
+    for (const aliasKey of aliasKeys) {
+        if (Object.prototype.hasOwnProperty.call(vars, aliasKey)) {
+                    const aliasEntry = vars[aliasKey];
+                    if (__blocks_shouldMarkVar(aliasEntry)) return aliasEntry;
+                    if (directEntry === undefined) return aliasEntry;
+        }
+    }
+            return directEntry;
+}
+
+        function __blocks_getAliasKeyForMaterialFamily(key: string): string | null {
+            const rawKey = String(key ?? '').trim();
+            if (!rawKey) return null;
+            const lower = rawKey.toLowerCase();
+            const materialMatch = lower.match(/^(material|rindex|nd|abbe|vd)(\d*)$/);
+            if (!materialMatch) return null;
+
+            const family = materialMatch[1];
+            const suffix = materialMatch[2] || '';
+            if (family === 'abbe') return `vd${suffix}`;
+            if (family === 'vd') return `abbe${suffix}`;
+            if (family === 'rindex') return `nd${suffix}`;
+            if (family === 'nd') return `rindex${suffix}`;
+            return null;
+        }
+
+function __blocks_resolveVarStorageKey(vars: any, key: string): string {
+    const rawKey = String(key ?? '').trim();
+    if (!rawKey) return rawKey;
+    if (!vars || typeof vars !== 'object') return rawKey;
+    if (Object.prototype.hasOwnProperty.call(vars, rawKey)) return rawKey;
+
+    const lower = rawKey.toLowerCase();
+    const materialMatch = lower.match(/^(material|rindex|nd|abbe|vd)(\d*)$/);
+    if (!materialMatch) return rawKey;
+
+    const family = materialMatch[1];
+    const suffix = materialMatch[2] || '';
+    const aliasKeys = family === 'abbe'
+        ? [`vd${suffix}`]
+        : family === 'vd'
+            ? [`abbe${suffix}`]
+            : family === 'rindex'
+                ? [`nd${suffix}`]
+                : family === 'nd'
+                    ? [`rindex${suffix}`]
+                    : [];
+
+    for (const aliasKey of aliasKeys) {
+        if (Object.prototype.hasOwnProperty.call(vars, aliasKey)) {
+            return aliasKey;
+        }
+    }
+
+    return rawKey;
+}
+
 function __blocks_getVarScope(v: any): string {
     try {
         const s = String(v?.optimize?.scope ?? '').trim();
@@ -6830,7 +6981,7 @@ function __blocks_getVisibleApertureKeys(block: any): string[] {
 
 function __blocks_setVarScope(blockId: string, key: string, scope: string): void {
     try {
-        const systemConfig = loadSystemConfigurations();
+        const systemConfig = cooptLoadCanonicalDesignIntentSystemConfig();
         if (!systemConfig || !Array.isArray(systemConfig.configurations)) return;
 
         const activeId = systemConfig.activeConfigId;
@@ -6849,9 +7000,20 @@ function __blocks_setVarScope(blockId: string, key: string, scope: string): void
             : (cooptGetBlockNumericValue(b, key) ?? '');
 
         if (!b.variables || typeof b.variables !== 'object') b.variables = {};
-        if (!b.variables[key] || typeof b.variables[key] !== 'object') b.variables[key] = { value: initialValue };
-        if (!b.variables[key].optimize || typeof b.variables[key].optimize !== 'object') b.variables[key].optimize = {};
-        b.variables[key].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
+        const storageKey = __blocks_resolveVarStorageKey(b.variables, key) || String(key ?? '').trim();
+        if (!b.variables[storageKey] || typeof b.variables[storageKey] !== 'object') b.variables[storageKey] = { value: initialValue };
+        if (!b.variables[storageKey].optimize || typeof b.variables[storageKey].optimize !== 'object') b.variables[storageKey].optimize = {};
+        b.variables[storageKey].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
+
+        const aliasKey = __blocks_getAliasKeyForMaterialFamily(storageKey);
+        if (aliasKey && b.variables[aliasKey] && typeof b.variables[aliasKey] === 'object') {
+            if (!b.variables[aliasKey].optimize || typeof b.variables[aliasKey].optimize !== 'object') b.variables[aliasKey].optimize = {};
+            b.variables[aliasKey].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
+        }
+
+        try {
+            __cooptRememberBlockVariablesForConfig(String(activeCfg?.id ?? activeId ?? ''), [b]);
+        } catch (_) {}
 
         try {
             saveSystemConfigurations(systemConfig);
@@ -6945,10 +7107,18 @@ function __blocks_setVarMode(blockId: string, key: string, enabled: boolean, sco
                 : (cooptGetBlockNumericValue(b, key) ?? '');
 
             if (!b.variables || typeof b.variables !== 'object') b.variables = {};
-            if (!b.variables[key] || typeof b.variables[key] !== 'object') b.variables[key] = { value: initialValue };
-            if (!b.variables[key].optimize || typeof b.variables[key].optimize !== 'object') b.variables[key].optimize = {};
-            b.variables[key].optimize.mode = enabled ? 'V' : 'F';
-            b.variables[key].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
+            const storageKey = __blocks_resolveVarStorageKey(b.variables, key) || String(key ?? '').trim();
+            if (!b.variables[storageKey] || typeof b.variables[storageKey] !== 'object') b.variables[storageKey] = { value: initialValue };
+            if (!b.variables[storageKey].optimize || typeof b.variables[storageKey].optimize !== 'object') b.variables[storageKey].optimize = {};
+            b.variables[storageKey].optimize.mode = enabled ? 'V' : 'F';
+            b.variables[storageKey].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
+
+            const aliasKey = __blocks_getAliasKeyForMaterialFamily(storageKey);
+            if (aliasKey && b.variables[aliasKey] && typeof b.variables[aliasKey] === 'object') {
+                if (!b.variables[aliasKey].optimize || typeof b.variables[aliasKey].optimize !== 'object') b.variables[aliasKey].optimize = {};
+                b.variables[aliasKey].optimize.mode = enabled ? 'V' : 'F';
+                b.variables[aliasKey].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
+            }
 
             if (enabled && mutuallyExclusiveKeys.length > 0) {
                 for (const excludedKey of mutuallyExclusiveKeys) {
@@ -6964,11 +7134,15 @@ function __blocks_setVarMode(blockId: string, key: string, enabled: boolean, sco
                 try {
                     if (!b.parameters || typeof b.parameters !== 'object') b.parameters = {};
                     b.parameters[key] = sharedNumericValue;
-                    if (b.variables[key] && typeof b.variables[key] === 'object' && Object.prototype.hasOwnProperty.call(b.variables[key], 'value')) {
-                        b.variables[key].value = sharedNumericValue;
+                    if (b.variables[storageKey] && typeof b.variables[storageKey] === 'object' && Object.prototype.hasOwnProperty.call(b.variables[storageKey], 'value')) {
+                        b.variables[storageKey].value = sharedNumericValue;
                     }
                 } catch (_) {}
             }
+
+            try {
+                __cooptRememberBlockVariablesForConfig(String(cfg?.id ?? ''), [b]);
+            } catch (_) {}
         }
 
         __blocks_lastScopeErrors = missing.length > 0
@@ -7481,11 +7655,17 @@ function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''
                     params.material = normalizedMaterial;
                     changed = true;
                 }
-                if (String(params.rindex ?? '').trim() === '0') {
+                if (
+                    String(params.rindex ?? '').trim() === '0'
+                    && !__blocks_shouldMarkVar(block.variables?.rindex)
+                ) {
                     delete params.rindex;
                     changed = true;
                 }
-                if (String(params.abbe ?? '').trim() === '0') {
+                if (
+                    String(params.abbe ?? '').trim() === '0'
+                    && !__blocks_shouldMarkVar(block.variables?.abbe)
+                ) {
                     delete params.abbe;
                     changed = true;
                 }
@@ -7496,12 +7676,24 @@ function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''
                         changed = true;
                     }
                     const rindexVar = block.variables.rindex;
-                    if (rindexVar && typeof rindexVar === 'object' && Object.prototype.hasOwnProperty.call(rindexVar, 'value') && String(rindexVar.value ?? '').trim() === '0') {
+                    if (
+                        rindexVar
+                        && typeof rindexVar === 'object'
+                        && Object.prototype.hasOwnProperty.call(rindexVar, 'value')
+                        && String(rindexVar.value ?? '').trim() === '0'
+                        && !__blocks_shouldMarkVar(rindexVar)
+                    ) {
                         delete block.variables.rindex;
                         changed = true;
                     }
                     const abbeVar = block.variables.abbe;
-                    if (abbeVar && typeof abbeVar === 'object' && Object.prototype.hasOwnProperty.call(abbeVar, 'value') && String(abbeVar.value ?? '').trim() === '0') {
+                    if (
+                        abbeVar
+                        && typeof abbeVar === 'object'
+                        && Object.prototype.hasOwnProperty.call(abbeVar, 'value')
+                        && String(abbeVar.value ?? '').trim() === '0'
+                        && !__blocks_shouldMarkVar(abbeVar)
+                    ) {
                         delete block.variables.abbe;
                         changed = true;
                     }
@@ -9099,6 +9291,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     container.innerHTML = '';
     syncDesignIntentQuickEditorToggle();
     const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
+    const activeConfigIdForInspector = String(activeCfg?.id ?? '').trim();
     const maxImageHeightTargetMm = __cooptGetMaxImageHeightTargetMmFromObjectRows(Array.isArray(activeCfg?.object) ? activeCfg.object : []);
 
     // Show error banner if scope errors exist
@@ -11637,7 +11830,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if ((blockType === 'Gap' || blockType === 'AirGap') && key === 'material' && (value === undefined || value === null || value === '')) {
                         value = 'AIR';
                     }
-                    const varEntry = (vars as any)[key];
+                    const varEntry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, key);
                     const isAbbeRow = key === 'abbe' || key === 'vd' || /^abbe\d+$/.test(key) || /^vd\d+$/.test(key);
                     const isGroupedSurfTypeRow =
                         (blockType === 'Doublet' || blockType === 'Triplet') &&
@@ -11801,7 +11994,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
 
                 for (const { rawKey, displayKey, value } of apertureEntries) {
-                    const apertureEntry = (vars as any)[rawKey];
+                    const apertureEntry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, rawKey);
                     
                     // Create row with optimize checkbox and scope selector
                     const apertureRow = document.createElement('div');
@@ -11871,7 +12064,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         continue;
                     }
                     
-                    const entry = (vars as any)[key];
+                    const entry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, key);
                     const value = entry && typeof entry === 'object' && 'value' in entry ? entry.value : entry;
 
                     // Create a row with checkbox and scope select
@@ -11997,8 +12190,38 @@ function __cooptRememberBlockVariablesForConfig(configId: string, blocks: any[])
         if (!block || typeof block !== 'object') continue;
         const blockId = String(block?.blockId ?? '').trim();
         if (!blockId || !__cooptIsPlainRecord(block.variables)) continue;
-        cache.set(blockId, cooptCloneJsonValue(block.variables) || block.variables);
+        const previousSnapshot = cache.get(blockId);
+        const merged = __cooptMergeVariableSnapshot(previousSnapshot, block.variables, block.parameters);
+        cache.set(blockId, cooptCloneJsonValue(merged) || merged);
     }
+}
+
+function __cooptGetCachedBlockVariableEntry(configId: string, blockId: string, key: string): any {
+    const cfgId = String(configId ?? '').trim();
+    const bid = String(blockId ?? '').trim();
+    const rawKey = String(key ?? '').trim();
+    if (!cfgId || !bid || !rawKey) return undefined;
+    const cache = __cooptBlockVariableCacheByConfigId.get(cfgId);
+    if (!cache) return undefined;
+    const snapshot = cache.get(bid);
+    if (!__cooptIsPlainRecord(snapshot)) return undefined;
+    return __blocks_getVarEntryForKey(snapshot, rawKey);
+}
+
+function __cooptGetEffectiveBlockVariableEntry(configId: string, blockId: string, vars: any, key: string): any {
+    const live = __blocks_getVarEntryForKey(vars, key);
+    const cached = __cooptGetCachedBlockVariableEntry(configId, blockId, key);
+    if (__cooptIsPlainRecord(cached) && __cooptIsPlainRecord(live)) {
+        const merged: Record<string, any> = { ...cached, ...live };
+        if (__cooptIsPlainRecord(cached.optimize) || __cooptIsPlainRecord(live.optimize)) {
+            merged.optimize = {
+                ...(__cooptIsPlainRecord(cached.optimize) ? cached.optimize : {}),
+                ...(__cooptIsPlainRecord(live.optimize) ? live.optimize : {}),
+            };
+        }
+        return merged;
+    }
+    return live ?? cached;
 }
 
 function __cooptRestoreBlockVariablesFromCache(configId: string, blocks: any[]): number {

@@ -2559,7 +2559,7 @@ export default function App() {
       return false;
     }
   })();
-  const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd'>('kkt');
+  const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd' | 'global'>('kkt');
   const [optMaxIterations, setOptMaxIterations] = useState(5000);
   const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(false);
   const [optRunning, setOptRunning] = useState(false);
@@ -3827,14 +3827,9 @@ export default function App() {
       const enabledKeys = familyKeys.filter((key) => shouldMarkV(block.variables?.[key]));
       if (enabledKeys.length <= 1) return;
 
-      const keepKey = enabledKeys.includes(materialKey) ? materialKey : enabledKeys[0];
-      for (const key of familyKeys) {
-        if (key === keepKey) continue;
-        const entry = block.variables?.[key];
-        if (!entry || typeof entry !== 'object') continue;
-        if (!entry.optimize || typeof entry.optimize !== 'object') entry.optimize = {};
-        entry.optimize.mode = 'F';
-      }
+      // Do not force-disable other glass-family optimize flags during row-back sync.
+      // Forced exclusivity here made Abbe/Vd checkboxes appear to "fall off" after UI refresh.
+      return;
     };
 
     const mergeBlockVariablesFromSnapshot = (block: any, snapshotVars: any) => {
@@ -8698,8 +8693,9 @@ const collectLegacyCrossRays = async (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
             Method
-            <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt' | 'lm' | 'cd'))} style={{ padding: '4px 6px' }}>
+            <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt' | 'lm' | 'cd' | 'global'))} style={{ padding: '4px 6px' }}>
               <option value="kkt">Augmented Lagrangian (AL)</option>
+              <option value="global">Global (Escape Function)</option>
               <option value="lm">Levenberg-Marquardt (LM)</option>
               <option value="cd">Coordinate Descent (CD)</option>
             </select>
