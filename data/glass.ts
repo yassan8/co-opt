@@ -4319,6 +4319,49 @@ export function calculateRefractiveIndex(sellmeierCoeffs, wavelength) {
 }
 
 /**
+ * Calculate refractive index from nd / Vd using the Herzberger dispersion formula.
+ * This matches the fallback described in classic optical-design literature for
+ * cases where only principal index and Abbe number are available.
+ *
+ * n(λ) = 1 + (nd - 1) * { 1 + B(λ) + A(λ) / Vd }
+ *
+ * λ is expressed in micrometers.
+ */
+export function calculateRefractiveIndexHerzberger(nd, vd, wavelength) {
+  const ndValue = Number(nd);
+  const vdValue = Number(vd);
+  const lambda = Number(wavelength);
+  if (!Number.isFinite(ndValue) || ndValue <= 0 || !Number.isFinite(lambda) || lambda <= 0) {
+    return Number.isFinite(ndValue) && ndValue > 0 ? ndValue : 1.0;
+  }
+  if (!Number.isFinite(vdValue) || Math.abs(vdValue) <= 1e-12) {
+    return ndValue;
+  }
+
+  const lambda2 = lambda * lambda;
+  const denom = lambda2 - 0.035;
+  if (!Number.isFinite(denom) || Math.abs(denom) <= 1e-12) {
+    return ndValue;
+  }
+
+  const denom2 = denom * denom;
+  const a = -1.294878
+    + 0.088927 * lambda2
+    + 0.37349 / denom
+    + 0.005799 / denom2;
+  const b = 0.00125
+    - 0.007068 * lambda2
+    + 0.001071 / denom
+    - 0.000218 / denom2;
+
+  const n = 1 + (ndValue - 1) * (1 + b + (a / vdValue));
+  if (!Number.isFinite(n) || n < 1.0 || n > 3.0) {
+    return ndValue;
+  }
+  return n;
+}
+
+/**
  * Calculate refractive index using Schott equation (used by CDGM)
  * Schott formula: n² = A0 + A1*λ² + A2*λ⁻² + A3*λ⁻⁴ + A4*λ⁻⁶ + A5*λ⁻⁸
  * @param {Object} schottCoeffs - Schott coefficients {A0, A1, A2, A3, A4, A5}

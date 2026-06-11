@@ -378,6 +378,30 @@ export function validateSceneGeometry(scene, label = '') {
 
 export function asphericSurfaceZ(r, params, mode = "even") {
   const { radius, conic, coef1, coef2, coef3, coef4, coef5, coef6, coef7, coef8, coef9, coef10 } = params;
+  const evaluateSag = (radialSample) => {
+    const r2 = radialSample * radialSample;
+    const absRadius = Math.abs(radius);
+    const sqrtTerm = 1 - (1 + conic) * r2 / (absRadius * absRadius);
+
+    if (!isFinite(sqrtTerm) || sqrtTerm < 0) {
+      return NaN;
+    }
+
+    const baseAbs = r2 / (absRadius * (1 + Math.sqrt(sqrtTerm)));
+    const base = radius > 0 ? baseAbs : -baseAbs;
+
+    let asphere = 0;
+    const coefs = [coef1, coef2, coef3, coef4, coef5, coef6, coef7, coef8, coef9, coef10];
+    for (let i = 0; i < coefs.length; i++) {
+      if (mode === "even") {
+        asphere += (coefs[i] || 0) * Math.pow(radialSample, 2 * (i + 2));
+      } else if (mode === "odd") {
+        asphere += (coefs[i] || 0) * Math.pow(radialSample, 2 * (i + 1) + 1);
+      }
+    }
+
+    return base + asphere;
+  };
   
   // Try WASM first for performance
   try {
@@ -422,36 +446,26 @@ export function asphericSurfaceZ(r, params, mode = "even") {
     return NaN;}
   }
   
-  const r2 = r * r;
-  const absRadius = Math.abs(radius);
-  const sqrtTerm = 1 - (1 + conic) * r2 / (absRadius * absRadius);
-  
-  if (!isFinite(sqrtTerm) || sqrtTerm < 0) {
+  let result = evaluateSag(r);
+
+  if (!isFinite(result)) {
+    const curvatureTerm = 1 + conic;
+    if (isFinite(curvatureTerm) && curvatureTerm > 0) {
+      const absRadius = Math.abs(radius);
+      const maxRenderableRadius = absRadius / Math.sqrt(curvatureTerm);
+      const epsilon = Math.max(1e-9, maxRenderableRadius * 1e-9);
+      const clampedRadius = Math.max(0, Math.min(Math.abs(r), maxRenderableRadius - epsilon));
+      result = evaluateSag(clampedRadius);
+    }
+  }
+
+  if (!isFinite(result)) {
     const asphericSurfaceZAny = asphericSurfaceZ as any;
     if (!asphericSurfaceZAny._sqrtWarned) {
-      // console.warn(`asphericSurfaceZ: sqrtTerm=${sqrtTerm} is invalid (r=${r}, conic=${conic}, radius=${radius}), returning NaN`);
       asphericSurfaceZAny._sqrtWarned = true;
     }
     return NaN;
   }
-  
-  // 負の半径に対応した球面計算
-  const baseAbs = r2 / (absRadius * (1 + Math.sqrt(sqrtTerm)));
-  const base = radius > 0 ? baseAbs : -baseAbs;
-
-  let asphere = 0;
-  const coefs = [coef1, coef2, coef3, coef4, coef5, coef6, coef7, coef8, coef9, coef10];
-  for (let i = 0; i < coefs.length; i++) {
-    if (mode === "even") {
-      // Align with ray-tracing.js: coef1 corresponds to r^4.
-      asphere += (coefs[i] || 0) * Math.pow(r, 2 * (i + 2));
-    } else if (mode === "odd") {
-      // Align with ray-tracing.js: coef1 corresponds to r^3.
-      asphere += (coefs[i] || 0) * Math.pow(r, 2 * (i + 1) + 1);
-    }
-  }
-  
-  const result = base + asphere;
   
   // 結果が無効な場合のデバッグ
   const asphericSurfaceZAny = asphericSurfaceZ as any;

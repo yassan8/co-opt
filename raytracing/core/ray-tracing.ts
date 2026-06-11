@@ -2933,7 +2933,10 @@ function __getCorrectRefractiveIndex_impl(surface, wavelength = 0.5875618) {
       const wlKey = Math.round(Number(wavelength) * 1e9) | 0;
       const matKey = String(effectiveMaterial ?? '');
       const manualKey = String(effectiveRindex ?? '');
-      const key = `${wlKey}|${matKey}|${manualKey}`;
+      const abbeKey = String(effectiveAbbe ?? '');
+      const optimizeNdKey = String(surface.__cooptGapOptimizeRI ?? surface.optimizeRI ?? '');
+      const optimizeVdKey = String(surface.__cooptGapOptimizeAbbe ?? surface.optimizeAbbe ?? '');
+      const key = `${wlKey}|${matKey}|${manualKey}|${abbeKey}|${optimizeNdKey}|${optimizeVdKey}`;
       if (cache.has(key)) return cache.get(key);
 
       // Compute using the original logic, then store.

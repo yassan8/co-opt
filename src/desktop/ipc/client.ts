@@ -13,6 +13,8 @@ import type {
   NativeAstigmatismDebugResponse,
   NativeTransverseAberrationRequest,
   NativeTransverseAberrationResponse,
+  NativeTransverseRmsRequest,
+  NativeTransverseRmsResponse,
   NativeOpdMapRequest,
   NativeOpdMapResponse,
   NativeOpdRmsWavesRequest,
@@ -1871,6 +1873,101 @@ export async function runNativeTransverseAberration(
   return invokeCommand<NativeTransverseAberrationRequest, NativeTransverseAberrationResponse>(
     "run_native_transverse_aberration",
     normalizedPayload,
+  );
+}
+
+export async function runNativeTransverseRmsUm(
+  payload: NativeTransverseRmsRequest,
+): Promise<NativeTransverseRmsResponse> {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
+  const normalizedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
+    opticalSystemRows,
+    sourceRows,
+    Array.isArray(payload?.objectRows) ? payload.objectRows : [],
+    Number(payload?.wavelength),
+  );
+
+  const componentRaw = String(payload?.component ?? "total").trim().toLowerCase();
+  const component = componentRaw === "meridional" || componentRaw === "sagittal"
+    ? componentRaw
+    : "total";
+
+  if (!isTauriRuntime()) {
+    const aberrationResponse = await runNativeTransverseAberration({
+      ...payload,
+      opticalSystemRows,
+      sourceRows,
+      objectRows: normalizedObjectRows,
+    });
+
+    const collectStats = (series: any[]) => {
+      let sumSq = 0;
+      let count = 0;
+      if (!Array.isArray(series)) return { sumSq, count };
+      for (const item of series) {
+        const pts = Array.isArray(item?.points) ? item.points : [];
+        for (const point of pts) {
+          const value = Number(point?.transverseAberration);
+          if (!Number.isFinite(value)) continue;
+          sumSq += value * value;
+          count += 1;
+        }
+      }
+      return { sumSq, count };
+    };
+
+    const meridionalStats = collectStats((aberrationResponse as any)?.meridionalData);
+    const sagittalStats = collectStats((aberrationResponse as any)?.sagittalData);
+
+    let sumSq = 0;
+    let count = 0;
+    if (component === "meridional") {
+      sumSq = meridionalStats.sumSq;
+      count = meridionalStats.count;
+      if (count === 0 && sagittalStats.count > 0) {
+        sumSq = sagittalStats.sumSq;
+        count = sagittalStats.count;
+      }
+    } else if (component === "sagittal") {
+      sumSq = sagittalStats.sumSq;
+      count = sagittalStats.count;
+      if (count === 0 && meridionalStats.count > 0) {
+        sumSq = meridionalStats.sumSq;
+        count = meridionalStats.count;
+      }
+    } else {
+      sumSq = meridionalStats.sumSq + sagittalStats.sumSq;
+      count = meridionalStats.count + sagittalStats.count;
+    }
+
+    if (count <= 0) {
+      throw new Error("Web transverse RMS calculation failed");
+    }
+
+    return {
+      backend: String((aberrationResponse as any)?.backend || "web-rust-wasm"),
+      wavelength: Number((aberrationResponse as any)?.wavelength ?? payload?.wavelength ?? 0.5876),
+      targetSurface: Number((aberrationResponse as any)?.targetSurface ?? 0),
+      stopSurface: Number((aberrationResponse as any)?.stopSurface ?? 0),
+      rayCount: Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : 51,
+      component: component as NativeTransverseRmsResponse["component"],
+      meridionalCount: meridionalStats.count,
+      sagittalCount: sagittalStats.count,
+      rmsUm: Math.sqrt(sumSq / count) * 1000,
+      message: "Computed via Web Rust/WASM transverse RMS API",
+    };
+  }
+
+  return invokeCommand<NativeTransverseRmsRequest, NativeTransverseRmsResponse>(
+    "run_native_transverse_rms_um",
+    {
+      ...payload,
+      opticalSystemRows,
+      sourceRows,
+      objectRows: normalizedObjectRows,
+      component,
+    },
   );
 }
 

@@ -1,4 +1,4 @@
-export type OptimizerMethod = "cd" | "lm" | "kkt";
+export type OptimizerMethod = "cd" | "lm" | "kkt" | "global";
 
 export interface OptimizeStepRequest {
   opticalSystemRows: unknown[];

@@ -3733,6 +3733,14 @@ function setupOptimizeDesignIntentButton(): void {
         <input id="opt-max-iter" type="number" min="1" step="1" value="5000" style="width:100px; padding:4px 6px;" />
     </label>
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
+        W
+        <input id="opt-escape-width" type="number" min="0" step="0.01" value="1" style="width:100px; padding:4px 6px;" />
+    </label>
+    <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
+        H
+        <input id="opt-escape-height" type="number" min="0" step="0.01" value="0.1" style="width:100px; padding:4px 6px;" />
+    </label>
+    <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         <input id="opt-auto-render" type="checkbox" checked style="width:16px; height:16px;" />
         Auto-render on Accept
     </label>
@@ -4756,6 +4764,8 @@ function setupOptimizeDesignIntentButton(): void {
                         const trustRegionDeltaMax = Math.max(trustRegionDelta, readNum('opt-trust-region-delta-max', 1.0));
 
                         return {
+                            escapeFunctionWidth: readNum('opt-escape-width', 1),
+                            escapeFunctionHeight: readNum('opt-escape-height', 0.1),
                             stepFraction: readNum('opt-step-fraction', 0.02),
                             minStep: readNum('opt-min-step', 1e-6),
                             stepDecay: readNum('opt-step-decay', 0.5),
@@ -12154,6 +12164,10 @@ function __cooptIsPlainRecord(value: any): value is Record<string, any> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function __cooptIsGlassFamilyKey(key: string): boolean {
+    return /^(?:material|rindex|abbe|vd|nd)\d*$/i.test(String(key ?? '').trim());
+}
+
 function __cooptMergeVariableSnapshot(snapshotVars: any, currentVars: any, currentParams?: any): Record<string, any> {
     const snapshot = __cooptIsPlainRecord(snapshotVars) ? snapshotVars : {};
     const current = __cooptIsPlainRecord(currentVars) ? currentVars : {};
@@ -12170,7 +12184,7 @@ function __cooptMergeVariableSnapshot(snapshotVars: any, currentVars: any, curre
                 ...(__cooptIsPlainRecord(currentEntry.optimize) ? currentEntry.optimize : {}),
             };
         }
-        if (!Object.prototype.hasOwnProperty.call(mergedEntry, 'value') && Object.prototype.hasOwnProperty.call(params, key)) {
+        if (Object.prototype.hasOwnProperty.call(params, key) && (__cooptIsGlassFamilyKey(key) || !Object.prototype.hasOwnProperty.call(mergedEntry, 'value'))) {
             mergedEntry.value = params[key];
         }
         merged[key] = mergedEntry;

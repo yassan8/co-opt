@@ -13,19 +13,21 @@ use crate::commands::analysis::{
     compute_paraxial_metrics,
 };
 use crate::commands::optics::{
+    compute_native_transverse_rms_batch,
     compute_native_chief_ray_angle_deg,
     compute_finite_opd_grid_rms_waves,
+    reduce_native_transverse_rms_stats,
     run_native_opd_map,
     run_native_spherical_aberration,
     NativeOpdMapRequest,
     run_native_spot_raytrace,
-    run_native_transverse_aberration,
+    run_native_transverse_rms_um,
     NativeSphericalAberrationPoint,
     NativeSphericalAberrationRequest,
     NativeSphericalAberrationSeries,
     NativeTransverseAberrationSeries,
+    NativeTransverseRmsRequest,
     NativeSpotRaytraceRequest,
-    NativeTransverseAberrationRequest,
     aspheric_sag,
 };
 
@@ -41,9 +43,10 @@ const ACTIVE_INEQ_MARGIN_TOL_SCALE: f64 = 0.5;
 const SQP_DIRECTION_LIMIT_SCALE: f64 = 0.02;
 const SQP_DIRECTION_LIMIT_STEP_MULT: f64 = 20.0;
 // TS parity defaults from optimization/kkt-optimizer.ts
-const KKT_LINESEARCH_C: f64 = 0.1;
+const KKT_LINESEARCH_C: f64 = 1e-4;
 const KKT_LINESEARCH_RHO: f64 = 0.5;
 const KKT_LINESEARCH_MAX_BACKTRACK: usize = 20;
+const KKT_FILTER_ACCEPTANCE_C: f64 = 0.05;
 const KKT_INITIAL_PENALTY: f64 = 1.0;
 const KKT_PENALTY_INCREASE_FACTOR: f64 = 1.5;
 
@@ -117,6 +120,8 @@ struct KktRuntimeState {
 struct OptimizerSessionState {
     kkt: KktRuntimeState,
     step_by_var_id: HashMap<String, f64>,
+    best_eval: Option<EvalState>,
+    best_rows: Vec<Value>,
 }
 
 fn is_stop_requested() -> bool {
@@ -615,6 +620,9 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
         ),
     };
 
+    let mut overall_best_eval = best_eval;
+    let mut overall_best_rows = rows.clone();
+
     if let Some(sid) = session_id.as_ref() {
         if let Ok(mut map) = OPTIMIZER_SESSIONS.lock() {
             let mut step_by_var_id = HashMap::new();
@@ -622,10 +630,20 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
                 step_by_var_id.insert(v.id.clone(), v.step);
             }
             let mut st = map.get(sid).cloned().unwrap_or_default();
+            if let Some(previous_best_eval) = st.best_eval {
+                if is_better_eval(previous_best_eval, overall_best_eval)
+                    && !st.best_rows.is_empty()
+                {
+                    overall_best_eval = previous_best_eval;
+                    overall_best_rows = st.best_rows.clone();
+                }
+            }
             st.step_by_var_id = step_by_var_id;
             if let Some(kkt_state) = kkt_final_state {
                 st.kkt = kkt_state;
             }
+            st.best_eval = Some(overall_best_eval);
+            st.best_rows = overall_best_rows.clone();
             map.insert(sid.clone(), st);
             if map.len() > 64 {
                 if let Some(k) = map.keys().next().cloned() {
@@ -639,18 +657,18 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
         events.push(OptimizeProgressEvent {
             phase: "done".to_string(),
             iter: completed_iterations,
-            current: best_eval.score,
-            best: best_eval.score,
+            current: overall_best_eval.score,
+            best: overall_best_eval.score,
             accepted: true,
             message: Some("optimizer done".to_string()),
             variable_id: None,
             method: Some(mode_used.clone()),
-            violation_score: Some(best_eval.violation_score),
+            violation_score: Some(overall_best_eval.violation_score),
             soft_penalty: Some(0.0),
             requirement_count: Some(requirements.len()),
             residual_count: Some(requirements.len()),
             rho: None,
-            feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
+            feasible: Some(overall_best_eval.violation_score.is_finite() && overall_best_eval.violation_score <= 1e-9),
         });
     }
 
@@ -668,7 +686,7 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
         variable_count,
         completed_iterations,
         before_eval.score,
-        best_eval.score,
+        overall_best_eval.score,
         invalid_requirements.len(),
         invalid_ops_preview
     );
@@ -677,12 +695,12 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
         iterations: completed_iterations,
         variable_count,
         merit_before: before_eval.score,
-        merit_after: best_eval.score,
+        merit_after: overall_best_eval.score,
         converged,
         mode_used,
         requirement_score_before: before_eval.requirement_score,
-        requirement_score_after: best_eval.requirement_score,
-        optimized_rows: rows,
+        requirement_score_after: overall_best_eval.requirement_score,
+        optimized_rows: overall_best_rows,
         progress_events: events,
         message,
         profile: optimizer_profile_finish(),
@@ -1003,7 +1021,7 @@ fn run_kkt(
         let aug_base = best_eval.score
             + mu_total * best_eval.violation_score
             + 0.5 * penalty * best_eval.violation_score * best_eval.violation_score;
-        let filter_c = tuning.line_search_c;
+        let filter_c = KKT_FILTER_ACCEPTANCE_C;
 
         let mut accepted = false;
         let mut best_trial = best_eval;
@@ -2300,52 +2318,20 @@ fn native_transverse_rms_um(
     object_rows: &[Value],
     req_spec: &RequirementSpec,
 ) -> Option<f64> {
-    let surface_index = image_surface_index(rows);
-    let ray_count = parse_ta_rms_ray_count(&req_spec.param4);
-    let source_rows_effective = source_rows_for_wavelength_param(source_rows, &req_spec.param1);
-    let wavelength = resolve_requirement_wavelength_um(source_rows, &req_spec.param1);
-    let object_rows_effective = select_object_rows_for_requirement(object_rows, &req_spec.param2);
-    let req = NativeTransverseAberrationRequest {
+    let req = NativeTransverseRmsRequest {
         optical_system_rows: rows.to_vec(),
-        source_rows: source_rows_effective,
-        object_rows: object_rows_effective,
-        surface_index: Some(surface_index),
-        ray_count: Some(ray_count),
+        source_rows: source_rows_for_wavelength_param(source_rows, &req_spec.param1),
+        object_rows: select_object_rows_for_requirement(object_rows, &req_spec.param2),
+        surface_index: Some(image_surface_index(rows)),
+        ray_count: Some(parse_ta_rms_ray_count(&req_spec.param4)),
         ring_count: Some(10),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
-        wavelength: Some(wavelength),
+        wavelength: Some(resolve_requirement_wavelength_um(source_rows, &req_spec.param1)),
+        component: Some(normalize_ta_component(&req_spec.param3).to_string()),
     };
 
-    let resp = run_native_transverse_aberration(req).ok()?;
-    let component = normalize_ta_component(&req_spec.param3);
-    let meridional_stats = collect_ta_stats(&resp.meridional_data);
-    let sagittal_stats = collect_ta_stats(&resp.sagittal_data);
-
-    let (sum_sq_mm, count) = if component == "meridional" {
-        if meridional_stats.1 > 0 {
-            meridional_stats
-        } else {
-            sagittal_stats
-        }
-    } else if component == "sagittal" {
-        if sagittal_stats.1 > 0 {
-            sagittal_stats
-        } else {
-            meridional_stats
-        }
-    } else {
-        (
-            meridional_stats.0 + sagittal_stats.0,
-            meridional_stats.1 + sagittal_stats.1,
-        )
-    };
-
-    if count == 0 {
-        return None;
-    }
-    let rms_mm = (sum_sq_mm / count as f64).sqrt();
-    Some(rms_mm * 1000.0)
+    Some(run_native_transverse_rms_um(req).ok()?.rms_um)
 }
 
 fn transverse_rms_um_from_series(
@@ -2392,10 +2378,6 @@ fn evaluate_batched_transverse_rms<'a>(
     requirements: &[&'a RequirementSpec],
 ) -> Option<Vec<(&'a RequirementSpec, Option<f64>)>> {
     let first = *requirements.first()?;
-    let surface_index = image_surface_index(rows);
-    let ray_count = parse_ta_rms_ray_count(&first.param4);
-    let source_rows_effective = source_rows_for_wavelength_param(source_rows, &first.param1);
-    let wavelength = resolve_requirement_wavelength_um(source_rows, &first.param1);
     let mut batched_object_rows = Vec::with_capacity(requirements.len());
 
     for req in requirements {
@@ -2406,20 +2388,21 @@ fn evaluate_batched_transverse_rms<'a>(
         batched_object_rows.push(selected[0].clone());
     }
 
-    let req = NativeTransverseAberrationRequest {
+    let req = NativeTransverseRmsRequest {
         optical_system_rows: rows.to_vec(),
-        source_rows: source_rows_effective,
+        source_rows: source_rows_for_wavelength_param(source_rows, &first.param1),
         object_rows: batched_object_rows,
-        surface_index: Some(surface_index),
-        ray_count: Some(ray_count),
+        surface_index: Some(image_surface_index(rows)),
+        ray_count: Some(parse_ta_rms_ray_count(&first.param4)),
         ring_count: Some(10),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
-        wavelength: Some(wavelength),
+        wavelength: Some(resolve_requirement_wavelength_um(source_rows, &first.param1)),
+        component: Some("total".to_string()),
     };
 
-    let resp = run_native_transverse_aberration(req).ok()?;
-    if resp.meridional_data.len() < requirements.len() || resp.sagittal_data.len() < requirements.len() {
+    let batch = compute_native_transverse_rms_batch(req).ok()?;
+    if batch.stats.len() < requirements.len() {
         return None;
     }
 
@@ -2430,11 +2413,12 @@ fn evaluate_batched_transverse_rms<'a>(
             .map(|(idx, req_spec)| {
                 (
                     *req_spec,
-                    transverse_rms_um_from_series(
-                        resp.meridional_data.get(idx),
-                        resp.sagittal_data.get(idx),
-                        normalize_ta_component(&req_spec.param3),
-                    ),
+                    batch.stats.get(idx).and_then(|stats| {
+                        reduce_native_transverse_rms_stats(
+                            stats,
+                            normalize_ta_component(&req_spec.param3),
+                        )
+                    }),
                 )
             })
             .collect(),

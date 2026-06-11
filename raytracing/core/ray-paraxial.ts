@@ -3,7 +3,7 @@
 
 // @ts-nocheck
 
-import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex } from '../../data/glass.ts';
+import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, calculateRefractiveIndexHerzberger } from '../../data/glass.ts';
 
 // デバッグレベル設定（0: エラーのみ、1: 警告+エラー、2: 情報+警告+エラー、3: すべて）
 const DEBUG_LEVEL = 1;
@@ -1608,63 +1608,19 @@ export function traceParaxialRayFromStopInternal(opticalSystemRows, stopIndex, w
 }
 
 /**
- * ndとνdから任意の波長の屈折率を近似計算
- * 2点推定法とCauchy式の簡易版を使用
+ * nd と Vd から Herzberger 分散式で任意波長の屈折率を計算
  * @param {number} nd - d線（587.56nm）での屈折率
  * @param {number} vd - アッベ数
  * @param {number} wavelength - 目的波長 (μm)
  * @returns {number} 推定屈折率
  */
 function estimateRefractiveIndexFromNdVd(nd, vd, wavelength) {
-  // 基準波長
-  const lambda_d = 0.5875618; // d線 (587.56 nm)
-  const lambda_F = 0.4861327; // F線 (486.13 nm)
-  const lambda_C = 0.6562725; // C線 (656.27 nm)
-  
-  // アッベ数の定義から nF と nC を推定
-  // νd = (nd - 1) / (nF - nC)
-  // より正確な2点推定法：
-  const dispersion = (nd - 1) / vd;
-  const nF = nd + dispersion / 2;
-  const nC = nd - dispersion / 2;
-  
-  // 3点（C, d, F）での値が得られたので、線形補間または簡易Cauchy式で推定
-  
-  // 可視域（0.4 ~ 0.7 μm）では線形補間が妥当
-  if (wavelength >= lambda_F && wavelength <= lambda_C) {
-    // 線形補間
-    if (wavelength <= lambda_d) {
-      // F線とd線の間
-      const t = (wavelength - lambda_F) / (lambda_d - lambda_F);
-      return nF + t * (nd - nF);
-    } else {
-      // d線とC線の間
-      const t = (wavelength - lambda_d) / (lambda_C - lambda_d);
-      return nd + t * (nC - nd);
-    }
-  }
-  
-  // 可視域外では簡易Cauchy式 n(λ) = A + B/λ² を使用
-  // 3点からA, Bを最小二乗法で求める（簡易版：2点で近似）
-  // d線とF線から求める
-  const lambda_d_sq = lambda_d * lambda_d;
-  const lambda_F_sq = lambda_F * lambda_F;
-  
-  // nd = A + B/λd²
-  // nF = A + B/λF²
-  // より、B = (nF - nd) / (1/λF² - 1/λd²)
-  const B = (nF - nd) / (1/lambda_F_sq - 1/lambda_d_sq);
-  const A = nd - B / lambda_d_sq;
-  
-  const n_estimated = A + B / (wavelength * wavelength);
-  
-  // 妥当性チェック（屈折率は1.0～3.0の範囲）
-  if (n_estimated < 1.0 || n_estimated > 3.0) {
-    console.warn(`⚠️ 推定屈折率が異常: n=${n_estimated.toFixed(6)} at λ=${wavelength.toFixed(4)}μm, nd=${nd}, vd=${vd} → nd値を返す`);
+  const nEstimated = calculateRefractiveIndexHerzberger(nd, vd, wavelength);
+  if (!Number.isFinite(nEstimated) || nEstimated < 1.0 || nEstimated > 3.0) {
+    console.warn(`⚠️ Herzberger 推定屈折率が異常: n=${Number(nEstimated).toFixed(6)} at λ=${Number(wavelength).toFixed(4)}μm, nd=${nd}, vd=${vd} → nd値を返す`);
     return nd;
   }
-  
-  return n_estimated;
+  return nEstimated;
 }
 
 /**
@@ -1678,6 +1634,17 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
   const effectiveMaterial = surface.__cooptGapMaterial ?? surface.__cooptActualMaterial ?? surface.material;
   const effectiveRindex = surface.__cooptGapRindex ?? surface.__cooptActualRindex ?? surface.rindex;
   const effectiveAbbe = surface.__cooptGapAbbe ?? surface.__cooptActualAbbe ?? surface.abbe;
+  const hasOptimizeNd = String(surface.__cooptGapOptimizeRI ?? surface.optimizeRI ?? '').trim().toUpperCase().includes('V');
+  const hasOptimizeVd = String(surface.__cooptGapOptimizeAbbe ?? surface.optimizeAbbe ?? '').trim().toUpperCase().includes('V');
+  const manualNd = parseFloat(String(effectiveRindex ?? surface['Ref Index'] ?? surface.refIndex ?? surface['ref index'] ?? '').trim());
+  const manualVd = parseFloat(String(effectiveAbbe ?? surface.Abbe ?? surface.vd ?? surface.Vd ?? '').trim());
+
+  if (Number.isFinite(manualNd) && manualNd > 1.0 && (hasOptimizeNd || hasOptimizeVd)) {
+    if (Number.isFinite(manualVd) && manualVd > 0) {
+      return estimateRefractiveIndexFromNdVd(manualNd, manualVd, wavelength);
+    }
+    return manualNd;
+  }
   
   // Check if effectiveMaterial is a numeric string (e.g., "1.336")
   // If so, treat it as nd and, when Abbe is available, apply wavelength dispersion approximation.

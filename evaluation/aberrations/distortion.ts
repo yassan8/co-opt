@@ -480,6 +480,7 @@ export async function calculateGridDistortion(opticalSystemRows, gridSize = 20, 
   const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
     ? options.onProgress
     : null;
+  const yieldToUi = async () => new Promise((resolve) => setTimeout(resolve, 0));
   if (!opticalSystemRows || !Array.isArray(opticalSystemRows)) {
     console.error('❌ calculateGridDistortion: opticalSystemRows invalid');
     return null;
@@ -589,7 +590,13 @@ export async function calculateGridDistortion(opticalSystemRows, gridSize = 20, 
           k += 1;
           const progress = 5 + (90 * k) / Math.max(1, total);
           try { onProgress?.({ percent: progress, message: `Tracing grid ${k}/${total} (Rust/WASM)...` }); } catch (_) {}
+
+          if ((k % 8) === 0) {
+            await yieldToUi();
+          }
         }
+
+        await yieldToUi();
       }
     }, requireRustWasm);
 

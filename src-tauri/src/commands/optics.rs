@@ -499,6 +499,56 @@ pub struct NativeTransverseAberrationResponse {
     pub message: String,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeTransverseRmsRequest {
+    pub optical_system_rows: Vec<Value>,
+    #[serde(default)]
+    pub source_rows: Vec<Value>,
+    #[serde(default)]
+    pub object_rows: Vec<Value>,
+    pub surface_index: Option<usize>,
+    pub ray_count: Option<u32>,
+    pub ring_count: Option<u32>,
+    pub pattern: Option<String>,
+    pub wavelength_mode: Option<String>,
+    pub wavelength: Option<f64>,
+    pub component: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeTransverseRmsStats {
+    pub wavelength_um: f64,
+    pub meridional_sum_sq_mm: f64,
+    pub meridional_count: usize,
+    pub sagittal_sum_sq_mm: f64,
+    pub sagittal_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeTransverseRmsBatchResult {
+    pub wavelength: f64,
+    pub target_surface: usize,
+    pub stop_surface: usize,
+    pub ray_count: usize,
+    pub stats: Vec<NativeTransverseRmsStats>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeTransverseRmsResponse {
+    pub backend: String,
+    pub wavelength: f64,
+    pub target_surface: usize,
+    pub stop_surface: usize,
+    pub ray_count: usize,
+    pub component: String,
+    pub meridional_count: usize,
+    pub sagittal_count: usize,
+    pub rms_um: f64,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeOpdMapRequest {
@@ -995,6 +1045,7 @@ pub struct NativeDistortionResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeGridDistortionRequest {
+    pub job_id: Option<String>,
     pub optical_system_rows: Vec<Value>,
     #[serde(default)]
     pub source_rows: Vec<Value>,
@@ -6418,6 +6469,308 @@ pub fn run_native_transverse_aberration(
     })
 }
 
+fn normalize_transverse_component_native(raw: Option<&str>) -> String {
+    let value = raw.unwrap_or("total").trim().to_ascii_lowercase();
+    if value == "meridional" || value == "sagittal" {
+        value
+    } else {
+        "total".to_string()
+    }
+}
+
+pub fn reduce_native_transverse_rms_stats(
+    stats: &NativeTransverseRmsStats,
+    component: &str,
+) -> Option<f64> {
+    let (sum_sq_mm, count) = if component == "meridional" {
+        if stats.meridional_count > 0 {
+            (stats.meridional_sum_sq_mm, stats.meridional_count)
+        } else {
+            (stats.sagittal_sum_sq_mm, stats.sagittal_count)
+        }
+    } else if component == "sagittal" {
+        if stats.sagittal_count > 0 {
+            (stats.sagittal_sum_sq_mm, stats.sagittal_count)
+        } else {
+            (stats.meridional_sum_sq_mm, stats.meridional_count)
+        }
+    } else {
+        (
+            stats.meridional_sum_sq_mm + stats.sagittal_sum_sq_mm,
+            stats.meridional_count + stats.sagittal_count,
+        )
+    };
+
+    if count == 0 {
+        return None;
+    }
+
+    Some((sum_sq_mm / count as f64).sqrt() * 1000.0)
+}
+
+pub fn compute_native_transverse_rms_batch(
+    req: NativeTransverseRmsRequest,
+) -> Result<NativeTransverseRmsBatchResult, String> {
+    if req.optical_system_rows.is_empty() {
+        return Err("run_native_transverse_rms_um: opticalSystemRows is empty".to_string());
+    }
+
+    let rows: Vec<Value> = req
+        .optical_system_rows
+        .iter()
+        .map(normalize_coord_trans_row)
+        .collect();
+    if rows.is_empty() {
+        return Err("run_native_transverse_rms_um: normalized rows are empty".to_string());
+    }
+
+    let surface_data = calculate_surface_data(&rows);
+    if surface_data.len() != rows.len() {
+        return Err("run_native_transverse_rms_um: failed to calculate surface origins".to_string());
+    }
+
+    let target_surface_index = req
+        .surface_index
+        .unwrap_or_else(|| rows.len().saturating_sub(1))
+        .min(rows.len().saturating_sub(1));
+
+    let stop_surface_index = find_stop_surface_index_native(&rows)
+        .unwrap_or_else(|| rows.len().saturating_sub(1))
+        .min(rows.len().saturating_sub(1));
+
+    let stop_surface = surface_data[stop_surface_index];
+    let stop_rot = stop_surface.rot;
+    let stop_plane_u = normalize3(stop_rot[0], stop_rot[3], stop_rot[6]);
+    let stop_plane_v = normalize3(stop_rot[1], stop_rot[4], stop_rot[7]);
+
+    let ring_count = req.ring_count.unwrap_or(10).clamp(1, 64) as usize;
+    let traced_rays_req = req.ray_count.unwrap_or(51).clamp(9, 10001) as usize;
+
+    let pattern_owned = req
+        .pattern
+        .unwrap_or_else(|| "cross".to_string())
+        .trim()
+        .to_lowercase();
+    let pattern = if pattern_owned == "grid" {
+        "grid"
+    } else if pattern_owned == "annular" {
+        "annular"
+    } else {
+        "cross"
+    };
+
+    let wavelength_mode = req
+        .wavelength_mode
+        .unwrap_or_else(|| "primary".to_string());
+
+    let requested_wavelength = req.wavelength.filter(|w| w.is_finite() && *w > 0.0);
+    let source_rows_effective = if let Some(wl) = requested_wavelength {
+        vec![serde_json::json!({
+            "id": "NativeTransverseRmsSource",
+            "name": "NativeTransverseRmsSource",
+            "wavelength": wl,
+            "color": "#9ACD32",
+            "isPrimary": true,
+            "intensity": 1
+        })]
+    } else {
+        req.source_rows.clone()
+    };
+
+    let primary_wavelength = requested_wavelength
+        .unwrap_or_else(|| get_primary_wavelength_um_native(&source_rows_effective, 0.5876));
+
+    let infinite_conjugate = is_infinite_conjugate_native(&rows);
+    let mut object_rows = req.object_rows.clone();
+    if object_rows.is_empty() {
+        let fallback = if infinite_conjugate {
+            serde_json::json!({"name":"AutoField0","position":"Angle","xHeightAngle":0.0,"yHeightAngle":0.0})
+        } else {
+            serde_json::json!({"name":"AutoField0","position":"Rectangle","xHeight":0.0,"yHeight":0.0})
+        };
+        object_rows.push(fallback);
+    }
+
+    let generated_series = build_native_object_ray_series(
+        &rows,
+        &surface_data,
+        &object_rows,
+        target_surface_index,
+        traced_rays_req,
+        pattern,
+        ring_count,
+        &source_rows_effective,
+        &wavelength_mode,
+        false,
+    );
+    if generated_series.is_empty() {
+        return Err("run_native_transverse_rms_um: failed to generate native rays".to_string());
+    }
+
+    let stop_radius = estimate_stop_radius_mm(&rows).max(1.0e-6);
+    let mirror_sign = distortion_mirror_sign(&rows);
+    let mut stats = Vec::<NativeTransverseRmsStats>::new();
+
+    for (_series_label, _series_color, _has_field_angle, rays, wavelength_um) in generated_series {
+        if rays.is_empty() {
+            continue;
+        }
+
+        if wavelength_mode.eq_ignore_ascii_case("primary")
+            && (wavelength_um - primary_wavelength).abs() > 1.0e-6
+        {
+            continue;
+        }
+
+        let packed_target = match build_packed_meta(&rows, &surface_data, target_surface_index, wavelength_um) {
+            Ok(packed) => packed,
+            Err(_) => continue,
+        };
+        let packed_stop = match build_packed_meta(&rows, &surface_data, stop_surface_index, wavelength_um) {
+            Ok(packed) => packed,
+            Err(_) => continue,
+        };
+
+        let chief = rays.iter().find(|ray| ray.is_chief).unwrap_or(&rays[0]);
+        let chief_vec = [
+            chief.start_p.x,
+            chief.start_p.y,
+            chief.start_p.z,
+            chief.dir.x,
+            chief.dir.y,
+            chief.dir.z,
+        ];
+
+        let chief_target_hit = match trace_target_with_packed_native(chief_vec, target_surface_index, &packed_target) {
+            Some(hit) => hit,
+            None => continue,
+        };
+        let chief_stop_hit = trace_target_with_packed_native(chief_vec, stop_surface_index, &packed_stop)
+            .unwrap_or(chief_target_hit);
+
+        let chief_u =
+            (chief_stop_hit.0 - stop_surface.origin[0]) * stop_plane_u[0]
+            + (chief_stop_hit.1 - stop_surface.origin[1]) * stop_plane_u[1]
+            + (chief_stop_hit.2 - stop_surface.origin[2]) * stop_plane_u[2];
+        let chief_v =
+            (chief_stop_hit.0 - stop_surface.origin[0]) * stop_plane_v[0]
+            + (chief_stop_hit.1 - stop_surface.origin[1]) * stop_plane_v[1]
+            + (chief_stop_hit.2 - stop_surface.origin[2]) * stop_plane_v[2];
+
+        let mut meridional_sum_sq_mm = 0.0_f64;
+        let mut meridional_count = 0usize;
+        let mut sagittal_sum_sq_mm = 0.0_f64;
+        let mut sagittal_count = 0usize;
+
+        for ray in &rays {
+            let ray_vec = [
+                ray.start_p.x,
+                ray.start_p.y,
+                ray.start_p.z,
+                ray.dir.x,
+                ray.dir.y,
+                ray.dir.z,
+            ];
+
+            let Some(target_hit) = trace_target_with_packed_native(ray_vec, target_surface_index, &packed_target) else {
+                continue;
+            };
+
+            let stop_hit = trace_target_with_packed_native(ray_vec, stop_surface_index, &packed_stop)
+                .unwrap_or(target_hit);
+
+            let ru =
+                (stop_hit.0 - stop_surface.origin[0]) * stop_plane_u[0]
+                + (stop_hit.1 - stop_surface.origin[1]) * stop_plane_u[1]
+                + (stop_hit.2 - stop_surface.origin[2]) * stop_plane_u[2];
+            let rv =
+                (stop_hit.0 - stop_surface.origin[0]) * stop_plane_v[0]
+                + (stop_hit.1 - stop_surface.origin[1]) * stop_plane_v[1]
+                + (stop_hit.2 - stop_surface.origin[2]) * stop_plane_v[2];
+
+            let du = ru - chief_u;
+            let dv = rv - chief_v;
+            let transverse_aberration = if du.abs() <= dv.abs() {
+                (target_hit.1 - chief_target_hit.1) * mirror_sign
+            } else {
+                (target_hit.0 - chief_target_hit.0) * mirror_sign
+            };
+
+            if !transverse_aberration.is_finite() {
+                continue;
+            }
+
+            let pupil_coordinate = if du.abs() <= dv.abs() {
+                dv / stop_radius
+            } else {
+                du / stop_radius
+            };
+            if !pupil_coordinate.is_finite() || pupil_coordinate.abs() > 1.0 {
+                continue;
+            }
+
+            if du.abs() <= dv.abs() {
+                meridional_sum_sq_mm += transverse_aberration * transverse_aberration;
+                meridional_count += 1;
+            } else {
+                sagittal_sum_sq_mm += transverse_aberration * transverse_aberration;
+                sagittal_count += 1;
+            }
+        }
+
+        if meridional_count == 0 && sagittal_count == 0 {
+            continue;
+        }
+
+        stats.push(NativeTransverseRmsStats {
+            wavelength_um,
+            meridional_sum_sq_mm,
+            meridional_count,
+            sagittal_sum_sq_mm,
+            sagittal_count,
+        });
+    }
+
+    if stats.is_empty() {
+        return Err("run_native_transverse_rms_um: no valid series produced".to_string());
+    }
+
+    Ok(NativeTransverseRmsBatchResult {
+        wavelength: primary_wavelength,
+        target_surface: target_surface_index,
+        stop_surface: stop_surface_index,
+        ray_count: traced_rays_req,
+        stats,
+    })
+}
+
+#[tauri::command]
+pub fn run_native_transverse_rms_um(
+    req: NativeTransverseRmsRequest,
+) -> Result<NativeTransverseRmsResponse, String> {
+    let component = normalize_transverse_component_native(req.component.as_deref());
+    let batch = compute_native_transverse_rms_batch(req)?;
+    let stats = batch
+        .stats
+        .first()
+        .ok_or_else(|| "run_native_transverse_rms_um: no stats produced".to_string())?;
+    let rms_um = reduce_native_transverse_rms_stats(stats, &component)
+        .ok_or_else(|| "run_native_transverse_rms_um: no valid points produced".to_string())?;
+
+    Ok(NativeTransverseRmsResponse {
+        backend: "native-rust-transverse-rms".to_string(),
+        wavelength: stats.wavelength_um,
+        target_surface: batch.target_surface,
+        stop_surface: batch.stop_surface,
+        ray_count: batch.ray_count,
+        component,
+        meridional_count: stats.meridional_count,
+        sagittal_count: stats.sagittal_count,
+        rms_um,
+        message: "Computed via Rust/WASM native transverse RMS API".to_string(),
+    })
+}
+
 fn build_native_object_ray_series(
     rows: &[Value],
     surface_data: &[SurfaceInfo],
@@ -6912,12 +7265,18 @@ fn distortion_derive_max_field_angle(object_rows: &[Value]) -> f64 {
     if max_angle > 0.0 { max_angle } else { 20.0 }
 }
 
-fn run_native_grid_distortion_impl(
+fn run_native_grid_distortion_impl<F>(
     req: NativeGridDistortionRequest,
-) -> Result<NativeGridDistortionResponse, String> {
+    mut report_progress: F,
+) -> Result<NativeGridDistortionResponse, String>
+where
+    F: FnMut(f64, &str),
+{
     if req.optical_system_rows.is_empty() {
         return Err("run_native_grid_distortion: opticalSystemRows is empty".to_string());
     }
+
+    report_progress(5.0, "Preparing native grid distortion inputs...");
 
     let rows: Vec<Value> = req
         .optical_system_rows
@@ -6949,6 +7308,8 @@ fn run_native_grid_distortion_impl(
     if source_rows.is_empty() {
         source_rows = distortion_default_source_rows(wavelength);
     }
+
+    report_progress(12.0, "Estimating focal length and field extent...");
 
     let focal_length = distortion_estimate_focal_length_mm(&rows, &source_rows, surface_index, mirror_sign)
         .ok_or_else(|| "run_native_grid_distortion: failed to estimate focal length".to_string())?;
@@ -7006,42 +7367,63 @@ fn run_native_grid_distortion_impl(
         }
     }
 
-    let spot_response = run_native_spot_raytrace(NativeSpotRaytraceRequest {
-        optical_system_rows: rows,
-        source_rows,
-        object_rows,
-        surface_index: Some(surface_index),
-        ray_count: Some(51),
-        ring_count: Some(1),
-        pattern: Some("cross".to_string()),
-        wavelength_mode: Some("primary".to_string()),
-        ray_series: Vec::new(),
-    })?;
+    report_progress(24.0, "Generated distortion grid targets...");
 
     let mut real_x = vec![None; ideal_x.len()];
     let mut real_y = vec![None; ideal_y.len()];
-    for series in &spot_response.series {
-        let Some(idx) = distortion_parse_field_index(&series.label) else {
-            continue;
-        };
-        if idx >= real_x.len() {
+    let chunk_size = 64usize;
+    let total_chunks = ((object_rows.len() + chunk_size - 1) / chunk_size).max(1);
+    for chunk_index in 0..total_chunks {
+        let start = chunk_index * chunk_size;
+        let end = ((chunk_index + 1) * chunk_size).min(object_rows.len());
+        if start >= end {
             continue;
         }
-        if let Some(chief) = &series.chief_point_um {
-            let x_mm = (chief.x_um / 1000.0) * mirror_sign;
-            let y_mm = (chief.y_um / 1000.0) * mirror_sign;
-            if x_mm.is_finite() && y_mm.is_finite() {
-                real_x[idx] = Some(x_mm);
-                real_y[idx] = Some(y_mm);
+
+        report_progress(
+            24.0 + (60.0 * chunk_index as f64 / total_chunks as f64),
+            &format!("Tracing grid chunk {}/{}...", chunk_index + 1, total_chunks),
+        );
+
+        let spot_response = run_native_spot_raytrace(NativeSpotRaytraceRequest {
+            optical_system_rows: rows.clone(),
+            source_rows: source_rows.clone(),
+            object_rows: object_rows[start..end].to_vec(),
+            surface_index: Some(surface_index),
+            ray_count: Some(51),
+            ring_count: Some(1),
+            pattern: Some("cross".to_string()),
+            wavelength_mode: Some("primary".to_string()),
+            ray_series: Vec::new(),
+        })?;
+
+        for series in &spot_response.series {
+            let Some(idx) = distortion_parse_field_index(&series.label) else {
+                continue;
+            };
+            if idx >= real_x.len() {
+                continue;
+            }
+            if let Some(chief) = &series.chief_point_um {
+                let x_mm = (chief.x_um / 1000.0) * mirror_sign;
+                let y_mm = (chief.y_um / 1000.0) * mirror_sign;
+                if x_mm.is_finite() && y_mm.is_finite() {
+                    real_x[idx] = Some(x_mm);
+                    real_y[idx] = Some(y_mm);
+                }
             }
         }
     }
+
+    report_progress(92.0, "Finalizing grid distortion result...");
 
     let mut meta = Map::new();
     meta.insert("wavelength".to_string(), Value::from(wavelength));
     meta.insert("focalLength".to_string(), Value::from(focal_length));
     meta.insert("finiteSystem".to_string(), Value::from(finite));
     meta.insert("mirrorSign".to_string(), Value::from(mirror_sign));
+    meta.insert("chunkSize".to_string(), Value::from(chunk_size as i64));
+    meta.insert("chunkCount".to_string(), Value::from(total_chunks as i64));
 
     Ok(NativeGridDistortionResponse {
         backend: "native-rust-grid-distortion".to_string(),
@@ -7059,10 +7441,43 @@ fn run_native_grid_distortion_impl(
 #[tauri::command]
 pub async fn run_native_grid_distortion(
     req: NativeGridDistortionRequest,
+    app: AppHandle,
 ) -> Result<NativeGridDistortionResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || run_native_grid_distortion_impl(req))
-        .await
-        .map_err(|e| format!("run_native_grid_distortion: task join error: {}", e))?
+    let job_id = req
+        .job_id
+        .clone()
+        .unwrap_or_else(|| build_native_job_id("native-grid-distortion"));
+    let kind = "grid-distortion-native";
+    emit_native_analysis_progress(&app, &job_id, kind, "prepare", "Preparing native grid distortion...", Some(2.0));
+
+    let app_for_task = app.clone();
+    let job_id_for_task = job_id.clone();
+    let kind_for_task = kind.to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        run_native_grid_distortion_impl(req, |percent, message| {
+            emit_native_analysis_progress(
+                &app_for_task,
+                &job_id_for_task,
+                &kind_for_task,
+                "compute",
+                message,
+                Some(percent),
+            );
+        })
+    })
+    .await
+    .map_err(|e| format!("run_native_grid_distortion: task join error: {}", e))?;
+
+    match result {
+        Ok(resp) => {
+            emit_native_analysis_done(&app, &job_id, kind, "Native grid distortion completed");
+            Ok(resp)
+        }
+        Err(err) => {
+            emit_native_analysis_error(&app, &job_id, kind, &err);
+            Err(err)
+        }
+    }
 }
 
 fn lca_find_image_surface_index(rows: &[Value]) -> usize {
@@ -9199,32 +9614,26 @@ fn estimate_refractive_index_from_nd_vd(nd: f64, vd: f64, wavelength_um: f64) ->
         return nd.max(1.0);
     }
 
-    let lambda_d = 0.587_561_8_f64;
-    let lambda_f = 0.486_132_7_f64;
-    let lambda_c = 0.656_272_5_f64;
-
-    let dispersion = (nd - 1.0) / vd;
-    let n_f = nd + dispersion / 2.0;
-    let n_c = nd - dispersion / 2.0;
-
-    if wavelength_um >= lambda_f && wavelength_um <= lambda_c {
-        if wavelength_um <= lambda_d {
-            let t = (wavelength_um - lambda_f) / (lambda_d - lambda_f);
-            return n_f + t * (nd - n_f);
-        }
-        let t = (wavelength_um - lambda_d) / (lambda_c - lambda_d);
-        return nd + t * (n_c - nd);
-    }
-
-    let lambda_d_sq = lambda_d * lambda_d;
-    let lambda_f_sq = lambda_f * lambda_f;
-    let b = (n_f - nd) / (1.0 / lambda_f_sq - 1.0 / lambda_d_sq);
-    let a = nd - b / lambda_d_sq;
-    let n_est = a + b / (wavelength_um * wavelength_um);
-    if n_est < 1.0 || n_est > 3.0 || !n_est.is_finite() {
+    let lambda2 = wavelength_um * wavelength_um;
+    let denom = lambda2 - 0.035_f64;
+    if !denom.is_finite() || denom.abs() <= 1.0e-12 {
         nd
     } else {
-        n_est
+        let denom2 = denom * denom;
+        let a = -1.294_878_f64
+            + 0.088_927_f64 * lambda2
+            + 0.373_49_f64 / denom
+            + 0.005_799_f64 / denom2;
+        let b = 0.001_25_f64
+            - 0.007_068_f64 * lambda2
+            + 0.001_071_f64 / denom
+            - 0.000_218_f64 / denom2;
+        let n_est = 1.0 + (nd - 1.0) * (1.0 + b + (a / vd));
+        if n_est < 1.0 || n_est > 3.0 || !n_est.is_finite() {
+            nd
+        } else {
+            n_est
+        }
     }
 }
 

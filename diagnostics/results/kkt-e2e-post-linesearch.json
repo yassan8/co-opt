@@ -1,0 +1,181 @@
+{
+  "timestamp": "2026-06-06T03:51:25.572Z",
+  "config": {
+    "rounds": 3,
+    "n": 24,
+    "mEq": 6,
+    "mIneq": 6,
+    "maxIter": 20,
+    "seed": 12345
+  },
+  "bridge": {
+    "ready": true,
+    "hasSolveSpd": true,
+    "hasSolveLinear": true,
+    "hasBuildNormalEq": true,
+    "hasFdBatchPoints": true,
+    "hasFdBatchJacobian": true,
+    "hasFdBatchJacobianGrouped": false,
+    "hasPilotBufferAbi": true,
+    "hasVectorOps": true,
+    "hasMatrixOps": true,
+    "hasCholesky": true,
+    "hasBfgs": true,
+    "hasQr": true,
+    "hasQpSubproblem": true,
+    "hasQpKktEqSubproblem": true,
+    "hasLineSearchArmijo": true,
+    "hasTrustRegionUpdate": true,
+    "initSource": "shared-raytracing",
+    "initError": null,
+    "lastSolveReason": "not-run",
+    "lastNormalEqReason": "not-run",
+    "lastPilotReason": "not-run",
+    "lastPilotErrorDetail": null,
+    "lastPilotPath": "none",
+    "lastPilotBufferAttempted": false,
+    "lastPilotBufferStatus": null,
+    "kktWasmBufferCalls": 0,
+    "kktWasmBufferHits": 0,
+    "kktWasmBufferFallbacks": 0,
+    "kktWasmBufferStatusHistogram": {}
+  },
+  "wasm": {
+    "runs": 3,
+    "avgTotalMs": 7.944250000000001,
+    "avgSolverAndOtherMs": 2.3953029999995628,
+    "avgObjectiveEvalMs": 4.252819666666809,
+    "avgConstraintEvalMs": 1.2961273333336294,
+    "avgIterations": 6,
+    "okCount": 3,
+    "feasibleCount": 3
+  },
+  "ts": {
+    "runs": 3,
+    "avgTotalMs": 11.79458333333333,
+    "avgSolverAndOtherMs": 2.5169389999997804,
+    "avgObjectiveEvalMs": 7.446366000000239,
+    "avgConstraintEvalMs": 1.8312783333333111,
+    "avgIterations": 10.666666666666666,
+    "okCount": 3,
+    "feasibleCount": 3
+  },
+  "speedups": {
+    "total": 1.4846692051903363,
+    "solverAndOther": 1.0507810494122205
+  },
+  "detail": {
+    "wasmRuns": [
+      {
+        "mode": "wasm",
+        "ok": true,
+        "iterations": 6,
+        "feasible": true,
+        "fval": 2.1166483138022083,
+        "reason": "Converged (constraints satisfied)",
+        "totalMs": 10.865667000000002,
+        "objectiveEval": {
+          "calls": 4075,
+          "ms": 4.725812999999917
+        },
+        "constraintEval": {
+          "calls": 50466,
+          "ms": 1.7654709999990814
+        },
+        "solverAndOtherMs": 4.3743830000010036
+      },
+      {
+        "mode": "wasm",
+        "ok": true,
+        "iterations": 7,
+        "feasible": true,
+        "fval": 2.131201352172234,
+        "reason": "Converged (constraints satisfied)",
+        "totalMs": 7.612082999999984,
+        "objectiveEval": {
+          "calls": 4754,
+          "ms": 4.675990999999414
+        },
+        "constraintEval": {
+          "calls": 58675,
+          "ms": 1.248931000001022
+        },
+        "solverAndOtherMs": 1.6871609999995485
+      },
+      {
+        "mode": "wasm",
+        "ok": true,
+        "iterations": 5,
+        "feasible": true,
+        "fval": 0.5945802501511869,
+        "reason": "Converged (constraints satisfied)",
+        "totalMs": 5.355000000000018,
+        "objectiveEval": {
+          "calls": 3396,
+          "ms": 3.3566550000010977
+        },
+        "constraintEval": {
+          "calls": 41807,
+          "ms": 0.8739800000007847
+        },
+        "solverAndOtherMs": 1.1243649999981358
+      }
+    ],
+    "tsRuns": [
+      {
+        "mode": "ts",
+        "ok": true,
+        "iterations": 11,
+        "feasible": true,
+        "fval": 0.623121101908962,
+        "reason": "Converged (constraints satisfied)",
+        "totalMs": 14.06129199999998,
+        "objectiveEval": {
+          "calls": 7470,
+          "ms": 8.82196500000029
+        },
+        "constraintEval": {
+          "calls": 91811,
+          "ms": 1.972416000001033
+        },
+        "solverAndOtherMs": 3.2669109999986574
+      },
+      {
+        "mode": "ts",
+        "ok": true,
+        "iterations": 11,
+        "feasible": true,
+        "fval": 0.6187496016590368,
+        "reason": "Converged (constraints satisfied)",
+        "totalMs": 11.213041000000004,
+        "objectiveEval": {
+          "calls": 7470,
+          "ms": 7.132751000001349
+        },
+        "constraintEval": {
+          "calls": 91786,
+          "ms": 1.8063059999997222
+        },
+        "solverAndOtherMs": 2.273983999998933
+      },
+      {
+        "mode": "ts",
+        "ok": true,
+        "iterations": 10,
+        "feasible": true,
+        "fval": 0.44708010286877625,
+        "reason": "Converged (constraints satisfied)",
+        "totalMs": 10.109417000000008,
+        "objectiveEval": {
+          "calls": 6791,
+          "ms": 6.3843819999990785
+        },
+        "constraintEval": {
+          "calls": 83377,
+          "ms": 1.715112999999178
+        },
+        "solverAndOtherMs": 2.009922000001751
+      }
+    ]
+  }
+}

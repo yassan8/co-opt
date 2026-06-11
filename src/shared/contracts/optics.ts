@@ -322,6 +322,32 @@ export interface NativeTransverseAberrationResponse {
   message: string;
 }
 
+export interface NativeTransverseRmsRequest {
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+  surfaceIndex?: number;
+  rayCount?: number;
+  ringCount?: number;
+  pattern?: "annular" | "grid" | "cross";
+  wavelengthMode?: "all" | "primary";
+  wavelength?: number;
+  component?: "total" | "meridional" | "sagittal";
+}
+
+export interface NativeTransverseRmsResponse {
+  backend: string;
+  wavelength: number;
+  targetSurface: number;
+  stopSurface: number;
+  rayCount: number;
+  component: "total" | "meridional" | "sagittal";
+  meridionalCount: number;
+  sagittalCount: number;
+  rmsUm: number;
+  message: string;
+}
+
 export interface NativeOpdMapRequest {
   jobId?: string;
   opticalSystemRows: unknown[];
@@ -565,6 +591,7 @@ export interface NativeDistortionResponse {
 }
 
 export interface NativeGridDistortionRequest {
+  jobId?: string;
   opticalSystemRows: unknown[];
   sourceRows?: unknown[];
   objectRows?: unknown[];

@@ -2476,32 +2476,26 @@ fn estimate_refractive_index_from_nd_vd(nd: f64, vd: f64, wavelength_um: f64) ->
         return nd.max(1.0);
     }
 
-    let lambda_d = 0.587_561_8_f64;
-    let lambda_f = 0.486_132_7_f64;
-    let lambda_c = 0.656_272_5_f64;
-
-    let dispersion = (nd - 1.0) / vd;
-    let n_f = nd + dispersion / 2.0;
-    let n_c = nd - dispersion / 2.0;
-
-    if wavelength_um >= lambda_f && wavelength_um <= lambda_c {
-        if wavelength_um <= lambda_d {
-            let t = (wavelength_um - lambda_f) / (lambda_d - lambda_f);
-            return n_f + t * (nd - n_f);
-        }
-        let t = (wavelength_um - lambda_d) / (lambda_c - lambda_d);
-        return nd + t * (n_c - nd);
-    }
-
-    let lambda_d_sq = lambda_d * lambda_d;
-    let lambda_f_sq = lambda_f * lambda_f;
-    let b = (n_f - nd) / (1.0 / lambda_f_sq - 1.0 / lambda_d_sq);
-    let a = nd - b / lambda_d_sq;
-    let n_est = a + b / (wavelength_um * wavelength_um);
-    if n_est < 1.0 || n_est > 3.0 || !n_est.is_finite() {
+    let lambda2 = wavelength_um * wavelength_um;
+    let denom = lambda2 - 0.035_f64;
+    if !denom.is_finite() || denom.abs() <= 1.0e-12 {
         nd
     } else {
-        n_est
+        let denom2 = denom * denom;
+        let a = -1.294_878_f64
+            + 0.088_927_f64 * lambda2
+            + 0.373_49_f64 / denom
+            + 0.005_799_f64 / denom2;
+        let b = 0.001_25_f64
+            - 0.007_068_f64 * lambda2
+            + 0.001_071_f64 / denom
+            - 0.000_218_f64 / denom2;
+        let n_est = 1.0 + (nd - 1.0) * (1.0 + b + (a / vd));
+        if n_est < 1.0 || n_est > 3.0 || !n_est.is_finite() {
+            nd
+        } else {
+            n_est
+        }
     }
 }
 

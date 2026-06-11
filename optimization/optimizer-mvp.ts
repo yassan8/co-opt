@@ -204,6 +204,13 @@ async function runOptimizationMvpnative(options = {}) {
   const maxIterations = Number.isFinite(Number(opts.maxIterations))
     ? Math.max(1, Math.floor(Number(opts.maxIterations)))
     : 24;
+  const shouldSkipLiveTableSync = (() => {
+    try {
+      return isTauriRuntime();
+    } catch (_) {
+      return false;
+    }
+  })();
   // Smaller chunks (5) for more responsive Stop button, avoiding UI freeze
   const chunkIterations = Number.isFinite(Number(opts.nativeChunkIterations))
     ? Math.max(1, Math.floor(Number(opts.nativeChunkIterations)))
@@ -306,7 +313,7 @@ async function runOptimizationMvpnative(options = {}) {
           profile: enableOptimizerProfiling,
           penaltyParameter: 1.0,
           penaltyIncreaseFactor: 1.5,
-          lineSearchC: 0.1,
+          lineSearchC: 1e-4,
           lineSearchRho: 0.5,
           lineSearchMaxBacktrack: 20,
         });
@@ -347,12 +354,14 @@ async function runOptimizationMvpnative(options = {}) {
 
       if (Array.isArray(resp?.optimizedRows) && resp.optimizedRows.length > 0) {
         rowsWorking = resp.optimizedRows;
-        try {
-          const table = (window as any).tableOpticalSystem;
-          if (table && typeof table.setData === 'function') {
-            await table.setData(rowsWorking);
-          }
-        } catch (_) {}
+        if (!shouldSkipLiveTableSync) {
+          try {
+            const table = (window as any).tableOpticalSystem;
+            if (table && typeof table.setData === 'function') {
+              await table.setData(rowsWorking);
+            }
+          } catch (_) {}
+        }
       }
 
       if (onProgress && Array.isArray(resp?.progressEvents)) {
@@ -694,6 +703,8 @@ export async function profileOptimizationRun(baseOptions = {}) {
   const methodRaw = String(source.method || 'kkt').trim().toLowerCase();
   const method = methodRaw === 'cd' || methodRaw === 'coordinatedescent'
     ? 'cd'
+    : methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction'
+      ? 'global'
     : methodRaw === 'lm'
       ? 'lm'
       : 'kkt';
@@ -2137,6 +2148,226 @@ export async function exportMatrixFreeBenchmarkJson(options = {}) {
   };
 }
 
+function summarizeGlobalVsKktRuns(runs = []) {
+  const validRuns = Array.isArray(runs) ? runs : [];
+  const count = validRuns.length;
+  const avg = (selector) => {
+    if (count <= 0) return 0;
+    return validRuns.reduce((sum, run) => sum + selector(run), 0) / count;
+  };
+  const bestFinite = validRuns
+    .map((run) => Number(run?.best))
+    .filter((value) => Number.isFinite(value));
+  return {
+    runs: count,
+    avgElapsedMs: avg((run) => Number(run?.elapsedMs) || 0),
+    avgIterations: avg((run) => Number(run?.iterations) || 0),
+    avgBest: avg((run) => {
+      const value = Number(run?.best);
+      return Number.isFinite(value) ? value : 0;
+    }),
+    okRatePct: count > 0 ? (100 * validRuns.filter((run) => !!run?.ok).length / count) : 0,
+    feasibleRatePct: count > 0 ? (100 * validRuns.filter((run) => !!run?.feasible).length / count) : 0,
+    bestMin: bestFinite.length > 0 ? Math.min(...bestFinite) : null,
+    bestMax: bestFinite.length > 0 ? Math.max(...bestFinite) : null
+  };
+}
+
+function filterBenchmarkRuns(runs = [], warmupDiscard = 0, filterOutliers = true) {
+  const discard = Math.max(0, Math.floor(Number(warmupDiscard) || 0));
+  const source = Array.isArray(runs) ? runs.slice(discard) : [];
+  if (!filterOutliers || source.length < 5) {
+    return {
+      filtered: source,
+      droppedWarmup: discard,
+      droppedOutliers: 0
+    };
+  }
+
+  const elapsed = source
+    .map((run) => Number(run?.elapsedMs) || 0)
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  if (elapsed.length === 0) {
+    return { filtered: source, droppedWarmup: discard, droppedOutliers: 0 };
+  }
+  const median = elapsed.length % 2 === 1
+    ? elapsed[Math.floor(elapsed.length / 2)]
+    : (elapsed[(elapsed.length / 2) - 1] + elapsed[elapsed.length / 2]) / 2;
+  const deviations = elapsed.map((value) => Math.abs(value - median)).sort((a, b) => a - b);
+  const mad = deviations.length % 2 === 1
+    ? deviations[Math.floor(deviations.length / 2)]
+    : (deviations[(deviations.length / 2) - 1] + deviations[deviations.length / 2]) / 2;
+  if (!Number.isFinite(mad) || mad <= 0) {
+    return { filtered: source, droppedWarmup: discard, droppedOutliers: 0 };
+  }
+  const cutoff = median + (6 * mad);
+  const filtered = source.filter((run) => (Number(run?.elapsedMs) || 0) <= cutoff);
+  return {
+    filtered: filtered.length > 0 ? filtered : source,
+    droppedWarmup: discard,
+    droppedOutliers: Math.max(0, source.length - filtered.length)
+  };
+}
+
+export async function compareGlobalVsKktBenchmark(baseOptions = {}) {
+  const source = isPlainObject(baseOptions) ? baseOptions : {};
+  const common = { ...source };
+  const repeatRaw = Number(source.repeat ?? source.benchmarkRepeat ?? 1);
+  const repeat = Number.isFinite(repeatRaw) ? Math.max(1, Math.floor(repeatRaw)) : 1;
+  const warmupDiscardRaw = Number(source.warmupDiscard ?? source.discardWarmup ?? (repeat > 1 ? 1 : 0));
+  const warmupDiscard = Number.isFinite(warmupDiscardRaw) ? Math.max(0, Math.floor(warmupDiscardRaw)) : 0;
+  const filterOutliers = source.filterOutliers !== false;
+  try { delete common.repeat; } catch (_) {}
+  try { delete common.benchmarkRepeat; } catch (_) {}
+  try { delete common.warmupDiscard; } catch (_) {}
+  try { delete common.discardWarmup; } catch (_) {}
+  try { delete common.filterOutliers; } catch (_) {}
+  try { delete common.download; } catch (_) {}
+  try { delete common.fileName; } catch (_) {}
+
+  const deepClone = (value) => {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const originalSystemConfig = loadSystemConfigurationsRaw();
+  const baselineSystemConfig = deepClone(originalSystemConfig);
+  const restoreBaselineConfig = () => {
+    if (!baselineSystemConfig) return;
+    try {
+      saveSystemConfigurationsRaw(deepClone(baselineSystemConfig));
+    } catch (_) {}
+  };
+
+  const runOne = async (method) => {
+    restoreBaselineConfig();
+    const options = { ...common, method, profile: true, forceTs: true };
+    const t0 = nowMs();
+    const result = await runOptimizationMVP(options);
+    const elapsedMs = nowMs() - t0;
+    const profile = getLastOptimizeProfile();
+    const timing = pickTimingMetricsFromProfile(profile);
+    return {
+      method,
+      elapsedMs,
+      result,
+      best: Number(result?.objectiveScore ?? result?.best ?? Number.NaN),
+      feasible: result?.feasible === undefined ? null : !!result.feasible,
+      ok: !!result?.ok,
+      iterations: Number(result?.iterations) || 0,
+      timing,
+      profile
+    };
+  };
+
+  const kktRuns = [];
+  const globalRuns = [];
+  try {
+    for (let index = 0; index < repeat; index++) {
+      kktRuns.push(await runOne('kkt'));
+      globalRuns.push(await runOne('global'));
+    }
+  } finally {
+    restoreBaselineConfig();
+  }
+
+  const filteredKkt = filterBenchmarkRuns(kktRuns, warmupDiscard, filterOutliers);
+  const filteredGlobal = filterBenchmarkRuns(globalRuns, warmupDiscard, filterOutliers);
+  const kktSummary = summarizeGlobalVsKktRuns(filteredKkt.filtered);
+  const globalSummary = summarizeGlobalVsKktRuns(filteredGlobal.filtered);
+  const elapsedSpeedup = (kktSummary.avgElapsedMs > 0 && globalSummary.avgElapsedMs > 0)
+    ? (kktSummary.avgElapsedMs / globalSummary.avgElapsedMs)
+    : null;
+  const bestRatio = (Number.isFinite(globalSummary.avgBest) && Number.isFinite(kktSummary.avgBest) && globalSummary.avgBest > 0)
+    ? (kktSummary.avgBest / globalSummary.avgBest)
+    : null;
+
+  try {
+    console.groupCollapsed('[OptimizerMVP] global vs kkt benchmark');
+    console.log('kkt', kktSummary);
+    console.log('global', globalSummary);
+    console.log('delta', {
+      elapsedSpeedup,
+      bestRatio,
+      filteredKkt,
+      filteredGlobal
+    });
+    console.groupEnd();
+  } catch (_) {}
+
+  return {
+    timestamp: new Date().toISOString(),
+    config: {
+      repeat,
+      warmupDiscard,
+      filterOutliers,
+      maxIterations: Number(source.maxIterations ?? common.maxIterations ?? 24) || 24,
+      escapeGlobalMaxRestarts: Number(source.escapeGlobalMaxRestarts ?? common.escapeGlobalMaxRestarts ?? 4) || 4,
+      escapeGlobalLocalIterations: Number(source.escapeGlobalLocalIterations ?? common.escapeGlobalLocalIterations ?? Math.max(8, Math.min(40, Number(source.maxIterations ?? common.maxIterations ?? 24))))
+    },
+    filtering: {
+      kkt: {
+        droppedWarmup: filteredKkt.droppedWarmup,
+        droppedOutliers: filteredKkt.droppedOutliers,
+        usedRuns: filteredKkt.filtered.length
+      },
+      global: {
+        droppedWarmup: filteredGlobal.droppedWarmup,
+        droppedOutliers: filteredGlobal.droppedOutliers,
+        usedRuns: filteredGlobal.filtered.length
+      }
+    },
+    kkt: kktSummary,
+    global: globalSummary,
+    speedups: {
+      elapsed: elapsedSpeedup,
+      bestScoreRatio: bestRatio
+    },
+    detail: {
+      kktRuns,
+      globalRuns,
+      kktRunsUsed: filteredKkt.filtered,
+      globalRunsUsed: filteredGlobal.filtered
+    }
+  };
+}
+
+export async function exportGlobalVsKktBenchmarkJson(options = {}) {
+  const source = isPlainObject(options) ? options : {};
+  const benchmark = source.benchmarkResult && typeof source.benchmarkResult === 'object'
+    ? source.benchmarkResult
+    : await compareGlobalVsKktBenchmark(source);
+  const json = JSON.stringify(benchmark, null, 2);
+
+  const shouldDownload = source.download !== false;
+  if (shouldDownload && typeof window !== 'undefined' && typeof document !== 'undefined') {
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = String(source.fileName || `global-vs-kkt-benchmark-${stamp}.json`);
+      const blob = new Blob([`${json}\n`], { type: 'application/json;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  }
+
+  return {
+    json,
+    summary: benchmark,
+    benchmark
+  };
+}
+
 function bumpOptimizerProfileCount(name, delta = 1) {
   try {
     const g = (typeof globalThis !== 'undefined') ? globalThis : null;
@@ -2165,6 +2396,18 @@ function yieldViaMessageChannel(callback: () => void): void {
     // Fallback if MessageChannel is unavailable
     setTimeout(callback, 0);
   }
+}
+
+function yieldViaMicrotask(callback: () => void): void {
+  try {
+    if (typeof queueMicrotask === 'function') {
+      queueMicrotask(callback);
+      return;
+    }
+  } catch (_) {
+    // fall through
+  }
+  Promise.resolve().then(callback).catch(() => callback());
 }
 
 let __cooptLastOptimizerUiYieldAt = 0;
@@ -2228,6 +2471,17 @@ function nextFrame() {
     }
   })();
 
+  const shouldUseImmediateBackgroundYield = (() => {
+    try {
+      if (!isTauriRuntime()) return false;
+      const localHidden = typeof document !== 'undefined' && !!document && document.hidden === true;
+      const schedulerHidden = !!(schedulerWindow && schedulerWindow.document && schedulerWindow.document.hidden === true);
+      return localHidden || schedulerHidden;
+    } catch (_) {
+      return false;
+    }
+  })();
+
   const now = nowMs();
   if ((now - __cooptLastOptimizerUiYieldAt) < COOPT_OPTIMIZER_UI_YIELD_MIN_INTERVAL_MS) {
     return Promise.resolve();
@@ -2238,6 +2492,10 @@ function nextFrame() {
     return new Promise((resolve) => {
       if (canUseSchedulerRaf) {
         schedulerWindow.requestAnimationFrame(() => resolve());
+        return;
+      }
+      if (shouldUseImmediateBackgroundYield) {
+        yieldViaMicrotask(() => resolve());
         return;
       }
       // Use MessageChannel for yields when rAF is not available (background/low-power mode).
@@ -2265,6 +2523,10 @@ function nextFrame() {
 
     if (canUseSchedulerRaf) {
       schedulerWindow.requestAnimationFrame(() => done());
+      return;
+    }
+    if (shouldUseImmediateBackgroundYield) {
+      yieldViaMicrotask(done);
       return;
     }
     // Use MessageChannel for yields when rAF is not available (background/low-power mode).
@@ -2693,6 +2955,17 @@ function updateExpandedOpticalSystemInConfig(config) {
   }
 }
 
+function coerceInfiniteRadiusVariableValue(key, rawValue) {
+  const s = String(rawValue ?? '').trim();
+  if (!/^inf(inity)?$/i.test(s)) return null;
+  if (!(/^(front|back)radius$/i.test(String(key ?? '').trim()) || /^radius$/i.test(String(key ?? '').trim()) || /^surf\d+radius$/i.test(String(key ?? '').trim()))) {
+    return null;
+  }
+  // Approximate a flat surface with a very large finite radius so numeric optimizers
+  // can start moving from an INF design-intent seed.
+  return 1e6;
+}
+
 function getNumericVariables(activeCfg) {
   const all = listDesignVariablesFromBlocks(activeCfg);
   const coerceBlankToZero = (v) => {
@@ -2724,20 +2997,9 @@ function getNumericVariables(activeCfg) {
       }
     }
 
-    // Treat INF (infinite radius) as curvature 0 (flat surface) for radius parameters.
-    // This allows optimization to start from a flat surface: Radius=∞ → Curvature=0.
-    if (/^inf(inity)?$/i.test(s)) {
-      if (
-        /^(front|back)radius$/i.test(key) ||
-        /^radius$/i.test(key) ||
-        /^surf\d+radius$/i.test(key)
-      ) {
-        // Note: We return radius=0 as a placeholder. The optimizer will need special
-        // handling to convert between radius and curvature when applying values.
-        // For now, we mark INF radius as non-optimizable by NOT converting it.
-        // Users should manually set a numeric value before optimizing.
-        return v;
-      }
+    const infRadiusValue = coerceInfiniteRadiusVariableValue(key, raw);
+    if (infRadiusValue !== null) {
+      return { ...v, value: infRadiusValue };
     }
 
     // Numeric string → number
@@ -3265,6 +3527,9 @@ function coerceBlankAsphereToZero(v) {
     if (/^surf\d+coef\d+$/i.test(key) || /^surf\d+a\d+$/i.test(key)) return { ...v, value: 0 };
     if (/^surf\d+conic$/i.test(key)) return { ...v, value: 0 };
   }
+
+  const infRadiusValue = coerceInfiniteRadiusVariableValue(key, raw);
+  if (infRadiusValue !== null) return { ...v, value: infRadiusValue };
 
   if (s !== '') {
     const n = Number(s);
@@ -4465,6 +4730,279 @@ function resetAsphericCoefficientsToZero({ configsById, targetConfigIds }) {
   return resetCount;
 }
 
+function clampEscapePositive(value, fallback) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+}
+
+function normalizeEscapeMinima(rawMinima) {
+  if (!Array.isArray(rawMinima)) return [];
+  const minima = [];
+  for (const raw of rawMinima) {
+    if (!raw || typeof raw !== 'object') continue;
+    const center = Array.isArray(raw.center)
+      ? raw.center.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+      : [];
+    if (center.length === 0) continue;
+    const scales = Array.isArray(raw.scales)
+      ? raw.scales.map((value) => clampEscapePositive(value, 1))
+      : [];
+    minima.push({
+      center,
+      scales: center.map((_, index) => clampEscapePositive(scales[index], 1)),
+      width: clampEscapePositive(raw.width, 0.75),
+      height: clampEscapePositive(raw.height, 1),
+      label: String(raw.label || '').trim()
+    });
+  }
+  return minima;
+}
+
+function computeEscapePenaltyScore(point, minima) {
+  if (!Array.isArray(point) || point.length === 0 || !Array.isArray(minima) || minima.length === 0) {
+    return 0;
+  }
+  let penalty = 0;
+  for (const minimum of minima) {
+    const center = Array.isArray(minimum?.center) ? minimum.center : [];
+    if (center.length === 0) continue;
+    const scales = Array.isArray(minimum?.scales) ? minimum.scales : [];
+    const width = clampEscapePositive(minimum?.width, 0.75);
+    const height = clampEscapePositive(minimum?.height, 1);
+    let distanceSquared = 0;
+    const count = Math.min(point.length, center.length);
+    for (let index = 0; index < count; index++) {
+      const value = Number(point[index]);
+      const base = Number(center[index]);
+      if (!Number.isFinite(value) || !Number.isFinite(base)) continue;
+      const scale = clampEscapePositive(scales[index], 1) * width;
+      const delta = (value - base) / scale;
+      distanceSquared += delta * delta;
+    }
+    penalty += height * Math.exp(-distanceSquared);
+  }
+  return Number.isFinite(penalty) ? penalty : 0;
+}
+
+async function readCurrentRequirementScoreForEscapeSearch() {
+  try {
+    const editor = (typeof window !== 'undefined') ? window.systemRequirementsEditor : null;
+    if (editor && typeof editor.evaluateAndUpdateNow === 'function') {
+      const maybePromise = editor.evaluateAndUpdateNow({
+        reason: 'escape-global-score',
+        forceSilent: true,
+        silent: true
+      });
+      if (maybePromise && typeof maybePromise.then === 'function') {
+        await maybePromise;
+      }
+    }
+  } catch (_) {}
+
+  try {
+    const editor = (typeof window !== 'undefined') ? window.systemRequirementsEditor : null;
+    if (editor && typeof editor.getData === 'function') {
+      const rows = editor.getData();
+      if (Array.isArray(rows)) {
+        let total = 0;
+        let count = 0;
+        for (const row of rows) {
+          const enabled = row?.enabled === undefined || row?.enabled === null ? true : !!row.enabled;
+          const operand = String(row?.operand ?? '').trim();
+          const weight = Number(row?.weight ?? 1);
+          if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
+          const contribution = Number.isFinite(Number(row?._contribution))
+            ? Number(row._contribution)
+            : Number(row?.score);
+          if (!Number.isFinite(contribution)) continue;
+          total += Math.max(0, contribution);
+          count += 1;
+        }
+        if (count > 0 && Number.isFinite(total)) return total;
+      }
+    }
+  } catch (_) {}
+
+  return Number.NaN;
+}
+
+function captureEscapeVariableState(activeCfg) {
+  const allMarked = listDesignVariablesFromBlocks(activeCfg || {});
+  const numericVars = Array.isArray(allMarked)
+    ? allMarked.filter((entry) => Number.isFinite(Number(entry?.value)))
+    : [];
+  return numericVars.map((entry) => {
+    const value = Number(entry.value);
+    const baseScale = defaultScaleForKey(entry?.key);
+    return {
+      id: String(entry.id),
+      key: String(entry.key ?? ''),
+      value,
+      scale: Math.max(baseScale, Math.abs(value) || 0)
+    };
+  });
+}
+
+async function runEscapeFunctionGlobalOptimization(options = {}) {
+  const outerOpts = isPlainObject(options) ? { ...options } : {};
+  const methodRaw = String(outerOpts.method || 'global').trim().toLowerCase();
+  const innerMethodRaw = String(
+    outerOpts.escapeInnerMethod
+      || outerOpts.globalInnerMethod
+      || outerOpts.escapeLocalMethod
+      || 'kkt'
+  ).trim().toLowerCase();
+  const innerMethod = innerMethodRaw === 'cd' || innerMethodRaw === 'lm' || innerMethodRaw === 'kkt'
+    ? innerMethodRaw
+    : 'kkt';
+  const targetIterations = Number.isFinite(Number(outerOpts.maxIterations))
+    ? Math.max(1, Math.floor(Number(outerOpts.maxIterations)))
+    : 24;
+  const innerIterationsDefault = Math.max(8, Math.min(40, targetIterations));
+  const innerIterations = Number.isFinite(Number(outerOpts.escapeGlobalLocalIterations))
+    ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalLocalIterations)))
+    : innerIterationsDefault;
+  const configuredOuterLoops = Number.isFinite(Number(outerOpts.escapeGlobalMaxRestarts))
+    ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalMaxRestarts)))
+    : 4;
+  const requiredOuterLoops = Math.max(1, Math.ceil(targetIterations / Math.max(1, innerIterations)));
+  // Global(Escape Function) should keep running until total iterations reach maxIterations.
+  const outerLoops = Math.max(configuredOuterLoops, requiredOuterLoops);
+  const escapeWidth = clampEscapePositive(outerOpts.escapeFunctionWidth ?? outerOpts.escapeGlobalWidth, 0.75);
+  const escapeHeightFactor = clampEscapePositive(outerOpts.escapeFunctionHeight ?? outerOpts.escapeGlobalHeight, 4);
+  const escapeHeightFloor = clampEscapePositive(outerOpts.escapeFunctionHeightFloor ?? outerOpts.escapeGlobalHeightFloor, 1);
+  const minima = normalizeEscapeMinima(outerOpts.__escapeGlobalMinima);
+  const progress = typeof outerOpts.onProgress === 'function' ? outerOpts.onProgress : null;
+  const shouldStop = typeof outerOpts.shouldStop === 'function' ? outerOpts.shouldStop : null;
+  const makeInnerOpts = (escapeMinima, iterBudget) => ({
+    ...outerOpts,
+    method: innerMethod,
+    maxIterations: Math.max(1, Math.floor(Number(iterBudget) || innerIterations)),
+    forceTs: true,
+    __escapeGlobalMinima: escapeMinima,
+    __escapeGlobalDepth: Number(outerOpts.__escapeGlobalDepth || 0) + 1
+  });
+
+  let bestResult = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  let bestSystemConfigSnapshot = null;
+  let bestOpticalSystemRowsSnapshot = null;
+  let totalIterations = 0;
+
+  for (let loopIndex = 0; loopIndex < outerLoops; loopIndex++) {
+    if (shouldStop && shouldStop()) break;
+    if (totalIterations >= targetIterations) break;
+
+    const remainingIterations = Math.max(1, targetIterations - totalIterations);
+    const iterBudget = Math.max(1, Math.min(innerIterations, remainingIterations));
+
+    if (progress) {
+      try {
+        progress({
+          phase: loopIndex === 0 ? 'escape-start' : 'escape-restart',
+          iter: loopIndex,
+          current: Number.isFinite(bestScore) ? bestScore : Number.NaN,
+          best: Number.isFinite(bestScore) ? bestScore : Number.NaN,
+          method: methodRaw,
+          escapeLoop: loopIndex + 1,
+          escapeLoops: outerLoops,
+          maxIterations: targetIterations,
+          accepted: false
+        });
+      } catch (_) {}
+    }
+
+    const result = await runOptimizationMVP(makeInnerOpts(minima, iterBudget));
+    const consumed = Number.isFinite(Number(result?.iterations))
+      ? Math.max(0, Math.floor(Number(result.iterations)))
+      : 0;
+    totalIterations += consumed;
+    const actualScore = await readCurrentRequirementScoreForEscapeSearch();
+    const candidateScore = Number.isFinite(actualScore)
+      ? actualScore
+      : Number(result?.objectiveScore ?? result?.best ?? Number.NaN);
+
+    if (!bestResult || (Number.isFinite(candidateScore) && candidateScore < bestScore)) {
+      bestResult = result;
+      bestScore = candidateScore;
+      bestSystemConfigSnapshot = (() => {
+        try {
+          return JSON.parse(JSON.stringify(loadSystemConfigurationsRaw()));
+        } catch (_) {
+          return null;
+        }
+      })();
+      bestOpticalSystemRowsSnapshot = (() => {
+        try {
+          if (typeof window !== 'undefined' && typeof window.getOpticalSystemRows === 'function') {
+            const rows = window.getOpticalSystemRows(window.tableOpticalSystem);
+            return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+          }
+        } catch (_) {}
+        return [];
+      })();
+    }
+
+    if (loopIndex >= outerLoops - 1) break;
+    if (totalIterations >= targetIterations) break;
+    if (consumed <= 0) {
+      // Prevent dead-loop when inner solver reports no progress/iterations.
+      break;
+    }
+
+    const activeSystemConfig = loadSystemConfigurationsRaw();
+    const activeCfg = getActiveConfigRef(activeSystemConfig);
+    if (!activeCfg) break;
+
+    const variableState = captureEscapeVariableState(activeCfg);
+    if (variableState.length === 0) break;
+
+    minima.push({
+      center: variableState.map((entry) => entry.value),
+      scales: variableState.map((entry) => clampEscapePositive(entry.scale, 1)),
+      width: escapeWidth,
+      height: Math.max(
+        escapeHeightFloor,
+        Math.abs(Number.isFinite(candidateScore) ? candidateScore : bestScore) * escapeHeightFactor
+      ),
+      label: `escape-${loopIndex + 1}`
+    });
+  }
+
+  if (bestSystemConfigSnapshot) {
+    try {
+      saveSystemConfigurationsRaw(bestSystemConfigSnapshot);
+    } catch (_) {}
+  }
+
+  if (Array.isArray(bestOpticalSystemRowsSnapshot) && bestOpticalSystemRowsSnapshot.length > 0) {
+    try {
+      const table = (typeof window !== 'undefined') ? window.tableOpticalSystem : null;
+      if (table && typeof table.setData === 'function') {
+        await table.setData(bestOpticalSystemRowsSnapshot);
+      }
+    } catch (_) {}
+  }
+
+  const base = bestResult && typeof bestResult === 'object' ? { ...bestResult } : {};
+  return {
+    ...base,
+    ok: !!bestResult?.ok,
+    aborted: !!bestResult?.aborted,
+    method: 'global',
+    globalMethod: 'escape',
+    innerMethod,
+    iterations: Math.max(0, Math.min(totalIterations, targetIterations)),
+    best: Number.isFinite(bestScore) ? bestScore : Number(base?.best ?? Number.NaN),
+    objectiveScore: Number.isFinite(bestScore) ? bestScore : Number(base?.objectiveScore ?? Number.NaN),
+    escapeMinimaCount: minima.length,
+    systemConfigSnapshot: bestSystemConfigSnapshot || base?.systemConfigSnapshot,
+    opticalSystemRowsSnapshot: Array.isArray(bestOpticalSystemRowsSnapshot)
+      ? bestOpticalSystemRowsSnapshot
+      : base?.opticalSystemRowsSnapshot
+  };
+}
+
 /**
  * Run coordinate descent optimization on the active configuration.
  *
@@ -4481,8 +5019,17 @@ function resetAsphericCoefficientsToZero({ configsById, targetConfigIds }) {
  */
 export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
-  const kktUseWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer !== false;
   const methodRaw = String(opts.method || '').trim().toLowerCase();
+  const escapeGlobalDepth = Number(opts.__escapeGlobalDepth || 0);
+  if (escapeGlobalDepth <= 0 && (methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction')) {
+    return runEscapeFunctionGlobalOptimization(opts);
+  }
+  const kktUseWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer !== false;
+  const systemConfigForRoute = loadSystemConfigurationsRaw();
+  const activeCfgForRoute = getActiveConfigRef(systemConfigForRoute);
+  const categoricalMaterialVarsForRoute = activeCfgForRoute
+    ? getCategoricalMaterialVariables(activeCfgForRoute)
+    : [];
   const requestedMethod = (methodRaw === 'kkt' || methodRaw === 'sqp' || methodRaw === 'al' || methodRaw === 'augmentedlagrangian' || methodRaw === 'augmented-lagrangian')
     ? 'kkt'
     : (methodRaw === 'cd' || methodRaw === 'coordinatedescent')
@@ -4498,12 +5045,21 @@ export async function runOptimizationMVP(options = {}) {
   const shouldPreferNativeRoute = isTauriRuntime()
     && effectiveOpts.forceTs !== true
     && unsupportedNativeOperands.length === 0
+    && categoricalMaterialVarsForRoute.length === 0
     && (effectiveOpts.forceNative === true || effectiveOpts.preferNative === true);
 
   if (isTauriRuntime() && effectiveOpts.forceTs !== true && unsupportedNativeOperands.length > 0) {
     try {
       console.warn('[OptimizerMVP] Falling back to TS optimizer because native optimizer does not support some active requirement operands.', {
         unsupportedOperands: unsupportedNativeOperands,
+      });
+    } catch (_) {}
+  }
+
+  if (isTauriRuntime() && effectiveOpts.forceTs !== true && categoricalMaterialVarsForRoute.length > 0) {
+    try {
+      console.warn('[OptimizerMVP] Falling back to TS optimizer because active design variables include categorical material(V) entries that native optimization does not optimize.', {
+        categoricalMaterialVars: categoricalMaterialVarsForRoute.map((v: any) => String(v?.id ?? '')).filter(Boolean),
       });
     } catch (_) {}
   }
@@ -5096,7 +5652,7 @@ export async function runOptimizationMVP(options = {}) {
   // Backtracking line search along LM step.
   const backtracking = (opts.backtracking === undefined) ? true : !!opts.backtracking;
   const backtrackingMaxTries = Number.isFinite(Number(opts.backtrackingMaxTries)) ? Math.max(1, Math.floor(Number(opts.backtrackingMaxTries))) : 5;
-  const lineSearchC = Number.isFinite(Number(opts.lineSearchC)) ? Math.max(1e-8, Number(opts.lineSearchC)) : 0.1;
+  const lineSearchC = Number.isFinite(Number(opts.lineSearchC)) ? Math.max(1e-8, Number(opts.lineSearchC)) : 1e-4;
   const lineSearchRho = Number.isFinite(Number(opts.lineSearchRho)) ? Math.min(0.95, Math.max(1e-3, Number(opts.lineSearchRho))) : 0.5;
   const lineSearchMaxBacktrack = Number.isFinite(Number(opts.lineSearchMaxBacktrack)) ? Math.max(1, Math.floor(Number(opts.lineSearchMaxBacktrack))) : 20;
   const lmGeodesicAcceleration = (opts.lmGeodesicAcceleration === undefined) ? true : !!opts.lmGeodesicAcceleration;
@@ -5770,10 +6326,28 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
     const violationScore = toFiniteNumber(req.violationScore, 0);
     const softPenalty = toFiniteNumber(req.softPenalty, 0);
-    const score = violationScore + softPenalty;
+    const baseScore = violationScore + softPenalty;
+    let escapePenalty = 0;
+    try {
+      const escapeMinima = normalizeEscapeMinima(opts.__escapeGlobalMinima);
+      if (escapeMinima.length > 0) {
+        const point = yr.map((variable) => {
+          const value = jointState
+            ? Number(getJointCurrentValue(jointState, variable.id))
+            : Number(getCurrentDesignValueByVariableId(activeCfg, variable.id));
+          return Number.isFinite(value) ? value : 0;
+        });
+        escapePenalty = computeEscapePenaltyScore(point, escapeMinima);
+      }
+    } catch (_) {
+      escapePenalty = 0;
+    }
+    const score = baseScore + escapePenalty;
     return {
       merit: 0,
       score,
+      baseScore,
+      escapePenalty,
       feasible: !!req.feasible,
       violationScore,
       softPenalty,
@@ -5808,6 +6382,15 @@ export async function runOptimizationMVP(options = {}) {
     .map(coerceBlankAsphereToZero)
     .filter(v => v && typeof v.value === 'number' && Number.isFinite(v.value));
   const catVars = Array.isArray(jointVars.categoricalMaterial) ? jointVars.categoricalMaterial : [];
+  const hasInfiniteRadiusSeedVars = targetConfigs.some((cfg) => {
+    const all = listDesignVariablesFromBlocks(cfg || {});
+    return Array.isArray(all) && all.some((v) => {
+      const key = String(v?.key ?? '').trim();
+      const raw = String(v?.value ?? '').trim();
+      return /^inf(inity)?$/i.test(raw)
+        && (/^(front|back)radius$/i.test(key) || /^radius$/i.test(key) || /^surf\d+radius$/i.test(key));
+    });
+  });
   const asphereVarCount = vars.filter(v => isAsphereCoefKey(v?.key)).length;
 
   if (vars.length === 0 && catVars.length === 0) {
@@ -10476,8 +11059,25 @@ export async function runOptimizationMVP(options = {}) {
       const noKktImprovement = Number.isFinite(finalScore)
         && Number.isFinite(initialScore)
         && finalScore >= (initialScore - 1e-12);
-      if (!shouldStopKKT() && noKktImprovement) {
-        console.warn('⚠️ [AL] No improvement detected in KKT path. Keeping KKT result (LM fallback disabled).');
+      const kktRelativeImprove = (Number.isFinite(initialScore) && Number.isFinite(finalScore))
+        ? ((initialScore - finalScore) / Math.max(1, Math.abs(initialScore)))
+        : Number.POSITIVE_INFINITY;
+      const disableKktNoImproveFallback = opts?.__disableKktNoImproveFallback === true;
+      const kktNoImproveFallbackIterations = Number.isFinite(Number(opts?.kktNoImproveFallbackIterations))
+        ? Math.max(1, Math.floor(Number(opts.kktNoImproveFallbackIterations)))
+        : Math.min(maxIterations, 20);
+      const kktNoImproveFallbackMinRelImprove = Number.isFinite(Number(opts?.kktNoImproveFallbackMinRelImprove))
+        ? Math.max(0, Number(opts.kktNoImproveFallbackMinRelImprove))
+        : 0.0025;
+      const shouldTryCdFallback = !shouldStopKKT()
+        && (noKktImprovement || kktRelativeImprove < kktNoImproveFallbackMinRelImprove);
+      if (shouldTryCdFallback) {
+        console.warn('⚠️ [AL] KKT improvement is insufficient. Keeping KKT result.', {
+          iterations: kktNoImproveFallbackIterations,
+          variables: vars.length,
+          relativeImprove: kktRelativeImprove,
+          fallbackEnabled: !disableKktNoImproveFallback,
+        });
       }
 
       // Re-evaluate after best snapshot restore to keep final reporting consistent with requirement table.
@@ -11069,9 +11669,11 @@ if (typeof window !== 'undefined') {
     compareMatrixFree: compareMatrixFreeBenchmark,
     compareTsVsNative: compareTsVsNativeOptimizerBenchmark,
     compareKktAnalyticEq: compareKktAnalyticEqBenchmark,
+    compareGlobalVsKkt: compareGlobalVsKktBenchmark,
     exportBenchmarkCsv: exportWasmPilotBenchmarkCsv,
     exportMatrixFreeCsv: exportMatrixFreeBenchmarkCsv,
     exportMatrixFreeJson: exportMatrixFreeBenchmarkJson,
+    exportGlobalVsKktJson: exportGlobalVsKktBenchmarkJson,
     pickAnalyticCandidates: pickAnalyticDerivativeCandidates,
     stop: () => {
       __optimizerStopRequested = true;

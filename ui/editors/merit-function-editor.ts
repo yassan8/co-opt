@@ -2805,7 +2805,7 @@ class MeritFunctionEditor {
     async calculateTransverseAberrationRmsUmViaNativeAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
         try {
             const ipcMod = await import('../../src/desktop/ipc/client.ts');
-            if (!ipcMod || typeof ipcMod.runNativeTransverseAberration !== 'function') {
+            if (!ipcMod || typeof ipcMod.runNativeTransverseRmsUm !== 'function') {
                 return null;
             }
             if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
@@ -2855,19 +2855,31 @@ class MeritFunctionEditor {
                 return Math.max(0, opticalSystemData.length - 1);
             })();
 
-            const resp = await ipcMod.runNativeTransverseAberration({
+            const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, opticalSystemData, wavelength);
+            const fieldKey = fieldSettingCacheKey(fieldSetting);
+            const cfgKey = (operand?.configId !== undefined && operand?.configId !== null)
+                ? String(operand.configId)
+                : 'active';
+            const cacheKey = `ta-rms-native:${cfgKey}:wl=${wavelength}:obj=${objectIndex0}:surf=${imageSurfaceIndex}:rays=${rayCount}:component=${component}:field=${fieldKey}`;
+            const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
+            if (Number.isFinite(cached)) {
+                return Number(cached);
+            }
+
+            const resp = await ipcMod.runNativeTransverseRmsUm({
                 opticalSystemRows: opticalSystemData,
                 sourceRows: __cooptBuildPrimaryOnlySourceRows(sourceRows, wavelength),
                 objectRows: [objRow],
                 surfaceIndex: imageSurfaceIndex,
                 rayCount,
                 wavelengthMode: 'primary',
-                wavelength
+                wavelength,
+                component,
             });
 
             this.stampRequirementBackend('ta', {
                 backend: String(resp?.backend || 'unknown'),
-                route: 'ipc-wrapper',
+                route: 'ipc-transverse-rms',
                 operand: 'TA_RMS_UM',
                 configId: operand?.configId ?? '',
                 objectIndex0,
@@ -2876,49 +2888,10 @@ class MeritFunctionEditor {
                 component,
             });
 
-            const collectStats = (series: any[]) => {
-                let sumSq = 0;
-                let count = 0;
-                if (!Array.isArray(series)) return { sumSq, count };
-                for (const item of series) {
-                    const pts = Array.isArray(item?.points) ? item.points : [];
-                    for (const p of pts) {
-                        const t = toFiniteNumber(p?.transverseAberration, NaN);
-                        if (!Number.isFinite(t)) continue;
-                        sumSq += t * t;
-                        count += 1;
-                    }
-                }
-                return { sumSq, count };
-            };
-
-            const meridionalStats = collectStats(resp?.meridionalData);
-            const sagittalStats = collectStats(resp?.sagittalData);
-
-            let sumSq = 0;
-            let count = 0;
-            if (component === 'meridional') {
-                sumSq = meridionalStats.sumSq;
-                count = meridionalStats.count;
-                if (count === 0 && sagittalStats.count > 0) {
-                    sumSq = sagittalStats.sumSq;
-                    count = sagittalStats.count;
-                }
-            } else if (component === 'sagittal') {
-                sumSq = sagittalStats.sumSq;
-                count = sagittalStats.count;
-                if (count === 0 && meridionalStats.count > 0) {
-                    sumSq = meridionalStats.sumSq;
-                    count = meridionalStats.count;
-                }
-            } else {
-                sumSq = meridionalStats.sumSq + sagittalStats.sumSq;
-                count = meridionalStats.count + sagittalStats.count;
-            }
-
-            if (count <= 0) return null;
-            const rmsMm = Math.sqrt(sumSq / count);
-            return rmsMm * 1000;
+            const rmsUm = Number(resp?.rmsUm);
+            if (!Number.isFinite(rmsUm)) return null;
+            if (this._runtimeCache) this._runtimeCache.set(cacheKey, rmsUm);
+            return rmsUm;
         } catch {
             return null;
         }

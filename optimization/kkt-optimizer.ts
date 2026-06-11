@@ -425,12 +425,13 @@ export function lineSearch(
   constraints: KKTOptimizerOptions,
   state: KKTOptimizerState,
   predictedReduction: number,
-  c: number = 0.1,
+  c: number = 1e-4,
   rho: number = 0.5
 ): { stepSize: number; accepted: boolean } {
   let alpha = 1.0;
   const x_new = x.slice();
   const useWasmLineSearch = constraints.useWasmLineSearch !== false;
+  const filterC = 0.05;
 
   // Initial function values
   const merit0 = evaluateAugmentedLagrangian(x, objective, constraints, state);
@@ -461,7 +462,7 @@ export function lineSearch(
       const viol_new = state.violationScore;
       if (
         merit_new < merit0 - c * alpha * Math.abs(predictedReduction) ||
-        viol_new < (1 - c) * viol0
+        viol_new < (1 - filterC) * viol0
       ) {
         return { stepSize: alpha, accepted: true };
       }
@@ -480,7 +481,7 @@ export function lineSearch(
     // Filter acceptance: either merit decreases OR constraint violation decreases
     if (
       merit_new < merit0 - c * alpha * Math.abs(predictedReduction) ||
-      viol_new < (1 - c) * viol0
+      viol_new < (1 - filterC) * viol0
     ) {
       return { stepSize: alpha, accepted: true };
     }

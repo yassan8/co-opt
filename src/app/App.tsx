@@ -2561,6 +2561,8 @@ export default function App() {
   })();
   const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd' | 'global'>('kkt');
   const [optMaxIterations, setOptMaxIterations] = useState(5000);
+  const [optEscapeFunctionWidth, setOptEscapeFunctionWidth] = useState(1);
+  const [optEscapeFunctionHeight, setOptEscapeFunctionHeight] = useState(0.1);
   const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(false);
   const [optRunning, setOptRunning] = useState(false);
   const [optStopRequested, setOptStopRequested] = useState(false);
@@ -3855,7 +3857,9 @@ export default function App() {
             ...(currentOptimize && typeof currentOptimize === 'object' ? currentOptimize : {}),
           };
         }
-        if (!Object.prototype.hasOwnProperty.call(mergedEntry, 'value') && Object.prototype.hasOwnProperty.call(currentParams, key)) {
+        if (Object.prototype.hasOwnProperty.call(currentParams, key) && /^(?:material|rindex|abbe|vd|nd)\d*$/i.test(String(key ?? '').trim())) {
+          mergedEntry.value = currentParams[key];
+        } else if (!Object.prototype.hasOwnProperty.call(mergedEntry, 'value') && Object.prototype.hasOwnProperty.call(currentParams, key)) {
           mergedEntry.value = currentParams[key];
         }
         block.variables[key] = mergedEntry;
@@ -8249,6 +8253,8 @@ const collectLegacyCrossRays = async (
           systemRequirementsRows,
           method: optMethod,
           maxIterations,
+          escapeFunctionWidth: optEscapeFunctionWidth,
+          escapeFunctionHeight: optEscapeFunctionHeight,
           preferNative: isTauriRuntime(),
           kktUseWasmPilotOptimizer: true,
           shouldStop: () => !!(window as any).__cooptOptimizeStopRequested,
@@ -8711,6 +8717,36 @@ const collectLegacyCrossRays = async (
               onChange={(e) => {
                 const n = Number(e.target.value);
                 setOptMaxIterations(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
+              }}
+              style={{ width: 100, padding: '4px 6px' }}
+            />
+          </label>
+          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
+            W
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={optEscapeFunctionWidth}
+              disabled={optRunning}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setOptEscapeFunctionWidth(Number.isFinite(n) ? n : 1);
+              }}
+              style={{ width: 100, padding: '4px 6px' }}
+            />
+          </label>
+          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
+            H
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={optEscapeFunctionHeight}
+              disabled={optRunning}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setOptEscapeFunctionHeight(Number.isFinite(n) ? n : 0.1);
               }}
               style={{ width: 100, padding: '4px 6px' }}
             />

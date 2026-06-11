@@ -4507,10 +4507,10 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     if (legacyHasV(rowObj, '__cooptGapOptimizeMaterial') || legacyHasV(rowObj, 'optimizeMaterial')) {
       variables.material = legacyVarV(gapMaterial);
     }
-    if (gapRindex !== '' && (legacyHasV(rowObj, '__cooptGapOptimizeRI') || legacyHasV(rowObj, 'optimizeRI'))) {
+    if (legacyHasV(rowObj, '__cooptGapOptimizeRI') || legacyHasV(rowObj, 'optimizeRI')) {
       variables.rindex = legacyVarV(gapRindex);
     }
-    if (gapAbbe !== '' && (legacyHasV(rowObj, '__cooptGapOptimizeAbbe') || legacyHasV(rowObj, 'optimizeAbbe'))) {
+    if (legacyHasV(rowObj, '__cooptGapOptimizeAbbe') || legacyHasV(rowObj, 'optimizeAbbe')) {
       variables.abbe = legacyVarV(gapAbbe);
     }
     blocks.push({
