@@ -36,6 +36,8 @@ import { asphericSurfaceZ, toricSurfaceZ } from '../../optical/surface-math.ts';
 import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.ts';
 import { calculateTransverseAberration } from '../../evaluation/aberrations/transverse-aberration.ts';
 import { calculateChiefRayNewton } from '../../evaluation/aberrations/transverse-aberration.ts';
+import { generateCrossBeam } from '../../raytracing/generation/gen-ray-cross-finite.ts';
+import { generateInfiniteSystemCrossBeam } from '../../raytracing/generation/gen-ray-cross-infinite.ts';
 import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.ts';
 import { loadSystemConfigurations } from '../../data/table-configuration.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../../data/table-optical-system.ts';
@@ -2365,7 +2367,13 @@ class MeritFunctionEditor {
                 return this.calculateOperandValue(operand);
             }
             case 'CRA_DEG': {
-                return withRequirementRustRayTracing(() => this.calculateChiefRayAngleDeg(operand, opticalSystemData));
+                return withRequirementRustRayTracing(async () => {
+                    const renderVal = await this.calculateChiefRayAngleDegViaRenderAsync(operand, opticalSystemData);
+                    if (Number.isFinite(renderVal as any)) {
+                        return Number(renderVal);
+                    }
+                    return this.calculateChiefRayAngleDeg(operand, opticalSystemData);
+                });
             }
             case 'OPD_RMS_WAVES':
             case 'OPD_RMS_UM': {
@@ -3502,19 +3510,198 @@ class MeritFunctionEditor {
         if (rayCount > 5000) rayCount = 5000;
 
         const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
-        const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, opticalSystemData, wavelength);
-        const chiefResult = calculateChiefRayNewton(opticalSystemData, fieldSetting, wavelength, 'unified', { rayCount });
+        if (!objRow || typeof objRow !== 'object') return 1e9;
 
-        const dir = chiefResult?.rayData?.dir || chiefResult?.dir;
-        const dx = toFiniteNumber(dir?.x, NaN);
-        const dy = toFiniteNumber(dir?.y, NaN);
-        const dz = toFiniteNumber(dir?.z, NaN);
-        if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) {
-            return 1e9;
+        const renderCrossBeamAngle = this.calculateChiefRayAngleDegViaRenderCrossBeam(operand, opticalSystemData);
+        if (Number.isFinite(renderCrossBeamAngle as any)) {
+            return Number(renderCrossBeamAngle);
         }
 
-        const transverse = Math.sqrt(dx * dx + dy * dy);
-        const angleDeg = Math.atan2(transverse, Math.abs(dz)) * 180 / Math.PI;
+        const imageSurfaceIndex = opticalSystemData.findIndex((row: any) => {
+            const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+            const normalized = String(raw ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+            return normalized === 'image' || normalized.startsWith('image');
+        });
+        const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemData.length - 1);
+
+        const isCoordTransRow = (row: any) => {
+            const st = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').trim().toLowerCase();
+            return st === 'coord trans' || st === 'coordinate break' || st === 'coordtrans' || st === 'coordinatebreak' || st === 'ct';
+        };
+        const isObjectRow = (row: any) => {
+            const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? '';
+            return String(raw ?? '').trim().toLowerCase() === 'object';
+        };
+        const isGapRow = (row: any) => String(row?._blockType ?? '').trim() === 'Gap';
+        const isThinLensBackRow = (row: any) => {
+            const blockType = String(row?._blockType ?? row?.blockType ?? row?.block_type ?? row?.blockTypeName ?? '').trim().toLowerCase();
+            if (blockType !== 'thinlens' && blockType !== 'paraxial') return false;
+            return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
+        };
+        const imagePathPointIndex = (() => {
+            if (imageSurfaceIndex < 0) return null;
+            let count = 0;
+            for (let index = 0; index <= imageSurfaceIndex; index += 1) {
+                const row = opticalSystemData[index];
+                if (isCoordTransRow(row) || isObjectRow(row) || isGapRow(row) || isThinLensBackRow(row)) continue;
+                count += 1;
+            }
+            return count > 0 ? count : null;
+        })();
+
+        const conjugateType = detectConjugateType(opticalSystemData) === 'finite' ? 'finite' : 'infinite';
+        const rowPosRaw = String(objRow?.position ?? objRow?.fieldType ?? objRow?.type ?? '').trim().toLowerCase();
+        const isImageHeightRow = rowPosRaw.includes('imageheight');
+        const resolvedObjectRow = rowPosRaw.includes('imageheight')
+            ? (() => {
+                try {
+                    return convertImageHeightToEffectiveObject(
+                        objRow,
+                        opticalSystemData,
+                        wavelength,
+                        conjugateType,
+                        {
+                            skipTsValidation: true,
+                            validationTraceBackend: 'rust',
+                            disableSolveCache: true,
+                            disableWarmStartCache: true,
+                        }
+                    ) || objRow;
+                } catch {
+                    return objRow;
+                }
+            })()
+            : objRow;
+
+        const generationOptions = {
+            pattern: 'annular' as const,
+            wavelengthUm: wavelength,
+            conjugateType: conjugateType as 'finite' | 'infinite',
+            pupilScale: 1,
+            aimThroughStop: true,
+            useChiefRayAnalysis: true,
+            allowStopBasedOriginSolve: true,
+            originSolveTraceBackend: 'rust' as const,
+            imageHeightValidationTraceBackend: 'rust' as const,
+            targetSurfaceIndex,
+            disableCrossExtent: true,
+            crossType: 'both' as const,
+            exactCrossBeamSampling: true,
+            displayAxisAlignedSampling: isImageHeightRow,
+            preserveChiefNormalEmissionPlane: true,
+        };
+
+        const chiefOnlyRayStarts = isImageHeightRow
+            ? generateRayStartPointsForObject(
+                resolvedObjectRow,
+                opticalSystemData,
+                1,
+                null,
+                generationOptions,
+            )
+            : null;
+
+        const rayStarts = generateRayStartPointsForObject(
+            resolvedObjectRow,
+            opticalSystemData,
+            Math.max(3, rayCount),
+            null,
+            generationOptions,
+        );
+        const starts = Array.isArray(rayStarts) ? rayStarts : [];
+        if (starts.length === 0) return 1e9;
+
+        const expectedChiefOrigin = (rayStarts as any)?.expectedChiefOrigin;
+        const getCandidateScore = (candidate: any) => {
+            const planeU = Number(candidate?.planeCoords?.u);
+            const planeV = Number(candidate?.planeCoords?.v);
+            if (Number.isFinite(planeU) && Number.isFinite(planeV)) {
+                return Math.hypot(planeU, planeV);
+            }
+            const sx = Number(candidate?.startP?.x);
+            const sy = Number(candidate?.startP?.y);
+            const sz = Number(candidate?.startP?.z);
+            const ox = Number(expectedChiefOrigin?.x);
+            const oy = Number(expectedChiefOrigin?.y);
+            const oz = Number(expectedChiefOrigin?.z);
+            if ([sx, sy, sz, ox, oy, oz].every(Number.isFinite)) {
+                return Math.hypot(sx - ox, sy - oy, sz - oz);
+            }
+            return Number.POSITIVE_INFINITY;
+        };
+        const chiefIndex = starts.reduce((bestIndex: number, candidate: any, candidateIndex: number) => {
+            const score = getCandidateScore(candidate);
+            const bestScore = getCandidateScore(starts[bestIndex]);
+            return score < bestScore ? candidateIndex : bestIndex;
+        }, 0);
+
+        const fallbackChiefStart = (Array.isArray(chiefOnlyRayStarts) && chiefOnlyRayStarts[0])
+            ? chiefOnlyRayStarts[0]
+            : (starts[chiefIndex] || starts[0]);
+        const chiefOrigin = resolvedObjectRow?.__cooptImageHeightSolve?.chiefRay?.origin;
+        const chiefDir = resolvedObjectRow?.__cooptImageHeightSolve?.chiefRay?.dir;
+        const ox = Number(chiefOrigin?.x);
+        const oy = Number(chiefOrigin?.y);
+        const oz = Number(chiefOrigin?.z);
+        const vx = Number(chiefDir?.x);
+        const vy = Number(chiefDir?.y);
+        const vz = Number(chiefDir?.z);
+        const chiefStart = [ox, oy, oz, vx, vy, vz].every(Number.isFinite)
+            ? {
+                ...(fallbackChiefStart && typeof fallbackChiefStart === 'object' ? fallbackChiefStart : {}),
+                startP: { x: ox, y: oy, z: oz },
+                dir: { x: vx, y: vy, z: vz },
+                planeCoords: fallbackChiefStart?.planeCoords ?? { u: 0, v: 0 },
+                description: fallbackChiefStart?.description || 'Chief requirement ray (exact ImageHeight solver)',
+            }
+            : fallbackChiefStart;
+        if (!chiefStart?.startP || !chiefStart?.dir) return 1e9;
+
+        const traceOptions = {
+            allowNonStrict: true,
+            useRustWasm: true,
+            requireRustWasm: true,
+            disableWasmRayTracing: false,
+            __renderImageHeightRustPreferred: true,
+        };
+        const rayPath = traceRay(
+            opticalSystemData,
+            { pos: chiefStart.startP, dir: chiefStart.dir, wavelength },
+            1.0,
+            null,
+            targetSurfaceIndex,
+            traceOptions,
+        );
+        if (!Array.isArray(rayPath) || rayPath.length < 2) return 1e9;
+
+        let p0 = rayPath[rayPath.length - 2];
+        let p1 = rayPath[rayPath.length - 1];
+        if (imagePathPointIndex !== null) {
+            if (imagePathPointIndex >= 1 && imagePathPointIndex < rayPath.length) {
+                p1 = rayPath[imagePathPointIndex];
+                p0 = rayPath[imagePathPointIndex - 1];
+            } else if (imageSurfaceIndex >= 0) {
+                for (let index = rayPath.length - 1; index >= 1; index -= 1) {
+                    const pointSurfaceIndex = Number(rayPath[index]?.surfaceIndex ?? rayPath[index]?.surface ?? rayPath[index]?.surfaceIdx);
+                    if (Number.isInteger(pointSurfaceIndex) && pointSurfaceIndex === imageSurfaceIndex) {
+                        p1 = rayPath[index];
+                        p0 = rayPath[index - 1];
+                        break;
+                    }
+                }
+            }
+        }
+
+        const dx = Number(p1?.x) - Number(p0?.x);
+        const dy = Number(p1?.y) - Number(p0?.y);
+        const dz = Number(p1?.z) - Number(p0?.z);
+        const norm = Math.hypot(dx, dy, dz);
+        if (!(Number.isFinite(norm) && norm > 1e-12)) return 1e9;
+
+        const ux = dx / norm;
+        const uy = dy / norm;
+        const uz = dz / norm;
+        const angleDeg = Math.atan2(Math.hypot(ux, uy), Math.abs(uz)) * 180 / Math.PI;
         return Number.isFinite(angleDeg) ? Math.abs(angleDeg) : 1e9;
     }
 
@@ -3556,6 +3743,348 @@ class MeritFunctionEditor {
 
             const value = Number(resp?.chiefRayAngleDeg);
             return Number.isFinite(value) ? value : null;
+        } catch {
+            return null;
+        }
+    }
+
+    async calculateChiefRayAngleDegViaRenderAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
+        try {
+            const calculator = (window as any)?.__cooptCalculateRenderChiefAngleDegForRequirement
+                || (window as any)?.opener?.__cooptCalculateRenderChiefAngleDegForRequirement;
+            if (typeof calculator === 'function') {
+                const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+                const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+                const objectIndex1 = (param1Raw === '') ? 1 : Math.max(1, Math.floor(Number(param1Raw)));
+                const objectIndex0 = objectIndex1 - 1;
+                const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
+                const rayCount = (param4Raw === '') ? 51 : Math.floor(Number(param4Raw));
+                const response = await calculator({
+                    opticalSystemRows: opticalSystemData,
+                    objectRows,
+                    sourceRows,
+                    objectIndex0,
+                    rayCount: Number.isFinite(rayCount) && rayCount > 0 ? rayCount : 51,
+                });
+                const angle = Number(response?.angleDeg);
+                if (response?.ok === true && Number.isFinite(angle)) {
+                    return angle;
+                }
+            }
+        } catch (_) {}
+        return this.calculateChiefRayAngleDegViaRenderCrossBeam(operand, opticalSystemData);
+    }
+
+    calculateChiefRayAngleDegViaRenderCrossBeam(operand: any, opticalSystemData: any[]): number | null {
+        try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+
+            const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+            const objectIndex1 = (param1Raw === '') ? 1 : Math.max(1, Math.floor(Number(param1Raw)));
+            const objectIndex0 = objectIndex1 - 1;
+            const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+            if (!objRow || typeof objRow !== 'object') return null;
+
+            const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+            const wavelength = (param2Raw === '')
+                ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+                : this.getSystemWavelengthFromOperandOrPrimary({ ...operand, param1: operand?.param2 }, sourceRows);
+
+            const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
+            let rayCount = (param4Raw === '') ? 51 : Math.floor(Number(param4Raw));
+            if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = 51;
+            if (rayCount > 5000) rayCount = 5000;
+
+            const imageSurfaceIndex = opticalSystemData.findIndex((row: any) => {
+                const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+                const normalized = String(raw ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+                return normalized === 'image' || normalized.startsWith('image');
+            });
+            const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemData.length - 1);
+
+            const isCoordTransRow = (row: any) => {
+                const st = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').trim().toLowerCase();
+                return st === 'coord trans' || st === 'coordinate break' || st === 'coordtrans' || st === 'coordinatebreak' || st === 'ct';
+            };
+            const isObjectRow = (row: any) => {
+                const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? '';
+                return String(raw ?? '').trim().toLowerCase() === 'object';
+            };
+            const isGapRow = (row: any) => String(row?._blockType ?? '').trim() === 'Gap';
+            const isThinLensBackRow = (row: any) => {
+                const blockType = String(row?._blockType ?? row?.blockType ?? row?.block_type ?? row?.blockTypeName ?? '').trim().toLowerCase();
+                if (blockType !== 'thinlens' && blockType !== 'paraxial') return false;
+                return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
+            };
+            const imagePathPointIndex = (() => {
+                if (imageSurfaceIndex < 0) return null;
+                let count = 0;
+                for (let index = 0; index <= imageSurfaceIndex; index += 1) {
+                    const row = opticalSystemData[index];
+                    if (isCoordTransRow(row) || isObjectRow(row) || isGapRow(row) || isThinLensBackRow(row)) continue;
+                    count += 1;
+                }
+                return count > 0 ? count : null;
+            })();
+
+            const conjugateType = detectConjugateType(opticalSystemData) === 'finite' ? 'finite' : 'infinite';
+            const rowPosRaw = String(objRow?.position ?? objRow?.fieldType ?? objRow?.type ?? '').trim().toLowerCase();
+            const getImageHeightTargetForRequirement = (row: any): { x: number; y: number } | null => {
+                const positionNorm = String(row?.position ?? '')
+                    .trim()
+                    .toLowerCase()
+                    .replace(/[\s_-]+/g, '');
+                const effectivePositionNorm = String(row?.__cooptEffectivePosition ?? '')
+                    .trim()
+                    .toLowerCase()
+                    .replace(/[\s_-]+/g, '');
+                const isRawImageHeightRow = positionNorm === 'imageheight' && !effectivePositionNorm;
+                const tableX = Number(row?.xHeightAngle);
+                const tableY = Number(row?.yHeightAngle);
+                if (isRawImageHeightRow && Number.isFinite(tableX) && Number.isFinite(tableY)) {
+                    return { x: tableX, y: tableY };
+                }
+                const storedTarget = row?.__cooptImageHeightTarget;
+                if (storedTarget && Number.isFinite(Number(storedTarget.x)) && Number.isFinite(Number(storedTarget.y))) {
+                    return { x: Number(storedTarget.x), y: Number(storedTarget.y) };
+                }
+                const heightX = Number(row?.xHeight ?? row?.heightX ?? row?.['object x']);
+                const heightY = Number(row?.yHeight ?? row?.heightY ?? row?.['object y']);
+                if (Number.isFinite(heightX) && Number.isFinite(heightY)) {
+                    return { x: heightX, y: heightY };
+                }
+                if (Number.isFinite(tableX) && Number.isFinite(tableY)) {
+                    return { x: tableX, y: tableY };
+                }
+                return null;
+            };
+            const imageHeightTarget = getImageHeightTargetForRequirement(objRow);
+            const imageHeightAxis: 'YZ' | 'XZ' | 'BOTH' = imageHeightTarget
+                ? (Math.abs(Number(imageHeightTarget.y)) >= Math.abs(Number(imageHeightTarget.x)) ? 'YZ' : 'XZ')
+                : 'BOTH';
+            const scopedImageHeightRow = imageHeightTarget
+                ? {
+                    ...objRow,
+                    __cooptCrossSectionAxis: imageHeightAxis,
+                    __cooptOriginalImageHeightTarget: objRow?.__cooptOriginalImageHeightTarget ?? imageHeightTarget,
+                }
+                : objRow;
+            const resolvedObjectRow = rowPosRaw.includes('imageheight')
+                ? (() => {
+                    try {
+                        return convertImageHeightToEffectiveObject(
+                            scopedImageHeightRow,
+                            opticalSystemData,
+                            wavelength,
+                            conjugateType,
+                            {
+                                skipTsValidation: true,
+                                validationTraceBackend: 'rust',
+                                disableSolveCache: true,
+                                disableWarmStartCache: true,
+                            }
+                        ) || objRow;
+                    } catch {
+                        return objRow;
+                    }
+                })()
+                : objRow;
+
+            const toNum = (v: any) => {
+                const n = Number(v);
+                return Number.isFinite(n) ? n : 0;
+            };
+
+            const collectChief3DFromRays = (rays: any[], targetObjectIndex: number): number | null => {
+                if (!Array.isArray(rays) || rays.length === 0) return null;
+                let maxChief3D = Number.NEGATIVE_INFINITY;
+                const pickPath = (ray: any): any[] | null => {
+                    const candidatePaths = [ray?.rayPath, ray?.rayPathToTarget, ray?.path, ray?.originalRay?.rayPath];
+                    for (const candidate of candidatePaths) {
+                        if (Array.isArray(candidate) && candidate.length >= 2) return candidate;
+                    }
+                    return null;
+                };
+
+                for (const ray of rays) {
+                    const rayObjectIndexRaw = Number(ray?.objectIndex ?? ray?.originalRay?.objectIndex);
+                    const rayObjectIndex = Number.isFinite(rayObjectIndexRaw) ? Math.max(0, Math.floor(rayObjectIndexRaw)) : 0;
+                    if (rayObjectIndex !== targetObjectIndex) continue;
+
+                    const typeLabel = String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
+                    if (!typeLabel.includes('chief')) continue;
+                    const path = pickPath(ray);
+                    if (!Array.isArray(path) || path.length < 2) continue;
+
+                    let p0 = path[path.length - 2];
+                    let p1 = path[path.length - 1];
+                    if (imagePathPointIndex !== null) {
+                        if (imagePathPointIndex >= 1 && imagePathPointIndex < path.length) {
+                            p1 = path[imagePathPointIndex];
+                            p0 = path[imagePathPointIndex - 1];
+                        } else if (imageSurfaceIndex >= 0) {
+                            for (let index = path.length - 1; index >= 1; index -= 1) {
+                                const pointSurfaceIndex = Number(path[index]?.surfaceIndex ?? path[index]?.surface ?? path[index]?.surfaceIdx);
+                                if (Number.isInteger(pointSurfaceIndex) && pointSurfaceIndex === imageSurfaceIndex) {
+                                    p1 = path[index];
+                                    p0 = path[index - 1];
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    const dx = Number(p1?.x) - Number(p0?.x);
+                    const dy = Number(p1?.y) - Number(p0?.y);
+                    const dz = Number(p1?.z) - Number(p0?.z);
+                    const norm = Math.hypot(dx, dy, dz);
+                    if (!(Number.isFinite(norm) && norm > 1e-12)) continue;
+                    const ux = dx / norm;
+                    const uy = dy / norm;
+                    const uz = dz / norm;
+                    const angleDeg = Math.atan2(Math.hypot(ux, uy), Math.abs(uz)) * 180 / Math.PI;
+                    if (Number.isFinite(angleDeg)) {
+                        maxChief3D = Math.max(maxChief3D, Math.abs(angleDeg));
+                    }
+                }
+
+                return Number.isFinite(maxChief3D) ? maxChief3D : null;
+            };
+
+            if (imageHeightTarget) {
+                const crossType: 'vertical' | 'horizontal' | 'both' = imageHeightAxis === 'YZ' ? 'vertical' : (imageHeightAxis === 'XZ' ? 'horizontal' : 'both');
+                const exactOptions = {
+                    pattern: imageHeightAxis === 'BOTH' ? 'annular' as const : 'grid' as const,
+                    wavelengthUm: wavelength,
+                    conjugateType: conjugateType as 'finite' | 'infinite',
+                    pupilScale: 1,
+                    aimThroughStop: true,
+                    useChiefRayAnalysis: true,
+                    allowStopBasedOriginSolve: true,
+                    originSolveTraceBackend: 'rust' as const,
+                    imageHeightValidationTraceBackend: 'rust' as const,
+                    targetSurfaceIndex,
+                    disableCrossExtent: true,
+                    crossType,
+                    exactCrossBeamSampling: true,
+                    displayAxisAlignedSampling: true,
+                    preserveChiefNormalEmissionPlane: true,
+                };
+                const chiefOnlyRayStarts = generateRayStartPointsForObject(
+                    resolvedObjectRow,
+                    opticalSystemData,
+                    1,
+                    null,
+                    exactOptions,
+                );
+                const fallbackChiefStart = Array.isArray(chiefOnlyRayStarts) ? chiefOnlyRayStarts[0] : null;
+                const chiefOrigin = resolvedObjectRow?.__cooptImageHeightSolve?.chiefRay?.origin;
+                const chiefDir = resolvedObjectRow?.__cooptImageHeightSolve?.chiefRay?.dir;
+                const ox = Number(chiefOrigin?.x);
+                const oy = Number(chiefOrigin?.y);
+                const oz = Number(chiefOrigin?.z);
+                const vx = Number(chiefDir?.x);
+                const vy = Number(chiefDir?.y);
+                const vz = Number(chiefDir?.z);
+                const chiefStart = [ox, oy, oz, vx, vy, vz].every(Number.isFinite)
+                    ? {
+                        ...(fallbackChiefStart && typeof fallbackChiefStart === 'object' ? fallbackChiefStart : {}),
+                        startP: { x: ox, y: oy, z: oz },
+                        dir: { x: vx, y: vy, z: vz },
+                    }
+                    : fallbackChiefStart;
+                if (chiefStart?.startP && chiefStart?.dir) {
+                    const traceOptions = {
+                        allowNonStrict: true,
+                        useRustWasm: true,
+                        requireRustWasm: true,
+                        disableWasmRayTracing: false,
+                        __renderImageHeightRustPreferred: true,
+                    };
+                    const rayPath = traceRay(
+                        opticalSystemData,
+                        { pos: chiefStart.startP, dir: chiefStart.dir, wavelength },
+                        1.0,
+                        null,
+                        targetSurfaceIndex,
+                        traceOptions,
+                    );
+                    const exactAngle = collectChief3DFromRays([{ rayPath, objectIndex: objectIndex0, type: 'chief' }], objectIndex0);
+                    if (Number.isFinite(exactAngle as any)) {
+                        return Number(exactAngle);
+                    }
+                }
+            }
+
+            let rays: any[] = [];
+            const isImageHeightObjectRowForRequirement = (row: any): boolean => {
+                const posNorm = String(row?.position ?? row?.fieldType ?? row?.type ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+                const storedTarget = row?.__cooptImageHeightTarget;
+                return posNorm.includes('imageheight') || !!(
+                    storedTarget
+                    && Number.isFinite(Number(storedTarget.x))
+                    && Number.isFinite(Number(storedTarget.y))
+                );
+            };
+            const crossBeamObjectRows = Array.isArray(objectRows)
+                ? objectRows
+                    .map((row: any, index: number) => ({
+                        ...(row && typeof row === 'object' ? row : {}),
+                        objectIndex: Number.isFinite(Number(row?.objectIndex)) ? Number(row.objectIndex) : index,
+                    }))
+                    .filter((row: any) => !isImageHeightObjectRowForRequirement(row))
+                : [];
+            if (conjugateType === 'infinite') {
+                const objectAngles = crossBeamObjectRows.map((row: any) => ({
+                    x: toNum(row?.xHeightAngle ?? row?.x),
+                    y: toNum(row?.yHeightAngle ?? row?.y),
+                    objectIndex: Number.isFinite(Number(row?.objectIndex)) ? Number(row.objectIndex) : 0,
+                }));
+                if (objectAngles.length === 0) return null;
+                const result: any = generateInfiniteSystemCrossBeam(opticalSystemData, objectAngles, {
+                    rayCount,
+                    debugMode: false,
+                    wavelength,
+                    useRustWasm: true,
+                    crossType: 'both',
+                    targetSurfaceIndex,
+                    angleUnit: 'deg',
+                    chiefZ: -20,
+                });
+                const objectResults = Array.isArray(result?.objectResults)
+                    ? result.objectResults
+                    : (Array.isArray(result?.results) ? result.results : []);
+                for (const entry of objectResults) {
+                    const traced = Array.isArray(entry?.tracedRays) ? entry.tracedRays : (Array.isArray(entry?.rays) ? entry.rays : []);
+                    rays.push(...traced);
+                }
+                if (rays.length === 0 && Array.isArray(result?.allTracedRays)) rays = result.allTracedRays;
+                if (rays.length === 0 && Array.isArray(result?.tracedRays)) rays = result.tracedRays;
+                if (rays.length === 0 && Array.isArray(result)) rays = result;
+            } else {
+                const allObjectPositions = crossBeamObjectRows.map((row: any) => ({
+                    x: toNum(row?.xHeightAngle ?? row?.x ?? row?.height ?? row?.heightX),
+                    y: toNum(row?.yHeightAngle ?? row?.y ?? row?.height ?? row?.heightY),
+                    z: 0,
+                    objectIndex: Number.isFinite(Number(row?.objectIndex)) ? Number(row.objectIndex) : 0,
+                }));
+                if (allObjectPositions.length === 0) return null;
+                const result: any = generateCrossBeam(opticalSystemData, allObjectPositions, {
+                    rayCount,
+                    debugMode: false,
+                    wavelength,
+                    useRustWasm: true,
+                    crossType: 'both',
+                });
+                if (Array.isArray(result?.allTracedRays)) rays = result.allTracedRays;
+                else if (Array.isArray(result?.tracedRays)) rays = result.tracedRays;
+                else if (Array.isArray(result)) rays = result;
+            }
+
+            const renderChiefDeg = collectChief3DFromRays(rays, objectIndex0);
+            return Number.isFinite(renderChiefDeg as any) ? Number(renderChiefDeg) : null;
         } catch {
             return null;
         }

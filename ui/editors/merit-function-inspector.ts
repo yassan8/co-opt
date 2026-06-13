@@ -358,13 +358,13 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     notes: "横収差図（Transverse Aberration）を内部計算し、指定 Source/Object の評価で RMS を返します。\n\n定義:\n- 評価面: Image面\n- Component=total: meridional + sagittal の transverseAberration を合算して RMS = sqrt(mean(T^2))\n- Component=meridional: メリジオナルのみで RMS\n- Component=sagittal: サジタルのみで RMS\n- 単位: µm（計算値 mm を ×1000）"
   },
   "CRA_DEG": {
-    name: "Chief Ray Angle (deg)",
-    description: "Absolute chief ray angle at the image surface relative to the global optical axis (Z).",
+    name: "Chief@Image (deg)",
+    description: "Absolute chief ray angle at the image surface relative to the global optical axis (Z), not the object field angle.",
     parameters: [
       { key: "param1", label: "Object idx/id", description: "Object row selector for the target field (blank=1st object)" },
       { key: "param2", label: "λ idx", description: "Source row (1-based) or wavelength in µm (blank=Primary)" }
     ],
-    notes: "実光線追跡で、絞り中心を通る主光線を求めて像面まで追跡します。\n\n返り値:\n- 像面到達時の主光線方向と光軸 Z のなす角の絶対値\n- 単位: deg\n\nparam1 は評価対象の Object 行です。数値 index に加えて object id 文字列も受け付けます。\nparam2 は任意の波長指定です。空欄なら Primary wavelength を使います。"
+    notes: "実光線追跡で、絞り中心を通る主光線を求めて像面まで追跡します。\n\n返り値:\n- 像面到達時の主光線方向と光軸 Z のなす角の絶対値（Chief@Image）\n- Object の Field角とは別の量\n- 単位: deg\n\nparam1 は評価対象の Object 行です。数値 index に加えて object id 文字列も受け付けます。\nparam2 は任意の波長指定です。空欄なら Primary wavelength を使います。"
   },
   "OPD_RMS_WAVES": {
     name: "Wavefront RMS OPD (waves)",

@@ -384,6 +384,7 @@ class SystemRequirementsEditor {
         EDGE: 'Edge Thickness',
         CTCT: 'Center Thickness',
         DBLT_K: 'Doublet Bending K',
+        CRA_DEG: 'Chief@Image (deg)',
         GAP: 'Gap Thickness',
         THIC: 'All Thickness',
         SDIST: 'Surface distance',

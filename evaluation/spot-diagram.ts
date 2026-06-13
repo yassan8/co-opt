@@ -1043,6 +1043,20 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
             if (mag < 1e-12) return null;
             return { x: dir.x / mag, y: dir.y / mag, z: dir.z / mag };
         })();
+        const chiefRayIndex = (() => {
+            const chiefPoint = spotPoints.find(p => p && p.isChiefRay === true && Number.isInteger(p.rayIndex));
+            return Number.isInteger(chiefPoint?.rayIndex) ? Number(chiefPoint.rayIndex) : 0;
+        })();
+        const chiefRayImageDir = __spot_computeChiefRayImageDirection(
+            opticalSystemRows,
+            rayStartPoints?.[chiefRayIndex],
+            primaryWavelength?.wavelength,
+            targetSurfaceIndex,
+            (options && typeof options === 'object' && options.traceOptions && typeof options.traceOptions === 'object')
+                ? options.traceOptions
+                : null
+        );
+        const chiefRayAngleDeg = __spot_computeChiefRayAngleDegFromDirection(chiefRayImageDir);
 
         if (shouldApplyCentroidOffset) {
             spotPoints.forEach(point => {
@@ -1099,6 +1113,8 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
             selectedRingOverride: selectedRingOverride,
             objectDir: chiefRayNormalized || (rayStartPoints.expectedChiefDir ? { ...rayStartPoints.expectedChiefDir } : null),
             expectedChiefDir: rayStartPoints.expectedChiefDir ? { ...rayStartPoints.expectedChiefDir } : null,
+            chiefImageDir: chiefRayImageDir ? { ...chiefRayImageDir } : null,
+            chiefRayAngleDeg: Number.isFinite(chiefRayAngleDeg) ? chiefRayAngleDeg : null,
             expectedChiefOrigin: rayStartPoints.expectedChiefOrigin ? { ...rayStartPoints.expectedChiefOrigin } : null,
             emissionBasis: emissionBasis,
             emissionPoints: emissionPatternPoints,
@@ -1501,6 +1517,53 @@ function rayPathPointIndexToSurfaceIndex(rows, pointIndex) {
         if (count === targetCount) return i;
     }
     return null;
+}
+
+function __spot_computeChiefRayImageDirection(rows, rayStart, wavelengthUm, targetSurfaceIndex, traceOptions = null) {
+    try {
+        if (!Array.isArray(rows) || rows.length === 0) return null;
+        if (!rayStart?.startP || !rayStart?.dir) return null;
+        if (!Number.isInteger(targetSurfaceIndex) || targetSurfaceIndex < 0) return null;
+
+        const ray0 = {
+            pos: rayStart.startP,
+            dir: rayStart.dir,
+            wavelength: Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : 0.5876,
+        };
+        const rayPath = traceRay(rows, ray0, 1.0, null, targetSurfaceIndex, traceOptions);
+        const targetPointIndex = surfaceIndexToRayPathPointIndex(rows, targetSurfaceIndex);
+        if (!Array.isArray(rayPath) || !Number.isInteger(targetPointIndex) || targetPointIndex <= 0 || rayPath.length <= targetPointIndex) {
+            return null;
+        }
+
+        const prevPoint = rayPath[targetPointIndex - 1];
+        const hitPoint = rayPath[targetPointIndex];
+        const dx = Number(hitPoint?.x) - Number(prevPoint?.x);
+        const dy = Number(hitPoint?.y) - Number(prevPoint?.y);
+        const dz = Number(hitPoint?.z) - Number(prevPoint?.z);
+        if (![dx, dy, dz].every(Number.isFinite)) return null;
+
+        const mag = Math.hypot(dx, dy, dz);
+        if (!(mag > 1e-12)) return null;
+
+        return {
+            x: dx / mag,
+            y: dy / mag,
+            z: dz / mag,
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
+function __spot_computeChiefRayAngleDegFromDirection(dir) {
+    const dx = Number(dir?.x);
+    const dy = Number(dir?.y);
+    const dz = Number(dir?.z);
+    if (![dx, dy, dz].every(Number.isFinite)) return null;
+    const transverse = Math.hypot(dx, dy);
+    const angleDeg = Math.atan2(transverse, Math.abs(dz)) * 180 / Math.PI;
+    return Number.isFinite(angleDeg) ? Math.abs(angleDeg) : null;
 }
 
 function __spot_withRayTraceFailureCapture(runTraceFn) {
@@ -2454,6 +2517,8 @@ export async function generateSpotDiagramAsync(
             selectedRingOverride: selectedRingOverride,
             objectDir: chiefRayNormalized || (rayStartPoints.expectedChiefDir ? { ...rayStartPoints.expectedChiefDir } : null),
             expectedChiefDir: rayStartPoints.expectedChiefDir ? { ...rayStartPoints.expectedChiefDir } : null,
+            chiefImageDir: chiefRayImageDir ? { ...chiefRayImageDir } : null,
+            chiefRayAngleDeg: Number.isFinite(chiefRayAngleDeg) ? chiefRayAngleDeg : null,
             expectedChiefOrigin: rayStartPoints.expectedChiefOrigin ? { ...rayStartPoints.expectedChiefOrigin } : null,
             emissionBasis: emissionBasis,
             emissionPoints: emissionPatternPoints,
@@ -3007,7 +3072,10 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         const angleInfo = (objectData.objectType === 'Angle')
             ? ` • Field(deg): (${fmtAngle(objectData.objectXHeightAngle)}, ${fmtAngle(objectData.objectYHeightAngle)})`
             : '';
-        objectTitle.textContent = `Object ${objectData.objectId} (${objectData.objectType}) - Success: ${rayInfo} rays (${successRate}%)${ringInfo}${angleInfo}`;
+        const chiefAngleInfo = Number.isFinite(Number(objectData.chiefRayAngleDeg))
+            ? ` • Chief@Image(deg): ${fmtAngle(objectData.chiefRayAngleDeg)}`
+            : '';
+        objectTitle.textContent = `Object ${objectData.objectId} (${objectData.objectType}) - Success: ${rayInfo} rays (${successRate}%)${ringInfo}${angleInfo}${chiefAngleInfo}`;
         objectTitle.style.cssText = 'margin: 0 0 10px 0; color: #555;';
         graphContainer.appendChild(objectTitle);
         
