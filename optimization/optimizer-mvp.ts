@@ -4843,8 +4843,285 @@ function captureEscapeVariableState(activeCfg) {
   });
 }
 
+function getEscapeSnapshotBaseFileName() {
+  let loadedName = '';
+  try {
+    const fromStorageApi = (typeof window !== 'undefined' && window.__cooptLoadedFileStorage && typeof window.__cooptLoadedFileStorage.getLoadedFileName === 'function')
+      ? window.__cooptLoadedFileStorage.getLoadedFileName()
+      : null;
+    loadedName = String(fromStorageApi || '').trim();
+  } catch (_) {}
+
+  if (!loadedName) {
+    try {
+      loadedName = String(localStorage.getItem('loadedFileName') || '').trim();
+    } catch (_) {}
+  }
+
+  if (!loadedName) {
+    try {
+      loadedName = String(window.__cooptLoadedFileNameRuntime || '').trim();
+    } catch (_) {}
+  }
+
+  if (!loadedName) {
+    return 'coopt';
+  }
+
+  const normalized = loadedName.replace(/\\/g, '/');
+  const leaf = normalized.split('/').pop() || normalized;
+  const noExt = leaf.replace(/\.[^.]+$/g, '');
+  const safe = noExt.replace(/[^0-9A-Za-z._-]/g, '_').replace(/_+/g, '_').trim();
+  return safe || 'coopt';
+}
+
+function formatEscapeSnapshotScoreToken(score) {
+  const numeric = Number(score);
+  if (!Number.isFinite(numeric)) return 'NaN';
+  const formatted = Number.isInteger(numeric)
+    ? String(numeric)
+    : Number(numeric.toFixed(6)).toString();
+  return formatted.replace(/[^0-9A-Za-z._-]/g, '_');
+}
+
+function buildEscapeSnapshotFileName(loopIndex, score) {
+  const base = getEscapeSnapshotBaseFileName();
+  const loopNum = String(Math.max(1, Number(loopIndex) || 1)).padStart(3, '0');
+  const scoreToken = formatEscapeSnapshotScoreToken(score);
+  return `${base}_${loopNum}_score_${scoreToken}.json`;
+}
+
+async function saveEscapeSnapshotToOpfs(payload, fileName) {
+  try {
+    if (typeof navigator === 'undefined') return false;
+    const storage = navigator?.storage;
+    if (!storage || typeof storage.getDirectory !== 'function') return false;
+
+    const root = await storage.getDirectory();
+    const dir = await root.getDirectoryHandle('coopt-escape-snapshots', { create: true });
+    const handle = await dir.getFileHandle(String(fileName || 'escape-snapshot.json'), { create: true });
+    const writable = await handle.createWritable();
+    const json = JSON.stringify(payload, null, 2);
+    await writable.write(`${json}\n`);
+    await writable.close();
+
+    try {
+      const key = 'coopt.escapeSnapshotsIndex';
+      const existing = JSON.parse(localStorage.getItem(key) || '[]');
+      const list = Array.isArray(existing) ? existing : [];
+      list.push({
+        fileName: String(fileName || ''),
+        savedAt: String(payload?.savedAt || new Date().toISOString()),
+        loopScore: Number(payload?.loopScore),
+        escapeLoop: Number(payload?.escapeLoop),
+      });
+      localStorage.setItem(key, JSON.stringify(list.slice(-2000)));
+    } catch (_) {}
+
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function downloadEscapeSnapshotJson(payload, fileName) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  try {
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([`${json}\n`], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = String(fileName || 'escape-snapshot.json');
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (_) {}
+}
+
+async function persistEscapeSnapshotJson(payload, fileName, mode = 'auto') {
+  const normalizedMode = String(mode || 'auto').trim().toLowerCase();
+
+  // In Chrome, OPFS enables prompt-free automatic file updates.
+  if (normalizedMode !== 'download') {
+    const savedToOpfs = await saveEscapeSnapshotToOpfs(payload, fileName);
+    if (savedToOpfs) return;
+    if (normalizedMode === 'opfs') return;
+  }
+
+  downloadEscapeSnapshotJson(payload, fileName);
+}
+
+async function readAllEscapeSnapshotsFromOpfs() {
+  const result = {
+    ok: false,
+    source: 'none',
+    count: 0,
+    snapshots: [] as any[],
+  };
+
+  try {
+    if (typeof navigator === 'undefined') return result;
+    const storage = (navigator as any)?.storage;
+    if (!storage || typeof storage.getDirectory !== 'function') return result;
+
+    const root = await storage.getDirectory();
+    const dir = await root.getDirectoryHandle('coopt-escape-snapshots', { create: true });
+    const entries: Array<{ name: string; handle: any }> = [];
+    for await (const [name, handle] of dir.entries()) {
+      entries.push({ name: String(name || ''), handle });
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    const snapshots: any[] = [];
+    for (const entry of entries) {
+      try {
+        if (!entry?.handle || entry.handle.kind !== 'file') continue;
+        const file = await entry.handle.getFile();
+        const text = await file.text();
+        let payload: any = null;
+        try {
+          payload = JSON.parse(text);
+        } catch (_) {
+          payload = null;
+        }
+        snapshots.push({
+          fileName: entry.name,
+          size: Number(file?.size) || 0,
+          lastModified: Number(file?.lastModified) || 0,
+          payload,
+          raw: payload == null ? text : undefined,
+        });
+      } catch (_) {}
+    }
+
+    return {
+      ok: true,
+      source: 'opfs',
+      count: snapshots.length,
+      snapshots,
+    };
+  } catch (_) {
+    return result;
+  }
+}
+
+function normalizeZipFileName(fileName) {
+  const raw = String(fileName || 'escape-snapshots-archive.zip').trim();
+  if (!raw) return 'escape-snapshots-archive.zip';
+  return raw.toLowerCase().endsWith('.zip') ? raw : `${raw}.zip`;
+}
+
+function sanitizeZipEntryFileName(name, fallback = 'snapshot') {
+  const base = String(name || fallback)
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return base || String(fallback || 'snapshot');
+}
+
+async function buildEscapeSnapshotsZipBlob(archive) {
+  const mod = await import('jszip');
+  const JSZipCtor = (mod as any)?.default || mod;
+  const zip = new JSZipCtor();
+  zip.file('archive-metadata.json', `${JSON.stringify({
+    exportedAt: archive?.exportedAt,
+    format: archive?.format,
+    source: archive?.source,
+    count: archive?.count,
+  }, null, 2)}\n`);
+
+  const snapshots = Array.isArray(archive?.snapshots) ? archive.snapshots : [];
+  const snapshotsDir = zip.folder('snapshots');
+  for (let i = 0; i < snapshots.length; i++) {
+    const entry = snapshots[i] || {};
+    const sourceName = sanitizeZipEntryFileName(entry.fileName || `snapshot_${String(i + 1).padStart(3, '0')}.json`);
+    const zipName = sourceName.toLowerCase().endsWith('.json') ? sourceName : `${sourceName}.json`;
+    const text = entry?.payload == null
+      ? String(entry?.raw ?? '')
+      : JSON.stringify(entry.payload, null, 2);
+    if (snapshotsDir && typeof snapshotsDir.file === 'function') {
+      snapshotsDir.file(zipName, `${text}\n`);
+    } else {
+      zip.file(`snapshots/${zipName}`, `${text}\n`);
+    }
+  }
+
+  return await zip.generateAsync({
+    type: 'blob',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  });
+}
+
+async function downloadEscapeSnapshotsArchiveZip(archive, fileName) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+  try {
+    const blob = await buildEscapeSnapshotsZipBlob(archive);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = normalizeZipFileName(fileName);
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function exportEscapeSnapshotsArchive(options = {}) {
+  const source = isPlainObject(options) ? options : {};
+  const baseName = getEscapeSnapshotBaseFileName();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const fileName = normalizeZipFileName(source.fileName || `${baseName}_escape_snapshots_${stamp}.zip`);
+
+  const opfsRead = await readAllEscapeSnapshotsFromOpfs();
+  const archive = {
+    exportedAt: new Date().toISOString(),
+    format: 'coopt-escape-snapshots-archive-v1',
+    source: opfsRead.source,
+    count: Number(opfsRead.count) || 0,
+    snapshots: Array.isArray(opfsRead.snapshots) ? opfsRead.snapshots : [],
+  };
+
+  if (source.download !== false) {
+    await downloadEscapeSnapshotsArchiveZip(archive, fileName);
+  }
+
+  return {
+    ok: true,
+    fileName,
+    count: archive.count,
+    archive,
+  };
+}
+
+async function listEscapeSnapshots() {
+  const opfsRead = await readAllEscapeSnapshotsFromOpfs();
+  return {
+    ok: true,
+    source: opfsRead.source,
+    count: Number(opfsRead.count) || 0,
+    files: (Array.isArray(opfsRead.snapshots) ? opfsRead.snapshots : []).map((entry) => ({
+      fileName: String(entry?.fileName || ''),
+      size: Number(entry?.size) || 0,
+      lastModified: Number(entry?.lastModified) || 0,
+      escapeLoop: Number(entry?.payload?.escapeLoop),
+      loopScore: Number(entry?.payload?.loopScore),
+      savedAt: String(entry?.payload?.savedAt || ''),
+    })),
+  };
+}
+
 async function runEscapeFunctionGlobalOptimization(options = {}) {
   const outerOpts = isPlainObject(options) ? { ...options } : {};
+  const escapeSnapshotSaveMode = String(outerOpts.escapeSnapshotSaveMode || 'auto').trim().toLowerCase();
   const methodRaw = String(outerOpts.method || 'global').trim().toLowerCase();
   const innerMethodRaw = String(
     outerOpts.escapeInnerMethod
@@ -4921,6 +5198,35 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
     const candidateScore = Number.isFinite(actualScore)
       ? actualScore
       : Number(result?.objectiveScore ?? result?.best ?? Number.NaN);
+
+    // Persist a JSON snapshot for each escape iteration.
+    try {
+      const snapshotSystemConfig = loadSystemConfigurationsRaw();
+      const snapshotRows = (() => {
+        try {
+          if (typeof window !== 'undefined' && typeof window.getOpticalSystemRows === 'function') {
+            const rows = window.getOpticalSystemRows(window.tableOpticalSystem);
+            return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+          }
+        } catch (_) {}
+        return [];
+      })();
+      const payload = {
+        savedAt: new Date().toISOString(),
+        optimizer: 'global-escape',
+        escapeLoop: loopIndex + 1,
+        escapeLoops: outerLoops,
+        loopScore: Number.isFinite(candidateScore) ? candidateScore : null,
+        bestScoreAtSave: Number.isFinite(bestScore) ? bestScore : null,
+        innerMethod,
+        maxIterations: targetIterations,
+        totalIterations,
+        systemConfigSnapshot: snapshotSystemConfig,
+        opticalSystemRowsSnapshot: snapshotRows,
+      };
+      const fileName = buildEscapeSnapshotFileName(loopIndex + 1, candidateScore);
+      await persistEscapeSnapshotJson(payload, fileName, escapeSnapshotSaveMode);
+    } catch (_) {}
 
     if (!bestResult || (Number.isFinite(candidateScore) && candidateScore < bestScore)) {
       bestResult = result;
@@ -11674,6 +11980,8 @@ if (typeof window !== 'undefined') {
     exportMatrixFreeCsv: exportMatrixFreeBenchmarkCsv,
     exportMatrixFreeJson: exportMatrixFreeBenchmarkJson,
     exportGlobalVsKktJson: exportGlobalVsKktBenchmarkJson,
+    exportEscapeSnapshotsArchive,
+    listEscapeSnapshots,
     pickAnalyticCandidates: pickAnalyticDerivativeCandidates,
     stop: () => {
       __optimizerStopRequested = true;

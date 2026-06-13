@@ -2583,6 +2583,8 @@ export default function App() {
     bestRequirementScore: NaN,
     acceptCount: 0,
     rejectCount: 0,
+    escapeLoop: null,
+    escapeLoops: null,
     issue: '-',
     percent: 0,
     progressEvents: [],
@@ -7752,6 +7754,8 @@ const collectLegacyCrossRays = async (
         iterations: 0,
         acceptCount: 0,
         rejectCount: 0,
+        escapeLoop: null,
+        escapeLoops: null,
         issue: '-',
         percent: 0,
         progressEvents: [],
@@ -8337,6 +8341,8 @@ const collectLegacyCrossRays = async (
               phase,
               modeUsed: progressMethod || optMethod,
               iterations: iter,
+              escapeLoop: Number.isFinite(Number(ev?.escapeLoop)) ? Number(ev.escapeLoop) : prev.escapeLoop,
+              escapeLoops: Number.isFinite(Number(ev?.escapeLoops)) ? Number(ev.escapeLoops) : prev.escapeLoops,
               meritBefore: prev.meritBefore,
               meritAfter: Number.isFinite(displayScore) ? displayScore : prev.meritAfter,
               requirementScoreBefore: prev.requirementScoreBefore,
@@ -8658,6 +8664,44 @@ const collectLegacyCrossRays = async (
       }
     };
 
+    const exportEscapeSnapshots = async () => {
+      try {
+        const w = window as any;
+        const hostWindow = getOptimizeHostWindow();
+        const candidates = [w, hostWindow, w?.opener];
+        let exporter: any = null;
+        for (const candidate of candidates) {
+          if (!candidate || candidate.closed) continue;
+          const opt = candidate.OptimizationMVP;
+          if (opt && typeof opt.exportEscapeSnapshotsArchive === 'function') {
+            exporter = opt.exportEscapeSnapshotsArchive.bind(opt);
+            break;
+          }
+        }
+
+        if (!exporter) {
+          setOptimizeState((prev: any) => ({
+            ...prev,
+            issue: 'Export unavailable: OptimizationMVP.exportEscapeSnapshotsArchive not found',
+          }));
+          return;
+        }
+
+        const out = await exporter({ download: true });
+        const count = Number(out?.count) || 0;
+        const fileName = String(out?.fileName || 'escape-snapshots-archive.json');
+        setOptimizeState((prev: any) => ({
+          ...prev,
+          issue: `Exported ${count} snapshots: ${fileName}`,
+        }));
+      } catch (err) {
+        setOptimizeState((prev: any) => ({
+          ...prev,
+          issue: `Export failed: ${(err as any)?.message || String(err)}`,
+        }));
+      }
+    };
+
     const optimizeDisplayScore = Number.isFinite(Number(optimizeState?.requirementScoreTable))
       ? Number(optimizeState.requirementScoreTable)
       : (Number.isFinite(Number(optimizeState?.requirementScoreAfter))
@@ -8666,6 +8710,17 @@ const collectLegacyCrossRays = async (
     const optimizeDisplayBest = Number.isFinite(Number(optimizeState?.bestRequirementScore))
       ? Number(optimizeState.bestRequirementScore)
       : (Number.isFinite(Number(optimizeState?.best)) ? Number(optimizeState.best) : Number.NaN);
+    const optimizeEscapeLoopLabel = (() => {
+      const loop = Number(optimizeState?.escapeLoop);
+      const loops = Number(optimizeState?.escapeLoops);
+      if (Number.isFinite(loop) && Number.isFinite(loops) && loops > 0) {
+        return `${Math.max(0, Math.floor(loop))} / ${Math.max(0, Math.floor(loops))}`;
+      }
+      if (Number.isFinite(loop) && loop > 0) {
+        return `${Math.max(0, Math.floor(loop))}`;
+      }
+      return '-';
+    })();
 
     return (
       <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#f4f4f4', color: '#222', padding: 12, boxSizing: 'border-box', gap: 10 }}>
@@ -8676,7 +8731,6 @@ const collectLegacyCrossRays = async (
           </div>
           <div style={{ fontSize: 12, color: '#666', flex: '0 0 auto' }}>{optRunning ? 'Running' : String(optimizeState?.status || 'Idle')}</div>
         </div>
-        <div style={{ fontSize: 12, color: '#555' }}>Updates per candidate evaluation (±step)</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button type="button" disabled={optRunning} onClick={() => { void runOptimize(); }} style={{ padding: '6px 10px' }}>Run</button>
           <button type="button" disabled={!optRunning} onClick={() => {
@@ -8695,6 +8749,7 @@ const collectLegacyCrossRays = async (
             } catch (_) {}
             setOptimizeState((prev: any) => ({ ...prev, phase: 'stopping', issue: 'Stop requested...' }));
           }} style={{ padding: '6px 10px' }}>Stop</button>
+          <button type="button" disabled={optRunning} onClick={() => { void exportEscapeSnapshots(); }} style={{ padding: '6px 10px' }}>Export Snapshots</button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -8760,6 +8815,7 @@ const collectLegacyCrossRays = async (
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Phase</span><span>{String(optimizeState?.phase || '-')}</span></div>
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Decision</span><span>{String(optimizeState?.phase === 'accept' ? 'ACCEPT' : optimizeState?.phase === 'reject' ? 'REJECT' : '-')}</span></div>
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Accept/Reject</span><span>{`${Number(optimizeState?.acceptCount || 0)} / ${Number(optimizeState?.rejectCount || 0)}`}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Escape</span><span>{optimizeEscapeLoopLabel}</span></div>
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Iter</span><span>{String(optimizeState?.iterations ?? 0)}</span></div>
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Vars</span><span>{String(optimizeState?.variableCount ?? 0)}</span></div>
           <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Req</span><span>{String(optimizeState?.requirementCount ?? '-')}</span></div>
