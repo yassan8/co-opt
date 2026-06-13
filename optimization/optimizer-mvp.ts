@@ -4954,6 +4954,42 @@ async function persistEscapeSnapshotJson(payload, fileName, mode = 'auto') {
   downloadEscapeSnapshotJson(payload, fileName);
 }
 
+async function clearEscapeSnapshotsInOpfs() {
+  const out = { ok: false, deleted: 0 };
+  try {
+    if (typeof navigator === 'undefined') {
+      try { localStorage.removeItem('coopt.escapeSnapshotsIndex'); } catch (_) {}
+      return out;
+    }
+    const storage = (navigator as any)?.storage;
+    if (!storage || typeof storage.getDirectory !== 'function') {
+      try { localStorage.removeItem('coopt.escapeSnapshotsIndex'); } catch (_) {}
+      return out;
+    }
+
+    const root = await storage.getDirectory();
+    const dir = await root.getDirectoryHandle('coopt-escape-snapshots', { create: true });
+    const names: string[] = [];
+    for await (const [name] of dir.entries()) {
+      names.push(String(name || ''));
+    }
+    for (const name of names) {
+      if (!name) continue;
+      try {
+        await dir.removeEntry(name, { recursive: true } as any);
+        out.deleted += 1;
+      } catch (_) {}
+    }
+
+    try { localStorage.removeItem('coopt.escapeSnapshotsIndex'); } catch (_) {}
+    out.ok = true;
+    return out;
+  } catch (_) {
+    try { localStorage.removeItem('coopt.escapeSnapshotsIndex'); } catch (_) {}
+    return out;
+  }
+}
+
 async function readAllEscapeSnapshotsFromOpfs() {
   const result = {
     ok: false,
@@ -5121,6 +5157,7 @@ async function listEscapeSnapshots() {
 
 async function runEscapeFunctionGlobalOptimization(options = {}) {
   const outerOpts = isPlainObject(options) ? { ...options } : {};
+  const escapeSnapshotResetOnRun = outerOpts.escapeSnapshotResetOnRun !== false;
   const escapeSnapshotSaveMode = String(outerOpts.escapeSnapshotSaveMode || 'auto').trim().toLowerCase();
   const methodRaw = String(outerOpts.method || 'global').trim().toLowerCase();
   const innerMethodRaw = String(
@@ -5165,6 +5202,13 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   let bestSystemConfigSnapshot = null;
   let bestOpticalSystemRowsSnapshot = null;
   let totalIterations = 0;
+
+  // Start each Global(Escape) run from a clean snapshot set to avoid mixing old files.
+  if (escapeSnapshotResetOnRun) {
+    try {
+      await clearEscapeSnapshotsInOpfs();
+    } catch (_) {}
+  }
 
   for (let loopIndex = 0; loopIndex < outerLoops; loopIndex++) {
     if (shouldStop && shouldStop()) break;
