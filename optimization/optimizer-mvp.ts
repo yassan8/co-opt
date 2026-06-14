@@ -5242,6 +5242,9 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
     const candidateScore = Number.isFinite(actualScore)
       ? actualScore
       : Number(result?.objectiveScore ?? result?.best ?? Number.NaN);
+    const escapeBestScoreAtSave = Number.isFinite(candidateScore)
+      ? Math.min(bestScore, candidateScore)
+      : bestScore;
 
     // Persist a JSON snapshot for each escape iteration.
     try {
@@ -5261,14 +5264,14 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
         escapeLoop: loopIndex + 1,
         escapeLoops: outerLoops,
         loopScore: Number.isFinite(candidateScore) ? candidateScore : null,
-        bestScoreAtSave: Number.isFinite(bestScore) ? bestScore : null,
+        bestScoreAtSave: Number.isFinite(escapeBestScoreAtSave) ? escapeBestScoreAtSave : null,
         innerMethod,
         maxIterations: targetIterations,
         totalIterations,
         systemConfigSnapshot: snapshotSystemConfig,
         opticalSystemRowsSnapshot: snapshotRows,
       };
-      const fileName = buildEscapeSnapshotFileName(loopIndex + 1, candidateScore);
+      const fileName = buildEscapeSnapshotFileName(loopIndex + 1, escapeBestScoreAtSave);
       await persistEscapeSnapshotJson(payload, fileName, escapeSnapshotSaveMode);
     } catch (_) {}
 
