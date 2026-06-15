@@ -358,7 +358,7 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     notes: "横収差図（Transverse Aberration）を内部計算し、指定 Source/Object の評価で RMS を返します。\n\n定義:\n- 評価面: Image面\n- Component=total: meridional + sagittal の transverseAberration を合算して RMS = sqrt(mean(T^2))\n- Component=meridional: メリジオナルのみで RMS\n- Component=sagittal: サジタルのみで RMS\n- 単位: µm（計算値 mm を ×1000）"
   },
   "LCA_RMS_UM": {
-    name: "Lateral chromatic aberration RMS",
+    name: "Lateral chromatic RMS",
     description: "RMS of lateral chromatic aberration from the LCA analysis curve (d-line excluded).",
     parameters: [
       { key: "param1", label: "Samples", description: "Field sample count for 0..max field (default 21)" }
