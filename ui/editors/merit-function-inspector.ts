@@ -357,6 +357,14 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "横収差図（Transverse Aberration）を内部計算し、指定 Source/Object の評価で RMS を返します。\n\n定義:\n- 評価面: Image面\n- Component=total: meridional + sagittal の transverseAberration を合算して RMS = sqrt(mean(T^2))\n- Component=meridional: メリジオナルのみで RMS\n- Component=sagittal: サジタルのみで RMS\n- 単位: µm（計算値 mm を ×1000）"
   },
+  "LCA_RMS_UM": {
+    name: "Lateral chromatic aberration RMS",
+    description: "RMS of lateral chromatic aberration from the LCA analysis curve (d-line excluded).",
+    parameters: [
+      { key: "param1", label: "Samples", description: "Field sample count for 0..max field (default 21)" }
+    ],
+    notes: "Lateral Chromatic Aberration 解析と同じ計算経路（runNativeMagnificationChromaticAberration）で得た displacement(mm) を RMS 化して返します。\n\n定義:\n- 対象波長: d-line(0.5876µm)を除く全波長\n- 重み: 一様重み\n- RMS = sqrt(mean(displacement^2))\n- 単位: µm（mm × 1000）\n\nparam1: フィールドサンプル数（2以上、既定21）"
+  },
   "CRA_DEG": {
     name: "Chief@Image (deg)",
     description: "Absolute chief ray angle at the image surface relative to the global optical axis (Z), not the object field angle.",

@@ -1639,6 +1639,9 @@ class MeritFunctionEditor {
             case 'LA_RMS_UM':
                 return this.calculateLongitudinalAberrationRmsUm(operand, opticalSystemData);
 
+            case 'LCA_RMS_UM':
+                return this.calculateLateralChromaticAberrationRmsUm(operand, opticalSystemData);
+
             case 'SA':
                 return this.calculateSphericalAberrationUm(operand, opticalSystemData);
 
@@ -2366,6 +2369,14 @@ class MeritFunctionEditor {
                 }
                 return this.calculateOperandValue(operand);
             }
+            case 'LCA_RMS_UM': {
+                if (disableRequirementRustFirst) return this.calculateOperandValue(operand);
+                const nativeVal = await this.calculateLateralChromaticAberrationRmsUmViaNativeAsync(operand, opticalSystemData);
+                if (Number.isFinite(nativeVal as any)) {
+                    return Number(nativeVal);
+                }
+                return this.calculateOperandValue(operand);
+            }
             case 'CRA_DEG': {
                 return withRequirementRustRayTracing(async () => {
                     const renderVal = await this.calculateChiefRayAngleDegViaRenderAsync(operand, opticalSystemData);
@@ -2637,6 +2648,264 @@ class MeritFunctionEditor {
         }
     }
 
+    calculateLateralChromaticAberrationRmsUm(operand: any, opticalSystemData: any[]): number {
+        try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+            const normalizedRows = Array.isArray(objectRows) ? objectRows : [];
+
+            const inferObjectFieldMode = (objects: any[]) => {
+                const pickTag = (o: any) => {
+                    const raw = o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type;
+                    return (raw ?? '').toString().toLowerCase();
+                };
+                const tags = objects.map(pickTag).filter(Boolean);
+                const hasImageHeight = tags.some((t: string) => t.includes('imageheight') || t.includes('image height'));
+                if (hasImageHeight) return { mode: 'imageheight' };
+                const hasRect = tags.some((t: string) => t.includes('rect') || t.includes('rectangle'));
+                const hasHeight = tags.some((t: string) => t.includes('height'));
+                if (hasRect || hasHeight) return { mode: 'height' };
+                const hasAngle = tags.some((t: string) => t.includes('angle'));
+                if (hasAngle) return { mode: 'angle' };
+                const heightCandidates = objects
+                    .map((o: any) => parseFloat(o?.yHeight ?? o?.y ?? NaN))
+                    .filter((v: any) => Number.isFinite(v));
+                if (heightCandidates.length > 0) return { mode: 'height' };
+                return { mode: 'angle' };
+            };
+
+            const fieldMode = inferObjectFieldMode(normalizedRows);
+            const heightMode = fieldMode.mode === 'height';
+            const rawFieldValues = normalizedRows
+                .map((o: any) => {
+                    if (heightMode) {
+                        return parseFloat(o?.yHeight ?? o?.y ?? o?.yHeightAngle ?? NaN);
+                    }
+                    return parseFloat(o?.yHeightAngle ?? o?.yFieldAngle ?? o?.yAngle ?? o?.fieldAngle ?? o?.y ?? NaN);
+                })
+                .filter((v: any) => Number.isFinite(v))
+                .map((v: number) => Math.abs(v));
+
+            if (rawFieldValues.length === 0) return 0;
+            const maxFieldValue = Math.max(...rawFieldValues.map((v: number) => Number(v)));
+            if (!Number.isFinite(maxFieldValue) || maxFieldValue <= 0) return 0;
+
+            const pointCountRaw = (operand?.param1 !== undefined && operand?.param1 !== null)
+                ? String(operand.param1).trim()
+                : '';
+            let pointCount = (pointCountRaw === '') ? 21 : Math.floor(Number(pointCountRaw));
+            if (!Number.isFinite(pointCount) || pointCount < 2) pointCount = 21;
+            if (pointCount > 201) pointCount = 201;
+
+            const fieldValues: number[] = [];
+            if (pointCount <= 1) {
+                fieldValues.push(maxFieldValue);
+            } else {
+                for (let i = 0; i < pointCount; i++) {
+                    const v = (maxFieldValue * i) / (pointCount - 1);
+                    fieldValues.push(Number(v.toFixed(6)));
+                }
+            }
+
+            const normalizeUm = (raw: any) => {
+                const n = Number(raw);
+                if (!Number.isFinite(n) || n <= 0) return null;
+                return n > 10 ? (n / 1000) : n;
+            };
+            const fallbackWavelengths = [0.4358, 0.5876, 0.6563];
+            const wavelengths = (() => {
+                const rows = Array.isArray(sourceRows) ? sourceRows : [];
+                const unique: number[] = [];
+                for (const row of rows) {
+                    const wl = normalizeUm(row?.wavelength ?? row?.Wavelength);
+                    if (wl === null) continue;
+                    if (!unique.some((w) => Math.abs(w - wl) < 1e-12)) unique.push(wl);
+                    if (unique.length >= 6) break;
+                }
+                return unique.length > 0 ? unique : fallbackWavelengths.slice();
+            })();
+
+            const referenceWavelength = 0.5876;
+            if (!wavelengths.some((w) => Math.abs(w - referenceWavelength) < 1e-6)) {
+                wavelengths.push(referenceWavelength);
+                wavelengths.sort((a, b) => a - b);
+            }
+
+            const cfgKey = (operand?.configId !== undefined && operand?.configId !== null)
+                ? String(operand.configId)
+                : 'active';
+            const cacheKey = [
+                'lca-rms-um',
+                cfgKey,
+                String(maxFieldValue),
+                String(pointCount),
+                String(wavelengths.join(',')),
+                String(fieldMode.mode),
+            ].join('|');
+            const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
+            if (Number.isFinite(cached)) {
+                return Number(cached);
+            }
+            return 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    async calculateLateralChromaticAberrationRmsUmViaNativeAsync(operand: any, opticalSystemData: any[]): Promise<number | null> {
+        try {
+            const ipcMod = await import('../../src/desktop/ipc/client.ts');
+            if (!ipcMod || typeof ipcMod.runNativeMagnificationChromaticAberration !== 'function') {
+                return null;
+            }
+
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+            const normalizedRows = Array.isArray(objectRows) ? objectRows : [];
+            if (normalizedRows.length === 0) return null;
+
+            const inferObjectFieldMode = (objects: any[]) => {
+                const pickTag = (o: any) => {
+                    const raw = o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type;
+                    return (raw ?? '').toString().toLowerCase();
+                };
+                const tags = objects.map(pickTag).filter(Boolean);
+                const hasImageHeight = tags.some((t: string) => t.includes('imageheight') || t.includes('image height'));
+                if (hasImageHeight) return { mode: 'imageheight' };
+                const hasRect = tags.some((t: string) => t.includes('rect') || t.includes('rectangle'));
+                const hasHeight = tags.some((t: string) => t.includes('height'));
+                if (hasRect || hasHeight) return { mode: 'height' };
+                const hasAngle = tags.some((t: string) => t.includes('angle'));
+                if (hasAngle) return { mode: 'angle' };
+                const heightCandidates = objects
+                    .map((o: any) => parseFloat(o?.yHeight ?? o?.y ?? NaN))
+                    .filter((v: any) => Number.isFinite(v));
+                if (heightCandidates.length > 0) return { mode: 'height' };
+                return { mode: 'angle' };
+            };
+
+            const fieldMode = inferObjectFieldMode(normalizedRows);
+            const imageHeightMode = fieldMode.mode === 'imageheight';
+            const heightMode = fieldMode.mode === 'height';
+            const rawFieldValues = normalizedRows
+                .map((o: any) => {
+                    if (heightMode) {
+                        return parseFloat(o?.yHeight ?? o?.y ?? o?.yHeightAngle ?? NaN);
+                    }
+                    return parseFloat(o?.yHeightAngle ?? o?.yFieldAngle ?? o?.yAngle ?? o?.fieldAngle ?? o?.y ?? NaN);
+                })
+                .filter((v: any) => Number.isFinite(v))
+                .map((v: number) => Math.abs(v));
+
+            if (rawFieldValues.length === 0) return 0;
+            const maxFieldValue = Math.max(...rawFieldValues.map((v: number) => Number(v)));
+            if (!Number.isFinite(maxFieldValue) || maxFieldValue <= 0) return 0;
+
+            const pointCountRaw = (operand?.param1 !== undefined && operand?.param1 !== null)
+                ? String(operand.param1).trim()
+                : '';
+            let pointCount = (pointCountRaw === '') ? 21 : Math.floor(Number(pointCountRaw));
+            if (!Number.isFinite(pointCount) || pointCount < 2) pointCount = 21;
+            if (pointCount > 201) pointCount = 201;
+
+            const fieldValues: number[] = [];
+            if (pointCount <= 1) {
+                fieldValues.push(maxFieldValue);
+            } else {
+                for (let i = 0; i < pointCount; i++) {
+                    const v = (maxFieldValue * i) / (pointCount - 1);
+                    fieldValues.push(Number(v.toFixed(6)));
+                }
+            }
+
+            const normalizeUm = (raw: any) => {
+                const n = Number(raw);
+                if (!Number.isFinite(n) || n <= 0) return null;
+                return n > 10 ? (n / 1000) : n;
+            };
+            const fallbackWavelengths = [0.4358, 0.5876, 0.6563];
+            const wavelengths = (() => {
+                const rows = Array.isArray(sourceRows) ? sourceRows : [];
+                const unique: number[] = [];
+                for (const row of rows) {
+                    const wl = normalizeUm(row?.wavelength ?? row?.Wavelength);
+                    if (wl === null) continue;
+                    if (!unique.some((w) => Math.abs(w - wl) < 1e-12)) unique.push(wl);
+                    if (unique.length >= 6) break;
+                }
+                return unique.length > 0 ? unique : fallbackWavelengths.slice();
+            })();
+
+            const referenceWavelength = 0.5876;
+            if (!wavelengths.some((w) => Math.abs(w - referenceWavelength) < 1e-6)) {
+                wavelengths.push(referenceWavelength);
+                wavelengths.sort((a, b) => a - b);
+            }
+
+            const cfgKey = (operand?.configId !== undefined && operand?.configId !== null)
+                ? String(operand.configId)
+                : 'active';
+            const cacheKey = [
+                'lca-rms-um',
+                cfgKey,
+                String(maxFieldValue),
+                String(pointCount),
+                String(wavelengths.join(',')),
+                String(fieldMode.mode),
+            ].join('|');
+            const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
+            if (Number.isFinite(cached)) return Number(cached);
+
+            const response = await ipcMod.runNativeMagnificationChromaticAberration({
+                opticalSystemRows: opticalSystemData,
+                sourceRows,
+                fieldSamples: fieldValues,
+                wavelengths,
+                referenceWavelength,
+                heightMode,
+                imageHeightMode,
+                rayCount: 101,
+                ringCount: 3,
+                chiefRayDefinition: 'stop-center',
+            } as any);
+
+            const dataByWavelength = Array.isArray(response?.dataByWavelength) ? response.dataByWavelength : [];
+            let sumSq = 0;
+            let count = 0;
+            for (const entry of dataByWavelength) {
+                const wl = Number(entry?.wavelength);
+                if (!Number.isFinite(wl)) continue;
+                if (Math.abs(wl - referenceWavelength) < 1e-6) continue;
+                const displacements = Array.isArray(entry?.displacements) ? entry.displacements : [];
+                for (const rawDisp of displacements) {
+                    const dispMm = Number(rawDisp);
+                    if (!Number.isFinite(dispMm)) continue;
+                    sumSq += dispMm * dispMm;
+                    count += 1;
+                }
+            }
+
+            const rmsUm = (count > 0) ? (Math.sqrt(sumSq / count) * 1000) : 0;
+            this.stampRequirementBackend('lca', {
+                backend: String(response?.backend || response?.meta?.backend || 'unknown'),
+                route: 'ipc-wrapper',
+                operand: 'LCA_RMS_UM',
+                configId: operand?.configId ?? '',
+                referenceWavelength,
+                wavelengths,
+                pointCount,
+                heightMode,
+                imageHeightMode,
+                sampleCount: count,
+                rmsUm,
+            });
+            if (this._runtimeCache) this._runtimeCache.set(cacheKey, rmsUm);
+            return Number.isFinite(rmsUm) ? rmsUm : null;
+        } catch {
+            return null;
+        }
+    }
+
     calculateOpdRmsWaves(operand: any, opticalSystemData: any[]): number {
         try {
             if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return Number.NaN;
@@ -2776,7 +3045,7 @@ class MeritFunctionEditor {
         }
     }
 
-    private stampRequirementBackend(kind: 'spot' | 'ta' | 'cra' | 'paraxial' | 'seidel', payload: Record<string, any>): void {
+    private stampRequirementBackend(kind: 'spot' | 'ta' | 'cra' | 'paraxial' | 'seidel' | 'lca', payload: Record<string, any>): void {
         try {
             if (typeof window === 'undefined') return;
 
@@ -2788,7 +3057,9 @@ class MeritFunctionEditor {
                     ? '__cooptLastTransverseAberrationDebug'
                     : (kind === 'cra'
                         ? '__cooptLastChiefRayDebug'
-                        : (kind === 'paraxial' ? '__cooptLastParaxialMetricsDebug' : '__cooptLastSeidelDebug')));
+                        : (kind === 'paraxial'
+                            ? '__cooptLastParaxialMetricsDebug'
+                            : (kind === 'lca' ? '__cooptLastLcaDebug' : '__cooptLastSeidelDebug'))));
             const currentStore = (w as any)[storeKey];
             const nextStore = (currentStore && typeof currentStore === 'object') ? currentStore : {};
             Object.assign(nextStore, {
