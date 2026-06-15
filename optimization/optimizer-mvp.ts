@@ -5058,6 +5058,16 @@ function sanitizeZipEntryFileName(name, fallback = 'snapshot') {
   return base || String(fallback || 'snapshot');
 }
 
+function getEscapeSnapshotZipEntryName(entry, index) {
+  const payload = entry && typeof entry === 'object' ? entry.payload : null;
+  const escapeLoop = Math.max(1, Number(payload?.escapeLoop) || Number(index) || 1);
+  const bestScore = Number(payload?.bestScoreAtSave);
+  if (Number.isFinite(bestScore)) {
+    return buildEscapeSnapshotFileName(escapeLoop, bestScore);
+  }
+  return String(entry?.fileName || `snapshot_${String(Math.max(1, Number(index) || 1)).padStart(3, '0')}.json`);
+}
+
 async function buildEscapeSnapshotsZipBlob(archive) {
   const mod = await import('jszip');
   const JSZipCtor = (mod as any)?.default || mod;
@@ -5073,7 +5083,7 @@ async function buildEscapeSnapshotsZipBlob(archive) {
   const snapshotsDir = zip.folder('snapshots');
   for (let i = 0; i < snapshots.length; i++) {
     const entry = snapshots[i] || {};
-    const sourceName = sanitizeZipEntryFileName(entry.fileName || `snapshot_${String(i + 1).padStart(3, '0')}.json`);
+    const sourceName = sanitizeZipEntryFileName(getEscapeSnapshotZipEntryName(entry, i + 1));
     const zipName = sourceName.toLowerCase().endsWith('.json') ? sourceName : `${sourceName}.json`;
     const text = entry?.payload == null
       ? String(entry?.raw ?? '')
