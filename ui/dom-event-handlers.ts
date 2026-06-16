@@ -2321,6 +2321,12 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
 
 async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: string } = {}): Promise<boolean> {
     const displayName = options?.filename || 'shared-link.json';
+    try { (window as any).__cooptLastLoadFailureReason = ''; } catch (_) {}
+    const failLoad = (reason: string, detail?: any): false => {
+        try { (window as any).__cooptLastLoadFailureReason = String(reason || 'unknown-load-failure'); } catch (_) {}
+        try { console.error('❌ [Load] ' + reason, detail); } catch (_) {}
+        return false;
+    };
     const loadSessionId = (() => {
         try {
             const next = Number((window as any).__cooptFileLoadSessionId || 0) + 1;
@@ -2341,6 +2347,65 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 
     try {
         (window as any).__cooptSuppressStartupConfigApplyUntil = Date.now() + 5000;
+    } catch (_) {}
+
+    // Accept optimizer escape snapshot wrapper files directly.
+    // Snapshot files store the design under `systemConfigSnapshot`.
+    try {
+        const maybeSnapshot = allData as any;
+        let wrappedConfig = maybeSnapshot?.systemConfigSnapshot;
+        if (!wrappedConfig && maybeSnapshot?.payload && typeof maybeSnapshot.payload === 'object') {
+            wrappedConfig = maybeSnapshot.payload.systemConfigSnapshot;
+        }
+        if (wrappedConfig && typeof wrappedConfig === 'object' && Array.isArray(wrappedConfig.configurations)) {
+            allData = wrappedConfig;
+
+            // If a rows snapshot exists, inject it into the active configuration.
+            // This preserves the exact row state captured at snapshot save time.
+            const rowsSnapshot = Array.isArray(maybeSnapshot?.opticalSystemRowsSnapshot)
+                ? maybeSnapshot.opticalSystemRowsSnapshot
+                : (Array.isArray(maybeSnapshot?.payload?.opticalSystemRowsSnapshot)
+                    ? maybeSnapshot.payload.opticalSystemRowsSnapshot
+                    : null);
+            const mergedRequirements = Array.isArray(maybeSnapshot?.systemRequirements)
+                ? maybeSnapshot.systemRequirements
+                : (Array.isArray(maybeSnapshot?.payload?.systemRequirements)
+                    ? maybeSnapshot.payload.systemRequirements
+                    : null);
+            if (mergedRequirements && mergedRequirements.length > 0 && !Array.isArray((allData as any).systemRequirements)) {
+                (allData as any).systemRequirements = mergedRequirements;
+            }
+            if (Array.isArray(maybeSnapshot?.meritFunction) && !Array.isArray((allData as any).meritFunction)) {
+                (allData as any).meritFunction = maybeSnapshot.meritFunction;
+            }
+            if (Array.isArray(maybeSnapshot?.payload?.meritFunction) && !Array.isArray((allData as any).meritFunction)) {
+                (allData as any).meritFunction = maybeSnapshot.payload.meritFunction;
+            }
+            if (Array.isArray(maybeSnapshot?.source) && !Array.isArray((allData as any).source)) {
+                (allData as any).source = maybeSnapshot.source;
+            }
+            if (Array.isArray(maybeSnapshot?.object) && !Array.isArray((allData as any).object)) {
+                (allData as any).object = maybeSnapshot.object;
+            }
+            if (Array.isArray(maybeSnapshot?.payload?.source) && !Array.isArray((allData as any).source)) {
+                (allData as any).source = maybeSnapshot.payload.source;
+            }
+            if (Array.isArray(maybeSnapshot?.payload?.object) && !Array.isArray((allData as any).object)) {
+                (allData as any).object = maybeSnapshot.payload.object;
+            }
+
+            if (rowsSnapshot && rowsSnapshot.length > 0) {
+                const activeId = String((allData as any)?.activeConfigId ?? '').trim();
+                const cfgs = Array.isArray((allData as any)?.configurations)
+                    ? (allData as any).configurations
+                : null;
+                const cfgList = Array.isArray(cfgs) ? cfgs : [];
+                const activeCfg = cfgList.find((c: any) => String(c?.id ?? '').trim() === activeId) || cfgList[0];
+                if (activeCfg && (!Array.isArray(activeCfg.opticalSystem) || activeCfg.opticalSystem.length === 0)) {
+                    activeCfg.opticalSystem = rowsSnapshot;
+                }
+            }
+        }
     } catch (_) {}
 
     // File load must not race an optimizer popup. If optimization is active, block
@@ -2370,7 +2435,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 
         if (g?.__cooptOptimizerIsRunning === true && !popupLooksIdle) {
             alert('Optimization is still running. Stop it or close the optimize window before loading a file.');
-            return false;
+            return failLoad('optimization-still-running');
         }
 
         if (!popupClosed && popupLooksIdle) {
@@ -2418,10 +2483,59 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         candidateConfig = allData;
     }
 
-    // Ensure candidateConfig has configurations array
+    // Ensure candidateConfig has configurations array.
+    // Some historical exports are hybrid payloads (top-level source/object/opticalSystem
+    // with nested `configurations` object). Try a resilient fallback before failing.
     if (!candidateConfig || !Array.isArray(candidateConfig.configurations)) {
-        console.error('❌ [Load] Invalid configurations format:', candidateConfig);
-        return false;
+        try {
+            const fallbackCfg: any = {
+                id: 1,
+                name: 'Config 1',
+                schemaVersion: BLOCK_SCHEMA_VERSION,
+                blocks: Array.isArray(allData?.blocks) ? allData.blocks : [],
+                source: Array.isArray(allData?.source) ? allData.source : [],
+                object: Array.isArray(allData?.object) ? allData.object : [],
+                opticalSystem: Array.isArray(allData?.opticalSystem) ? allData.opticalSystem : [],
+                meritFunction: Array.isArray(allData?.meritFunction) ? allData.meritFunction : [],
+                systemData: (allData?.systemData && typeof allData.systemData === 'object')
+                    ? allData.systemData
+                    : { referenceFocalLength: '' },
+                metadata: {
+                    created: new Date().toISOString(),
+                    modified: new Date().toISOString(),
+                    locked: false,
+                    importedFrom: 'fallback-mixed-shape'
+                }
+            };
+
+            // If nested configurations exists but was wrapped oddly, prefer its first config as base.
+            const nestedConfigs = Array.isArray(allData?.configurations?.configurations)
+                ? allData.configurations.configurations
+                : [];
+            const firstNested = nestedConfigs[0];
+            if (firstNested && typeof firstNested === 'object') {
+                fallbackCfg.id = firstNested.id ?? fallbackCfg.id;
+                fallbackCfg.name = firstNested.name ?? fallbackCfg.name;
+                fallbackCfg.schemaVersion = firstNested.schemaVersion ?? fallbackCfg.schemaVersion;
+                if (Array.isArray(firstNested.blocks)) fallbackCfg.blocks = firstNested.blocks;
+                if (Array.isArray(firstNested.source) && fallbackCfg.source.length === 0) fallbackCfg.source = firstNested.source;
+                if (Array.isArray(firstNested.object) && fallbackCfg.object.length === 0) fallbackCfg.object = firstNested.object;
+                if (Array.isArray(firstNested.opticalSystem) && fallbackCfg.opticalSystem.length === 0) fallbackCfg.opticalSystem = firstNested.opticalSystem;
+                if (Array.isArray(firstNested.meritFunction) && fallbackCfg.meritFunction.length === 0) fallbackCfg.meritFunction = firstNested.meritFunction;
+                if (firstNested.systemData && typeof firstNested.systemData === 'object') fallbackCfg.systemData = firstNested.systemData;
+            }
+
+            candidateConfig = {
+                configurations: [fallbackCfg],
+                activeConfigId: fallbackCfg.id,
+                meritFunction: Array.isArray(allData?.meritFunction) ? allData.meritFunction : [],
+                systemRequirements: Array.isArray(allData?.systemRequirements) ? allData.systemRequirements : [],
+                optimizationRules: allData?.optimizationRules || {}
+            };
+            try { console.warn('⚠️ [Load] Recovered mixed-shape payload via fallback configuration wrapping.'); } catch (_) {}
+        } catch (recoveryError) {
+            return failLoad('invalid-configurations-format', { candidateConfig, recoveryError });
+        }
     }
 
     // Ensure config IDs and activeConfigId
@@ -2990,9 +3104,37 @@ function setupLoadAllButton(): void {
             try {
                 const text = await file.text();
                 const parsed = JSON.parse(text);
-                const ok = await __loadAllDataObjectIntoApp(parsed, { filename: file.name });
+
+                // Align legacy loader path with toolbar loader normalization.
+                let payload = parsed;
+                if (String(parsed?.format || '').trim() === 'coopt-escape-snapshots-archive-v1' && !Array.isArray(parsed?.configurations)) {
+                    throw new Error('This file is archive metadata, not a design snapshot. Please load a file under snapshots/*.json.');
+                }
+                const wrapped = parsed?.systemConfigSnapshot
+                    || (parsed?.payload && typeof parsed.payload === 'object' ? parsed.payload.systemConfigSnapshot : null);
+                if (wrapped && typeof wrapped === 'object') {
+                    payload = wrapped;
+                }
+
+                const looksLoadable = !!(
+                    payload
+                    && typeof payload === 'object'
+                    && (
+                        Array.isArray(payload?.configurations)
+                        || Array.isArray(payload?.opticalSystem)
+                        || Array.isArray(payload?.blocks)
+                        || Array.isArray(payload?.configurations?.configurations)
+                        || Array.isArray(payload?.systemConfigurations?.configurations)
+                    )
+                );
+                if (!looksLoadable) {
+                    throw new Error('Selected JSON is not a loadable design format. Choose a design file or snapshots/*.json.');
+                }
+
+                const ok = await __loadAllDataObjectIntoApp(payload, { filename: file.name });
                 if (!ok) {
-                    throw new Error('Load step failed (invalid format or persistence failure).');
+                    const reason = String((window as any).__cooptLastLoadFailureReason || '').trim();
+                    throw new Error(reason ? `App loader returned false (${reason}).` : 'App loader returned false (reason unavailable; reload app and retry).');
                 }
             } catch (err) {
                 console.error('❌ Load failed:', err);

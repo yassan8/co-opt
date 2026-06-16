@@ -5068,6 +5068,20 @@ function getEscapeSnapshotZipEntryName(entry, index) {
   return String(entry?.fileName || `snapshot_${String(Math.max(1, Number(index) || 1)).padStart(3, '0')}.json`);
 }
 
+function getEscapeSnapshotZipEntryDate(entry) {
+  const payloadSavedAt = String(entry?.payload?.savedAt || '').trim();
+  if (payloadSavedAt) {
+    const parsed = new Date(payloadSavedAt);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  const lastModified = Number(entry?.lastModified);
+  if (Number.isFinite(lastModified) && lastModified > 0) {
+    const parsed = new Date(lastModified);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date();
+}
+
 async function buildEscapeSnapshotsZipBlob(archive) {
   const mod = await import('jszip');
   const JSZipCtor = (mod as any)?.default || mod;
@@ -5085,13 +5099,14 @@ async function buildEscapeSnapshotsZipBlob(archive) {
     const entry = snapshots[i] || {};
     const sourceName = sanitizeZipEntryFileName(getEscapeSnapshotZipEntryName(entry, i + 1));
     const zipName = sourceName.toLowerCase().endsWith('.json') ? sourceName : `${sourceName}.json`;
+    const zipDate = getEscapeSnapshotZipEntryDate(entry);
     const text = entry?.payload == null
       ? String(entry?.raw ?? '')
       : JSON.stringify(entry.payload, null, 2);
     if (snapshotsDir && typeof snapshotsDir.file === 'function') {
-      snapshotsDir.file(zipName, `${text}\n`);
+      snapshotsDir.file(zipName, `${text}\n`, { date: zipDate });
     } else {
-      zip.file(`snapshots/${zipName}`, `${text}\n`);
+      zip.file(`snapshots/${zipName}`, `${text}\n`, { date: zipDate });
     }
   }
 
@@ -5253,13 +5268,11 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
       ? actualScore
       : Number(result?.objectiveScore ?? result?.best ?? Number.NaN);
     const escapeLoopBestScore = (() => {
-      const values = [
-        Number(result?.best),
-        Number(result?.objectiveScore),
-        Number(candidateScore),
-      ].filter((v) => Number.isFinite(v));
-      if (values.length === 0) return Number.NaN;
-      return Math.min(...values);
+      const byEscapeBest = Number(result?.best);
+      if (Number.isFinite(byEscapeBest)) return byEscapeBest;
+      const byObjective = Number(result?.objectiveScore);
+      if (Number.isFinite(byObjective)) return byObjective;
+      return Number(candidateScore);
     })();
 
     // Persist a JSON snapshot for each escape iteration.
@@ -5274,7 +5287,28 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
         } catch (_) {}
         return [];
       })();
+      const baseSystemConfig = (snapshotSystemConfig && typeof snapshotSystemConfig === 'object')
+        ? (() => {
+            try { return JSON.parse(JSON.stringify(snapshotSystemConfig)); } catch (_) { return snapshotSystemConfig; }
+          })()
+        : {};
+
+      const activeConfig = (() => {
+        try {
+          const cfgs = Array.isArray((baseSystemConfig as any)?.configurations)
+            ? (baseSystemConfig as any).configurations
+            : [];
+          const activeId = (baseSystemConfig as any)?.activeConfigId;
+          return cfgs.find((c: any) => String(c?.id ?? '') === String(activeId ?? '')) || cfgs[0] || null;
+        } catch (_) {
+          return null;
+        }
+      })();
+
+      // Save as a normal loadable design JSON (top-level configurations),
+      // and keep escape-search metadata as extra fields.
       const payload = {
+        ...(baseSystemConfig as any),
         savedAt: new Date().toISOString(),
         optimizer: 'global-escape',
         escapeLoop: loopIndex + 1,
@@ -5285,8 +5319,13 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
         innerMethod,
         maxIterations: targetIterations,
         totalIterations,
-        systemConfigSnapshot: snapshotSystemConfig,
         opticalSystemRowsSnapshot: snapshotRows,
+        source: Array.isArray((baseSystemConfig as any)?.source)
+          ? (baseSystemConfig as any).source
+          : (Array.isArray(activeConfig?.source) ? activeConfig.source : []),
+        object: Array.isArray((baseSystemConfig as any)?.object)
+          ? (baseSystemConfig as any).object
+          : (Array.isArray(activeConfig?.object) ? activeConfig.object : []),
       };
       const fileName = buildEscapeSnapshotFileName(loopIndex + 1, escapeLoopBestScore);
       await persistEscapeSnapshotJson(payload, fileName, escapeSnapshotSaveMode);

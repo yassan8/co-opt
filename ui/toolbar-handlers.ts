@@ -52,6 +52,73 @@ function clearSystemDataCache(): void {
   } catch (_) {}
 }
 
+function unwrapSnapshotLikePayload(input: any): any {
+  const raw = input && typeof input === 'object' ? input : null;
+  if (!raw) return input;
+
+  // Guard: archive metadata itself is not a design file.
+  if (String(raw?.format || '').trim() === 'coopt-escape-snapshots-archive-v1' && !Array.isArray(raw?.configurations)) {
+    const e = new Error('This file is archive metadata, not a design snapshot. Please load a file under snapshots/*.json.');
+    (e as any).__cooptLoadGuard = 'archive-metadata';
+    throw e;
+  }
+
+  let wrapped = raw.systemConfigSnapshot
+    || (raw.payload && typeof raw.payload === 'object' ? raw.payload.systemConfigSnapshot : null);
+
+  if (!wrapped && typeof raw.systemConfigSnapshot === 'string') {
+    try { wrapped = JSON.parse(raw.systemConfigSnapshot); } catch (_) {}
+  }
+  if (!wrapped && typeof raw?.payload?.systemConfigSnapshot === 'string') {
+    try { wrapped = JSON.parse(raw.payload.systemConfigSnapshot); } catch (_) {}
+  }
+
+  if (!wrapped || typeof wrapped !== 'object' || !Array.isArray(wrapped.configurations)) {
+    return input;
+  }
+
+  let out: any = wrapped;
+  try { out = JSON.parse(JSON.stringify(wrapped)); } catch (_) { out = wrapped; }
+
+  const rowsSnapshot = Array.isArray(raw.opticalSystemRowsSnapshot)
+    ? raw.opticalSystemRowsSnapshot
+    : (Array.isArray(raw?.payload?.opticalSystemRowsSnapshot) ? raw.payload.opticalSystemRowsSnapshot : null);
+  const cfgs = Array.isArray(out?.configurations) ? out.configurations : [];
+  const activeId = String(out?.activeConfigId ?? '').trim();
+  const activeCfg = cfgs.find((c: any) => String(c?.id ?? '').trim() === activeId) || cfgs[0];
+  if (activeCfg && rowsSnapshot && rowsSnapshot.length > 0 && (!Array.isArray(activeCfg.opticalSystem) || activeCfg.opticalSystem.length === 0)) {
+    activeCfg.opticalSystem = rowsSnapshot;
+  }
+
+  if (!Array.isArray(out?.source)) {
+    if (Array.isArray(raw?.source)) out.source = raw.source;
+    else if (Array.isArray(raw?.payload?.source)) out.source = raw.payload.source;
+  }
+  if (!Array.isArray(out?.object)) {
+    if (Array.isArray(raw?.object)) out.object = raw.object;
+    else if (Array.isArray(raw?.payload?.object)) out.object = raw.payload.object;
+  }
+  if (!Array.isArray(out?.meritFunction)) {
+    if (Array.isArray(raw?.meritFunction)) out.meritFunction = raw.meritFunction;
+    else if (Array.isArray(raw?.payload?.meritFunction)) out.meritFunction = raw.payload.meritFunction;
+  }
+  if (!Array.isArray(out?.systemRequirements)) {
+    if (Array.isArray(raw?.systemRequirements)) out.systemRequirements = raw.systemRequirements;
+    else if (Array.isArray(raw?.payload?.systemRequirements)) out.systemRequirements = raw.payload.systemRequirements;
+  }
+
+  return out;
+}
+
+function isDesignPayloadLike(data: any): boolean {
+  if (!data || typeof data !== 'object') return false;
+  if (Array.isArray((data as any).configurations)) return true;
+  if (data.systemConfigurations && Array.isArray(data.systemConfigurations.configurations)) return true;
+  if (data.configurations && Array.isArray(data.configurations.configurations)) return true;
+  if (Array.isArray(data.opticalSystem) || Array.isArray(data.blocks)) return true;
+  return false;
+}
+
 function cloneRuntimeSystemConfig(): any {
   try {
     const runtimeSystemConfig = typeof w.loadSystemConfigurations === 'function'
@@ -803,11 +870,17 @@ export function handleLoad(): void {
         const picked = await openJsonFromNativeDialog();
         if (!picked) return;
         clearSystemDataCache();
-        const data = JSON.parse(picked.content);
+        const data = unwrapSnapshotLikePayload(JSON.parse(picked.content));
+        if (!isDesignPayloadLike(data)) {
+          throw new Error('Selected JSON is not a loadable design format. Choose a design file or snapshots/*.json.');
+        }
         const loadedFilename = basenameFromPath(picked.path);
         if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
           const ok = await (window as any).__loadAllDataObjectIntoApp(data, { filename: loadedFilename });
-          if (!ok) throw new Error('App loader returned false.');
+          if (!ok) {
+            const reason = String((window as any).__cooptLastLoadFailureReason || '').trim();
+            throw new Error(reason ? `App loader returned false (${reason}).` : 'App loader returned false (reason unavailable; reload app and retry).');
+          }
         }
         setLoadedFileName(loadedFilename);
         try {
@@ -875,11 +948,17 @@ export function handleLoad(): void {
     try {
       clearSystemDataCache();
       const text = await file.text();
-      const data = JSON.parse(text);
+      const data = unwrapSnapshotLikePayload(JSON.parse(text));
+      if (!isDesignPayloadLike(data)) {
+        throw new Error('Selected JSON is not a loadable design format. Choose a design file or snapshots/*.json.');
+      }
       
       if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
         const ok = await (window as any).__loadAllDataObjectIntoApp(data, { filename: file.name });
-        if (!ok) throw new Error('App loader returned false.');
+        if (!ok) {
+          const reason = String((window as any).__cooptLastLoadFailureReason || '').trim();
+          throw new Error(reason ? `App loader returned false (${reason}).` : 'App loader returned false (reason unavailable; reload app and retry).');
+        }
       }
       setLoadedFileName(file.name);
       try {
