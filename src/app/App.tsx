@@ -9187,17 +9187,39 @@ const collectLegacyCrossRays = async (
           tsBestScore = Math.min(tsBestScore, resultBestScore);
         }
 
-        if (tsAborted && Number.isFinite(resultBestScore)) {
-          finalTableScore = resultBestScore;
+        const pickBestFiniteMin = (...values: number[]) => {
+          let best = Number.NaN;
+          for (const value of values) {
+            if (!Number.isFinite(value)) continue;
+            best = Number.isFinite(best) ? Math.min(best, value) : value;
+          }
+          return best;
+        };
+
+        const abortedTrackedBest = pickBestFiniteMin(
+          tsBestRequirementScore,
+          tsBestScore,
+          resultBestScore,
+          resultObjectiveScore
+        );
+
+        if (tsAborted && Number.isFinite(abortedTrackedBest)) {
+          finalTableScore = abortedTrackedBest;
         }
 
         const finalScore = tsAborted
-          ? (Number.isFinite(resultBestScore) ? resultBestScore : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN))
+          ? (Number.isFinite(abortedTrackedBest)
+            ? abortedTrackedBest
+            : (Number.isFinite(resultBestScore)
+              ? resultBestScore
+              : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN)))
           : (Number.isFinite(resultObjectiveScore)
             ? resultObjectiveScore
             : (Number.isFinite(finalTableScore) ? finalTableScore : Number.NaN));
         const finalBest = tsAborted
-          ? (Number.isFinite(resultBestScore) ? resultBestScore : finalScore)
+          ? (Number.isFinite(abortedTrackedBest)
+            ? abortedTrackedBest
+            : (Number.isFinite(resultBestScore) ? resultBestScore : finalScore))
           : (Number.isFinite(tsBestScore)
             ? tsBestScore
             : (Number.isFinite(tsBestRequirementScore)
@@ -9222,11 +9244,15 @@ const collectLegacyCrossRays = async (
           meritAfter: Number.isFinite(finalTableScore) ? finalTableScore
             : (Number.isFinite(finalScore) ? finalScore : prev.meritAfter),
           best: Number.isFinite(finalBest) ? finalBest : prev.best,
-          bestRequirementScore: Number.isFinite(tsBestRequirementScore)
-            ? tsBestRequirementScore
-            : (Number.isFinite(finalTableScore)
-              ? finalTableScore
-              : (Number.isFinite(finalScore) ? finalScore : prev.bestRequirementScore)),
+          bestRequirementScore: aborted
+            ? (Number.isFinite(finalBest)
+              ? finalBest
+              : (Number.isFinite(finalScore) ? finalScore : prev.bestRequirementScore))
+            : (Number.isFinite(tsBestRequirementScore)
+              ? tsBestRequirementScore
+              : (Number.isFinite(finalTableScore)
+                ? finalTableScore
+                : (Number.isFinite(finalScore) ? finalScore : prev.bestRequirementScore))),
           percent: 100,
         }));
 
