@@ -5252,9 +5252,15 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
     const candidateScore = Number.isFinite(actualScore)
       ? actualScore
       : Number(result?.objectiveScore ?? result?.best ?? Number.NaN);
-    const escapeBestScoreAtSave = Number.isFinite(candidateScore)
-      ? Math.min(bestScore, candidateScore)
-      : bestScore;
+    const escapeLoopBestScore = (() => {
+      const values = [
+        Number(result?.best),
+        Number(result?.objectiveScore),
+        Number(candidateScore),
+      ].filter((v) => Number.isFinite(v));
+      if (values.length === 0) return Number.NaN;
+      return Math.min(...values);
+    })();
 
     // Persist a JSON snapshot for each escape iteration.
     try {
@@ -5274,14 +5280,15 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
         escapeLoop: loopIndex + 1,
         escapeLoops: outerLoops,
         loopScore: Number.isFinite(candidateScore) ? candidateScore : null,
-        bestScoreAtSave: Number.isFinite(escapeBestScoreAtSave) ? escapeBestScoreAtSave : null,
+        bestScoreAtSave: Number.isFinite(escapeLoopBestScore) ? escapeLoopBestScore : null,
+        globalBestAtSave: Number.isFinite(bestScore) ? bestScore : null,
         innerMethod,
         maxIterations: targetIterations,
         totalIterations,
         systemConfigSnapshot: snapshotSystemConfig,
         opticalSystemRowsSnapshot: snapshotRows,
       };
-      const fileName = buildEscapeSnapshotFileName(loopIndex + 1, escapeBestScoreAtSave);
+      const fileName = buildEscapeSnapshotFileName(loopIndex + 1, escapeLoopBestScore);
       await persistEscapeSnapshotJson(payload, fileName, escapeSnapshotSaveMode);
     } catch (_) {}
 
