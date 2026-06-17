@@ -540,6 +540,16 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "Controls edge thickness at specified height. Select lens element (Lens, Doublet, Triplet). Supports toric surfaces with X/Y direction. For spherical/aspheric, leave Direction blank for radial calculation. Unit: mm."
   },
+  "ALL_EDGE_ELEMENT": {
+    name: "All Edge Element",
+    description: "All Edge Element",
+    parameters: [
+      { key: "param1", label: "Mode", description: "MIN or MAX" },
+      { key: "param2", label: "Height" },
+      { key: "param3", label: "Direction", description: "X/Y/blank=Radial" }
+    ],
+    notes: "Evaluates edge thickness for all lens elements. Mode=MIN returns the smallest finite edge thickness, so use `>= target` to constrain every element edge from below. Mode=MAX returns the largest finite edge thickness, so use `<= target` to constrain every element edge from above. Supports toric surfaces with X/Y direction. For spherical/aspheric, leave Direction blank for radial calculation. Unit: mm."
+  },
   "EDGE_AIR": {
     name: "EDGE_AIR",
     description: "Edge Air Gap",
@@ -657,7 +667,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
   'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'LCA_RMS_UM', 'CRA_DEG', 'OPD_RMS_WAVES',
   'ZERN_COEFF',
-  'EDGE', 'EDGE_AIR', 'ALL_EDGE_AIR', 'CTCT', 'DBLT_K', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
+  'EDGE', 'ALL_EDGE_ELEMENT', 'EDGE_AIR', 'ALL_EDGE_AIR', 'CTCT', 'DBLT_K', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
 ]);
 
 /**

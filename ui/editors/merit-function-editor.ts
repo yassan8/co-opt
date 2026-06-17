@@ -390,6 +390,59 @@ function collectRequirementEdgeAirGapValues(rows: any[], heightRaw: number, dire
     return values;
 }
 
+function calculateRequirementElementEdgeThicknessAtRow(rows: any[], surfaceIndex0: number, heightRaw: number, directionRaw: string): number {
+    if (!Array.isArray(rows) || rows.length === 0) return Number.NaN;
+    if (!Number.isFinite(surfaceIndex0) || surfaceIndex0 < 0 || surfaceIndex0 >= rows.length) return Number.NaN;
+
+    const surface = rows[surfaceIndex0];
+    if (!surface || typeof surface !== 'object') return Number.NaN;
+
+    const thickness = Number(surface.thickness);
+    if (!Number.isFinite(thickness)) return Number.NaN;
+
+    let height = Number(heightRaw);
+    if (!Number.isFinite(height) || height <= 0) {
+        const semidiaVal = Number(surface?.semidia);
+        height = (Number.isFinite(semidiaVal) && semidiaVal > 0) ? semidiaVal : 10;
+    }
+    if (!Number.isFinite(height) || height <= 0) return Number.NaN;
+
+    const normalizedDirection = String(directionRaw ?? '').trim().toUpperCase();
+    let sag = computeRequirementSurfaceSagAtHeight(surface, height, normalizedDirection);
+    if (!Number.isFinite(sag)) sag = 0;
+
+    let sag2 = 0;
+    const nextSurfaceIdx = surfaceIndex0 + 1;
+    if (nextSurfaceIdx < rows.length) {
+        const nextSurface = rows[nextSurfaceIdx];
+        if (isRequirementRealSurfaceRow(nextSurface)) {
+            sag2 = computeRequirementSurfaceSagAtHeight(nextSurface, height, normalizedDirection);
+            if (!Number.isFinite(sag2)) sag2 = 0;
+        }
+    }
+
+    return thickness - sag - sag2;
+}
+
+function collectRequirementElementEdgeThicknessValues(rows: any[], heightRaw: number, directionRaw: string): number[] {
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const values: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (!isRequirementRealSurfaceRow(row)) continue;
+
+        const objType = String(row['object type'] ?? row.object ?? row.objectType ?? row.type ?? '').trim().toLowerCase();
+        const material = String(row.material ?? '').trim().toLowerCase();
+        const isStop = objType === 'stop' || objType === 'sto' || objType === 'aperturestop';
+        const isGlass = !!material && material !== 'air';
+        if (isStop || !isGlass) continue;
+
+        const value = calculateRequirementElementEdgeThicknessAtRow(rows, i, heightRaw, directionRaw);
+        if (Number.isFinite(value)) values.push(value);
+    }
+    return values;
+}
+
 function collectFiniteThicknessValues(rows: any[]): number[] {
     if (!Array.isArray(rows) || rows.length === 0) return [];
     const values: number[] = [];
@@ -2096,7 +2149,7 @@ class MeritFunctionEditor {
             }
 
             case 'EDGE': {
-                // Edge Thickness: thickness - sag1 - sag2 at specified height
+                // Edge Thickness: thickness - sag(front) - sag(back) at specified height
                 const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
                 const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
                 const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toUpperCase() : '';
@@ -2146,93 +2199,8 @@ class MeritFunctionEditor {
                 }
                 
                 
-                const computeEdgeThicknessForRows = (rows: any[]): number => {
-                    if (!Array.isArray(rows)) return Number.NaN;
-                    if (surfaceIndex0 < 0 || surfaceIndex0 >= rows.length) return Number.NaN;
-
-                    const surface = rows[surfaceIndex0];
-                    if (!surface) return Number.NaN;
-
-                    const thickness = Number(surface.thickness);
-                    if (!Number.isFinite(thickness)) return Number.NaN;
-
-                    const computeSurfaceSag = (surfaceRow: any): number => {
-                        if (!surfaceRow || typeof surfaceRow !== 'object') return 0;
-                        const surfType = String(surfaceRow.surfType || surfaceRow.type || '').trim().toLowerCase();
-                        const isToric = surfType === 'toric';
-
-                        if (isToric) {
-                            const radiusXRaw = surfaceRow.radiusX;
-                            const radiusYRaw = surfaceRow.radiusY || surfaceRow.radius;
-                            const radiusXInf = String(radiusXRaw ?? '').trim().toUpperCase() === 'INF' || radiusXRaw === Infinity;
-                            const radiusYInf = String(radiusYRaw ?? '').trim().toUpperCase() === 'INF' || radiusYRaw === Infinity;
-                            const radiusX = radiusXInf ? Infinity : Number(radiusXRaw);
-                            const radiusY = radiusYInf ? Infinity : Number(radiusYRaw);
-
-                            if ((Number.isFinite(radiusX) || radiusX === Infinity) && (Number.isFinite(radiusY) || radiusY === Infinity)) {
-                                const toricParams = {
-                                    radiusX,
-                                    radiusY,
-                                    conic: Number(surfaceRow.conic) || 0,
-                                    axis: Number(surfaceRow.axis) || 0
-                                };
-
-                                if (param3Raw === 'X') return toricSurfaceZ(height, 0, toricParams);
-                                if (param3Raw === 'Y') return toricSurfaceZ(0, height, toricParams);
-                                const sagX = toricSurfaceZ(height, 0, toricParams);
-                                const sagY = toricSurfaceZ(0, height, toricParams);
-                                return Number.isFinite(sagX) && Number.isFinite(sagY) ? (sagX + sagY) / 2 : 0;
-                            }
-                            return 0;
-                        }
-
-                        const radiusRaw = surfaceRow.radius;
-                        const radiusInf = String(radiusRaw ?? '').trim().toUpperCase() === 'INF' || radiusRaw === Infinity || radiusRaw === 0;
-                        const radius = radiusInf ? Infinity : Number(radiusRaw);
-                        if (!(Number.isFinite(radius) || radius === Infinity)) return 0;
-
-                        const asphericParams = {
-                            radius,
-                            conic: Number(surfaceRow.conic) || 0,
-                            coef1: Number(surfaceRow.coef1) || 0,
-                            coef2: Number(surfaceRow.coef2) || 0,
-                            coef3: Number(surfaceRow.coef3) || 0,
-                            coef4: Number(surfaceRow.coef4) || 0,
-                            coef5: Number(surfaceRow.coef5) || 0,
-                            coef6: Number(surfaceRow.coef6) || 0,
-                            coef7: Number(surfaceRow.coef7) || 0,
-                            coef8: Number(surfaceRow.coef8) || 0,
-                            coef9: Number(surfaceRow.coef9) || 0,
-                            coef10: Number(surfaceRow.coef10) || 0
-                        };
-                        const mode = surfType.includes('odd') ? 'odd' : 'even';
-                        return asphericSurfaceZ(height, asphericParams, mode);
-                    };
-
-                    let sag = computeSurfaceSag(surface);
-                    if (!Number.isFinite(sag)) sag = 0;
-
-                    let sag2 = 0;
-                    const nextSurfaceIdx = surfaceIndex0 + 1;
-                    if (nextSurfaceIdx < rows.length) {
-                        const nextSurface = rows[nextSurfaceIdx];
-                        const nextObjType = String(nextSurface?.['object type'] || nextSurface?.object || nextSurface?.surfType || '').trim().toLowerCase();
-                        const isNextOpticalSurface = !!nextSurface && !(nextObjType === 'object'
-                            || nextObjType === 'image'
-                            || nextObjType === 'stop'
-                            || nextObjType === 'sto'
-                            || nextObjType === 'aperturestop'
-                            || nextObjType === 'ct'
-                            || nextObjType.includes('coordinate')
-                            || nextObjType.includes('coordtrans'));
-                        if (isNextOpticalSurface) {
-                            sag2 = computeSurfaceSag(nextSurface);
-                            if (!Number.isFinite(sag2)) sag2 = 0;
-                        }
-                    }
-
-                    return thickness - sag + sag2;
-                };
+                const computeEdgeThicknessForRows = (rows: any[]): number =>
+                    calculateRequirementElementEdgeThicknessAtRow(rows, surfaceIndex0, height, param3Raw);
 
                 let edgeThickness = computeEdgeThicknessForRows(opticalSystemData);
                 if ((!Number.isFinite(edgeThickness) || Math.abs(edgeThickness) >= 1e8) && (isCurrentOperand || isOperandActiveConfig)) {
@@ -2262,6 +2230,47 @@ class MeritFunctionEditor {
                 }
 
                 return Number.isFinite(edgeThickness) ? edgeThickness : 1e9;
+            }
+
+            case 'ALL_EDGE_ELEMENT': {
+                const modeRaw = String(operand?.param1 ?? '').trim().toUpperCase();
+                const useMinimum = modeRaw !== 'MAX';
+                const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+                const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toUpperCase() : '';
+                const height = Number(param2Raw);
+
+                let edgeValues = collectRequirementElementEdgeThicknessValues(opticalSystemData, height, param3Raw);
+
+                if ((edgeValues.length === 0 || edgeValues.every((value) => !Number.isFinite(value))) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        const liveRows = getOpticalSystemRows(null);
+                        edgeValues = collectRequirementElementEdgeThicknessValues(liveRows, height, param3Raw);
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+
+                if (!Array.isArray(edgeValues) || edgeValues.length === 0) {
+                    return 1e9;
+                }
+
+                const finiteValues = edgeValues.filter((value) => Number.isFinite(value));
+                if (finiteValues.length === 0) return 1e9;
+                return useMinimum ? Math.min(...finiteValues) : Math.max(...finiteValues);
             }
 
             case 'EDGE_AIR': {

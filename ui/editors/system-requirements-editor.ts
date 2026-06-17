@@ -382,6 +382,7 @@ class SystemRequirementsEditor {
     const formatOperandLabel = (key: string): string => {
       const labelOverrides: Record<string, string> = {
         EDGE: 'Edge Thickness',
+        ALL_EDGE_ELEMENT: 'All Edge Element',
         EDGE_AIR: 'Edge Air Gap',
         ALL_EDGE_AIR: 'All Edge Air Gap',
         CTCT: 'Center Thickness',
@@ -1068,7 +1069,7 @@ class SystemRequirementsEditor {
           row.param3 = '';
           row.param4 = '';
           row.param5 = '';
-        } else if (row.operand === 'RADI_ALL' || row.operand === 'ALL_EDGE_AIR') {
+        } else if (row.operand === 'RADI_ALL' || row.operand === 'ALL_EDGE_AIR' || row.operand === 'ALL_EDGE_ELEMENT') {
           row.param1 = 'MIN';
           row.param2 = '';
           row.param3 = '';
@@ -1190,12 +1191,14 @@ class SystemRequirementsEditor {
         // EDGE param2: Height selection (based on semidia)
         const isEdgeHeightParam = field === 'param2' && (
           String(row?.operand ?? '').trim() === 'EDGE'
+          || String(row?.operand ?? '').trim() === 'ALL_EDGE_ELEMENT'
           || String(row?.operand ?? '').trim() === 'EDGE_AIR'
         );
         
         // EDGE param3: Direction selection (X/Y/blank=Radial)
         const isEdgeDirectionParam = field === 'param3' && (
           String(row?.operand ?? '').trim() === 'EDGE'
+          || String(row?.operand ?? '').trim() === 'ALL_EDGE_ELEMENT'
           || String(row?.operand ?? '').trim() === 'EDGE_AIR'
         );
         
@@ -1453,7 +1456,7 @@ class SystemRequirementsEditor {
 
           const current = String(row[field] || '').trim().toUpperCase();
           control.value = current === 'MAX' ? 'MAX' : 'MIN';
-        } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'RADI_ALL') {
+        } else if (field === 'param1' && (String(row?.operand ?? '').trim() === 'RADI_ALL' || String(row?.operand ?? '').trim() === 'ALL_EDGE_ELEMENT')) {
           control = document.createElement('select');
           control.style.width = '100%';
           control.style.fontSize = '12px';
@@ -2220,7 +2223,7 @@ class SystemRequirementsEditor {
               displayVal = getRequirementReferenceLabelById(val, row?.id);
             } else if (operandName === 'REQMATH' && i === 2) {
               displayVal = String(val || '+').trim() || '+';
-            } else if ((operandName === 'GAP' || operandName === 'THIC' || operandName === 'ALL_EDGE_AIR') && i === 1) {
+            } else if ((operandName === 'GAP' || operandName === 'THIC' || operandName === 'ALL_EDGE_AIR' || operandName === 'ALL_EDGE_ELEMENT') && i === 1) {
               displayVal = String(val).trim().toUpperCase() === 'MAX' ? 'Max' : 'Min';
             } else if (operandName === 'DBLT_K' && i === 1) {
               const blocks = getCachedBlocksForConfigHint(row?.configId);
