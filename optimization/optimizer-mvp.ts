@@ -5242,8 +5242,10 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   const useTotalIterationBudget = (() => {
     if (outerOpts.escapeGlobalUseTotalIterationBudget === true) return true;
     if (outerOpts.escapeGlobalUseTotalIterationBudget === false) return false;
-    // Manual mode should prioritize configured Escape loop progression.
-    return !useManualEscapeIterations;
+    // Treat Max Iterations as a per-Escape inner budget so Global keeps
+    // progressing through every configured Escape loop instead of stopping
+    // at Escape 1 once the first inner run consumes the whole budget.
+    return false;
   })();
   const plannedTotalIterations = useTotalIterationBudget
     ? targetIterations
