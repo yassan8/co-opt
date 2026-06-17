@@ -5239,6 +5239,15 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   const innerIterations = useManualEscapeIterations && Number.isFinite(Number(outerOpts.escapeGlobalLocalIterations))
     ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalLocalIterations)))
     : innerIterationsDefault;
+  const useTotalIterationBudget = (() => {
+    if (outerOpts.escapeGlobalUseTotalIterationBudget === true) return true;
+    if (outerOpts.escapeGlobalUseTotalIterationBudget === false) return false;
+    // Manual mode should prioritize configured Escape loop progression.
+    return !useManualEscapeIterations;
+  })();
+  const plannedTotalIterations = useTotalIterationBudget
+    ? targetIterations
+    : Math.max(1, innerIterations * Math.max(1, configuredOuterLoops));
   const requiredOuterLoops = Math.max(1, Math.ceil(targetIterations / Math.max(1, innerIterations)));
   // Global(Escape Function) should keep running until total iterations reach maxIterations.
   const outerLoops = Math.max(configuredOuterLoops, requiredOuterLoops);
@@ -5253,7 +5262,10 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
     method: innerMethod,
     maxIterations: Math.max(1, Math.floor(Number(iterBudget) || innerIterations)),
     onProgress: typeof onProgressProxy === 'function' ? onProgressProxy : outerOpts.onProgress,
-    forceTs: true,
+    forceNative: outerOpts.forceNative === undefined ? true : !!outerOpts.forceNative,
+    kktUseWasmPilotOptimizer: outerOpts.kktUseWasmPilotOptimizer !== false,
+    kktUseMatrixFreeCore: outerOpts.kktUseMatrixFreeCore !== false,
+    kktMatrixFreePriority: outerOpts.kktMatrixFreePriority === undefined ? true : !!outerOpts.kktMatrixFreePriority,
     __escapeGlobalMinima: escapeMinima,
     __escapeGlobalDepth: Number(outerOpts.__escapeGlobalDepth || 0) + 1
   });
@@ -5273,10 +5285,14 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
 
   for (let loopIndex = 0; loopIndex < outerLoops; loopIndex++) {
     if (shouldStop && shouldStop()) break;
-    if (totalIterations >= targetIterations) break;
+    if (useTotalIterationBudget && totalIterations >= targetIterations) break;
 
-    const remainingIterations = Math.max(1, targetIterations - totalIterations);
-    const iterBudget = Math.max(1, Math.min(innerIterations, remainingIterations));
+    const remainingIterations = useTotalIterationBudget
+      ? Math.max(1, targetIterations - totalIterations)
+      : innerIterations;
+    const iterBudget = useTotalIterationBudget
+      ? Math.max(1, Math.min(innerIterations, remainingIterations))
+      : Math.max(1, innerIterations);
 
     if (progress) {
       try {
@@ -5288,7 +5304,7 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
           method: methodRaw,
           escapeLoop: loopIndex + 1,
           escapeLoops: outerLoops,
-          maxIterations: targetIterations,
+          maxIterations: plannedTotalIterations,
           accepted: false
         });
       } catch (_) {}
@@ -5385,7 +5401,7 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
         bestInternalScoreAtSave: Number.isFinite(escapeLoopBestScore) ? escapeLoopBestScore : null,
         globalBestAtSave: Number.isFinite(bestScore) ? bestScore : null,
         innerMethod,
-        maxIterations: targetIterations,
+        maxIterations: plannedTotalIterations,
         totalIterations,
         opticalSystemRowsSnapshot: snapshotRows,
         source: Array.isArray((baseSystemConfig as any)?.source)
@@ -5432,7 +5448,7 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
     }
 
     if (loopIndex >= outerLoops - 1) break;
-    if (totalIterations >= targetIterations) break;
+    if (useTotalIterationBudget && totalIterations >= targetIterations) break;
     if (consumed <= 0) {
       // Prevent dead-loop when inner solver reports no progress/iterations.
       break;
@@ -5480,7 +5496,9 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
     method: 'global',
     globalMethod: 'escape',
     innerMethod,
-    iterations: Math.max(0, Math.min(totalIterations, targetIterations)),
+    iterations: useTotalIterationBudget
+      ? Math.max(0, Math.min(totalIterations, targetIterations))
+      : Math.max(0, totalIterations),
     best: Number.isFinite(bestScore) ? bestScore : Number(base?.best ?? Number.NaN),
     objectiveScore: Number.isFinite(bestScore) ? bestScore : Number(base?.objectiveScore ?? Number.NaN),
     escapeMinimaCount: minima.length,
@@ -5507,12 +5525,19 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
  */
 export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
+  const optsWithSpeedPreset = {
+    ...opts,
+    forceNative: opts.forceNative === undefined ? true : !!opts.forceNative,
+    kktUseWasmPilotOptimizer: opts.kktUseWasmPilotOptimizer !== false,
+    kktUseMatrixFreeCore: opts.kktUseMatrixFreeCore !== false,
+    kktMatrixFreePriority: opts.kktMatrixFreePriority === undefined ? true : !!opts.kktMatrixFreePriority,
+  };
   const methodRaw = String(opts.method || '').trim().toLowerCase();
-  const escapeGlobalDepth = Number(opts.__escapeGlobalDepth || 0);
+  const escapeGlobalDepth = Number(optsWithSpeedPreset.__escapeGlobalDepth || 0);
   if (escapeGlobalDepth <= 0 && (methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction' || methodRaw === 'global-al' || methodRaw === 'global-lm')) {
-    return runEscapeFunctionGlobalOptimization(opts);
+    return runEscapeFunctionGlobalOptimization(optsWithSpeedPreset);
   }
-  const kktUseWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer !== false;
+  const kktUseWasmPilotOptimizer = optsWithSpeedPreset?.kktUseWasmPilotOptimizer !== false;
   const systemConfigForRoute = loadSystemConfigurationsRaw();
   const activeCfgForRoute = getActiveConfigRef(systemConfigForRoute);
   const categoricalMaterialVarsForRoute = activeCfgForRoute
@@ -5527,18 +5552,22 @@ export async function runOptimizationMVP(options = {}) {
     : (methodRaw === 'cd' || methodRaw === 'coordinatedescent')
     ? 'cd'
     : 'lm';
-  const activeRequirementRows = getActiveRequirementRowsForOptimizer(opts);
+  const activeRequirementRows = getActiveRequirementRowsForOptimizer(optsWithSpeedPreset);
   const unsupportedNativeOperands = findUnsupportedNativeRequirementOperands(
     activeRequirementRows
   );
   const hasHeavyAsyncRequirementOperands = hasAsyncPreferredRequirementOperands(activeRequirementRows);
   const effectiveMethod = requestedMethod;
-  const effectiveOpts = opts;
-  const shouldPreferNativeRoute = isTauriRuntime()
-    && effectiveOpts.forceTs !== true
-    && unsupportedNativeOperands.length === 0
-    && categoricalMaterialVarsForRoute.length === 0
-    && (effectiveOpts.forceNative === true || effectiveOpts.preferNative === true);
+  const effectiveOpts = optsWithSpeedPreset;
+  const canAttemptNativeRoute = isTauriRuntime() && effectiveOpts.forceTs !== true;
+  const shouldPreferNativeRoute = canAttemptNativeRoute && (
+    effectiveOpts.forceNative === true
+    || (
+      unsupportedNativeOperands.length === 0
+      && categoricalMaterialVarsForRoute.length === 0
+      && effectiveOpts.preferNative === true
+    )
+  );
 
   if (isTauriRuntime() && effectiveOpts.forceTs !== true && unsupportedNativeOperands.length > 0) {
     try {
