@@ -1306,11 +1306,10 @@ class SystemRequirementsEditor {
 
                   const prevSemidia = Number(prevSurf?.semidia);
                   const nextSemidia = Number(nextSurf?.semidia);
-                  // Use the entrance-side surface (prevSurf = surf before the gap) semidia.
-                  if (Number.isFinite(prevSemidia) && prevSemidia > 0) {
-                    semidia = prevSemidia;
-                  } else if (Number.isFinite(nextSemidia) && nextSemidia > 0) {
-                    semidia = nextSemidia;
+                  // Use the smaller valid semidia so both sag terms are evaluated at a shared valid height.
+                  const candidates = [prevSemidia, nextSemidia].filter((v: number) => Number.isFinite(v) && v > 0);
+                  if (candidates.length > 0) {
+                    semidia = Math.min(...candidates);
                   }
                 }
               }
