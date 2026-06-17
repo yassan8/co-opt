@@ -3027,7 +3027,7 @@ export default function App() {
     }
   })();
   const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'>('kkt');
-  const [optMaxIterations, setOptMaxIterations] = useState(5000);
+  const [optMaxIterations, setOptMaxIterations] = useState(10);
   const [optEscapeFunctionWidth, setOptEscapeFunctionWidth] = useState(1);
   const [optEscapeFunctionHeight, setOptEscapeFunctionHeight] = useState(0.1);
   const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(false);
