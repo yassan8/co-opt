@@ -5248,10 +5248,11 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   const minima = normalizeEscapeMinima(outerOpts.__escapeGlobalMinima);
   const progress = typeof outerOpts.onProgress === 'function' ? outerOpts.onProgress : null;
   const shouldStop = typeof outerOpts.shouldStop === 'function' ? outerOpts.shouldStop : null;
-  const makeInnerOpts = (escapeMinima, iterBudget) => ({
+  const makeInnerOpts = (escapeMinima, iterBudget, onProgressProxy) => ({
     ...outerOpts,
     method: innerMethod,
     maxIterations: Math.max(1, Math.floor(Number(iterBudget) || innerIterations)),
+    onProgress: typeof onProgressProxy === 'function' ? onProgressProxy : outerOpts.onProgress,
     forceTs: true,
     __escapeGlobalMinima: escapeMinima,
     __escapeGlobalDepth: Number(outerOpts.__escapeGlobalDepth || 0) + 1
@@ -5293,15 +5294,46 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
       } catch (_) {}
     }
 
-    const result = await runOptimizationMVP(makeInnerOpts(minima, iterBudget));
+    let loopExternalBestScore = Number.POSITIVE_INFINITY;
+    const loopExternalReads: Promise<void>[] = [];
+    const sampleExternalScore = (fallbackValue) => {
+      const task = (async () => {
+        const externalScore = await readCurrentRequirementScoreForEscapeSearch();
+        const candidate = Number.isFinite(externalScore)
+          ? externalScore
+          : Number(fallbackValue);
+        if (Number.isFinite(candidate)) {
+          loopExternalBestScore = Math.min(loopExternalBestScore, candidate);
+        }
+      })();
+      loopExternalReads.push(task);
+      void task.catch(() => {});
+    };
+    const innerProgressProxy = (payload) => {
+      if (progress) {
+        try { progress(payload); } catch (_) {}
+      }
+      sampleExternalScore(Number(payload?.current));
+    };
+
+    const result = await runOptimizationMVP(makeInnerOpts(minima, iterBudget, innerProgressProxy));
+    if (loopExternalReads.length > 0) {
+      try { await Promise.allSettled(loopExternalReads); } catch (_) {}
+    }
     const consumed = Number.isFinite(Number(result?.iterations))
       ? Math.max(0, Math.floor(Number(result.iterations)))
       : 0;
     totalIterations += consumed;
     const actualScore = await readCurrentRequirementScoreForEscapeSearch();
+    if (Number.isFinite(actualScore)) {
+      loopExternalBestScore = Math.min(loopExternalBestScore, actualScore);
+    }
     const candidateScore = Number.isFinite(actualScore)
       ? actualScore
       : Number(result?.objectiveScore ?? result?.best ?? Number.NaN);
+    const escapeLoopExternalBestScore = Number.isFinite(loopExternalBestScore)
+      ? loopExternalBestScore
+      : candidateScore;
     const escapeLoopBestScore = (() => {
       const byEscapeBest = Number(result?.best);
       if (Number.isFinite(byEscapeBest)) return byEscapeBest;
@@ -5349,7 +5381,8 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
         escapeLoop: loopIndex + 1,
         escapeLoops: outerLoops,
         loopScore: Number.isFinite(candidateScore) ? candidateScore : null,
-        bestScoreAtSave: Number.isFinite(escapeLoopBestScore) ? escapeLoopBestScore : null,
+        bestScoreAtSave: Number.isFinite(escapeLoopExternalBestScore) ? escapeLoopExternalBestScore : null,
+        bestInternalScoreAtSave: Number.isFinite(escapeLoopBestScore) ? escapeLoopBestScore : null,
         globalBestAtSave: Number.isFinite(bestScore) ? bestScore : null,
         innerMethod,
         maxIterations: targetIterations,
@@ -5362,14 +5395,21 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
           ? (baseSystemConfig as any).object
           : (Array.isArray(activeConfig?.object) ? activeConfig.object : []),
       };
-      const fileName = buildEscapeSnapshotFileName(loopIndex + 1, escapeLoopBestScore);
+      const fileName = buildEscapeSnapshotFileName(loopIndex + 1, escapeLoopExternalBestScore);
       await persistEscapeSnapshotJson(payload, fileName, escapeSnapshotSaveMode);
     } catch (_) {}
 
-    if (!bestResult || (Number.isFinite(candidateScore) && candidateScore < bestScore)) {
+    const bestCandidateForSelection = Number.isFinite(escapeLoopExternalBestScore)
+      ? escapeLoopExternalBestScore
+      : candidateScore;
+    if (!bestResult || (Number.isFinite(bestCandidateForSelection) && bestCandidateForSelection < bestScore)) {
       bestResult = result;
-      bestScore = candidateScore;
+      bestScore = bestCandidateForSelection;
       bestSystemConfigSnapshot = (() => {
+        const fromResult = result?.systemConfigSnapshot;
+        if (fromResult && typeof fromResult === 'object') {
+          try { return JSON.parse(JSON.stringify(fromResult)); } catch (_) { return fromResult; }
+        }
         try {
           return JSON.parse(JSON.stringify(loadSystemConfigurationsRaw()));
         } catch (_) {
@@ -5377,6 +5417,10 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
         }
       })();
       bestOpticalSystemRowsSnapshot = (() => {
+        const fromResult = result?.opticalSystemRowsSnapshot;
+        if (Array.isArray(fromResult) && fromResult.length > 0) {
+          try { return JSON.parse(JSON.stringify(fromResult)); } catch (_) { return fromResult; }
+        }
         try {
           if (typeof window !== 'undefined' && typeof window.getOpticalSystemRows === 'function') {
             const rows = window.getOpticalSystemRows(window.tableOpticalSystem);
