@@ -1277,12 +1277,7 @@ class SystemRequirementsEditor {
                 s && String(s.id) === String(selectedSurfaceId)
               );
               
-              if (selectedSurf && selectedSurf.semidia) {
-                const semidiaVal = Number(selectedSurf.semidia);
-                if (Number.isFinite(semidiaVal) && semidiaVal > 0) {
-                  semidia = semidiaVal;
-                }
-              } else if (selectedSurf && String(row?.operand ?? '').trim() === 'EDGE_AIR') {
+              if (selectedSurf && String(row?.operand ?? '').trim() === 'EDGE_AIR') {
                 const selectedIdx = opticalRows.findIndex((s: any) => s && String(s.id) === String(selectedSurfaceId));
                 if (selectedIdx >= 0) {
                   const isRealSurface = (surf: any): boolean => {
@@ -1311,6 +1306,11 @@ class SystemRequirementsEditor {
                   if (candidates.length > 0) {
                     semidia = Math.min(...candidates);
                   }
+                }
+              } else if (selectedSurf && selectedSurf.semidia) {
+                const semidiaVal = Number(selectedSurf.semidia);
+                if (Number.isFinite(semidiaVal) && semidiaVal > 0) {
+                  semidia = semidiaVal;
                 }
               }
             }
