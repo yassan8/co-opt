@@ -5201,6 +5201,13 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   const escapeSnapshotResetOnRun = outerOpts.escapeSnapshotResetOnRun !== false;
   const escapeSnapshotSaveMode = String(outerOpts.escapeSnapshotSaveMode || 'auto').trim().toLowerCase();
   const methodRaw = String(outerOpts.method || 'global-al').trim().toLowerCase();
+  // Auto mode is default. Manual inner/outer loop settings are honored only when explicitly requested.
+  const escapeIterationMode = String(
+    outerOpts.escapeIterationMode
+      ?? outerOpts.escapeGlobalIterationMode
+      ?? 'auto'
+  ).trim().toLowerCase();
+  const useManualEscapeIterations = escapeIterationMode === 'manual';
   
   // Auto-set inner method based on global method if not explicitly specified
   let innerMethodRaw = String(
@@ -5216,7 +5223,7 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   const targetIterations = Number.isFinite(Number(outerOpts.maxIterations))
     ? Math.max(1, Math.floor(Number(outerOpts.maxIterations)))
     : 24;
-  const configuredOuterLoops = Number.isFinite(Number(outerOpts.escapeGlobalMaxRestarts))
+  const configuredOuterLoops = useManualEscapeIterations && Number.isFinite(Number(outerOpts.escapeGlobalMaxRestarts))
     ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalMaxRestarts)))
     : 4;
   const activeCfgForEscape = getActiveConfigRef(loadSystemConfigurationsRaw());
@@ -5227,9 +5234,9 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
     : 0;
   const innerIterationsDefault = Math.max(
     1,
-    Math.min(40, Math.max(autoInnerIterationsByBudget, autoInnerIterationsByVariables))
+    Math.min(targetIterations, Math.max(autoInnerIterationsByBudget, autoInnerIterationsByVariables))
   );
-  const innerIterations = Number.isFinite(Number(outerOpts.escapeGlobalLocalIterations))
+  const innerIterations = useManualEscapeIterations && Number.isFinite(Number(outerOpts.escapeGlobalLocalIterations))
     ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalLocalIterations)))
     : innerIterationsDefault;
   const requiredOuterLoops = Math.max(1, Math.ceil(targetIterations / Math.max(1, innerIterations)));

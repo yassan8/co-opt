@@ -9350,10 +9350,6 @@ const collectLegacyCrossRays = async (
       : (Number.isFinite(Number(optimizeState?.best)) ? Number(optimizeState.best) : Number.NaN);
     const optimizeEscapeLoopLabel = (() => {
       const loop = Number(optimizeState?.escapeLoop);
-      const loops = Number(optimizeState?.escapeLoops);
-      if (Number.isFinite(loop) && Number.isFinite(loops) && loops > 0) {
-        return `${Math.max(0, Math.floor(loop))} / ${Math.max(0, Math.floor(loops))}`;
-      }
       if (Number.isFinite(loop) && loop > 0) {
         return `${Math.max(0, Math.floor(loop))}`;
       }
