@@ -311,11 +311,22 @@ function calculateRequirementEdgeAirGapAtRow(rows: any[], gapRowIndex: number, h
     const gapThickness = readRequirementGapThickness(gapRow, rows);
     if (!Number.isFinite(gapThickness)) return Number.NaN;
 
+    const gapThicknessRaw = gapRow?.__cooptGapThickness;
+    const hasAttachedGapThickness = gapThicknessRaw !== undefined
+        && gapThicknessRaw !== null
+        && String(gapThicknessRaw).trim() !== '';
+    const isRealSurfaceGapHost = isRequirementRealSurfaceRow(gapRow) && hasAttachedGapThickness;
+
     let prevSurfaceIdx = -1;
-    for (let i = gapRowIndex - 1; i >= 0; i--) {
-        if (isRequirementRealSurfaceRow(rows[i])) {
-            prevSurfaceIdx = i;
-            break;
+    if (isRealSurfaceGapHost) {
+        // Gap is attached to this surface row: use this row as the entrance-side surface.
+        prevSurfaceIdx = gapRowIndex;
+    } else {
+        for (let i = gapRowIndex - 1; i >= 0; i--) {
+            if (isRequirementRealSurfaceRow(rows[i])) {
+                prevSurfaceIdx = i;
+                break;
+            }
         }
     }
 
@@ -334,17 +345,11 @@ function calculateRequirementEdgeAirGapAtRow(rows: any[], gapRowIndex: number, h
 
     let effectiveHeight = heightRaw;
     if (!Number.isFinite(effectiveHeight) || effectiveHeight <= 0) {
-        // Use prevSurface semidia (the surface on the entrance side of the gap).
-        // This is surf 10 when the gap is between surf 10 and surf 11.
+        // Height-min method for sag comparison across both adjacent surfaces.
         const prevSemidia = Number(prevSurface?.semidia);
         const nextSemidia = Number(nextSurface?.semidia);
-        if (Number.isFinite(prevSemidia) && prevSemidia > 0) {
-            effectiveHeight = prevSemidia;
-        } else if (Number.isFinite(nextSemidia) && nextSemidia > 0) {
-            effectiveHeight = nextSemidia;
-        } else {
-            effectiveHeight = 10;
-        }
+        const candidates = [prevSemidia, nextSemidia].filter((v) => Number.isFinite(v) && v > 0);
+        effectiveHeight = candidates.length > 0 ? Math.min(...(candidates as number[])) : 10;
     }
     if (!Number.isFinite(effectiveHeight) || effectiveHeight <= 0) return Number.NaN;
 

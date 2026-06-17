@@ -1273,12 +1273,20 @@ class SystemRequirementsEditor {
           try {
             const opticalRows = (getOpticalSystemRows as any)(null);
             if (Array.isArray(opticalRows) && selectedSurfaceId) {
-              const selectedSurf = opticalRows.find((s: any) => 
+              let selectedIdx = opticalRows.findIndex((s: any) =>
                 s && String(s.id) === String(selectedSurfaceId)
               );
+              if (selectedIdx < 0) {
+                const asIndex1 = Math.floor(Number(selectedSurfaceId));
+                if (Number.isFinite(asIndex1) && asIndex1 >= 1 && asIndex1 <= opticalRows.length) {
+                  selectedIdx = asIndex1 - 1;
+                }
+              }
+              const selectedSurf = (selectedIdx >= 0 && selectedIdx < opticalRows.length)
+                ? opticalRows[selectedIdx]
+                : null;
               
               if (selectedSurf && String(row?.operand ?? '').trim() === 'EDGE_AIR') {
-                const selectedIdx = opticalRows.findIndex((s: any) => s && String(s.id) === String(selectedSurfaceId));
                 if (selectedIdx >= 0) {
                   const isRealSurface = (surf: any): boolean => {
                     if (!surf || typeof surf !== 'object') return false;
@@ -1290,9 +1298,19 @@ class SystemRequirementsEditor {
                     return !isObject && !isImage && !isCT && !isGapType;
                   };
 
+                  const gapThicknessRaw = selectedSurf?.__cooptGapThickness;
+                  const hasAttachedGapThickness = gapThicknessRaw !== undefined
+                    && gapThicknessRaw !== null
+                    && String(gapThicknessRaw).trim() !== '';
+                  const isRealSurfaceGapHost = isRealSurface(selectedSurf) && hasAttachedGapThickness;
+
                   let prevSurf: any = null;
-                  for (let i = selectedIdx - 1; i >= 0; i--) {
-                    if (isRealSurface(opticalRows[i])) { prevSurf = opticalRows[i]; break; }
+                  if (isRealSurfaceGapHost) {
+                    prevSurf = selectedSurf;
+                  } else {
+                    for (let i = selectedIdx - 1; i >= 0; i--) {
+                      if (isRealSurface(opticalRows[i])) { prevSurf = opticalRows[i]; break; }
+                    }
                   }
                   let nextSurf: any = null;
                   for (let i = selectedIdx + 1; i < opticalRows.length; i++) {
@@ -1700,7 +1718,7 @@ class SystemRequirementsEditor {
                   && String(gapThicknessRaw).trim() !== '';
                 const isGapLike = isGapType || hasAttachedGapThickness || (!isGlass && hasFiniteThickness && Math.abs(thickness) > 1e-12);
 
-                if (isObject || isCT || isImage || isStop) continue;
+                if (isObject || isCT || isImage) continue;
                 if (!isGapLike) continue;
 
                 gapCount++;
@@ -2093,6 +2111,8 @@ class SystemRequirementsEditor {
               String(row?.operand ?? '').trim() === 'EDGE'
               || String(row?.operand ?? '').trim() === 'EDGE_AIR'
             )) {
+              // Force height to be recomputed from the newly selected surface/gap.
+              row.param2 = '';
               this.renderTable();
               this.scheduleEvaluateAndUpdate();
               return;
