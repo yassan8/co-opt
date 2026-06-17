@@ -334,10 +334,17 @@ function calculateRequirementEdgeAirGapAtRow(rows: any[], gapRowIndex: number, h
 
     let effectiveHeight = heightRaw;
     if (!Number.isFinite(effectiveHeight) || effectiveHeight <= 0) {
+        // Use prevSurface semidia (the surface on the entrance side of the gap).
+        // This is surf 10 when the gap is between surf 10 and surf 11.
         const prevSemidia = Number(prevSurface?.semidia);
         const nextSemidia = Number(nextSurface?.semidia);
-        const candidates = [prevSemidia, nextSemidia].filter((v) => Number.isFinite(v) && v > 0);
-        effectiveHeight = candidates.length > 0 ? Math.min(...(candidates as number[])) : 10;
+        if (Number.isFinite(prevSemidia) && prevSemidia > 0) {
+            effectiveHeight = prevSemidia;
+        } else if (Number.isFinite(nextSemidia) && nextSemidia > 0) {
+            effectiveHeight = nextSemidia;
+        } else {
+            effectiveHeight = 10;
+        }
     }
     if (!Number.isFinite(effectiveHeight) || effectiveHeight <= 0) return Number.NaN;
 
