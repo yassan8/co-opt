@@ -183,7 +183,8 @@ async function runOptimizationMvpnative(options = {}) {
   })();
 
   const methodRaw = String(opts.method || 'kkt').trim().toLowerCase();
-  const method = (methodRaw === 'cd' || methodRaw === 'lm' || methodRaw === 'kkt') ? methodRaw : 'kkt';
+  const normalizedMethod = methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction' ? 'global-al' : methodRaw;
+  const method = (normalizedMethod === 'cd' || normalizedMethod === 'lm' || normalizedMethod === 'kkt' || normalizedMethod === 'global-al' || normalizedMethod === 'global-lm') ? normalizedMethod : 'kkt';
 
   const systemConfigSnapshot = (() => {
     if (opts.systemConfigSnapshot && typeof opts.systemConfigSnapshot === 'object') {
@@ -703,8 +704,10 @@ export async function profileOptimizationRun(baseOptions = {}) {
   const methodRaw = String(source.method || 'kkt').trim().toLowerCase();
   const method = methodRaw === 'cd' || methodRaw === 'coordinatedescent'
     ? 'cd'
-    : methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction'
-      ? 'global'
+    : methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction' || methodRaw === 'global-al'
+      ? 'global-al'
+    : methodRaw === 'global-lm'
+      ? 'global-lm'
     : methodRaw === 'lm'
       ? 'lm'
       : 'kkt';
@@ -5184,13 +5187,16 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   const outerOpts = isPlainObject(options) ? { ...options } : {};
   const escapeSnapshotResetOnRun = outerOpts.escapeSnapshotResetOnRun !== false;
   const escapeSnapshotSaveMode = String(outerOpts.escapeSnapshotSaveMode || 'auto').trim().toLowerCase();
-  const methodRaw = String(outerOpts.method || 'global').trim().toLowerCase();
-  const innerMethodRaw = String(
+  const methodRaw = String(outerOpts.method || 'global-al').trim().toLowerCase();
+  
+  // Auto-set inner method based on global method if not explicitly specified
+  let innerMethodRaw = String(
     outerOpts.escapeInnerMethod
       || outerOpts.globalInnerMethod
       || outerOpts.escapeLocalMethod
-      || 'kkt'
+      || (methodRaw === 'global-lm' ? 'lm' : 'kkt')
   ).trim().toLowerCase();
+  
   const innerMethod = innerMethodRaw === 'cd' || innerMethodRaw === 'lm' || innerMethodRaw === 'kkt'
     ? innerMethodRaw
     : 'kkt';
@@ -5430,7 +5436,7 @@ export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
   const methodRaw = String(opts.method || '').trim().toLowerCase();
   const escapeGlobalDepth = Number(opts.__escapeGlobalDepth || 0);
-  if (escapeGlobalDepth <= 0 && (methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction')) {
+  if (escapeGlobalDepth <= 0 && (methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction' || methodRaw === 'global-al' || methodRaw === 'global-lm')) {
     return runEscapeFunctionGlobalOptimization(opts);
   }
   const kktUseWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer !== false;
@@ -5441,6 +5447,10 @@ export async function runOptimizationMVP(options = {}) {
     : [];
   const requestedMethod = (methodRaw === 'kkt' || methodRaw === 'sqp' || methodRaw === 'al' || methodRaw === 'augmentedlagrangian' || methodRaw === 'augmented-lagrangian')
     ? 'kkt'
+    : (methodRaw === 'global-al' || methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction')
+    ? 'global-al'
+    : methodRaw === 'global-lm'
+    ? 'global-lm'
     : (methodRaw === 'cd' || methodRaw === 'coordinatedescent')
     ? 'cd'
     : 'lm';

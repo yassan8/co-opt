@@ -3026,7 +3026,7 @@ export default function App() {
       return false;
     }
   })();
-  const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd' | 'global'>('kkt');
+  const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'>('kkt');
   const [optMaxIterations, setOptMaxIterations] = useState(5000);
   const [optEscapeFunctionWidth, setOptEscapeFunctionWidth] = useState(1);
   const [optEscapeFunctionHeight, setOptEscapeFunctionHeight] = useState(0.1);
@@ -9392,9 +9392,10 @@ const collectLegacyCrossRays = async (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
             Method
-            <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt' | 'lm' | 'cd' | 'global'))} style={{ padding: '4px 6px' }}>
+            <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'))} style={{ padding: '4px 6px' }}>
               <option value="kkt">Augmented Lagrangian (AL)</option>
-              <option value="global">Global (Escape Function)</option>
+              <option value="global-al">Global AL (KKT + Escape Function)</option>
+              <option value="global-lm">Global LM (LM + Escape Function)</option>
               <option value="lm">Levenberg-Marquardt (LM)</option>
               <option value="cd">Coordinate Descent (CD)</option>
             </select>
