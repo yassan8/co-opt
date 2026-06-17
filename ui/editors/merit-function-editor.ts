@@ -247,6 +247,120 @@ function collectRequirementGapThicknesses(rows: any[]): number[] {
     return values;
 }
 
+function computeRequirementSurfaceSagAtHeight(surfaceRow: any, height: number, directionRaw: string): number {
+    if (!surfaceRow || typeof surfaceRow !== 'object') return 0;
+
+    const surfType = String(surfaceRow.surfType || surfaceRow.type || '').trim().toLowerCase();
+    const isToric = surfType === 'toric';
+
+    if (isToric) {
+        const radiusXRaw = surfaceRow.radiusX;
+        const radiusYRaw = surfaceRow.radiusY || surfaceRow.radius;
+        const radiusXInf = String(radiusXRaw ?? '').trim().toUpperCase() === 'INF' || radiusXRaw === Infinity;
+        const radiusYInf = String(radiusYRaw ?? '').trim().toUpperCase() === 'INF' || radiusYRaw === Infinity;
+        const radiusX = radiusXInf ? Infinity : Number(radiusXRaw);
+        const radiusY = radiusYInf ? Infinity : Number(radiusYRaw);
+
+        if ((Number.isFinite(radiusX) || radiusX === Infinity) && (Number.isFinite(radiusY) || radiusY === Infinity)) {
+            const toricParams = {
+                radiusX,
+                radiusY,
+                conic: Number(surfaceRow.conic) || 0,
+                axis: Number(surfaceRow.axis) || 0
+            };
+
+            if (directionRaw === 'X') return toricSurfaceZ(height, 0, toricParams);
+            if (directionRaw === 'Y') return toricSurfaceZ(0, height, toricParams);
+            const sagX = toricSurfaceZ(height, 0, toricParams);
+            const sagY = toricSurfaceZ(0, height, toricParams);
+            return Number.isFinite(sagX) && Number.isFinite(sagY) ? (sagX + sagY) / 2 : 0;
+        }
+        return 0;
+    }
+
+    const radiusRaw = surfaceRow.radius;
+    const radiusInf = String(radiusRaw ?? '').trim().toUpperCase() === 'INF' || radiusRaw === Infinity || radiusRaw === 0;
+    const radius = radiusInf ? Infinity : Number(radiusRaw);
+    if (!(Number.isFinite(radius) || radius === Infinity)) return 0;
+
+    const asphericParams = {
+        radius,
+        conic: Number(surfaceRow.conic) || 0,
+        coef1: Number(surfaceRow.coef1) || 0,
+        coef2: Number(surfaceRow.coef2) || 0,
+        coef3: Number(surfaceRow.coef3) || 0,
+        coef4: Number(surfaceRow.coef4) || 0,
+        coef5: Number(surfaceRow.coef5) || 0,
+        coef6: Number(surfaceRow.coef6) || 0,
+        coef7: Number(surfaceRow.coef7) || 0,
+        coef8: Number(surfaceRow.coef8) || 0,
+        coef9: Number(surfaceRow.coef9) || 0,
+        coef10: Number(surfaceRow.coef10) || 0
+    };
+    const mode = surfType.includes('odd') ? 'odd' : 'even';
+    return asphericSurfaceZ(height, asphericParams, mode);
+}
+
+function calculateRequirementEdgeAirGapAtRow(rows: any[], gapRowIndex: number, heightRaw: number, directionRaw: string): number {
+    if (!Array.isArray(rows) || rows.length === 0) return Number.NaN;
+    if (!Number.isFinite(gapRowIndex) || gapRowIndex < 0 || gapRowIndex >= rows.length) return Number.NaN;
+
+    const gapRow = rows[gapRowIndex];
+    if (!isRequirementGapLikeRow(gapRow)) return Number.NaN;
+
+    const gapThickness = readRequirementGapThickness(gapRow, rows);
+    if (!Number.isFinite(gapThickness)) return Number.NaN;
+
+    let prevSurfaceIdx = -1;
+    for (let i = gapRowIndex - 1; i >= 0; i--) {
+        if (isRequirementRealSurfaceRow(rows[i])) {
+            prevSurfaceIdx = i;
+            break;
+        }
+    }
+
+    let nextSurfaceIdx = -1;
+    for (let i = gapRowIndex + 1; i < rows.length; i++) {
+        if (isRequirementRealSurfaceRow(rows[i])) {
+            nextSurfaceIdx = i;
+            break;
+        }
+    }
+
+    if (prevSurfaceIdx < 0 || nextSurfaceIdx < 0) return Number.NaN;
+
+    const prevSurface = rows[prevSurfaceIdx];
+    const nextSurface = rows[nextSurfaceIdx];
+
+    let effectiveHeight = heightRaw;
+    if (!Number.isFinite(effectiveHeight) || effectiveHeight <= 0) {
+        const prevSemidia = Number(prevSurface?.semidia);
+        const nextSemidia = Number(nextSurface?.semidia);
+        const candidates = [prevSemidia, nextSemidia].filter((v) => Number.isFinite(v) && v > 0);
+        effectiveHeight = candidates.length > 0 ? Math.min(...(candidates as number[])) : 10;
+    }
+    if (!Number.isFinite(effectiveHeight) || effectiveHeight <= 0) return Number.NaN;
+
+    const normalizedDirection = String(directionRaw ?? '').trim().toUpperCase();
+    let sagPrev = computeRequirementSurfaceSagAtHeight(prevSurface, effectiveHeight, normalizedDirection);
+    if (!Number.isFinite(sagPrev)) sagPrev = 0;
+    let sagNext = computeRequirementSurfaceSagAtHeight(nextSurface, effectiveHeight, normalizedDirection);
+    if (!Number.isFinite(sagNext)) sagNext = 0;
+
+    return gapThickness - sagPrev + sagNext;
+}
+
+function collectRequirementEdgeAirGapValues(rows: any[], heightRaw: number, directionRaw: string): number[] {
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const values: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+        if (!isRequirementGapLikeRow(rows[i])) continue;
+        const value = calculateRequirementEdgeAirGapAtRow(rows, i, heightRaw, directionRaw);
+        if (Number.isFinite(value)) values.push(value);
+    }
+    return values;
+}
+
 function collectFiniteThicknessValues(rows: any[]): number[] {
     if (!Array.isArray(rows) || rows.length === 0) return [];
     const values: number[] = [];
@@ -2114,6 +2228,119 @@ class MeritFunctionEditor {
                 }
 
                 return Number.isFinite(edgeThickness) ? edgeThickness : 1e9;
+            }
+
+            case 'EDGE_AIR': {
+                // Edge Air Gap: gapThickness - sag(prev surface) + sag(next surface) at specified height
+                const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+                const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+                const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toUpperCase() : '';
+
+                if (!param1Raw) {
+                    return 1e9;
+                }
+
+                const selectedIndex1 = Math.floor(Number(param1Raw));
+                let height = Number(param2Raw);
+
+                if (!Number.isFinite(selectedIndex1) || selectedIndex1 < 1) {
+                    return 1e9;
+                }
+                if (!Array.isArray(opticalSystemData)) {
+                    return 1e9;
+                }
+
+                const selectedIndex0 = selectedIndex1 - 1;
+
+                const computeEdgeAirGapForRows = (rows: any[]): number => {
+                    if (!Array.isArray(rows) || rows.length === 0) return Number.NaN;
+                    if (selectedIndex0 < 0 || selectedIndex0 >= rows.length) return Number.NaN;
+
+                    const selectedRow = rows[selectedIndex0];
+                    if (!selectedRow || typeof selectedRow !== 'object') return Number.NaN;
+
+                    let gapRowIndex = -1;
+                    if (isRequirementGapLikeRow(selectedRow)) {
+                        gapRowIndex = selectedIndex0;
+                    } else {
+                        const nextRow = rows[selectedIndex0 + 1];
+                        if (nextRow && isRequirementGapLikeRow(nextRow)) {
+                            gapRowIndex = selectedIndex0 + 1;
+                        }
+                    }
+                    if (gapRowIndex < 0 || gapRowIndex >= rows.length) return Number.NaN;
+                    return calculateRequirementEdgeAirGapAtRow(rows, gapRowIndex, height, param3Raw);
+                };
+
+                let edgeAirGap = computeEdgeAirGapForRows(opticalSystemData);
+                if ((!Number.isFinite(edgeAirGap) || Math.abs(edgeAirGap) >= 1e8) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        const liveRows = getOpticalSystemRows(null);
+                        const liveEdgeAirGap = computeEdgeAirGapForRows(liveRows);
+                        if (Number.isFinite(liveEdgeAirGap)) {
+                            edgeAirGap = liveEdgeAirGap;
+                        }
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+
+                return Number.isFinite(edgeAirGap) ? edgeAirGap : 1e9;
+            }
+
+            case 'ALL_EDGE_AIR': {
+                const modeRaw = String(operand?.param1 ?? '').trim().toUpperCase();
+                const useMinimum = modeRaw !== 'MAX';
+                const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+                const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toUpperCase() : '';
+                const height = Number(param2Raw);
+
+                let edgeAirValues = collectRequirementEdgeAirGapValues(opticalSystemData, height, param3Raw);
+
+                if ((edgeAirValues.length === 0 || edgeAirValues.every((value) => !Number.isFinite(value))) && (isCurrentOperand || isOperandActiveConfig)) {
+                    let prevPreferTable: any;
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                            (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
+                        }
+                        const liveRows = getOpticalSystemRows(null);
+                        edgeAirValues = collectRequirementEdgeAirGapValues(liveRows, height, param3Raw);
+                    } catch (_) {
+                    } finally {
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                if (prevPreferTable === undefined) {
+                                    delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
+                                } else {
+                                    (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+
+                if (!Array.isArray(edgeAirValues) || edgeAirValues.length === 0) {
+                    return 1e9;
+                }
+
+                const finiteValues = edgeAirValues.filter((value) => Number.isFinite(value));
+                if (finiteValues.length === 0) return 1e9;
+                return useMinimum ? Math.min(...finiteValues) : Math.max(...finiteValues);
             }
 
             case 'DBLT_K':

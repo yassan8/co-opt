@@ -2310,7 +2310,20 @@ export async function compareGlobalVsKktBenchmark(baseOptions = {}) {
       filterOutliers,
       maxIterations: Number(source.maxIterations ?? common.maxIterations ?? 24) || 24,
       escapeGlobalMaxRestarts: Number(source.escapeGlobalMaxRestarts ?? common.escapeGlobalMaxRestarts ?? 4) || 4,
-      escapeGlobalLocalIterations: Number(source.escapeGlobalLocalIterations ?? common.escapeGlobalLocalIterations ?? Math.max(8, Math.min(40, Number(source.maxIterations ?? common.maxIterations ?? 24))))
+      escapeGlobalLocalIterations: Number(
+        source.escapeGlobalLocalIterations
+          ?? common.escapeGlobalLocalIterations
+          ?? Math.max(
+            1,
+            Math.min(
+              40,
+              Math.ceil(
+                Number(source.maxIterations ?? common.maxIterations ?? 24)
+                / Math.max(1, Number(source.escapeGlobalMaxRestarts ?? common.escapeGlobalMaxRestarts ?? 4))
+              )
+            )
+          )
+      )
     },
     filtering: {
       kkt: {
@@ -5203,13 +5216,22 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   const targetIterations = Number.isFinite(Number(outerOpts.maxIterations))
     ? Math.max(1, Math.floor(Number(outerOpts.maxIterations)))
     : 24;
-  const innerIterationsDefault = Math.max(8, Math.min(40, targetIterations));
-  const innerIterations = Number.isFinite(Number(outerOpts.escapeGlobalLocalIterations))
-    ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalLocalIterations)))
-    : innerIterationsDefault;
   const configuredOuterLoops = Number.isFinite(Number(outerOpts.escapeGlobalMaxRestarts))
     ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalMaxRestarts)))
     : 4;
+  const activeCfgForEscape = getActiveConfigRef(loadSystemConfigurationsRaw());
+  const escapeVariableCount = Math.max(0, captureEscapeVariableState(activeCfgForEscape).length);
+  const autoInnerIterationsByBudget = Math.max(1, Math.ceil(targetIterations / Math.max(1, configuredOuterLoops)));
+  const autoInnerIterationsByVariables = escapeVariableCount > 0
+    ? Math.ceil(escapeVariableCount * 1.5)
+    : 0;
+  const innerIterationsDefault = Math.max(
+    1,
+    Math.min(40, Math.max(autoInnerIterationsByBudget, autoInnerIterationsByVariables))
+  );
+  const innerIterations = Number.isFinite(Number(outerOpts.escapeGlobalLocalIterations))
+    ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalLocalIterations)))
+    : innerIterationsDefault;
   const requiredOuterLoops = Math.max(1, Math.ceil(targetIterations / Math.max(1, innerIterations)));
   // Global(Escape Function) should keep running until total iterations reach maxIterations.
   const outerLoops = Math.max(configuredOuterLoops, requiredOuterLoops);

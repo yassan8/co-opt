@@ -540,6 +540,24 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "Controls edge thickness at specified height. Select lens element (Lens, Doublet, Triplet). Supports toric surfaces with X/Y direction. For spherical/aspheric, leave Direction blank for radial calculation. Unit: mm."
   },
+  "EDGE_AIR": {
+    name: "EDGE_AIR",
+    description: "Edge Air Gap",
+    parameters: [
+      { key: "param1", label: "Gap" },
+      { key: "param2", label: "Height" },
+      { key: "param3", label: "Direction", description: "X/Y/blank=Radial" }
+    ],
+    notes: "Evaluates edge air distance between neighboring lens surfaces across the selected gap at specified height. Supports toric surfaces with X/Y direction. For spherical/aspheric, leave Direction blank for radial calculation. Unit: mm."
+  },
+  "ALL_EDGE_AIR": {
+    name: "All Edge Air Gap",
+    description: "All Edge Air Gap",
+    parameters: [
+      { key: "param1", label: "Mode", description: "MIN or MAX" }
+    ],
+    notes: "Evaluates edge air distances for all gap-like rows. Mode=MIN returns the smallest finite edge air gap, so use `>= target` to constrain every edge air gap from below. Mode=MAX returns the largest finite edge air gap, so use `<= target` to constrain every edge air gap from above."
+  },
   "CTCT": {
     name: "CTCT",
     description: "Center Thickness",
@@ -639,7 +657,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
   'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'LCA_RMS_UM', 'CRA_DEG', 'OPD_RMS_WAVES',
   'ZERN_COEFF',
-  'EDGE', 'CTCT', 'DBLT_K', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
+  'EDGE', 'EDGE_AIR', 'ALL_EDGE_AIR', 'CTCT', 'DBLT_K', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
 ]);
 
 /**

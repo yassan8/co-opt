@@ -382,6 +382,8 @@ class SystemRequirementsEditor {
     const formatOperandLabel = (key: string): string => {
       const labelOverrides: Record<string, string> = {
         EDGE: 'Edge Thickness',
+        EDGE_AIR: 'Edge Air Gap',
+        ALL_EDGE_AIR: 'All Edge Air Gap',
         CTCT: 'Center Thickness',
         DBLT_K: 'Doublet Bending K',
         CRA_DEG: 'Chief@Image (deg)',
@@ -1066,7 +1068,7 @@ class SystemRequirementsEditor {
           row.param3 = '';
           row.param4 = '';
           row.param5 = '';
-        } else if (row.operand === 'RADI_ALL') {
+        } else if (row.operand === 'RADI_ALL' || row.operand === 'ALL_EDGE_AIR') {
           row.param1 = 'MIN';
           row.param2 = '';
           row.param3 = '';
@@ -1186,10 +1188,16 @@ class SystemRequirementsEditor {
         const isSpotSizeSurfaceParam = field === 'param5' && String(row?.operand ?? '').startsWith('SPOT_SIZE');
         
         // EDGE param2: Height selection (based on semidia)
-        const isEdgeHeightParam = field === 'param2' && String(row?.operand ?? '').trim() === 'EDGE';
+        const isEdgeHeightParam = field === 'param2' && (
+          String(row?.operand ?? '').trim() === 'EDGE'
+          || String(row?.operand ?? '').trim() === 'EDGE_AIR'
+        );
         
         // EDGE param3: Direction selection (X/Y/blank=Radial)
-        const isEdgeDirectionParam = field === 'param3' && String(row?.operand ?? '').trim() === 'EDGE';
+        const isEdgeDirectionParam = field === 'param3' && (
+          String(row?.operand ?? '').trim() === 'EDGE'
+          || String(row?.operand ?? '').trim() === 'EDGE_AIR'
+        );
         
         if (isSpotSizeSurfaceParam) {
           // SPOT_SIZE param5: Surface selection dropdown (1-based surface numbers, empty=image)
@@ -1258,7 +1266,7 @@ class SystemRequirementsEditor {
           control.style.padding = '2px 4px';
           control.style.boxSizing = 'border-box';
           
-          // Get semidia from param1 (surface ID)
+          // Get semidia from param1 (surface/gap ID)
           const selectedSurfaceId = row.param1;
           let semidia = 10; // default fallback
           
@@ -1273,6 +1281,35 @@ class SystemRequirementsEditor {
                 const semidiaVal = Number(selectedSurf.semidia);
                 if (Number.isFinite(semidiaVal) && semidiaVal > 0) {
                   semidia = semidiaVal;
+                }
+              } else if (selectedSurf && String(row?.operand ?? '').trim() === 'EDGE_AIR') {
+                const selectedIdx = opticalRows.findIndex((s: any) => s && String(s.id) === String(selectedSurfaceId));
+                if (selectedIdx >= 0) {
+                  const isRealSurface = (surf: any): boolean => {
+                    if (!surf || typeof surf !== 'object') return false;
+                    const objType = String(surf['object type'] ?? surf.object ?? surf.surfType ?? '').trim().toLowerCase();
+                    const isObject = objType === 'object';
+                    const isImage = objType === 'image';
+                    const isCT = objType === 'ct' || objType.includes('coordinate') || objType.includes('coordtrans');
+                    const isGapType = objType === 'gap' || objType.includes('gap');
+                    return !isObject && !isImage && !isCT && !isGapType;
+                  };
+
+                  let prevSurf: any = null;
+                  for (let i = selectedIdx - 1; i >= 0; i--) {
+                    if (isRealSurface(opticalRows[i])) { prevSurf = opticalRows[i]; break; }
+                  }
+                  let nextSurf: any = null;
+                  for (let i = selectedIdx + 1; i < opticalRows.length; i++) {
+                    if (isRealSurface(opticalRows[i])) { nextSurf = opticalRows[i]; break; }
+                  }
+
+                  const prevSemidia = Number(prevSurf?.semidia);
+                  const nextSemidia = Number(nextSurf?.semidia);
+                  const candidates = [prevSemidia, nextSemidia].filter((v: number) => Number.isFinite(v) && v > 0);
+                  if (candidates.length > 0) {
+                    semidia = Math.min(...candidates);
+                  }
                 }
               }
             }
@@ -1371,7 +1408,11 @@ class SystemRequirementsEditor {
 
           const current = String(row[field] || '').trim();
           control.value = ['+', '-', '*', '/'].includes(current) ? current : '+';
-        } else if (field === 'param1' && (String(row?.operand ?? '').trim() === 'GAP' || String(row?.operand ?? '').trim() === 'THIC')) {
+        } else if (field === 'param1' && (
+          String(row?.operand ?? '').trim() === 'GAP'
+          || String(row?.operand ?? '').trim() === 'THIC'
+          || String(row?.operand ?? '').trim() === 'ALL_EDGE_AIR'
+        )) {
           control = document.createElement('select');
           control.style.width = '100%';
           control.style.fontSize = '12px';
@@ -1624,6 +1665,54 @@ class SystemRequirementsEditor {
             console.warn('Failed to populate EDGE param1 dropdown:', err);
           }
           
+          control.value = String(row[field] || '');
+        } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'EDGE_AIR') {
+          // EDGE_AIR param1: Gap selection (air gaps only)
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+
+          try {
+            const opticalRows = (getOpticalSystemRows as any)(null);
+            if (Array.isArray(opticalRows)) {
+              let gapCount = 0;
+              for (let i = 0; i < opticalRows.length; i++) {
+                const surfRow = opticalRows[i];
+                if (!surfRow) continue;
+                const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim().toLowerCase();
+                const material = String(surfRow.material || '').trim().toLowerCase();
+                const thickness = Number(surfRow.thickness);
+                const isObject = objType === 'object';
+                const isImage = objType === 'image';
+                const isCT = objType === 'ct' || objType.includes('coordinate') || objType.includes('coordtrans');
+                const isStop = objType === 'stop' || objType === 'sto' || objType === 'aperturestop';
+                const isGlass = material && material !== 'air' && material !== '';
+                const isGapType = objType === 'gap' || objType.includes('gap');
+                const hasFiniteThickness = Number.isFinite(thickness);
+                const gapThicknessRaw = surfRow.__cooptGapThickness;
+                const hasAttachedGapThickness = gapThicknessRaw !== undefined
+                  && gapThicknessRaw !== null
+                  && String(gapThicknessRaw).trim() !== '';
+                const isGapLike = isGapType || hasAttachedGapThickness || (!isGlass && hasFiniteThickness && Math.abs(thickness) > 1e-12);
+
+                if (isObject || isCT || isImage || isStop) continue;
+                if (!isGapLike) continue;
+
+                gapCount++;
+                const opt = document.createElement('option');
+                opt.value = String((surfRow?.id !== undefined && surfRow?.id !== null) ? surfRow.id : (i + 1));
+                opt.textContent = `Gap ${gapCount}`;
+                control.appendChild(opt);
+              }
+            }
+          } catch (err) {
+            console.warn('Failed to populate EDGE_AIR param1 dropdown:', err);
+          }
+
           control.value = String(row[field] || '');
         } else if (isPrincipalPointZoomGroupParam) {
           control = document.createElement('select');
@@ -1998,8 +2087,11 @@ class SystemRequirementsEditor {
               return;
             }
             
-            // Re-render table if EDGE param1 changes (to update Height dropdown based on new semidia)
-            if (field === 'param1' && String(row?.operand ?? '').trim() === 'EDGE') {
+            // Re-render table if EDGE/EDGE_AIR param1 changes (to update Height dropdown based on semidia)
+            if (field === 'param1' && (
+              String(row?.operand ?? '').trim() === 'EDGE'
+              || String(row?.operand ?? '').trim() === 'EDGE_AIR'
+            )) {
               this.renderTable();
               this.scheduleEvaluateAndUpdate();
               return;
@@ -2099,13 +2191,15 @@ class SystemRequirementsEditor {
             let displayVal = String(val);
             if (operandName === 'CTCT' && i === 1) {
               displayVal = getCtctElementLabelBySurfaceValue(val);
+            } else if (operandName === 'EDGE_AIR' && i === 1) {
+              displayVal = getCtctElementLabelBySurfaceValue(val) || String(val);
             } else if (operandName === 'SDIST' && (i === 1 || i === 2)) {
               displayVal = getCtctElementLabelBySurfaceValue(val) || String(val);
             } else if (operandName === 'REQMATH' && (i === 1 || i === 3)) {
               displayVal = getRequirementReferenceLabelById(val, row?.id);
             } else if (operandName === 'REQMATH' && i === 2) {
               displayVal = String(val || '+').trim() || '+';
-            } else if ((operandName === 'GAP' || operandName === 'THIC') && i === 1) {
+            } else if ((operandName === 'GAP' || operandName === 'THIC' || operandName === 'ALL_EDGE_AIR') && i === 1) {
               displayVal = String(val).trim().toUpperCase() === 'MAX' ? 'Max' : 'Min';
             } else if (operandName === 'DBLT_K' && i === 1) {
               const blocks = getCachedBlocksForConfigHint(row?.configId);
