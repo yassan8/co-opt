@@ -365,9 +365,26 @@ function calculateRequirementEdgeAirGapAtRow(rows: any[], gapRowIndex: number, h
 function collectRequirementEdgeAirGapValues(rows: any[], heightRaw: number, directionRaw: string): number[] {
     if (!Array.isArray(rows) || rows.length === 0) return [];
     const values: number[] = [];
+    const seenGapKeys = new Set<string>();
     for (let i = 0; i < rows.length; i++) {
-        if (!isRequirementGapLikeRow(rows[i])) continue;
-        const value = calculateRequirementEdgeAirGapAtRow(rows, i, heightRaw, directionRaw);
+        const row = rows[i];
+        if (!isRequirementGapLikeRow(row)) continue;
+
+        // Prefer stable row-id based selection to avoid index drift issues.
+        const idKeyRaw = String(row?.id ?? '').trim();
+        const gapKey = idKeyRaw ? `id:${idKeyRaw}` : `idx:${i}`;
+        if (seenGapKeys.has(gapKey)) continue;
+        seenGapKeys.add(gapKey);
+
+        let gapRowIndex = i;
+        if (idKeyRaw) {
+            const byIdIndex = rows.findIndex((candidate: any) =>
+                candidate && String(candidate?.id ?? '').trim() === idKeyRaw
+            );
+            if (byIdIndex >= 0) gapRowIndex = byIdIndex;
+        }
+
+        const value = calculateRequirementEdgeAirGapAtRow(rows, gapRowIndex, heightRaw, directionRaw);
         if (Number.isFinite(value)) values.push(value);
     }
     return values;
@@ -446,22 +463,25 @@ function collectRequirementSurfaceRadiusStates(rows: any[]): { finiteValues: num
     return { finiteValues, hasInfinite, hasInvalid };
 }
 
+function resolveRequirementRowIndexByIdOrIndex(rows: any[], selectionRaw: any): number {
+    if (!Array.isArray(rows) || rows.length === 0) return -1;
+
+    const raw = String(selectionRaw ?? '').trim();
+    if (!raw) return -1;
+
+    const byIdIndex = rows.findIndex((row: any) => row && String(row?.id ?? '').trim() === raw);
+    if (byIdIndex >= 0) return byIdIndex;
+
+    const index1 = Math.floor(Number(raw));
+    if (!Number.isFinite(index1) || index1 < 1) return -1;
+    const index0 = index1 - 1;
+    return (index0 >= 0 && index0 < rows.length) ? index0 : -1;
+}
+
 function resolveRequirementSurfaceBySelection(rows: any[], selectionRaw: any): { row: any; index: number } | null {
-    if (!Array.isArray(rows) || rows.length === 0) return null;
-    const surfaceNum = Math.floor(Number(selectionRaw));
-    if (!Number.isFinite(surfaceNum) || surfaceNum < 1) return null;
-
-    const byIdIndex = rows.findIndex((row: any) => Number(row?.id) === surfaceNum);
-    if (byIdIndex >= 0) {
-        return { row: rows[byIdIndex], index: byIdIndex };
-    }
-
-    const surfaceIndex0 = surfaceNum - 1;
-    if (surfaceIndex0 >= 0 && surfaceIndex0 < rows.length) {
-        return { row: rows[surfaceIndex0], index: surfaceIndex0 };
-    }
-
-    return null;
+    const index = resolveRequirementRowIndexByIdOrIndex(rows, selectionRaw);
+    if (index < 0 || index >= rows.length) return null;
+    return { row: rows[index], index };
 }
 
 function calculateRequirementSurfaceDistance(rows: any[], startSelectionRaw: any, endSelectionRaw: any): number {
@@ -470,11 +490,13 @@ function calculateRequirementSurfaceDistance(rows: any[], startSelectionRaw: any
     const startHit = resolveRequirementSurfaceBySelection(rows, startSelectionRaw);
     const endHit = resolveRequirementSurfaceBySelection(rows, endSelectionRaw);
     if (!startHit || !endHit) return NaN;
-    if (startHit.index >= endHit.index) return NaN;
+
+    const startIndex = Math.min(startHit.index, endHit.index);
+    const endIndex = Math.max(startHit.index, endHit.index);
 
     let total = 0;
     let sawFinite = false;
-    for (let index = startHit.index; index < endHit.index; index++) {
+    for (let index = startIndex; index < endIndex; index++) {
         const row = rows[index];
         if (!row || typeof row !== 'object') continue;
 
@@ -2251,21 +2273,15 @@ class MeritFunctionEditor {
                 if (!param1Raw) {
                     return 1e9;
                 }
-
-                const selectedIndex1 = Math.floor(Number(param1Raw));
                 let height = Number(param2Raw);
-
-                if (!Number.isFinite(selectedIndex1) || selectedIndex1 < 1) {
-                    return 1e9;
-                }
                 if (!Array.isArray(opticalSystemData)) {
                     return 1e9;
                 }
 
-                const selectedIndex0 = selectedIndex1 - 1;
-
                 const computeEdgeAirGapForRows = (rows: any[]): number => {
                     if (!Array.isArray(rows) || rows.length === 0) return Number.NaN;
+
+                    const selectedIndex0 = resolveRequirementRowIndexByIdOrIndex(rows, param1Raw);
                     if (selectedIndex0 < 0 || selectedIndex0 >= rows.length) return Number.NaN;
 
                     const selectedRow = rows[selectedIndex0];
