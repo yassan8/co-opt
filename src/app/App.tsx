@@ -9139,6 +9139,10 @@ const collectLegacyCrossRays = async (
           await applyHostSystemConfigSnapshot(resultConfigSnapshot, resultRowsSnapshot);
         }
 
+        const committedRowsSnapshot = Array.isArray(resultRowsSnapshot) && resultRowsSnapshot.length > 0
+          ? (cloneJsonLocal(resultRowsSnapshot) || resultRowsSnapshot)
+          : loadHostRowsSnapshot();
+
         try {
           if ((window as any).__COOPT_AL_DIAG !== true) throw new Error('AL diag disabled');
           const __diagHostRows = hostWindow.getOpticalSystemRows
@@ -9175,7 +9179,9 @@ const collectLegacyCrossRays = async (
 
         if (!tsAborted) {
           try {
-            const latestRowsBeforeReload = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+            const latestRowsBeforeReload = Array.isArray(committedRowsSnapshot) && committedRowsSnapshot.length > 0
+              ? (cloneJsonLocal(committedRowsSnapshot) || committedRowsSnapshot)
+              : (hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : []);
             if (Array.isArray(latestRowsBeforeReload) && latestRowsBeforeReload.length > 0) {
               const finalizeRowsFn = hostWindow.__cooptRefreshRequirementTableScoreForOptimize;
               if (typeof finalizeRowsFn === 'function') {
@@ -9183,9 +9189,16 @@ const collectLegacyCrossRays = async (
               }
             }
 
-            await syncHostDesignIntentAndRequirements(hostWindow, 'optimize-finished-reload', 'after');
+            await syncHostDesignIntentAndRequirements(
+              hostWindow,
+              'optimize-finished-reload',
+              'after',
+              Array.isArray(latestRowsBeforeReload) ? latestRowsBeforeReload : []
+            );
 
-            const rowsAfter = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+            const rowsAfter = Array.isArray(committedRowsSnapshot) && committedRowsSnapshot.length > 0
+              ? (cloneJsonLocal(committedRowsSnapshot) || committedRowsSnapshot)
+              : (hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : []);
             if (Array.isArray(rowsAfter) && rowsAfter.length > 0) {
               await maybeAutoRender(rowsAfter, { force: true });
               const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -9216,7 +9229,9 @@ const collectLegacyCrossRays = async (
           } catch (_) {}
 
           try {
-            const latestRows = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+            const latestRows = Array.isArray(committedRowsSnapshot) && committedRowsSnapshot.length > 0
+              ? (cloneJsonLocal(committedRowsSnapshot) || committedRowsSnapshot)
+              : (hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : []);
             await syncHostDesignIntentAndRequirements(
               hostWindow,
               'optimize-finished-sync',
