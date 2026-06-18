@@ -2899,7 +2899,7 @@ export default function App() {
   const [renderCompareOffsetDirection, setRenderCompareOffsetDirection] = useState<RenderCompareOffsetDirection>('centered');
   const [renderCompareOffsetStepMm, setRenderCompareOffsetStepMm] = useState(20);
   const [renderCompareAlignReference, setRenderCompareAlignReference] = useState<RenderCompareAlignReference>('object');
-  const [renderRayCount, setRenderRayCount] = useState(5);
+  const [renderRayCount, setRenderRayCount] = useState(6);
   const [renderSurfaceColorsCollapsed, setRenderSurfaceColorsCollapsed] = useState(true);
   const [renderLensColorTargets, setRenderLensColorTargets] = useState<RenderLensColorTarget[]>([]);
   const [renderColorUiRevision, setRenderColorUiRevision] = useState(0);
@@ -2912,7 +2912,7 @@ export default function App() {
   const optimizeWakeLockRef = useRef<any>(null);
   const renderViewModeRef = useRef<'3D' | 'XZ' | 'YZ'>('3D');
   const renderViewAxisRef = useRef<'YZ' | 'XZ'>('YZ');
-  const renderRayCountRef = useRef(5);
+  const renderRayCountRef = useRef(6);
   const renderRayCountDebounceRef = useRef<number | null>(null);
   const renderRedrawInFlightRef = useRef(false);
   const renderDrawRequestSeqRef = useRef(0);
