@@ -4824,6 +4824,16 @@ export default function App() {
         if (applyToken && lastOptimizeApplyToken === applyToken) {
           return;
         }
+
+        // Prefer canonical optimizer snapshot (blocks + active config) when available.
+        // Relying only on table rows can lose block linkage metadata and later reloads
+        // may fall back to pre-optimization blocks.
+        if (undoSnapshots?.afterConfig && typeof undoSnapshots.afterConfig === 'object') {
+          try {
+            applySystemConfigSnapshotSync(undoSnapshots.afterConfig);
+          } catch (_) {}
+        }
+
         if (undoHistory) {
           undoHistory.isExecuting = true;
         }
