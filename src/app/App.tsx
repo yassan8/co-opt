@@ -8411,6 +8411,31 @@ const collectLegacyCrossRays = async (
         ? `optimize-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
         : '';
 
+      const publishRunConfigForOptimizerOnly = (cfg: any) => {
+        const clonedConfig = cfg && typeof cfg === 'object'
+          ? (cloneJsonLocal(cfg) || cfg)
+          : null;
+        const targets = [w, hostWindow].filter((target, index, arr) => target && arr.indexOf(target) === index);
+        for (const target of targets) {
+          try {
+            if (clonedConfig) {
+              target.__cooptSystemConfig = cloneJsonLocal(clonedConfig) || clonedConfig;
+              target.__cooptPreferRuntimeSystemConfig = true;
+              target.__cooptDeferDerivedUiUntil = Date.now() + 60000;
+            }
+          } catch (_) {}
+        }
+      };
+
+      const clearRunConfigForOptimizerOnly = () => {
+        const targets = [w, hostWindow].filter((target, index, arr) => target && arr.indexOf(target) === index);
+        for (const target of targets) {
+          try { delete target.__cooptPreferRuntimeSystemConfig; } catch (_) {}
+          try { delete target.__cooptSystemConfig; } catch (_) {}
+          try { delete target.__cooptDeferDerivedUiUntil; } catch (_) {}
+        }
+      };
+
       const maxIterations = Math.max(1, Math.floor(Number(optMaxIterations) || 1));
       const maxEscapeLoops = Math.max(1, Math.floor(Number(optMaxEscapeLoops) || 1));
 
@@ -9060,21 +9085,24 @@ const collectLegacyCrossRays = async (
           };
         })();
 
-        const tsResult: any = await optimizerRunner.run({
-          opticalSystemRows: rows,
-          sourceRows,
-          objectRows,
-          activeConfigId,
-          systemRequirementsRows,
-          method: optMethod,
-          maxIterations,
-          escapeGlobalMaxRestarts: maxEscapeLoops,
-          escapeFunctionWidth: optEscapeFunctionWidth,
-          escapeFunctionHeight: optEscapeFunctionHeight,
-          preferNative: isTauriRuntime(),
-          kktUseWasmPilotOptimizer: true,
-          shouldStop: () => !!(window as any).__cooptOptimizeStopRequested,
-          onProgress: (ev: any) => {
+        let tsResult: any = null;
+        try {
+          publishRunConfigForOptimizerOnly(clickSnapshot?.config || frozenHostConfigForRun);
+          tsResult = await optimizerRunner.run({
+            opticalSystemRows: rows,
+            sourceRows,
+            objectRows,
+            activeConfigId,
+            systemRequirementsRows,
+            method: optMethod,
+            maxIterations,
+            escapeGlobalMaxRestarts: maxEscapeLoops,
+            escapeFunctionWidth: optEscapeFunctionWidth,
+            escapeFunctionHeight: optEscapeFunctionHeight,
+            preferNative: isTauriRuntime(),
+            kktUseWasmPilotOptimizer: true,
+            shouldStop: () => !!(window as any).__cooptOptimizeStopRequested,
+            onProgress: (ev: any) => {
             const phase = String(ev?.phase ?? 'running');
             const phaseLower = phase.toLowerCase();
             const progressMethod = String(ev?.method ?? (optMethod || 'kkt')).trim().toLowerCase();
@@ -9149,8 +9177,11 @@ const collectLegacyCrossRays = async (
                 ? tsBestRequirementScore
                 : prev.bestRequirementScore,
             }));
-          },
-        });
+            },
+          });
+        } finally {
+          clearRunConfigForOptimizerOnly();
+        }
 
         if (!tsResult || tsResult.ok !== true) {
           throw new Error(`[${optimizerRunner.source}] ${String(tsResult?.reason || 'TS/WASM optimizer returned non-ok result')}`);
