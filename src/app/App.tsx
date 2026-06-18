@@ -5034,7 +5034,9 @@ export default function App() {
     ) => {
       if (!Array.isArray(rows) || rows.length === 0) return Number.NaN;
       const startedAt = Date.now();
-      await applyOptimizedRows(rows, '', undefined, { syncBlocks: options?.syncBlocks !== false, recordUndo: false });
+      if (options?.syncBlocks !== false) {
+        syncRowsBackToActiveBlocks(rows);
+      }
       await requestRequirementReeval(reason, true);
       await waitRequirementEvalDone(startedAt);
       return readRequirementTableScoreFromHost();
@@ -5189,6 +5191,8 @@ export default function App() {
       if (ev.key !== optimizeRowsSyncKey || !ev.newValue) return;
       try {
         const payload = JSON.parse(ev.newValue);
+        const senderId = String(payload?.senderId ?? '').trim();
+        if (senderId && senderId === getOrCreateCooptWindowSyncSenderId()) return;
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
         const token = String(payload?.ts ?? payload?.token ?? '');
         const undoSnapshots = {
@@ -5223,6 +5227,8 @@ export default function App() {
           });
           const unlisten = await (mod as any).listen('coopt-optimize-rows-sync', (ev: any) => {
             try {
+              const senderId = String(ev?.payload?.senderId ?? '').trim();
+              if (senderId && senderId === getOrCreateCooptWindowSyncSenderId()) return;
               const rows = Array.isArray(ev?.payload?.rows) ? ev.payload.rows : [];
               const token = String(ev?.payload?.ts ?? ev?.payload?.token ?? '');
               const undoSnapshots = {
@@ -9462,6 +9468,7 @@ const collectLegacyCrossRays = async (
               localStorage.setItem(optimizeRowsSyncKey, JSON.stringify({
                 rows: rowsAfter,
                 token: applyToken,
+                senderId: getOrCreateCooptWindowSyncSenderId(),
                 syncBlocks: true,
                 afterConfigSnapshot: afterHostConfigSnapshot,
                 afterRowsSnapshot: afterHostRowsSnapshot,
@@ -9473,6 +9480,7 @@ const collectLegacyCrossRays = async (
                   await (mod as any).emit('coopt-optimize-rows-sync', {
                     rows: rowsAfter,
                     token: applyToken,
+                    senderId: getOrCreateCooptWindowSyncSenderId(),
                     syncBlocks: true,
                     afterConfigSnapshot: afterHostConfigSnapshot,
                     afterRowsSnapshot: afterHostRowsSnapshot,

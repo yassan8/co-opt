@@ -11701,11 +11701,10 @@ export async function runOptimizationMVP(options = {}) {
         }
       } catch (_) {}
 
-      try {
-        if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.evaluateAndUpdateNow === 'function') {
-          await Promise.resolve(window.systemRequirementsEditor.evaluateAndUpdateNow());
-        }
-      } catch (_) {}
+      // Do not run a final System Requirements re-evaluation here. The AL path has
+      // just restored/persisted the tracked best snapshot; re-evaluating from the
+      // ambient UI table can overwrite that best Req snapshot with the last/host
+      // state before the result snapshot is returned to App.tsx.
 
       // Get final best evaluation for fallback decision (objective-space)
       const bestFinalEval = restoredBestFinalEval || getBestScoreEvalSoFar();
