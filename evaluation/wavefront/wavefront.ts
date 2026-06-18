@@ -6873,7 +6873,6 @@ export class WavefrontAberrationAnalyzer {
                             at: Date.now()
                         };
                     }
-                    console.warn('🧭 [OPD Backend] Rust-WASM (generateWavefrontMap preload)');
                 } catch (_) {
                     // ignore
                 }
