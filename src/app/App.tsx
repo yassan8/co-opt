@@ -4830,6 +4830,7 @@ export default function App() {
       },
       options?: {
         syncBlocks?: boolean;
+        recordUndo?: boolean;
       }
     ) => {
       if (!Array.isArray(rows) || rows.length === 0) return;
@@ -4846,6 +4847,9 @@ export default function App() {
           return;
         }
 
+        beforeSnapshot = loadSystemConfigSnapshot();
+        beforeRowsSnapshot = loadOpticalRowsSnapshot();
+
         // Prefer canonical optimizer snapshot (blocks + active config) when available.
         // Relying only on table rows can lose block linkage metadata and later reloads
         // may fall back to pre-optimization blocks.
@@ -4858,8 +4862,6 @@ export default function App() {
         if (undoHistory) {
           undoHistory.isExecuting = true;
         }
-        beforeSnapshot = loadSystemConfigSnapshot();
-        beforeRowsSnapshot = loadOpticalRowsSnapshot();
         const table = w.tableOpticalSystem;
         if (table && typeof table.setData === 'function') {
           await table.setData(rows);
@@ -4893,13 +4895,15 @@ export default function App() {
       }
 
       try {
-        recordOptimizationUndoFromSnapshots(
-          undoSnapshots?.beforeConfig ?? beforeSnapshot,
-          Array.isArray(undoSnapshots?.beforeRows) ? undoSnapshots?.beforeRows : beforeRowsSnapshot,
-          undoSnapshots?.afterConfig ?? afterSnapshot,
-          Array.isArray(undoSnapshots?.afterRows) ? undoSnapshots?.afterRows : afterRowsSnapshot,
-          'Optimization apply'
-        );
+        if (options?.recordUndo !== false) {
+          recordOptimizationUndoFromSnapshots(
+            undoSnapshots?.beforeConfig ?? beforeSnapshot,
+            Array.isArray(undoSnapshots?.beforeRows) ? undoSnapshots?.beforeRows : beforeRowsSnapshot,
+            undoSnapshots?.afterConfig ?? afterSnapshot,
+            Array.isArray(undoSnapshots?.afterRows) ? undoSnapshots?.afterRows : afterRowsSnapshot,
+            'Optimization apply'
+          );
+        }
       } catch (_) {}
     };
 
@@ -4911,7 +4915,7 @@ export default function App() {
     ) => {
       if (!Array.isArray(rows) || rows.length === 0) return Number.NaN;
       const startedAt = Date.now();
-      await applyOptimizedRows(rows, '', undefined, { syncBlocks: options?.syncBlocks !== false });
+      await applyOptimizedRows(rows, '', undefined, { syncBlocks: options?.syncBlocks !== false, recordUndo: false });
       await requestRequirementReeval(reason, true);
       await waitRequirementEvalDone(startedAt);
       return readRequirementTableScoreFromHost();
@@ -5069,12 +5073,10 @@ export default function App() {
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
         const token = String(payload?.ts ?? payload?.token ?? '');
         const undoSnapshots = {
-          beforeConfig: payload?.beforeConfigSnapshot,
-          beforeRows: Array.isArray(payload?.beforeRowsSnapshot) ? payload.beforeRowsSnapshot : [],
           afterConfig: payload?.afterConfigSnapshot,
           afterRows: Array.isArray(payload?.afterRowsSnapshot) ? payload.afterRowsSnapshot : [],
         };
-        void applyOptimizedRows(rows, token, undoSnapshots, { syncBlocks: payload?.syncBlocks === true });
+        void applyOptimizedRows(rows, token, undoSnapshots, { syncBlocks: payload?.syncBlocks === true, recordUndo: false });
       } catch (_) {}
     };
 
@@ -5100,12 +5102,10 @@ export default function App() {
               const rows = Array.isArray(ev?.payload?.rows) ? ev.payload.rows : [];
               const token = String(ev?.payload?.ts ?? ev?.payload?.token ?? '');
               const undoSnapshots = {
-                beforeConfig: ev?.payload?.beforeConfigSnapshot,
-                beforeRows: Array.isArray(ev?.payload?.beforeRowsSnapshot) ? ev.payload.beforeRowsSnapshot : [],
                 afterConfig: ev?.payload?.afterConfigSnapshot,
                 afterRows: Array.isArray(ev?.payload?.afterRowsSnapshot) ? ev.payload.afterRowsSnapshot : [],
               };
-              void applyOptimizedRows(rows, token, undoSnapshots, { syncBlocks: ev?.payload?.syncBlocks === true });
+              void applyOptimizedRows(rows, token, undoSnapshots, { syncBlocks: ev?.payload?.syncBlocks === true, recordUndo: false });
             } catch (_) {}
           });
           if (tauriListenerCancelled) {
@@ -9249,8 +9249,6 @@ const collectLegacyCrossRays = async (
                 rows: rowsAfter,
                 token: applyToken,
                 syncBlocks: true,
-                beforeConfigSnapshot: beforeHostConfigSnapshot,
-                beforeRowsSnapshot: beforeHostRowsSnapshot,
                 afterConfigSnapshot: afterHostConfigSnapshot,
                 afterRowsSnapshot: afterHostRowsSnapshot,
               }));
@@ -9261,8 +9259,6 @@ const collectLegacyCrossRays = async (
                     rows: rowsAfter,
                     token: applyToken,
                     syncBlocks: true,
-                    beforeConfigSnapshot: beforeHostConfigSnapshot,
-                    beforeRowsSnapshot: beforeHostRowsSnapshot,
                     afterConfigSnapshot: afterHostConfigSnapshot,
                     afterRowsSnapshot: afterHostRowsSnapshot,
                   });
