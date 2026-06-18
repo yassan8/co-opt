@@ -959,6 +959,14 @@ fn run_kkt(
         );
     }
 
+    // Track the minimum requirement-score state separately from the last
+    // accepted iterate. The augmented-Lagrangian filter can accept a step that
+    // raises the raw requirement score (to reduce constraint violation), so the
+    // final accepted state is not always the best. We restore this snapshot at
+    // the end so the applied optical system matches the reported best score.
+    let mut best_score_eval = best_eval;
+    let mut best_score_values = current_values(rows, vars);
+
     for iter in 1..=iterations_max {
         if is_stop_requested() {
             break;
@@ -1057,6 +1065,10 @@ fn run_kkt(
         if accepted {
             let prev_violation = best_eval.violation_score;
             best_eval = best_trial;
+            if best_eval.score < best_score_eval.score - 1e-12 {
+                best_score_eval = best_eval;
+                best_score_values = current_values(rows, vars);
+            }
             stall_count = 0;
             // ALM-style multiplier and penalty updates.
             mu_total = (mu_total + penalty * best_eval.violation_score).max(0.0).min(1e12);
@@ -1103,6 +1115,10 @@ fn run_kkt(
             );
             if let Some(next_eval) = nudged {
                 best_eval = next_eval;
+                if best_eval.score < best_score_eval.score - 1e-12 {
+                    best_score_eval = best_eval;
+                    best_score_values = current_values(rows, vars);
+                }
                 stall_count = 0;
                 let penalty_tag = if rho >= 999_999.0 { " [penalty-capped]" } else { "" };
                 prev_x = base_values;
@@ -1155,10 +1171,13 @@ fn run_kkt(
         }
     }
 
+    // Restore the minimum requirement-score state so callers (and the table)
+    // receive the true best optical system, not merely the last accepted step.
+    restore_values(rows, vars, &best_score_values);
     (
         "kkt".to_string(),
         completed_iterations,
-        best_eval,
+        best_score_eval,
         Some(KktRuntimeState { rho, stall_count, mu_total, penalty, hdiag, prev_x, prev_grad }),
     )
 }
