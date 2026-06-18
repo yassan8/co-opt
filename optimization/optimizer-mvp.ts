@@ -9913,6 +9913,9 @@ export async function runOptimizationMVP(options = {}) {
             return sourceEval || null;
           }
           let restoredEval = evalCompositeFromRequirementsProfiled();
+          const __diagSnapshotRestoredScore = Number(restoredEval?.score);
+          let __diagFallbackApplied = false;
+          let __diagFallbackScore: number | undefined;
           // Verify the restored state actually matches the tracked best score.
           // The block snapshot can occasionally correspond to a slightly different
           // iterate than `bestScore`; if the restored score is worse than the
@@ -9933,6 +9936,8 @@ export async function runOptimizationMVP(options = {}) {
             ) {
               if (applyXToDesignState(bestX)) {
                 const reEval = evalCompositeFromRequirementsProfiled();
+                __diagFallbackApplied = true;
+                __diagFallbackScore = Number(reEval?.score);
                 if (reEval && Number(reEval.score) <= restoredScore + 1e-12) {
                   restoredEval = reEval;
                 }
@@ -9951,6 +9956,28 @@ export async function runOptimizationMVP(options = {}) {
             __persistedOptimizerResultForUi = true;
             __lastOptimizerResultSnapshotForUi = buildOptimizerResultSnapshotForUi();
           }
+          try {
+            const __diagActiveId = String(jointState?.activeConfigId ?? activeConfigId ?? '').trim();
+            const __diagSnap = __lastOptimizerResultSnapshotForUi as any;
+            const __diagRows = __diagSnap && Array.isArray(__diagSnap.opticalSystemRowsSnapshot)
+              ? __diagSnap.opticalSystemRowsSnapshot
+              : null;
+            console.log('🩺 [AL-DIAG] restoreBestStateAndPersist', {
+              trackedBestScore: Number(bestScore),
+              sourceBestScore: Number(sourceEval?.score),
+              snapshotRestoredScore: __diagSnapshotRestoredScore,
+              fallbackApplied: __diagFallbackApplied,
+              fallbackScore: __diagFallbackScore,
+              finalRestoredScore: Number(restoredEval?.score),
+              persisted,
+              hasUiSnapshot: !!__diagSnap,
+              uiSnapshotRowCount: __diagRows ? __diagRows.length : null,
+              uiSnapshotHasConfigs: !!(__diagSnap && __diagSnap.systemConfigSnapshot
+                && Array.isArray(__diagSnap.systemConfigSnapshot.configurations)
+                && __diagSnap.systemConfigSnapshot.configurations.length),
+              activeConfigId: __diagActiveId,
+            });
+          } catch (_) {}
           return finalEval;
         } catch (_) {
           return sourceEval || null;

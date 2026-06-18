@@ -9084,9 +9084,37 @@ const collectLegacyCrossRays = async (
           ? (cloneJsonLocal(tsResult.opticalSystemRowsSnapshot) || tsResult.opticalSystemRowsSnapshot)
           : [];
 
+        try {
+          const __diagCfgArr = resultConfigSnapshot && Array.isArray(resultConfigSnapshot.configurations)
+            ? resultConfigSnapshot.configurations
+            : null;
+          console.log('🩺 [AL-DIAG] App.tsx tsResult snapshot', {
+            tsResultBest: Number((tsResult as any)?.best),
+            tsResultObjective: Number((tsResult as any)?.objectiveScore),
+            hasResultConfigSnapshot: !!resultConfigSnapshot,
+            configCount: __diagCfgArr ? __diagCfgArr.length : null,
+            resultRowsSnapshotCount: Array.isArray(resultRowsSnapshot) ? resultRowsSnapshot.length : null,
+            firstRowRadius: Array.isArray(resultRowsSnapshot) && resultRowsSnapshot.length > 1
+              ? (resultRowsSnapshot[1] as any)?.['radius of curvature']
+              : null,
+          });
+        } catch (_) {}
+
         if (resultConfigSnapshot) {
           await applyHostSystemConfigSnapshot(resultConfigSnapshot, resultRowsSnapshot);
         }
+
+        try {
+          const __diagHostRows = hostWindow.getOpticalSystemRows
+            ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem)
+            : [];
+          console.log('🩺 [AL-DIAG] App.tsx host rows after apply', {
+            hostRowCount: Array.isArray(__diagHostRows) ? __diagHostRows.length : null,
+            hostFirstRowRadius: Array.isArray(__diagHostRows) && __diagHostRows.length > 1
+              ? (__diagHostRows[1] as any)?.['radius of curvature']
+              : null,
+          });
+        } catch (_) {}
 
         if (tsAborted) {
           try { localStorage.removeItem(OPTIMIZE_PROGRESS_SYNC_KEY); } catch (_) {}
