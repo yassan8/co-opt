@@ -4331,6 +4331,7 @@ export default function App() {
 
     const setParam = (block: any, key: string, value: any) => {
       if (!block || typeof block !== 'object' || !key) return;
+      if (value === undefined) return;
       if (!block.parameters || typeof block.parameters !== 'object') block.parameters = {};
       block.parameters[key] = parseMaybeNumber(value);
     };
@@ -4411,14 +4412,24 @@ export default function App() {
       }
     };
 
+    const pickRowValue = (row: any, keys: string[]): any => {
+      if (!row || typeof row !== 'object') return undefined;
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+        const value = row[key];
+        if (value !== undefined) return value;
+      }
+      return undefined;
+    };
+
     const updateBlockByRole = (block: any, role: string, row: any) => {
       const blockType = String(block?.blockType ?? '');
       const r = String(role || '').trim();
-      const radius = row?.radius;
-      const thickness = row?.thickness;
-      const material = row?.material;
-      const conic = row?.conic;
-      const surfType = String(row?.surfType ?? row?.surfaceType ?? '').trim();
+      const radius = pickRowValue(row, ['radius', 'radius of curvature', 'Radius', 'R']);
+      const thickness = pickRowValue(row, ['thickness', 'distance', 'Thickness']);
+      const material = pickRowValue(row, ['material', 'glass', 'Material']);
+      const conic = pickRowValue(row, ['conic', 'Conic']);
+      const surfType = String(pickRowValue(row, ['surfType', 'surfaceType', 'surf type']) ?? '').trim();
 
       if (blockType === 'Lens') {
         if (r === 'front') {
@@ -5181,7 +5192,6 @@ export default function App() {
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
         const token = String(payload?.ts ?? payload?.token ?? '');
         const undoSnapshots = {
-          afterConfig: payload?.afterConfigSnapshot,
           afterRows: Array.isArray(payload?.afterRowsSnapshot) ? payload.afterRowsSnapshot : [],
         };
         logOptimizeSyncDiag('storage-optimizeRowsSync:received', {
@@ -5216,7 +5226,6 @@ export default function App() {
               const rows = Array.isArray(ev?.payload?.rows) ? ev.payload.rows : [];
               const token = String(ev?.payload?.ts ?? ev?.payload?.token ?? '');
               const undoSnapshots = {
-                afterConfig: ev?.payload?.afterConfigSnapshot,
                 afterRows: Array.isArray(ev?.payload?.afterRowsSnapshot) ? ev.payload.afterRowsSnapshot : [],
               };
               logOptimizeSyncDiag('tauri-optimizeRowsSync:received', {
