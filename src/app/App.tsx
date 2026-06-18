@@ -9081,7 +9081,7 @@ const collectLegacyCrossRays = async (
           ? (cloneJsonLocal(tsResult.opticalSystemRowsSnapshot) || tsResult.opticalSystemRowsSnapshot)
           : [];
 
-        if (tsAborted && resultConfigSnapshot) {
+        if (resultConfigSnapshot) {
           await applyHostSystemConfigSnapshot(resultConfigSnapshot, resultRowsSnapshot);
         }
 
