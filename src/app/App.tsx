@@ -7684,14 +7684,16 @@ const collectLegacyCrossRays = async (
             : null;
         } catch (_) {}
         const __runtimeCfg = sourceWindow.__cooptSystemConfig || null;
-        console.log('🩺 [AL-DIAG] Optimize REOPEN read', {
-          preferRuntimeFlag: !!sourceWindow.__cooptPreferRuntimeSystemConfig,
-          deferUntil: Number(sourceWindow.__cooptDeferDerivedUiUntil) || 0,
-          now: Date.now(),
-          usedConfigFirstLens: __firstLensRadius(sourceSystemConfig),
-          storageConfigFirstLens: __firstLensRadius(__storageCfg),
-          runtimeConfigFirstLens: __firstLensRadius(__runtimeCfg),
-        });
+        if ((window as any).__COOPT_AL_DIAG === true) {
+          console.log('🩺 [AL-DIAG] Optimize REOPEN read', {
+            preferRuntimeFlag: !!sourceWindow.__cooptPreferRuntimeSystemConfig,
+            deferUntil: Number(sourceWindow.__cooptDeferDerivedUiUntil) || 0,
+            now: Date.now(),
+            usedConfigFirstLens: __firstLensRadius(sourceSystemConfig),
+            storageConfigFirstLens: __firstLensRadius(__storageCfg),
+            runtimeConfigFirstLens: __firstLensRadius(__runtimeCfg),
+          });
+        }
       } catch (_) {}
       let rows = sourceWindow.getOpticalSystemRows ? sourceWindow.getOpticalSystemRows(sourceWindow.tableOpticalSystem) : [];
       let reqRows: any[] = [];
@@ -9117,6 +9119,7 @@ const collectLegacyCrossRays = async (
           : [];
 
         try {
+          if ((window as any).__COOPT_AL_DIAG !== true) throw new Error('AL diag disabled');
           const __diagCfgArr = resultConfigSnapshot && Array.isArray(resultConfigSnapshot.configurations)
             ? resultConfigSnapshot.configurations
             : null;
@@ -9137,6 +9140,7 @@ const collectLegacyCrossRays = async (
         }
 
         try {
+          if ((window as any).__COOPT_AL_DIAG !== true) throw new Error('AL diag disabled');
           const __diagHostRows = hostWindow.getOpticalSystemRows
             ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem)
             : [];

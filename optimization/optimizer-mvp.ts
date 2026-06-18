@@ -2886,6 +2886,22 @@ function materializeGapThicknessModesForPersistence(blocks) {
   return persistedBlocks;
 }
 
+function materializeBlockVariableValuesFromParameters(blocks) {
+  if (!Array.isArray(blocks)) return blocks;
+  for (const block of blocks) {
+    if (!block || typeof block !== 'object') continue;
+    const params = isPlainObject(block.parameters) ? block.parameters : null;
+    const vars = isPlainObject(block.variables) ? block.variables : null;
+    if (!params || !vars) continue;
+    for (const [key, entry] of Object.entries(vars)) {
+      if (!isPlainObject(entry)) continue;
+      if (!Object.prototype.hasOwnProperty.call(params, key)) continue;
+      entry.value = params[key];
+    }
+  }
+  return blocks;
+}
+
 function updateExpandedOpticalSystemInConfig(config) {
   if (!config || !Array.isArray(config.blocks)) return;
 
@@ -3137,6 +3153,7 @@ function persistBlocksByConfigIdToSystemConfig({ systemConfig, configsById, targ
         baselineBlocks,
         materializeGapThicknessModesForPersistence(blocks),
       );
+      materializeBlockVariableValuesFromParameters(persistedBlocks);
       cfg.blocks = Array.isArray(persistedBlocks)
         ? persistedBlocks
         : JSON.parse(JSON.stringify(blocks));
@@ -6762,6 +6779,7 @@ export async function runOptimizationMVP(options = {}) {
           const blocks = cid && blocksByConfigId ? blocksByConfigId[cid] : null;
           if (!cfg || !Array.isArray(blocks)) continue;
           const clonedBlocks = cloneForOptimizerResult(blocks) || blocks;
+          materializeBlockVariableValuesFromParameters(clonedBlocks);
           cfg.blocks = clonedBlocks;
           try {
             const expanded = expandBlocksIntoConfiguration(cfg);
@@ -9957,6 +9975,7 @@ export async function runOptimizationMVP(options = {}) {
             __lastOptimizerResultSnapshotForUi = buildOptimizerResultSnapshotForUi();
           }
           try {
+            if (!(typeof window !== 'undefined' && (window as any).__COOPT_AL_DIAG === true)) throw new Error('AL diag disabled');
             const __diagActiveId = String(jointState?.activeConfigId ?? activeConfigId ?? '').trim();
             const __diagSnap = __lastOptimizerResultSnapshotForUi as any;
             const __diagRows = __diagSnap && Array.isArray(__diagSnap.opticalSystemRowsSnapshot)
@@ -11604,7 +11623,7 @@ export async function runOptimizationMVP(options = {}) {
 
       // Final sync to tables - this is critical to reflect values in UI
       try {
-        if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+        if (!__persistedOptimizerResultForUi && window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
           await window.ConfigurationManager.loadActiveConfigurationToTables({
             applyToUI: true,
             suppressOpticalSystemDataChanged: true,
