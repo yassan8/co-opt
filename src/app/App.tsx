@@ -8460,6 +8460,7 @@ const collectLegacyCrossRays = async (
         let tsRejectCount = 0;
         let tsBestScore = Number.POSITIVE_INFINITY;
         let tsBestRequirementScore = Number.POSITIVE_INFINITY;
+        let tsBestRequirementSnapshot: any[] = [];
         let renderSyncSequence = 0;
         let lastRenderSyncAt = 0;
         const RENDER_SYNC_MIN_INTERVAL_MS = 400;
@@ -8869,7 +8870,10 @@ const collectLegacyCrossRays = async (
               const snap = getRequirementTableScoreSnapshot();
               const tableScore = Number(snap.score);
               if (!Number.isFinite(tableScore)) return;
-              tsBestRequirementScore = Math.min(tsBestRequirementScore, tableScore);
+              if (tableScore < tsBestRequirementScore) {
+                tsBestRequirementScore = tableScore;
+                tsBestRequirementSnapshot = Array.isArray(reqSnapshot) ? (cloneJsonLocal(reqSnapshot) || reqSnapshot) : [];
+              }
               if (optimizeFinalized) return;
 
               setOptimizeState((prev: any) => ({
@@ -8982,7 +8986,12 @@ const collectLegacyCrossRays = async (
               tsBestScore = Math.min(tsBestScore, progressBestScore);
             }
             if (Number.isFinite(requirementDisplayScore)) {
-              tsBestRequirementScore = Math.min(tsBestRequirementScore, requirementDisplayScore);
+              if (requirementDisplayScore < tsBestRequirementScore) {
+                tsBestRequirementScore = requirementDisplayScore;
+                tsBestRequirementSnapshot = requirementSnapshots.length > 0
+                  ? (cloneJsonLocal(requirementSnapshots) || requirementSnapshots)
+                  : tsBestRequirementSnapshot;
+              }
             }
 
             const shouldAutoRenderPhase = phaseLower === 'accept' || phaseLower === 'done';
@@ -9273,6 +9282,15 @@ const collectLegacyCrossRays = async (
                 if (cnt > 0 && Number.isFinite(sum)) finalTableScore = sum;
               }
             }
+
+            if (
+              Array.isArray(tsBestRequirementSnapshot)
+              && tsBestRequirementSnapshot.length > 0
+              && sre
+              && typeof sre.applyOptimizerRequirementSnapshot === 'function'
+            ) {
+              sre.applyOptimizerRequirementSnapshot(tsBestRequirementSnapshot);
+            }
           } catch (_) {}
         }
 
@@ -9302,16 +9320,23 @@ const collectLegacyCrossRays = async (
           finalTableScore = abortedTrackedBest;
         }
 
+        const doneTrackedBestRequirementScore = pickBestFiniteMin(
+          tsBestRequirementScore,
+          resultBestScore,
+          resultObjectiveScore,
+          tsBestScore
+        );
+
         const finalScore = tsAborted
           ? (Number.isFinite(abortedTrackedBest)
             ? abortedTrackedBest
             : (Number.isFinite(resultBestScore)
               ? resultBestScore
               : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN)))
-          : (Number.isFinite(finalTableScore)
-            ? finalTableScore
-            : (Number.isFinite(tsBestRequirementScore)
-              ? tsBestRequirementScore
+          : (Number.isFinite(doneTrackedBestRequirementScore)
+            ? doneTrackedBestRequirementScore
+            : (Number.isFinite(finalTableScore)
+              ? finalTableScore
               : (Number.isFinite(resultBestScore)
                 ? resultBestScore
                 : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN))));
@@ -9338,6 +9363,7 @@ const collectLegacyCrossRays = async (
               tsBestScore,
               tsBestRequirementScore,
               finalTableScore,
+              doneTrackedBestRequirementScore,
               finalScore,
               finalBest,
             });
@@ -9356,11 +9382,11 @@ const collectLegacyCrossRays = async (
             ? Number(tsResult.hardViolations.length)
             : prev.requirementCount,
           requirementScoreAfter: Number.isFinite(finalScore) ? finalScore : prev.requirementScoreAfter,
-          requirementScoreTable: Number.isFinite(finalTableScore)
-            ? finalTableScore
-            : (Number.isFinite(finalScore) ? finalScore : prev.requirementScoreTable),
-          meritAfter: Number.isFinite(finalTableScore) ? finalTableScore
-            : (Number.isFinite(finalScore) ? finalScore : prev.meritAfter),
+          requirementScoreTable: Number.isFinite(finalScore)
+            ? finalScore
+            : (Number.isFinite(finalTableScore) ? finalTableScore : prev.requirementScoreTable),
+          meritAfter: Number.isFinite(finalScore) ? finalScore
+            : (Number.isFinite(finalTableScore) ? finalTableScore : prev.meritAfter),
           best: Number.isFinite(finalBest) ? finalBest : prev.best,
           bestRequirementScore: aborted
             ? (Number.isFinite(finalBest)
