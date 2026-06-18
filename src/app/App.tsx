@@ -4097,8 +4097,29 @@ export default function App() {
     let refreshScheduledTimer: any = null;
     let refreshInFlight = false;
     let refreshPending = false;
+    const getRecentBestRequirementSnapshotScore = (): number => {
+      try {
+        const state = hostWin?.__cooptOptimizeBestRequirementSnapshotApplied || w.__cooptOptimizeBestRequirementSnapshotApplied;
+        const at = Number(state?.at ?? 0);
+        const score = Number(state?.score);
+        if (Number.isFinite(at) && at > 0 && (Date.now() - at) < 10000 && Number.isFinite(score)) return score;
+      } catch (_) {}
+      return Number.NaN;
+    };
     const scheduleHostScoreRefresh = (reason: string, triggerEval = true, delayMs = 120) => {
       if (cancelled || optRunning) return;
+      const lockedBestScore = getRecentBestRequirementSnapshotScore();
+      if (Number.isFinite(lockedBestScore)) {
+        setOptimizeState((prev: any) => ({
+          ...prev,
+          requirementScoreAfter: lockedBestScore,
+          requirementScoreTable: lockedBestScore,
+          meritAfter: lockedBestScore,
+          best: lockedBestScore,
+          bestRequirementScore: lockedBestScore,
+        }));
+        return;
+      }
       if (refreshScheduledTimer) {
         clearTimeout(refreshScheduledTimer);
         refreshScheduledTimer = null;
@@ -5009,6 +5030,9 @@ export default function App() {
         if (stamp) lastOptimizeProgressStamp = stamp;
         const progressPhase = String(payload?.phase ?? '').trim().toLowerCase();
         const reqSnapshot = Array.isArray(payload?.requirementSnapshots) ? payload.requirementSnapshots : [];
+        if (progressPhase === 'done' || progressPhase === 'stopped') {
+          return;
+        }
         if (reqSnapshot.length > 0) {
           const sre = (window as any).systemRequirementsEditor;
           if (sre && typeof sre.applyOptimizerRequirementSnapshot === 'function') {
@@ -9289,7 +9313,26 @@ const collectLegacyCrossRays = async (
               && sre
               && typeof sre.applyOptimizerRequirementSnapshot === 'function'
             ) {
-              sre.applyOptimizerRequirementSnapshot(tsBestRequirementSnapshot);
+              const appliedBestRequirementSnapshot = !!sre.applyOptimizerRequirementSnapshot(tsBestRequirementSnapshot);
+              if (appliedBestRequirementSnapshot) {
+                const bestScoreForLock = Number.isFinite(tsBestRequirementScore)
+                  ? tsBestRequirementScore
+                  : Number.NaN;
+                try {
+                  hostWindow.__cooptOptimizeBestRequirementSnapshotApplied = {
+                    at: Date.now(),
+                    score: bestScoreForLock,
+                    source: 'optimize-done-best-snapshot',
+                  };
+                } catch (_) {}
+                try {
+                  w.__cooptOptimizeBestRequirementSnapshotApplied = {
+                    at: Date.now(),
+                    score: bestScoreForLock,
+                    source: 'optimize-done-best-snapshot',
+                  };
+                } catch (_) {}
+              }
             }
           } catch (_) {}
         }

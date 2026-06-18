@@ -4719,7 +4719,16 @@ function setupOptimizeDesignIntentButton(): void {
                         try {
                             const sre = w.systemRequirementsEditor;
                             const shouldAwaitFinalSync = !(phaseStr === 'stopped' || stopFlag.stop);
-                            if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+                            let skipFinalReevalForBestSnapshot = false;
+                            try {
+                                const bestSnapshotState = w.__cooptOptimizeBestRequirementSnapshotApplied;
+                                const appliedAt = Number(bestSnapshotState?.at ?? 0);
+                                skipFinalReevalForBestSnapshot = phaseStr === 'done'
+                                    && Number.isFinite(appliedAt)
+                                    && appliedAt > 0
+                                    && (Date.now() - appliedAt) < 10000;
+                            } catch (_) {}
+                            if (!skipFinalReevalForBestSnapshot && sre && typeof sre.evaluateAndUpdateNow === 'function') {
                                 const r = sre.evaluateAndUpdateNow({ reason: 'optimize-progress-final-sync' });
                                 if (shouldAwaitFinalSync && r && typeof (r as any).then === 'function') {
                                     await r;
