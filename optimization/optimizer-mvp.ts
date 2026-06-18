@@ -9978,7 +9978,13 @@ export async function runOptimizationMVP(options = {}) {
               }
             }
           } catch (_) {}
-          const scoreEval = restoredEval || sourceEval;
+          const sourceScore = Number(sourceEval?.score);
+          const restoredScore = Number(restoredEval?.score);
+          const preferSourceEval = Number.isFinite(sourceScore)
+            && (!Number.isFinite(restoredScore) || sourceScore <= (restoredScore + 1e-12));
+          const scoreEval = preferSourceEval
+            ? (sourceEval || restoredEval)
+            : (restoredEval || sourceEval);
           const finalEval = {
             ...scoreEval,
             restoredBestScore: Number.isFinite(Number(restoredEval?.score)) ? Number(restoredEval.score) : undefined,
@@ -10010,7 +10016,9 @@ export async function runOptimizationMVP(options = {}) {
               fallbackAppliedByX: __diagFallbackAppliedByX,
               fallbackApplied: __diagFallbackApplied,
               fallbackScore: __diagFallbackScore,
+              preferSourceEval,
               finalRestoredScore: Number(restoredEval?.score),
+              finalReturnedScore: Number(finalEval?.score),
               persisted,
               hasUiSnapshot: !!__diagSnap,
               uiSnapshotRowCount: __diagRows ? __diagRows.length : null,
