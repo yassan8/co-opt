@@ -8411,10 +8411,15 @@ const collectLegacyCrossRays = async (
         ? `optimize-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
         : '';
 
-      const publishRunConfigForOptimizerOnly = (cfg: any) => {
+      const publishRunConfigForOptimizerOnly = (cfg: any, requirementRows?: any[]) => {
         const clonedConfig = cfg && typeof cfg === 'object'
           ? (cloneJsonLocal(cfg) || cfg)
           : null;
+        if (clonedConfig && Array.isArray(requirementRows) && requirementRows.length > 0) {
+          try {
+            clonedConfig.systemRequirements = cloneJsonLocal(requirementRows) || requirementRows;
+          } catch (_) {}
+        }
         const targets = [w, hostWindow].filter((target, index, arr) => target && arr.indexOf(target) === index);
         for (const target of targets) {
           try {
@@ -9087,7 +9092,7 @@ const collectLegacyCrossRays = async (
 
         let tsResult: any = null;
         try {
-          publishRunConfigForOptimizerOnly(clickSnapshot?.config || frozenHostConfigForRun);
+          publishRunConfigForOptimizerOnly(clickSnapshot?.config || frozenHostConfigForRun, systemRequirementsRows);
           tsResult = await optimizerRunner.run({
             opticalSystemRows: rows,
             sourceRows,
@@ -9109,8 +9114,13 @@ const collectLegacyCrossRays = async (
             const iter = Number(ev?.iter ?? 0);
             const requirementSnapshots = Array.isArray(ev?.requirementSnapshots) ? ev.requirementSnapshots : [];
             try {
-              // Keep live progress inside this Progress window. Do not publish
-              // Requirement snapshots to the host; final done/stop owns host state.
+              if (requirementSnapshots.length > 0) {
+                const localReqEditor = w.systemRequirementsEditor;
+                const hostReqEditor = hostWindow?.systemRequirementsEditor;
+                if (localReqEditor && localReqEditor !== hostReqEditor && typeof localReqEditor.applyOptimizerRequirementSnapshot === 'function') {
+                  localReqEditor.applyOptimizerRequirementSnapshot(requirementSnapshots);
+                }
+              }
             } catch (_) {}
             // Keep live progress local to this window. Updating the host Req/Render
             // during optimization creates competing state writers; final done/stop
