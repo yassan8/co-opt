@@ -9913,6 +9913,24 @@ export async function runOptimizationMVP(options = {}) {
         }
       };
 
+      const withAppliedXSnapshot = (x: number[], evalResult: any) => {
+        if (!evalResult || !Array.isArray(x) || x.length === 0) return evalResult;
+        const savedX = Array.isArray(currentX) ? currentX.slice() : null;
+        try {
+          if (!applyXToDesignState(x)) return evalResult;
+          return {
+            ...evalResult,
+            blocksSnapshot: snapshotBlocksByConfigId(blocksByConfigId)
+          };
+        } catch (_) {
+          return evalResult;
+        } finally {
+          try {
+            if (savedX && savedX.length > 0) applyXToDesignState(savedX);
+          } catch (_) {}
+        }
+      };
+
       const restoreBestStateAndPersist = (sourceEval: any) => {
         try {
           const sourceBlocksSnapshot = (sourceEval && sourceEval.blocksSnapshot && typeof sourceEval.blocksSnapshot === 'object')
@@ -10410,9 +10428,10 @@ export async function runOptimizationMVP(options = {}) {
             applyXToDesignState(probeBestX);
             const seededEval = evalCompositeFromRequirementsProfiled();
             if (seededEval) {
-              bestEval = seededEval;
-              bestScore = Number.isFinite(Number(seededEval.score)) ? Number(seededEval.score) : bestScore;
-              recordEval(seededEval);
+              const seededEvalWithSnapshot = withAppliedXSnapshot(probeBestX, seededEval);
+              bestEval = seededEvalWithSnapshot;
+              bestScore = Number.isFinite(Number(seededEvalWithSnapshot.score)) ? Number(seededEvalWithSnapshot.score) : bestScore;
+              recordEval(seededEvalWithSnapshot);
             }
           } catch (_) {}
         }
@@ -11132,7 +11151,8 @@ export async function runOptimizationMVP(options = {}) {
           // 【重要修正】LM法と同じくrecordEval()を使ってBest管理を統一
           // これにより、feasible/infeasibleの自動判定とBest値の正確な追跡が可能になる
           const prevBestEval = getBestScoreEvalSoFar();
-          recordEval(currentEval);
+          const currentEvalWithSnapshot = withAppliedXSnapshot(currentX, currentEval);
+          recordEval(currentEvalWithSnapshot);
           const prevBestScore = bestScore;
           // 【高速化】evalSQPAtX(currentX) を一度だけ計算し、ベスト更新ログ・bestMerit 計算で共有する
           // （以前は新ベスト達成時に同じ x で 2 回呼んでいた。kktEvalCache はあるが冗長を排除）
@@ -11153,7 +11173,7 @@ export async function runOptimizationMVP(options = {}) {
               lastBestIter = iter;
               const improvement = prevBestScore - bestScore;
               const currentViolation = acceptedViolationNorm;
-              const status = currentEval.feasible ? '✓FEAS' : `Viol:${currentViolation.toExponential(2)}`;
+              const status = currentEvalWithSnapshot.feasible ? '✓FEAS' : `Viol:${currentViolation.toExponential(2)}`;
               if (onProgress) {
                 try {
                   onProgress({
@@ -11164,9 +11184,9 @@ export async function runOptimizationMVP(options = {}) {
                     method: 'kkt',
                     multiScenario,
                     requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
-                    feasible: currentEval.feasible,
-                    violationScore: currentEval.violationScore,
-                    softPenalty: currentEval.softPenalty,
+                    feasible: currentEvalWithSnapshot.feasible,
+                    violationScore: currentEvalWithSnapshot.violationScore,
+                    softPenalty: currentEvalWithSnapshot.softPenalty,
                     alpha: lastAlpha,
                     rho: acceptedRho
                   });
@@ -11205,14 +11225,15 @@ export async function runOptimizationMVP(options = {}) {
               broydenSkipCount = 0;
 
               const materialEval = evalStateKKT();
-              recordEval(materialEval);
-              lastAcceptedScore = materialEval?.score ?? lastAcceptedScore;
+              const materialEvalWithSnapshot = withAppliedXSnapshot(currentX, materialEval);
+              recordEval(materialEvalWithSnapshot);
+              lastAcceptedScore = materialEvalWithSnapshot?.score ?? lastAcceptedScore;
 
               const bestEvalAfterMaterialSweep = getBestScoreEvalSoFar();
               if (bestEvalAfterMaterialSweep) {
                 bestScore = bestEvalAfterMaterialSweep.score;
                 bestEval = bestEvalAfterMaterialSweep;
-                if (!bestEvalBeforeMaterialSweep || compareEval(materialEval, bestEvalBeforeMaterialSweep)) {
+                if (!bestEvalBeforeMaterialSweep || compareEval(materialEvalWithSnapshot, bestEvalBeforeMaterialSweep)) {
                   bestX = currentX.slice();
                   bestScoreXSnapshot = currentX.slice();
                 }
