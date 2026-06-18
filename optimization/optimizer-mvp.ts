@@ -9912,7 +9912,33 @@ export async function runOptimizationMVP(options = {}) {
           } else if (!applyXToDesignState(bestX)) {
             return sourceEval || null;
           }
-          const restoredEval = evalCompositeFromRequirementsProfiled();
+          let restoredEval = evalCompositeFromRequirementsProfiled();
+          // Verify the restored state actually matches the tracked best score.
+          // The block snapshot can occasionally correspond to a slightly different
+          // iterate than `bestScore`; if the restored score is worse than the
+          // tracked best, fall back to applying the best variable vector (bestX)
+          // directly so the applied optical system / Requirement score truly
+          // reflect the minimum-score state.
+          try {
+            const trackedBest = Number.isFinite(Number(bestScore))
+              ? Number(bestScore)
+              : Number(sourceEval?.score);
+            const restoredScore = Number(restoredEval?.score);
+            if (
+              Number.isFinite(trackedBest)
+              && Number.isFinite(restoredScore)
+              && restoredScore > (trackedBest + 1e-9)
+              && Array.isArray(bestX)
+              && bestX.length > 0
+            ) {
+              if (applyXToDesignState(bestX)) {
+                const reEval = evalCompositeFromRequirementsProfiled();
+                if (reEval && Number(reEval.score) <= restoredScore + 1e-12) {
+                  restoredEval = reEval;
+                }
+              }
+            }
+          } catch (_) {}
           const scoreEval = restoredEval || sourceEval;
           const finalEval = {
             ...scoreEval,
