@@ -4748,10 +4748,96 @@ export default function App() {
       } catch (_) {}
     };
 
+    const getDiagRowsFingerprint = (rowsInput: any[]): any => {
+      const rows = Array.isArray(rowsInput) ? rowsInput : [];
+      const firstLens = rows.find((row: any) => {
+        const type = String(row?.['object type'] ?? row?.object ?? row?.type ?? '').trim().toLowerCase();
+        return type !== 'object' && type !== 'image';
+      }) || rows[1] || rows[0] || null;
+      return {
+        rowCount: rows.length,
+        firstId: firstLens?.id ?? firstLens?._id ?? null,
+        firstBlockId: firstLens?._blockId ?? null,
+        firstRole: firstLens?._surfaceRole ?? null,
+        firstRadius: firstLens?.['radius of curvature'] ?? firstLens?.radius ?? firstLens?.R ?? null,
+        firstThickness: firstLens?.thickness ?? firstLens?.distance ?? null,
+        firstMaterial: firstLens?.material ?? firstLens?.glass ?? null,
+      };
+    };
+
+    const getDiagConfigFingerprint = (cfg: any): any => {
+      const activeId = String(cfg?.activeConfigId ?? '').trim();
+      const active = Array.isArray(cfg?.configurations)
+        ? (cfg.configurations.find((c: any) => String(c?.id ?? '') === activeId) || cfg.configurations[0])
+        : null;
+      const rows = Array.isArray(active?.opticalSystem)
+        ? active.opticalSystem
+        : (Array.isArray(active?.opticalSystemRows) ? active.opticalSystemRows : []);
+      const firstBlock = Array.isArray(active?.blocks) ? active.blocks[0] : null;
+      return {
+        activeId,
+        configCount: Array.isArray(cfg?.configurations) ? cfg.configurations.length : null,
+        optical: getDiagRowsFingerprint(rows),
+        firstBlockId: firstBlock?.blockId ?? null,
+        firstBlockType: firstBlock?.type ?? firstBlock?.blockType ?? null,
+        firstBlockParams: firstBlock?.parameters ? {
+          radius: firstBlock.parameters.radius ?? firstBlock.parameters.frontRadius ?? null,
+          backRadius: firstBlock.parameters.backRadius ?? null,
+          thickness: firstBlock.parameters.thickness ?? null,
+          material: firstBlock.parameters.material ?? null,
+        } : null,
+      };
+    };
+
+    const getDiagRequirementScore = (target: any): number => {
+      try {
+        const sre = target?.systemRequirementsEditor || (window as any).systemRequirementsEditor;
+        const data = sre && typeof sre.getData === 'function' ? sre.getData() : [];
+        if (!Array.isArray(data)) return Number.NaN;
+        let sum = 0;
+        let count = 0;
+        for (const row of data) {
+          const enabled = (row?.enabled === undefined || row?.enabled === null) ? true : !!row.enabled;
+          const operand = String(row?.operand ?? '').trim();
+          const weight = Number(row?.weight ?? 1);
+          if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
+          const contribution = Number.isFinite(Number(row?._contribution)) ? Number(row._contribution) : Number(row?.score);
+          if (!Number.isFinite(contribution)) continue;
+          if (contribution > 0) sum += contribution;
+          count += 1;
+        }
+        return count > 0 ? sum : Number.NaN;
+      } catch (_) {
+        return Number.NaN;
+      }
+    };
+
+    const logOptimizeSyncDiag = (label: string, extra: any = {}): void => {
+      try {
+        if ((window as any).__COOPT_AL_DIAG !== true) return;
+        const target = getOptimizeSyncTargetWindow();
+        const rows = typeof target.getOpticalSystemRows === 'function'
+          ? target.getOpticalSystemRows(target.tableOpticalSystem)
+          : [];
+        const cfg = typeof target.loadSystemConfigurationsFromTableConfig === 'function'
+          ? target.loadSystemConfigurationsFromTableConfig()
+          : (typeof target.loadSystemConfigurations === 'function' ? target.loadSystemConfigurations() : null);
+        console.log('🩺 [AL-DIAG][overwrite-sync]', {
+          label,
+          at: Date.now(),
+          rows: getDiagRowsFingerprint(rows),
+          config: getDiagConfigFingerprint(cfg),
+          requirementScore: getDiagRequirementScore(target),
+          extra,
+        });
+      } catch (_) {}
+    };
+
     const applyOpticalRowsSnapshotSync = (rowsSnapshot: any[]): void => {
       const w = getOptimizeSyncTargetWindow();
       if (!Array.isArray(rowsSnapshot) || rowsSnapshot.length === 0) return;
       try {
+        logOptimizeSyncDiag('applyOpticalRowsSnapshotSync:before', { incomingRows: getDiagRowsFingerprint(rowsSnapshot) });
         const rows = cloneJson(rowsSnapshot) || [];
         const table = w.tableOpticalSystem;
         if (table && typeof table.replaceData === 'function') {
@@ -4763,6 +4849,7 @@ export default function App() {
         if (typeof w.loadActiveConfigurationToTables === 'function') {
           w.loadActiveConfigurationToTables();
         }
+        logOptimizeSyncDiag('applyOpticalRowsSnapshotSync:after', { incomingRows: getDiagRowsFingerprint(rowsSnapshot) });
       } catch (_) {}
     };
 
@@ -4792,10 +4879,20 @@ export default function App() {
           name: 'Optimization',
           timestamp: Date.now(),
           execute: () => {
+            logOptimizeSyncDiag('undo-command:execute-afterSnapshot', {
+              description,
+              afterRows: getDiagRowsFingerprint(afterRowsSnapshot || []),
+              afterConfig: getDiagConfigFingerprint(afterSnapshot),
+            });
             applySystemConfigSnapshotSync(afterSnapshot);
             applyOpticalRowsSnapshotSync(afterRowsSnapshot);
           },
           undo: () => {
+            logOptimizeSyncDiag('undo-command:undo-beforeSnapshot', {
+              description,
+              beforeRows: getDiagRowsFingerprint(beforeRowsSnapshot || []),
+              beforeConfig: getDiagConfigFingerprint(beforeSnapshot),
+            });
             applySystemConfigSnapshotSync(beforeSnapshot);
             applyOpticalRowsSnapshotSync(beforeRowsSnapshot);
           },
@@ -4855,7 +4952,13 @@ export default function App() {
         // may fall back to pre-optimization blocks.
         if (undoSnapshots?.afterConfig && typeof undoSnapshots.afterConfig === 'object') {
           try {
+            logOptimizeSyncDiag('applyOptimizedRows:before-afterConfig', {
+              token: applyToken,
+              incomingRows: getDiagRowsFingerprint(rows),
+              afterConfig: getDiagConfigFingerprint(undoSnapshots.afterConfig),
+            });
             applySystemConfigSnapshotSync(undoSnapshots.afterConfig);
+            logOptimizeSyncDiag('applyOptimizedRows:after-afterConfig', { token: applyToken });
           } catch (_) {}
         }
 
@@ -4869,6 +4972,11 @@ export default function App() {
         if (shouldSyncBlocks) {
           syncRowsBackToActiveBlocks(rows);
         }
+        logOptimizeSyncDiag('applyOptimizedRows:after-table-and-blocks', {
+          token: applyToken,
+          incomingRows: getDiagRowsFingerprint(rows),
+          recordUndo: options?.recordUndo !== false,
+        });
         afterSnapshot = loadSystemConfigSnapshot();
         afterRowsSnapshot = loadOpticalRowsSnapshot();
 
@@ -5076,6 +5184,12 @@ export default function App() {
           afterConfig: payload?.afterConfigSnapshot,
           afterRows: Array.isArray(payload?.afterRowsSnapshot) ? payload.afterRowsSnapshot : [],
         };
+        logOptimizeSyncDiag('storage-optimizeRowsSync:received', {
+          token,
+          rows: getDiagRowsFingerprint(rows),
+          afterConfig: getDiagConfigFingerprint(payload?.afterConfigSnapshot),
+          afterRows: getDiagRowsFingerprint(Array.isArray(payload?.afterRowsSnapshot) ? payload.afterRowsSnapshot : []),
+        });
         void applyOptimizedRows(rows, token, undoSnapshots, { syncBlocks: payload?.syncBlocks === true, recordUndo: false });
       } catch (_) {}
     };
@@ -5105,6 +5219,12 @@ export default function App() {
                 afterConfig: ev?.payload?.afterConfigSnapshot,
                 afterRows: Array.isArray(ev?.payload?.afterRowsSnapshot) ? ev.payload.afterRowsSnapshot : [],
               };
+              logOptimizeSyncDiag('tauri-optimizeRowsSync:received', {
+                token,
+                rows: getDiagRowsFingerprint(rows),
+                afterConfig: getDiagConfigFingerprint(ev?.payload?.afterConfigSnapshot),
+                afterRows: getDiagRowsFingerprint(Array.isArray(ev?.payload?.afterRowsSnapshot) ? ev.payload.afterRowsSnapshot : []),
+              });
               void applyOptimizedRows(rows, token, undoSnapshots, { syncBlocks: ev?.payload?.syncBlocks === true, recordUndo: false });
             } catch (_) {}
           });
@@ -8822,6 +8942,66 @@ const collectLegacyCrossRays = async (
         const beforeHostConfigSnapshot = clickSnapshot?.config ?? loadHostConfigSnapshot();
         const beforeHostRowsSnapshot = clickSnapshot?.rows ?? loadHostRowsSnapshot();
 
+        const getDiagRowsFingerprintLocal = (rowsInput: any[]): any => {
+          const rows = Array.isArray(rowsInput) ? rowsInput : [];
+          const firstLens = rows.find((row: any) => {
+            const type = String(row?.['object type'] ?? row?.object ?? row?.type ?? '').trim().toLowerCase();
+            return type !== 'object' && type !== 'image';
+          }) || rows[1] || rows[0] || null;
+          return {
+            rowCount: rows.length,
+            firstId: firstLens?.id ?? firstLens?._id ?? null,
+            firstBlockId: firstLens?._blockId ?? null,
+            firstRole: firstLens?._surfaceRole ?? null,
+            firstRadius: firstLens?.['radius of curvature'] ?? firstLens?.radius ?? firstLens?.R ?? null,
+            firstThickness: firstLens?.thickness ?? firstLens?.distance ?? null,
+            firstMaterial: firstLens?.material ?? firstLens?.glass ?? null,
+          };
+        };
+
+        const getDiagConfigFingerprintLocal = (cfg: any): any => {
+          const activeId = String(cfg?.activeConfigId ?? '').trim();
+          const active = Array.isArray(cfg?.configurations)
+            ? (cfg.configurations.find((c: any) => String(c?.id ?? '') === activeId) || cfg.configurations[0])
+            : null;
+          const rows = Array.isArray(active?.opticalSystem)
+            ? active.opticalSystem
+            : (Array.isArray(active?.opticalSystemRows) ? active.opticalSystemRows : []);
+          const firstBlock = Array.isArray(active?.blocks) ? active.blocks[0] : null;
+          return {
+            activeId,
+            configCount: Array.isArray(cfg?.configurations) ? cfg.configurations.length : null,
+            optical: getDiagRowsFingerprintLocal(rows),
+            firstBlockId: firstBlock?.blockId ?? null,
+            firstBlockType: firstBlock?.type ?? firstBlock?.blockType ?? null,
+            firstBlockParams: firstBlock?.parameters ? {
+              radius: firstBlock.parameters.radius ?? firstBlock.parameters.frontRadius ?? null,
+              backRadius: firstBlock.parameters.backRadius ?? null,
+              thickness: firstBlock.parameters.thickness ?? null,
+              material: firstBlock.parameters.material ?? null,
+            } : null,
+          };
+        };
+
+        const logDoneApplyDiag = (label: string, extra: any = {}) => {
+          try {
+            if ((window as any).__COOPT_AL_DIAG !== true) return;
+            const hostRows = typeof hostWindow.getOpticalSystemRows === 'function'
+              ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem)
+              : [];
+            console.log('🩺 [AL-DIAG][done-apply]', {
+              label,
+              at: Date.now(),
+              hostRows: getDiagRowsFingerprintLocal(hostRows),
+              hostConfig: getDiagConfigFingerprintLocal(loadHostConfigSnapshot()),
+              beforeRows: getDiagRowsFingerprintLocal(beforeHostRowsSnapshot),
+              beforeConfig: getDiagConfigFingerprintLocal(beforeHostConfigSnapshot),
+              requirementScore: getRequirementTableScoreSnapshot().score,
+              extra,
+            });
+          } catch (_) {}
+        };
+
         const getRequirementTableScoreSnapshot = () => {
           try {
             const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
@@ -9179,7 +9359,14 @@ const collectLegacyCrossRays = async (
         } catch (_) {}
 
         if (resultConfigSnapshot) {
+          logDoneApplyDiag('before-applyHostSystemConfigSnapshot', {
+            resultRows: getDiagRowsFingerprintLocal(resultRowsSnapshot),
+            resultConfig: getDiagConfigFingerprintLocal(resultConfigSnapshot),
+          });
           await applyHostSystemConfigSnapshot(resultConfigSnapshot, resultRowsSnapshot);
+          logDoneApplyDiag('after-applyHostSystemConfigSnapshot', {
+            resultRows: getDiagRowsFingerprintLocal(resultRowsSnapshot),
+          });
         }
 
         const committedRowsSnapshot = Array.isArray(resultRowsSnapshot) && resultRowsSnapshot.length > 0
@@ -9228,16 +9415,28 @@ const collectLegacyCrossRays = async (
             if (Array.isArray(latestRowsBeforeReload) && latestRowsBeforeReload.length > 0) {
               const finalizeRowsFn = hostWindow.__cooptRefreshRequirementTableScoreForOptimize;
               if (typeof finalizeRowsFn === 'function') {
+                logDoneApplyDiag('before-optimize-finished-finalize', {
+                  latestRowsBeforeReload: getDiagRowsFingerprintLocal(latestRowsBeforeReload),
+                });
                 await finalizeRowsFn(latestRowsBeforeReload, 'optimize-finished-finalize', { syncBlocks: true });
+                logDoneApplyDiag('after-optimize-finished-finalize', {
+                  latestRowsBeforeReload: getDiagRowsFingerprintLocal(latestRowsBeforeReload),
+                });
               }
             }
 
+            logDoneApplyDiag('before-optimize-finished-reload', {
+              latestRowsBeforeReload: getDiagRowsFingerprintLocal(latestRowsBeforeReload),
+            });
             await syncHostDesignIntentAndRequirements(
               hostWindow,
               'optimize-finished-reload',
               'after',
               Array.isArray(latestRowsBeforeReload) ? latestRowsBeforeReload : []
             );
+            logDoneApplyDiag('after-optimize-finished-reload', {
+              latestRowsBeforeReload: getDiagRowsFingerprintLocal(latestRowsBeforeReload),
+            });
 
             const rowsAfter = Array.isArray(committedRowsSnapshot) && committedRowsSnapshot.length > 0
               ? (cloneJsonLocal(committedRowsSnapshot) || committedRowsSnapshot)
@@ -9245,6 +9444,12 @@ const collectLegacyCrossRays = async (
             if (Array.isArray(rowsAfter) && rowsAfter.length > 0) {
               await maybeAutoRender(rowsAfter, { force: true });
               const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              logDoneApplyDiag('before-optimizeRowsSync-setItem', {
+                applyToken,
+                rowsAfter: getDiagRowsFingerprintLocal(rowsAfter),
+                afterConfig: getDiagConfigFingerprintLocal(afterHostConfigSnapshot),
+                afterRows: getDiagRowsFingerprintLocal(afterHostRowsSnapshot),
+              });
               localStorage.setItem(optimizeRowsSyncKey, JSON.stringify({
                 rows: rowsAfter,
                 token: applyToken,
@@ -9252,6 +9457,7 @@ const collectLegacyCrossRays = async (
                 afterConfigSnapshot: afterHostConfigSnapshot,
                 afterRowsSnapshot: afterHostRowsSnapshot,
               }));
+              logDoneApplyDiag('after-optimizeRowsSync-setItem', { applyToken });
               try {
                 const mod = await import('@tauri-apps/api/event');
                 if (mod && typeof (mod as any).emit === 'function') {
@@ -9262,6 +9468,7 @@ const collectLegacyCrossRays = async (
                     afterConfigSnapshot: afterHostConfigSnapshot,
                     afterRowsSnapshot: afterHostRowsSnapshot,
                   });
+                  logDoneApplyDiag('after-tauri-optimize-rows-sync-emit', { applyToken });
                 }
               } catch (_) {}
             }
@@ -9271,12 +9478,18 @@ const collectLegacyCrossRays = async (
             const latestRows = Array.isArray(committedRowsSnapshot) && committedRowsSnapshot.length > 0
               ? (cloneJsonLocal(committedRowsSnapshot) || committedRowsSnapshot)
               : (hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : []);
+            logDoneApplyDiag('before-optimize-finished-sync', {
+              latestRows: getDiagRowsFingerprintLocal(latestRows),
+            });
             await syncHostDesignIntentAndRequirements(
               hostWindow,
               'optimize-finished-sync',
               'after',
               Array.isArray(latestRows) ? latestRows : []
             );
+            logDoneApplyDiag('after-optimize-finished-sync', {
+              latestRows: getDiagRowsFingerprintLocal(latestRows),
+            });
           } catch (_) {}
         }
 
@@ -9285,10 +9498,12 @@ const collectLegacyCrossRays = async (
           try {
             const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
             if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+              logDoneApplyDiag('before-optimize-final-score-eval');
               const p = sre.evaluateAndUpdateNow({ reason: 'optimize-final-score', forceSilent: true, silent: true });
               if (p && typeof (p as any).then === 'function') {
                 await p;
               }
+              logDoneApplyDiag('after-optimize-final-score-eval');
             }
             if (sre && typeof sre.getData === 'function') {
               const rr = sre.getData();
@@ -9309,7 +9524,15 @@ const collectLegacyCrossRays = async (
               && sre
               && typeof sre.applyOptimizerRequirementSnapshot === 'function'
             ) {
+              logDoneApplyDiag('before-apply-best-requirement-snapshot', {
+                bestRequirementScore: tsBestRequirementScore,
+                snapshotRows: Array.isArray(tsBestRequirementSnapshot) ? tsBestRequirementSnapshot.length : 0,
+              });
               const appliedBestRequirementSnapshot = !!sre.applyOptimizerRequirementSnapshot(tsBestRequirementSnapshot);
+              logDoneApplyDiag('after-apply-best-requirement-snapshot', {
+                appliedBestRequirementSnapshot,
+                bestRequirementScore: tsBestRequirementScore,
+              });
               if (appliedBestRequirementSnapshot) {
                 const bestScoreForLock = Number.isFinite(tsBestRequirementScore)
                   ? tsBestRequirementScore
