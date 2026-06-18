@@ -8628,10 +8628,7 @@ const collectLegacyCrossRays = async (
         let renderSyncInFlight = false;
         let lastQueuedRenderSyncSignature = '';
         let lastCompletedRenderSyncSignature = '';
-        let reqEvalInFlight = false;
         let optimizeFinalized = false;
-        let lastReqEvalAt = 0;
-        const REQ_EVAL_THROTTLE_MS = 1200;
 
         const materializeAutoImageSemidiaForRender = async (rowsInput: any[], allowHeavyTrace = true): Promise<any[]> => {
           const rows = Array.isArray(rowsInput) ? (cloneJsonLocal(rowsInput) || rowsInput) : [];
@@ -9047,77 +9044,6 @@ const collectLegacyCrossRays = async (
           return { score: Number.NaN, reqCount: Number.NaN };
         };
 
-        const scheduleRequirementRefresh = (progressEvent?: any) => {
-          if (optimizeFinalized) return;
-          const now = Date.now();
-          if (reqEvalInFlight) return;
-          if ((now - lastReqEvalAt) < REQ_EVAL_THROTTLE_MS) return;
-          lastReqEvalAt = now;
-          reqEvalInFlight = true;
-
-          void (async () => {
-            try {
-              const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
-              const payloadReqSnapshot = Array.isArray(progressEvent?.requirementSnapshots)
-                ? progressEvent.requirementSnapshots
-                : null;
-              const dbg = (w.__cooptLastOptimizerResidualDebug && typeof w.__cooptLastOptimizerResidualDebug === 'object')
-                ? w.__cooptLastOptimizerResidualDebug
-                : null;
-              const reqSnapshot = (payloadReqSnapshot && payloadReqSnapshot.length > 0)
-                ? payloadReqSnapshot
-                : (Array.isArray(dbg?.requirementsSnapshot) ? dbg.requirementsSnapshot : null);
-
-              const progressPhase = String(progressEvent?.phase ?? '').trim().toLowerCase();
-              const shouldAllowFallbackEval = progressPhase === 'accept' || progressPhase === 'done' || progressPhase === 'stopped';
-
-              let appliedSnapshot = false;
-              if (sre && typeof sre.applyOptimizerRequirementSnapshot === 'function' && reqSnapshot && reqSnapshot.length > 0) {
-                appliedSnapshot = !!sre.applyOptimizerRequirementSnapshot(reqSnapshot);
-              }
-
-              if (!appliedSnapshot && shouldAllowFallbackEval && sre && typeof sre.evaluateAndUpdateNow === 'function') {
-                const p = sre.evaluateAndUpdateNow({ reason: 'optimize-progress-live', forceSilent: true, silent: true });
-                if (p && typeof (p as any).then === 'function') {
-                  await p;
-                }
-              }
-
-              if (!appliedSnapshot && !shouldAllowFallbackEval) {
-                return;
-              }
-
-              const snap = getRequirementTableScoreSnapshot();
-              const tableScore = Number(snap.score);
-              if (!Number.isFinite(tableScore)) return;
-              if (tableScore < tsBestRequirementScore) {
-                tsBestRequirementScore = tableScore;
-                tsBestRequirementSnapshot = Array.isArray(reqSnapshot) ? (cloneJsonLocal(reqSnapshot) || reqSnapshot) : [];
-              }
-              if (optimizeFinalized) return;
-
-              setOptimizeState((prev: any) => ({
-                ...prev,
-                meritAfter: tableScore,
-                requirementScoreAfter: tableScore,
-                requirementScoreTable: tableScore,
-                best: Number.isFinite(tsBestScore)
-                  ? tsBestScore
-                  : (Number.isFinite(tsBestRequirementScore)
-                    ? tsBestRequirementScore
-                    : prev.best),
-                bestRequirementScore: Number.isFinite(tsBestRequirementScore)
-                  ? tsBestRequirementScore
-                  : prev.bestRequirementScore,
-              }));
-            } catch (_) {
-              // ignore live refresh failures and keep progress loop running
-            } finally {
-              reqEvalInFlight = false;
-            }
-          })();
-        };
-
         const optimizerRunner = (() => {
           try {
             const hostOpt = hostWindow?.OptimizationMVP;
@@ -9173,11 +9099,11 @@ const collectLegacyCrossRays = async (
               : (Number.isFinite(progressViolationScore)
                 ? progressViolationScore
                 : (Number.isFinite(tableScore) ? tableScore : Number.NaN));
-            const requirementDisplayScore = Number.isFinite(tableScore)
-              ? tableScore
-              : (Number.isFinite(progressViolationScore)
-                ? progressViolationScore
-                : displayScore);
+            const requirementDisplayScore = Number.isFinite(displayScore)
+              ? displayScore
+              : (Number.isFinite(progressBestScore)
+                ? progressBestScore
+                : (Number.isFinite(tableScore) ? tableScore : Number.NaN));
 
             if (phaseLower === 'accept') tsAcceptCount += 1;
             if (phaseLower === 'reject') tsRejectCount += 1;
