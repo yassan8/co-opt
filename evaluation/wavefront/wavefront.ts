@@ -8213,16 +8213,6 @@ export class WavefrontAberrationAnalyzer {
         wavefrontMap.restartedDueToModeSwitch = restartedDueToModeSwitch;
         wavefrontMap.restartedDueToStopUnreachable = restartedDueToStopUnreachable;
         wavefrontMap.restartedDueToStopMiss = restartedDueToStopMiss;
-        try {
-            const top = Object.entries(invalidReasonCounts)
-                .sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0))
-                .slice(0, 5);
-            if (top.length) {
-                console.log(`📉 無効理由(上位): ${top.map(([k, v]) => `${k}:${v}`).join(', ')}`);
-            }
-        } catch (_) {
-            // ignore
-        }
         if (OPD_DEBUG) {
             if (recordRays && wavefrontMap.rayData) {
                 console.log(`📊 光線データ: ${wavefrontMap.rayData.length}本記録`);

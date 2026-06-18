@@ -550,9 +550,6 @@ export async function calculateMagnificationChromaticAberrationData(
                 maxAbsUm: maxAbs * 1000,
             };
         });
-        try {
-            console.log('📊 [LCA][Web] displacement stats:', displacementStats);
-        } catch (_) {}
 
         try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
         return {
