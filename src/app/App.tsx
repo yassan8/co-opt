@@ -8349,6 +8349,7 @@ const collectLegacyCrossRays = async (
             } else {
               delete target.__cooptPreferRuntimeSystemConfig;
               delete target.__cooptSystemConfig;
+              delete target.__cooptDeferDerivedUiUntil;
             }
           } catch (_) {}
         };
@@ -8361,11 +8362,6 @@ const collectLegacyCrossRays = async (
         const hostConfigBeforeSync = loadHostSystemConfigSnapshot();
         frozenHostConfigForRun = cloneJsonLocal(hostConfigBeforeSync) || hostConfigBeforeSync || null;
         if (frozenHostConfigForRun) {
-          try {
-            hostWindow.__cooptSystemConfig = cloneJsonLocal(frozenHostConfigForRun) || frozenHostConfigForRun;
-            hostWindow.__cooptPreferRuntimeSystemConfig = true;
-            hostWindow.__cooptDeferDerivedUiUntil = Date.now() + 60000;
-          } catch (_) {}
           try {
             w.__cooptSystemConfig = cloneJsonLocal(frozenHostConfigForRun) || frozenHostConfigForRun;
             w.__cooptPreferRuntimeSystemConfig = true;
@@ -8416,11 +8412,6 @@ const collectLegacyCrossRays = async (
           ? (cloneJsonLocal(clickSnapshot.config) || clickSnapshot.config)
           : null;
         if (frozenRunConfig) {
-          try {
-            hostWindow.__cooptSystemConfig = cloneJsonLocal(frozenRunConfig) || frozenRunConfig;
-            hostWindow.__cooptPreferRuntimeSystemConfig = true;
-            hostWindow.__cooptDeferDerivedUiUntil = Date.now() + 60000;
-          } catch (_) {}
           try {
             w.__cooptSystemConfig = cloneJsonLocal(frozenRunConfig) || frozenRunConfig;
             w.__cooptPreferRuntimeSystemConfig = true;
@@ -9842,11 +9833,13 @@ const collectLegacyCrossRays = async (
         try {
           delete w.__cooptPreferRuntimeSystemConfig;
           delete w.__cooptSystemConfig;
+          delete w.__cooptDeferDerivedUiUntil;
         } catch (_) {}
         try {
           if (hostWindow) {
             delete hostWindow.__cooptPreferRuntimeSystemConfig;
             delete hostWindow.__cooptSystemConfig;
+            delete hostWindow.__cooptDeferDerivedUiUntil;
           }
         } catch (_) {}
         const activeSleepBlockToken = optimizeDisplaySleepBlockTokenRef.current;
