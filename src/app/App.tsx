@@ -9074,6 +9074,23 @@ const collectLegacyCrossRays = async (
           return { score: Number.NaN, reqCount: Number.NaN };
         };
 
+        const getRequirementSnapshotScore = (snapshotRows: any[]): number => {
+          try {
+            if (!Array.isArray(snapshotRows) || snapshotRows.length === 0) return Number.NaN;
+            let sum = 0;
+            let count = 0;
+            for (const row of snapshotRows) {
+              const contribution = Number(row?.contribution ?? row?._contribution ?? row?.score);
+              if (!Number.isFinite(contribution)) continue;
+              if (contribution > 0) sum += contribution;
+              count += 1;
+            }
+            return count > 0 && Number.isFinite(sum) ? sum : Number.NaN;
+          } catch (_) {
+            return Number.NaN;
+          }
+        };
+
         const optimizerRunner = (() => {
           try {
             const hostOpt = hostWindow?.OptimizationMVP;
@@ -9129,14 +9146,17 @@ const collectLegacyCrossRays = async (
             const progressCurrentScore = Number(ev?.current);
             const progressBestScore = Number(ev?.best);
             const progressViolationScore = Number(ev?.violationScore);
+            const snapshotScore = getRequirementSnapshotScore(requirementSnapshots);
             const tableScore = Number(snap.score);
             // ev.current = violationScore + softPenalty (total Requirement score)
             // ev.violationScore = hard violations only (fall back)
-            const displayScore = Number.isFinite(progressCurrentScore)
-              ? progressCurrentScore
-              : (Number.isFinite(progressViolationScore)
-                ? progressViolationScore
-                : (Number.isFinite(tableScore) ? tableScore : Number.NaN));
+            const displayScore = Number.isFinite(snapshotScore)
+              ? snapshotScore
+              : (Number.isFinite(progressCurrentScore)
+                ? progressCurrentScore
+                : (Number.isFinite(progressViolationScore)
+                  ? progressViolationScore
+                  : (Number.isFinite(tableScore) ? tableScore : Number.NaN)));
             const requirementDisplayScore = Number.isFinite(displayScore)
               ? displayScore
               : (Number.isFinite(progressBestScore)
