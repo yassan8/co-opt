@@ -8073,8 +8073,11 @@ const collectLegacyCrossRays = async (
       };
     };
 
-    const maybeAutoRender = async (rowsSnapshot: any[]) => {
-      if (!optAutoRenderOnAccept) return;
+    const maybeAutoRender = async (rowsSnapshot: any[], options?: { force?: boolean }) => {
+      // Always refresh the render when forced (e.g. on optimization completion)
+      // so the displayed optical system reflects the applied best result even
+      // when the live auto-render-on-accept toggle is disabled.
+      if (!optAutoRenderOnAccept && options?.force !== true) return;
       try {
         const rows = Array.isArray(rowsSnapshot) ? rowsSnapshot : [];
         const objectRows = getRenderObjectRows(window as any, rows);
@@ -9120,7 +9123,7 @@ const collectLegacyCrossRays = async (
 
             const rowsAfter = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
             if (Array.isArray(rowsAfter) && rowsAfter.length > 0) {
-              await maybeAutoRender(rowsAfter);
+              await maybeAutoRender(rowsAfter, { force: true });
               const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
               localStorage.setItem(optimizeRowsSyncKey, JSON.stringify({
                 rows: rowsAfter,
