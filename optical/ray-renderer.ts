@@ -4290,6 +4290,11 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         const isHighField = maxFieldDeg >= 15;
         const logHighFieldChiefRayFailure = (reason, details = {}) => {
             if (!isHighField) return;
+            try {
+                if (!(typeof window !== 'undefined' && (window as any).__COOPT_AL_DIAG === true)) return;
+            } catch (_) {
+                return;
+            }
             console.warn('⚠️ [HighFieldChiefRay] Render chief-ray solve issue', {
                 reason,
                 angleX,

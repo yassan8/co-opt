@@ -11584,6 +11584,7 @@ export async function runOptimizationMVP(options = {}) {
       const totalImprovement = initialScore - bestScore;
       const improvementPercent = (totalImprovement / Math.max(1e-10, initialScore)) * 100;
       const t1 = nowMs();
+      let restoredBestFinalEval: any = null;
       
       // 【修正】LMメソッドと同じパターン：bestX を手動で適用せず、
       // recordEval() で保存された blocksSnapshot を直接復元する
@@ -11591,7 +11592,7 @@ export async function runOptimizationMVP(options = {}) {
       try {
         const bestFinalEval = getBestScoreEvalSoFar();
         if (bestFinalEval) {
-          restoreBestStateAndPersist(bestFinalEval);
+          restoredBestFinalEval = restoreBestStateAndPersist(bestFinalEval);
           try {
             const latestUiSnapshot = buildOptimizerResultSnapshotForUi();
             if (latestUiSnapshot) {
@@ -11650,12 +11651,12 @@ export async function runOptimizationMVP(options = {}) {
 
       try {
         if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.evaluateAndUpdateNow === 'function') {
-          window.systemRequirementsEditor.evaluateAndUpdateNow();
+          await Promise.resolve(window.systemRequirementsEditor.evaluateAndUpdateNow());
         }
       } catch (_) {}
 
       // Get final best evaluation for fallback decision (objective-space)
-      const bestFinalEval = getBestScoreEvalSoFar();
+      const bestFinalEval = restoredBestFinalEval || getBestScoreEvalSoFar();
       const finalScore = bestFinalEval ? bestFinalEval.score : bestScore;
       const noKktImprovement = Number.isFinite(finalScore)
         && Number.isFinite(initialScore)
@@ -11681,8 +11682,9 @@ export async function runOptimizationMVP(options = {}) {
         });
       }
 
-      // Re-evaluate after best snapshot restore to keep final reporting consistent with requirement table.
-      const finalCompositeEval = evalCompositeFromRequirementsProfiled();
+      // Re-evaluate after best snapshot restore can be non-deterministic for high-field
+      // chief-ray solve fallbacks. Prefer the restored best eval if available.
+      const finalCompositeEval = restoredBestFinalEval || evalCompositeFromRequirementsProfiled();
       const finalViolationScore = Number.isFinite(finalCompositeEval?.violationScore)
         ? finalCompositeEval.violationScore
         : (bestFinalEval?.violationScore ?? 0);
