@@ -9413,13 +9413,15 @@ const collectLegacyCrossRays = async (
           });
         } catch (_) {}
 
+        let hostResultSnapshotApplied = false;
         if (resultConfigSnapshot) {
           logDoneApplyDiag('before-applyHostSystemConfigSnapshot', {
             resultRows: getDiagRowsFingerprintLocal(resultRowsSnapshot),
             resultConfig: getDiagConfigFingerprintLocal(resultConfigSnapshot),
           });
-          await applyHostSystemConfigSnapshot(resultConfigSnapshot, resultRowsSnapshot);
+          hostResultSnapshotApplied = !!(await applyHostSystemConfigSnapshot(resultConfigSnapshot, resultRowsSnapshot));
           logDoneApplyDiag('after-applyHostSystemConfigSnapshot', {
+            hostResultSnapshotApplied,
             resultRows: getDiagRowsFingerprintLocal(resultRowsSnapshot),
           });
         }
@@ -9500,27 +9502,35 @@ const collectLegacyCrossRays = async (
               await maybeAutoRender(rowsAfter, { force: true });
               const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
               const applyCreatedAt = Date.now();
+              const shouldBroadcastRowsSync = isTauriRuntime() || !hostResultSnapshotApplied;
               logDoneApplyDiag('before-optimizeRowsSync-setItem', {
                 applyToken,
+                shouldBroadcastRowsSync,
+                hostResultSnapshotApplied,
                 rowsAfter: getDiagRowsFingerprintLocal(rowsAfter),
                 afterConfig: getDiagConfigFingerprintLocal(afterHostConfigSnapshot),
                 afterRows: getDiagRowsFingerprintLocal(afterHostRowsSnapshot),
               });
-              localStorage.setItem(optimizeRowsSyncKey, JSON.stringify({
-                rows: rowsAfter,
-                token: applyToken,
-                createdAt: applyCreatedAt,
-                senderId: getOrCreateCooptWindowSyncSenderId(),
-                best: Number(tsResult?.best),
-                objectiveScore: Number(tsResult?.objectiveScore),
-                syncBlocks: true,
-                afterConfigSnapshot: afterHostConfigSnapshot,
-                afterRowsSnapshot: afterHostRowsSnapshot,
-              }));
-              logDoneApplyDiag('after-optimizeRowsSync-setItem', { applyToken });
+              if (shouldBroadcastRowsSync) {
+                localStorage.setItem(optimizeRowsSyncKey, JSON.stringify({
+                  rows: rowsAfter,
+                  token: applyToken,
+                  createdAt: applyCreatedAt,
+                  senderId: getOrCreateCooptWindowSyncSenderId(),
+                  best: Number(tsResult?.best),
+                  objectiveScore: Number(tsResult?.objectiveScore),
+                  syncBlocks: true,
+                  afterConfigSnapshot: afterHostConfigSnapshot,
+                  afterRowsSnapshot: afterHostRowsSnapshot,
+                }));
+                logDoneApplyDiag('after-optimizeRowsSync-setItem', { applyToken });
+              } else {
+                try { localStorage.removeItem(optimizeRowsSyncKey); } catch (_) {}
+                logDoneApplyDiag('skip-optimizeRowsSync-setItem', { applyToken, hostResultSnapshotApplied });
+              }
               try {
                 const mod = await import('@tauri-apps/api/event');
-                if (mod && typeof (mod as any).emit === 'function') {
+                if (shouldBroadcastRowsSync && mod && typeof (mod as any).emit === 'function') {
                   await (mod as any).emit('coopt-optimize-rows-sync', {
                     rows: rowsAfter,
                     token: applyToken,
