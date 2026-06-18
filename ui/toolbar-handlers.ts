@@ -1698,6 +1698,12 @@ export function handleOptimize(): void {
   };
 
   if (!isOptimizeWindowContext) {
+    const optimizeWindowName = 'coopt-optimize-progress-window';
+    const optimizeWindowFeatures = 'width=560,height=640,resizable=yes,scrollbars=yes';
+    const preopenedWebPopup = !isTauriRuntime()
+      ? window.open('', optimizeWindowName, optimizeWindowFeatures)
+      : null;
+
     (async () => {
       try {
         persistCurrentDesignIntent();
@@ -1759,19 +1765,18 @@ export function handleOptimize(): void {
           return;
         }
 
-        const webPopup = window.open(
-          url.toString(),
-          'coopt-optimize-progress-window',
-          'width=560,height=640,resizable=yes,scrollbars=yes'
-        );
+        const webPopup = preopenedWebPopup && !preopenedWebPopup.closed
+          ? preopenedWebPopup
+          : window.open(url.toString(), optimizeWindowName, optimizeWindowFeatures);
         if (webPopup && !webPopup.closed) {
+          try { webPopup.location.href = url.toString(); } catch (_) {}
           try { webPopup.focus(); } catch (_) {}
           return;
         }
 
-        // Popup blocked fallback: run in current tab.
-        window.location.href = url.toString();
+        console.warn('⚠️ [Optimize] optimize progress window was blocked by the browser.');
       } catch (err) {
+        try { if (preopenedWebPopup && !preopenedWebPopup.closed) preopenedWebPopup.close(); } catch (_) {}
         console.error('❌ [Optimize] failed to open optimize progress window:', err);
       }
     })();
