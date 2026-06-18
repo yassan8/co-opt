@@ -3028,6 +3028,7 @@ export default function App() {
   })();
   const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'>('kkt');
   const [optMaxIterations, setOptMaxIterations] = useState(10);
+  const [optMaxEscapeLoops, setOptMaxEscapeLoops] = useState(4);
   const [optEscapeFunctionWidth, setOptEscapeFunctionWidth] = useState(1);
   const [optEscapeFunctionHeight, setOptEscapeFunctionHeight] = useState(0.1);
   const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(false);
@@ -8204,6 +8205,7 @@ const collectLegacyCrossRays = async (
         : '';
 
       const maxIterations = Math.max(1, Math.floor(Number(optMaxIterations) || 1));
+      const maxEscapeLoops = Math.max(1, Math.floor(Number(optMaxEscapeLoops) || 1));
 
       let rows = w.getOpticalSystemRows ? w.getOpticalSystemRows(w.tableOpticalSystem) : [];
       if ((!Array.isArray(rows) || rows.length === 0) && hostWindow !== w) {
@@ -8869,6 +8871,7 @@ const collectLegacyCrossRays = async (
           systemRequirementsRows,
           method: optMethod,
           maxIterations,
+          escapeGlobalMaxRestarts: maxEscapeLoops,
           escapeFunctionWidth: optEscapeFunctionWidth,
           escapeFunctionHeight: optEscapeFunctionHeight,
           preferNative: isTauriRuntime(),
@@ -9407,6 +9410,21 @@ const collectLegacyCrossRays = async (
               onChange={(e) => {
                 const n = Number(e.target.value);
                 setOptMaxIterations(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
+              }}
+              style={{ width: 100, padding: '4px 6px' }}
+            />
+          </label>
+          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
+            Max Escape
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={optMaxEscapeLoops}
+              disabled={optRunning}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setOptMaxEscapeLoops(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
               }}
               style={{ width: 100, padding: '4px 6px' }}
             />

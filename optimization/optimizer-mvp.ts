@@ -5223,7 +5223,7 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   const targetIterations = Number.isFinite(Number(outerOpts.maxIterations))
     ? Math.max(1, Math.floor(Number(outerOpts.maxIterations)))
     : 24;
-  const configuredOuterLoops = useManualEscapeIterations && Number.isFinite(Number(outerOpts.escapeGlobalMaxRestarts))
+  const configuredOuterLoops = Number.isFinite(Number(outerOpts.escapeGlobalMaxRestarts))
     ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalMaxRestarts)))
     : 4;
   const activeCfgForEscape = getActiveConfigRef(loadSystemConfigurationsRaw());
@@ -5250,9 +5250,8 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
   const plannedTotalIterations = useTotalIterationBudget
     ? targetIterations
     : Math.max(1, innerIterations * Math.max(1, configuredOuterLoops));
-  const requiredOuterLoops = Math.max(1, Math.ceil(targetIterations / Math.max(1, innerIterations)));
-  // Global(Escape Function) should keep running until total iterations reach maxIterations.
-  const outerLoops = Math.max(configuredOuterLoops, requiredOuterLoops);
+  // Escape count follows configured outer loops strictly.
+  const outerLoops = Math.max(1, configuredOuterLoops);
   const escapeWidth = clampEscapePositive(outerOpts.escapeFunctionWidth ?? outerOpts.escapeGlobalWidth, 0.75);
   const escapeHeightFactor = clampEscapePositive(outerOpts.escapeFunctionHeight ?? outerOpts.escapeGlobalHeight, 4);
   const escapeHeightFloor = clampEscapePositive(outerOpts.escapeFunctionHeightFloor ?? outerOpts.escapeGlobalHeightFloor, 1);
