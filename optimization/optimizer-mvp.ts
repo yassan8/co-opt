@@ -11592,6 +11592,12 @@ export async function runOptimizationMVP(options = {}) {
         const bestFinalEval = getBestScoreEvalSoFar();
         if (bestFinalEval) {
           restoreBestStateAndPersist(bestFinalEval);
+          try {
+            const latestUiSnapshot = buildOptimizerResultSnapshotForUi();
+            if (latestUiSnapshot) {
+              __lastOptimizerResultSnapshotForUi = latestUiSnapshot;
+            }
+          } catch (_) {}
         }
       } catch (e) {
         console.error('❌ [AL] Error restoring/persisting best state:', e);
@@ -11600,6 +11606,7 @@ export async function runOptimizationMVP(options = {}) {
       if (shouldStopKKT()) {
         const stoppedFinalEval = getBestScoreEvalSoFar() || getBestEvalSoFar();
         const stoppedBestScore = Number.isFinite(stoppedFinalEval?.score) ? stoppedFinalEval.score : bestScore;
+        const stoppedUiSnapshot = buildOptimizerResultSnapshotForUi() || __lastOptimizerResultSnapshotForUi || {};
         return {
           ok: true,
           aborted: true,
@@ -11614,7 +11621,7 @@ export async function runOptimizationMVP(options = {}) {
           objectiveScore: stoppedBestScore,
           hardViolations: stoppedFinalEval?.hardViolations ?? [],
           softViolations: stoppedFinalEval?.softViolations ?? [],
-          ...(__lastOptimizerResultSnapshotForUi || buildOptimizerResultSnapshotForUi() || {})
+          ...stoppedUiSnapshot
         };
       }
 
@@ -11711,6 +11718,8 @@ export async function runOptimizationMVP(options = {}) {
         } catch (_) {}
       }
 
+      const doneUiSnapshot = buildOptimizerResultSnapshotForUi() || __lastOptimizerResultSnapshotForUi || {};
+
       return {
         ok: true,
         aborted: shouldStopKKT(),
@@ -11725,7 +11734,7 @@ export async function runOptimizationMVP(options = {}) {
         objectiveScore: finalObjectiveScore,
         hardViolations: bestFinalEval?.hardViolations ?? [],
         softViolations: bestFinalEval?.softViolations ?? [],
-        ...(__lastOptimizerResultSnapshotForUi || buildOptimizerResultSnapshotForUi() || {})
+        ...doneUiSnapshot
       };
     } catch (e: any) {
       if (e?.__cooptStop) {
@@ -11736,6 +11745,7 @@ export async function runOptimizationMVP(options = {}) {
           stoppedFinalEval = restoreBestStateAndPersist(stoppedFinalEval) || stoppedFinalEval;
         } catch (_) {}
         const stoppedBestScore = Number.isFinite(stoppedFinalEval?.score) ? stoppedFinalEval.score : bestScore;
+        const emergencyStoppedUiSnapshot = buildOptimizerResultSnapshotForUi() || __lastOptimizerResultSnapshotForUi || {};
         return {
           ok: true,
           aborted: true,
@@ -11750,7 +11760,7 @@ export async function runOptimizationMVP(options = {}) {
           objectiveScore: stoppedBestScore,
           hardViolations: stoppedFinalEval?.hardViolations ?? [],
           softViolations: stoppedFinalEval?.softViolations ?? [],
-          ...(__lastOptimizerResultSnapshotForUi || buildOptimizerResultSnapshotForUi() || {})
+          ...emergencyStoppedUiSnapshot
         };
       }
       console.error('❌ [AL Optimizer] Fatal error:', e);
