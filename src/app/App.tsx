@@ -9283,18 +9283,37 @@ const collectLegacyCrossRays = async (
             : (Number.isFinite(resultBestScore)
               ? resultBestScore
               : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN)))
-          : (Number.isFinite(resultObjectiveScore)
-            ? resultObjectiveScore
-            : (Number.isFinite(finalTableScore) ? finalTableScore : Number.NaN));
+          : (Number.isFinite(resultBestScore)
+            ? resultBestScore
+            : (Number.isFinite(finalTableScore)
+              ? finalTableScore
+              : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN)));
         const finalBest = tsAborted
           ? (Number.isFinite(abortedTrackedBest)
             ? abortedTrackedBest
             : (Number.isFinite(resultBestScore) ? resultBestScore : finalScore))
-          : (Number.isFinite(tsBestScore)
-            ? tsBestScore
-            : (Number.isFinite(tsBestRequirementScore)
-              ? tsBestRequirementScore
-              : finalScore));
+          : (Number.isFinite(resultBestScore)
+            ? resultBestScore
+            : (Number.isFinite(tsBestScore)
+              ? tsBestScore
+              : (Number.isFinite(tsBestRequirementScore)
+                ? tsBestRequirementScore
+                : finalScore)));
+
+        try {
+          if ((window as any).__COOPT_AL_DIAG === true) {
+            console.log('🩺 [AL-DIAG] done score aggregation', {
+              tsAborted,
+              resultBestScore,
+              resultObjectiveScore,
+              tsBestScore,
+              tsBestRequirementScore,
+              finalTableScore,
+              finalScore,
+              finalBest,
+            });
+          }
+        } catch (_) {}
         const aborted = tsAborted;
 
         setOptimizeState((prev: any) => ({
