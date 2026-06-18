@@ -9430,6 +9430,55 @@ const collectLegacyCrossRays = async (
           ? (cloneJsonLocal(resultRowsSnapshot) || resultRowsSnapshot)
           : [];
 
+        const finalizeHostResultSnapshot = async (reason: string) => {
+          try {
+            if (resultConfigSnapshot) {
+              logDoneApplyDiag(`before-finalizeHostResultSnapshot:${reason}`, {
+                resultRows: getDiagRowsFingerprintLocal(committedRowsSnapshot),
+                resultConfig: getDiagConfigFingerprintLocal(resultConfigSnapshot),
+              });
+              await applyHostSystemConfigSnapshot(resultConfigSnapshot, committedRowsSnapshot);
+              logDoneApplyDiag(`after-finalizeHostResultSnapshot:${reason}`, {
+                resultRows: getDiagRowsFingerprintLocal(committedRowsSnapshot),
+              });
+              return;
+            }
+            if (Array.isArray(committedRowsSnapshot) && committedRowsSnapshot.length > 0) {
+              const rows = cloneJsonLocal(committedRowsSnapshot) || committedRowsSnapshot;
+              const table = hostWindow.tableOpticalSystem;
+              const previousDepth = Number(hostWindow.__suppressOpticalSystemDataChangedDepth || 0);
+              try {
+                hostWindow.__suppressOpticalSystemDataChangedDepth = previousDepth + 1;
+                hostWindow.__suppressOpticalSystemDataChanged = true;
+                if (table && typeof table.replaceData === 'function') {
+                  await Promise.resolve(table.replaceData(rows));
+                } else if (table && typeof table.setData === 'function') {
+                  await Promise.resolve(table.setData(rows));
+                }
+                if (typeof hostWindow.__cooptSyncRowsBackToActiveBlocks === 'function') {
+                  hostWindow.__cooptSyncRowsBackToActiveBlocks(rows);
+                }
+              } finally {
+                try {
+                  setTimeout(() => {
+                    hostWindow.__suppressOpticalSystemDataChangedDepth = previousDepth;
+                    hostWindow.__suppressOpticalSystemDataChanged = previousDepth > 0;
+                  }, 50);
+                } catch (_) {
+                  hostWindow.__suppressOpticalSystemDataChangedDepth = previousDepth;
+                  hostWindow.__suppressOpticalSystemDataChanged = previousDepth > 0;
+                }
+              }
+              logDoneApplyDiag(`after-finalizeHostRows:${reason}`, {
+                resultRows: getDiagRowsFingerprintLocal(committedRowsSnapshot),
+              });
+            }
+          } catch (_) {}
+          try { requestRefreshBlockInspector(hostWindow); } catch (_) {}
+          try { if (typeof hostWindow.refreshAllUI === 'function') hostWindow.refreshAllUI(); } catch (_) {}
+          try { if (typeof hostWindow.drawOpticalSystem === 'function') hostWindow.drawOpticalSystem(); } catch (_) {}
+        };
+
         try {
           if ((window as any).__COOPT_AL_DIAG !== true) throw new Error('AL diag disabled');
           const __diagHostRows = hostWindow.getOpticalSystemRows
@@ -9565,6 +9614,8 @@ const collectLegacyCrossRays = async (
               latestRows: getDiagRowsFingerprintLocal(latestRows),
             });
           } catch (_) {}
+
+          await finalizeHostResultSnapshot('after-done-sync');
         }
 
         let finalTableScore = Number.NaN;
@@ -9655,6 +9706,49 @@ const collectLegacyCrossRays = async (
         if (tsAborted && Number.isFinite(abortedTrackedBest)) {
           finalTableScore = abortedTrackedBest;
         }
+
+        await finalizeHostResultSnapshot(tsAborted ? 'after-stop-score' : 'after-done-score');
+
+        try {
+          const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
+          if (
+            Array.isArray(tsBestRequirementSnapshot)
+            && tsBestRequirementSnapshot.length > 0
+            && sre
+            && typeof sre.applyOptimizerRequirementSnapshot === 'function'
+          ) {
+            logDoneApplyDiag('before-final-apply-best-requirement-snapshot', {
+              tsAborted,
+              bestRequirementScore: tsBestRequirementScore,
+              snapshotRows: tsBestRequirementSnapshot.length,
+            });
+            const appliedBestRequirementSnapshot = !!sre.applyOptimizerRequirementSnapshot(tsBestRequirementSnapshot);
+            logDoneApplyDiag('after-final-apply-best-requirement-snapshot', {
+              tsAborted,
+              appliedBestRequirementSnapshot,
+              bestRequirementScore: tsBestRequirementScore,
+            });
+            if (appliedBestRequirementSnapshot) {
+              const bestScoreForLock = Number.isFinite(tsBestRequirementScore)
+                ? tsBestRequirementScore
+                : Number.NaN;
+              try {
+                hostWindow.__cooptOptimizeBestRequirementSnapshotApplied = {
+                  at: Date.now(),
+                  score: bestScoreForLock,
+                  source: tsAborted ? 'optimize-stop-final-best-snapshot' : 'optimize-done-final-best-snapshot',
+                };
+              } catch (_) {}
+              try {
+                w.__cooptOptimizeBestRequirementSnapshotApplied = {
+                  at: Date.now(),
+                  score: bestScoreForLock,
+                  source: tsAborted ? 'optimize-stop-final-best-snapshot' : 'optimize-done-final-best-snapshot',
+                };
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
 
         const doneTrackedBestRequirementScore = pickBestFiniteMin(
           tsBestRequirementScore,
