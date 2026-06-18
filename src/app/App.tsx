@@ -4890,7 +4890,7 @@ export default function App() {
     ) => {
       if (!Array.isArray(rows) || rows.length === 0) return Number.NaN;
       const startedAt = Date.now();
-      await applyOptimizedRows(rows, '', undefined, { syncBlocks: options?.syncBlocks === true });
+      await applyOptimizedRows(rows, '', undefined, { syncBlocks: options?.syncBlocks !== false });
       await requestRequirementReeval(reason, true);
       await waitRequirementEvalDone(startedAt);
       return readRequirementTableScoreFromHost();
@@ -8063,7 +8063,7 @@ const collectLegacyCrossRays = async (
       try {
         const refreshFn = targetWindow?.__cooptRefreshRequirementTableScoreForOptimize;
         if (typeof refreshFn === 'function' && Array.isArray(hostRows) && hostRows.length > 0) {
-          refreshedScore = Number(await refreshFn(hostRows, reason));
+          refreshedScore = Number(await refreshFn(hostRows, reason, { syncBlocks: true }));
         } else {
           const reqEditor = targetWindow?.systemRequirementsEditor || (window as any).systemRequirementsEditor;
           if (reqEditor && typeof reqEditor.evaluateAndUpdateNow === 'function') {
