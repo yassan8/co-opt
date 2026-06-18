@@ -8996,7 +8996,7 @@ const collectLegacyCrossRays = async (
               escapeLoop: Number.isFinite(Number(ev?.escapeLoop)) ? Number(ev.escapeLoop) : prev.escapeLoop,
               escapeLoops: Number.isFinite(Number(ev?.escapeLoops)) ? Number(ev.escapeLoops) : prev.escapeLoops,
               meritBefore: prev.meritBefore,
-              meritAfter: Number.isFinite(displayScore) ? displayScore : prev.meritAfter,
+              meritAfter: Number.isFinite(requirementDisplayScore) ? requirementDisplayScore : prev.meritAfter,
               requirementScoreBefore: prev.requirementScoreBefore,
               requirementScoreAfter: Number.isFinite(requirementDisplayScore) ? requirementDisplayScore : prev.requirementScoreAfter,
               requirementScoreTable: Number.isFinite(requirementDisplayScore) ? requirementDisplayScore : prev.requirementScoreTable,
@@ -9004,10 +9004,10 @@ const collectLegacyCrossRays = async (
               rejectCount: tsRejectCount,
               issue: '-',
               percent: maxIterations > 0 ? Math.round((Math.max(0, iter) / maxIterations) * 100) : 0,
-              best: Number.isFinite(tsBestScore)
-                ? tsBestScore
-                : (Number.isFinite(tsBestRequirementScore)
-                  ? tsBestRequirementScore
+              best: Number.isFinite(tsBestRequirementScore)
+                ? tsBestRequirementScore
+                : (Number.isFinite(tsBestScore)
+                  ? tsBestScore
                   : prev.best),
               bestRequirementScore: Number.isFinite(tsBestRequirementScore)
                 ? tsBestRequirementScore
@@ -9283,22 +9283,26 @@ const collectLegacyCrossRays = async (
             : (Number.isFinite(resultBestScore)
               ? resultBestScore
               : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN)))
-          : (Number.isFinite(resultBestScore)
-            ? resultBestScore
-            : (Number.isFinite(finalTableScore)
-              ? finalTableScore
-              : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN)));
+          : (Number.isFinite(finalTableScore)
+            ? finalTableScore
+            : (Number.isFinite(tsBestRequirementScore)
+              ? tsBestRequirementScore
+              : (Number.isFinite(resultBestScore)
+                ? resultBestScore
+                : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN))));
         const finalBest = tsAborted
           ? (Number.isFinite(abortedTrackedBest)
             ? abortedTrackedBest
             : (Number.isFinite(resultBestScore) ? resultBestScore : finalScore))
-          : (Number.isFinite(resultBestScore)
-            ? resultBestScore
-            : (Number.isFinite(tsBestScore)
-              ? tsBestScore
-              : (Number.isFinite(tsBestRequirementScore)
-                ? tsBestRequirementScore
-                : finalScore)));
+          : (Number.isFinite(tsBestRequirementScore)
+            ? tsBestRequirementScore
+            : (Number.isFinite(finalTableScore)
+              ? finalTableScore
+              : (Number.isFinite(resultBestScore)
+                ? resultBestScore
+                : (Number.isFinite(tsBestScore)
+                  ? tsBestScore
+                  : finalScore))));
 
         try {
           if ((window as any).__COOPT_AL_DIAG === true) {
