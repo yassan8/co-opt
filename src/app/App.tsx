@@ -5153,20 +5153,8 @@ export default function App() {
         const stamp = String(payload?.ts ?? payload?.token ?? '');
         if (stamp && stamp === lastOptimizeProgressStamp) return;
         if (stamp) lastOptimizeProgressStamp = stamp;
-        const progressPhase = String(payload?.phase ?? '').trim().toLowerCase();
-        const reqSnapshot = Array.isArray(payload?.requirementSnapshots) ? payload.requirementSnapshots : [];
-        if (progressPhase === 'done' || progressPhase === 'stopped') {
-          return;
-        }
-        if (reqSnapshot.length > 0) {
-          const sre = (window as any).systemRequirementsEditor;
-          if (sre && typeof sre.applyOptimizerRequirementSnapshot === 'function') {
-            sre.applyOptimizerRequirementSnapshot(reqSnapshot);
-          }
-          return;
-        }
-
-        // Live progress must not apply optical rows. Final done/stop sync owns table/config persistence.
+        // Progress messages are display-only for the host. The final done/stop
+        // result snapshot is the single owner of Req/Render/table/config updates.
       } catch (_) {}
     };
 
@@ -9165,35 +9153,14 @@ const collectLegacyCrossRays = async (
             const phaseLower = phase.toLowerCase();
             const progressMethod = String(ev?.method ?? (optMethod || 'kkt')).trim().toLowerCase();
             const iter = Number(ev?.iter ?? 0);
+            const requirementSnapshots = Array.isArray(ev?.requirementSnapshots) ? ev.requirementSnapshots : [];
             try {
-              const requirementSnapshots = Array.isArray(ev?.requirementSnapshots) ? ev.requirementSnapshots : [];
-              if (requirementSnapshots.length > 0) {
-                const payloadToken = `${Date.now()}-${iter}-${Math.random().toString(36).slice(2, 8)}`;
-                const payload = {
-                  ts: payloadToken,
-                  token: payloadToken,
-                  phase,
-                  iter,
-                  current: ev?.current,
-                  best: ev?.best,
-                  violationScore: ev?.violationScore,
-                  requirementSnapshots,
-                  rows: [],
-                };
-                localStorage.setItem(OPTIMIZE_PROGRESS_SYNC_KEY, JSON.stringify(payload));
-                if (isTauriRuntime()) {
-                  void (async () => {
-                    try {
-                      const mod = await import('@tauri-apps/api/event');
-                      if (mod && typeof (mod as any).emit === 'function') {
-                        await (mod as any).emit('coopt-optimize-progress', payload);
-                      }
-                    } catch (_) {}
-                  })();
-                }
-              }
+              // Keep live progress inside this Progress window. Do not publish
+              // Requirement snapshots to the host; final done/stop owns host state.
             } catch (_) {}
-            scheduleRequirementRefresh(ev);
+            // Keep live progress local to this window. Updating the host Req/Render
+            // during optimization creates competing state writers; final done/stop
+            // snapshot application below is the only host-facing update path.
             const snap = getRequirementTableScoreSnapshot();
             const progressCurrentScore = Number(ev?.current);
             const progressBestScore = Number(ev?.best);
@@ -9226,16 +9193,8 @@ const collectLegacyCrossRays = async (
               }
             }
 
-            const shouldAutoRenderPhase = phaseLower === 'accept' || phaseLower === 'done';
-            if (shouldAutoRenderPhase) {
-              const now = Date.now();
-              if ((now - lastRenderSyncAt) >= RENDER_SYNC_MIN_INTERVAL_MS || phaseLower === 'done') {
-                lastRenderSyncAt = now;
-                requestRenderSync(
-                  Array.isArray((ev as any)?.rows) ? (ev as any).rows : undefined,
-                  { finalizeAutoSemidia: phaseLower === 'done' }
-                );
-              }
+            if (phaseLower === 'done') {
+              lastRenderSyncAt = Date.now();
             }
 
             setOptimizeState((prev: any) => ({
