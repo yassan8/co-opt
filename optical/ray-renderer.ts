@@ -4291,7 +4291,9 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         const logHighFieldChiefRayFailure = (reason, details = {}) => {
             if (!isHighField) return;
             try {
-                if (!(typeof window !== 'undefined' && (window as any).__COOPT_AL_DIAG === true)) return;
+                // Keep this warning on a dedicated switch so AL diagnostics can be enabled
+                // without flooding the console during optimization.
+                if (!(typeof window !== 'undefined' && (window as any).__COOPT_HIGHFIELD_CHIEFRAY_DIAG === true)) return;
             } catch (_) {
                 return;
             }

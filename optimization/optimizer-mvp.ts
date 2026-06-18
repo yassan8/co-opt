@@ -9915,8 +9915,12 @@ export async function runOptimizationMVP(options = {}) {
 
       const restoreBestStateAndPersist = (sourceEval: any) => {
         try {
-          if (bestScoreBlocksSnapshot && typeof bestScoreBlocksSnapshot === 'object') {
-            const snapshot = snapshotBlocksByConfigId(bestScoreBlocksSnapshot);
+          const sourceBlocksSnapshot = (sourceEval && sourceEval.blocksSnapshot && typeof sourceEval.blocksSnapshot === 'object')
+            ? sourceEval.blocksSnapshot
+            : null;
+          const preferredBlocksSnapshot = sourceBlocksSnapshot || bestScoreBlocksSnapshot;
+          if (preferredBlocksSnapshot && typeof preferredBlocksSnapshot === 'object') {
+            const snapshot = snapshotBlocksByConfigId(preferredBlocksSnapshot);
             const restored = restoreBlocksByConfigId(blocksByConfigId, snapshot);
             if (restored) {
               try {
@@ -9934,6 +9938,13 @@ export async function runOptimizationMVP(options = {}) {
           const __diagSnapshotRestoredScore = Number(restoredEval?.score);
           let __diagFallbackApplied = false;
           let __diagFallbackScore: number | undefined;
+          let __diagFallbackCondition = false;
+          let __diagFallbackAppliedByX = false;
+          let __diagBestXAppliedOk = false;
+          let __diagTrackedBest = Number.NaN;
+          let __diagRestoredScore = Number.NaN;
+          let __diagBestXLength = Array.isArray(bestX) ? bestX.length : -1;
+          let __diagUsedSourceBlocksSnapshot = !!sourceBlocksSnapshot;
           // Verify the restored state actually matches the tracked best score.
           // The block snapshot can occasionally correspond to a slightly different
           // iterate than `bestScore`; if the restored score is worse than the
@@ -9945,14 +9956,19 @@ export async function runOptimizationMVP(options = {}) {
               ? Number(bestScore)
               : Number(sourceEval?.score);
             const restoredScore = Number(restoredEval?.score);
-            if (
+            __diagTrackedBest = trackedBest;
+            __diagRestoredScore = restoredScore;
+            __diagFallbackCondition = (
               Number.isFinite(trackedBest)
               && Number.isFinite(restoredScore)
               && restoredScore > (trackedBest + 1e-9)
               && Array.isArray(bestX)
               && bestX.length > 0
-            ) {
-              if (applyXToDesignState(bestX)) {
+            );
+            if (__diagFallbackCondition) {
+              __diagBestXAppliedOk = applyXToDesignState(bestX);
+              if (__diagBestXAppliedOk) {
+                __diagFallbackAppliedByX = true;
                 const reEval = evalCompositeFromRequirementsProfiled();
                 __diagFallbackApplied = true;
                 __diagFallbackScore = Number(reEval?.score);
@@ -9985,6 +10001,13 @@ export async function runOptimizationMVP(options = {}) {
               trackedBestScore: Number(bestScore),
               sourceBestScore: Number(sourceEval?.score),
               snapshotRestoredScore: __diagSnapshotRestoredScore,
+              usedSourceBlocksSnapshot: __diagUsedSourceBlocksSnapshot,
+              fallbackCondition: __diagFallbackCondition,
+              fallbackTrackedBest: __diagTrackedBest,
+              fallbackRestoredScore: __diagRestoredScore,
+              bestXLength: __diagBestXLength,
+              bestXAppliedOk: __diagBestXAppliedOk,
+              fallbackAppliedByX: __diagFallbackAppliedByX,
               fallbackApplied: __diagFallbackApplied,
               fallbackScore: __diagFallbackScore,
               finalRestoredScore: Number(restoredEval?.score),
