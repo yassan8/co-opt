@@ -7661,6 +7661,38 @@ const collectLegacyCrossRays = async (
       const w = window as any;
       const sourceWindow = getOptimizeHostWindow();
       const sourceSystemConfig = getSystemConfigFromWindow(sourceWindow);
+      try {
+        const __firstLensRadius = (sc: any): any => {
+          try {
+            const cfgs = Array.isArray(sc?.configurations) ? sc.configurations : [];
+            const aId = sc?.activeConfigId;
+            const ac = cfgs.find((c: any) => c && String(c.id) === String(aId)) || cfgs[0];
+            const blks = Array.isArray(ac?.blocks) ? ac.blocks : [];
+            for (const b of blks) {
+              const p = b?.parameters;
+              if (p && (p.radius1 !== undefined || p.radius !== undefined)) {
+                return { blockId: b?.blockId, radius1: p.radius1, radius: p.radius, thickness: p.thickness };
+              }
+            }
+          } catch (_) {}
+          return null;
+        };
+        let __storageCfg: any = null;
+        try {
+          __storageCfg = typeof sourceWindow.loadSystemConfigurations === 'function'
+            ? sourceWindow.loadSystemConfigurations()
+            : null;
+        } catch (_) {}
+        const __runtimeCfg = sourceWindow.__cooptSystemConfig || null;
+        console.log('🩺 [AL-DIAG] Optimize REOPEN read', {
+          preferRuntimeFlag: !!sourceWindow.__cooptPreferRuntimeSystemConfig,
+          deferUntil: Number(sourceWindow.__cooptDeferDerivedUiUntil) || 0,
+          now: Date.now(),
+          usedConfigFirstLens: __firstLensRadius(sourceSystemConfig),
+          storageConfigFirstLens: __firstLensRadius(__storageCfg),
+          runtimeConfigFirstLens: __firstLensRadius(__runtimeCfg),
+        });
+      } catch (_) {}
       let rows = sourceWindow.getOpticalSystemRows ? sourceWindow.getOpticalSystemRows(sourceWindow.tableOpticalSystem) : [];
       let reqRows: any[] = [];
       try {
