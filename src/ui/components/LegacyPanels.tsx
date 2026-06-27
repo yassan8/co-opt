@@ -3372,9 +3372,6 @@ export default function LegacyPanels() {
           ></textarea>
         </div>
       </div>
-
-      <SystemDataPanel />
-
       {false && (
       <div className="draw-system-container">
         <div className="draw-section">

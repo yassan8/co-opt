@@ -1319,6 +1319,10 @@ body.dark-mode #design-intent-add-block-type option {
     overflow: auto;
 }
 
+.win-mdi-window--intent .win-mdi-content {
+    overflow: hidden;
+}
+
 .win-mdi-content > iframe {
     display: block;
 }

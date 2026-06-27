@@ -49,24 +49,7 @@ export default function DesignIntentSection() {
         （Surface の解析・編集は可能ですが、設計意図は完全には利用できません）
       </div>
 
-      <div id="design-intent-blocks-panel" className="block-inspector-panel" aria-label="Block Inspector">
-        <div id="block-inspector" className="block-inspector" role="listbox" aria-label="Design blocks"></div>
-      </div>
-
-      <div id="apply-reason-section" className="apply-reason-section" style={{ display: "none" }}>
-        <div className="apply-reason-title">適用理由（参照用 / 読み取り専用）</div>
-        <div className="apply-reason-help">
-          セルを選択または編集すると、対象 Block（_blockId）に対する最新の評価要約（LCA/TCA 寄与）が表示されます。
-          ※評価は「Aberration Coefficients」実行時に更新されます。
-        </div>
-        <textarea
-          id="apply-reason-text"
-          rows={6}
-          cols={100}
-          readOnly
-          placeholder="ここに適用理由（評価要約）が表示されます…"
-        ></textarea>
-      </div>
+      <div id="block-inspector" className="block-inspector" role="listbox" aria-label="Design blocks"></div>
 
       <div id="table-optical-system" className="ide-table-container"></div>
     </section>

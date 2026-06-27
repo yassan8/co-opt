@@ -9621,11 +9621,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     for (const item of valueHeaderColumns) {
         const span = document.createElement('span');
         span.textContent = item.label;
-        const handle = document.createElement('span');
-        handle.className = 'block-inspector-col-resizer';
-        handle.title = `${item.label} width`;
-        span.appendChild(handle);
-        attachDiColumnResizer(handle, item.key, container);
         headerValues.appendChild(span);
     }
     const headerZoom = document.createElement('div');

@@ -12406,7 +12406,7 @@ const collectLegacyCrossRays = async (
             return (
               <div
                 key={s.key}
-                className={`win-mdi-window${ws.minimized ? ' is-minimized' : ''}${ws.maximized ? ' is-maximized' : ''}${workspaceFocus === s.key ? ' is-focused' : ''}`}
+                className={`win-mdi-window win-mdi-window--${s.key}${ws.minimized ? ' is-minimized' : ''}${ws.maximized ? ' is-maximized' : ''}${workspaceFocus === s.key ? ' is-focused' : ''}`}
                 style={{ left: ws.x, top: ws.y, width: ws.width, height: ws.minimized ? 44 : ws.height, zIndex: ws.zIndex }}
                 onMouseDown={() => bringMdiToFront(s.key)}
                 onPointerUp={(e) => syncWindowGeometry(s.key, e.currentTarget as HTMLElement)}
