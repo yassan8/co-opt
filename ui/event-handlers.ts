@@ -9507,10 +9507,44 @@ export function setupAnalysisWindows() {
             overflow: hidden;
             background: white;
             display: flex;
-            flex-direction: column;
+            flex-direction: row;
         }
-        #popup-wavefront-container { flex: 1 1 auto; min-height: 0; }
-        #popup-wavefront-container-stats { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; color: #333; border-top: 1px solid #eee; }
+        #popup-wavefront-container { flex: 1 1 auto; min-width: 0; min-height: 0; }
+        #popup-wavefront-container-stats {
+            flex: 0 0 280px;
+            width: 280px;
+            padding: 12px 14px;
+            font-size: 12px;
+            color: #333;
+            border-right: 1px solid #eee;
+            overflow-y: auto;
+            background: #fafafa;
+        }
+        #popup-wavefront-container-stats .wavefront-statistics h4 {
+            margin: 0 0 10px;
+            font-size: 13px;
+        }
+        #popup-wavefront-container-stats .stats-note {
+            margin-bottom: 6px;
+            line-height: 1.35;
+        }
+        #popup-wavefront-container-stats .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        @media (max-width: 960px) {
+            .content {
+                flex-direction: column;
+            }
+            #popup-wavefront-container-stats {
+                flex: 0 0 auto;
+                width: auto;
+                border-right: 0;
+                border-top: 1px solid #eee;
+            }
+        }
     </style>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
@@ -9551,8 +9585,8 @@ export function setupAnalysisWindows() {
         <progress id="popup-opd-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
     </div>
     <div class="content">
-        <div id="popup-wavefront-container"></div>
         <div id="popup-wavefront-container-stats"></div>
+        <div id="popup-wavefront-container"></div>
     </div>
 
     <script>

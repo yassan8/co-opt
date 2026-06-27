@@ -45,6 +45,18 @@
   <!-- Import map for native module scripts loaded directly from index.html -->
 
 
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/co-opt/node_modules/three/build/three.module.js",
+        "three/addons/": "/co-opt/node_modules/three/examples/jsm/",
+        "three/examples/jsm/controls/OrbitControls.js": "/co-opt/node_modules/three/examples/jsm/controls/OrbitControls.js",
+        "OrbitControls": "/co-opt/node_modules/three/examples/jsm/controls/OrbitControls.js"
+      }
+    }
+  </script>
+  <script type="module" src="/co-opt/rust-wasm/pkg/surface_origins-loader.js"></script>
+
   <!-- Early WASM service globals (getWASMSystem/_setWASMSystem) -->
 
   <!-- Early asphericSag service global (window.asphericSag) -->
@@ -230,23 +242,13 @@
     }, true);
   </script>
 
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "/co-opt/node_modules/three/build/three.module.js",
-        "three/addons/": "/co-opt/node_modules/three/examples/jsm/",
-        "three/examples/jsm/controls/OrbitControls.js": "/co-opt/node_modules/three/examples/jsm/controls/OrbitControls.js",
-        "OrbitControls": "/co-opt/node_modules/three/examples/jsm/controls/OrbitControls.js"
-      }
-    }
-  </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-CVjiiVlU.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-Cht2oNsQ.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/main-DRGllPoI.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-riClfYir.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-og_3iNv4.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/ray-renderer-qwwUgl2W.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/ray-renderer-AwGu-YiV.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-D78Ercu8.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/optimizer-wasm-bridge-DDEXKL2k.js">
-  <link rel="stylesheet" crossorigin href="/co-opt/assets/app-f4-N_5rO.css">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/optimizer-wasm-bridge-BfhWE71w.js">
+  <link rel="stylesheet" crossorigin href="/co-opt/assets/app-Jl5fd_GJ.css">
 </head>
 <body>
 

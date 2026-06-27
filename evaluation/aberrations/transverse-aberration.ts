@@ -162,9 +162,10 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
     // 🔧 FIX: semidia/aperture値は既に半径として保存されている（直径ではない）
     const stopRadius = apertureValue;  // 半径をそのまま使用
     
-    // 🔧 FIX: 横収差図の正規化には絞り面半径を使用
-    // 光線は絞り面を基準に生成されているため、絞り半径で正規化すれば軸上で±1になる
-    const entrancePupilRadius = stopRadius;  // 絞り面半径 = 瞳半径として使用
+    const estimatedEntrancePupilDiameter = getEstimatedEntrancePupilDiameter(opticalSystemRows, wavelength);
+    const entrancePupilRadius = Number.isFinite(estimatedEntrancePupilDiameter) && estimatedEntrancePupilDiameter > 0
+        ? estimatedEntrancePupilDiameter / 2
+        : stopRadius;
     
 
     const aberrationData = {
@@ -192,7 +193,17 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
 
         try {
             // 十字光線を生成（絞り面インデックスと評価面インデックスも渡す）
-            const crossBeamData = generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, rayCount, wavelength, stopSurfaceIndex, targetSurfaceIndex, lightweight);
+            const crossBeamData = generateCrossBeamForField(
+                opticalSystemRows,
+                fieldSetting,
+                isFinite,
+                rayCount,
+                wavelength,
+                stopSurfaceIndex,
+                targetSurfaceIndex,
+                lightweight,
+                options,
+            );
             
             if (crossBeamData) {
                 // メリジオナル・サジタル光線を分離して横収差を計算（絞り半径と入射瞳半径を別々に渡す）
@@ -301,8 +312,12 @@ export async function calculateTransverseAberrationAsync(
  * @param {number} targetSurfaceIndex - 評価面インデックス
  * @returns {Object} 十字光線データ
  */
-function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, rayCount, wavelength, stopSurfaceIndex, targetSurfaceIndex, lightweight = false) {
+function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, rayCount, wavelength, stopSurfaceIndex, targetSurfaceIndex, lightweight = false, analysisOptions = null) {
     const debugMode = TRANSVERSE_DEBUG;
+    const requestedPupilSamplingMode = String((analysisOptions && typeof analysisOptions === 'object' ? analysisOptions.pupilSamplingMode : '') || '').trim().toLowerCase();
+    const pupilSamplingMode = requestedPupilSamplingMode === 'stop' || requestedPupilSamplingMode === 'entrance'
+        ? requestedPupilSamplingMode
+        : (isFinite ? 'stop' : 'entrance');
     
     const options = {
         rayCount: rayCount,
@@ -310,7 +325,8 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
         colorMode: 'segment', // セグメント色分け
         crossType: 'both', // 明示的に水平・垂直両方向を指定
         debugMode: debugMode,
-        targetSurfaceIndex: targetSurfaceIndex // 評価面インデックスを追加
+        targetSurfaceIndex: targetSurfaceIndex, // 評価面インデックスを追加
+        pupilSamplingMode,
     };
     
     try {
@@ -791,12 +807,18 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         yOffset = (minY + maxY) / 2;
     }
     
-    // 🔧 FIX: 絞り面半径で正規化（全Objectで統一基準）
-    // 光線は絞り面を通るように生成されているため、絞り半径で正規化すれば軸上で±1になる
-    const maxAbsY = entrancePupilRadius;  // = stopRadius
-    
-    // 🔧 FIX: 部分的光線処理用も同じ瞳半径を使用
-    const maxCorrectedY = entrancePupilRadius;  // = stopRadius
+    // The normalized entrance pupil coordinate must be centered on the pupil
+    // center, not on the global stop-plane coordinate origin. Off-axis fields
+    // otherwise collapse to a one-sided 0..1 footprint.
+    const chiefStopIntersection = Number.isInteger(stopPointIndex)
+        ? getIntersectionAtPathPoint(chiefRay, stopPointIndex, stopSurfaceInfo, mirrorSign, false)
+        : getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
+    const pupilCenterY = chiefStopIntersection ? chiefStopIntersection.y : yOffset;
+    const sampledMaxAbsY = stopYCoordinates.length > 0
+        ? Math.max(...stopYCoordinates.map((value) => Math.abs(value - pupilCenterY)))
+        : 0;
+    const maxAbsY = sampledMaxAbsY > 0 ? sampledMaxAbsY : entrancePupilRadius;
+    const maxCorrectedY = maxAbsY;
     
     // メリジオナル光線の横収差を計算（座標分布に基づく正規化）
     meridionalRays.forEach((ray, index) => {
@@ -811,9 +833,10 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
             if (stopIntersection) {
                 // Y座標はオフセット補正なしで直接使用
                 const stopY = stopIntersection.y;
+                const centeredStopY = stopY - pupilCenterY;
                 
                 // 🔧 FIX: 事前に計算済みのmaxAbsYを使用（ループ内で再計算しない）
-                const normalizedPupilCoord = maxAbsY > 0 ? stopY / maxAbsY : 0;
+                const normalizedPupilCoord = maxAbsY > 0 ? centeredStopY / maxAbsY : 0;
                 
                 const transverseAberration = intersection.y - chiefIntersection.y; // Y方向の収差
                 
@@ -844,6 +867,8 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                                 stopCoordinate: {
                                     x: stopIntersection.x,
                                     y: stopIntersection.y,
+                                    pupilCenterY: pupilCenterY,
+                                    centeredY: centeredStopY,
                                     maxAbsY: maxAbsY,
                                     normalizedY: normalizedPupilCoord
                                 }
@@ -873,10 +898,11 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
             );
             
             if (stopIntersection) {
-                const correctedStopY = stopIntersection.y - yOffset; // Y座標をオフセット補正
+                const correctedStopY = stopIntersection.y;
+                const centeredStopY = correctedStopY - pupilCenterY;
                 
                 // 🔧 FIX: 事前に計算済みのmaxCorrectedYを使用（ループ内で再計算しない）
-                const normalizedPupilCoord = maxCorrectedY > 0 ? correctedStopY / maxCorrectedY : 0;
+                const normalizedPupilCoord = maxCorrectedY > 0 ? centeredStopY / maxCorrectedY : 0;
                 
                 // 規格化座標が±1以内の光線を含める（座標分布基準）
                 if (Math.abs(normalizedPupilCoord) <= 1.0) {
@@ -933,7 +959,9 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                                     stopCoordinate: {
                                         x: stopIntersection.x,
                                         y: stopIntersection.y,
+                                        pupilCenterY: pupilCenterY,
                                         correctedY: correctedStopY,
+                                        centeredY: centeredStopY,
                                         yOffset: yOffset,
                                         maxCorrectedY: maxCorrectedY,
                                         normalizedY: normalizedPupilCoord
@@ -946,14 +974,9 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         }
     });
     
-    // 主光線の絞り面座標を取得
-    const chiefStopIntersection = Number.isInteger(stopPointIndex)
-        ? getIntersectionAtPathPoint(chiefRay, stopPointIndex, stopSurfaceInfo, mirrorSign, false)
-        : getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
-
     // 🔧 FIX: 主光線を明示的に追加（Ray number偶数時に瞳座標=0が含まれない問題を回避）
     const chiefStopY = chiefStopIntersection ? chiefStopIntersection.y : 0;
-    const chiefNormalizedPupilCoordMeridional = maxAbsY > 0 ? chiefStopY / maxAbsY : 0;
+    const chiefNormalizedPupilCoordMeridional = maxAbsY > 0 ? (chiefStopY - pupilCenterY) / maxAbsY : 0;
     
     // 主光線が既にpoints配列に含まれているか確認（重複回避）
     const chiefAlreadyExistsMeridional = points.some(p => Math.abs(p.pupilCoordinate - chiefNormalizedPupilCoordMeridional) < 1e-9);
@@ -983,6 +1006,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                     stopCoordinate: {
                         x: chiefStopIntersection ? chiefStopIntersection.x : 0,
                         y: chiefStopY,
+                        pupilCenterY: pupilCenterY,
                         maxAbsY: maxAbsY,
                         normalizedY: chiefNormalizedPupilCoordMeridional
                     }
@@ -1032,20 +1056,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
             }
         }
 
-        // 横収差0位置でのオフセット適用
-        if (zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6) {
-            // 284点以上の場合も同じ処理を適用
-
-            // 全点の瞳座標をオフセット
-            points.forEach(point => {
-                point.originalPupilCoordinate = point.pupilCoordinate; // 元の座標を保存
-                point.pupilCoordinate -= zeroAberrationPosition; // オフセット適用
-            });
-
-            // オフセット後に再ソート
-            points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
-
-        }
+        // Entrance pupil基準の生座標を保持するため、横収差0位置への瞳座標シフトは行わない。
     }
     
     // メリジオナル統計情報（必要時に利用）
@@ -1055,8 +1066,8 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         rayType: 'meridional',
         points: points,
         zeroAberrationPosition: zeroAberrationPosition,
-        offsetMethod: offsetMethod,
-        hasOffset: zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6
+        offsetMethod: 'none',
+        hasOffset: false
     };
     
     return result;
@@ -1171,14 +1182,17 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
         xOffset = (minX + maxX) / 2; // デバッグ用のみ
     }
     
-    // 🔧 FIX: 絞り面半径で正規化（全Objectで統一基準）
-    // 光線は絞り面を通るように生成されているため、絞り半径で正規化すれば軸上で±1になる
-    const maxCorrectedX = entrancePupilRadius;  // = stopRadius
-    
-    // 主光線の絞り面X座標も取得（参考用）
+    // The normalized entrance pupil coordinate must be centered on the pupil
+    // center, not on the global stop-plane coordinate origin. Off-axis fields
+    // otherwise collapse to a one-sided 0..1 footprint.
     const chiefStopIntersection = Number.isInteger(stopPointIndex)
         ? getIntersectionAtPathPoint(chiefRay, stopPointIndex, stopSurfaceInfo, mirrorSign, false)
         : getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
+    const pupilCenterX = chiefStopIntersection ? chiefStopIntersection.x : xOffset;
+    const sampledMaxAbsX = stopXCoordinates.length > 0
+        ? Math.max(...stopXCoordinates.map((value) => Math.abs(value - pupilCenterX)))
+        : 0;
+    const maxCorrectedX = sampledMaxAbsX > 0 ? sampledMaxAbsX : entrancePupilRadius;
     
     // サジタル光線の横収差を計算（座標分布に基づく正規化）
     sagittalRays.forEach((ray, index) => {
@@ -1193,9 +1207,10 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
             if (stopIntersection) {
                 // 🔧 FIX: X座標をオフセット補正せずに直接使用（メリディオナルと同じロジック）
                 const stopX = stopIntersection.x;
+                const centeredStopX = stopX - pupilCenterX;
                 
                 // 🔧 FIX: 事前に計算済みのmaxCorrectedXを使用（ループ内で再計算しない）
-                const normalizedPupilCoord = maxCorrectedX > 0 ? stopX / maxCorrectedX : 0;
+                const normalizedPupilCoord = maxCorrectedX > 0 ? centeredStopX / maxCorrectedX : 0;
                 
                 const transverseAberration = intersection.x - chiefIntersection.x; // X方向の収差
                 
@@ -1226,6 +1241,8 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                                 stopCoordinate: {
                                     x: stopIntersection.x,
                                     y: stopIntersection.y,
+                                    pupilCenterX: pupilCenterX,
+                                    centeredX: centeredStopX,
                                     maxCorrectedX: maxCorrectedX,
                                     normalizedX: normalizedPupilCoord
                                 }
@@ -1255,10 +1272,11 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
             );
             
             if (stopIntersection) {
-                const correctedStopX = stopIntersection.x - xOffset; // X座標をオフセット補正
+                const correctedStopX = stopIntersection.x;
+                const centeredStopX = correctedStopX - pupilCenterX;
                 
                 // 🔧 FIX: 事前に計算済みのmaxCorrectedXを使用（ループ内で再計算しない）
-                const normalizedPupilCoord = maxCorrectedX > 0 ? correctedStopX / maxCorrectedX : 0;
+                const normalizedPupilCoord = maxCorrectedX > 0 ? centeredStopX / maxCorrectedX : 0;
                 
                 // 規格化座標が±1以内の光線を含める（座標分布基準）
                 if (Math.abs(normalizedPupilCoord) <= 1.0) {
@@ -1315,7 +1333,9 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                                     stopCoordinate: {
                                         x: stopIntersection.x,
                                         y: stopIntersection.y,
+                                        pupilCenterX: pupilCenterX,
                                         correctedX: correctedStopX,
+                                        centeredX: centeredStopX,
                                         xOffset: xOffset,
                                         maxCorrectedX: maxCorrectedX,
                                         normalizedX: normalizedPupilCoord
@@ -1330,7 +1350,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     
     // 🔧 FIX: 主光線を明示的に追加（Ray number偶数時に瞳座標=0が含まれない問題を回避）
     const chiefStopX = chiefStopIntersection ? chiefStopIntersection.x : 0;
-    const chiefNormalizedPupilCoordSagittal = maxCorrectedX > 0 ? chiefStopX / maxCorrectedX : 0;
+    const chiefNormalizedPupilCoordSagittal = maxCorrectedX > 0 ? (chiefStopX - pupilCenterX) / maxCorrectedX : 0;
     
     // 主光線が既にpoints配列に含まれているか確認（重複回避）
     const chiefAlreadyExistsSagittal = points.some(p => Math.abs(p.pupilCoordinate - chiefNormalizedPupilCoordSagittal) < 1e-9);
@@ -1360,6 +1380,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                     stopCoordinate: {
                         x: chiefStopX,
                         y: chiefStopIntersection ? chiefStopIntersection.y : 0,
+                        pupilCenterX: pupilCenterX,
                         maxCorrectedX: maxCorrectedX,
                         normalizedX: chiefNormalizedPupilCoordSagittal
                     }
@@ -1409,20 +1430,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
             }
         }
 
-        // 横収差0位置でのオフセット適用
-        if (zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6) {
-            // 284点以上の場合も同じ処理を適用
-
-            // 全点の瞳座標をオフセット
-            points.forEach(point => {
-                point.originalPupilCoordinate = point.pupilCoordinate; // 元の座標を保存
-                point.pupilCoordinate -= zeroAberrationPosition; // オフセット適用
-            });
-
-            // オフセット後に再ソート
-            points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
-
-        }
+        // Entrance pupil基準の生座標を保持するため、横収差0位置への瞳座標シフトは行わない。
     }
     
     // サジタル統計情報（必要時に利用）
@@ -1432,8 +1440,8 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
         rayType: 'sagittal',
         points: points,
         zeroAberrationPosition: zeroAberrationPosition,
-        offsetMethod: offsetMethod,
-        hasOffset: zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6
+        offsetMethod: 'none',
+        hasOffset: false
     };
     
     return result;

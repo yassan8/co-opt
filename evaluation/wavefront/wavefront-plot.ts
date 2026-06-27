@@ -1102,6 +1102,43 @@ export class WavefrontPlotter {
         return container.ownerDocument.getElementById(`${containerId}-stats`);
     }
 
+    buildOpdStatsAnnotation(statistics) {
+        const formatStat = (value, digits = 4) => {
+            const n = Number(value);
+            return Number.isFinite(n) ? n.toFixed(digits) : 'n/a';
+        };
+
+        return {
+            x: 0.02,
+            y: 0.98,
+            xref: 'paper',
+            yref: 'paper',
+            xanchor: 'left',
+            yanchor: 'top',
+            align: 'left',
+            showarrow: false,
+            text: [
+                `<b>RMS:</b> ${formatStat(statistics?.rms)} λ`,
+                `<b>Peak-to-Peak:</b> ${formatStat(statistics?.peakToPeak)} λ`,
+                `<b>Min:</b> ${formatStat(statistics?.min)} λ`,
+                `<b>Max:</b> ${formatStat(statistics?.max)} λ`
+            ].join('<br>'),
+            font: { size: 12, color: '#222' },
+            bgcolor: 'rgba(255,255,255,0.88)',
+            bordercolor: '#cfcfcf',
+            borderwidth: 1,
+            borderpad: 6
+        };
+    }
+
+    clearStatsContainer() {
+        const container = this.resolveContainer();
+        const statsContainer = this.resolveStatsContainer(container);
+        if (statsContainer) {
+            statsContainer.innerHTML = '';
+        }
+    }
+
     _setSystemDataText(text) {
         const value = typeof text === 'string' ? text : String(text ?? '');
         try {
@@ -1406,8 +1443,17 @@ export class WavefrontPlotter {
                         eye: { x: 1.5, y: 1.5, z: 1.5 }
                     }
                 },
-                margin: { l: 0, r: 0, b: 0, t: 40 }
+                margin: { l: 0, r: 0, b: 0, t: 40 },
+                annotations: []
             };
+
+            {
+                const stats = wavefrontMap?.statistics?.display?.opdWavelengths
+                    ? wavefrontMap.statistics.display.opdWavelengths
+                    : (wavefrontMap?.statistics?.raw?.opdWavelengths || wavefrontMap?.statistics?.opdWavelengths);
+                layout.annotations = [this.buildOpdStatsAnnotation(stats)];
+                this.clearStatsContainer();
+            }
 
             try {
                 const container = this.resolveContainer();
@@ -1453,16 +1499,6 @@ export class WavefrontPlotter {
                     await plotly.newPlot(container, [fallbackData], layout, this.plotlyConfig);
                 }
                 console.log('⚠️ フォールバックデータで描画しました');
-            }
-
-            // 統計情報を表示
-            {
-                // IMPORTANT: Stats must match what is plotted.
-                // OPD is fixed to piston+tilt removed display (fallback to raw if missing).
-                const stats = wavefrontMap?.statistics?.display?.opdWavelengths
-                    ? wavefrontMap.statistics.display.opdWavelengths
-                    : (wavefrontMap?.statistics?.raw?.opdWavelengths || wavefrontMap?.statistics?.opdWavelengths);
-                this.displayStatistics(stats, 'OPD', 'λ');
             }
 
             console.log('✅ OPD 3Dサーフェスプロット生成完了');
@@ -1754,8 +1790,18 @@ export class WavefrontPlotter {
                 },
                 width: 600,
                 height: 600,
-                margin: { l: 60, r: 60, b: 60, t: 60 }
+                margin: { l: 60, r: 60, b: 60, t: 60 },
+                annotations: []
             };
+
+            {
+                const stats = wavefrontMap?.statistics?.display?.opdWavelengths
+                    ? wavefrontMap.statistics.display.opdWavelengths
+                    : (wavefrontMap?.statistics?.raw?.opdWavelengths || wavefrontMap?.statistics?.opdWavelengths);
+                layout.annotations = [this.buildOpdStatsAnnotation(stats)];
+                this.clearStatsContainer();
+            }
+
             const container = this.resolveContainer();
             const plotly = this.resolvePlotly(container);
             if (!container || !plotly) {
@@ -1767,16 +1813,6 @@ export class WavefrontPlotter {
             emitProgress(96, 'Rendering OPD heatmap...');
             await plotly.newPlot(container, [heatmapData], layout, this.plotlyConfig);
             emitProgress(100, 'Completed');
-            // 統計情報を表示
-            {
-                // IMPORTANT: Stats must match what is plotted.
-                // - Zernike fit OFF(raw): plot shows raw OPD → show raw stats.
-                // - Zernike fit ON: plot shows OPD after removedModel (default piston) → show primary stats.
-                const stats = wavefrontMap?.statistics?.display?.opdWavelengths
-                    ? wavefrontMap.statistics.display.opdWavelengths
-                    : (wavefrontMap?.statistics?.raw?.opdWavelengths || wavefrontMap?.statistics?.opdWavelengths);
-                this.displayStatistics(stats, 'OPD', 'λ');
-            }
             console.log('✅ OPD ヒートマップ生成完了');
             return wavefrontMap;
         } catch (error) {

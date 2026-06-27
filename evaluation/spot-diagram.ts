@@ -2452,6 +2452,20 @@ export async function generateSpotDiagramAsync(
             if (mag < 1e-12) return null;
             return { x: dir.x / mag, y: dir.y / mag, z: dir.z / mag };
         })();
+        const chiefRayIndex = (() => {
+            const chiefPoint = spotPoints.find(p => p && p.isChiefRay === true && Number.isInteger(p.rayIndex));
+            return Number.isInteger(chiefPoint?.rayIndex) ? Number(chiefPoint.rayIndex) : 0;
+        })();
+        const chiefRayImageDir = __spot_computeChiefRayImageDirection(
+            opticalSystemRows,
+            rayStartPoints?.[chiefRayIndex],
+            primaryWavelength?.wavelength,
+            targetSurfaceIndex,
+            (options && typeof options === 'object' && options.traceOptions && typeof options.traceOptions === 'object')
+                ? options.traceOptions
+                : null
+        );
+        const chiefRayAngleDeg = __spot_computeChiefRayAngleDegFromDirection(chiefRayImageDir);
 
         if (shouldApplyCentroidOffset) {
             spotPoints.forEach(point => {

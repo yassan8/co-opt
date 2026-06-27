@@ -2860,38 +2860,90 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
         console.log(`📊 光線本数: ${rayCount}本`);
 
         const { getPrimaryWavelengthForAberration } = await import('../evaluation/aberrations/transverse-aberration.js');
-        const { plotTransverseAberrationDiagram } = await import('../evaluation/aberrations/transverse-aberration-plot.js');
+        const { plotTransverseAberration } = await import('../evaluation/aberrations/transverse-aberration-plot.js');
         const { runNativeTransverseAberration } = await import('../src/desktop/ipc/client.ts');
-
-        const wavelength = getPrimaryWavelengthForAberration(); // μm
-        console.log(`📊 Wavelength: ${wavelength} μm`);
 
         const tableSource = getTableSource();
         const tableObject = getTableObject();
         const sourceRows = getSourceRows(tableSource);
         const objectRows = getObjectRows(tableObject);
 
-        try { onProgress?.({ percent: 10, message: 'Computing transverse aberration (Rust API)...' }); } catch (_) {}
-        const aberrationData: any = await runNativeTransverseAberration({
-            opticalSystemRows,
-            sourceRows: Array.isArray(sourceRows) ? sourceRows : [],
-            objectRows: Array.isArray(objectRows) ? objectRows : [],
-            surfaceIndex: targetSurfaceIndex,
-            rayCount,
-            pattern: 'cross',
-            wavelengthMode: 'primary',
-            wavelength,
-        });
+        const wavelengths = (() => {
+            const valid = (Array.isArray(sourceRows) ? sourceRows : [])
+                .map((row: any) => Number(row?.wavelength))
+                .filter((value: number) => Number.isFinite(value) && value > 0);
+            if (valid.length > 0) {
+                return [...new Set(valid)];
+            }
+            return [getPrimaryWavelengthForAberration()];
+        })();
 
-        if (!aberrationData) {
+        console.log(`📊 Wavelengths: ${wavelengths.map((wl: number) => `${wl} μm`).join(', ')}`);
+
+        let mergedAberrationData: any = null;
+        for (let wavelengthIndex = 0; wavelengthIndex < wavelengths.length; wavelengthIndex++) {
+            const wavelength = wavelengths[wavelengthIndex];
+            try { onProgress?.({ percent: 10 + Math.round((70 * wavelengthIndex) / Math.max(1, wavelengths.length)), message: `Computing transverse aberration λ=${wavelength.toFixed(4)} μm...` }); } catch (_) {}
+            const aberrationData: any = await runNativeTransverseAberration({
+                opticalSystemRows,
+                sourceRows: Array.isArray(sourceRows) ? sourceRows : [],
+                objectRows: Array.isArray(objectRows) ? objectRows : [],
+                surfaceIndex: targetSurfaceIndex,
+                rayCount,
+                pattern: 'cross',
+                wavelengthMode: 'primary',
+                wavelength,
+            });
+
+            if (!aberrationData) {
+                throw new Error(`Failed to calculate transverse aberration data for λ=${wavelength.toFixed(4)} μm`);
+            }
+
+            const wavelengthLabel = `${wavelength.toFixed(5)} μm`;
+            const annotateSeries = (seriesList: any[] = []) => seriesList.map((series: any, fieldIndex: number) => ({
+                ...series,
+                wavelengthUm: wavelength,
+                wavelengthLabel,
+                fieldIndex,
+                fieldSetting: {
+                    ...(series?.fieldSetting || {}),
+                    wavelengthUm: wavelength,
+                    wavelengthLabel,
+                    fieldIndex,
+                },
+            }));
+
+            if (!mergedAberrationData) {
+                mergedAberrationData = {
+                    ...aberrationData,
+                    wavelength: wavelength,
+                    wavelengthsUm: [...wavelengths],
+                    fieldSettings: Array.isArray(aberrationData?.fieldSettings) ? aberrationData.fieldSettings : [],
+                    meridionalData: annotateSeries(Array.isArray(aberrationData?.meridionalData) ? aberrationData.meridionalData : []),
+                    sagittalData: annotateSeries(Array.isArray(aberrationData?.sagittalData) ? aberrationData.sagittalData : []),
+                    metadata: {
+                        ...(aberrationData?.metadata || {}),
+                        wavelengthsUm: [...wavelengths],
+                    },
+                };
+            } else {
+                mergedAberrationData.meridionalData.push(...annotateSeries(Array.isArray(aberrationData?.meridionalData) ? aberrationData.meridionalData : []));
+                mergedAberrationData.sagittalData.push(...annotateSeries(Array.isArray(aberrationData?.sagittalData) ? aberrationData.sagittalData : []));
+            }
+        }
+
+        if (!mergedAberrationData) {
             throw new Error('Failed to calculate transverse aberration data');
         }
 
         try { onProgress?.({ percent: 95, message: 'Rendering...' }); } catch (_) {}
-        plotTransverseAberrationDiagram(aberrationData, containerTarget, typeof containerTarget === 'string' ? document : containerTarget.ownerDocument);
+        plotTransverseAberration(containerTarget, mergedAberrationData, {
+            title: 'TRANSVERSE RAY ABERRATIONS',
+            fixedScaleMm: 0.05,
+        });
         try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
         console.log('✅ Transverse aberration diagram generated successfully');
-        return aberrationData;
+        return mergedAberrationData;
     } catch (error) {
         console.error('❌ Transverse aberration diagram error:', error);
         const container = typeof containerTarget === 'string'
@@ -3334,13 +3386,19 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
         let processedObjectRows = normalizeAstigmatismObjectRowsForImageHeight(objectRows, opticalSystemRows, sourceRows);
         const objectFieldMode = inferAstigmatismObjectFieldMode(objectRows);
         const hasHeightRect = objectFieldMode === 'height';
+        const interpolationSubdivisionsFromOption = Number(options?.interpolationSubdivisions);
+        const interpolationSubdivisions = Number.isFinite(interpolationSubdivisionsFromOption)
+            ? Math.max(4, Math.min(100, Math.round(interpolationSubdivisionsFromOption)))
+            : 24;
 
         if (fieldMode === 'interpolate' && (processedObjectRows || []).length > 0 && !hasHeightRect) {
             // Y方向の最大角度を取得
             const maxYAngle = Math.max(...processedObjectRows.map((obj: any) => Math.abs(parseFloat(obj.yHeightAngle || 0))));
 
-            // 0°から最大値まで100等分（101点）
-            const subdivisions = 50;
+            // Web astigmatism already uses Rust/WASM tracing, but TS-side field interpolation
+            // dominates runtime if we oversample the field axis. Keep a moderate default and
+            // allow callers to opt back into denser interpolation when needed.
+            const subdivisions = interpolationSubdivisions;
             const interpolationProgressStart = 16;
             const interpolationProgressEnd = 60;
             processedObjectRows = [];

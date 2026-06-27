@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { plotDistortionPercent, plotGridDistortion } from '../../evaluation/aberrations/distortion-plot.ts';
-import { calculateDistortionData, calculateGridDistortion } from '../../evaluation/aberrations/distortion.ts';
 import { runNativeDistortion, runNativeGridDistortion } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
 
@@ -14,9 +13,6 @@ function formatRuntimeInfo(runtimeLabel: 'tauri' | 'web', backendLabel?: string)
   const base = backendLabel
     ? `runtime=${runtimeLabel}, backend=${backendLabel}`
     : `runtime=${runtimeLabel}`;
-  if (runtimeLabel === 'web') {
-    return `${base} (native backend unavailable in browser mode)`;
-  }
   return base;
 }
 
@@ -404,41 +400,7 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
         const wl = wavelengths[i];
         const base = (i / Math.max(1, wavelengths.length)) * 100;
         const span = 100 / Math.max(1, wavelengths.length);
-        if (!isTauriRuntime()) {
-          const resp = await calculateDistortionData(
-            opticalSystemRows,
-            fieldValues,
-            wl,
-            {
-              heightMode,
-              requireRustWasm: true,
-              onProgress: (evt: any) => {
-                try {
-                  const p = Number(evt?.percent);
-                  const msg = String(evt?.message || 'Distortion running...');
-                  const mapped = Number.isFinite(p) ? (base + (span * p) / 100) : base;
-                  setProgress(Math.max(0, Math.min(100, mapped)), msg);
-                } catch (_) {}
-              },
-            },
-          );
-          if (!resp) {
-            throw new Error(`Distortion returned no data for λ=${wl.toFixed(4)} um`);
-          }
-          const backendLabel = String(resp?.meta?.backend || 'web-rust-wasm');
-          setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
-          allData.push({
-            fieldValues: deriveDisplayFieldValues(objectRows, Array.isArray(resp?.fieldValues) ? resp.fieldValues : fieldValues),
-            idealHeights: Array.isArray(resp?.idealHeights) ? resp.idealHeights : [],
-            realHeights: Array.isArray(resp?.realHeights) ? resp.realHeights : [],
-            distortion: Array.isArray(resp?.distortion) ? resp.distortion : [],
-            distortionPercent: Array.isArray(resp?.distortionPercent) ? resp.distortionPercent : [],
-            meta: { ...(resp?.meta || {}), wavelength: wl, heightMode },
-          });
-          setProgress(base + span, `Distortion (λ=${wl.toFixed(4)} um, backend=${backendLabel})`);
-          continue;
-        }
-
+        setProgress(base, `Distortion (λ=${wl.toFixed(4)} um): tracing`);
         const resp = await runNativeDistortion({
           opticalSystemRows,
           sourceRows,
@@ -483,34 +445,6 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       const runtimeLabel = isTauriRuntime() ? 'tauri' : 'web';
       setBackendInfo(formatRuntimeInfo(runtimeLabel));
       setProgress(5, `Grid distortion (${runtimeLabel}): preparing`);
-
-      if (!isTauriRuntime()) {
-        const data = await calculateGridDistortion(
-          opticalSystemRows,
-          Number(gridSize) || 20,
-          wavelength,
-          {
-            requireRustWasm: true,
-            onProgress: (evt: any) => {
-              const p = Number(evt?.percent);
-              const msg = String(evt?.message || 'Grid distortion running...');
-              setProgress(Number.isFinite(p) ? Math.max(5, Math.min(95, p)) : 50, msg);
-            },
-          },
-        );
-        if (!data) {
-          throw new Error('Grid distortion returned no data');
-        }
-        setBackendInfo(formatRuntimeInfo(runtimeLabel, String(data?.meta?.backend || 'web-rust-wasm')));
-        setProgress(40, `Grid distortion ${data.gridSize}×${data.gridSize}`);
-        await plotGridDistortion(data, chartRef.current as any, (evt: any) => {
-          const p = Number(evt?.percent);
-          const msg = String(evt?.message || 'Grid distortion plotting...');
-          setProgress(Number.isFinite(p) ? Math.max(40, Math.min(100, 40 + p * 0.6)) : 60, msg);
-        });
-        hideProgress();
-        return;
-      }
 
       const scales = [1.0, 0.7, 0.5, 0.35, 0.2];
       let data: any = null;
@@ -617,12 +551,13 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
   }, [gridSize, plotlyReady, setProgress, hideProgress]);
 
   useEffect(() => {
-    if (type === 'distortion') {
-      handleRenderDistortion();
-    } else {
-      hideProgress();
+    hideProgress();
+    setErrorMsg('');
+    setBackendInfo('');
+    if (chartRef.current) {
+      chartRef.current.innerHTML = '';
     }
-  }, [type, handleRenderDistortion, hideProgress]);
+  }, [type, hideProgress]);
 
   return (
     <div className="dist-analysis-page">

@@ -49,56 +49,22 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
     
     // デフォルトオプション
     const defaultOptions = {
-        width: 1000,
-        height: 600,
+        width: 1100,
+        height: 700,
         title: '横収差図',
         showLegend: true,
         gridLines: true,
-        colors: ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+        fixedScaleMm: 0.05,
+        wavelengthStyles: [
+            { color: '#0000fe', dash: 'dash' },
+            { color: '#7ffe7e', dash: 'solid' },
+            { color: '#fe0000', dash: 'dashdot' },
+            { color: '#8b5cf6', dash: 'longdash' },
+            { color: '#0f766e', dash: 'dot' },
+        ]
     };
     
     const plotOptions = { ...defaultOptions, ...options };
-
-    const computeSquareDomains = () => {
-        const margin = { l: 80, r: 150, t: 80, b: 80 };
-        const gap = 0.1;
-        const maxSpanBySpace = (1 - gap) / 2; // 0.45
-
-        const containerWidth = Math.max(200, Number(container?.clientWidth) || Number(plotOptions.width) || 1000);
-        const containerHeight = Math.max(200, Number(container?.clientHeight) || Number(plotOptions.height) || 600);
-        const innerW = Math.max(100, containerWidth - margin.l - margin.r);
-        const innerH = Math.max(100, containerHeight - margin.t - margin.b);
-        const spanByAspect = innerH / innerW;
-
-        // Case A: wide canvas -> shrink X span and keep full Y.
-        // Case B: tall canvas -> keep max X span and shrink Y span.
-        let xSpan = maxSpanBySpace;
-        let ySpan = 1;
-        if (spanByAspect <= maxSpanBySpace) {
-            xSpan = Math.max(0.1, spanByAspect);
-            ySpan = 1;
-        } else {
-            xSpan = maxSpanBySpace;
-            ySpan = Math.max(0.1, Math.min(1, (xSpan * innerW) / innerH));
-        }
-
-        const totalX = 2 * xSpan + gap;
-        const xStart = Math.max(0, (1 - totalX) / 2);
-        const yStart = Math.max(0, (1 - ySpan) / 2);
-
-        const x1: [number, number] = [xStart, xStart + xSpan];
-        const x2: [number, number] = [xStart + xSpan + gap, xStart + 2 * xSpan + gap];
-        const y: [number, number] = [yStart, yStart + ySpan];
-
-        return {
-            margin,
-            x1,
-            x2,
-            y,
-            meridionalCenterX: x1[0] + xSpan / 2,
-            sagittalCenterX: x2[0] + xSpan / 2,
-        };
-    };
 
     const parseNumber = (v) => {
         const n = Number(v);
@@ -129,328 +95,193 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
     };
     
     try {
-        // Plotlyの可用性チェック
         if (!plotlyRef) {
             throw new Error('Plotly library is not loaded. Please include Plotly.js in your HTML file.');
         }
-        
-        // サブプロット構成（左：メリジオナル、右：サジタル）
-        const traces = [];
-        
-        // 全データから最大収差値を取得してY軸範囲を統一（部分的なデータも含む）
-        let maxAberration = 0;
-        
-        // メリジオナルデータから最大値を取得
-        aberrationData.meridionalData.forEach(data => {
-            if (data.points && data.points.length > 0) {
-                data.points.forEach(point => {
-                    if (isFinite(point.transverseAberration)) {
-                        maxAberration = Math.max(maxAberration, Math.abs(point.transverseAberration));
-                    }
-                });
-            }
+        const axisName = (base, index) => index === 1 ? base : `${base}${index}`;
+        const axisRef = (base, index) => index === 1 ? base : `${base}${index}`;
+        const allSeries = [
+            ...(Array.isArray(aberrationData?.meridionalData) ? aberrationData.meridionalData : []),
+            ...(Array.isArray(aberrationData?.sagittalData) ? aberrationData.sagittalData : []),
+        ];
+        const wavelengthValues = [...new Set(allSeries
+            .map((series) => Number(series?.wavelengthUm ?? series?.fieldSetting?.wavelengthUm))
+            .filter((value) => Number.isFinite(value) && value > 0))].sort((a, b) => a - b);
+        const styleMap = new Map();
+        wavelengthValues.forEach((wavelength, index) => {
+            styleMap.set(wavelength, plotOptions.wavelengthStyles[index % plotOptions.wavelengthStyles.length]);
         });
-        
-        // サジタルデータから最大値を取得
-        aberrationData.sagittalData.forEach(data => {
-            if (data.points && data.points.length > 0) {
-                data.points.forEach(point => {
-                    if (isFinite(point.transverseAberration)) {
-                        maxAberration = Math.max(maxAberration, Math.abs(point.transverseAberration));
-                    }
-                });
-            }
-        });
-        
-        // μm単位に変換（mm→μm: ×1000）、10%のマージンを追加
-        const maxAberrationMicrons = maxAberration * 1000 * 1.1;
-        const yAxisRange = [-maxAberrationMicrons, maxAberrationMicrons];
-        
-        // 有限系の場合、全フィールドのデータから最適化されたオフセットを計算
-        let globalCenterOffset = { meridional: 0, sagittal: 0 };
-        
-        if (aberrationData.isFiniteSystem) {
-            // メリジオナル全データの最適化されたオフセットを計算
-            let allMeridionalCoords = [];
-            aberrationData.meridionalData.forEach(data => {
-                if (data.points && data.points.length > 0) {
-                    const coords = data.points.map(p => p.pupilCoordinate);
-                    allMeridionalCoords.push(...coords);
-                }
-            });
-            if (allMeridionalCoords.length > 0) {
-                // 重複を除去してユニークな座標のみを使用
-                const uniqueCoords = [...new Set(allMeridionalCoords)].sort((a, b) => a - b);
-                const minCoord = uniqueCoords[0];
-                const maxCoord = uniqueCoords[uniqueCoords.length - 1];
-                globalCenterOffset.meridional = (minCoord + maxCoord) / 2;
-            }
-            
-            // サジタル全データの最適化されたオフセットを計算
-            let allSagittalCoords = [];
-            aberrationData.sagittalData.forEach(data => {
-                if (data.points && data.points.length > 0) {
-                    const coords = data.points.map(p => p.pupilCoordinate);
-                    allSagittalCoords.push(...coords);
-                }
-            });
-            if (allSagittalCoords.length > 0) {
-                // 重複を除去してユニークな座標のみを使用
-                const uniqueCoords = [...new Set(allSagittalCoords)].sort((a, b) => a - b);
-                const minCoord = uniqueCoords[0];
-                const maxCoord = uniqueCoords[uniqueCoords.length - 1];
-                globalCenterOffset.sagittal = (minCoord + maxCoord) / 2;
-            }
+
+        const fieldIndices = [...new Set(allSeries
+            .map((series, index) => Number.isInteger(series?.fieldIndex) ? Number(series.fieldIndex) : index)
+            .filter((value) => Number.isInteger(value) && value >= 0))].sort((a, b) => b - a);
+        if (fieldIndices.length === 0) {
+            throw new Error('No transverse aberration series were available to plot.');
         }
-        
-        // メリジオナルデータの処理
-        aberrationData.meridionalData.forEach((data, fieldIndex) => {
-            if (data.points && data.points.length > 0) {
-                // オフセット情報をログ出力
-                if (data.hasOffset) {
-                    console.log(`📊 Field ${fieldIndex} M: データ既にオフセット済み (${data.offsetMethod}, 元位置=${data.zeroAberrationPosition?.toFixed(6)})`);
-                } else {
-                    console.log(`📊 Field ${fieldIndex} M: オフセット処理なし`);
-                }
-                
-                // 完全に成功した光線と部分的な光線を分離
-                const fullSuccessPoints = data.points.filter(p => p.isFullSuccess !== false);
-                const partialPoints = data.points.filter(p => p.isPartial === true);
-                
-                // 完全成功光線のプロット
-                if (fullSuccessPoints.length > 0) {
-                    // データが既にオフセット済みなので、そのまま使用
-                    if (data.hasOffset && data.zeroAberrationPosition !== null && data.zeroAberrationPosition !== undefined) {
-                        console.log(`📊 Field ${fieldIndex} M: データ既にオフセット済み (${data.offsetMethod}, 元位置=${data.zeroAberrationPosition?.toFixed(6)})`);
-                    } else {
-                        console.log(`📊 Field ${fieldIndex} M: オフセット処理なし`);
-                    }
-                    
-                    // 瞳座標をそのまま使用（データは既にオフセット済み）
-                    const x = fullSuccessPoints.map(p => p.pupilCoordinate);
-                    const y = fullSuccessPoints.map(p => p.transverseAberration * 1000); // mm→μmに変換
-                    
-                    traces.push({
-                        x: x,
-                        y: y,
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: `${getFieldLabel(data.fieldSetting, fieldIndex)} (M)`,
-                        line: {
-                            color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
-                            width: 2
-                        },
-                        xaxis: 'x',
-                        yaxis: 'y',
-                        hovertemplate: '<b>%{fullData.name}</b><br>' +
-                                       'Pupil Coord: %{x:.3f}<br>' +
-                                       'Transverse Aberration: %{y:.3f} μm<br>' +
-                                       '<extra></extra>'
-                    });
-                }
-                
-                // 部分的な光線のプロット（異なるスタイル）
-                if (partialPoints.length > 0) {
-                    // データが既にオフセット済みなので、そのまま使用
-                    const x = partialPoints.map(p => p.pupilCoordinate);
-                    const y = partialPoints.map(p => p.transverseAberration * 1000); // mm→μmに変換
-                    
-                    traces.push({
-                        x: x,
-                        y: y,
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: `${getFieldLabel(data.fieldSetting, fieldIndex)} (M-partial)`,
-                        line: {
-                            color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
-                            width: 1.5,
-                            dash: 'dot'
-                        },
-                        xaxis: 'x',
-                        yaxis: 'y',
-                        hovertemplate: '<b>%{fullData.name}</b><br>' +
-                                       'Pupil Coord: %{x:.3f}<br>' +
-                                       'Transverse Aberration: %{y:.3f} μm (estimated)<br>' +
-                                       '<extra></extra>'
-                    });
-                }
-            }
-        });
-        
-        // サジタルデータの処理
-        aberrationData.sagittalData.forEach((data, fieldIndex) => {
-            if (data.points && data.points.length > 0) {
-                // オフセット情報をログ出力
-                if (data.hasOffset) {
-                    console.log(`📊 Field ${fieldIndex} S: データ既にオフセット済み (${data.offsetMethod}, 元位置=${data.zeroAberrationPosition?.toFixed(6)})`);
-                } else {
-                    console.log(`📊 Field ${fieldIndex} S: オフセットなし`);
-                }
-                
-                // 完全に成功した光線と部分的な光線を分離
-                const fullSuccessPoints = data.points.filter(p => p.isFullSuccess !== false);
-                const partialPoints = data.points.filter(p => p.isPartial === true);
-                
-                // 完全成功光線のプロット
-                if (fullSuccessPoints.length > 0) {
-                    // データが既にオフセット済みかチェック
-                    if (data.hasOffset && data.zeroAberrationPosition !== null && data.zeroAberrationPosition !== undefined) {
-                        console.log(`📊 Field ${fieldIndex} S: データ既にオフセット済み (${data.offsetMethod}, 元位置=${data.zeroAberrationPosition?.toFixed(6)})`);
-                    } else {
-                        console.log(`📊 Field ${fieldIndex} S: オフセット処理なし`);
-                    }
-                    
-                    // 瞳座標をそのまま使用（フィッティングによるオフセットのみ適用済み）
-                    const x = fullSuccessPoints.map(p => p.pupilCoordinate);
-                    const y = fullSuccessPoints.map(p => p.transverseAberration * 1000); // mm→μmに変換
-                    
-                    traces.push({
-                        x: x,
-                        y: y,
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: `${getFieldLabel(data.fieldSetting, fieldIndex)} (S)`,
-                        line: {
-                            color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
-                            width: 2,
-                            dash: 'dash' // サジタルは破線で区別
-                        },
-                        xaxis: 'x2',
-                        yaxis: 'y2',
-                        hovertemplate: '<b>%{fullData.name}</b><br>' +
-                                       'Pupil Coord: %{x:.3f}<br>' +
-                                       'Transverse Aberration: %{y:.3f} μm<br>' +
-                                       '<extra></extra>'
-                    });
-                }
-                
-                // 部分的な光線のプロット（異なるスタイル）
-                if (partialPoints.length > 0) {
-                    // データが既にオフセット済みの場合はそのまま使用
-                    const partialX = partialPoints.map(p => p.pupilCoordinate);
-                    const partialY = partialPoints.map(p => p.transverseAberration * 1000); // mm→μmに変換
-                    
-                    traces.push({
-                        x: partialX,
-                        y: partialY,
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: `${getFieldLabel(data.fieldSetting, fieldIndex)} (S-partial)`,
-                        line: {
-                            color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
-                            width: 1.5,
-                            dash: 'dot'
-                        },
-                        xaxis: 'x2',
-                        yaxis: 'y2',
-                        hovertemplate: '<b>%{fullData.name}</b><br>' +
-                                       'Pupil Coord: %{x:.3f}<br>' +
-                                       'Transverse Aberration: %{y:.3f} μm (estimated)<br>' +
-                                       '<extra></extra>'
-                    });
-                }
-            }
-        });
-        
-        // レイアウト設定
-        const squareDomains = computeSquareDomains();
+
+        const rowCount = fieldIndices.length;
+        const leftDomain = [0.08, 0.47];
+        const rightDomain = [0.53, 0.92];
+        const rowGap = rowCount > 1 ? 0.05 : 0.08;
+        const rowSpan = (1 - rowGap * Math.max(0, rowCount - 1)) / rowCount;
+        const traces = [];
+        const annotations = [];
+        const legendShown = new Set();
+        const fixedScaleMm = Math.abs(Number(plotOptions.fixedScaleMm)) > 0 ? Math.abs(Number(plotOptions.fixedScaleMm)) : 0.05;
         const layout = {
             title: {
                 text: plotOptions.title,
-                font: { size: 16 }
+                font: { size: 18 }
             },
-            width: plotOptions.width,
-            height: plotOptions.height,
-            
-            // サブプロット設定
-            grid: {
-                rows: 1,
-                columns: 2,
-                pattern: 'independent',
-                xgap: 0.1
-            },
-            
-            // メリジオナル軸（左側）
-            xaxis: {
-                title: 'Normalized Pupil Coordinate',
-                range: [-1.1, 1.1], // ±1まで（10%マージン）
-                showgrid: plotOptions.gridLines,
-                zeroline: true,
-                domain: squareDomains.x1
-            },
-            yaxis: {
-                title: 'Transverse Aberration (μm)',
-                range: yAxisRange,
-                showgrid: plotOptions.gridLines,
-                zeroline: true,
-                domain: squareDomains.y
-            },
-            
-            // サジタル軸（右側）
-            xaxis2: {
-                title: 'Normalized Pupil Coordinate',
-                range: [-1.1, 1.1], // ±1まで（10%マージン）
-                showgrid: plotOptions.gridLines,
-                zeroline: true,
-                domain: squareDomains.x2
-            },
-            yaxis2: {
-                title: 'Transverse Aberration (μm)',
-                range: yAxisRange,
-                showgrid: plotOptions.gridLines,
-                zeroline: true,
-                domain: squareDomains.y
-            },
-            
-            // 凡例設定
+            autosize: true,
             showlegend: plotOptions.showLegend,
             legend: {
-                x: 1.05,
+                x: 0.94,
                 y: 1,
-                bgcolor: 'rgba(255,255,255,0.8)',
+                xanchor: 'left',
+                yanchor: 'top',
+                bgcolor: 'rgba(255,255,255,0.85)',
                 bordercolor: 'rgba(0,0,0,0.2)',
                 borderwidth: 1
             },
-            
-            // アノテーション（軸ラベル）
-            annotations: [
-                {
-                    text: 'Meridional',
-                    x: squareDomains.meridionalCenterX,
-                    y: 1.02,
-                    xref: 'paper',
-                    yref: 'paper',
-                    xanchor: 'center',
-                    yanchor: 'bottom',
-                    showarrow: false,
-                    font: { size: 14, color: '#333' }
-                },
-                {
-                    text: 'Sagittal',
-                    x: squareDomains.sagittalCenterX,
-                    y: 1.02,
-                    xref: 'paper',
-                    yref: 'paper',
-                    xanchor: 'center',
-                    yanchor: 'bottom',
-                    showarrow: false,
-                    font: { size: 14, color: '#333' }
-                }
-            ],
-            
-            // マージン設定
-            margin: {
-                l: squareDomains.margin.l,
-                r: squareDomains.margin.r,
-                t: squareDomains.margin.t,
-                b: squareDomains.margin.b
-            }
+            margin: { l: 90, r: 220, t: 90, b: 110 },
+            annotations,
         };
-        
-        // プロット作成（popup含む: container要素を直接渡す）
-        layout.autosize = true;
-        delete layout.width;
-        delete layout.height;
+
+        annotations.push({
+            text: 'tangential',
+            x: (leftDomain[0] + leftDomain[1]) / 2,
+            y: 1.03,
+            xref: 'paper',
+            yref: 'paper',
+            xanchor: 'center',
+            showarrow: false,
+            align: 'center',
+            font: { size: 14, color: '#333' }
+        });
+        annotations.push({
+            text: 'sagittal',
+            x: (rightDomain[0] + rightDomain[1]) / 2,
+            y: 1.03,
+            xref: 'paper',
+            yref: 'paper',
+            xanchor: 'center',
+            showarrow: false,
+            align: 'center',
+            font: { size: 14, color: '#333' }
+        });
+        annotations.push({
+            text: 'Normalized Entrance Pupil',
+            x: 0.5,
+            y: -0.14,
+            xref: 'paper',
+            yref: 'paper',
+            showarrow: false,
+            font: { size: 13, color: '#333' }
+        });
+
+        const buildTrace = (series, rowIndex, axisIndex, branchLabel, dashedForPartial = false) => {
+            const points = (Array.isArray(series?.points) ? series.points : []).filter((point) => (
+                Number.isFinite(Number(point?.pupilCoordinate)) && Number.isFinite(Number(point?.transverseAberration))
+            ));
+            if (points.length === 0) return;
+            const wavelengthUm = Number(series?.wavelengthUm ?? series?.fieldSetting?.wavelengthUm);
+            const wavelengthLabel = String(series?.wavelengthLabel || series?.fieldSetting?.wavelengthLabel || (Number.isFinite(wavelengthUm) ? `${wavelengthUm.toFixed(5)} μm` : 'λ'));
+            const style = styleMap.get(wavelengthUm) || plotOptions.wavelengthStyles[0];
+            const legendKey = `${wavelengthLabel}`;
+            traces.push({
+                x: points.map((point) => Number(point.pupilCoordinate)),
+                y: points.map((point) => Number(point.transverseAberration)),
+                type: 'scatter',
+                mode: 'lines',
+                name: wavelengthLabel,
+                legendgroup: wavelengthLabel,
+                showlegend: !legendShown.has(legendKey),
+                line: {
+                    color: style.color,
+                    width: dashedForPartial ? 1.5 : 2,
+                    dash: dashedForPartial ? 'dot' : style.dash,
+                },
+                xaxis: axisRef('x', axisIndex),
+                yaxis: axisRef('y', axisIndex),
+                hovertemplate: `<b>${branchLabel}</b><br>Pupil: %{x:.3f}<br>Aberration: %{y:.5f} mm<extra>${wavelengthLabel}</extra>`
+            });
+            legendShown.add(legendKey);
+        };
+
+        fieldIndices.forEach((fieldIndex, rowIndex) => {
+            const rowTop = 1 - rowIndex * (rowSpan + rowGap);
+            const rowBottom = rowTop - rowSpan;
+            const leftAxisIndex = rowIndex * 2 + 1;
+            const rightAxisIndex = rowIndex * 2 + 2;
+            const fieldSetting = aberrationData?.fieldSettings?.[fieldIndex]
+                || aberrationData?.meridionalData?.find((series) => Number(series?.fieldIndex) === fieldIndex)?.fieldSetting
+                || aberrationData?.sagittalData?.find((series) => Number(series?.fieldIndex) === fieldIndex)?.fieldSetting
+                || {};
+            const rowLabel = getFieldLabel(fieldSetting, fieldIndex);
+            const objectLabelYOffset = rowSpan * (0.02 / (fixedScaleMm * 2));
+
+            layout[axisName('xaxis', leftAxisIndex)] = {
+                domain: leftDomain,
+                range: [-1, 1],
+                showgrid: plotOptions.gridLines,
+                zeroline: true,
+                tickmode: 'array',
+                tickvals: [-1, -0.5, 0, 0.5, 1],
+            };
+            layout[axisName('yaxis', leftAxisIndex)] = {
+                domain: [rowBottom, rowTop],
+                range: [-fixedScaleMm, fixedScaleMm],
+                showgrid: plotOptions.gridLines,
+                zeroline: true,
+                title: rowIndex === Math.floor(rowCount / 2) ? 'Aberration (mm)' : undefined,
+                tickformat: '.4f',
+            };
+            layout[axisName('xaxis', rightAxisIndex)] = {
+                domain: rightDomain,
+                range: [-1, 1],
+                showgrid: plotOptions.gridLines,
+                zeroline: true,
+                tickmode: 'array',
+                tickvals: [-1, -0.5, 0, 0.5, 1],
+            };
+            layout[axisName('yaxis', rightAxisIndex)] = {
+                domain: [rowBottom, rowTop],
+                range: [-fixedScaleMm, fixedScaleMm],
+                showgrid: plotOptions.gridLines,
+                zeroline: true,
+                tickformat: '.4f',
+            };
+
+            annotations.push({
+                text: rowLabel,
+                x: (leftDomain[1] + rightDomain[0]) / 2,
+                y: Math.min(rowTop - rowSpan * 0.08, rowBottom + rowSpan / 2 + objectLabelYOffset),
+                xref: 'paper',
+                yref: 'paper',
+                xanchor: 'center',
+                yanchor: 'middle',
+                showarrow: false,
+                font: { size: 12, color: '#333' },
+                align: 'center'
+            });
+
+            const meridionalSeries = (Array.isArray(aberrationData?.meridionalData) ? aberrationData.meridionalData : []).filter((series) => Number(series?.fieldIndex) === fieldIndex);
+            const sagittalSeries = (Array.isArray(aberrationData?.sagittalData) ? aberrationData.sagittalData : []).filter((series) => Number(series?.fieldIndex) === fieldIndex);
+
+            meridionalSeries.forEach((series) => {
+                const full = (Array.isArray(series?.points) ? series.points : []).filter((point) => point?.isPartial !== true);
+                const partial = (Array.isArray(series?.points) ? series.points : []).filter((point) => point?.isPartial === true);
+                buildTrace({ ...series, points: full }, rowIndex, leftAxisIndex, 'Tangential', false);
+                buildTrace({ ...series, points: partial }, rowIndex, leftAxisIndex, 'Tangential (partial)', true);
+            });
+            sagittalSeries.forEach((series) => {
+                const full = (Array.isArray(series?.points) ? series.points : []).filter((point) => point?.isPartial !== true);
+                const partial = (Array.isArray(series?.points) ? series.points : []).filter((point) => point?.isPartial === true);
+                buildTrace({ ...series, points: full }, rowIndex, rightAxisIndex, 'Sagittal', false);
+                buildTrace({ ...series, points: partial }, rowIndex, rightAxisIndex, 'Sagittal (partial)', true);
+            });
+        });
 
         plotlyRef.newPlot(container, traces, layout, {
             responsive: true,
@@ -459,35 +290,9 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
             displaylogo: false
         });
 
-        // リサイズ追従
-        const win = targetDocument?.defaultView;
-        if (win && plotlyRef?.Plots?.resize) {
-            if (container.__transversePlotResizeHandler) {
-                try { win.removeEventListener('resize', container.__transversePlotResizeHandler); } catch (_) {}
-            }
-            container.__transversePlotResizeHandler = () => {
-                try {
-                    plotlyRef.Plots.resize(container);
-                    const d = computeSquareDomains();
-                    plotlyRef.relayout(container, {
-                        'xaxis.domain': d.x1,
-                        'xaxis2.domain': d.x2,
-                        'yaxis.domain': d.y,
-                        'yaxis2.domain': d.y,
-                        'annotations[0].x': d.meridionalCenterX,
-                        'annotations[1].x': d.sagittalCenterX,
-                    });
-                } catch (_) {}
-            };
-            win.addEventListener('resize', container.__transversePlotResizeHandler);
-            try { container.__transversePlotResizeHandler(); } catch (_) {}
-        }
-        
-        // 情報パネルの更新
         if (typeof containerId === 'string') {
             updateAberrationInfoPanel(aberrationData, containerId);
         }
-        
         console.log('✅ 横収差図作成完了');
         
     } catch (error) {
