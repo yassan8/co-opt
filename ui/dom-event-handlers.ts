@@ -6840,27 +6840,18 @@ let __cooptBlockInspectorLastSummary: any[] | null = null;
 let __cooptBlockInspectorLastGroups: any = null;
 let __cooptBlockInspectorLastBlockById: Map<string, any> | null = null;
 let __cooptBlockInspectorLastBlocksInOrder: any[] | null = null;
-const DESIGN_INTENT_QUICK_EDITOR_STORAGE_KEY = 'coopt.blockInspectorQuickEditorEnabled';
 let __designIntentQuickEditorDelegatedBindingInstalled = false;
 
 function readDesignIntentQuickEditorEnabled(): boolean {
-    try {
-        const stored = localStorage.getItem(DESIGN_INTENT_QUICK_EDITOR_STORAGE_KEY);
-        if (stored === '0' || stored === 'false') return false;
-        if (stored === '1' || stored === 'true') return true;
-    } catch (_) {}
     return true;
 }
 
 function writeDesignIntentQuickEditorEnabled(enabled: boolean): void {
-    try {
-        localStorage.setItem(DESIGN_INTENT_QUICK_EDITOR_STORAGE_KEY, enabled ? '1' : '0');
-    } catch (_) {}
+    void enabled;
 }
 
 function syncDesignIntentQuickEditorToggle(): void {
-    const toggle = document.getElementById('design-intent-quick-editor-toggle') as HTMLInputElement | null;
-    if (toggle) toggle.checked = readDesignIntentQuickEditorEnabled();
+    // Quick editor is always enabled.
 }
 
 function rerenderBlockInspectorFromCache(): boolean {
@@ -6880,29 +6871,10 @@ function rerenderBlockInspectorFromCache(): boolean {
 
 function ensureDesignIntentQuickEditorToggleBinding(): void {
     if (__designIntentQuickEditorDelegatedBindingInstalled) {
-        syncDesignIntentQuickEditorToggle();
         return;
     }
 
-    document.addEventListener('click', (event) => {
-        const target = event.target as HTMLElement | null;
-        if (target && target.id === 'design-intent-quick-editor-toggle') {
-            try { event.stopPropagation(); } catch (_) {}
-        }
-    });
-
-    document.addEventListener('change', (event) => {
-        const target = event.target as HTMLInputElement | null;
-        if (!target || target.id !== 'design-intent-quick-editor-toggle') return;
-        writeDesignIntentQuickEditorEnabled(!!target.checked);
-        syncDesignIntentQuickEditorToggle();
-        if (!rerenderBlockInspectorFromCache()) {
-            try { refreshBlockInspector(); } catch (_) {}
-        }
-    });
-
     __designIntentQuickEditorDelegatedBindingInstalled = true;
-    syncDesignIntentQuickEditorToggle();
 }
 
 function __blocks_shouldMarkVar(v: any): boolean {
@@ -9556,6 +9528,117 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         return;
     }
 
+    const DI_COL_WIDTH_STORAGE_KEY = 'coopt.designIntent.columnWidths';
+    const diColKeys = ['item', 'r', 'ct', 'g', 'n', 'abbe', 'sd'] as const;
+    type DiColKey = typeof diColKeys[number];
+    const diColVarNameByKey: Record<DiColKey, string> = {
+        item: '--di-col-item',
+        r: '--di-col-r',
+        ct: '--di-col-ct',
+        g: '--di-col-g',
+        n: '--di-col-n',
+        abbe: '--di-col-abbe',
+        sd: '--di-col-sd'
+    };
+
+    const applySavedDiColumnWidths = (scopeEl: HTMLElement): void => {
+        try {
+            const raw = localStorage.getItem(DI_COL_WIDTH_STORAGE_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            for (const key of diColKeys) {
+                const width = Number(parsed?.[key]);
+                if (!Number.isFinite(width)) continue;
+                const px = Math.max(72, Math.min(560, Math.round(width)));
+                scopeEl.style.setProperty(diColVarNameByKey[key], `${px}px`);
+            }
+        } catch (_) {}
+    };
+
+    const persistDiColumnWidth = (scopeEl: HTMLElement, key: DiColKey, nextWidth: number): void => {
+        const px = Math.max(72, Math.min(560, Math.round(nextWidth)));
+        try {
+            const raw = localStorage.getItem(DI_COL_WIDTH_STORAGE_KEY);
+            const state = raw ? JSON.parse(raw) : {};
+            state[key] = px;
+            localStorage.setItem(DI_COL_WIDTH_STORAGE_KEY, JSON.stringify(state));
+        } catch (_) {}
+        scopeEl.style.setProperty(diColVarNameByKey[key], `${px}px`);
+    };
+
+    const attachDiColumnResizer = (handleEl: HTMLElement, key: DiColKey, scopeEl: HTMLElement): void => {
+        handleEl.addEventListener('mousedown', (downEvent: MouseEvent) => {
+            try { downEvent.preventDefault(); } catch (_) {}
+            try { downEvent.stopPropagation(); } catch (_) {}
+
+            const cssValue = getComputedStyle(scopeEl).getPropertyValue(diColVarNameByKey[key]);
+            const parsedCss = Number.parseFloat(cssValue);
+            const fallbackWidth = handleEl.parentElement?.getBoundingClientRect().width ?? 120;
+            const startWidth = Number.isFinite(parsedCss) ? parsedCss : fallbackWidth;
+            const startX = downEvent.clientX;
+
+            const onMove = (moveEvent: MouseEvent) => {
+                const delta = moveEvent.clientX - startX;
+                const liveWidth = Math.max(72, Math.min(560, Math.round(startWidth + delta)));
+                scopeEl.style.setProperty(diColVarNameByKey[key], `${liveWidth}px`);
+            };
+
+            const onUp = (upEvent: MouseEvent) => {
+                const delta = upEvent.clientX - startX;
+                persistDiColumnWidth(scopeEl, key, startWidth + delta);
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    };
+
+    applySavedDiColumnWidths(container);
+
+    const collapsedHeader = document.createElement('div');
+    collapsedHeader.className = 'block-inspector-table-header';
+    const headerDrag = document.createElement('div');
+    headerDrag.textContent = '';
+    const headerId = document.createElement('div');
+    headerId.textContent = 'Block';
+    const headerIdResizer = document.createElement('span');
+    headerIdResizer.className = 'block-inspector-col-resizer';
+    headerIdResizer.title = 'Block width';
+    headerId.appendChild(headerIdResizer);
+    attachDiColumnResizer(headerIdResizer, 'item', container);
+    const headerValues = document.createElement('div');
+    headerValues.className = 'block-inspector-values-header';
+    const valueHeaderColumns: Array<{ label: string; key: DiColKey }> = [
+        { label: 'Radius', key: 'r' },
+        { label: 'Center Thickness', key: 'ct' },
+        { label: 'Glass', key: 'g' },
+        { label: 'Refractive Index', key: 'n' },
+        { label: 'Abbe', key: 'abbe' },
+        { label: 'Semi Diameter', key: 'sd' }
+    ];
+    for (const item of valueHeaderColumns) {
+        const span = document.createElement('span');
+        span.textContent = item.label;
+        const handle = document.createElement('span');
+        handle.className = 'block-inspector-col-resizer';
+        handle.title = `${item.label} width`;
+        span.appendChild(handle);
+        attachDiColumnResizer(handle, item.key, container);
+        headerValues.appendChild(span);
+    }
+    const headerZoom = document.createElement('div');
+    headerZoom.textContent = 'Zoom';
+    const headerSurf = document.createElement('div');
+    headerSurf.textContent = 'Surfaces';
+    collapsedHeader.appendChild(headerDrag);
+    collapsedHeader.appendChild(headerId);
+    collapsedHeader.appendChild(headerValues);
+    collapsedHeader.appendChild(headerZoom);
+    collapsedHeader.appendChild(headerSurf);
+    container.appendChild(collapsedHeader);
+
     const quickEditorEnabled = readDesignIntentQuickEditorEnabled();
 
     const isLogicalDesignIntentSurfaceRow = (row: any) => {
@@ -9662,7 +9745,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         }
     } catch (_) {}
 
-    const unifiedLensToneTypes = new Set(['lens', 'doublet', 'triplet']);
     const buildBlockInspectorLabelText = (blockLike: any) => {
         const rawId = String(blockLike?.blockId ?? '(none)');
         const label = displayLabelByBlockId.get(rawId) || formatSingletonBlockLabel(blockLike?.blockType, rawId);
@@ -9679,22 +9761,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         }
         return label;
     };
-
-    const unifiedLensBadgeWidthCh = (() => {
-        let maxChars = 0;
-        for (const item of list) {
-            const rawType = String(item?.blockType ?? '').trim();
-            const normalized = (() => {
-                const t = (rawType === 'ObjectPlane') ? 'ObjectSurface' : rawType;
-                if (t === 'PositiveLens' || t === 'Paraxial') return 'lens';
-                if (t === 'AirGap') return 'gap';
-                return String(t || 'unknown').trim().toLowerCase();
-            })();
-            if (!unifiedLensToneTypes.has(normalized)) continue;
-            maxChars = Math.max(maxChars, buildBlockInspectorLabelText(item).length);
-        }
-        return Math.max(14, maxChars + 1);
-    })();
 
     const getZoomGroupLabel = (blockLike: any): string => {
         if (!blockLike || typeof blockLike !== 'object') return '';
@@ -9734,7 +9800,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         if (blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane') return '';
         const params = (blockLike.parameters && typeof blockLike.parameters === 'object') ? blockLike.parameters : null;
         const value = Number(params?.zoomPosition);
-        if (!Number.isFinite(value)) return 'Zoom x=0.00';
+        if (!Number.isFinite(value)) return '';
+        if (Math.abs(value) < 1e-9) return '';
         return `Zoom x=${value.toFixed(2)}`;
     };
 
@@ -9766,11 +9833,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     };
 
     const getGapZoomChipLabel = (blockLike: any): string => {
-        const boundary = String(getGapBoundaryLabel(blockLike) || '').trim();
-        if (!boundary) return '';
-        const parts = boundary.split(/->|→/).map((part) => String(part ?? '').trim()).filter(Boolean);
-        if (parts.length === 2 && parts[0] === parts[1]) return parts[0];
-        return boundary;
+        return '';
     };
 
     const createSummaryChip = (text: string, kind: 'group' | 'controller' | 'gap'): HTMLElement => {
@@ -9803,8 +9866,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     const styleQuickInput = (el: HTMLInputElement | HTMLSelectElement, widthPx: number): void => {
         const dark = document.body.classList.contains('dark-mode');
         el.className = 'block-inspector-quick-input';
-        el.style.width = `${widthPx}px`;
-        el.style.minWidth = `${widthPx}px`;
+        el.style.width = '100%';
+        el.style.minWidth = '0';
         el.style.height = '24px';
         el.style.boxSizing = 'border-box';
         el.style.fontSize = '11px';
@@ -9815,9 +9878,22 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         el.style.color = dark ? '#f9fafb' : '#111827';
     };
 
+    const resolveQuickColumnIndex = (label: string): number => {
+        const key = String(label || '').trim().toLowerCase();
+        if (!key) return 1;
+        if (key.startsWith('r')) return 1;
+        if (key === 'ct') return 2;
+        if (key.startsWith('g')) return 3;
+        if (key.startsWith('n')) return 4;
+        if (key.startsWith('abbe') || key.startsWith('vd')) return 5;
+        if (key.startsWith('sd')) return 6;
+        return 6;
+    };
+
     const createQuickFieldShell = (label: string): { wrapper: HTMLSpanElement; content: HTMLSpanElement } => {
         const wrapper = document.createElement('span');
         wrapper.className = 'block-inspector-quick-field';
+        wrapper.style.gridColumn = String(resolveQuickColumnIndex(label));
         const tag = document.createElement('span');
         tag.className = 'block-inspector-quick-label';
         tag.textContent = label;
@@ -9994,11 +10070,13 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         const blockType = String(blockLike?.blockType ?? '').trim();
         const params = (blockLike.parameters && typeof blockLike.parameters === 'object') ? blockLike.parameters : {};
         const aperture = (blockLike.aperture && typeof blockLike.aperture === 'object') ? blockLike.aperture : {};
+        const vars = (blockLike.variables && typeof blockLike.variables === 'object') ? blockLike.variables : {};
         const blockId = String(blockLike?.blockId ?? '').trim();
         if (!blockId) return null;
 
         const root = document.createElement('div');
         root.className = 'block-inspector-quick-editor';
+        root.style.setProperty('--quick-cols', '6');
         stopRowToggle(root);
 
         const createQuickRow = (): HTMLDivElement => {
@@ -10006,6 +10084,69 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             row.className = 'block-inspector-quick-editor-row';
             stopRowToggle(row);
             return row;
+        };
+
+        const createQuickScopeToggle = (varKey: string): HTMLButtonElement => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'block-inspector-quick-scope-btn';
+
+            const key = String(varKey || '').trim();
+            let state: 'off' | 'perConfig' | 'global' = 'off';
+
+            const resolveState = () => {
+                const vEntry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, key);
+                const enabled = __blocks_shouldMarkVar(vEntry);
+                const scope = __blocks_getVarScope(vEntry);
+                if (!enabled) return 'off';
+                return scope === 'global' ? 'global' : 'perConfig';
+            };
+
+            const render = () => {
+                if (state === 'perConfig') {
+                    btn.textContent = 'v';
+                    btn.title = 'Pre-config';
+                    btn.style.opacity = '1';
+                } else if (state === 'global') {
+                    btn.textContent = 'w';
+                    btn.title = 'Share';
+                    btn.style.opacity = '1';
+                } else {
+                    btn.textContent = '';
+                    btn.title = 'Off';
+                    btn.style.opacity = '0.5';
+                }
+            };
+
+            state = resolveState();
+            render();
+
+            btn.onclick = (event: MouseEvent) => {
+                try { event.preventDefault(); } catch (_) {}
+                try { event.stopPropagation(); } catch (_) {}
+
+                state = state === 'off' ? 'perConfig' : (state === 'perConfig' ? 'global' : 'off');
+
+                if (state === 'off') {
+                    __blocks_setVarMode(blockId, key, false, 'perConfig');
+                } else if (state === 'perConfig') {
+                    __blocks_setVarScope(blockId, key, 'perConfig');
+                    __blocks_setVarMode(blockId, key, true, 'perConfig');
+                } else {
+                    __blocks_setVarScope(blockId, key, 'global');
+                    __blocks_setVarMode(blockId, key, true, 'global');
+                }
+                render();
+            };
+
+            stopRowToggle(btn);
+            return btn;
+        };
+
+        const attachQuickScopeToggle = (wrapper: HTMLElement, path: string) => {
+            const key = String(path ?? '').trim().split('.').pop() || '';
+            if (!key) return;
+            wrapper.insertBefore(createQuickScopeToggle(key), wrapper.firstChild);
         };
 
         const appendTextField = (label: string, path: string, currentValue: any, widthPx: number, target: HTMLElement = root) => {
@@ -10035,6 +10176,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             input.addEventListener('blur', commit);
             stopRowToggle(input);
             shell.content.appendChild(input);
+            attachQuickScopeToggle(shell.wrapper, path);
             target.appendChild(shell.wrapper);
         };
 
@@ -10071,6 +10213,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             });
             stopRowToggle(select);
             shell.content.appendChild(select);
+            attachQuickScopeToggle(shell.wrapper, path);
             target.appendChild(shell.wrapper);
         };
 
@@ -10186,87 +10329,110 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             group.appendChild(mapBtn);
 
             shell.content.appendChild(group);
+            attachQuickScopeToggle(shell.wrapper, materialPath);
             target.appendChild(shell.wrapper);
         };
 
         if (blockType === 'Lens' || blockType === 'PositiveLens') {
-            appendTextField('R1', 'parameters.frontRadius', params.frontRadius, 62);
-            appendTextField('R2', 'parameters.backRadius', params.backRadius, 62);
-            appendTextField('CT', 'parameters.centerThickness', params.centerThickness, 54);
-            appendMaterialField('parameters.material', params.material, 'parameters.abbe', params.abbe);
-            appendTextField('n', 'parameters.rindex', params.rindex, 54);
-            appendTextField('Abbe', 'parameters.abbe', params.abbe, 54);
-            appendTextField('SD1', 'aperture.front', aperture.front, 50);
-            appendTextField('SD2', 'aperture.back', aperture.back, 50);
-        } else if (blockType === 'Doublet') {
             root.classList.add('block-inspector-quick-editor-multiline');
+            root.style.setProperty('--quick-cols', '6');
             const row1 = createQuickRow();
             const row2 = createQuickRow();
 
-            appendTextField('R1', 'parameters.radius1', params.radius1, 62, row1);
-            appendTextField('R2', 'parameters.radius2', params.radius2, 62, row1);
-            appendTextField('CT', 'parameters.thickness1', params.thickness1, 54, row1);
-            appendMaterialField('parameters.material1', params.material1, 'parameters.abbe1', params.abbe1, 'G1', row1);
-            appendTextField('n1', 'parameters.rindex1', params.rindex1, 60, row1);
-            appendTextField('Abbe1', 'parameters.abbe1', params.abbe1, 60, row1);
-            appendTextField('SD1', 'aperture.s1', aperture.s1, 50, row1);
-            appendTextField('SD2', 'aperture.s2', aperture.s2, 50, row1);
+            appendTextField('R1', 'parameters.frontRadius', params.frontRadius, 62, row1);
+            appendTextField('CT', 'parameters.centerThickness', params.centerThickness, 54, row1);
+            appendMaterialField('parameters.material', params.material, 'parameters.abbe', params.abbe, 'G', row1);
+            appendTextField('n', 'parameters.rindex', params.rindex, 54, row1);
+            appendTextField('Abbe', 'parameters.abbe', params.abbe, 54, row1);
+            appendTextField('SD1', 'aperture.front', aperture.front, 50, row1);
 
-            appendSpacerField('R1', 62, row2);
-            appendTextField('R3', 'parameters.radius3', params.radius3, 62, row2);
-            appendTextField('CT', 'parameters.thickness2', params.thickness2, 54, row2);
-            appendMaterialField('parameters.material2', params.material2, 'parameters.abbe2', params.abbe2, 'G2', row2);
-            appendTextField('n2', 'parameters.rindex2', params.rindex2, 60, row2);
-            appendTextField('Abbe2', 'parameters.abbe2', params.abbe2, 60, row2);
-            appendSpacerField('SD1', 50, row2);
-            appendTextField('SD3', 'aperture.s3', aperture.s3, 50, row2);
+            appendTextField('R2', 'parameters.backRadius', params.backRadius, 62, row2);
+            appendSpacerField('CT', 54, row2);
+            appendSpacerField('G', 188, row2);
+            appendSpacerField('n', 54, row2);
+            appendSpacerField('Abbe', 54, row2);
+            appendTextField('SD2', 'aperture.back', aperture.back, 50, row2);
 
             root.appendChild(row1);
             root.appendChild(row2);
-        } else if (blockType === 'Triplet') {
+        } else if (blockType === 'Doublet') {
             root.classList.add('block-inspector-quick-editor-multiline');
+            root.style.setProperty('--quick-cols', '6');
             const row1 = createQuickRow();
             const row2 = createQuickRow();
             const row3 = createQuickRow();
 
             appendTextField('R1', 'parameters.radius1', params.radius1, 62, row1);
-            appendTextField('R2', 'parameters.radius2', params.radius2, 62, row1);
             appendTextField('CT', 'parameters.thickness1', params.thickness1, 54, row1);
             appendMaterialField('parameters.material1', params.material1, 'parameters.abbe1', params.abbe1, 'G1', row1);
             appendTextField('n1', 'parameters.rindex1', params.rindex1, 60, row1);
             appendTextField('Abbe1', 'parameters.abbe1', params.abbe1, 60, row1);
             appendTextField('SD1', 'aperture.s1', aperture.s1, 50, row1);
-            appendTextField('SD2', 'aperture.s2', aperture.s2, 50, row1);
 
-            appendSpacerField('R1', 62, row2);
-            appendTextField('R3', 'parameters.radius3', params.radius3, 62, row2);
+            appendTextField('R2', 'parameters.radius2', params.radius2, 62, row2);
             appendTextField('CT', 'parameters.thickness2', params.thickness2, 54, row2);
             appendMaterialField('parameters.material2', params.material2, 'parameters.abbe2', params.abbe2, 'G2', row2);
             appendTextField('n2', 'parameters.rindex2', params.rindex2, 60, row2);
             appendTextField('Abbe2', 'parameters.abbe2', params.abbe2, 60, row2);
-            appendSpacerField('SD1', 50, row2);
-            appendTextField('SD3', 'aperture.s3', aperture.s3, 50, row2);
+            appendTextField('SD2', 'aperture.s2', aperture.s2, 50, row2);
 
-            appendSpacerField('R1', 62, row3);
-            appendSpacerField('R2', 62, row3);
-            appendTextField('R4', 'parameters.radius4', params.radius4, 62, row3);
+            appendTextField('R3', 'parameters.radius3', params.radius3, 62, row3);
+            appendSpacerField('CT', 54, row3);
+            appendSpacerField('G1', 188, row3);
+            appendSpacerField('n1', 60, row3);
+            appendSpacerField('Abbe1', 60, row3);
+            appendTextField('SD3', 'aperture.s3', aperture.s3, 50, row3);
+
+            root.appendChild(row1);
+            root.appendChild(row2);
+            root.appendChild(row3);
+        } else if (blockType === 'Triplet') {
+            root.classList.add('block-inspector-quick-editor-multiline');
+            root.style.setProperty('--quick-cols', '6');
+            const row1 = createQuickRow();
+            const row2 = createQuickRow();
+            const row3 = createQuickRow();
+
+            appendTextField('R1', 'parameters.radius1', params.radius1, 62, row1);
+            appendTextField('CT', 'parameters.thickness1', params.thickness1, 54, row1);
+            appendMaterialField('parameters.material1', params.material1, 'parameters.abbe1', params.abbe1, 'G1', row1);
+            appendTextField('n1', 'parameters.rindex1', params.rindex1, 60, row1);
+            appendTextField('Abbe1', 'parameters.abbe1', params.abbe1, 60, row1);
+            appendTextField('SD1', 'aperture.s1', aperture.s1, 50, row1);
+
+            appendTextField('R2', 'parameters.radius2', params.radius2, 62, row2);
+            appendTextField('CT', 'parameters.thickness2', params.thickness2, 54, row2);
+            appendMaterialField('parameters.material2', params.material2, 'parameters.abbe2', params.abbe2, 'G2', row2);
+            appendTextField('n2', 'parameters.rindex2', params.rindex2, 60, row2);
+            appendTextField('Abbe2', 'parameters.abbe2', params.abbe2, 60, row2);
+            appendTextField('SD2', 'aperture.s2', aperture.s2, 50, row2);
+
+            appendTextField('R3', 'parameters.radius3', params.radius3, 62, row3);
             appendTextField('CT', 'parameters.thickness3', params.thickness3, 54, row3);
             appendMaterialField('parameters.material3', params.material3, 'parameters.abbe3', params.abbe3, 'G3', row3);
             appendTextField('n3', 'parameters.rindex3', params.rindex3, 60, row3);
             appendTextField('Abbe3', 'parameters.abbe3', params.abbe3, 60, row3);
-            appendSpacerField('SD1', 50, row3);
-            appendSpacerField('SD2', 50, row3);
+            appendTextField('SD3', 'aperture.s3', aperture.s3, 50, row3);
+            appendTextField('R4', 'parameters.radius4', params.radius4, 62, row3);
             appendTextField('SD4', 'aperture.s4', aperture.s4, 50, row3);
 
             root.appendChild(row1);
             root.appendChild(row2);
             root.appendChild(row3);
         } else if (blockType === 'Gap' || blockType === 'AirGap') {
-            appendSpacerField('R1', 62);
-            appendSpacerField('R2', 62);
+            appendSpacerField('R', 62);
             appendTextField('CT', 'parameters.thickness', params.thickness, 54);
-            appendMaterialField('parameters.material', params.material, 'parameters.abbe', params.abbe);
+            appendMaterialField('parameters.material', params.material, 'parameters.abbe', params.abbe, 'G');
+            appendTextField('n', 'parameters.rindex', params.rindex, 54);
             appendTextField('Abbe', 'parameters.abbe', params.abbe, 54);
+            appendSpacerField('SD', 50);
+        } else if (blockType === 'Stop') {
+            appendSpacerField('R', 62);
+            appendSpacerField('CT', 54);
+            appendSpacerField('G', 188);
+            appendSpacerField('n', 54);
+            appendSpacerField('Abbe', 54);
+            appendTextField('SD', 'parameters.semiDiameter', params.semiDiameter, 54);
         } else if (blockType === 'SingleSurface' || blockType === 'Mirror') {
             appendTextField('R', 'parameters.radius', params.radius, 62);
             if (Object.prototype.hasOwnProperty.call(params, 'material')) {
@@ -10302,7 +10468,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     for (const b of list) {
         const blockId = String(b.blockId ?? '').trim();
         const row = document.createElement('div');
-        row.className = 'block-inspector-row';
+        row.className = 'block-inspector-row block-inspector-row-spreadsheet';
         if (blockId && __blockInspectorExpandedBlockId === blockId) row.classList.add('selected');
 
         const colId = document.createElement('div');
@@ -10318,7 +10484,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             const chip = document.createElement('button');
             chip.type = 'button';
             chip.className = 'block-inspector-zg-chip';
-            chip.textContent = `ZG ${currentZoomGroupValue}`;
+            chip.textContent = currentZoomGroupValue === 'Fixed' ? 'Fixed' : `ZG ${currentZoomGroupValue}`;
             chip.title = `Zoom Group: ${currentZoomGroupValue}`;
             chip.onclick = (e: MouseEvent) => {
                 try { e.preventDefault(); } catch (_) {}
@@ -10333,10 +10499,18 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         } else if (gapZoomChipLabel) {
             const chip = document.createElement('span');
             chip.className = 'block-inspector-zg-chip block-inspector-zg-chip-gap';
-            chip.textContent = `ZG ${gapZoomChipLabel}`;
+            chip.textContent = gapZoomChipLabel === 'Fixed' ? 'Fixed' : `ZG ${gapZoomChipLabel}`;
             chip.title = `Zoom Group: ${gapZoomChipLabel}`;
             zoomGroupChip = chip;
         }
+        const zoomGroupCell = zoomGroupChip || (() => {
+            const empty = document.createElement('span');
+            empty.className = 'block-inspector-zg-chip-placeholder';
+            return empty;
+        })();
+        const colZoom = document.createElement('div');
+        colZoom.className = 'block-inspector-col-zg';
+        colZoom.appendChild(zoomGroupCell);
 
         const rawType = String(b.blockType ?? '').trim();
         const displayType = (rawType === 'ObjectPlane') ? 'ObjectSurface' : String(b.blockType ?? '(none)');
@@ -10349,14 +10523,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         row.dataset.blockType = toneType;
         colId.dataset.blockType = toneType;
         colId.title = displayType;
-        if (unifiedLensToneTypes.has(toneType) || toneType === 'gap') {
-            const unifiedWidth = `${unifiedLensBadgeWidthCh}ch`;
-            colId.style.width = unifiedWidth;
-            colId.style.minWidth = unifiedWidth;
-            colId.style.maxWidth = unifiedWidth;
-            colId.style.flex = `0 0 ${unifiedWidth}`;
-        }
-
         const colParams = document.createElement('div');
         colParams.className = 'block-inspector-col-params';
         const previewText = String(b.preview ?? '');
@@ -10373,20 +10539,18 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
         const rawTypeForSummary = String(realBlock?.blockType ?? b?.blockType ?? '').trim();
         if (rawTypeForSummary === 'ObjectSurface' || rawTypeForSummary === 'ObjectPlane') {
-            colParams.appendChild(createSummaryChip(getZoomPositionSummary(realBlock), 'controller'));
+            const zoomSummary = getZoomPositionSummary(realBlock);
+            if (zoomSummary) {
+                colParams.appendChild(createSummaryChip(zoomSummary, 'controller'));
+            }
             const lawGroups = getZoomLawGroupNames(realBlock);
             if (lawGroups.length > 0) {
                 colParams.appendChild(createSummaryChip(`Laws: ${lawGroups.join(', ')}`, 'controller'));
             }
-        } else if ((rawTypeForSummary === 'Gap' || rawTypeForSummary === 'AirGap') && !zoomGroupChip) {
-            const gapBoundaryText = getGapBoundaryLabel(realBlock);
-            if (gapBoundaryText) {
-                colParams.appendChild(createSummaryChip(`ZG ${gapBoundaryText}`, 'gap'));
-            }
         } else if (!quickEditor && !zoomGroupChip) {
             const zoomGroupText = getZoomGroupLabel(realBlock);
             if (zoomGroupText) {
-                colParams.appendChild(createSummaryChip(`ZG ${zoomGroupText}`, 'group'));
+                colParams.appendChild(createSummaryChip(zoomGroupText === 'Fixed' ? 'Fixed' : `ZG ${zoomGroupText}`, 'group'));
             }
         }
 
@@ -10404,7 +10568,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         row.appendChild(dragHandle);
         row.appendChild(colId);
         row.appendChild(colParams);
-        if (zoomGroupChip) row.appendChild(zoomGroupChip);
+        row.appendChild(colZoom);
         row.appendChild(colCount);
 
         // Drag-and-drop support (only when blocksInOrder is available)
@@ -10485,6 +10649,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
             const params = (expandedBlock.parameters && typeof expandedBlock.parameters === 'object') ? expandedBlock.parameters : {};
             const vars = (expandedBlock.variables && typeof expandedBlock.variables === 'object') ? expandedBlock.variables : {};
+            const quickEditorCoveredParamKeys = new Set<string>();
+            const quickEditorCoveredApertureKeys = new Set<string>();
             
             // Custom sort order: material1 → material2 → abbe → front* → back* → radius → conic → thickness → semidia → coef*
             const sortParameterKeys = (keys: string[]): string[] => {
@@ -10673,10 +10839,43 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             };
             
             const blockType = String(expandedBlock.blockType || expandedBlock.type || 'unknown');
+            const shouldHideExpandedField = (rawKey: string): boolean => {
+                const key = String(rawKey ?? '').trim().toLowerCase();
+                if (!key) return false;
+                if (key === 'zoomgroup') return true;
+                if (key.includes('semidia') || key === 'semidiameter') return true;
+                if (/^rindex\d*$/.test(key)) return true;
+                return false;
+            };
+            if (quickEditorEnabled) {
+                if (blockType === 'Lens' || blockType === 'PositiveLens') {
+                    ['frontRadius', 'backRadius', 'centerThickness', 'material', 'rindex', 'abbe'].forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
+                    ['front', 'back'].forEach((k) => quickEditorCoveredApertureKeys.add(k.toLowerCase()));
+                } else if (blockType === 'Doublet') {
+                    ['radius1', 'radius2', 'radius3', 'thickness1', 'thickness2', 'material1', 'material2', 'rindex1', 'rindex2', 'abbe1', 'abbe2'].forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
+                    ['s1', 's2', 's3'].forEach((k) => quickEditorCoveredApertureKeys.add(k.toLowerCase()));
+                } else if (blockType === 'Triplet') {
+                    ['radius1', 'radius2', 'radius3', 'radius4', 'thickness1', 'thickness2', 'thickness3', 'material1', 'material2', 'material3', 'rindex1', 'rindex2', 'rindex3', 'abbe1', 'abbe2', 'abbe3'].forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
+                    ['s1', 's2', 's3', 's4'].forEach((k) => quickEditorCoveredApertureKeys.add(k.toLowerCase()));
+                } else if (blockType === 'Gap' || blockType === 'AirGap') {
+                    ['thickness', 'material', 'abbe'].forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
+                } else if (blockType === 'SingleSurface' || blockType === 'Mirror') {
+                    quickEditorCoveredParamKeys.add('radius');
+                    if (Object.prototype.hasOwnProperty.call(params, 'material')) {
+                        quickEditorCoveredParamKeys.add('material');
+                        quickEditorCoveredParamKeys.add('abbe');
+                    }
+                    quickEditorCoveredApertureKeys.add('semidia');
+                } else if (blockType === 'ImageSurface') {
+                    quickEditorCoveredParamKeys.add('semidia');
+                }
+            }
+
             // For Gap blocks, ensure material/thicknessMode are always in paramKeys even if not set
             const allParamKeys = Object.keys(params || {}).filter(k => {
                 // chiefRayShiftX/Y/Z は廃止フィールド。表示しない
                 const kl = k.toLowerCase();
+                if (shouldHideExpandedField(kl)) return false;
                 if (kl === 'chiefrayshiftx' || kl === 'chiefrayshifty' || kl === 'chiefrayshiftz') return false;
                 if (kl === 'zoomgroupaprofile' || kl === 'zoomgroupbprofile') return false;
                 if ((blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && (kl === 'zoomposition' || kl === 'zoomgroupprofiles')) return false;
@@ -10721,31 +10920,17 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') {
                 if (!allParamKeys.includes('bending')) allParamKeys.push('bending');
             }
-            if ((blockType === 'Lens' || blockType === 'PositiveLens') && !allParamKeys.includes('rindex')) {
-                allParamKeys.push('rindex');
-            }
             if ((blockType === 'Lens' || blockType === 'PositiveLens') && !allParamKeys.includes('abbe')) {
                 allParamKeys.push('abbe');
             }
             if (blockType === 'Doublet') {
-                if (!allParamKeys.includes('rindex1')) allParamKeys.push('rindex1');
-                if (!allParamKeys.includes('rindex2')) allParamKeys.push('rindex2');
                 if (!allParamKeys.includes('abbe1')) allParamKeys.push('abbe1');
                 if (!allParamKeys.includes('abbe2')) allParamKeys.push('abbe2');
             }
             if (blockType === 'Triplet') {
-                if (!allParamKeys.includes('rindex1')) allParamKeys.push('rindex1');
-                if (!allParamKeys.includes('rindex2')) allParamKeys.push('rindex2');
-                if (!allParamKeys.includes('rindex3')) allParamKeys.push('rindex3');
                 if (!allParamKeys.includes('abbe1')) allParamKeys.push('abbe1');
                 if (!allParamKeys.includes('abbe2')) allParamKeys.push('abbe2');
                 if (!allParamKeys.includes('abbe3')) allParamKeys.push('abbe3');
-            }
-            if (blockType === 'Stop') {
-                if (!allParamKeys.includes('semiDiameter')) allParamKeys.push('semiDiameter');
-            }
-            if (blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'ImageSurface' && blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane') {
-                if (!allParamKeys.includes('zoomGroup')) allParamKeys.push('zoomGroup');
             }
             // For Lens and other blocks with front/back surfaces, ensure coefficient fields are present
             if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'SingleSurface' || blockType === 'Mirror') {
@@ -10785,7 +10970,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     return a.localeCompare(b);
                 });
             };
-            const varKeys = sortVariableKeys(Object.keys(vars || {}));
+            const varKeys = sortVariableKeys(Object.keys(vars || {}).filter((k) => !shouldHideExpandedField(k)));
 
             const normalizeSurfTypeLabel = (value: any) => {
                 return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '');
@@ -10861,14 +11046,130 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 return title;
             };
 
+            const createSpreadsheetHeader = () => {
+                const header = document.createElement('div');
+                header.style.display = 'grid';
+                header.style.gridTemplateColumns = '32px 148px minmax(220px,1fr) 56px';
+                header.style.gap = '8px';
+                header.style.alignItems = 'center';
+                header.style.padding = '4px 6px';
+                header.style.marginBottom = '2px';
+                header.style.borderBottom = isDarkMode ? '1px solid #374151' : '1px solid #d1d5db';
+                header.style.fontSize = '11px';
+                header.style.fontWeight = '600';
+                header.style.color = isDarkMode ? '#9ca3af' : '#6b7280';
+
+                const opt = document.createElement('div');
+                opt.textContent = 'Opt';
+                const field = document.createElement('div');
+                field.textContent = 'Field';
+                const value = document.createElement('div');
+                value.textContent = 'Value';
+                const state = document.createElement('div');
+                state.textContent = 'State';
+
+                header.appendChild(opt);
+                header.appendChild(field);
+                header.appendChild(value);
+                header.appendChild(state);
+                return header;
+            };
+
+            const normalizeScopeForToggle = (scopeValue: any): string => {
+                const s = String(scopeValue ?? '').trim().toLowerCase();
+                if (s === 'global' || s === 'shared') return 'global';
+                if (s === 'perconfig' || s === 'per-config' || s === 'local') return 'perConfig';
+                return '';
+            };
+
+            const createOptimizeScopeIconControl = (
+                initialEnabled: boolean,
+                initialScope: any,
+                onStateChange: (state: 'off' | 'perConfig' | 'global') => void,
+            ) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.style.flex = '0 0 28px';
+                btn.style.width = '28px';
+                btn.style.height = '24px';
+                btn.style.fontSize = '12px';
+                btn.style.fontWeight = '700';
+                btn.style.borderRadius = '4px';
+                btn.style.border = isDarkMode ? '1px solid #374151' : '1px solid #d1d5db';
+                btn.style.background = isDarkMode ? '#111827' : '#ffffff';
+                btn.style.color = isDarkMode ? '#e5e7eb' : '#374151';
+                btn.style.cursor = 'pointer';
+                btn.addEventListener('click', (event) => {
+                    try { event.stopPropagation(); } catch (_) {}
+                });
+
+                let currentScope = normalizeScopeForToggle(initialScope);
+                let currentEnabled = !!initialEnabled;
+
+                const getState = (): 'off' | 'perConfig' | 'global' => {
+                    if (!currentEnabled) return 'off';
+                    return currentScope === 'global' ? 'global' : 'perConfig';
+                };
+
+                const render = () => {
+                    btn.textContent = !currentEnabled
+                        ? ''
+                        : (currentScope === 'perConfig' ? 'V' : (currentScope === 'global' ? 'W' : ''));
+                    btn.title = currentEnabled
+                        ? (currentScope === 'global' ? 'Share' : 'Per-config')
+                        : 'Disabled';
+                    btn.style.opacity = currentEnabled ? '1' : '0.45';
+                };
+
+                btn.onclick = (event) => {
+                    try { event.preventDefault(); } catch (_) {}
+                    try { event.stopPropagation(); } catch (_) {}
+
+                    const state = getState();
+                    if (state === 'off') {
+                        currentEnabled = true;
+                        currentScope = 'perConfig';
+                    } else if (state === 'perConfig') {
+                        currentEnabled = true;
+                        currentScope = 'global';
+                    } else {
+                        currentEnabled = false;
+                        currentScope = 'perConfig';
+                    }
+
+                    render();
+                    onStateChange(getState());
+                };
+
+                render();
+
+                return {
+                    button: btn,
+                    getState,
+                    setState: (nextState: 'off' | 'perConfig' | 'global') => {
+                        if (nextState === 'off') {
+                            currentEnabled = false;
+                            currentScope = 'perConfig';
+                        } else {
+                            currentEnabled = true;
+                            currentScope = nextState === 'global' ? 'global' : 'perConfig';
+                        }
+                        render();
+                    },
+                };
+            };
+
             const createRow = (label: string, value: any, path: string, badge?: string, paramType?: string) => {
                 const row = document.createElement('div');
                 row.className = 'block-inspector-detail-row';
-                row.style.display = 'flex';
+                row.style.display = 'grid';
+                row.style.gridTemplateColumns = '148px minmax(220px,1fr) 56px';
                 row.style.gap = '8px';
                 row.style.alignItems = 'center';
                 row.style.minHeight = '32px';
-                row.style.marginBottom = '4px';
+                row.style.marginBottom = '0';
+                row.style.padding = '4px 0';
+                row.style.borderBottom = isDarkMode ? '1px solid #1f2937' : '1px solid #eef2f7';
 
                 const name = document.createElement('div');
                 const coefLabel = getCoefDisplayLabel(label);
@@ -10877,7 +11178,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 name.title = coefLabel || displayLabel;
                 name.style.fontSize = '12px';
                 name.style.color = isDarkMode ? '#d1d5db' : '#374151';
-                name.style.flex = '0 0 140px';
+                name.style.minWidth = '0';
                 name.style.whiteSpace = 'nowrap';
                 name.style.overflow = 'hidden';
                 name.style.textOverflow = 'ellipsis';
@@ -11384,207 +11685,38 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
                     inputElement = select;
                 } else if (isNumeric) {
-                    // Create parameter slider with Lin/Log, ×0.1/×10 buttons
-                    const container = document.createElement('div');
-                    container.className = 'param-input-with-slider';
-                    container.style.display = 'grid';
-                    container.style.gridTemplateColumns = '120px 40px 40px 40px 140px 220px';
-                    container.style.columnGap = '6px';
-                    container.style.alignItems = 'center';
-                    container.style.flex = '1';
+                    // Spreadsheet-style numeric editor (slider controls removed)
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.value = value === undefined || value === null ? '' : String(value);
+                    input.style.fontSize = '12px';
+                    input.style.padding = '4px 6px';
+                    input.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
+                    input.style.background = isDarkMode ? '#111827' : '#fff';
+                    input.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    input.style.borderRadius = '4px';
+                    input.style.flex = '1';
+                    input.style.minWidth = '200px';
+                    input.style.height = '28px';
+                    input.style.boxSizing = 'border-box';
 
-                    // Parse initial value
-                    const initialVal = parseFloat(String(value));
-                    const hasValidValue = Number.isFinite(initialVal);
-
-                    // Get initial range
-                    let rangeConfig = getSliderRangeForParameter(label, blockType, value);
-                    let { min, max, step } = rangeConfig;
-                    let useLog = false;
-                    let magnitudeMultiplier = 1.0;
-
-                    // Text input
-                    const textInput = document.createElement('input');
-                    textInput.type = 'text';
-                    textInput.value = value === undefined || value === null ? '' : String(value);
-                    textInput.style.fontSize = '12px';
-                    textInput.style.padding = '4px 6px';
-                    textInput.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
-                    textInput.style.background = isDarkMode ? '#111827' : '#fff';
-                    textInput.style.color = isDarkMode ? '#f9fafb' : '#111827';
-                    textInput.style.borderRadius = '4px';
-                    textInput.style.boxSizing = 'border-box';
-                    textInput.style.height = '28px';
-
-                    // Lin/Log toggle button
-                    const scaleBtn = document.createElement('button');
-                    scaleBtn.type = 'button';
-                    scaleBtn.className = 'scale-mode-btn';
-                    scaleBtn.textContent = 'Lin';
-                    scaleBtn.title = 'Toggle linear/logarithmic scale';
-                    scaleBtn.style.fontSize = '10px';
-                    scaleBtn.style.padding = '2px';
-                    scaleBtn.style.boxSizing = 'border-box';
-                    scaleBtn.style.height = '28px';
-
-                    // Magnitude down button (×0.1)
-                    const magDownBtn = document.createElement('button');
-                    magDownBtn.type = 'button';
-                    magDownBtn.className = 'magnitude-btn';
-                    magDownBtn.textContent = '×0.1';
-                    magDownBtn.title = 'Decrease range by 10x';
-                    magDownBtn.style.fontSize = '9px';
-                    magDownBtn.style.padding = '2px';
-                    magDownBtn.style.boxSizing = 'border-box';
-                    magDownBtn.style.height = '28px';
-
-                    // Magnitude up button (×10)
-                    const magUpBtn = document.createElement('button');
-                    magUpBtn.type = 'button';
-                    magUpBtn.className = 'magnitude-btn';
-                    magUpBtn.textContent = '×10';
-                    magUpBtn.title = 'Increase range by 10x';
-                    magUpBtn.style.fontSize = '9px';
-                    magUpBtn.style.padding = '2px';
-                    magUpBtn.style.boxSizing = 'border-box';
-                    magUpBtn.style.height = '28px';
-
-                    // Range display
-                    const rangeDisplay = document.createElement('div');
-                    rangeDisplay.className = 'slider-range-display';
-                    rangeDisplay.style.fontSize = '9px';
-                    rangeDisplay.style.color = '#666';
-                    rangeDisplay.style.whiteSpace = 'nowrap';
-                    rangeDisplay.style.overflow = 'hidden';
-                    rangeDisplay.style.textOverflow = 'ellipsis';
-                    rangeDisplay.style.fontFamily = 'monospace';
-                    rangeDisplay.title = 'Slider range (min ~ max)';
-
-                    // Range slider
-                    const slider = document.createElement('input');
-                    slider.type = 'range';
-                    slider.min = '0';
-                    slider.max = '1';
-                    slider.step = '0.001';
-                    slider.value = hasValidValue ? String(valueToSlider(initialVal, min, max, useLog)) : '0.5';
-
-                    // Update range display
-                    const formatRangeValue = (val: number, precision: number) => {
-                        const n = Number(val);
-                        if (!Number.isFinite(n)) return String(val ?? '');
-                        const abs = Math.abs(n);
-                        if (abs > 0 && abs < 1e-6) return n.toExponential(2);
-                        return n.toFixed(precision);
-                    };
-
-                    const updateRangeDisplay = () => {
-                        const precision = Math.max(2, Math.min(6, -Math.floor(Math.log10(Math.abs(max - min) / 100))));
-                        rangeDisplay.textContent = `[${formatRangeValue(min, precision)} ~ ${formatRangeValue(max, precision)}]`;
-                    };
-                    updateRangeDisplay();
-
-                    // Update range from magnitude multiplier
-                    const updateRangeFromMultiplier = () => {
-                        const baseConfig = getSliderRangeForParameter(label, blockType, value);
-                        const center = (baseConfig.min + baseConfig.max) / 2;
-                        const baseRange = (baseConfig.max - baseConfig.min) / 2;
-                        const newRange = baseRange * magnitudeMultiplier;
-
-                        min = center - newRange;
-                        max = center + newRange;
-                        step = baseConfig.step * magnitudeMultiplier;
-
-                        // For non-negative parameters, clamp min to 0
-                        if (label.includes('Thickness') || label.includes('hickness') ||
-                            label.includes('semidia') || label.includes('aperture')) {
-                            if (min < 0) {
-                                min = 0;
-                                max = center * 2;
-                            }
-                        }
-
-                        updateSliderPosition();
-                        updateRangeDisplay();
-                    };
-
-                    // Update slider position
-                    const updateSliderPosition = () => {
-                        const val = parseFloat(textInput.value);
-                        if (Number.isFinite(val)) {
-                            slider.value = String(valueToSlider(val, min, max, useLog));
+                    const commit = () => {
+                        const newValue = cooptNormalizeInputValue(input.value, value, path);
+                        if (newValue !== value) {
+                            cooptApplyBlockValue(blockId, path, value, newValue);
                         }
                     };
 
-                    // Event handlers
-                    scaleBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        useLog = !useLog;
-                        scaleBtn.textContent = useLog ? 'Log' : 'Lin';
-                        scaleBtn.style.background = useLog ? '#007acc' : '';
-                        scaleBtn.style.color = useLog ? 'white' : '';
-                        updateSliderPosition();
-                        updateRangeDisplay();
-                    });
-
-                    magDownBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        magnitudeMultiplier *= 0.1;
-                        updateRangeFromMultiplier();
-                    });
-
-                    magUpBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        magnitudeMultiplier *= 10;
-                        updateRangeFromMultiplier();
-                    });
-
-                    slider.addEventListener('input', (e) => {
-                        e.stopPropagation();
-                        const sliderVal = parseFloat(slider.value);
-                        const paramVal = sliderToValue(sliderVal, min, max, useLog);
-                        const precision = getDisplayPrecision(paramVal, max - min);
-                        textInput.value = paramVal.toFixed(precision);
-                    });
-
-                    slider.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        const sliderVal = parseFloat(slider.value);
-                        const paramVal = sliderToValue(sliderVal, min, max, useLog);
-                        const precision = getDisplayPrecision(paramVal, max - min);
-                        const newValue = paramVal.toFixed(precision);
-                        textInput.value = newValue;
-                        cooptApplyBlockValue(blockId, path, value, newValue);
-                    });
-
-                    const tryCommit = () => {
-                        const newValue = textInput.value;
-                        const numVal = parseFloat(newValue);
-                        if (Number.isFinite(numVal)) {
-                            slider.value = String(valueToSlider(numVal, min, max, useLog));
-                        }
-                        cooptApplyBlockValue(blockId, path, value, newValue);
-                    };
-
-                    textInput.addEventListener('keydown', (e) => {
+                    input.addEventListener('keydown', (e) => {
                         if (e.key === 'Enter') {
                             e.preventDefault();
                             e.stopPropagation();
-                            tryCommit();
+                            commit();
                         }
                     });
 
-                    textInput.addEventListener('blur', () => {
-                        tryCommit();
-                    });
-
-                    container.appendChild(textInput);
-                    container.appendChild(scaleBtn);
-                    container.appendChild(magDownBtn);
-                    container.appendChild(magUpBtn);
-                    container.appendChild(rangeDisplay);
-                    container.appendChild(slider);
-
-                    inputElement = container;
+                    input.addEventListener('blur', commit);
+                    inputElement = input;
                 } else if (isMaterial) {
                     // Create material input with glass search
                     const container = document.createElement('div');
@@ -11990,6 +12122,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 chip.style.border = badge ? (isDarkMode ? '1px solid #374151' : '1px solid #e5e7eb') : 'none';
                 chip.style.color = isDarkMode ? '#9ca3af' : '#6b7280';
                 chip.style.visibility = badge ? 'visible' : 'hidden';
+                chip.style.justifySelf = 'center';
 
                 row.appendChild(name);
                 row.appendChild(inputElement);
@@ -11998,8 +12131,14 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             };
 
             if (paramKeys.length > 0) {
-                panel.appendChild(createSectionTitle('Parameters'));
+                panel.appendChild(createSpreadsheetHeader());
                 for (const key of paramKeys) {
+                    if (shouldHideExpandedField(key)) {
+                        continue;
+                    }
+                    if (quickEditorEnabled && quickEditorCoveredParamKeys.has(String(key).toLowerCase())) {
+                        continue;
+                    }
                     if (blockType === 'ImageSurface' && key === 'optimizeSemiDia') {
                         continue;
                     }
@@ -12068,55 +12207,34 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         (blockType === 'Doublet' || blockType === 'Triplet') &&
                         /^surf\d+SurfType$/.test(key);
 
-                    // Create row with optimize checkbox and scope selector
+                    // Create row with optimize/scope icon control
                     const paramRow = document.createElement('div');
-                    paramRow.style.display = 'flex';
+                    paramRow.style.display = 'grid';
+                    paramRow.style.gridTemplateColumns = '32px minmax(0,1fr)';
                     paramRow.style.alignItems = 'center';
                     paramRow.style.gap = '6px';
-                    paramRow.style.minHeight = '32px';
-                    paramRow.style.marginBottom = (isAbbeRow || isGroupedSurfTypeRow) ? '8px' : '4px';
+                    paramRow.style.minHeight = '34px';
+                    paramRow.style.marginBottom = (isAbbeRow || isGroupedSurfTypeRow) ? '4px' : '0';
 
-                    // Optimize checkbox
-                    const cb = document.createElement('input');
-                    cb.type = 'checkbox';
-                    cb.style.flex = '0 0 auto';
-                    cb.style.width = '16px';
-                    cb.style.height = '16px';
-                    cb.style.margin = '0 4px 0 0';
-                    cb.checked = __blocks_shouldMarkVar(varEntry);
-                    cb.addEventListener('click', (e) => e.stopPropagation());
-
-                    // Scope select (Per-config / Shared)
-                    const scopeSel = document.createElement('select');
-                    scopeSel.style.flex = '0 0 110px';
-                    scopeSel.style.fontSize = '12px';
-                    scopeSel.style.padding = '2px 4px';
-                    scopeSel.innerHTML = '<option value="perConfig">Per-config</option><option value="global">Shared (all configs)</option>';
-                    scopeSel.value = __blocks_getVarScope(varEntry);
-                    scopeSel.disabled = !cb.checked;
-                    scopeSel.addEventListener('click', (e) => e.stopPropagation());
-
-                    cb.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        try { scopeSel.disabled = !cb.checked; } catch (_) {}
-                        __blocks_setVarMode(blockId, key, cb.checked, String(scopeSel.value));
-                    });
-
-                    scopeSel.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        const newScope = String(scopeSel.value);
-                        __blocks_setVarScope(blockId, key, newScope);
-                        if (cb.checked) {
-                            __blocks_setVarMode(blockId, key, true, newScope);
+                    const optimizeControl = createOptimizeScopeIconControl(
+                        __blocks_shouldMarkVar(varEntry),
+                        __blocks_getVarScope(varEntry),
+                        (nextState) => {
+                            if (nextState === 'off') {
+                                __blocks_setVarMode(blockId, key, false, 'perConfig');
+                                return;
+                            }
+                            const scope = nextState === 'global' ? 'global' : 'perConfig';
+                            __blocks_setVarScope(blockId, key, scope);
+                            __blocks_setVarMode(blockId, key, true, scope);
                         }
-                    });
+                    );
 
                     const innerRow = createRow(key, value, `parameters.${key}`);
                     innerRow.style.flex = '1';
                     innerRow.style.marginBottom = '0';
 
-                    paramRow.appendChild(cb);
-                    paramRow.appendChild(scopeSel);
+                    paramRow.appendChild(optimizeControl.button);
                     paramRow.appendChild(innerRow);
                     panel.appendChild(paramRow);
                     
@@ -12222,68 +12340,59 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 }
             }
 
-            if (apertureEntries.length > 0) {
+            if (apertureEntries.length > 0 && !shouldHideExpandedField('semidia')) {
                 panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
+                panel.appendChild(createSpreadsheetHeader());
 
                 for (const { rawKey, displayKey, value } of apertureEntries) {
+                    if (quickEditorEnabled) {
+                        const rawLower = String(rawKey).toLowerCase();
+                        const displayLower = String(displayKey).toLowerCase();
+                        if (quickEditorCoveredApertureKeys.has(rawLower) || quickEditorCoveredApertureKeys.has(displayLower)) {
+                            continue;
+                        }
+                    }
                     const apertureEntry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, rawKey);
                     
-                    // Create row with optimize checkbox and scope selector
+                    // Create row with optimize/scope icon control
                     const apertureRow = document.createElement('div');
-                    apertureRow.style.display = 'flex';
+                    apertureRow.style.display = 'grid';
+                    apertureRow.style.gridTemplateColumns = '32px minmax(0,1fr)';
                     apertureRow.style.alignItems = 'center';
                     apertureRow.style.gap = '6px';
-                    apertureRow.style.minHeight = '32px';
-                    apertureRow.style.marginBottom = '4px';
+                    apertureRow.style.minHeight = '34px';
+                    apertureRow.style.marginBottom = '0';
 
-                    // Optimize checkbox
-                    const cb = document.createElement('input');
-                    cb.type = 'checkbox';
-                    cb.style.flex = '0 0 auto';
-                    cb.style.width = '16px';
-                    cb.style.height = '16px';
-                    cb.style.margin = '0 4px 0 0';
-                    cb.checked = __blocks_shouldMarkVar(apertureEntry);
-                    cb.addEventListener('click', (e) => e.stopPropagation());
-
-                    // Scope select (Per-config / Shared)
-                    const scopeSel = document.createElement('select');
-                    scopeSel.style.flex = '0 0 110px';
-                    scopeSel.style.fontSize = '12px';
-                    scopeSel.style.padding = '2px 4px';
-                    scopeSel.innerHTML = '<option value="perConfig">Per-config</option><option value="global">Shared (all configs)</option>';
-                    scopeSel.value = __blocks_getVarScope(apertureEntry);
-                    scopeSel.disabled = !cb.checked;
-                    scopeSel.addEventListener('click', (e) => e.stopPropagation());
-
-                    cb.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        try { scopeSel.disabled = !cb.checked; } catch (_) {}
-                        __blocks_setVarMode(blockId, rawKey, cb.checked, String(scopeSel.value));
-                    });
-
-                    scopeSel.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        const newScope = String(scopeSel.value);
-                        __blocks_setVarScope(blockId, rawKey, newScope);
-                        if (cb.checked) {
-                            __blocks_setVarMode(blockId, rawKey, true, newScope);
+                    const optimizeControl = createOptimizeScopeIconControl(
+                        __blocks_shouldMarkVar(apertureEntry),
+                        __blocks_getVarScope(apertureEntry),
+                        (nextState) => {
+                            if (nextState === 'off') {
+                                __blocks_setVarMode(blockId, rawKey, false, 'perConfig');
+                                return;
+                            }
+                            const scope = nextState === 'global' ? 'global' : 'perConfig';
+                            __blocks_setVarScope(blockId, rawKey, scope);
+                            __blocks_setVarMode(blockId, rawKey, true, scope);
                         }
-                    });
+                    );
 
                     const innerRow = createRow(displayKey, value, `aperture.${rawKey}`);
                     innerRow.style.flex = '1';
                     innerRow.style.marginBottom = '0';
 
-                    apertureRow.appendChild(cb);
-                    apertureRow.appendChild(scopeSel);
+                    apertureRow.appendChild(optimizeControl.button);
                     apertureRow.appendChild(innerRow);
                     panel.appendChild(apertureRow);
                 }
             }
 
             if (varKeys.length > 0) {
+                panel.appendChild(createSpreadsheetHeader());
                 for (const key of varKeys) {
+                    if (shouldHideExpandedField(key)) {
+                        continue;
+                    }
                     const normalizedVarKey = String(key ?? '').trim().toLowerCase()
                         .replace(/^front$/, 's1')
                         .replace(/^back$/, blockType === 'Lens' || blockType === 'PositiveLens' ? 's2' : 's3')
@@ -12295,53 +12404,39 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (paramKeys.includes(key) || renderedApertureKeys.has(normalizedVarKey)) {
                         continue;
                     }
+                    if (quickEditorEnabled) {
+                        const keyLower = String(key).toLowerCase();
+                        if (quickEditorCoveredParamKeys.has(keyLower) || quickEditorCoveredApertureKeys.has(keyLower) || quickEditorCoveredApertureKeys.has(normalizedVarKey)) {
+                            continue;
+                        }
+                    }
                     
                     const entry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, key);
                     const value = entry && typeof entry === 'object' && 'value' in entry ? entry.value : entry;
 
-                    // Create a row with checkbox and scope select
+                    // Create a row with optimize/scope icon control
                     const varRow = document.createElement('div');
-                    varRow.style.display = 'flex';
+                    varRow.style.display = 'grid';
+                    varRow.style.gridTemplateColumns = '32px minmax(0,1fr)';
                     varRow.style.alignItems = 'center';
                     varRow.style.gap = '6px';
-                    varRow.style.marginBottom = '4px';
+                    varRow.style.marginBottom = '0';
 
-                    // Optimize checkbox
-                    const cb = document.createElement('input');
-                    cb.type = 'checkbox';
-                    cb.style.flex = '0 0 auto';
-                    cb.style.width = '16px';
-                    cb.style.height = '16px';
-                    cb.style.margin = '0 4px 0 0';
-                    cb.checked = __blocks_shouldMarkVar(entry);
-                    cb.addEventListener('click', (e) => e.stopPropagation());
-
-                    // Scope select (Per-config / Shared)
-                    const scopeSel = document.createElement('select');
-                    scopeSel.style.flex = '0 0 110px';
-                    scopeSel.style.fontSize = '12px';
-                    scopeSel.style.padding = '2px 4px';
-                    scopeSel.innerHTML = '<option value="perConfig">Per-config</option><option value="global">Shared (all configs)</option>';
-                    scopeSel.value = __blocks_getVarScope(entry);
-                    scopeSel.disabled = !cb.checked;
-                    scopeSel.addEventListener('click', (e) => e.stopPropagation());
-
-                    cb.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        try { scopeSel.disabled = !cb.checked; } catch (_) {}
-                        __blocks_setVarMode(blockId, key, cb.checked, String(scopeSel.value));
-                        updateOptimizeChip();
-                    });
-
-                    scopeSel.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        const newScope = String(scopeSel.value);
-                        __blocks_setVarScope(blockId, key, newScope);
-                        if (cb.checked) {
-                            __blocks_setVarMode(blockId, key, true, newScope);
+                    const optimizeControl = createOptimizeScopeIconControl(
+                        __blocks_shouldMarkVar(entry),
+                        __blocks_getVarScope(entry),
+                        (nextState) => {
+                            if (nextState === 'off') {
+                                __blocks_setVarMode(blockId, key, false, 'perConfig');
+                                updateOptimizeChip();
+                                return;
+                            }
+                            const scope = nextState === 'global' ? 'global' : 'perConfig';
+                            __blocks_setVarScope(blockId, key, scope);
+                            __blocks_setVarMode(blockId, key, true, scope);
+                            updateOptimizeChip();
                         }
-                        updateOptimizeChip();
-                    });
+                    );
 
                     // Build the standard createRow content but embed in this container
                     const badge = entry && typeof entry === 'object' && entry.optimize && entry.optimize.mode ? `V:${entry.optimize.mode}` : 'V';
@@ -12351,13 +12446,13 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     const chip = innerRow.lastElementChild as HTMLDivElement | null;
                     const updateOptimizeChip = () => {
                         if (!chip) return;
-                        chip.textContent = cb.checked ? 'V:V' : 'V:F';
+                        chip.textContent = optimizeControl.getState() === 'off' ? 'V:F' : 'V:V';
                         chip.style.border = isDarkMode ? '1px solid #374151' : '1px solid #e5e7eb';
                         chip.style.visibility = 'visible';
                     };
 
-                    varRow.appendChild(cb);
-                    varRow.appendChild(scopeSel);
+                    updateOptimizeChip();
+                    varRow.appendChild(optimizeControl.button);
                     varRow.appendChild(innerRow);
                     panel.appendChild(varRow);
                 }
