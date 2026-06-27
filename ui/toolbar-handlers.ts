@@ -4,7 +4,7 @@
  */
 
 import { BLOCK_SCHEMA_VERSION, deriveBlocksFromLegacyOpticalSystemRows } from '../data/block-schema.ts';
-import { loadSystemConfigurations, loadPersistedSystemConfigurations, saveSystemConfigurations, clearAllPersistedState } from '../data/table-configuration.ts';
+import { loadSystemConfigurations, loadPersistedSystemConfigurations, saveSystemConfigurations, clearAllPersistedState, shouldPreferImportedOpticalRows } from '../data/table-configuration.ts';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
@@ -165,7 +165,7 @@ function buildLiveRenderSyncPayload(reason = 'render-open') {
   let rows: any[] = [];
   let objectRows: any[] = [];
   let systemConfig: any = null;
-  const includeSystemConfig = shouldIncludeSystemConfigInRenderPayload(reason);
+  let includeSystemConfig = shouldIncludeSystemConfigInRenderPayload(reason);
   const preferLiveTableRows = !includeSystemConfig;
 
   try {
@@ -184,6 +184,16 @@ function buildLiveRenderSyncPayload(reason = 'render-open') {
         || runtimeSystemConfig.configurations[0]
         || null)
       : null;
+    const preferImportedRows = shouldPreferImportedOpticalRows(activeConfig);
+
+    if (preferImportedRows && !includeSystemConfig) {
+      includeSystemConfig = true;
+      try {
+        systemConfig = JSON.parse(JSON.stringify(runtimeSystemConfig));
+      } catch (_) {
+        systemConfig = runtimeSystemConfig ?? null;
+      }
+    }
 
     if (Array.isArray(activeConfig?.object) && activeConfig.object.length > 0) {
       objectRows = activeConfig.object.slice();
@@ -194,6 +204,10 @@ function buildLiveRenderSyncPayload(reason = 'render-open') {
       if (Array.isArray(liveRows) && liveRows.length > 0) {
         rows = liveRows.slice();
       }
+    }
+
+    if (rows.length === 0 && preferImportedRows && Array.isArray(activeConfig?.opticalSystem) && activeConfig.opticalSystem.length > 0) {
+      rows = activeConfig.opticalSystem.slice();
     }
 
     const activeBlocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
