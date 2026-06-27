@@ -1168,6 +1168,22 @@ function __coopt_buildFallbackBlocksFromRows(rows: any[]): any[] {
   return blocks;
 }
 
+function __coopt_shouldAcceptDerivedBlocks(blocks: any[], rows: any[]): boolean {
+  if (!Array.isArray(blocks) || blocks.length === 0) return false;
+
+  const physicalBlocks = blocks.filter((block: any) => {
+    const blockType = String(block?.blockType ?? '').trim();
+    return blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane' && blockType !== 'ImageSurface';
+  });
+
+  if (physicalBlocks.length === 0) return false;
+
+  const physicalRowCount = Math.max(0, (Array.isArray(rows) ? rows.length : 0) - 2);
+  if (physicalRowCount >= 4 && physicalBlocks.length <= 1) return false;
+
+  return true;
+}
+
 function __coopt_normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
   if (!Array.isArray(blocks)) return [];
 
@@ -1275,17 +1291,19 @@ export function handleImportZemax(): void {
           const fatals = Array.isArray(derived?.issues)
             ? derived.issues.filter((it: any) => it?.severity === 'fatal')
             : [];
-          if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0) {
+          if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0 && __coopt_shouldAcceptDerivedBlocks(derived.blocks, rows)) {
             blocks = __coopt_normalizeObjectDistanceInBlocks(derived.blocks);
           } else {
-            blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+            blocks = [];
             if (fatals.length > 0) {
-              console.warn('⚠️ [Zemax Import] deriveBlocks had fatals; fallback blocks generated:', fatals);
+              console.warn('⚠️ [Zemax Import] deriveBlocks had fatals; using explicit rows only:', fatals);
+            } else if (Array.isArray(derived?.blocks) && derived.blocks.length > 0) {
+              console.warn('⚠️ [Zemax Import] derived blocks were too lossy; using explicit rows only.');
             }
           }
         } catch (e) {
-          console.warn('⚠️ [Zemax Import] deriveBlocks failed; fallback blocks generated:', e);
-          blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+          console.warn('⚠️ [Zemax Import] deriveBlocks failed; using explicit rows only:', e);
+          blocks = [];
         }
 
         const payload = {
@@ -1303,7 +1321,9 @@ export function handleImportZemax(): void {
               created: now,
               modified: now,
               locked: false,
-              importedFrom: 'zemax'
+              importedFrom: 'zemax',
+              importAnalyzeMode: blocks.length === 0,
+              importRowsPreferred: true
             }
           }],
           activeConfigId: 1,
@@ -1439,17 +1459,19 @@ export function handleImportZemax(): void {
         const fatals = Array.isArray(derived?.issues)
           ? derived.issues.filter((it: any) => it?.severity === 'fatal')
           : [];
-        if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0) {
+        if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0 && __coopt_shouldAcceptDerivedBlocks(derived.blocks, rows)) {
           blocks = __coopt_normalizeObjectDistanceInBlocks(derived.blocks);
         } else {
-          blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+          blocks = [];
           if (fatals.length > 0) {
-            console.warn('⚠️ [Zemax Import] deriveBlocks had fatals; fallback blocks generated:', fatals);
+            console.warn('⚠️ [Zemax Import] deriveBlocks had fatals; using explicit rows only:', fatals);
+          } else if (Array.isArray(derived?.blocks) && derived.blocks.length > 0) {
+            console.warn('⚠️ [Zemax Import] derived blocks were too lossy; using explicit rows only.');
           }
         }
       } catch (e) {
-        console.warn('⚠️ [Zemax Import] deriveBlocks failed; fallback blocks generated:', e);
-        blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+        console.warn('⚠️ [Zemax Import] deriveBlocks failed; using explicit rows only:', e);
+        blocks = [];
       }
 
       const payload = {
@@ -1467,7 +1489,9 @@ export function handleImportZemax(): void {
             created: now,
             modified: now,
             locked: false,
-            importedFrom: 'zemax'
+            importedFrom: 'zemax',
+            importAnalyzeMode: blocks.length === 0,
+            importRowsPreferred: true
           }
         }],
         activeConfigId: 1,

@@ -3358,17 +3358,19 @@ function __buildZemaxLoadPayload(parsed: any): any {
         const fatals = Array.isArray(derived?.issues)
             ? derived.issues.filter((it: any) => it?.severity === 'fatal')
             : [];
-        if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0) {
+        if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0 && __coopt_shouldAcceptDerivedBlocks(derived.blocks, rows)) {
             blocks = __coopt_normalizeObjectDistanceInBlocks(derived.blocks);
         } else {
-            blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+            blocks = [];
             if (fatals.length > 0) {
-                console.warn('⚠️ [Zemax Import] deriveBlocks had fatals; fallback blocks generated:', fatals);
+                console.warn('⚠️ [Zemax Import] deriveBlocks had fatals; using explicit rows only:', fatals);
+            } else if (Array.isArray(derived?.blocks) && derived.blocks.length > 0) {
+                console.warn('⚠️ [Zemax Import] derived blocks were too lossy; using explicit rows only.');
             }
         }
     } catch (e) {
-        console.warn('⚠️ [Zemax Import] deriveBlocks failed; fallback blocks generated:', e);
-        blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+        console.warn('⚠️ [Zemax Import] deriveBlocks failed; using explicit rows only:', e);
+        blocks = [];
     }
 
     const now = new Date().toISOString();
@@ -3387,7 +3389,9 @@ function __buildZemaxLoadPayload(parsed: any): any {
                 created: now,
                 modified: now,
                 locked: false,
-                importedFrom: 'zemax'
+                importedFrom: 'zemax',
+                importAnalyzeMode: blocks.length === 0,
+                importRowsPreferred: true
             }
         }],
         activeConfigId: 1,
