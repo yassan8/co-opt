@@ -9868,7 +9868,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         el.className = 'block-inspector-quick-input';
         el.style.width = '100%';
         el.style.minWidth = '0';
-        el.style.height = '24px';
+        el.style.height = '20px';
         el.style.boxSizing = 'border-box';
         el.style.fontSize = '11px';
         el.style.padding = '2px 6px';
