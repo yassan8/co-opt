@@ -2848,7 +2848,7 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
             // stopZが数値であることを確認
             stopZ = Number(stopZ) || 0;
             
-            // Stop面の半径を取得（複数のフィールド名を試す）
+            // Stop面の半径を取得（複数のフィールド名 + ブロック構造を試す）
             let stopRadius = 10; // デフォルト値
             // console.log(`🔍 [findStopSurface] Stop面データ:`, surface);
             // console.log(`🔍 [findStopSurface] Stop面の全プロパティ:`, JSON.stringify(surface, null, 2));
@@ -2861,18 +2861,75 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
                 'semiDia', 'aper', 'halfDiameter', 'half-diameter',
                 'Clear_Aperture', 'clearAperture', 'clear_aperture'
             ];
+
+            const radiusSources = [
+                surface,
+                surface?.parameters,
+                surface?.aperture,
+                surface?.variables,
+            ];
+
+            const readNumericLike = (raw) => {
+                if (raw === undefined || raw === null || raw === '') return null;
+                if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+                if (typeof raw === 'string') {
+                    const n = parseFloat(raw);
+                    return Number.isFinite(n) ? n : null;
+                }
+                if (typeof raw === 'object') {
+                    const nested = raw?.value;
+                    if (nested === undefined || nested === null || nested === '') return null;
+                    const n = parseFloat(nested);
+                    return Number.isFinite(n) ? n : null;
+                }
+                return null;
+            };
             
             // console.log(`🔍 [findStopSurface] 半径候補チェック:`);
             for (const field of radiusFields) {
-                const value = surface[field];
-                // console.log(`  ${field}: ${value} (type: ${typeof value})`);
-                if (value !== undefined && value !== null && value !== '') {
-                    const numValue = parseFloat(value);
-                    if (!isNaN(numValue)) {
-                        stopRadius = numValue;
-                        // console.log(`🎯 [findStopSurface] フィールド "${field}" を使用: ${stopRadius}`);
-                        break;
+                let resolved = null;
+                for (const src of radiusSources) {
+                    resolved = readNumericLike(src?.[field]);
+                    if (resolved !== null) break;
+                }
+                // console.log(`  ${field}: ${resolved} (resolved)`);
+                if (resolved !== null) {
+                    stopRadius = resolved;
+                    // console.log(`🎯 [findStopSurface] フィールド "${field}" を使用: ${stopRadius}`);
+                    break;
+                }
+            }
+
+            // Stop block parameter name precedence: parameters.semiDiameter
+            if ((!Number.isFinite(stopRadius) || stopRadius <= 0) && surface?.parameters) {
+                const fallbackParamSemiDiameter = readNumericLike(surface.parameters.semiDiameter);
+                if (fallbackParamSemiDiameter !== null) {
+                    stopRadius = fallbackParamSemiDiameter;
+                }
+            }
+
+            // Block variable fallback: variables.semiDiameter.value
+            if ((!Number.isFinite(stopRadius) || stopRadius <= 0) && surface?.variables) {
+                const fallbackVarSemiDiameter = readNumericLike(surface.variables.semiDiameter);
+                if (fallbackVarSemiDiameter !== null) {
+                    stopRadius = fallbackVarSemiDiameter;
+                }
+            }
+
+            if (!Number.isFinite(stopRadius) || stopRadius <= 0) {
+                for (const src of radiusSources) {
+                    if (!src || typeof src !== 'object') continue;
+                    for (const key of Object.keys(src)) {
+                        if (!/semi\s*dia|semidia|aperture|clear[_\s-]*aperture/i.test(String(key))) continue;
+                        const candidate = readNumericLike(src[key]);
+                        if (candidate !== null && candidate > 0) {
+                            stopRadius = candidate;
+                            break;
+                        }
                     }
+                }
+                if (!Number.isFinite(stopRadius) || stopRadius <= 0) {
+                    stopRadius = 10;
                 }
             }
             

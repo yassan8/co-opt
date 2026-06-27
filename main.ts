@@ -2089,17 +2089,23 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                 rayCount,
                 null,
                 {
+                    // Render should use grid-based cross sampling, not annular ring shrink.
+                    pattern: 'grid',
                     // For Angle objects, aim the chief ray through stop center by solving origin.
                     aimThroughStop: !!isAngle,
-                    // In Open Render, keep the chief-ray origin solve but sample peripheral rays
-                    // on the normal emission plane. Solving every peripheral origin to stop offsets
-                    // makes off-axis Angle objects fragile and can drop surrounding rays.
-                    preserveChiefNormalEmissionPlane: !!isAngle,
+                    // In Render, solve peripheral origins through stop offsets so cross rays can
+                    // reach stop cardinal points (top/bottom/left/right) when physically possible.
+                    preserveChiefNormalEmissionPlane: false,
                     useChiefRayAnalysis: true,
                     allowStopBasedOriginSolve: true,
+                    originSolveTraceBackend: 'rust',
                     skipImageHeightTsValidation: true,
                     // Keep this consistent with analysis/spot behavior.
                     disableCrossExtent: true,
+                    // Ensure peripheral rays include the pupil cardinal boundaries (up/down/left/right).
+                    crossType: 'both',
+                    exactCrossBeamSampling: true,
+                    pupilScale: 1,
                 }
             );
 
@@ -2160,7 +2166,6 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
             let successfulRayCount = 0;
             for (const rayStart of orderedRayStartPoints) {
                 if (!rayStart || !rayStart.startP || !rayStart.dir) continue;
-                if (successfulRayCount >= rayCount) break;
 
                 try {
                     const ray = {

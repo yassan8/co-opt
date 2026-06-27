@@ -672,7 +672,16 @@ function normalizeExactSectionCandidates(
     const coord = primaryCoord(entry);
     if (coord < 0) return negativeSide;
     if (coord > 0) return positiveSide;
-    return entry?.side === negativeSide || entry?.side === positiveSide ? entry.side : positiveSide;
+    if (entry?.side === negativeSide || entry?.side === positiveSide) return entry.side;
+    // For zero primary coord, infer side from orthogonal pupil coord before defaulting.
+    if (axis === 'XZ') {
+      const planeV = Number(entry?.rayStart?.planeCoords?.v ?? entry?.originalRay?.planeCoords?.v ?? entry?.planeCoords?.v);
+      if (Number.isFinite(planeV)) return planeV < 0 ? negativeSide : positiveSide;
+    } else {
+      const planeU = Number(entry?.rayStart?.planeCoords?.u ?? entry?.originalRay?.planeCoords?.u ?? entry?.planeCoords?.u);
+      if (Number.isFinite(planeU)) return planeU < 0 ? negativeSide : positiveSide;
+    }
+    return positiveSide;
   };
 
   const bySide = new Map<string, any[]>();
@@ -687,10 +696,12 @@ function normalizeExactSectionCandidates(
   [negativeSide, positiveSide].forEach((side) => {
     const ordered = [...(bySide.get(side) || [])].sort((a, b) => Math.abs(primaryCoord(b)) - Math.abs(primaryCoord(a)));
     ordered.forEach((entry, index) => {
+      const explicitType = String(entry?.type ?? '').trim().toLowerCase();
+      const keepCross = explicitType === crossType;
       normalized.push({
         ...entry,
         side,
-        type: index === 0 ? marginalTypeForSide(side) : crossType,
+        type: keepCross ? crossType : (index === 0 ? marginalTypeForSide(side) : crossType),
       });
     });
   });
@@ -1000,7 +1011,7 @@ function buildExactRenderRaysForImageHeightObjects(
         ? Number(row.objectIndex)
         : objectIndex;
       const imageHeightTarget = getRenderImageHeightTargetForAxis(row, axis);
-      const exactPattern = axis === 'BOTH' ? 'annular' : 'grid';
+      const exactPattern = 'grid';
       const crossType = axis === 'YZ' ? 'vertical' : (axis === 'XZ' ? 'horizontal' : 'both');
       const resolvedRow = convertImageHeightToEffectiveObject(
         scopedRow,
@@ -1379,7 +1390,7 @@ function buildExactLowCountRenderRaysForObjects(
     return normalized === 'image' || normalized.startsWith('image');
   });
   const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
-  const exactPattern = axis === 'BOTH' ? 'annular' : 'grid';
+  const exactPattern = 'grid';
   const crossType = axis === 'YZ' ? 'vertical' : (axis === 'XZ' ? 'horizontal' : 'both');
   const getCandidateScore = (candidate: any, expectedChiefOrigin: any) => {
     const planeU = Number(candidate?.planeCoords?.u);
@@ -1442,6 +1453,10 @@ function buildExactLowCountRenderRaysForObjects(
         objectIndex,
         overlappingImageHeightSolveEntries,
       );
+      const isImageHeight = isRenderImageHeightObjectRow(row);
+      const candidateGenerationRayCount = (!isImageHeight && conjugateType === 'infinite')
+        ? Math.max(generationRayCount, 100)
+        : generationRayCount;
       const chiefOnlyRayStarts = isRenderImageHeightObjectRow(row)
         ? generateRayStartPointsForObject(
             separatedResolvedRow,
@@ -1470,7 +1485,7 @@ function buildExactLowCountRenderRaysForObjects(
       const rayStarts = generateRayStartPointsForObject(
         separatedResolvedRow,
         opticalSystemRows,
-        generationRayCount,
+        candidateGenerationRayCount,
         null,
         {
           pattern: exactPattern,
@@ -1492,7 +1507,6 @@ function buildExactLowCountRenderRaysForObjects(
       );
       const renderRayStarts = Array.isArray(rayStarts) ? rayStarts : [];
       if (renderRayStarts.length === 0) return;
-      const isImageHeight = isRenderImageHeightObjectRow(row);
       const imageHeightTarget = isImageHeight ? getRenderImageHeightTargetForAxis(row, axis) : null;
       const expectedChiefOrigin = rayStarts?.expectedChiefOrigin;
       const explicitCenterIndex = renderRayStarts.findIndex((candidate: any) => {
@@ -1530,7 +1544,7 @@ function buildExactLowCountRenderRaysForObjects(
       const chiefPlaneV = Number(chiefStartCandidate?.planeCoords?.v ?? chiefStart?.planeCoords?.v);
       const chiefStartP = chiefStart?.startP || { x: 0, y: 0, z: 0 };
 
-      const pushExactRay = (rayStart: any, type: string, side: string, rayPath: any[]) => {
+      const pushExactRay = (rayStart: any, type: string, side: string, rayPath: any[], pinnedLowCount = false) => {
         rays.push({
           success: true,
           rayPath,
@@ -1545,12 +1559,14 @@ function buildExactLowCountRenderRaysForObjects(
             ? 'chief'
             : (type.includes('left') || type.includes('right') ? 'horizontal' : 'vertical'),
           side,
+          __cooptPinnedLowCount: pinnedLowCount,
           originalRay: {
             type,
             beamType: type === 'chief'
               ? 'chief'
               : (type.includes('left') || type.includes('right') ? 'horizontal' : 'vertical'),
             side,
+            __cooptPinnedLowCount: pinnedLowCount,
             objectIndex,
             origin: rayStart.startP,
             position: rayStart.startP,
@@ -1565,9 +1581,207 @@ function buildExactLowCountRenderRaysForObjects(
         });
       };
 
-      pushExactRay(chiefStart, 'chief', 'center', chiefRayPath);
+      pushExactRay(chiefStart, 'chief', 'center', chiefRayPath, false);
 
       if (desiredRayCount <= 1) return;
+
+      // Infinite Angle low-count preset:
+      // - BOTH: chief + 4 cardinals (<=5)
+      // - YZ/XZ: chief + 2 marginals (<=3)
+      // This keeps low-count rendering stable and intuitive without requiring high ray counts.
+      const useInfiniteLowCountCardinalPreset =
+        conjugateType === 'infinite'
+        && !isImageHeight
+        && ((axis === 'BOTH' && desiredRayCount <= 5) || (axis !== 'BOTH' && desiredRayCount <= 3));
+      if (useInfiniteLowCountCardinalPreset) {
+        const candidates = renderRayStarts
+          .map((rayStart: any, index: number) => ({ rayStart, index }))
+          .filter((entry: any) => entry.index !== chiefIndex)
+          .map((entry: any) => {
+            const rayStart = entry.rayStart;
+            if (!rayStart?.startP || !rayStart?.dir) return null;
+            const rayPath = traceExactRayForRender(rayStart.startP, rayStart.dir, false);
+            if (!rayPath) return null;
+            const u = Number(rayStart?.planeCoords?.u);
+            const v = Number(rayStart?.planeCoords?.v);
+            return {
+              ...entry,
+              rayPath,
+              u: Number.isFinite(u) ? u : Number.NaN,
+              v: Number.isFinite(v) ? v : Number.NaN,
+            };
+          })
+          .filter((entry: any) => entry && (Number.isFinite(entry.u) || Number.isFinite(entry.v)));
+
+        if (candidates.length > 0) {
+          const used = new Set<number>();
+          const pick = (key: 'u' | 'v', mode: 'min' | 'max') => {
+            const pool = candidates.filter((entry: any) => !used.has(entry.index) && Number.isFinite(Number(entry[key])));
+            if (pool.length === 0) return null;
+            const best = pool.reduce((acc: any, cur: any) => {
+              if (!acc) return cur;
+              return mode === 'min'
+                ? (Number(cur[key]) < Number(acc[key]) ? cur : acc)
+                : (Number(cur[key]) > Number(acc[key]) ? cur : acc);
+            }, null);
+            if (!best) return null;
+            used.add(best.index);
+            return best;
+          };
+          const mirrorCandidate = (seed: any, axisToMirror: 'u' | 'v') => {
+            if (!seed?.rayStart) return null;
+            const u0 = Number(seed?.rayStart?.planeCoords?.u);
+            const v0 = Number(seed?.rayStart?.planeCoords?.v);
+            const hasU = Number.isFinite(u0);
+            const hasV = Number.isFinite(v0);
+            if (!hasU && !hasV) return null;
+            const mirroredU = axisToMirror === 'u'
+              ? -(hasU ? u0 : 0)
+              : (hasU ? u0 : 0);
+            const mirroredV = axisToMirror === 'v'
+              ? -(hasV ? v0 : 0)
+              : (hasV ? v0 : 0);
+            const rebuiltStart = buildRenderRayStartOnChiefPlane(chiefStart, {
+              ...(seed.rayStart || {}),
+              planeCoords: { u: mirroredU, v: mirroredV },
+            });
+            if (!rebuiltStart?.startP || !rebuiltStart?.dir) return null;
+            const mirroredPath = traceExactRayForRender(rebuiltStart.startP, rebuiltStart.dir, false);
+            if (!mirroredPath) return null;
+            return {
+              rayStart: rebuiltStart,
+              rayPath: mirroredPath,
+              u: mirroredU,
+              v: mirroredV,
+            };
+          };
+
+          if (axis === 'YZ') {
+            const baseCount = rays.length;
+            let lower = null as any;
+            let upper = null as any;
+            if (desiredRayCount >= 2) {
+              lower = pick('v', 'min');
+              if (lower) pushExactRay(lower.rayStart, 'lower_marginal', 'lower', lower.rayPath, true);
+            }
+            if (desiredRayCount >= 3) {
+              upper = pick('v', 'max');
+              if (upper) pushExactRay(upper.rayStart, 'upper_marginal', 'upper', upper.rayPath, true);
+            }
+            if (desiredRayCount >= 3 && (!lower || !upper)) {
+              if (!lower && upper) {
+                const mirrored = mirrorCandidate(upper, 'v');
+                if (mirrored) {
+                  lower = mirrored;
+                  pushExactRay(mirrored.rayStart, 'lower_marginal', 'lower', mirrored.rayPath, true);
+                }
+              }
+              if (!upper && lower) {
+                const mirrored = mirrorCandidate(lower, 'v');
+                if (mirrored) {
+                  upper = mirrored;
+                  pushExactRay(mirrored.rayStart, 'upper_marginal', 'upper', mirrored.rayPath, true);
+                }
+              }
+            }
+            const added = rays.length - baseCount;
+            const requiredAdded = Math.max(0, Math.min(2, desiredRayCount - 1));
+            if (added >= requiredAdded) return;
+          }
+
+          if (axis === 'XZ') {
+            const baseCount = rays.length;
+            let left = null as any;
+            let right = null as any;
+            if (desiredRayCount >= 2) {
+              left = pick('u', 'min');
+              if (left) pushExactRay(left.rayStart, 'left_marginal', 'left', left.rayPath, true);
+            }
+            if (desiredRayCount >= 3) {
+              right = pick('u', 'max');
+              if (right) pushExactRay(right.rayStart, 'right_marginal', 'right', right.rayPath, true);
+            }
+            if (desiredRayCount >= 3 && (!left || !right)) {
+              if (!left && right) {
+                const mirrored = mirrorCandidate(right, 'u');
+                if (mirrored) {
+                  left = mirrored;
+                  pushExactRay(mirrored.rayStart, 'left_marginal', 'left', mirrored.rayPath, true);
+                }
+              }
+              if (!right && left) {
+                const mirrored = mirrorCandidate(left, 'u');
+                if (mirrored) {
+                  right = mirrored;
+                  pushExactRay(mirrored.rayStart, 'right_marginal', 'right', mirrored.rayPath, true);
+                }
+              }
+            }
+            const added = rays.length - baseCount;
+            const requiredAdded = Math.max(0, Math.min(2, desiredRayCount - 1));
+            if (added >= requiredAdded) return;
+          }
+
+          if (axis === 'BOTH') {
+            const baseCount = rays.length;
+            let upper = null as any;
+            let lower = null as any;
+            let left = null as any;
+            let right = null as any;
+            if (desiredRayCount >= 2) {
+              upper = pick('v', 'max');
+              if (upper) pushExactRay(upper.rayStart, 'upper_marginal', 'upper', upper.rayPath, true);
+            }
+            if (desiredRayCount >= 3) {
+              lower = pick('v', 'min');
+              if (lower) pushExactRay(lower.rayStart, 'lower_marginal', 'lower', lower.rayPath, true);
+            }
+            if (desiredRayCount >= 4) {
+              left = pick('u', 'min');
+              if (left) pushExactRay(left.rayStart, 'left_marginal', 'left', left.rayPath, true);
+            }
+            if (desiredRayCount >= 5) {
+              right = pick('u', 'max');
+              if (right) pushExactRay(right.rayStart, 'right_marginal', 'right', right.rayPath, true);
+            }
+            if (desiredRayCount >= 3 && (!upper || !lower)) {
+              if (!upper && lower) {
+                const mirrored = mirrorCandidate(lower, 'v');
+                if (mirrored) {
+                  upper = mirrored;
+                  pushExactRay(mirrored.rayStart, 'upper_marginal', 'upper', mirrored.rayPath, true);
+                }
+              }
+              if (!lower && upper) {
+                const mirrored = mirrorCandidate(upper, 'v');
+                if (mirrored) {
+                  lower = mirrored;
+                  pushExactRay(mirrored.rayStart, 'lower_marginal', 'lower', mirrored.rayPath, true);
+                }
+              }
+            }
+            if (desiredRayCount >= 5 && (!left || !right)) {
+              if (!left && right) {
+                const mirrored = mirrorCandidate(right, 'u');
+                if (mirrored) {
+                  left = mirrored;
+                  pushExactRay(mirrored.rayStart, 'left_marginal', 'left', mirrored.rayPath, true);
+                }
+              }
+              if (!right && left) {
+                const mirrored = mirrorCandidate(left, 'u');
+                if (mirrored) {
+                  right = mirrored;
+                  pushExactRay(mirrored.rayStart, 'right_marginal', 'right', mirrored.rayPath, true);
+                }
+              }
+            }
+            const added = rays.length - baseCount;
+            const requiredAdded = Math.max(0, Math.min(4, desiredRayCount - 1));
+            if (added >= requiredAdded) return;
+          }
+        }
+      }
 
       const collectAxisCandidateExactRays = (candidateStarts: any[], candidateExpectedChiefOrigin: any) => {
         const starts = Array.isArray(candidateStarts) ? candidateStarts : [];
@@ -1613,11 +1827,25 @@ function buildExactLowCountRenderRaysForObjects(
           let type = 'marginal';
           let side = 'center';
           if (axis === 'XZ') {
-            type = deltaX >= 0 ? 'right_marginal' : 'left_marginal';
-            side = deltaX >= 0 ? 'right' : 'left';
+            const hasUV = Number.isFinite(planeU) && Number.isFinite(planeV);
+            if (hasUV && Math.abs(planeV) > Math.abs(planeU) + 1e-9) {
+              // Orthogonal cardinal rays should remain cross rays (not re-labeled as marginals).
+              type = 'horizontal_cross';
+              side = planeV >= 0 ? 'right' : 'left';
+            } else {
+              type = deltaX >= 0 ? 'right_marginal' : 'left_marginal';
+              side = deltaX >= 0 ? 'right' : 'left';
+            }
           } else if (axis === 'YZ') {
-            type = deltaY >= 0 ? 'upper_marginal' : 'lower_marginal';
-            side = deltaY >= 0 ? 'upper' : 'lower';
+            const hasUV = Number.isFinite(planeU) && Number.isFinite(planeV);
+            if (hasUV && Math.abs(planeU) > Math.abs(planeV) + 1e-9) {
+              // Orthogonal cardinal rays should remain cross rays (not re-labeled as marginals).
+              type = 'vertical_cross';
+              side = planeU >= 0 ? 'upper' : 'lower';
+            } else {
+              type = deltaY >= 0 ? 'upper_marginal' : 'lower_marginal';
+              side = deltaY >= 0 ? 'upper' : 'lower';
+            }
           } else if (Math.abs(deltaY) >= Math.abs(deltaX)) {
             type = deltaY >= 0 ? 'upper_marginal' : 'lower_marginal';
             side = deltaY >= 0 ? 'upper' : 'lower';
@@ -1661,10 +1889,10 @@ function buildExactLowCountRenderRaysForObjects(
         : false;
 
       if (axis !== 'BOTH' && desiredRayCount >= 4 && !selectedHasCrossCandidate) {
-        const oddFallbackGenerationRayCount = generationRayCount % 2 === 0
-          ? Math.max(5, generationRayCount - 1)
-          : generationRayCount;
-        if (oddFallbackGenerationRayCount !== generationRayCount) {
+        const oddFallbackGenerationRayCount = candidateGenerationRayCount % 2 === 0
+          ? Math.max(5, candidateGenerationRayCount - 1)
+          : candidateGenerationRayCount;
+        if (oddFallbackGenerationRayCount !== candidateGenerationRayCount) {
           const fallbackRayStarts = generateRayStartPointsForObject(
             separatedResolvedRow,
             opticalSystemRows,
@@ -1711,7 +1939,7 @@ function buildExactLowCountRenderRaysForObjects(
         if (!crossCandidateType) return 0;
         return (Array.isArray(items) ? items : []).filter((entry: any) => String(entry?.type ?? '').trim().toLowerCase() === crossCandidateType).length;
       };
-      if (axis !== 'BOTH' && desiredRayCount >= 4 && (
+      if (conjugateType !== 'infinite' && axis !== 'BOTH' && desiredRayCount >= 4 && (
         countCrossInSelected(selectedExactRays) < requiredCrossCount || selectedExactRays.length < requiredAdditionalCount
       )) {
         const pickByType = (items: any[], typeName: string) => {
@@ -6361,8 +6589,33 @@ const collectLegacyCrossRays = async (
       grouped.forEach((rays, objectIndex) => {
         const alreadyKept = Number(perObjectCount[objectIndex]) || 0;
         const remainingSlots = Math.max(0, desiredCount - alreadyKept);
+        const pinnedCandidates = Array.isArray(rays)
+          ? rays.filter((ray: any) => ray?.__cooptPinnedLowCount === true || ray?.originalRay?.__cooptPinnedLowCount === true)
+          : [];
         const selected = remainingSlots > 0
-          ? selectCrossRaysForAxis(rays, remainingSlots, axis)
+          ? (() => {
+              if (pinnedCandidates.length <= 0) {
+                return selectCrossRaysForAxis(rays, remainingSlots, axis);
+              }
+              const orderedAll = Array.isArray(rays) ? [...rays].sort(compareCrossRayDrawOrder) : [];
+              const chief = orderedAll.find((ray: any) => String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase() === 'chief') || null;
+              const pool = [...pinnedCandidates].sort(compareCrossRayDrawOrder);
+              const picked: any[] = [];
+              if (chief) picked.push(chief);
+              for (const candidate of pool) {
+                if (picked.length >= remainingSlots) break;
+                if (picked.includes(candidate)) continue;
+                picked.push(candidate);
+              }
+              if (picked.length < remainingSlots) {
+                for (const candidate of orderedAll) {
+                  if (picked.length >= remainingSlots) break;
+                  if (picked.includes(candidate)) continue;
+                  picked.push(candidate);
+                }
+              }
+              return picked.slice(0, remainingSlots);
+            })()
           : [];
         perObjectCount[objectIndex] = alreadyKept + selected.length;
         limitedRays.push(...selected);
@@ -7218,23 +7471,6 @@ const collectLegacyCrossRays = async (
           return false;
         }
         try {
-          const perObjectSummary = Array.from(groupedCrossRays.entries())
-            .sort((a, b) => a[0] - b[0])
-            .map(([objectIndex, group]) => {
-              const selectedGroup = selectCrossRaysForAxis(group, Math.max(1, Number(effectiveRayCountOverride) || 1), axis);
-              return `obj${objectIndex + 1}: raw=${group.length}(${summarizeCrossTypes(group)}) sel=${selectedGroup.length}(${summarizeCrossTypes(selectedGroup)})`;
-            })
-            .join(' | ');
-          setRenderVisibleDebug([
-            `[RenderWindow section] axis=${axis}`,
-            `request=${Number(effectiveRayCountOverride) || 0}`,
-            `raw=${legacyCrossRays.length} types=${summarizeCrossTypes(legacyCrossRays)}`,
-            `visible=${Array.from(groupedCrossRays.values()).reduce((sum, group) => sum + group.length, 0)} types=${summarizeCrossTypes(Array.from(groupedCrossRays.values()).flat())}`,
-            `selected=${filteredCrossRays.length} types=${summarizeCrossTypes(filteredCrossRays)}`,
-            perObjectSummary,
-          ].join('\n'));
-        } catch (_) {}
-        try {
           const showDrawCrossCoordinateReport = (w as any).__cooptShowDrawCrossCoordinateReport;
           if (typeof showDrawCrossCoordinateReport === 'function') {
             const imageSurfaceIndex = rowsForRender.findIndex((row: any) => {
@@ -7250,35 +7486,6 @@ const collectLegacyCrossRays = async (
               targetSurfaceIndex,
               window
             );
-          }
-        } catch (_) {}
-        try {
-          const classification = (w as any).__COOPT_LAST_RENDER_IMAGEHEIGHT_CLASSIFICATION;
-          if (classification && Array.isArray(classification.rows) && classification.rows.length > 0) {
-            const rowSummary = classification.rows.map((entry: any) => {
-              const objectIndex = Number.isFinite(Number(entry?.objectIndex)) ? Number(entry.objectIndex) : null;
-              const bucket = String(entry?.bucket ?? 'unknown');
-              const position = String(entry?.position ?? '');
-              const originalPosition = String(entry?.originalPosition ?? '');
-              return `obj${Number.isFinite(Number(objectIndex)) ? Number(objectIndex) + 1 : '?'}:${bucket}:${position}${originalPosition ? `/${originalPosition}` : ''}`;
-            }).join(' | ');
-            const objectDebugSummary = Array.isArray(classification.objectDebug)
-              ? classification.objectDebug.map((entry: any) => {
-                  const objectIndex = Number.isFinite(Number(entry?.objectIndex)) ? Number(entry.objectIndex) : null;
-                  const residualRaw = entry?.chiefResidualMm;
-                  const residualNumber = typeof residualRaw === 'number' ? residualRaw : NaN;
-                  const residualLabel = Number.isFinite(residualNumber)
-                    ? ` r=${residualNumber.toFixed(4)}`
-                    : ' r=-';
-                  return `obj${Number.isFinite(Number(objectIndex)) ? Number(objectIndex) + 1 : '?'}:${Number(entry?.kept) || 0}/${Number(entry?.starts) || 0}/${Number(entry?.requested) || 0}${residualLabel}`;
-                }).join(' | ')
-              : 'debug=n/a';
-            setRenderVisibleDebug([
-              `[RenderWindow section] axis=${axis} request=${Number(effectiveRayCountOverride) || 0}`,
-              `[ImageHeight ${axis}] req=${Number(classification.effectiveRayCount) || 0} exactRows=${Number(classification.directExactImageHeightCount) || 0} legacyRows=${Number(classification.legacyCrossBeamCount) || 0} exactRays=${Number(classification.exactImageHeightRayCount) || 0}`,
-              objectDebugSummary,
-              rowSummary,
-            ].join('\n'));
           }
         } catch (_) {}
         if (filteredCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
@@ -10868,6 +11075,7 @@ const collectLegacyCrossRays = async (
 
     const handleRenderDraw = async () => {
       try {
+        setRenderRayCount(5);
         const w = window as any;
         const startupStages: RenderTimingStage[] = [];
         try {
@@ -10931,6 +11139,7 @@ const collectLegacyCrossRays = async (
     };
 
     const handleViewXZ = () => {
+      setRenderRayCount(3);
       renderViewAxisRef.current = 'XZ';
       renderViewModeRef.current = 'XZ';
       setRenderViewAxis('XZ');
@@ -10942,6 +11151,7 @@ const collectLegacyCrossRays = async (
     };
 
     const handleViewYZ = () => {
+      setRenderRayCount(3);
       renderViewAxisRef.current = 'YZ';
       renderViewModeRef.current = 'YZ';
       setRenderViewAxis('YZ');

@@ -182,6 +182,7 @@ type RayGenerationOptions = {
     skipImageHeightTsValidation?: boolean;
     imageHeightValidationTraceBackend?: 'ts' | 'rust';
     preserveChiefNormalEmissionPlane?: boolean;
+    angleStopDiag?: boolean;
 };
 
 type ImageHeightSolveOptions = {
@@ -2624,6 +2625,42 @@ export function clearAllRays(scene) {
 
 const RAY_RENDERER_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAY_RENDERER_DEBUG);
 const rrLog = (...args) => { if (RAY_RENDERER_DEBUG) console.log(...args); };
+const shouldEmitAngleStopDiag = () => {
+    try {
+        if (typeof globalThis === 'undefined') return false;
+        const host: any = globalThis as any;
+        const enabled = host?.__COOPT_ENABLE_ANGLE_STOP_DIAG === true || host?.__RAYTRACE_DEBUG === true;
+        const requestedOnce = host?.__COOPT_REQUEST_ANGLE_STOP_DIAG_ONCE === true;
+        if (requestedOnce) host.__COOPT_REQUEST_ANGLE_STOP_DIAG_ONCE = false;
+        return enabled || requestedOnce;
+    } catch (_) {
+        return false;
+    }
+};
+const emitAngleStopDiag = (label: string, payload: any, force = false) => {
+    if (!force && !shouldEmitAngleStopDiag()) return;
+    try {
+        const host: any = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+        const record = {
+            at: new Date().toISOString(),
+            source: 'ray-renderer',
+            label,
+            ...payload
+        };
+        if (host) {
+            try { host.__COOPT_LAST_ANGLE_STOP_DIAG = record; } catch (_) {}
+            try {
+                const logs = Array.isArray(host.__COOPT_ANGLE_STOP_DIAG_LOGS)
+                    ? host.__COOPT_ANGLE_STOP_DIAG_LOGS
+                    : [];
+                logs.push(record);
+                if (logs.length > 200) logs.shift();
+                host.__COOPT_ANGLE_STOP_DIAG_LOGS = logs;
+            } catch (_) {}
+        }
+        // Intentionally no console output.
+    } catch (_) {}
+};
 const mirrorChiefRayDiagToOpener = (label, payload) => {
     try {
         if (typeof window === 'undefined') return;
@@ -4274,6 +4311,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
     rayStartData.selectedRingOverride = annularRingCount ?? 0;
     
     try {
+        const forceAngleStopDiag = options?.angleStopDiag === true;
         // Use unified conjugate type detection
         const conjugateType = options?.conjugateType || detectConjugateType(opticalSystemRows, options);
         const isInfiniteObject = (conjugateType === 'infinite');
@@ -4285,6 +4323,14 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         const angleY = parseAngleInput(
             obj.yAngle ?? obj.objectAngleY ?? obj.yHeightAngle ?? obj.y ?? obj.angle ?? obj.angleY
         );
+        emitAngleStopDiag('angle-generator-enter', {
+            objectId: obj?.id ?? null,
+            pattern,
+            rayCount,
+            conjugateType,
+            isInfiniteObject,
+            angleDeg: { x: Number(angleX) || 0, y: Number(angleY) || 0 },
+        }, forceAngleStopDiag);
         const chiefDir = buildDirectionFromFieldAngles(angleX, angleY);
         const maxFieldDeg = Math.max(Math.abs(angleX), Math.abs(angleY));
         const isHighField = maxFieldDeg >= 15;
@@ -4560,7 +4606,12 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             ? Number(surf.semidia)
             : 10;
         const stopConfig = resolveStopConfig(opticalSystemRows, surfaceOrigins, objectZ + (Number(surf.thickness) || 10), apertureRadius);
-        let stopRadiusLimited = Math.min(stopConfig.radius, apertureRadius);
+        let stopRadiusLimited = (Number.isFinite(Number(stopConfig?.radius)) && Number(stopConfig.radius) > 0)
+            ? Number(stopConfig.radius)
+            : apertureRadius;
+        if (!isInfiniteObject) {
+            stopRadiusLimited = Math.min(stopRadiusLimited, apertureRadius);
+        }
         const extApLim = Number(options?.apertureLimitMm ?? options?.apertureLimit);
         if (Number.isFinite(extApLim) && extApLim > 0) {
             stopRadiusLimited = Math.min(stopRadiusLimited, extApLim);
@@ -4660,7 +4711,6 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         const shouldSolveOriginsThroughStop =
             aimThroughStop
             && isInfiniteObject
-            && options?.preserveChiefNormalEmissionPlane !== true
             && Number.isInteger(stopConfig?.index);
         const stopPlaneCenter3d = (Number.isFinite(stopConfig?.center?.x) && Number.isFinite(stopConfig?.center?.y) && Number.isFinite(stopConfig?.z))
             ? { x: stopConfig.center.x, y: stopConfig.center.y, z: stopConfig.z }
@@ -4687,6 +4737,21 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         let startOffsetVAxis = vAxis;
         let targetOffsetUAxis = stopPlaneU;
         let targetOffsetVAxis = stopPlaneV;
+
+        // Infinite-angle with preserved chief-normal emission plane:
+        // compensate projection shrink so requested pupil offsets map to stop-plane offsets 1:1.
+        // Without this, stop-plane coordinates shrink by a fixed factor (|proj(stopAxis on chief plane)|).
+        if (isInfiniteObject && options?.preserveChiefNormalEmissionPlane === true) {
+            const buildCompensatedStartAxis = (stopAxis, fallbackAxis) => {
+                const projectedUnit = projectVectorOntoPlane(stopAxis, unitChief, fallbackAxis);
+                if (!projectedUnit) return fallbackAxis;
+                return projectedUnit;
+            };
+
+            startOffsetUAxis = buildCompensatedStartAxis(stopPlaneU, uAxis);
+            startOffsetVAxis = buildCompensatedStartAxis(stopPlaneV, vAxis);
+        }
+
         if (useDisplayAxisAlignedSampling) {
             const stopPlaneNormal = normalizeVector3(crossProduct(stopPlaneU, stopPlaneV), unitChief);
             if (exactCrossType === 'horizontal') {
@@ -4728,6 +4793,20 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             });
         };
 
+        const anchorStartToChiefEmissionPlane = (point) => {
+            if (!(isInfiniteObject && options?.preserveChiefNormalEmissionPlane === true)) return point;
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) return point;
+            const dx = point.x - emissionOrigin.x;
+            const dy = point.y - emissionOrigin.y;
+            const dz = point.z - emissionOrigin.z;
+            const deltaAlongChief = dx * unitChief.x + dy * unitChief.y + dz * unitChief.z;
+            return {
+                x: point.x - deltaAlongChief * unitChief.x,
+                y: point.y - deltaAlongChief * unitChief.y,
+                z: point.z - deltaAlongChief * unitChief.z,
+            };
+        };
+
         const pushRayWithSolvedOriginIfNeeded = (offsetU, offsetV, dirVector, description) => {
             let startP = {
                 x: emissionOrigin.x + offsetU * startOffsetUAxis.x + offsetV * startOffsetVAxis.x,
@@ -4751,7 +4830,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                     originSolveTraceBackend
                 );
                 if (refined && Number.isFinite(refined.x) && Number.isFinite(refined.y) && Number.isFinite(refined.z)) {
-                    startP = refined;
+                    startP = anchorStartToChiefEmissionPlane(refined);
                 }
             }
 
@@ -4805,7 +4884,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 console.log(`🔍 [Cross-based extent] X=${crossExtentX.toFixed(6)}, Y=${crossExtentY.toFixed(6)}, effectiveRadius=${effectiveRadius.toFixed(6)}`);
             } else {
                 effectiveRadius = Number.isFinite(stopRadiusLimited) && stopRadiusLimited > 0
-                    ? Math.min(stopRadiusLimited, apertureRadius)
+                    ? (isInfiniteObject ? stopRadiusLimited : Math.min(stopRadiusLimited, apertureRadius))
                     : apertureRadius;
             }
             
@@ -4814,10 +4893,25 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 : 1;
             const insideScale = 1;
             const halfExtent = Math.max(1e-6, effectiveRadius * pupilScale * insideScale);
-            const useExactCrossBeamSampling = isInfiniteObject && options?.exactCrossBeamSampling === true;
+            // Apply exact cross sampling for both finite and infinite systems.
+            // Limiting this to infinite systems made finite Angle rendering fall back to
+            // annular/grid sampling, which uses inward ring scaling and appears as a
+            // constant-factor shrink inside the pupil.
+            const useExactCrossBeamSampling = options?.exactCrossBeamSampling === true;
             const crossType = exactCrossType;
+            const stopSamplingRadius = (() => {
+                let radius = Number.isFinite(Number(stopConfig?.radius)) && Number(stopConfig.radius) > 0
+                    ? Number(stopConfig.radius)
+                    : effectiveRadius;
+                if (Number.isFinite(extApLim) && extApLim > 0) {
+                    radius = Math.min(radius, extApLim);
+                }
+                return Math.max(1e-6, radius);
+            })();
+            const halfExtentForExactCross = Math.max(1e-6, stopSamplingRadius * pupilScale * insideScale);
             const offsets = useExactCrossBeamSampling
                 ? (() => {
+                    const exactHalfExtent = halfExtentForExactCross;
                     const lineOffsets: Array<{ offsetU: number; offsetV: number }> = [{ offsetU: 0, offsetV: 0 }];
                     const useVertical = crossType === 'both' || crossType === 'vertical';
                     const useHorizontal = crossType === 'both' || crossType === 'horizontal';
@@ -4833,12 +4927,12 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
 
                     if (verticalTargetCount > 0) {
                         if (verticalTargetCount === 1) {
-                            lineOffsets.push({ offsetU: 0, offsetV: halfExtent });
+                            lineOffsets.push({ offsetU: 0, offsetV: exactHalfExtent });
                         } else {
                             const den = Math.max(1, verticalTargetCount - 1);
                             for (let i = 0; i < verticalTargetCount; i++) {
                                 const t = i / den;
-                                const offsetV = halfExtent + t * (-2 * halfExtent);
+                                const offsetV = exactHalfExtent + t * (-2 * exactHalfExtent);
                                 lineOffsets.push({ offsetU: 0, offsetV });
                             }
                         }
@@ -4846,22 +4940,111 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
 
                     if (horizontalTargetCount > 0) {
                         if (horizontalTargetCount === 1) {
-                            lineOffsets.push({ offsetU: halfExtent, offsetV: 0 });
+                            lineOffsets.push({ offsetU: exactHalfExtent, offsetV: 0 });
                         } else {
                             const den = Math.max(1, horizontalTargetCount - 1);
                             for (let i = 0; i < horizontalTargetCount; i++) {
                                 const t = i / den;
-                                const offsetU = -halfExtent + t * (2 * halfExtent);
+                                const offsetU = -exactHalfExtent + t * (2 * exactHalfExtent);
                                 lineOffsets.push({ offsetU, offsetV: 0 });
                             }
                         }
                     }
 
-                    return lineOffsets;
+                    // Always include pupil cardinal points for exact cross sampling.
+                    if (useVertical) {
+                        lineOffsets.push({ offsetU: 0, offsetV: exactHalfExtent });
+                        lineOffsets.push({ offsetU: 0, offsetV: -exactHalfExtent });
+                    }
+                    if (useHorizontal) {
+                        lineOffsets.push({ offsetU: exactHalfExtent, offsetV: 0 });
+                        lineOffsets.push({ offsetU: -exactHalfExtent, offsetV: 0 });
+                    }
+
+                    const uniqueOffsets: Array<{ offsetU: number; offsetV: number }> = [];
+                    const seen = new Set<string>();
+                    lineOffsets.forEach((pt) => {
+                        const u = Number(pt.offsetU) || 0;
+                        const v = Number(pt.offsetV) || 0;
+                        const key = `${u.toFixed(9)}_${v.toFixed(9)}`;
+                        if (seen.has(key)) return;
+                        seen.add(key);
+                        uniqueOffsets.push({ offsetU: u, offsetV: v });
+                    });
+
+                    return uniqueOffsets;
                 })()
                 : (pattern === 'annular'
                     ? generateAnnularOffsets(rayCount, halfExtent, annularRingCount || 3)
                     : generateCenteredGridOffsets(rayCount, halfExtent));
+
+            if (isInfiniteObject) {
+                const dot = (a, b) => Number(a?.x || 0) * Number(b?.x || 0) + Number(a?.y || 0) * Number(b?.y || 0) + Number(a?.z || 0) * Number(b?.z || 0);
+                const stopU = stopPlaneU || { x: 1, y: 0, z: 0 };
+                const stopV = stopPlaneV || { x: 0, y: 1, z: 0 };
+                const center = stopPlaneCenter3d || { x: stopCenter.x, y: stopCenter.y, z: stopConfig.z };
+                const preview = offsets.slice(0, Math.min(8, offsets.length)).map((coord) => {
+                    const targetPoint = {
+                        x: center.x + coord.offsetU * targetOffsetUAxis.x + coord.offsetV * targetOffsetVAxis.x,
+                        y: center.y + coord.offsetU * targetOffsetUAxis.y + coord.offsetV * targetOffsetVAxis.y,
+                        z: center.z + coord.offsetU * targetOffsetUAxis.z + coord.offsetV * targetOffsetVAxis.z,
+                    };
+                    const dv = {
+                        x: targetPoint.x - center.x,
+                        y: targetPoint.y - center.y,
+                        z: targetPoint.z - center.z,
+                    };
+                    const projU = dot(dv, stopU);
+                    const projV = dot(dv, stopV);
+                    const expectedR = Math.hypot(Number(coord.offsetU) || 0, Number(coord.offsetV) || 0);
+                    const projectedR = Math.hypot(projU, projV);
+                    return {
+                        reqU: Number(coord.offsetU) || 0,
+                        reqV: Number(coord.offsetV) || 0,
+                        projU,
+                        projV,
+                        reqR: expectedR,
+                        projR: projectedR,
+                        ratio: expectedR > 1e-9 ? projectedR / expectedR : null,
+                    };
+                });
+                const maxReqR = offsets.reduce((m, c) => Math.max(m, Math.hypot(Number(c?.offsetU) || 0, Number(c?.offsetV) || 0)), 0);
+                const maxReqAbsU = offsets.reduce((m, c) => Math.max(m, Math.abs(Number(c?.offsetU) || 0)), 0);
+                const maxReqAbsV = offsets.reduce((m, c) => Math.max(m, Math.abs(Number(c?.offsetV) || 0)), 0);
+                emitAngleStopDiag('infinite-angle-sampling', {
+                    objectId: obj?.id ?? null,
+                    angleDeg: { x: Number(angleX) || 0, y: Number(angleY) || 0 },
+                    pattern,
+                    rayCount,
+                    useExactCrossBeamSampling,
+                    crossType,
+                    radii: {
+                        stopConfigRadius: Number(stopConfig?.radius) || null,
+                        apertureRadius: Number(apertureRadius) || null,
+                        stopRadiusLimited: Number(stopRadiusLimited) || null,
+                        effectiveRadius: Number(effectiveRadius) || null,
+                        stopSamplingRadius: Number(stopSamplingRadius) || null,
+                        pupilScale: Number(pupilScale) || null,
+                        halfExtent: Number(halfExtent) || null,
+                        halfExtentForExactCross: Number(halfExtentForExactCross) || null,
+                    },
+                    basis: {
+                        stopUNorm: Math.hypot(Number(stopU.x) || 0, Number(stopU.y) || 0, Number(stopU.z) || 0),
+                        stopVNorm: Math.hypot(Number(stopV.x) || 0, Number(stopV.y) || 0, Number(stopV.z) || 0),
+                        stopUdotV: dot(stopU, stopV),
+                        targetUNorm: Math.hypot(Number(targetOffsetUAxis?.x) || 0, Number(targetOffsetUAxis?.y) || 0, Number(targetOffsetUAxis?.z) || 0),
+                        targetVNorm: Math.hypot(Number(targetOffsetVAxis?.x) || 0, Number(targetOffsetVAxis?.y) || 0, Number(targetOffsetVAxis?.z) || 0),
+                        targetUdotV: dot(targetOffsetUAxis || { x: 1, y: 0, z: 0 }, targetOffsetVAxis || { x: 0, y: 1, z: 0 }),
+                    },
+                    stats: {
+                        offsetCount: offsets.length,
+                        maxReqR,
+                        maxReqAbsU,
+                        maxReqAbsV,
+                    },
+                    preview,
+                }, forceAngleStopDiag);
+            }
 
             const canUseRustParallelStarts = !shouldSolveOriginsThroughStop && (isInfiniteObject || !canAimAtStop);
             const startsFromRust = canUseRustParallelStarts
@@ -4905,6 +5088,12 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 );
             })();
 
+            const useExactStopTargetedInfiniteStarts =
+                isInfiniteObject
+                && options?.preserveChiefNormalEmissionPlane === true
+                && !!stopPlaneCenter3d
+                && !!targetOffsetUAxis
+                && !!targetOffsetVAxis;
             offsets.forEach((coord, index) => {
                 let dirVector = unitChief;
                 
@@ -4938,8 +5127,9 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 if (shouldSolveOriginsThroughStop) {
                     const solved = Array.isArray(solvedOriginsBatch) ? solvedOriginsBatch[index] : null;
                     if (solved && Number.isFinite(solved.x) && Number.isFinite(solved.y) && Number.isFinite(solved.z)) {
+                        const anchoredSolved = anchorStartToChiefEmissionPlane({ x: solved.x, y: solved.y, z: solved.z });
                         rayStartData.push({
-                            startP: { x: solved.x, y: solved.y, z: solved.z },
+                            startP: { x: anchoredSolved.x, y: anchoredSolved.y, z: anchoredSolved.z },
                             dir: unitChief,
                             description: `${pattern === 'annular' ? 'Annular' : 'Grid'} angle ray ${index + 1}`,
                             planeCoords: { u: coord.offsetU, v: coord.offsetV }
@@ -4948,7 +5138,30 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                         pushRayWithSolvedOriginIfNeeded(coord.offsetU, coord.offsetV, unitChief, `${pattern === 'annular' ? 'Annular' : 'Grid'} angle ray ${index + 1}`);
                     }
                 } else {
-                    pushRay(coord.offsetU, coord.offsetV, dirVector, `${pattern === 'annular' ? 'Annular' : 'Grid'} angle ray ${index + 1}`);
+                    if (useExactStopTargetedInfiniteStarts) {
+                        const targetPoint = {
+                            x: stopPlaneCenter3d.x + coord.offsetU * targetOffsetUAxis.x + coord.offsetV * targetOffsetVAxis.x,
+                            y: stopPlaneCenter3d.y + coord.offsetU * targetOffsetUAxis.y + coord.offsetV * targetOffsetVAxis.y,
+                            z: stopPlaneCenter3d.z + coord.offsetU * targetOffsetUAxis.z + coord.offsetV * targetOffsetVAxis.z
+                        };
+                        const relX = targetPoint.x - emissionOrigin.x;
+                        const relY = targetPoint.y - emissionOrigin.y;
+                        const relZ = targetPoint.z - emissionOrigin.z;
+                        const lambda = relX * unitChief.x + relY * unitChief.y + relZ * unitChief.z;
+                        const startP = {
+                            x: targetPoint.x - lambda * unitChief.x,
+                            y: targetPoint.y - lambda * unitChief.y,
+                            z: targetPoint.z - lambda * unitChief.z,
+                        };
+                        rayStartData.push({
+                            startP,
+                            dir: unitChief,
+                            description: `${pattern === 'annular' ? 'Annular' : 'Grid'} angle ray ${index + 1}`,
+                            planeCoords: { u: coord.offsetU, v: coord.offsetV }
+                        });
+                    } else {
+                        pushRay(coord.offsetU, coord.offsetV, dirVector, `${pattern === 'annular' ? 'Annular' : 'Grid'} angle ray ${index + 1}`);
+                    }
                 }
             });
             }
@@ -5287,8 +5500,20 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
                 ? options.crossType
                 : 'both';
             const useExactCrossBeamSampling = options?.exactCrossBeamSampling === true;
+            const stopSamplingRadius = (() => {
+                const apLimNum = Number(apertureLimit);
+                let radius = Number.isFinite(Number(stopConfig?.radius)) && Number(stopConfig.radius) > 0
+                    ? Number(stopConfig.radius)
+                    : effectiveRadius;
+                if (Number.isFinite(apLimNum) && apLimNum > 0) {
+                    radius = Math.min(radius, apLimNum);
+                }
+                return Math.max(1e-6, radius);
+            })();
+            const halfExtentForExactCross = Math.max(1e-6, stopSamplingRadius * pupilScale);
             const offsets = useExactCrossBeamSampling
                 ? (() => {
+                    const exactHalfExtent = halfExtentForExactCross;
                     const lineOffsets: Array<{ offsetU: number; offsetV: number }> = [{ offsetU: 0, offsetV: 0 }];
                     const useVertical = exactCrossType === 'both' || exactCrossType === 'vertical';
                     const useHorizontal = exactCrossType === 'both' || exactCrossType === 'horizontal';
@@ -5304,12 +5529,12 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
 
                     if (verticalTargetCount > 0) {
                         if (verticalTargetCount === 1) {
-                            lineOffsets.push({ offsetU: 0, offsetV: halfExtent });
+                            lineOffsets.push({ offsetU: 0, offsetV: exactHalfExtent });
                         } else {
                             const den = Math.max(1, verticalTargetCount - 1);
                             for (let i = 0; i < verticalTargetCount; i++) {
                                 const t = i / den;
-                                const offsetV = halfExtent + t * (-2 * halfExtent);
+                                const offsetV = exactHalfExtent + t * (-2 * exactHalfExtent);
                                 lineOffsets.push({ offsetU: 0, offsetV });
                             }
                         }
@@ -5317,18 +5542,39 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
 
                     if (horizontalTargetCount > 0) {
                         if (horizontalTargetCount === 1) {
-                            lineOffsets.push({ offsetU: halfExtent, offsetV: 0 });
+                            lineOffsets.push({ offsetU: exactHalfExtent, offsetV: 0 });
                         } else {
                             const den = Math.max(1, horizontalTargetCount - 1);
                             for (let i = 0; i < horizontalTargetCount; i++) {
                                 const t = i / den;
-                                const offsetU = -halfExtent + t * (2 * halfExtent);
+                                const offsetU = -exactHalfExtent + t * (2 * exactHalfExtent);
                                 lineOffsets.push({ offsetU, offsetV: 0 });
                             }
                         }
                     }
 
-                    return lineOffsets;
+                    // Always include pupil cardinal points for exact cross sampling.
+                    if (useVertical) {
+                        lineOffsets.push({ offsetU: 0, offsetV: exactHalfExtent });
+                        lineOffsets.push({ offsetU: 0, offsetV: -exactHalfExtent });
+                    }
+                    if (useHorizontal) {
+                        lineOffsets.push({ offsetU: exactHalfExtent, offsetV: 0 });
+                        lineOffsets.push({ offsetU: -exactHalfExtent, offsetV: 0 });
+                    }
+
+                    const uniqueOffsets: Array<{ offsetU: number; offsetV: number }> = [];
+                    const seen = new Set<string>();
+                    lineOffsets.forEach((pt) => {
+                        const u = Number(pt.offsetU) || 0;
+                        const v = Number(pt.offsetV) || 0;
+                        const key = `${u.toFixed(9)}_${v.toFixed(9)}`;
+                        if (seen.has(key)) return;
+                        seen.add(key);
+                        uniqueOffsets.push({ offsetU: u, offsetV: v });
+                    });
+
+                    return uniqueOffsets;
                 })()
                 : (pattern === 'annular'
                     ? generateAnnularOffsets(rayCount, halfExtent, annularRingCount || 3)
