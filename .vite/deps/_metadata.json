@@ -1,0 +1,106 @@
+{
+  "hash": "ca93e481",
+  "configHash": "9a94acc5",
+  "lockfileHash": "734ba0fc",
+  "browserHash": "e724ce7a",
+  "optimized": {
+    "react/jsx-dev-runtime": {
+      "src": "../../node_modules/react/jsx-dev-runtime.js",
+      "file": "react_jsx-dev-runtime.js",
+      "fileHash": "df285b97",
+      "needsInterop": true
+    },
+    "react-dom/client": {
+      "src": "../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "5c95f70f",
+      "needsInterop": true
+    },
+    "jszip": {
+      "src": "../../node_modules/jszip/dist/jszip.min.js",
+      "file": "jszip.js",
+      "fileHash": "fd8abe9a",
+      "needsInterop": true
+    },
+    "@tauri-apps/api/event": {
+      "src": "../../node_modules/@tauri-apps/api/event.js",
+      "file": "@tauri-apps_api_event.js",
+      "fileHash": "a9b9c4b1",
+      "needsInterop": false
+    },
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "445bd0c1",
+      "needsInterop": true
+    },
+    "three": {
+      "src": "../../node_modules/three/build/three.module.js",
+      "file": "three.js",
+      "fileHash": "839edebb",
+      "needsInterop": false
+    },
+    "@tauri-apps/api/window": {
+      "src": "../../node_modules/@tauri-apps/api/window.js",
+      "file": "@tauri-apps_api_window.js",
+      "fileHash": "b8085435",
+      "needsInterop": false
+    },
+    "@tauri-apps/api/webviewWindow": {
+      "src": "../../node_modules/@tauri-apps/api/webviewWindow.js",
+      "file": "@tauri-apps_api_webviewWindow.js",
+      "fileHash": "0d5280c2",
+      "needsInterop": false
+    },
+    "@tauri-apps/api/core": {
+      "src": "../../node_modules/@tauri-apps/api/core.js",
+      "file": "@tauri-apps_api_core.js",
+      "fileHash": "49c07d72",
+      "needsInterop": false
+    },
+    "pdfjs-dist": {
+      "src": "../../node_modules/pdfjs-dist/build/pdf.mjs",
+      "file": "pdfjs-dist.js",
+      "fileHash": "4d1d4509",
+      "needsInterop": false
+    },
+    "tesseract.js": {
+      "src": "../../node_modules/tesseract.js/src/index.js",
+      "file": "tesseract__js.js",
+      "fileHash": "4e39ce5d",
+      "needsInterop": true
+    },
+    "@tauri-apps/plugin-dialog": {
+      "src": "../../node_modules/@tauri-apps/plugin-dialog/dist-js/index.js",
+      "file": "@tauri-apps_plugin-dialog.js",
+      "fileHash": "b51cd0e9",
+      "needsInterop": false
+    },
+    "three/examples/jsm/controls/OrbitControls.js": {
+      "src": "../../node_modules/three/examples/jsm/controls/OrbitControls.js",
+      "file": "three_examples_jsm_controls_OrbitControls__js.js",
+      "fileHash": "6f1e1c0b",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-PF4EC4Q7": {
+      "file": "chunk-PF4EC4Q7.js"
+    },
+    "chunk-YBETZBMD": {
+      "file": "chunk-YBETZBMD.js"
+    },
+    "chunk-3HUGACAS": {
+      "file": "chunk-3HUGACAS.js"
+    },
+    "chunk-BQQRLTD4": {
+      "file": "chunk-BQQRLTD4.js"
+    },
+    "chunk-YQTFE5VL": {
+      "file": "chunk-YQTFE5VL.js"
+    },
+    "chunk-HUFPFIQ3": {
+      "file": "chunk-HUFPFIQ3.js"
+    }
+  }
+}

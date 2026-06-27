@@ -149,7 +149,6 @@ export default function RequirementsSection() {
 
   return (
     <section className="merit-function-section requirements-section ide-section-card" id="requirements-container" aria-label="Requirements">
-      <h2 className="section-title">Requirements</h2>
       <div className="merit-function-buttons-container ide-toolbar" role="toolbar" aria-label="Requirements controls">
         <button id="add-requirement-btn" type="button" onClick={handleAddRequirement}>Add Requirement</button>
         <button id="add-memo-btn" type="button" onClick={handleAddMemo} title="Add a memo / note row (not evaluated)">Add Memo</button>

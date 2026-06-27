@@ -5882,6 +5882,77 @@ function setupLoadDefaultButton(): void {
     newBtn.addEventListener('click', defaultHandler);
 }
 
+function isThreeBlockPlaceholderConfiguration(systemConfig: any): boolean {
+    try {
+        const cfgs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+        if (cfgs.length !== 1) return false;
+
+        const activeId = systemConfig?.activeConfigId;
+        const activeCfg = cfgs.find((c: any) => String(c?.id ?? '') === String(activeId ?? '')) || cfgs[0];
+        if (!activeCfg || typeof activeCfg !== 'object') return false;
+
+        const blocks = Array.isArray(activeCfg.blocks) ? activeCfg.blocks : [];
+        if (blocks.length !== 3) return false;
+
+        const blockTypes = blocks.map((b: any) => String(b?.blockType ?? '').trim()).sort();
+        const expected = ['ImageSurface', 'ObjectSurface', 'Stop'];
+        if (blockTypes.length !== expected.length) return false;
+        for (let i = 0; i < expected.length; i++) {
+            if (blockTypes[i] !== expected[i]) return false;
+        }
+
+        const opticalLen = Array.isArray(activeCfg.opticalSystem) ? activeCfg.opticalSystem.length : 0;
+        if (opticalLen > 3) return false;
+
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+async function maybeAutoRecoverDefaultLensData(): Promise<void> {
+    try {
+        if ((window as any).__cooptAutoRecoverDefaultLensDataStarted) return;
+        (window as any).__cooptAutoRecoverDefaultLensDataStarted = true;
+    } catch (_) {}
+
+    try {
+        // Never auto-recover while an explicit file/URL load is in progress.
+        if ((window as any).__cooptFileLoadInProgress) return;
+
+        const compressed = getCompressedStringFromLocation();
+        if (compressed) return;
+
+        const markerKey = 'coopt.autoRecoverDefaultLensData.v1';
+
+        const systemConfig = loadSystemConfigurations();
+        const markerDone = (() => {
+            try { return localStorage.getItem(markerKey) === 'done'; } catch (_) { return false; }
+        })();
+        const isPlaceholder = isThreeBlockPlaceholderConfiguration(systemConfig);
+        if (markerDone && !isPlaceholder) return;
+        if (!isPlaceholder) return;
+
+        let loadedFileName = '';
+        try {
+            const { getLoadedFileName } = await import('./loaded-file-storage.ts');
+            loadedFileName = String(getLoadedFileName() || '').trim();
+        } catch (_) {}
+        const normalizedLoadedName = loadedFileName.toLowerCase();
+        const looksDefaultLabel = normalizedLoadedName.includes('default-load.json') || normalizedLoadedName.includes('/default-load.json');
+        if (loadedFileName && !looksDefaultLabel) return;
+
+        const defaultData = await loadBrowserDefaultProjectJson();
+        const loaded = await __loadAllDataObjectIntoApp(defaultData, { filename: 'default-load.json' });
+        if (loaded) {
+            try { localStorage.setItem(markerKey, 'done'); } catch (_) {}
+            console.log('✅ [AutoRecover] Loaded default lens data from placeholder 3-block state.');
+        }
+    } catch (err) {
+        console.warn('⚠️ [AutoRecover] Failed to auto-recover default lens data:', err);
+    }
+}
+
 // Setup Share URL Button
 function showShareUrlLengthOnButton(urlLength: number): void {
     const btn = document.getElementById('share-url-btn') as HTMLButtonElement | null;
@@ -13375,6 +13446,11 @@ export function setupDOMEventHandlers(): void {
     } catch (err) {
         console.error('❌ [DOM] Failed to setup event handlers:', err);
     }
+
+    // Recover from a stale placeholder config that can hide lens data in Design Intent.
+    setTimeout(() => {
+        void maybeAutoRecoverDefaultLensData();
+    }, 50);
 }
 
 /**

@@ -40,6 +40,48 @@ function idsEqual(a: any, b: any): boolean {
   return String(a ?? '') === String(b ?? '');
 }
 
+function isPlaceholderThreeBlockConfig(cfg: any): boolean {
+  try {
+    if (!cfg || typeof cfg !== 'object') return false;
+    const blocks = Array.isArray(cfg.blocks) ? cfg.blocks : [];
+    if (blocks.length !== 3) return false;
+    const blockTypes = blocks.map((b: any) => String(b?.blockType ?? '').trim()).sort();
+    const expected = ['ImageSurface', 'ObjectSurface', 'Stop'];
+    for (let i = 0; i < expected.length; i++) {
+      if (blockTypes[i] !== expected[i]) return false;
+    }
+    const opticalLen = Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem.length : 0;
+    return opticalLen <= 3;
+  } catch (_) {
+    return false;
+  }
+}
+
+function isPlaceholderThreeBlockSystemConfig(systemConfig: any): boolean {
+  try {
+    const cfgs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+    if (cfgs.length !== 1) return false;
+    const active = cfgs.find((c: any) => idsEqual(c?.id, systemConfig?.activeConfigId)) || cfgs[0];
+    return isPlaceholderThreeBlockConfig(active);
+  } catch (_) {
+    return false;
+  }
+}
+
+function hasRicherThanPlaceholderContent(systemConfig: any): boolean {
+  try {
+    const cfgs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+    if (cfgs.length > 1) return true;
+    const active = cfgs.find((c: any) => idsEqual(c?.id, systemConfig?.activeConfigId)) || cfgs[0];
+    if (!active || typeof active !== 'object') return false;
+    if (!isPlaceholderThreeBlockConfig(active)) return true;
+    const opticalLen = Array.isArray(active.opticalSystem) ? active.opticalSystem.length : 0;
+    return opticalLen > 3;
+  } catch (_) {
+    return false;
+  }
+}
+
 function cloneSystemConfiguration<T>(value: T): T | null {
   try {
     return JSON.parse(JSON.stringify(value));
@@ -460,6 +502,9 @@ export function loadSystemConfigurations(): SystemConfiguration {
 export function saveSystemConfigurations(systemConfig: SystemConfiguration): void {
   cfgLog('🔵 [Configuration] Saving system configurations...');
   if (systemConfig && systemConfig.configurations) {
+    let configToSave: SystemConfiguration = systemConfig;
+    let persistedConfigForGuard: SystemConfiguration | null = null;
+
     try {
       const runtimeConfig = loadRuntimeSystemConfigurations();
       if (runtimeConfig) mergeBlockVariablesFromBaselineSystemConfig(systemConfig, runtimeConfig);
@@ -468,23 +513,36 @@ export function saveSystemConfigurations(systemConfig: SystemConfiguration): voi
     }
     try {
       const persistedConfig = loadPersistedSystemConfigurationsFromStorage();
+      persistedConfigForGuard = persistedConfig;
       if (persistedConfig) mergeBlockVariablesFromBaselineSystemConfig(systemConfig, persistedConfig);
     } catch (_) {
       // ignore
     }
     try {
-      for (const cfg of systemConfig.configurations) {
+      if (
+        persistedConfigForGuard
+        && isPlaceholderThreeBlockSystemConfig(systemConfig)
+        && hasRicherThanPlaceholderContent(persistedConfigForGuard)
+      ) {
+        cfgWarn('⚠️ [Configuration] Prevented placeholder overwrite of richer persisted configuration.');
+        configToSave = persistedConfigForGuard;
+      }
+    } catch (_) {
+      // ignore guard errors
+    }
+    try {
+      for (const cfg of configToSave.configurations) {
         normalizeImageSurfaceBlocksForConfiguration(cfg);
         interpolateExplicitApertureSemidiaForConfiguration(cfg);
       }
     } catch (_) {}
     try {
-      w.__cooptSystemConfig = cloneSystemConfiguration(systemConfig) ?? systemConfig;
+      w.__cooptSystemConfig = cloneSystemConfiguration(configToSave) ?? configToSave;
     } catch (_) {
       // ignore
     }
-    storageSetItem(STORAGE_KEY, JSON.stringify(systemConfig));
-    cfgLog(`💾 [Configuration] Saved ${systemConfig.configurations.length} configurations`);
+    storageSetItem(STORAGE_KEY, JSON.stringify(configToSave));
+    cfgLog(`💾 [Configuration] Saved ${configToSave.configurations.length} configurations`);
   } else {
     console.error('❌ [Configuration] Invalid system config, not saving:', systemConfig);
   }

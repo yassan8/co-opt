@@ -1,7 +1,6 @@
 export default function ConfigurationSection() {
   return (
     <section className="configuration-section ide-section-card" aria-label="Configuration">
-      <h2 className="section-title">Configuration</h2>
       <div className="configuration-controls ide-toolbar" role="toolbar" aria-label="Configuration controls">
         <button id="add-config-btn" type="button">➕ Add</button>
         <button id="delete-config-btn" type="button">🗑️ Delete</button>

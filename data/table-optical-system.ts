@@ -3195,15 +3195,59 @@ function autoSetGlassByProperties(rowIndex, field, value) {
 // Mount function for table initialization
 export function mountTableOpticalSystemIfReady(): boolean {
   try {
-    const container = document.getElementById('optical-system-table');
+    const container = document.getElementById('table-optical-system')
+      || document.getElementById('optical-system-table');
     if (!container) return false;
-    
-    if (shouldDisableExpandedOpticalSystemUI()) {
-      tableOpticalSystem = createNoopOpticalSystemTable();
+
+    const activeContainer = (() => {
+      try {
+        if (tableOpticalSystem && typeof tableOpticalSystem.getElement === 'function') {
+          return tableOpticalSystem.getElement();
+        }
+      } catch (_) {}
+      return null;
+    })();
+
+    if (activeContainer === container && (container as any).tabulator) {
       return true;
     }
     
-    // Table mounting logic would go here
+    if (shouldDisableExpandedOpticalSystemUI()) {
+      tableOpticalSystem = createNoopOpticalSystemTable();
+      try {
+        if (typeof window !== 'undefined') {
+          (window as any).tableOpticalSystem = tableOpticalSystem;
+        }
+      } catch (_) {}
+      return true;
+    }
+
+    const prevRows = (() => {
+      try {
+        if (tableOpticalSystem && typeof tableOpticalSystem.getData === 'function') {
+          const rows = tableOpticalSystem.getData();
+          return Array.isArray(rows) ? rows : [];
+        }
+      } catch (_) {}
+      return [];
+    })();
+
+    try {
+      tableOpticalSystem = new Tabulator(`#${container.id}`, tabulatorOptions as any);
+      try { (container as any).tabulator = tableOpticalSystem; } catch (_) {}
+      try {
+        if (typeof window !== 'undefined') {
+          (window as any).tableOpticalSystem = tableOpticalSystem;
+        }
+      } catch (_) {}
+      if (prevRows.length > 0 && typeof tableOpticalSystem.setData === 'function') {
+        tableOpticalSystem.setData(prevRows);
+      }
+    } catch (mountError) {
+      console.warn('Failed to re-mount optical system table. Falling back to existing instance.', mountError);
+      return false;
+    }
+
     return true;
   } catch (e) {
     console.error('Failed to mount optical system table:', e);

@@ -6856,7 +6856,7 @@ export class WavefrontAberrationAnalyzer {
                 : callerTraceOptions);
         const traceOptionsPatch = forceWasmTraceOptions ? { traceOptions: forceWasmTraceOptions } : null;
 
-        if (forceRustWasmOPD) {
+        if (forceRustWasmOPD && typeof window === 'undefined') {
             try {
                 const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import('../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts');
                 const rustApi = await preloadRustRayTracingWasm();

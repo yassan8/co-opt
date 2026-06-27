@@ -207,7 +207,17 @@ let rustWasmInitPromise: Promise<RustRayTracingWasm | null> | null = null;
 let rustWasmInitError: string | null = null;
 let rustWasmLastInitAttemptMs = 0;
 const RUST_WASM_RETRY_COOLDOWN_MS = 1000;
-const isNodeRuntime = typeof process !== 'undefined' && !!(process as any)?.versions?.node;
+const isNodeRuntime = (() => {
+  const hasProcessNode = (typeof process !== 'undefined') && !!(process as any)?.versions?.node;
+  const hasBrowserGlobals = (
+    typeof window !== 'undefined'
+    || typeof document !== 'undefined'
+    || typeof navigator !== 'undefined'
+    || (typeof self !== 'undefined' && typeof (self as any)?.importScripts === 'function')
+  );
+  const isElectronRenderer = (typeof process !== 'undefined') && String((process as any)?.type || '').toLowerCase() === 'renderer';
+  return hasProcessNode && !hasBrowserGlobals && !isElectronRenderer;
+})();
 
 export function getMissingRequiredRustRayTracingWasmFunctions(api: unknown): RequiredRustRayTracingWasmFunction[] {
   return REQUIRED_RUST_RAYTRACING_WASM_FUNCTIONS.filter((name) => {
@@ -279,13 +289,7 @@ async function importSurfaceOriginsModule(): Promise<any> {
       const mod = await import(/* @vite-ignore */ moduleUrl);
       return mod;
     }
-
-    const modulePath = await resolveBrowserModulePath();
-    const mod = await import(/* @vite-ignore */ modulePath);
-    try {
-      console.log(`✅ [Rust-WASM] Loaded module from: ${modulePath}`);
-    } catch (_) {}
-    return mod;
+    throw new Error('surface_origins browser import is unsupported; use the JS fallback in browser runtimes');
   } catch (e) {
     throw new Error(`surface_origins module import failed (${String((e as any)?.message || e || 'failed')})`);
   }

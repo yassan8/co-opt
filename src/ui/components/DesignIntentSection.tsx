@@ -1,7 +1,6 @@
 export default function DesignIntentSection() {
   return (
     <section className="optical-system-section ide-section-card" id="design-intent-container" aria-label="Design Intent">
-      <h2 className="section-title">Design Intent</h2>
       <div id="design-intent-toolbar" className="optical-system-buttons-container ide-toolbar" role="toolbar" aria-label="Design Intent controls">
         <select id="design-intent-add-block-type" aria-label="Block type">
           <option value="ObjectPlane">ObjectSurface</option>

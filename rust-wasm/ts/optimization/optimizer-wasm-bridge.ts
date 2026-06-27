@@ -332,6 +332,10 @@ async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | nu
   if (!optimizerDirectInitPromise) {
     optimizerDirectInitPromise = (async () => {
       try {
+        const isViteDev = !!((import.meta as any)?.env?.DEV);
+        if (isViteDev) {
+          throw new Error('surface_origins module import skipped in Vite dev (public module import unsupported)');
+        }
         const modulePath = await resolveBrowserModulePath();
         const mod: any = await import(/* @vite-ignore */ modulePath);
 

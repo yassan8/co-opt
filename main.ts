@@ -184,7 +184,7 @@ import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTran
 
 // THREE.js and OrbitControls imports
 import * as THREE from 'three';
-import { OrbitControls } from 'OrbitControls';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 // Type definitions for camera options
 interface CameraOptions {
@@ -442,7 +442,7 @@ async function initializeApplication() {
                 const rustApi = await preloadRustRayTracingWasm();
                 if (!rustApi) {
                     const initError = getRustRayTracingWasmInitError?.();
-                    if (initError) {
+                    if (initError && typeof window === 'undefined') {
                         console.warn('⚠️ [Init] Rust-WASM preload failed:', initError);
                     }
                     return;
