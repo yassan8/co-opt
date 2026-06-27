@@ -157,8 +157,8 @@ function publishRuntimeSystemConfigSnapshot(systemConfig: any, deferMs = 1500): 
 }
 
 function shouldIncludeSystemConfigInRenderPayload(reason: string): boolean {
-  const normalizedReason = String(reason || '').trim().toLowerCase();
-  return normalizedReason ? !normalizedReason.startsWith('render-open') : true;
+  void reason;
+  return true;
 }
 
 function buildLiveRenderSyncPayload(reason = 'render-open') {

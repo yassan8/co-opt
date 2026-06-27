@@ -1929,13 +1929,13 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
     }
 }
 
-function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], options: { entrancePupilDiameterMm?: number; stopSemidiaWasMissing?: boolean; forceOverwriteSemidia?: boolean; strictMaxImageHeightMarginalOnly?: boolean; apertureMarginFactor?: number; apertureMarginMm?: number } = {}): void {
+function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], options: { entrancePupilDiameterMm?: number; stopSemidiaWasMissing?: boolean; forceOverwriteSemidia?: boolean; strictMaxImageHeightMarginalOnly?: boolean; apertureMarginFactor?: number; apertureMarginMm?: number } = {}): any[] | null {
     console.log('[autoCalculateMissingSemidia] START');
-    const tbl = w.tableOpticalSystem || w.tableOpticalSystem;
+    const tbl = w.tableOpticalSystem || w.opticalSystemTabulator;
     const rows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
     if (!Array.isArray(rows) || rows.length < 2) {
         console.warn('[autoCalculateMissingSemidia] Invalid rows:', rows);
-        return;
+        return null;
     }
     console.log('[autoCalculateMissingSemidia] Table loaded with', rows.length, 'rows');
     console.log('[autoCalculateMissingSemidia] Initial rows (first 5):', 
@@ -1958,7 +1958,7 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], optio
             console.warn('Primary wavelength is unavailable. Semidia auto-calculation is skipped.');
             return NaN;
         })();
-        if (!Number.isFinite(primaryWavelength) || primaryWavelength <= 0) return;
+        if (!Number.isFinite(primaryWavelength) || primaryWavelength <= 0) return null;
 
         const enpd = Number(options?.entrancePupilDiameterMm);
         const stopIndex = __zmxGetStopSurfaceIndex(rows);
@@ -2039,7 +2039,10 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], optio
         } catch (err) {
             console.error('[autoCalculateMissingSemidia] ❌ Failed to save configuration:', err);
         }
-    } catch (_) {}
+        return rows;
+    } catch (_) {
+        return null;
+    }
 }
 
 function __cooptExpectedApertureKeysForBlockType(blockTypeRaw: any): string[] {
@@ -2100,8 +2103,8 @@ function __cooptAutoCalculateMissingDesignIntentApertures(): boolean {
             try { return loadObjectTableData(); } catch (_) { return []; }
         })();
 
-        autoCalculateMissingSemidia(sourceRows, objectRows, {});
-        __zmxSyncDesignIntentApertureFromOpticalRows();
+        const updatedRows = autoCalculateMissingSemidia(sourceRows, objectRows, {});
+        __zmxSyncDesignIntentApertureFromOpticalRows(updatedRows);
         return true;
     } catch (err) {
         console.warn('[DesignIntent] Missing aperture auto-calculation failed:', err);
@@ -2131,13 +2134,12 @@ function autoSetBlockAperturesFromLargestObjectCondition(): boolean {
             try { return loadObjectTableData(); } catch (_) { return []; }
         })();
 
-        autoCalculateMissingSemidia(sourceRows, objectRows, {
+        const updatedRows = autoCalculateMissingSemidia(sourceRows, objectRows, {
             forceOverwriteSemidia: true,
-            strictMaxImageHeightMarginalOnly: true,
             apertureMarginFactor: COOPT_AUTO_APERTURE_MARGIN_FACTOR,
             apertureMarginMm: COOPT_AUTO_APERTURE_MARGIN_MM
         } as any);
-        __zmxSyncDesignIntentApertureFromOpticalRows();
+        __zmxSyncDesignIntentApertureFromOpticalRows(updatedRows);
         return true;
     } catch (err) {
         console.warn('[DesignIntent] Largest-object aperture auto-calculation failed:', err);
@@ -2145,11 +2147,13 @@ function autoSetBlockAperturesFromLargestObjectCondition(): boolean {
     }
 }
 
-function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
+function __zmxSyncDesignIntentApertureFromOpticalRows(rowsOverride: any[] | null = null): void {
     console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] START');
     try {
         const tbl = w.tableOpticalSystem || w.opticalSystemTabulator;
-        const tableRows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
+        const tableRows = Array.isArray(rowsOverride) && rowsOverride.length > 0
+            ? rowsOverride
+            : ((tbl && typeof tbl.getData === 'function') ? tbl.getData() : null);
         if (!Array.isArray(tableRows) || tableRows.length === 0) {
             console.warn('[__zmxSyncDesignIntentApertureFromOpticalRows] No table rows found');
             return;
