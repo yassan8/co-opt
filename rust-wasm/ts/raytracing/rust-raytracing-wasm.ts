@@ -249,39 +249,6 @@ function normalizeBaseUrl(): string {
   }
 }
 
-function buildBrowserModuleCandidates(): string[] {
-  const baseUrl = normalizeBaseUrl();
-  const candidates = [
-    `${baseUrl}rust-wasm/pkg/surface_origins.js`
-  ];
-  return Array.from(new Set(candidates));
-}
-
-async function browserPathExists(path: string): Promise<boolean> {
-  try {
-    const head = await fetch(path, { method: 'HEAD', cache: 'no-store' });
-    if (head.ok) return true;
-    if (head.status !== 405) return false;
-  } catch {
-    return false;
-  }
-
-  try {
-    const getRes = await fetch(path, { method: 'GET', cache: 'no-store' });
-    return getRes.ok;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveBrowserModulePath(): Promise<string> {
-  const candidates = buildBrowserModuleCandidates();
-  for (const candidate of candidates) {
-    if (await browserPathExists(candidate)) return candidate;
-  }
-  throw new Error(`surface_origins module not found in candidates: ${candidates.join(', ')}`);
-}
-
 async function importSurfaceOriginsModule(): Promise<any> {
   try {
     if (isNodeRuntime) {
@@ -289,7 +256,12 @@ async function importSurfaceOriginsModule(): Promise<any> {
       const mod = await import(/* @vite-ignore */ moduleUrl);
       return mod;
     }
-    throw new Error('surface_origins browser import is unsupported; use the JS fallback in browser runtimes');
+    const baseUrl = normalizeBaseUrl();
+    const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+    const mod = await g?.__cooptSurfaceOriginsModulePromise;
+    if (mod) return mod;
+    if (g?.__cooptSurfaceOriginsModule) return g.__cooptSurfaceOriginsModule;
+    throw new Error(`surface_origins browser module is not available at base URL ${baseUrl}`);
   } catch (e) {
     throw new Error(`surface_origins module import failed (${String((e as any)?.message || e || 'failed')})`);
   }

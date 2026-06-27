@@ -2887,6 +2887,8 @@ export function LiteratureImportPanel() {
       <div className="literature-import-panel__header">
         <div>
           <h3>Patent Import</h3>
+
+      <SystemDataPanel />
           <p>Independent workspace tab for semi-automatic patent import: load URL text when allowed, or paste/select a PDF file, then choose embodiment / zoom position and apply the extracted optical system directly.</p>
         </div>
         <div className="literature-import-panel__actions">

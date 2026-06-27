@@ -11609,7 +11609,7 @@ const collectLegacyCrossRays = async (
     label: string;
     icon: string;
   }> = [
-    { key: 'configuration', label: 'System', icon: '🧭' },
+    { key: 'configuration', label: 'Config', icon: '🧭' },
     { key: 'source', label: 'Sources / Objects', icon: '🔎' },
     { key: 'intent', label: 'Design Intent', icon: '🧩' },
     { key: 'requirements', label: 'Requirements', icon: '📏' },
@@ -11654,7 +11654,7 @@ const collectLegacyCrossRays = async (
     }
   };
   const [{ text: statusFileText, color: statusFileColor }, setStatusFile] = useState(resolveStatusFile);
-  const activeWorkspaceLabel = workspaceSections.find((s) => s.key === workspaceFocus)?.label || 'System';
+  const activeWorkspaceLabel = workspaceSections.find((s) => s.key === workspaceFocus)?.label || 'Config';
   const [openMenu, setOpenMenu] = useState<null | 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis'>(null);
 
   useEffect(() => {

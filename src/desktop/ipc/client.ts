@@ -1573,6 +1573,7 @@ export async function runNativeSphericalAberration(
       Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : 51,
       {
         requireRustWasm: true,
+        referenceFocusMode: payload?.referenceFocusMode,
       },
     );
     if (!result) throw new Error("Web spherical aberration calculation failed");

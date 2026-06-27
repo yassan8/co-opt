@@ -380,11 +380,12 @@ async function resolveAnalysisRustTraceOptions(options: { forceRustWasm?: boolea
             analysisRustTraceOptionsCache = { options: null, at: Date.now(), forceKey };
             return null;
         } catch (error: any) {
-            if (requireRustWasm) {
+            const detail = String(error?.message || error || 'Rust WASM init failed');
+            const browserUnsupported = /browser import is unsupported|use the JS fallback in browser runtimes/i.test(detail);
+            if (requireRustWasm && !browserUnsupported) {
                 throw error;
             }
             try {
-                const detail = String(error?.message || error || 'Rust WASM init failed');
                 (window as any).__COOPT_LAST_ANALYSIS_BACKEND = {
                     kind: 'js',
                     detail,

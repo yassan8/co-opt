@@ -318,13 +318,10 @@ async function browserPathExists(path: string): Promise<boolean> {
 
 async function resolveBrowserModulePath(): Promise<string> {
   const baseUrl = normalizeBaseUrl();
-  const candidates = Array.from(new Set([
-    `${baseUrl}rust-wasm/pkg/surface_origins.js`
-  ]));
-  for (const candidate of candidates) {
-    if (await browserPathExists(candidate)) return candidate;
-  }
-  throw new Error(`surface_origins module not found in candidates: ${candidates.join(', ')}`);
+  const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+  if (g?.__cooptSurfaceOriginsModulePromise) return '';
+  if (g?.__cooptSurfaceOriginsModule) return '';
+  throw new Error(`surface_origins module not available at base URL ${baseUrl}`);
 }
 
 async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | null> {
@@ -336,8 +333,12 @@ async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | nu
         if (isViteDev) {
           throw new Error('surface_origins module import skipped in Vite dev (public module import unsupported)');
         }
-        const modulePath = await resolveBrowserModulePath();
-        const mod: any = await import(/* @vite-ignore */ modulePath);
+        await resolveBrowserModulePath();
+        const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+        const mod: any = (await g?.__cooptSurfaceOriginsModulePromise) || g?.__cooptSurfaceOriginsModule;
+        if (!mod) {
+          throw new Error('surface_origins browser module is not preloaded');
+        }
 
         if (typeof mod?.default === 'function') {
           await mod.default();

@@ -848,13 +848,21 @@ export function calculateLongitudinalAberration(
         return null;
     };
 
-    // 主波長のBFL（近軸像点位置）を計算
-    // 最終面のZ座標（CoordTransを考慮）
+    const normalizeReferenceFocusMode = (mode) => {
+        const raw = String(mode ?? '').trim().toLowerCase();
+        if (raw === 'primary-paraxial' || raw === 'chief-ray' || raw === 'current-paraxial') return raw;
+        return 'current-paraxial';
+    };
+    const referenceFocusMode = normalizeReferenceFocusMode(options?.referenceFocusMode);
+    console.log(`📊 Reference focus mode: ${referenceFocusMode}`);
+
+    // 主波長の近軸像点位置を BFL 基準で計算
     const primaryBFLRaw = calculateBackFocalLength(opticalSystemRows, primaryWavelength);
     const primaryBFL = resolveBflScalar(primaryBFLRaw);
-    const primaryImageZ = Number.isFinite(primaryBFL) ? (lastSurfaceZ + primaryBFL) : lastSurfaceZ;
-    if (!Number.isFinite(primaryBFL)) {
-        console.warn('⚠️ 主波長BFLが不正のため、像点位置は最終面基準で処理します');
+    const primaryFocusDistance = primaryBFL;
+    const primaryImageZ = Number.isFinite(primaryFocusDistance) ? (lastSurfaceZ + primaryFocusDistance) : lastSurfaceZ;
+    if (!Number.isFinite(primaryFocusDistance)) {
+        console.warn('⚠️ 主波長の像面距離が不正のため、最終面基準で処理します');
     }
     
     // 物体空間と像空間の屈折率を取得
@@ -924,15 +932,16 @@ export function calculateLongitudinalAberration(
         console.log(`\n📊 ========== 波長 ${wlIndex + 1}/${wavelengths.length}: ${wavelength.toFixed(4)} μm ==========`);
             dbg('🐞 [SA] wavelength start', { wlIndex, wavelength });
         
-        // この波長のBFLを計算
+        // この波長の近軸像点位置を BFL 基準で計算
         const currentBFLRaw = calculateBackFocalLength(opticalSystemRows, wavelength);
         const currentBFL = resolveBflScalar(currentBFLRaw);
-        const currentImageZ = Number.isFinite(currentBFL) ? (lastSurfaceZ + currentBFL) : lastSurfaceZ;
-        wavelengthBFLs[wavelength] = currentBFL;
-        if (Number.isFinite(currentBFL)) {
-            console.log(`  この波長の近軸像点位置: ${currentImageZ.toFixed(6)} mm (BFL: ${currentBFL.toFixed(6)} mm)`);
+        const currentFocusDistance = currentBFL;
+        const currentImageZ = Number.isFinite(currentFocusDistance) ? (lastSurfaceZ + currentFocusDistance) : lastSurfaceZ;
+        wavelengthBFLs[wavelength] = Number.isFinite(currentFocusDistance) ? currentFocusDistance : currentBFL;
+        if (Number.isFinite(currentFocusDistance)) {
+            console.log(`  この波長の近軸像点位置: ${currentImageZ.toFixed(6)} mm (BFL: ${currentFocusDistance.toFixed(6)} mm)`);
         } else {
-            console.warn(`⚠️ 波長 ${wavelength.toFixed(4)} μm: BFLが不正のため最終面基準で処理します`);
+            console.warn(`⚠️ 波長 ${wavelength.toFixed(4)} μm: 近軸像面距離が不正のため最終面基準で処理します`);
         }
         
         // 軸上（画角0°）の十字光線を生成
@@ -997,12 +1006,22 @@ export function calculateLongitudinalAberration(
             continue;
         }
         
-        // SA図の基準は「同一波長の近軸像点」を使用
-        // 縦収差 = 実際の焦点位置 - 同一波長の近軸像点位置
-        const referenceImageZ = currentImageZ;
-        let referenceFocusOffset = Number.isFinite(currentBFL) ? currentBFL : 0;
-        if (Number.isFinite(currentBFL)) {
-            console.log(`  基準像点位置（同一波長のBFL）: ${referenceImageZ.toFixed(6)} mm`);
+        // 選択された reference focus mode に従って基準像点を決定する
+        // focus offset は最終面基準の相対距離として統一する
+        let referenceFocusOffset = NaN;
+        let referenceImageZ = lastSurfaceZ;
+        if (referenceFocusMode === 'primary-paraxial') {
+            if (Number.isFinite(primaryFocusDistance)) {
+                referenceFocusOffset = primaryFocusDistance;
+                referenceImageZ = lastSurfaceZ + primaryFocusDistance;
+                console.log(`  基準像点位置（主波長BFL）: ${referenceImageZ.toFixed(6)} mm`);
+            }
+        } else if (referenceFocusMode === 'current-paraxial') {
+            if (Number.isFinite(currentFocusDistance)) {
+                referenceFocusOffset = currentFocusDistance;
+                referenceImageZ = currentImageZ;
+                console.log(`  基準像点位置（同一波長BFL）: ${referenceImageZ.toFixed(6)} mm`);
+            }
         }
         
         // 主光線の焦点位置を求める（瞳位置0のデータ用）
@@ -1026,8 +1045,25 @@ export function calculateLongitudinalAberration(
         // traced chief-ray focus exaggerates chromatic shift when third-order
         // aberration is otherwise small, because the chief ray is not a paraxial
         // reference and depends on sampling/aiming details.
+        if (referenceFocusMode === 'chief-ray' && Number.isFinite(chiefFocusZ)) {
+            referenceFocusOffset = chiefFocusZ;
+            referenceImageZ = lastSurfaceZ + chiefFocusZ;
+            console.log(`  基準像点位置（chief ray）: ${referenceImageZ.toFixed(6)} mm`);
+        }
+
+        if (!Number.isFinite(referenceFocusOffset) && Number.isFinite(currentFocusDistance)) {
+            referenceFocusOffset = currentFocusDistance;
+            referenceImageZ = currentImageZ;
+            console.log(`  基準像点位置（current-paraxial fallback）: ${referenceImageZ.toFixed(6)} mm`);
+        }
+        if (!Number.isFinite(referenceFocusOffset) && Number.isFinite(primaryFocusDistance)) {
+            referenceFocusOffset = primaryFocusDistance;
+            referenceImageZ = lastSurfaceZ + primaryFocusDistance;
+            console.log(`  基準像点位置（primary-paraxial fallback）: ${referenceImageZ.toFixed(6)} mm`);
+        }
         if (!Number.isFinite(referenceFocusOffset) && Number.isFinite(chiefFocusZ)) {
             referenceFocusOffset = chiefFocusZ;
+            referenceImageZ = lastSurfaceZ + chiefFocusZ;
             console.log(`  基準像点位置（chief ray fallback）: ${chiefFocusZ.toFixed(6)} mm`);
         }
         
@@ -1553,6 +1589,7 @@ export function calculateLongitudinalAberration(
             const refFocus = findRayAxisIntersection(referenceRay, lastSurfaceZ);
             if (Number.isFinite(refFocus)) {
                 referenceFocusOffset = refFocus;
+                referenceImageZ = lastSurfaceZ + refFocus;
                 console.log(`  基準像点位置（reference ray fallback）: ${refFocus.toFixed(6)} mm`);
             }
         }
@@ -1576,9 +1613,8 @@ export function calculateLongitudinalAberration(
             const sc = null;
             
             if (focusResult !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopPointIndex) {
-                // 縦収差 = ローカルZ方向の距離（像面中心を基準, local Z=0）
-                // Mirrorが奇数枚の場合は符号反転
-                const longitudinalAberration = mirrorSign * (focusResult - referenceFocusOffset);
+                // BFL/IMD は差し引かず、最終面基準の生の焦点位置をそのまま描画する。
+                const longitudinalAberration = mirrorSign * focusResult;
                 const focusPosition = mirrorSign * focusResult;
                 const stopPoint = tracedRay.rayPath[stopPointIndex];
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
@@ -1690,8 +1726,8 @@ export function calculateLongitudinalAberration(
             wavelength: wavelength,
             rayType: 'meridional',
             points: plottedMeridionalPoints,
-            paraxialAberration: (Number.isFinite(currentBFL) && Number.isFinite(primaryBFL))
-                ? (currentBFL - primaryBFL)
+            paraxialAberration: (Number.isFinite(currentFocusDistance) && Number.isFinite(primaryFocusDistance))
+                ? (currentFocusDistance - primaryFocusDistance)
                 : null
         });
         
@@ -1719,9 +1755,8 @@ export function calculateLongitudinalAberration(
             const sc = null;
             
             if (focusResult !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopPointIndex) {
-                // 縦収差 = ローカルZ方向の距離（像面中心を基準, local Z=0）
-                // Mirrorが奇数枚の場合は符号反転
-                const longitudinalAberration = mirrorSign * (focusResult - referenceFocusOffset);
+                // BFL/IMD は差し引かず、最終面基準の生の焦点位置をそのまま描画する。
+                const longitudinalAberration = mirrorSign * focusResult;
                 const stopPoint = tracedRay.rayPath[stopPointIndex];
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
                 const pupilHeight = stopLocal ? stopLocal.u : stopPoint.x;
@@ -1831,7 +1866,9 @@ export function calculateLongitudinalAberration(
             wavelength: wavelength,
             rayType: 'sagittal',
             points: plottedSagittalPoints,
-            paraxialAberration: currentBFL - primaryBFL  // 近軸の縦収差（色収差成分）
+            paraxialAberration: (Number.isFinite(currentFocusDistance) && Number.isFinite(primaryFocusDistance))
+                ? (currentFocusDistance - primaryFocusDistance)
+                : null  // 近軸の縦収差（色収差成分）
         });
 
         stageCounts.push(stageCount);

@@ -7867,96 +7867,31 @@ export function setupAnalysisWindows() {
                 if (canUseRustSpotDiagram) {
                     setProgress(25, 'Computing Spot Diagram (Rust)...');
                     const rustStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
-                    const result = await opener.runDesktopAnalysisComputeForPopup({
-                        kind: 'spot-diagram',
+                    await opener.showSpotDiagram({
+                        containerElement: popupContainer,
                         surfaceIndex: popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined,
+                        surfaceRowIndex: popupSurfaceRowIndex,
+                        surfaceRowId: popupSurfaceRowId,
+                        surfaceRowSig: popupSurfaceRowSig,
+                        surfaceIsImage: popupSurfaceIsImage,
                         rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
                         ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,
                         pattern: popupPattern ? String(popupPattern.value || 'annular') : 'annular',
+                        wavelengthMode: 'all',
+                        forceRustWasmTrace: true,
+                        requireRustWasmTrace: true,
+                        onProgress: (evt) => {
+                            try {
+                                const p = Number(evt && evt.percent);
+                                const msg = (evt && evt.message) || (evt && evt.phase) || 'Working...';
+                                if (Number.isFinite(p)) setProgress(p, msg);
+                                else setProgress(undefined, msg);
+                            } catch (_) {}
+                        },
                     });
-                    const series = Array.isArray(result?.spotDiagramSeries) ? result.spotDiagramSeries : [];
-                    if (!series.length) {
-                        throw new Error('Rust Spot Diagram result is empty');
-                    }
-                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
-                        throw new Error('Plotly is not available in Spot Diagram popup');
-                    }
-
-                    const traces = [];
-                    const groupedByObject = new Map();
-                    for (let i = 0; i < series.length; i++) {
-                        const s = series[i] || {};
-                        const label = String(s?.label || 'Object ' + (i + 1));
-                        const objectLabel = label.replace(/\s*(Primary(?:\s*\([^)]*\))?|\d+(?:\.\d+)?\s*nm)\s*$/i, '').trim() || label;
-                        if (!groupedByObject.has(objectLabel)) {
-                            groupedByObject.set(objectLabel, []);
-                        }
-                        groupedByObject.get(objectLabel).push(s);
-                    }
-
-                    const centeredSeries = [];
-                    const allCenteredPoints = [];
-                    for (const objectSeries of groupedByObject.values()) {
-                        const objectCentroid = computeSpotCentroidUm(
-                            objectSeries.flatMap((seriesItem) => Array.isArray(seriesItem?.points) ? seriesItem.points : [])
-                        );
-                        for (const s of objectSeries) {
-                            const centeredPoints = centerSpotPointsByCentroid(s?.points, objectCentroid);
-                            const culled = cullExtremeSpotOutliers(centeredPoints);
-                            centeredSeries.push({
-                                series: s,
-                                points: culled.points,
-                            });
-                            allCenteredPoints.push(...culled.points);
-                        }
-                    }
-
-                    const unifiedRangeAbs = computeSpotAxisRangeAbsUm(allCenteredPoints);
-                    for (const entry of centeredSeries) {
-                        const s = entry.series;
-                        const points = entry.points;
-                        traces.push({
-                            x: points.map((p) => Number(p?.xUm) || 0),
-                            y: points.map((p) => Number(p?.yUm) || 0),
-                            type: 'scattergl',
-                            mode: 'markers',
-                            name: String(s?.label || 'Series'),
-                            marker: {
-                                size: 3,
-                                color: String(s?.color || '#2563eb'),
-                                opacity: 0.6,
-                            },
-                            hovertemplate: 'x=%{x:.2f}µm<br>y=%{y:.2f}µm<extra></extra>',
-                        });
-                    }
-
-                    setProgress(85, 'Rendering Spot Diagram...');
-                    const plotStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
-                    await window.Plotly.newPlot(popupContainer, traces, {
-                        margin: { l: 52, r: 20, t: 20, b: 45 },
-                        xaxis: {
-                            title: 'X (µm)',
-                            zeroline: true,
-                            autorange: false,
-                            range: [-unifiedRangeAbs, unifiedRangeAbs],
-                        },
-                        yaxis: {
-                            title: 'Y (µm)',
-                            zeroline: true,
-                            autorange: false,
-                            range: [-unifiedRangeAbs, unifiedRangeAbs],
-                            scaleanchor: 'x',
-                            scaleratio: 1,
-                        },
-                        showlegend: true,
-                        paper_bgcolor: '#ffffff',
-                        plot_bgcolor: '#ffffff',
-                    }, { responsive: true, displaylogo: false });
-                    const plotEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
                     const rustEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
-                    const plotMs = Math.max(0, plotEnd - plotStart);
                     const wallMs = Math.max(0, rustEnd - rustStart);
-                    setPopupStats('Rust stats: series=' + series.length + ', wall=' + wallMs.toFixed(1) + ', plot=' + plotMs.toFixed(1));
+                    setPopupStats('Rust-WASM stats: wall=' + wallMs.toFixed(1));
                     try {
                         if (progressWrapper) progressWrapper.style.display = 'none';
                     } catch (_) {}
