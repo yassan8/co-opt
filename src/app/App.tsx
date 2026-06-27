@@ -4150,6 +4150,17 @@ export default function App() {
     return null;
   };
 
+  const shouldPreferImportedOpticalRowsInConfig = (cfg: any): boolean => {
+    try {
+      if (!cfg || typeof cfg !== 'object') return false;
+      if (!Array.isArray(cfg.opticalSystem) || cfg.opticalSystem.length === 0) return false;
+      const metadata = cfg.metadata && typeof cfg.metadata === 'object' ? cfg.metadata : null;
+      return !!(metadata?.importRowsPreferred || metadata?.importAnalyzeMode);
+    } catch (_) {
+      return false;
+    }
+  };
+
   function approxEqualNumber(left: any, right: any, epsilon = 1e-9): boolean {
     const l = Number(left);
     const r = Number(right);
@@ -4331,6 +4342,9 @@ export default function App() {
 
   const getConfigRowsForRender = (targetWindow: any, cfg: any, systemConfig?: any): any[] => {
     if (!cfg || typeof cfg !== 'object') return [];
+    if (shouldPreferImportedOpticalRowsInConfig(cfg)) {
+      return Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem : [];
+    }
     try {
       const activeId = systemConfig?.activeConfigId;
       const isActive = activeId !== undefined && activeId !== null && String(cfg.id) === String(activeId);
@@ -5634,7 +5648,7 @@ export default function App() {
           active.object = cloneValue(objectRows);
         }
 
-        if (!Array.isArray(active.blocks) || active.blocks.length === 0) {
+        if (shouldPreferImportedOpticalRowsInConfig(active) || !Array.isArray(active.blocks) || active.blocks.length === 0) {
           active.opticalSystem = cloneValue(rows);
           if (!active.metadata || typeof active.metadata !== 'object') active.metadata = {};
           active.metadata.modified = new Date().toISOString();
@@ -8771,7 +8785,7 @@ const collectLegacyCrossRays = async (
         const activeCfg = Array.isArray(cfg?.configurations)
           ? (cfg.configurations.find((c: any) => c && String(c.id) === String(activeId)) || cfg.configurations[0])
           : null;
-        if (activeCfg && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof sourceWindow.expandBlocksToOpticalSystemRows === 'function') {
+        if (activeCfg && !shouldPreferImportedOpticalRowsInConfig(activeCfg) && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof sourceWindow.expandBlocksToOpticalSystemRows === 'function') {
           const expanded = sourceWindow.expandBlocksToOpticalSystemRows(activeCfg.blocks);
           if (expanded && Array.isArray(expanded.rows) && expanded.rows.length > 0) {
             rows = expanded.rows;
@@ -9353,7 +9367,7 @@ const collectLegacyCrossRays = async (
         const activeCfg = Array.isArray(cfg?.configurations)
           ? (cfg.configurations.find((c: any) => c && String(c.id) === String(activeId)) || cfg.configurations[0])
           : null;
-        if (activeCfg && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof hostWindow.expandBlocksToOpticalSystemRows === 'function') {
+        if (activeCfg && !shouldPreferImportedOpticalRowsInConfig(activeCfg) && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof hostWindow.expandBlocksToOpticalSystemRows === 'function') {
           const expanded = hostWindow.expandBlocksToOpticalSystemRows(activeCfg.blocks);
           if (expanded && Array.isArray(expanded.rows) && expanded.rows.length > 0) {
             rows = expanded.rows;
