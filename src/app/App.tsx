@@ -3911,7 +3911,7 @@ export default function App() {
   const optimizeWakeLockRef = useRef<any>(null);
   const renderViewModeRef = useRef<'3D' | 'XZ' | 'YZ'>('3D');
   const renderViewAxisRef = useRef<'YZ' | 'XZ'>('YZ');
-  const renderRayCountRef = useRef(6);
+  const renderRayCountRef = useRef(5);
   const renderRayCountDebounceRef = useRef<number | null>(null);
   const renderRedrawInFlightRef = useRef(false);
   const renderDrawRequestSeqRef = useRef(0);
@@ -11297,24 +11297,6 @@ const collectLegacyCrossRays = async (
               <option value="object">Object</option>
               <option value="image">Image</option>
             </select>
-            <label htmlFor="render-ray-count-input" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Raynum</label>
-            <input
-              id="render-ray-count-input"
-              type="number"
-              min={1}
-              max={10001}
-              step={1}
-              value={renderRayCount}
-              onChange={(e) => {
-                const parsed = parseInt(e.target.value, 10);
-                if (Number.isFinite(parsed) && parsed > 0) {
-                  setRenderRayCount(parsed);
-                } else if (e.target.value === '') {
-                  setRenderRayCount(5);
-                }
-              }}
-              style={{ width: 84 }}
-            />
             <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 500 }}>
               <input
                 type="checkbox"
