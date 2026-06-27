@@ -143,6 +143,7 @@ import {
     saveSystemConfigurations as saveSystemConfigurationsFromTableConfig,
     saveCurrentToActiveConfiguration as saveCurrentToActiveConfigurationFromTableConfig,
     loadActiveConfigurationToTables as loadActiveConfigurationToTablesFromTableConfig,
+    shouldPreferImportedOpticalRows,
     clearAllPersistedState
 } from '../data/table-configuration.ts';
 import {
@@ -2665,7 +2666,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     for (const cfg of cfgList) {
         try {
             const hasBlocks = configurationHasBlocks(cfg);
-            if (hasBlocks && typeof w.expandBlocksIntoConfiguration === 'function') {
+            if (hasBlocks && !shouldPreferImportedOpticalRows(cfg) && typeof w.expandBlocksIntoConfiguration === 'function') {
                 w.expandBlocksIntoConfiguration(cfg);
             }
         } catch (_) {}
@@ -2690,7 +2691,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     try {
         const activeId = candidateConfig?.activeConfigId || 1;
         const activeCfg = cfgList.find((c: any) => c.id === activeId) || cfgList[0];
-        if (activeCfg && configurationHasBlocks(activeCfg)) {
+        if (activeCfg && configurationHasBlocks(activeCfg) && !shouldPreferImportedOpticalRows(activeCfg)) {
             const refreshed = (typeof expandBlocksIntoConfiguration === 'function')
                 ? expandBlocksIntoConfiguration(activeCfg, { captureLegacyAperture: true })
                 : ((typeof w.expandBlocksIntoConfiguration === 'function')
@@ -2715,7 +2716,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 // Source is persisted globally; per-config duplicates increase storage pressure.
                 try { delete cfg.source; } catch (_) {}
                 // For block-driven designs, expanded optical rows are derivable and can be large.
-                if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0) {
+                if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0 && !shouldPreferImportedOpticalRows(cfg)) {
                     try { delete cfg.opticalSystem; } catch (_) {}
                 }
             }

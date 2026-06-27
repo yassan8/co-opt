@@ -11,7 +11,7 @@ import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
 import { getPrimaryWavelength as getPrimaryWavelengthFallback } from '../data/glass.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedSourceTableData } from '../data/table-source.ts';
 import { calculateSeidelCoefficients, formatSeidelCoefficients } from '../evaluation/aberrations/seidel-coefficients.ts';
-import { getActiveConfiguration } from '../data/table-configuration.ts';
+import { getActiveConfiguration, shouldPreferImportedOpticalRows } from '../data/table-configuration.ts';
 import { configurationHasBlocks, expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
 
@@ -271,6 +271,7 @@ function __du_expandActiveBlocksToRows() {
   try {
     if (typeof getActiveConfiguration !== 'function') return null;
     const activeCfg = getActiveConfiguration();
+    if (shouldPreferImportedOpticalRows(activeCfg)) return null;
     if (!configurationHasBlocks(activeCfg)) return null;
 
     const scenarios = Array.isArray(activeCfg?.scenarios) ? activeCfg.scenarios : null;
@@ -350,6 +351,14 @@ export function getOpticalSystemRows(tableOpticalSystem?) {
     try {
       const ov = (typeof globalThis !== 'undefined') ? globalThis.__cooptOpticalSystemRowsOverride : null;
       if (Array.isArray(ov)) return ov;
+    } catch (_) {}
+
+    try {
+      const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
+      if (shouldPreferImportedOpticalRows(activeCfg)) {
+        const explicitRows = Array.isArray(activeCfg?.opticalSystem) ? activeCfg.opticalSystem : [];
+        if (explicitRows.length > 0) return explicitRows;
+      }
     } catch (_) {}
 
     // Blocks-first mode: if Design Intent (blocks) exists, it is the source of truth.

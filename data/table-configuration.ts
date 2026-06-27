@@ -40,6 +40,18 @@ function idsEqual(a: any, b: any): boolean {
   return String(a ?? '') === String(b ?? '');
 }
 
+export function shouldPreferImportedOpticalRows(cfg: any): boolean {
+  try {
+    if (!cfg || typeof cfg !== 'object') return false;
+    const metadata = cfg.metadata && typeof cfg.metadata === 'object' ? cfg.metadata : null;
+    const hasExplicitRows = Array.isArray(cfg.opticalSystem) && cfg.opticalSystem.length > 0;
+    if (!hasExplicitRows) return false;
+    return !!(metadata?.importRowsPreferred || metadata?.importAnalyzeMode);
+  } catch (_) {
+    return false;
+  }
+}
+
 function isPlaceholderThreeBlockConfig(cfg: any): boolean {
   try {
     if (!cfg || typeof cfg !== 'object') return false;
@@ -721,7 +733,7 @@ export function saveCurrentToActiveConfiguration(): void {
     } catch (_) {}
     return [];
   })();
-  if (!configurationHasBlocks(activeConfig)) {
+  if (!configurationHasBlocks(activeConfig) || shouldPreferImportedOpticalRows(activeConfig)) {
     activeConfig.opticalSystem = opticalRowsFromTable;
   } else {
     try {
@@ -804,8 +816,9 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
   } catch (_) {}
 
   // If the active config uses blocks, deterministically expand to legacy surface rows for UI/evaluation.
+  const preferImportedOpticalRows = shouldPreferImportedOpticalRows(activeConfig);
   let effectiveOpticalSystem = activeConfig.opticalSystem;
-  if (configurationHasBlocks(activeConfig)) {
+  if (configurationHasBlocks(activeConfig) && !preferImportedOpticalRows) {
     const normalizeIdsInPlace = (rows: any[]): void => {
       if (!Array.isArray(rows)) return;
       for (let i = 0; i < rows.length; i++) {
@@ -964,7 +977,7 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
     storageSetItem('objectTableData', JSON.stringify(activeConfig.object));
   }
   if (effectiveOpticalSystem) {
-    if (configurationHasBlocks(activeConfig)) {
+    if (configurationHasBlocks(activeConfig) && !preferImportedOpticalRows) {
       // Blocks-only evaluation path should not persist Expanded Optical System rows.
       // This avoids drift between Design Intent and any stale surface-table snapshots.
       try { storageRemoveItem('OpticalSystemTableData'); } catch (_) {}
