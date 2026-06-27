@@ -2323,6 +2323,10 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
 async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: string } = {}): Promise<boolean> {
     const displayName = options?.filename || 'shared-link.json';
     try { (window as any).__cooptLastLoadFailureReason = ''; } catch (_) {}
+    try { localStorage.removeItem('coopt.renderSyncRequest'); } catch (_) {}
+    try { delete (window as any).__cooptRenderSnapshotRows; } catch (_) {}
+    try { delete (window as any).__cooptRenderSnapshotObjectRows; } catch (_) {}
+    try { delete (window as any).__cooptRenderSnapshotSystemConfig; } catch (_) {}
     const failLoad = (reason: string, detail?: any): false => {
         try { (window as any).__cooptLastLoadFailureReason = String(reason || 'unknown-load-failure'); } catch (_) {}
         try { console.error('❌ [Load] ' + reason, detail); } catch (_) {}

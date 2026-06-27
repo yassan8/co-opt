@@ -57,7 +57,9 @@ function getRowsFromWindow(w: any): { opticalSystemRows: any[]; sourceRows: any[
       let snapshotOpticalRows = Array.isArray(activeConfig?.opticalSystem)
         ? activeConfig.opticalSystem.map((row: any) => (row && typeof row === 'object') ? { ...row } : row)
         : [];
-      if (Array.isArray(activeConfig?.blocks) && activeConfig.blocks.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
+      const metadata = activeConfig?.metadata && typeof activeConfig.metadata === 'object' ? activeConfig.metadata : null;
+      const preferImportedRows = snapshotOpticalRows.length > 0 && !!(metadata?.importRowsPreferred || metadata?.importAnalyzeMode);
+      if (!preferImportedRows && Array.isArray(activeConfig?.blocks) && activeConfig.blocks.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
         const expanded = safeCall(() => w.expandBlocksToOpticalSystemRows(activeConfig.blocks), null as any);
         if (Array.isArray(expanded?.rows) && expanded.rows.length > 0) {
           snapshotOpticalRows = expanded.rows.map((row: any) => (row && typeof row === 'object') ? { ...row } : row);

@@ -618,6 +618,8 @@ export function clearAllPersistedState(): void {
       'lastPsfError',
       'lastSpotDiagramSettings',
       'lastSpotSettings',
+      'coopt.renderSyncRequest',
+      'coopt.autoRecoverDefaultLensData.v1',
       'coopt.forceInfinitePupilMode',
       'coopt.glassMap.defaultManufacturers',
       'coopt.darkMode'
