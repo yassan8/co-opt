@@ -319,7 +319,12 @@ async function browserPathExists(path: string): Promise<boolean> {
 async function resolveBrowserModulePath(): Promise<string> {
   const baseUrl = normalizeBaseUrl();
   const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-  if (g?.__cooptSurfaceOriginsModulePromise) return '';
+  if (await g?.__cooptSurfaceOriginsModulePromise) return '';
+  if (g?.__cooptSurfaceOriginsModule) return '';
+  const loader = await import('../surface-origins-loader.ts');
+  const ensured = await loader.ensureSurfaceOriginsModuleLoaded?.();
+  if (ensured) return '';
+  if (await g?.__cooptSurfaceOriginsModulePromise) return '';
   if (g?.__cooptSurfaceOriginsModule) return '';
   throw new Error(`surface_origins module not available at base URL ${baseUrl}`);
 }

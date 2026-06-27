@@ -261,6 +261,12 @@ async function importSurfaceOriginsModule(): Promise<any> {
     const mod = await g?.__cooptSurfaceOriginsModulePromise;
     if (mod) return mod;
     if (g?.__cooptSurfaceOriginsModule) return g.__cooptSurfaceOriginsModule;
+    const loader = await import('../surface-origins-loader.ts');
+    const ensured = await loader.ensureSurfaceOriginsModuleLoaded?.();
+    if (ensured) return ensured;
+    const retried = await g?.__cooptSurfaceOriginsModulePromise;
+    if (retried) return retried;
+    if (g?.__cooptSurfaceOriginsModule) return g.__cooptSurfaceOriginsModule;
     throw new Error(`surface_origins browser module is not available at base URL ${baseUrl}`);
   } catch (e) {
     throw new Error(`surface_origins module import failed (${String((e as any)?.message || e || 'failed')})`);
