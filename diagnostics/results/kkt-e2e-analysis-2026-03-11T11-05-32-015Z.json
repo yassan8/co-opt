@@ -1,0 +1,71 @@
+{
+  "timestamp": "2026-03-11T11:05:32.015Z",
+  "inputPath": "diagnostics/results/kkt-e2e-2026-03-11T11-05-31-943Z.json",
+  "metrics": {
+    "runCount": 3,
+    "totalSpeedup": 1.1093517349378796,
+    "solverSpeedup": 0.7479735573937735,
+    "wasmOkRate": 1,
+    "tsOkRate": 1,
+    "wasmFeasibleRate": 1,
+    "tsFeasibleRate": 1,
+    "wasmAvgTotalMs": 2.99022233333334,
+    "tsAvgTotalMs": 3.3172083333333355,
+    "wasmAvgIterations": 6,
+    "tsAvgIterations": 10.333333333333334
+  },
+  "phaseC": {
+    "matrixFreeCalls": null,
+    "matrixFreeFallbacks": null,
+    "matrixFreeFallbackRate": null,
+    "matrixFreeUnknownFallbackRate": null,
+    "matrixFreeFallbackReasons": {}
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "minTotalSpeedup": 1,
+      "minSolverSpeedup": 1,
+      "minWasmOkRate": 1,
+      "minWasmFeasibleRate": 1,
+      "requirePhaseC": false,
+      "maxMatrixFreeFallbackRate": 0.05,
+      "maxMatrixFreeUnknownFallbackRate": 0.01
+    },
+    "checks": [
+      {
+        "name": "totalSpeedup",
+        "actual": 1.1093517349378796,
+        "limit": 1,
+        "pass": true
+      },
+      {
+        "name": "solverSpeedup",
+        "actual": 0.7479735573937735,
+        "limit": 1,
+        "pass": false
+      },
+      {
+        "name": "wasmOkRate",
+        "actual": 1,
+        "limit": 1,
+        "pass": true
+      },
+      {
+        "name": "wasmFeasibleRate",
+        "actual": 1,
+        "limit": 1,
+        "pass": true
+      }
+    ],
+    "failedChecks": [
+      {
+        "name": "solverSpeedup",
+        "actual": 0.7479735573937735,
+        "limit": 1,
+        "pass": false
+      }
+    ],
+    "passed": false
+  }
+}

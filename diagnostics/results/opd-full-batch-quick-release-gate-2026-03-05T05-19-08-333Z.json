@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-03-05T05:19:08.659Z",
+  "gridSize": 64,
+  "fieldX": 10,
+  "wavelength": 0.5876,
+  "runs": 1,
+  "opdMode": "referenceSphere",
+  "forceFinite": true,
+  "off": {
+    "avgMs": 43.261458000000005,
+    "minMs": 43.261458000000005,
+    "maxMs": 43.261458000000005,
+    "validAvg": 3096
+  },
+  "on": {
+    "avgMs": 23.12258300000002,
+    "minMs": 23.12258300000002,
+    "maxMs": 23.12258300000002,
+    "validAvg": 3096
+  },
+  "speedup": 1.8709613022039955,
+  "speedupPercent": 87.09613022039954,
+  "samples": {
+    "off": [
+      {
+        "ms": 43.261458000000005,
+        "valid": 3096
+      }
+    ],
+    "on": [
+      {
+        "ms": 23.12258300000002,
+        "valid": 3096
+      }
+    ]
+  }
+}

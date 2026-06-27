@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <script>
+    // Auto cache-bust once per tab so users opening plain /co-opt/ get latest assets.
+    (() => {
+      try {
+        const url = new URL(location.href);
+        if (url.searchParams.has('v')) return;
+
+        const onceKey = '__coopt_auto_cache_bust_once__';
+        if (sessionStorage.getItem(onceKey) === '1') return;
+        sessionStorage.setItem(onceKey, '1');
+
+        url.searchParams.set('v', String(Date.now()));
+        location.replace(url.toString());
+      } catch (_) {
+        console.warn('⚠️ [Startup] Auto cache-bust redirect skipped:', _);
+      }
+    })();
+  </script>
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6256283356932127"
+     crossorigin="anonymous"></script>
+  <title>co-opt</title>
+  <!-- SVG favicon for modern browsers -->
+  <link rel="icon" type="image/svg+xml" href="/co-opt/assets/favicon-DBJeJkyS.svg">
+  <link rel="shortcut icon" href="/co-opt/favicon.ico">
+  <!-- Fallback for Safari and older browsers -->
+  <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a4d8f' rx='4'/><text x='16' y='22' font-family='Arial, sans-serif' font-size='18' font-weight='bold' fill='%23ffffff' text-anchor='middle'>CO</text></svg>">
+  <!-- TabulatorのCSSとJSを追加 -->
+  <link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
+  
+  <!-- Plotly.js最新版を追加 -->
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+
+  <!-- URL Share compression (global LZString) -->
+  <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+
+  <!-- Import map polyfill for older Safari/iOS -->
+  <script src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js"></script>
+
+  <!-- Import map for native module scripts loaded directly from index.html -->
+
+
+  <!-- Early WASM service globals (getWASMSystem/_setWASMSystem) -->
+
+  <!-- Early asphericSag service global (window.asphericSag) -->
+
+  <!-- Early vector math service globals (window.dotProduct/crossProduct/normalize) -->
+  
+  <script>
+    // Warn (in English) when the user tries to leave via the browser Back button.
+    // Install early (in <head>) so it works even if heavy scripts delay initialization.
+    // Note: Modern browsers may ignore custom beforeunload text; popstate uses confirm().
+    (() => {
+      if (globalThis.__cooptBackWarningInstalled) return;
+
+      const isMainWindowContext = (() => {
+        try {
+          const url = new URL(window.location.href);
+          return ![
+            'coopt_render_window',
+            'coopt_analysis_window',
+            'coopt_optimize_window',
+            'coopt_settings_window'
+          ].some((key) => url.searchParams.get(key) === '1');
+        } catch (_) {
+          return true;
+        }
+      })();
+      if (!isMainWindowContext) return;
+
+      globalThis.__cooptBackWarningInstalled = true;
+
+      const message = 'Leave this page? Unsaved changes may be lost.';
+      let armed = false;
+      let allowNavigation = false;
+
+      try {
+        history.pushState({ __cooptBackGuard: true, t: Date.now() }, '', location.href);
+        armed = true;
+      } catch (_) {
+        armed = false;
+      }
+
+      window.addEventListener('popstate', () => {
+        if (!armed) return;
+        if (allowNavigation) return;
+
+        const ok = window.confirm(message);
+        if (ok) {
+          allowNavigation = true;
+          // We consumed one history step (the guard). Go back once more.
+          setTimeout(() => {
+            try {
+              history.back();
+            } catch (_) {
+              console.warn('⚠️ [Startup] Back navigation retry failed:', _);
+            }
+          }, 0);
+          return;
+        }
+
+        // Stay on the page: re-arm guard.
+        try {
+          history.pushState({ __cooptBackGuard: true, t: Date.now() }, '', location.href);
+        } catch (_) {
+          console.warn('⚠️ [Startup] Back navigation guard re-arm failed:', _);
+        }
+      });
+
+      // Handle refresh/close/navigation away.
+      const onBeforeUnload = (e) => {
+        if (allowNavigation) return;
+        try {
+          e.preventDefault();
+          // Safari/Chromium: custom text is typically ignored; empty string is the most compatible.
+          e.returnValue = '';
+          return '';
+        } catch (_) {
+          console.warn('⚠️ [Startup] beforeunload guard setup failed:', _);
+        }
+      };
+      window.addEventListener('beforeunload', onBeforeUnload, { capture: true });
+      // Some Safari versions behave more reliably with the legacy handler.
+      window['onbeforeunload'] = onBeforeUnload;
+    })();
+  </script>
+
+  <script>
+    // Ensure stale Service Workers do not serve outdated module paths.
+    (async () => {
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map(r => r.unregister()));
+        }
+      } catch (_) {
+        console.warn('⚠️ [Startup] Service worker cleanup skipped:', _);
+      }
+    })();
+  </script>
+
+  <script>
+    // iOS Detection - Log immediately for debugging (before any console filtering)
+    (() => {
+      const isIOSLike = () => {
+        try {
+          const ua = String(navigator.userAgent || '');
+          if (/iPad|iPhone|iPod/i.test(ua)) return true;
+          if (/Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1) return true;
+        } catch (_) {
+          console.warn('⚠️ [Startup] iOS detection failed:', _);
+        }
+        return false;
+      };
+      
+      const isIOS = isIOSLike();
+      const maxTouch = navigator.maxTouchPoints || 0;
+      
+      // Store for later use
+      window.__cooptIOSDetected = isIOS;
+      window.__cooptTouchPoints = maxTouch;
+    })();
+  </script>
+
+  <script>
+    // Suppress only the known duplicate Three.js warning noise.
+    (() => {
+      if (globalThis.__cooptThreeWarnFilterInstalled) return;
+      globalThis.__cooptThreeWarnFilterInstalled = true;
+
+      const originalWarn = console.warn.bind(console);
+      console.warn = (...args) => {
+        try {
+          const first = args[0];
+          if (typeof first === 'string' && first.includes('THREE.WARNING: Multiple instances of Three.js being imported.')) {
+            return;
+          }
+        } catch (_) {
+          originalWarn('⚠️ [Startup] Three.js warning filter failed:', _);
+        }
+        originalWarn(...args);
+      };
+    })();
+  </script>
+
+  <script>
+    // Error-only console mode for the entire app.
+    (() => {
+      if (!globalThis.__COOPT_ERROR_ONLY_CONSOLE) return;
+      if (globalThis.__cooptErrorOnlyConsoleFilterInstalled) return;
+      globalThis.__cooptErrorOnlyConsoleFilterInstalled = true;
+
+      const methods = [
+        'log',
+        'warn',
+        'info',
+        'debug',
+        'table',
+        'group',
+        'groupCollapsed',
+        'groupEnd'
+      ];
+
+      for (const method of methods) {
+        const original = console[method]?.bind(console);
+        if (typeof original !== 'function') continue;
+
+        console[method] = () => {};
+      }
+    })();
+  </script>
+
+  <script>
+    // Log resource load failures with concrete URLs.
+    window.addEventListener('error', (event) => {
+      try {
+        const target = event?.target;
+        const url = target?.src || target?.href || null;
+        if (url) {
+          console.warn('❌ [Resource Error]', url);
+        }
+      } catch (_) {
+        console.warn('⚠️ [Startup] Resource error logger failed:', _);
+      }
+    }, true);
+  </script>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/co-opt/node_modules/three/build/three.module.js",
+        "three/addons/": "/co-opt/node_modules/three/examples/jsm/",
+        "three/examples/jsm/controls/OrbitControls.js": "/co-opt/node_modules/three/examples/jsm/controls/OrbitControls.js",
+        "OrbitControls": "/co-opt/node_modules/three/examples/jsm/controls/OrbitControls.js"
+      }
+    }
+  </script>
+  <script type="module" crossorigin src="/co-opt/assets/main-B3XtYKLe.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-DEK5aDAM.js"></script>
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-tzDWd_HT.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/ray-renderer-DEl8walC.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-DCyaYjsy.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/optimizer-wasm-bridge-Cs_AZaYx.js">
+  <link rel="stylesheet" crossorigin href="/co-opt/assets/app-g_j8JsWi.css">
+</head>
+<body>
+
+  <div id="react-root"></div>
+  
+  <!-- Early WASM globals are installed by core/wasm-service.ts (in <head>) -->
+  
+  <!--
+    IMPORTANT:
+    When multiple System Configurations exist, each table reads from shared localStorage keys
+    (e.g. OpticalSystemTableData). On refresh, if those shared keys still contain a different
+    config's data, the UI can appear to "switch" and auto-save may overwrite the active config.
+
+    To prevent this, expand the ACTIVE configuration into the shared keys BEFORE table modules initialize.
+    We only do this when the configuration system has already been initialized (systemConfigurations exists),
+    to avoid wiping legacy single-config data before the migration runs.
+  -->
+  
+  <!-- Configuration System -->
+  
+  <!-- Multi-State / Scenarios (console-driven) -->
+
+  <!-- MVP Optimizer (console-driven; uses Blocks variable flags) -->
+
+  <!-- PSFプロット機能を読み込み -->
+  
+  <!-- OPDプロファイル実行ハーネス（コンソールから runOPDProfiling(...) を呼び出し） -->
+  
+  <!-- PSF WASM計算器を読み込み -->
+  <script>
+    // Keep console quiet by default: suppress PSF WASM glue logs unless explicitly enabled.
+    (() => {
+      if (!globalThis.__COOPT_PSF_CONSOLE_FILTER) return;
+      if (globalThis.__JS_LensDraw_PSFConsoleFilterInstalled) return;
+      globalThis.__JS_LensDraw_PSFConsoleFilterInstalled = true;
+      
+      const isDebugEnabled = () => !!(globalThis.__PSF_DEBUG || globalThis.__OPD_DEBUG);
+      const originalLog = console.log.bind(console);
+
+      console.log = (...args) => {
+        try {
+          if (!isDebugEnabled()) {
+            const first = args[0];
+            if (typeof first === 'string') {
+              if (
+                first.includes('PSF Calculator WebAssembly module') ||
+                first.includes('[WASM-C] Internal timing for')
+              ) {
+                return;
+              }
+            }
+          }
+        } catch {
+          // If filtering fails for any reason, fall back to normal logging.
+        }
+        return originalLog(...args);
+      };
+    })();
+  </script>
+  <!-- Core functionality scripts -->
+
+  <!-- 絞り周辺光線計算スクリプト -->
+
+  <!-- WASM最適化モジュール -->
+
+  <script>
+    // Ray tracing WASMサービス初期化確認
+    document.addEventListener('DOMContentLoaded', function() {
+      // WASM サービスの確認（ポーリング方式）
+      let checkCount = 0;
+      const maxChecks = 50; // 最大5秒待機（100ms x 50）
+      
+      const checkWASMSystem = () => {
+        checkCount++;
+        if (typeof window.getWASMSystem === 'function') {
+          window.getWASMSystem?.();
+          
+          // PSF関連の初期化
+          setTimeout(() => {
+            if (typeof window.setupPSFObjectSelect === 'function') {
+              window.setupPSFObjectSelect();
+            }
+            if (typeof initializePSFWasmStatus === 'function') {
+              initializePSFWasmStatus();
+            }
+          }, 1000);
+          
+          return; // 成功したので終了
+        }
+        
+        if (checkCount < maxChecks) {
+          setTimeout(checkWASMSystem, 100); // 100ms後に再チェック
+        } else {
+          console.error('❌ getWASMSystem がタイムアウトしました。main.ts の初期化を確認してください。');
+        }
+      };
+      
+      // 最初のチェックを少し遅延させる
+      setTimeout(checkWASMSystem, 100);
+    });
+  </script>
+
+  <script>
+    // OptimalAsphericCalculator初期化用ヘルパー関数
+    let optimalCalculatorInitialized = false;
+    let initializationPromise = null;
+    
+    async function ensureOptimalCalculatorReady() {
+      if (optimalCalculatorInitialized) return;
+      
+      if (!initializationPromise) {
+        initializationPromise = (async () => {
+          // OptimalAsphericCalculatorクラスが読み込まれるまで待機
+          while (typeof OptimalAsphericCalculator === 'undefined') {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
+          console.log('🎯 OptimalAsphericCalculator初期化中...');
+          window['optimalCalculator'] = new OptimalAsphericCalculator();
+          await window.optimalCalculator.initialize();
+          
+          optimalCalculatorInitialized = true;
+          console.log('✅ OptimalAsphericCalculator初期化完了');
+          console.log(`   最適化戦略: ${window.optimalCalculator.getActiveStrategy()}`);
+          
+          // 統合確認関数を定義
+          window['verifyIntegration'] = async () => {
+            console.log('🔍 OptimalAsphericCalculator メインアプリ統合確認中...');
+            
+            const calcStatus = window.optimalCalculator ? '✅' : '❌';
+            console.log(`OptimalAsphericCalculator: ${calcStatus}`);
+            
+            if (typeof window.asphericSag === 'function') {
+              const testR = 2.5;
+              const testParams = { radius: 10, conic: -0.8, coef1: 0.01, coef2: 0.02, coef3: 0.03, coef4: 0.04 };
+              
+              const result = await window.asphericSag(testR, testParams);
+              console.log('統合版 asphericSag テスト:', '✅', result);
+            }
+            
+            if (window.optimalCalculator) {
+              const stats = window.optimalCalculator.getPerformanceStats();
+              console.log('性能統計:', stats);
+            }
+            
+            return {
+              calculatorReady: !!window.optimalCalculator,
+              asphericSagIntegrated: typeof window.asphericSag === 'function',
+              integrationComplete: true
+            };
+          };
+          
+          // OptimalAsphericCalculatorテスト関数
+          window['testOptimalCalculator'] = async () => {
+            console.log('🎯 OptimalAsphericCalculator統合テスト実行中...');
+            
+            const smallTest = await window.optimalCalculator.calculateAsphericSag([1, 2, 3, 4, 5], -0.8, [0.01, 0.02, 0.03]);
+            console.log('小規模計算結果:', smallTest.strategy, smallTest.time + 'ms');
+            
+            const largeInput = Array.from({length: 100000}, (_, i) => i * 0.01);
+            const largeTest = await window.optimalCalculator.calculateAsphericSag(largeInput, -0.8, [0.01, 0.02, 0.03]);
+            console.log('大規模計算結果:', largeTest.strategy, largeTest.time + 'ms');
+            
+            return { small: smallTest, large: largeTest };
+          };
+          
+          console.log('🎯 OptimalAsphericCalculator テスト関数が利用可能になりました:');
+          console.log('   verifyIntegration() - 統合状態確認');
+          console.log('   testOptimalCalculator() - 最適化テスト実行');
+          
+          // WASMサービスデバッグ補助関数
+          window['createWASMSystem'] = () => {
+            if (typeof window.getWASMSystem === 'function') {
+              return window.getWASMSystem();
+            } else {
+              console.error('❌ getWASMSystem が利用できません');
+              return null;
+            }
+          };
+          
+          window['testWASMSystemDirect'] = async () => {
+            console.log('🧪 WASM サービス直接テスト開始...');
+            const system = (typeof window.getWASMSystem === 'function')
+              ? window.getWASMSystem()
+              : null;
+            if (!system) {
+              console.error('❌ WASM サービスが初期化されていません');
+              return null;
+            }
+            console.log('✅ WASM サービス状態:', system);
+            return system;
+          };
+          
+          console.log('🔧 WASM直接テスト関数が追加されました:');
+          console.log('   createWASMSystem() - WASMシステム作成');
+          console.log('   testWASMSystemDirect() - WASM直接テスト');
+        })();
+      }
+      
+      await initializationPromise;
+    }
+    
+    // WASM最適化システム自動初期化
+    document.addEventListener('DOMContentLoaded', async () => {
+      
+      try {
+        // 基本的な機能のみ有効化（削除された最適化ファイルへの依存を除去）
+        
+        // Loadしたファイル名を表示 (gateway経由)
+        const loadedFileName = window.__cooptLoadedFileStorage?.getLoadedFileName?.() || null;
+        const loadedFileWarn = window.__cooptLoadedFileStorage?.getLoadedFileWarn?.() || false;
+        const fileNameElement = document.getElementById('loaded-file-name');
+        if (fileNameElement) {
+          if (loadedFileName) {
+            fileNameElement.textContent = loadedFileName;
+            fileNameElement.style.color = '#1a4d8f';
+          } else {
+            fileNameElement.textContent = 'No file loaded';
+            fileNameElement.style.color = '#999';
+          }
+
+          if (loadedFileWarn && loadedFileName) {
+            const s = String(fileNameElement.textContent || '');
+            if (!s.includes('LOAD WARN') && !s.includes('(surfaces only)')) {
+              fileNameElement.textContent = s + ' (surfaces only)';
+              fileNameElement.style.color = '#b45309';
+            }
+          }
+        }
+        
+        // System Data を復元（Reference Focal Length）
+        try {
+          const systemData = window.__cooptSystemDataProjection?.loadSystemDataProjection?.();
+          const refFLInput = document.getElementById('reference-focal-length');
+          if (refFLInput && systemData && systemData.referenceFocalLength !== undefined) {
+            refFLInput.value = systemData.referenceFocalLength;
+          }
+        } catch (e) {
+          console.warn('⚠️ System Data復元エラー:', e);
+        }
+        
+        // Configuration UI を初期化（リトライロジック付き）
+        const initConfigUI = async () => {
+          let retries = 0;
+          const maxRetries = 30;
+          
+          while (retries < maxRetries) {
+            if (typeof window.initializeConfigurationUI === 'function') {
+              window.initializeConfigurationUI();
+              
+              // UI初期化後、確実に選択状態を更新
+              setTimeout(() => {
+                if (typeof window.refreshConfigurationUI === 'function') {
+                  window.refreshConfigurationUI();
+                }
+              }, 200);
+              return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            retries++;
+          }
+        };
+        
+        await initConfigUI();
+        
+        // 基本テスト関数のみ公開
+        window['testBasicFunctionality'] = () => {
+          console.log('🧪 基本機能テスト実行中...');
+          
+          // 基本的な光学計算テスト
+          if (typeof window.asphericSag === 'function') {
+            try {
+              const testResult = window.asphericSag(1.0, {radius: 50, conic: -0.5, coef1: 1e-6});
+              console.log('✅ 非球面SAG計算: 正常動作');
+              return true;
+            } catch (error) {
+              console.log('❌ 非球面SAG計算: エラー', error);
+              return false;
+            }
+          } else {
+            console.log('⚠️ asphericSag関数が見つかりません');
+            return false;
+          }
+        };
+        
+
+        
+      } catch (error) {
+        // Silent error
+      }
+    });
+    
+    // PSF WASM状況初期化関数
+    async function initializePSFWasmStatus() {
+      const statusElement = document.getElementById('psf-wasm-status');
+      if (!statusElement) return;
+      
+      try {
+        const PSFCalculator = window['PSFCalculator'];
+        if (typeof PSFCalculator !== 'function') {
+          statusElement.textContent = 'WASM Status: PSF unavailable ⚠️';
+          statusElement.style.color = 'orange';
+          return;
+        }
+        const psfCalculator = new PSFCalculator();
+        
+        // 初期化を待機
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        const wasmStatus = psfCalculator.getWasmStatus();
+        
+        if (wasmStatus.ready) {
+          statusElement.textContent = 'WASM Status: Ready ✅';
+          statusElement.style.color = 'green';
+        } else if (wasmStatus.available) {
+          statusElement.textContent = 'WASM Status: Initializing... ⚠️';
+          statusElement.style.color = 'orange';
+        } else {
+          statusElement.textContent = 'WASM Status: JavaScript Only ❌';
+          statusElement.style.color = 'red';
+        }
+        
+        // console.log('🔧 [PSF] WASM状況初期化完了:', wasmStatus);
+        
+      } catch (error) {
+        console.error('❌ [PSF] WASM状況初期化エラー:', error);
+        statusElement.textContent = 'WASM Status: Error ❌';
+        statusElement.style.color = 'red';
+      }
+    }
+  </script>
+
+  <!-- Coordinate Transform Test (Temporary - remove after testing) -->
+  <!-- <script type="module" src="testing/test-coordinate-transform.ts"></script> -->
+
+  <!-- React App Entry Point -->
+
+</body>
+
+</html>

@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-03-02T00:02:05.355Z",
+  "startedAt": "2026-03-02T00:02:05.242Z",
+  "thresholds": {
+    "raytraceMaxMismatchRate": 0,
+    "raytraceMaxSuccessMismatchRate": 0,
+    "raytraceMaxMeanOplUm": 0,
+    "raytraceMaxOplUm": 0,
+    "opdMinSpeedup": 1.05,
+    "opdMaxValidDiff": 0,
+    "kktMinTotalSpeedup": 1.5,
+    "kktMinSolverSpeedup": 1,
+    "kktMinWasmOkRate": 1,
+    "kktMinWasmFeasibleRate": 1
+  },
+  "kktConfig": {
+    "rounds": 1,
+    "n": 12,
+    "meq": 3,
+    "mineq": 3,
+    "maxIter": 10
+  },
+  "controls": {
+    "startFrom": "kkt",
+    "output": "diagnostics/results/release-gate-resume-smoke.json",
+    "checkpoint": "diagnostics/results/release-gate-resume-smoke.checkpoint.json"
+  },
+  "steps": {
+    "raytrace": {
+      "passed": false,
+      "skipped": true,
+      "golden": null,
+      "analysis": null
+    },
+    "opd": {
+      "passed": false,
+      "skipped": true,
+      "result": null,
+      "analysis": null
+    },
+    "kkt": {
+      "passed": false,
+      "skipped": false,
+      "result": "diagnostics/results/kkt-e2e-2026-03-02T00-02-05-325Z.json",
+      "analysis": "diagnostics/results/kkt-e2e-analysis-2026-03-02T00-02-05-346Z.json"
+    }
+  },
+  "passed": false,
+  "failedStep": "kkt",
+  "error": "diagnostics/kkt-e2e-auto.mjs failed with code 1"
+}

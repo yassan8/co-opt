@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-11T08:27:32.685Z",
+  "inputPath": "diagnostics/results/raytrace-golden-quick-release-gate-2026-03-11T08-27-07-432Z.json",
+  "settings": {
+    "marginNearMm": 0.05
+  },
+  "totals": {
+    "apertureBlockCount": 16,
+    "distinctSurfaces": 2
+  },
+  "bySurface": [
+    {
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "surfType": "Spherical",
+      "count": 12,
+      "marginMm": {
+        "min": 3.885690586,
+        "p50": 5.836349195,
+        "p90": 5.836349195,
+        "max": 5.836349195,
+        "mean": 5.186129659
+      },
+      "hitRadiusMm": {
+        "min": 15.885690586,
+        "max": 17.836349195
+      },
+      "apertureLimitMm": {
+        "min": 12,
+        "max": 12
+      }
+    },
+    {
+      "surfaceIndex": 6,
+      "surfaceNumber": 7,
+      "surfType": "Spherical",
+      "count": 4,
+      "marginMm": {
+        "min": 0.883364558,
+        "p50": 0.883364558,
+        "p90": 0.883364558,
+        "max": 0.883364558,
+        "mean": 0.883364558
+      },
+      "hitRadiusMm": {
+        "min": 12.883364558,
+        "max": 12.883364558
+      },
+      "apertureLimitMm": {
+        "min": 12,
+        "max": 12
+      }
+    }
+  ],
+  "nearEdge": [],
+  "crossChecks": {
+    "rustSingleHitMetaStatus": {
+      "aperture_block": 16,
+      "ok": 9
+    },
+    "rustCapturedFailure": 0
+  }
+}

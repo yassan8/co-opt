@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-03-08T14:58:35.936Z",
+  "input": "diagnostics/results/ta-rms-lightweight-vs-statsonly-2026-03-08T14-58-24-083Z.json",
+  "output": "diagnostics/results/ta-rms-lightweight-vs-statsonly-analysis-2026-03-08T14-58-24-083Z.json",
+  "metrics": {
+    "medianOfMedianSpeedup": 1.0008278047027361,
+    "rayCountMedians": [
+      {
+        "rayCount": 21,
+        "medianSpeedup": 0.9943006652863448
+      },
+      {
+        "rayCount": 31,
+        "medianSpeedup": 1.0052079942237782
+      },
+      {
+        "rayCount": 51,
+        "medianSpeedup": 0.9945291426059991
+      },
+      {
+        "rayCount": 81,
+        "medianSpeedup": 1.0039614439166058
+      },
+      {
+        "rayCount": 101,
+        "medianSpeedup": 1.0009666699562176
+      },
+      {
+        "rayCount": 151,
+        "medianSpeedup": 1.0006889394492544
+      }
+    ]
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "minMedianOfMedianSpeedup": 0.99,
+      "minPerRaycountSpeedup": 0.97
+    },
+    "failedChecks": [],
+    "passed": true
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "timestamp": "2026-03-02T00:02:05.324Z",
+  "config": {
+    "rounds": 1,
+    "n": 12,
+    "mEq": 3,
+    "mIneq": 3,
+    "maxIter": 10,
+    "seed": 12345
+  },
+  "bridge": {
+    "ready": true,
+    "hasSolveSpd": true,
+    "hasSolveLinear": true,
+    "hasBuildNormalEq": true,
+    "hasVectorOps": true,
+    "hasMatrixOps": true,
+    "hasCholesky": true,
+    "hasBfgs": true,
+    "hasQr": true,
+    "hasQpSubproblem": true,
+    "hasQpKktEqSubproblem": true,
+    "hasLineSearchArmijo": true,
+    "hasTrustRegionUpdate": true,
+    "initSource": "shared-raytracing",
+    "initError": null,
+    "lastSolveReason": "not-run",
+    "lastNormalEqReason": "not-run"
+  },
+  "wasm": {
+    "runs": 1,
+    "avgTotalMs": 3.3928339999999935,
+    "avgSolverAndOtherMs": 2.0191810000000103,
+    "avgObjectiveEvalMs": 0.5774369999998399,
+    "avgConstraintEvalMs": 0.7962160000001433,
+    "avgIterations": 6,
+    "okCount": 1,
+    "feasibleCount": 1
+  },
+  "ts": {
+    "runs": 1,
+    "avgTotalMs": 3.4744579999999985,
+    "avgSolverAndOtherMs": 2.1412440000001,
+    "avgObjectiveEvalMs": 0.7626670000000999,
+    "avgConstraintEvalMs": 0.5705469999997987,
+    "avgIterations": 10,
+    "okCount": 0,
+    "feasibleCount": 0
+  },
+  "speedups": {
+    "total": 1.0240577640992767,
+    "solverAndOther": 1.060451737610491
+  },
+  "detail": {
+    "wasmRuns": [
+      {
+        "mode": "wasm",
+        "ok": true,
+        "iterations": 6,
+        "feasible": true,
+        "fval": 2.2538495103478864,
+        "reason": "Converged (constraints satisfied)",
+        "totalMs": 3.3928339999999935,
+        "objectiveEval": {
+          "calls": 1195,
+          "ms": 0.5774369999998399
+        },
+        "constraintEval": {
+          "calls": 7590,
+          "ms": 0.7962160000001433
+        },
+        "solverAndOtherMs": 2.0191810000000103
+      }
+    ],
+    "tsRuns": [
+      {
+        "mode": "ts",
+        "ok": false,
+        "iterations": 10,
+        "feasible": false,
+        "fval": 0.29851741571844986,
+        "reason": "Max iterations reached",
+        "totalMs": 3.4744579999999985,
+        "objectiveEval": {
+          "calls": 1991,
+          "ms": 0.7626670000000999
+        },
+        "constraintEval": {
+          "calls": 12529,
+          "ms": 0.5705469999997987
+        },
+        "solverAndOtherMs": 2.1412440000001
+      }
+    ]
+  }
+}

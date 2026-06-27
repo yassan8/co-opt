@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-05T06:53:13.971Z",
+  "inputPath": "diagnostics/results/raytrace-golden-2026-03-05T06-53-13-909Z.json",
+  "settings": {
+    "marginNearMm": 0.05
+  },
+  "totals": {
+    "apertureBlockCount": 7,
+    "distinctSurfaces": 2
+  },
+  "bySurface": [
+    {
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "surfType": "Spherical",
+      "count": 5,
+      "marginMm": {
+        "min": 4.776625683,
+        "p50": 4.776625683,
+        "p90": 4.776625683,
+        "max": 4.776625683,
+        "mean": 4.776625683
+      },
+      "hitRadiusMm": {
+        "min": 16.776625683,
+        "max": 16.776625683
+      },
+      "apertureLimitMm": {
+        "min": 12,
+        "max": 12
+      }
+    },
+    {
+      "surfaceIndex": 6,
+      "surfaceNumber": 7,
+      "surfType": "Spherical",
+      "count": 2,
+      "marginMm": {
+        "min": 0.883364558,
+        "p50": 0.883364558,
+        "p90": 0.883364558,
+        "max": 0.883364558,
+        "mean": 0.883364558
+      },
+      "hitRadiusMm": {
+        "min": 12.883364558,
+        "max": 12.883364558
+      },
+      "apertureLimitMm": {
+        "min": 12,
+        "max": 12
+      }
+    }
+  ],
+  "nearEdge": [],
+  "crossChecks": {
+    "rustSingleHitMetaStatus": {
+      "aperture_block": 7,
+      "ok": 3
+    },
+    "rustCapturedFailure": 0
+  }
+}

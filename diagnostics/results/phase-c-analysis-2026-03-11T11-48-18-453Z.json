@@ -1,0 +1,90 @@
+{
+  "timestamp": "2026-03-11T11:48:18.452Z",
+  "inputPath": "diagnostics/results/phase-c-benchmark-browser-real.json",
+  "selectedMode": "matrixFree",
+  "metrics": {
+    "elapsedSpeedup": null,
+    "baselineOkRatePct": null,
+    "selectedOkRatePct": null,
+    "okRateDeltaPct": null,
+    "matrixFreeCalls": null,
+    "matrixFreeFallbacks": null,
+    "matrixFreeFallbackRate": null,
+    "matrixFreeUnknownFallbackRate": null,
+    "matrixFreeHitRatePct": null,
+    "matrixFreeCgItersAvg": null,
+    "matrixFreeSolverItersAvg": null,
+    "matrixFreeResidualNormAvg": null,
+    "matrixFreeMsAvg": null,
+    "matrixFreeFallbackReasons": {}
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "minElapsedSpeedup": 1.5,
+      "minOkRateDeltaPct": 0,
+      "maxMatrixFreeFallbackRate": 0.05,
+      "maxMatrixFreeUnknownFallbackRate": 0.01,
+      "requireMatrixFreeCalls": true
+    },
+    "checks": [
+      {
+        "name": "elapsedSpeedup",
+        "actual": null,
+        "limit": 1.5,
+        "pass": false
+      },
+      {
+        "name": "okRateDeltaPct",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "name": "phaseC.matrixFreeFallbackRate",
+        "actual": null,
+        "limit": 0.05,
+        "pass": false
+      },
+      {
+        "name": "phaseC.matrixFreeUnknownFallbackRate",
+        "actual": null,
+        "limit": 0.01,
+        "pass": false
+      },
+      {
+        "name": "phaseC.matrixFreeCalls",
+        "actual": null,
+        "limit": 1,
+        "pass": false
+      }
+    ],
+    "failedChecks": [
+      {
+        "name": "elapsedSpeedup",
+        "actual": null,
+        "limit": 1.5,
+        "pass": false
+      },
+      {
+        "name": "phaseC.matrixFreeFallbackRate",
+        "actual": null,
+        "limit": 0.05,
+        "pass": false
+      },
+      {
+        "name": "phaseC.matrixFreeUnknownFallbackRate",
+        "actual": null,
+        "limit": 0.01,
+        "pass": false
+      },
+      {
+        "name": "phaseC.matrixFreeCalls",
+        "actual": null,
+        "limit": 1,
+        "pass": false
+      }
+    ],
+    "passed": false
+  }
+}

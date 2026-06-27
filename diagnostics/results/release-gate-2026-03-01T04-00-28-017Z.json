@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-03-01T04:00:27.838Z",
+  "startedAt": "2026-03-01T04:00:27.837Z",
+  "thresholds": {
+    "raytraceMaxMismatchRate": 0,
+    "raytraceMaxSuccessMismatchRate": 0,
+    "raytraceMaxMeanOplUm": 0,
+    "raytraceMaxOplUm": 0,
+    "opdMinSpeedup": 1.05,
+    "opdMaxValidDiff": 0,
+    "kktMinTotalSpeedup": 1.5,
+    "kktMinSolverSpeedup": 1,
+    "kktMinWasmOkRate": 1,
+    "kktMinWasmFeasibleRate": 1
+  },
+  "kktConfig": {
+    "rounds": 6,
+    "n": 24,
+    "meq": 6,
+    "mineq": 6,
+    "maxIter": 20
+  },
+  "steps": {
+    "raytrace": {
+      "passed": false,
+      "golden": "diagnostics/results/raytrace-golden-2026-03-01T04-00-27-878Z.json",
+      "analysis": "diagnostics/results/raytrace-golden-analysis-2026-03-01T04-00-28-008Z.json"
+    },
+    "opd": {
+      "passed": false,
+      "result": "diagnostics/results/opd-full-batch-2026-03-01T02-47-08-481Z.json",
+      "analysis": "diagnostics/results/opd-full-batch-analysis-2026-03-01T02-49-24-529Z.json"
+    },
+    "kkt": {
+      "passed": false,
+      "result": "diagnostics/results/kkt-e2e-2026-03-01T03-01-02-484Z.json",
+      "analysis": "diagnostics/results/kkt-e2e-analysis-2026-03-01T03-01-02-509Z.json"
+    }
+  },
+  "passed": false,
+  "failedStep": "raytrace",
+  "error": "diagnostics/raytrace-golden-auto.mjs failed with code 2"
+}

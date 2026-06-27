@@ -1,0 +1,95 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-wasm
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Rust WASM bundle
+        run: npm run wasm:rebuild
+
+      - name: Build GitHub Pages app
+        run: npm run build:pages
+
+      - name: Detect Pages availability
+        id: pages_check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const res = await github.request('GET /repos/{owner}/{repo}/pages', {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+              core.info(`GitHub Pages detected (status=${res.data?.status || 'unknown'})`);
+              core.setOutput('enabled', 'true');
+            } catch (error) {
+              if (error && error.status === 404) {
+                core.warning('GitHub Pages is not enabled for this repository. Skipping Pages deploy steps.');
+                core.setOutput('enabled', 'false');
+                return;
+              }
+              throw error;
+            }
+
+      - name: Configure Pages
+        if: steps.pages_check.outputs.enabled == 'true'
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact (dist)
+        if: steps.pages_check.outputs.enabled == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+      - name: Deploy to GitHub Pages
+        if: steps.pages_check.outputs.enabled == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Skip message
+        if: steps.pages_check.outputs.enabled != 'true'
+        run: echo "GitHub Pages is not enabled. Workflow completed without deployment."

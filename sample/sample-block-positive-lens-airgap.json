@@ -1,0 +1,80 @@
+{
+  "configurations": {
+    "configurations": [
+      {
+        "id": 1,
+        "name": "Block Sample (Lens + AirGap)",
+        "schemaVersion": "0.1",
+        "blocks": [
+          {
+            "blockId": "B1",
+            "blockType": "Lens",
+            "role": "Imaging",
+            "constraints": {},
+            "parameters": {
+              "frontRadius": 50,
+              "backRadius": -50,
+              "centerThickness": 5,
+              "material": "N-BK7"
+            },
+            "variables": {
+              "frontRadius": { "optimize": { "mode": "V" } },
+              "backRadius": { "optimize": { "mode": "V" } },
+              "centerThickness": { "optimize": { "mode": "V" } }
+            },
+            "metadata": {
+              "note": "MVP sample: lens thickness is internal only; post spacing is a separate AirGap block."
+            }
+          },
+          {
+            "blockId": "S1",
+            "blockType": "Stop",
+            "role": "ApertureStop",
+            "constraints": {},
+            "parameters": {
+              "semiDiameter": 5.0
+            },
+            "variables": {},
+            "metadata": {}
+          },
+          {
+            "blockId": "G1",
+            "blockType": "AirGap",
+            "role": "Spacing",
+            "constraints": {},
+            "parameters": {
+              "thickness": 50
+            },
+            "variables": {
+              "thickness": { "optimize": { "mode": "V" } }
+            },
+            "metadata": {}
+          }
+        ],
+        "source": [
+          { "id": 1, "wavelength": 0.4358343, "weight": 1.0, "primary": "", "angle": 0 },
+          { "id": 2, "wavelength": 0.5875618, "weight": 1.0, "primary": "Primary Wavelength", "angle": 5 },
+          { "id": 3, "wavelength": 0.6562725, "weight": 1.0, "primary": "", "angle": 10 }
+        ],
+        "object": [
+          { "id": 1, "xHeightAngle": 0, "yHeightAngle": 0, "position": "Rectangle", "angle": 0 },
+          { "id": 2, "xHeightAngle": 0, "yHeightAngle": 5, "position": "Rectangle", "angle": 5 },
+          { "id": 3, "xHeightAngle": 0, "yHeightAngle": 10, "position": "Rectangle", "angle": 10 }
+        ],
+        "systemData": {
+          "referenceFocalLength": ""
+        },
+        "metadata": {
+          "created": "2025-12-23T00:00:00.000Z",
+          "modified": "2025-12-23T00:00:00.000Z",
+          "optimizationTarget": null,
+          "locked": false,
+          "designer": { "type": "ai", "name": "BlockSchemaSample", "confidence": null }
+        }
+      }
+    ],
+    "activeConfigId": 1,
+    "meritFunction": [],
+    "optimizationRules": {}
+  }
+}

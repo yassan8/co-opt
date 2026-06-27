@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-03-01T04:49:05.682Z",
+  "inputPath": "diagnostics/results/opd-full-batch-2026-03-01T04-43-34-834Z.json",
+  "metrics": {
+    "offAvgMs": 24.404302250000015,
+    "onAvgMs": 22.774375000000006,
+    "speedup": 1.0715684733390052,
+    "speedupPercent": 7.156847333900518,
+    "validOff": 3096,
+    "validOn": 3096,
+    "validDiff": 0
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "minSpeedup": 1.05,
+      "maxValidDiff": 0
+    },
+    "checks": [
+      {
+        "name": "speedup",
+        "actual": 1.0715684733390052,
+        "limit": 1.05,
+        "pass": true
+      },
+      {
+        "name": "validDiff",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      }
+    ],
+    "failedChecks": [],
+    "passed": true
+  }
+}

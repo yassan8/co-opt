@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "projectRootRel": ".",
+    "filesScanned": 164,
+    "ignoredDirs": [
+      ".git",
+      ".venv",
+      ".vscode",
+      "dist",
+      "docs",
+      "node_modules"
+    ]
+  },
+  "localStorage": {
+    "ops": {},
+    "opFiles": {},
+    "keys": {},
+    "keyFiles": {}
+  },
+  "window": {
+    "assignments": {},
+    "assignmentFiles": {}
+  }
+}
