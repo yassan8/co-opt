@@ -1145,6 +1145,11 @@ body.dark-mode #design-intent-add-block-type option {
     margin: 0;
 }
 
+#design-intent-container {
+    padding-bottom: 10px;
+    box-sizing: border-box;
+}
+
 .block-inspector-panel {
     flex: 1 1 38%;
     min-height: 260px;
