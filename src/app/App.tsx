@@ -11089,7 +11089,6 @@ const collectLegacyCrossRays = async (
 
     const handleRenderDraw = async () => {
       try {
-        setRenderRayCount(5);
         const w = window as any;
         const startupStages: RenderTimingStage[] = [];
         try {
@@ -11153,7 +11152,6 @@ const collectLegacyCrossRays = async (
     };
 
     const handleViewXZ = () => {
-      setRenderRayCount(3);
       renderViewAxisRef.current = 'XZ';
       renderViewModeRef.current = 'XZ';
       setRenderViewAxis('XZ');
@@ -11165,7 +11163,6 @@ const collectLegacyCrossRays = async (
     };
 
     const handleViewYZ = () => {
-      setRenderRayCount(3);
       renderViewAxisRef.current = 'YZ';
       renderViewModeRef.current = 'YZ';
       setRenderViewAxis('YZ');
@@ -11262,6 +11259,20 @@ const collectLegacyCrossRays = async (
             <button type="button" onClick={handleRenderDraw}>Render</button>
             <button type="button" onClick={handleViewXZ}>X-Z View</button>
             <button type="button" onClick={handleViewYZ}>Y-Z View</button>
+            <label htmlFor="render-ray-count" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Raynum</label>
+            <input
+              id="render-ray-count"
+              type="number"
+              min={1}
+              step={1}
+              value={renderRayCount}
+              onChange={(e) => {
+                const parsed = Number.parseInt(e.target.value, 10);
+                if (!Number.isFinite(parsed)) return;
+                setRenderRayCount(Math.max(1, parsed));
+              }}
+              style={{ width: 76, height: 28 }}
+            />
             <label htmlFor="render-compare-scope" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Configs</label>
             <select
               id="render-compare-scope"
@@ -12422,7 +12433,8 @@ const collectLegacyCrossRays = async (
                 key={s.key}
                 className={`win-mdi-window win-mdi-window--${s.key}${ws.minimized ? ' is-minimized' : ''}${ws.maximized ? ' is-maximized' : ''}${workspaceFocus === s.key ? ' is-focused' : ''}`}
                 style={{ left: ws.x, top: ws.y, width: ws.width, height: ws.minimized ? 44 : ws.height, zIndex: ws.zIndex }}
-                onMouseDown={() => bringMdiToFront(s.key)}
+                onPointerDownCapture={() => bringMdiToFront(s.key)}
+                onFocusCapture={() => bringMdiToFront(s.key)}
                 onPointerUp={(e) => syncWindowGeometry(s.key, e.currentTarget as HTMLElement)}
                 onMouseUp={(e) => syncWindowGeometry(s.key, e.currentTarget as HTMLElement)}
               >
@@ -12483,7 +12495,8 @@ const collectLegacyCrossRays = async (
                 key={w.id}
                 className={`win-mdi-window${w.minimized ? ' is-minimized' : ''}${w.maximized ? ' is-maximized' : ''}`}
                 style={{ left: w.x, top: w.y, width: w.width, height: w.minimized ? 44 : w.height, zIndex: w.zIndex }}
-                onMouseDown={() => bringMdiAuxToFront(w.id)}
+                onPointerDownCapture={() => bringMdiAuxToFront(w.id)}
+                onFocusCapture={() => bringMdiAuxToFront(w.id)}
                 onPointerUp={(e) => syncAuxWindowGeometry(w.id, e.currentTarget as HTMLElement)}
                 onMouseUp={(e) => syncAuxWindowGeometry(w.id, e.currentTarget as HTMLElement)}
               >
@@ -12524,6 +12537,7 @@ const collectLegacyCrossRays = async (
                     <iframe
                       title={w.title}
                       src={w.url}
+                      onFocus={() => bringMdiAuxToFront(w.id)}
                       style={{ width: '100%', height: '100%', border: 'none', background: '#ffffff' }}
                     />
                   </div>

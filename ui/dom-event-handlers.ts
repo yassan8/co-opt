@@ -2115,30 +2115,37 @@ function __cooptAutoCalculateMissingDesignIntentApertures(): boolean {
 function autoSetBlockAperturesFromLargestObjectCondition(): boolean {
     try {
         const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
+        const activeCfg = Array.isArray(systemConfig?.configurations)
+            ? (systemConfig.configurations.find((c: any) => c && String(c.id) === String(systemConfig?.activeConfigId)) || systemConfig.configurations[0])
+            : null;
         const sourceRows = (() => {
             try {
-                const activeCfg = Array.isArray(systemConfig?.configurations)
-                    ? (systemConfig.configurations.find((c: any) => c && String(c.id) === String(systemConfig?.activeConfigId)) || systemConfig.configurations[0])
-                    : null;
                 if (Array.isArray(activeCfg?.source) && activeCfg.source.length > 0) return activeCfg.source;
             } catch (_) {}
             try { return loadSourceTableData(); } catch (_) { return []; }
         })();
         const objectRows = (() => {
             try {
-                const activeCfg = Array.isArray(systemConfig?.configurations)
-                    ? (systemConfig.configurations.find((c: any) => c && String(c.id) === String(systemConfig?.activeConfigId)) || systemConfig.configurations[0])
-                    : null;
                 if (Array.isArray(activeCfg?.object) && activeCfg.object.length > 0) return activeCfg.object;
             } catch (_) {}
             try { return loadObjectTableData(); } catch (_) { return []; }
         })();
 
-        const updatedRows = autoCalculateMissingSemidia(sourceRows, objectRows, {
+        let updatedRows = autoCalculateMissingSemidia(sourceRows, objectRows, {
             forceOverwriteSemidia: true,
             apertureMarginFactor: COOPT_AUTO_APERTURE_MARGIN_FACTOR,
             apertureMarginMm: COOPT_AUTO_APERTURE_MARGIN_MM
         } as any);
+        if (!Array.isArray(updatedRows) || updatedRows.length === 0) {
+            const tbl = w.tableOpticalSystem || w.opticalSystemTabulator;
+            const tableRows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
+            if (Array.isArray(tableRows) && tableRows.length > 0) {
+                updatedRows = tableRows;
+            } else if (Array.isArray(activeCfg?.opticalSystem) && activeCfg.opticalSystem.length > 0) {
+                updatedRows = activeCfg.opticalSystem;
+            }
+        }
+        if (!Array.isArray(updatedRows) || updatedRows.length === 0) return false;
         __zmxSyncDesignIntentApertureFromOpticalRows(updatedRows);
         return true;
     } catch (err) {
@@ -6854,6 +6861,7 @@ let __cooptBlockInspectorLastGroups: any = null;
 let __cooptBlockInspectorLastBlockById: Map<string, any> | null = null;
 let __cooptBlockInspectorLastBlocksInOrder: any[] | null = null;
 let __designIntentQuickEditorDelegatedBindingInstalled = false;
+let __designIntentToolbarDelegatedBindingInstalled = false;
 
 function readDesignIntentQuickEditorEnabled(): boolean {
     return true;
@@ -7398,13 +7406,31 @@ function __blocks_setParameterAndApertureModeBulk(enabled: boolean): { ok: boole
         }
 
         const activeId = systemConfig.activeConfigId;
-        const activeCfg = systemConfig.configurations.find((c: any) => c && c.id === activeId) || null;
+        const activeCfg = systemConfig.configurations.find((c: any) => c && String(c.id) === String(activeId))
+            || systemConfig.configurations[0]
+            || null;
         if (!activeCfg || !Array.isArray(activeCfg.blocks)) {
             return { ok: false, changedCount: 0, reason: 'active configuration or blocks not found' };
         }
 
         const beforeBlocks = JSON.parse(JSON.stringify(activeCfg.blocks));
         let changedCount = 0;
+
+        const getBulkTargetState = (currentVarEntry: any): { mode: 'V' | 'F'; scope: 'perConfig' | 'global' } => {
+            if (!enabled) {
+                return { mode: 'F', scope: 'perConfig' };
+            }
+
+            const isEnabled = __blocks_shouldMarkVar(currentVarEntry);
+            const currentScope = __blocks_getVarScope(currentVarEntry);
+            if (!isEnabled) {
+                return { mode: 'V', scope: 'perConfig' };
+            }
+            return {
+                mode: 'V',
+                scope: currentScope === 'global' ? 'perConfig' : 'global'
+            };
+        };
 
         for (const block of activeCfg.blocks) {
             if (!block || typeof block !== 'object') continue;
@@ -7417,33 +7443,49 @@ function __blocks_setParameterAndApertureModeBulk(enabled: boolean): { ok: boole
             const blockType = String(block?.blockType || block?.type || 'unknown');
             const paramKeys = __blocks_getVisibleParameterKeys(block);
             for (const key of paramKeys) {
-                const mode = __blocks_getBulkOptimizeModeForParameter(block, key, enabled);
+                const currentVarEntry = __blocks_getVarEntryForKey(block.variables, key);
+                const targetState = getBulkTargetState(currentVarEntry);
+                const mode = enabled
+                    ? __blocks_getBulkOptimizeModeForParameter(block, key, true)
+                    : 'F';
                 const initialValue = ((String(key ?? '').trim().toLowerCase() === 'bending')
                     && !!cooptGetBendingConfigForBlock(block))
                     ? cooptComputeLensBendingValue(block, blockType)
                     : (cooptGetBlockNumericValue(block, key) ?? params?.[key] ?? '');
-                if (!block.variables[key] || typeof block.variables[key] !== 'object') {
-                    block.variables[key] = { value: initialValue };
+                const storageKey = __blocks_resolveVarStorageKey(block.variables, key) || String(key ?? '').trim();
+                if (!block.variables[storageKey] || typeof block.variables[storageKey] !== 'object') {
+                    block.variables[storageKey] = { value: initialValue };
                 }
-                if (Object.prototype.hasOwnProperty.call(block.variables[key], 'value') === false) {
-                    block.variables[key].value = initialValue;
+                if (Object.prototype.hasOwnProperty.call(block.variables[storageKey], 'value') === false) {
+                    block.variables[storageKey].value = initialValue;
                 }
-                if (!block.variables[key].optimize || typeof block.variables[key].optimize !== 'object') {
-                    block.variables[key].optimize = {};
+                if (!block.variables[storageKey].optimize || typeof block.variables[storageKey].optimize !== 'object') {
+                    block.variables[storageKey].optimize = {};
                 }
 
-                const prevMode = String(block.variables[key].optimize.mode ?? '').trim();
+                const prevMode = String(block.variables[storageKey].optimize.mode ?? '').trim();
+                const prevScope = String(block.variables[storageKey].optimize.scope ?? '').trim();
                 if (prevMode !== mode) changedCount++;
-                block.variables[key].optimize.mode = mode;
-                if (!block.variables[key].optimize.scope) {
-                    block.variables[key].optimize.scope = 'perConfig';
+                if (prevScope !== targetState.scope) changedCount++;
+                block.variables[storageKey].optimize.mode = mode;
+                block.variables[storageKey].optimize.scope = targetState.scope;
+
+                const aliasKey = __blocks_getAliasKeyForMaterialFamily(storageKey);
+                if (aliasKey && block.variables[aliasKey] && typeof block.variables[aliasKey] === 'object') {
+                    if (!block.variables[aliasKey].optimize || typeof block.variables[aliasKey].optimize !== 'object') {
+                        block.variables[aliasKey].optimize = {};
+                    }
+                    block.variables[aliasKey].optimize.mode = mode;
+                    block.variables[aliasKey].optimize.scope = targetState.scope;
                 }
             }
 
             const aperture = (block.aperture && typeof block.aperture === 'object') ? block.aperture : null;
             const apertureKeys = __blocks_getVisibleApertureKeys(block);
             for (const key of apertureKeys) {
-                const mode = enabled ? 'V' : 'F';
+                const currentVarEntry = __blocks_getVarEntryForKey(block.variables, key);
+                const targetState = getBulkTargetState(currentVarEntry);
+                const mode = targetState.mode;
                 if (!block.variables[key] || typeof block.variables[key] !== 'object') {
                     block.variables[key] = { value: aperture ? aperture[key] : '' };
                 }
@@ -7455,15 +7497,22 @@ function __blocks_setParameterAndApertureModeBulk(enabled: boolean): { ok: boole
                 }
 
                 const prevMode = String(block.variables[key].optimize.mode ?? '').trim();
+                const prevScope = String(block.variables[key].optimize.scope ?? '').trim();
                 if (prevMode !== mode) changedCount++;
+                if (prevScope !== targetState.scope) changedCount++;
                 block.variables[key].optimize.mode = mode;
-                if (!block.variables[key].optimize.scope) {
-                    block.variables[key].optimize.scope = 'perConfig';
-                }
+                block.variables[key].optimize.scope = targetState.scope;
             }
         }
 
         if (changedCount <= 0) {
+            __cooptScheduleDesignIntentUiRefresh({
+                systemConfig,
+                activeConfigId: String(activeCfg.id ?? activeId ?? ''),
+                refreshBlockInspector: true,
+                triggerRender: true,
+                debounceMs: 40,
+            });
             return { ok: true, changedCount: 0 };
         }
 
@@ -13333,22 +13382,33 @@ function __blocks_generateZoomScenariosForActiveConfig(): any {
 
 // Design Intent Add/Delete Buttons Setup
 function setupDesignIntentButtons(): void {
-    const addBtn = document.getElementById('design-intent-add-block-btn');
-    const deleteBtn = document.getElementById('design-intent-delete-block-btn');
-    const paramAllOnBtn = document.getElementById('design-intent-param-all-on-btn');
-    const paramAllOffBtn = document.getElementById('design-intent-param-all-off-btn');
-    const autoSetAperturesBtn = document.getElementById('design-intent-auto-set-apertures-btn');
-    const zoomScenarioBtn = document.getElementById('design-intent-generate-zoom-scenarios-btn');
-    const typeSelect = document.getElementById('design-intent-add-block-type') as HTMLSelectElement | null;
     ensureDesignIntentQuickEditorToggleBinding();
+    if (__designIntentToolbarDelegatedBindingInstalled) return;
+    __designIntentToolbarDelegatedBindingInstalled = true;
 
-    if (addBtn && !addBtn.dataset.designIntentAddBound) {
-        addBtn.dataset.designIntentAddBound = '1';
+    document.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (!target) return;
 
-        addBtn.addEventListener('click', (e) => {
-            try { e?.preventDefault?.(); } catch (_) {}
-            try { e?.stopPropagation?.(); } catch (_) {}
+        const toolbar = target.closest('[id="design-intent-toolbar"]') as HTMLElement | null;
+        if (!toolbar) return;
 
+        const typeSelect = toolbar.querySelector('[id="design-intent-add-block-type"]') as HTMLSelectElement | null;
+        const addBtn = target.closest('[id="design-intent-add-block-btn"]');
+        const deleteBtn = target.closest('[id="design-intent-delete-block-btn"]');
+        const paramAllOnBtn = target.closest('[id="design-intent-param-all-on-btn"]');
+        const paramAllOffBtn = target.closest('[id="design-intent-param-all-off-btn"]');
+        const autoSetAperturesBtn = target.closest('[id="design-intent-auto-set-apertures-btn"]');
+        const zoomScenarioBtn = target.closest('[id="design-intent-generate-zoom-scenarios-btn"]');
+
+        if (!addBtn && !deleteBtn && !paramAllOnBtn && !paramAllOffBtn && !autoSetAperturesBtn && !zoomScenarioBtn) {
+            return;
+        }
+
+        try { e.preventDefault(); } catch (_) {}
+        try { e.stopPropagation(); } catch (_) {}
+
+        if (addBtn) {
             try {
                 const type = String(typeSelect?.value ?? 'Lens').trim();
                 const after = __blockInspectorExpandedBlockId;
@@ -13358,39 +13418,24 @@ function setupDesignIntentButtons(): void {
                     return;
                 }
                 __blockInspectorExpandedBlockId = String(res.blockId ?? '') || null;
-
-                // Record undo
                 try {
                     if (w.undoHistory && w.AddBlockCommand && !w.undoHistory.isExecuting && res.blockData && typeof res.insertIndex === 'number') {
                         const sysConfig = loadSystemConfigurations();
                         const cmd = new w.AddBlockCommand(sysConfig.activeConfigId, res.blockData, res.insertIndex);
                         w.undoHistory.record(cmd);
                     }
-                } catch (undoError) {
-                }
-
-                try {
-                    __cooptScheduleDesignIntentUiRefresh({
-                        forceExpandedRows: true,
-                        refreshBlockInspector: true,
-                        triggerRender: true,
-                        debounceMs: 40,
-                    });
                 } catch (_) {}
-            } catch (e) {
-                console.error('❌ Failed to add block:', e);
-                alert(`Failed to add block: ${(e as Error)?.message || String(e)}`);
+                try {
+                    __cooptScheduleDesignIntentUiRefresh({ forceExpandedRows: true, refreshBlockInspector: true, triggerRender: true, debounceMs: 40 });
+                } catch (_) {}
+            } catch (err) {
+                console.error('❌ Failed to add block:', err);
+                alert(`Failed to add block: ${(err as Error)?.message || String(err)}`);
             }
-        });
-    }
+            return;
+        }
 
-    if (deleteBtn && !deleteBtn.dataset.designIntentDeleteBound) {
-        deleteBtn.dataset.designIntentDeleteBound = '1';
-
-        deleteBtn.addEventListener('click', (e) => {
-            try { e?.preventDefault?.(); } catch (_) {}
-            try { e?.stopPropagation?.(); } catch (_) {}
-
+        if (deleteBtn) {
             try {
                 const bid = String(__blockInspectorExpandedBlockId ?? '').trim();
                 if (!bid) {
@@ -13402,90 +13447,58 @@ function setupDesignIntentButtons(): void {
                     alert(`Failed to delete block: ${res?.reason || 'unknown error'}`);
                     return;
                 }
-
-                // Record undo
                 try {
                     if (w.undoHistory && w.DeleteBlockCommand && !w.undoHistory.isExecuting && res.blockData && typeof res.blockIndex === 'number') {
                         const sysConfig = loadSystemConfigurations();
                         const cmd = new w.DeleteBlockCommand(sysConfig.activeConfigId, res.blockData, res.blockIndex);
                         w.undoHistory.record(cmd);
                     }
-                } catch (undoError) {
-                }
-
+                } catch (_) {}
                 __blockInspectorExpandedBlockId = null;
                 try {
-                    __cooptScheduleDesignIntentUiRefresh({
-                        forceExpandedRows: true,
-                        refreshBlockInspector: true,
-                        triggerRender: true,
-                        debounceMs: 40,
-                    });
+                    __cooptScheduleDesignIntentUiRefresh({ forceExpandedRows: true, refreshBlockInspector: true, triggerRender: true, debounceMs: 40 });
                 } catch (_) {}
-            } catch (e) {
-                console.error('❌ Failed to delete block:', e);
-                alert(`Failed to delete block: ${(e as Error)?.message || String(e)}`);
+            } catch (err) {
+                console.error('❌ Failed to delete block:', err);
+                alert(`Failed to delete block: ${(err as Error)?.message || String(err)}`);
             }
-        });
-    }
+            return;
+        }
 
-    if (paramAllOnBtn && !paramAllOnBtn.dataset.designIntentParamAllOnBound) {
-        paramAllOnBtn.dataset.designIntentParamAllOnBound = '1';
-        paramAllOnBtn.addEventListener('click', (e) => {
-            try { e?.preventDefault?.(); } catch (_) {}
-            try { e?.stopPropagation?.(); } catch (_) {}
+        if (paramAllOnBtn) {
             const res = __blocks_setParameterAndApertureModeBulk(true);
             if (!res || res.ok !== true) {
                 alert(`Failed to set Parameter All ON: ${res?.reason || 'unknown error'}`);
             }
-        });
-    }
+            return;
+        }
 
-    if (paramAllOffBtn && !paramAllOffBtn.dataset.designIntentParamAllOffBound) {
-        paramAllOffBtn.dataset.designIntentParamAllOffBound = '1';
-        paramAllOffBtn.addEventListener('click', (e) => {
-            try { e?.preventDefault?.(); } catch (_) {}
-            try { e?.stopPropagation?.(); } catch (_) {}
+        if (paramAllOffBtn) {
             const res = __blocks_setParameterAndApertureModeBulk(false);
             if (!res || res.ok !== true) {
                 alert(`Failed to set Parameter All OFF: ${res?.reason || 'unknown error'}`);
             }
-        });
-    }
+            return;
+        }
 
-    if (autoSetAperturesBtn && !autoSetAperturesBtn.dataset.designIntentAutoSetAperturesBound) {
-        autoSetAperturesBtn.dataset.designIntentAutoSetAperturesBound = '1';
-        autoSetAperturesBtn.addEventListener('click', (e) => {
-            try { e?.preventDefault?.(); } catch (_) {}
-            try { e?.stopPropagation?.(); } catch (_) {}
+        if (autoSetAperturesBtn) {
             try {
-                const ok = typeof w.autoSetBlockAperturesFromLargestObjectCondition === 'function'
-                    ? w.autoSetBlockAperturesFromLargestObjectCondition()
-                    : false;
+                const ok = autoSetBlockAperturesFromLargestObjectCondition();
                 if (!ok) {
                     alert('Failed to auto-set apertures.');
                     return;
                 }
                 try {
-                    __cooptScheduleDesignIntentUiRefresh({
-                        forceExpandedRows: true,
-                        refreshBlockInspector: true,
-                        triggerRender: true,
-                        debounceMs: 40,
-                    });
+                    __cooptScheduleDesignIntentUiRefresh({ forceExpandedRows: true, refreshBlockInspector: true, triggerRender: true, debounceMs: 40 });
                 } catch (_) {}
             } catch (err) {
                 console.error('❌ Failed to auto-set apertures:', err);
                 alert(`Failed to auto-set apertures: ${(err as Error)?.message || String(err)}`);
             }
-        });
-    }
+            return;
+        }
 
-    if (zoomScenarioBtn && !zoomScenarioBtn.dataset.designIntentZoomScenarioBound) {
-        zoomScenarioBtn.dataset.designIntentZoomScenarioBound = '1';
-        zoomScenarioBtn.addEventListener('click', (e) => {
-            try { e?.preventDefault?.(); } catch (_) {}
-            try { e?.stopPropagation?.(); } catch (_) {}
+        if (zoomScenarioBtn) {
             try {
                 const res = __blocks_generateZoomScenariosForActiveConfig();
                 if (!res || res.ok !== true) {
@@ -13493,20 +13506,14 @@ function setupDesignIntentButtons(): void {
                     return;
                 }
                 try {
-                    __cooptScheduleDesignIntentUiRefresh({
-                        forceExpandedRows: true,
-                        refreshBlockInspector: true,
-                        refreshZoomUi: true,
-                        triggerRender: true,
-                        debounceMs: 40,
-                    });
+                    __cooptScheduleDesignIntentUiRefresh({ forceExpandedRows: true, refreshBlockInspector: true, refreshZoomUi: true, triggerRender: true, debounceMs: 40 });
                 } catch (_) {}
-            } catch (e) {
-                console.error('❌ Failed to generate zoom scenarios:', e);
-                alert(`Failed to generate zoom scenarios: ${(e as Error)?.message || String(e)}`);
+            } catch (err) {
+                console.error('❌ Failed to generate zoom scenarios:', err);
+                alert(`Failed to generate zoom scenarios: ${(err as Error)?.message || String(err)}`);
             }
-        });
-    }
+        }
+    });
 }
 
 // Main DOM Event Handlers Setup Function
