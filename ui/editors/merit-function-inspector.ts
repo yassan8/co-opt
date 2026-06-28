@@ -224,10 +224,10 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
-      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
+      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT3_COMA": {
     name: "3rd Order Coma",
@@ -235,10 +235,10 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
-      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
+      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT3_ASTI": {
     name: "3rd Order Astigmatism",
@@ -246,10 +246,10 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
-      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
+      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT3_FCUR": {
     name: "3rd Order Field Curvature",
@@ -257,10 +257,10 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
-      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
+      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT3_DIST": {
     name: "3rd Order Distortion",
@@ -268,10 +268,10 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
-      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
+      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT3_PETZ": {
     name: "Petzval Sum",
@@ -279,30 +279,30 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
-      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
+      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Petzval sum P = Σ(φ/n) across all surfaces in the optical system.\n\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Used for afocal normalization (0=Auto).\n\nUnit: diopters (1/mm)."
+    notes: "Petzval sum P = Σ(φ/n) across all surfaces in the optical system.\n\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、A のように書くと Zoom Group を評価します。\nReference Focal Length: Used for afocal normalization (0=Auto).\n\nUnit: diopters (1/mm)."
   },
   "TOT_LCA": {
     name: "Longitudinal Chromatic",
     description: "Longitudinal chromatic aberration",
     parameters: [
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
-      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
+      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto).\n\nNote: これは 3rd-order の longitudinal chromatic coefficient です。値がほぼ 0 でも、オフ軸の lateral/magnification chromatic は残り得ます。倍率色収差を抑えたい場合は TOT_TCA か Lateral Chromatic Aberration 解析を併用してください。"
+    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto).\n\nNote: これは 3rd-order の longitudinal chromatic coefficient です。値がほぼ 0 でも、オフ軸の lateral/magnification chromatic は残り得ます。倍率色収差を抑えたい場合は TOT_TCA か Lateral Chromatic Aberration 解析を併用してください。"
   },
   "TOT_TCA": {
     name: "Transverse Chromatic",
     description: "Transverse chromatic aberration",
     parameters: [
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
-      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, ZG:A" },
+      { key: "param3", label: "Scope", description: "blank/0/ALL=Total, or surface id, blockId, A" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、ZG:A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto).\n\nNote: オフ軸の lateral / magnification chromatic を merit で直接抑えるなら、TOT_LCA よりこちらの方が対応づけやすいです。"
+    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nScope: EFL の Blocks と同じく自由入力で指定します。blank / 0 / ALL は全系、surface id はその面、blockId はそのブロック、A のように書くと Zoom Group を評価します。\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto).\n\nNote: オフ軸の lateral / magnification chromatic を merit で直接抑えるなら、TOT_LCA よりこちらの方が対応づけやすいです。"
   },
   
   // ===== Analysis (解析関連) =====

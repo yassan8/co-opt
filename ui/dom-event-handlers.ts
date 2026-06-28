@@ -9229,7 +9229,7 @@ function __zoom_collectState(): any {
                 emptyState.style.display = '';
                 lawError.textContent = '';
                 lawError.style.display = 'none';
-                renderChips(groupChips, [], 'ZG ', 'design-intent-zoom-chip design-intent-zoom-chip-group', 'No zoom groups');
+                renderChips(groupChips, [], '', 'design-intent-zoom-chip design-intent-zoom-chip-group', 'No zoom groups');
                 renderChips(lawChips, [], 'Law ', 'design-intent-zoom-chip design-intent-zoom-chip-law', 'No zoom laws');
                 return;
         }
@@ -9252,7 +9252,7 @@ function __zoom_collectState(): any {
         compSamplesInput.value = String(Number(state.compensationSamples || 33));
         body.style.display = '';
         emptyState.style.display = 'none';
-        renderChips(groupChips, state.groupNames || [], 'ZG ', 'design-intent-zoom-chip design-intent-zoom-chip-group', 'No zoom groups');
+        renderChips(groupChips, state.groupNames || [], '', 'design-intent-zoom-chip design-intent-zoom-chip-group', 'No zoom groups');
         renderChips(lawChips, state.lawGroups || [], 'Law ', 'design-intent-zoom-chip design-intent-zoom-chip-law', 'No zoom laws');
         if (Array.isArray(state.lawErrors) && state.lawErrors.length > 0) {
             lawError.textContent = state.lawErrors[0];
@@ -9465,7 +9465,7 @@ function openZoomControlWindow(): void {
                     slider.value = '0';
                     lawError.textContent = '';
                     lawError.style.display = 'none';
-                    renderChips(groupChips, [], 'chip-group', 'ZG ');
+                    renderChips(groupChips, [], 'chip-group', '');
                     renderChips(lawChips, [], 'chip-law', 'Law ');
                     if (!suspendTextSync) lawsInput.value = '';
                     return;
@@ -9474,7 +9474,7 @@ function openZoomControlWindow(): void {
                 configName.textContent = state.configName || 'Active config';
                 zoomValue.textContent = Number(state.zoomPosition || 0).toFixed(2);
                 slider.value = String(state.zoomPosition || 0);
-                renderChips(groupChips, state.groupNames || [], 'chip-group', 'ZG ');
+                renderChips(groupChips, state.groupNames || [], 'chip-group', '');
                 renderChips(lawChips, state.lawGroups || [], 'chip-law', 'Law ');
                 if (Array.isArray(state.lawErrors) && state.lawErrors.length > 0) {
                     lawError.textContent = state.lawErrors[0];
@@ -10541,7 +10541,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             const chip = document.createElement('button');
             chip.type = 'button';
             chip.className = 'block-inspector-zg-chip';
-            chip.textContent = currentZoomGroupValue === 'Fixed' ? 'Fixed' : `ZG ${currentZoomGroupValue}`;
+            chip.textContent = currentZoomGroupValue === 'Fixed' ? 'Fixed' : currentZoomGroupValue;
             chip.title = `Zoom Group: ${currentZoomGroupValue}`;
             chip.onclick = (e: MouseEvent) => {
                 try { e.preventDefault(); } catch (_) {}
@@ -10556,7 +10556,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         } else if (gapZoomChipLabel) {
             const chip = document.createElement('span');
             chip.className = 'block-inspector-zg-chip block-inspector-zg-chip-gap';
-            chip.textContent = gapZoomChipLabel === 'Fixed' ? 'Fixed' : `ZG ${gapZoomChipLabel}`;
+            chip.textContent = gapZoomChipLabel === 'Fixed' ? 'Fixed' : gapZoomChipLabel;
             chip.title = `Zoom Group: ${gapZoomChipLabel}`;
             zoomGroupChip = chip;
         }
@@ -10607,7 +10607,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         } else if (!quickEditor && !zoomGroupChip) {
             const zoomGroupText = getZoomGroupLabel(realBlock);
             if (zoomGroupText) {
-                colParams.appendChild(createSummaryChip(zoomGroupText === 'Fixed' ? 'Fixed' : `ZG ${zoomGroupText}`, 'group'));
+                colParams.appendChild(createSummaryChip(zoomGroupText === 'Fixed' ? 'Fixed' : zoomGroupText, 'group'));
             }
         }
 

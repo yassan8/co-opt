@@ -586,7 +586,7 @@ class SystemRequirementsEditor {
           const zoomGroup = String(block?.parameters?.zoomGroup ?? '').trim().toUpperCase();
           if (zoomGroup && !seenZoomGroups.has(zoomGroup)) {
             seenZoomGroups.add(zoomGroup);
-            options.push({ value: `ZG:${zoomGroup}`, label: `ZG:${zoomGroup} (Zoom Group)` });
+            options.push({ value: `ZG:${zoomGroup}`, label: `${zoomGroup} (Zoom Group)` });
           }
         }
       } catch (_) {}
