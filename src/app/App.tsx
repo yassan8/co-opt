@@ -39,6 +39,8 @@ const RENDER_SHOW_PRINCIPAL_POINTS_KEY = 'coopt.render.showPrincipalPointLabels'
 const RENDER_SHOW_SURFACE_NUMBERS_KEY = 'coopt.render.showSurfaceNumberLabels';
 const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
 const OPTIMIZE_PROGRESS_SYNC_KEY = 'coopt.optimizeProgress';
+const SYSTEM_TEXT_WINDOW_ID = 'system-text-window';
+const SYSTEM_TEXT_WINDOW_TITLE = 'System Console';
 const RENDER_SCALE_BAR_MIN_WIDTH_PX = 72;
 const RENDER_SCALE_BAR_TARGET_WIDTH_PX = 160;
 const RENDER_SCALE_BAR_MAX_WIDTH_PX = 240;
@@ -3904,7 +3906,27 @@ export default function App() {
     requirements:  { open: false, minimized: false, maximized: false, restoreBounds: null, x: 84,  y: 84,  width: 860, height: 560, zIndex: 2 },
     literature:    { open: false, minimized: false, maximized: false, restoreBounds: null, x: 108, y: 108, width: 840, height: 540, zIndex: 1 },
   });
-  const [mdiAuxWindows, setMdiAuxWindows] = useState<Record<string, MdiAuxWindowState>>({});
+  const [mdiAuxWindows, setMdiAuxWindows] = useState<Record<string, MdiAuxWindowState>>(() => ({
+    [SYSTEM_TEXT_WINDOW_ID]: {
+      id: SYSTEM_TEXT_WINDOW_ID,
+      title: SYSTEM_TEXT_WINDOW_TITLE,
+      url: '',
+      open: true,
+      minimized: false,
+      maximized: false,
+      restoreBounds: null,
+      x: 160,
+      y: 110,
+      width: 760,
+      height: 360,
+      zIndex: 7,
+    },
+  }));
+  const [systemTextLines, setSystemTextLines] = useState<string[]>([]);
+  const [systemTextCommand, setSystemTextCommand] = useState('');
+  const [systemTextHistory, setSystemTextHistory] = useState<string[]>([]);
+  const systemTextLogRef = useRef<HTMLDivElement | null>(null);
+  const lastOptimizeLogSignatureRef = useRef('');
   const [treeOpenGroups, setTreeOpenGroups] = useState<Set<string>>(new Set(['panels', 'analysis']));
   const renderScaleRafRef = useRef<number | null>(null);
   const optimizeDisplaySleepBlockTokenRef = useRef<string | null>(null);
@@ -11894,6 +11916,7 @@ const collectLegacyCrossRays = async (
   };
 
   const closeMdiAuxWindow = (id: string) => {
+    if (id === SYSTEM_TEXT_WINDOW_ID) return;
     setMdiAuxWindows((prev) => prev[id] ? ({ ...prev, [id]: { ...prev[id], open: false } }) : prev);
   };
 
@@ -11923,6 +11946,105 @@ const collectLegacyCrossRays = async (
   const openSettingsMdiWindow = () => {
     openMdiAuxWindow('settings', 'Settings', buildMdiModeUrl('settings'), { width: 520, height: 620, x: 220, y: 110 });
   };
+
+  const appendSystemTextLine = (lineRaw: any) => {
+    const line = String(lineRaw ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!line) return;
+    setSystemTextLines((prev) => {
+      const next = [...prev, ...line.split('\n')];
+      if (next.length > 3000) {
+        return next.slice(next.length - 3000);
+      }
+      return next;
+    });
+  };
+
+  const runSystemTextCommand = (rawCommand: string) => {
+    const command = String(rawCommand ?? '').trim();
+    if (!command) return;
+    setSystemTextHistory((prev) => {
+      const next = [command, ...prev.filter((entry) => entry !== command)];
+      return next.slice(0, 30);
+    });
+    const lower = command.toLowerCase();
+    if (lower === 'cls') {
+      setSystemTextLines([]);
+      return;
+    }
+    appendSystemTextLine(`> ${command}`);
+    if (lower === 'help') {
+      appendSystemTextLine('Commands: cls, help');
+      return;
+    }
+    appendSystemTextLine(`Command not identified : ${command}`);
+  };
+
+  useEffect(() => {
+    setSystemTextLines((prev) => {
+      if (prev.length > 0) return prev;
+      return [
+        'co-opt System Console',
+        'Type "help" for commands. Type "cls" to clear window.',
+      ];
+    });
+  }, []);
+
+  useEffect(() => {
+    const el = systemTextLogRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [systemTextLines]);
+
+  useEffect(() => {
+    const wAny = window as any;
+    const previousWriter = wAny.__cooptTextWindowWrite;
+    const nextWriter = (message: any) => {
+      appendSystemTextLine(message);
+    };
+    wAny.__cooptTextWindowWrite = nextWriter;
+    return () => {
+      try {
+        if (wAny.__cooptTextWindowWrite === nextWriter) {
+          if (typeof previousWriter === 'function') {
+            wAny.__cooptTextWindowWrite = previousWriter;
+          } else {
+            delete wAny.__cooptTextWindowWrite;
+          }
+        }
+      } catch (_) {}
+    };
+  }, []);
+
+  useEffect(() => {
+    const phase = String(optimizeState?.phase ?? '').trim().toLowerCase();
+    const iterations = Number(optimizeState?.iterations ?? 0);
+    const score = Number(optimizeState?.requirementScoreAfter ?? optimizeState?.meritAfter);
+    const best = Number(optimizeState?.bestRequirementScore ?? optimizeState?.best);
+    const signature = [
+      optRunning ? '1' : '0',
+      phase,
+      String(iterations),
+      Number.isFinite(score) ? score.toFixed(6) : '-',
+      Number.isFinite(best) ? best.toFixed(6) : '-',
+      String(optEscapeFunctionHeight),
+      String(optEscapeFunctionWidth),
+    ].join('|');
+    if (signature === lastOptimizeLogSignatureRef.current) return;
+    lastOptimizeLogSignatureRef.current = signature;
+
+    if (optRunning) {
+      appendSystemTextLine(
+        `[Optimize] phase=${phase || 'running'} iter=${iterations} score=${Number.isFinite(score) ? score.toFixed(6) : '-'} best=${Number.isFinite(best) ? best.toFixed(6) : '-'} H=${optEscapeFunctionHeight} W=${optEscapeFunctionWidth}`
+      );
+      return;
+    }
+
+    if (phase === 'done' || phase === 'stopped' || phase === 'error') {
+      appendSystemTextLine(
+        `[Optimize] ${phase} score=${Number.isFinite(score) ? score.toFixed(6) : '-'} best=${Number.isFinite(best) ? best.toFixed(6) : '-'} H=${optEscapeFunctionHeight} W=${optEscapeFunctionWidth}`
+      );
+    }
+  }, [optRunning, optimizeState, optEscapeFunctionHeight, optEscapeFunctionWidth]);
 
   const syncWorkspaceUiAfterOpen = () => {
     const run = async () => {
@@ -12488,65 +12610,110 @@ const collectLegacyCrossRays = async (
               </div>
             );
           })}
-          {Object.values(mdiAuxWindows).map((w) => {
-            if (!w.open) return null;
+          {Object.values(mdiAuxWindows).map((aux) => {
+            if (!aux.open) return null;
+            const isSystemTextWindow = aux.id === SYSTEM_TEXT_WINDOW_ID;
             return (
               <div
-                key={w.id}
-                className={`win-mdi-window${w.minimized ? ' is-minimized' : ''}${w.maximized ? ' is-maximized' : ''}`}
-                style={{ left: w.x, top: w.y, width: w.width, height: w.minimized ? 44 : w.height, zIndex: w.zIndex }}
-                onPointerDownCapture={() => bringMdiAuxToFront(w.id)}
-                onFocusCapture={() => bringMdiAuxToFront(w.id)}
-                onPointerUp={(e) => syncAuxWindowGeometry(w.id, e.currentTarget as HTMLElement)}
-                onMouseUp={(e) => syncAuxWindowGeometry(w.id, e.currentTarget as HTMLElement)}
+                key={aux.id}
+                className={`win-mdi-window${aux.minimized ? ' is-minimized' : ''}${aux.maximized ? ' is-maximized' : ''}`}
+                style={{ left: aux.x, top: aux.y, width: aux.width, height: aux.minimized ? 44 : aux.height, zIndex: aux.zIndex }}
+                onPointerDownCapture={() => bringMdiAuxToFront(aux.id)}
+                onFocusCapture={() => bringMdiAuxToFront(aux.id)}
+                onPointerUp={(e) => syncAuxWindowGeometry(aux.id, e.currentTarget as HTMLElement)}
+                onMouseUp={(e) => syncAuxWindowGeometry(aux.id, e.currentTarget as HTMLElement)}
               >
                 <div
                   className="win-mdi-titlebar is-focused"
-                  onPointerDown={(e) => handleWinTitlePointerDown(e, w.id, w)}
+                  onPointerDown={(e) => handleWinTitlePointerDown(e, aux.id, aux)}
                 >
                   <div className="win-mdi-traffic">
-                    <button
-                      type="button"
-                      className="win-mdi-btn win-mdi-btn--close"
-                      title="Close"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => { e.stopPropagation(); closeMdiAuxWindow(w.id); }}
-                    />
+                    {isSystemTextWindow ? (
+                      <button
+                        type="button"
+                        className="win-mdi-btn win-mdi-btn--ghost"
+                        aria-hidden="true"
+                        tabIndex={-1}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="win-mdi-btn win-mdi-btn--close"
+                        title="Close"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); closeMdiAuxWindow(aux.id); }}
+                      />
+                    )}
                     <button
                       type="button"
                       className="win-mdi-btn win-mdi-btn--minimize"
                       title="Minimize"
                       onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => { e.stopPropagation(); minimizeMdiAuxWindow(w.id); }}
+                      onClick={(e) => { e.stopPropagation(); minimizeMdiAuxWindow(aux.id); }}
                     />
                     <button
                       type="button"
                       className="win-mdi-btn win-mdi-btn--zoom"
                       title="Zoom"
                       onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => { e.stopPropagation(); toggleMdiAuxWindowMaximize(w.id); }}
+                      onClick={(e) => { e.stopPropagation(); toggleMdiAuxWindowMaximize(aux.id); }}
                     />
                   </div>
-                  <span className="win-mdi-title">{w.title}</span>
+                  <span className="win-mdi-title">{aux.title}</span>
                   <div className="win-mdi-controls">
                     <button type="button" className="win-mdi-btn win-mdi-btn--ghost" aria-hidden="true" tabIndex={-1} />
                   </div>
                 </div>
-                {!w.minimized && (
-                  <div className="win-mdi-content" style={{ padding: 0 }}>
-                    <iframe
-                      title={w.title}
-                      src={w.url}
-                      onFocus={() => bringMdiAuxToFront(w.id)}
-                      style={{ width: '100%', height: '100%', border: 'none', background: '#ffffff' }}
-                    />
+                {!aux.minimized && (
+                  <div className="win-mdi-content" style={isSystemTextWindow ? undefined : { padding: 0 }}>
+                    {isSystemTextWindow ? (
+                      <div className="system-text-window">
+                        <div className="system-text-window__log" ref={systemTextLogRef}>
+                          {systemTextLines.map((line, index) => (
+                            <div key={`line-${index}`} className="system-text-window__line">{line}</div>
+                          ))}
+                        </div>
+                        <form
+                          className="system-text-window__commandRow"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const cmd = systemTextCommand;
+                            setSystemTextCommand('');
+                            runSystemTextCommand(cmd);
+                          }}
+                        >
+                          <label className="system-text-window__label" htmlFor="system-text-window-command">Command</label>
+                          <input
+                            id="system-text-window-command"
+                            className="system-text-window__input"
+                            list="system-text-window-history"
+                            value={systemTextCommand}
+                            onChange={(e) => setSystemTextCommand(e.target.value)}
+                            autoComplete="off"
+                            spellCheck={false}
+                          />
+                          <datalist id="system-text-window-history">
+                            {systemTextHistory.map((entry, index) => (
+                              <option key={`history-${index}`} value={entry} />
+                            ))}
+                          </datalist>
+                        </form>
+                      </div>
+                    ) : (
+                      <iframe
+                        title={aux.title}
+                        src={aux.url}
+                        onFocus={() => bringMdiAuxToFront(aux.id)}
+                        style={{ width: '100%', height: '100%', border: 'none', background: '#ffffff' }}
+                      />
+                    )}
                   </div>
                 )}
                 <button
                   type="button"
                   className="win-mdi-resizeHandle"
                   aria-label="Resize window"
-                  onPointerDown={(e) => handleWinResizePointerDown(e, w.id, w)}
+                  onPointerDown={(e) => handleWinResizePointerDown(e, aux.id, aux)}
                 />
               </div>
             );
