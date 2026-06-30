@@ -2739,9 +2739,9 @@ button:active {
     );
     flex: 1 1 auto;
     background-color: #ffffff;
-    border: 1px solid #d0d7de;
-    border-radius: 8px;
-    padding: 8px 8px 14px;
+    border: none;
+    border-radius: 0;
+    padding: 4px 0 14px;
     box-sizing: border-box;
     height: auto;
     min-height: clamp(280px, 38vh, 460px);

@@ -1,4 +1,4 @@
-export default function DesignIntentSection() {
+export default function DesignIntentSection({ hideTable }: { hideTable?: boolean } = {}) {
   return (
     <section className="optical-system-section ide-section-card" id="design-intent-container" aria-label="Design Intent">
       <div id="design-intent-toolbar" className="optical-system-buttons-container ide-toolbar" role="toolbar" aria-label="Design Intent controls">
@@ -48,9 +48,9 @@ export default function DesignIntentSection() {
         （Surface の解析・編集は可能ですが、設計意図は完全には利用できません）
       </div>
 
-      <div id="block-inspector" className="block-inspector" role="listbox" aria-label="Design blocks"></div>
+      {!hideTable && <div id="block-inspector" className="block-inspector" role="listbox" aria-label="Design blocks"></div>}
 
-      <div id="table-optical-system" className="ide-table-container"></div>
+      {!hideTable && <div id="table-optical-system" className="ide-table-container"></div>}
     </section>
   );
 }

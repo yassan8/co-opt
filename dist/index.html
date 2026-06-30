@@ -23,12 +23,22 @@
   </script>
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6256283356932127"
      crossorigin="anonymous"></script>
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-JCN7K04XZY"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-JCN7K04XZY');
+  </script>
   <title>co-opt</title>
   <!-- SVG favicon for modern browsers -->
   <link rel="icon" type="image/svg+xml" href="/co-opt/assets/favicon-odkZE4gq.svg">
   <link rel="shortcut icon" href="/co-opt/favicon.ico">
   <!-- Fallback for Safari and older browsers -->
-  <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a4d8f' rx='4'/><text x='16' y='22' font-family='Arial, sans-serif' font-size='18' font-weight='bold' fill='%23ffffff' text-anchor='middle'>CO</text></svg>">
+  <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a4d8f' rx='4'/><text x='16' y='22' font-family='Arial, sans-serif' font-size='18' font-weight='bold' fill='%23ffffff' text-anchor='middle'>CO</text></svg>">
+
   <!-- TabulatorのCSSとJSを追加 -->
   <link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator.min.css" rel="stylesheet">
   <script src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
@@ -44,13 +54,17 @@
 
   <!-- Import map for native module scripts loaded directly from index.html -->
 
-
 
-  <!-- Early WASM service globals (getWASMSystem/_setWASMSystem) -->
 
-  <!-- Early asphericSag service global (window.asphericSag) -->
 
-  <!-- Early vector math service globals (window.dotProduct/crossProduct/normalize) -->
+  <!-- Early WASM service globals (getWASMSystem/_setWASMSystem) -->
+
+
+  <!-- Early asphericSag service global (window.asphericSag) -->
+
+
+  <!-- Early vector math service globals (window.dotProduct/crossProduct/normalize) -->
+
   
   <script>
     // Warn (in English) when the user tries to leave via the browser Back button.
@@ -242,7 +256,7 @@
     }
   </script>
   <script type="module" crossorigin src="/co-opt/assets/main-8z4ZrNTi.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-Czow7Gzh.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-L0ORQwZO.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-BnACIF28.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/ray-renderer-BxArCUtf.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/surface-origins-loader-DAFoF8gY.js">
@@ -265,17 +279,25 @@
     To prevent this, expand the ACTIVE configuration into the shared keys BEFORE table modules initialize.
     We only do this when the configuration system has already been initialized (systemConfigurations exists),
     to avoid wiping legacy single-config data before the migration runs.
-  -->
-  
-  <!-- Configuration System -->
-  
-  <!-- Multi-State / Scenarios (console-driven) -->
+  -->
 
-  <!-- MVP Optimizer (console-driven; uses Blocks variable flags) -->
-
-  <!-- PSFプロット機能を読み込み -->
   
-  <!-- OPDプロファイル実行ハーネス（コンソールから runOPDProfiling(...) を呼び出し） -->
+  <!-- Configuration System -->
+
+
+
+  
+  <!-- Multi-State / Scenarios (console-driven) -->
+
+
+  <!-- MVP Optimizer (console-driven; uses Blocks variable flags) -->
+
+
+  <!-- PSFプロット機能を読み込み -->
+
+  
+  <!-- OPDプロファイル実行ハーネス（コンソールから runOPDProfiling(...) を呼び出し） -->
+
   
   <!-- PSF WASM計算器を読み込み -->
   <script>
@@ -308,9 +330,11 @@
       };
     })();
   </script>
-  <!-- Core functionality scripts -->
+  <!-- Core functionality scripts -->
 
-  <!-- 絞り周辺光線計算スクリプト -->
+
+  <!-- 絞り周辺光線計算スクリプト -->
+
 
   <!-- WASM最適化モジュール -->
 
@@ -584,7 +608,8 @@
   <!-- Coordinate Transform Test (Temporary - remove after testing) -->
   <!-- <script type="module" src="testing/test-coordinate-transform.ts"></script> -->
 
-  <!-- React App Entry Point -->
+  <!-- React App Entry Point -->
+
 
 </body>
 

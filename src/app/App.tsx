@@ -10945,7 +10945,7 @@ const collectLegacyCrossRays = async (
           <MainToolbar />
           <ConfigurationSection />
           <SourceObjectSection />
-          <DesignIntentSection />
+          <DesignIntentSection hideTable />
           <RequirementsSection />
         </div>
       </>
@@ -11101,7 +11101,7 @@ const collectLegacyCrossRays = async (
           <MainToolbar />
           <ConfigurationSection />
           <SourceObjectSection />
-          <DesignIntentSection />
+          <DesignIntentSection hideTable />
         </div>
       </>
     );
