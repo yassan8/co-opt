@@ -11040,6 +11040,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (lower.startsWith('surf1coef')) return params.surf1SurfType;
                 if (lower.startsWith('surf2coef')) return params.surf2SurfType;
                 if (lower.startsWith('surf3coef')) return params.surf3SurfType;
+                if (lower.startsWith('surf4coef')) return params.surf4SurfType;
                 return params.surfType;
             };
 
@@ -11053,8 +11054,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const surfType = normalizeSurfTypeLabel(surfTypeRaw);
                 const isEven = surfType === 'asphericeven' || surfType === 'asphericaleven' || surfType === 'aspheric-even' || surfType === 'aspherical-even';
                 const isOdd = surfType === 'asphericodd' || surfType === 'asphericalodd' || surfType === 'aspheric-odd' || surfType === 'aspherical-odd';
-                if (!isEven && !isOdd) return null;
-
                 const aIndex = isEven ? (2 * idx + 2) : (2 * idx + 1);
                 const lower = String(key).toLowerCase();
                 let prefix = '';
@@ -11064,6 +11063,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 else if (lower.startsWith('surf2coef')) prefix = 's2 ';
                 else if (lower.startsWith('surf3coef')) prefix = 's3 ';
                 else if (lower.startsWith('surf4coef')) prefix = 's4 ';
+                const isQcon = surfType === 'qcon';
+                if (isQcon) return `${prefix}Q${idx - 1}`.trim();
+                if (!isEven && !isOdd) return null;
                 return `${prefix}A${aIndex}`.trim();
             };
 
@@ -11093,6 +11095,32 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 return label;
             };
 
+            const getGroupedSurfaceParamInfo = (rawKey: string): { groupKey: string; surfaceIndex: number } | null => {
+                const key = String(rawKey ?? '').trim();
+                if (!key) return null;
+
+                const frontBackMatch = key.match(/^(front|back)([A-Z].+)$/);
+                if (frontBackMatch) {
+                    const surfaceIndex = frontBackMatch[1] === 'front' ? 1 : 2;
+                    return {
+                        surfaceIndex,
+                        groupKey: frontBackMatch[2],
+                    };
+                }
+
+                const surfMatch = key.match(/^surf(\d+)([A-Z].+)$/);
+                if (surfMatch) {
+                    const surfaceIndex = Number(surfMatch[1]);
+                    if (!Number.isFinite(surfaceIndex) || surfaceIndex <= 0) return null;
+                    return {
+                        surfaceIndex,
+                        groupKey: surfMatch[2],
+                    };
+                }
+
+                return null;
+            };
+
             const createSectionTitle = (label: string) => {
                 const title = document.createElement('div');
                 title.className = 'block-inspector-section-title';
@@ -11101,35 +11129,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 title.style.margin = '6px 0';
                 title.style.fontSize = '12px';
                 return title;
-            };
-
-            const createSpreadsheetHeader = () => {
-                const header = document.createElement('div');
-                header.style.display = 'grid';
-                header.style.gridTemplateColumns = '32px 148px minmax(220px,1fr) 56px';
-                header.style.gap = '8px';
-                header.style.alignItems = 'center';
-                header.style.padding = '4px 6px';
-                header.style.marginBottom = '2px';
-                header.style.borderBottom = isDarkMode ? '1px solid #374151' : '1px solid #d1d5db';
-                header.style.fontSize = '11px';
-                header.style.fontWeight = '600';
-                header.style.color = isDarkMode ? '#9ca3af' : '#6b7280';
-
-                const opt = document.createElement('div');
-                opt.textContent = 'Opt';
-                const field = document.createElement('div');
-                field.textContent = 'Field';
-                const value = document.createElement('div');
-                value.textContent = 'Value';
-                const state = document.createElement('div');
-                state.textContent = 'State';
-
-                header.appendChild(opt);
-                header.appendChild(field);
-                header.appendChild(value);
-                header.appendChild(state);
-                return header;
             };
 
             const normalizeScopeForToggle = (scopeValue: any): string => {
@@ -11146,15 +11145,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             ) => {
                 const btn = document.createElement('button');
                 btn.type = 'button';
-                btn.style.flex = '0 0 28px';
-                btn.style.width = '28px';
-                btn.style.height = '24px';
-                btn.style.fontSize = '12px';
-                btn.style.fontWeight = '700';
-                btn.style.borderRadius = '4px';
-                btn.style.border = isDarkMode ? '1px solid #374151' : '1px solid #d1d5db';
-                btn.style.background = isDarkMode ? '#111827' : '#ffffff';
-                btn.style.color = isDarkMode ? '#e5e7eb' : '#374151';
+                btn.className = 'block-inspector-quick-scope-btn';
+                btn.style.flex = '0 0 18px';
                 btn.style.cursor = 'pointer';
                 btn.addEventListener('click', (event) => {
                     try { event.stopPropagation(); } catch (_) {}
@@ -11217,16 +11209,21 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             };
 
             const createRow = (label: string, value: any, path: string, badge?: string, paramType?: string) => {
+                const isGroupedSurfaceLayout = paramType === '__groupedSurface';
                 const row = document.createElement('div');
                 row.className = 'block-inspector-detail-row';
                 row.style.display = 'grid';
-                row.style.gridTemplateColumns = '148px minmax(220px,1fr) 56px';
-                row.style.gap = '8px';
+                row.style.gridTemplateColumns = isGroupedSurfaceLayout
+                    ? '56px minmax(136px,1fr)'
+                    : '148px minmax(220px,1fr) 56px';
+                row.style.gap = isGroupedSurfaceLayout ? '6px' : '8px';
                 row.style.alignItems = 'center';
-                row.style.minHeight = '32px';
+                row.style.minHeight = isGroupedSurfaceLayout ? '28px' : '32px';
                 row.style.marginBottom = '0';
-                row.style.padding = '4px 0';
-                row.style.borderBottom = isDarkMode ? '1px solid #1f2937' : '1px solid #eef2f7';
+                row.style.padding = isGroupedSurfaceLayout ? '0' : '4px 0';
+                row.style.borderBottom = isGroupedSurfaceLayout
+                    ? 'none'
+                    : (isDarkMode ? '1px solid #1f2937' : '1px solid #eef2f7');
 
                 const name = document.createElement('div');
                 const coefLabel = getCoefDisplayLabel(label);
@@ -11240,10 +11237,21 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 name.style.overflow = 'hidden';
                 name.style.textOverflow = 'ellipsis';
                 name.style.lineHeight = '1.2';
+                if (isGroupedSurfaceLayout) {
+                    name.style.fontSize = '11px';
+                }
+
+                const relaxFieldSizing = (element: HTMLElement | null | undefined) => {
+                    if (!element || !isGroupedSurfaceLayout) return;
+                    element.style.minWidth = '0';
+                    element.style.maxWidth = '100%';
+                    element.style.width = '100%';
+                    element.style.boxSizing = 'border-box';
+                };
 
                 // Check parameter type - surfType uses exact match (case-sensitive key)
                 const isSurfType = label === 'surfType' || label === 'frontSurfType' || label === 'backSurfType' || 
-                                   label === 'surf1SurfType' || label === 'surf2SurfType' || label === 'surf3SurfType';
+                                   label === 'surf1SurfType' || label === 'surf2SurfType' || label === 'surf3SurfType' || label === 'surf4SurfType';
                 const isMaterial = label.toLowerCase().includes('material') || paramType === 'material';
                 const isGapThicknessMode = (blockType === 'Gap' || blockType === 'AirGap') && label === 'thicknessMode';
                 const isObjectDistanceMode = (blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && label === 'objectDistanceMode';
@@ -11284,8 +11292,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         ? [{ value: 'Toric', label: 'X/Y power' }]
                         : [
                             { value: 'Spherical', label: 'Spherical' },
-                            { value: 'Aspherical even', label: 'Aspherical even' },
-                            { value: 'Aspherical odd', label: 'Aspherical odd' },
+                            { value: 'Aspheric even', label: 'Aspheric even' },
+                            { value: 'Aspheric odd', label: 'Aspheric odd' },
+                            { value: 'Qcon', label: 'Qcon' },
                             { value: 'Toric', label: 'Astigmatic (X/Y power)' }
                         ];
                     const currentValue = String(value || 'Spherical');
@@ -11306,6 +11315,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             cooptApplyBlockValue(blockId, path, value, newValue);
                         }
                     });
+
+                    relaxFieldSizing(select);
 
                     inputElement = select;
                 } else if (isGapThicknessMode) {
@@ -11386,6 +11397,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    relaxFieldSizing(select);
+
                     inputElement = select;
                 } else if (isObjectDistanceMode) {
                     const select = document.createElement('select');
@@ -11432,6 +11445,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             }
                         }
                     });
+
+                    relaxFieldSizing(select);
 
                     inputElement = select;
                 } else if (isImageSemidiaMode) {
@@ -11489,6 +11504,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    relaxFieldSizing(select);
+
                     inputElement = select;
                 } else if (isCoordReturn) {
                     const select = document.createElement('select');
@@ -11537,6 +11554,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    relaxFieldSizing(select);
+
                     inputElement = select;
                 } else if (isCoordOrder) {
                     const select = document.createElement('select');
@@ -11576,6 +11595,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             cooptApplyBlockValue(blockId, path, oldValue, newValue);
                         }
                     });
+
+                    relaxFieldSizing(select);
 
                     inputElement = select;
                 } else if (isCoordToSurf) {
@@ -11665,6 +11686,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    relaxFieldSizing(select);
+
                     inputElement = select;
                 } else if (isApertureShape) {
                     const select = document.createElement('select');
@@ -11705,6 +11728,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    relaxFieldSizing(select);
+
                     inputElement = select;
                 } else if (isZoomGroup) {
                     const select = document.createElement('select');
@@ -11740,6 +11765,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    relaxFieldSizing(select);
+
                     inputElement = select;
                 } else if (isNumeric) {
                     // Spreadsheet-style numeric editor (slider controls removed)
@@ -11773,6 +11800,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     });
 
                     input.addEventListener('blur', commit);
+                    relaxFieldSizing(input);
                     inputElement = input;
                 } else if (isMaterial) {
                     // Create material input with glass search
@@ -11783,6 +11811,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     container.style.flex = '1';
                     container.style.flexWrap = 'nowrap';
                     container.style.minHeight = '28px';
+                    if (isGroupedSurfaceLayout) {
+                        container.style.gap = '4px';
+                        container.style.minWidth = '0';
+                        container.style.width = '100%';
+                    }
 
                     const applyMaterialDerivedFields = (nextMaterialValue: any, selectedGlass?: any) => {
                         const glass = (selectedGlass && typeof selectedGlass === 'object')
@@ -11818,6 +11851,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.minWidth = '200px';
                     input.style.height = '28px';
                     input.style.boxSizing = 'border-box';
+                    relaxFieldSizing(input);
 
                     const glassBtn = document.createElement('button');
                     glassBtn.type = 'button';
@@ -12144,6 +12178,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     container.appendChild(input);
                     container.appendChild(glassBtn);
                     container.appendChild(glassMapBtn);
+                    relaxFieldSizing(container);
                     inputElement = container;
                 } else {
                     // Standard text input
@@ -12168,6 +12203,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    relaxFieldSizing(input);
+
                     inputElement = input;
                 }
 
@@ -12181,48 +12218,64 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 chip.style.visibility = badge ? 'visible' : 'hidden';
                 chip.style.justifySelf = 'center';
 
+                if (isGroupedSurfaceLayout) {
+                    chip.style.display = 'none';
+                }
+
                 row.appendChild(name);
                 row.appendChild(inputElement);
-                row.appendChild(chip);
+                if (!isGroupedSurfaceLayout) {
+                    row.appendChild(chip);
+                }
                 return row;
             };
 
             if (paramKeys.length > 0) {
-                panel.appendChild(createSpreadsheetHeader());
+
+                const shouldSkipExpandedParamKey = (key: string): boolean => {
+                    if (shouldHideExpandedField(key)) return true;
+                    if (quickEditorEnabled && quickEditorCoveredParamKeys.has(String(key).toLowerCase())) return true;
+                    if (blockType === 'ImageSurface' && key === 'optimizeSemiDia') return true;
+                    if (blockType === 'ImageSurface' && key === 'thickness') return true;
+                    if (/^coef\d+$/.test(key) && params.surfType === 'Spherical') return true;
+                    if (/^frontCoef\d+$/.test(key) && params.frontSurfType === 'Spherical') return true;
+                    if (/^backCoef\d+$/.test(key) && params.backSurfType === 'Spherical') return true;
+                    if (/^surf1Coef\d+$/.test(key) && params.surf1SurfType === 'Spherical') return true;
+                    if (/^surf2Coef\d+$/.test(key) && params.surf2SurfType === 'Spherical') return true;
+                    if (/^surf3Coef\d+$/.test(key) && params.surf3SurfType === 'Spherical') return true;
+                    if (/^surf4Coef\d+$/.test(key) && params.surf4SurfType === 'Spherical') return true;
+                    return false;
+                };
+
+                const groupedSurfaceParamRows: Array<{
+                    groupKey: string;
+                    keysBySurface: Map<number, string>;
+                }> = [];
+                const groupedSurfaceParamRowMap = new Map<string, { groupKey: string; keysBySurface: Map<number, string> }>();
+                let groupedSurfaceParamColumnCount = 0;
+
                 for (const key of paramKeys) {
-                    if (shouldHideExpandedField(key)) {
-                        continue;
+                    if (shouldSkipExpandedParamKey(key)) continue;
+                    const info = getGroupedSurfaceParamInfo(key);
+                    if (!info) continue;
+                    let row = groupedSurfaceParamRowMap.get(info.groupKey);
+                    if (!row) {
+                        row = { groupKey: info.groupKey, keysBySurface: new Map<number, string>() };
+                        groupedSurfaceParamRowMap.set(info.groupKey, row);
+                        groupedSurfaceParamRows.push(row);
                     }
-                    if (quickEditorEnabled && quickEditorCoveredParamKeys.has(String(key).toLowerCase())) {
-                        continue;
-                    }
-                    if (blockType === 'ImageSurface' && key === 'optimizeSemiDia') {
-                        continue;
-                    }
-                    // Skip thickness field for ImageSurface (image plane doesn't need thickness)
-                    if (blockType === 'ImageSurface' && key === 'thickness') {
-                        continue;
-                    }
-                    // Skip coef* parameters when surfType is "Spherical"
-                    if (/^coef\d+$/.test(key) && params.surfType === 'Spherical') {
-                        continue;
-                    }
-                    if (/^frontCoef\d+$/.test(key) && params.frontSurfType === 'Spherical') {
-                        continue;
-                    }
-                    if (/^backCoef\d+$/.test(key) && params.backSurfType === 'Spherical') {
-                        continue;
-                    }
-                    if (/^surf1Coef\d+$/.test(key) && params.surf1SurfType === 'Spherical') {
-                        continue;
-                    }
-                    if (/^surf2Coef\d+$/.test(key) && params.surf2SurfType === 'Spherical') {
-                        continue;
-                    }
-                    if (/^surf3Coef\d+$/.test(key) && params.surf3SurfType === 'Spherical') {
-                        continue;
-                    }
-                    
+                    row.keysBySurface.set(info.surfaceIndex, key);
+                    groupedSurfaceParamColumnCount = Math.max(groupedSurfaceParamColumnCount, info.surfaceIndex);
+                }
+
+                const groupedSurfaceParamKeys = new Set<string>();
+                for (const row of groupedSurfaceParamRows) {
+                    for (const key of row.keysBySurface.values()) groupedSurfaceParamKeys.add(key);
+                }
+
+                const renderedGroupedSurfaceParamRows = new Set<string>();
+
+                const resolveExpandedParamValue = (key: string) => {
                     let value = (params as any)[key];
                     if (blockType === 'Paraxial' && key === 'focalLengthX' && (value === undefined || value === null || String(value).trim() === '')) {
                         value = (params as any).focalLengthY ?? (params as any).focalLength ?? 100;
@@ -12254,24 +12307,32 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         const opt = String((params as any)?.optimizeSemiDia ?? '').trim().toUpperCase();
                         value = (opt === 'A' || opt === 'AUTO') ? 'Auto' : 'Manual';
                     }
-                    // For Gap/AirGap material, default to 'AIR' if undefined or empty
                     if ((blockType === 'Gap' || blockType === 'AirGap') && key === 'material' && (value === undefined || value === null || value === '')) {
                         value = 'AIR';
                     }
+                    return value;
+                };
+
+                const renderExpandedParamRow = (key: string, mode: 'default' | 'compact' = 'default') => {
+                    const value = resolveExpandedParamValue(key);
                     const varEntry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, key);
                     const isAbbeRow = key === 'abbe' || key === 'vd' || /^abbe\d+$/.test(key) || /^vd\d+$/.test(key);
                     const isGroupedSurfTypeRow =
                         (blockType === 'Doublet' || blockType === 'Triplet') &&
                         /^surf\d+SurfType$/.test(key);
+                    const isCompact = mode === 'compact';
 
-                    // Create row with optimize/scope icon control
                     const paramRow = document.createElement('div');
                     paramRow.style.display = 'grid';
-                    paramRow.style.gridTemplateColumns = '32px minmax(0,1fr)';
+                    paramRow.style.gridTemplateColumns = isCompact ? '18px minmax(0,1fr)' : '32px minmax(0,1fr)';
                     paramRow.style.alignItems = 'center';
                     paramRow.style.gap = '6px';
-                    paramRow.style.minHeight = '34px';
-                    paramRow.style.marginBottom = (isAbbeRow || isGroupedSurfTypeRow) ? '4px' : '0';
+                    paramRow.style.minHeight = isCompact ? '28px' : '34px';
+                    paramRow.style.marginBottom = isCompact ? '0' : ((isAbbeRow || isGroupedSurfTypeRow) ? '4px' : '0');
+                    if (isCompact) {
+                        paramRow.style.width = '244px';
+                        paramRow.style.maxWidth = '100%';
+                    }
 
                     const optimizeControl = createOptimizeScopeIconControl(
                         __blocks_shouldMarkVar(varEntry),
@@ -12287,13 +12348,99 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     );
 
-                    const innerRow = createRow(key, value, `parameters.${key}`);
+                    const innerRow = createRow(key, value, `parameters.${key}`, undefined, isCompact ? '__groupedSurface' : undefined);
                     innerRow.style.flex = '1';
                     innerRow.style.marginBottom = '0';
+                    if (isCompact) {
+                        innerRow.style.minWidth = '0';
+                    }
 
                     paramRow.appendChild(optimizeControl.button);
                     paramRow.appendChild(innerRow);
                     panel.appendChild(paramRow);
+                };
+
+                const renderGroupedSurfaceParamRow = (groupKey: string) => {
+                    const row = groupedSurfaceParamRowMap.get(groupKey);
+                    if (!row || renderedGroupedSurfaceParamRows.has(groupKey)) return;
+                    renderedGroupedSurfaceParamRows.add(groupKey);
+
+                    const pairRowScroll = document.createElement('div');
+                    pairRowScroll.style.overflowX = 'auto';
+                    pairRowScroll.style.overflowY = 'hidden';
+                    pairRowScroll.style.paddingBottom = '2px';
+
+                    const pairRow = document.createElement('div');
+                    pairRow.style.display = 'grid';
+                    pairRow.style.gridTemplateColumns = `repeat(${Math.max(1, groupedSurfaceParamColumnCount)}, 244px)`;
+                    pairRow.style.gap = '8px';
+                    pairRow.style.alignItems = 'start';
+                    pairRow.style.marginBottom = '0';
+                    pairRow.style.width = 'max-content';
+                    pairRow.style.minWidth = '100%';
+
+                    for (let surfaceIndex = 1; surfaceIndex <= Math.max(1, groupedSurfaceParamColumnCount); surfaceIndex += 1) {
+                        const key = row.keysBySurface.get(surfaceIndex);
+                        if (!key) {
+                            pairRow.appendChild(document.createElement('div'));
+                            continue;
+                        }
+
+                        let value = (params as any)[key];
+                        if (blockType === 'Paraxial' && key === 'surfType' && (value === undefined || value === null || String(value).trim() === '')) {
+                            value = 'Toric';
+                        }
+
+                        const varEntry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, key);
+                        const cell = document.createElement('div');
+                        cell.style.display = 'grid';
+                        cell.style.gridTemplateColumns = '18px minmax(0,1fr)';
+                        cell.style.alignItems = 'center';
+                        cell.style.gap = '6px';
+                        cell.style.minHeight = '28px';
+                        cell.style.minWidth = '0';
+
+                        const optimizeControl = createOptimizeScopeIconControl(
+                            __blocks_shouldMarkVar(varEntry),
+                            __blocks_getVarScope(varEntry),
+                            (nextState) => {
+                                if (nextState === 'off') {
+                                    __blocks_setVarMode(blockId, key, false, 'perConfig');
+                                    return;
+                                }
+                                const scope = nextState === 'global' ? 'global' : 'perConfig';
+                                __blocks_setVarScope(blockId, key, scope);
+                                __blocks_setVarMode(blockId, key, true, scope);
+                            }
+                        );
+
+                        const innerRow = createRow(key, value, `parameters.${key}`, undefined, '__groupedSurface');
+                        innerRow.style.flex = '1';
+                        innerRow.style.marginBottom = '0';
+                        innerRow.style.minWidth = '0';
+
+                        cell.appendChild(optimizeControl.button);
+                        cell.appendChild(innerRow);
+                        pairRow.appendChild(cell);
+                    }
+
+                    pairRowScroll.appendChild(pairRow);
+                    panel.appendChild(pairRowScroll);
+                };
+
+                if (paramKeys.includes('bending') && !shouldSkipExpandedParamKey('bending')) {
+                    renderExpandedParamRow('bending', 'compact');
+                }
+
+                for (const key of paramKeys) {
+                    if (shouldSkipExpandedParamKey(key)) continue;
+                    if (key === 'bending') continue;
+                    if (groupedSurfaceParamKeys.has(key)) {
+                        const info = getGroupedSurfaceParamInfo(key);
+                        if (info) renderGroupedSurfaceParamRow(info.groupKey);
+                        continue;
+                    }
+                    renderExpandedParamRow(key);
                     
                     // nd/vd display is no longer shown here -- abbe field already holds vd,
                     // and nd can be looked up via the glass search button.
@@ -12399,26 +12546,25 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
             if (apertureEntries.length > 0 && !shouldHideExpandedField('semidia')) {
                 panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
-                panel.appendChild(createSpreadsheetHeader());
 
-                for (const { rawKey, displayKey, value } of apertureEntries) {
+                const renderApertureEntry = (rawKey: string, displayKey: string, value: any): HTMLElement | null => {
                     if (quickEditorEnabled) {
                         const rawLower = String(rawKey).toLowerCase();
                         const displayLower = String(displayKey).toLowerCase();
                         if (quickEditorCoveredApertureKeys.has(rawLower) || quickEditorCoveredApertureKeys.has(displayLower)) {
-                            continue;
+                            return null;
                         }
                     }
+
                     const apertureEntry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, rawKey);
-                    
-                    // Create row with optimize/scope icon control
-                    const apertureRow = document.createElement('div');
-                    apertureRow.style.display = 'grid';
-                    apertureRow.style.gridTemplateColumns = '32px minmax(0,1fr)';
-                    apertureRow.style.alignItems = 'center';
-                    apertureRow.style.gap = '6px';
-                    apertureRow.style.minHeight = '34px';
-                    apertureRow.style.marginBottom = '0';
+
+                    const apertureCell = document.createElement('div');
+                    apertureCell.style.display = 'grid';
+                    apertureCell.style.gridTemplateColumns = '24px minmax(0,1fr)';
+                    apertureCell.style.alignItems = 'center';
+                    apertureCell.style.gap = '6px';
+                    apertureCell.style.minHeight = '34px';
+                    apertureCell.style.marginBottom = '0';
 
                     const optimizeControl = createOptimizeScopeIconControl(
                         __blocks_shouldMarkVar(apertureEntry),
@@ -12438,14 +12584,36 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     innerRow.style.flex = '1';
                     innerRow.style.marginBottom = '0';
 
-                    apertureRow.appendChild(optimizeControl.button);
-                    apertureRow.appendChild(innerRow);
-                    panel.appendChild(apertureRow);
+                    apertureCell.appendChild(optimizeControl.button);
+                    apertureCell.appendChild(innerRow);
+                    return apertureCell;
+                };
+
+                for (let i = 0; i < apertureEntries.length; i += 2) {
+                    const pairRow = document.createElement('div');
+                    pairRow.style.display = 'grid';
+                    pairRow.style.gridTemplateColumns = 'minmax(0,1fr) minmax(0,1fr)';
+                    pairRow.style.gap = '8px';
+                    pairRow.style.alignItems = 'start';
+
+                    const first = apertureEntries[i];
+                    const second = apertureEntries[i + 1];
+                    const firstCell = first ? renderApertureEntry(first.rawKey, first.displayKey, first.value) : null;
+                    const secondCell = second ? renderApertureEntry(second.rawKey, second.displayKey, second.value) : null;
+
+                    if (firstCell) pairRow.appendChild(firstCell);
+                    else pairRow.appendChild(document.createElement('div'));
+
+                    if (secondCell) pairRow.appendChild(secondCell);
+                    else pairRow.appendChild(document.createElement('div'));
+
+                    if (firstCell || secondCell) {
+                        panel.appendChild(pairRow);
+                    }
                 }
             }
 
             if (varKeys.length > 0) {
-                panel.appendChild(createSpreadsheetHeader());
                 for (const key of varKeys) {
                     if (shouldHideExpandedField(key)) {
                         continue;

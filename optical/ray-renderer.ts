@@ -12,6 +12,12 @@ import { detectConjugateType, ConjugateType } from '../utils/conjugate-detection
 import { getRustRayTracingWasmSync } from '../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 
+function getAsphericModeFromSurfType(surfType) {
+    const normalized = String(surfType ?? '').trim().toLowerCase();
+    if (normalized.includes('qcon')) return 'qcon';
+    return normalized.includes('odd') ? 'odd' : 'even';
+}
+
 const RENDER_TS_TRACE_OPTIONS = {
     allowNonStrict: true,
     requireWasmRayTracing: false,
@@ -1273,7 +1279,7 @@ function resolveFiniteObjectSurfacePoint(opticalSystemRows, x, y) {
             coef9: Number(surf.coef9) || 0,
             coef10: Number(surf.coef10) || 0,
         };
-        sag = asphericSurfaceZ(r, asphericParams, surf.surfType === 'Aspheric Odd' ? 'odd' : 'even') || 0;
+        sag = asphericSurfaceZ(r, asphericParams, getAsphericModeFromSurfType(surf.surfType)) || 0;
     }
     return {
         x,
@@ -3860,7 +3866,7 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
                 coef9: Number(surf.coef9) || 0,
                 coef10: Number(surf.coef10) || 0
             };
-            objectSag = asphericSurfaceZ(r, asphericParams, surf.surfType === "Aspheric Odd" ? "odd" : "even") || 0;
+            objectSag = asphericSurfaceZ(r, asphericParams, getAsphericModeFromSurfType(surf.surfType)) || 0;
             // console.log(`🔍 [RayRenderer] Object面sag計算: r=${r.toFixed(3)}, sag=${objectSag.toFixed(6)}`);
         }
         
@@ -4477,7 +4483,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 coef7: Number(surf.coef7) || 0,
                 coef8: Number(surf.coef8) || 0
             };
-            const sag = asphericSurfaceZ(r, asphericParams, surf.surfType === "Aspheric Odd" ? "odd" : "even") || 0;
+            const sag = asphericSurfaceZ(r, asphericParams, getAsphericModeFromSurfType(surf.surfType)) || 0;
             if (Math.abs(sag) > 0) {
                 console.log(`🔍 [AngleRayRenderer] Object面sag計算: r=${r.toFixed(3)}, sag=${sag.toFixed(6)}`);
             }
@@ -5357,7 +5363,7 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
                 coef9: Number(surf.coef9) || 0,
                 coef10: Number(surf.coef10) || 0
             };
-            objectSag = asphericSurfaceZ(r, asphericParams, surf.surfType === "Aspheric Odd" ? "odd" : "even") || 0;
+            objectSag = asphericSurfaceZ(r, asphericParams, getAsphericModeFromSurfType(surf.surfType)) || 0;
             rrLog(`🔍 [RayRenderer] Rectangle Object面sag計算: r=${r.toFixed(3)}, sag=${objectSag.toFixed(6)}`);
         }
         

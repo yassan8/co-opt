@@ -33,7 +33,7 @@ export interface Block {
   aperture?: Record<string, any>;
 }
 
-const ALLOWED_SURF_TYPES = new Set(['', 'Spherical', 'Aspheric even', 'Aspheric odd', 'Toric']);
+const ALLOWED_SURF_TYPES = new Set(['', 'Spherical', 'Aspheric even', 'Aspheric odd', 'Qcon', 'Toric']);
 
 function normalizeSurfTypeValue(value: any): string {
   const s = String(value ?? '').trim();
@@ -56,6 +56,7 @@ function normalizeSurfTypeValue(value: any): string {
   if (key === 'spherical' || key === 'sphere' || key === 'sph') return 'Spherical';
   if (key === 'asphericaleven' || key === 'asphericeven' || key === 'evenasphere' || key === 'evenaspheric' || key === 'evenaspherical' || key === 'evenasperical' || key === 'aspericaleven') return 'Aspheric even';
   if (key === 'asphericalodd' || key === 'asphericodd' || key === 'oddasphere' || key === 'oddaspheric' || key === 'oddaspherical' || key === 'oddasperical' || key === 'aspericalodd') return 'Aspheric odd';
+  if (key === 'qcon' || key === 'q-type' || key === 'qtype' || key === 'qconic') return 'Qcon';
   if (key === 'aspherical' || key === 'aspheric' || key === 'asphere' || key === 'asperical') return 'Aspheric even';
   if (key === 'toric' || key === 'toroidal' || key === 'astigmatic' || key === 'anamorphic' || key === 'xypower' || key === 'x-y-power') return 'Toric';
 
@@ -145,7 +146,7 @@ function computeThinLensSurfaceRadii({ focalLength, focalLengthX, focalLengthY, 
 
 function blockAsphereLooksNonZero({ surfType, conic, coefs }: any): boolean {
   const st = normalizeSurfTypeValue(surfType);
-  if (st === 'Aspheric even' || st === 'Aspheric odd') return true;
+  if (st === 'Aspheric even' || st === 'Aspheric odd' || st === 'Qcon') return true;
   const c = Number(String(conic ?? '').trim());
   if (Number.isFinite(c) && Math.abs(c) > 0) return true;
   if (Array.isArray(coefs)) {

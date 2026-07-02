@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'OrbitControls';
 import { getLegacyWasmAsphericSagFn } from '../core/wasm-service.ts';
 import { toricSurfaceZ, toricSagDerivatives } from './surface-math.ts';
+import { evaluateQconSagDerivative, evaluateQconSagDeviation } from './qcon-basis.ts';
 
 // Debug control: Set to true to enable all 🔸 debug logs
 const ENABLE_DEBUG_LOGS = true;
@@ -392,11 +393,15 @@ export function asphericSurfaceZ(r, params, mode = "even") {
 
     let asphere = 0;
     const coefs = [coef1, coef2, coef3, coef4, coef5, coef6, coef7, coef8, coef9, coef10];
-    for (let i = 0; i < coefs.length; i++) {
-      if (mode === "even") {
-        asphere += (coefs[i] || 0) * Math.pow(radialSample, 2 * (i + 2));
-      } else if (mode === "odd") {
-        asphere += (coefs[i] || 0) * Math.pow(radialSample, 2 * (i + 1) + 1);
+    if (String(mode || '').toLowerCase() === 'qcon') {
+      asphere = evaluateQconSagDeviation(radialSample, params, coefs);
+    } else {
+      for (let i = 0; i < coefs.length; i++) {
+        if (mode === "even") {
+          asphere += (coefs[i] || 0) * Math.pow(radialSample, 2 * (i + 2));
+        } else if (mode === "odd") {
+          asphere += (coefs[i] || 0) * Math.pow(radialSample, 2 * (i + 1) + 1);
+        }
       }
     }
 
@@ -483,6 +488,12 @@ export function asphericSagDerivative(r, params, mode = "even") {
   const rr = Number(r);
   if (!isFinite(rr)) {
     return NaN;
+  }
+  if (String(mode || '').toLowerCase() === 'qcon') {
+    return evaluateQconSagDerivative(rr, params, [
+      params?.coef1, params?.coef2, params?.coef3, params?.coef4, params?.coef5,
+      params?.coef6, params?.coef7, params?.coef8, params?.coef9, params?.coef10,
+    ]);
   }
   // スケールに応じて刻み幅を調整
   const base = Math.max(1, Math.abs(rr));

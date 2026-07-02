@@ -68,7 +68,9 @@ function asphericSag(r, params, mode = "even")
 **入力:**
 - `r`: 半径距離 [mm]
 - `params`: {radius, conic, coef1-coef10, semidia}
-- `mode`: "even" (偶数べき) または "odd" (奇数べき)
+- `mode`: "even" (偶数べき), "odd" (奇数べき), または "qcon" (正規化半径上の直交Q基底)
+
+`qcon` は Forbes 系の Q 表現を踏まえた、正規化開口半径に対する直交多項式モードです。`coef1`..`coef10` は、従来のべき級数ではなく Q 基底の係数として解釈されます。
 
 **出力:**
 - SAG値 [mm]

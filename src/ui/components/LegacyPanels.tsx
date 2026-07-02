@@ -38,7 +38,7 @@ type DraftBuildResult = {
 type PatentAsphereTerms = {
   hasAny: boolean;
   conic: number | null;
-  surfType: 'Aspheric even' | 'Aspheric odd' | null;
+  surfType: 'Aspheric even' | 'Aspheric odd' | 'Qcon' | null;
   coefficients: Record<number, number>;
 };
 

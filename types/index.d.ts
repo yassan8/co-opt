@@ -27,6 +27,7 @@ export type SurfaceType =
   | 'Spherical'
   | 'Aspheric even'
   | 'Aspheric odd'
+  | 'Qcon'
   | 'Toric';
 
 export type ObjectMode = 'Infinite' | 'Finite';

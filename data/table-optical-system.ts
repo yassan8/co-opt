@@ -654,6 +654,7 @@ let tabulatorOptions = {
               {value: "Spherical", label: "Spherical"},
               {value: "Aspheric even", label: "Aspheric even"},
               {value: "Aspheric odd", label: "Aspheric odd"},
+              {value: "Qcon", label: "Qcon"},
               {value: "Toric", label: "Toric"},
               {value: "Coord Break", label: "Coord Break"}
             ]
@@ -1160,6 +1161,9 @@ let tabulatorOptions = {
         } else if (st === 'Aspheric odd') {
           updateTitlesForCoordTrans(false);
           updateCoefTitles('odd');
+        } else if (st === 'Qcon') {
+          updateTitlesForCoordTrans(false);
+          updateCoefTitles();
         } else {
           updateTitlesForCoordTrans(false);
           updateCoefTitles();
@@ -1890,6 +1894,9 @@ tableOpticalSystem.on("cellEdited", function(cell){
         } else if (st === 'Aspheric odd') {
           updateTitlesForCoordTrans(false);
           updateCoefTitles('odd');
+        } else if (st === 'Qcon') {
+          updateTitlesForCoordTrans(false);
+          updateCoefTitles();
         } else {
           updateTitlesForCoordTrans(false);
           updateCoefTitles();
