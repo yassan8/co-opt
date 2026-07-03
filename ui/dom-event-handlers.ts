@@ -11249,6 +11249,17 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     element.style.boxSizing = 'border-box';
                 };
 
+                const applyCompactEditorSizing = (element: HTMLInputElement | HTMLSelectElement | null | undefined) => {
+                    if (!element) return;
+                    element.style.width = '100%';
+                    element.style.minWidth = '0';
+                    element.style.height = '20px';
+                    element.style.boxSizing = 'border-box';
+                    element.style.fontSize = '11px';
+                    element.style.padding = '2px 6px';
+                    element.style.borderRadius = '4px';
+                };
+
                 // Check parameter type - surfType uses exact match (case-sensitive key)
                 const isSurfType = label === 'surfType' || label === 'frontSurfType' || label === 'backSurfType' || 
                                    label === 'surf1SurfType' || label === 'surf2SurfType' || label === 'surf3SurfType' || label === 'surf4SurfType';
@@ -11316,6 +11327,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(select);
                     relaxFieldSizing(select);
 
                     inputElement = select;
@@ -11397,6 +11409,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(select);
                     relaxFieldSizing(select);
 
                     inputElement = select;
@@ -11446,6 +11459,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(select);
                     relaxFieldSizing(select);
 
                     inputElement = select;
@@ -11504,6 +11518,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(select);
                     relaxFieldSizing(select);
 
                     inputElement = select;
@@ -11554,6 +11569,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(select);
                     relaxFieldSizing(select);
 
                     inputElement = select;
@@ -11596,6 +11612,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(select);
                     relaxFieldSizing(select);
 
                     inputElement = select;
@@ -11686,6 +11703,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(select);
                     relaxFieldSizing(select);
 
                     inputElement = select;
@@ -11728,6 +11746,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(select);
                     relaxFieldSizing(select);
 
                     inputElement = select;
@@ -11765,6 +11784,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(select);
                     relaxFieldSizing(select);
 
                     inputElement = select;
@@ -11800,6 +11820,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     });
 
                     input.addEventListener('blur', commit);
+                    applyCompactEditorSizing(input);
                     relaxFieldSizing(input);
                     inputElement = input;
                 } else if (isMaterial) {
@@ -11851,6 +11872,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.minWidth = '200px';
                     input.style.height = '28px';
                     input.style.boxSizing = 'border-box';
+                    applyCompactEditorSizing(input);
                     relaxFieldSizing(input);
 
                     const glassBtn = document.createElement('button');
@@ -12203,6 +12225,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         }
                     });
 
+                    applyCompactEditorSizing(input);
                     relaxFieldSizing(input);
 
                     inputElement = input;
@@ -12432,9 +12455,14 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     renderExpandedParamRow('bending', 'compact');
                 }
 
+                if ((blockType === 'Gap' || blockType === 'AirGap') && paramKeys.includes('thicknessMode') && !shouldSkipExpandedParamKey('thicknessMode')) {
+                    renderExpandedParamRow('thicknessMode', 'compact');
+                }
+
                 for (const key of paramKeys) {
                     if (shouldSkipExpandedParamKey(key)) continue;
                     if (key === 'bending') continue;
+                    if ((blockType === 'Gap' || blockType === 'AirGap') && key === 'thicknessMode') continue;
                     if (groupedSurfaceParamKeys.has(key)) {
                         const info = getGroupedSurfaceParamInfo(key);
                         if (info) renderGroupedSurfaceParamRow(info.groupKey);
