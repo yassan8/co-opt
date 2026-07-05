@@ -2022,6 +2022,46 @@ function acceptRustImageHeightPairWithValidation(
     };
 }
 
+function isImageHeightPairNearParaxialBranch(
+    solvedX: number,
+    solvedY: number,
+    paraxialX: number,
+    paraxialY: number,
+    targetX: number,
+    targetY: number,
+    mode: 'angle' | 'object'
+): boolean {
+    if (![solvedX, solvedY, paraxialX, paraxialY].every((value) => Number.isFinite(Number(value)))) return false;
+
+    const significantTargetX = Math.abs(Number(targetX) || 0) > 1e-7;
+    const significantTargetY = Math.abs(Number(targetY) || 0) > 1e-7;
+    if (significantTargetX && Math.abs(paraxialX) > 1e-9 && Math.sign(solvedX) !== Math.sign(paraxialX)) return false;
+    if (significantTargetY && Math.abs(paraxialY) > 1e-9 && Math.sign(solvedY) !== Math.sign(paraxialY)) return false;
+
+    const solvedMagnitude = Math.hypot(solvedX, solvedY);
+    const paraxialMagnitude = Math.hypot(paraxialX, paraxialY);
+    const delta = Math.hypot(solvedX - paraxialX, solvedY - paraxialY);
+    const hardLimit = mode === 'angle'
+        ? Math.max(45, paraxialMagnitude * 3 + 12)
+        : Math.max(100, paraxialMagnitude * 5 + 25);
+    if (solvedMagnitude > hardLimit) return false;
+
+    const branchLimit = mode === 'angle'
+        ? Math.max(8, paraxialMagnitude * 1.5 + 3)
+        : Math.max(10, paraxialMagnitude * 2 + 5);
+    return delta <= branchLimit;
+}
+
+function isImageHeightComponentNearInitialBranch(candidate: number, initialGuess: number, mode: 'angle' | 'object'): boolean {
+    if (!Number.isFinite(Number(candidate)) || !Number.isFinite(Number(initialGuess))) return false;
+    const absInitial = Math.abs(Number(initialGuess));
+    const delta = Math.abs(Number(candidate) - Number(initialGuess));
+    const limit = mode === 'angle'
+        ? Math.max(8, absInitial * 1.5 + 3)
+        : Math.max(10, absInitial * 2 + 5);
+    return delta <= limit;
+}
+
 function solveImageHeightComponent(targetValue, initialGuess, evaluateCandidate, options: { initialStep?: number; maxStep?: number } = {}) {
     const target = Number(targetValue) || 0;
     if (Math.abs(target) < 1e-12) return 0;
@@ -2970,7 +3010,7 @@ export function convertImageHeightToEffectiveObject(
                 solvedAngleXDeg,
                 solvedAngleYDeg,
             );
-            const acceptedRustPair = skipTsValidation
+            let acceptedRustPair = skipTsValidation
                 ? acceptRustImageHeightPair(rustPairResult, targetX, targetY)
                 : acceptRustImageHeightPairWithValidation(
                     rustPairResult,
@@ -2987,6 +3027,17 @@ export function convertImageHeightToEffectiveObject(
                         validationTraceBackend,
                     )
                 );
+            if (acceptedRustPair && !isImageHeightPairNearParaxialBranch(
+                Number(acceptedRustPair.x),
+                Number(acceptedRustPair.y),
+                paraxialAngleXDeg,
+                paraxialAngleYDeg,
+                targetX,
+                targetY,
+                'angle'
+            )) {
+                acceptedRustPair = null;
+            }
             if (acceptedRustPair) {
                 solvedAngleXDeg = acceptedRustPair.x;
                 solvedAngleYDeg = acceptedRustPair.y;
@@ -3119,7 +3170,7 @@ export function convertImageHeightToEffectiveObject(
                         targetX,
                         (candidate) => evaluateAngleHitComponent(candidate, fixedAngleY, 0, validationTraceBackend)
                     );
-                if (acceptedRustCandidate !== null) return acceptedRustCandidate;
+                if (acceptedRustCandidate !== null && isImageHeightComponentNearInitialBranch(acceptedRustCandidate, initialGuess, 'angle')) return acceptedRustCandidate;
                 return solveImageHeightComponent(targetX, initialGuess, evaluateCandidate, solverOptions);
             };
 
@@ -3148,7 +3199,7 @@ export function convertImageHeightToEffectiveObject(
                         targetY,
                         (candidate) => evaluateAngleHitComponent(fixedAngleX, candidate, 1, validationTraceBackend)
                     );
-                if (acceptedRustCandidate !== null) return acceptedRustCandidate;
+                if (acceptedRustCandidate !== null && isImageHeightComponentNearInitialBranch(acceptedRustCandidate, initialGuess, 'angle')) return acceptedRustCandidate;
                 return solveImageHeightComponent(targetY, initialGuess, evaluateCandidate, solverOptions);
             };
 
@@ -3379,7 +3430,7 @@ export function convertImageHeightToEffectiveObject(
                 solvedObjectX,
                 solvedObjectY,
             );
-            const acceptedRustPair = skipTsValidation
+            let acceptedRustPair = skipTsValidation
                 ? acceptRustImageHeightPair(rustPairResult, targetX, targetY)
                 : acceptRustImageHeightPairWithValidation(
                     rustPairResult,
@@ -3396,6 +3447,17 @@ export function convertImageHeightToEffectiveObject(
                         validationTraceBackend,
                     )
                 );
+            if (acceptedRustPair && !isImageHeightPairNearParaxialBranch(
+                Number(acceptedRustPair.x),
+                Number(acceptedRustPair.y),
+                paraxialObjectX,
+                paraxialObjectY,
+                targetX,
+                targetY,
+                'object'
+            )) {
+                acceptedRustPair = null;
+            }
             if (acceptedRustPair) {
                 solvedObjectX = acceptedRustPair.x;
                 solvedObjectY = acceptedRustPair.y;
@@ -3528,7 +3590,7 @@ export function convertImageHeightToEffectiveObject(
                         targetX,
                         (candidate) => evaluateFiniteHitComponent(candidate, fixedObjectY, 0, validationTraceBackend)
                     );
-                if (acceptedRustCandidate !== null) return acceptedRustCandidate;
+                if (acceptedRustCandidate !== null && isImageHeightComponentNearInitialBranch(acceptedRustCandidate, initialGuess, 'object')) return acceptedRustCandidate;
                 return solveImageHeightComponent(targetX, initialGuess, evaluateCandidate, solverOptions);
             };
 
@@ -3557,7 +3619,7 @@ export function convertImageHeightToEffectiveObject(
                         targetY,
                         (candidate) => evaluateFiniteHitComponent(fixedObjectX, candidate, 1, validationTraceBackend)
                     );
-                if (acceptedRustCandidate !== null) return acceptedRustCandidate;
+                if (acceptedRustCandidate !== null && isImageHeightComponentNearInitialBranch(acceptedRustCandidate, initialGuess, 'object')) return acceptedRustCandidate;
                 return solveImageHeightComponent(targetY, initialGuess, evaluateCandidate, solverOptions);
             };
 

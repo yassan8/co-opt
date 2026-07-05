@@ -1,0 +1,178 @@
+
+🔥 PERIPHERAL RAY DETECTED: start distance = 10.000mm from center
+   This ray may be subject to aperture limitations
+
+=== SURFACE 1 DETAILED DEBUG ===
+Surface Type: Spherical
+Material field: "AIR" → Material type: REFRACTIVE
+Ray Position (Local):  (0.000000, 10.000000, 0.000000)
+Ray Direction (Local): (0.000000, 0.000000, 1.000000)
+Ray Position (Global): (0.000000, 10.000000, 0.000000)
+Ray Direction (Global): (0.000000, 0.000000, 1.000000)
+Surface Origin O(s): (0.000000, 0.000000, 0.000000)
+Object surface: Zero thickness, ray position unchanged
+
+=== SURFACE 2 DETAILED DEBUG ===
+Surface Type: Spherical
+Material field: "J-LASFH22" → Material type: REFRACTIVE
+Ray Position (Local):  (0.000000, 10.000000, 0.000000)
+Ray Direction (Local): (0.000000, 0.000000, 1.000000)
+Ray Position (Global): (0.000000, 10.000000, 0.000000)
+Ray Direction (Global): (0.000000, 0.000000, 1.000000)
+Surface Origin O(s): (0.000000, 0.000000, 0.000000)
+Local Ray for intersection: pos=(0.000000, 10.000000, 0.000000), dir=(0.000000, 0.000000, 1.000000)
+Surface radius: 22.438183012, Surface origin: (0.000000, 0.000000, 0.000000)
+Global ray before transform: pos=(0.000000, 10.000000, 0.000000), dir=(0.000000, 0.000000, 1.000000)
+Surface intersection using numerical method: radius=22.438183012, conic=0
+Non-zero aspherical coefficients: NO
+🔍 intersectAsphericSurface: radius=22.438183012, semidia=12
+   Ray pos: (0.000, 10.000, 0.000)
+   Ray dir: (0.000, 0.000, 1.000)
+   🎯 Initial guesses (Phase 2 optimized): [2.351569, 42.524797]
+   🔄 Trying guess 1: t=2.351569
+     🎯 Starting Newton iteration with t=2.351569, r0=10.000
+     📐 Iter 0: t=2.351569, pt=(0.000,10.000,2.352), r=10.000, sag=2.351569, F=-0.000000
+     ✅ Converged in 0 iterations, F=-0.000000000
+🔄 Normal vector flipped: dot product was 0.895198, now facing outward
+📐 semidia制限: 12.000mm → 最終制限=12.000mm
+✅ SURFACE APERTURE CHECK PASSED: Hit radius 10.000000mm ≤ Aperture limit 12.000000mm
+Hit point (local): (0.000, 10.000, 2.352), radius: 10.000mm
+Surface semi-diameter: 12.000mm
+Hit point (global): (0.000, 10.000, 2.352)
+🔧 [RefractiveIndex] Surface 2: material="J-LASFH22", rindex="1.8485", wavelength=0.5500μm, calculated n=1.852614
+🔍 REFRACTION DETAILS:
+   Local normal: (0.000000, 0.445669, -0.895198)
+   Global normal: (0.000000, 0.445669, -0.895198)
+   Incident ray: (0.000000, 0.000000, 1.000000)
+   n1=1.0000 → n2=1.8526, eta=0.5398
+   cos(incident angle): 0.895198
+Refraction: n1=1.0000 → n2=1.8526, oldDir=(0.000000, 0.000000, 1.000000) → newDir=(0.000000, -0.217230, 0.976120)
+Thickness advancement: 3.756577415mm (intermediate position not recorded for clean ray paths)
+
+=== SURFACE 3 DETAILED DEBUG ===
+Surface Type: Spherical
+Material field: "AIR" → Material type: REFRACTIVE
+Ray Position (Local):  (0.000000, 9.183957, 6.018441)
+Ray Direction (Local): (0.000000, -0.217230, 0.976120)
+Ray Position (Global): (0.000000, 9.183957, 6.018441)
+Ray Direction (Global): (0.000000, -0.217230, 0.976120)
+Surface Origin O(s): (0.000000, 0.000000, 3.756577)
+🔍 SPECIAL ANALYSIS for Surface 3 (problematic surface):
+  Previous surface (2): radius=22.438183012, thickness=3.756577415
+  Current surface (3): radius=34.992992593, semidia=12
+  Expected advancement from surface 2: 3.756577415mm
+  Surface 2 origin: (0.000000, 0.000000, 0.000000)
+  Surface 3 origin: (0.000000, 0.000000, 3.756577)
+  Distance between surface origins: 3.756577mm
+Local Ray for intersection: pos=(0.000000, 9.183957, 2.261863), dir=(0.000000, -0.217230, 0.976120)
+Surface radius: 34.992992593, Surface origin: (0.000000, 0.000000, 3.756577)
+Global ray before transform: pos=(0.000000, 10.000000, 0.000000), dir=(0.000000, 0.000000, 1.000000)
+Surface intersection using numerical method: radius=34.992992593, conic=0
+Non-zero aspherical coefficients: NO
+🔍 intersectAsphericSurface: radius=34.992992593, semidia=12
+   Ray pos: (0.000, 9.184, 2.262)
+   Ray dir: (0.000, -0.217, 0.976)
+   🎯 Initial guesses (Phase 2 optimized): [1.000000, 68.888376]
+   🔄 Trying guess 1: t=1.000000
+     🎯 Starting Newton iteration with t=1.000000, r0=8.967
+     📐 Iter 0: t=1.000000, pt=(0.000,8.967,3.238), r=8.967, sag=1.168337, F=2.069647
+     🛡️ Iter 0: Limiting deltaT from 2.002160 to 1.5
+     🔄 Iter 0: F=2.069647, dzdr=0.265094, dFdt=1.033707, deltaT=2.002160, newT=-0.500000
+     📐 Iter 1: t=-0.500000, pt=(0.000,9.293,1.774), r=9.293, sag=1.256401, F=0.517402
+     🔄 Iter 1: F=0.517402, dzdr=0.275445, dFdt=1.035955, deltaT=0.499445, newT=-0.999445
+     📐 Iter 2: t=-0.999445, pt=(0.000,9.401,1.286), r=9.401, sag=1.286473, F=-0.000188
+     🔄 Iter 2: F=-0.000188, dzdr=0.278909, dFdt=1.036708, deltaT=-0.000181, newT=-0.999264
+     ✅ Converged in 3 iterations, F=-0.000000000
+🔄 Normal vector flipped: dot product was 0.998595, now facing outward
+📐 semidia制限: 12.000mm → 最終制限=12.000mm
+✅ SURFACE APERTURE CHECK PASSED: Hit radius 9.401027mm ≤ Aperture limit 12.000000mm
+Hit point (local): (0.000, 9.401, 1.286), radius: 9.401mm
+Surface semi-diameter: 12.000mm
+Hit point (global): (0.000, 9.401, 5.043)
+🔧 [RefractiveIndex] Surface 3: material="AIR", rindex="undefined", wavelength=0.5500μm, calculated n=1.000000
+🔍 REFRACTION DETAILS:
+   Local normal: (0.000000, 0.268655, -0.963237)
+   Global normal: (0.000000, 0.268655, -0.963237)
+   Incident ray: (0.000000, -0.217230, 0.976120)
+   n1=1.8526 → n2=1.0000, eta=1.8526
+   cos(incident angle): 0.998595
+Refraction: n1=1.8526 → n2=1.0000, oldDir=(0.000000, -0.217230, 0.976120) → newDir=(0.000000, -0.172787, 0.984959)
+Thickness advancement: 3mm (intermediate position not recorded for clean ray paths)
+
+=== SURFACE 4 DETAILED DEBUG ===
+Surface Type: Spherical
+Material field: "J-SF13" → Material type: REFRACTIVE
+Ray Position (Local):  (0.000000, 8.882666, 7.997917)
+Ray Direction (Local): (0.000000, -0.172787, 0.984959)
+Ray Position (Global): (0.000000, 8.882666, 7.997917)
+Ray Direction (Global): (0.000000, -0.172787, 0.984959)
+Surface Origin O(s): (0.000000, 0.000000, 6.756577)
+Local Ray for intersection: pos=(0.000000, 8.882666, 1.241339), dir=(0.000000, -0.172787, 0.984959)
+Surface radius: -34.09400605, Surface origin: (0.000000, 0.000000, 6.756577)
+Global ray before transform: pos=(0.000000, 10.000000, 0.000000), dir=(0.000000, 0.000000, 1.000000)
+Surface intersection using numerical method: radius=-34.09400605, conic=0
+Non-zero aspherical coefficients: NO
+🔍 intersectAsphericSurface: radius=-34.09400605, semidia=10
+   Ray pos: (0.000, 8.883, 1.241)
+   Ray dir: (0.000, -0.173, 0.985)
+   🎯 Initial guesses (Phase 2 optimized): [0.010000, 1.000000, 10.000000]
+   🔄 Trying guess 1: t=0.010000
+     🎯 Starting Newton iteration with t=0.010000, r0=8.881
+     📐 Iter 0: t=0.010000, pt=(0.000,8.881,1.251), r=8.881, sag=-1.176986, F=2.428175
+     🛡️ Iter 0: Limiting deltaT from 2.587731 to 1.005
+     🔄 Iter 0: F=2.428175, dzdr=-0.269798, dFdt=0.938342, deltaT=2.587731, newT=-0.995000
+     📐 Iter 1: t=-0.995000, pt=(0.000,9.055,0.261), r=9.055, sag=-1.224329, F=1.485634
+     🛡️ Iter 1: Limiting deltaT from 1.584910 to 1.4975
+     🔄 Iter 1: F=1.485634, dzdr=-0.275469, dFdt=0.937362, deltaT=1.584910, newT=-2.492500
+     📐 Iter 2: t=-2.492500, pt=(0.000,9.313,-1.214), r=9.313, sag=-1.296705, F=0.083033
+     🔄 Iter 2: F=0.083033, dzdr=-0.283967, dFdt=0.935893, deltaT=0.088721, newT=-2.581221
+     ✅ Converged in 4 iterations, F=0.000000000
+🔄 Normal vector flipped: dot product was 0.900095, now facing outward
+📐 semidia制限: 10.000mm → 最終制限=10.000mm
+✅ SURFACE APERTURE CHECK PASSED: Hit radius 9.328668mm ≤ Aperture limit 10.000000mm
+Hit point (local): (0.000, 9.329, -1.301), radius: 9.329mm
+Surface semi-diameter: 10.000mm
+Hit point (global): (0.000, 9.329, 5.456)
+🔧 [RefractiveIndex] Surface 4: material="J-SF13", rindex="1.74077", wavelength=0.5500μm, calculated n=1.746410
+🔍 REFRACTION DETAILS:
+   Local normal: (0.000000, -0.273616, -0.961839)
+   Global normal: (0.000000, -0.273616, -0.961839)
+   Incident ray: (0.000000, -0.172787, 0.984959)
+   n1=1.0000 → n2=1.7464, eta=0.5726
+   cos(incident angle): 0.900095
+Refraction: n1=1.0000 → n2=1.7464, oldDir=(0.000000, -0.172787, 0.984959) → newDir=(0.000000, 0.025005, 0.999687)
+Thickness advancement: 2.034669543mm (intermediate position not recorded for clean ray paths)
+
+=== SURFACE 5 DETAILED DEBUG ===
+Surface Type: Spherical
+Material field: "J-LASF08A" → Material type: REFRACTIVE
+Ray Position (Local):  (0.000000, 9.379545, 7.489549)
+Ray Direction (Local): (0.000000, 0.025005, 0.999687)
+Ray Position (Global): (0.000000, 9.379545, 7.489549)
+Ray Direction (Global): (0.000000, 0.025005, 0.999687)
+Surface Origin O(s): (0.000000, 0.000000, 8.791247)
+Local Ray for intersection: pos=(0.000000, 9.379545, -1.301698), dir=(0.000000, 0.025005, 0.999687)
+Surface radius: 22.911250176, Surface origin: (0.000000, 0.000000, 8.791247)
+Global ray before transform: pos=(0.000000, 10.000000, 0.000000), dir=(0.000000, 0.000000, 1.000000)
+Surface intersection using numerical method: radius=22.911250176, conic=0
+Non-zero aspherical coefficients: NO
+🔍 intersectAsphericSurface: radius=22.911250176, semidia=8
+   Ray pos: (0.000, 9.380, -1.302)
+   Ray dir: (0.000, 0.025, 1.000)
+   🎯 Initial guesses (Phase 2 optimized): [1.302105, 3.348429, 44.593256]
+   🔄 Trying guess 1: t=1.302105
+     🎯 Starting Newton iteration with t=1.302105, r0=9.412
+     📐 Iter 0: t=1.302105, pt=(0.000,9.412,0.000), r=9.412, sag=2.022553, F=-2.022553
+     🛡️ Iter 0: Limiting deltaT from -2.046247 to -1.6510525597165908
+     🔄 Iter 0: F=-2.022553, dzdr=0.450584, dFdt=0.988420, deltaT=-2.046247, newT=2.953158
+     📐 Iter 1: t=2.953158, pt=(0.000,9.453,1.651), r=9.453, sag=2.041204, F=-0.390668
+     🔄 Iter 1: F=-0.390668, dzdr=0.452964, dFdt=0.988361, deltaT=-0.395268, newT=3.348426
+     📐 Iter 2: t=3.348426, pt=(0.000,9.463,2.046), r=9.463, sag=2.045684, F=-0.000003
+     🔄 Iter 2: F=-0.000003, dzdr=0.453535, dFdt=0.988347, deltaT=-0.000003, newT=3.348429
+     ✅ Converged in 3 iterations, F=-0.000000000
+🔄 Normal vector flipped: dot product was 0.900100, now facing outward
+📐 semidia制限: 8.000mm → 最終制限=8.000mm
+❌ PHYSICAL APERTURE BLOCK: Ray physically blocked on Surface 5
+   Hit radius: 9.463273mm > Aperture limit: 8.000000mm
+   Surface type: "undefined", aperture: "undefined", semidia: "8"
+   Ray PHYSICALLY STOPPED - This ray should NOT reach the image plane

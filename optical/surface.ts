@@ -2445,17 +2445,20 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         
         const currentBlockId = String(currentSurf?._blockId ?? currentSurf?.blockId ?? '').trim();
         const nextBlockId = String(nextSurf?._blockId ?? nextSurf?.blockId ?? '').trim();
-        const currentIsLens = (__coopt_hasLensTag(currentSurf) || (currentSurf.material && currentSurf.material !== '' && currentSurf.material !== 'AIR' && currentSurf.material !== '0' && currentSurf.material !== 'MIRROR'));
-        const nextIsLens = (__coopt_hasLensTag(nextSurf) || (nextSurf.material && nextSurf.material !== '' && nextSurf.material !== 'AIR' && nextSurf.material !== '0' && nextSurf.material !== 'MIRROR'));
+        const isGlassMaterial = (materialValue) => {
+          const material = String(materialValue ?? '').trim().toUpperCase();
+          return !!material && material !== 'AIR' && material !== '0' && material !== 'MIRROR';
+        };
+        const currentIsLens = (__coopt_hasLensTag(currentSurf) || isGlassMaterial(currentSurf.material));
+        const nextIsLens = (__coopt_hasLensTag(nextSurf) || isGlassMaterial(nextSurf.material));
 
         const sameBlock = currentBlockId && nextBlockId && currentBlockId === nextBlockId;
-        const blockIdsMissing = !currentBlockId || !nextBlockId;
-        const canDrawAdjacentLensPair = sameBlock || (blockIdsMissing && currentIsLens && nextIsLens);
+        const blockIdsMissing = !currentBlockId && !nextBlockId;
+        const canDrawAdjacentLensPair = (sameBlock && currentIsLens && nextIsLens) || (blockIdsMissing && currentIsLens);
 
         if (__coopt_isRenderableLensConnectionSurface(currentSurf) &&
           __coopt_isRenderableLensConnectionSurface(nextSurf) &&
-          canDrawAdjacentLensPair &&
-          currentIsLens && nextIsLens) {
+          canDrawAdjacentLensPair) {
             const surfaceIndex = i;
             const nextSurfaceIndex = i + 1;
             

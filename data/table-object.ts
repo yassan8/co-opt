@@ -117,9 +117,39 @@ export function saveTableData(data: ObjectRow[]): void {
   }
   if (data && Array.isArray(data)) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    persistObjectRowsToActiveConfiguration(data);
   } else {
     console.warn('⚠️ [TableObject] Invalid data, not saving:', data);
   }
+}
+
+function cloneJsonSafe<T>(value: T): T {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    return Array.isArray(value) ? (value.slice() as T) : value;
+  }
+}
+
+function persistObjectRowsToActiveConfiguration(rows: ObjectRow[]): void {
+  if (!hasWindow || !Array.isArray(rows)) return;
+  try {
+    const cfg = typeof w.loadSystemConfigurationsFromTableConfig === 'function'
+      ? w.loadSystemConfigurationsFromTableConfig()
+      : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+    if (!cfg || !Array.isArray(cfg.configurations)) return;
+    const activeId = cfg.activeConfigId;
+    const active = cfg.configurations.find((c: any) => String(c?.id) === String(activeId));
+    if (!active) return;
+    active.object = cloneJsonSafe(rows);
+    if (!active.metadata || typeof active.metadata !== 'object') active.metadata = {};
+    active.metadata.modified = new Date().toISOString();
+    if (typeof w.saveSystemConfigurationsFromTableConfig === 'function') {
+      w.saveSystemConfigurationsFromTableConfig(cfg);
+    } else if (typeof w.saveSystemConfigurations === 'function') {
+      w.saveSystemConfigurations(cfg);
+    }
+  } catch (_) {}
 }
 
 // 行追加
@@ -146,6 +176,7 @@ const initialData = loadTableData();
 const hasDocument = (typeof document !== 'undefined') && document && typeof document.getElementById === 'function';
 const hasWindow = (typeof window !== 'undefined') && window;
 let tableContainer = hasDocument ? document.getElementById('table-object') : null;
+let objectRowsRenderSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let derivedEvaluationRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 // 表の構成
@@ -187,11 +218,85 @@ const createCellEvent = (field: string, value: any, rowData: ObjectRow): CellEve
   };
 };
 
+function scheduleRenderObjectRowsSync(): void {
+  if (!hasWindow) return;
+  if (objectRowsRenderSyncTimer !== null) {
+    clearTimeout(objectRowsRenderSyncTimer);
+  }
+  objectRowsRenderSyncTimer = setTimeout(() => {
+    objectRowsRenderSyncTimer = null;
+    try {
+      const objectRows = tableObject && typeof tableObject.getData === 'function' ? tableObject.getData() : [];
+      const opticalRows = typeof w.getOpticalSystemRows === 'function'
+        ? w.getOpticalSystemRows(w.tableOpticalSystem)
+        : [];
+      if (!Array.isArray(opticalRows) || opticalRows.length === 0) return;
+      const token = `${Date.now()}-object-rows-sync`;
+      const systemConfig = (() => {
+        try {
+          const cfg = typeof w.loadSystemConfigurationsFromTableConfig === 'function'
+            ? w.loadSystemConfigurationsFromTableConfig()
+            : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+          return cfg && typeof cfg === 'object' ? cloneJsonSafe(cfg) : undefined;
+        } catch (_) {
+          return undefined;
+        }
+      })();
+      try {
+        if (systemConfig && typeof systemConfig === 'object') {
+          w.__cooptPendingRenderSystemConfig = systemConfig;
+        }
+        if (typeof w.__cooptRenderWindowRedraw === 'function') {
+          void Promise.resolve(w.__cooptRenderWindowRedraw(opticalRows, token, objectRows));
+        }
+      } catch (_) {}
+      try {
+        const popup = w.popup3DWindow;
+        if (popup && !popup.closed && typeof popup.__cooptRenderWindowRedraw === 'function') {
+          if (systemConfig && typeof systemConfig === 'object') {
+            try {
+              popup.__cooptPendingRenderSystemConfig = systemConfig;
+              popup.__cooptSystemConfig = systemConfig;
+              popup.__cooptPreferRuntimeSystemConfig = true;
+            } catch (_) {}
+          }
+          void Promise.resolve(popup.__cooptRenderWindowRedraw(opticalRows, token, objectRows));
+        }
+      } catch (_) {}
+      try {
+        localStorage.setItem('coopt.renderSyncRequest', JSON.stringify({
+          action: 'request-redraw',
+          rows: opticalRows,
+          objectRows,
+          systemConfig,
+          ts: token,
+          token,
+        }));
+      } catch (_) {}
+    } catch (_) {}
+  }, 0);
+}
+
 const normalizeNumberLike = (v: any): number | string => {
   if (v === '' || v == null) return '';
   const n = Number(v);
   return Number.isFinite(n) ? n : v;
 };
+
+const IMAGE_HEIGHT_INTERNAL_FIELDS = [
+  '__cooptImageHeightTarget',
+  '__cooptImageHeightSolve',
+  '__cooptOriginalPosition',
+  '__cooptEffectivePosition',
+  '__cooptOriginalImageHeightTarget',
+  '__cooptRenderApproxImageHeight',
+  '__cooptRenderApproxDebug',
+  '__cooptRenderImageHeightSplit',
+  '__cooptRenderImageHeightDisplayDistance',
+  '__cooptImageHeightExactRender',
+  '__cooptImageHeightTargetX',
+  '__cooptImageHeightTargetY',
+];
 
 const normalizePositionValue = (value: any): 'Angle' | 'Rectangle' | 'ImageHeight' => {
   const compact = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
@@ -199,6 +304,13 @@ const normalizePositionValue = (value: any): 'Angle' | 'Rectangle' | 'ImageHeigh
   if (compact === 'rectangle' || compact === 'heightrect' || compact === 'rect' || compact === 'height') return 'Rectangle';
   if (compact === 'imageheight' || compact === 'imageheigth') return 'ImageHeight';
   return 'Angle';
+};
+
+const clearImageHeightInternalState = (row: any): void => {
+  if (!row || typeof row !== 'object') return;
+  IMAGE_HEIGHT_INTERNAL_FIELDS.forEach((field) => {
+    try { delete row[field]; } catch (_) { row[field] = undefined; }
+  });
 };
 
 const inferColumnTitlesFromRows = (rows: ObjectRow[]): { x: string; y: string } => {
@@ -225,6 +337,7 @@ const normalizeRow = (row: Partial<ObjectRow>, fallbackId: number): ObjectRow =>
   normalized.yHeightAngle = normalizeNumberLike(normalized.yHeightAngle);
   // Spec: Position should be Angle, Rectangle, or ImageHeight. Accept UI/import label variants.
   normalized.position = normalizePositionValue(normalized.position);
+  if (normalized.position !== 'ImageHeight') clearImageHeightInternalState(normalized);
   if (!('angle' in normalized)) normalized.angle = 0;
   normalized.enabled = (normalized.enabled !== false);
   return normalized as ObjectRow;
@@ -291,6 +404,7 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
       if (positionValue === 'Angle') {
         r.angle = (r.yHeightAngle === '' || r.yHeightAngle == null) ? '' : r.yHeightAngle;
       }
+      if (normalizePositionValue(positionValue) !== 'ImageHeight') clearImageHeightInternalState(r);
     });
     replaceData(rows);
   };
@@ -598,6 +712,7 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
         if (rowData.position === 'Angle') {
           rowData.angle = rowData.yHeightAngle;
         }
+        if (normalizePositionValue(rowData.position) !== 'ImageHeight') clearImageHeightInternalState(rowData);
         
         // Record undo command
         if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.position) {
@@ -742,6 +857,7 @@ const attachObjectTableListeners = (): void => {
     updatePSFObjectSelectIfAvailable();
     updateWavefrontObjectOptionsIfAvailable();
     scheduleDerivedEvaluationRefresh();
+    scheduleRenderObjectRowsSync();
   });
 
   tableObject.on("rowAdded", function() {

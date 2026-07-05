@@ -8198,8 +8198,11 @@ function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
 
     if (rows.length === 0) {
         try {
+            if (shouldPreferImportedOpticalRows(activeConfig) && Array.isArray(activeConfig?.opticalSystem) && activeConfig.opticalSystem.length > 0) {
+                rows = activeConfig.opticalSystem.slice();
+            }
             const activeBlocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
-            if (activeBlocks.length > 0) {
+            if (rows.length === 0 && activeBlocks.length > 0) {
                 const autoGapResult = cooptAutoApplyGapThicknessModes(activeBlocks, '');
                 const expandedRows = Array.isArray(autoGapResult?.rows)
                     ? autoGapResult.rows
@@ -8213,7 +8216,7 @@ function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
                         activeConfig.opticalSystem = expandedRows;
                     } catch (_) {}
                 }
-            } else if (Array.isArray(activeConfig?.opticalSystem) && activeConfig.opticalSystem.length > 0) {
+            } else if (rows.length === 0 && Array.isArray(activeConfig?.opticalSystem) && activeConfig.opticalSystem.length > 0) {
                 rows = activeConfig.opticalSystem.slice();
             }
         } catch (_) {}

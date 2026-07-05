@@ -47,7 +47,7 @@ import { createOPDCalculator, createWavefrontAnalyzer, WavefrontAberrationAnalyz
 import { PSFCalculator } from '../evaluation/psf/psf-calculator.ts';
 import { calculateFocalLength, calculateParaxialData, findStopSurfaceIndex, calculateImageSpaceDiffractionParams } from '../raytracing/core/ray-paraxial.ts';
 import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
-import { loadSystemConfigurations } from '../data/table-configuration.ts';
+import { loadSystemConfigurations, shouldPreferImportedOpticalRows } from '../data/table-configuration.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 import { showThroughFocusMTFDiagram } from '../evaluation/mtf-plot.ts';
 import { readDesktopSetting, runAnalysisCompute, runNativeDistortion, runNativeFieldMtfMap, runNativeGridDistortion, runNativeMtfMap, runNativeOpdMap, runNativePsfMap, runNativeSphericalAberration, runNativeSpotRaytrace, runNativeThroughFocusMtfMap } from '../src/desktop/ipc/client.ts';
@@ -118,7 +118,7 @@ function collectPopupRowsFromMainWindow(): {
             let snapshotOpticalRows: any[] = Array.isArray(activeConfig?.opticalSystem)
                 ? activeConfig.opticalSystem.map((row: any) => (row && typeof row === 'object') ? { ...row } : row)
                 : [];
-            if (Array.isArray(activeConfig?.blocks) && activeConfig.blocks.length > 0) {
+            if (!shouldPreferImportedOpticalRows(activeConfig) && Array.isArray(activeConfig?.blocks) && activeConfig.blocks.length > 0) {
                 const expanded = w.expandBlocksToOpticalSystemRows
                     ? w.expandBlocksToOpticalSystemRows(activeConfig.blocks)
                     : null;
@@ -186,6 +186,32 @@ function collectPopupRowsFromMainWindow(): {
     }
 
     return { opticalSystemRows, sourceRows, objectRows };
+}
+
+function collectLiveObjectRowsFromMainWindow(): any[] | null {
+    try {
+        if (typeof w.getObjectRows === 'function') {
+            const rows = w.getObjectRows(w.tableObject);
+            if (Array.isArray(rows) && rows.length > 0) return rows.map((row: any) => (row && typeof row === 'object') ? { ...row } : row);
+        }
+    } catch (_) {}
+
+    try {
+        if (w.tableObject && typeof w.tableObject.getData === 'function') {
+            const rows = w.tableObject.getData();
+            if (Array.isArray(rows) && rows.length > 0) return rows.map((row: any) => (row && typeof row === 'object') ? { ...row } : row);
+        }
+    } catch (_) {}
+
+    try {
+        const tableElement = document.getElementById('table-object');
+        const rows = tableElement && (tableElement as any).tabulator && typeof (tableElement as any).tabulator.getData === 'function'
+            ? (tableElement as any).tabulator.getData()
+            : null;
+        if (Array.isArray(rows) && rows.length > 0) return rows.map((row: any) => (row && typeof row === 'object') ? { ...row } : row);
+    } catch (_) {}
+
+    return null;
 }
 
 function getPrimaryWavelengthMicronsFromSourceRows(sourceRows: any[]): number {
@@ -4005,6 +4031,9 @@ function ensurePopupMessageHandler(): void {
         };
 
         const resolveRenderSnapshotObjectRows = (messageData: any, popupWindow?: any): any[] | null => {
+            const liveRows = collectLiveObjectRowsFromMainWindow();
+            if (liveRows && liveRows.length > 0) return liveRows;
+
             const messageRows = Array.isArray(messageData?.objectRows) ? messageData.objectRows : null;
             if (messageRows && messageRows.length > 0) return messageRows;
 
@@ -4440,10 +4469,12 @@ function ensurePopupMessageHandler(): void {
             // tracing uses the latest snapshot rows/objectRows and refraction
             // is consistent with the Render button path.
             const routedViewAxis = data.action === 'view-xz' ? 'XZ' : 'YZ';
+            const liveObjectRows = collectLiveObjectRowsFromMainWindow();
             window.postMessage({
                 ...data,
                 action: 'draw-cross',
-                viewAxis: routedViewAxis
+                viewAxis: routedViewAxis,
+                ...(liveObjectRows && liveObjectRows.length > 0 ? { objectRows: liveObjectRows } : {})
             }, '*');
             return;
 

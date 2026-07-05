@@ -228,9 +228,9 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
   let fieldYs = [];
   /** @type {number[]} */
   let fieldWs = [];
-  /** @type {'Angle'|'Rectangle'} */
+  /** @type {'Angle'|'Rectangle'|'ImageHeight'} */
   let fieldPosition = 'Rectangle';
-  /** @type {null|'Angle'|'Rectangle'} */
+  /** @type {null|'Angle'|'Rectangle'|'ImageHeight'} */
   let fieldPositionFromFTYP = null;
   let entrancePupilDiameterMm = null;
   /** @type {null|number} */
@@ -336,15 +336,20 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
     }
 
     if (key === 'FTYP') {
-      // Minimal handling: co-opt export uses Angle field type.
-      // We treat token[3] == 2 as Angle (matches our exporter: `FTYP 0 0 2 3 0 0 0 2`).
+      // Minimal handling: co-opt export uses token[3] == 2 for Angle.
+      // OpTaliX/Zemax-style `FTYP 2 0` stores field coordinates as image heights.
       const t3 = parseNumberOrNull(tokens[3]);
       if (t3 !== null && Number.isFinite(t3) && Math.trunc(t3) === 2) {
         fieldPosition = 'Angle';
         fieldPositionFromFTYP = 'Angle';
       } else {
-        // OpTaliX uses FTYP 4 for angle fields in many exported files.
         const t1 = parseNumberOrNull(tokens[1]);
+        if (tokens.length <= 3 && t1 !== null && Math.trunc(t1) === 2) {
+          fieldPosition = 'ImageHeight';
+          fieldPositionFromFTYP = 'ImageHeight';
+          continue;
+        }
+        // OpTaliX uses FTYP 4 for angle fields in many exported files.
         if ((t1 !== null && Math.trunc(t1) === 4) || (t3 !== null && Math.trunc(t3) === 4)) {
           fieldPosition = 'Angle';
           fieldPositionFromFTYP = 'Angle';
@@ -723,9 +728,10 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       const j = Math.trunc(idx);
 
       if (j === 1) {
-        row.conic = val;
+        // XDAT 1 is the Q-con type flag (1 = Q-con), NOT the conic constant.
+        // The conic constant is provided separately via the CONI record.
       } else if (j === 2) {
-        // XDAT 2 is exported as diameter; store internal qconNrad/C2 as radius.
+        // XDAT 2 is exported as a normalization diameter; co-opt stores qconNrad as radius.
         row.qconNrad = Math.abs(val) / 2;
       } else if (j === 3) {
         row.qconOffset = val;

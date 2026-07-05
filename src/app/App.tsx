@@ -757,16 +757,23 @@ function filterRenderCrossRaysForAxis(rays: any[], axis: 'YZ' | 'XZ'): any[] {
   });
 }
 
-function isRenderImageHeightObjectRow(row: any): boolean {
-  const posNorm = String(row?.__cooptOriginalPosition ?? row?.position ?? '')
+function normalizeRenderObjectPositionTag(value: any): string {
+  return String(value ?? '')
     .trim()
     .toLowerCase()
     .replace(/[\s_-]+/g, '');
+}
+
+function isRenderImageHeightObjectRow(row: any): boolean {
+  const currentPosNorm = normalizeRenderObjectPositionTag(row?.position);
+  const originalPosNorm = normalizeRenderObjectPositionTag(row?.__cooptOriginalPosition);
   const storedTarget = row?.__cooptImageHeightTarget;
   const hasStoredImageHeightTarget = storedTarget
     && Number.isFinite(Number(storedTarget.x))
     && Number.isFinite(Number(storedTarget.y));
-  return posNorm === 'imageheight' || !!hasStoredImageHeightTarget;
+  if (currentPosNorm === 'imageheight') return true;
+  if (currentPosNorm && currentPosNorm !== 'imageheight') return false;
+  return originalPosNorm === 'imageheight' || !!hasStoredImageHeightTarget;
 }
 
 function hasRenderImageHeightObjectRows(rows: any[]): boolean {
@@ -2482,14 +2489,10 @@ function replaceImageHeightChiefRaysWithExactRenderTrace(
       ? Number(ray.objectIndex)
       : (Number.isFinite(Number(ray?.originalRay?.objectIndex)) ? Number(ray.originalRay.objectIndex) : 0);
     const objectRow = normalizedObjectRows[objectIndex];
-    const posNorm = String(objectRow?.__cooptOriginalPosition ?? objectRow?.position ?? '')
-      .trim()
-      .toLowerCase()
-      .replace(/[\s_-]+/g, '');
     const hasImageHeightTarget = objectRow?.__cooptImageHeightTarget
       && Number.isFinite(Number(objectRow.__cooptImageHeightTarget.x))
       && Number.isFinite(Number(objectRow.__cooptImageHeightTarget.y));
-    if (posNorm !== 'imageheight' && !hasImageHeightTarget) return ray;
+    if (!isRenderImageHeightObjectRow(objectRow)) return ray;
 
     const dropFallbackChiefRay = (reason: string) => {
       try {
@@ -2504,7 +2507,7 @@ function replaceImageHeightChiefRaysWithExactRenderTrace(
     };
 
     try {
-      const resolvedObjectRow = hasImageHeightTarget || posNorm === 'imageheight'
+      const resolvedObjectRow = hasImageHeightTarget || isRenderImageHeightObjectRow(objectRow)
         ? convertImageHeightToEffectiveObject(
             objectRow,
             opticalSystemRows,
@@ -2597,20 +2600,16 @@ function replaceImageHeightChiefRaysWithExactRenderTrace(
 }
 
 function getRenderImageHeightTarget(row: any): { x: number; y: number } | null {
-  const positionNorm = String(row?.position ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '');
-  const effectivePositionNorm = String(row?.__cooptEffectivePosition ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '');
+  const positionNorm = normalizeRenderObjectPositionTag(row?.position);
+  const effectivePositionNorm = normalizeRenderObjectPositionTag(row?.__cooptEffectivePosition);
   const isRawImageHeightRow = positionNorm === 'imageheight' && !effectivePositionNorm;
   const tableX = Number(row?.xHeightAngle);
   const tableY = Number(row?.yHeightAngle);
   if (isRawImageHeightRow && Number.isFinite(tableX) && Number.isFinite(tableY)) {
     return { x: tableX, y: tableY };
   }
+
+  if (positionNorm && positionNorm !== 'imageheight') return null;
 
   const storedTarget = row?.__cooptImageHeightTarget;
   if (storedTarget && Number.isFinite(Number(storedTarget.x)) && Number.isFinite(Number(storedTarget.y))) {
@@ -3863,13 +3862,21 @@ function isGlassMaterial(materialValue: any): boolean {
   return !(material === 'AIR' || material === '0' || material === 'MIRROR');
 }
 
+function isLensFrontSurface(front: any): boolean {
+  return isGlassMaterial(front?.material) || hasLensTag(front);
+}
+
 function isLensInterval(front: any, back: any): boolean {
   if (!front || !back) return false;
   if (!isRenderableLensCandidateSurface(front) || !isRenderableLensCandidateSurface(back)) return false;
   const frontBlockId = String(front?._blockId ?? front?.blockId ?? '').trim();
   const backBlockId = String(back?._blockId ?? back?.blockId ?? '').trim();
-  if (!frontBlockId || !backBlockId || frontBlockId !== backBlockId) return false;
-  return (isGlassMaterial(front?.material) || hasLensTag(front)) && (isGlassMaterial(back?.material) || hasLensTag(back));
+  const frontIsLens = isLensFrontSurface(front);
+  const backIsLens = isGlassMaterial(back?.material) || hasLensTag(back);
+  if (frontBlockId || backBlockId) {
+    return !!(frontBlockId && backBlockId && frontBlockId === backBlockId && frontIsLens && backIsLens);
+  }
+  return frontIsLens;
 }
 
 function buildRenderableSurfaceNumberMap(opticalSystemRows: any[]): Map<number, number> {
@@ -7796,6 +7803,14 @@ const collectLegacyCrossRays = async (
         } catch (_) {}
       }
 
+      if (!compareEnabled && sceneForDraw) {
+        try {
+          applyRenderWindowDirectCrossFill(sceneForDraw, axis, rowsForRender);
+        } catch (fillErr) {
+          console.warn('[RenderWindow] Cross-section lens fill failed:', fillErr);
+        }
+      }
+
       if (!compareEnabled && !shouldSkipRayGeneration) {
         const collectStartMs = performance.now();
         const legacyCrossRays = await collectLegacyCrossRays(
@@ -7868,12 +7883,6 @@ const collectLegacyCrossRays = async (
           w.drawCrossBeamRays(filteredCrossRays, sceneForDraw);
           rayDrawMs += performance.now() - drawStartMs;
         }
-        try {
-          applyRenderWindowDirectCrossFill(sceneForDraw, axis, rowsForRender);
-        } catch (fillErr) {
-          console.warn('[RenderWindow] Cross-section lens fill failed:', fillErr);
-        }
-
       }
       if (rayCollectMs > 0) timingStages.push({ label: 'rayCollect', ms: rayCollectMs });
       if (rayDrawMs > 0) timingStages.push({ label: 'rayDraw', ms: rayDrawMs });

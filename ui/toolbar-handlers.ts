@@ -52,6 +52,64 @@ function clearSystemDataCache(): void {
   } catch (_) {}
 }
 
+function syncRenderAfterZemaxImport(fallbackRows: any[], fallbackObjectRows: any[], systemConfig: any): void {
+  const token = `${Date.now()}-zemax-import-render-sync`;
+  const readLiveRows = (): any[] => {
+    try {
+      if (typeof w.getOpticalSystemRows === 'function') {
+        const rows = w.getOpticalSystemRows(w.tableOpticalSystem);
+        if (Array.isArray(rows) && rows.length > 0) return rows;
+      }
+    } catch (_) {}
+    return Array.isArray(fallbackRows) ? fallbackRows : [];
+  };
+  const readLiveObjectRows = (): any[] => {
+    try {
+      if (typeof w.getObjectRows === 'function') {
+        const rows = w.getObjectRows(w.tableObject);
+        if (Array.isArray(rows) && rows.length > 0) return rows;
+      }
+    } catch (_) {}
+    return Array.isArray(fallbackObjectRows) ? fallbackObjectRows : [];
+  };
+  const send = () => {
+    try {
+      const rows = readLiveRows();
+      const objectRows = readLiveObjectRows();
+      if (!Array.isArray(rows) || rows.length === 0) return;
+      const clonedSystemConfig = systemConfig && typeof systemConfig === 'object'
+        ? JSON.parse(JSON.stringify(systemConfig))
+        : undefined;
+      const payload = {
+        action: 'request-redraw',
+        rows,
+        objectRows,
+        systemConfig: clonedSystemConfig,
+        ts: token,
+        token,
+        senderId: getOrCreateCooptWindowSyncSenderId(),
+      };
+      try {
+        if (typeof w.__cooptRenderWindowRedraw === 'function') {
+          void Promise.resolve(w.__cooptRenderWindowRedraw(rows, token, objectRows));
+        }
+      } catch (_) {}
+      try {
+        const popup = w.popup3DWindow;
+        if (popup && !popup.closed && typeof popup.__cooptRenderWindowRedraw === 'function') {
+          void Promise.resolve(popup.__cooptRenderWindowRedraw(rows, token, objectRows));
+        }
+      } catch (_) {}
+      try {
+        localStorage.setItem('coopt.renderSyncRequest', JSON.stringify(payload));
+      } catch (_) {}
+    } catch (_) {}
+  };
+
+  send();
+  setTimeout(send, 250);
+}
+
 function unwrapSnapshotLikePayload(input: any): any {
   const raw = input && typeof input === 'object' ? input : null;
   if (!raw) return input;
@@ -1404,6 +1462,7 @@ export function handleImportZemax(): void {
         if (!loaded) {
           throw new Error('Zemax import parsed, but app load step returned false.');
         }
+        syncRenderAfterZemaxImport(rows, objectRows, payload);
 
         try {
           if (shouldRunSemidiaAutoFill && typeof (window as any).autoCalculateMissingSemidia === 'function') {
@@ -1575,6 +1634,7 @@ export function handleImportZemax(): void {
       if (!loaded) {
         throw new Error('Zemax import parsed, but app load step returned false.');
       }
+      syncRenderAfterZemaxImport(rows, objectRows, payload);
 
       try {
         if (shouldRunSemidiaAutoFill && typeof (window as any).autoCalculateMissingSemidia === 'function') {

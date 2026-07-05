@@ -744,9 +744,34 @@ function __buildAsphericParamsArray(params) {
 
 function __buildQconParamsArray(params) {
   const safe = params || {};
+  const signature = [
+    safe.semidia,
+    safe.radius,
+    safe.conic,
+    safe.qconNrad,
+    safe.qconNRadius,
+    safe.nrad,
+    safe.NRAD,
+    safe.qconOffset,
+    safe.qcon_offset,
+    safe.offset,
+    safe.coef1,
+    safe.coef2,
+    safe.coef3,
+    safe.coef4,
+    safe.coef5,
+    safe.coef6,
+    safe.coef7,
+    safe.coef8,
+    safe.coef9,
+    safe.coef10,
+    safe.semiDia,
+    safe.semiDiameter,
+    safe['Semi Diameter']
+  ].map((value) => String(value ?? '')).join('|');
   if (safe && typeof safe === 'object') {
     const cached = __rustQconParamsCache.get(safe);
-    if (cached) return cached;
+    if (cached && cached.signature === signature && cached.array) return cached.array;
   }
   const resolvedQconNrad = (() => {
     const raw = Number(safe.qconNrad ?? safe.qconNRadius ?? safe.nrad ?? safe.NRAD);
@@ -776,7 +801,7 @@ function __buildQconParamsArray(params) {
     Number(safe.coef10) || 0
   ]);
   if (safe && typeof safe === 'object') {
-    __rustQconParamsCache.set(safe, arr);
+    __rustQconParamsCache.set(safe, { signature, array: arr });
   }
   return arr;
 }
