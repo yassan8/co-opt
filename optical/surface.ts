@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'OrbitControls';
 import { getLegacyWasmAsphericSagFn } from '../core/wasm-service.ts';
 import { toricSurfaceZ, toricSagDerivatives } from './surface-math.ts';
-import { evaluateQconSagDerivative, evaluateQconSagDeviation } from './qcon-basis.ts';
+import { evaluateConicBaseSagDerivative, evaluateQconSagDerivative, evaluateQconSagDeviation } from './qcon-basis.ts';
 
 // Debug control: Set to true to enable all 🔸 debug logs
 const ENABLE_DEBUG_LOGS = true;
@@ -482,6 +482,27 @@ export function asphericSurfaceZ(r, params, mode = "even") {
   return result;
 }
 
+function __coopt_getQconNrad(surface) {
+  const nrad = Number(surface?.qconNrad ?? surface?.qconNRadius ?? surface?.nrad ?? surface?.NRAD);
+  if (Number.isFinite(nrad) && nrad > 0) return nrad;
+  const semidia = __coopt_getSemidiaMm(surface);
+  if (Number.isFinite(semidia) && semidia > 0) return semidia;
+  return 0;
+}
+
+function __coopt_getQconOffset(surface) {
+  const offset = Number(surface?.qconOffset ?? surface?.qcon_offset ?? surface?.offset);
+  return Number.isFinite(offset) ? offset : 0;
+}
+
+function __coopt_resolveAsphereMode(params, fallbackMode = 'even') {
+  const fallback = String(fallbackMode || 'even').trim().toLowerCase() || 'even';
+  const surfType = String(params?.surfType ?? params?.type ?? params?.surfaceType ?? '').trim().toLowerCase();
+  if (surfType.includes('qcon')) return 'qcon';
+  if (surfType.includes('odd')) return 'odd';
+  return fallback;
+}
+
 // ray-tracing.js 互換: 非球面サグの1階微分 ds/dr
 // 解析式は条件分岐や符号(負半径)が絡むため、ここでは堅牢な数値微分を採用
 export function asphericSagDerivative(r, params, mode = "even") {
@@ -490,10 +511,15 @@ export function asphericSagDerivative(r, params, mode = "even") {
     return NaN;
   }
   if (String(mode || '').toLowerCase() === 'qcon') {
-    return evaluateQconSagDerivative(rr, params, [
+    const baseDerivative = evaluateConicBaseSagDerivative(rr, params);
+    const deviationDerivative = evaluateQconSagDerivative(rr, params, [
       params?.coef1, params?.coef2, params?.coef3, params?.coef4, params?.coef5,
       params?.coef6, params?.coef7, params?.coef8, params?.coef9, params?.coef10,
     ]);
+    if (!isFinite(baseDerivative) || !isFinite(deviationDerivative)) {
+      return NaN;
+    }
+    return baseDerivative + deviationDerivative;
   }
   // スケールに応じて刻み幅を調整
   const base = Math.max(1, Math.abs(rr));
@@ -631,6 +657,7 @@ export function drawLensSurface(scene, params, mode = "even", segments = 100, zO
     coef9: Number(params.coef9) || 0,
     coef10: Number(params.coef10) || 0,
   };
+  const resolvedMode = __coopt_resolveAsphereMode(paramsForZ, mode);
   // 各パラメータが数値かどうかチェック
   Object.entries(paramsForZ).forEach(([k, v]) => {
     if (["radius","conic","coef1","coef2","coef3","coef4","coef5","coef6","coef7","coef8","coef9","coef10"].includes(k)) {
@@ -644,7 +671,7 @@ export function drawLensSurface(scene, params, mode = "even", segments = 100, zO
       const r = (semidia * j) / segments;
       const x = r * Math.cos(theta);
       const y = r * Math.sin(theta);
-      let z = isIdealThinLens ? 0 : asphericSurfaceZ(r, paramsForZ, mode);
+      let z = isIdealThinLens ? 0 : asphericSurfaceZ(r, paramsForZ, resolvedMode);
       if (!isFinite(z)) z = 0;
       
       // 座標ブレーク変換を適用（{0,0,0}中心で回転）
@@ -811,6 +838,7 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
     coef9: Number(params.coef9) || 0,
     coef10: Number(params.coef10) || 0,
   };
+  const resolvedMode = __coopt_resolveAsphereMode(paramsForZ, mode);
 
   const shouldUseRect = apertureShape === 'Square' || apertureShape === 'Rectangular';
   let rectWidth = apertureWidth;
@@ -835,7 +863,7 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
       for (let ix = 0; ix <= segments; ix++) {
         const x = -halfW + (2 * halfW * ix / segments);
         const r = Math.sqrt(x * x + y * y);
-        let z = isIdealThinLens ? 0 : asphericSurfaceZ(r, paramsForZ, mode);
+        let z = isIdealThinLens ? 0 : asphericSurfaceZ(r, paramsForZ, resolvedMode);
         if (!isFinite(z)) z = 0;
 
         let vertex = new THREE_CTX.Vector3(x, y, z);
@@ -867,7 +895,7 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
         const r = (semidia * j) / segments;
         const x = r * Math.cos(theta);
         const y = r * Math.sin(theta);
-        let z = isIdealThinLens ? 0 : asphericSurfaceZ(r, paramsForZ, mode);
+        let z = isIdealThinLens ? 0 : asphericSurfaceZ(r, paramsForZ, resolvedMode);
         if (!isFinite(z)) z = 0;
         
         // 座標変換を適用（回転行列と原点オフセット）
@@ -1128,6 +1156,7 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
   // 非球面・トーリック面パラメータを準備
   let asphericParams = null;
   let toricParams = null;
+  let asphereMode = 'even';
   const isIdealThinLens = __coopt_isIdealThinLensSurface(surf);
   const isToric = surf && surf.surfType === 'Toric' && !isIdealThinLens;
   
@@ -1161,8 +1190,16 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
         coef7: Number(surf.coef7) || 0,
         coef8: Number(surf.coef8) || 0,
         coef9: Number(surf.coef9) || 0,
-        coef10: Number(surf.coef10) || 0
+        coef10: Number(surf.coef10) || 0,
+        qconNrad: __coopt_getQconNrad(surf),
+        qconOffset: __coopt_getQconOffset(surf),
+        qconTermCount: Number(surf.qconTermCount)
       };
+      try {
+        const st = String(surf.surfType ?? '').toLowerCase();
+        if (st.includes('qcon')) asphereMode = 'qcon';
+        else if (st.includes('odd')) asphereMode = 'odd';
+      } catch (_) {}
     }
   }
 
@@ -1187,7 +1224,7 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
     } else if (asphericParams) {
       // Rotationally symmetric surface: use radial distance
       const r = Math.sqrt(x * x + y * y); // 各点での半径
-      sagZ = asphericSurfaceZ(r, asphericParams, "even");
+      sagZ = asphericSurfaceZ(r, asphericParams, asphereMode);
       if (!isFinite(sagZ)) {
         sagZ = 0; // 計算エラーの場合は0にフォールバック
       }
@@ -1307,11 +1344,15 @@ export function drawRectApertureWithOriginAndSurface(scene, width = 20, height =
         coef7: Number(surf.coef7) || 0,
         coef8: Number(surf.coef8) || 0,
         coef9: Number(surf.coef9) || 0,
-        coef10: Number(surf.coef10) || 0
+        coef10: Number(surf.coef10) || 0,
+        qconNrad: __coopt_getQconNrad(surf),
+        qconOffset: __coopt_getQconOffset(surf),
+        qconTermCount: Number(surf.qconTermCount)
       };
       try {
         const st = String(surf.surfType ?? '').toLowerCase();
-        if (st.includes('odd')) asphereMode = 'odd';
+        if (st.includes('qcon')) asphereMode = 'qcon';
+        else if (st.includes('odd')) asphereMode = 'odd';
       } catch (_) {}
     }
   }
@@ -2332,11 +2373,20 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         coef7: Number(surf.coef7) || 0,
         coef8: Number(surf.coef8) || 0,
         coef9: Number(surf.coef9) || 0,
-        coef10: Number(surf.coef10) || 0
+        coef10: Number(surf.coef10) || 0,
+        qconNrad: __coopt_getQconNrad(surf),
+        qconOffset: __coopt_getQconOffset(surf),
+        qconTermCount: Number(surf.qconTermCount)
       };
 
+      let mode = 'even';
+      try {
+        if (surfTypeNorm.includes('qcon')) mode = 'qcon';
+        else if (surfTypeNorm.includes('odd')) mode = 'odd';
+      } catch (_) {}
+
       const r = Math.sqrt(x * x + y * y);
-      const z = asphericSurfaceZ(r, asphericParams, "even");
+      const z = asphericSurfaceZ(r, asphericParams, mode);
       return Number.isFinite(z) ? z : 0;
     };
 
@@ -2398,9 +2448,13 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         const currentIsLens = (__coopt_hasLensTag(currentSurf) || (currentSurf.material && currentSurf.material !== '' && currentSurf.material !== 'AIR' && currentSurf.material !== '0' && currentSurf.material !== 'MIRROR'));
         const nextIsLens = (__coopt_hasLensTag(nextSurf) || (nextSurf.material && nextSurf.material !== '' && nextSurf.material !== 'AIR' && nextSurf.material !== '0' && nextSurf.material !== 'MIRROR'));
 
+        const sameBlock = currentBlockId && nextBlockId && currentBlockId === nextBlockId;
+        const blockIdsMissing = !currentBlockId || !nextBlockId;
+        const canDrawAdjacentLensPair = sameBlock || (blockIdsMissing && currentIsLens && nextIsLens);
+
         if (__coopt_isRenderableLensConnectionSurface(currentSurf) &&
           __coopt_isRenderableLensConnectionSurface(nextSurf) &&
-          currentBlockId && nextBlockId && currentBlockId === nextBlockId &&
+          canDrawAdjacentLensPair &&
           currentIsLens && nextIsLens) {
             const surfaceIndex = i;
             const nextSurfaceIndex = i + 1;
@@ -2453,11 +2507,17 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                             coef7: Number(surf.coef7) || 0,
                             coef8: Number(surf.coef8) || 0,
                             coef9: Number(surf.coef9) || 0,
-                            coef10: Number(surf.coef10) || 0
+                            coef10: Number(surf.coef10) || 0,
+                            qconNrad: __coopt_getQconNrad(surf),
+                            qconOffset: __coopt_getQconOffset(surf),
+                            qconTermCount: Number(surf.qconTermCount)
                         };
+
+                          const surfTypeNorm = String(surf?.surfType ?? surf?.type ?? '').trim().toLowerCase();
+                          const mode = surfTypeNorm.includes('qcon') ? 'qcon' : (surfTypeNorm.includes('odd') ? 'odd' : 'even');
                         
                         const r = Math.sqrt(x * x + y * y);
-                        return asphericSurfaceZ(r, asphericParams, "even") || 0;
+                          return asphericSurfaceZ(r, asphericParams, mode) || 0;
                     };
                     
                     // 接続線を描画する関数（4本の線: +Y, -Y, +X, -X）
@@ -2836,11 +2896,16 @@ export function drawConnectionCornerRings3D(scene, rows, surfaceOrigins) {
       coef7: Number(surf.coef7) || 0,
       coef8: Number(surf.coef8) || 0,
       coef9: Number(surf.coef9) || 0,
-      coef10: Number(surf.coef10) || 0
+      coef10: Number(surf.coef10) || 0,
+      qconNrad: __coopt_getQconNrad(surf),
+      qconOffset: __coopt_getQconOffset(surf),
+      qconTermCount: Number(surf.qconTermCount)
     };
 
     const r = Math.sqrt(x * x + y * y);
-    return asphericSurfaceZ(r, asphericParams, "even") || 0;
+    const surfTypeNorm = String(surf?.surfType ?? surf?.type ?? '').trim().toLowerCase();
+    const mode = surfTypeNorm.includes('qcon') ? 'qcon' : (surfTypeNorm.includes('odd') ? 'odd' : 'even');
+    return asphericSurfaceZ(r, asphericParams, mode) || 0;
   };
 
   for (let i = 0; i < rows.length - 1; i++) {

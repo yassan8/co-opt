@@ -574,7 +574,7 @@ async function normalizeTransverseObjectRowsForImageHeight(
           ...row,
           ...effective,
           __cooptImageHeightTarget: preservedTarget,
-          position: (effective as any)?.__cooptEffectivePosition ?? (effective as any)?.position ?? (row as any)?.position,
+          position: (row as any)?.position,
           __cooptOriginalPosition: row.position,
         };
       }
@@ -2604,6 +2604,10 @@ export async function runNativeMtfMap(
     }
 
     const points = Math.max(2, Math.min(2048, Math.floor(Number(payload?.points) || freqDiscrete.length)));
+    const directEvalOnly = !!payload?.directEvalOnly;
+    const sampledFrequenciesLpmm = (Array.isArray(payload?.sampleFrequenciesLpmm) ? payload.sampleFrequenciesLpmm : [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v) && v >= 0);
     const sampleLinear = (xArr: number[], yArr: number[], x: number) => {
       if (xArr.length === 0 || yArr.length === 0) return 0;
       if (x <= xArr[0]) return yArr[0] ?? 0;
@@ -2620,23 +2624,35 @@ export async function runNativeMtfMap(
       return yArr[last] ?? 0;
     };
 
+    const sampledMtfTangential = sampledFrequenciesLpmm.length > 0
+      ? sampledFrequenciesLpmm.map((f) => Math.max(0, Math.min(1, sampleLinear(freqDiscrete, tangentialDiscrete, f))))
+      : undefined;
+    const sampledMtfSagittal = sampledFrequenciesLpmm.length > 0
+      ? sampledFrequenciesLpmm.map((f) => Math.max(0, Math.min(1, sampleLinear(freqDiscrete, sagittalDiscrete, f))))
+      : undefined;
+
     const frequencyAxis: number[] = [];
     const mtfSagittal: number[] = [];
     const mtfTangential: number[] = [];
-    for (let i = 0; i < points; i++) {
-      const f = (i / Math.max(1, points - 1)) * maxFreq;
-      frequencyAxis.push(f);
-      mtfSagittal.push(sampleLinear(freqDiscrete, sagittalDiscrete, f));
-      mtfTangential.push(sampleLinear(freqDiscrete, tangentialDiscrete, f));
+    if (!directEvalOnly) {
+      for (let i = 0; i < points; i++) {
+        const f = (i / Math.max(1, points - 1)) * maxFreq;
+        frequencyAxis.push(f);
+        mtfSagittal.push(sampleLinear(freqDiscrete, sagittalDiscrete, f));
+        mtfTangential.push(sampleLinear(freqDiscrete, tangentialDiscrete, f));
+      }
+      if (mtfSagittal.length > 0) mtfSagittal[0] = 1;
+      if (mtfTangential.length > 0) mtfTangential[0] = 1;
     }
-    if (mtfSagittal.length > 0) mtfSagittal[0] = 1;
-    if (mtfTangential.length > 0) mtfTangential[0] = 1;
 
     return {
       backend: "web-rust-wasm",
       frequencyAxis,
       mtfTangential,
       mtfSagittal,
+      sampledFrequenciesLpmm: sampledFrequenciesLpmm.length > 0 ? sampledFrequenciesLpmm : undefined,
+      sampledMtfTangential,
+      sampledMtfSagittal,
       nyquistLpmm,
       message: "Computed via Web Rust/WASM MTF API",
     };
@@ -2867,10 +2883,9 @@ export async function runNativeFieldMtfMap(
     return normalizedRow;
   });
   const hasImageHeightObjectRows = normalizedInputObjectRows.some((row) => String((row as any)?.position ?? "").trim().toLowerCase() === "imageheight");
-  // Desktop can use the dedicated native field-MTF command for faster execution.
-  // Keep the shared route for ImageHeight rows because that path depends on the
-  // JS-side normalization/preservation logic added for parity with the popup flow.
-  const preferSharedFieldMtfRoute = !isTauriRuntime() || hasImageHeightObjectRows;
+  // Prefer the dedicated native field-MTF command on desktop for all object row types.
+  // Shared route remains as a full fallback if native path is unavailable/fails.
+  const preferSharedFieldMtfRoute = !isTauriRuntime();
   const sampleFromObjectRows = payload?.sampleFromObjectRows === true && normalizedInputObjectRows.length > 0;
 
   const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 256;
@@ -2900,11 +2915,15 @@ export async function runNativeFieldMtfMap(
     : (forcedPupilSamplingMode || "entrance");
   const onProgress = typeof (payload as any)?.onProgress === "function" ? (payload as any).onProgress : null;
 
-  if (!preferSharedFieldMtfRoute && isTauriRuntime() && !hasImageHeightObjectRows) {
+  if (!preferSharedFieldMtfRoute && isTauriRuntime()) {
     try {
+      const nativePayload: NativeFieldMtfMapRequest = {
+        ...(payload as NativeFieldMtfMapRequest),
+        objectRows: normalizedInputObjectRows,
+      };
       return await invokeCommand<NativeFieldMtfMapRequest, NativeFieldMtfMapResponse>(
         "run_native_field_mtf_map",
-        payload,
+        nativePayload,
       );
     } catch (_) {
       // Keep the Rust/WASM fallback below if the direct native command is unavailable.
@@ -3388,24 +3407,49 @@ export async function runNativeFieldMtfMap(
     secondLo: number | null;
     secondHi: number | null;
   }> => {
+    const maxTargetFrequencyLpmm = Math.max(0, Number(firstFrequencyLpmm) || 0, Number(secondFrequencyLpmm) || 0);
+    const mtfMaxFrequencyLpmm = Math.max(1, maxTargetFrequencyLpmm * 2);
+    const targetFreqs = [firstFrequencyLpmm, secondFrequencyLpmm]
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v) && v >= 0);
+
     const mtfResp = await runNativeMtfMap({
       psfData,
       pixelSizeUm,
-      points: 513,
+      maxFrequencyLpmm: mtfMaxFrequencyLpmm,
+      points: 2,
+      sampleFrequenciesLpmm: targetFreqs,
+      directEvalOnly: true,
     } as NativeMtfMapRequest);
 
     const freqAxis = Array.isArray((mtfResp as any)?.frequencyAxis) ? (mtfResp as any).frequencyAxis : [];
     const mtfTangential = Array.isArray((mtfResp as any)?.mtfTangential) ? (mtfResp as any).mtfTangential : [];
     const mtfSagittal = Array.isArray((mtfResp as any)?.mtfSagittal) ? (mtfResp as any).mtfSagittal : [];
+    const sampledTangential = Array.isArray((mtfResp as any)?.sampledMtfTangential) ? (mtfResp as any).sampledMtfTangential : [];
+    const sampledSagittal = Array.isArray((mtfResp as any)?.sampledMtfSagittal) ? (mtfResp as any).sampledMtfSagittal : [];
     const tanAxis = inferTanAxis(fieldValue, fieldVector);
     const tanVals = tanAxis === "x" ? mtfSagittal : mtfTangential;
     const sagVals = tanAxis === "x" ? mtfTangential : mtfSagittal;
 
+    const hasDirectSamples = sampledTangential.length >= 2 && sampledSagittal.length >= 2;
+    const firstM = hasDirectSamples
+      ? (tanAxis === "x" ? Number(sampledSagittal[0]) : Number(sampledTangential[0]))
+      : interpolateAxisValue(freqAxis, tanVals, firstFrequencyLpmm);
+    const firstS = hasDirectSamples
+      ? (tanAxis === "x" ? Number(sampledTangential[0]) : Number(sampledSagittal[0]))
+      : interpolateAxisValue(freqAxis, sagVals, firstFrequencyLpmm);
+    const secondM = hasDirectSamples
+      ? (tanAxis === "x" ? Number(sampledSagittal[1]) : Number(sampledTangential[1]))
+      : interpolateAxisValue(freqAxis, tanVals, secondFrequencyLpmm);
+    const secondS = hasDirectSamples
+      ? (tanAxis === "x" ? Number(sampledTangential[1]) : Number(sampledSagittal[1]))
+      : interpolateAxisValue(freqAxis, sagVals, secondFrequencyLpmm);
+
     return {
-      firstM: interpolateAxisValue(freqAxis, tanVals, firstFrequencyLpmm),
-      firstS: interpolateAxisValue(freqAxis, sagVals, firstFrequencyLpmm),
-      secondM: interpolateAxisValue(freqAxis, tanVals, secondFrequencyLpmm),
-      secondS: interpolateAxisValue(freqAxis, sagVals, secondFrequencyLpmm),
+      firstM,
+      firstS,
+      secondM,
+      secondS,
       firstLo: findLowerBracketValue(freqAxis, firstFrequencyLpmm),
       firstHi: findUpperBracketValue(freqAxis, firstFrequencyLpmm),
       secondLo: findLowerBracketValue(freqAxis, secondFrequencyLpmm),

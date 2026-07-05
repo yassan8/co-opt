@@ -84,7 +84,7 @@ function normalizeDistortionObjectRows(objectRows: any[], opticalSystemRows: any
             return {
               ...normalized,
               ...effective,
-              position: effective?.__cooptEffectivePosition ?? effective?.position ?? normalized.position,
+              position: normalized.position,
               __cooptOriginalPosition: normalized.position,
             };
           }

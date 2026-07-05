@@ -2604,6 +2604,390 @@ pub fn surface_normal_aspheric_rt10_batch(
     out
 }
 
+fn jacobi_recurrence_coefficients(n: usize, alpha: f64, beta: f64) -> (f64, f64, f64) {
+    if n == 0 {
+        return (1.0 + 0.5 * (alpha + beta), 0.5 * (alpha - beta), 1.0);
+    }
+
+    let n1 = (n + 1) as f64;
+    let sum = alpha + beta;
+    let a_num = (2.0 * n as f64 + sum + 1.0) * (2.0 * n as f64 + sum + 2.0);
+    let a_den = 2.0 * n1 * (n as f64 + sum + 1.0);
+    let a = a_num / a_den;
+    let b = ((alpha * alpha) - (beta * beta)) * (2.0 * n as f64 + sum + 1.0)
+        / (2.0 * n1 * (n as f64 + sum + 1.0) * (2.0 * n as f64 + sum));
+    let c = (n as f64 + alpha) * (n as f64 + beta) * (2.0 * n as f64 + sum + 2.0)
+        / (n1 * (n as f64 + sum + 1.0) * (2.0 * n as f64 + sum));
+    (a, b, c)
+}
+
+fn jacobi_polynomial_with_derivative(n: usize, alpha: f64, beta: f64, x: f64) -> (f64, f64) {
+    if !x.is_finite() {
+        return (f64::NAN, f64::NAN);
+    }
+    if n == 0 {
+        return (1.0, 0.0);
+    }
+
+    let p1 = alpha + 1.0 + (alpha + beta + 2.0) * ((x - 1.0) * 0.5);
+    let dp1 = 0.5 * (alpha + beta + 2.0);
+    if n == 1 {
+        return (p1, dp1);
+    }
+
+    let mut pnm2 = 1.0;
+    let mut dpnm2 = 0.0;
+    let mut pnm1 = p1;
+    let mut dpnm1 = dp1;
+    let mut pn = p1;
+    let mut dpn = dp1;
+
+    for i in 2..=n {
+        let (a, b, c) = jacobi_recurrence_coefficients(i - 1, alpha, beta);
+        let lin = a * x + b;
+        pn = lin * pnm1 - c * pnm2;
+        dpn = a * pnm1 + lin * dpnm1 - c * dpnm2;
+        pnm2 = pnm1;
+        dpnm2 = dpnm1;
+        pnm1 = pn;
+        dpnm1 = dpn;
+    }
+
+    (pn, dpn)
+}
+
+fn parse_qcon_params(params: &[f64]) -> (f64, f64, f64, f64, f64, [f64; 10]) {
+    let semidia = get_param(params, 0, 0.0);
+    let radius = get_param(params, 1, 0.0);
+    let conic = get_param(params, 2, 0.0);
+    let qcon_nrad = get_param(params, 3, 0.0);
+    let qcon_offset = get_param(params, 4, 0.0);
+    let mut coefs = [0.0_f64; 10];
+    for i in 0..10 {
+        coefs[i] = get_param(params, 5 + i, 0.0);
+    }
+    (semidia, radius, conic, qcon_nrad, qcon_offset, coefs)
+}
+
+fn resolve_qcon_scale(semidia: f64, radius: f64, qcon_nrad: f64) -> f64 {
+    if qcon_nrad.is_finite() && qcon_nrad > 0.0 {
+        return qcon_nrad.abs();
+    }
+    if semidia.is_finite() && semidia > 0.0 {
+        return semidia.abs();
+    }
+    if radius.is_finite() && radius != 0.0 {
+        return radius.abs();
+    }
+    1.0
+}
+
+fn get_effective_qcon_term_count(coefs: &[f64; 10]) -> usize {
+    for i in (0..coefs.len()).rev() {
+        if coefs[i] != 0.0 {
+            return i + 1;
+        }
+    }
+    0
+}
+
+fn qcon_sag_deviation(r: f64, semidia: f64, radius: f64, qcon_nrad: f64, coefs: &[f64; 10]) -> f64 {
+    if !r.is_finite() {
+        return f64::NAN;
+    }
+    let scale = resolve_qcon_scale(semidia, radius, qcon_nrad);
+    if !scale.is_finite() || scale <= 0.0 {
+        return f64::NAN;
+    }
+
+    let u = r / scale;
+    let u2 = u * u;
+    let x = 2.0 * u2 - 1.0;
+    let u4 = u2 * u2;
+    let terms = get_effective_qcon_term_count(coefs);
+    let mut sag = 0.0_f64;
+
+    for i in 0..terms {
+        let coef = coefs[i];
+        if coef == 0.0 {
+            continue;
+        }
+        let (pn, _) = jacobi_polynomial_with_derivative(i, 0.0, 4.0, x);
+        sag += coef * (u4 * pn);
+    }
+
+    sag
+}
+
+fn qcon_sag_derivative(r: f64, semidia: f64, radius: f64, qcon_nrad: f64, coefs: &[f64; 10]) -> f64 {
+    if !r.is_finite() {
+        return f64::NAN;
+    }
+    if r == 0.0 {
+        return 0.0;
+    }
+
+    let scale = resolve_qcon_scale(semidia, radius, qcon_nrad);
+    if !scale.is_finite() || scale <= 0.0 {
+        return f64::NAN;
+    }
+
+    let u = r / scale;
+    let u2 = u * u;
+    let x = 2.0 * u2 - 1.0;
+    let terms = get_effective_qcon_term_count(coefs);
+    let mut derivative = 0.0_f64;
+
+    for i in 0..terms {
+        let coef = coefs[i];
+        if coef == 0.0 {
+            continue;
+        }
+        let (pn, d_pn_dx) = jacobi_polynomial_with_derivative(i, 0.0, 4.0, x);
+        derivative += coef * ((4.0 * u * u2 * pn) + (4.0 * u * u2 * u2 * d_pn_dx)) / scale;
+    }
+
+    derivative
+}
+
+fn qcon_total_sag(r: f64, semidia: f64, radius: f64, conic: f64, qcon_nrad: f64, qcon_offset: f64, coefs: &[f64; 10]) -> f64 {
+    let base = aspheric_sag(r, radius, conic, &[0.0_f64; 10], false);
+    let deviation = qcon_sag_deviation(r, semidia, radius, qcon_nrad, coefs);
+    base + deviation + qcon_offset
+}
+
+fn qcon_total_sag_derivative(r: f64, semidia: f64, radius: f64, conic: f64, qcon_nrad: f64, coefs: &[f64; 10]) -> f64 {
+    let base = aspheric_sag_derivative(r, radius, conic, &[0.0_f64; 10], false);
+    let deviation = qcon_sag_derivative(r, semidia, radius, qcon_nrad, coefs);
+    base + deviation
+}
+
+fn intersect_qcon_internal(
+    ray: &[f64],
+    params: &[f64],
+    _mode_odd: bool,
+    max_iter: i32,
+    tol: f64,
+) -> f64 {
+    if ray.len() < 6 {
+        return f64::NAN;
+    }
+
+    let ox = ray[0];
+    let oy = ray[1];
+    let oz = ray[2];
+    let dx = ray[3];
+    let dy = ray[4];
+    let dz = ray[5];
+
+    if !ox.is_finite() || !oy.is_finite() || !oz.is_finite() || !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+        return f64::NAN;
+    }
+
+    let (semidia_raw, radius, conic, qcon_nrad, qcon_offset, coefs) = parse_qcon_params(params);
+    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 { semidia_raw } else { f64::INFINITY };
+    let mut guesses: Vec<f64> = Vec::new();
+
+    // Keep the initial guess strategy aligned with intersect_aspheric_internal.
+    if radius.is_finite() && radius != 0.0 {
+        let cz = radius;
+        let a = dx * dx + dy * dy + dz * dz;
+        let b = 2.0 * (ox * dx + oy * dy + (oz - cz) * dz);
+        let c = ox * ox + oy * oy + (oz - cz) * (oz - cz) - radius * radius;
+        let d = b * b - 4.0 * a * c;
+        if d >= 0.0 {
+            let sqrt_d = d.sqrt();
+            let t1 = (-b - sqrt_d) / (2.0 * a);
+            let t2 = (-b + sqrt_d) / (2.0 * a);
+            if t1 > 1e-10 {
+                guesses.push(t1);
+            }
+            if t2 > 1e-10 {
+                guesses.push(t2);
+            }
+        }
+    }
+
+    if dz.abs() > 1e-10 {
+        let t_plane = -oz / dz;
+        if t_plane > 1e-10 {
+            guesses.push(t_plane);
+        }
+    }
+
+    if guesses.is_empty() {
+        guesses.push(0.01);
+        guesses.push(1.0);
+        guesses.push(10.0);
+    } else if guesses.len() == 1 {
+        guesses.push(1.0);
+    }
+
+    guesses.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    guesses.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+
+    let max_iter = if max_iter <= 0 { 20 } else { max_iter } as usize;
+    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 1e-7 };
+
+    for guess in guesses.iter() {
+        let mut t = *guess;
+        let mut last_valid_t = f64::NAN;
+        let mut last_valid_f = f64::INFINITY;
+
+        for _ in 0..max_iter {
+            let px = ox + dx * t;
+            let py = oy + dy * t;
+            let pz = oz + dz * t;
+            let r = (px * px + py * py).sqrt();
+            let sag = qcon_total_sag(r, semidia, radius, conic, qcon_nrad, qcon_offset, &coefs);
+            let f = pz - sag;
+
+            if r <= semidia && f.abs() < last_valid_f.abs() {
+                last_valid_t = t;
+                last_valid_f = f;
+            }
+
+            if f.abs() < tol {
+                return t;
+            }
+
+            let dzdr = qcon_total_sag_derivative(r, semidia, radius, conic, qcon_nrad, &coefs);
+            let r_safe = if r > EPS_R { r } else { EPS_R };
+            let d_fdt = dz - dzdr * (px * dx + py * dy) / r_safe;
+
+            if d_fdt.abs() < 1e-12 {
+                break;
+            }
+
+            let delta_t = f / d_fdt;
+            let max_delta = t.abs() * 0.5 + 1.0;
+            if delta_t.abs() > max_delta {
+                t -= delta_t.signum() * max_delta;
+            } else {
+                t -= delta_t;
+            }
+
+            if t < -10000.0 || t > 10000.0 {
+                break;
+            }
+        }
+
+        let px = ox + dx * t;
+        let py = oy + dy * t;
+        let pz = oz + dz * t;
+        let r = (px * px + py * py).sqrt();
+        let sag = qcon_total_sag(r, semidia, radius, conic, qcon_nrad, qcon_offset, &coefs);
+        let f = pz - sag;
+        if f.abs() < tol * 10.0 && r <= semidia * 1.1 {
+            return t;
+        }
+
+        if last_valid_t.is_finite() && last_valid_f.abs() < tol * 50.0 {
+            return last_valid_t;
+        }
+    }
+
+    f64::NAN
+}
+
+#[wasm_bindgen]
+pub fn intersect_qcon_surface(
+    ray: &[f64],
+    params: &[f64],
+    _mode_odd: i32,
+    max_iter: i32,
+    tol: f64,
+) -> f64 {
+    intersect_qcon_internal(ray, params, false, max_iter, tol)
+}
+
+#[wasm_bindgen]
+pub fn intersect_qcon_surface_batch(
+    rays: &[f64],
+    ray_count: usize,
+    params: &[f64],
+    _mode_odd: i32,
+    max_iter: i32,
+    tol: f64,
+) -> Vec<f64> {
+    let mut out = vec![f64::NAN; ray_count];
+    if rays.len() < ray_count * 6 {
+        return out;
+    }
+
+    for i in 0..ray_count {
+        let offset = i * 6;
+        let t = intersect_qcon_internal(&rays[offset..offset + 6], params, false, max_iter, tol);
+        out[i] = t;
+    }
+
+    out
+}
+
+#[wasm_bindgen]
+pub fn surface_normal_qcon_surface(
+    pt: &[f64],
+    params: &[f64],
+    _mode_odd: i32,
+) -> Vec<f64> {
+    if pt.len() < 3 {
+        return vec![0.0, 0.0, 1.0];
+    }
+
+    let x = pt[0];
+    let y = pt[1];
+    let r = (x * x + y * y).sqrt();
+    if r < EPS_R {
+        return vec![0.0, 0.0, 1.0];
+    }
+
+    let (semidia_raw, radius, conic, qcon_nrad, _qcon_offset, coefs) = parse_qcon_params(params);
+    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 { semidia_raw } else { f64::INFINITY };
+    let dzdr = qcon_total_sag_derivative(r, semidia, radius, conic, qcon_nrad, &coefs);
+    let dzdx = dzdr * (x / r);
+    let dzdy = dzdr * (y / r);
+    let n = normalize3(-dzdx, -dzdy, 1.0);
+    vec![n[0], n[1], n[2]]
+}
+
+#[wasm_bindgen]
+pub fn surface_normal_qcon_surface_batch(
+    points: &[f64],
+    count: usize,
+    params: &[f64],
+    _mode_odd: i32,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; count * 3];
+    if points.len() < count * 3 {
+        return out;
+    }
+
+    let (semidia_raw, radius, conic, qcon_nrad, _qcon_offset, coefs) = parse_qcon_params(params);
+    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 { semidia_raw } else { f64::INFINITY };
+    for i in 0..count {
+        let base = i * 3;
+        let x = points[base];
+        let y = points[base + 1];
+        let r = (x * x + y * y).sqrt();
+        if r < EPS_R {
+            out[base] = 0.0;
+            out[base + 1] = 0.0;
+            out[base + 2] = 1.0;
+            continue;
+        }
+
+        let dzdr = qcon_total_sag_derivative(r, semidia, radius, conic, qcon_nrad, &coefs);
+        let dzdx = dzdr * (x / r);
+        let dzdy = dzdr * (y / r);
+        let n = normalize3(-dzdx, -dzdy, 1.0);
+        out[base] = n[0];
+        out[base + 1] = n[1];
+        out[base + 2] = n[2];
+    }
+
+    out
+}
+
 #[wasm_bindgen]
 pub fn batch_mat3_mul_vec3(
     mat: &[f64],
@@ -2743,9 +3127,9 @@ pub fn refract_ray_batch(
         let dx = dirs[j];
         let dy = dirs[j + 1];
         let dz = dirs[j + 2];
-        let nx = normals[j];
-        let ny = normals[j + 1];
-        let nz = normals[j + 2];
+        let mut nx = normals[j];
+        let mut ny = normals[j + 1];
+        let mut nz = normals[j + 2];
         let n1v = n1[i];
         let n2v = n2[i];
         if !dx.is_finite() || !dy.is_finite() || !dz.is_finite() ||
@@ -2754,9 +3138,21 @@ pub fn refract_ray_batch(
             continue;
         }
 
-        let cos_i = -(nx * dx + ny * dy + nz * dz);
+        let d_dot_n = dx * nx + dy * ny + dz * nz;
+        if d_dot_n > 0.0 {
+            nx = -nx;
+            ny = -ny;
+            nz = -nz;
+        }
+
+        let mut cos_i = -(nx * dx + ny * dy + nz * dz);
+        if cos_i < 0.0 { cos_i = 0.0; }
+        if cos_i > 1.0 { cos_i = 1.0; }
         let eta = n1v / n2v;
-        let k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+        let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+        if k < 0.0 && k > -1.0e-10 {
+            k = 0.0;
+        }
         if k < 0.0 {
             continue;
         }
@@ -3088,16 +3484,28 @@ pub fn trace_ray_batch_with_system_json(
                 continue;
             }
 
-            let nx = normal[0];
-            let ny = normal[1];
-            let nz = normal[2];
+            let mut nx = normal[0];
+            let mut ny = normal[1];
+            let mut nz = normal[2];
+
+            let d_dot_n = dx * nx + dy * ny + dz * nz;
+            if d_dot_n > 0.0 {
+                nx = -nx;
+                ny = -ny;
+                nz = -nz;
+            }
 
             // Refract or reflect based on surface properties
             let (new_dx, new_dy, new_dz) = if next_n.is_finite() && next_n > 0.0 && (current_n - next_n).abs() > EPS_R {
                 // Refraction
-                let cos_i = -(nx * dx + ny * dy + nz * dz);
+                let mut cos_i = -(nx * dx + ny * dy + nz * dz);
+                if cos_i < 0.0 { cos_i = 0.0; }
+                if cos_i > 1.0 { cos_i = 1.0; }
                 let eta = current_n / next_n;
-                let k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+                let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+                if k < 0.0 && k > -1.0e-10 {
+                    k = 0.0;
+                }
                 if k >= 0.0 {
                     let sqrt_k = k.sqrt();
                     let rx = eta * dx + (eta * cos_i - sqrt_k) * nx;
@@ -3436,9 +3844,20 @@ fn trace_single_ray_hit_point_with_meta_core(
             let nn = normalize3(rx, ry, rz);
             (nn[0], nn[1], nn[2], n_cur)
         } else if n2.is_finite() && n2 > 0.0 && (n_cur - n2).abs() > EPS_R {
-            let cos_i = -(nx * ldx + ny * ldy + nz * ldz);
+            let mut cos_i = -(nx * ldx + ny * ldy + nz * ldz);
+            if cos_i < 0.0 { cos_i = 0.0; }
+            if cos_i > 1.0 { cos_i = 1.0; }
             let eta = n_cur / n2;
-            let k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+            let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+            if k < 0.0 {
+                if k > -1.0e-10 {
+                    k = 0.0;
+                } else {
+                    out[0] = 5.0; // TIR
+                    out[1] = opl;
+                    return out;
+                }
+            }
             if k < 0.0 {
                 out[0] = 5.0; // TIR
                 out[1] = opl;
@@ -3683,9 +4102,20 @@ fn trace_single_ray_hit_state_with_meta_core(
             let nn = normalize3(rx, ry, rz);
             (nn[0], nn[1], nn[2], n_cur)
         } else if n2.is_finite() && n2 > 0.0 && (n_cur - n2).abs() > EPS_R {
-            let cos_i = -(nx * ldx + ny * ldy + nz * ldz);
+            let mut cos_i = -(nx * ldx + ny * ldy + nz * ldz);
+            if cos_i < 0.0 { cos_i = 0.0; }
+            if cos_i > 1.0 { cos_i = 1.0; }
             let eta = n_cur / n2;
-            let k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+            let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+            if k < 0.0 {
+                if k > -1.0e-10 {
+                    k = 0.0;
+                } else {
+                    out[0] = 5.0;
+                    out[1] = opl;
+                    return out;
+                }
+            }
             if k < 0.0 {
                 out[0] = 5.0;
                 out[1] = opl;
@@ -6368,7 +6798,7 @@ where
         };
         let err_x = (local_hit[0] - target_x).abs();
         let err_y = (local_hit[1] - target_y).abs();
-        if (err_x < 1e-6 && err_y < 1e-6) || (iter > 0 && err_x < 1e-4 && err_y < 1e-4) {
+        if (err_x < 1e-6 && err_y < 1e-6) || (iter > 1 && err_x < 1e-5 && err_y < 1e-5) {
             break;
         }
     }

@@ -277,6 +277,34 @@ function __coopt_isStopSurface(surface) {
     return false;
 }
 
+function __coopt_normalizeStopSurfaceKey(value) {
+    return String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_-]+/g, '');
+}
+
+function __coopt_isStopSurfaceLike(surface) {
+    if (!surface || typeof surface !== 'object') return false;
+    const candidates = [
+        surface.type,
+        surface.surfType,
+        surface.surfaceType,
+        surface['surf type'],
+        surface['object type'],
+        surface.object,
+        surface.Object,
+        surface.objectType,
+        surface.material,
+        surface._blockType,
+        surface.blockType,
+    ];
+    return candidates.some((value) => {
+        const normalized = __coopt_normalizeStopSurfaceKey(value);
+        return normalized === 'stop' || normalized === 'sto' || normalized === 'aperturestop';
+    });
+}
+
 function __coopt_isObjectSurface(surface) {
     if (!surface || typeof surface !== 'object') return false;
     const objType = String(surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type ?? '')
@@ -2231,9 +2259,15 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                     coef4: Number(surface.coef4) || 0,
                                     coef5: Number(surface.coef5) || 0,
                                     coef6: Number(surface.coef6) || 0,
-                                    coef7: Number(surface.coef7) || 0
+                                    coef7: Number(surface.coef7) || 0,
+                                    coef8: Number(surface.coef8) || 0,
+                                    coef9: Number(surface.coef9) || 0,
+                                    coef10: Number(surface.coef10) || 0,
+                                    qconNrad: Number(surface.qconNrad ?? surface.qconNRadius ?? surface.nrad ?? surface.NRAD),
+                                    qconOffset: Number(surface.qconOffset ?? surface.qcon_offset) || 0
                                 };
-                                z = asphericSurfaceZ(Math.abs(y), asphericParams, 'even');
+                                const asphereMode = String(surface.surfType || '').toLowerCase() === 'qcon' ? 'qcon' : 'even';
+                                z = asphericSurfaceZ(Math.abs(y), asphericParams, asphereMode);
                                 if (!isFinite(z)) z = 0;
                             }
                             const point = new THREE.Vector3(0, y, z);
@@ -2274,9 +2308,15 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                     coef4: Number(surface.coef4) || 0,
                                     coef5: Number(surface.coef5) || 0,
                                     coef6: Number(surface.coef6) || 0,
-                                    coef7: Number(surface.coef7) || 0
+                                    coef7: Number(surface.coef7) || 0,
+                                    coef8: Number(surface.coef8) || 0,
+                                    coef9: Number(surface.coef9) || 0,
+                                    coef10: Number(surface.coef10) || 0,
+                                    qconNrad: Number(surface.qconNrad ?? surface.qconNRadius ?? surface.nrad ?? surface.NRAD),
+                                    qconOffset: Number(surface.qconOffset ?? surface.qcon_offset) || 0
                                 };
-                                z = asphericSurfaceZ(Math.abs(x), asphericParams, 'even');
+                                const asphereMode = String(surface.surfType || '').toLowerCase() === 'qcon' ? 'qcon' : 'even';
+                                z = asphericSurfaceZ(Math.abs(x), asphericParams, asphereMode);
                                 if (!isFinite(z)) z = 0;
                             }
                             const point = new THREE.Vector3(x, 0, z);
@@ -2480,9 +2520,15 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                     coef4: Number(surface.coef4) || 0,
                                     coef5: Number(surface.coef5) || 0,
                                     coef6: Number(surface.coef6) || 0,
-                                    coef7: Number(surface.coef7) || 0
+                                    coef7: Number(surface.coef7) || 0,
+                                    coef8: Number(surface.coef8) || 0,
+                                    coef9: Number(surface.coef9) || 0,
+                                    coef10: Number(surface.coef10) || 0,
+                                    qconNrad: Number(surface.qconNrad ?? surface.qconNRadius ?? surface.nrad ?? surface.NRAD),
+                                    qconOffset: Number(surface.qconOffset ?? surface.qcon_offset) || 0
                                 };
-                                z = asphericSurfaceZ(Math.abs(y), asphericParams, 'even');
+                                const asphereMode = String(surface.surfType || '').toLowerCase() === 'qcon' ? 'qcon' : 'even';
+                                z = asphericSurfaceZ(Math.abs(y), asphericParams, asphereMode);
                                 if (!isFinite(z)) z = 0;
                             }
                             let point = new THREE.Vector3(0, y, z);
@@ -2533,9 +2579,15 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                     coef4: Number(surface.coef4) || 0,
                                     coef5: Number(surface.coef5) || 0,
                                     coef6: Number(surface.coef6) || 0,
-                                    coef7: Number(surface.coef7) || 0
+                                    coef7: Number(surface.coef7) || 0,
+                                    coef8: Number(surface.coef8) || 0,
+                                    coef9: Number(surface.coef9) || 0,
+                                    coef10: Number(surface.coef10) || 0,
+                                    qconNrad: Number(surface.qconNrad ?? surface.qconNRadius ?? surface.nrad ?? surface.NRAD),
+                                    qconOffset: Number(surface.qconOffset ?? surface.qcon_offset) || 0
                                 };
-                                z = asphericSurfaceZ(Math.abs(x), asphericParams, 'even');
+                                const asphereMode = String(surface.surfType || '').toLowerCase() === 'qcon' ? 'qcon' : 'even';
+                                z = asphericSurfaceZ(Math.abs(x), asphericParams, asphereMode);
                                 if (!isFinite(z)) z = 0;
                             }
                             let point = new THREE.Vector3(x, 0, z);
@@ -2817,9 +2869,7 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
         // - type: 'Stop'
         // - object type: 'Stop'
         // - Zemax-style: object/object type: 'STO'
-        const objTypeRaw = surface['object type'] ?? surface.object ?? surface.objectType;
-        const objTypeNorm = String(objTypeRaw ?? '').trim().toUpperCase();
-        if (surface.type === 'Stop' || surface['object type'] === 'Stop' || objTypeNorm === 'STO') {
+        if (__coopt_isStopSurfaceLike(surface)) {
             // console.log(`🎯 [findStopSurface] Stop面発見! Surface ${i}`);
             
             // Stop面の位置を計算（CB対応）

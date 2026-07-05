@@ -793,6 +793,29 @@ export function saveCurrentToActiveConfiguration(): void {
 
 // アクティブなConfigurationのデータをlocalStorageに展開（各テーブル用）
 export async function loadActiveConfigurationToTables(options: LoadConfigurationOptions = {}): Promise<void> {
+  // Persist any pending debounced surface-edit -> blocks sync BEFORE we read and
+  // re-expand the blocks below. Blocks are canonical, so if a recent edit (e.g. a
+  // Qcon->Spherical surfType change) is still sitting in the 120ms debounce, the
+  // re-expansion here would regenerate the surface rows from the stale block and
+  // the pending timer would then write that reverted value back, discarding the
+  // edit. Flushing first guarantees the edit reaches the block before re-expand.
+  try {
+    const flushWindows: any[] = [];
+    const currentWin: any = (typeof window !== 'undefined') ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+    if (currentWin) flushWindows.push(currentWin);
+    try {
+      const openerWin = currentWin?.opener;
+      if (openerWin && !openerWin.closed && !flushWindows.includes(openerWin)) flushWindows.push(openerWin);
+    } catch (_) {}
+    for (const flushWin of flushWindows) {
+      try {
+        if (flushWin && typeof flushWin.__cooptFlushPendingRowsToBlocks === 'function') {
+          flushWin.__cooptFlushPendingRowsToBlocks();
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+
   const systemConfig = loadSystemConfigurations();
   // IMPORTANT: Use the active config object from this `systemConfig` instance.
   // Calling getActiveConfiguration() would reload from localStorage and return a different object,

@@ -201,11 +201,34 @@ type ImageHeightSolveOptions = {
 // Helper function to normalize hit points
 function normalizeHitPoint(hit): Vec3 | null {
     if (!hit || Array.isArray(hit)) return null;
-    const x = Number(hit.x);
-    const y = Number(hit.y);
-    const z = Number(hit.z);
+    const point = (hit.hitPoint && typeof hit.hitPoint === 'object') ? hit.hitPoint : hit;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    const z = Number(point.z);
     if (![x, y, z].every(Number.isFinite)) return null;
     return { x, y, z };
+}
+
+function normalizeObjectPositionTag(value: any): string {
+    return String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function resolveObjectPositionForRayPath(obj: any): 'point' | 'angle' | 'rectangle' | 'imageheight' | '' {
+    const rawPos = normalizeObjectPositionTag(obj?.position ?? obj?.object ?? obj?.objectType ?? obj?.fieldType ?? obj?.type);
+    const effectivePos = normalizeObjectPositionTag(obj?.__cooptEffectivePosition);
+
+    // Explicit row position should win so stale internal fields do not override user intent.
+    if (rawPos === 'point' || rawPos === 'angle' || rawPos === 'rectangle') return rawPos as 'point' | 'angle' | 'rectangle';
+    if (rawPos === 'imageheight') {
+        if (effectivePos === 'angle' || effectivePos === 'rectangle') return effectivePos as 'angle' | 'rectangle';
+        return 'imageheight';
+    }
+
+    if (effectivePos === 'point' || effectivePos === 'angle' || effectivePos === 'rectangle' || effectivePos === 'imageheight') {
+        return effectivePos as 'point' | 'angle' | 'rectangle' | 'imageheight';
+    }
+
+    return '';
 }
 
 // Global variables for ray pattern and color mode
@@ -419,7 +442,7 @@ function normalizeAnnularRingCount(value) {
     return Math.max(1, Math.min(Math.floor(numeric), 32));
 }
 
-function resolveInfiniteObjectZ(opticalSystemRows, renderDist) {
+function resolveInfiniteObjectZ(opticalSystemRows, renderDist, stopCenter = null) {
     const rd = Number(renderDist);
     if (Number.isFinite(rd) && rd > 0) return -Math.abs(rd);
     let systemLength = 0;
@@ -432,7 +455,8 @@ function resolveInfiniteObjectZ(opticalSystemRows, renderDist) {
             }
         }
     }
-    const fallbackDist = Math.max(1000, systemLength * 5);
+    const stopZ = Number.isFinite(Number(stopCenter?.z)) ? Math.abs(Number(stopCenter.z)) : 0;
+    const fallbackDist = Math.max(1000, systemLength * 5, stopZ + 1000);
     return -fallbackDist;
 }
 
@@ -626,7 +650,7 @@ function solveChiefRayDirectionToStopCenterFast(centerPoint, stopCenter3d, stopS
     return solveRayDirectionToStopPointFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceBackend);
 }
 
-function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceBackend: 'ts' | 'rust' = 'rust') {
+export function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceBackend: 'ts' | 'rust' = 'rust') {
     const stopIdx = Number(stopSurfaceIndex);
     if (!Number.isInteger(stopIdx) || stopIdx < 0) {
         return null;
@@ -649,8 +673,64 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
     const tolMm = 1e-3;
     const maxIter = 20;
     const maxStep = 10.0;
+    const targetX = Number(stopTarget3d.x);
+    const targetY = Number(stopTarget3d.y);
+    const targetZ = Number(stopTarget3d.z);
+    if (![targetX, targetY].every(Number.isFinite)) {
+        return null;
+    }
+
+    if ([targetX, targetY, targetZ].every(Number.isFinite) && Math.abs(baseDir.z) > 1e-12) {
+        const dz = targetZ - origin.z;
+        const directOrigin = {
+            x: targetX - baseDir.x / baseDir.z * dz,
+            y: targetY - baseDir.y / baseDir.z * dz,
+            z: origin.z
+        };
+        if ([directOrigin.x, directOrigin.y, directOrigin.z].every(Number.isFinite)) {
+            origin = directOrigin;
+        }
+    }
+
     let bestOrigin = { ...origin };
     let bestErr = Infinity;
+
+    const evaluateOrigin = (o) => {
+        const hit = normalizeHitPoint(traceRayHitPointForRender(
+            opticalSystemRows,
+            { wavelength: wavelengthUm, pos: { ...o }, dir: { ...baseDir } },
+            1.0,
+            stopIdx,
+            traceBackend
+        ));
+        if (!hit) return { hit: null, err: Number.POSITIVE_INFINITY, ex: Number.POSITIVE_INFINITY, ey: Number.POSITIVE_INFINITY };
+        const ex = hit.x - targetX;
+        const ey = hit.y - targetY;
+        const err = Math.hypot(ex, ey);
+        return { hit, err, ex, ey };
+    };
+
+    const acceptImprovingStep = (baseOrigin, dx, dy, currentErr) => {
+        if (![dx, dy, currentErr].every(Number.isFinite)) return null;
+        const scales = [1, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625];
+        let bestCandidate: any = null;
+        let bestCandidateErr = currentErr;
+        for (const scale of scales) {
+            const candidate = {
+                x: baseOrigin.x + dx * scale,
+                y: baseOrigin.y + dy * scale,
+                z: baseOrigin.z
+            };
+            if (![candidate.x, candidate.y, candidate.z].every(Number.isFinite)) continue;
+            const evaluated = evaluateOrigin(candidate);
+            if (evaluated.err + 1e-9 < bestCandidateErr) {
+                bestCandidateErr = evaluated.err;
+                bestCandidate = candidate;
+                if (evaluated.err < tolMm) break;
+            }
+        }
+        return bestCandidate;
+    };
 
     const hitAtBatch = (o) => {
         const rays = [
@@ -663,7 +743,12 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
 
     for (let iter = 0; iter < maxIter; iter++) {
         const sampled = hitAtBatch(origin);
-        const hit = normalizeHitPoint(Array.isArray(sampled) ? sampled[0] : null);
+        let hit = normalizeHitPoint(Array.isArray(sampled) ? sampled[0] : null);
+        let scalarEval: any = null;
+        if (!hit) {
+            scalarEval = evaluateOrigin(origin);
+            hit = scalarEval.hit;
+        }
         if (!hit) {
             origin = {
                 x: 0.5 * (origin.x + bestOrigin.x),
@@ -672,10 +757,10 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
             };
             continue;
         }
-        const ex = hit.x - Number(stopTarget3d.x);
-        const ey = hit.y - Number(stopTarget3d.y);
+        const ex = scalarEval ? scalarEval.ex : hit.x - targetX;
+        const ey = scalarEval ? scalarEval.ey : hit.y - targetY;
         if (!Number.isFinite(ex) || !Number.isFinite(ey)) return null;
-        const err = Math.hypot(ex, ey);
+        const err = scalarEval ? scalarEval.err : Math.hypot(ex, ey);
         if (err < bestErr) {
             bestErr = err;
             bestOrigin = { ...origin };
@@ -696,7 +781,8 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
                 dx *= s;
                 dy *= s;
             }
-            origin = { x: origin.x + dx, y: origin.y + dy, z: origin.z };
+            const improved = acceptImprovingStep(origin, dx, dy, err);
+            origin = improved || { x: origin.x + dx, y: origin.y + dy, z: origin.z };
             continue;
         }
 
@@ -706,22 +792,16 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
         const j22 = (hitY.y - hit.y) / eps;
         if (![j11, j12, j21, j22].every(Number.isFinite)) {
             const gain = 0.2;
-            origin = {
-                x: origin.x - gain * ex,
-                y: origin.y - gain * ey,
-                z: origin.z
-            };
+            const improved = acceptImprovingStep(origin, -gain * ex, -gain * ey, err);
+            origin = improved || { x: origin.x - gain * ex, y: origin.y - gain * ey, z: origin.z };
             continue;
         }
 
         const det = j11 * j22 - j12 * j21;
         if (!Number.isFinite(det) || Math.abs(det) < 1e-14) {
             const gain = 0.2;
-            origin = {
-                x: origin.x - gain * ex,
-                y: origin.y - gain * ey,
-                z: origin.z
-            };
+            const improved = acceptImprovingStep(origin, -gain * ex, -gain * ey, err);
+            origin = improved || { x: origin.x - gain * ex, y: origin.y - gain * ey, z: origin.z };
             continue;
         }
 
@@ -736,7 +816,15 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
             dy *= s;
         }
 
-        origin = { x: origin.x + dx, y: origin.y + dy, z: origin.z };
+        const improved = acceptImprovingStep(origin, dx, dy, err);
+        if (improved) {
+            origin = improved;
+        } else {
+            const gain = 0.2;
+            const fallback = acceptImprovingStep(origin, -gain * ex, -gain * ey, err);
+            if (!fallback) break;
+            origin = fallback;
+        }
     }
 
     const result = bestErr < Infinity ? bestOrigin : origin;
@@ -958,6 +1046,22 @@ function selectSymmetricSubset(points, needed) {
     return selected;
 }
 
+function ensureCenterOffsetIncluded(offsets, rayCount) {
+    const limit = Math.max(0, Math.floor(Number(rayCount) || 0));
+    if (limit <= 0) return [];
+    const list = Array.isArray(offsets) ? offsets.slice() : [];
+    const centerIndex = list.findIndex((point) => {
+        return Math.abs(Number(point?.offsetU) || 0) <= 1e-12
+            && Math.abs(Number(point?.offsetV) || 0) <= 1e-12;
+    });
+    if (centerIndex >= 0) {
+        const center = list.splice(centerIndex, 1)[0];
+        return [center, ...list].slice(0, limit);
+    }
+    const withCenter = [{ offsetU: 0, offsetV: 0 }, ...list];
+    return withCenter.slice(0, limit);
+}
+
 function generateAnnularOffsets(rayCount, maxRadius, ringCount) {
     try {
         const rust = getRustRayTracingWasmSync();
@@ -970,7 +1074,7 @@ function generateAnnularOffsets(rayCount, maxRadius, ringCount) {
                     offsets.push({ offsetU: Number((flat as any)[i]) || 0, offsetV: Number((flat as any)[i + 1]) || 0 });
                 }
                 if (offsets.length > 0) {
-                    return offsets.slice(0, Math.max(0, rayCount));
+                    return ensureCenterOffsetIncluded(offsets, rayCount);
                 }
             }
         }
@@ -1034,7 +1138,7 @@ function generateCenteredGridOffsets(rayCount, halfExtent) {
                     offsets.push({ offsetU: Number((flat as any)[i]) || 0, offsetV: Number((flat as any)[i + 1]) || 0 });
                 }
                 if (offsets.length >= rayCount) {
-                    return offsets.slice(0, rayCount);
+                    return ensureCenterOffsetIncluded(offsets, rayCount);
                 }
             }
         }
@@ -1595,7 +1699,7 @@ export function traceChiefRayLocalImagePointForObject(
         stopCenter3d,
     };
 
-    const posNorm = String(obj?.__cooptEffectivePosition ?? obj?.position ?? '').trim().toLowerCase();
+    const posNorm = resolveObjectPositionForRayPath(obj);
     if (posNorm === 'imageheight') {
         const effectiveObj = convertImageHeightToEffectiveObject(
             obj,
@@ -3700,7 +3804,7 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
         if (cached) return cached;
     }
 
-    const posNorm = String(obj?.__cooptEffectivePosition ?? obj?.position ?? '').trim().toLowerCase();
+    const posNorm = resolveObjectPositionForRayPath(obj);
 
     // Pass conjugateType to all generation functions
     const enhancedOptions = { ...options, conjugateType };
@@ -3834,6 +3938,9 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
         const surfaceOrigins = (Array.isArray(options?.precomputedSurfaceOrigins) && options.precomputedSurfaceOrigins.length > 0)
             ? options.precomputedSurfaceOrigins
             : calculateSurfaceOrigins(opticalSystemRows);
+        const stopSurfaceInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
+        const stopSurfaceCenter3d = extractStopCenter3d(stopSurfaceInfo);
+        const stopSurfaceIndex = Number.isInteger(stopSurfaceInfo?.index) ? stopSurfaceInfo.index : null;
         const firstSurfaceOrigin = surfaceOrigins[0] ? surfaceOrigins[0].origin : { x: 0, y: 0, z: 0 };
         const finiteObjectZ = Number.isFinite(firstSurfaceOrigin?.z) ? firstSurfaceOrigin.z : 0;
         const surf = opticalSystemRows[0];
@@ -3846,12 +3953,17 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
         const renderDist = (objectRow && Number.isFinite(Number(objectRow.objectRenderDistance)))
             ? Number(objectRow.objectRenderDistance)
             : 0;
-        let objectZ = isInfiniteObject ? resolveInfiniteObjectZ(opticalSystemRows, renderDist) : finiteObjectZ;
+        let objectZ = isInfiniteObject ? resolveInfiniteObjectZ(opticalSystemRows, renderDist, stopSurfaceCenter3d) : finiteObjectZ;
         
         // Calculate Object surface sag at object position (finite objectのみ)
         let objectSag = 0;
         if (!isInfiniteObject && surf.radius && surf.radius !== "INF") {
             const r = Math.sqrt(objectX * objectX + objectY * objectY);
+            const semidiaForQcon = Number(surf.semidia);
+            const rawQconNrad = Number(surf.qconNrad ?? surf.qconNRadius ?? surf.nrad ?? surf.NRAD);
+            const resolvedQconNrad = (Number.isFinite(rawQconNrad) && rawQconNrad > 0)
+                ? rawQconNrad
+                : ((Number.isFinite(semidiaForQcon) && semidiaForQcon > 0) ? semidiaForQcon : 0);
             const asphericParams = {
                 radius: parseFloat(surf.radius),
                 conic: Number(surf.conic) || 0,
@@ -3864,7 +3976,11 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
                 coef7: Number(surf.coef7) || 0,
                 coef8: Number(surf.coef8) || 0,
                 coef9: Number(surf.coef9) || 0,
-                coef10: Number(surf.coef10) || 0
+                coef10: Number(surf.coef10) || 0,
+                semidia: (Number.isFinite(semidiaForQcon) && semidiaForQcon > 0) ? semidiaForQcon : undefined,
+                qconNrad: resolvedQconNrad,
+                qconOffset: Number(surf.qconOffset ?? surf.qcon_offset) || 0,
+                qconTermCount: Number(surf.qconTermCount) || 0
             };
             objectSag = asphericSurfaceZ(r, asphericParams, getAsphericModeFromSurfType(surf.surfType)) || 0;
             // console.log(`🔍 [RayRenderer] Object面sag計算: r=${r.toFixed(3)}, sag=${objectSag.toFixed(6)}`);
@@ -3991,7 +4107,9 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
             rayStartData.push({
                 startP: { x: objectX, y: objectY, z: actualObjectZ },
                 dir: unitChief,
-                description: 'Chief point ray from object center'
+                description: 'Chief point ray from object center',
+                isChief: true,
+                planeCoords: { u: 0, v: 0 }
             });
             rayStartData.expectedChiefOrigin = { x: objectX, y: objectY, z: actualObjectZ };
             rayStartData.expectedChiefDir = { ...unitChief };
@@ -4099,7 +4217,9 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
                     rayStartData.push({
                         startP: { ...centerPoint },
                         dir,
-                        description: `Point ${(pattern === 'annular') ? 'annular' : 'grid'} ray ${index + 1}`
+                        description: `Point ${(pattern === 'annular') ? 'annular' : 'grid'} ray ${index + 1}`,
+                        isChief: Math.abs(Number(coord.offsetU) || 0) <= 1e-12 && Math.abs(Number(coord.offsetV) || 0) <= 1e-12,
+                        planeCoords: { u: coord.offsetU, v: coord.offsetV }
                     });
                 });
             } else {
@@ -4111,7 +4231,9 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
                         rayStartData.push({
                             startP: entry.startP,
                             dir: unitChief,
-                            description: `Point ${(pattern === 'annular') ? 'annular' : 'grid'} ray ${index + 1}`
+                            description: `Point ${(pattern === 'annular') ? 'annular' : 'grid'} ray ${index + 1}`,
+                            isChief: Math.abs(Number(offsets[index]?.offsetU) || 0) <= 1e-12 && Math.abs(Number(offsets[index]?.offsetV) || 0) <= 1e-12,
+                            planeCoords: { u: offsets[index]?.offsetU ?? 0, v: offsets[index]?.offsetV ?? 0 }
                         });
                     });
                 } else {
@@ -4124,7 +4246,9 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
                         rayStartData.push({
                             startP,
                             dir: unitChief,
-                            description: `Point ${(pattern === 'annular') ? 'annular' : 'grid'} ray ${index + 1}`
+                            description: `Point ${(pattern === 'annular') ? 'annular' : 'grid'} ray ${index + 1}`,
+                            isChief: Math.abs(Number(coord.offsetU) || 0) <= 1e-12 && Math.abs(Number(coord.offsetV) || 0) <= 1e-12,
+                            planeCoords: { u: coord.offsetU, v: coord.offsetV }
                         });
                     });
                 }
@@ -4365,6 +4489,9 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         const surfaceOrigins = (Array.isArray(options?.precomputedSurfaceOrigins) && options.precomputedSurfaceOrigins.length > 0)
             ? options.precomputedSurfaceOrigins
             : calculateSurfaceOrigins(opticalSystemRows);
+        const stopSurfaceInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
+        const stopSurfaceCenter3d = extractStopCenter3d(stopSurfaceInfo);
+        const stopSurfaceIndex = Number.isInteger(stopSurfaceInfo?.index) ? stopSurfaceInfo.index : null;
 
         // IMPORTANT:
         // - Default: do NOT aim through stop unless explicitly requested.
@@ -4447,7 +4574,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         const renderDist = (objectRow && Number.isFinite(Number(objectRow.objectRenderDistance)))
             ? Number(objectRow.objectRenderDistance)
             : 0;
-        let objectZ = isInfiniteObject ? resolveInfiniteObjectZ(opticalSystemRows, renderDist) : finiteObjectZ;
+        let objectZ = isInfiniteObject ? resolveInfiniteObjectZ(opticalSystemRows, renderDist, stopSurfaceCenter3d) : finiteObjectZ;
         const imageHeightChiefRayOverride = isInfiniteObject
             ? obj?.__cooptImageHeightSolve?.chiefRay
             : null;
@@ -4484,14 +4611,8 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 coef8: Number(surf.coef8) || 0
             };
             const sag = asphericSurfaceZ(r, asphericParams, getAsphericModeFromSurfType(surf.surfType)) || 0;
-            if (Math.abs(sag) > 0) {
-                console.log(`🔍 [AngleRayRenderer] Object面sag計算: r=${r.toFixed(3)}, sag=${sag.toFixed(6)}`);
-            }
             return sag;
         };
-        const stopSurfaceInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
-        const stopSurfaceCenter3d = extractStopCenter3d(stopSurfaceInfo);
-        const stopSurfaceIndex = Number.isInteger(stopSurfaceInfo?.index) ? stopSurfaceInfo.index : null;
         const targetSurfaceIndex = Number.isInteger(options?.targetSurfaceIndex)
             ? options.targetSurfaceIndex
             : opticalSystemRows.length - 1;
@@ -4795,6 +4916,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 startP,
                 dir: dirVector,
                 description,
+                isChief: Math.abs(Number(offsetU) || 0) <= 1e-12 && Math.abs(Number(offsetV) || 0) <= 1e-12,
                 planeCoords: { u: offsetU, v: offsetV }
             });
         };
@@ -4844,6 +4966,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 startP,
                 dir: dirVector,
                 description,
+                isChief: Math.abs(Number(offsetU) || 0) <= 1e-12 && Math.abs(Number(offsetV) || 0) <= 1e-12,
                 planeCoords: { u: offsetU, v: offsetV }
             });
         };
@@ -5102,6 +5225,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 && !!targetOffsetVAxis;
             offsets.forEach((coord, index) => {
                 let dirVector = unitChief;
+                const isCenterOffset = Math.abs(Number(coord.offsetU) || 0) <= 1e-12 && Math.abs(Number(coord.offsetV) || 0) <= 1e-12;
                 
                 // 無限遠物体でない場合のみ、Stop面への狙いを計算
                 if (!isInfiniteObject && canAimAtStop) {
@@ -5131,6 +5255,16 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                     };
                 }
                 if (shouldSolveOriginsThroughStop) {
+                    if (isCenterOffset) {
+                        rayStartData.push({
+                            startP: { x: emissionOrigin.x, y: emissionOrigin.y, z: emissionOrigin.z },
+                            dir: unitChief,
+                            description: `${pattern === 'annular' ? 'Annular' : 'Grid'} chief angle ray`,
+                            isChief: true,
+                            planeCoords: { u: 0, v: 0 }
+                        });
+                        return;
+                    }
                     const solved = Array.isArray(solvedOriginsBatch) ? solvedOriginsBatch[index] : null;
                     if (solved && Number.isFinite(solved.x) && Number.isFinite(solved.y) && Number.isFinite(solved.z)) {
                         const anchoredSolved = anchorStartToChiefEmissionPlane({ x: solved.x, y: solved.y, z: solved.z });
@@ -5138,6 +5272,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                             startP: { x: anchoredSolved.x, y: anchoredSolved.y, z: anchoredSolved.z },
                             dir: unitChief,
                             description: `${pattern === 'annular' ? 'Annular' : 'Grid'} angle ray ${index + 1}`,
+                            isChief: false,
                             planeCoords: { u: coord.offsetU, v: coord.offsetV }
                         });
                     } else {
@@ -5163,6 +5298,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                             startP,
                             dir: unitChief,
                             description: `${pattern === 'annular' ? 'Annular' : 'Grid'} angle ray ${index + 1}`,
+                            isChief: isCenterOffset,
                             planeCoords: { u: coord.offsetU, v: coord.offsetV }
                         });
                     } else {

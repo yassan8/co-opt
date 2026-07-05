@@ -463,10 +463,24 @@ export function getOpticalSystemRows(tableOpticalSystem?) {
  */
 export function getObjectRows(tableObject?, options?: { includeDisabled?: boolean }) {
   const includeDisabled = options?.includeDisabled === true;
-  const filterEnabledRows = (rows) => {
+  const normalizePosition = (value) => {
+    const compact = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    if (compact === 'imageheight' || compact === 'imageheigth') return 'ImageHeight';
+    if (compact === 'rectangle' || compact === 'heightrect' || compact === 'rect' || compact === 'height') return 'Rectangle';
+    if (compact === 'angle' || compact === 'fieldangle' || compact === 'point') return 'Angle';
+    return value;
+  };
+  const normalizeRows = (rows) => {
     if (!Array.isArray(rows)) return [];
-    if (includeDisabled) return rows;
-    return rows.filter((row) => row && row.enabled !== false);
+    return rows.map((row) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+      return { ...row, position: normalizePosition(row.position ?? row.objectType ?? row.fieldType ?? row.type) };
+    });
+  };
+  const filterEnabledRows = (rows) => {
+    const normalizedRows = normalizeRows(rows);
+    if (includeDisabled) return normalizedRows;
+    return normalizedRows.filter((row) => row && row.enabled !== false);
   };
 
   try {

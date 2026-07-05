@@ -73,6 +73,10 @@ export function intersect_aspheric_rt10(ray: Float64Array, params: Float64Array,
 
 export function intersect_aspheric_rt10_batch(rays: Float64Array, ray_count: number, params: Float64Array, mode_odd: number, max_iter: number, tol: number): Float64Array;
 
+export function intersect_qcon_surface(ray: Float64Array, params: Float64Array, _mode_odd: number, max_iter: number, tol: number): number;
+
+export function intersect_qcon_surface_batch(rays: Float64Array, ray_count: number, params: Float64Array, _mode_odd: number, max_iter: number, tol: number): Float64Array;
+
 export function malloc(size: number): number;
 
 /**
@@ -98,6 +102,8 @@ export function qr_factorization(a_flat: Float64Array, rows: number, cols: numbe
 export function reflect_ray_batch(dirs: Float64Array, normals: Float64Array, count: number): Float64Array;
 
 export function refract_ray_batch(dirs: Float64Array, normals: Float64Array, n1: Float64Array, n2: Float64Array, count: number): Float64Array;
+
+export function run_native_chief_ray_angle_wasm_json(req_json: string): any;
 
 export function run_native_distortion_wasm_json(req_json: string): any;
 
@@ -130,6 +136,8 @@ export function run_native_opd_map_wasm_json(req_json: string): any;
 
 export function run_native_opd_rms_waves_wasm_json(req_json: string): any;
 
+export function run_native_paraxial_metrics_wasm_json(req_json: string): any;
+
 /**
  * Compute PSF from an OPD map grid (grids are in *waves*, nulls = outside pupil).
  * Matches the Tauri-native `run_native_psf_map` logic.
@@ -148,6 +156,8 @@ export function run_native_opd_rms_waves_wasm_json(req_json: string): any;
  * Output JSON: `{ backend, gridSize, fftSize, psfData: number[][], message }`
  */
 export function run_native_psf_from_opd_wasm_json(req_json: string): any;
+
+export function run_native_seidel_wasm_json(req_json: string): any;
 
 export function solve_image_height_component_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, conjugate_mode: number, component_index: number, target_value: number, initial_guess: number, fixed_value: number, initial_step: number, max_step: number): Float64Array;
 
@@ -191,6 +201,10 @@ export function solve_spd_linear_system(a_flat: Float64Array, n: number, b: Floa
 export function surface_normal_aspheric_rt10(pt: Float64Array, params: Float64Array, mode_odd: number): Float64Array;
 
 export function surface_normal_aspheric_rt10_batch(points: Float64Array, count: number, params: Float64Array, mode_odd: number): Float64Array;
+
+export function surface_normal_qcon_surface(pt: Float64Array, params: Float64Array, _mode_odd: number): Float64Array;
+
+export function surface_normal_qcon_surface_batch(points: Float64Array, count: number, params: Float64Array, _mode_odd: number): Float64Array;
 
 export function trace_image_height_finite_candidate_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, object_x: number, object_y: number): Float64Array;
 
@@ -265,6 +279,8 @@ export interface InitOutput {
     readonly generate_parallel_start_points_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly intersect_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly intersect_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly intersect_qcon_surface: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly intersect_qcon_surface_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly malloc: (a: number) => number;
     readonly matrix_vector_multiply: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly normal_eq_matvec: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
@@ -273,11 +289,14 @@ export interface InitOutput {
     readonly qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
     readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly run_native_chief_ray_angle_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_opd_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_paraxial_metrics_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_seidel_wasm_json: (a: number, b: number) => [number, number, number];
     readonly solve_image_height_component_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
     readonly solve_image_height_pair_exact_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly solve_image_height_pair_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
@@ -288,6 +307,8 @@ export interface InitOutput {
     readonly solve_spd_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly surface_normal_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly surface_normal_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly surface_normal_qcon_surface: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly surface_normal_qcon_surface_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly trace_image_height_finite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
     readonly trace_image_height_infinite_candidate_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
     readonly trace_image_height_infinite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];

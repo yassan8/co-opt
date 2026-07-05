@@ -70,6 +70,7 @@ type MtfPlotOptions = {
     objectIndex?: number;
     objectOverride?: Record<string, any> | null;
     maxFrequencyLpmm?: number;
+    targetFrequencyLpmm?: number;
     samplingSize?: number;
     samplingPoints?: number;
     containerElement?: HTMLElement | null;
@@ -81,6 +82,7 @@ type MtfPlotOptions = {
     zeroPadTo?: number;
     legacyBaselineMode?: boolean;
     plotPointCount?: number;
+    fastSampleOnly?: boolean;
 };
 
 type ThroughFocusMtfOptions = {
@@ -178,7 +180,7 @@ function ensureConsoleError(...args) {
     } catch (_) {}
 }
 
-async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount }: MtfPlotOptions = {}) {
+async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, maxFrequencyLpmm, targetFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount, fastSampleOnly }: MtfPlotOptions = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -209,6 +211,12 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         } catch (_) {}
     };
 
+    const shouldSuppressMtfProgressMessage = (message: any) => {
+        const text = String(message ?? '').trim();
+        if (!text) return false;
+        return /native\s*opd/i.test(text);
+    };
+
     const useWasmFastOnly = !!((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_WASM_FAST_ONLY);
     const enableMtfProfileLog = !((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_PROFILE === false);
     const useLegacyBaselineMode = (typeof legacyBaselineMode === 'boolean')
@@ -224,6 +232,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         5,
         2001
     );
+    const targetFreqLpmm = Number(targetFrequencyLpmm);
+    const fastSampleEnabled = !!fastSampleOnly && Number.isFinite(targetFreqLpmm) && targetFreqLpmm >= 0;
 
     const primaryWl = (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function')
         ? Number(window.getPrimaryWavelength())
@@ -446,7 +456,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                 selectedObject = {
                     ...selectedObject,
                     ...effectiveObject,
-                    position: effectiveObject?.__cooptEffectivePosition ?? effectiveObject?.position ?? selectedObject?.position,
+                    position: selectedObject?.position,
                     __cooptOriginalPosition: selectedObject?.position ?? effectiveObject?.__cooptOriginalPosition,
                 };
                 objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? objectTypeRaw);
@@ -574,6 +584,28 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         return null;
     };
 
+    const sampleCurveAtFrequency = (curve, targetFreq) => {
+        if (!curve || !Array.isArray(curve.freq) || !Array.isArray(curve.mtfVals) || curve.freq.length === 0) {
+            return Number.NaN;
+        }
+        const tx = Number(targetFreq);
+        if (!Number.isFinite(tx)) return Number.NaN;
+        let bestIdx = 0;
+        let bestDf = Infinity;
+        for (let i = 0; i < curve.freq.length; i++) {
+            const f = Number(curve.freq[i]);
+            if (!Number.isFinite(f)) continue;
+            const df = Math.abs(f - tx);
+            if (df < bestDf) {
+                bestDf = df;
+                bestIdx = i;
+            }
+        }
+        const v = Number(curve.mtfVals[bestIdx]);
+        if (!Number.isFinite(v)) return Number.NaN;
+        return Math.max(0, Math.min(1, v));
+    };
+
     const resampleCurveToRange = (curve, axisMaxLpmm: number, pointCount: number) => {
         if (!curve || !Array.isArray(curve.freq) || !Array.isArray(curve.mtfVals)) return curve;
         const srcX = curve.freq.map((v: any) => Number(v));
@@ -675,6 +707,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             try {
                 const p = Number(evt?.percent);
                 const msg = evt?.message || evt?.phase || 'Generating wavefront...';
+                if (shouldSuppressMtfProgressMessage(msg)) {
+                    return;
+                }
                 if (Number.isFinite(p)) {
                     reportProgress(localBase + (p / 100) * (localSpan * 0.55), `λ=${titleNmLocal} nm: ${msg}`);
                 } else {
@@ -684,6 +719,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         };
 
         const generateWavefrontMapForMode = async (mode, customFieldSetting = fieldSetting) => {
+            const allowWavefrontCache = (!objectOverride) && Math.abs(Number(defocusShiftMm || 0)) < 1e-12;
             return await withForcedInfinitePupilMode(mode, async () => {
                 ensureConsoleLog(`🔍 [Wavefront] Calling generateWavefrontMap with customFieldSetting:`, customFieldSetting);
                 const result = await analyzer.generateWavefrontMap(customFieldSetting, samplingSizeForPSF, 'circular', {
@@ -699,7 +735,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                     opdMode: 'simple',
                     opdDisplayMode: effectiveOpdDisplayMode,
                     onProgress: onWavefrontProgress,
-                    useCache: false  // ✅ Disable cache to force new OPD computation per field/defocus
+                    useCache: allowWavefrontCache
                 });
                 // 🔍 Compute simple checksum of OPD grid to verify it's different for each field/defocus
                 if (result?.opdGrid) {
@@ -972,14 +1008,10 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             // Do not force pixelSize: PSFCalculator must apply Npupil/Nfft scaling
             // to keep lp/mm axis physically consistent across sampling/zero-padding.
             pixelSize: null,
-            forceImplementation: useLegacyBaselineMode ? null : 'javascript',
+            forceImplementation: null,
             // OPD grid is already piston+tilt removed by opdDisplayMode.
             removeTilt: false
         });
-
-        if (!useLegacyBaselineMode && String(psfResult?.implementationUsed || '').toLowerCase() !== 'javascript') {
-            console.warn('⚠️ MTF PSF path expected JavaScript (for zero-padding), but got a different implementation.');
-        }
 
         reportProgress(localBase + localSpan * 0.85, `λ=${titleNmLocal} nm: Computing OTF/MTF...`);
 
@@ -1122,35 +1154,59 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             sag = sample1DAxis(sagAxis);
         }
 
-        tan = resampleCurveToRange(tan, requestedPlotLpmm, resolvedPlotPointCount);
-        sag = resampleCurveToRange(sag, requestedPlotLpmm, resolvedPlotPointCount);
+        if (fastSampleEnabled) {
+            const tanAtTarget = sampleCurveAtFrequency(tan, targetFreqLpmm);
+            const sagAtTarget = sampleCurveAtFrequency(sag, targetFreqLpmm);
+            maxPlotLpmmGlobal = Math.max(maxPlotLpmmGlobal, targetFreqLpmm);
+            const color = getColorForWavelength(wlLocal);
+            traces.push({
+                x: [targetFreqLpmm],
+                y: [Number.isFinite(tanAtTarget) ? tanAtTarget : null],
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: `Tangential (${titleNmLocal}nm)`,
+                showlegend: true,
+                line: { color, width: 2, dash: 'solid' }
+            });
+            traces.push({
+                x: [targetFreqLpmm],
+                y: [Number.isFinite(sagAtTarget) ? sagAtTarget : null],
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: `Sagittal (${titleNmLocal}nm)`,
+                showlegend: true,
+                line: { color, width: 2, dash: 'dot' }
+            });
+        } else {
+            tan = resampleCurveToRange(tan, requestedPlotLpmm, resolvedPlotPointCount);
+            sag = resampleCurveToRange(sag, requestedPlotLpmm, resolvedPlotPointCount);
 
-        let diffVals = null;
-        if (showDiffractionLimitEnabled || forceSymmetricIdealMtf) {
+            let diffVals = null;
+            if (showDiffractionLimitEnabled || forceSymmetricIdealMtf) {
 
-            try {
-                const idealOpdGrid = Array.from({ length: s }, () => new Float32Array(s));
-                const idealOpdData = {
-                    gridSize: s,
-                    wavelength: wlLocal,
-                    gridData: {
-                        opd: idealOpdGrid,
-                        amplitude: ampGrid,
-                        pupilMask: maskGrid,
-                        xCoords,
-                        yCoords
-                    }
-                };
+                try {
+                    const idealOpdGrid = Array.from({ length: s }, () => new Float32Array(s));
+                    const idealOpdData = {
+                        gridSize: s,
+                        wavelength: wlLocal,
+                        gridData: {
+                            opd: idealOpdGrid,
+                            amplitude: ampGrid,
+                            pupilMask: maskGrid,
+                            xCoords,
+                            yCoords
+                        }
+                    };
 
-                const idealPsfResult = await psfCalculator.calculatePSF(idealOpdData, {
-                    samplingSize: s,
-                    zeroPadTo: effectiveZeroPadTo,
-                    pupilDiameter: pupilDiameterMm,
-                    focalLength: focalLengthMm,
-                    pixelSize: null,
-                    forceImplementation: useLegacyBaselineMode ? null : 'javascript',
-                    removeTilt: false
-                });
+                    const idealPsfResult = await psfCalculator.calculatePSF(idealOpdData, {
+                        samplingSize: s,
+                        zeroPadTo: effectiveZeroPadTo,
+                        pupilDiameter: pupilDiameterMm,
+                        focalLength: focalLengthMm,
+                        pixelSize: null,
+                        forceImplementation: null,
+                        removeTilt: false
+                    });
 
                 const idealPsf2D = idealPsfResult?.psfData || idealPsfResult?.psf || idealPsfResult?.intensity || null;
                 if (idealPsf2D && Array.isArray(idealPsf2D) && Array.isArray(idealPsf2D[0])) {
@@ -1226,84 +1282,85 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                         }
                     }
                 }
-            } catch (_) {
-                diffVals = null;
+                } catch (_) {
+                    diffVals = null;
+                }
+
+                if (!diffVals) {
+                    diffVals = tan.freq.map((f) => computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction));
+                }
             }
 
-            if (!diffVals) {
-                diffVals = tan.freq.map((f) => computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction));
+            const idealPsfEnvelope = (Array.isArray(diffVals) && diffVals.length === tan.freq.length)
+                ? diffVals.map((v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(1, Number(v))) : null))
+                : null;
+            const analyticDiffVals = tan.freq.map((f) => {
+                const v = computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction);
+                return Number.isFinite(Number(v)) ? Math.max(0, Math.min(1, Number(v))) : null;
+            });
+            const physicalEnvelope = (Array.isArray(idealPsfEnvelope) && idealPsfEnvelope.some((v) => Number.isFinite(Number(v))))
+                ? idealPsfEnvelope
+                : (analyticDiffVals.some((v) => Number.isFinite(Number(v))) ? analyticDiffVals : null);
+
+            if (forceSymmetricIdealMtf) {
+                const symmetricVals = (Array.isArray(physicalEnvelope) && physicalEnvelope.length === tan.freq.length)
+                    ? physicalEnvelope.slice()
+                    : tan.freq.map((_, idx) => {
+                        const tv = Number(tan?.mtfVals?.[idx]);
+                        const sv = Number(sag?.mtfVals?.[idx]);
+                        if (Number.isFinite(tv) && Number.isFinite(sv)) return Math.max(0, Math.min(1, 0.5 * (tv + sv)));
+                        if (Number.isFinite(tv)) return Math.max(0, Math.min(1, tv));
+                        if (Number.isFinite(sv)) return Math.max(0, Math.min(1, sv));
+                        return null;
+                    });
+                tan = { ...tan, mtfVals: symmetricVals.slice() };
+                sag = { ...sag, mtfVals: symmetricVals.slice() };
+                diffVals = symmetricVals.slice();
+                try {
+                    console.log(`ℹ️ [MTF] Pure Paraxial/ThinLens system detected; using the analytic diffraction-limited M/S curve at λ=${titleNmLocal}nm.`);
+                } catch (_) {}
+            } else {
+                tan = clampCurveToPhysicalEnvelope(tan, physicalEnvelope);
+                sag = clampCurveToPhysicalEnvelope(sag, physicalEnvelope);
+                if (Array.isArray(physicalEnvelope) && physicalEnvelope.length === tan.freq.length) {
+                    diffVals = physicalEnvelope.slice();
+                }
             }
-        }
 
-        const idealPsfEnvelope = (Array.isArray(diffVals) && diffVals.length === tan.freq.length)
-            ? diffVals.map((v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(1, Number(v))) : null))
-            : null;
-        const analyticDiffVals = tan.freq.map((f) => {
-            const v = computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction);
-            return Number.isFinite(Number(v)) ? Math.max(0, Math.min(1, Number(v))) : null;
-        });
-        const physicalEnvelope = (Array.isArray(idealPsfEnvelope) && idealPsfEnvelope.some((v) => Number.isFinite(Number(v))))
-            ? idealPsfEnvelope
-            : (analyticDiffVals.some((v) => Number.isFinite(Number(v))) ? analyticDiffVals : null);
-
-        if (forceSymmetricIdealMtf) {
-            const symmetricVals = (Array.isArray(physicalEnvelope) && physicalEnvelope.length === tan.freq.length)
-                ? physicalEnvelope.slice()
-                : tan.freq.map((_, idx) => {
-                    const tv = Number(tan?.mtfVals?.[idx]);
-                    const sv = Number(sag?.mtfVals?.[idx]);
-                    if (Number.isFinite(tv) && Number.isFinite(sv)) return Math.max(0, Math.min(1, 0.5 * (tv + sv)));
-                    if (Number.isFinite(tv)) return Math.max(0, Math.min(1, tv));
-                    if (Number.isFinite(sv)) return Math.max(0, Math.min(1, sv));
-                    return null;
-                });
-            tan = { ...tan, mtfVals: symmetricVals.slice() };
-            sag = { ...sag, mtfVals: symmetricVals.slice() };
-            diffVals = symmetricVals.slice();
-            try {
-                console.log(`ℹ️ [MTF] Pure Paraxial/ThinLens system detected; using the analytic diffraction-limited M/S curve at λ=${titleNmLocal}nm.`);
-            } catch (_) {}
-        } else {
-            tan = clampCurveToPhysicalEnvelope(tan, physicalEnvelope);
-            sag = clampCurveToPhysicalEnvelope(sag, physicalEnvelope);
-            if (Array.isArray(physicalEnvelope) && physicalEnvelope.length === tan.freq.length) {
-                diffVals = physicalEnvelope.slice();
-            }
-        }
-
-        const color = getColorForWavelength(wlLocal);
-        console.log(`🔍 [TFMTF MTF] λ=${titleNmLocal}nm: tan=${tan.freq.length}pts(${Math.min(...tan.mtfVals).toFixed(3)}-${Math.max(...tan.mtfVals).toFixed(3)}), sag=${sag.freq.length}pts(${Math.min(...sag.mtfVals).toFixed(3)}-${Math.max(...sag.mtfVals).toFixed(3)})`);
-        
-        traces.push({
-            x: tan.freq,
-            y: tan.mtfVals,
-            type: 'scatter',
-            mode: 'lines',
-            name: `Tangential (${titleNmLocal}nm)`,
-            showlegend: true,
-            line: { color, width: 2, dash: 'solid' }
-        });
-        traces.push({
-            x: sag.freq,
-            y: sag.mtfVals,
-            type: 'scatter',
-            mode: 'lines',
-            name: `Sagittal (${titleNmLocal}nm)`,
-            showlegend: true,
-            line: { color, width: 2, dash: 'dot' }
-        });
-
-        if (showDiffractionLimitEnabled && Array.isArray(diffVals)) {
+            const color = getColorForWavelength(wlLocal);
+            console.log(`🔍 [TFMTF MTF] λ=${titleNmLocal}nm: tan=${tan.freq.length}pts(${Math.min(...tan.mtfVals).toFixed(3)}-${Math.max(...tan.mtfVals).toFixed(3)}), sag=${sag.freq.length}pts(${Math.min(...sag.mtfVals).toFixed(3)}-${Math.max(...sag.mtfVals).toFixed(3)})`);
+            
             traces.push({
                 x: tan.freq,
-                y: diffVals,
+                y: tan.mtfVals,
                 type: 'scatter',
                 mode: 'lines',
-                name: `Diffraction Limit (${titleNmLocal}nm)`,
+                name: `Tangential (${titleNmLocal}nm)`,
                 showlegend: true,
-                meta: { overlayType: 'diffractionLimit' },
-                line: { color, width: 1.75, dash: 'dash' }
+                line: { color, width: 2, dash: 'solid' }
             });
+            traces.push({
+                x: sag.freq,
+                y: sag.mtfVals,
+                type: 'scatter',
+                mode: 'lines',
+                name: `Sagittal (${titleNmLocal}nm)`,
+                showlegend: true,
+                line: { color, width: 2, dash: 'dot' }
+            });
+
+            if (showDiffractionLimitEnabled && Array.isArray(diffVals)) {
+                traces.push({
+                    x: tan.freq,
+                    y: diffVals,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: `Diffraction Limit (${titleNmLocal}nm)`,
+                    showlegend: true,
+                    meta: { overlayType: 'diffractionLimit' },
+                    line: { color, width: 1.75, dash: 'dash' }
+                });
+            }
         }
     };
 
@@ -1453,6 +1510,9 @@ async function showThroughFocusMTFDiagram({
                 let subMessage = '';
                 const mtfSubProgress = (evt: { percent?: number; message?: string }) => {
                     if (evt?.message) {
+                        if (/native\s*opd/i.test(String(evt.message))) {
+                            return;
+                        }
                         const defocusInfo = `Defocus ${shift.toFixed(4)}mm(${index + 1}/${defocusValues.length}) `;
                         subMessage = defocusInfo + evt.message;
                         const pct = Math.floor(10 + (index / Math.max(1, defocusValues.length)) * 50);
@@ -1466,11 +1526,13 @@ async function showThroughFocusMTFDiagram({
                         wavelengthMicrons,
                         objectIndex,
                         maxFrequencyLpmm: targetFreq,
+                        targetFrequencyLpmm: targetFreq,
                         samplingSize: sampling,
                         zeroPadTo,
                         opdDisplayMode,
                         defocusShiftMm: shift,
                         skipPlot: true,
+                        fastSampleOnly: true,
                         onProgress: mtfSubProgress,
                         containerElement
                     });
@@ -1563,6 +1625,14 @@ async function showThroughFocusMTFDiagram({
     // 初回プロット作成（空の状態で準備）
     reportProgress(62, 'Initializing plot...', undefined, undefined);
     plotly.newPlot(containerEl, [], layout, { responsive: true, displaylogo: false });
+    const redrawPlot = async (nextTraces: any[]) => {
+        if (typeof plotly.react === 'function') {
+            await plotly.react(containerEl, nextTraces, layout, { responsive: true, displaylogo: false });
+            return;
+        }
+        await plotly.newPlot(containerEl, nextTraces, layout, { responsive: true, displaylogo: false });
+    };
+    const redrawStride = Math.max(1, Math.floor(psfResults.length / 20));
 
     // Process MTF traces from all defocus values
     // Since PSF calculation is the bottleneck (now with Rust FFT), and workers can't easily
@@ -1625,9 +1695,12 @@ async function showThroughFocusMTFDiagram({
             agg.y.push(mtfVal);
         }
 
-        // 1プロット計算毎にグラフを更新
+        // Refresh plot in chunks to reduce UI overhead on large through-focus runs.
         const currentTraces = Array.from(traceMap.values());
-        plotly.newPlot(containerEl, currentTraces, layout, { responsive: true, displaylogo: false });
+        const shouldRedraw = ((i + 1) % redrawStride === 0) || (i === psfResults.length - 1);
+        if (shouldRedraw) {
+            await redrawPlot(currentTraces);
+        }
 
         // 進捗ごとに現時点のtraceMapとサンプリング進捗テキストをonProgressで通知
         const pct = Math.floor(60 + ((i + 1) / psfResults.length) * 35);
@@ -1659,7 +1732,7 @@ async function showThroughFocusMTFDiagram({
 
     const traces = Array.from(traceMap.values());
     reportProgress(98, 'Finalizing plot...', undefined, undefined);
-    plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
+    await redrawPlot(traces);
     reportProgress(100, 'Done', undefined, undefined);
     
     console.log(`✅ [TFMTF] Computed ${psfResults.length} through-focus points with ${nSteps} steps`);
@@ -1894,6 +1967,9 @@ async function showFieldMTFDiagram({
                 let subMessage = '';
                 const mtfSubProgress = (evt: { percent?: number; message?: string }) => {
                     if (evt?.message) {
+                        if (/native\s*opd/i.test(String(evt.message))) {
+                            return;
+                        }
                         const fieldInfo = `Field ${fieldValue.toFixed(4)}${axisUnit}(${index + 1}/${fieldValues.length}) `;
                         subMessage = fieldInfo + evt.message;
                         const pct = Math.floor(10 + (index / Math.max(1, fieldValues.length)) * 50);

@@ -770,14 +770,21 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>, preserveS
   const firstRow = safeRows[0] || {};
   const objectDistanceMode = isInfLikePatentImport(firstRow?.thickness) ? 'INF' : 'Finite';
   const objectDistance = Number(firstRow?.thickness);
+  const objectRenderDistance = Number(firstRow?.objectRenderDistance);
+  const objectParameters: Record<string, any> = objectDistanceMode === 'INF'
+    ? { objectDistanceMode: 'INF' }
+    : { objectDistanceMode: 'Finite' };
+  if (objectDistanceMode === 'INF') {
+    if (Number.isFinite(objectRenderDistance) && objectRenderDistance > 0) objectParameters.objectDistance = objectRenderDistance;
+  } else if (Number.isFinite(objectDistance) && objectDistance > 0) {
+    objectParameters.objectDistance = objectDistance;
+  }
   blocks.push({
     blockId: 'ObjectSurface-1',
     blockType: 'ObjectSurface',
     role: null,
     constraints: {},
-    parameters: objectDistanceMode === 'INF'
-      ? { objectDistanceMode: 'INF' }
-      : { objectDistanceMode: 'Finite', objectDistance: Number.isFinite(objectDistance) ? objectDistance : 10 },
+    parameters: objectParameters,
     variables: {},
     metadata: { source: 'patent-import-fallback' },
   });
@@ -1199,13 +1206,15 @@ function normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
     if (isInfLikePatentImport(modeRaw)) {
       params.objectDistanceMode = 'INF';
       const distanceInf = Number(params.objectDistance);
-      params.objectDistance = Number.isFinite(distanceInf) ? distanceInf : 10;
+      if (Number.isFinite(distanceInf) && distanceInf > 0) params.objectDistance = distanceInf;
+      else delete params.objectDistance;
       continue;
     }
 
     params.objectDistanceMode = 'Finite';
     const distance = Number(params.objectDistance);
-    params.objectDistance = Number.isFinite(distance) ? distance : 10;
+    if (Number.isFinite(distance) && distance > 0) params.objectDistance = distance;
+    else delete params.objectDistance;
   }
 
   if (!hasObjectSurface) {
@@ -1214,7 +1223,7 @@ function normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
       blockType: 'ObjectSurface',
       role: null,
       constraints: {},
-      parameters: { objectDistanceMode: 'Finite', objectDistance: 10 },
+      parameters: { objectDistanceMode: 'Finite' },
       variables: {},
       metadata: { source: 'patent-import-fallback', inserted: true },
     });
@@ -2062,7 +2071,6 @@ async function buildDraftRowsFromSelection(result: LiteratureExtractResult, embo
     thickness: 'INF',
     material: 'AIR',
     comment: 'Draft literature import object surface',
-    objectRenderDistance: 100,
   });
 
   const draftRows: Array<Record<string, any>> = [];

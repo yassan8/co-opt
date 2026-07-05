@@ -193,17 +193,38 @@ const normalizeNumberLike = (v: any): number | string => {
   return Number.isFinite(n) ? n : v;
 };
 
+const normalizePositionValue = (value: any): 'Angle' | 'Rectangle' | 'ImageHeight' => {
+  const compact = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (compact === 'point' || compact === 'angle' || compact === 'fieldangle') return 'Angle';
+  if (compact === 'rectangle' || compact === 'heightrect' || compact === 'rect' || compact === 'height') return 'Rectangle';
+  if (compact === 'imageheight' || compact === 'imageheigth') return 'ImageHeight';
+  return 'Angle';
+};
+
+const inferColumnTitlesFromRows = (rows: ObjectRow[]): { x: string; y: string } => {
+  const positions = Array.isArray(rows) ? rows.map(row => normalizePositionValue(row?.position)) : [];
+  if (positions.length > 0 && positions.every(position => position === 'ImageHeight')) {
+    return { x: 'X image height (mm)', y: 'Y image height (mm)' };
+  }
+  if (positions.length > 0 && positions.every(position => position === 'Angle')) {
+    return { x: 'X angle (deg)', y: 'Y angle (deg)' };
+  }
+  if (positions.length > 0 && positions.every(position => position === 'Rectangle')) {
+    return { x: 'X height rect (mm)', y: 'Y height rect (mm)' };
+  }
+  if (positions.includes('ImageHeight')) return { x: 'X image height (mm)', y: 'Y image height (mm)' };
+  if (positions.includes('Rectangle')) return { x: 'X height rect (mm)', y: 'Y height rect (mm)' };
+  return { x: 'X angle (deg)', y: 'Y angle (deg)' };
+};
+
 const normalizeRow = (row: Partial<ObjectRow>, fallbackId: number): ObjectRow => {
   const normalized: any = { ...row };
   normalized.id = (normalized.id === '' || normalized.id == null) ? fallbackId : Number(normalized.id);
   if (Number.isNaN(normalized.id)) normalized.id = fallbackId;
   normalized.xHeightAngle = normalizeNumberLike(normalized.xHeightAngle);
   normalized.yHeightAngle = normalizeNumberLike(normalized.yHeightAngle);
-  if (typeof normalized.position !== 'string') normalized.position = normalized.position ? String(normalized.position) : 'Angle';
-  if (!normalized.position) normalized.position = 'Angle';
-  // Spec: Position should be Angle, Rectangle, or ImageHeight. Migrate legacy Point -> Angle.
-  if (normalized.position === 'Point') normalized.position = 'Angle';
-  if (!['Angle', 'Rectangle', 'ImageHeight'].includes(normalized.position)) normalized.position = 'Angle';
+  // Spec: Position should be Angle, Rectangle, or ImageHeight. Accept UI/import label variants.
+  normalized.position = normalizePositionValue(normalized.position);
   if (!('angle' in normalized)) normalized.angle = 0;
   normalized.enabled = (normalized.enabled !== false);
   return normalized as ObjectRow;
@@ -610,6 +631,9 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
   const replaceData = (rows: ObjectRow[]): Promise<void> => {
     data = safeCloneRows(rows).map((r, idx) => normalizeRow(r, idx + 1));
     renumberIds(data);
+    const titles = inferColumnTitlesFromRows(data);
+    xTitle = titles.x;
+    yTitle = titles.y;
     rerender();
     saveTableData(getData());
     emit('dataChanged');
@@ -640,6 +664,10 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
     return Promise.resolve();
   };
 
+  const initialTitles = inferColumnTitlesFromRows(data.map((row, index) => normalizeRow(row, index + 1)));
+  xTitle = initialTitles.x;
+  yTitle = initialTitles.y;
+
   // Initial render
   rerender();
 
@@ -659,7 +687,7 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
 };
 
 const createNoopObjectTable = (initialRows: ObjectRow[]): TableObjectAPI => {
-  let data = safeCloneRows(initialRows);
+  let data = safeCloneRows(initialRows).map((row, index) => normalizeRow(row, index + 1));
   const listeners = new Map<string, Array<(...args: any[]) => void>>();
   const on = (eventName: string, handler: (...args: any[]) => void): void => {
     if (!eventName || typeof handler !== 'function') return;
@@ -672,7 +700,7 @@ const createNoopObjectTable = (initialRows: ObjectRow[]): TableObjectAPI => {
     handlers.forEach(fn => { try { fn(...args); } catch (_) {} });
   };
   const getData = (): ObjectRow[] => safeCloneRows(data);
-  const replaceData = (rows: ObjectRow[]): Promise<void> => { data = safeCloneRows(rows); emit('dataChanged'); return Promise.resolve(); };
+  const replaceData = (rows: ObjectRow[]): Promise<void> => { data = safeCloneRows(rows).map((row, index) => normalizeRow(row, index + 1)); emit('dataChanged'); return Promise.resolve(); };
   return {
     on,
     getData,

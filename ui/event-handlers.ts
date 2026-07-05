@@ -237,13 +237,22 @@ function computePopupAiryRadiusUm(opticalSystemRows: any[], sourceRows: any[]): 
     }
 }
 
+function shouldSuppressNativeOpdPsfProgressLabel(rawLabel: any): boolean {
+    const text = String(rawLabel ?? '').trim();
+    if (!text) return false;
+    return /native\s*opd(\s*\/\s*psf)?|native\s*psf/i.test(text);
+}
+
 async function runDesktopAnalysisComputeForPopup(
     payload: Omit<RunAnalysisComputeRequest, 'opticalSystemRows' | 'sourceRows' | 'objectRows'>,
 ): Promise<RunAnalysisComputeResponse> {
     const jobId = `analysis-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlisten: null | (() => void) = null;
+    const suppressProgressHud = (payload as any)?.suppressProgressHud !== false;
 
-    showAnalysisProgressHud('Starting analysis...', 180);
+    if (!suppressProgressHud) {
+        showAnalysisProgressHud('Starting analysis...', 180);
+    }
 
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
     try {
@@ -256,7 +265,9 @@ async function runDesktopAnalysisComputeForPopup(
                     const message = String(data?.message || data?.phase || 'Computing analysis...');
                     const percentRaw = Number(data?.percent);
                     const percent = Number.isFinite(percentRaw) ? percentRaw : null;
-                    updateAnalysisProgressHud({ label: message, percent });
+                    if (!suppressProgressHud) {
+                        updateAnalysisProgressHud({ label: message, percent });
+                    }
                 } catch (_) {}
             });
         } catch (listenErr) {
@@ -275,7 +286,9 @@ async function runDesktopAnalysisComputeForPopup(
             sourceRows,
             objectRows,
         });
-        updateAnalysisProgressHud({ label: 'Done', percent: 100 });
+        if (!suppressProgressHud) {
+            updateAnalysisProgressHud({ label: 'Done', percent: 100 });
+        }
         return response;
     } finally {
         if (typeof unlisten === 'function') {
@@ -283,11 +296,13 @@ async function runDesktopAnalysisComputeForPopup(
                 unlisten();
             } catch (_) {}
         }
-        window.setTimeout(() => {
-            try {
-                hideAnalysisProgressHud();
-            } catch (_) {}
-        }, 220);
+        if (!suppressProgressHud) {
+            window.setTimeout(() => {
+                try {
+                    hideAnalysisProgressHud();
+                } catch (_) {}
+            }, 220);
+        }
     }
 }
 
@@ -299,23 +314,30 @@ async function runDesktopNativeOpdMapForPopup(payload: {
     wavelengthUm?: number;
     surfaceIndex?: number;
     opdDisplayMode?: 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved' | string;
+    suppressProgressHud?: boolean;
 }) {
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
     const jobId = `native-opd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlistenProgress: null | (() => void) = null;
 
     try {
-        showAnalysisProgressHud('Native OPD: starting...', 140);
+        const suppressProgressHud = payload?.suppressProgressHud !== false;
+        if (!suppressProgressHud) {
+            showAnalysisProgressHud('Computing analysis...', 140);
+        }
         try {
             unlistenProgress = await listen('analysis-progress', (event: any) => {
                 try {
                     const data = event?.payload || {};
                     if (!data || String(data.jobId || '') !== jobId) return;
                     const percent = Number(data.percent);
-                    updateAnalysisProgressHud({
-                        label: data.message || 'Native OPD running...',
-                        percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null,
-                    });
+                    const labelRaw = data.message || 'Computing analysis...';
+                    if (!suppressProgressHud) {
+                        updateAnalysisProgressHud({
+                            label: shouldSuppressNativeOpdPsfProgressLabel(labelRaw) ? 'Computing analysis...' : labelRaw,
+                            percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null,
+                        });
+                    }
                 } catch (_) {}
             });
         } catch (listenErr) {
@@ -363,7 +385,9 @@ async function runDesktopNativeOpdMapForPopup(payload: {
             opdDisplayMode: (payload?.opdDisplayMode as any) || 'pistonTiltRemoved',
         });
 
-        updateAnalysisProgressHud({ label: 'Native OPD done', percent: 100 });
+        if (!suppressProgressHud) {
+            updateAnalysisProgressHud({ label: 'Native OPD done', percent: 100 });
+        }
         return result;
     } finally {
         try {
@@ -371,11 +395,13 @@ async function runDesktopNativeOpdMapForPopup(payload: {
                 unlistenProgress();
             }
         } catch (_) {}
-        setTimeout(() => {
-            try {
-                hideAnalysisProgressHud();
-            } catch (_) {}
-        }, 220);
+        if (payload?.suppressProgressHud === false) {
+            setTimeout(() => {
+                try {
+                    hideAnalysisProgressHud();
+                } catch (_) {}
+            }, 220);
+        }
     }
 }
 
@@ -390,22 +416,29 @@ async function runDesktopNativePsfMapForPopup(payload: {
     removeTilt?: boolean;
     zeroPadTo?: number;
     recenterIfWrapped?: boolean;
+    suppressProgressHud?: boolean;
 }) {
     const jobId = `native-psf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlistenProgress: null | (() => void) = null;
 
     try {
-        showAnalysisProgressHud('Native PSF: starting...', 140);
+        const suppressProgressHud = payload?.suppressProgressHud !== false;
+        if (!suppressProgressHud) {
+            showAnalysisProgressHud('Computing analysis...', 140);
+        }
         try {
             unlistenProgress = await listen('analysis-progress', (event: any) => {
                 try {
                     const data = event?.payload || {};
                     if (!data || String(data.jobId || '') !== jobId) return;
                     const percent = Number(data.percent);
-                    updateAnalysisProgressHud({
-                        label: data.message || 'Native PSF running...',
-                        percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null,
-                    });
+                    const labelRaw = data.message || 'Computing analysis...';
+                    if (!suppressProgressHud) {
+                        updateAnalysisProgressHud({
+                            label: shouldSuppressNativeOpdPsfProgressLabel(labelRaw) ? 'Computing analysis...' : labelRaw,
+                            percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null,
+                        });
+                    }
                 } catch (_) {}
             });
         } catch (listenErr) {
@@ -427,7 +460,9 @@ async function runDesktopNativePsfMapForPopup(payload: {
             recenterIfWrapped: !!payload?.recenterIfWrapped,
         });
 
-        updateAnalysisProgressHud({ label: 'Native PSF done', percent: 100 });
+        if (!suppressProgressHud) {
+            updateAnalysisProgressHud({ label: 'Native PSF done', percent: 100 });
+        }
         return result;
     } finally {
         try {
@@ -435,11 +470,13 @@ async function runDesktopNativePsfMapForPopup(payload: {
                 unlistenProgress();
             }
         } catch (_) {}
-        setTimeout(() => {
-            try {
-                hideAnalysisProgressHud();
-            } catch (_) {}
-        }, 220);
+        if (payload?.suppressProgressHud === false) {
+            setTimeout(() => {
+                try {
+                    hideAnalysisProgressHud();
+                } catch (_) {}
+            }, 220);
+        }
     }
 }
 
@@ -545,7 +582,10 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
                     const data = event?.payload || {};
                     if (!data || String(data.jobId || '') !== jobId) return;
                     const percent = Number(data?.percent);
-                    const message = String(data?.message || data?.phase || 'Computing Through-Focus MTF...');
+                    const messageRaw = String(data?.message || data?.phase || 'Computing Through-Focus MTF...');
+                    const message = shouldSuppressNativeOpdPsfProgressLabel(messageRaw)
+                        ? 'Computing Through-Focus MTF...'
+                        : messageRaw;
                     reportProgress({
                         percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : undefined,
                         message,
@@ -800,6 +840,7 @@ async function runDesktopNativeCompareMtfVsTfmtfForPopup(payload: {
         gridSize: samplingSize,
         wavelengthUm: wl,
         opdDisplayMode,
+        suppressProgressHud: true,
     });
 
     const s = samplingSize;
@@ -876,6 +917,7 @@ async function runDesktopNativeCompareMtfVsTfmtfForPopup(payload: {
         removeTilt: false,
         zeroPadTo: requestedFftSize,
         recenterIfWrapped: false,
+        suppressProgressHud: true,
     });
 
     const nativeMtfResp = await runDesktopNativeMtfMapForPopup({
@@ -1472,6 +1514,9 @@ async function runPortableFieldMtfForPopup(payload: {
     zeroPadTo?: number;
     opdDisplayMode?: string;
     fieldAxisMode?: 'angle' | 'height';
+    adaptiveSampling?: boolean;
+    adaptiveThreshold?: number;
+    adaptiveInitialSteps?: number;
     onProgress?: (evt: { percent?: number; message?: string }) => void;
 }) {
     // Always use the shared field-MTF implementation so the React analysis
@@ -1493,6 +1538,9 @@ async function runPortableFieldMtfForPopup(payload: {
         zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : undefined,
         opdDisplayMode: payload?.opdDisplayMode,
         fieldAxisMode: payload?.fieldAxisMode,
+        adaptiveSampling: payload?.adaptiveSampling,
+        adaptiveThreshold: Number.isFinite(Number(payload?.adaptiveThreshold)) ? Number(payload?.adaptiveThreshold) : undefined,
+        adaptiveInitialSteps: Number.isFinite(Number(payload?.adaptiveInitialSteps)) ? Math.max(3, Math.floor(Number(payload?.adaptiveInitialSteps))) : undefined,
         onProgress: payload?.onProgress,
     } as any);
 }
@@ -3059,6 +3107,7 @@ function getRequiredFunctions(): any {
         getObjectRows: w.getObjectRows || (() => []),
         generateCrossBeam: w.generateCrossBeam || (() => ({ results: [] })),
         generateInfiniteSystemCrossBeam: w.generateInfiniteSystemCrossBeam || (() => ({ results: [] })),
+        convertImageHeightToEffectiveObject: w.convertImageHeightToEffectiveObject || null,
         drawOpticalSystemSurfaces: w.drawOpticalSystemSurfaces || (() => {}),
         drawCrossBeamRays: w.drawCrossBeamRays || (() => {}),
         harmonizeSceneGeometry: w.harmonizeSceneGeometry || (() => {}),
@@ -4013,12 +4062,6 @@ function ensurePopupMessageHandler(): void {
                 let restoreObjectRowsOverride = false;
                 let prevObjectRowsOverride: any = null;
                 
-                if (!isOptimizing && !redrawRows) {
-                    if (typeof w.loadActiveConfigurationToTables === 'function') {
-                        w.loadActiveConfigurationToTables();
-                    }
-                }
-
                 if (redrawRows) {
                     try {
                         prevRowsOverride = w.__cooptOpticalSystemRowsOverride;
@@ -4049,6 +4092,7 @@ function ensurePopupMessageHandler(): void {
                     clearAllOpticalElements,
                     generateCrossBeam,
                     generateInfiniteSystemCrossBeam,
+                    convertImageHeightToEffectiveObject,
                     drawCrossBeamRays
                 } = getRequiredFunctions();
                 
@@ -4147,10 +4191,12 @@ function ensurePopupMessageHandler(): void {
                     thicknessStr === '∞' ||
                     (Number.isFinite(thicknessVal) && Math.abs(thicknessVal) > 1e6)
                 );
+                const normalizeObjectPosition = (row: any): string => String(row?.position ?? row?.objectType ?? row?.fieldType ?? row?.type ?? '')
+                    .trim()
+                    .toLowerCase()
+                    .replace(/[\s_-]+/g, '');
                 const objectRowsIndicateInfinite = !objectRows || objectRows.length === 0 ||
-                    objectRows.every((row: any) => row.position === 'Angle' ||
-                        (!row.height && !row.y && !row.xHeightAngle && !row.yHeightAngle) ||
-                        parseFloat(row.height || 0) === 0);
+                    objectRows.every((row: any) => normalizeObjectPosition(row) === 'angle');
                 const isInfiniteSystem = hasThicknessInfo ? thicknessIndicatesInfinite : objectRowsIndicateInfinite;
                 const primaryWavelength = (() => {
                     try {
@@ -4162,13 +4208,55 @@ function ensurePopupMessageHandler(): void {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 })();
 
+                const normalizeObjectRowForTrace = (row: any, index: number): { x: number; y: number; objectIndex: number } => {
+                    const toNumber = (value: any) => {
+                        const num = parseFloat(value);
+                        return Number.isFinite(num) ? num : 0;
+                    };
+                    if (Array.isArray(row)) {
+                        return {
+                            x: toNumber(row[1]),
+                            y: toNumber(row[2]),
+                            objectIndex: index
+                        };
+                    }
+
+                    const sourceRow = row && typeof row === 'object' ? { ...row } : row;
+                    let effectiveRow: any = sourceRow;
+                    const posNorm = String(sourceRow?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+                    if (posNorm === 'imageheight' && typeof convertImageHeightToEffectiveObject === 'function') {
+                        try {
+                            effectiveRow = convertImageHeightToEffectiveObject(
+                                sourceRow,
+                                opticalSystemRows,
+                                primaryWavelength,
+                                isInfiniteSystem ? 'infinite' : 'finite',
+                                { skipTsValidation: true }
+                            );
+                        } catch (error) {
+                            console.warn('⚠️ [Popup draw-cross] Failed to convert ImageHeight object; using raw values.', error);
+                            effectiveRow = row;
+                        }
+                    }
+
+                    return {
+                        x: toNumber(effectiveRow?.xHeightAngle ?? effectiveRow?.x ?? effectiveRow?.height ?? effectiveRow?.heightX),
+                        y: toNumber(effectiveRow?.yHeightAngle ?? effectiveRow?.y ?? effectiveRow?.height ?? effectiveRow?.heightY),
+                        objectIndex: Number.isFinite(Number(row?.objectIndex)) ? Number(row.objectIndex) : index
+                    };
+                };
+
                 let crossBeamResult: any;
                 let coordinateReportSurfaceIndex = Math.max(0, opticalSystemRows.length - 1);
                 if (isInfiniteSystem) {
-                    const objectAngles = objectRows.map((row: any) => ({
-                        x: parseFloat(row.xHeightAngle) || 0,
-                        y: parseFloat(row.yHeightAngle) || 0
-                    }));
+                    const objectAngles = objectRows.map((row: any, index: number) => {
+                        const normalized = normalizeObjectRowForTrace(row, index);
+                        return {
+                            x: normalized.x,
+                            y: normalized.y,
+                            objectIndex: normalized.objectIndex
+                        };
+                    });
 
                     const isImageRow = (row: any) => {
                         const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
@@ -4190,32 +4278,18 @@ function ensurePopupMessageHandler(): void {
                         wavelength: primaryWavelength,
                         crossType: 'both',
                         targetSurfaceIndex,
-                        pupilSamplingMode: 'entrance',
                         logEntrancePupilConfig: false,
                         angleUnit: 'deg',
                         chiefZ: -20
                     });
                 } else {
-                    const toNumber = (value: any) => {
-                        const num = parseFloat(value);
-                        return Number.isFinite(num) ? num : 0;
-                    };
                     const allObjectPositions = (objectRows || []).map((row: any, index: number) => {
-                        if (Array.isArray(row)) {
-                            return {
-                                x: toNumber(row[1]),
-                                y: toNumber(row[2]),
-                                z: 0,
-                                objectIndex: index
-                            };
-                        }
-                        const xCoord = toNumber(row.xHeightAngle ?? row.x ?? row.height ?? row.heightX);
-                        const yCoord = toNumber(row.yHeightAngle ?? row.y ?? row.height ?? row.heightY);
+                        const normalized = normalizeObjectRowForTrace(row, index);
                         return {
-                            x: xCoord,
-                            y: yCoord,
+                            x: normalized.x,
+                            y: normalized.y,
                             z: 0,
-                            objectIndex: row.objectIndex ?? index
+                            objectIndex: normalized.objectIndex
                         };
                     });
                     if (allObjectPositions.length === 0) {
@@ -4362,6 +4436,17 @@ function ensurePopupMessageHandler(): void {
         
         // Handle view-xz and view-yz messages
         if (data.action === 'view-xz' || data.action === 'view-yz') {
+            // Always route cross-section view requests through draw-cross so
+            // tracing uses the latest snapshot rows/objectRows and refraction
+            // is consistent with the Render button path.
+            const routedViewAxis = data.action === 'view-xz' ? 'XZ' : 'YZ';
+            window.postMessage({
+                ...data,
+                action: 'draw-cross',
+                viewAxis: routedViewAxis
+            }, '*');
+            return;
+
             console.log('🎥 Handling popup view action:', data.action);
             if (!w.popup3DWindow) {
                 return;
@@ -4620,7 +4705,7 @@ function ensurePopupMessageHandler(): void {
 // EXECUTE CROSS-SECTION VIEW
 // ============================================================================
 
-function executeCrossSectionView(options: {
+async function executeCrossSectionView(options: {
     viewAxis: string;
     buttonElement?: HTMLElement | null;
     statusElement?: HTMLElement | null;
@@ -4629,7 +4714,7 @@ function executeCrossSectionView(options: {
     targetControls?: any;
     targetRenderer?: any;
     showAlerts?: boolean;
-}): void {
+}): Promise<void> {
     const {
         viewAxis,
         buttonElement = null,
@@ -4673,11 +4758,6 @@ function executeCrossSectionView(options: {
                     cm.saveCurrentToActiveConfiguration();
                 }
             } catch (_) {}
-
-            const loadActiveConfigurationToTables = w.loadActiveConfigurationToTables;
-            if (!hasRowsOverride && typeof loadActiveConfigurationToTables === 'function') {
-                loadActiveConfigurationToTables();
-            }
         }
         
         const {
@@ -4685,6 +4765,7 @@ function executeCrossSectionView(options: {
             getObjectRows,
             generateCrossBeam,
             generateInfiniteSystemCrossBeam,
+            convertImageHeightToEffectiveObject,
             drawOpticalSystemSurfaces,
             drawCrossBeamRays
         } = getRequiredFunctions();
@@ -4700,22 +4781,91 @@ function executeCrossSectionView(options: {
             return;
         }
         
-        const objectThickness = objectRows && objectRows.length > 0 && objectRows[0] ? objectRows[0].thickness : null;
-        const objectThicknessStr = String(objectThickness).trim().toUpperCase();
-        const isInfiniteSystem = objectThickness === Infinity || 
-                                objectThicknessStr === 'INF' || 
-                                objectThicknessStr === 'INFINITY' || 
-                                (Number(objectThickness) > 1e6);
+        const objectSurface = opticalSystemRows[0] || {};
+        const thicknessRaw = objectSurface?.thickness;
+        const hasThicknessInfo = thicknessRaw !== undefined && thicknessRaw !== null && thicknessRaw !== '';
+        const thicknessStr = hasThicknessInfo ? String(thicknessRaw).trim().toUpperCase() : '';
+        const thicknessVal = Number(thicknessRaw);
+        const thicknessIndicatesInfinite = hasThicknessInfo && (
+            thicknessRaw === Infinity ||
+            thicknessStr === 'INF' ||
+            thicknessStr === 'INFINITY' ||
+            thicknessStr === '∞' ||
+            (Number.isFinite(thicknessVal) && Math.abs(thicknessVal) > 1e6)
+        );
+        const normalizeObjectPosition = (row: any): string => String(row?.position ?? row?.objectType ?? row?.fieldType ?? row?.type ?? '')
+            .trim()
+            .toLowerCase()
+            .replace(/[\s_-]+/g, '');
+        const objectRowsIndicateInfinite = !objectRows || objectRows.length === 0 ||
+            objectRows.every((row: any) => normalizeObjectPosition(row) === 'angle');
+        const isInfiniteSystem = hasThicknessInfo ? thicknessIndicatesInfinite : objectRowsIndicateInfinite;
         const rayCount = (() => {
             const rayCountInput = document.getElementById('draw-ray-count-input') as HTMLInputElement | null;
             const v = parseInt(rayCountInput?.value || '51', 10);
             return Number.isFinite(v) && v > 0 ? v : 51;
         })();
+        const primaryWavelength = (() => {
+            try {
+                if (typeof w.getPrimaryWavelength === 'function') {
+                    const wl = Number(w.getPrimaryWavelength());
+                    if (Number.isFinite(wl) && wl > 0) return wl;
+                }
+            } catch (_) {}
+            return 0.5876;
+        })();
+
+        const normalizeObjectRowForTrace = (row: any, index: number): { x: number; y: number; objectIndex: number } => {
+            const toNumber = (value: any) => {
+                const num = parseFloat(value);
+                return Number.isFinite(num) ? num : 0;
+            };
+
+            if (Array.isArray(row)) {
+                return {
+                    x: toNumber(row[1]),
+                    y: toNumber(row[2]),
+                    objectIndex: index
+                };
+            }
+
+            const sourceRow = row && typeof row === 'object' ? { ...row } : row;
+            let effectiveRow: any = sourceRow;
+            const posNorm = String(sourceRow?.position ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+            if (posNorm === 'imageheight' && typeof convertImageHeightToEffectiveObject === 'function') {
+                try {
+                    effectiveRow = convertImageHeightToEffectiveObject(
+                        sourceRow,
+                        opticalSystemRows,
+                        primaryWavelength,
+                        isInfiniteSystem ? 'infinite' : 'finite',
+                        { skipTsValidation: true }
+                    );
+                } catch (error) {
+                    console.warn('⚠️ [CrossSection] Failed to convert ImageHeight object; using raw values.', error);
+                    effectiveRow = row;
+                }
+            }
+
+            return {
+                x: toNumber(effectiveRow?.xHeightAngle ?? effectiveRow?.x ?? effectiveRow?.height ?? effectiveRow?.heightX),
+                y: toNumber(effectiveRow?.yHeightAngle ?? effectiveRow?.y ?? effectiveRow?.height ?? effectiveRow?.heightY),
+                objectIndex: Number.isFinite(Number(row?.objectIndex)) ? Number(row.objectIndex) : index
+            };
+        };
         
         let result: any;
         let coordinateReportSurfaceIndex = Math.max(0, opticalSystemRows.length - 1);
         if (isInfiniteSystem) {
             if (typeof generateInfiniteSystemCrossBeam === 'function') {
+                const objectAngles = (objectRows || []).map((row: any, index: number) => {
+                    const normalized = normalizeObjectRowForTrace(row, index);
+                    return {
+                        x: normalized.x,
+                        y: normalized.y,
+                        objectIndex: normalized.objectIndex
+                    };
+                });
                 const isImageRow = (row: any) => {
                     const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
                     const normalized = String(raw).trim().toLowerCase().replace(/[\s_-]+/g, '');
@@ -4723,11 +4873,36 @@ function executeCrossSectionView(options: {
                 };
                 const imageSurfaceIndex = opticalSystemRows.findIndex((row: any) => row && isImageRow(row));
                 coordinateReportSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
-                result = generateInfiniteSystemCrossBeam(opticalSystemRows, { rayCount, targetSurfaceIndex: coordinateReportSurfaceIndex });
+                result = await generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, {
+                    rayCount,
+                    debugMode: false,
+                    wavelength: primaryWavelength,
+                    crossType: 'both',
+                    targetSurfaceIndex: coordinateReportSurfaceIndex,
+                    angleUnit: 'deg',
+                    chiefZ: -20
+                });
             }
         } else {
-            if (typeof generateCrossBeam === 'function' && objectRows && objectRows.length > 0) {
-                result = generateCrossBeam(opticalSystemRows, objectRows, { rayCount });
+            if (typeof generateCrossBeam === 'function') {
+                const allObjectPositions = (objectRows || []).map((row: any, index: number) => {
+                    const normalized = normalizeObjectRowForTrace(row, index);
+                    return {
+                        x: normalized.x,
+                        y: normalized.y,
+                        z: 0,
+                        objectIndex: normalized.objectIndex
+                    };
+                });
+                if (allObjectPositions.length === 0) {
+                    allObjectPositions.push({ x: 0, y: 0, z: 0, objectIndex: 0 });
+                }
+                result = await generateCrossBeam(opticalSystemRows, allObjectPositions, {
+                    rayCount,
+                    debugMode: false,
+                    wavelength: primaryWavelength,
+                    crossType: 'both'
+                });
             }
         }
         
@@ -11307,6 +11482,7 @@ export function setupAnalysisWindows() {
                                 gridSize: wavefrontGridSize,
                                 wavelengthUm: wavelength,
                                 opdDisplayMode,
+                                suppressProgressHud: true,
                             }), activeCancelToken);
                             throwIfCancelled(activeCancelToken);
                             {
@@ -11987,6 +12163,7 @@ export function setupAnalysisWindows() {
                         removeTilt: false,
                         zeroPadTo: requestedFftSize,
                         recenterIfWrapped: false,
+                        suppressProgressHud: true,
                     }), activeCancelToken);
                     const psfResult = {
                         psfData: nativePsfResp?.psfData,
@@ -12889,6 +13066,7 @@ export function setupAnalysisWindows() {
                             gridSize: wavefrontGridSize,
                             wavelengthUm: wl,
                             opdDisplayMode,
+                            suppressProgressHud: true,
                         });
 
                         const s = wavefrontGridSize;
@@ -12994,6 +13172,7 @@ export function setupAnalysisWindows() {
                             removeTilt: false,
                             zeroPadTo: requestedFftSize,
                             recenterIfWrapped: false,
+                            suppressProgressHud: true,
                         });
 
                         setProgress(30 + baseProgress, 'λ=' + titleNm + 'nm: MTF (Rust native)...');
@@ -13028,6 +13207,7 @@ export function setupAnalysisWindows() {
                                     removeTilt: false,
                                     zeroPadTo: requestedFftSize,
                                     recenterIfWrapped: false,
+                                    suppressProgressHud: true,
                                 });
                                 const idealMtfResp = await opener.runDesktopNativeMtfMapForPopup({
                                     psfData: idealNativePsfResp?.psfData,
@@ -14789,6 +14969,9 @@ export function setupAnalysisWindows() {
                     zeroPadTo,
                     opdDisplayMode,
                     fieldAxisMode: axisInfo.mode,
+                    adaptiveSampling: true,
+                    adaptiveThreshold: 0.04,
+                    adaptiveInitialSteps: Math.max(3, Math.floor((Number.isFinite(steps) ? steps : 21) * 0.45)),
                     onProgress: (evt) => {
                         const p = Number(evt && evt.percent);
                         const msg = String((evt && evt.message) || 'Computing Object MTF...');

@@ -3,7 +3,7 @@
 // This file intentionally avoids importing browser/UI modules (three.js, main.js, etc.).
 
 import { getLegacyWasmAsphericSagFn } from '../core/wasm-service.ts';
-import { evaluateQconSagDerivative, evaluateQconSagDeviation } from './qcon-basis.ts';
+import { evaluateConicBaseSagDerivative, evaluateQconSagDerivative, evaluateQconSagDeviation } from './qcon-basis.ts';
 
 export function asphericSurfaceZ(r, params, mode = "even") {
   const {
@@ -109,10 +109,15 @@ export function asphericSagDerivative(r, params, mode = "even") {
   }
 
   if (String(mode || '').toLowerCase() === 'qcon') {
-    return evaluateQconSagDerivative(rr, params, [
+    const baseDerivative = evaluateConicBaseSagDerivative(rr, params);
+    const deviationDerivative = evaluateQconSagDerivative(rr, params, [
       params?.coef1, params?.coef2, params?.coef3, params?.coef4, params?.coef5,
       params?.coef6, params?.coef7, params?.coef8, params?.coef9, params?.coef10,
     ]);
+    if (!isFinite(baseDerivative) || !isFinite(deviationDerivative)) {
+      return NaN;
+    }
+    return baseDerivative + deviationDerivative;
   }
 
   // Try analytical derivative first (preferred)

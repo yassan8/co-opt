@@ -696,7 +696,7 @@ function toFieldSettingFromObjectRow(objRow: any, index0: number, opticalSystemR
                 normalizedRow = {
                     ...objRow,
                     ...effectiveRow,
-                    position: effectiveRow.__cooptEffectivePosition ?? effectiveRow.position ?? objRow.position,
+                    position: objRow.position,
                     __cooptOriginalPosition: objRow.position,
                 };
             }

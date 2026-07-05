@@ -369,6 +369,43 @@ export function intersect_aspheric_rt10_batch(rays, ray_count, params, mode_odd,
 }
 
 /**
+ * @param {Float64Array} ray
+ * @param {Float64Array} params
+ * @param {number} _mode_odd
+ * @param {number} max_iter
+ * @param {number} tol
+ * @returns {number}
+ */
+export function intersect_qcon_surface(ray, params, _mode_odd, max_iter, tol) {
+    const ptr0 = passArrayF64ToWasm0(ray, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.intersect_qcon_surface(ptr0, len0, ptr1, len1, _mode_odd, max_iter, tol);
+    return ret;
+}
+
+/**
+ * @param {Float64Array} rays
+ * @param {number} ray_count
+ * @param {Float64Array} params
+ * @param {number} _mode_odd
+ * @param {number} max_iter
+ * @param {number} tol
+ * @returns {Float64Array}
+ */
+export function intersect_qcon_surface_batch(rays, ray_count, params, _mode_odd, max_iter, tol) {
+    const ptr0 = passArrayF64ToWasm0(rays, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.intersect_qcon_surface_batch(ptr0, len0, ray_count, ptr1, len1, _mode_odd, max_iter, tol);
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
+}
+
+/**
  * @param {number} size
  * @returns {number}
  */
@@ -524,6 +561,20 @@ export function refract_ray_batch(dirs, normals, n1, n2, count) {
  * @param {string} req_json
  * @returns {any}
  */
+export function run_native_chief_ray_angle_wasm_json(req_json) {
+    const ptr0 = passStringToWasm0(req_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.run_native_chief_ray_angle_wasm_json(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {string} req_json
+ * @returns {any}
+ */
 export function run_native_distortion_wasm_json(req_json) {
     const ptr0 = passStringToWasm0(req_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
@@ -598,6 +649,20 @@ export function run_native_opd_rms_waves_wasm_json(req_json) {
 }
 
 /**
+ * @param {string} req_json
+ * @returns {any}
+ */
+export function run_native_paraxial_metrics_wasm_json(req_json) {
+    const ptr0 = passStringToWasm0(req_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.run_native_paraxial_metrics_wasm_json(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * Compute PSF from an OPD map grid (grids are in *waves*, nulls = outside pupil).
  * Matches the Tauri-native `run_native_psf_map` logic.
  *
@@ -620,6 +685,20 @@ export function run_native_psf_from_opd_wasm_json(req_json) {
     const ptr0 = passStringToWasm0(req_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.run_native_psf_from_opd_wasm_json(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {string} req_json
+ * @returns {any}
+ */
+export function run_native_seidel_wasm_json(req_json) {
+    const ptr0 = passStringToWasm0(req_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.run_native_seidel_wasm_json(ptr0, len0);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -851,6 +930,41 @@ export function surface_normal_aspheric_rt10_batch(points, count, params, mode_o
     const ptr1 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
     const len1 = WASM_VECTOR_LEN;
     const ret = wasm.surface_normal_aspheric_rt10_batch(ptr0, len0, count, ptr1, len1, mode_odd);
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
+}
+
+/**
+ * @param {Float64Array} pt
+ * @param {Float64Array} params
+ * @param {number} _mode_odd
+ * @returns {Float64Array}
+ */
+export function surface_normal_qcon_surface(pt, params, _mode_odd) {
+    const ptr0 = passArrayF64ToWasm0(pt, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.surface_normal_qcon_surface(ptr0, len0, ptr1, len1, _mode_odd);
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
+}
+
+/**
+ * @param {Float64Array} points
+ * @param {number} count
+ * @param {Float64Array} params
+ * @param {number} _mode_odd
+ * @returns {Float64Array}
+ */
+export function surface_normal_qcon_surface_batch(points, count, params, _mode_odd) {
+    const ptr0 = passArrayF64ToWasm0(points, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.surface_normal_qcon_surface_batch(ptr0, len0, count, ptr1, len1, _mode_odd);
     var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v3;

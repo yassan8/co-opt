@@ -8,7 +8,7 @@ if (typeof window !== 'undefined') {
 
 // Import functions from ray-paraxial.js without destructuring for compatibility
 import * as rayParaxial from './ray-paraxial.ts';
-import { asphericSagDerivative, toricSurfaceZ, toricSagDerivatives } from '../../optical/surface-math.ts';
+import { asphericSagDerivative, asphericSurfaceZ, toricSurfaceZ, toricSagDerivatives } from '../../optical/surface-math.ts';
 import {
   getWASMSystem as getWASMSystemService,
   getLegacyWasmModule,
@@ -22,6 +22,54 @@ const getRefractiveIndex = rayParaxial.getRefractiveIndex;
 const isCoordTransSurface = rayParaxial.isCoordTransSurface;
 // 循環依存を避けるため、main.jsからのimportを削除
 // import { getWASMSystem } from './main.ts';
+
+function __rtNormalizeStopSurfaceKey(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+}
+
+function __rtIsStopSurfaceRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  const candidates = [
+    row.type,
+    row.surfType,
+    row.surfaceType,
+    row['surf type'],
+    row['object type'],
+    row.object,
+    row.Object,
+    row.objectType,
+    row.material,
+    row._blockType,
+    row.blockType,
+  ];
+  return candidates.some((value) => {
+    const normalized = __rtNormalizeStopSurfaceKey(value);
+    return normalized === 'stop' || normalized === 'sto' || normalized === 'aperturestop';
+  });
+}
+
+function __rtIsImageSurfaceRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  const candidates = [
+    row['object type'],
+    row.object,
+    row.Object,
+    row.objectType,
+    row.type,
+    row.surfaceType,
+    row.surfType,
+    row['surf type'],
+    row._blockType,
+    row.blockType,
+  ];
+  return candidates.some((value) => {
+    const normalized = __rtNormalizeStopSurfaceKey(value);
+    return normalized === 'image' || normalized.startsWith('imagesurface');
+  });
+}
 
 // --- WASM fast-path cache (avoid per-call getWASMSystem() overhead) ---
 let __wasmSystemCached = null;
@@ -37,6 +85,8 @@ let __wasmTraceRayBatchFullFn = null;
 
 let __wasmTmpVec3Ptr = 0;
 let __wasmTmpVec3Module = null;
+
+const __rustQconParamsCache = new WeakMap();
 
 let __wasmBatchIntersectRaysPtr = 0;
 let __wasmBatchIntersectOutPtr = 0;
@@ -66,6 +116,40 @@ let __wasmTraceBatchCachedOrigins = null;
 let __wasmTraceBatchCachedRotations = null;
 let __wasmTraceBatchCachedInvRotations = null;
 let __wasmTraceBatchCachedRowCount = 0;
+
+function __getQconTraceRuntimeConfig() {
+  try {
+    const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+    const enabled = !!g && g.__COOPT_QCON_TRACE_LOG_ENABLED !== false;
+    const maxEntriesRaw = Number(g?.__COOPT_QCON_TRACE_MAX_ENTRIES);
+    const maxEntries = Number.isFinite(maxEntriesRaw) && maxEntriesRaw > 0
+      ? Math.max(20, Math.min(5000, Math.trunc(maxEntriesRaw)))
+      : 400;
+    const consoleEnabled = !!g && g.__COOPT_QCON_TRACE_CONSOLE !== false;
+    return { enabled, maxEntries, consoleEnabled, g };
+  } catch (_) {
+    return { enabled: false, maxEntries: 0, consoleEnabled: false, g: null };
+  }
+}
+
+function __emitQconTrace(entry: any) {
+  try {
+    const cfg = __getQconTraceRuntimeConfig();
+    if (!cfg.enabled || !cfg.g) return;
+    const list = Array.isArray(cfg.g.__COOPT_QCON_TRACE_LOG)
+      ? cfg.g.__COOPT_QCON_TRACE_LOG
+      : [];
+    list.push(entry);
+    while (list.length > cfg.maxEntries) list.shift();
+    cfg.g.__COOPT_QCON_TRACE_LOG = list;
+    cfg.g.__COOPT_LAST_QCON_TRACE = entry;
+    if (cfg.consoleEnabled) {
+      console.log('[QconTrace]', entry);
+    }
+  } catch (_) {
+    // ignore trace logging failures
+  }
+}
 
 export function clearRayTracingTransientCaches(): void {
   __wasmTraceBatchCachedSystemHash = null;
@@ -132,6 +216,8 @@ function __computeWasmTraceBatchSystemHash(effectiveSystemRows, surfaceData, wav
       mixNumber(row?.coef8, 1e9);
       mixNumber(row?.coef9, 1e9);
       mixNumber(row?.coef10, 1e9);
+      mixNumber(row?.qconNrad ?? row?.qconNRadius ?? row?.nrad ?? row?.NRAD, 1e6);
+      mixNumber(row?.qconOffset ?? row?.qcon_offset, 1e6);
       mixNumber(row?.__cooptActualSemidia ?? row?.semidia, 1e6);
       mixNumber(row?.radiusX, 1e6);
       mixNumber(row?.radiusY ?? row?.radius, 1e6);
@@ -652,6 +738,45 @@ function __buildAsphericParamsArray(params) {
   ]);
   if (safe && typeof safe === 'object') {
     __rustAsphericParamsCache.set(safe, arr);
+  }
+  return arr;
+}
+
+function __buildQconParamsArray(params) {
+  const safe = params || {};
+  if (safe && typeof safe === 'object') {
+    const cached = __rustQconParamsCache.get(safe);
+    if (cached) return cached;
+  }
+  const resolvedQconNrad = (() => {
+    const raw = Number(safe.qconNrad ?? safe.qconNRadius ?? safe.nrad ?? safe.NRAD);
+    if (Number.isFinite(raw) && raw > 0) return Math.abs(raw);
+    const semidiaRaw = Number(safe.semidia ?? safe.semiDia ?? safe.semiDiameter ?? safe['Semi Diameter']);
+    if (Number.isFinite(semidiaRaw) && semidiaRaw > 0) return Math.abs(semidiaRaw);
+    const radiusRaw = Number(safe.radius);
+    if (Number.isFinite(radiusRaw) && radiusRaw !== 0) return Math.abs(radiusRaw);
+    return 1;
+  })();
+
+  const arr = new Float64Array([
+    Number(safe.semidia) || 0,
+    Number(safe.radius) || 0,
+    Number(safe.conic) || 0,
+    resolvedQconNrad,
+    Number(safe.qconOffset ?? safe.qcon_offset ?? safe.offset) || 0,
+    Number(safe.coef1) || 0,
+    Number(safe.coef2) || 0,
+    Number(safe.coef3) || 0,
+    Number(safe.coef4) || 0,
+    Number(safe.coef5) || 0,
+    Number(safe.coef6) || 0,
+    Number(safe.coef7) || 0,
+    Number(safe.coef8) || 0,
+    Number(safe.coef9) || 0,
+    Number(safe.coef10) || 0
+  ]);
+  if (safe && typeof safe === 'object') {
+    __rustQconParamsCache.set(safe, arr);
   }
   return arr;
 }
@@ -1185,6 +1310,8 @@ export function asphericSag(r, params, mode = "even") {
 // Internal implementation (kept separate to minimize profiling overhead when disabled)
 function __asphericSag_impl(r, params, mode = "even") {
   const safeParams = params || {};
+  const normalizedMode = String(mode || '').toLowerCase();
+  const isQconMode = normalizedMode.includes('qcon');
   const radius = safeParams.radius;
   const conic = safeParams.conic !== undefined ? safeParams.conic : 0;
   const coef1 = safeParams.coef1 !== undefined ? safeParams.coef1 : 0;
@@ -1198,6 +1325,11 @@ function __asphericSag_impl(r, params, mode = "even") {
   const coef9 = safeParams.coef9 !== undefined ? safeParams.coef9 : 0;
   const coef10 = safeParams.coef10 !== undefined ? safeParams.coef10 : 0;
 
+  if (isQconMode) {
+    // Qcon is not represented by RT10 polynomial kernels.
+    return asphericSurfaceZ(r, safeParams, 'qcon');
+  }
+
   // Optional WASM fast path (ray-tracing.js coefficient convention).
   // This is only used if the loaded RayTracingWASM build exports _aspheric_sag_rt10.
   const wasmSagRt10 = __getWasmSagRt10Fn();
@@ -1206,7 +1338,7 @@ function __asphericSag_impl(r, params, mode = "even") {
     const R = Number(radius);
     const k = Number(conic) || 0;
     if (Number.isFinite(rr) && Number.isFinite(R) && R !== 0) {
-      const modeOdd = (String(mode || '').toLowerCase() === 'odd') ? 1 : 0;
+      const modeOdd = (normalizedMode === 'odd') ? 1 : 0;
       const out = wasmSagRt10(
         rr, R, k,
         coef1 || 0,
@@ -1235,7 +1367,7 @@ function __asphericSag_impl(r, params, mode = "even") {
   let asphere = 0;
   const coefs = [coef1, coef2, coef3, coef4, coef5, coef6, coef7, coef8, coef9, coef10];
   
-  if (mode === "even") {
+  if (normalizedMode === "even") {
     // Math.pow()を使わずに逐次乗算でr^(2n)を計算
     // IMPORTANT: even-mode coefficients are A4..A22 (r^4..r^22)
     let r_power = r2 * r2; // r^4
@@ -1245,7 +1377,7 @@ function __asphericSag_impl(r, params, mode = "even") {
       }
       r_power *= r2; // r^2 → r^4 → r^6 → ...
     }
-  } else if (mode === "odd") {
+  } else if (normalizedMode === "odd") {
     // Math.pow()を使わずに逐次乗算でr^(2n+1)を計算
     let r_power = r2 * r; // r^3
     for (let i = 0; i < coefs.length; i++) {
@@ -1326,7 +1458,9 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
   const coef8 = Number(safeParams.coef8 !== undefined ? safeParams.coef8 : 0) || 0;
   const coef9 = Number(safeParams.coef9 !== undefined ? safeParams.coef9 : 0) || 0;
   const coef10 = Number(safeParams.coef10 !== undefined ? safeParams.coef10 : 0) || 0;
-  const modeOdd = (String(mode || '').toLowerCase() === 'odd') ? 1 : 0;
+  const normalizedMode = String(mode || '').toLowerCase();
+  const isQconMode = normalizedMode.includes('qcon');
+  const modeOdd = (normalizedMode === 'odd') ? 1 : 0;
   const forceRustWasm = !!(strictOptions && (strictOptions as any).__forceRustWasmOpd === true);
   const disableWasmRayTracing = !!(strictOptions && strictOptions.disableWasmRayTracing === true);
   const allowNonStrict = !!(strictOptions && strictOptions.allowNonStrict === true);
@@ -1347,6 +1481,62 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
   const rustTol = Number.isFinite(Number(strictOptions?.rustTol)) ? Number(strictOptions.rustTol) : null;
 
   try {
+    if (isQconMode) {
+      const rust = useRustWasm ? getRustRayTracingWasmSync() : null;
+      if (!rust || typeof rust.intersect_qcon_surface_batch !== 'function') {
+        throw new Error('Rust WASM Qcon support is unavailable');
+      }
+      if (!__rustBatchRayBuffer || __rustBatchRayCapacity < list.length) {
+        __rustBatchRayBuffer = new Float64Array(list.length * 6);
+        __rustBatchRayCapacity = list.length;
+      }
+      const raysArr = __rustBatchRayBuffer;
+      for (let i = 0; i < list.length; i++) {
+        const ray = list[i];
+        const base = i * 6;
+        raysArr[base + 0] = Number(ray?.pos?.x);
+        raysArr[base + 1] = Number(ray?.pos?.y);
+        raysArr[base + 2] = Number(ray?.pos?.z);
+        raysArr[base + 3] = Number(ray?.dir?.x);
+        raysArr[base + 4] = Number(ray?.dir?.y);
+        raysArr[base + 5] = Number(ray?.dir?.z);
+      }
+      const paramsArr = __buildQconParamsArray(safeParams);
+      const tHits = rust.intersect_qcon_surface_batch(
+        raysArr,
+        list.length,
+        paramsArr,
+        (normalizedMode === 'odd') ? 1 : 0,
+        (rustMaxIter !== null ? rustMaxIter : maxIter) | 0,
+        (rustTol !== null ? rustTol : (Number(tol) || 1e-7))
+      );
+      if (tHits && tHits.length === list.length) {
+        const out = new Array(list.length);
+        for (let i = 0; i < list.length; i++) {
+          const tHit = tHits[i];
+          const minT = __resolveForwardHitMinTForRay(list[i], safeParams, mode, requireForwardHit);
+          const isForwardHit = requireForwardHit
+            ? (Number.isFinite(tHit) && tHit >= minT)
+            : Number.isFinite(tHit);
+          if (isForwardHit) {
+            const ray = list[i];
+            out[i] = add(ray.pos, scale(ray.dir, tHit));
+          } else {
+            out[i] = intersectAsphericSurface(list[i], safeParams, mode, maxIter, tol, null, {
+              ...strictOptions,
+              useRustWasm: false,
+              requireRustWasm: false,
+              requireWasmRayTracing: false,
+              disableWasmRayTracing: true,
+              allowNonStrict: true
+            });
+          }
+        }
+        return out;
+      }
+      throw new Error('Rust WASM Qcon support is unavailable');
+    }
+
     if (useRustWasm) {
       const rust = getRustRayTracingWasmSync();
       if (!rust) {
@@ -1523,6 +1713,8 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
   const requireRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(strictOptions && strictOptions.requireRustWasm === true));
   const requireForwardHit = !!(strictOptions && strictOptions.requireForwardHit === true);
   const forwardHitMinT = __resolveForwardHitMinTForRay(ray, safeParams, mode, requireForwardHit);
+  const normalizedMode = String(mode || '').toLowerCase();
+  const isQconMode = normalizedMode.includes('qcon');
 
   if (requireWasmRayTracing && debugLog) {
     debugLog = null;
@@ -1530,7 +1722,36 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
 
   // Optional Rust WASM fast-path (skip when debugLog is requested to preserve diagnostics).
   try {
-    if (!debugLog) {
+    if (isQconMode) {
+      if (debugLog) debugLog = null;
+      const rust = useRustWasm ? getRustRayTracingWasmSync() : null;
+      if (!rust || typeof rust.intersect_qcon_surface !== 'function') {
+        throw new Error('Rust WASM Qcon support is unavailable');
+      }
+      const rayArr = __buildRayArray(ray);
+      const paramsArr = __buildQconParamsArray(safeParams);
+      const modeOdd = (normalizedMode === 'odd') ? 1 : 0;
+      const tHit = rust.intersect_qcon_surface(
+        rayArr,
+        paramsArr,
+        modeOdd,
+        maxIter | 0,
+        Number(tol) || 1e-7
+      );
+      const isForwardHit = requireForwardHit
+        ? (Number.isFinite(tHit) && tHit >= forwardHitMinT)
+        : Number.isFinite(tHit);
+      if (isForwardHit) {
+        __logOpdBackendOnce('rustWasm', 'intersect_qcon_surface');
+        const pt = add(ray.pos, scale(ray.dir, tHit));
+        if (pt && isFinite(pt.x) && isFinite(pt.y) && isFinite(pt.z)) return pt;
+      }
+      if (requireRustWasm) return null;
+    }
+
+    // Qcon is not representable by RT10 kernels. If Rust Qcon misses, fall back to
+    // the JS Qcon Newton solver below instead of trying RT10 paths.
+    if (!debugLog && !isQconMode) {
       if (useRustWasm) {
         const rust = getRustRayTracingWasmSync();
         if (!rust) {
@@ -1540,7 +1761,7 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
         } else {
           const rayArr = __buildRayArray(ray);
           const paramsArr = __buildAsphericParamsArray(safeParams);
-          const modeOdd = (String(mode || '').toLowerCase() === 'odd') ? 1 : 0;
+          const modeOdd = (normalizedMode === 'odd') ? 1 : 0;
           const tHit = rust.intersect_aspheric_rt10(
             rayArr,
             paramsArr,
@@ -1576,7 +1797,7 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
         const sm = Number(semidia) || 0;
         const R = Number(radius);
         const k = Number(conic) || 0;
-        const modeOdd = (String(mode || '').toLowerCase() === 'odd') ? 1 : 0;
+        const modeOdd = (normalizedMode === 'odd') ? 1 : 0;
         if (Number.isFinite(ox) && Number.isFinite(oy) && Number.isFinite(oz) && Number.isFinite(dx) && Number.isFinite(dy) && Number.isFinite(dz)) {
           const retryMaxIter = Math.max(40, (maxIter | 0) * 3);
           const retryTol = Math.max(1e-6, (Number(tol) || 1e-7) * 10);
@@ -2095,9 +2316,27 @@ export function surfaceNormal(pt, params, mode = "even", options = null) {
 }
 
 function __surfaceNormal_impl(pt, params, mode = "even", options = null) {
+  const normalizedMode = String(mode || '').toLowerCase();
+  const isQconMode = normalizedMode.includes('qcon');
   const useRustWasm = !!(options && options.useRustWasm === true) || __preferRustRayTracingByDefault();
   const requireRustWasm = !!(options && options.requireRustWasm === true);
-  if (useRustWasm) {
+  if (isQconMode) {
+    const rust = useRustWasm ? getRustRayTracingWasmSync() : null;
+    if (rust && typeof rust.surface_normal_qcon_surface === 'function') {
+      const ptArr = __buildPointArray(pt);
+      const paramsArr = __buildQconParamsArray(params);
+      const modeOdd = (normalizedMode === 'odd') ? 1 : 0;
+      const n = rust.surface_normal_qcon_surface(ptArr, paramsArr, modeOdd);
+      if (n && n.length === 3) {
+        return vec3(n[0], n[1], n[2]);
+      }
+      if (requireRustWasm) {
+        return normalize(vec3(0, 0, 1));
+      }
+    } else if (requireRustWasm) {
+      throw new Error('Rust WASM Qcon support is unavailable');
+    }
+  } else if (useRustWasm) {
     const rust = getRustRayTracingWasmSync();
     if (!rust) {
       if (requireRustWasm) {
@@ -2106,7 +2345,7 @@ function __surfaceNormal_impl(pt, params, mode = "even", options = null) {
     } else {
       const ptArr = __buildPointArray(pt);
       const paramsArr = __buildAsphericParamsArray(params);
-      const modeOdd = (String(mode || '').toLowerCase() === 'odd') ? 1 : 0;
+      const modeOdd = (normalizedMode === 'odd') ? 1 : 0;
       const n = rust.surface_normal_aspheric_rt10(ptArr, paramsArr, modeOdd);
       if (n && n.length === 3) {
         return vec3(n[0], n[1], n[2]);
@@ -2189,11 +2428,19 @@ function refractRay(dir, normal, n1, n2) {
 }
 
 function __refractRay_impl(dir, normal, n1, n2) {
-  const cosI = -dot(normal, dir);
+  const incident = norm(dir);
+  let n = norm(normal);
+  let cosI = -dot(n, incident);
+  if (cosI < 0) {
+    n = scale(n, -1);
+    cosI = -dot(n, incident);
+  }
   const eta = n1 / n2;
-  const k = 1 - eta * eta * (1 - cosI * cosI);
-  if (k < 0) return null; // 全反射
-  return norm(add(scale(dir, eta), scale(normal, eta * cosI - Math.sqrt(k))));
+  const kRaw = 1 - eta * eta * (1 - cosI * cosI);
+  // Numerical guard: tiny negative values can appear near the critical angle.
+  if (kRaw < -1e-12) return null; // 全反射
+  const k = Math.max(0, kRaw);
+  return norm(add(scale(incident, eta), scale(n, eta * cosI - Math.sqrt(k))));
 }
 
 function reflectRay(dir, normal) {
@@ -3002,6 +3249,31 @@ function __getCorrectRefractiveIndex_impl(surface, wavelength = 0.5875618) {
 // キャッシュが古くなる可能性があるため、必要なら呼び出し側で新しい配列を渡すこと。
 const __surfaceOriginsCache = new WeakMap();
 
+function __rtAsphereModeFromSurfType(surfType) {
+  const normalized = String(surfType ?? '').trim().toLowerCase();
+  if (normalized.includes('qcon')) return 'qcon';
+  if (normalized.includes('odd')) return 'odd';
+  return 'even';
+}
+
+function __rtRowIsQcon(row) {
+  return __rtAsphereModeFromSurfType(row?.surfType ?? row?.type ?? row?.surfaceType ?? row?.surface_type) === 'qcon';
+}
+
+function __rtRowsContainQcon(rows) {
+  return Array.isArray(rows) && rows.some((row) => __rtRowIsQcon(row));
+}
+
+function __rtQconNrad(row) {
+  const raw = Number(row?.qconNrad ?? row?.qconNRadius ?? row?.nrad ?? row?.NRAD);
+  if (Number.isFinite(raw) && raw > 0) return Math.abs(raw);
+  const semidiaRaw = Number(row?.semidia ?? row?.semiDia ?? row?.semiDiameter ?? row?.['Semi Diameter']);
+  if (Number.isFinite(semidiaRaw) && semidiaRaw > 0) return Math.abs(semidiaRaw);
+  const radiusRaw = Number(row?.radius);
+  if (Number.isFinite(radiusRaw) && radiusRaw !== 0) return Math.abs(radiusRaw);
+  return 1;
+}
+
 function __computeSurfaceOriginsSignature(opticalSystemRows) {
   // A lightweight content signature to invalidate stale surface-origin caches when
   // the table mutates in-place (same array reference, same length).
@@ -3121,6 +3393,7 @@ function __getHitPointPrecomputed(opticalSystemRows, targetSurfaceIndex) {
 function __buildRustStopSolverPackedMeta(effectiveSystemRows, surfaceData, stopSurfaceIndex, wavelengthRef) {
   try {
     if (!Array.isArray(effectiveSystemRows) || !Array.isArray(surfaceData)) return null;
+    if (__rtRowsContainQcon(effectiveSystemRows)) return null;
     const rowCount = effectiveSystemRows.length;
     if (!(rowCount > 0) || !Number.isInteger(stopSurfaceIndex) || stopSurfaceIndex < 0 || stopSurfaceIndex >= rowCount) return null;
 
@@ -3888,11 +4161,11 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
 
     const radius = Number(row.radius);
     const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
-    const rowObjectTypeNorm = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
-    const rowIsStopSurface = rowObjectTypeNorm === 'stop' || rowObjectTypeNorm === 'sto';
+    const rowIsStopSurface = __rtIsStopSurfaceRow(row);
+    const rowIsImageSurface = __rtIsImageSurfaceRow(row);
     const surfType = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
     const isToricSurface = surfType === 'toric';
-    const asphereMode = surfType.includes('odd') ? 'odd' : 'even';
+    const asphereMode = __rtAsphereModeFromSurfType(surfType);
     const n2Uniform = (() => {
       if (!rowRefractiveIndexCache) return NaN;
       let cached = rowRefractiveIndexCache[i];
@@ -3906,6 +4179,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     const surfaceParams = {
       radius: row.radius,
       conic: Number(row.conic) || 0,
+      qconOffset: Number(row.qconOffset ?? row.qcon_offset) || 0,
       coef1: Number(row.coef1) || 0,
       coef2: Number(row.coef2) || 0,
       coef3: Number(row.coef3) || 0,
@@ -3916,6 +4190,10 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
       coef8: Number(row.coef8) || 0,
       coef9: Number(row.coef9) || 0,
       coef10: Number(row.coef10) || 0,
+      qconNrad: __rtQconNrad(row),
+      qconNRadius: row.qconNRadius,
+      nrad: row.nrad,
+      NRAD: row.NRAD,
       semidia: (() => {
         const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
         const semiDiaNum = Number(semiDiaValue);
@@ -4131,7 +4409,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     const rustNormalsFlat = (() => {
       if (!useRustWasm || isPlaneSurface || isToricSurface) return null;
       const rust = getRustRayTracingWasmSync();
-      if (!rust || typeof rust.surface_normal_aspheric_rt10_batch !== 'function') return null;
+      if (!rust) return null;
       if (!__rustBatchPointBuffer || __rustBatchPointCapacity < localHits.length) {
         __rustBatchPointBuffer = new Float64Array(localHits.length * 3);
         __rustBatchPointCapacity = localHits.length;
@@ -4144,9 +4422,16 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
         points[j + 1] = Number(hit?.y) || 0;
         points[j + 2] = Number(hit?.z) || 0;
       }
-      const paramsArr = __buildAsphericParamsArray(surfaceParams);
-      const modeOdd = (String(asphereMode || '').toLowerCase() === 'odd') ? 1 : 0;
-      const out = rust.surface_normal_aspheric_rt10_batch(points, localHits.length, paramsArr, modeOdd);
+      const modeName = String(asphereMode || '').toLowerCase();
+      const modeOdd = modeName === 'odd' ? 1 : 0;
+      let out = null;
+      if (modeName === 'qcon' && typeof rust.surface_normal_qcon_surface_batch === 'function') {
+        const paramsArr = __buildQconParamsArray(surfaceParams);
+        out = rust.surface_normal_qcon_surface_batch(points, localHits.length, paramsArr, modeOdd);
+      } else if (typeof rust.surface_normal_aspheric_rt10_batch === 'function') {
+        const paramsArr = __buildAsphericParamsArray(surfaceParams);
+        out = rust.surface_normal_aspheric_rt10_batch(points, localHits.length, paramsArr, modeOdd);
+      }
       if (!out || out.length !== localHits.length * 3) return null;
       return out;
     })();
@@ -4236,7 +4521,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
       const globalHitPoint = (() => {
         const rotated = rotatedHitBatch?.[k];
         if (rotated) {
-          return add(rotated, surfaceInfo.origin);
+          return rotatedHitIsGlobal ? rotated : add(rotated, surfaceInfo.origin);
         }
         return transformPointToGlobal(hitPoint, surfaceInfo);
       })();
@@ -4281,14 +4566,14 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
     let rustRefractOut = null;
     let rustRefractN2 = null;
-    if (!isMirror && !rowIsStopSurface && useRustWasm && pendingNormalRows.length) {
+    if (!isMirror && !rowIsStopSurface && !rowIsImageSurface && useRustWasm && pendingNormalRows.length) {
       const buffers = __ensureRustRefractBuffers(pendingNormalRows.length);
       if (buffers) {
         for (let p = 0; p < pendingNormalRows.length; p++) {
           const item = pendingNormalRows[p];
           const ridx = item.ridx;
           const s = rayState[ridx];
-          const globalNormal = globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal);
+          const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal));
           const j = p * 3;
           buffers.dirs[j] = s.dir.x;
           buffers.dirs[j + 1] = s.dir.y;
@@ -4321,7 +4606,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
           if (!alive[ridx]) continue;
           const dotProduct = dot(item.localRay.dir, item.normal);
           if (dotProduct < 0) {
-            const globalNormal = globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal);
+            const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal));
             const s = rayState[ridx];
             const j = mirrorCount * 3;
             buffers.dirs[j] = s.dir.x;
@@ -4351,7 +4636,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
       const s = rayState[ridx];
       const localRay = item.localRay;
       const normal = item.normal;
-      const globalNormal = globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, normal);
+      const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, normal));
 
       if (isMirror) {
         // Mirror parity with scalar path:
@@ -4374,8 +4659,8 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
             s.dir = reflectRay(s.dir, globalNormal);
           }
         }
-      } else if (rowIsStopSurface) {
-        // Stop面は開口制限のみ。屈折計算も媒質更新も行わない。
+      } else if (rowIsStopSurface || rowIsImageSurface) {
+        // Stop/Image面は開口制限のみ。屈折計算も媒質更新も行わない。
       } else {
         if (rustRefractOut) {
           const j = p * 3;
@@ -4572,6 +4857,7 @@ export function solveRayOriginsToStopPointsWithRustMeta(
 
 function __traceRayEvalBatch_wasmFull(opticalSystemRows, rays, n0, targetSurfaceIndex, options) {
   try {
+    if (__rtRowsContainQcon(opticalSystemRows)) return null;
     const list = Array.isArray(rays) ? rays : [];
     if (!list.length) return null;
 
@@ -4991,6 +5277,7 @@ function __traceRayEvalBatch_wasmFull(opticalSystemRows, rays, n0, targetSurface
 /// Reduces JS-Wasm round-trips by passing system data as JSON to Rust
 function __traceRayEvalBatch_rustJsonMeta(opticalSystemRows, rays, n0, targetSurfaceIndex, options) {
   try {
+    if (__rtRowsContainQcon(opticalSystemRows)) return null;
     const list = Array.isArray(rays) ? rays : [];
     if (!list.length) return null;
 
@@ -5269,6 +5556,7 @@ function __traceSingleRayHitPoint_rustMeta(opticalSystemRows, ray0, n0, targetSu
 
 function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurfaceIndex, options) {
   try {
+    if (__rtRowsContainQcon(opticalSystemRows)) return null;
     const list = Array.isArray(rays) ? rays : [];
     if (!list.length) return null;
     if (!Number.isInteger(targetSurfaceIndex) || targetSurfaceIndex < 0) return null;
@@ -5691,11 +5979,11 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
 
     const radius = Number(row.radius);
     const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
-    const rowObjectTypeNorm = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
-    const rowIsStopSurface = rowObjectTypeNorm === 'stop' || rowObjectTypeNorm === 'sto';
+    const rowIsStopSurface = __rtIsStopSurfaceRow(row);
+    const rowIsImageSurface = __rtIsImageSurfaceRow(row);
     const surfType = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
     const isToricSurface = surfType === 'toric';
-    const asphereMode = surfType.includes('odd') ? 'odd' : 'even';
+    const asphereMode = __rtAsphereModeFromSurfType(surfType);
     const n2Uniform = (() => {
       if (!rowRefractiveIndexCache) return NaN;
       let cached = rowRefractiveIndexCache[i];
@@ -5709,6 +5997,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
     const surfaceParams = {
       radius: row.radius,
       conic: Number(row.conic) || 0,
+      qconOffset: Number(row.qconOffset ?? row.qcon_offset) || 0,
       coef1: Number(row.coef1) || 0,
       coef2: Number(row.coef2) || 0,
       coef3: Number(row.coef3) || 0,
@@ -5719,6 +6008,10 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
       coef8: Number(row.coef8) || 0,
       coef9: Number(row.coef9) || 0,
       coef10: Number(row.coef10) || 0,
+      qconNrad: __rtQconNrad(row),
+      qconNRadius: row.qconNRadius,
+      nrad: row.nrad,
+      NRAD: row.NRAD,
       semidia: (() => {
         const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
         const semiDiaNum = Number(semiDiaValue);
@@ -5934,7 +6227,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
     })();
 
     const rustNormalsFlat = (() => {
-      if (!useRustWasm || isPlaneSurface || isToricSurface) return null;
+      if (!useRustWasm || isPlaneSurface || isToricSurface || asphereMode === 'qcon') return null;
       const rust = getRustRayTracingWasmSync();
       if (!rust || typeof rust.surface_normal_aspheric_rt10_batch !== 'function') return null;
       if (!__rustBatchPointBuffer || __rustBatchPointCapacity < localHits.length) {
@@ -6094,14 +6387,14 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
     const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
     let rustRefractOut = null;
     let rustRefractN2 = null;
-    if (!isMirror && !rowIsStopSurface && useRustWasm && pendingNormalRows.length) {
+    if (!isMirror && !rowIsStopSurface && !rowIsImageSurface && useRustWasm && pendingNormalRows.length) {
       const buffers = __ensureRustRefractBuffers(pendingNormalRows.length);
       if (buffers) {
         for (let p = 0; p < pendingNormalRows.length; p++) {
           const item = pendingNormalRows[p];
           const ridx = item.ridx;
           const s = rayState[ridx];
-          const globalNormal = globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal);
+          const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal));
           const j = p * 3;
           buffers.dirs[j] = s.dir.x;
           buffers.dirs[j + 1] = s.dir.y;
@@ -6134,7 +6427,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
           if (!alive[ridx] || done[ridx]) continue;
           const dotProduct = dot(item.localRay.dir, item.normal);
           if (dotProduct < 0) {
-            const globalNormal = globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal);
+            const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal));
             const s = rayState[ridx];
             const j = mirrorCount * 3;
             buffers.dirs[j] = s.dir.x;
@@ -6164,7 +6457,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
       const s = rayState[ridx];
       const localRay = item.localRay;
       const normal = item.normal;
-      const globalNormal = globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, normal);
+      const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, normal));
 
       if (isMirror) {
         const dotProduct = dot(localRay.dir, normal);
@@ -6184,8 +6477,8 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
             s.dir = reflectRay(s.dir, globalNormal);
           }
         }
-      } else if (rowIsStopSurface) {
-        // Stop面は開口制限のみ。屈折計算も媒質更新も行わない。
+      } else if (rowIsStopSurface || rowIsImageSurface) {
+        // Stop/Image面は開口制限のみ。屈折計算も媒質更新も行わない。
       } else {
         if (rustRefractOut) {
           const j = p * 3;
@@ -6519,6 +6812,9 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
   for (let i = 0; i < effectiveSystemRows.length; ++i) {
     lastProcessedSurfaceIndex = i; // 現在処理中の面を記録
     const row = effectiveSystemRows[i];
+    let tracedAsphereMode = 'even';
+    let isQconSurface = false;
+    let qconSurfaceParams = null as any;
 
     // 評価面判定: maxSurfaceIndexが指定されていて、現在の面がそれと一致する場合は評価面
     // CT/Mirror変換後の座標系では aperture 判定が正しく機能しないため、評価面では aperture チェックをスキップ
@@ -6530,8 +6826,8 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
 
     // マテリアルタイプの判定（通常面では純粋にマテリアル判定のみ、CB面では座標変換パラメータとして使用）
     const materialType = (typeof row.material === 'string' && row.material === "MIRROR") ? "MIRROR" : "REFRACTIVE";
-    const rowObjectTypeNorm = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
-    const rowIsStopSurface = rowObjectTypeNorm === 'stop' || rowObjectTypeNorm === 'sto';
+    const rowIsStopSurface = __rtIsStopSurfaceRow(row);
+    const rowIsImageSurface = __rtIsImageSurfaceRow(row);
     const isThinLensSurface = __rtIsThinLensRow(row);
     const isThinLensBackSurface = __rtIsThinLensBackRow(row);
     const isIdealThinLensFront = isThinLensSurface && !isThinLensBackSurface;
@@ -6912,6 +7208,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       const surfaceParams = {
         radius: row.radius,
         conic: Number(row.conic) || 0,
+        qconOffset: Number(row.qconOffset ?? row.qcon_offset) || 0,
         coef1: Number(row.coef1) || 0,
         coef2: Number(row.coef2) || 0,
         coef3: Number(row.coef3) || 0,
@@ -6922,6 +7219,10 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         coef8: Number(row.coef8) || 0,
         coef9: Number(row.coef9) || 0,
         coef10: Number(row.coef10) || 0,
+        qconNrad: __rtQconNrad(row),
+        qconNRadius: row.qconNRadius,
+        nrad: row.nrad,
+        NRAD: row.NRAD,
         // NOTE: semidia 未指定時に thickness を代用すると、物理的に存在しない開口制限を
         //       誤って導入してしまい、軸外で大量に光線がブロックされる。
         // CB rows propagate the prior surface's semidia in __cooptActualSemidia
@@ -6941,9 +7242,12 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         debugLog.push(`Non-zero aspherical coefficients: ${hasAsphericCoefs ? 'YES' : 'NO'}`);
       }
       
-      // Determine asphere mode (even/odd) for non-toric surfaces
+      // Determine asphere mode (even/odd/qcon) for non-toric surfaces
       const surfType = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
-      const asphereMode = surfType.includes('odd') ? 'odd' : 'even';
+      const asphereMode = __rtAsphereModeFromSurfType(surfType);
+      tracedAsphereMode = asphereMode;
+      isQconSurface = asphereMode === 'qcon';
+      qconSurfaceParams = surfaceParams;
       
       // Toric surface intersection
       const surfTypeStr = String(row.surfType ?? row.type ?? '').trim();
@@ -7105,6 +7409,32 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           },
           intersectionInput: intersectionParamsForDiagnostics
         });
+        if (isQconSurface) {
+          __emitQconTrace({
+            at: new Date().toISOString(),
+            status: 'no_intersection',
+            surfaceIndex: i,
+            surfaceType: row?.surfType ?? row?.type ?? '',
+            mode: tracedAsphereMode,
+            useRustWasm,
+            requireRustWasm,
+            rayStart: {
+              x: Number(ray0?.pos?.x),
+              y: Number(ray0?.pos?.y),
+              z: Number(ray0?.pos?.z),
+            },
+            localRay: {
+              pos: { x: Number(localRay?.pos?.x), y: Number(localRay?.pos?.y), z: Number(localRay?.pos?.z) },
+              dir: { x: Number(localRay?.dir?.x), y: Number(localRay?.dir?.y), z: Number(localRay?.dir?.z) },
+            },
+            qcon: qconSurfaceParams ? {
+              radius: Number(qconSurfaceParams.radius),
+              conic: Number(qconSurfaceParams.conic),
+              semidia: Number(qconSurfaceParams.semidia),
+              nrad: Number(qconSurfaceParams.qconNrad ?? qconSurfaceParams.qconNRadius ?? qconSurfaceParams.nrad ?? qconSurfaceParams.NRAD),
+            } : null,
+          });
+        }
         break;
       }
       
@@ -7310,7 +7640,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       
       if (dotProduct < 0) {
         // 表面からの入射：反射処理
-        const globalNormal = applyMatrixToVector(surfaceInfo.rotationMatrix, normal);
+        const globalNormal = norm(applyMatrixToVector(surfaceInfo.rotationMatrix, normal));
         const oldDir = { ...safeRay0.dir };
         safeRay0.dir = reflectRay(safeRay0.dir, globalNormal);
         if (isDetailedDebug) {
@@ -7323,10 +7653,10 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         }
         // 光線方向はそのまま維持（透過）
       }
-    } else if (rowIsStopSurface) {
-      // Stop面は開口制限のみ。媒質は変化させない。
+    } else if (rowIsStopSurface || rowIsImageSurface || isEvaluationSurface) {
+      // Stop/Image/評価面は開口制限・評価のみ。媒質は変化させない。
       if (isDetailedDebug) {
-        debugLog.push(`Stop surface: keep refractive index n=${n.toFixed(6)} (no medium transition)`);
+        debugLog.push(`Stop/Image/Eval surface: keep refractive index n=${n.toFixed(6)} (no medium transition)`);
       }
     } else {
       const oldN = n;
@@ -7337,8 +7667,13 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         debugLog.push(`🔧 [RefractiveIndex] Surface ${i + 1}: material="${row.material}", rindex="${row.rindex || row['Ref Index']}", wavelength=${safeRay0.wavelength.toFixed(4)}μm, calculated n=${n.toFixed(6)}`);
       }
       
-      const globalNormal = applyMatrixToVector(surfaceInfo.rotationMatrix, normal);
+      const globalNormal = norm(applyMatrixToVector(surfaceInfo.rotationMatrix, normal));
       const oldDir = { ...safeRay0.dir };
+      const qconHitRadius = Math.hypot(Number(hitPoint?.x) || 0, Number(hitPoint?.y) || 0);
+      const qconSag = isQconSurface ? asphericSurfaceZ(qconHitRadius, qconSurfaceParams || {}, tracedAsphereMode) : NaN;
+      const qconSagResidual = isQconSurface
+        ? (Number(hitPoint?.z) - Number(qconSag))
+        : NaN;
       
       if (isDetailedDebug) {
         debugLog.push(`🔍 REFRACTION DETAILS:`);
@@ -7363,9 +7698,58 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           n1: oldN,
           n2: n
         });
+        if (isQconSurface) {
+          __emitQconTrace({
+            at: new Date().toISOString(),
+            status: 'tir',
+            surfaceIndex: i,
+            surfaceType: row?.surfType ?? row?.type ?? '',
+            mode: tracedAsphereMode,
+            useRustWasm,
+            requireRustWasm,
+            n1: Number(oldN),
+            n2: Number(n),
+            localHit: { x: Number(hitPoint?.x), y: Number(hitPoint?.y), z: Number(hitPoint?.z) },
+            globalHit: { x: Number(globalHitPoint?.x), y: Number(globalHitPoint?.y), z: Number(globalHitPoint?.z) },
+            localNormal: { x: Number(normal?.x), y: Number(normal?.y), z: Number(normal?.z) },
+            globalNormal: { x: Number(globalNormal?.x), y: Number(globalNormal?.y), z: Number(globalNormal?.z) },
+            oldDir: { x: Number(oldDir?.x), y: Number(oldDir?.y), z: Number(oldDir?.z) },
+            sagAtHit: Number(qconSag),
+            sagResidual: Number(qconSagResidual),
+            hitRadius: Number(qconHitRadius),
+          });
+        }
         break;
       }
       safeRay0.dir = refractedDir;
+      if (isQconSurface) {
+        __emitQconTrace({
+          at: new Date().toISOString(),
+          status: 'ok',
+          surfaceIndex: i,
+          surfaceType: row?.surfType ?? row?.type ?? '',
+          mode: tracedAsphereMode,
+          useRustWasm,
+          requireRustWasm,
+          n1: Number(oldN),
+          n2: Number(n),
+          localHit: { x: Number(hitPoint?.x), y: Number(hitPoint?.y), z: Number(hitPoint?.z) },
+          globalHit: { x: Number(globalHitPoint?.x), y: Number(globalHitPoint?.y), z: Number(globalHitPoint?.z) },
+          localNormal: { x: Number(normal?.x), y: Number(normal?.y), z: Number(normal?.z) },
+          globalNormal: { x: Number(globalNormal?.x), y: Number(globalNormal?.y), z: Number(globalNormal?.z) },
+          oldDir: { x: Number(oldDir?.x), y: Number(oldDir?.y), z: Number(oldDir?.z) },
+          newDir: { x: Number(refractedDir?.x), y: Number(refractedDir?.y), z: Number(refractedDir?.z) },
+          sagAtHit: Number(qconSag),
+          sagResidual: Number(qconSagResidual),
+          hitRadius: Number(qconHitRadius),
+          qcon: qconSurfaceParams ? {
+            radius: Number(qconSurfaceParams.radius),
+            conic: Number(qconSurfaceParams.conic),
+            semidia: Number(qconSurfaceParams.semidia),
+            nrad: Number(qconSurfaceParams.qconNrad ?? qconSurfaceParams.qconNRadius ?? qconSurfaceParams.nrad ?? qconSurfaceParams.NRAD),
+          } : null,
+        });
+      }
       if (isDetailedDebug) {
         debugLog.push(`Refraction: n1=${oldN.toFixed(4)} → n2=${n.toFixed(4)}, oldDir=(${oldDir.x.toFixed(6)}, ${oldDir.y.toFixed(6)}, ${oldDir.z.toFixed(6)}) → newDir=(${safeRay0.dir.x.toFixed(6)}, ${safeRay0.dir.y.toFixed(6)}, ${safeRay0.dir.z.toFixed(6)})`);
       }

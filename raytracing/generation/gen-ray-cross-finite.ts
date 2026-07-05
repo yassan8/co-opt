@@ -121,9 +121,25 @@ function isObjectRow(row) {
 }
 
 function isStopRow(row) {
-    const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.Type ?? '';
-    const t = String(raw ?? '').trim().toLowerCase();
-    return t === 'stop' || t === 'sto';
+    if (!row || typeof row !== 'object') return false;
+    const candidates = [
+        row.type,
+        row.Type,
+        row.surfType,
+        row.surfaceType,
+        row['surf type'],
+        row['object type'],
+        row.object,
+        row.Object,
+        row.objectType,
+        row.material,
+        row._blockType,
+        row.blockType,
+    ];
+    return candidates.some((value) => {
+        const t = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+        return t === 'stop' || t === 'sto' || t === 'aperturestop';
+    });
 }
 
 function isThinLensRow(row) {
@@ -1542,7 +1558,8 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                             coef7: parseFloat(objectSurface.A7) || 0,
                             coef8: parseFloat(objectSurface.A8) || 0,
                             coef9: parseFloat(objectSurface.A9) || 0,
-                            coef10: parseFloat(objectSurface.A10) || 0
+                            coef10: parseFloat(objectSurface.A10) || 0,
+                            qconOffset: Number(objectSurface.qconOffset ?? objectSurface.qcon_offset) || 0
                         };
                         
                         // ray-tracing.jsのasphericSag関数を使用してsag計算

@@ -462,13 +462,14 @@ export class PSFCalculator {
                     console.error('❌ [PSF] NativeRust failed (force mode):', error);
                     throw error;
                 }
+                emitProgress(12, 'psf-fallback', 'Native PSF failed, using JavaScript fallback...');
                 console.warn('⚠️ [PSF] Native PSF failed, falling back to JavaScript:', error);
             }
         }
 
         // 可能なら先にWASM初期化を待ってから実装方法を決定する。
         // ここで待たないと、初回計算が常にJSへ落ちてしまう。
-        const wantsWasm = false;
+        const wantsWasm = this.shouldUseWasm(samplingSize, forceImplementation);
 
         if (wantsWasm) {
             if (!this._wasmInitPromise) {
@@ -583,6 +584,7 @@ export class PSFCalculator {
                 return result;
                 
             } catch (error) {
+                emitProgress(70, 'psf-fallback', 'WASM PSF failed, using JavaScript fallback...');
                 // console.warn('⚠️ [PSF] WASM calculation failed, falling back to JavaScript:', error);
                 // JavaScript版にフォールバック
             }
@@ -712,7 +714,16 @@ export class PSFCalculator {
      * @returns {boolean} WASM使用するかどうか
      */
     shouldUseWasm(samplingSize, forceImplementation) {
-        return false;
+        if (forceImplementation === 'javascript' || forceImplementation === 'native') {
+            return false;
+        }
+        if (forceImplementation === 'wasm') {
+            return true;
+        }
+        if (typeof globalThis !== 'undefined' && (globalThis as any).__PSF_FORCE_WASM === true) {
+            return true;
+        }
+        return Number.isFinite(Number(samplingSize)) && Number(samplingSize) >= 64;
     }
 
     /**

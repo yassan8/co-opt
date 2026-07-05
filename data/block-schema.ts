@@ -3015,7 +3015,11 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
         rows[0].thickness = 'INF';
         const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
         const distVal = normalizeThicknessToRowValue(distRaw);
-        rows[0].objectRenderDistance = (typeof distVal === 'number' && Number.isFinite(distVal)) ? distVal : 10;
+        if (typeof distVal === 'number' && Number.isFinite(distVal) && distVal > 0) {
+          rows[0].objectRenderDistance = distVal;
+        } else {
+          delete rows[0].objectRenderDistance;
+        }
       } else {
         const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
         rows[0].thickness = normalizeThicknessToRowValue(distRaw);
@@ -3190,13 +3194,14 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       return false;
     };
 
-    const applyAsphereFieldsFromParams = (row, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw, forceAsphere = false) => {
+    const applyAsphereFieldsFromParams = (row, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw, qconNradRaw, forceAsphere = false) => {
       const stNorm = normalizeSurfTypeValue(surfTypeRaw);
       let st = (stNorm && ALLOWED_SURF_TYPES.has(stNorm)) ? stNorm : '';
       if (forceAsphere && (!st || st === 'Spherical')) {
         st = 'Aspheric even';
       }
       row.surfType = st || (blockAsphereLooksNonZero({ surfType: stNorm, conic: conicRaw, coefs: coefsRaw }) ? 'Aspheric even' : 'Spherical');
+      const qconNrad = normalizeOptionalNumberToRowValue(qconNradRaw);
       
       if (row.surfType === 'Toric') {
         // Toric surfaces use radiusX (tangential) and row.radius (sagittal/radiusY)
@@ -3212,14 +3217,17 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
         row.radiusY = row.radius; // Use existing radius field for Y direction
         row.axis = normalizeOptionalNumberToRowValue(axisRaw);
         row.conic = normalizeOptionalNumberToRowValue(conicRaw);
+        row.qconNrad = '';
         // Toric surfaces don't use aspheric coefficients in initial implementation
         for (let i = 0; i < 10; i++) row[`coef${i + 1}`] = '';
       } else if (row.surfType === 'Spherical') {
         // Keep conic for spherical surfaces (k-only conic section is valid).
         row.conic = normalizeOptionalNumberToRowValue(conicRaw);
+        row.qconNrad = '';
         for (let i = 0; i < 10; i++) row[`coef${i + 1}`] = '';
       } else {
         row.conic = normalizeOptionalNumberToRowValue(conicRaw);
+        row.qconNrad = row.surfType === 'Qcon' ? qconNrad : '';
         for (let i = 0; i < 10; i++) row[`coef${i + 1}`] = normalizeOptionalNumberToRowValue(coefsRaw?.[i]);
       }
     };
@@ -3366,13 +3374,16 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       const frontForceAsphere = isThinLens ? false : (hasVFlag(vars, 'frontConic') || hasAnyCoefV(vars, 'frontCoef'));
       const backForceAsphere = isThinLens ? false : (hasVFlag(vars, 'backConic') || hasAnyCoefV(vars, 'backCoef'));
 
-      applyAsphereFieldsFromParams(front, frontSurfTypeRaw, frontConicRaw, frontCoefsRaw, frontRadiusXRaw, undefined, frontAxisRaw, frontForceAsphere);
+      const frontQconNradRaw = isThinLens ? '' : getParamOrVarValue(params, vars, 'frontQconNrad');
+      const backQconNradRaw = isThinLens ? '' : getParamOrVarValue(params, vars, 'backQconNrad');
+
+      applyAsphereFieldsFromParams(front, frontSurfTypeRaw, frontConicRaw, frontCoefsRaw, frontRadiusXRaw, undefined, frontAxisRaw, frontQconNradRaw, frontForceAsphere);
 
       back.radius = normalizeRadiusToRowValue(backRadius);
       back.thickness = 0; // post spacing is handled by AirGap block only
       back.material = 'AIR';
 
-      applyAsphereFieldsFromParams(back, backSurfTypeRaw, backConicRaw, backCoefsRaw, backRadiusXRaw, undefined, backAxisRaw, backForceAsphere);
+      applyAsphereFieldsFromParams(back, backSurfTypeRaw, backConicRaw, backCoefsRaw, backRadiusXRaw, undefined, backAxisRaw, backQconNradRaw, backForceAsphere);
 
       // Only set optimize flags for variables explicitly present.
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'frontRadius') && shouldMarkV(vars.frontRadius)) {
@@ -3453,7 +3464,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
 
       applyDerivedGlassDisplay(surf);
       const surfForceAsphere = hasVFlag(vars, 'conic') || hasAnyCoefV(vars, 'coef');
-      applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw, surfForceAsphere);
+      const qconNradRaw = getParamOrVarValue(params, vars, 'qconNrad');
+      applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw, qconNradRaw, surfForceAsphere);
 
       // Aperture shape handling (same as Mirror)
       const shape = normalizeApertureShape(getParamOrVarValue(params, vars, 'apertureShape'));
@@ -3748,9 +3760,13 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       const s2ForceAsphere = hasVFlag(vars, 'surf2Conic') || hasAnyCoefV(vars, 'surf2Coef');
       const s3ForceAsphere = hasVFlag(vars, 'surf3Conic') || hasAnyCoefV(vars, 'surf3Coef');
 
-      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis, s1ForceAsphere);
-      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis, s2ForceAsphere);
-      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis, s3ForceAsphere);
+      const s1QconNrad = getParamOrVarValue(params, vars, 'surf1QconNrad');
+      const s2QconNrad = getParamOrVarValue(params, vars, 'surf2QconNrad');
+      const s3QconNrad = getParamOrVarValue(params, vars, 'surf3QconNrad');
+
+      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis, s1QconNrad, s1ForceAsphere);
+      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis, s2QconNrad, s2ForceAsphere);
+      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis, s3QconNrad, s3ForceAsphere);
 
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');
@@ -3973,10 +3989,15 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       const s3ForceAsphere = hasVFlag(vars, 'surf3Conic') || hasAnyCoefV(vars, 'surf3Coef');
       const s4ForceAsphere = hasVFlag(vars, 'surf4Conic') || hasAnyCoefV(vars, 'surf4Coef');
 
-      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis, s1ForceAsphere);
-      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis, s2ForceAsphere);
-      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis, s3ForceAsphere);
-      applyAsphereFieldsFromParams(s4, s4SurfType, s4Conic, s4Coefs, s4RadiusX, undefined, s4Axis, s4ForceAsphere);
+      const s1QconNrad = getParamOrVarValue(params, vars, 'surf1QconNrad');
+      const s2QconNrad = getParamOrVarValue(params, vars, 'surf2QconNrad');
+      const s3QconNrad = getParamOrVarValue(params, vars, 'surf3QconNrad');
+      const s4QconNrad = getParamOrVarValue(params, vars, 'surf4QconNrad');
+
+      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis, s1QconNrad, s1ForceAsphere);
+      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis, s2QconNrad, s2ForceAsphere);
+      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis, s3QconNrad, s3ForceAsphere);
+      applyAsphereFieldsFromParams(s4, s4SurfType, s4Conic, s4Coefs, s4RadiusX, undefined, s4Axis, s4QconNrad, s4ForceAsphere);
 
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');
@@ -4043,7 +4064,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       const conicRaw = getParamOrVarValue(params, vars, 'conic');
       const coefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `coef${i + 1}`));
       const mirrorForceAsphere = hasVFlag(vars, 'conic') || hasAnyCoefV(vars, 'coef');
-      applyAsphereFieldsFromParams(mirror, surfTypeRaw, conicRaw, coefsRaw, undefined, undefined, undefined, mirrorForceAsphere);
+      const qconNradRaw = getParamOrVarValue(params, vars, 'qconNrad');
+      applyAsphereFieldsFromParams(mirror, surfTypeRaw, conicRaw, coefsRaw, undefined, undefined, undefined, qconNradRaw, mirrorForceAsphere);
 
       const mat = String(matRaw ?? '').trim();
       mirror.material = mat ? mat : 'MIRROR';
@@ -4568,16 +4590,25 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     const objRow = legacyRows[0];
     const objThickness = asNumberOrInfOrZero(objRow.thickness);
     const isInfinite = objThickness === 'INF' || objThickness === Infinity;
+    const renderDistanceRaw = normalizeThicknessToRowValue(objRow.objectRenderDistance);
+    const renderDistance = (typeof renderDistanceRaw === 'number' && Number.isFinite(renderDistanceRaw) && renderDistanceRaw > 0)
+      ? renderDistanceRaw
+      : null;
+    const objectParameters: Record<string, any> = {
+      objectDistanceMode: isInfinite ? 'INF' : 'Finite',
+    };
+    if (isInfinite) {
+      if (renderDistance !== null) objectParameters.objectDistance = renderDistance;
+    } else if (typeof objThickness === 'number' && objThickness > 0) {
+      objectParameters.objectDistance = objThickness;
+    }
     
     blocks.push({
       blockId: 'ObjectSurface-1',
       blockType: 'ObjectSurface',
       role: null,
       constraints: {},
-      parameters: {
-        objectDistanceMode: isInfinite ? 'INF' : 'Finite',
-        ...(isInfinite ? {} : { objectDistance: typeof objThickness === 'number' && objThickness > 0 ? objThickness : 100 })
-      },
+      parameters: objectParameters,
       variables: {},
       metadata: { source: 'legacy-opticalSystem' }
     });
@@ -4793,9 +4824,14 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
         return isNumericString(s) ? Number(s) : (typeof vv === 'number' && Number.isFinite(vv) ? vv : 0);
       });
       const surfType = inferLegacySurfType(rowObj, conic, coefs);
+      const qconNradRaw = rowObj?.qconNrad;
+      const qconNrad = isNumericString(String(qconNradRaw ?? '').trim())
+        ? Number(String(qconNradRaw).trim())
+        : (typeof qconNradRaw === 'number' && Number.isFinite(qconNradRaw) ? qconNradRaw : '');
       return {
         [`surf${surfIdx}SurfType`]: surfType,
         [`surf${surfIdx}Conic`]: conic,
+        ...(surfType === 'Qcon' && qconNrad !== '' ? { [`surf${surfIdx}QconNrad`]: qconNrad } : {}),
         ...Object.fromEntries(coefs.map((v, idx) => [`surf${surfIdx}Coef${idx + 1}`, v]))
       };
     };
@@ -5066,6 +5102,8 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
 
     const frontConic = isNumericString(String(r.conic ?? '').trim()) ? Number(String(r.conic).trim()) : (typeof r.conic === 'number' ? r.conic : 0);
     const backConic = isNumericString(String(back.conic ?? '').trim()) ? Number(String(back.conic).trim()) : (typeof back.conic === 'number' ? back.conic : 0);
+    const frontQconNrad = isNumericString(String(r.qconNrad ?? '').trim()) ? Number(String(r.qconNrad).trim()) : (typeof r.qconNrad === 'number' ? r.qconNrad : '');
+    const backQconNrad = isNumericString(String(back.qconNrad ?? '').trim()) ? Number(String(back.qconNrad).trim()) : (typeof back.qconNrad === 'number' ? back.qconNrad : '');
     const frontCoefs = Array.from({ length: 10 }, (_, k) => {
       const vv = r[`coef${k + 1}`];
       const s = String(vv ?? '').trim();
@@ -5117,10 +5155,12 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
 
         frontSurfType,
         frontConic,
+        ...(frontSurfType === 'Qcon' && frontQconNrad !== '' ? { frontQconNrad } : {}),
         ...Object.fromEntries(frontCoefs.map((v, idx) => [`frontCoef${idx + 1}`, v])),
 
         backSurfType,
         backConic,
+        ...(backSurfType === 'Qcon' && backQconNrad !== '' ? { backQconNrad } : {}),
         ...Object.fromEntries(backCoefs.map((v, idx) => [`backCoef${idx + 1}`, v]))
       },
       aperture: {

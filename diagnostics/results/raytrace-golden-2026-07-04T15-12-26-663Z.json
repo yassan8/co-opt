@@ -1,0 +1,2683 @@
+{
+  "timestamp": "2026-07-04T15:12:26.764Z",
+  "inputPath": "defaults\\default-load.json",
+  "outputPath": "diagnostics\\results\\raytrace-golden-2026-07-04T15-12-26-663Z.json",
+  "settings": {
+    "engine": "both",
+    "rayCount": 25,
+    "wavelength": 0.5875618,
+    "targetSurfaceIndex": 23,
+    "probeSurfaceIndex": 3,
+    "forwardOnly": false,
+    "rustBatchMetaFastPath": false,
+    "oplEpsilonUm": 0.001,
+    "spanMm": 9.600000000000001
+  },
+  "rows": {
+    "opticalSystem": 24,
+    "source": 3
+  },
+  "rays": [
+    {
+      "pos": {
+        "x": -9.600000000000001,
+        "y": -9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": -4.800000000000001,
+        "y": -9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 0,
+        "y": -9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 4.800000000000001,
+        "y": -9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 9.600000000000001,
+        "y": -9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": -9.600000000000001,
+        "y": -4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": -4.800000000000001,
+        "y": -4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 0,
+        "y": -4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 4.800000000000001,
+        "y": -4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 9.600000000000001,
+        "y": -4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": -9.600000000000001,
+        "y": 0,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": -4.800000000000001,
+        "y": 0,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 4.800000000000001,
+        "y": 0,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 9.600000000000001,
+        "y": 0,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": -9.600000000000001,
+        "y": 4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": -4.800000000000001,
+        "y": 4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 0,
+        "y": 4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 4.800000000000001,
+        "y": 4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 9.600000000000001,
+        "y": 4.800000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": -9.600000000000001,
+        "y": 9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": -4.800000000000001,
+        "y": 9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 0,
+        "y": 9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 4.800000000000001,
+        "y": 9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    },
+    {
+      "pos": {
+        "x": 9.600000000000001,
+        "y": 9.600000000000001,
+        "z": 0
+      },
+      "dir": {
+        "x": 0,
+        "y": 0,
+        "z": 1
+      },
+      "wavelength": 0.5875618
+    }
+  ],
+  "outputs": {
+    "js": [
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 30703.642466129582
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 91084.08099722996
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 87567.84935329633
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 91084.08099722996
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 30703.642466129582
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 91084.08099722996
+      },
+      {
+        "success": true,
+        "status": "ok",
+        "hitPoint": {
+          "x": 0.012210530605,
+          "y": 0.012210530605,
+          "z": 189.438757
+        },
+        "oplMicrons": 236498.29189003786
+      },
+      {
+        "success": true,
+        "status": "ok",
+        "hitPoint": {
+          "x": 0,
+          "y": 0.011733838567,
+          "z": 189.438757
+        },
+        "oplMicrons": 226044.15811726876
+      },
+      {
+        "success": true,
+        "status": "ok",
+        "hitPoint": {
+          "x": -0.012210530605,
+          "y": 0.012210530605,
+          "z": 189.438757
+        },
+        "oplMicrons": 236498.29189003786
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 91084.08099722996
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 87567.84935329633
+      },
+      {
+        "success": true,
+        "status": "ok",
+        "hitPoint": {
+          "x": 0.011733838567,
+          "y": 0,
+          "z": 189.438757
+        },
+        "oplMicrons": 226044.15811726876
+      },
+      {
+        "success": true,
+        "status": "ok",
+        "hitPoint": {
+          "x": 0,
+          "y": 0,
+          "z": 189.438757001
+        },
+        "oplMicrons": 215828.90611810787
+      },
+      {
+        "success": true,
+        "status": "ok",
+        "hitPoint": {
+          "x": -0.011733838567,
+          "y": 0,
+          "z": 189.438757
+        },
+        "oplMicrons": 226044.15811726876
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 87567.84935329633
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 91084.08099722996
+      },
+      {
+        "success": true,
+        "status": "ok",
+        "hitPoint": {
+          "x": 0.012210530605,
+          "y": -0.012210530605,
+          "z": 189.438757
+        },
+        "oplMicrons": 236498.29189003786
+      },
+      {
+        "success": true,
+        "status": "ok",
+        "hitPoint": {
+          "x": 0,
+          "y": -0.011733838567,
+          "z": 189.438757
+        },
+        "oplMicrons": 226044.15811726876
+      },
+      {
+        "success": true,
+        "status": "ok",
+        "hitPoint": {
+          "x": -0.012210530605,
+          "y": -0.012210530605,
+          "z": 189.438757
+        },
+        "oplMicrons": 236498.29189003786
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 91084.08099722996
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 30703.642466129582
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 91084.08099722996
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 87567.84935329633
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 91084.08099722996
+      },
+      {
+        "success": false,
+        "status": "aperture_block",
+        "hitPoint": null,
+        "oplMicrons": 30703.642466129582
+      }
+    ]
+  },
+  "diagnostics": {
+    "js": {
+      "perRay": [
+        {
+          "index": 0,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 6,
+            "surfaceNumber": 7,
+            "details": {
+              "surfaceIndex": 6,
+              "surfaceNumber": 7,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 12.883364558015243,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": -9.109914443471006,
+                "y": -9.109914443471006,
+                "z": 0.1787731548782159
+              },
+              "hitPointGlobalMm": {
+                "x": -9.109914443471006,
+                "y": -9.109914443471006,
+                "z": 14.978773154878214
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -9.125924596754038,
+                  "y": -9.125924596754038,
+                  "z": -0.00077542265963082
+                },
+                "dir": {
+                  "x": 0.0884682776094915,
+                  "y": 0.0884682776094915,
+                  "z": 0.9921424936538198
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 14.799999999999997
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 1.5,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 1,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 17.836349197531806,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": -7.976657855220989,
+                "y": -15.953315710441977,
+                "z": 1.4774829733993418
+              },
+              "hitPointGlobalMm": {
+                "x": -7.976657855220989,
+                "y": -15.953315710441977,
+                "z": 60.997482973399336
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -7.790602723629872,
+                  "y": -15.581205447259745,
+                  "z": -0.6514767702402366
+                },
+                "dir": {
+                  "x": -0.08577018708002868,
+                  "y": -0.17154037416005735,
+                  "z": 0.9814363835936002
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 2,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 15.885690588275112,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": 0,
+                "y": -15.885690588275112,
+                "z": 1.1703173811706638
+              },
+              "hitPointGlobalMm": {
+                "x": 0,
+                "y": -15.885690588275112,
+                "z": 60.69031738117066
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 0,
+                  "y": -15.590918976874288,
+                  "z": -0.5211083922425388
+                },
+                "dir": {
+                  "x": 0,
+                  "y": -0.1716863646666641,
+                  "z": 0.9851516594857592
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 3,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 17.836349197531806,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": 7.976657855220989,
+                "y": -15.953315710441977,
+                "z": 1.4774829733993418
+              },
+              "hitPointGlobalMm": {
+                "x": 7.976657855220989,
+                "y": -15.953315710441977,
+                "z": 60.997482973399336
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 7.790602723629872,
+                  "y": -15.581205447259745,
+                  "z": -0.6514767702402366
+                },
+                "dir": {
+                  "x": 0.08577018708002868,
+                  "y": -0.17154037416005735,
+                  "z": 0.9814363835936002
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 4,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 6,
+            "surfaceNumber": 7,
+            "details": {
+              "surfaceIndex": 6,
+              "surfaceNumber": 7,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 12.883364558015243,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": 9.109914443471006,
+                "y": -9.109914443471006,
+                "z": 0.1787731548782159
+              },
+              "hitPointGlobalMm": {
+                "x": 9.109914443471006,
+                "y": -9.109914443471006,
+                "z": 14.978773154878214
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 9.125924596754038,
+                  "y": -9.125924596754038,
+                  "z": -0.00077542265963082
+                },
+                "dir": {
+                  "x": -0.0884682776094915,
+                  "y": 0.0884682776094915,
+                  "z": 0.9921424936538198
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 14.799999999999997
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 1.5,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 5,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 17.836349197531806,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": -15.953315710441977,
+                "y": -7.976657855220989,
+                "z": 1.4774829733993418
+              },
+              "hitPointGlobalMm": {
+                "x": -15.953315710441977,
+                "y": -7.976657855220989,
+                "z": 60.997482973399336
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -15.581205447259745,
+                  "y": -7.790602723629872,
+                  "z": -0.6514767702402366
+                },
+                "dir": {
+                  "x": -0.17154037416005735,
+                  "y": -0.08577018708002868,
+                  "z": 0.9814363835936002
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 6,
+          "reachedTarget": true,
+          "hitPoint": {
+            "x": 0.012210530605,
+            "y": 0.012210530605,
+            "z": 189.438757
+          },
+          "failure": null,
+          "rustSingleMeta": null
+        },
+        {
+          "index": 7,
+          "reachedTarget": true,
+          "hitPoint": {
+            "x": 0,
+            "y": 0.011733838567,
+            "z": 189.438757
+          },
+          "failure": null,
+          "rustSingleMeta": null
+        },
+        {
+          "index": 8,
+          "reachedTarget": true,
+          "hitPoint": {
+            "x": -0.012210530605,
+            "y": 0.012210530605,
+            "z": 189.438757
+          },
+          "failure": null,
+          "rustSingleMeta": null
+        },
+        {
+          "index": 9,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 17.836349197531806,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": 15.953315710441977,
+                "y": -7.976657855220989,
+                "z": 1.4774829733993418
+              },
+              "hitPointGlobalMm": {
+                "x": 15.953315710441977,
+                "y": -7.976657855220989,
+                "z": 60.997482973399336
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 15.581205447259745,
+                  "y": -7.790602723629872,
+                  "z": -0.6514767702402366
+                },
+                "dir": {
+                  "x": 0.17154037416005735,
+                  "y": -0.08577018708002868,
+                  "z": 0.9814363835936002
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 10,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 15.885690588275112,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": -15.885690588275112,
+                "y": 0,
+                "z": 1.1703173811706638
+              },
+              "hitPointGlobalMm": {
+                "x": -15.885690588275112,
+                "y": 0,
+                "z": 60.69031738117066
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -15.590918976874288,
+                  "y": 0,
+                  "z": -0.5211083922425388
+                },
+                "dir": {
+                  "x": -0.1716863646666641,
+                  "y": 0,
+                  "z": 0.9851516594857592
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 11,
+          "reachedTarget": true,
+          "hitPoint": {
+            "x": 0.011733838567,
+            "y": 0,
+            "z": 189.438757
+          },
+          "failure": null,
+          "rustSingleMeta": null
+        },
+        {
+          "index": 12,
+          "reachedTarget": true,
+          "hitPoint": {
+            "x": 0,
+            "y": 0,
+            "z": 189.438757001
+          },
+          "failure": null,
+          "rustSingleMeta": null
+        },
+        {
+          "index": 13,
+          "reachedTarget": true,
+          "hitPoint": {
+            "x": -0.011733838567,
+            "y": 0,
+            "z": 189.438757
+          },
+          "failure": null,
+          "rustSingleMeta": null
+        },
+        {
+          "index": 14,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 15.885690588275112,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": 15.885690588275112,
+                "y": 0,
+                "z": 1.1703173811706638
+              },
+              "hitPointGlobalMm": {
+                "x": 15.885690588275112,
+                "y": 0,
+                "z": 60.69031738117066
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 15.590918976874288,
+                  "y": 0,
+                  "z": -0.5211083922425388
+                },
+                "dir": {
+                  "x": 0.1716863646666641,
+                  "y": 0,
+                  "z": 0.9851516594857592
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 15,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 17.836349197531806,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": -15.953315710441977,
+                "y": 7.976657855220989,
+                "z": 1.4774829733993418
+              },
+              "hitPointGlobalMm": {
+                "x": -15.953315710441977,
+                "y": 7.976657855220989,
+                "z": 60.997482973399336
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -15.581205447259745,
+                  "y": 7.790602723629872,
+                  "z": -0.6514767702402366
+                },
+                "dir": {
+                  "x": -0.17154037416005735,
+                  "y": 0.08577018708002868,
+                  "z": 0.9814363835936002
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 16,
+          "reachedTarget": true,
+          "hitPoint": {
+            "x": 0.012210530605,
+            "y": -0.012210530605,
+            "z": 189.438757
+          },
+          "failure": null,
+          "rustSingleMeta": null
+        },
+        {
+          "index": 17,
+          "reachedTarget": true,
+          "hitPoint": {
+            "x": 0,
+            "y": -0.011733838567,
+            "z": 189.438757
+          },
+          "failure": null,
+          "rustSingleMeta": null
+        },
+        {
+          "index": 18,
+          "reachedTarget": true,
+          "hitPoint": {
+            "x": -0.012210530605,
+            "y": -0.012210530605,
+            "z": 189.438757
+          },
+          "failure": null,
+          "rustSingleMeta": null
+        },
+        {
+          "index": 19,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 17.836349197531806,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": 15.953315710441977,
+                "y": 7.976657855220989,
+                "z": 1.4774829733993418
+              },
+              "hitPointGlobalMm": {
+                "x": 15.953315710441977,
+                "y": 7.976657855220989,
+                "z": 60.997482973399336
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 15.581205447259745,
+                  "y": 7.790602723629872,
+                  "z": -0.6514767702402366
+                },
+                "dir": {
+                  "x": 0.17154037416005735,
+                  "y": 0.08577018708002868,
+                  "z": 0.9814363835936002
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 20,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 6,
+            "surfaceNumber": 7,
+            "details": {
+              "surfaceIndex": 6,
+              "surfaceNumber": 7,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 12.883364558015243,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": -9.109914443471006,
+                "y": 9.109914443471006,
+                "z": 0.1787731548782159
+              },
+              "hitPointGlobalMm": {
+                "x": -9.109914443471006,
+                "y": 9.109914443471006,
+                "z": 14.978773154878214
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -9.125924596754038,
+                  "y": 9.125924596754038,
+                  "z": -0.00077542265963082
+                },
+                "dir": {
+                  "x": 0.0884682776094915,
+                  "y": -0.0884682776094915,
+                  "z": 0.9921424936538198
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 14.799999999999997
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 1.5,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 21,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 17.836349197531806,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": -7.976657855220989,
+                "y": 15.953315710441977,
+                "z": 1.4774829733993418
+              },
+              "hitPointGlobalMm": {
+                "x": -7.976657855220989,
+                "y": 15.953315710441977,
+                "z": 60.997482973399336
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -7.790602723629872,
+                  "y": 15.581205447259745,
+                  "z": -0.6514767702402366
+                },
+                "dir": {
+                  "x": -0.08577018708002868,
+                  "y": 0.17154037416005735,
+                  "z": 0.9814363835936002
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 22,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 15.885690588275112,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": 0,
+                "y": 15.885690588275112,
+                "z": 1.1703173811706638
+              },
+              "hitPointGlobalMm": {
+                "x": 0,
+                "y": 15.885690588275112,
+                "z": 60.69031738117066
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 0,
+                  "y": 15.590918976874288,
+                  "z": -0.5211083922425388
+                },
+                "dir": {
+                  "x": 0,
+                  "y": 0.1716863646666641,
+                  "z": 0.9851516594857592
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 23,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 11,
+            "surfaceNumber": 12,
+            "details": {
+              "surfaceIndex": 11,
+              "surfaceNumber": 12,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 17.836349197531806,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": 7.976657855220989,
+                "y": 15.953315710441977,
+                "z": 1.4774829733993418
+              },
+              "hitPointGlobalMm": {
+                "x": 7.976657855220989,
+                "y": 15.953315710441977,
+                "z": 60.997482973399336
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 7.790602723629872,
+                  "y": 15.581205447259745,
+                  "z": -0.6514767702402366
+                },
+                "dir": {
+                  "x": 0.08577018708002868,
+                  "y": 0.17154037416005735,
+                  "z": 0.9814363835936002
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 59.519999999999996
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 5.8,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        },
+        {
+          "index": 24,
+          "reachedTarget": false,
+          "hitPoint": null,
+          "failure": {
+            "kind": "PHYSICAL_APERTURE_BLOCK",
+            "surfaceIndex": 6,
+            "surfaceNumber": 7,
+            "details": {
+              "surfaceIndex": 6,
+              "surfaceNumber": 7,
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "hitRadiusMm": 12.883364558015243,
+              "apertureLimitMm": 12,
+              "hitPointLocalMm": {
+                "x": 9.109914443471006,
+                "y": 9.109914443471006,
+                "z": 0.1787731548782159
+              },
+              "hitPointGlobalMm": {
+                "x": 9.109914443471006,
+                "y": 9.109914443471006,
+                "z": 14.978773154878214
+              },
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 9.125924596754038,
+                  "y": 9.125924596754038,
+                  "z": -0.00077542265963082
+                },
+                "dir": {
+                  "x": -0.0884682776094915,
+                  "y": -0.0884682776094915,
+                  "z": 0.9921424936538198
+                }
+              },
+              "surfaceOriginMm": {
+                "x": 0,
+                "y": 0,
+                "z": 14.799999999999997
+              },
+              "cbState": {
+                "isInTransformedCoordinates": false,
+                "transformCount": 0
+              },
+              "thickness": 1.5,
+              "semidia": 12
+            }
+          },
+          "rustSingleMeta": null
+        }
+      ],
+      "summary": {
+        "total": 25,
+        "capturedFailure": 16,
+        "kinds": {
+          "PHYSICAL_APERTURE_BLOCK": 16
+        },
+        "surfaces": {
+          "6": 4,
+          "11": 12
+        },
+        "rustSingleHitMetaStatus": {}
+      }
+    },
+    "jsProbe": {
+      "surfaceIndex": 3,
+      "total": 25,
+      "captured": 25,
+      "perRay": [
+        {
+          "index": 0,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946790,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -9.387685643229627,
+                  "y": -9.387685643229627,
+                  "z": 1.339550053521858
+                },
+                "dir": {
+                  "x": 0.016373943701534232,
+                  "y": 0.016373943701534232,
+                  "z": 0.9997318580175977
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 1,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946790,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -4.697694320320171,
+                  "y": -9.395388640640341,
+                  "z": 0.8354840302559268
+                },
+                "dir": {
+                  "x": 0.008208861065510142,
+                  "y": 0.016417722131020284,
+                  "z": 0.9998315223076515
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 2,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946790,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 0,
+                  "y": -9.397942320030806,
+                  "z": 0.6679272495523492
+                },
+                "dir": {
+                  "x": 0,
+                  "y": 0.016432065823788592,
+                  "z": 0.9998649844917876
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 3,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946790,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 4.697694320320171,
+                  "y": -9.395388640640341,
+                  "z": 0.8354840302559268
+                },
+                "dir": {
+                  "x": -0.008208861065510142,
+                  "y": 0.016417722131020284,
+                  "z": 0.9998315223076515
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 4,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946790,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 9.387685643229627,
+                  "y": -9.387685643229627,
+                  "z": 1.339550053521858
+                },
+                "dir": {
+                  "x": -0.016373943701534232,
+                  "y": 0.016373943701534232,
+                  "z": 0.9997318580175977
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 5,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946790,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -9.395388640640341,
+                  "y": -4.697694320320171,
+                  "z": 0.8354840302559268
+                },
+                "dir": {
+                  "x": 0.016417722131020284,
+                  "y": 0.008208861065510142,
+                  "z": 0.9998315223076515
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 6,
+          "reachedTarget": true,
+          "probe": {
+            "at": 1783177946790,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -4.701514440293948,
+                  "y": -4.701514440293948,
+                  "z": 0.33350559682954994
+                },
+                "dir": {
+                  "x": 0.008230193467989174,
+                  "y": 0.008230193467989174,
+                  "z": 0.9999322616212356
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 7,
+          "reachedTarget": true,
+          "probe": {
+            "at": 1783177946791,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 0,
+                  "y": -4.702780910779502,
+                  "z": 0.1666387743409672
+                },
+                "dir": {
+                  "x": 0,
+                  "y": 0.008237183383001797,
+                  "z": 0.9999660738294649
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 8,
+          "reachedTarget": true,
+          "probe": {
+            "at": 1783177946791,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 4.701514440293948,
+                  "y": -4.701514440293948,
+                  "z": 0.33350559682954994
+                },
+                "dir": {
+                  "x": -0.008230193467989174,
+                  "y": 0.008230193467989174,
+                  "z": 0.9999322616212356
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 9,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946791,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 9.395388640640341,
+                  "y": -4.697694320320171,
+                  "z": 0.8354840302559268
+                },
+                "dir": {
+                  "x": -0.016417722131020284,
+                  "y": 0.008208861065510142,
+                  "z": 0.9998315223076515
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 10,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946791,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -9.397942320030806,
+                  "y": 0,
+                  "z": 0.6679272495523492
+                },
+                "dir": {
+                  "x": 0.016432065823788592,
+                  "y": 0,
+                  "z": 0.9998649844917876
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 11,
+          "reachedTarget": true,
+          "probe": {
+            "at": 1783177946792,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -4.702780910779502,
+                  "y": 0,
+                  "z": 0.1666387743409672
+                },
+                "dir": {
+                  "x": 0.008237183383001797,
+                  "y": 0,
+                  "z": 0.9999660738294649
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 12,
+          "reachedTarget": true,
+          "probe": {
+            "at": 1783177946792,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 0,
+                  "y": 0,
+                  "z": 0
+                },
+                "dir": {
+                  "x": 0,
+                  "y": 0,
+                  "z": 1
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 13,
+          "reachedTarget": true,
+          "probe": {
+            "at": 1783177946792,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 4.702780910779502,
+                  "y": 0,
+                  "z": 0.1666387743409672
+                },
+                "dir": {
+                  "x": -0.008237183383001797,
+                  "y": 0,
+                  "z": 0.9999660738294649
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 14,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946793,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 9.397942320030806,
+                  "y": 0,
+                  "z": 0.6679272495523492
+                },
+                "dir": {
+                  "x": -0.016432065823788592,
+                  "y": 0,
+                  "z": 0.9998649844917876
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 15,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946793,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -9.395388640640341,
+                  "y": 4.697694320320171,
+                  "z": 0.8354840302559268
+                },
+                "dir": {
+                  "x": 0.016417722131020284,
+                  "y": -0.008208861065510142,
+                  "z": 0.9998315223076515
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 16,
+          "reachedTarget": true,
+          "probe": {
+            "at": 1783177946793,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -4.701514440293948,
+                  "y": 4.701514440293948,
+                  "z": 0.33350559682954994
+                },
+                "dir": {
+                  "x": 0.008230193467989174,
+                  "y": -0.008230193467989174,
+                  "z": 0.9999322616212356
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 17,
+          "reachedTarget": true,
+          "probe": {
+            "at": 1783177946793,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 0,
+                  "y": 4.702780910779502,
+                  "z": 0.1666387743409672
+                },
+                "dir": {
+                  "x": 0,
+                  "y": -0.008237183383001797,
+                  "z": 0.9999660738294649
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 18,
+          "reachedTarget": true,
+          "probe": {
+            "at": 1783177946793,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 4.701514440293948,
+                  "y": 4.701514440293948,
+                  "z": 0.33350559682954994
+                },
+                "dir": {
+                  "x": -0.008230193467989174,
+                  "y": -0.008230193467989174,
+                  "z": 0.9999322616212356
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 19,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946794,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 9.395388640640341,
+                  "y": 4.697694320320171,
+                  "z": 0.8354840302559268
+                },
+                "dir": {
+                  "x": -0.016417722131020284,
+                  "y": -0.008208861065510142,
+                  "z": 0.9998315223076515
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 20,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946794,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -9.387685643229627,
+                  "y": 9.387685643229627,
+                  "z": 1.339550053521858
+                },
+                "dir": {
+                  "x": 0.016373943701534232,
+                  "y": -0.016373943701534232,
+                  "z": 0.9997318580175977
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 21,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946794,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": -4.697694320320171,
+                  "y": 9.395388640640341,
+                  "z": 0.8354840302559268
+                },
+                "dir": {
+                  "x": 0.008208861065510142,
+                  "y": -0.016417722131020284,
+                  "z": 0.9998315223076515
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 22,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946794,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 0,
+                  "y": 9.397942320030806,
+                  "z": 0.6679272495523492
+                },
+                "dir": {
+                  "x": 0,
+                  "y": -0.016432065823788592,
+                  "z": 0.9998649844917876
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 23,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946794,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 4.697694320320171,
+                  "y": 9.395388640640341,
+                  "z": 0.8354840302559268
+                },
+                "dir": {
+                  "x": -0.008208861065510142,
+                  "y": -0.016417722131020284,
+                  "z": 0.9998315223076515
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "index": 24,
+          "reachedTarget": false,
+          "probe": {
+            "at": 1783177946794,
+            "surfaceIndex": 3,
+            "surfaceNumber": 4,
+            "useRustWasm": false,
+            "requireRustWasm": false,
+            "requireWasmRayTracing": false,
+            "details": {
+              "surfaceType": "",
+              "surfType": "Spherical",
+              "localRayAtSurface": {
+                "pos": {
+                  "x": 9.387685643229627,
+                  "y": 9.387685643229627,
+                  "z": 1.339550053521858
+                },
+                "dir": {
+                  "x": -0.016373943701534232,
+                  "y": -0.016373943701534232,
+                  "z": 0.9997318580175977
+                }
+              },
+              "intersectionInput": {
+                "model": "aspheric",
+                "mode": "even",
+                "params": {
+                  "radius": -4571.825,
+                  "conic": 0,
+                  "semidia": 26,
+                  "coef1": 0,
+                  "coef2": 0,
+                  "coef3": 0,
+                  "coef4": 0,
+                  "coef5": 0,
+                  "coef6": 0,
+                  "coef7": 0,
+                  "coef8": 0,
+                  "coef9": 0,
+                  "coef10": 0
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "summaries": {
+    "js": {
+      "total": 25,
+      "success": 9,
+      "failed": 16,
+      "statuses": {
+        "aperture_block": 16,
+        "ok": 9
+      }
+    }
+  },
+  "comparison": null,
+  "notes": [
+    "rust_init_failed:surface_origins module import failed (surface_origins browser module is not available at base URL /)"
+  ]
+}

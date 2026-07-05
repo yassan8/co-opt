@@ -5,6 +5,18 @@ import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 
 let __cooptPersistEditedRowsToBlocksTimer: ReturnType<typeof setTimeout> | null = null;
 
+function __cooptRunPersistEditedOpticalRowsToBlocks(): void {
+  try {
+    const rows = (tableOpticalSystem && typeof tableOpticalSystem.getData === 'function')
+      ? tableOpticalSystem.getData()
+      : [];
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    if (typeof window.__cooptSyncRowsBackToActiveBlocks === 'function') {
+      window.__cooptSyncRowsBackToActiveBlocks(rows);
+    }
+  } catch (_) {}
+}
+
 function schedulePersistEditedOpticalRowsToBlocks(): void {
   try {
     const activeConfig = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
@@ -21,17 +33,29 @@ function schedulePersistEditedOpticalRowsToBlocks(): void {
 
   __cooptPersistEditedRowsToBlocksTimer = setTimeout(() => {
     __cooptPersistEditedRowsToBlocksTimer = null;
-    try {
-      const rows = (tableOpticalSystem && typeof tableOpticalSystem.getData === 'function')
-        ? tableOpticalSystem.getData()
-        : [];
-      if (!Array.isArray(rows) || rows.length === 0) return;
-      if (typeof window.__cooptSyncRowsBackToActiveBlocks === 'function') {
-        window.__cooptSyncRowsBackToActiveBlocks(rows);
-      }
-    } catch (_) {}
+    __cooptRunPersistEditedOpticalRowsToBlocks();
   }, 120);
 }
+
+// Flush a pending debounced rows->blocks sync immediately.
+// Safe no-op when nothing is pending. This must run before any block
+// re-expansion / table reload so that a just-made surface edit (e.g. a
+// Qcon->Spherical surfType change) is persisted to the canonical block
+// BEFORE the blocks are re-expanded. Otherwise the reload regenerates the
+// row from the stale (still-Qcon) block and the pending timer then writes
+// that reverted value back, silently discarding the user's edit.
+function flushPendingEditedOpticalRowsToBlocks(): void {
+  if (__cooptPersistEditedRowsToBlocksTimer === null) return;
+  clearTimeout(__cooptPersistEditedRowsToBlocksTimer);
+  __cooptPersistEditedRowsToBlocksTimer = null;
+  __cooptRunPersistEditedOpticalRowsToBlocks();
+}
+
+try {
+  if (typeof window !== 'undefined') {
+    (window as any).__cooptFlushPendingRowsToBlocks = flushPendingEditedOpticalRowsToBlocks;
+  }
+} catch (_) {}
 
 function shouldDisableExpandedOpticalSystemUI() {
   try {
@@ -497,6 +521,56 @@ const COORDTRANS_COLUMN_TITLES = Object.freeze({
   // coef1 is used as an order flag in the ray tracing implementation.
   coef1: 'Order',
 });
+
+function __cooptNormalizeAsphereProfileKey(surfTypeRaw) {
+  const st = String(surfTypeRaw ?? '').trim().toLowerCase();
+  if (st === 'qcon') return 'qcon';
+  if (st === 'aspheric even') return 'even';
+  if (st === 'aspheric odd') return 'odd';
+  return null;
+}
+
+function __cooptCloneAsphereProfiles(store) {
+  if (!store || typeof store !== 'object') return {};
+  return {
+    qcon: store.qcon && typeof store.qcon === 'object' ? { ...store.qcon } : undefined,
+    even: store.even && typeof store.even === 'object' ? { ...store.even } : undefined,
+    odd: store.odd && typeof store.odd === 'object' ? { ...store.odd } : undefined,
+  };
+}
+
+function __cooptCaptureAsphereProfile(rowData, surfTypeRaw) {
+  const key = __cooptNormalizeAsphereProfileKey(surfTypeRaw);
+  if (!key || !rowData || typeof rowData !== 'object') return null;
+  const profile = {
+    conic: rowData.conic ?? '',
+    qconNrad: key === 'qcon' ? (rowData.qconNrad ?? '') : '',
+  };
+  for (let i = 1; i <= 10; i++) {
+    profile[`coef${i}`] = rowData[`coef${i}`] ?? '';
+  }
+  return { key, profile };
+}
+
+function __cooptBuildAsphereProfileRestorePatch(store, surfTypeRaw, currentConic) {
+  const key = __cooptNormalizeAsphereProfileKey(surfTypeRaw);
+  if (!key) return null;
+  const profile = (store && typeof store === 'object' && store[key] && typeof store[key] === 'object')
+    ? store[key]
+    : null;
+  const patch = {
+    conic: profile && Object.prototype.hasOwnProperty.call(profile, 'conic') ? profile.conic : (currentConic ?? ''),
+    qconNrad: key === 'qcon'
+      ? (profile && Object.prototype.hasOwnProperty.call(profile, 'qconNrad') ? profile.qconNrad : '')
+      : ''
+  };
+  for (let i = 1; i <= 10; i++) {
+    patch[`coef${i}`] = profile && Object.prototype.hasOwnProperty.call(profile, `coef${i}`)
+      ? profile[`coef${i}`]
+      : '';
+  }
+  return patch;
+}
 
 function setTabulatorColumnTitle(field, title) {
   try {
@@ -1782,6 +1856,8 @@ tableOpticalSystem.on("cellEdited", function(cell){
 
         const isOldCB = oldSurfType === 'Coord Break';
         const isNewCB = newSurfType === 'Coord Break';
+        const oldAsphereKey = __cooptNormalizeAsphereProfileKey(oldSurfType);
+        const newAsphereKey = __cooptNormalizeAsphereProfileKey(newSurfType);
 
         // Fields to preserve/restore when toggling CB on/off.
         const LENS_FIELDS = [
@@ -1842,6 +1918,35 @@ tableOpticalSystem.on("cellEdited", function(cell){
             } catch (e) {
               console.warn('⚠️ Failed to restore values after leaving Coord Break:', e);
             }
+          }
+        }
+
+        if (!isOldCB && !isNewCB && (oldAsphereKey || newAsphereKey)) {
+          const profiles = __cooptCloneAsphereProfiles(rowData.__cooptAsphereProfiles);
+          const captured = __cooptCaptureAsphereProfile(rowData, oldSurfType);
+          if (captured) {
+            profiles[captured.key] = captured.profile;
+          }
+
+          const patch = {
+            __cooptAsphereProfiles: profiles,
+          };
+
+          const restorePatch = __cooptBuildAsphereProfileRestorePatch(profiles, newSurfType, rowData.conic);
+          if (restorePatch) {
+            Object.assign(patch, restorePatch);
+          } else if (newSurfType === 'Spherical' || newSurfType === 'Toric') {
+            patch.qconNrad = '';
+            for (let i = 1; i <= 10; i++) {
+              patch[`coef${i}`] = '';
+            }
+          }
+
+          try {
+            const rid = (typeof rowData.id === 'number') ? rowData.id : Number(rowData.id);
+            if (Number.isFinite(rid)) tableOpticalSystem.updateRow(rid, patch);
+          } catch (e) {
+            console.warn('⚠️ Failed to switch dedicated asphere coefficient set:', e);
           }
         }
       }

@@ -156,6 +156,11 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
     let mut source_rows: Vec<Value> = Vec::new();
     let mut object_rows: Vec<Value> = Vec::new();
     let mut entrance_pupil_diameter_mm: Option<f64> = None;
+    let mut wavelengths_list: Vec<f64> = Vec::new();
+    let mut wavelength_weights_list: Vec<f64> = Vec::new();
+    let mut primary_wavelength_index: Option<usize> = None;
+    let mut otx_primary_wavelength_index: Option<usize> = None;
+    let mut last_system_list_key: Option<String> = None;
 
     for line in lines {
         if line.is_empty() {
@@ -165,7 +170,77 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
         if tokens.is_empty() {
             continue;
         }
+
+        if current_surf.is_none() {
+            if let Some(list_key) = last_system_list_key.clone() {
+                let first_is_numeric = tokens
+                    .get(0)
+                    .and_then(|v| parse_num(v))
+                    .map(|v| v.is_finite())
+                    .unwrap_or(false);
+                if first_is_numeric {
+                    let values = tokens
+                        .iter()
+                        .filter_map(|t| parse_num(t))
+                        .collect::<Vec<_>>();
+                    if !values.is_empty() {
+                        match list_key.as_str() {
+                            "XFLN" => {
+                                let start = object_rows.len();
+                                while object_rows.len() < start + values.len() {
+                                    object_rows.push(json!({
+                                        "id": object_rows.len() + 1,
+                                        "xHeightAngle": 0,
+                                        "yHeightAngle": 0,
+                                        "position": "Angle",
+                                        "angle": 0
+                                    }));
+                                }
+                                for (idx, val) in values.iter().enumerate() {
+                                    if let Some(obj) = object_rows.get_mut(start + idx).and_then(Value::as_object_mut) {
+                                        obj.insert("xHeightAngle".to_string(), json!(val));
+                                    }
+                                }
+                                continue;
+                            }
+                            "YFLN" => {
+                                let start = object_rows.len();
+                                while object_rows.len() < start + values.len() {
+                                    object_rows.push(json!({
+                                        "id": object_rows.len() + 1,
+                                        "xHeightAngle": 0,
+                                        "yHeightAngle": 0,
+                                        "position": "Angle",
+                                        "angle": 0
+                                    }));
+                                }
+                                for (idx, val) in values.iter().enumerate() {
+                                    if let Some(obj) = object_rows.get_mut(start + idx).and_then(Value::as_object_mut) {
+                                        obj.insert("yHeightAngle".to_string(), json!(val));
+                                    }
+                                }
+                                continue;
+                            }
+                            "WAVL" | "WL" => {
+                                wavelengths_list.extend(values);
+                                continue;
+                            }
+                            "WWGT" | "FWGT" | "WTW" => {
+                                wavelength_weights_list.extend(values);
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
         let key = tokens[0].to_uppercase();
+
+        if key != "XFLN" && key != "YFLN" && key != "WAVL" && key != "WL" && key != "WWGT" && key != "FWGT" && key != "WTW" {
+            last_system_list_key = None;
+        }
 
         if key == "WAVM" {
             let wl = tokens.get(2).and_then(|v| parse_num(v));
@@ -182,7 +257,46 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
             continue;
         }
 
+        if key == "WAVL" || key == "WL" {
+            last_system_list_key = Some(key.clone());
+            let values = tokens
+                .iter()
+                .skip(1)
+                .filter_map(|t| parse_num(t))
+                .collect::<Vec<_>>();
+            wavelengths_list.extend(values);
+            continue;
+        }
+
+        if key == "WWGT" || key == "FWGT" || key == "WTW" {
+            last_system_list_key = Some(key.clone());
+            let values = tokens
+                .iter()
+                .skip(1)
+                .filter_map(|t| parse_num(t))
+                .collect::<Vec<_>>();
+            wavelength_weights_list.extend(values);
+            continue;
+        }
+
+        if key == "PWAV" {
+            let idx = tokens.get(1).and_then(|v| parse_num(v)).map(|n| n.max(1.0) as usize);
+            if let Some(i) = idx {
+                primary_wavelength_index = Some(i);
+            }
+            continue;
+        }
+
+        if key == "REF" {
+            let idx = tokens.get(1).and_then(|v| parse_num(v)).map(|n| n.max(1.0) as usize);
+            if let Some(i) = idx {
+                otx_primary_wavelength_index = Some(i);
+            }
+            continue;
+        }
+
         if key == "XFLN" || key == "YFLN" {
+            last_system_list_key = Some(key.clone());
             let values = tokens
                 .iter()
                 .skip(1)
@@ -210,12 +324,37 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
             continue;
         }
 
+        if key == "FLD" {
+            let index = tokens
+                .get(1)
+                .and_then(|v| parse_num(v))
+                .map(|n| n.max(1.0) as usize);
+            let x = tokens.get(2).and_then(|v| parse_num(v));
+            let y = tokens.get(3).and_then(|v| parse_num(v));
+            if let (Some(i), Some(fx), Some(fy)) = (index, x, y) {
+                while object_rows.len() < i {
+                    object_rows.push(json!({
+                        "id": object_rows.len() + 1,
+                        "xHeightAngle": 0,
+                        "yHeightAngle": 0,
+                        "position": "Angle",
+                        "angle": 0
+                    }));
+                }
+                if let Some(obj) = object_rows.get_mut(i - 1).and_then(Value::as_object_mut) {
+                    obj.insert("xHeightAngle".to_string(), json!(fx));
+                    obj.insert("yHeightAngle".to_string(), json!(fy));
+                }
+            }
+            continue;
+        }
+
         if key == "ENPD" {
             entrance_pupil_diameter_mm = tokens.get(1).and_then(|v| parse_num(v));
             continue;
         }
 
-        if key == "SURF" {
+        if key == "SURF" || key == "SUR" {
             let idx = tokens
                 .get(1)
                 .and_then(|v| parse_num(v))
@@ -226,7 +365,7 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
             } else {
                 issues.push(Issue {
                     severity: "warning".to_string(),
-                    message: format!("Invalid SURF record: {line}"),
+                    message: format!("Invalid SURF/SUR record: {line}"),
                 });
             }
             continue;
@@ -240,10 +379,10 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
         let row = rows[idx].as_object_mut().ok_or("invalid row object")?;
 
         match key.as_str() {
-            "STOP" => {
+            "STOP" | "STO" => {
                 row.insert("object type".to_string(), json!("Stop"));
             }
-            "CURV" => {
+            "CURV" | "CUY" => {
                 let curv = tokens.get(1).and_then(|v| parse_num(v)).unwrap_or(0.0);
                 let radius = if curv.abs() < f64::EPSILON {
                     Value::String("INF".to_string())
@@ -252,11 +391,11 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
                 };
                 row.insert("radius".to_string(), radius);
             }
-            "DISZ" => {
+            "DISZ" | "THI" => {
                 let disz = tokens.get(1).and_then(|v| parse_num(v)).unwrap_or(0.0);
                 row.insert("thickness".to_string(), json!(disz));
             }
-            "GLAS" => {
+            "GLAS" | "GLA" => {
                 let name = tokens.get(1).cloned().unwrap_or_else(|| "AIR".to_string());
                 row.insert("material".to_string(), json!(name));
             }
@@ -265,10 +404,53 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
                     row.insert("semidia".to_string(), json!(v));
                 }
             }
+            "APE" => {
+                let sx = tokens.get(2).and_then(|t| parse_num(t));
+                let sy = tokens.get(3).and_then(|t| parse_num(t));
+                let semidia = sx
+                    .map(|v| v.abs())
+                    .unwrap_or(0.0)
+                    .max(sy.map(|v| v.abs()).unwrap_or(0.0));
+                if semidia > 0.0 {
+                    row.insert("semidia".to_string(), json!(semidia));
+                }
+                if let (Some(w), Some(h)) = (sx, sy) {
+                    if (w - h).abs() > 1e-12 {
+                        row.insert("_apertureShape".to_string(), json!("Rectangular"));
+                        row.insert("_apertureWidth".to_string(), json!(w.abs() * 2.0));
+                        row.insert("_apertureHeight".to_string(), json!(h.abs() * 2.0));
+                    }
+                }
+            }
+            "CLAP" => {
+                let semidia_missing = row
+                    .get("semidia")
+                    .map(|v| {
+                        if v.is_null() {
+                            true
+                        } else if let Some(s) = v.as_str() {
+                            s.trim().is_empty()
+                        } else if let Some(n) = v.as_f64() {
+                            !n.is_finite() || n <= 0.0
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(true);
+                if semidia_missing {
+                    if let Some(v) = tokens.get(2).and_then(|t| parse_num(t)) {
+                        if v.is_finite() && v > 0.0 {
+                            row.insert("semidia".to_string(), json!(v));
+                        }
+                    }
+                }
+            }
             "TYPE" => {
                 let t = tokens.get(1).cloned().unwrap_or_default().to_uppercase();
                 let surf_type = if t == "EVENASPH" {
                     "Aspheric even"
+                } else if t == "QED_TYPE" || t == "QCON" || t == "QCON_TYPE" {
+                    "Qcon"
                 } else if t == "COORDBRK" {
                     "Coord Trans"
                 } else {
@@ -276,9 +458,67 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
                 };
                 row.insert("surfType".to_string(), json!(surf_type));
             }
+            "SUT" => {
+                let t = tokens.get(1).cloned().unwrap_or_default().to_uppercase();
+                if t == "A" || t == "ASPHERIC" {
+                    let existing = row
+                        .get("surfType")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    if existing != "Qcon" {
+                        row.insert("surfType".to_string(), json!("Aspheric even"));
+                    }
+                } else {
+                    row.insert("surfType".to_string(), json!("Spherical"));
+                }
+            }
             "CONI" => {
                 if let Some(v) = tokens.get(1).and_then(|t| parse_num(t)) {
                     row.insert("conic".to_string(), json!(v));
+                }
+            }
+            "XDAT" => {
+                let j = tokens.get(1).and_then(|t| parse_num(t)).unwrap_or(0.0) as i32;
+                let v = tokens.get(2).and_then(|t| parse_num(t)).unwrap_or(0.0);
+                if j == 1 {
+                    row.insert("conic".to_string(), json!(v));
+                } else if j == 2 {
+                    // XDAT 2 is exported as diameter; store internal qconNrad/C2 as radius.
+                    row.insert("qconNrad".to_string(), json!(v.abs() / 2.0));
+                } else if j == 3 {
+                    row.insert("qconOffset".to_string(), json!(v));
+                } else if (4..=13).contains(&j) {
+                    row.insert(format!("coef{}", j - 3), json!(v));
+                }
+            }
+            "SPS" => {
+                let mode = tokens.get(1).cloned().unwrap_or_default().to_uppercase();
+                if mode == "QCN" || mode == "QCON" {
+                    row.insert("surfType".to_string(), json!("Qcon"));
+                } else {
+                    let j = tokens.get(1).and_then(|t| parse_num(t)).unwrap_or(0.0) as i32;
+                    let v = tokens.get(2).and_then(|t| parse_num(t)).unwrap_or(0.0);
+                    let current_type = row.get("surfType").and_then(Value::as_str).unwrap_or("");
+                    if current_type == "Qcon" {
+                        if j == 1 {
+                            row.insert("conic".to_string(), json!(v));
+                        } else if j == 2 {
+                            row.insert("qconNrad".to_string(), json!(v));
+                        } else if (3..=12).contains(&j) {
+                            row.insert(format!("coef{}", j - 2), json!(v));
+                        } else if j == 32 {
+                            row.insert("qconTermCount".to_string(), json!(v));
+                        }
+                    } else if j == 1 {
+                        row.insert("conic".to_string(), json!(v));
+                    } else if j == 2 {
+                        row.insert("qconNrad".to_string(), json!(v));
+                    } else if (3..=12).contains(&j) {
+                        row.insert(format!("coef{}", j - 2), json!(v));
+                    } else if j == 32 {
+                        row.insert("qconTermCount".to_string(), json!(v));
+                    }
                 }
             }
             "PARM" => {
@@ -298,6 +538,26 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
 
     if rows.is_empty() {
         return Err("Zemax import: no SURF records found.".to_string());
+    }
+
+    if source_rows.is_empty() && !wavelengths_list.is_empty() {
+        for (idx, wavelength) in wavelengths_list.iter().enumerate() {
+            let weight = wavelength_weights_list.get(idx).copied().unwrap_or(1.0);
+            source_rows.push(json!({
+                "id": idx + 1,
+                "wavelength": wavelength,
+                "weight": weight,
+                "primary": "",
+                "angle": 0
+            }));
+        }
+        if !source_rows.is_empty() {
+            let one_based = primary_wavelength_index.or(otx_primary_wavelength_index).unwrap_or(1).max(1);
+            let bounded = one_based.min(source_rows.len());
+            if let Some(primary) = source_rows.get_mut(bounded - 1).and_then(Value::as_object_mut) {
+                primary.insert("primary".to_string(), json!("Primary Wavelength"));
+            }
+        }
     }
 
     if let Some(first) = rows.first_mut().and_then(Value::as_object_mut) {

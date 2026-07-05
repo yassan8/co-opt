@@ -94,7 +94,7 @@ function toWavefrontFieldSettingFromObjectRow(objRow, index0, opticalSystemRows,
                 normalizedRow = {
                     ...objRow,
                     ...effectiveRow,
-                    position: effectiveRow.__cooptEffectivePosition ?? effectiveRow.position ?? objRow.position,
+                    position: objRow.position,
                     __cooptOriginalPosition: objRow.position,
                 };
             }

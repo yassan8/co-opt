@@ -233,6 +233,10 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
   /** @type {null|'Angle'|'Rectangle'} */
   let fieldPositionFromFTYP = null;
   let entrancePupilDiameterMm = null;
+  /** @type {null|number} */
+  let otxPrimaryWavelengthIndex = null;
+  /** @type {null|'XFLN'|'YFLN'|'WWGT'|'FWGT'} */
+  let lastSystemListKey = null;
 
   let currentSurf = null;
 
@@ -248,7 +252,26 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
     const tokens = tokenizeZmxLine(line);
     if (tokens.length === 0) continue;
 
+    if (currentSurf === null && lastSystemListKey) {
+      const firstAsNumber = parseNumberOrNull(tokens[0]);
+      if (firstAsNumber !== null && Number.isFinite(firstAsNumber)) {
+        const continuationValues = tokens
+          .map((token) => parseNumberOrNull(token))
+          .filter((value) => value !== null && Number.isFinite(value));
+        if (continuationValues.length > 0) {
+          if (lastSystemListKey === 'XFLN') fieldXs = [...fieldXs, ...continuationValues];
+          if (lastSystemListKey === 'YFLN') fieldYs = [...fieldYs, ...continuationValues];
+          if (lastSystemListKey === 'WWGT' || lastSystemListKey === 'FWGT') fieldWs = [...fieldWs, ...continuationValues];
+          continue;
+        }
+      }
+    }
+
     const key = String(tokens[0] ?? '').toUpperCase();
+
+    if (!['XFLN', 'YFLN', 'WWGT', 'FWGT'].includes(key)) {
+      lastSystemListKey = null;
+    }
 
     // --- Global / system-level records ---
     if (key === 'WAVM') {
@@ -268,7 +291,7 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       continue;
     }
 
-    if (key === 'WAVL') {
+    if (key === 'WAVL' || key === 'WL') {
       // WAVL <wl1> <wl2> ... (Zemax list form)
       for (let k = 1; k < tokens.length; k++) {
         const wl = parseNumberOrNull(tokens[k]);
@@ -278,7 +301,7 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       continue;
     }
 
-    if (key === 'WWGT') {
+    if (key === 'WWGT' || key === 'WTW') {
       // WWGT <w1> <w2> ... (weights list form)
       for (let k = 1; k < tokens.length; k++) {
         const w = parseNumberOrNull(tokens[k]);
@@ -299,6 +322,13 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       continue;
     }
 
+    if (key === 'REF') {
+      const idx = parseNumberOrNull(tokens[1]);
+      const ii = (idx !== null && Number.isFinite(idx)) ? Math.trunc(idx) : null;
+      if (ii && ii > 0) otxPrimaryWavelengthIndex = ii;
+      continue;
+    }
+
     if (key === 'ENPD') {
       const v = parseNumberOrNull(tokens[1]);
       if (v !== null && Number.isFinite(v) && v > 0) entrancePupilDiameterMm = v;
@@ -312,6 +342,13 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       if (t3 !== null && Number.isFinite(t3) && Math.trunc(t3) === 2) {
         fieldPosition = 'Angle';
         fieldPositionFromFTYP = 'Angle';
+      } else {
+        // OpTaliX uses FTYP 4 for angle fields in many exported files.
+        const t1 = parseNumberOrNull(tokens[1]);
+        if ((t1 !== null && Math.trunc(t1) === 4) || (t3 !== null && Math.trunc(t3) === 4)) {
+          fieldPosition = 'Angle';
+          fieldPositionFromFTYP = 'Angle';
+        }
       }
       continue;
     }
@@ -336,6 +373,7 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
     };
 
     if (key === 'XFLN') {
+      lastSystemListKey = 'XFLN';
       if (tokens.length === 3) {
         const p = parseFieldIndexed(tokens);
         if (p) {
@@ -351,6 +389,7 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
     }
 
     if (key === 'YFLN') {
+      lastSystemListKey = 'YFLN';
       if (tokens.length === 3) {
         const p = parseFieldIndexed(tokens);
         if (p) {
@@ -362,6 +401,19 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       }
       const list = parseFieldList(tokens);
       if (list.length > 0) fieldYs = list;
+      continue;
+    }
+
+    if (key === 'FLD') {
+      const id1 = parseNumberOrNull(tokens[1]);
+      const x = parseNumberOrNull(tokens[2]);
+      const y = parseNumberOrNull(tokens[3]);
+      if (id1 === null || x === null || y === null) continue;
+      const oneBased = Math.max(1, Math.trunc(id1));
+      while (fieldXs.length < oneBased) fieldXs.push(0);
+      while (fieldYs.length < oneBased) fieldYs.push(0);
+      fieldXs[oneBased - 1] = x;
+      fieldYs[oneBased - 1] = y;
       continue;
     }
 
@@ -380,10 +432,17 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       continue;
     }
 
-    if (key === 'SURF') {
+    if (key === 'WWGT' || key === 'FWGT') {
+      lastSystemListKey = key;
+      const list = parseFieldList(tokens);
+      if (list.length > 0) fieldWs = [...fieldWs, ...list];
+      continue;
+    }
+
+    if (key === 'SURF' || key === 'SUR') {
       const idx = parseNumberOrNull(tokens[1]);
       if (idx === null || !Number.isFinite(idx) || idx < 0) {
-        addIssue('warning', `Invalid SURF index at line ${lineNo + 1}: ${line}`);
+        addIssue('warning', `Invalid SURF/SUR index at line ${lineNo + 1}: ${line}`);
         currentSurf = null;
         continue;
       }
@@ -394,7 +453,7 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
 
     // Most records apply to a surface, but some are global (UNIT/NAME/NOTE/etc).
     // If we see a surface record without a SURF header, we treat it as a warning.
-    const needsSurf = new Set(['STOP', 'CURV', 'DISZ', 'GLAS', 'DIAM', 'TYPE', 'CONI', 'PARM', 'COMM']);
+    const needsSurf = new Set(['STOP', 'STO', 'CURV', 'CUY', 'DISZ', 'THI', 'GLAS', 'GLA', 'DIAM', 'APE', 'CLAP', 'TYPE', 'SUT', 'CONI', 'PARM', 'XDAT', 'SPS', 'COMM']);
     if (needsSurf.has(key) && (currentSurf === null || currentSurf === undefined)) {
       addIssue('warning', `Record without SURF context at line ${lineNo + 1}: ${line}`);
       continue;
@@ -406,7 +465,21 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       continue;
     }
 
+    if (key === 'STO') {
+      const row = ensureRow(rows, currentSurf);
+      row['object type'] = 'Stop';
+      continue;
+    }
+
     if (key === 'CURV') {
+      const row = ensureRow(rows, currentSurf);
+      const curv = parseNumberOrNull(tokens[1]);
+      if (curv === null) continue;
+      row.radius = invertCurvatureToRadius(curv);
+      continue;
+    }
+
+    if (key === 'CUY') {
       const row = ensureRow(rows, currentSurf);
       const curv = parseNumberOrNull(tokens[1]);
       if (curv === null) continue;
@@ -443,6 +516,22 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       continue;
     }
 
+    if (key === 'THI') {
+      const row = ensureRow(rows, currentSurf);
+      const disz = parseNumberOrNull(tokens[1]);
+      if (disz === null) continue;
+      if (disz === Infinity) {
+        row.thickness = 'INF';
+        if (currentSurf === 0 && fieldPositionFromFTYP === null) fieldPosition = 'Angle';
+      } else if (Number.isFinite(disz) && Math.abs(disz) >= 1e9) {
+        row.thickness = 'INF';
+        if (currentSurf === 0 && fieldPositionFromFTYP === null) fieldPosition = 'Angle';
+      } else {
+        row.thickness = disz;
+      }
+      continue;
+    }
+
     if (key === 'GLAS') {
       const row = ensureRow(rows, currentSurf);
       const name = String(tokens[1] ?? '').trim();
@@ -469,6 +558,13 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       continue;
     }
 
+    if (key === 'GLA') {
+      const row = ensureRow(rows, currentSurf);
+      const name = String(tokens[1] ?? '').trim();
+      row.material = normalizeImportedMaterialName(name);
+      continue;
+    }
+
     if (key === 'DIAM') {
       const row = ensureRow(rows, currentSurf);
       const semidia = parseNumberOrNull(tokens[1]);
@@ -477,11 +573,39 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       continue;
     }
 
+    if (key === 'APE') {
+      const row = ensureRow(rows, currentSurf);
+      const sx = parseNumberOrNull(tokens[2]);
+      const sy = parseNumberOrNull(tokens[3]);
+      const semidia = Math.max(
+        Number.isFinite(sx) ? Math.abs(Number(sx)) : 0,
+        Number.isFinite(sy) ? Math.abs(Number(sy)) : 0,
+      );
+      if (semidia > 0) row.semidia = semidia;
+      if (Number.isFinite(sx) && Number.isFinite(sy) && Math.abs(Number(sx) - Number(sy)) > 1e-9) {
+        row._apertureShape = 'Rectangular';
+        row._apertureWidth = Math.abs(Number(sx)) * 2;
+        row._apertureHeight = Math.abs(Number(sy)) * 2;
+      }
+      continue;
+    }
+
+    if (key === 'CLAP') {
+      const row = ensureRow(rows, currentSurf);
+      if (!isBlank(row.semidia)) continue;
+      const clearAperture = parseNumberOrNull(tokens[2]);
+      if (clearAperture === null || !Number.isFinite(clearAperture) || clearAperture <= 0) continue;
+      row.semidia = clearAperture;
+      continue;
+    }
+
     if (key === 'TYPE') {
       const row = ensureRow(rows, currentSurf);
       const typeName = String(tokens[1] ?? '').trim().toUpperCase();
       if (typeName === 'EVENASPH') {
         row.surfType = 'Aspheric even';
+      } else if (typeName === 'QED_TYPE' || typeName === 'QCON' || typeName === 'QCON_TYPE') {
+        row.surfType = 'Qcon';
       } else if (typeName === 'TORICS') {
         row.surfType = 'Toric';
         // Zemax TORICS uses PARM 1=radiusX curvature, PARM 2=radiusY curvature, PARM 3=axis
@@ -505,6 +629,17 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
         throw err;
       } else {
         // Default: treat as spherical/standard.
+        row.surfType = 'Spherical';
+      }
+      continue;
+    }
+
+    if (key === 'SUT') {
+      const row = ensureRow(rows, currentSurf);
+      const typeName = String(tokens[1] ?? '').trim().toUpperCase();
+      if (typeName === 'A' || typeName === 'ASPHERIC') {
+        if (String(row.surfType ?? '').trim() !== 'Qcon') row.surfType = 'Aspheric even';
+      } else {
         row.surfType = 'Spherical';
       }
       continue;
@@ -576,6 +711,65 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
         } else {
           addIssue('warning', `PARM index out of range (1..11) at surface ${currentSurf}: ${j}`);
         }
+      }
+      continue;
+    }
+
+    if (key === 'XDAT') {
+      const row = ensureRow(rows, currentSurf);
+      const idx = parseNumberOrNull(tokens[1]);
+      const val = parseNumberOrNull(tokens[2]);
+      if (idx === null || val === null) continue;
+      const j = Math.trunc(idx);
+
+      if (j === 1) {
+        row.conic = val;
+      } else if (j === 2) {
+        // XDAT 2 is exported as diameter; store internal qconNrad/C2 as radius.
+        row.qconNrad = Math.abs(val) / 2;
+      } else if (j === 3) {
+        row.qconOffset = val;
+      } else if (j >= 4 && j <= 13) {
+        row[`coef${j - 3}`] = val;
+      }
+      continue;
+    }
+
+    if (key === 'SPS') {
+      const row = ensureRow(rows, currentSurf);
+      const mode = String(tokens[1] ?? '').trim().toUpperCase();
+      if (mode === 'QCN' || mode === 'QCON') {
+        row.surfType = 'Qcon';
+        continue;
+      }
+
+      const idx = parseNumberOrNull(tokens[1]);
+      const val = parseNumberOrNull(tokens[2]);
+      if (idx === null || val === null) continue;
+      const c = Math.trunc(idx);
+      if (c <= 0) continue;
+
+      if (String(row.surfType ?? '').trim() === 'Qcon') {
+        if (c === 1) {
+          row.conic = val;
+        } else if (c === 2) {
+          row.qconNrad = val;
+        } else if (c >= 3 && c <= 12) {
+          row[`coef${c - 2}`] = val;
+        } else if (c === 32) {
+          row.qconTermCount = val;
+        }
+        continue;
+      }
+
+      if (c === 1) {
+        row.conic = val;
+      } else if (c === 2) {
+        row.qconNrad = val;
+      } else if (c >= 3 && c <= 12) {
+        row[`coef${c - 2}`] = val;
+      } else if (c === 32) {
+        row.qconTermCount = val;
       }
       continue;
     }
@@ -670,7 +864,10 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
     }
 
     // Ensure a primary wavelength exists
-    const pw = (primaryWavelengthIndex !== null && Number.isFinite(primaryWavelengthIndex)) ? Math.trunc(primaryWavelengthIndex) : 1;
+    const pwFallback = (otxPrimaryWavelengthIndex !== null && Number.isFinite(otxPrimaryWavelengthIndex))
+      ? Math.trunc(otxPrimaryWavelengthIndex)
+      : 1;
+    const pw = (primaryWavelengthIndex !== null && Number.isFinite(primaryWavelengthIndex)) ? Math.trunc(primaryWavelengthIndex) : pwFallback;
     const primaryOneBased = Math.max(1, Math.min(sourceRows.length, pw));
     for (let i = 0; i < sourceRows.length; i++) sourceRows[i].primary = '';
     if (sourceRows[primaryOneBased - 1]) sourceRows[primaryOneBased - 1].primary = 'Primary Wavelength';
@@ -708,7 +905,7 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
     
     // Skip if already marked as aspheric or non-standard type
     const currentSurfType = String(row.surfType ?? '').trim();
-    if (currentSurfType === 'Aspheric even' || currentSurfType === 'Toric' || currentSurfType === 'Coord Trans') {
+    if (currentSurfType === 'Aspheric even' || currentSurfType === 'Qcon' || currentSurfType === 'Toric' || currentSurfType === 'Coord Trans') {
       continue;
     }
     

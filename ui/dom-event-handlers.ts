@@ -2362,7 +2362,9 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     };
 
     try {
-        (window as any).__cooptSuppressStartupConfigApplyUntil = Date.now() + 5000;
+        // Keep a short debounce to avoid duplicate startup apply, but do not
+        // block the first render handoff for several seconds.
+        (window as any).__cooptSuppressStartupConfigApplyUntil = Date.now() + 1200;
     } catch (_) {}
 
     // Accept optimizer escape snapshot wrapper files directly.
@@ -3073,6 +3075,12 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         alert('Load completed partially: the file was applied to tables, but persistent storage failed.\n\nTry reducing file size or clearing old local data.');
     }
 
+    try {
+        if (!isStaleLoadSession()) {
+            __cooptRequestRenderRedrawWithRows(Array.isArray(effectiveOpticalSystem) ? effectiveOpticalSystem : null);
+        }
+    } catch (_) {}
+
     return true;
 }
 
@@ -3175,6 +3183,8 @@ function __coopt_isInfLike(value: any): boolean {
     return s === 'INF' || s === 'INFINITY' || s === '∞';
 }
 
+const __COOPT_DEFAULT_INF_OBJECT_DISTANCE_MM = 10;
+
 function __coopt_buildFallbackBlocksFromRows(rows: any[]): any[] {
     const safeRows = Array.isArray(rows) ? rows : [];
     const blocks: any[] = [];
@@ -3192,14 +3202,22 @@ function __coopt_buildFallbackBlocksFromRows(rows: any[]): any[] {
     const first = safeRows[0] || {};
     const objectDistanceMode = __coopt_isInfLike(first?.thickness) ? 'INF' : 'Finite';
     const objectDistanceVal = Number(first?.thickness);
+    const objectRenderDistanceVal = Number(first?.objectRenderDistance);
+    const objectParameters = objectDistanceMode === 'INF'
+        ? { objectDistanceMode: 'INF' }
+        : { objectDistanceMode: 'Finite' };
+    if (objectDistanceMode === 'INF') {
+        if (Number.isFinite(objectRenderDistanceVal) && objectRenderDistanceVal > 0) objectParameters.objectDistance = objectRenderDistanceVal;
+        else objectParameters.objectDistance = __COOPT_DEFAULT_INF_OBJECT_DISTANCE_MM;
+    } else if (Number.isFinite(objectDistanceVal) && objectDistanceVal > 0) {
+        objectParameters.objectDistance = objectDistanceVal;
+    }
     blocks.push({
         blockId: 'ObjectSurface-1',
         blockType: 'ObjectSurface',
         role: null,
         constraints: {},
-        parameters: objectDistanceMode === 'INF'
-            ? { objectDistanceMode: 'INF' }
-            : { objectDistanceMode: 'Finite', objectDistance: Number.isFinite(objectDistanceVal) ? objectDistanceVal : 10 },
+        parameters: objectParameters,
         variables: {},
         metadata: { source: 'zemax-fallback' }
     });
@@ -3319,13 +3337,15 @@ function __coopt_normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
         if (infMode) {
             params.objectDistanceMode = 'INF';
             const dInf = Number(params.objectDistance);
-            params.objectDistance = Number.isFinite(dInf) ? dInf : 10;
+            if (Number.isFinite(dInf) && dInf > 0) params.objectDistance = dInf;
+            else params.objectDistance = __COOPT_DEFAULT_INF_OBJECT_DISTANCE_MM;
             continue;
         }
 
         params.objectDistanceMode = 'Finite';
         const d = Number(params.objectDistance);
-        params.objectDistance = Number.isFinite(d) ? d : 10;
+        if (Number.isFinite(d) && d > 0) params.objectDistance = d;
+        else delete params.objectDistance;
     }
 
     if (!hasObjectSurface) {
@@ -3334,7 +3354,7 @@ function __coopt_normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
             blockType: 'ObjectSurface',
             role: null,
             constraints: {},
-            parameters: { objectDistanceMode: 'Finite', objectDistance: 10 },
+            parameters: { objectDistanceMode: 'Finite' },
             variables: {},
             metadata: { source: 'zemax-fallback', inserted: true }
         });
@@ -3490,19 +3510,37 @@ function setupImportZemaxButton(): void {
                         const n = Number(s);
                         return !(Number.isFinite(n) && n > 0);
                     })();
+                    const hasMissingSemidia = parsedRows.some((row: any, index: number) => {
+                        const objectType = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+                        if (objectType === 'object' || objectType === 'ct') return false;
+                        if (index === 0) return false;
+                        return __zmxIsMissingSemidia(row);
+                    });
+                    const imageSurfaceIndex = parsedRows.findIndex((row: any, index: number) => {
+                        if (index === parsedRows.length - 1) return true;
+                        const objectType = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+                        return objectType === 'image';
+                    });
+                    const imageSemidiaMissing = imageSurfaceIndex < 0 || __zmxIsMissingSemidia(parsedRows[imageSurfaceIndex]);
 
-                    autoCalculateMissingSemidia(
-                        Array.isArray(parsed?.sourceRows) ? parsed.sourceRows : [],
-                        Array.isArray(parsed?.objectRows) ? parsed.objectRows : [],
-                        {
-                            entrancePupilDiameterMm: Number(parsed?.entrancePupilDiameterMm),
-                            stopSemidiaWasMissing
-                        }
-                    );
+                    if (hasMissingSemidia || stopSemidiaWasMissing) {
+                        autoCalculateMissingSemidia(
+                            Array.isArray(parsed?.sourceRows) ? parsed.sourceRows : [],
+                            Array.isArray(parsed?.objectRows) ? parsed.objectRows : [],
+                            {
+                                entrancePupilDiameterMm: Number(parsed?.entrancePupilDiameterMm),
+                                stopSemidiaWasMissing
+                            }
+                        );
+                    }
+
+                    if (!imageSemidiaMissing) {
+                        (w as any).__cooptSkipImportImageSemidiaAutoFill = true;
+                    }
                 } catch (_) {}
 
                 try {
-                    if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
+                    if ((w as any).__cooptSkipImportImageSemidiaAutoFill !== true && typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
                         const tryAutoImageSemidia = (triesLeft: number) => {
                             setTimeout(() => {
                                 try {
@@ -3532,9 +3570,16 @@ function setupImportZemaxButton(): void {
                         tryAutoImageSemidia(4);
                     }
                 } catch (_) {}
+                try {
+                    delete (w as any).__cooptSkipImportImageSemidiaAutoFill;
+                } catch (_) {}
 
                 try {
                     __zmxSyncDesignIntentApertureFromOpticalRows();
+                } catch (_) {}
+                try {
+                    const importedRows = Array.isArray(parsed?.rows) ? parsed.rows : null;
+                    __cooptRequestRenderRedrawWithRows(Array.isArray(importedRows) ? importedRows : null);
                 } catch (_) {}
 
             } catch (err) {
@@ -8133,30 +8178,28 @@ function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
         return;
     }
 
-    let rows = Array.isArray(rowsSnapshot) ? rowsSnapshot : [];
-    let objectRows: any[] = [];
     try {
-        if (typeof w.getObjectRows === 'function') {
-            const liveTableRows = w.getObjectRows(w.tableObject);
-            if (Array.isArray(liveTableRows) && liveTableRows.length > 0) {
-                objectRows = liveTableRows.slice();
-            }
+        if (typeof (w as any).__cooptFlushPendingRowsToBlocks === 'function') {
+            (w as any).__cooptFlushPendingRowsToBlocks();
         }
     } catch (_) {}
+
+    let rows = Array.isArray(rowsSnapshot) ? rowsSnapshot.slice() : [];
+    let objectRows: any[] = [];
+    let runtimeSystemConfig: any = null;
+    let activeConfig: any = null;
+
     try {
-        const runtimeSystemConfig = __cooptGetSystemConfig();
-        const activeConfig = runtimeSystemConfig?.configurations?.find((cfg: any) => cfg && String(cfg.id) === String(runtimeSystemConfig?.activeConfigId))
+        runtimeSystemConfig = __cooptGetSystemConfig();
+        activeConfig = runtimeSystemConfig?.configurations?.find((cfg: any) => cfg && String(cfg.id) === String(runtimeSystemConfig?.activeConfigId))
             || runtimeSystemConfig?.configurations?.[0]
             || null;
-        if (objectRows.length === 0 && Array.isArray(activeConfig?.object) && activeConfig.object.length > 0) {
-            objectRows = activeConfig.object.slice();
-        }
-        if (rows.length === 0) {
+    } catch (_) {}
+
+    if (rows.length === 0) {
+        try {
             const activeBlocks = Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
-            if (Array.isArray(activeConfig?.opticalSystem) && activeConfig.opticalSystem.length > 0) {
-                rows = activeConfig.opticalSystem.slice();
-            } else if (activeBlocks.length > 0) {
-                const legacyRows = Array.isArray(activeConfig?.opticalSystem) ? activeConfig.opticalSystem : [];
+            if (activeBlocks.length > 0) {
                 const autoGapResult = cooptAutoApplyGapThicknessModes(activeBlocks, '');
                 const expandedRows = Array.isArray(autoGapResult?.rows)
                     ? autoGapResult.rows
@@ -8165,22 +8208,29 @@ function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
                         return expanded && Array.isArray(expanded.rows) ? expanded.rows : [];
                     })();
                 if (expandedRows.length > 0) {
-                    cooptPreserveLegacySemidiaIntoExpanded(expandedRows, legacyRows);
                     rows = expandedRows.slice();
                     try {
                         activeConfig.opticalSystem = expandedRows;
                     } catch (_) {}
                 }
+            } else if (Array.isArray(activeConfig?.opticalSystem) && activeConfig.opticalSystem.length > 0) {
+                rows = activeConfig.opticalSystem.slice();
+            }
+        } catch (_) {}
+    }
+
+    try {
+        if (typeof w.getObjectRows === 'function') {
+            const tableRows = w.getObjectRows(w.tableObject);
+            if (Array.isArray(tableRows) && tableRows.length > 0) {
+                objectRows = tableRows.slice();
             }
         }
     } catch (_) {}
     if (objectRows.length === 0) {
         try {
-            if (typeof w.getObjectRows === 'function') {
-                const tableRows = w.getObjectRows(w.tableObject);
-                if (Array.isArray(tableRows) && tableRows.length > 0) {
-                    objectRows = tableRows.slice();
-                }
+            if (Array.isArray(activeConfig?.object) && activeConfig.object.length > 0) {
+                objectRows = activeConfig.object.slice();
             }
         } catch (_) {}
     }
@@ -8191,7 +8241,7 @@ function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
     __cooptPendingRenderSyncRequest = {
         rows: Array.isArray(rows) ? rows.slice() : [],
         objectRows: Array.isArray(objectRows) ? objectRows.slice() : [],
-        systemConfig: __cooptGetSystemConfig(),
+        systemConfig: runtimeSystemConfig,
     };
 
     if (__cooptRenderSyncTimer !== null) {
@@ -8255,10 +8305,6 @@ function __cooptRequestRenderRedrawWithRows(rowsSnapshot: any[] | null): void {
                     popup.postMessage({ action: 'request-redraw', rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig, ts: token, token }, '*');
                 }
             }
-        } catch (_) {}
-
-        try {
-            localStorage.setItem('coopt.renderSyncRequest', JSON.stringify({ ts: token, token, rows: renderRowsPayload, objectRows: renderObjectRowsPayload, systemConfig, senderId: getOrCreateCooptWindowSyncSenderId() }));
         } catch (_) {}
 
         try {
@@ -10964,6 +11010,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (!allParamKeys.includes('thickness')) allParamKeys.push('thickness');
                 if (!allParamKeys.includes('surfType')) allParamKeys.push('surfType');
                 if (!allParamKeys.includes('conic')) allParamKeys.push('conic');
+                if (String(params.surfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('qconNrad')) {
+                    allParamKeys.push('qconNrad');
+                }
                 for (let i = 1; i <= 10; i++) {
                     const coefKey = `coef${i}`;
                     if (!allParamKeys.includes(coefKey)) allParamKeys.push(coefKey);
@@ -10993,11 +11042,67 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'SingleSurface' || blockType === 'Mirror') {
                 if (!allParamKeys.includes('frontSurfType')) allParamKeys.push('frontSurfType');
                 if (!allParamKeys.includes('backSurfType')) allParamKeys.push('backSurfType');
+                if (String(params.frontSurfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('frontQconNrad')) {
+                    allParamKeys.push('frontQconNrad');
+                }
+                if (String(params.backSurfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('backQconNrad')) {
+                    allParamKeys.push('backQconNrad');
+                }
                 for (let i = 1; i <= 10; i++) {
                     const frontCoefKey = `frontCoef${i}`;
                     const backCoefKey = `backCoef${i}`;
                     if (!allParamKeys.includes(frontCoefKey)) allParamKeys.push(frontCoefKey);
                     if (!allParamKeys.includes(backCoefKey)) allParamKeys.push(backCoefKey);
+                }
+            }
+            if (blockType === 'Doublet') {
+                if (!allParamKeys.includes('surf1SurfType')) allParamKeys.push('surf1SurfType');
+                if (!allParamKeys.includes('surf2SurfType')) allParamKeys.push('surf2SurfType');
+                if (!allParamKeys.includes('surf3SurfType')) allParamKeys.push('surf3SurfType');
+                if (String(params.surf1SurfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('surf1QconNrad')) {
+                    allParamKeys.push('surf1QconNrad');
+                }
+                if (String(params.surf2SurfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('surf2QconNrad')) {
+                    allParamKeys.push('surf2QconNrad');
+                }
+                if (String(params.surf3SurfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('surf3QconNrad')) {
+                    allParamKeys.push('surf3QconNrad');
+                }
+                for (let i = 1; i <= 10; i++) {
+                    const surf1CoefKey = `surf1Coef${i}`;
+                    const surf2CoefKey = `surf2Coef${i}`;
+                    const surf3CoefKey = `surf3Coef${i}`;
+                    if (!allParamKeys.includes(surf1CoefKey)) allParamKeys.push(surf1CoefKey);
+                    if (!allParamKeys.includes(surf2CoefKey)) allParamKeys.push(surf2CoefKey);
+                    if (!allParamKeys.includes(surf3CoefKey)) allParamKeys.push(surf3CoefKey);
+                }
+            }
+            if (blockType === 'Triplet') {
+                if (!allParamKeys.includes('surf1SurfType')) allParamKeys.push('surf1SurfType');
+                if (!allParamKeys.includes('surf2SurfType')) allParamKeys.push('surf2SurfType');
+                if (!allParamKeys.includes('surf3SurfType')) allParamKeys.push('surf3SurfType');
+                if (!allParamKeys.includes('surf4SurfType')) allParamKeys.push('surf4SurfType');
+                if (String(params.surf1SurfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('surf1QconNrad')) {
+                    allParamKeys.push('surf1QconNrad');
+                }
+                if (String(params.surf2SurfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('surf2QconNrad')) {
+                    allParamKeys.push('surf2QconNrad');
+                }
+                if (String(params.surf3SurfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('surf3QconNrad')) {
+                    allParamKeys.push('surf3QconNrad');
+                }
+                if (String(params.surf4SurfType ?? '').toLowerCase() === 'qcon' && !allParamKeys.includes('surf4QconNrad')) {
+                    allParamKeys.push('surf4QconNrad');
+                }
+                for (let i = 1; i <= 10; i++) {
+                    const surf1CoefKey = `surf1Coef${i}`;
+                    const surf2CoefKey = `surf2Coef${i}`;
+                    const surf3CoefKey = `surf3Coef${i}`;
+                    const surf4CoefKey = `surf4Coef${i}`;
+                    if (!allParamKeys.includes(surf1CoefKey)) allParamKeys.push(surf1CoefKey);
+                    if (!allParamKeys.includes(surf2CoefKey)) allParamKeys.push(surf2CoefKey);
+                    if (!allParamKeys.includes(surf3CoefKey)) allParamKeys.push(surf3CoefKey);
+                    if (!allParamKeys.includes(surf4CoefKey)) allParamKeys.push(surf4CoefKey);
                 }
             }
             const paramKeys = sortParameterKeys(allParamKeys);
@@ -11033,16 +11138,55 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '');
             };
 
+            const isQconSurfTypeValue = (value: any): boolean => {
+                return normalizeSurfTypeLabel(value) === 'qcon';
+            };
+
             const getSurfTypeForCoefKey = (key: string) => {
                 const lower = String(key).toLowerCase();
                 if (lower.startsWith('frontcoef')) return params.frontSurfType;
+                if (lower.startsWith('frontqconnrad')) return params.frontSurfType;
                 if (lower.startsWith('backcoef')) return params.backSurfType;
-                if (lower.startsWith('surf1coef')) return params.surf1SurfType;
-                if (lower.startsWith('surf2coef')) return params.surf2SurfType;
-                if (lower.startsWith('surf3coef')) return params.surf3SurfType;
-                if (lower.startsWith('surf4coef')) return params.surf4SurfType;
+                if (lower.startsWith('backqconnrad')) return params.backSurfType;
+                if (lower.startsWith('surf1coef') || lower.startsWith('surf1qconnrad')) return params.surf1SurfType;
+                if (lower.startsWith('surf2coef') || lower.startsWith('surf2qconnrad')) return params.surf2SurfType;
+                if (lower.startsWith('surf3coef') || lower.startsWith('surf3qconnrad')) return params.surf3SurfType;
+                if (lower.startsWith('surf4coef') || lower.startsWith('surf4qconnrad')) return params.surf4SurfType;
                 return params.surfType;
             };
+
+            const getSurfTypeForConicKey = (key: string) => {
+                const lower = String(key).toLowerCase();
+                if (lower === 'frontconic' || lower === 'frontqconnrad') return params.frontSurfType;
+                if (lower === 'backconic' || lower === 'backqconnrad') return params.backSurfType;
+                if (lower === 'surf1conic' || lower === 'surf1qconnrad') return params.surf1SurfType;
+                if (lower === 'surf2conic' || lower === 'surf2qconnrad') return params.surf2SurfType;
+                if (lower === 'surf3conic' || lower === 'surf3qconnrad') return params.surf3SurfType;
+                if (lower === 'surf4conic' || lower === 'surf4qconnrad') return params.surf4SurfType;
+                if (lower === 'conic') return params.surfType;
+                return undefined;
+            };
+
+            const isQconCoefKey = (key: string): boolean => {
+                if (!/coef\d+/i.test(String(key))) return false;
+                return isQconSurfTypeValue(getSurfTypeForCoefKey(key));
+            };
+
+            const isQconNradKey = (key: string): boolean => {
+                const lower = String(key).toLowerCase();
+                if (lower === 'qconNrad') return true;
+                // Match front/back/surf variants
+                if (/^(?:front|back|surf\d+)?[Qq]con[Nn]rad$/.test(key)) return isQconSurfTypeValue(getSurfTypeForConicKey(key));
+                return false;
+            };
+
+            const QCON_POLYNOMIAL_TOOLTIP = [
+                'Qcon sag: z = z_conic + u^4 * Σ(a_m * Q_m^con(u^2))',
+                'u = r / NRAD',
+                'Q(0,x) = 1',
+                'Q(1,x) = 6x - 5',
+                'Q(n+1,x) = ((A_n x + B_n)Q(n,x)) - C_n Q(n-1,x)'
+            ].join('\n');
 
             const getCoefDisplayLabel = (key: string) => {
                 const match = String(key).match(/coef(\d+)/i);
@@ -11064,7 +11208,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 else if (lower.startsWith('surf3coef')) prefix = 's3 ';
                 else if (lower.startsWith('surf4coef')) prefix = 's4 ';
                 const isQcon = surfType === 'qcon';
-                if (isQcon) return `${prefix}Q${idx - 1}`.trim();
+                if (isQcon) {
+                    // For Qcon: coef1=C3, coef2=C4, etc.
+                    // C1 is conic, C2 is NRAD (shown separately)
+                    return `${prefix}C${idx + 2}`.trim();
+                }
                 if (!isEven && !isOdd) return null;
                 return `${prefix}A${aIndex}`.trim();
             };
@@ -11086,6 +11234,26 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (label === 'surf2SurfType') return 's2 Surf Type';
                 if (label === 'surf3SurfType') return 's3 Surf Type';
                 if (label === 'surf4SurfType') return 's4 Surf Type';
+                if (label === 'conic' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 'C1 (K)';
+                if (label === 'qconNrad') return isQconSurfTypeValue(getSurfTypeForConicKey(label)) ? 'C2 (Nrad)' : '';
+                if (label === 'frontConic' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's1 C1 (K)';
+                if (label === 'frontQconNrad' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's1 C2 (Nrad)';
+                if (label === 'frontQconNrad') return '';
+                if (label === 'backConic' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's2 C1 (K)';
+                if (label === 'backQconNrad' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's2 C2 (Nrad)';
+                if (label === 'backQconNrad') return '';
+                if (label === 'surf1Conic' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's1 C1 (K)';
+                if (label === 'surf1QconNrad' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's1 C2 (Nrad)';
+                if (label === 'surf1QconNrad') return '';
+                if (label === 'surf2Conic' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's2 C1 (K)';
+                if (label === 'surf2QconNrad' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's2 C2 (Nrad)';
+                if (label === 'surf2QconNrad') return '';
+                if (label === 'surf3Conic' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's3 C1 (K)';
+                if (label === 'surf3QconNrad' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's3 C2 (Nrad)';
+                if (label === 'surf3QconNrad') return '';
+                if (label === 'surf4Conic' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's4 C1 (K)';
+                if (label === 'surf4QconNrad' && isQconSurfTypeValue(getSurfTypeForConicKey(label))) return 's4 C2 (Nrad)';
+                if (label === 'surf4QconNrad') return '';
                 if (label === 'frontConic') return 's1 Conic';
                 if (label === 'backConic') return 's2 Conic';
                 if (label === 'surf1Conic') return 's1 Conic';
@@ -11229,7 +11397,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const coefLabel = getCoefDisplayLabel(label);
                 const displayLabel = getDisplayLabelForKey(label);
                 name.textContent = coefLabel || displayLabel;
-                name.title = coefLabel || displayLabel;
+                name.title = isQconCoefKey(label)
+                    ? `${coefLabel || displayLabel}\n\n${QCON_POLYNOMIAL_TOOLTIP}`
+                    : (coefLabel || displayLabel);
                 name.style.fontSize = '12px';
                 name.style.color = isDarkMode ? '#d1d5db' : '#374151';
                 name.style.minWidth = '0';
@@ -12267,6 +12437,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (/^surf2Coef\d+$/.test(key) && params.surf2SurfType === 'Spherical') return true;
                     if (/^surf3Coef\d+$/.test(key) && params.surf3SurfType === 'Spherical') return true;
                     if (/^surf4Coef\d+$/.test(key) && params.surf4SurfType === 'Spherical') return true;
+                    if (isQconNradKey(key) && !isQconSurfTypeValue(getSurfTypeForConicKey(key))) return true;
                     return false;
                 };
 
@@ -13267,7 +13438,6 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
     if (type === 'ObjectSurface') {
         base.parameters = {
             objectDistanceMode: 'Finite',
-            objectDistance: 100,
             zoomPosition: 0,
             zoomGroupProfiles: 'A=0:0,1:0'
         };

@@ -227,9 +227,25 @@ function isGapRow(row) {
 }
 
 function isStopRow(row) {
-    const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.Type ?? '';
-    const t = String(raw ?? '').trim().toLowerCase();
-    return t === 'stop' || t === 'sto';
+    if (!row || typeof row !== 'object') return false;
+    const candidates = [
+        row.type,
+        row.Type,
+        row.surfType,
+        row.surfaceType,
+        row['surf type'],
+        row['object type'],
+        row.object,
+        row.Object,
+        row.objectType,
+        row.material,
+        row._blockType,
+        row.blockType,
+    ];
+    return candidates.some((value) => {
+        const t = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+        return t === 'stop' || t === 'sto' || t === 'aperturestop';
+    });
 }
 
 function isThinLensRow(row) {

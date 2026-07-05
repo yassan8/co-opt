@@ -464,6 +464,8 @@ export interface NativeMtfMapRequest {
   pixelSizeUm: number;
   maxFrequencyLpmm?: number;
   points?: number;
+  sampleFrequenciesLpmm?: number[];
+  directEvalOnly?: boolean;
 }
 
 export interface NativeMtfMapResponse {
@@ -471,6 +473,9 @@ export interface NativeMtfMapResponse {
   frequencyAxis: number[];
   mtfTangential: number[];
   mtfSagittal: number[];
+  sampledFrequenciesLpmm?: number[];
+  sampledMtfTangential?: number[];
+  sampledMtfSagittal?: number[];
   nyquistLpmm: number;
   message: string;
 }
@@ -559,6 +564,9 @@ export interface NativeFieldMtfMapRequest {
   pixelSizeUm?: number;
   opdDisplayMode?: string;
   fieldAxisMode?: "angle" | "height";
+  adaptiveSampling?: boolean;
+  adaptiveThreshold?: number;
+  adaptiveInitialSteps?: number;
 }
 
 export interface NativeFieldMtfMapResponse {

@@ -1,0 +1,3128 @@
+    1: /**
+    2:  * Optical system renderer for 3D visualization
+    3:  */
+    4: 
+    5: import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawToricSurfaceWithOrigin,
+    6:          drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, 
+    7:          drawSemidiaRingWithOriginAndSurface, drawRectApertureWithOriginAndSurface, asphericSurfaceZ, toricSurfaceZ, addMirrorBackText,
+    8:          drawConnectionCornerRings3D } from './surface.ts';
+    9: import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
+   10: import { calculatePrincipalPointPositions } from '../raytracing/core/ray-paraxial.ts';
+   11: 
+   12: type CooptPerfCounter = {
+   13:     count: number;
+   14:     totalMs: number;
+   15:     maxMs: number;
+   16:     lastMs: number;
+   17: };
+   18: 
+   19: function recordCooptPerfSample(name, durationMs) {
+   20:     const safeDuration = Number(durationMs);
+   21:     if (!name || !Number.isFinite(safeDuration) || safeDuration < 0) return;
+   22:     try {
+   23:         const g = globalThis;
+   24:         if (!g.__cooptPerf || typeof g.__cooptPerf !== 'object') {
+   25:             g.__cooptPerf = { samples: {} };
+   26:         }
+   27:         if (!g.__cooptPerf.samples || typeof g.__cooptPerf.samples !== 'object') {
+   28:             g.__cooptPerf.samples = {};
+   29:         }
+   30:         const current = g.__cooptPerf.samples[name] || { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
+   31:         current.count += 1;
+   32:         current.totalMs += safeDuration;
+   33:         current.maxMs = Math.max(current.maxMs, safeDuration);
+   34:         current.lastMs = safeDuration;
+   35:         g.__cooptPerf.samples[name] = current;
+   36:     } catch (_) {}
+   37: }
+   38: 
+   39: const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
+   40: const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordTrans';
+   41: const RENDER_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showDesignIntentLabels';
+   42: const RENDER_PRINCIPAL_POINT_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showPrincipalPointLabels';
+   43: const RENDER_SURFACE_NUMBER_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showSurfaceNumberLabels';
+   44: 
+   45: function __coopt_isCoordTransDebugEnabled() {
+   46:     try {
+   47:         const g: any = (typeof globalThis !== 'undefined') ? globalThis : null;
+   48:         if (g && g.__COOPT_DEBUG_COORD_BREAK) return true;
+   49:         // If running inside an iframe, allow enabling from parent.
+   50:         try {
+   51:             if (g && g.parent && g.parent !== g && g.parent.__COOPT_DEBUG_COORD_BREAK) return true;
+   52:         } catch (_) {}
+   53:         // Also allow enabling via localStorage so both parent/child frames can see it.
+   54:         try {
+   55:             if (typeof localStorage !== 'undefined') {
+   56:                 const v = String(localStorage.getItem(COORD_BREAK_DEBUG_STORAGE_KEY) ?? '').trim();
+   57:                 if (v && v !== '0' && v.toLowerCase() !== 'false') return true;
+   58:             }
+   59:         } catch (_) {}
+   60:     } catch (_) {}
+   61:     return false;
+   62: }
+   63: 
+   64: function __coopt_isPlainObject(v) {
+   65:     return !!v && typeof v === 'object' && !Array.isArray(v);
+   66: }
+   67: 
+   68: function __coopt_parseColorToInt(value) {
+   69:     if (typeof value === 'number' && Number.isFinite(value)) return value;
+   70:     if (typeof value !== 'string') return null;
+   71:     const s = value.trim();
+   72:     if (!s) return null;
+   73:     if (/^0x[0-9a-fA-F]{6}$/.test(s)) return parseInt(s.slice(2), 16);
+   74:     if (/^#[0-9a-fA-F]{6}$/.test(s)) return parseInt(s.slice(1), 16);
+   75:     const n = Number(s);
+   76:     return Number.isFinite(n) ? n : null;
+   77: }
+   78: 
+   79: function __coopt_surfaceColorKey(surface, index0) {
+   80:     try {
+   81:         const bid = String(surface?._blockId ?? '').trim();
+   82:         const role = String(surface?._surfaceRole ?? '').trim();
+   83:         if (bid && role) return `p:${bid}|${role}`;
+   84:     } catch (_) {}
+   85: 
+   86:     try {
+   87:         const sid = Number(surface?.id);
+   88:         if (Number.isFinite(sid)) return `id:${Math.floor(sid)}`;
+   89:     } catch (_) {}
+   90: 
+   91:     return `i:${Math.floor(Number(index0) || 0)}`;
+   92: }
+   93: 
+   94: function __coopt_parseNumberOrNull(v) {
+   95:     if (v === null || v === undefined) return null;
+   96:     if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+   97:     const s = String(v).trim();
+   98:     if (!s) return null;
+   99:     const n = Number(s);
+  100:     return Number.isFinite(n) ? n : null;
+  101: }
+  102: 
+  103: function __coopt_getRenderSemidiaMm(surface) {
+  104:     if (!surface || typeof surface !== 'object') return null;
+  105: 
+  106:     // CB rows propagate the prior surface's semidia in a dedicated field
+  107:     // to avoid confusing it with decenterX (which reuses the semidia column).
+  108:     if (__coopt_isCoordTransSurface(surface)) {
+  109:         const cbActual = __coopt_parseNumberOrNull(surface.__cooptActualSemidia);
+  110:         if (cbActual !== null && cbActual > 0) return cbActual;
+  111:     }
+  112: 
+  113:     const candidates = [
+  114:         surface.semidia,
+  115:         surface.SemiDia,
+  116:         surface['Semi Dia'],
+  117:         surface['semi dia'],
+  118:         surface['Semi Diameter'],
+  119:         surface['semi diameter'],
+  120:         surface.semiDia,
+  121:         surface.semiDiameter,
+  122:         surface.semidiameter,
+  123:         surface['semi_diameter'],
+  124:         surface['semi-diameter'],
+  125:     ];
+  126: 
+  127:     for (const c of candidates) {
+  128:         const n = __coopt_parseNumberOrNull(c);
+  129:         if (n !== null && n > 0) return n;
+  130:     }
+  131: 
+  132:     // Paraxial/ThinLens is an ideal zero-thickness element. Existing projects may
+  133:     // not carry an explicit aperture/semidia, but it still needs a finite visual
+  134:     // height so the ideal-lens symbol and principal-point dimensions can render.
+  135:     try {
+  136:         if (__coopt_isThinLensSurface(surface)) return 10;
+  137:     } catch (_) {}
+  138: 
+  139:     // Stop surfaces may supply diameter-like aperture.
+  140:     try {
+  141:         const objTypeRaw = surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type;
+  142:         const objType = String(objTypeRaw ?? '').trim().toLowerCase();
+  143:         const isStop = objType === 'stop' || objType === 'sto';
+  144:         if (isStop) {
+  145:             const ap = __coopt_parseNumberOrNull(surface.aperture ?? surface.Aperture ?? surface.diameter);
+  146:             if (ap !== null && ap > 0) return ap / 2;
+  147:         }
+  148:     } catch (_) {}
+  149: 
+  150:     return null;
+  151: }
+  152: 
+  153: function __coopt_getRenderApertureShape(surface) {
+  154:     const raw = surface?._apertureShape ?? surface?.apertureShape ?? surface?.ApertureShape;
+  155:     const s = String(raw ?? '').trim();
+  156:     if (!s) return 'Circular';
+  157:     const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+  158:     if (key === 'circle' || key === 'circular') return 'Circular';
+  159:     if (key === 'square' || key === 'sq') return 'Square';
+  160:     if (key === 'rect' || key === 'rectangle' || key === 'rectangular') return 'Rectangular';
+  161:     return 'Circular';
+  162: }
+  163: 
+  164: function __coopt_getRenderApertureDims(surface) {
+  165:     const wRaw = surface?._apertureWidth ?? surface?.apertureWidth ?? surface?.apertureX ?? surface?.apertureWidthMm;
+  166:     const hRaw = surface?._apertureHeight ?? surface?.apertureHeight ?? surface?.apertureY ?? surface?.apertureHeightMm;
+  167:     const w = __coopt_parseNumberOrNull(wRaw);
+  168:     const h = __coopt_parseNumberOrNull(hRaw);
+  169:     return { width: w, height: h };
+  170: }
+  171: 
+  172: function __coopt_getCrosshairHalfExtents(surface, fallbackSemidia) {
+  173:     const shape = __coopt_getRenderApertureShape(surface);
+  174:     const { width, height } = __coopt_getRenderApertureDims(surface);
+  175:     const fallback = (Number.isFinite(fallbackSemidia) && fallbackSemidia > 0) ? fallbackSemidia : 0;
+  176: 
+  177:     if (shape === 'Square') {
+  178:         const side = (width !== null && width > 0) ? width : ((height !== null && height > 0) ? height : (fallback > 0 ? fallback * 2 : 0));
+  179:         const half = side > 0 ? side / 2 : fallback;
+  180:         return { halfX: half, halfY: half };
+  181:     }
+  182: 
+  183:     if (shape === 'Rectangular') {
+  184:         const w = (width !== null && width > 0) ? width : ((height !== null && height > 0) ? height : (fallback > 0 ? fallback * 2 : 0));
+  185:         const h = (height !== null && height > 0) ? height : ((width !== null && width > 0) ? width : (fallback > 0 ? fallback * 2 : 0));
+  186:         return { halfX: w > 0 ? w / 2 : fallback, halfY: h > 0 ? h / 2 : fallback };
+  187:     }
+  188: 
+  189:     return { halfX: fallback, halfY: fallback };
+  190: }
+  191: 
+  192: function __coopt_isGapSurface(surface) {
+  193:     if (!surface || typeof surface !== 'object') return false;
+  194: 
+  195:     const blockType = String(surface._blockType ?? surface.blockType ?? '').trim().toLowerCase();
+  196:     if (blockType === 'gap' || blockType === 'airgap') return true;
+  197: 
+  198:     const objType = String(surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type ?? '').trim().toLowerCase();
+  199:     if (objType === 'gap' || objType === 'airgap' || objType === 'air gap') return true;
+  200: 
+  201:     const role = String(surface._surfaceRole ?? '').trim().toLowerCase();
+  202:     if (role === 'gap' || role === 'airgap') return true;
+  203: 
+  204:     return false;
+  205: }
+  206: 
+  207: function __coopt_isCoordTransSurface(surface) {
+  208:     if (!surface || typeof surface !== 'object') return false;
+  209: 
+  210:     const values = [
+  211:         surface.surfType, surface.type, surface.surfaceType, surface.surface_type,
+  212:         surface['object type'], surface.object, surface.Object,
+  213:         surface.comment, surface.Comment,
+  214:         surface._blockType, surface.blockType, surface.block_type, surface.blockTypeName,
+  215:     ];
+  216: 
+  217:     return values.some((value) => {
+  218:         const normalized = String(value ?? '').trim().toLowerCase();
+  219:         if (!normalized) return false;
+  220:         return normalized === 'ct'
+  221:             || normalized === 'coordtrans'
+  222:             || normalized === 'coordinatebreak'
+  223:             || normalized === 'coord trans'
+  224:             || normalized === 'coordinate break'
+  225:             || normalized.includes('coord trans')
+  226:             || normalized.includes('coordinate break');
+  227:     });
+  228: }
+  229: 
+  230: function __coopt_isThinLensSurface(surface) {
+  231:     if (!surface || typeof surface !== 'object') return false;
+  232:     const blockType = String(surface._blockType ?? surface.blockType ?? '').trim().toLowerCase();
+  233:     return blockType === 'thinlens' || blockType === 'paraxial';
+  234: }
+  235: 
+  236: function __coopt_isThinLensBackSurface(surface) {
+  237:     return __coopt_isThinLensSurface(surface)
+  238:         && String(surface._surfaceRole ?? '').trim().toLowerCase() === 'back';
+  239: }
+  240: 
+  241: function __coopt_makeFlatThinLensSurface(surface) {
+  242:     if (!__coopt_isThinLensSurface(surface)) return surface;
+  243:     return {
+  244:         ...surface,
+  245:         surfType: 'Spherical',
+  246:         radius: 'INF',
+  247:         radiusX: 'INF',
+  248:         radiusY: 'INF',
+  249:         conic: '',
+  250:         axis: '',
+  251:         coef1: '', coef2: '', coef3: '', coef4: '', coef5: '',
+  252:         coef6: '', coef7: '', coef8: '', coef9: '', coef10: ''
+  253:     };
+  254: }
+  255: 
+  256: function __coopt_isStopSurface(surface) {
+  257:     if (!surface || typeof surface !== 'object') return false;
+  258: 
+  259:     const candidates = [
+  260:         surface.type,
+  261:         surface.surfType,
+  262:         surface['object type'],
+  263:         surface.object,
+  264:         surface.objectType,
+  265:     ];
+  266: 
+  267:     for (const value of candidates) {
+  268:         const normalized = String(value ?? '')
+  269:             .trim()
+  270:             .toLowerCase()
+  271:             .replace(/[\s_-]+/g, '');
+  272:         if (normalized === 'stop' || normalized === 'sto' || normalized === 'aperturestop') {
+  273:             return true;
+  274:         }
+  275:     }
+  276: 
+  277:     return false;
+  278: }
+  279: 
+  280: function __coopt_isObjectSurface(surface) {
+  281:     if (!surface || typeof surface !== 'object') return false;
+  282:     const objType = String(surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type ?? '')
+  283:         .trim()
+  284:         .toLowerCase()
+  285:     .replace(/[\s_-]+/g, '');
+  286:     const blockType = String(surface._blockType ?? surface.blockType ?? '')
+  287:         .trim()
+  288:         .toLowerCase()
+  289:         .replace(/[\s_-]+/g, '');
+  290:     return objType === 'object' || objType === 'objectsurface' || blockType === 'objectsurface';
+  291: }
+  292: 
+  293: function __coopt_isImageSurface(surface) {
+  294:     if (!surface || typeof surface !== 'object') return false;
+  295:     const objType = String(surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type ?? '')
+  296:         .trim()
+  297:         .toLowerCase()
+  298:         .replace(/[\s_-]+/g, '');
+  299:     const surfType = String(surface.surfType ?? surface.type ?? '')
+  300:         .trim()
+  301:         .toLowerCase()
+  302:         .replace(/[\s_-]+/g, '');
+  303:     const blockType = String(surface._blockType ?? surface.blockType ?? '')
+  304:         .trim()
+  305:         .toLowerCase()
+  306:         .replace(/[\s_-]+/g, '');
+  307:     return surfType === 'imagesurface' || objType === 'image' || objType === 'imagesurface' || blockType === 'imagesurface';
+  308: }
+  309: 
+  310: function __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMatrix, color) {
+  311:     const shape = __coopt_getRenderApertureShape(surface);
+  312:     const { width, height } = __coopt_getRenderApertureDims(surface);
+  313: 
+  314:     if (shape === 'Square') {
+  315:         const side = (width !== null) ? width : height;
+  316:         if (side !== null && side > 0) {
+  317:             drawRectApertureWithOriginAndSurface(scene, side, side, 128, color, origin, rotationMatrix, surface);
+  318:             return;
+  319:         }
+  320:     }
+  321: 
+  322:     if (shape === 'Rectangular') {
+  323:         if (width !== null && width > 0 && height !== null && height > 0) {
+  324:             drawRectApertureWithOriginAndSurface(scene, width, height, 128, color, origin, rotationMatrix, surface);
+  325:             return;
+  326:         }
+  327:     }
+  328: 
+  329:     drawSemidiaRingWithOriginAndSurface(scene, semidia, 100, color, origin, rotationMatrix, surface);
+  330: }
+  331: 
+  332: function __coopt_getImageSemidiaWarningColor(surface, fallbackColor) {
+  333:     const shortfall = Number(surface?.__cooptRenderImageSemidiaWarning?.shortfall);
+  334:     if (Number.isFinite(shortfall) && shortfall > 1e-6) return 0xd92d20;
+  335:     return fallbackColor;
+  336: }
+  337: 
+  338: function __coopt_withSurfaceRenderMeta(surface, surfaceIndex0) {
+  339:     if (!surface || typeof surface !== 'object') return surface;
+  340:     return {
+  341:         ...surface,
+  342:         __cooptSurfaceIndex0: surfaceIndex0,
+  343:     };
+  344: }
+  345: 
+  346: function __coopt_computeRenderableCenter(object3d) {
+  347:     try {
+  348:         const posAttr = object3d?.geometry?.getAttribute?.('position');
+  349:         if (!posAttr || !Number.isFinite(Number(posAttr.count)) || posAttr.count <= 0) return null;
+  350:         let sx = 0;
+  351:         let sy = 0;
+  352:         let sz = 0;
+  353:         for (let i = 0; i < posAttr.count; i += 1) {
+  354:             sx += Number(posAttr.getX(i)) || 0;
+  355:             sy += Number(posAttr.getY(i)) || 0;
+  356:             sz += Number(posAttr.getZ(i)) || 0;
+  357:         }
+  358:         const inv = 1 / posAttr.count;
+  359:         return { x: sx * inv, y: sy * inv, z: sz * inv };
+  360:     } catch (_) {
+  361:         return null;
+  362:     }
+  363: }
+  364: 
+  365: function __coopt_removeSceneObject(scene, object3d) {
+  366:     if (!scene || !object3d) return;
+  367:     try { scene.remove(object3d); } catch (_) {}
+  368:     try { object3d.geometry?.dispose?.(); } catch (_) {}
+  369:     try {
+  370:         if (Array.isArray(object3d.material)) {
+  371:             object3d.material.forEach((m) => m?.dispose?.());
+  372:         } else {
+  373:             object3d.material?.dispose?.();
+  374:         }
+  375:     } catch (_) {}
+  376: }
+  377: 
+  378: function __coopt_isImageSurfaceDiagEnabled() {
+  379:     try {
+  380:         const w = (typeof window !== 'undefined') ? window : null;
+  381:         if (w && (w as any).__cooptImageSurfaceDiag === true) return true;
+  382:     } catch (_) {}
+  383:     return false;
+  384: }
+  385: 
+  386: let __coopt_lastImageSurfaceDiagRunAtMs = 0;
+  387: function __coopt_shouldRunImageSurfaceDiag() {
+  388:     if (!__coopt_isImageSurfaceDiagEnabled()) return false;
+  389:     const now = Date.now();
+  390:     if (now - __coopt_lastImageSurfaceDiagRunAtMs < 1200) return false;
+  391:     __coopt_lastImageSurfaceDiagRunAtMs = now;
+  392:     return true;
+  393: }
+  394: 
+  395: function __coopt_getExpectedImageOriginFromPreviousRow(opticalSystemData, surfaceOrigins, imageIndex0) {
+  396:     if (!Array.isArray(opticalSystemData) || !Array.isArray(surfaceOrigins)) return null;
+  397:     if (!Number.isInteger(imageIndex0) || imageIndex0 <= 0) return null;
+  398:     const prevRow = opticalSystemData[imageIndex0 - 1];
+  399:     const prevEntry = surfaceOrigins[imageIndex0 - 1];
+  400:     if (!prevRow || !prevEntry?.origin) return null;
+  401: 
+  402:     const hasAttachedGap = (prevRow as any)?.__cooptGapApplied === true;
+  403:     const spacingRaw = hasAttachedGap
+  404:         ? ((prevRow as any).__cooptGapThickness ?? prevRow?.thickness)
+  405:         : (prevRow?.thickness ?? (prevRow as any).__cooptGapThickness);
+  406:     const spacing = __coopt_parseNumberOrNull(spacingRaw);
+  407:     if (spacing === null || !Number.isFinite(spacing) || spacing === 0) return null;
+  408: 
+  409:     const prevRot = prevEntry.rotationMatrix;
+  410:     const axis = (Array.isArray(prevRot) && prevRot.length >= 3)
+  411:         ? {
+  412:             x: Number(prevRot?.[0]?.[2]) || 0,
+  413:             y: Number(prevRot?.[1]?.[2]) || 0,
+  414:             z: Number(prevRot?.[2]?.[2]) || 1,
+  415:         }
+  416:         : { x: 0, y: 0, z: 1 };
+  417: 
+  418:     return {
+  419:         x: Number(prevEntry.origin.x || 0) + axis.x * spacing,
+  420:         y: Number(prevEntry.origin.y || 0) + axis.y * spacing,
+  421:         z: Number(prevEntry.origin.z || 0) + axis.z * spacing,
+  422:     };
+  423: }
+  424: 
+  425: function __coopt_dedupeImageSurfaceArtifacts(scene, imageSurfaceIndex0, expectedOrigin) {
+  426:     if (!scene || !Number.isInteger(imageSurfaceIndex0)) return;
+  427:     const expected = expectedOrigin || { x: 0, y: 0, z: 0 };
+  428:     const rings = [];
+  429:     const crossY = [];
+  430:     const crossX = [];
+  431: 
+  432:     scene.traverse((child) => {
+  433:         const ud = child?.userData;
+  434:         if (!ud || typeof ud !== 'object') return;
+  435:         if (ud.type === 'semidiaRing' && Number(ud.surfaceIndex0) === imageSurfaceIndex0) {
+  436:             rings.push(child);
+  437:             return;
+  438:         }
+  439:         if (ud.type === 'plane-crosshair' && Number(ud.surfaceIndex) === imageSurfaceIndex0) {
+  440:             const dir = String(ud.direction || '').toLowerCase();
+  441:             if (dir === 'vertical') crossY.push(child);
+  442:             if (dir === 'horizontal') crossX.push(child);
+  443:         }
+  444:     });
+  445: 
+  446:     const distance2 = (obj) => {
+  447:         const c = __coopt_computeRenderableCenter(obj);
+  448:         if (!c) return Number.POSITIVE_INFINITY;
+  449:         const dx = c.x - expected.x;
+  450:         const dy = c.y - expected.y;
+  451:         const dz = c.z - expected.z;
+  452:         return dx * dx + dy * dy + dz * dz;
+  453:     };
+  454: 
+  455:     const dedupeList = (items) => {
+  456:         if (!Array.isArray(items) || items.length <= 1) return;
+  457:         const sorted = [...items].sort((a, b) => distance2(a) - distance2(b));
+  458:         for (let i = 1; i < sorted.length; i += 1) {
+  459:             __coopt_removeSceneObject(scene, sorted[i]);
+  460:         }
+  461:     };
+  462: 
+  463:     dedupeList(rings);
+  464:     dedupeList(crossY);
+  465:     dedupeList(crossX);
+  466: }
+  467: 
+  468: function __coopt_pruneNearbyNonImageRings(scene, imageSurfaceIndex0, expectedOrigin, toleranceMm = 2.0) {
+  469:     if (!scene || !Number.isInteger(imageSurfaceIndex0) || !expectedOrigin) return;
+  470:     const tol = Number(toleranceMm);
+  471:     if (!Number.isFinite(tol) || tol <= 0) return;
+  472: 
+  473:     const expected = {
+  474:         x: Number(expectedOrigin.x || 0),
+  475:         y: Number(expectedOrigin.y || 0),
+  476:         z: Number(expectedOrigin.z || 0),
+  477:     };
+  478: 
+  479:     const nearby = [];
+  480:     scene.traverse((child) => {
+  481:         const ud = child?.userData;
+  482:         if (!ud || ud.type !== 'semidiaRing') return;
+  483:         const ringSurfaceIndex0 = Number(ud.surfaceIndex0);
+  484:         if (Number.isInteger(ringSurfaceIndex0) && ringSurfaceIndex0 === imageSurfaceIndex0) return;
+  485: 
+  486:         const center = __coopt_computeRenderableCenter(child);
+  487:         if (!center) return;
+  488:         const dx = center.x - expected.x;
+  489:         const dy = center.y - expected.y;
+  490:         const dz = center.z - expected.z;
+  491:         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  492:         if (Number.isFinite(dist) && dist <= tol) {
+  493:             nearby.push({ child, dist, surfaceIndex0: Number.isInteger(ringSurfaceIndex0) ? ringSurfaceIndex0 : null });
+  494:         }
+  495:     });
+  496: 
+  497:     if (nearby.length <= 3) return;
+  498: 
+  499:     const sorted = nearby.sort((a, b) => a.dist - b.dist);
+  500:     const indexedBySurface = new Map();
+  501:     const unindexedEntries = [];
+  502: 
+  503:     for (const entry of sorted) {
+  504:         if (entry.surfaceIndex0 === null) {
+  505:             unindexedEntries.push(entry);
+  506:             continue;
+  507:         }
+  508:         const key = String(entry.surfaceIndex0);
+  509:         if (!indexedBySurface.has(key)) {
+  510:             indexedBySurface.set(key, entry);
+  511:         }
+  512:     }
+  513: 
+  514:     const keepObjects = new Set(
+  515:         Array.from(indexedBySurface.values())
+  516:             .sort((a, b) => {
+  517:                 if (b.surfaceIndex0 !== a.surfaceIndex0) return b.surfaceIndex0 - a.surfaceIndex0;
+  518:                 return a.dist - b.dist;
+  519:             })
+  520:             .slice(0, 3)
+  521:             .map((entry) => entry.child)
+  522:     );
+  523: 
+  524:     if (keepObjects.size === 0 && unindexedEntries.length > 0) {
+  525:         keepObjects.add(unindexedEntries[0].child);
+  526:     }
+  527: 
+  528:     const toRemove = sorted
+  529:         .filter((entry) => !keepObjects.has(entry.child))
+  530:         .map((entry) => entry.child);
+  531: 
+  532:     if (toRemove.length > 0) {
+  533:         for (const obj of toRemove) {
+  534:             __coopt_removeSceneObject(scene, obj);
+  535:         }
+  536:         if (__coopt_isImageSurfaceDiagEnabled()) {
+  537:             console.log('[ImageSurfaceDiag] pruned nearby non-image rings', {
+  538:                 imageSurfaceIndex0,
+  539:                 removedCount: toRemove.length,
+  540:                 toleranceMm: tol,
+  541:             });
+  542:         }
+  543:     }
+  544: }
+  545: 
+  546: function __coopt_removeUnindexedSemidiaRings(scene) {
+  547:     if (!scene) return;
+  548:     const toRemove = [];
+  549:     scene.traverse((child) => {
+  550:         const ud = child?.userData;
+  551:         if (!ud || ud.type !== 'semidiaRing') return;
+  552:         const idx = Number(ud.surfaceIndex0);
+  553:         if (!Number.isInteger(idx)) {
+  554:             toRemove.push(child);
+  555:         }
+  556:     });
+  557: 
+  558:     if (toRemove.length > 0) {
+  559:         for (const obj of toRemove) {
+  560:             __coopt_removeSceneObject(scene, obj);
+  561:         }
+  562:         if (__coopt_isImageSurfaceDiagEnabled()) {
+  563:             console.log('[ImageSurfaceDiag] removed unindexed semidia rings', {
+  564:                 removedCount: toRemove.length,
+  565:             });
+  566:         }
+  567:     }
+  568: }
+  569: 
+  570: function __coopt_pruneNearbyConnectionCornerRings(scene, expectedOrigin, toleranceMm = 8.0) {
+  571:     if (!scene || !expectedOrigin) return;
+  572:     const tol = Number(toleranceMm);
+  573:     if (!Number.isFinite(tol) || tol <= 0) return;
+  574: 
+  575:     const expected = {
+  576:         x: Number(expectedOrigin.x || 0),
+  577:         y: Number(expectedOrigin.y || 0),
+  578:         z: Number(expectedOrigin.z || 0),
+  579:     };
+  580: 
+  581:     const toRemove = [];
+  582:     scene.traverse((child) => {
+  583:         const ud = child?.userData;
+  584:         if (!ud || ud.type !== 'connectionCornerRing') return;
+  585:         const center = __coopt_computeRenderableCenter(child);
+  586:         if (!center) return;
+  587:         const dx = center.x - expected.x;
+  588:         const dy = center.y - expected.y;
+  589:         const dz = center.z - expected.z;
+  590:         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  591:         if (Number.isFinite(dist) && dist <= tol) {
+  592:             toRemove.push(child);
+  593:         }
+  594:     });
+  595: 
+  596:     if (toRemove.length > 0) {
+  597:         for (const obj of toRemove) {
+  598:             __coopt_removeSceneObject(scene, obj);
+  599:         }
+  600:         if (__coopt_isImageSurfaceDiagEnabled()) {
+  601:             console.log('[ImageSurfaceDiag] pruned nearby connection corner rings', {
+  602:                 removedCount: toRemove.length,
+  603:                 toleranceMm: tol,
+  604:             });
+  605:         }
+  606:     }
+  607: }
+  608: 
+  609: function __coopt_translateRenderableGeometry(object3d, dx, dy, dz) {
+  610:     if (!object3d?.geometry || (!dx && !dy && !dz)) return;
+  611:     try {
+  612:         const posAttr = object3d.geometry.getAttribute?.('position');
+  613:         if (!posAttr || !Number.isFinite(Number(posAttr.count)) || posAttr.count <= 0) return;
+  614:         for (let i = 0; i < posAttr.count; i += 1) {
+  615:             posAttr.setXYZ(
+  616:                 i,
+  617:                 (Number(posAttr.getX(i)) || 0) + dx,
+  618:                 (Number(posAttr.getY(i)) || 0) + dy,
+  619:                 (Number(posAttr.getZ(i)) || 0) + dz
+  620:             );
+  621:         }
+  622:         posAttr.needsUpdate = true;
+  623:         object3d.geometry.computeBoundingSphere?.();
+  624:         object3d.geometry.computeBoundingBox?.();
+  625:     } catch (_) {}
+  626: }
+  627: 
+  628: function __coopt_snapImageSurfaceArtifactsToOrigin(scene, imageSurfaceIndex0, expectedOrigin) {
+  629:     if (!scene || !Number.isInteger(imageSurfaceIndex0) || !expectedOrigin) return;
+  630:     const targets = [];
+  631:     scene.traverse((child) => {
+  632:         const ud = child?.userData;
+  633:         if (!ud || typeof ud !== 'object') return;
+  634:         if (ud.type === 'semidiaRing' && Number(ud.surfaceIndex0) === imageSurfaceIndex0) {
+  635:             targets.push(child);
+  636:             return;
+  637:         }
+  638:         if (ud.type === 'plane-crosshair' && Number(ud.surfaceIndex) === imageSurfaceIndex0) {
+  639:             targets.push(child);
+  640:         }
+  641:     });
+  642: 
+  643:     for (const obj of targets) {
+  644:         const center = __coopt_computeRenderableCenter(obj);
+  645:         if (!center) continue;
+  646:         const dx = Number(expectedOrigin.x || 0) - center.x;
+  647:         const dy = Number(expectedOrigin.y || 0) - center.y;
+  648:         const dz = Number(expectedOrigin.z || 0) - center.z;
+  649:         const err2 = dx * dx + dy * dy + dz * dz;
+  650:         if (err2 > 1e-10) {
+  651:             __coopt_translateRenderableGeometry(obj, dx, dy, dz);
+  652:         }
+  653:     }
+  654: }
+  655: 
+  656: function __coopt_logImageRingDiagnostics(scene, imageSurfaceIndex0, expectedOrigin) {
+  657:     if (!__coopt_shouldRunImageSurfaceDiag()) return;
+  658:     if (!scene || !Number.isInteger(imageSurfaceIndex0)) return;
+  659: 
+  660:     const expected = expectedOrigin || { x: 0, y: 0, z: 0 };
+  661:     const ringRows = [];
+  662:     const crossRows = [];
+  663:     const cornerRingRows = [];
+  664: 
+  665:     const distMm = (center) => {
+  666:         if (!center) return Number.POSITIVE_INFINITY;
+  667:         const dx = Number(center.x || 0) - Number(expected.x || 0);
+  668:         const dy = Number(center.y || 0) - Number(expected.y || 0);
+  669:         const dz = Number(center.z || 0) - Number(expected.z || 0);
+  670:         return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  671:     };
+  672: 
+  673:     scene.traverse((child) => {
+  674:         const ud = child?.userData;
+  675:         if (!ud || typeof ud !== 'object') return;
+  676: 
+  677:         if (ud.type === 'semidiaRing') {
+  678:             const center = __coopt_computeRenderableCenter(child);
+  679:             ringRows.push({
+  680:                 surfaceIndex0: Number.isInteger(Number(ud.surfaceIndex0)) ? Number(ud.surfaceIndex0) : null,
+  681:                 semidia: Number.isFinite(Number(ud.semidia)) ? Number(ud.semidia) : null,
+  682:                 center,
+  683:                 distanceToExpectedMm: distMm(center),
+  684:                 name: String(child?.name || ''),
+  685:             });
+  686:             return;
+  687:         }
+  688: 
+  689:         if (ud.type === 'plane-crosshair') {
+  690:             const center = __coopt_computeRenderableCenter(child);
+  691:             crossRows.push({
+  692:                 surfaceIndex: Number.isInteger(Number(ud.surfaceIndex)) ? Number(ud.surfaceIndex) : null,
+  693:                 direction: String(ud.direction || ''),
+  694:                 center,
+  695:                 distanceToExpectedMm: distMm(center),
+  696:                 name: String(child?.name || ''),
+  697:             });
+  698:             return;
+  699:         }
+  700: 
+  701:         if (ud.type === 'connectionCornerRing') {
+  702:             const center = __coopt_computeRenderableCenter(child);
+  703:             cornerRingRows.push({
+  704:                 surfaceIndex: Number.isInteger(Number(ud.surfaceIndex)) ? Number(ud.surfaceIndex) : null,
+  705:                 direction: String(ud.direction || ''),
+  706:                 center,
+  707:                 distanceToExpectedMm: distMm(center),
+  708:                 name: String(child?.name || ''),
+  709:             });
+  710:         }
+  711:     });
+  712: 
+  713:     const countsBySurfaceIndex0 = {};
+  714:     for (const row of ringRows) {
+  715:         const key = String(row.surfaceIndex0);
+  716:         countsBySurfaceIndex0[key] = (Number(countsBySurfaceIndex0[key]) || 0) + 1;
+  717:     }
+  718: 
+  719:     const nearExpectedRings = ringRows
+  720:         .filter((row) => Number.isFinite(Number(row.distanceToExpectedMm)) && Number(row.distanceToExpectedMm) <= 2.0)
+  721:         .sort((a, b) => Number(a.distanceToExpectedMm) - Number(b.distanceToExpectedMm));
+  722: 
+  723:     const imageCrossRows = crossRows
+  724:         .filter((row) => row.surfaceIndex === imageSurfaceIndex0)
+  725:         .sort((a, b) => Number(a.distanceToExpectedMm) - Number(b.distanceToExpectedMm));
+  726: 
+  727:     const nearExpectedCornerRings = cornerRingRows
+  728:         .filter((row) => Number.isFinite(Number(row.distanceToExpectedMm)) && Number(row.distanceToExpectedMm) <= 8.0)
+  729:         .sort((a, b) => Number(a.distanceToExpectedMm) - Number(b.distanceToExpectedMm));
+  730: 
+  731:     console.log('[ImageSurfaceDiag] render summary', {
+  732:         imageSurfaceIndex0,
+  733:         expectedOrigin: {
+  734:             x: Number(expected.x || 0),
+  735:             y: Number(expected.y || 0),
+  736:             z: Number(expected.z || 0),
+  737:         },
+  738:         ringCount: ringRows.length,
+  739:         crosshairCount: crossRows.length,
+  740:         connectionCornerRingCount: cornerRingRows.length,
+  741:         ringCountsBySurfaceIndex0: countsBySurfaceIndex0,
+  742:         nearExpectedRingCount: nearExpectedRings.length,
+  743:         nearExpectedConnectionCornerRingCount: nearExpectedCornerRings.length,
+  744:         imageCrosshairCount: imageCrossRows.length,
+  745:     });
+  746: 
+  747:     console.log('[ImageSurfaceDiag] near-expected rings (<=2mm)', nearExpectedRings.slice(0, 12));
+  748:     console.log('[ImageSurfaceDiag] near-expected connection corner rings (<=8mm)', nearExpectedCornerRings.slice(0, 12));
+  749:     console.log('[ImageSurfaceDiag] image crosshairs', imageCrossRows.slice(0, 12));
+  750: }
+  751: 
+  752: function __coopt_loadSurfaceColorOverrides() {
+  753:     try {
+  754:         if (typeof localStorage === 'undefined') return {};
+  755:         const raw = localStorage.getItem(SURFACE_COLOR_OVERRIDES_STORAGE_KEY);
+  756:         if (!raw) return {};
+  757:         const parsed = JSON.parse(raw);
+  758:         return __coopt_isPlainObject(parsed) ? parsed : {};
+  759:     } catch (_) {
+  760:         return {};
+  761:     }
+  762: }
+  763: 
+  764: function __coopt_shouldShowDesignIntentLabels(value) {
+  765:     if (typeof value === 'boolean') return value;
+  766:     try {
+  767:         if (typeof localStorage !== 'undefined') {
+  768:             const raw = String(localStorage.getItem(RENDER_LABEL_TOGGLE_STORAGE_KEY) ?? '').trim().toLowerCase();
+  769:             if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+  770:             if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+  771:         }
+  772:     } catch (_) {}
+  773:     return false;
+  774: }
+  775: 
+  776: function __coopt_shouldShowPrincipalPointLabels(value) {
+  777:     if (typeof value === 'boolean') return value;
+  778:     try {
+  779:         if (typeof localStorage !== 'undefined') {
+  780:             const raw = String(localStorage.getItem(RENDER_PRINCIPAL_POINT_LABEL_TOGGLE_STORAGE_KEY) ?? '').trim().toLowerCase();
+  781:             if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+  782:             if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+  783:         }
+  784:     } catch (_) {}
+  785:     return false;
+  786: }
+  787: 
+  788: function __coopt_shouldShowSurfaceNumberLabels(value) {
+  789:     if (typeof value === 'boolean') return value;
+  790:     try {
+  791:         if (typeof localStorage !== 'undefined') {
+  792:             const raw = String(localStorage.getItem(RENDER_SURFACE_NUMBER_LABEL_TOGGLE_STORAGE_KEY) ?? '').trim().toLowerCase();
+  793:             if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+  794:             if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+  795:         }
+  796:     } catch (_) {}
+  797:     return false;
+  798: }
+  799: 
+  800: function __coopt_normalizeBlockDisplayType(blockType) {
+  801:     const raw = String(blockType ?? '').trim();
+  802:     if (!raw) return '';
+  803:     if (raw === 'PositiveLens') return 'Lens';
+  804:     if (raw === 'Paraxial') return 'Paraxial';
+  805:     if (raw === 'ObjectPlane') return 'ObjectSurface';
+  806:     return raw;
+  807: }
+  808: 
+  809: function __coopt_isRenderableDesignIntentBlockType(blockType) {
+  810:     const t = __coopt_normalizeBlockDisplayType(blockType).toLowerCase();
+  811:     if (!t) return false;
+  812:     return !(t === 'coordtrans' || t === 'coord trans' || t === 'coordinate transform' || t === 'coordinatebreak' || t === 'coordinate break');
+  813: }
+  814: 
+  815: function __coopt_getActiveDesignIntentBlocks() {
+  816:     try {
+  817:         const w = (typeof window !== 'undefined') ? window : null;
+  818:         if (!w) return [];
+  819:         const systemConfig = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+  820:             ? w.loadSystemConfigurationsFromTableConfig()
+  821:             : ((typeof w.loadSystemConfigurations === 'function') ? w.loadSystemConfigurations() : null);
+  822:         const activeId = systemConfig?.activeConfigId;
+  823:         const activeCfg = Array.isArray(systemConfig?.configurations)
+  824:             ? (systemConfig.configurations.find((cfg) => cfg && String(cfg.id) === String(activeId)) || systemConfig.configurations[0])
+  825:             : null;
+  826:         const blocks = Array.isArray(activeCfg?.blocks) ? activeCfg.blocks : [];
+  827:         return blocks.filter((block) => block && __coopt_isRenderableDesignIntentBlockType(block.blockType));
+  828:     } catch (_) {
+  829:         return [];
+  830:     }
+  831: }
+  832: 
+  833: function __coopt_vectorFromOriginEntry(entry) {
+  834:     const origin = entry?.origin || entry || {};
+  835:     return new THREE.Vector3(
+  836:         Number(origin?.x) || 0,
+  837:         Number(origin?.y) || 0,
+  838:         Number(origin?.z) || 0
+  839:     );
+  840: }
+  841: 
+  842: function __coopt_averageOriginForRange(surfaceOrigins, minIdx, maxIdx) {
+  843:     if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return null;
+  844:     const start = Math.max(0, Math.min(surfaceOrigins.length - 1, Number(minIdx) || 0));
+  845:     const end = Math.max(start, Math.min(surfaceOrigins.length - 1, Number(maxIdx) || start));
+  846:     const acc = new THREE.Vector3(0, 0, 0);
+  847:     let count = 0;
+  848:     for (let i = start; i <= end; i += 1) {
+  849:         const v = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+  850:         acc.add(v);
+  851:         count += 1;
+  852:     }
+  853:     return count > 0 ? acc.multiplyScalar(1 / count) : null;
+  854: }
+  855: 
+  856: function __coopt_buildSurfRangeByBlockId(opticalSystemData) {
+  857:     const surfRangeByBlockId = new Map();
+  858:     if (!Array.isArray(opticalSystemData)) return surfRangeByBlockId;
+  859:     for (let i = 0; i < opticalSystemData.length; i += 1) {
+  860:         const row = opticalSystemData[i];
+  861:         const blockId = String(row?._blockId ?? '').trim();
+  862:         if (!blockId) continue;
+  863: 
+  864:         const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+  865:         const surfaceRole = String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase();
+  866:         if ((blockType === 'paraxial' || blockType === 'thinlens') && surfaceRole === 'back') continue;
+  867: 
+  868:         const prev = surfRangeByBlockId.get(blockId);
+  869:         if (!prev) surfRangeByBlockId.set(blockId, { min: i, max: i });
+  870:         else {
+  871:             if (i < prev.min) prev.min = i;
+  872:             if (i > prev.max) prev.max = i;
+  873:         }
+  874:     }
+  875:     return surfRangeByBlockId;
+  876: }
+  877: 
+  878: function __coopt_formatSurfRangeText(range) {
+  879:     if (!range || !Number.isFinite(Number(range.min)) || !Number.isFinite(Number(range.max))) return '';
+  880:     return (range.min === range.max)
+  881:         ? `Surf ${range.min}`
+  882:         : `Surf ${range.min}窶・{range.max}`;
+  883: }
+  884: 
+  885: function __coopt_getDesignIntentDisplayBase(blockType, blockId) {
+  886:     const normalized = __coopt_normalizeBlockDisplayType(blockType);
+  887:     if (normalized === 'PositiveLens' || normalized === 'Lens') return 'Lens';
+  888:     if (normalized === 'Paraxial') return 'Paraxial';
+  889:     if (normalized === 'AirGap' || normalized === 'Gap') return 'Gap';
+  890:     if (normalized === 'Doublet' || normalized === 'Triplet' || normalized === 'Mirror' || normalized === 'Stop' || normalized === 'SingleSurface') return normalized;
+  891: 
+  892:     const id = String(blockId ?? '').trim();
+  893:     if (/^Lens-/i.test(id)) return 'Lens';
+  894:     if (/^(Gap|AirGap)-/i.test(id)) return 'Gap';
+  895:     if (/^Doublet-/i.test(id)) return 'Doublet';
+  896:     if (/^Triplet-/i.test(id)) return 'Triplet';
+  897:     if (/^Mirror-/i.test(id)) return 'Mirror';
+  898:     if (/^Stop-/i.test(id)) return 'Stop';
+  899:     if (/^Surf-/i.test(id)) return 'SingleSurface';
+  900: 
+  901:     return '';
+  902: }
+  903: 
+  904: function __coopt_makeSequentialDesignIntentLabel(displayCounts, blockType, blockId) {
+  905:     const base = __coopt_getDesignIntentDisplayBase(blockType, blockId);
+  906:     if (!base) return String(blockId ?? '').trim() || String(blockType ?? '').trim();
+  907:     const next = (displayCounts.get(base) || 0) + 1;
+  908:     displayCounts.set(base, next);
+  909:     return `${base}-${next}`;
+  910: }
+  911: 
+  912: function __coopt_indexToAlphabetLabel(index) {
+  913:     let value = Math.max(0, Math.floor(Number(index) || 0));
+  914:     let label = '';
+  915:     do {
+  916:         label = String.fromCharCode(65 + (value % 26)) + label;
+  917:         value = Math.floor(value / 26) - 1;
+  918:     } while (value >= 0);
+  919:     return label;
+  920: }
+  921: 
+  922: function __coopt_makeStandaloneParaxialPrincipalLabel(displayCounts) {
+  923:     const key = '__standalone_paraxial_principal_label__';
+  924:     const next = Number(displayCounts.get(key) || 0);
+  925:     displayCounts.set(key, next + 1);
+  926:     return __coopt_indexToAlphabetLabel(next);
+  927: }
+  928: 
+  929: function __coopt_getDesignIntentLabelStyle(blockType, blockId) {
+  930:     const base = __coopt_getDesignIntentDisplayBase(blockType, blockId);
+  931:     if (base === 'Lens' || base === 'Paraxial' || base === 'Doublet' || base === 'Triplet') {
+  932:         return {
+  933:             fillStyle: 'rgba(223,241,255,0.96)',
+  934:             strokeStyle: '#bfdbfe',
+  935:             textStyle: '#1d4ed8',
+  936:             lineColor: 0x93c5fd,
+  937:         };
+  938:     }
+  939:     return {
+  940:         fillStyle: 'rgba(255,255,255,0.94)',
+  941:         strokeStyle: '#475569',
+  942:         textStyle: '#111827',
+  943:         lineColor: 0x475569,
+  944:     };
+  945: }
+  946: 
+  947: function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOrigins) {
+  948:     const descriptors = [];
+  949:     const blocks = __coopt_getActiveDesignIntentBlocks();
+  950:     const surfRangeByBlockId = __coopt_buildSurfRangeByBlockId(opticalSystemData);
+  951:     const seenIds = new Set();
+  952:     const displayCounts = new Map();
+  953: 
+  954:     const objectAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[0]) : null;
+  955:     const imageAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[surfaceOrigins.length - 1]) : null;
+  956: 
+  957:     const pushDescriptor = (id, text, anchor, style = null, metadata = null) => {
+  958:         const safeId = String(id ?? '').trim();
+  959:         if (!safeId || !text || !anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !Number.isFinite(anchor.z)) return;
+  960:         if (seenIds.has(safeId)) return;
+  961:         seenIds.add(safeId);
+  962:         descriptors.push({
+  963:             id: safeId,
+  964:             text: String(text),
+  965:             anchor,
+  966:             style: style || __coopt_getDesignIntentLabelStyle('', safeId),
+  967:             blockType: String(metadata?.blockType ?? '').trim(),
+  968:             isGap: metadata?.isGap === true,
+  969:         });
+  970:     };
+  971: 
+  972:     if (blocks.length > 0) {
+  973:         const findNeighborAnchor = (startIndex, direction) => {
+  974:             for (let i = startIndex + direction; i >= 0 && i < blocks.length; i += direction) {
+  975:                 const block = blocks[i];
+  976:                 const blockType = __coopt_normalizeBlockDisplayType(block?.blockType);
+  977:                 const blockId = String(block?.blockId ?? '').trim();
+  978:                 if (blockType === 'ObjectSurface' && objectAnchor) return objectAnchor.clone();
+  979:                 if (blockType === 'ImageSurface' && imageAnchor) return imageAnchor.clone();
+  980:                 const range = blockId ? surfRangeByBlockId.get(blockId) : null;
+  981:                 if (range) {
+  982:                     const idx = direction < 0 ? range.max : range.min;
+  983:                     return __coopt_vectorFromOriginEntry(surfaceOrigins[idx]);
+  984:                 }
+  985:             }
+  986:             return null;
+  987:         };
+  988: 
+  989:         for (let i = 0; i < blocks.length; i += 1) {
+  990:             const block = blocks[i];
+  991:             const blockType = __coopt_normalizeBlockDisplayType(block?.blockType);
+  992:             const blockId = String(block?.blockId ?? '').trim() || blockType || `Block-${i + 1}`;
+  993:             let anchor = null;
+  994: 
+  995:             if (blockType === 'ObjectSurface') {
+  996:                 continue;
+  997:             } else if (blockType === 'ImageSurface') {
+  998:                 anchor = imageAnchor ? imageAnchor.clone() : null;
+  999:             } else {
+ 1000:                 const range = surfRangeByBlockId.get(blockId);
+ 1001:                 if (range) {
+ 1002:                     anchor = __coopt_averageOriginForRange(surfaceOrigins, range.min, range.max);
+ 1003:                 } else if (blockType === 'Gap' || blockType === 'AirGap') {
+ 1004:                     const prevAnchor = findNeighborAnchor(i, -1);
+ 1005:                     const nextAnchor = findNeighborAnchor(i, 1);
+ 1006:                     if (prevAnchor && nextAnchor) anchor = prevAnchor.clone().lerp(nextAnchor, 0.5);
+ 1007:                     else anchor = prevAnchor || nextAnchor;
+ 1008:                 }
+ 1009:             }
+ 1010: 
+ 1011:             const displayText = __coopt_makeSequentialDesignIntentLabel(displayCounts, blockType, blockId);
+ 1012:             const labelStyle = __coopt_getDesignIntentLabelStyle(blockType, blockId);
+ 1013:             pushDescriptor(blockId, displayText, anchor, labelStyle, {
+ 1014:                 blockType,
+ 1015:                 isGap: blockType === 'Gap' || blockType === 'AirGap',
+ 1016:             });
+ 1017:         }
+ 1018:     }
+ 1019: 
+ 1020:     if (descriptors.length > 0) return descriptors;
+ 1021: 
+ 1022:     for (const [blockId, range] of surfRangeByBlockId.entries()) {
+ 1023:         const anchor = __coopt_averageOriginForRange(surfaceOrigins, range.min, range.max);
+ 1024:         if (/^Object(Surface|Plane)?/i.test(String(blockId))) continue;
+ 1025:         const displayText = __coopt_makeSequentialDesignIntentLabel(displayCounts, '', blockId);
+ 1026:         const displayBase = __coopt_getDesignIntentDisplayBase('', blockId);
+ 1027:         pushDescriptor(blockId, displayText, anchor, __coopt_getDesignIntentLabelStyle('', blockId), {
+ 1028:             blockType: displayBase,
+ 1029:             isGap: displayBase === 'Gap',
+ 1030:         });
+ 1031:     }
+ 1032: 
+ 1033:     return descriptors;
+ 1034: }
+ 1035: 
+ 1036: function __coopt_addDesignIntentLabelPolyline(scene, points, color = 0x475569) {
+ 1037:     if (!scene || !Array.isArray(points) || points.length < 2) return;
+ 1038:     const geometry = new THREE.BufferGeometry().setFromPoints(points);
+ 1039:     const material = new THREE.LineBasicMaterial({
+ 1040:         color,
+ 1041:         transparent: true,
+ 1042:         opacity: 0.85,
+ 1043:         depthTest: false,
+ 1044:         depthWrite: false,
+ 1045:     });
+ 1046:     const line = new THREE.Line(geometry, material);
+ 1047:     line.renderOrder = 65000;
+ 1048:     line.frustumCulled = false;
+ 1049:     line.userData = { type: 'design-intent-label-line', isOpticalElement: true };
+ 1050:     scene.add(line);
+ 1051: }
+ 1052: 
+ 1053: function __coopt_addDesignIntentLabelSprite(scene, text, position, style = {}) {
+ 1054:     if (!scene || !text || !position) return;
+ 1055:     const canvas = document.createElement('canvas');
+ 1056:     const context = canvas.getContext('2d');
+ 1057:     if (!context) return;
+ 1058: 
+ 1059:     const fontPt = Number(style?.fontPt) > 0 ? Number(style.fontPt) : 25;
+ 1060:     const paddingX = Number(style?.paddingX) >= 0 ? Number(style.paddingX) : 10;
+ 1061:     const paddingY = Number(style?.paddingY) >= 0 ? Number(style.paddingY) : 5;
+ 1062:     const fillStyle = String(style?.fillStyle || 'rgba(255,255,255,0.94)');
+ 1063:     const strokeStyle = String(style?.strokeStyle || '#475569');
+ 1064:     const textStyle = String(style?.textStyle || '#111827');
+ 1065:     const fontWeight = String(style?.fontWeight || '600');
+ 1066:     const fontFamily = String(style?.fontFamily || 'Arial, sans-serif');
+ 1067:     const drawFrame = style?.drawFrame !== false;
+ 1068:     const rotation = Number(style?.rotation || 0);
+ 1069:     context.font = `${fontWeight} ${fontPt}pt ${fontFamily}`;
+ 1070:     const metrics = context.measureText(String(text));
+ 1071:     const textHeight = Math.ceil(fontPt * 1.55);
+ 1072:     canvas.width = Math.ceil(metrics.width + paddingX * 2);
+ 1073:     canvas.height = Math.ceil(textHeight + paddingY * 2);
+ 1074: 
+ 1075:     context.font = `${fontWeight} ${fontPt}pt ${fontFamily}`;
+ 1076:     if (drawFrame) {
+ 1077:         context.fillStyle = fillStyle;
+ 1078:         context.fillRect(0, 0, canvas.width, canvas.height);
+ 1079:         context.strokeStyle = strokeStyle;
+ 1080:         context.lineWidth = 1;
+ 1081:         context.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
+ 1082:     }
+ 1083:     context.fillStyle = textStyle;
+ 1084:     context.textAlign = 'center';
+ 1085:     context.textBaseline = 'middle';
+ 1086:     context.fillText(String(text), canvas.width / 2, canvas.height / 2);
+ 1087: 
+ 1088:     const texture = new THREE.CanvasTexture(canvas);
+ 1089:     const spriteMaterial = new THREE.SpriteMaterial({
+ 1090:         map: texture,
+ 1091:         transparent: true,
+ 1092:         depthTest: false,
+ 1093:         depthWrite: false,
+ 1094:     });
+ 1095:     const sprite = new THREE.Sprite(spriteMaterial);
+ 1096:     spriteMaterial.rotation = rotation;
+ 1097:     sprite.center.set(0.5, 0.5);
+ 1098:     sprite.scale.set(canvas.width / 13, canvas.height / 13, 1);
+ 1099:     sprite.position.copy(position);
+ 1100:     sprite.renderOrder = 65010;
+ 1101:     sprite.frustumCulled = false;
+ 1102:     sprite.userData = { type: 'design-intent-label', isOpticalElement: true, labelText: String(text) };
+ 1103:     scene.add(sprite);
+ 1104: }
+ 1105: 
+ 1106: function __coopt_measureDesignIntentLabelWorldSize(text, style = {}) {
+ 1107:     const canvas = document.createElement('canvas');
+ 1108:     const context = canvas.getContext('2d');
+ 1109:     if (!context) return { width: 24, height: 6 };
+ 1110: 
+ 1111:     const fontPt = Number(style?.fontPt) > 0 ? Number(style.fontPt) : 25;
+ 1112:     const paddingX = Number(style?.paddingX) >= 0 ? Number(style.paddingX) : 10;
+ 1113:     const paddingY = Number(style?.paddingY) >= 0 ? Number(style.paddingY) : 5;
+ 1114:     const fontWeight = String(style?.fontWeight || '600');
+ 1115:     const fontFamily = String(style?.fontFamily || 'Arial, sans-serif');
+ 1116:     context.font = `${fontWeight} ${fontPt}pt ${fontFamily}`;
+ 1117:     const metrics = context.measureText(String(text));
+ 1118:     const textHeight = Math.ceil(fontPt * 1.55);
+ 1119:     const canvasWidth = Math.ceil(metrics.width + paddingX * 2);
+ 1120:     const canvasHeight = Math.ceil(textHeight + paddingY * 2);
+ 1121: 
+ 1122:     return {
+ 1123:         width: canvasWidth / 13,
+ 1124:         height: canvasHeight / 13,
+ 1125:     };
+ 1126: }
+ 1127: 
+ 1128: function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceOrigins, options = {}) {
+ 1129:     if (!scene || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return;
+ 1130:     if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return;
+ 1131: 
+ 1132:     const descriptors = __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOrigins);
+ 1133:     if (!descriptors.length) return;
+ 1134: 
+ 1135:     const axis = (String(options?.axis ?? 'YZ').trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+ 1136:     const getVerticalCoord = (vec) => axis === 'XZ' ? vec.x : vec.y;
+ 1137:     const getDepthCoord = (vec) => axis === 'XZ' ? vec.y : vec.x;
+ 1138:     const makePoint = (vertical, depth, z) => {
+ 1139:         return axis === 'XZ'
+ 1140:             ? new THREE.Vector3(vertical, depth, z)
+ 1141:             : new THREE.Vector3(depth, vertical, z);
+ 1142:     };
+ 1143:     const makeMostlyVerticalLabelPoint = (anchor, labelVertical, zShift) => {
+ 1144:         const anchorVertical = getVerticalCoord(anchor);
+ 1145:         const vertical = Math.abs(labelVertical - anchorVertical) < 0.5 ? (anchorVertical + (labelVertical >= anchorVertical ? 0.5 : -0.5)) : labelVertical;
+ 1146:         return makePoint(vertical, getDepthCoord(anchor), Number(anchor?.z || 0) + zShift);
+ 1147:     };
+ 1148: 
+ 1149:     let surfaceTop = Number.NEGATIVE_INFINITY;
+ 1150:     let surfaceBottom = Number.POSITIVE_INFINITY;
+ 1151:     for (let i = 0; i < opticalSystemData.length; i += 1) {
+ 1152:         const surface = opticalSystemData[i];
+ 1153:         if (!surface || __coopt_isGapSurface(surface)) continue;
+ 1154:         const originVec = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+ 1155:         const semidia = __coopt_getRenderSemidiaMm(surface);
+ 1156:         const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
+ 1157:         const halfExtent = axis === 'XZ'
+ 1158:             ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0)
+ 1159:             : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
+ 1160:         surfaceTop = Math.max(surfaceTop, getVerticalCoord(originVec) + halfExtent);
+ 1161:         surfaceBottom = Math.min(surfaceBottom, getVerticalCoord(originVec) - halfExtent);
+ 1162:     }
+ 1163:     if (!Number.isFinite(surfaceTop)) {
+ 1164:         surfaceTop = Math.max(...descriptors.map((d) => getVerticalCoord(d.anchor)));
+ 1165:     }
+ 1166:     if (!Number.isFinite(surfaceBottom)) {
+ 1167:         surfaceBottom = Math.min(...descriptors.map((d) => getVerticalCoord(d.anchor)));
+ 1168:     }
+ 1169: 
+ 1170:     const primaryEntries = descriptors.filter((entry) => entry?.isGap !== true);
+ 1171:     const gapEntries = descriptors.filter((entry) => entry?.isGap === true);
+ 1172: 
+ 1173:     const layoutGroup = (entries, baseVertical, verticalDir = 1) => {
+ 1174:         const ordered = [...entries];
+ 1175:         const center = (ordered.length - 1) / 2;
+ 1176:         for (let i = 0; i < ordered.length; i += 1) {
+ 1177:             const entry = ordered[i];
+ 1178:             const zShift = (i - center) * 4;
+ 1179:             const verticalOffset = ordered.length > 6 ? Math.floor(i / 6) * 6 : 0;
+ 1180:             const labelVertical = baseVertical + verticalDir * verticalOffset;
+ 1181:             const labelAnchor = makeMostlyVerticalLabelPoint(entry.anchor, labelVertical, zShift);
+ 1182: 
+ 1183:             __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()], Number(entry?.style?.lineColor ?? 0x475569));
+ 1184:             __coopt_addDesignIntentLabelSprite(scene, entry.text, labelAnchor, entry?.style || {});
+ 1185:         }
+ 1186:     };
+ 1187: 
+ 1188:     const primaryBase = surfaceTop + 10;
+ 1189:     const gapBase = surfaceBottom - 16;
+ 1190: 
+ 1191:     layoutGroup(primaryEntries, primaryBase, 1);
+ 1192:     layoutGroup(gapEntries, gapBase, -1);
+ 1193: }
+ 1194: 
+ 1195: function __coopt_shouldLabelSurfaceNumber(surface) {
+ 1196:     if (!surface || __coopt_isGapSurface(surface) || __coopt_isCoordTransSurface(surface)) return false;
+ 1197:     if (__coopt_isThinLensBackSurface(surface)) return false;
+ 1198:     if (__coopt_isObjectSurface(surface)) return false;
+ 1199:     if (__coopt_isImageSurface(surface)) return false;
+ 1200:     return true;
+ 1201: }
+ 1202: 
+ 1203: function __coopt_addSurfaceNumberLabelsToScene(scene, opticalSystemData, surfaceOrigins, options = {}) {
+ 1204:     if (!scene || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return;
+ 1205:     if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return;
+ 1206: 
+ 1207:     const axis = (String(options?.axis ?? 'YZ').trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+ 1208:     const planeOffset = Number(options?.crossSectionCenterOffset) || 0;
+ 1209:     const getVerticalCoord = (vec) => axis === 'XZ' ? vec.x : vec.y;
+ 1210:     const getHorizontalCoord = (vec) => vec.z;
+ 1211:     const projectPointToSectionPlane = (vec) => {
+ 1212:         return axis === 'XZ'
+ 1213:             ? new THREE.Vector3(Number(vec?.x || 0), planeOffset, Number(vec?.z || 0))
+ 1214:             : new THREE.Vector3(planeOffset, Number(vec?.y || 0), Number(vec?.z || 0));
+ 1215:     };
+ 1216:     const makePoint = (vertical, horizontal) => {
+ 1217:         return axis === 'XZ'
+ 1218:             ? new THREE.Vector3(vertical, planeOffset, horizontal)
+ 1219:             : new THREE.Vector3(planeOffset, vertical, horizontal);
+ 1220:     };
+ 1221: 
+ 1222:     const labeledRows = [];
+ 1223:     for (let i = 0; i < opticalSystemData.length; i += 1) {
+ 1224:         const surface = opticalSystemData[i];
+ 1225:         if (!__coopt_shouldLabelSurfaceNumber(surface)) continue;
+ 1226:         const anchor = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+ 1227:         if (!anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !Number.isFinite(anchor.z)) continue;
+ 1228:         const projectedAnchor = projectPointToSectionPlane(anchor);
+ 1229:         const semidia = __coopt_getRenderSemidiaMm(surface);
+ 1230:         const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
+ 1231:         const halfExtent = axis === 'XZ'
+ 1232:             ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0)
+ 1233:             : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
+ 1234:         labeledRows.push({
+ 1235:             index0: i,
+ 1236:             anchor: projectedAnchor,
+ 1237:             halfExtent,
+ 1238:             vertical: getVerticalCoord(projectedAnchor),
+ 1239:             horizontal: getHorizontalCoord(projectedAnchor),
+ 1240:         });
+ 1241:     }
+ 1242:     if (!labeledRows.length) return;
+ 1243: 
+ 1244:     labeledRows.sort((left, right) => {
+ 1245:         const horizontalDelta = left.horizontal - right.horizontal;
+ 1246:         if (Math.abs(horizontalDelta) > 1e-6) return horizontalDelta;
+ 1247:         return left.index0 - right.index0;
+ 1248:     });
+ 1249: 
+ 1250:     const baseVertical = labeledRows.reduce((maxValue, entry) => {
+ 1251:         return Math.max(maxValue, Number(entry.vertical) + Number(entry.halfExtent));
+ 1252:     }, Number.NEGATIVE_INFINITY) + 10;
+ 1253:     const surfaceNumberLabelStyle = {
+ 1254:         fontPt: 25,
+ 1255:         paddingX: 2,
+ 1256:         paddingY: 1,
+ 1257:         fontWeight: '700',
+ 1258:     };
+ 1259:     const layoutEntries = labeledRows.map((entry, visibleIndex) => {
+ 1260:         const labelText = `S${visibleIndex + 1}`;
+ 1261:         const worldSize = __coopt_measureDesignIntentLabelWorldSize(labelText, surfaceNumberLabelStyle);
+ 1262:         return {
+ 1263:             ...entry,
+ 1264:             labelText,
+ 1265:             width: Math.max(5, Number(worldSize?.width || 0)),
+ 1266:             desiredCenter: Number(entry.horizontal),
+ 1267:             assignedCenter: Number(entry.horizontal),
+ 1268:         };
+ 1269:     });
+ 1270: 
+ 1271:     const desiredMin = layoutEntries.reduce((minValue, entry) => Math.min(minValue, Number(entry.desiredCenter)), Number.POSITIVE_INFINITY);
+ 1272:     const desiredMax = layoutEntries.reduce((maxValue, entry) => Math.max(maxValue, Number(entry.desiredCenter)), Number.NEGATIVE_INFINITY);
+ 1273:     const desiredMid = Number.isFinite(desiredMin) && Number.isFinite(desiredMax)
+ 1274:         ? (desiredMin + desiredMax) * 0.5
+ 1275:         : 0;
+ 1276:     const minLabelGap = 0;
+ 1277:     const totalPackedWidth = layoutEntries.reduce((sum, entry, index) => {
+ 1278:         const width = Number(entry.width) || 0;
+ 1279:         return sum + width + (index > 0 ? minLabelGap : 0);
+ 1280:     }, 0);
+ 1281:     let cursor = desiredMid - totalPackedWidth * 0.5;
+ 1282:     for (let i = 0; i < layoutEntries.length; i += 1) {
+ 1283:         const entry = layoutEntries[i];
+ 1284:         const halfWidth = entry.width * 0.5;
+ 1285:         cursor += halfWidth;
+ 1286:         entry.assignedCenter = cursor;
+ 1287:         cursor += halfWidth + minLabelGap;
+ 1288:     }
+ 1289: 
+ 1290:     for (let i = 0; i < layoutEntries.length; i += 1) {
+ 1291:         const entry = layoutEntries[i];
+ 1292:         const assignedHorizontal = entry.assignedCenter;
+ 1293:         const labelAnchor = makePoint(baseVertical, assignedHorizontal);
+ 1294:         __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()], 0x000000);
+ 1295:         __coopt_addDesignIntentLabelSprite(scene, entry.labelText, labelAnchor, {
+ 1296:             ...surfaceNumberLabelStyle,
+ 1297:             fillStyle: 'rgba(248,250,252,0.94)',
+ 1298:             strokeStyle: '#94a3b8',
+ 1299:             textStyle: '#0f172a',
+ 1300:         });
+ 1301:     }
+ 1302: }
+ 1303: 
+ 1304: function __coopt_getZoomGroupName(block) {
+ 1305:     try {
+ 1306:         const params = (block && typeof block.parameters === 'object') ? block.parameters : null;
+ 1307:         const raw = String(params?.zoomGroup ?? '').trim();
+ 1308:         if (!raw) return '';
+ 1309:         return /^fixed$/i.test(raw) ? '' : raw;
+ 1310:     } catch (_) {
+ 1311:         return '';
+ 1312:     }
+ 1313: }
+ 1314: 
+ 1315: function __coopt_isPrincipalPointGroupBlockType(blockType) {
+ 1316:     const t = __coopt_normalizeBlockDisplayType(blockType).toLowerCase();
+ 1317:     if (!t) return false;
+ 1318:     return !(t === 'objectsurface'
+ 1319:         || t === 'imagesurface'
+ 1320:         || t === 'gap'
+ 1321:         || t === 'airgap'
+ 1322:         || t === 'stop'
+ 1323:         || t === 'coordtrans'
+ 1324:         || t === 'coord trans'
+ 1325:         || t === 'coordinate transform'
+ 1326:         || t === 'coordinatebreak'
+ 1327:         || t === 'coordinate break');
+ 1328: }
+ 1329: 
+ 1330: function __coopt_buildPrincipalPointSubsystem(opticalSystemData, startIdx, endIdx) {
+ 1331:     if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+ 1332:     const start = Math.max(0, Math.min(opticalSystemData.length - 1, Number(startIdx) || 0));
+ 1333:     const end = Math.max(start, Math.min(opticalSystemData.length - 1, Number(endIdx) || start));
+ 1334: 
+ 1335:     const subsystem = [{
+ 1336:         surface: 0,
+ 1337:         'object type': 'Object',
+ 1338:         thickness: Infinity,
+ 1339:         radius: Infinity,
+ 1340:         comment: 'Virtual Object'
+ 1341:     }];
+ 1342: 
+ 1343:     for (let i = start; i <= end; i += 1) {
+ 1344:         const row = opticalSystemData[i];
+ 1345:         if (!row || typeof row !== 'object') continue;
+ 1346:         if (__coopt_isGapSurface(row) || __coopt_isCoordTransSurface(row)) continue;
+ 1347:         const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+ 1348:         if (objectType === 'object' || objectType === 'image') continue;
+ 1349:         subsystem.push({ ...row });
+ 1350:     }
+ 1351: 
+ 1352:     if (subsystem.length <= 1) return null;
+ 1353:     subsystem.push({
+ 1354:         surface: subsystem.length,
+ 1355:         'object type': 'Image',
+ 1356:         thickness: 0,
+ 1357:         radius: Infinity,
+ 1358:         comment: 'Virtual Image'
+ 1359:     });
+ 1360:     return subsystem;
+ 1361: }
+ 1362: 
+ 1363: function __coopt_getPrincipalPointPhysicalRange(opticalSystemData, startIdx, endIdx) {
+ 1364:     if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
+ 1365: 
+ 1366:     const start = Math.max(0, Math.min(opticalSystemData.length - 1, Number(startIdx) || 0));
+ 1367:     const end = Math.max(start, Math.min(opticalSystemData.length - 1, Number(endIdx) || start));
+ 1368: 
+ 1369:     let physicalStart = null;
+ 1370:     for (let i = start; i <= end; i += 1) {
+ 1371:         const row = opticalSystemData[i];
+ 1372:         if (!row || __coopt_isGapSurface(row) || __coopt_isCoordTransSurface(row)) continue;
+ 1373:         const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+ 1374:         if (objectType === 'object' || objectType === 'image') continue;
+ 1375:         physicalStart = i;
+ 1376:         break;
+ 1377:     }
+ 1378: 
+ 1379:     if (!Number.isInteger(physicalStart)) return null;
+ 1380: 
+ 1381:     let physicalEnd = physicalStart;
+ 1382:     for (let i = end; i >= physicalStart; i -= 1) {
+ 1383:         const row = opticalSystemData[i];
+ 1384:         if (!row || __coopt_isGapSurface(row) || __coopt_isCoordTransSurface(row)) continue;
+ 1385:         const objectType = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
+ 1386:         if (objectType === 'object' || objectType === 'image') continue;
+ 1387:         physicalEnd = i;
+ 1388:         break;
+ 1389:     }
+ 1390: 
+ 1391:     return { startIdx: physicalStart, endIdx: physicalEnd };
+ 1392: }
+ 1393: 
+ 1394: function __coopt_expandPrincipalPointRangeForThinLensBack(opticalSystemData, range) {
+ 1395:     if (!Array.isArray(opticalSystemData) || !range) return range;
+ 1396: 
+ 1397:     const startIdx = Math.max(0, Math.min(opticalSystemData.length - 1, Number(range.startIdx) || 0));
+ 1398:     let endIdx = Math.max(startIdx, Math.min(opticalSystemData.length - 1, Number(range.endIdx) || startIdx));
+ 1399:     const endRow = opticalSystemData[endIdx];
+ 1400:     const endBlockId = String(endRow?._blockId ?? '').trim();
+ 1401:     const endBlockType = String(endRow?._blockType ?? endRow?.blockType ?? '').trim().toLowerCase();
+ 1402: 
+ 1403:     if ((endBlockType === 'paraxial' || endBlockType === 'thinlens') && endBlockId) {
+ 1404:         for (let i = endIdx + 1; i < opticalSystemData.length; i += 1) {
+ 1405:             const row = opticalSystemData[i];
+ 1406:             const rowBlockId = String(row?._blockId ?? '').trim();
+ 1407:             const rowBlockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+ 1408:             const rowSurfaceRole = String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase();
+ 1409: 
+ 1410:             if (rowBlockId !== endBlockId) break;
+ 1411:             if ((rowBlockType === 'paraxial' || rowBlockType === 'thinlens') && rowSurfaceRole === 'back') {
+ 1412:                 endIdx = i;
+ 1413:                 break;
+ 1414:             }
+ 1415:         }
+ 1416:     }
+ 1417: 
+ 1418:     return { startIdx, endIdx };
+ 1419: }
+ 1420: 
+ 1421: function __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins, wavelengthUm = 0.5876, axis = 'YZ') {
+ 1422:     const blocks = __coopt_getActiveDesignIntentBlocks();
+ 1423:     const surfRangeByBlockId = __coopt_buildSurfRangeByBlockId(opticalSystemData);
+ 1424:     const groups = new Map();
+ 1425:     const standaloneDisplayCounts = new Map();
+ 1426: 
+ 1427:     const registerGroup = (groupKey, zoomGroupLabel, range, order) => {
+ 1428:         if (!groupKey || !zoomGroupLabel || !range) return;
+ 1429:         const existing = groups.get(groupKey) || {
+ 1430:             zoomGroup: zoomGroupLabel,
+ 1431:             startIdx: range.min,
+ 1432:             endIdx: range.max,
+ 1433:             order,
+ 1434:         };
+ 1435:         existing.startIdx = Math.min(existing.startIdx, range.min);
+ 1436:         existing.endIdx = Math.max(existing.endIdx, range.max);
+ 1437:         groups.set(groupKey, existing);
+ 1438:     };
+ 1439: 
+ 1440:     for (let i = 0; i < blocks.length; i += 1) {
+ 1441:         const block = blocks[i];
+ 1442:         const blockType = String(block?.blockType ?? '').trim();
+ 1443:         if (!__coopt_isPrincipalPointGroupBlockType(blockType)) continue;
+ 1444: 
+ 1445:         const normalizedBlockType = __coopt_normalizeBlockDisplayType(blockType);
+ 1446:         const zoomGroup = __coopt_getZoomGroupName(block);
+ 1447:         const standaloneParaxialLabel = (!zoomGroup && normalizedBlockType === 'Paraxial')
+ 1448:             ? __coopt_makeStandaloneParaxialPrincipalLabel(standaloneDisplayCounts)
+ 1449:             : '';
+ 1450:         if (!zoomGroup && !standaloneParaxialLabel) continue;
+ 1451: 
+ 1452:         const blockId = String(block?.blockId ?? '').trim();
+ 1453:         if (!blockId) continue;
+ 1454:         const range = surfRangeByBlockId.get(blockId);
+ 1455:         if (!range) continue;
+ 1456: 
+ 1457:         const groupKey = zoomGroup || `__standalone_paraxial__:${blockId}`;
+ 1458:         registerGroup(groupKey, zoomGroup || standaloneParaxialLabel, range, i);
+ 1459:     }
+ 1460: 
+ 1461:     if (groups.size === 0) {
+ 1462:         const fallbackEntries = Array.from(surfRangeByBlockId.entries())
+ 1463:             .map(([blockId, range]) => ({ blockId, range }))
+ 1464:             .sort((a, b) => a.range.min - b.range.min);
+ 1465: 
+ 1466:         for (let i = 0; i < fallbackEntries.length; i += 1) {
+ 1467:             const entry = fallbackEntries[i];
+ 1468:             const row = opticalSystemData?.[entry.range.min] || null;
+ 1469:             const blockType = __coopt_normalizeBlockDisplayType(row?._blockType ?? row?.blockType ?? '');
+ 1470:             if (!__coopt_isPrincipalPointGroupBlockType(blockType)) continue;
+ 1471: 
+ 1472:             const zoomGroupLabel = blockType === 'Paraxial'
+ 1473:                 ? __coopt_makeStandaloneParaxialPrincipalLabel(standaloneDisplayCounts)
+ 1474:                 : __coopt_makeSequentialDesignIntentLabel(standaloneDisplayCounts, blockType, entry.blockId);
+ 1475: 
+ 1476:             registerGroup(`__fallback_principal__:${entry.blockId}`, zoomGroupLabel, entry.range, entry.range.min);
+ 1477:         }
+ 1478:     }
+ 1479: 
+ 1480:     const orderedGroups = Array.from(groups.values()).sort((a, b) => {
+ 1481:         if (a.startIdx !== b.startIdx) return a.startIdx - b.startIdx;
+ 1482:         return a.order - b.order;
+ 1483:     });
+ 1484: 
+ 1485:     const descriptors = [];
+ 1486:     for (const group of orderedGroups) {
+ 1487:         const rawPhysicalRange = __coopt_getPrincipalPointPhysicalRange(opticalSystemData, group.startIdx, group.endIdx);
+ 1488:         if (!rawPhysicalRange) continue;
+ 1489:         const physicalRange = __coopt_expandPrincipalPointRangeForThinLensBack(opticalSystemData, rawPhysicalRange);
+ 1490:         const leadSurface = opticalSystemData?.[rawPhysicalRange.startIdx];
+ 1491:         const isSingleThinLensGroup = rawPhysicalRange.startIdx === rawPhysicalRange.endIdx
+ 1492:             && __coopt_isThinLensSurface(leadSurface);
+ 1493: 
+ 1494:         const subsystem = __coopt_buildPrincipalPointSubsystem(opticalSystemData, physicalRange.startIdx, physicalRange.endIdx);
+ 1495:         if (!subsystem) continue;
+ 1496: 
+ 1497:         const meridian = String(axis).trim().toUpperCase() === 'XZ' ? 'sagittal' : 'tangential';
+ 1498:         const principal = calculatePrincipalPointPositions(subsystem, wavelengthUm, meridian);
+ 1499:         if (!principal) continue;
+ 1500: 
+ 1501:         const startOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[physicalRange.startIdx]);
+ 1502:         const endOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[physicalRange.endIdx]);
+ 1503:         const anchor = __coopt_averageOriginForRange(surfaceOrigins, physicalRange.startIdx, physicalRange.endIdx)
+ 1504:             || startOrigin.clone().lerp(endOrigin, 0.5);
+ 1505:         const frontGlobal = anchor.clone();
+ 1506:         const rearGlobal = anchor.clone();
+ 1507:         if (isSingleThinLensGroup) {
+ 1508:             const lensPlaneZ = Number(startOrigin.z || 0);
+ 1509:             frontGlobal.z = lensPlaneZ;
+ 1510:             rearGlobal.z = lensPlaneZ;
+ 1511:         } else {
+ 1512:             frontGlobal.z = Number(startOrigin.z || 0) + Number(principal.frontPrincipalFromFirstSurfaceMm || 0);
+ 1513:             rearGlobal.z = Number(endOrigin.z || 0) + Number(principal.rearPrincipalFromLastSurfaceMm || 0);
+ 1514:         }
+ 1515: 
+ 1516:         descriptors.push({
+ 1517:             zoomGroup: group.zoomGroup,
+ 1518:             startIdx: physicalRange.startIdx,
+ 1519:             endIdx: physicalRange.endIdx,
+ 1520:             anchor,
+ 1521:             frontGlobal,
+ 1522:             rearGlobal,
+ 1523:             isSingleThinLensGroup,
+ 1524:             frontFromFirstSurfaceMm: isSingleThinLensGroup ? 0 : Number(principal.frontPrincipalFromFirstSurfaceMm || 0),
+ 1525:             rearFromLastSurfaceMm: isSingleThinLensGroup ? 0 : Number(principal.rearPrincipalFromLastSurfaceMm || 0),
+ 1526:             rearFromFirstSurfaceMm: isSingleThinLensGroup ? 0 : Number(principal.rearPrincipalFromFirstSurfaceMm || 0),
+ 1527:             effectiveFocalLengthMm: Number(principal.effectiveFocalLengthMm),
+ 1528:         });
+ 1529:     }
+ 1530: 
+ 1531:     return descriptors;
+ 1532: }
+ 1533: 
+ 1534: function __coopt_getSurfaceRangeVerticalBounds(opticalSystemData, surfaceOrigins, startIdx, endIdx, axis) {
+ 1535:     const normalizedAxis = (String(axis).trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+ 1536:     const getVerticalCoord = (vec) => normalizedAxis === 'XZ' ? vec.x : vec.y;
+ 1537: 
+ 1538:     let top = Number.NEGATIVE_INFINITY;
+ 1539:     let bottom = Number.POSITIVE_INFINITY;
+ 1540:     for (let i = startIdx; i <= endIdx; i += 1) {
+ 1541:         const surface = opticalSystemData[i];
+ 1542:         if (!surface || __coopt_isGapSurface(surface)) continue;
+ 1543:         const originVec = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+ 1544:         const semidia = __coopt_getRenderSemidiaMm(surface);
+ 1545:         const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
+ 1546:         const halfExtent = normalizedAxis === 'XZ'
+ 1547:             ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0)
+ 1548:             : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
+ 1549:         top = Math.max(top, getVerticalCoord(originVec) + halfExtent);
+ 1550:         bottom = Math.min(bottom, getVerticalCoord(originVec) - halfExtent);
+ 1551:     }
+ 1552: 
+ 1553:     if (!Number.isFinite(top) || !Number.isFinite(bottom)) return null;
+ 1554:     return { top, bottom };
+ 1555: }
+ 1556: 
+ 1557: function __coopt_addPrincipalPointVerticalMarker(scene, axis, position, verticalMin, verticalMax, color, userType) {
+ 1558:     if (!scene || !position || !Number.isFinite(verticalMin) || !Number.isFinite(verticalMax)) return;
+ 1559:     const points = (String(axis).trim().toUpperCase() === 'XZ')
+ 1560:         ? [
+ 1561:             new THREE.Vector3(verticalMin, Number(position.y || 0), Number(position.z || 0)),
+ 1562:             new THREE.Vector3(verticalMax, Number(position.y || 0), Number(position.z || 0)),
+ 1563:           ]
+ 1564:         : [
+ 1565:             new THREE.Vector3(Number(position.x || 0), verticalMin, Number(position.z || 0)),
+ 1566:             new THREE.Vector3(Number(position.x || 0), verticalMax, Number(position.z || 0)),
+ 1567:           ];
+ 1568:     const geometry = new THREE.BufferGeometry().setFromPoints(points);
+ 1569:     const material = new THREE.LineBasicMaterial({
+ 1570:         color,
+ 1571:         transparent: true,
+ 1572:         opacity: 0.78,
+ 1573:         depthTest: false,
+ 1574:         depthWrite: false,
+ 1575:     });
+ 1576:     const line = new THREE.Line(geometry, material);
+ 1577:     line.renderOrder = 65020;
+ 1578:     line.frustumCulled = false;
+ 1579:     line.userData = { type: userType, isOpticalElement: true };
+ 1580:     scene.add(line);
+ 1581: }
+ 1582: 
+ 1583: function __coopt_addPrincipalPointCadDimension(scene, axis, startPoint, endPoint, dimensionCoord, color, userType, labelOffset = 2.8, labelCoord = null, extensionVerticals = null, arrowAtEnd = false, dotAtStart = false) {
+ 1584:     if (!scene || !startPoint || !endPoint || !Number.isFinite(dimensionCoord)) return null;
+ 1585: 
+ 1586:     const normalizedAxis = (String(axis).trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+ 1587:     const useXAsVertical = normalizedAxis === 'XZ';
+ 1588:     const getVertical = (vec) => useXAsVertical ? Number(vec?.x || 0) : Number(vec?.y || 0);
+ 1589:     const getDepth = (vec) => useXAsVertical ? Number(vec?.y || 0) : Number(vec?.x || 0);
+ 1590:     const getZ = (vec) => Number(vec?.z || 0);
+ 1591:     const makePoint = (vertical, depth, z) => useXAsVertical
+ 1592:         ? new THREE.Vector3(vertical, depth, z)
+ 1593:         : new THREE.Vector3(depth, vertical, z);
+ 1594: 
+ 1595:     const startVertical = getVertical(startPoint);
+ 1596:     const endVertical = getVertical(endPoint);
+ 1597:     const startDepth = getDepth(startPoint);
+ 1598:     const endDepth = getDepth(endPoint);
+ 1599:     const startZ = getZ(startPoint);
+ 1600:     const endZ = getZ(endPoint);
+ 1601: 
+ 1602:     const extensionStartVertical = Number.isFinite(extensionVerticals?.start)
+ 1603:         ? Number(extensionVerticals.start)
+ 1604:         : startVertical;
+ 1605:     const extensionEndVertical = Number.isFinite(extensionVerticals?.end)
+ 1606:         ? Number(extensionVerticals.end)
+ 1607:         : endVertical;
+ 1608: 
+ 1609:     const dimStart = makePoint(dimensionCoord, startDepth, startZ);
+ 1610:     const dimEnd = makePoint(dimensionCoord, endDepth, endZ);
+ 1611:     const extStart = makePoint(extensionStartVertical, startDepth, startZ);
+ 1612:     const extEnd = makePoint(extensionEndVertical, endDepth, endZ);
+ 1613: 
+ 1614:     __coopt_addDesignIntentLabelPolyline(scene, [extStart, dimStart], color);
+ 1615:     __coopt_addDesignIntentLabelPolyline(scene, [extEnd, dimEnd], color);
+ 1616:     __coopt_addDesignIntentLabelPolyline(scene, [dimStart, dimEnd], color);
+ 1617:     if (dotAtStart) {
+ 1618:         const dotGeometry = new THREE.SphereGeometry(0.45, 10, 10);
+ 1619:         const dotMaterial = new THREE.MeshBasicMaterial({
+ 1620:             color,
+ 1621:             transparent: true,
+ 1622:             opacity: 0.92,
+ 1623:             depthTest: false,
+ 1624:             depthWrite: false,
+ 1625:         });
+ 1626:         const dot = new THREE.Mesh(dotGeometry, dotMaterial);
+ 1627:         dot.position.copy(dimStart);
+ 1628:         dot.renderOrder = 65021;
+ 1629:         dot.frustumCulled = false;
+ 1630:         dot.userData = { type: userType, isOpticalElement: true };
+ 1631:         scene.add(dot);
+ 1632:     }
+ 1633:     if (arrowAtEnd) {
+ 1634:         const arrowWidth = 1.6;
+ 1635:         const arrowHeight = 0.9;
+ 1636:         const arrowBaseZ = endZ + (endZ >= startZ ? -arrowWidth : arrowWidth);
+ 1637:         __coopt_addDesignIntentLabelPolyline(scene, [
+ 1638:             makePoint(dimensionCoord + arrowHeight, endDepth, arrowBaseZ),
+ 1639:             dimEnd,
+ 1640:         ], color);
+ 1641:         __coopt_addDesignIntentLabelPolyline(scene, [
+ 1642:             makePoint(dimensionCoord - arrowHeight, endDepth, arrowBaseZ),
+ 1643:             dimEnd,
+ 1644:         ], color);
+ 1645:     }
+ 1646: 
+ 1647:     const resolvedLabelCoord = Number.isFinite(labelCoord)
+ 1648:         ? Number(labelCoord)
+ 1649:         : dimensionCoord + Number(labelOffset || 0);
+ 1650: 
+ 1651:     return makePoint(
+ 1652:         resolvedLabelCoord,
+ 1653:         (startDepth + endDepth) / 2,
+ 1654:         (startZ + endZ) / 2,
+ 1655:     );
+ 1656: }
+ 1657: 
+ 1658: function __coopt_formatZoomGroupSpanLabel(entry) {
+ 1659:     if (!entry) return '';
+ 1660:     const zoomGroup = String(entry.zoomGroup || '').trim();
+ 1661:     if (zoomGroup) return zoomGroup;
+ 1662:     const startLabel = `S${Number(entry.startIdx) + 1}`;
+ 1663:     const endLabel = `S${Number(entry.endIdx) + 1}`;
+ 1664:     return `${startLabel}竊・{endLabel}`;
+ 1665: }
+ 1666: 
+ 1667: function __coopt_formatZoomGroupDistanceLabel(current, next, distanceMm) {
+ 1668:     const currentLabel = __coopt_formatZoomGroupSpanLabel(current);
+ 1669:     const nextLabel = __coopt_formatZoomGroupSpanLabel(next);
+ 1670:     const useDash = /^[A-Z]+$/.test(currentLabel) && /^[A-Z]+$/.test(nextLabel);
+ 1671:     const connector = useDash ? '-' : '竊・;
+ 1672:     return `${currentLabel}${connector}${nextLabel} ${Number(distanceMm || 0).toFixed(2)}`;
+ 1673: }
+ 1674: 
+ 1675: function __coopt_addZoomGroupSpanBrace(scene, axis, verticalCoord, depthCoord, startZ, endZ, color) {
+ 1676:     if (!scene || !Number.isFinite(verticalCoord) || !Number.isFinite(depthCoord) || !Number.isFinite(startZ) || !Number.isFinite(endZ)) return;
+ 1677: 
+ 1678:     const normalizedAxis = (String(axis).trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+ 1679:     const makePoint = (vertical, depth, z) => normalizedAxis === 'XZ'
+ 1680:         ? new THREE.Vector3(vertical, depth, z)
+ 1681:         : new THREE.Vector3(depth, vertical, z);
+ 1682: 
+ 1683:     const minZ = Math.min(startZ, endZ);
+ 1684:     const maxZ = Math.max(startZ, endZ);
+ 1685:     const midZ = (minZ + maxZ) / 2;
+ 1686:     const span = Math.max(6, maxZ - minZ);
+ 1687:     const endPostHeight = Math.min(2.4, Math.max(1.2, span * 0.05));
+ 1688:     const stemHeight = Math.min(4.2, Math.max(2.4, span * 0.1));
+ 1689:     __coopt_addDesignIntentLabelPolyline(scene, [
+ 1690:         makePoint(verticalCoord, depthCoord, minZ),
+ 1691:         makePoint(verticalCoord + endPostHeight, depthCoord, minZ),
+ 1692:     ], color);
+ 1693:     __coopt_addDesignIntentLabelPolyline(scene, [
+ 1694:         makePoint(verticalCoord, depthCoord, minZ),
+ 1695:         makePoint(verticalCoord, depthCoord, maxZ),
+ 1696:     ], color);
+ 1697:     __coopt_addDesignIntentLabelPolyline(scene, [
+ 1698:         makePoint(verticalCoord, depthCoord, midZ),
+ 1699:         makePoint(verticalCoord - stemHeight, depthCoord, midZ),
+ 1700:     ], color);
+ 1701:     __coopt_addDesignIntentLabelPolyline(scene, [
+ 1702:         makePoint(verticalCoord, depthCoord, maxZ),
+ 1703:         makePoint(verticalCoord + endPostHeight, depthCoord, maxZ),
+ 1704:     ], color);
+ 1705: }
+ 1706: 
+ 1707: function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemData, surfaceOrigins, options = {}) {
+ 1708:     if (!scene || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return;
+ 1709:     if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return;
+ 1710: 
+ 1711:     let wavelengthUm = Number(options?.wavelengthUm);
+ 1712:     if (!Number.isFinite(wavelengthUm) || wavelengthUm <= 0) {
+ 1713:         try {
+ 1714:             if (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function') {
+ 1715:                 const resolved = Number(window.getPrimaryWavelength());
+ 1716:                 if (Number.isFinite(resolved) && resolved > 0) {
+ 1717:                     wavelengthUm = resolved;
+ 1718:                 }
+ 1719:             }
+ 1720:         } catch (_) {}
+ 1721:     }
+ 1722:     if (!Number.isFinite(wavelengthUm) || wavelengthUm <= 0) {
+ 1723:         wavelengthUm = 0.5876;
+ 1724:     }
+ 1725: 
+ 1726:     const descriptors = __coopt_buildZoomGroupPrincipalPointDescriptors(opticalSystemData, surfaceOrigins, wavelengthUm, options?.axis ?? 'YZ');
+ 1727:     if (!descriptors.length) return;
+ 1728: 
+ 1729:     const axis = (String(options?.axis ?? 'YZ').trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+ 1730:     const getVerticalCoord = (vec) => axis === 'XZ' ? vec.x : vec.y;
+ 1731:     const getDepthCoord = (vec) => axis === 'XZ' ? vec.y : vec.x;
+ 1732:     const makePoint = (vertical, depth, z) => {
+ 1733:         return axis === 'XZ'
+ 1734:             ? new THREE.Vector3(vertical, depth, z)
+ 1735:             : new THREE.Vector3(depth, vertical, z);
+ 1736:     };
+ 1737: 
+ 1738:     let surfaceTop = Number.NEGATIVE_INFINITY;
+ 1739:     let surfaceBottom = Number.POSITIVE_INFINITY;
+ 1740:     for (let i = 0; i < opticalSystemData.length; i += 1) {
+ 1741:         const surface = opticalSystemData[i];
+ 1742:         if (!surface || __coopt_isGapSurface(surface)) continue;
+ 1743:         const originVec = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+ 1744:         const semidia = __coopt_getRenderSemidiaMm(surface);
+ 1745:         const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
+ 1746:         const halfExtent = axis === 'XZ'
+ 1747:             ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0)
+ 1748:             : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
+ 1749:         surfaceTop = Math.max(surfaceTop, getVerticalCoord(originVec) + halfExtent);
+ 1750:         surfaceBottom = Math.min(surfaceBottom, getVerticalCoord(originVec) - halfExtent);
+ 1751:     }
+ 1752:     if (!Number.isFinite(surfaceTop) || !Number.isFinite(surfaceBottom)) return;
+ 1753: 
+ 1754:     const frontColor = 0xf97316;
+ 1755:     const rearColor = 0x14b8a6;
+ 1756:     const distanceColor = 0x0f766e;
+ 1757:     const topLabelBase = surfaceTop + 12;
+ 1758:     const topLabelLaneStep = 8;
+ 1759:     const principalDimBase = surfaceTop + 18;
+ 1760:     const groupDimBase = surfaceBottom - 8;
+ 1761:     const groupLabelCoord = groupDimBase - 3.2;
+ 1762:     const groupSpanBase = groupLabelCoord - 4.4;
+ 1763:     const lowerExtensionGap = 1.4;
+ 1764:     const descriptorBounds = descriptors.map((entry) => __coopt_getSurfaceRangeVerticalBounds(
+ 1765:         opticalSystemData,
+ 1766:         surfaceOrigins,
+ 1767:         entry.startIdx,
+ 1768:         entry.endIdx,
+ 1769:         axis,
+ 1770:     ));
+ 1771: 
+ 1772:     const topLabelItems = [];
+ 1773: 
+ 1774:     descriptors.forEach((entry, index) => {
+ 1775:         const bounds = descriptorBounds[index];
+ 1776:         const markerBottom = Number.isFinite(bounds?.bottom) ? Number(bounds.bottom) : surfaceBottom;
+ 1777:         const markerTop = Number.isFinite(bounds?.top) ? Number(bounds.top) : surfaceTop;
+ 1778:         if (!entry.isSingleThinLensGroup) {
+ 1779:             __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.frontGlobal, markerBottom, markerTop, frontColor, 'principal-point-front-marker');
+ 1780:             __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.rearGlobal, markerBottom, markerTop, rearColor, 'principal-point-rear-marker');
+ 1781:         }
+ 1782: 
+ 1783:         const principalDimCoord = principalDimBase + index * 8;
+ 1784:         const frontText = `${entry.zoomGroup} H ${entry.frontFromFirstSurfaceMm.toFixed(2)}`;
+ 1785:         const rearText = `${entry.zoomGroup} H' ${entry.rearFromLastSurfaceMm.toFixed(2)}`;
+ 1786: 
+ 1787:         if (!entry.isSingleThinLensGroup) {
+ 1788:             topLabelItems.push({
+ 1789:                 text: frontText,
+ 1790:                 sourcePoint: entry.frontGlobal.clone(),
+ 1791:                 depth: getDepthCoord(entry.anchor),
+ 1792:                 z: Number(entry.frontGlobal.z || 0),
+ 1793:                 color: frontColor,
+ 1794:                 style: {
+ 1795:                     fillStyle: 'rgba(255,247,237,0.96)',
+ 1796:                     strokeStyle: '#ea580c',
+ 1797:                     textStyle: '#9a3412',
+ 1798:                     lineColor: frontColor,
+ 1799:                 },
+ 1800:             });
+ 1801:             topLabelItems.push({
+ 1802:                 text: rearText,
+ 1803:                 sourcePoint: entry.rearGlobal.clone(),
+ 1804:                 depth: getDepthCoord(entry.anchor),
+ 1805:                 z: Number(entry.rearGlobal.z || 0),
+ 1806:                 color: rearColor,
+ 1807:                 style: {
+ 1808:                     fillStyle: 'rgba(240,253,250,0.96)',
+ 1809:                     strokeStyle: '#0f766e',
+ 1810:                     textStyle: '#115e59',
+ 1811:                     lineColor: rearColor,
+ 1812:                 },
+ 1813:             });
+ 1814:         }
+ 1815: 
+ 1816:     });
+ 1817: 
+ 1818:     const laneLastMaxByIndex = [];
+ 1819:     const laneGap = 6;
+ 1820:     topLabelItems
+ 1821:         .map((item) => {
+ 1822:             const size = __coopt_measureDesignIntentLabelWorldSize(item.text);
+ 1823:             return {
+ 1824:                 ...item,
+ 1825:                 widthWorld: Math.max(18, Number(size.width) || 0),
+ 1826:             };
+ 1827:         })
+ 1828:         .sort((a, b) => a.z - b.z)
+ 1829:         .forEach((item) => {
+ 1830:             const halfWidth = item.widthWorld / 2;
+ 1831:             const minZ = item.z - halfWidth;
+ 1832:             const maxZ = item.z + halfWidth;
+ 1833:             let laneIndex = 0;
+ 1834:             while (laneIndex < laneLastMaxByIndex.length) {
+ 1835:                 const lastMax = laneLastMaxByIndex[laneIndex];
+ 1836:                 if (!Number.isFinite(lastMax) || minZ > lastMax + laneGap) break;
+ 1837:                 laneIndex += 1;
+ 1838:             }
+ 1839:             laneLastMaxByIndex[laneIndex] = maxZ;
+ 1840: 
+ 1841:             const labelPoint = makePoint(topLabelBase + laneIndex * topLabelLaneStep, item.depth, item.z);
+ 1842:             __coopt_addDesignIntentLabelPolyline(scene, [item.sourcePoint.clone(), labelPoint.clone()], item.color);
+ 1843:             __coopt_addDesignIntentLabelSprite(scene, item.text, labelPoint, item.style);
+ 1844:         });
+ 1845: 
+ 1846:     descriptors.forEach((entry) => {
+ 1847:         const startOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[entry.startIdx]);
+ 1848:         const endOrigin = __coopt_vectorFromOriginEntry(surfaceOrigins[entry.endIdx]);
+ 1849:         const startZ = Number(startOrigin?.z || 0);
+ 1850:         const endZ = Number(endOrigin?.z || 0);
+ 1851:         const minZ = Math.min(startZ, endZ);
+ 1852:         const maxZ = Math.max(startZ, endZ);
+ 1853:         const midZ = (minZ + maxZ) / 2;
+ 1854:         const span = Math.max(6, maxZ - minZ);
+ 1855:         const stemHeight = Math.min(4.2, Math.max(2.4, span * 0.1));
+ 1856:         const groupLabelPoint = makePoint(groupSpanBase - stemHeight - 3.2, getDepthCoord(entry.anchor), midZ);
+ 1857:         const groupFocalPoint = makePoint(groupSpanBase - stemHeight - 6.0, getDepthCoord(entry.anchor), midZ);
+ 1858: 
+ 1859:         __coopt_addZoomGroupSpanBrace(scene, axis, groupSpanBase, getDepthCoord(entry.anchor), minZ, maxZ, distanceColor);
+ 1860:         __coopt_addDesignIntentLabelSprite(scene, __coopt_formatZoomGroupSpanLabel(entry), groupLabelPoint, {
+ 1861:             drawFrame: false,
+ 1862:             fillStyle: 'rgba(0,0,0,0)',
+ 1863:             strokeStyle: 'rgba(0,0,0,0)',
+ 1864:             textStyle: '#134e4a',
+ 1865:             paddingX: 2,
+ 1866:             paddingY: 0,
+ 1867:             fontWeight: '600',
+ 1868:         });
+ 1869:         if (Number.isFinite(entry.effectiveFocalLengthMm)) {
+ 1870:             __coopt_addDesignIntentLabelSprite(scene, `f ${entry.effectiveFocalLengthMm.toFixed(2)}`, groupFocalPoint, {
+ 1871:                 drawFrame: false,
+ 1872:                 fillStyle: 'rgba(0,0,0,0)',
+ 1873:                 strokeStyle: 'rgba(0,0,0,0)',
+ 1874:                 textStyle: '#0f766e',
+ 1875:                 paddingX: 2,
+ 1876:                 paddingY: 0,
+ 1877:             });
+ 1878:         }
+ 1879:     });
+ 1880: 
+ 1881:     for (let i = 0; i < descriptors.length - 1; i += 1) {
+ 1882:         const current = descriptors[i];
+ 1883:         const next = descriptors[i + 1];
+ 1884:         const currentBounds = descriptorBounds[i];
+ 1885:         const nextBounds = descriptorBounds[i + 1];
+ 1886:         const distanceMm = Number(next.frontGlobal.z || 0) - Number(current.rearGlobal.z || 0);
+ 1887:         const labelPoint = __coopt_addPrincipalPointCadDimension(
+ 1888:             scene,
+ 1889:             axis,
+ 1890:             current.rearGlobal,
+ 1891:             next.frontGlobal,
+ 1892:             groupDimBase,
+ 1893:             distanceColor,
+ 1894:             'principal-point-intergroup-dimension',
+ 1895:             -2.8,
+ 1896:             groupLabelCoord,
+ 1897:             {
+ 1898:                 start: Number.isFinite(currentBounds?.bottom) ? Number(currentBounds.bottom) - lowerExtensionGap : null,
+ 1899:                 end: Number.isFinite(nextBounds?.bottom) ? Number(nextBounds.bottom) - lowerExtensionGap : null,
+ 1900:             },
+ 1901:             true,
+ 1902:             true,
+ 1903:         );
+ 1904:         if (labelPoint) {
+ 1905:             __coopt_addDesignIntentLabelSprite(scene, __coopt_formatZoomGroupDistanceLabel(current, next, distanceMm), labelPoint, {
+ 1906:                 fillStyle: 'rgba(240,253,250,0.98)',
+ 1907:                 strokeStyle: '#0f766e',
+ 1908:                 textStyle: '#134e4a',
+ 1909:                 lineColor: distanceColor,
+ 1910:             });
+ 1911:         }
+ 1912:     }
+ 1913: }
+ 1914: 
+ 1915: /**
+ 1916:  * Draw optical system surfaces
+ 1917:  * @param {Object} options - Drawing options
+ 1918:  * @param {boolean} options.crossSectionOnly - Only draw cross-sections
+ 1919:  * @param {THREE.Scene} options.scene - Three.js scene
+ 1920:  * @param {boolean} options.showSurfaceOrigins - Show surface origins
+ 1921:  * @param {boolean} options.showSemidiaRing - Show semidia rings
+ 1922:  * @param {boolean} options.showMirrorBackText - Show mirror back text
+ 1923:  * @param {string} options.crossSectionDirection - Cross-section direction (YZ or XZ)
+ 1924:  * @param {number} options.crossSectionCenterOffset - Center offset for cross-section
+ 1925:  * @param {Array} options.opticalSystemData - Optical system data
+ 1926:  */
+ 1927: export function drawOpticalSystemSurfaces(options: any = {}) {
+ 1928:     const totalStartMs = performance.now();
+ 1929:     const showPlaneCrosshair = false;
+ 1930:     
+ 1931:     const {
+ 1932:         crossSectionOnly = false,
+ 1933:         scene,
+ 1934:         showSurfaceOrigins = false,
+ 1935:         showSemidiaRing = false,
+ 1936:         showMirrorBackText = false,
+ 1937:         showDesignIntentLabels = false,
+ 1938:         showPrincipalPointLabels = false,
+ 1939:         showSurfaceNumberLabels = false,
+ 1940:         surfaceMeshSegments = 100,
+ 1941:         toricMeshSegments = 256,
+ 1942:         crossSectionDirection = 'YZ',
+ 1943:         viewPlane = null,
+ 1944:         crossSectionCenterOffset = 0,
+ 1945:         opticalSystemData,
+ 1946:         surfaceOrigins: precomputedSurfaceOrigins = null
+ 1947:     } = options;
+ 1948: 
+ 1949:     // viewPlane繝代Λ繝｡繝ｼ繧ｿ繧団rossSectionDirection縺ｫ螟画鋤
+ 1950:     const actualCrossSectionDirection = viewPlane ? viewPlane.toUpperCase() : crossSectionDirection;
+ 1951: 
+ 1952:     if (!scene) {
+ 1953:         console.error('Scene not provided to drawOpticalSystemSurfaces');
+ 1954:         return;
+ 1955:     }
+ 1956: 
+ 1957:     if (!opticalSystemData || opticalSystemData.length === 0) {
+ 1958:         console.error('庁 蜈牙ｭｦ邉ｻ繝・・繧ｿ縺悟叙蠕励〒縺阪∪縺帙ｓ縲・SON繝輔ぃ繧､繝ｫ繧偵Ο繝ｼ繝峨＠縺ｦ縺上□縺輔＞縲・);
+ 1959:         alert('蜈牙ｭｦ邉ｻ繝・・繧ｿ縺後≠繧翫∪縺帙ｓ縲・SON繝輔ぃ繧､繝ｫ繧偵Ο繝ｼ繝峨＠縺ｦ縺上□縺輔＞縲・);
+ 1960:         return;
+ 1961:     }
+ 1962: 
+ 1963: 
+ 1964: 
+ 1965:     // Clear existing optical elements before drawing new ones
+ 1966:     const clearStartMs = performance.now();
+ 1967:     clearExistingOpticalElements(scene);
+ 1968:     recordCooptPerfSample('surfaceRenderer.clear', performance.now() - clearStartMs);
+ 1969: 
+ 1970:     // Surface origins calculation - NOW with the correct parameter
+ 1971:     const originsStartMs = performance.now();
+ 1972:     const surfaceOrigins = Array.isArray(precomputedSurfaceOrigins) && precomputedSurfaceOrigins.length === opticalSystemData.length
+ 1973:         ? precomputedSurfaceOrigins
+ 1974:         : calculateSurfaceOrigins(opticalSystemData);
+ 1975:     recordCooptPerfSample('surfaceRenderer.origins', performance.now() - originsStartMs);
+ 1976: 
+ 1977:     // Opt-in Coord Break debug: helps verify that decenter params are numeric at render time.
+ 1978:     try {
+ 1979:         const DEBUG_CB = __coopt_isCoordTransDebugEnabled();
+ 1980:         if (DEBUG_CB && Array.isArray(surfaceOrigins)) {
+ 1981:             const cbRows = [];
+ 1982:             for (let i = 0; i < opticalSystemData.length; i++) {
+ 1983:                 const row = opticalSystemData[i];
+ 1984:                 if (!row) continue;
+ 1985:                 if (String(row.surfType || '') !== 'Coord Break') continue;
+ 1986:                 const origin = surfaceOrigins[i]?.origin;
+ 1987:                 const cbParams = surfaceOrigins[i]?.cbParams;
+ 1988:                 cbRows.push({
+ 1989:                     i,
+ 1990:                     blockId: row._blockId || null,
+ 1991:                     raw: {
+ 1992:                         semidia: row.semidia,
+ 1993:                         material: row.material,
+ 1994:                         thickness: row.thickness,
+ 1995:                         rindex: row.rindex,
+ 1996:                         abbe: row.abbe,
+ 1997:                         conic: row.conic,
+ 1998:                         coef1: row.coef1,
+ 1999:                         decenterX: row.decenterX,
+ 2000:                         decenterY: row.decenterY,
+ 2001:                         decenterZ: row.decenterZ,
+ 2002:                         tiltX: row.tiltX,
+ 2003:                         tiltY: row.tiltY,
+ 2004:                         tiltZ: row.tiltZ,
+ 2005:                         order: row.order
+ 2006:                     },
+ 2007:                     parsed: cbParams || null,
+ 2008:                     origin: origin ? { x: origin.x, y: origin.y, z: origin.z } : null
+ 2009:                 });
+ 2010:             }
+ 2011:             if (cbRows.length) {
+ 2012:                 const tableRows = cbRows.map(r => ({
+ 2013:                     i: r.i,
+ 2014:                     blockId: r.blockId,
+ 2015:                     raw_material: r.raw.material,
+ 2016:                     raw_semidia: r.raw.semidia,
+ 2017:                     raw_thickness: r.raw.thickness,
+ 2018:                     decX: r.parsed?.decenterX,
+ 2019:                     decY: r.parsed?.decenterY,
+ 2020:                     decZ: r.parsed?.decenterZ,
+ 2021:                     tiltX: r.parsed?.tiltX,
+ 2022:                     tiltY: r.parsed?.tiltY,
+ 2023:                     tiltZ: r.parsed?.tiltZ,
+ 2024:                     order: r.parsed?.transformOrder,
+ 2025:                     ox: r.origin?.x,
+ 2026:                     oy: r.origin?.y,
+ 2027:                     oz: r.origin?.z
+ 2028:                 }));
+ 2029: 
+ 2030:                 // Print table outside of groups so it's visible even when groups are collapsed.
+ 2031:                 console.table(tableRows);
+ 2032: 
+ 2033:                 console.groupCollapsed(`ｧｭ [CO-OPT] Coord Break debug (${cbRows.length} rows)`);
+ 2034:                 for (const r of tableRows) {
+ 2035:                 }
+ 2036:                 console.log(cbRows);
+ 2037:                 console.groupEnd();
+ 2038:             }
+ 2039:         }
+ 2040:     } catch (_) {}
+ 2041: 
+ 2042:     const surfaceColorOverrides = __coopt_loadSurfaceColorOverrides();
+ 2043:     
+ 2044: 
+ 2045: 
+ 2046:     // Draw 3D surfaces (skip if crossSectionOnly is true)
+ 2047:     if (!crossSectionOnly) {
+ 2048:         const draw3DStartMs = performance.now();
+ 2049:         const isImageLikeSurface = (row) => {
+ 2050:             const surfType = String(row?.surfType ?? row?.type ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+ 2051:             const objType = String(row?.['object type'] ?? row?.object ?? row?.objectType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+ 2052:             const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+ 2053:             return surfType === 'imagesurface' || objType === 'image' || objType === 'imagesurface' || blockType === 'imagesurface';
+ 2054:         };
+ 2055:         const lastImageSurfaceIndex = (() => {
+ 2056:             for (let idx = opticalSystemData.length - 1; idx >= 0; idx -= 1) {
+ 2057:                 if (isImageLikeSurface(opticalSystemData[idx])) return idx;
+ 2058:             }
+ 2059:             return -1;
+ 2060:         })();
+ 2061:         for (let i = 0; i < opticalSystemData.length; i++) {
+ 2062:             const surface = opticalSystemData[i];
+ 2063:             const renderSurfaceMeta = __coopt_withSurfaceRenderMeta(surface, i);
+ 2064:             const isStopSurface = __coopt_isStopSurface(surface);
+ 2065: 
+ 2066:             // Gap/AirGap rows are spacing-only and should never be rendered as physical surfaces.
+ 2067:             if (__coopt_isGapSurface(surface)) {
+ 2068:                 continue;
+ 2069:             }
+ 2070:             
+ 2071:             
+ 2072:             // Object髱｢縺ｮ繧ｹ繧ｭ繝・・蛻､螳・
+ 2073:             const objectType = surface["object type"] || "";
+ 2074:             const isImageSurfaceCurrent = isImageLikeSurface(surface);
+ 2075:             if (isImageSurfaceCurrent && lastImageSurfaceIndex >= 0 && i !== lastImageSurfaceIndex) {
+ 2076:                 continue;
+ 2077:             }
+ 2078:             if (objectType === "Object") {
+ 2079:                 const objectThickness = surface.thickness;
+ 2080:                 const isInfiniteThickness = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
+ 2081:                 
+ 2082:                 if (isInfiniteThickness) {
+ 2083:                     // 辟｡髯千ｳｻ縺ｮObject髱｢縺ｯ繧ｹ繧ｭ繝・・・・ngle蛻､螳壹ｂ閠・・・・
+ 2084:                     let isAngleObject = false;
+ 2085:                     try {
+ 2086:                         const objectRows = window.getObjectRows ? window.getObjectRows() : [];
+ 2087:                         if (objectRows && objectRows.length > 0) {
+ 2088:                             const firstObject = objectRows[0];
+ 2089:                             const position = firstObject.position || (Array.isArray(firstObject) ? firstObject[3] : null);
+ 2090:                             isAngleObject = position === 'angle' || position === 'Angle';
+ 2091:                         }
+ 2092:                     } catch (error) {
+ 2093:                         console.warn(`笞・・3D Surface ${i}: Object data蜿門ｾ励お繝ｩ繝ｼ:`, error);
+ 2094:                     }
+ 2095:                     
+ 2096:                     // 辟｡髯千ｳｻ縺ｮObject髱｢縺ｯ蟶ｸ縺ｫ繧ｹ繧ｭ繝・・
+ 2097:                     continue;
+ 2098:                 } else {
+ 2099:                     // 譛蛾剞邉ｻ縺ｮObject髱｢繧呈緒逕ｻ
+ 2100:                     
+ 2101:                     try {
+ 2102:                         // surfaceOrigins縺ｮ遒ｺ隱・
+ 2103:                         
+ 2104:                         // semidia縺ｮ蜿門ｾ暦ｼ・bject繝・・繝悶Ν縺ｮRectangle蠎ｧ讓吶°繧芽ｨ育ｮ暦ｼ・
+ 2105:                         let planeSemidia = __coopt_getRenderSemidiaMm(surface);
+ 2106:                         if (planeSemidia === null) {
+ 2107:                             const objectRows = window.getObjectRows ? window.getObjectRows() : [];
+ 2108:                             if (objectRows && objectRows.length > 0) {
+ 2109:                                 let maxCoord = 0;
+ 2110:                                 objectRows.forEach(obj => {
+ 2111:                                     const xHeight = Math.abs(Number(obj.xHeightAngle) || 0);
+ 2112:                                     const yHeight = Math.abs(Number(obj.yHeightAngle) || 0);
+ 2113:                                     maxCoord = Math.max(maxCoord, xHeight, yHeight);
+ 2114:                                 });
+ 2115:                                 if (maxCoord > 0) {
+ 2116:                                     planeSemidia = maxCoord;
+ 2117:                                 }
+ 2118:                             }
+ 2119:                         }
+ 2120:                         // 逅・擇繝｡繝・す繝･縺後≠繧句ｴ蜷医〉adius 縺九ｉ semidia 繧呈耳螳・
+ 2121:                         if (planeSemidia === null && surface.radius !== undefined && surface.radius !== null && 
+ 2122:                             surface.radius !== 'INF' && surface.radius !== Infinity && 
+ 2123:                             !isNaN(Number(surface.radius))) {
+ 2124:                             const radius = Math.abs(Number(surface.radius));
+ 2125:                             if (radius > 0) {
+ 2126:                                 // 逅・擇 radius 縺九ｉ semidia 繧呈耳螳夲ｼ・ag 縺・radius 縺ｮ 20% 遞句ｺｦ縺ｾ縺ｧ・・
+ 2127:                                 planeSemidia = Math.sqrt(radius * radius / 5);
+ 2128:                             }
+ 2129:                         }
+ 2130:                         if (planeSemidia === null) planeSemidia = 20;
+ 2131:                         
+ 2132:                         // Object髱｢縺ｯ騾壼ｸｸ縲∝ｺｧ讓吝､画鋤縺御ｸ崎ｦ√↑縺溘ａ縲∝腰邏斐↑蠎ｧ讓吶〒謠冗判
+ 2133:                         const objOrigin = { x: 0, y: 0, z: 0 };
+ 2134:                         const objRotMat = null; // Object髱｢縺ｫ縺ｯ蝗櫁ｻ｢繧帝←逕ｨ縺励↑縺・
+ 2135:                         
+ 2136:                         // Object髱｢縺檎帥髱｢繝｡繝・す繝･繧呈欠螳壹＠縺ｦ縺・ｋ縺狗｢ｺ隱・
+ 2137:                         const hasObjectSphere = (
+ 2138:                             (surface.radius !== undefined && surface.radius !== null && 
+ 2139:                              surface.radius !== 'INF' && surface.radius !== Infinity && 
+ 2140:                              !isNaN(Number(surface.radius)) && Number(surface.radius) !== 0)
+ 2141:                         );
+ 2142:                         
+ 2143:                         if (hasObjectSphere) {
+ 2144:                             // 逅・擇繝｡繝・す繝･繧呈緒逕ｻ
+ 2145:                             try {
+ 2146:                                 const radius = Number(surface.radius);
+ 2147:                                 const conic = Number(surface.conic) || 0;
+ 2148:                                 const params = {
+ 2149:                                     radius: radius,
+ 2150:                                     conic: conic,
+ 2151:                                     coef1: Number(surface.coef1) || 0,
+ 2152:                                     coef2: Number(surface.coef2) || 0,
+ 2153:                                     coef3: Number(surface.coef3) || 0,
+ 2154:                                     coef4: Number(surface.coef4) || 0,
+ 2155:                                     coef5: Number(surface.coef5) || 0,
+ 2156:                                     coef6: Number(surface.coef6) || 0,
+ 2157:                                     coef7: Number(surface.coef7) || 0,
+ 2158:                                     coef8: Number(surface.coef8) || 0,
+ 2159:                                     coef9: Number(surface.coef9) || 0,
+ 2160:                                     coef10: Number(surface.coef10) || 0
+ 2161:                                 };
+ 2162:                                 
+ 2163:                                 // Object 髱｢縺ｮ逅・擇繝｡繝・す繝･繧呈緒逕ｻ
+ 2164:                                 drawLensSurfaceWithOrigin(
+ 2165:                                     scene,
+ 2166:                                     { ...params, __cooptSurfaceIndex0: i },
+ 2167:                                     objOrigin,
+ 2168:                                     objRotMat,
+ 2169:                                     'even',
+ 2170:                                     60,
+ 2171:                                     0x00ccff,
+ 2172:                                     0.3,
+ 2173:                                     'Spherical'
+ 2174:                                 );
+ 2175:                             } catch (error) {
+ 2176:                                 console.error(`笶・OBJECT Surface ${i}: 逅・擇繝｡繝・す繝･謠冗判繧ｨ繝ｩ繝ｼ:`, error);
+ 2177:                             }
+ 2178:                         }
+ 2179:                         
+ 2180:                         // 繝ｪ繝ｳ繧ｰ謠冗判
+ 2181:                         __coopt_drawApertureOutline(
+ 2182:                             scene,
+ 2183:                             surface,
+ 2184:                             planeSemidia,
+ 2185:                             objOrigin,
+ 2186:                             objRotMat,
+ 2187:                             0x808080 // 繧ｰ繝ｬ繝ｼ
+ 2188:                         );
+ 2189:                         
+ 2190:                         // 蜊∝ｭ礼ｷ壽緒逕ｻ
+ 2191:                         
+ 2192:                         const { halfX: crossHalfX, halfY: crossHalfY } = __coopt_getCrosshairHalfExtents(surface, planeSemidia);
+ 2193: 
+ 2194:                         // Toric髱｢縺ｮ蝣ｴ蜷医・繝代Λ繝｡繝ｼ繧ｿ貅門ｙ
+ 2195:                         let toricParams = null;
+ 2196:                         const isToric = surface && surface.surfType === 'Toric';
+ 2197:                         if (isToric) {
+ 2198:                             const radiusX = (surface.radiusX === "INF" || surface.radiusX === Infinity) ? Infinity : parseFloat(surface.radiusX);
+ 2199:                             const radiusY = (surface.radiusY === "INF" || surface.radiusY === Infinity || surface.radius === "INF" || surface.radius === Infinity) 
+ 2200:                                              ? Infinity 
+ 2201:                                              : parseFloat(surface.radiusY || surface.radius);
+ 2202:                             
+ 2203:                             if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+ 2204:                                 toricParams = {
+ 2205:                                     radiusX: radiusX,
+ 2206:                                     radiusY: radiusY,
+ 2207:                                     conic: Number(surface.conic) || 0
+ 2208:                                 };
+ 2209:                             }
+ 2210:                         }
+ 2211: 
+ 2212:                         // 邵ｦ邱夲ｼ・譁ｹ蜷代・ｻ抵ｼ・- 隍・焚繧ｻ繧ｰ繝｡繝ｳ繝医〒謠冗判
+ 2213:                         const pointsVertical = [];
+ 2214:                         const vSegments = 20; // 蜊∝ｭ礼ｷ壹・繧ｻ繧ｰ繝｡繝ｳ繝域焚
+ 2215:                         for (let j = 0; j <= vSegments; j++) {
+ 2216:                             const y = -crossHalfY + (2 * crossHalfY * j / vSegments);
+ 2217:                             let z = 0;
+ 2218:                             if (toricParams) {
+ 2219:                                 z = toricSurfaceZ(0, y, toricParams);
+ 2220:                                 if (!isFinite(z)) z = 0;
+ 2221:                             } else if (hasObjectSphere) {
+ 2222:                                 // 逅・擇縺ｮ Z 蠎ｧ讓吶ｒ險育ｮ・
+ 2223:                                 const radius = Number(surface.radius);
+ 2224:                                 const conic = Number(surface.conic) || 0;
+ 2225:                                 const asphericParams = {
+ 2226:                                     radius: radius,
+ 2227:                                     conic: conic,
+ 2228:                                     coef1: Number(surface.coef1) || 0,
+ 2229:                                     coef2: Number(surface.coef2) || 0,
+ 2230:                                     coef3: Number(surface.coef3) || 0,
+ 2231:                                     coef4: Number(surface.coef4) || 0,
+ 2232:                                     coef5: Number(surface.coef5) || 0,
+ 2233:                                     coef6: Number(surface.coef6) || 0,
+ 2234:                                     coef7: Number(surface.coef7) || 0,
+ 2235:                                     coef8: Number(surface.coef8) || 0,
+ 2236:                                     coef9: Number(surface.coef9) || 0,
+ 2237:                                     coef10: Number(surface.coef10) || 0,
+ 2238:                                     qconNrad: Number(surface.qconNrad) || Number(surface.qconNRadius) || 1
+ 2239:                                 };
+ 2240:                                 const asphereMode = String(surface.surfType || '').toLowerCase() === 'qcon' ? 'qcon' : 'even';
+ 2241:                                 z = asphericSurfaceZ(Math.abs(y), asphericParams, asphereMode);
+ 2242:                                 if (!isFinite(z)) z = 0;
+ 2243:                             }
+ 2244:                             const point = new THREE.Vector3(0, y, z);
+ 2245:                             pointsVertical.push(point);
+ 2246:                         }
+ 2247:                         if (showPlaneCrosshair && pointsVertical.length >= 2) {
+ 2248:                             const geometryV = new THREE.BufferGeometry().setFromPoints(pointsVertical);
+ 2249:                             const materialV = new THREE.LineBasicMaterial({ 
+ 2250:                                 color: 0x000000, 
+ 2251:                                 linewidth: 2,
+ 2252:                                 depthTest: false
+ 2253:                             });
+ 2254:                             const lineV = new THREE.Line(geometryV, materialV);
+ 2255:                             lineV.renderOrder = 999;
+ 2256:                             lineV.userData = { type: 'plane-crosshair', direction: 'vertical', surfaceIndex: i };
+ 2257:                             scene.add(lineV);
+ 2258:                         }
+ 2259:                         
+ 2260:                         // 讓ｪ邱夲ｼ・譁ｹ蜷代∬ｵ､・・- 隍・焚繧ｻ繧ｰ繝｡繝ｳ繝医〒謠冗判
+ 2261:                         const pointsHorizontal = [];
+ 2262:                         const hSegments = 20;
+ 2263:                         for (let j = 0; j <= hSegments; j++) {
+ 2264:                             const x = -crossHalfX + (2 * crossHalfX * j / hSegments);
+ 2265:                             let z = 0;
+ 2266:                             if (toricParams) {
+ 2267:                                 z = toricSurfaceZ(x, 0, toricParams);
+ 2268:                                 if (!isFinite(z)) z = 0;
+ 2269:                             } else if (hasObjectSphere) {
+ 2270:                                 // 逅・擇縺ｮ Z 蠎ｧ讓吶ｒ險育ｮ・
+ 2271:                                 const radius = Number(surface.radius);
+ 2272:                                 const conic = Number(surface.conic) || 0;
+ 2273:                                 const asphericParams = {
+ 2274:                                     radius: radius,
+ 2275:                                     conic: conic,
+ 2276:                                     coef1: Number(surface.coef1) || 0,
+ 2277:                                     coef2: Number(surface.coef2) || 0,
+ 2278:                                     coef3: Number(surface.coef3) || 0,
+ 2279:                                     coef4: Number(surface.coef4) || 0,
+ 2280:                                     coef5: Number(surface.coef5) || 0,
+ 2281:                                     coef6: Number(surface.coef6) || 0,
+ 2282:                                     coef7: Number(surface.coef7) || 0,
+ 2283:                                     coef8: Number(surface.coef8) || 0,
+ 2284:                                     coef9: Number(surface.coef9) || 0,
+ 2285:                                     coef10: Number(surface.coef10) || 0,
+ 2286:                                     qconNrad: Number(surface.qconNrad) || Number(surface.qconNRadius) || 1
+ 2287:                                 };
+ 2288:                                 const asphereMode = String(surface.surfType || '').toLowerCase() === 'qcon' ? 'qcon' : 'even';
+ 2289:                                 z = asphericSurfaceZ(Math.abs(x), asphericParams, asphereMode);
+ 2290:                                 if (!isFinite(z)) z = 0;
+ 2291:                             }
+ 2292:                             const point = new THREE.Vector3(x, 0, z);
+ 2293:                             pointsHorizontal.push(point);
+ 2294:                         }
+ 2295:                         if (showPlaneCrosshair && pointsHorizontal.length >= 2) {
+ 2296:                             const geometryH = new THREE.BufferGeometry().setFromPoints(pointsHorizontal);
+ 2297:                             const materialH = new THREE.LineBasicMaterial({ 
+ 2298:                                 color: 0xff0000, 
+ 2299:                                 linewidth: 2,
+ 2300:                                 depthTest: false
+ 2301:                             });
+ 2302:                             const lineH = new THREE.Line(geometryH, materialH);
+ 2303:                             lineH.renderOrder = 999;
+ 2304:                             lineH.userData = { type: 'plane-crosshair', direction: 'horizontal', surfaceIndex: i };
+ 2305:                             scene.add(lineH);
+ 2306:                         }
+ 2307:                         
+ 2308:                     } catch (error) {
+ 2309:                         console.error(`笶・Error drawing Object plane for surface ${i}:`, error);
+ 2310:                     }
+ 2311:                     continue; // Object髱｢縺ｮ蜃ｦ逅・ｵゆｺ・
+ 2312:                 }
+ 2313:             }
+ 2314: 
+ 2315:             // Image髱｢縺ｮ繧ｹ繧ｭ繝・・蛻､螳夲ｼ育┌髯千ｳｻ縺ｮ縺ｿ繧ｹ繧ｭ繝・・縲∵怏髯千ｳｻ縺ｧ縺ｯ謠冗判・・
+ 2316:             if (isImageSurfaceCurrent) {
+ 2317:                 // 譛蛾剞邉ｻ縺九←縺・°繧貞愛螳壹☆繧九◆繧√＾bject髱｢縺ｮthickness繧堤｢ｺ隱・
+ 2318:                 const firstSurface = opticalSystemData[0];
+ 2319:                 const objectThickness = firstSurface?.thickness;
+ 2320:                 const isInfiniteSystem = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
+ 2321:                 
+ 2322:                 
+ 2323:                 try {
+ 2324:                         // semidia縺ｮ蜿門ｾ・
+ 2325:                         let planeSemidia = __coopt_getRenderSemidiaMm(surface);
+ 2326:                         // Image髱｢縺ｮ繝ｪ繝ｳ繧ｰ縺ｯ莉夜擇縺ｮsemidia繧呈ｵ∫畑縺励↑縺・・
+ 2327:                         // semidia譛ｪ謖・ｮ壽凾縺ｯ縺薙・髱｢閾ｪ霄ｫ縺ｮ諠・ｱ縺縺代〒謗ｨ螳壹＠縲∵怙蠕後↓譌｢螳壼､縺ｸ繝輔か繝ｼ繝ｫ繝舌ャ繧ｯ縺吶ｋ縲・
+ 2328:                         // 逅・擇繝｡繝・す繝･縺後≠繧句ｴ蜷医〉adius 縺九ｉ semidia 繧呈耳螳・
+ 2329:                         if (planeSemidia === null && surface.radius !== undefined && surface.radius !== null && 
+ 2330:                             surface.radius !== 'INF' && surface.radius !== Infinity && 
+ 2331:                             !isNaN(Number(surface.radius))) {
+ 2332:                             const radius = Math.abs(Number(surface.radius));
+ 2333:                             if (radius > 0) {
+ 2334:                                 // 逅・擇 radius 縺九ｉ semidia 繧呈耳螳夲ｼ・ag 縺・radius 縺ｮ 20% 遞句ｺｦ縺ｾ縺ｧ繧呈Φ螳夲ｼ・
+ 2335:                                 planeSemidia = Math.sqrt(radius * radius / 5);
+ 2336:                             }
+ 2337:                         }
+ 2338:                         if (planeSemidia === null) planeSemidia = 20;
+ 2339:                         
+ 2340:                         // Image髱｢縺ｮ菴咲ｽｮ繧定ｨ育ｮ暦ｼ・urfaceOrigins縺九ｉ蜿門ｾ暦ｼ・
+ 2341:                         let imgOrigin = { x: 0, y: 0, z: 0 };
+ 2342:                         let imgRotMat = null;
+ 2343:                         
+ 2344:                         if (surfaceOrigins && surfaceOrigins[i]) {
+ 2345:                             imgOrigin = surfaceOrigins[i].origin || imgOrigin;
+ 2346:                             imgRotMat = surfaceOrigins[i].rotationMatrix || null;
+ 2347:                         } else {
+ 2348:                         }
+ 2349: 
+ 2350:                         // Reconcile image render origin with previous-surface spacing.
+ 2351:                         // Some imports store the final gap as attached metadata on the previous
+ 2352:                         // physical surface (__cooptGapApplied/__cooptGapThickness) rather than a
+ 2353:                         // standalone Gap row. In that case, force Image rendering to the advanced
+ 2354:                         // position so the ring does not remain at the pre-gap vertex.
+ 2355:                         try {
+ 2356:                             const prevRow = (i > 0) ? opticalSystemData[i - 1] : null;
+ 2357:                             if (prevRow && Array.isArray(surfaceOrigins) && surfaceOrigins[i - 1]) {
+ 2358:                                 const prevEntry = surfaceOrigins[i - 1];
+ 2359:                                 const prevOrigin = prevEntry?.origin;
+ 2360:                                 const prevRot = prevEntry?.rotationMatrix;
+ 2361:                                 const hasAttachedGap = (prevRow as any)?.__cooptGapApplied === true;
+ 2362:                                 const spacingRaw = hasAttachedGap
+ 2363:                                     ? ((prevRow as any).__cooptGapThickness ?? prevRow?.thickness)
+ 2364:                                     : (prevRow?.thickness ?? (prevRow as any).__cooptGapThickness);
+ 2365:                                 const spacing = __coopt_parseNumberOrNull(spacingRaw);
+ 2366: 
+ 2367:                                 if (prevOrigin && spacing !== null && Number.isFinite(spacing) && spacing !== 0) {
+ 2368:                                     const axis = (Array.isArray(prevRot) && prevRot.length >= 3)
+ 2369:                                         ? {
+ 2370:                                             x: Number(prevRot?.[0]?.[2]) || 0,
+ 2371:                                             y: Number(prevRot?.[1]?.[2]) || 0,
+ 2372:                                             z: Number(prevRot?.[2]?.[2]) || 1,
+ 2373:                                         }
+ 2374:                                         : { x: 0, y: 0, z: 1 };
+ 2375: 
+ 2376:                                     const expectedFromGap = {
+ 2377:                                         x: Number(prevOrigin.x || 0) + axis.x * spacing,
+ 2378:                                         y: Number(prevOrigin.y || 0) + axis.y * spacing,
+ 2379:                                         z: Number(prevOrigin.z || 0) + axis.z * spacing,
+ 2380:                                     };
+ 2381: 
+ 2382:                                     const dx = Number(imgOrigin.x || 0) - expectedFromGap.x;
+ 2383:                                     const dy = Number(imgOrigin.y || 0) - expectedFromGap.y;
+ 2384:                                     const dz = Number(imgOrigin.z || 0) - expectedFromGap.z;
+ 2385:                                     const err2 = dx * dx + dy * dy + dz * dz;
+ 2386: 
+ 2387:                                     if (err2 > 1e-10) {
+ 2388:                                         imgOrigin = expectedFromGap;
+ 2389:                                     }
+ 2390:                                 }
+ 2391:                             }
+ 2392:                         } catch (_) {}
+ 2393:                         
+ 2394:                         // Image髱｢縺檎帥髱｢繝｡繝・す繝･繧呈欠螳壹＠縺ｦ縺・ｋ縺狗｢ｺ隱・
+ 2395:                         const hasSphereRadius = (
+ 2396:                             (surface.radius !== undefined && surface.radius !== null && 
+ 2397:                              surface.radius !== 'INF' && surface.radius !== Infinity && 
+ 2398:                              !isNaN(Number(surface.radius)) && Number(surface.radius) !== 0)
+ 2399:                         );
+ 2400:                         
+ 2401:                         if (hasSphereRadius) {
+ 2402:                             // 逅・擇繝｡繝・す繝･繧呈緒逕ｻ
+ 2403:                             try {
+ 2404:                                 const radius = Number(surface.radius);
+ 2405:                                 const conic = Number(surface.conic) || 0;
+ 2406:                                 const params = {
+ 2407:                                     radius: radius,
+ 2408:                                     conic: conic,
+ 2409:                                     coef1: Number(surface.coef1) || 0,
+ 2410:                                     coef2: Number(surface.coef2) || 0,
+ 2411:                                     coef3: Number(surface.coef3) || 0,
+ 2412:                                     coef4: Number(surface.coef4) || 0,
+ 2413:                                     coef5: Number(surface.coef5) || 0,
+ 2414:                                     coef6: Number(surface.coef6) || 0,
+ 2415:                                     coef7: Number(surface.coef7) || 0,
+ 2416:                                     coef8: Number(surface.coef8) || 0,
+ 2417:                                     coef9: Number(surface.coef9) || 0,
+ 2418:                                     coef10: Number(surface.coef10) || 0
+ 2419:                                 };
+ 2420:                                 
+ 2421:                                 // Image 髱｢縺ｮ逅・擇繝｡繝・す繝･繧呈緒逕ｻ
+ 2422:                                 drawLensSurfaceWithOrigin(
+ 2423:                                     scene,
+ 2424:                                     params,
+ 2425:                                     imgOrigin,
+ 2426:                                     imgRotMat,
+ 2427:                                     'even',
+ 2428:                                     60,
+ 2429:                                     0x00ccff,
+ 2430:                                     0.3,
+ 2431:                                     'Spherical'
+ 2432:                                 );
+ 2433:                             } catch (error) {
+ 2434:                                 console.error(`笶・IMAGE Surface ${i}: 逅・擇繝｡繝・す繝･謠冗判繧ｨ繝ｩ繝ｼ:`, error);
+ 2435:                             }
+ 2436:                         }
+ 2437:                         
+ 2438:                         // Image 髱｢縺ｮ繝ｪ繝ｳ繧ｰ縺ｯ陦ｨ遉ｺ縺吶ｋ縲りｿ大ｍ縺ｮ驥崎､・□縺大ｾ梧ｮｵ縺ｧ謨ｴ逅・☆繧九・
+ 2439:                         const imageRingColor = __coopt_getImageSemidiaWarningColor(renderSurfaceMeta, 0x404040);
+ 2440:                         __coopt_drawApertureOutline(
+ 2441:                             scene,
+ 2442:                             renderSurfaceMeta,
+ 2443:                             planeSemidia,
+ 2444:                             imgOrigin,
+ 2445:                             imgRotMat,
+ 2446:                             imageRingColor
+ 2447:                         );
+ 2448:                         
+ 2449:                         const { halfX: crossHalfX, halfY: crossHalfY } = __coopt_getCrosshairHalfExtents(surface, planeSemidia);
+ 2450: 
+ 2451:                         // 蜊∝ｭ礼ｷ壽緒逕ｻ
+ 2452:                         
+ 2453:                         // Toric髱｢縺ｮ蝣ｴ蜷医・繝代Λ繝｡繝ｼ繧ｿ貅門ｙ
+ 2454:                         let toricParams = null;
+ 2455:                         const isToric = surface && surface.surfType === 'Toric';
+ 2456:                         if (isToric) {
+ 2457:                             const radiusX = (surface.radiusX === "INF" || surface.radiusX === Infinity) ? Infinity : parseFloat(surface.radiusX);
+ 2458:                             const radiusY = (surface.radiusY === "INF" || surface.radiusY === Infinity || surface.radius === "INF" || surface.radius === Infinity) 
+ 2459:                                              ? Infinity 
+ 2460:                                              : parseFloat(surface.radiusY || surface.radius);
+ 2461:                             
+ 2462:                             if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+ 2463:                                 toricParams = {
+ 2464:                                     radiusX: radiusX,
+ 2465:                                     radiusY: radiusY,
+ 2466:                                     conic: Number(surface.conic) || 0
+ 2467:                                 };
+ 2468:                             }
+ 2469:                         }
+ 2470:                         
+ 2471:                         // 邵ｦ邱夲ｼ・譁ｹ蜷代・ｻ抵ｼ・- 隍・焚繧ｻ繧ｰ繝｡繝ｳ繝医〒謠冗判
+ 2472:                         const pointsVertical = [];
+ 2473:                         const vSegments = 20;
+ 2474:                         for (let j = 0; j <= vSegments; j++) {
+ 2475:                             const y = -crossHalfY + (2 * crossHalfY * j / vSegments);
+ 2476:                             let z = 0;
+ 2477:                             if (toricParams) {
+ 2478:                                 z = toricSurfaceZ(0, y, toricParams);
+ 2479:                                 if (!isFinite(z)) z = 0;
+ 2480:                             } else if (hasSphereRadius) {
+ 2481:                                 // 逅・擇縺ｮ Z 蠎ｧ讓吶ｒ險育ｮ・
+ 2482:                                 const radius = Number(surface.radius);
+ 2483:                                 const conic = Number(surface.conic) || 0;
+ 2484:                                 const asphericParams = {
+ 2485:                                     radius: radius,
+ 2486:                                     conic: conic,
+ 2487:                                     coef1: Number(surface.coef1) || 0,
+ 2488:                                     coef2: Number(surface.coef2) || 0,
+ 2489:                                     coef3: Number(surface.coef3) || 0,
+ 2490:                                     coef4: Number(surface.coef4) || 0,
+ 2491:                                     coef5: Number(surface.coef5) || 0,
+ 2492:                                     coef6: Number(surface.coef6) || 0,
+ 2493:                                     coef7: Number(surface.coef7) || 0,
+ 2494:                                     coef8: Number(surface.coef8) || 0,
+ 2495:                                     coef9: Number(surface.coef9) || 0,
+ 2496:                                     coef10: Number(surface.coef10) || 0,
+ 2497:                                     qconNrad: Number(surface.qconNrad) || Number(surface.qconNRadius) || 1
+ 2498:                                 };
+ 2499:                                 const asphereMode = String(surface.surfType || '').toLowerCase() === 'qcon' ? 'qcon' : 'even';
+ 2500:                                 z = asphericSurfaceZ(Math.abs(y), asphericParams, asphereMode);
+ 2501:                                 if (!isFinite(z)) z = 0;
+ 2502:                             }
+ 2503:                             let point = new THREE.Vector3(0, y, z);
+ 2504:                             if (imgRotMat && Array.isArray(imgRotMat) && imgRotMat.length >= 3) {
+ 2505:                                 // 蝗櫁ｻ｢陦悟・繧帝←逕ｨ
+ 2506:                                 const newX = imgRotMat[0][0] * point.x + imgRotMat[0][1] * point.y + imgRotMat[0][2] * point.z;
+ 2507:                                 const newY = imgRotMat[1][0] * point.x + imgRotMat[1][1] * point.y + imgRotMat[1][2] * point.z;
+ 2508:                                 const newZ = imgRotMat[2][0] * point.x + imgRotMat[2][1] * point.y + imgRotMat[2][2] * point.z;
+ 2509:                                 point = new THREE.Vector3(newX, newY, newZ);
+ 2510:                             }
+ 2511:                             point.x += imgOrigin.x;
+ 2512:                             point.y += imgOrigin.y;
+ 2513:                             point.z += imgOrigin.z;
+ 2514:                             pointsVertical.push(point);
+ 2515:                         }
+ 2516:                         if (showPlaneCrosshair && pointsVertical.length >= 2) {
+ 2517:                             const geometryV = new THREE.BufferGeometry().setFromPoints(pointsVertical);
+ 2518:                             const materialV = new THREE.LineBasicMaterial({ 
+ 2519:                                 color: 0x000000, 
+ 2520:                                 linewidth: 2,
+ 2521:                                 depthTest: false
+ 2522:                             });
+ 2523:                             const lineV = new THREE.Line(geometryV, materialV);
+ 2524:                             lineV.renderOrder = 999;
+ 2525:                             lineV.userData = { type: 'plane-crosshair', direction: 'vertical', surfaceIndex: i };
+ 2526:                             scene.add(lineV);
+ 2527:                         }
+ 2528:                         
+ 2529:                         // 讓ｪ邱夲ｼ・譁ｹ蜷代∬ｵ､・・- 隍・焚繧ｻ繧ｰ繝｡繝ｳ繝医〒謠冗判
+ 2530:                         const pointsHorizontal = [];
+ 2531:                         const hSegments = 20;
+ 2532:                         for (let j = 0; j <= hSegments; j++) {
+ 2533:                             const x = -crossHalfX + (2 * crossHalfX * j / hSegments);
+ 2534:                             let z = 0;
+ 2535:                             if (toricParams) {
+ 2536:                                 z = toricSurfaceZ(x, 0, toricParams);
+ 2537:                                 if (!isFinite(z)) z = 0;
+ 2538:                             } else if (hasSphereRadius) {
+ 2539:                                 // 逅・擇縺ｮ Z 蠎ｧ讓吶ｒ險育ｮ・
+ 2540:                                 const radius = Number(surface.radius);
+ 2541:                                 const conic = Number(surface.conic) || 0;
+ 2542:                                 const asphericParams = {
+ 2543:                                     radius: radius,
+ 2544:                                     conic: conic,
+ 2545:                                     coef1: Number(surface.coef1) || 0,
+ 2546:                                     coef2: Number(surface.coef2) || 0,
+ 2547:                                     coef3: Number(surface.coef3) || 0,
+ 2548:                                     coef4: Number(surface.coef4) || 0,
+ 2549:                                     coef5: Number(surface.coef5) || 0,
+ 2550:                                     coef6: Number(surface.coef6) || 0,
+ 2551:                                     coef7: Number(surface.coef7) || 0,
+ 2552:                                     coef8: Number(surface.coef8) || 0,
+ 2553:                                     coef9: Number(surface.coef9) || 0,
+ 2554:                                     coef10: Number(surface.coef10) || 0,
+ 2555:                                     qconNrad: Number(surface.qconNrad) || Number(surface.qconNRadius) || 1
+ 2556:                                 };
+ 2557:                                 const asphereMode = String(surface.surfType || '').toLowerCase() === 'qcon' ? 'qcon' : 'even';
+ 2558:                                 z = asphericSurfaceZ(Math.abs(x), asphericParams, asphereMode);
+ 2559:                                 if (!isFinite(z)) z = 0;
+ 2560:                             }
+ 2561:                             let point = new THREE.Vector3(x, 0, z);
+ 2562:                             if (imgRotMat && Array.isArray(imgRotMat) && imgRotMat.length >= 3) {
+ 2563:                                 // 蝗櫁ｻ｢陦悟・繧帝←逕ｨ
+ 2564:                                 const newX = imgRotMat[0][0] * point.x + imgRotMat[0][1] * point.y + imgRotMat[0][2] * point.z;
+ 2565:                                 const newY = imgRotMat[1][0] * point.x + imgRotMat[1][1] * point.y + imgRotMat[1][2] * point.z;
+ 2566:                                 const newZ = imgRotMat[2][0] * point.x + imgRotMat[2][1] * point.y + imgRotMat[2][2] * point.z;
+ 2567:                                 point = new THREE.Vector3(newX, newY, newZ);
+ 2568:                             }
+ 2569:                             point.x += imgOrigin.x;
+ 2570:                             point.y += imgOrigin.y;
+ 2571:                             point.z += imgOrigin.z;
+ 2572:                             pointsHorizontal.push(point);
+ 2573:                         }
+ 2574:                         if (showPlaneCrosshair && pointsHorizontal.length >= 2) {
+ 2575:                             const geometryH = new THREE.BufferGeometry().setFromPoints(pointsHorizontal);
+ 2576:                             const materialH = new THREE.LineBasicMaterial({ 
+ 2577:                                 color: 0xff0000, 
+ 2578:                                 linewidth: 2,
+ 2579:                                 depthTest: false
+ 2580:                             });
+ 2581:                             const lineH = new THREE.Line(geometryH, materialH);
+ 2582:                             lineH.renderOrder = 999;
+ 2583:                             lineH.userData = { type: 'plane-crosshair', direction: 'horizontal', surfaceIndex: i };
+ 2584:                             scene.add(lineH);
+ 2585:                         }
+ 2586:                         
+ 2587:                     } catch (error) {
+ 2588:                         console.error(`笶・Error drawing Image plane for surface ${i}:`, error);
+ 2589:                     }
+ 2590:                     continue; // Image髱｢縺ｮ蜃ｦ逅・ｵゆｺ・
+ 2591:                 }
+ 2592: 
+ 2593:             // Coord Break surfaces are transform-only and must not be drawn in 3D.
+ 2594:             const surfType = String(surface?.surfType ?? surface?.type ?? '').trim().toLowerCase();
+ 2595:             const objType = String(surface?.['object type'] ?? surface?.object ?? '').trim().toLowerCase();
+ 2596:             const isCB = (
+ 2597:                 surfType === 'coord break' || surfType === 'coordinate break' || surfType === 'cb' ||
+ 2598:                 surfType === 'coordtrans' || surfType === 'coordinatebreak' ||
+ 2599:                 objType === 'coord break' || objType === 'coordinate break' || objType === 'cb' ||
+ 2600:                 objType === 'coordtrans' || objType === 'coordinatebreak'
+ 2601:             );
+ 2602:             if (isCB) {
+ 2603:                 continue;
+ 2604:             }
+ 2605: 
+ 2606:             if (__coopt_isThinLensBackSurface(surface)) {
+ 2607:                 continue;
+ 2608:             }
+ 2609:             
+ 2610:             try {
+ 2611:                 if (isStopSurface) {
+ 2612:                     // Stop髱｢縺ｮ蝣ｴ蜷医・迚ｹ蛻･縺ｪ蜃ｦ逅・- 繧｢繝代・繝√Ε譫縺ｮ縺ｿ謠冗判縲∝香蟄礼ｷ壹↑縺・
+ 2613:                     if (showSemidiaRing) {
+ 2614:                         try {
+ 2615:                             const ringSemidia = __coopt_getRenderSemidiaMm(surface);
+ 2616:                             if (ringSemidia === null) {
+ 2617:                             } else {
+ 2618:                             __coopt_drawApertureOutline(
+ 2619:                                 scene,
+ 2620:                                 surface,
+ 2621:                                 ringSemidia,
+ 2622:                                 surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0},
+ 2623:                                 surfaceOrigins[i]?.rotationMatrix || null,
+ 2624:                                 0x000000
+ 2625:                             );
+ 2626:                             }
+ 2627:                         } catch (stopRingError) {
+ 2628:                             console.error(`笶・Error drawing Stop ring for surface ${i}:`, stopRingError);
+ 2629:                         }
+ 2630:                     }
+ 2631:                     continue; // Stop髱｢縺ｮ蜃ｦ逅・ｵゆｺ・∝香蟄礼ｷ壽緒逕ｻ繧偵せ繧ｭ繝・・
+ 2632:                 } else if (surface.type === 'Mirror' || surface.material === 'MIRROR') {
+ 2633:                     // Mirror髱｢縺ｮ蜃ｦ逅・
+ 2634:                     const mirrorDefaultColor = 0xc0c0c0;
+ 2635:                     const mirrorKey = __coopt_surfaceColorKey(surface, i);
+ 2636:                     const mirrorOverride = __coopt_parseColorToInt(surfaceColorOverrides?.[mirrorKey]);
+ 2637:                     const mirrorColor = (mirrorOverride !== null) ? mirrorOverride : mirrorDefaultColor;
+ 2638:                     drawLensSurfaceWithOrigin(
+ 2639:                         scene, 
+ 2640:                         renderSurfaceMeta,           // params 繧ｪ繝悶ず繧ｧ繧ｯ繝亥・菴・
+ 2641:                         surfaceOrigins[i].origin,    // origin 縺九ｉ .origin 繝励Ο繝代ユ繧｣繧剃ｽｿ逕ｨ
+ 2642:                         surfaceOrigins[i].rotationMatrix, // rotation matrix
+ 2643:                         "even",                      // mode
+ 2644:                         surfaceMeshSegments,         // segments
+ 2645:                         mirrorColor,                // color
+ 2646:                         0.8,                        // opacity
+ 2647:                         'Mirror'                     // surfaceType
+ 2648:                     );
+ 2649:                     
+ 2650:                     if (showMirrorBackText) {
+ 2651:                         addMirrorBackText(
+ 2652:                             scene, 
+ 2653:                             surfaceOrigins[i].origin,
+ 2654:                             surfaceOrigins[i].rotationMatrix
+ 2655:                         );
+ 2656:                     }
+ 2657:                 } else if (surface.surfType === 'Toric' && !__coopt_isThinLensSurface(surface)) {
+ 2658:                     // Toric surface rendering
+ 2659:                     
+ 2660:                     const toricDefaultColor = 0x00ccff;
+ 2661:                     const toricKey = __coopt_surfaceColorKey(surface, i);
+ 2662:                     const toricOverride = __coopt_parseColorToInt(surfaceColorOverrides?.[toricKey]);
+ 2663:                     const toricColor = (toricOverride !== null) ? toricOverride : toricDefaultColor;
+ 2664:                     
+ 2665:                     drawToricSurfaceWithOrigin(
+ 2666:                         scene,
+ 2667:                         renderSurfaceMeta,               // params with radiusX, radiusY, conic, semidia
+ 2668:                         surfaceOrigins[i].origin,
+ 2669:                         surfaceOrigins[i].rotationMatrix,
+ 2670:                         toricMeshSegments,
+ 2671:                         toricColor,                      // color
+ 2672:                         0.5                              // opacity
+ 2673:                     );
+ 2674:                 } else {
+ 2675:                     // 騾壼ｸｸ縺ｮ繝ｬ繝ｳ繧ｺ髱｢縺ｮ蜃ｦ逅・
+ 2676:                     
+ 2677:                     // 3D陦ｨ髱｢繧呈緒逕ｻ
+ 2678:                     const isThinLens = __coopt_isThinLensSurface(surface);
+ 2679:                     const renderSurface = isThinLens ? __coopt_makeFlatThinLensSurface(surface) : surface;
+ 2680:                     const renderSurfaceWithMeta = __coopt_withSurfaceRenderMeta(renderSurface, i);
+ 2681:                     const lensDefaultColor = isThinLens ? 0x66ccff : 0x00ccff;
+ 2682:                     const lensKey = __coopt_surfaceColorKey(surface, i);
+ 2683:                     const lensOverride = __coopt_parseColorToInt(surfaceColorOverrides?.[lensKey]);
+ 2684:                     const lensColor = (lensOverride !== null) ? lensOverride : lensDefaultColor;
+ 2685:                     drawLensSurfaceWithOrigin(
+ 2686:                         scene, 
+ 2687:                         renderSurfaceWithMeta,        // params 繧ｪ繝悶ず繧ｧ繧ｯ繝亥・菴・
+ 2688:                         surfaceOrigins[i].origin,    // origin 縺九ｉ .origin 繝励Ο繝代ユ繧｣繧剃ｽｿ逕ｨ
+ 2689:                         surfaceOrigins[i].rotationMatrix, // rotation matrix
+ 2690:                         "even",                      // mode
+ 2691:                         surfaceMeshSegments,         // segments
+ 2692:                         lensColor,                  // color
+ 2693:                         isThinLens ? 0.25 : 0.5,    // opacity
+ 2694:                         renderSurface.type          // surfaceType
+ 2695:                     );
+ 2696:                 }
+ 2697:                 
+ 2698:                 // Surface origins陦ｨ遉ｺ・医ョ繝舌ャ繧ｰ逕ｨ縺ｮ霑ｽ蜉陦ｨ遉ｺ縺ｮ縺ｿ・・
+ 2699:                 if (showSurfaceOrigins) {
+ 2700:                     // 蜴溽せ繝槭・繧ｫ繝ｼ縺ｨ縺励※蟆上＆縺ｪ逅・ｒ謠冗判
+ 2701:                     const geometry = new THREE.SphereGeometry(2, 8, 8);
+ 2702:                     const material = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 });
+ 2703:                     const marker = new THREE.Mesh(geometry, material);
+ 2704:                     const origin = surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0};
+ 2705:                     marker.position.set(origin.x, origin.y, origin.z);
+ 2706:                     marker.userData = { type: 'surface-origin-marker', surfaceIndex: i };
+ 2707:                     scene.add(marker);
+ 2708:                 }
+ 2709:                 
+ 2710:                 // Semidia ring陦ｨ遉ｺ・・top髱｢縲，oord Trans髱｢縺ｯ髯､螟厄ｼ・
+ 2711:                 if (showSemidiaRing && !isStopSurface && !isCB) {
+ 2712:                     
+ 2713:                     try {
+ 2714:                         const ringSemidia = __coopt_getRenderSemidiaMm(surface);
+ 2715:                         if (ringSemidia === null) {
+ 2716:                         } else {
+ 2717:                         __coopt_drawApertureOutline(
+ 2718:                             scene,
+ 2719:                             renderSurfaceMeta,
+ 2720:                             ringSemidia,
+ 2721:                             surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0},
+ 2722:                             surfaceOrigins[i]?.rotationMatrix || null,
+ 2723:                             0x000000
+ 2724:                         );
+ 2725:                         }
+ 2726:                     } catch (ringError) {
+ 2727:                         console.error(`笶・Error drawing semidia ring for surface ${i}:`, ringError);
+ 2728:                     }
+ 2729:                 }
+ 2730:                 
+ 2731:             } catch (error) {
+ 2732:                 console.error(`笶・Error drawing surface ${i}:`, error);
+ 2733:             }
+ 2734:         }
+ 2735: 
+ 2736:         // 3D繝薙Η繝ｼ蟆ら畑: 謗･邯夂峩隗帝Κ繝ｪ繝ｳ繧ｰ繧呈緒逕ｻ
+ 2737:         drawConnectionCornerRings3D(scene, opticalSystemData, surfaceOrigins);
+ 2738: 
+ 2739:         // Hard guard: keep only one ImageSurface ring/crosshair set in 3D Render.
+ 2740:         if (lastImageSurfaceIndex >= 0) {
+ 2741:             const expectedImageOrigin = __coopt_getExpectedImageOriginFromPreviousRow(
+ 2742:                 opticalSystemData,
+ 2743:                 surfaceOrigins,
+ 2744:                 lastImageSurfaceIndex
+ 2745:             ) || (surfaceOrigins?.[lastImageSurfaceIndex]?.origin ?? null);
+ 2746:             __coopt_snapImageSurfaceArtifactsToOrigin(scene, lastImageSurfaceIndex, expectedImageOrigin);
+ 2747:             __coopt_pruneNearbyNonImageRings(scene, lastImageSurfaceIndex, expectedImageOrigin, 2.0);
+ 2748:             __coopt_dedupeImageSurfaceArtifacts(scene, lastImageSurfaceIndex, expectedImageOrigin);
+ 2749:             __coopt_removeUnindexedSemidiaRings(scene);
+ 2750:             __coopt_pruneNearbyConnectionCornerRings(scene, expectedImageOrigin, 8.0);
+ 2751:             __coopt_logImageRingDiagnostics(scene, lastImageSurfaceIndex, expectedImageOrigin);
+ 2752:         }
+ 2753: 
+ 2754:         recordCooptPerfSample('surfaceRenderer.draw3d', performance.now() - draw3DStartMs);
+ 2755:     } else {
+ 2756:     }
+ 2757: 
+ 2758:     // Draw cross-sections
+ 2759:     const crossSectionStartMs = performance.now();
+ 2760:     if (actualCrossSectionDirection === 'YZ') {
+ 2761:         drawLensCrossSectionWithSurfaceOrigins(
+ 2762:             scene, 
+ 2763:             opticalSystemData, 
+ 2764:             surfaceOrigins
+ 2765:         );
+ 2766:     } else if (actualCrossSectionDirection === 'XZ') {
+ 2767:         drawLensCrossSectionWithSurfaceOrigins(
+ 2768:             scene, 
+ 2769:             opticalSystemData, 
+ 2770:             surfaceOrigins
+ 2771:         );
+ 2772:     }
+ 2773:     recordCooptPerfSample('surfaceRenderer.crossSection', performance.now() - crossSectionStartMs);
+ 2774: 
+ 2775:     const showDesignLabels = __coopt_shouldShowDesignIntentLabels(showDesignIntentLabels);
+ 2776:     const showPrincipalLabels = __coopt_shouldShowPrincipalPointLabels(showPrincipalPointLabels);
+ 2777:     const showSurfaceLabels = __coopt_shouldShowSurfaceNumberLabels(showSurfaceNumberLabels);
+ 2778: 
+ 2779:     if (showDesignLabels || showPrincipalLabels || showSurfaceLabels) {
+ 2780:         const labelsStartMs = performance.now();
+ 2781:         try {
+ 2782:             if (showDesignLabels) {
+ 2783:                 __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
+ 2784:                     axis: actualCrossSectionDirection,
+ 2785:                     crossSectionOnly,
+ 2786:                 });
+ 2787:             }
+ 2788:             if (showPrincipalLabels) {
+ 2789:                 __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
+ 2790:                     axis: actualCrossSectionDirection,
+ 2791:                     crossSectionOnly,
+ 2792:                     wavelengthUm: (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function')
+ 2793:                         ? Number(window.getPrimaryWavelength()) || 0.5876
+ 2794:                         : 0.5876,
+ 2795:                 });
+ 2796:             }
+ 2797:             if (showSurfaceLabels) {
+ 2798:                 __coopt_addSurfaceNumberLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
+ 2799:                     axis: actualCrossSectionDirection,
+ 2800:                     crossSectionOnly,
+ 2801:                 });
+ 2802:             }
+ 2803:         } catch (labelErr) {
+ 2804:             console.warn('笞・・Failed to draw design intent labels:', labelErr);
+ 2805:         } finally {
+ 2806:             recordCooptPerfSample('surfaceRenderer.labels', performance.now() - labelsStartMs);
+ 2807:         }
+ 2808:     }
+ 2809: 
+ 2810:     recordCooptPerfSample('surfaceRenderer.total', performance.now() - totalStartMs);
+ 2811: }
+ 2812: 
+ 2813: /**
+ 2814:  * Find stop surface in optical system
+ 2815:  * @param {Array} opticalSystemRows - Optical system data
+ 2816:  * @param {Array} surfaceOrigins - Surface origins (optional)
+ 2817:  * @returns {Object|null} Stop surface data or null if not found
+ 2818:  */
+ 2819: export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
+ 2820:     if (!opticalSystemRows || opticalSystemRows.length === 0) {
+ 2821:         return null;
+ 2822:     }
+ 2823: 
+ 2824:     const DEBUG_STOP = !!(typeof globalThis !== 'undefined' && globalThis.__COOPT_DEBUG_STOP_SURFACE);
+ 2825:     if (DEBUG_STOP) {
+ 2826:         // 蜈牙ｭｦ邉ｻ繝・・繧ｿ蜈ｨ菴薙ｒ繝・ヰ繝・げ蜃ｺ蜉・
+ 2827:     }
+ 2828:     
+ 2829:     for (let i = 0; i < opticalSystemRows.length; i++) {
+ 2830:         const surface = opticalSystemRows[i];
+ 2831:         // console.log(`剥 [findStopSurface] Surface ${i}:`, surface);
+ 2832:         // console.log(`剥 [findStopSurface] Surface ${i} keys:`, Object.keys(surface));
+ 2833:         // console.log(`剥 [findStopSurface] Surface ${i} type:`, surface.type);
+ 2834:         // console.log(`剥 [findStopSurface] Surface ${i} object type:`, surface['object type']);
+ 2835:         
+ 2836:         // Stop surface can be tagged in multiple ways depending on the import/source:
+ 2837:         // - type: 'Stop'
+ 2838:         // - object type: 'Stop'
+ 2839:         // - Zemax-style: object/object type: 'STO'
+ 2840:         const objTypeRaw = surface['object type'] ?? surface.object ?? surface.objectType;
+ 2841:         const objTypeNorm = String(objTypeRaw ?? '').trim().toUpperCase();
+ 2842:         if (surface.type === 'Stop' || surface['object type'] === 'Stop' || objTypeNorm === 'STO') {
+ 2843:             // console.log(`識 [findStopSurface] Stop髱｢逋ｺ隕・ Surface ${i}`);
+ 2844:             
+ 2845:             // Stop髱｢縺ｮ菴咲ｽｮ繧定ｨ育ｮ暦ｼ・B蟇ｾ蠢懶ｼ・
+ 2846:             let stopX = 0;
+ 2847:             let stopY = 0;
+ 2848:             let stopZ = 0;
+ 2849:             if (surfaceOrigins && surfaceOrigins[i]) {
+ 2850:                 // calculateSurfaceOrigins() returns entries like { origin: {x,y,z}, rotationMatrix, ... }
+ 2851:                 const o = surfaceOrigins[i].origin || surfaceOrigins[i];
+ 2852:                 const ox = Number(o?.x);
+ 2853:                 const oy = Number(o?.y);
+ 2854:                 const oz = Number(o?.z);
+ 2855:                 if (Number.isFinite(ox)) stopX = ox;
+ 2856:                 if (Number.isFinite(oy)) stopY = oy;
+ 2857:                 if (Number.isFinite(oz)) stopZ = oz;
+ 2858:             } else {
+ 2859:                 // surfaceOrigins縺檎┌縺・ｴ蜷医・邏ｯ遨崎ｷ晞屬縺ｧ險育ｮ・
+ 2860:                 for (let j = 0; j < i; j++) {
+ 2861:                     const thickness = opticalSystemRows[j].thickness;
+ 2862:                     if (thickness !== undefined && thickness !== null && thickness !== 'INF' && thickness !== 'Infinity') {
+ 2863:                         stopZ += parseFloat(thickness) || 0;
+ 2864:                     }
+ 2865:                 }
+ 2866:             }
+ 2867:             
+ 2868:             // stopZ縺梧焚蛟､縺ｧ縺ゅｋ縺薙→繧堤｢ｺ隱・
+ 2869:             stopZ = Number(stopZ) || 0;
+ 2870:             
+ 2871:             // Stop髱｢縺ｮ蜊雁ｾ・ｒ蜿門ｾ暦ｼ郁､・焚縺ｮ繝輔ぅ繝ｼ繝ｫ繝牙錐 + 繝悶Ο繝・け讒矩繧定ｩｦ縺呻ｼ・
+ 2872:             let stopRadius = 10; // 繝・ヵ繧ｩ繝ｫ繝亥､
+ 2873:             // console.log(`剥 [findStopSurface] Stop髱｢繝・・繧ｿ:`, surface);
+ 2874:             // console.log(`剥 [findStopSurface] Stop髱｢縺ｮ蜈ｨ繝励Ο繝代ユ繧｣:`, JSON.stringify(surface, null, 2));
+ 2875:             
+ 2876:             // 繧医ｊ螟壹￥縺ｮ繝輔ぅ繝ｼ繝ｫ繝牙錐繧定ｩｦ縺・
+ 2877:             const radiusFields = [
+ 2878:                 'semidia',          // 螳滄圀縺ｮ繝輔ぅ繝ｼ繝ｫ繝牙錐・・
+ 2879:                 'semiDiameter', 'semi-diameter', 'semi_diameter',
+ 2880:                 'radius', 'aperture', 'diameter', 'semi-dia',
+ 2881:                 'semiDia', 'aper', 'halfDiameter', 'half-diameter',
+ 2882:                 'Clear_Aperture', 'clearAperture', 'clear_aperture'
+ 2883:             ];
+ 2884: 
+ 2885:             const radiusSources = [
+ 2886:                 surface,
+ 2887:                 surface?.parameters,
+ 2888:                 surface?.aperture,
+ 2889:                 surface?.variables,
+ 2890:             ];
+ 2891: 
+ 2892:             const readNumericLike = (raw) => {
+ 2893:                 if (raw === undefined || raw === null || raw === '') return null;
+ 2894:                 if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+ 2895:                 if (typeof raw === 'string') {
+ 2896:                     const n = parseFloat(raw);
+ 2897:                     return Number.isFinite(n) ? n : null;
+ 2898:                 }
+ 2899:                 if (typeof raw === 'object') {
+ 2900:                     const nested = raw?.value;
+ 2901:                     if (nested === undefined || nested === null || nested === '') return null;
+ 2902:                     const n = parseFloat(nested);
+ 2903:                     return Number.isFinite(n) ? n : null;
+ 2904:                 }
+ 2905:                 return null;
+ 2906:             };
+ 2907:             
+ 2908:             // console.log(`剥 [findStopSurface] 蜊雁ｾ・呵｣懊メ繧ｧ繝・け:`);
+ 2909:             for (const field of radiusFields) {
+ 2910:                 let resolved = null;
+ 2911:                 for (const src of radiusSources) {
+ 2912:                     resolved = readNumericLike(src?.[field]);
+ 2913:                     if (resolved !== null) break;
+ 2914:                 }
+ 2915:                 // console.log(`  ${field}: ${resolved} (resolved)`);
+ 2916:                 if (resolved !== null) {
+ 2917:                     stopRadius = resolved;
+ 2918:                     // console.log(`識 [findStopSurface] 繝輔ぅ繝ｼ繝ｫ繝・"${field}" 繧剃ｽｿ逕ｨ: ${stopRadius}`);
+ 2919:                     break;
+ 2920:                 }
+ 2921:             }
+ 2922: 
+ 2923:             // Stop block parameter name precedence: parameters.semiDiameter
+ 2924:             if ((!Number.isFinite(stopRadius) || stopRadius <= 0) && surface?.parameters) {
+ 2925:                 const fallbackParamSemiDiameter = readNumericLike(surface.parameters.semiDiameter);
+ 2926:                 if (fallbackParamSemiDiameter !== null) {
+ 2927:                     stopRadius = fallbackParamSemiDiameter;
+ 2928:                 }
+ 2929:             }
+ 2930: 
+ 2931:             // Block variable fallback: variables.semiDiameter.value
+ 2932:             if ((!Number.isFinite(stopRadius) || stopRadius <= 0) && surface?.variables) {
+ 2933:                 const fallbackVarSemiDiameter = readNumericLike(surface.variables.semiDiameter);
+ 2934:                 if (fallbackVarSemiDiameter !== null) {
+ 2935:                     stopRadius = fallbackVarSemiDiameter;
+ 2936:                 }
+ 2937:             }
+ 2938: 
+ 2939:             if (!Number.isFinite(stopRadius) || stopRadius <= 0) {
+ 2940:                 for (const src of radiusSources) {
+ 2941:                     if (!src || typeof src !== 'object') continue;
+ 2942:                     for (const key of Object.keys(src)) {
+ 2943:                         if (!/semi\s*dia|semidia|aperture|clear[_\s-]*aperture/i.test(String(key))) continue;
+ 2944:                         const candidate = readNumericLike(src[key]);
+ 2945:                         if (candidate !== null && candidate > 0) {
+ 2946:                             stopRadius = candidate;
+ 2947:                             break;
+ 2948:                         }
+ 2949:                     }
+ 2950:                 }
+ 2951:                 if (!Number.isFinite(stopRadius) || stopRadius <= 0) {
+ 2952:                     stopRadius = 10;
+ 2953:                 }
+ 2954:             }
+ 2955:             
+ 2956:             // 謇句虚縺ｧ險ｭ螳壹＆繧後◆蜊雁ｾ・､縺後≠繧九°繝√ぉ繝・け
+ 2957:             if (window.forceStopRadius && !isNaN(window.forceStopRadius)) {
+ 2958:                 console.log(`肌 [findStopSurface] 謇句虚險ｭ螳壹・蜊雁ｾ・ｒ菴ｿ逕ｨ: ${window.forceStopRadius}`);
+ 2959:                 stopRadius = window.forceStopRadius;
+ 2960:             }
+ 2961:             
+ 2962:             // NaN繝√ぉ繝・け
+ 2963:             if (isNaN(stopRadius)) {
+ 2964:                 console.warn(`笞・・[findStopSurface] 蜊雁ｾ・､縺檎┌蜉ｹ縲√ョ繝輔か繝ｫ繝亥､10繧剃ｽｿ逕ｨ`);
+ 2965:                 stopRadius = 10;
+ 2966:             }
+ 2967:             
+ 2968:             // console.log(`剥 [findStopSurface] 譛邨ら噪縺ｪ蜊雁ｾ・ ${stopRadius}`);
+ 2969:             
+ 2970:             return {
+ 2971:                 surface: surface,
+ 2972:                 index: i,
+ 2973:                 center: { x: stopX, y: stopY, z: stopZ },  // center繝励Ο繝代ユ繧｣繧定ｿｽ蜉・・B蟇ｾ蠢懶ｼ・
+ 2974:                 position: { x: stopX, y: stopY, z: stopZ },  // 莠呈鋤諤ｧ縺ｮ縺溘ａ縺ｫ菫晄戟
+ 2975:                 radius: stopRadius,  // 豁｣縺励＞蜊雁ｾ・､繧剃ｽｿ逕ｨ
+ 2976:                 origin: surfaceOrigins ? surfaceOrigins[i] : null
+ 2977:             };
+ 2978:         }
+ 2979:     }
+ 2980:     
+ 2981:     console.warn(`笞・・[findStopSurface] Stop髱｢縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ`);
+ 2982:     return null;
+ 2983: }
+ 2984: 
+ 2985: /**
+ 2986:  * Clear all optical elements from scene
+ 2987:  * @param {THREE.Scene} scene - Three.js scene
+ 2988:  */
+ 2989: export function clearAllOpticalElements(scene) {
+ 2990:     if (!scene) {
+ 2991:         console.error('Scene not provided to clearAllOpticalElements');
+ 2992:         return;
+ 2993:     }
+ 2994:     
+ 2995:     const objectsToRemove = [];
+ 2996:     
+ 2997:     scene.traverse((child) => {
+ 2998:         // Keep popup cross-section debug/fill overlays alive unless explicitly cleared by popup-specific logic.
+ 2999:         if (child?.userData?.type === 'popupLensFill' || child?.userData?.isUltraDebugOverlay === true) {
+ 3000:             return;
+ 3001:         }
+ 3002: 
+ 3003:         // Surface and lens objects by name
+ 3004:         if (child.name && 
+ 3005:             (child.name.startsWith('surface') || 
+ 3006:              child.name.startsWith('lens') ||
+ 3007:              child.name.startsWith('cross-section') ||
+ 3008:              child.name.startsWith('semidia') ||
+ 3009:              child.name.startsWith('mirror') ||
+ 3010:              child.name.includes('Profile') ||
+ 3011:              child.name.includes('Ring') ||
+ 3012:              child.name.includes('Connection'))) {
+ 3013:             objectsToRemove.push(child);
+ 3014:         }
+ 3015:         
+ 3016:         // Semidia ring objects specifically (for thickness change bug fix)
+ 3017:         if (child.userData && (
+ 3018:             child.userData.type === 'semidiaRing' ||
+ 3019:             child.userData.type === 'ring' ||
+ 3020:             child.userData.surfaceType === 'ring' ||
+ 3021:             child.name.includes('semidiaRing')
+ 3022:         )) {
+ 3023:             objectsToRemove.push(child);
+ 3024:         }
+ 3025:         
+ 3026:         // Ray objects by userData
+ 3027:         if (child.userData && (
+ 3028:             child.userData.isRayLine || 
+ 3029:             child.userData.type === 'ray'
+ 3030:         )) {
+ 3031:             objectsToRemove.push(child);
+ 3032:         }
+ 3033:         
+ 3034:         // Objects by userData type
+ 3035:         if (child.userData && (
+ 3036:             child.userData.isLensSurface ||
+ 3037:             child.userData.surfaceType === '3DSurface' ||
+ 3038:             child.userData.type === 'ring' ||
+ 3039:             child.userData.type === 'pupil' ||
+ 3040:             child.userData.type === 'crossSection'
+ 3041:         )) {
+ 3042:             objectsToRemove.push(child);
+ 3043:         }
+ 3044:         
+ 3045:         // Objects by material properties (lens surfaces are often transparent)
+ 3046:         if (child.material && child.material.transparent && 
+ 3047:             child.material.opacity && child.material.opacity < 1 &&
+ 3048:             child.type !== 'GridHelper' && child.type !== 'AxesHelper') {
+ 3049:             objectsToRemove.push(child);
+ 3050:         }
+ 3051:     });
+ 3052:     
+ 3053:     // Remove duplicates
+ 3054:     const uniqueObjects = [...new Set(objectsToRemove)];
+ 3055:     
+ 3056:     
+ 3057:     uniqueObjects.forEach(obj => {
+ 3058:         scene.remove(obj);
+ 3059:         
+ 3060:         // Dispose of geometry and material to free memory
+ 3061:         if (obj.geometry) {
+ 3062:             obj.geometry.dispose();
+ 3063:         }
+ 3064:         if (obj.material) {
+ 3065:             if (Array.isArray(obj.material)) {
+ 3066:                 obj.material.forEach(material => material.dispose());
+ 3067:             } else {
+ 3068:                 obj.material.dispose();
+ 3069:             }
+ 3070:         }
+ 3071:     });
+ 3072: }
+ 3073: 
+ 3074: /**
+ 3075:  * Clear existing optical elements from the scene
+ 3076:  * @param {THREE.Scene} scene - The THREE.js scene
+ 3077:  */
+ 3078: function clearExistingOpticalElements(scene) {
+ 3079:     const elementsToRemove = [];
+ 3080:     
+ 3081:     scene.traverse((child) => {
+ 3082:         if (child?.userData?.type === 'popupLensFill' || child?.userData?.isUltraDebugOverlay === true) {
+ 3083:             return;
+ 3084:         }
+ 3085: 
+ 3086:         // Clear renderables (Mesh/Line/Sprite/Points) created by the optical renderer.
+ 3087:         // Sprites are used for labels (e.g., mirrorBackText) and must be cleared too.
+ 3088:         if (!(child.isMesh || child.isLine || child.isSprite || child.isPoints)) return;
+ 3089: 
+ 3090:         const ud = child.userData;
+ 3091:         const isOptical = !!(ud && ud.isOpticalElement);
+ 3092: 
+ 3093:         // Remove optical surfaces, rings, markers, and labels
+ 3094:         if (isOptical || (ud && (
+ 3095:             ud.type === 'lensSurface' ||
+ 3096:             ud.isLensSurface ||
+ 3097:             ud.surfaceType === '3DSurface' ||
+ 3098:             ud.type === 'ring' ||
+ 3099:             ud.type === 'semidiaRing' ||
+ 3100:             ud.type === 'pupil' ||
+ 3101:             ud.type === 'surface-origin-marker' ||
+ 3102:             ud.surfaceIndex !== undefined
+ 3103:         )) || child.name.includes('LensSurface') || child.name.includes('Surface') || child.name.includes('semidiaRing')) {
+ 3104:             elementsToRemove.push(child);
+ 3105:         }
+ 3106:     });
+ 3107:     
+ 3108:     elementsToRemove.forEach(element => {
+ 3109:         scene.remove(element);
+ 3110:         if (element.geometry) element.geometry.dispose();
+ 3111:         if (element.material) {
+ 3112:             if (Array.isArray(element.material)) {
+ 3113:                 element.material.forEach(mat => mat.dispose());
+ 3114:             } else {
+ 3115:                 element.material.dispose();
+ 3116:             }
+ 3117:         }
+ 3118:         // Sprites often own a texture map that should be disposed.
+ 3119:         try {
+ 3120:             const m = element.material;
+ 3121:             const mats = Array.isArray(m) ? m : (m ? [m] : []);
+ 3122:             for (const mm of mats) {
+ 3123:                 if (mm && mm.map && typeof mm.map.dispose === 'function') mm.map.dispose();
+ 3124:             }
+ 3125:         } catch (_) {}
+ 3126:     });
+ 3127:     
+ 3128: }

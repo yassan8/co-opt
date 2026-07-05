@@ -3748,11 +3748,17 @@ const startApplicationOnce = (() => {
                             description: ray.description || ray.originalRay?.description || '',
                             source: ray
                         })));
+                        (window as any).__cooptRenderSnapshotAllRays = allRays;
+                        (window as any).__cooptRenderSnapshotRayCount = rayCount;
                         console.log('Stored draw-cross rays for overlay:', window.currentDrawCrossRays.length);
                         
                         drawCrossBeamRays(allRays, scene);
                     } else {
                         setCurrentDrawCrossRays([]);
+                        try {
+                            delete (window as any).__cooptRenderSnapshotAllRays;
+                            delete (window as any).__cooptRenderSnapshotRayCount;
+                        } catch (_) {}
                     }
                     
                     // 結果をグローバルに保存

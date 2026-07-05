@@ -1053,6 +1053,8 @@ function __coopt_isInfLike(value: any): boolean {
   return s === 'INF' || s === 'INFINITY' || s === '∞';
 }
 
+const __COOPT_DEFAULT_INF_OBJECT_DISTANCE_MM = 10;
+
 function __coopt_buildFallbackBlocksFromRows(rows: any[]): any[] {
   const safeRows = Array.isArray(rows) ? rows : [];
   const blocks: any[] = [];
@@ -1070,14 +1072,22 @@ function __coopt_buildFallbackBlocksFromRows(rows: any[]): any[] {
   const first = safeRows[0] || {};
   const objectDistanceMode = __coopt_isInfLike(first?.thickness) ? 'INF' : 'Finite';
   const objectDistanceVal = Number(first?.thickness);
+  const objectRenderDistanceVal = Number(first?.objectRenderDistance);
+  const objectParameters = objectDistanceMode === 'INF'
+    ? { objectDistanceMode: 'INF' }
+    : { objectDistanceMode: 'Finite' };
+  if (objectDistanceMode === 'INF') {
+    if (Number.isFinite(objectRenderDistanceVal) && objectRenderDistanceVal > 0) objectParameters.objectDistance = objectRenderDistanceVal;
+    else objectParameters.objectDistance = __COOPT_DEFAULT_INF_OBJECT_DISTANCE_MM;
+  } else if (Number.isFinite(objectDistanceVal) && objectDistanceVal > 0) {
+    objectParameters.objectDistance = objectDistanceVal;
+  }
   blocks.push({
     blockId: 'ObjectSurface-1',
     blockType: 'ObjectSurface',
     role: null,
     constraints: {},
-    parameters: objectDistanceMode === 'INF'
-      ? { objectDistanceMode: 'INF' }
-      : { objectDistanceMode: 'Finite', objectDistance: Number.isFinite(objectDistanceVal) ? objectDistanceVal : 10 },
+    parameters: objectParameters,
     variables: {},
     metadata: { source: 'zemax-fallback' }
   });
@@ -1142,6 +1152,11 @@ function __coopt_buildFallbackBlocksFromRows(rows: any[]): any[] {
       conic: Number.isFinite(conicNum) ? conicNum : 0,
       semidia: row?.semidia ?? ''
     };
+
+    const qconNradNum = Number(row?.qconNrad);
+    if (surfType === 'Qcon' && Number.isFinite(qconNradNum)) {
+      params.qconNrad = qconNradNum;
+    }
 
     if (surfType === 'Toric') {
       params.radiusX = __coopt_isInfLike(row?.radiusX) ? 'INF' : (String(row?.radiusX ?? '').trim() === '' ? 'INF' : row.radiusX);
@@ -1214,13 +1229,15 @@ function __coopt_normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
     if (infMode) {
       params.objectDistanceMode = 'INF';
       const dInf = Number(params.objectDistance);
-      params.objectDistance = Number.isFinite(dInf) ? dInf : 10;
+      if (Number.isFinite(dInf) && dInf > 0) params.objectDistance = dInf;
+      else params.objectDistance = __COOPT_DEFAULT_INF_OBJECT_DISTANCE_MM;
       continue;
     }
 
     params.objectDistanceMode = 'Finite';
     const d = Number(params.objectDistance);
-    params.objectDistance = Number.isFinite(d) ? d : 10;
+    if (Number.isFinite(d) && d > 0) params.objectDistance = d;
+    else delete params.objectDistance;
   }
 
   if (!hasObjectSurface) {
@@ -1229,13 +1246,44 @@ function __coopt_normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
       blockType: 'ObjectSurface',
       role: null,
       constraints: {},
-      parameters: { objectDistanceMode: 'Finite', objectDistance: 10 },
+      parameters: { objectDistanceMode: 'Finite' },
       variables: {},
       metadata: { source: 'zemax-fallback', inserted: true }
     });
   }
 
   return blocks;
+}
+
+function __cooptIsSemidiaMissing(row: any): boolean {
+  const raw = row?.semidia ?? row?.semiDiameter ?? row?.semiDia ?? row?.['semi diameter'] ?? row?.['Semi Diameter'];
+  if (raw === null || raw === undefined) return true;
+  const text = String(raw).trim();
+  if (text === '') return true;
+  const n = Number(text);
+  return !(Number.isFinite(n) && n > 0);
+}
+
+function __cooptHasAnyMissingSemidia(rows: any[]): boolean {
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  return rows.some((row: any, index: number) => {
+    const objType = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+    if (objType === 'object') return false;
+    if (objType === 'ct') return false;
+    if (index === 0) return false;
+    return __cooptIsSemidiaMissing(row);
+  });
+}
+
+function __cooptIsImageSemidiaMissing(rows: any[]): boolean {
+  if (!Array.isArray(rows) || rows.length === 0) return true;
+  const imageIndex = rows.findIndex((row: any, index: number) => {
+    if (index === rows.length - 1) return true;
+    const objType = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+    return objType === 'image';
+  });
+  if (imageIndex < 0) return true;
+  return __cooptIsSemidiaMissing(rows[imageIndex]);
 }
 
 export function handleImportZemax(): void {
@@ -1298,6 +1346,9 @@ export function handleImportZemax(): void {
           const n = Number(s);
           return !(Number.isFinite(n) && n > 0);
         })();
+        const hasMissingSemidia = __cooptHasAnyMissingSemidia(rows);
+        const shouldRunSemidiaAutoFill = hasMissingSemidia || stopSemidiaWasMissing;
+        const shouldRunImageSemidiaAutoFill = __cooptIsImageSemidiaMissing(rows);
 
         let blocks: any[] = [];
         try {
@@ -1355,7 +1406,7 @@ export function handleImportZemax(): void {
         }
 
         try {
-          if (typeof (window as any).autoCalculateMissingSemidia === 'function') {
+          if (shouldRunSemidiaAutoFill && typeof (window as any).autoCalculateMissingSemidia === 'function') {
             (window as any).autoCalculateMissingSemidia(sourceRows, objectRows, {
               entrancePupilDiameterMm: Number(parsed?.entrancePupilDiameterMm),
               stopSemidiaWasMissing
@@ -1364,7 +1415,7 @@ export function handleImportZemax(): void {
         } catch (_) {}
 
         try {
-          if (typeof (window as any).calculateImageSemiDiaFromChiefRays === 'function') {
+          if (shouldRunImageSemidiaAutoFill && typeof (window as any).calculateImageSemiDiaFromChiefRays === 'function') {
             const tryAutoImageSemidia = (triesLeft: number) => {
               setTimeout(() => {
                 try {
@@ -1466,6 +1517,9 @@ export function handleImportZemax(): void {
         const n = Number(s);
         return !(Number.isFinite(n) && n > 0);
       })();
+      const hasMissingSemidia = __cooptHasAnyMissingSemidia(rows);
+      const shouldRunSemidiaAutoFill = hasMissingSemidia || stopSemidiaWasMissing;
+      const shouldRunImageSemidiaAutoFill = __cooptIsImageSemidiaMissing(rows);
 
       let blocks: any[] = [];
       try {
@@ -1523,7 +1577,7 @@ export function handleImportZemax(): void {
       }
 
       try {
-        if (typeof (window as any).autoCalculateMissingSemidia === 'function') {
+        if (shouldRunSemidiaAutoFill && typeof (window as any).autoCalculateMissingSemidia === 'function') {
           (window as any).autoCalculateMissingSemidia(sourceRows, objectRows, {
             entrancePupilDiameterMm: Number(parsed?.entrancePupilDiameterMm),
             stopSemidiaWasMissing
@@ -1532,7 +1586,7 @@ export function handleImportZemax(): void {
       } catch (_) {}
 
       try {
-        if (typeof (window as any).calculateImageSemiDiaFromChiefRays === 'function') {
+        if (shouldRunImageSemidiaAutoFill && typeof (window as any).calculateImageSemiDiaFromChiefRays === 'function') {
           const tryAutoImageSemidia = (triesLeft: number) => {
             setTimeout(() => {
               try {
