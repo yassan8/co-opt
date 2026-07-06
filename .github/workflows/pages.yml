@@ -57,42 +57,14 @@ jobs:
           echo "Scanning dist for trailing-dot filenames..."
           find dist -type f -name '*.' -print -delete
 
-      - name: Detect Pages availability
-        id: pages_check
-        uses: actions/github-script@v7
-        with:
-          script: |
-            try {
-              const res = await github.request('GET /repos/{owner}/{repo}/pages', {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-              });
-              core.info(`GitHub Pages detected (status=${res.data?.status || 'unknown'})`);
-              core.setOutput('enabled', 'true');
-            } catch (error) {
-              if (error && error.status === 404) {
-                core.warning('GitHub Pages is not enabled for this repository. Skipping Pages deploy steps.');
-                core.setOutput('enabled', 'false');
-                return;
-              }
-              throw error;
-            }
-
       - name: Configure Pages
-        if: steps.pages_check.outputs.enabled == 'true'
         uses: actions/configure-pages@v5
 
       - name: Upload artifact (dist)
-        if: steps.pages_check.outputs.enabled == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
 
       - name: Deploy to GitHub Pages
-        if: steps.pages_check.outputs.enabled == 'true'
         id: deployment
         uses: actions/deploy-pages@v4
-
-      - name: Skip message
-        if: steps.pages_check.outputs.enabled != 'true'
-        run: echo "GitHub Pages is not enabled. Workflow completed without deployment."
