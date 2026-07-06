@@ -30,24 +30,8 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust-wasm
-
-      - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-pack
-
       - name: Install dependencies
         run: npm ci
-
-      - name: Build Rust WASM bundle
-        run: npm run wasm:rebuild
 
       - name: Build GitHub Pages app
         run: npm run build:pages
