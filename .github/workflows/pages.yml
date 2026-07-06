@@ -20,7 +20,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment:
-      name: ${{ github.ref_name == 'master' && 'github-pages-master' || 'github-pages' }}
+      name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
