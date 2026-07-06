@@ -317,7 +317,7 @@ function generateRayStartPointsForSpot(obj, opticalSystemRows, rayNumber, apertu
 }
 
 // スポットダイアグラムの生成
-export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, surfaceNumber, rayNumber = 501, ringCount = 3, options = {}) {
+export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, surfaceNumber, rayNumber = 128, ringCount = 3, options = {}) {
     // console.log('🎯 Generating spot diagram...');
     
     // 現在のカラーモードを表示
@@ -360,6 +360,13 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
     // 選択された面の種類をチェック
     const selectedSurface = opticalSystemRows[surfaceNumber - 1]; // 0-indexed
     const surfaceType = selectedSurface.surfType || selectedSurface.type || selectedSurface['object type'] || 'Standard';
+    
+    // Detect Qcon surface and validate parameters
+    const isQconSurface = String(surfaceType || '').toLowerCase().includes('qcon');
+    const qconNrad = isQconSurface ? (Number(selectedSurface.qconNrad ?? selectedSurface.qconNRadius ?? selectedSurface.semidia ?? selectedSurface.radius) || 1) : null;
+    if (isQconSurface) {
+        console.log(`🔬 [Q-con Surface Detected] Surface ${surfaceNumber}: qconNrad=${qconNrad}, surfType=${surfaceType}`);
+    }
     
     // Object / CoordTrans / Gap rows are non-evaluable for Spot.
     if (__spot_isSkippableRayPathRow(selectedSurface)) {
@@ -753,8 +760,8 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     } else {
                         __spot_recordTraceFailure(diag, traced.failure, 'NOT_REACHED_TARGET', opticalSystemRows, rayPath);
                     }
-                } catch (_) {
-                    __spot_recordTraceFailure(diag, null, 'EXCEPTION', opticalSystemRows, null);
+                } catch (error) {
+                    __spot_recordTraceFailure(diag, null, 'EXCEPTION', opticalSystemRows, null, error);
                 }
             }
             return { starts, ok, spotPoints: pts, diagnostics: diag, originSolveTraceBackend: attemptOriginSolveTraceBackend };
@@ -1120,6 +1127,21 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
             emissionPoints: emissionPatternPoints,
             diagnostics: diagnostics
         });
+
+        if (Number(successfulRays) > 0) {
+            consecutiveNoSuccessObjects = 0;
+        } else {
+            consecutiveNoSuccessObjects += 1;
+            if (
+                failFastConsecutiveNoSuccessObjects > 0
+                && consecutiveNoSuccessObjects >= failFastConsecutiveNoSuccessObjects
+                && objectIndex + 1 < totalObjects
+            ) {
+                failFastAborted = true;
+                failFastAbortAtObject = objectIndex + 1;
+                break;
+            }
+        }
     }
     
     // 結果の検証
@@ -1149,6 +1171,9 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         errorMessage += `- 成功した光線数: ${totalSuccessfulRays}\n`;
         errorMessage += `- 光学系の面数: ${opticalSystemRows.length}\n`;
         errorMessage += `- 指定された面: Surf ${Math.max(0, surfaceNumber - 1)}\n`;
+        if (failFastAborted) {
+            errorMessage += `- 早期打ち切り: ${failFastAbortAtObject}/${totalObjects} objects (all failed)\n`;
+        }
         if (reachableSurfaces.length > 0) {
             errorMessage += `- 到達可能な面: ${reachableSurfaces.join(', ')}\n`;
         }
@@ -1271,6 +1296,12 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     retry: r,
                     topKinds: kindCounts,
                     topSurfaces: surfaceCounts,
+                    exceptionMessage: o && typeof o === 'object' && o.diagnostics && o.diagnostics.exceptionMessage
+                        ? String(o.diagnostics.exceptionMessage).substring(0, 250)
+                        : null,
+                    exceptionStack: o && typeof o === 'object' && o.diagnostics && o.diagnostics.exceptionStack
+                        ? String(o.diagnostics.exceptionStack).substring(0, 200)
+                        : null,
                     example: ex,
                     exampleSummary: (ex && typeof ex === 'object') ? {
                         kind: ex.kind ?? null,
@@ -1348,6 +1379,9 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
             errorMessage += `\nDiagnostics (retry/blockers):\n`;
             objDiag.forEach((d, i) => {
                 errorMessage += `- Object ${i + 1} (id=${d.objectId}): `;
+                if (d.exceptionMessage) {
+                    errorMessage += `EXCEPTION: ${d.exceptionMessage}. `;
+                }
                 if (d.retry && typeof d.retry === 'object') {
                     const aim = d.retry.aimThroughStopUsed;
                     const used = d.retry.pupilScaleUsed;
@@ -1594,7 +1628,7 @@ function __spot_withRayTraceFailureCapture(runTraceFn) {
     }
 }
 
-function __spot_recordTraceFailure(diag, failure, fallbackKind, rows, rayPath) {
+function __spot_recordTraceFailure(diag, failure, fallbackKind, rows, rayPath, errorObj = null) {
     if (!diag) return;
     const kind = (failure && typeof failure === 'object' && typeof failure.kind === 'string' && failure.kind)
         ? failure.kind
@@ -1619,6 +1653,34 @@ function __spot_recordTraceFailure(diag, failure, fallbackKind, rows, rayPath) {
         }
     }
 
+    if (
+        (!diag.exceptionMessage || !diag.exceptionStack)
+        && (kind === 'EXCEPTION' || String(kind).startsWith('EXCEPTION'))
+    ) {
+        const errMsgFromFailure = String(details?.errorMessage || details?.message || '').trim();
+        const errStackFromFailure = String(details?.errorStack || details?.stack || '').trim();
+        const errMsgFromErrorObj = (() => {
+            try {
+                return errorObj ? String(errorObj?.message || errorObj).trim() : '';
+            } catch (_) {
+                return '';
+            }
+        })();
+        const errStackFromErrorObj = (() => {
+            try {
+                return errorObj && errorObj?.stack
+                    ? String(errorObj.stack).split('\n').slice(0, 5).join('\n')
+                    : '';
+            } catch (_) {
+                return '';
+            }
+        })();
+        const resolvedMessage = errMsgFromFailure || errMsgFromErrorObj;
+        const resolvedStack = errStackFromFailure || errStackFromErrorObj;
+        if (resolvedMessage) diag.exceptionMessage = resolvedMessage;
+        if (resolvedStack) diag.exceptionStack = resolvedStack;
+    }
+
     if (Array.isArray(diag.examples) && diag.examples.length < (diag.maxExamples || 6)) {
         diag.examples.push({ kind, details: details || null, surfaceIndex: Number.isFinite(surfaceIndex) ? surfaceIndex : null });
     }
@@ -1631,7 +1693,7 @@ export async function generateSpotDiagramAsync(
     sourceRows,
     objectRows,
     surfaceNumber,
-    rayNumber = 501,
+    rayNumber = 128,
     ringCount = 3,
     options = {}
 ) {
@@ -1762,6 +1824,15 @@ export async function generateSpotDiagramAsync(
 
     const selectedSurface = opticalSystemRows[surfaceNumber - 1];
     const surfaceType = selectedSurface.surfType || selectedSurface.type || selectedSurface['object type'] || 'Standard';
+    
+    // Detect Qcon surface and validate parameters
+    const isQconSurface = String(surfaceType || '').toLowerCase().includes('qcon');
+    const qconNrad = isQconSurface ? (Number(selectedSurface.qconNrad ?? selectedSurface.qconNRadius ?? selectedSurface.semidia ?? selectedSurface.radius) || 1) : null;
+    if (isQconSurface) {
+        console.log(`🔬 [Q-con Async] Surface ${surfaceNumber}: qconNrad=${qconNrad}, surfType=${surfaceType}`);
+        asyncProfile.qconSurface = { surfaceNumber, isQcon: true, qconNrad };
+    }
+    
     if (__spot_isSkippableRayPathRow(selectedSurface)) {
         throw new Error('The selected row is a non-physical surface (Object / CoordTrans / Gap) and cannot be used as the spot diagram evaluation surface. Please select a normal optical surface or the Image surface.');
     }
@@ -1795,6 +1866,16 @@ export async function generateSpotDiagramAsync(
 
     const spotData = [];
     const totalObjects = objectRows.length;
+    const failFastConsecutiveNoSuccessObjects = (() => {
+        try {
+            const raw = Number(enhancedOptions?.failFastConsecutiveNoSuccessObjects);
+            if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw);
+        } catch (_) {}
+        return 2;
+    })();
+    let consecutiveNoSuccessObjects = 0;
+    let failFastAborted = false;
+    let failFastAbortAtObject = null;
     asyncProfile.counters.objects = totalObjects;
     asyncProfile.counters.raysRequested = Math.max(0, totalObjects * Math.max(0, Number(rayNumber) || 0));
     let completedWork = 0;
@@ -2008,8 +2089,7 @@ export async function generateSpotDiagramAsync(
             }
             asyncProfile.counters.raysGenerated += starts.length;
 
-            const diag = collectTraceFailureDetails
-                ? {
+            const diag = {
                     objectId,
                     objectType,
                     targetSurfaceNumber: surfaceNumber,
@@ -2017,8 +2097,8 @@ export async function generateSpotDiagramAsync(
                     rayCountGenerated: starts.length,
                     kindCounts: {},
                     surfaceCounts: {},
-                    examples: [],
-                    maxExamples: 6,
+                    examples: collectTraceFailureDetails ? [] : null,
+                    maxExamples: collectTraceFailureDetails ? 6 : 0,
                     retry: {
                         pupilScaleRequested: scale,
                         aimThroughStopRequested: !!aimThroughStop,
@@ -2044,8 +2124,7 @@ export async function generateSpotDiagramAsync(
                             }
                             : null
                     }
-                }
-                : null;
+                            };
             const pts = [];
             let ok = 0;
             const maxRaysThisObject = Math.min(starts.length, rayNumber);
@@ -2133,9 +2212,9 @@ export async function generateSpotDiagramAsync(
                     } else if (diag) {
                         __spot_recordTraceFailure(diag, traced.failure, 'NOT_REACHED_TARGET', opticalSystemRows, rayPath);
                     }
-                } catch (_) {
+                } catch (error) {
                     if (diag) {
-                        __spot_recordTraceFailure(diag, null, 'EXCEPTION', opticalSystemRows, null);
+                        __spot_recordTraceFailure(diag, null, 'EXCEPTION', opticalSystemRows, null, error);
                     }
                 }
 
@@ -2324,21 +2403,56 @@ export async function generateSpotDiagramAsync(
         // In physical-vignetting mode, do NOT fall back to aimThroughStop=true by default.
         // However, for Angle objects in physical mode, match OPD behavior by aiming through stop.
         // CRITICAL: For infinite conjugate, ALWAYS use aimThroughStop=true to enable chief ray analysis
-        if (opdCompatibleAngle) {
-            // For infinite conjugate, use chief ray analysis; for finite conjugate, use geometric ray generation
-            const useAimThroughStop = (conjugateType === 'infinite');
-            const ok = await tryPupilScales(useAimThroughStop);
-            if (!ok) {
-                await tryPupilScales(!useAimThroughStop);
-            }
-        } else if (conjugateType === 'infinite') {
-            // Infinite conjugate non-angle object: keep a single mode to avoid duplicate spot traces.
-            // Recovery path: if no starts are generated at all, try the alternate mode once.
-            if (!(await tryPupilScales(false)) && (!Array.isArray(rayStartPoints) || rayStartPoints.length === 0)) {
+        try {
+            if (opdCompatibleAngle) {
+                // For infinite conjugate, use chief ray analysis; for finite conjugate, use geometric ray generation
+                const useAimThroughStop = (conjugateType === 'infinite');
+                const ok = await tryPupilScales(useAimThroughStop);
+                if (!ok) {
+                    await tryPupilScales(!useAimThroughStop);
+                }
+            } else if (conjugateType === 'infinite') {
+                // Infinite conjugate non-angle object: keep a single mode to avoid duplicate spot traces.
+                // Recovery path: if no starts are generated at all, try the alternate mode once.
+                if (!(await tryPupilScales(false)) && (!Array.isArray(rayStartPoints) || rayStartPoints.length === 0)) {
+                    await tryPupilScales(true);
+                }
+            } else if (!(await tryPupilScales(false))) {
                 await tryPupilScales(true);
             }
-        } else if (!(await tryPupilScales(false))) {
-            await tryPupilScales(true);
+        } catch (traceError) {
+            const errorMsg = String((traceError as any)?.message || traceError);
+            const errorStack = (traceError as any)?.stack ? String((traceError as any).stack).split('\n').slice(0, 5).join('\n') : null;
+            
+            // Special handling for Qcon surface tracing errors
+            if (isQconSurface) {
+                console.error(`❌ [Q-con Trace Error] Object ${objectId}, Surface ${surfaceNumber} (qconNrad=${qconNrad}):`, errorMsg);
+            } else {
+                console.error(`❌ [Trace Exception] Object ${objectId}:`, errorMsg);
+            }
+            
+            if (!diagnostics) {
+                diagnostics = {
+                    objectId,
+                    objectType,
+                    targetSurfaceNumber: surfaceNumber,
+                    rayCountRequested: rayNumber,
+                    rayCountGenerated: 0,
+                    kindCounts: { 'TRACE_EXCEPTION': 1 },
+                    surfaceCounts: {},
+                    examples: null,
+                    isQconSurface: isQconSurface,
+                    qconNradValue: qconNrad,
+                    exceptionMessage: errorMsg,
+                    exceptionStack: errorStack,
+                    retry: { pupilScaleRequested: null, aimThroughStopRequested: null }
+                };
+            } else {
+                diagnostics.isQconSurface = isQconSurface;
+                diagnostics.qconNradValue = qconNrad;
+                diagnostics.exceptionMessage = errorMsg;
+                diagnostics.exceptionStack = errorStack;
+            }
         }
 
         if (!rayStartPoints || !Array.isArray(rayStartPoints) || rayStartPoints.length === 0) {
@@ -2674,6 +2788,12 @@ export async function generateSpotDiagramAsync(
                     retry: r,
                     topKinds: kindCounts,
                     topSurfaces: surfaceCounts,
+                    exceptionMessage: o && typeof o === 'object' && o.diagnostics && o.diagnostics.exceptionMessage
+                        ? String(o.diagnostics.exceptionMessage).substring(0, 250)
+                        : null,
+                    exceptionStack: o && typeof o === 'object' && o.diagnostics && o.diagnostics.exceptionStack
+                        ? String(o.diagnostics.exceptionStack).substring(0, 200)
+                        : null,
                     example: ex,
                     exampleSummary: (ex && typeof ex === 'object') ? {
                         kind: ex.kind ?? null,
@@ -2706,6 +2826,12 @@ export async function generateSpotDiagramAsync(
             errorMessage += `\nDiagnostics (retry/blockers):\n`;
             objDiag.forEach((d, i) => {
                 errorMessage += `- Object ${i + 1} (id=${d.objectId}): `;
+                    if (d.isQconSurface) {
+                        errorMessage += `[Q-con: qconNrad=${d.qconNradValue}] `;
+                    }
+                    if (d.exceptionMessage) {
+                    errorMessage += `EXCEPTION: ${d.exceptionMessage}. `;
+                }
                 if (d.retry && typeof d.retry === 'object') {
                     const aim = d.retry.aimThroughStopUsed;
                     const used = d.retry.pupilScaleUsed;

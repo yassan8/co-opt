@@ -89,7 +89,7 @@ function deriveMaxFieldAngleLocal() {
   return maxAngle > 0 ? maxAngle : 20;
 }
 
-function deriveHeightSamplesLocal(interpolationPoints = 10) {
+function deriveHeightSamplesLocal(interpolationPoints = 21) {
   let objects = [];
   try { objects = getObjectRowsLocal(); } catch (_) { objects = []; }
   if (!objects || objects.length === 0) return null;
@@ -443,7 +443,12 @@ export async function calculateDistortionData(opticalSystemRows, fieldSamples, w
     });
     const distortionPercent = distortion.map((d, i) => {
       const ideal = Number(idealHeights[i]);
-      if (!Number.isFinite(ideal) || Math.abs(ideal) < 1e-15 || !Number.isFinite(d)) return null;
+      const fieldValue = Number(fieldValues[i]);
+      if (!Number.isFinite(ideal) || !Number.isFinite(d)) return null;
+      if (Math.abs(ideal) < 1e-15) {
+        if (Number.isFinite(fieldValue) && Math.abs(fieldValue) < 1e-12) return 0;
+        return null;
+      }
       return (d / ideal) * 100;
     });
 

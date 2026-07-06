@@ -3125,7 +3125,7 @@ class SystemRequirementsEditor {
                 existing = {
                   surfaceIndex: activeCfgSettings.surfaceIndex,
                   surfaceId: activeImageSurfaceId,
-                  rayCount: activeCfgSettings.rayCount || 501,
+                  rayCount: activeCfgSettings.rayCount || 128,
                   ringCount: activeCfgSettings.ringCount || 3,
                   pattern: activeCfgSettings.pattern || null,
                   primaryWavelengthUm: activeCfgSettings.primaryWavelengthUm || 0.5876,

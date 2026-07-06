@@ -6915,7 +6915,7 @@ export function setupAnalysisWindows() {
         <select id="popup-surface-number-select"></select>
 
         <label for="popup-ray-count-input">Ray number:</label>
-        <input type="number" id="popup-ray-count-input" value="501" min="1" step="1" />
+        <input type="number" id="popup-ray-count-input" value="128" min="1" step="1" />
 
         <label for="popup-ring-count-select">Ring count:</label>
         <select id="popup-ring-count-select">
@@ -8919,6 +8919,7 @@ export function setupAnalysisWindows() {
                             return;
                         }
                         w.__distortionGridPopup = popup;
+                        try { popup.focus(); } catch (_) {}
                         return;
                     } catch (_) {}
                 }
@@ -9266,6 +9267,11 @@ export function setupAnalysisWindows() {
         window.addEventListener('resize', resizePlot);
         window.addEventListener('focus', syncFromOpener);
         syncFromOpener();
+
+        // Auto-render immediately on open so the user does not have to click the button.
+        window.addEventListener('load', () => {
+            try { window.renderDistortionGrid(); } catch (_) {}
+        });
     </script>
 </body>
 </html>

@@ -27,6 +27,7 @@ const console = globalThis.console as Console;
 
 let spotDiagramRequestCounter = 0;
 let pendingSpotDiagramRequest: { requestId: number; options: any; requestedAt: number } | null = null;
+let activeSpotDiagramRequest: { requestId: number; startedAt: number } | null = null;
 let analysisRustTraceOptionsCache: { options: any; at: number; forceKey: string } | null = null;
 let analysisRustTraceOptionsPromise: Promise<any | null> | null = null;
 
@@ -519,6 +520,12 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         const requireRustWasmTrace = (options && typeof options === 'object')
             ? options.requireRustWasmTrace === true
             : false;
+        const generationTimeoutMs = (options && typeof options === 'object' && Number.isFinite(Number(options.generationTimeoutMs)))
+            ? Math.max(5000, Number(options.generationTimeoutMs))
+            : 180000;
+        const staleLockTimeoutMs = (options && typeof options === 'object' && Number.isFinite(Number(options.staleLockTimeoutMs)))
+            ? Math.max(10000, Number(options.staleLockTimeoutMs))
+            : Math.max(generationTimeoutMs + 10000, 190000);
 
     console.log('🎯 Starting spot diagram generation...');
 
@@ -599,6 +606,18 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
     // IMPORTANT: When switching configurations quickly, we must not drop the latest request.
     // If we just `return`, the UI can keep showing spot data computed from the previous config.
     if (getIsGeneratingSpotDiagram()) {
+        const lockAgeMs = activeSpotDiagramRequest
+            ? Math.max(0, Date.now() - Number(activeSpotDiagramRequest.startedAt || 0))
+            : Number.POSITIVE_INFINITY;
+        const lockIsStale = !Number.isFinite(lockAgeMs) || lockAgeMs > staleLockTimeoutMs;
+        if (lockIsStale) {
+            console.error(`⚠️ Spot diagram lock appears stale (age=${Number.isFinite(lockAgeMs) ? lockAgeMs : -1}ms). Forcing unlock.`);
+            setIsGeneratingSpotDiagram(false);
+            activeSpotDiagramRequest = null;
+        }
+    }
+
+    if (getIsGeneratingSpotDiagram()) {
         pendingSpotDiagramRequest = { requestId, options, requestedAt: Date.now() };
         console.warn(`⚠️ Spot diagram generation already in progress; queued request ${requestId}`);
         return;
@@ -606,6 +625,48 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
     
     try {
         setIsGeneratingSpotDiagram(true);
+        activeSpotDiagramRequest = { requestId, startedAt: Date.now() };
+
+        const runSpotGenerationWithTimeout = async (
+            generateSpotDiagramAsyncFn: (...args: any[]) => Promise<any>,
+            opticalRows: any[],
+            sourceRows: any[],
+            objects: any[],
+            targetSurfaceNumber: number,
+            rayCountValue: number,
+            ringCountValue: number,
+            generationOptions: any
+        ) => {
+            const generationPromise = generateSpotDiagramAsyncFn(
+                opticalRows,
+                sourceRows,
+                objects,
+                targetSurfaceNumber,
+                rayCountValue,
+                ringCountValue,
+                generationOptions
+            );
+
+            if (!Number.isFinite(generationTimeoutMs) || generationTimeoutMs <= 0) {
+                return generationPromise;
+            }
+
+            return await new Promise<any>((resolve, reject) => {
+                const timeoutHandle = setTimeout(() => {
+                    reject(new Error(`Spot diagram generation timed out after ${Math.round(generationTimeoutMs)} ms`));
+                }, generationTimeoutMs);
+
+                generationPromise
+                    .then((value) => {
+                        clearTimeout(timeoutHandle);
+                        resolve(value);
+                    })
+                    .catch((error) => {
+                        clearTimeout(timeoutHandle);
+                        reject(error);
+                    });
+            });
+        };
 
         try { onProgress?.({ percent: 0, message: 'Preparing spot diagram...' }); } catch (_) {}
         
@@ -672,12 +733,20 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             }
         }
         
+        const clampSpotRayCount = (value: number): number => {
+            // Keep spot tracing bounded to avoid runaway retries in high-angle systems.
+            return Math.max(1, Math.min(1001, Math.floor(Number(value) || 1)));
+        };
+        const clampSpotRingCount = (value: number): number => {
+            return Math.max(1, Math.min(32, Math.floor(Number(value) || 1)));
+        };
+
         if (providedRayCount !== null && providedRayCount > 0) {
-            rayCount = providedRayCount;
+            rayCount = clampSpotRayCount(providedRayCount);
         } else if (rayCountInput && rayCountInput.value !== '') {
-            rayCount = parseInt(rayCountInput.value) || 501;
+            rayCount = clampSpotRayCount(parseInt(rayCountInput.value, 10) || 128);
         } else {
-            console.warn('⚠️ Ray count input not found, using default (501)');
+            console.warn('⚠️ Ray count input not found, using default (128)');
         }
         
         const isPrimarySourceRow = (raw: any): boolean => {
@@ -720,10 +789,10 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         }
 
         if (providedRingCount !== null && providedRingCount > 0) {
-            ringCount = providedRingCount;
+            ringCount = clampSpotRingCount(providedRingCount);
         } else if (ringCountSelect && ringCountSelect.value !== '') {
             const parsedRingCount = parseInt(ringCountSelect.value, 10);
-            ringCount = Number.isInteger(parsedRingCount) && parsedRingCount > 0 ? parsedRingCount : 3;
+            ringCount = clampSpotRingCount(Number.isInteger(parsedRingCount) && parsedRingCount > 0 ? parsedRingCount : 3);
         } else {
             console.warn('⚠️ Ring count select not found, using default (3)');
         }
@@ -1581,7 +1650,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             // Import functions and use default object data
             const { generateSpotDiagramAsync, drawSpotDiagram } = await import('../evaluation/spot-diagram.js');
             const generateStartMs = nowMs();
-            const spotDiagramData = await generateSpotDiagramAsync(
+            const spotDiagramData = await runSpotGenerationWithTimeout(
+                generateSpotDiagramAsync,
                 opticalSystemRows,
                 effectiveSourceRowsForSpot,
                 defaultObjectRows,
@@ -1630,7 +1700,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             // Generate spot diagram with existing object data
             const { generateSpotDiagramAsync, drawSpotDiagram } = await import('../evaluation/spot-diagram.js');
             const generateStartMs = nowMs();
-            const spotDiagramData = await generateSpotDiagramAsync(
+            const spotDiagramData = await runSpotGenerationWithTimeout(
+                generateSpotDiagramAsync,
                 opticalSystemRows,
                 effectiveSourceRowsForSpot,
                 objectRows,
@@ -1755,6 +1826,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         alert(`Spot diagram error:\n${(error as any).message}`);
     } finally {
         setIsGeneratingSpotDiagram(false);
+        activeSpotDiagramRequest = null;
 
         // If a newer request arrived while we were generating, run it now (last request wins).
         try {

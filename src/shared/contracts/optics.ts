@@ -64,6 +64,7 @@ export interface NativeSpotRaytraceRequest {
   pattern?: string;
   wavelengthMode?: string;
   forceRustWasm?: boolean;
+  strictChiefOnly?: boolean;
   raySeries?: NativeSpotInputSeries[];
 }
 
@@ -584,7 +585,9 @@ export interface NativeDistortionRequest {
   surfaceIndex?: number;
   fieldSamples: number[];
   heightMode?: boolean;
+  distortionMetric?: 'chief-ray' | 'spot-gravity';
   wavelength?: number;
+  onProgress?: (evt: { percent?: number; message?: string }) => void;
 }
 
 export interface NativeDistortionResponse {
@@ -606,6 +609,8 @@ export interface NativeGridDistortionRequest {
   surfaceIndex?: number;
   gridSize?: number;
   wavelength?: number;
+  detailProgress?: boolean;
+  onProgress?: (evt: { percent?: number; message?: string }) => void;
 }
 
 export interface NativeGridDistortionResponse {

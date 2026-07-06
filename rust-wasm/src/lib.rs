@@ -4717,6 +4717,48 @@ fn get_primary_wavelength_um_native(source_rows: &[Value], default_wavelength: f
         .unwrap_or(default_wavelength)
 }
 
+fn distortion_source_rows_for_wavelength_native(source_rows: &[Value], wavelength: f64) -> Vec<Value> {
+    let wl = if wavelength.is_finite() && wavelength > 0.0 {
+        wavelength
+    } else {
+        0.5876
+    };
+
+    let mut picked: Option<Value> = None;
+    let mut best_delta = f64::INFINITY;
+    for row in source_rows {
+        let row_wl = get_field(row, "wavelength")
+            .or_else(|| get_field(row, "Wavelength"))
+            .or_else(|| get_field(row, "wavelengthUm"))
+            .and_then(value_to_f64);
+        if let Some(v) = row_wl {
+            if v.is_finite() && v > 0.0 {
+                let d = (v - wl).abs();
+                if d < best_delta {
+                    best_delta = d;
+                    picked = Some(row.clone());
+                }
+            }
+        }
+    }
+
+    let mut src = picked
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_else(Map::new);
+    src.insert("wavelength".to_string(), Value::from(wl));
+    src.insert("Wavelength".to_string(), Value::from(wl));
+    src.insert("wavelengthUm".to_string(), Value::from(wl));
+    src.insert("primary".to_string(), Value::from("Primary Wavelength"));
+    src.insert("isPrimary".to_string(), Value::from(true));
+    if !src.contains_key("id") {
+        src.insert("id".to_string(), Value::from("NativeDistortionSource"));
+    }
+    if !src.contains_key("name") {
+        src.insert("name".to_string(), Value::from("NativeDistortionSource"));
+    }
+    vec![Value::Object(src)]
+}
+
 fn compute_packed_surface_origins_native(
     rows: &[Value],
     row_origins: &mut Vec<f64>,
@@ -4976,7 +5018,7 @@ fn trace_distortion_chief_y_mm(
         packed.row_origins[stop_base + 2],
     ];
 
-    if finite || height_mode {
+    if finite {
         let h_obj = if height_mode {
             field_value
         } else {
@@ -8772,8 +8814,13 @@ pub fn run_native_chief_ray_angle_wasm_json(req_json: String) -> Result<JsValue,
         return Err(JsValue::from_str("run_native_chief_ray_angle_wasm_json: opticalSystemRows is empty"));
     }
 
-    let source_rows = req_obj
+    let source_rows_raw = req_obj
         .get("sourceRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let object_rows_raw = req_obj
+        .get("objectRows")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
@@ -8962,7 +9009,17 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
         .or_else(|| req_obj.get("wavelengthUm"))
         .and_then(value_to_f64)
         .filter(|w| w.is_finite() && *w > 0.0)
-        .unwrap_or_else(|| get_primary_wavelength_um_native(&source_rows, 0.5876));
+        .unwrap_or_else(|| get_primary_wavelength_um_native(&source_rows_raw, 0.5876));
+    let source_rows = distortion_source_rows_for_wavelength_native(&source_rows_raw, wavelength);
+    let imageheight_mode = object_rows_raw.iter().any(|row| {
+        let tag = get_field(row, "position")
+            .or_else(|| get_field(row, "objectType"))
+            .or_else(|| get_field(row, "type"))
+            .and_then(value_to_string)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        tag.contains("imageheight")
+    });
     let height_mode = req_obj
         .get("heightMode")
         .and_then(|v| match v {
@@ -8975,6 +9032,17 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
             _ => None,
         })
         .unwrap_or(false);
+    let distortion_metric = req_obj
+        .get("distortionMetric")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| s == "chief-ray" || s == "spot-gravity")
+        .unwrap_or_else(|| "chief-ray".to_string());
+    if distortion_metric == "spot-gravity" {
+        return Err(JsValue::from_str(
+            "run_native_distortion_wasm_json: spot-gravity is not supported in direct API; use spot fallback",
+        ));
+    }
 
     let surface_index = req_obj
         .get("surfaceIndex")
@@ -8996,39 +9064,15 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
     let mirror_sign = distortion_mirror_sign(&rows);
     let (packed, object_space_n) = build_trace_packed_meta_for_wavelength(&rows, wavelength, surface_index);
 
-    let focal_theta_deg = 0.1_f64;
-    let focal_theta_rad = focal_theta_deg.to_radians();
-    let focal_probe = trace_distortion_chief_y_mm(
-        &rows,
-        &packed,
-        object_space_n,
-        stop_surface_index,
-        surface_index,
-        focal_theta_deg,
-        false,
-        finite,
-        object_distance,
-    )
-    .map(|y| (y * mirror_sign) / focal_theta_rad.tan());
-    let focal_length = focal_probe.unwrap_or(1.0);
+    let paraxial_trace = calculate_full_system_paraxial_trace_json(&rows);
+    let paraxial_focal_length = paraxial_trace
+        .as_ref()
+        .map(|t| t.focal_length_mm)
+        .filter(|v| v.is_finite() && v.abs() > 1e-12);
+    let focal_length = paraxial_focal_length
+        .ok_or_else(|| JsValue::from_str("run_native_distortion_wasm_json: failed to resolve paraxial focal length"))?;
 
-    let magnification = if height_mode && finite {
-        trace_distortion_chief_y_mm(
-            &rows,
-            &packed,
-            object_space_n,
-            stop_surface_index,
-            surface_index,
-            1.0,
-            true,
-            finite,
-            object_distance,
-        )
-        .map(|y| (y * mirror_sign) / 1.0)
-        .unwrap_or(-1.0)
-    } else {
-        -1.0
-    };
+    let magnification = -1.0_f64;
 
     let mut real_heights = Vec::with_capacity(field_samples.len());
     let mut ideal_heights = Vec::with_capacity(field_samples.len());
@@ -9036,25 +9080,41 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
     let mut distortion_percent = Vec::with_capacity(field_samples.len());
 
     for field in &field_samples {
+        let trace_as_height_mode = height_mode && finite && !imageheight_mode;
+        let trace_field_value = if height_mode && (!finite || imageheight_mode) {
+            (field / focal_length).atan().to_degrees()
+        } else {
+            *field
+        };
         let y_real = trace_distortion_chief_y_mm(
             &rows,
             &packed,
             object_space_n,
             stop_surface_index,
             surface_index,
-            *field,
-            height_mode,
+            trace_field_value,
+            trace_as_height_mode,
             finite,
             object_distance,
         )
         .map(|y| (y * mirror_sign).abs());
         real_heights.push(y_real);
 
-        let h_ideal = if height_mode {
-            if finite { magnification * *field } else { *field }
+        let w_paraxial_rad = if height_mode {
+            if !finite || imageheight_mode {
+                (field / focal_length).atan()
+            } else {
+                let object_distance_abs = object_distance.abs();
+                if object_distance_abs > 1e-12 {
+                    (field / object_distance_abs).atan()
+                } else {
+                    0.0
+                }
+            }
         } else {
-            focal_length * field.to_radians().tan()
+            field.to_radians()
         };
+        let h_ideal = focal_length * w_paraxial_rad.tan();
         ideal_heights.push(h_ideal);
 
         let d = if h_ideal.abs() < 1e-12 {
@@ -9078,9 +9138,15 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
         "meta": {
             "wavelength": wavelength,
             "focalLength": focal_length,
+            "paraxialFocalLength": paraxial_focal_length,
             "finiteSystem": finite,
             "heightMode": height_mode,
+            "imageHeightMode": imageheight_mode,
             "magnification": magnification,
+            "paraxialReferenceMode": "strict-paraxial-trace",
+            "paraxialAngleUnit": "radian",
+            "idealHeightFormula": "tan(w_paraxial_rad) * EFL",
+            "distortionDefinition": distortion_metric,
             "mirrorSign": mirror_sign,
             "surfaceIndex": surface_index,
             "stopSurfaceIndex": stop_surface_index,

@@ -143,9 +143,6 @@ function __emitQconTrace(entry: any) {
     while (list.length > cfg.maxEntries) list.shift();
     cfg.g.__COOPT_QCON_TRACE_LOG = list;
     cfg.g.__COOPT_LAST_QCON_TRACE = entry;
-    if (cfg.consoleEnabled) {
-      console.log('[QconTrace]', entry);
-    }
   } catch (_) {
     // ignore trace logging failures
   }
@@ -1509,7 +1506,20 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
     if (isQconMode) {
       const rust = useRustWasm ? getRustRayTracingWasmSync() : null;
       if (!rust || typeof rust.intersect_qcon_surface_batch !== 'function') {
-        throw new Error('Rust WASM Qcon support is unavailable');
+        return list.map(ray => {
+          try {
+            return intersectAsphericSurface(ray, safeParams, mode, maxIter, tol, null, {
+              ...strictOptions,
+              useRustWasm: false,
+              requireRustWasm: false,
+              requireWasmRayTracing: false,
+              disableWasmRayTracing: true,
+              allowNonStrict: true
+            });
+          } catch (_) {
+            return null;
+          }
+        });
       }
       if (!__rustBatchRayBuffer || __rustBatchRayCapacity < list.length) {
         __rustBatchRayBuffer = new Float64Array(list.length * 6);
@@ -1559,7 +1569,20 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
         }
         return out;
       }
-      throw new Error('Rust WASM Qcon support is unavailable');
+      return list.map(ray => {
+        try {
+          return intersectAsphericSurface(ray, safeParams, mode, maxIter, tol, null, {
+            ...strictOptions,
+            useRustWasm: false,
+            requireRustWasm: false,
+            requireWasmRayTracing: false,
+            disableWasmRayTracing: true,
+            allowNonStrict: true
+          });
+        } catch (_) {
+          return null;
+        }
+      });
     }
 
     if (useRustWasm) {
@@ -1751,27 +1774,28 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
       if (debugLog) debugLog = null;
       const rust = useRustWasm ? getRustRayTracingWasmSync() : null;
       if (!rust || typeof rust.intersect_qcon_surface !== 'function') {
-        throw new Error('Rust WASM Qcon support is unavailable');
+        // Fall back to JS Qcon Newton solver below.
       }
-      const rayArr = __buildRayArray(ray);
-      const paramsArr = __buildQconParamsArray(safeParams);
-      const modeOdd = (normalizedMode === 'odd') ? 1 : 0;
-      const tHit = rust.intersect_qcon_surface(
-        rayArr,
-        paramsArr,
-        modeOdd,
-        maxIter | 0,
-        Number(tol) || 1e-7
-      );
-      const isForwardHit = requireForwardHit
-        ? (Number.isFinite(tHit) && tHit >= forwardHitMinT)
-        : Number.isFinite(tHit);
-      if (isForwardHit) {
-        __logOpdBackendOnce('rustWasm', 'intersect_qcon_surface');
-        const pt = add(ray.pos, scale(ray.dir, tHit));
-        if (pt && isFinite(pt.x) && isFinite(pt.y) && isFinite(pt.z)) return pt;
+      if (rust && typeof rust.intersect_qcon_surface === 'function') {
+        const rayArr = __buildRayArray(ray);
+        const paramsArr = __buildQconParamsArray(safeParams);
+        const modeOdd = (normalizedMode === 'odd') ? 1 : 0;
+        const tHit = rust.intersect_qcon_surface(
+          rayArr,
+          paramsArr,
+          modeOdd,
+          maxIter | 0,
+          Number(tol) || 1e-7
+        );
+        const isForwardHit = requireForwardHit
+          ? (Number.isFinite(tHit) && tHit >= forwardHitMinT)
+          : Number.isFinite(tHit);
+        if (isForwardHit) {
+          __logOpdBackendOnce('rustWasm', 'intersect_qcon_surface');
+          const pt = add(ray.pos, scale(ray.dir, tHit));
+          if (pt && isFinite(pt.x) && isFinite(pt.y) && isFinite(pt.z)) return pt;
+        }
       }
-      if (requireRustWasm) return null;
     }
 
     // Qcon is not representable by RT10 kernels. If Rust Qcon misses, fall back to
@@ -2359,7 +2383,7 @@ function __surfaceNormal_impl(pt, params, mode = "even", options = null) {
         return normalize(vec3(0, 0, 1));
       }
     } else if (requireRustWasm) {
-      throw new Error('Rust WASM Qcon support is unavailable');
+      // Qcon normal falls back to analytical JS derivative path below.
     }
   } else if (useRustWasm) {
     const rust = getRustRayTracingWasmSync();

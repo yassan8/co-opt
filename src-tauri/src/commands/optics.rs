@@ -7,7 +7,7 @@ use std::f64::consts::PI;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
-use crate::commands::analysis::SpotPoint;
+use crate::commands::analysis::{SpotPoint, paraxial_effective_focal_length_mm};
 use crate::commands::gpu_fft;
 
 const EPS_R: f64 = 1e-10;
@@ -1038,6 +1038,7 @@ pub struct NativeDistortionRequest {
     pub surface_index: Option<usize>,
     pub field_samples: Vec<f64>,
     pub height_mode: Option<bool>,
+    pub distortion_metric: Option<String>,
     pub wavelength: Option<f64>,
 }
 
@@ -7063,6 +7064,46 @@ fn distortion_default_source_rows(wavelength: f64) -> Vec<Value> {
     })]
 }
 
+fn distortion_source_rows_for_wavelength(source_rows: &[Value], wavelength: f64) -> Vec<Value> {
+    let wl = if wavelength.is_finite() && wavelength > 0.0 {
+        wavelength
+    } else {
+        0.5876
+    };
+
+    let mut picked: Option<Value> = None;
+    let mut best_delta = f64::INFINITY;
+    for row in source_rows {
+        let row_wl = get_field(row, "wavelength")
+            .or_else(|| get_field(row, "Wavelength"))
+            .and_then(value_to_f64);
+        if let Some(v) = row_wl {
+            if v.is_finite() && v > 0.0 {
+                let d = (v - wl).abs();
+                if d < best_delta {
+                    best_delta = d;
+                    picked = Some(row.clone());
+                }
+            }
+        }
+    }
+
+    let mut src = picked
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_else(Map::new);
+    src.insert("wavelength".to_string(), Value::from(wl));
+    src.insert("Wavelength".to_string(), Value::from(wl));
+    src.insert("primary".to_string(), Value::from("Primary Wavelength"));
+    src.insert("isPrimary".to_string(), Value::from(true));
+    if !src.contains_key("id") {
+        src.insert("id".to_string(), Value::from("NativeDistortionSource"));
+    }
+    if !src.contains_key("name") {
+        src.insert("name".to_string(), Value::from("NativeDistortionSource"));
+    }
+    vec![Value::Object(src)]
+}
+
 fn distortion_parse_field_index(label: &str) -> Option<usize> {
     let marker = "Field-";
     let pos = label.find(marker)?;
@@ -7075,6 +7116,51 @@ fn distortion_parse_field_index(label: &str) -> Option<usize> {
         return None;
     }
     digits.parse::<usize>().ok()
+}
+
+fn distortion_request_uses_imageheight_mode(object_rows: &[Value]) -> bool {
+    object_rows.iter().any(|row| {
+        let tag = get_field(row, "position")
+            .or_else(|| get_field(row, "objectType"))
+            .or_else(|| get_field(row, "type"))
+            .and_then(value_to_string)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        tag.contains("imageheight")
+    })
+}
+
+fn distortion_series_y_mm(series: &NativeSpotSeries, mirror_sign: f64, distortion_metric: &str) -> Option<f64> {
+    if distortion_metric == "chief-ray" {
+        let chief = series.chief_point_um.as_ref()?;
+        let y_mm = (chief.y_um / 1000.0) * mirror_sign;
+        if y_mm.is_finite() {
+            return Some(y_mm);
+        }
+        return None;
+    }
+    let mut sum_y_um = 0.0_f64;
+    let mut count = 0usize;
+    for p in &series.points {
+        if !p.y_um.is_finite() {
+            continue;
+        }
+        sum_y_um += p.y_um;
+        count += 1;
+    }
+    if count > 0 {
+        let y_mm = (sum_y_um / count as f64) / 1000.0 * mirror_sign;
+        if y_mm.is_finite() {
+            return Some(y_mm);
+        }
+    }
+    let chief = series.chief_point_um.as_ref()?;
+    let y_mm = (chief.y_um / 1000.0) * mirror_sign;
+    if y_mm.is_finite() {
+        Some(y_mm)
+    } else {
+        None
+    }
 }
 
 fn distortion_estimate_focal_length_mm(
@@ -7107,8 +7193,7 @@ fn distortion_estimate_focal_length_mm(
     };
     let response = run_native_spot_raytrace(req).ok()?;
     let series = response.series.iter().find(|s| distortion_parse_field_index(&s.label) == Some(0))?;
-    let chief = series.chief_point_um.as_ref()?;
-    let y_mm = (chief.y_um / 1000.0) * mirror_sign;
+    let y_mm = distortion_series_y_mm(series, mirror_sign, "spot-gravity")?;
     if !y_mm.is_finite() || theta_rad.abs() < 1e-12 {
         return None;
     }
@@ -7180,8 +7265,7 @@ fn distortion_estimate_height_magnification(
     };
     let response = run_native_spot_raytrace(req).ok()?;
     let series = response.series.iter().find(|s| distortion_parse_field_index(&s.label) == Some(0))?;
-    let chief = series.chief_point_um.as_ref()?;
-    let y_mm = (chief.y_um / 1000.0) * mirror_sign;
+    let y_mm = distortion_series_y_mm(series, mirror_sign, "spot-gravity")?;
     if !y_mm.is_finite() {
         return None;
     }
@@ -7212,6 +7296,12 @@ fn run_native_distortion_impl(
         .unwrap_or_else(|| rows.len().saturating_sub(1))
         .min(rows.len().saturating_sub(1));
     let height_mode = req.height_mode.unwrap_or(false);
+    let distortion_metric = req
+        .distortion_metric
+        .as_deref()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| s == "chief-ray" || s == "spot-gravity")
+        .unwrap_or_else(|| "spot-gravity".to_string());
     let wavelength = req
         .wavelength
         .filter(|w| w.is_finite() && *w > 0.0)
@@ -7225,17 +7315,15 @@ fn run_native_distortion_impl(
     if source_rows.is_empty() {
         source_rows = distortion_default_source_rows(wavelength);
     }
+    source_rows = distortion_source_rows_for_wavelength(&source_rows, wavelength);
 
     let mirror_sign = distortion_mirror_sign(&rows);
     let finite = !is_infinite_conjugate_native(&rows);
-    let focal_length = distortion_estimate_focal_length_mm(&rows, &source_rows, surface_index, mirror_sign)
-        .ok_or_else(|| "run_native_distortion: failed to estimate focal length".to_string())?;
-    let magnification = if height_mode && finite {
-        distortion_estimate_height_magnification(&rows, &source_rows, surface_index, mirror_sign)
-            .unwrap_or(-1.0)
-    } else {
-        -1.0
-    };
+    let imageheight_mode = distortion_request_uses_imageheight_mode(&req.object_rows);
+    let paraxial_focal_length = paraxial_effective_focal_length_mm(&rows);
+    let focal_length = paraxial_focal_length
+        .ok_or_else(|| "run_native_distortion: failed to resolve paraxial focal length".to_string())?;
+    let magnification = -1.0_f64;
 
     let object_distance = rows
         .first()
@@ -7252,15 +7340,28 @@ fn run_native_distortion_impl(
         .enumerate()
         .map(|(idx, sample)| {
             if height_mode {
-                serde_json::json!({
-                    "id": format!("Field-{}", idx),
-                    "name": format!("Field-{}", idx),
-                    "position": "Rectangle",
-                    "xHeight": 0.0,
-                    "yHeight": *sample,
-                    "x": 0.0,
-                    "y": *sample,
-                })
+                if finite && !imageheight_mode {
+                    serde_json::json!({
+                        "id": format!("Field-{}", idx),
+                        "name": format!("Field-{}", idx),
+                        "position": "Rectangle",
+                        "xHeight": 0.0,
+                        "yHeight": *sample,
+                        "x": 0.0,
+                        "y": *sample,
+                    })
+                } else {
+                    let theta_deg = (*sample / focal_length).atan() * 180.0 / PI;
+                    serde_json::json!({
+                        "id": format!("Field-{}", idx),
+                        "name": format!("Field-{}", idx),
+                        "position": "Angle",
+                        "xHeightAngle": 0.0,
+                        "yHeightAngle": theta_deg,
+                        "x": 0.0,
+                        "y": theta_deg,
+                    })
+                }
             } else if finite {
                 let theta_rad = *sample * PI / 180.0;
                 let h_object = object_distance * theta_rad.tan();
@@ -7307,11 +7408,8 @@ fn run_native_distortion_impl(
         if idx >= real_heights.len() {
             continue;
         }
-        if let Some(chief) = &series.chief_point_um {
-            let y_mm = (chief.y_um / 1000.0) * mirror_sign;
-            if y_mm.is_finite() {
-                real_heights[idx] = Some(y_mm.abs());
-            }
+        if let Some(y_mm) = distortion_series_y_mm(series, mirror_sign, &distortion_metric) {
+            real_heights[idx] = Some(y_mm.abs());
         }
     }
 
@@ -7320,15 +7418,21 @@ fn run_native_distortion_impl(
     let mut distortion_percent = Vec::<Option<f64>>::with_capacity(req.field_samples.len());
 
     for (idx, sample) in req.field_samples.iter().enumerate() {
-        let h_ideal = if height_mode {
-            if finite {
-                magnification * *sample
+        let w_paraxial_rad = if height_mode {
+            if !finite || imageheight_mode {
+                (*sample / focal_length).atan()
             } else {
-                *sample
+                let object_distance_abs = object_distance.abs();
+                if object_distance_abs > 1e-12 {
+                    (*sample / object_distance_abs).atan()
+                } else {
+                    0.0
+                }
             }
         } else {
-            focal_length * ((*sample) * PI / 180.0).tan()
+            (*sample) * PI / 180.0
         };
+        let h_ideal = focal_length * w_paraxial_rad.tan();
         ideal_heights.push(h_ideal);
 
         let d = if h_ideal.abs() < 1e-12 {
@@ -7345,9 +7449,17 @@ fn run_native_distortion_impl(
     let mut meta = Map::new();
     meta.insert("wavelength".to_string(), Value::from(wavelength));
     meta.insert("focalLength".to_string(), Value::from(focal_length));
+    if let Some(v) = paraxial_focal_length {
+        meta.insert("paraxialFocalLength".to_string(), Value::from(v));
+    }
     meta.insert("finiteSystem".to_string(), Value::from(finite));
     meta.insert("heightMode".to_string(), Value::from(height_mode));
+    meta.insert("imageHeightMode".to_string(), Value::from(imageheight_mode));
+    meta.insert("paraxialAngleUnit".to_string(), Value::from("radian"));
+    meta.insert("idealHeightFormula".to_string(), Value::from("tan(w_paraxial_rad) * EFL"));
     meta.insert("magnification".to_string(), Value::from(magnification));
+    meta.insert("paraxialReferenceMode".to_string(), Value::from("strict-paraxial-trace"));
+    meta.insert("distortionDefinition".to_string(), Value::from(distortion_metric));
     meta.insert("mirrorSign".to_string(), Value::from(mirror_sign));
 
     Ok(NativeDistortionResponse {

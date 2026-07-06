@@ -3395,7 +3395,7 @@ export default function LegacyPanels() {
                 <option value="">Select surface...</option>
               </select>
               <label htmlFor="ray-count-input">Ray number:</label>
-              <input type="number" id="ray-count-input" defaultValue={501} min={1} max={10001} step={1} />
+              <input type="number" id="ray-count-input" defaultValue={128} min={1} max={10001} step={1} />
               <label htmlFor="ring-count-select">Ring count:</label>
               <select id="ring-count-select" defaultValue="10">
                 <option value="1">1</option>

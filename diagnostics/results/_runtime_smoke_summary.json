@@ -1,0 +1,22 @@
+{
+  "imageIdx": 23,
+  "spot": {
+    "objects": 2,
+    "totalRays": 202,
+    "successfulRays": 68
+  },
+  "astig": {
+    "rows": 0,
+    "validM": 0,
+    "validS": 0
+  },
+  "distortion": {
+    "samples": 6,
+    "valid": 6
+  },
+  "grid": {
+    "pointsX": 400,
+    "pointsY": 400,
+    "usablePairs": 400
+  }
+}

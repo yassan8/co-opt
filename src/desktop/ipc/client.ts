@@ -474,6 +474,7 @@ async function computeReferenceOpdMapViaRustTracedJsMath(
 // Session-scoped guard: once direct distortion WASM export is known-missing,
 // skip repeated attempts to reduce console noise and extra overhead.
 let directDistortionWasmUnavailableInSession = false;
+const directDistortionSparseCoverageWarnedKeys = new Set<string>();
 
 function getPrimaryWavelengthFromSourceRows(sourceRows: any[] = []): number {
   let fallback = 0.5876;
@@ -508,6 +509,12 @@ async function normalizeTransverseObjectRowsForImageHeight(
   sourceRows: any[],
   objectRows: any[],
   explicitWavelength?: number,
+  options?: {
+    onProgress?: (evt: { percent?: number; message?: string }) => void;
+    progressStart?: number;
+    progressEnd?: number;
+    progressLabel?: string;
+  },
 ): Promise<any[]> {
   const parseFiniteNumber = (value: unknown): number | null => {
     const parsed = Number(value);
@@ -515,6 +522,21 @@ async function normalizeTransverseObjectRowsForImageHeight(
   };
   const rows = Array.isArray(objectRows) ? objectRows : [];
   if (rows.length === 0) return [];
+  const onProgress = typeof options?.onProgress === "function" ? options.onProgress : null;
+  const progressStart = Number.isFinite(Number(options?.progressStart)) ? Number(options?.progressStart) : 0;
+  const progressEnd = Number.isFinite(Number(options?.progressEnd)) ? Number(options?.progressEnd) : 100;
+  const progressLabel = String(options?.progressLabel || "ImageHeight conversion");
+  const emitProgress = (percent: number, message: string) => {
+    if (!onProgress) return;
+    try {
+      onProgress({
+        percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : undefined,
+        message,
+      });
+    } catch {
+      // Ignore progress callback failures.
+    }
+  };
 
   const normalizedRows = rows.map((row) => {
     if (!row || typeof row !== "object") return row;
@@ -536,6 +558,8 @@ async function normalizeTransverseObjectRowsForImageHeight(
   const hasImageHeight = normalizedRows.some((row) => String((row as any)?.position ?? "").trim().toLowerCase() === "imageheight");
   if (!hasImageHeight) return normalizedRows;
 
+  emitProgress(progressStart, `${progressLabel}: preparing...`);
+
   const [{ detectConjugateType }, { convertImageHeightToEffectiveObject }] = await Promise.all([
     import("../../../utils/conjugate-detection.ts"),
     import("../../../optical/ray-renderer.ts"),
@@ -547,9 +571,20 @@ async function normalizeTransverseObjectRowsForImageHeight(
     ? Number(explicitWavelength)
     : getPrimaryWavelengthFromSourceRows(sourceRows);
 
-  return normalizedRows.map((row) => {
+  const imageHeightCount = normalizedRows.reduce((acc, row) => {
     const posNorm = String((row as any)?.position ?? "").trim().toLowerCase();
-    if (posNorm !== "imageheight") return row;
+    return posNorm === "imageheight" ? acc + 1 : acc;
+  }, 0);
+  let convertedCount = 0;
+  const convertedRows: any[] = [];
+
+  for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
+    const row = normalizedRows[rowIndex];
+    const posNorm = String((row as any)?.position ?? "").trim().toLowerCase();
+    if (posNorm !== "imageheight") {
+      convertedRows.push(row);
+      continue;
+    }
 
     const preservedTarget = {
       x: parseFiniteNumber((row as any)?.__cooptImageHeightTarget?.x)
@@ -570,24 +605,40 @@ async function normalizeTransverseObjectRowsForImageHeight(
         validationTraceBackend: 'rust',
       });
       if (effective && typeof effective === "object") {
-        return {
+        convertedRows.push({
           ...row,
           ...effective,
           __cooptImageHeightTarget: preservedTarget,
           position: (row as any)?.position,
           __cooptOriginalPosition: row.position,
-        };
+        });
+        convertedCount += 1;
+        const percent = progressStart + ((progressEnd - progressStart) * convertedCount) / Math.max(1, imageHeightCount);
+        emitProgress(percent, `${progressLabel}: converting ${convertedCount}/${imageHeightCount}`);
+        if ((convertedCount % 3) === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        continue;
       }
     } catch (_) {
       // Fall through to the original row so the existing path still runs.
     }
 
-    return {
+    convertedRows.push({
       ...row,
       __cooptImageHeightTarget: preservedTarget,
       __cooptOriginalPosition: row.position,
-    };
-  });
+    });
+    convertedCount += 1;
+    const percent = progressStart + ((progressEnd - progressStart) * convertedCount) / Math.max(1, imageHeightCount);
+    emitProgress(percent, `${progressLabel}: converting ${convertedCount}/${imageHeightCount}`);
+    if ((convertedCount % 3) === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  emitProgress(progressEnd, `${progressLabel}: done`);
+  return convertedRows;
 }
 
 function buildTransverseFieldSettingsFromObjectRows(objectRows: any[] = []): any[] {
@@ -853,6 +904,43 @@ function buildDefaultDistortionSourceRows(wavelengthUm: number): any[] {
     primary: "Primary Wavelength",
     isPrimary: true,
     color: "#22c55e",
+  }];
+}
+
+function buildDistortionSourceRowsForWavelength(sourceRows: any[], wavelengthUm: number): any[] {
+  const wavelength = Number.isFinite(Number(wavelengthUm)) && Number(wavelengthUm) > 0
+    ? Number(wavelengthUm)
+    : getPrimaryWavelengthUm(sourceRows, 0.5876);
+  const rows = Array.isArray(sourceRows) ? sourceRows : [];
+  if (rows.length === 0) {
+    return buildDefaultDistortionSourceRows(wavelength);
+  }
+
+  let picked: any = null;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  for (const row of rows) {
+    const wl = Number((row as any)?.wavelength ?? (row as any)?.Wavelength);
+    if (!Number.isFinite(wl) || wl <= 0) continue;
+    const delta = Math.abs(wl - wavelength);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      picked = row;
+    }
+  }
+
+  const base = picked && typeof picked === "object"
+    ? { ...picked }
+    : {};
+  return [{
+    ...base,
+    id: String(base?.id ?? base?.name ?? "DistortionPrimarySource"),
+    name: String(base?.name ?? base?.id ?? "DistortionPrimarySource"),
+    wavelength,
+    Wavelength: wavelength,
+    weight: Number.isFinite(Number(base?.weight)) ? Number(base.weight) : 1,
+    intensity: Number.isFinite(Number(base?.intensity)) ? Number(base.intensity) : 1,
+    primary: "Primary Wavelength",
+    isPrimary: true,
   }];
 }
 
@@ -1263,6 +1351,7 @@ export async function runNativeSpotRaytrace(
   } as NativeSpotRaytraceRequest;
 
   if (!isTauriRuntime() || normalizedPayload?.forceRustWasm === true) {
+    const strictChiefOnly = normalizedPayload?.strictChiefOnly === true;
     const opticalSystemRows = Array.isArray(normalizedPayload?.opticalSystemRows) ? normalizedPayload.opticalSystemRows : [];
     if (opticalSystemRows.length === 0) {
       throw new Error("runNativeSpotRaytrace(web): opticalSystemRows is empty");
@@ -1281,10 +1370,14 @@ export async function runNativeSpotRaytrace(
       const { traceRayEvalBatchSummary } = await import("../../../raytracing/core/ray-tracing.ts");
       const requestSeries = payload.raySeries;
       const traceStartMs = nowMs();
+      const requestedTraceBackend = String((payload as any)?.renderTraceBackend || "").trim().toLowerCase();
+      const useRustTrace = requestedTraceBackend === "ts" ? false : true;
+      const allowNonStrictRaytrace = (payload as any)?.allowNonStrictRaytrace === true;
       const traceOptions = {
-        useRustWasm: true,
-        requireRustWasm: true,
-        allowNonStrict: false,
+        useRustWasm: useRustTrace,
+        requireRustWasm: useRustTrace,
+        disableWasmRayTracing: !useRustTrace,
+        allowNonStrict: allowNonStrictRaytrace,
       } as any;
 
       const series = requestSeries.map((entry: any, idx: number) => {
@@ -1320,9 +1413,13 @@ export async function runNativeSpotRaytrace(
             };
           })
           .filter((p: any) => !!p);
-        const chiefSummary = (chiefIdx >= 0 && chiefIdx < normalizedSummaries.length)
-          ? normalizedSummaries[chiefIdx]
-          : normalizedSummaries.find((s: any) => !!s?.success && s?.hitPoint);
+        const chiefSummary = strictChiefOnly
+          ? ((chiefIdx >= 0 && chiefIdx < normalizedSummaries.length)
+            ? normalizedSummaries[chiefIdx]
+            : null)
+          : ((chiefIdx >= 0 && chiefIdx < normalizedSummaries.length)
+            ? normalizedSummaries[chiefIdx]
+            : normalizedSummaries.find((s: any) => !!s?.success && s?.hitPoint));
         const chiefPointUm = (chiefSummary && chiefSummary.hitPoint)
           ? { xUm: Number(chiefSummary.hitPoint.x) * 1000, yUm: Number(chiefSummary.hitPoint.y) * 1000 }
           : undefined;
@@ -1401,10 +1498,13 @@ export async function runNativeSpotRaytrace(
     }
 
     const { generateSpotDiagramAsync } = await import("../../../evaluation/spot-diagram.ts");
+    const { calculateSurfaceOrigins, transformPointToLocal } = await import("../../../raytracing/core/ray-tracing.ts");
     const sourceRowsRaw = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
     const sourceRows = pickPrimarySourceRowsNativeLike(sourceRowsRaw, payload?.wavelengthMode);
     const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
-    const rayCount = Number.isInteger(payload?.rayCount) ? Math.max(1, Number(payload.rayCount)) : 501;
+    const rayCount = Number.isInteger(payload?.rayCount)
+      ? Math.max(1, Math.min(1001, Number(payload.rayCount)))
+      : 501;
     const ringCount = Number.isInteger(payload?.ringCount) ? Math.max(1, Number(payload.ringCount)) : 10;
 
     const pattern = String(payload?.pattern || "annular").toLowerCase();
@@ -1442,26 +1542,62 @@ export async function runNativeSpotRaytrace(
     }
 
     const spotData = Array.isArray(out?.spotData) ? out.spotData : [];
+    const surfaceInfoList = calculateSurfaceOrigins(opticalSystemRows);
+    const targetSurfaceInfo = (Array.isArray(surfaceInfoList) && targetSurface >= 0 && targetSurface < surfaceInfoList.length)
+      ? surfaceInfoList[targetSurface]
+      : null;
+    const toLocalPointMm = (p: any): { x: number; y: number } | null => {
+      if (!p || typeof p !== "object") return null;
+      const px = Number(p?.x);
+      const py = Number(p?.y);
+      const pz = Number(p?.z);
+      const gx = Number(p?.globalX);
+      const gy = Number(p?.globalY);
+      const gz = Number(p?.globalZ);
+
+      // Prefer explicit global coords when present, then convert to target-surface local.
+      if (targetSurfaceInfo && Number.isFinite(gx) && Number.isFinite(gy)) {
+        const globalPoint = {
+          x: gx,
+          y: gy,
+          z: Number.isFinite(gz) ? gz : (Number.isFinite(pz) ? pz : 0),
+        };
+        const localPoint = transformPointToLocal(globalPoint, targetSurfaceInfo);
+        const lx = Number(localPoint?.x);
+        const ly = Number(localPoint?.y);
+        if (Number.isFinite(lx) && Number.isFinite(ly)) {
+          return { x: lx, y: ly };
+        }
+      }
+
+      // Fallback to raw coordinates when conversion is not possible.
+      if (Number.isFinite(px) && Number.isFinite(py)) {
+        return { x: px, y: py };
+      }
+      return null;
+    };
     const series = spotData.map((obj: any, idx: number) => {
       const pointsRaw = Array.isArray(obj?.spotPoints) ? obj.spotPoints : [];
       const points = pointsRaw
-        .map((p: any) => ({
-          xUm: Number(p?.x) * 1000,
-          yUm: Number(p?.y) * 1000,
-          rayIndex: Number.isInteger(p?.rayIndex) ? Number(p.rayIndex) : undefined,
-          isChiefRay: p?.isChiefRay === true,
-          pupilU: Number.isFinite(Number(p?.pupilU)) ? Number(p.pupilU) : undefined,
-          pupilV: Number.isFinite(Number(p?.pupilV)) ? Number(p.pupilV) : undefined,
-        }))
-        .filter((p: any) => Number.isFinite(p.xUm) && Number.isFinite(p.yUm));
-      // Native spot behavior: if a strict chief marker is unavailable,
-      // use the first successful hit as chief fallback.
-      const chiefSrc = (
-        pointsRaw.find((p: any) => p?.isChiefRay === true)
-        || pointsRaw[0]
-      );
-      const chiefPointUm = chiefSrc
-        ? { xUm: Number(chiefSrc?.x) * 1000, yUm: Number(chiefSrc?.y) * 1000 }
+        .map((p: any) => {
+          const local = toLocalPointMm(p);
+          if (!local) return null;
+          return {
+            xUm: local.x * 1000,
+            yUm: local.y * 1000,
+            rayIndex: Number.isInteger(p?.rayIndex) ? Number(p.rayIndex) : undefined,
+            isChiefRay: p?.isChiefRay === true,
+            pupilU: Number.isFinite(Number(p?.pupilU)) ? Number(p.pupilU) : undefined,
+            pupilV: Number.isFinite(Number(p?.pupilV)) ? Number(p.pupilV) : undefined,
+          };
+        })
+        .filter((p: any) => !!p && Number.isFinite(p.xUm) && Number.isFinite(p.yUm));
+      const chiefSrc = strictChiefOnly
+        ? pointsRaw.find((p: any) => p?.isChiefRay === true)
+        : (pointsRaw.find((p: any) => p?.isChiefRay === true) || pointsRaw[0]);
+      const chiefLocal = toLocalPointMm(chiefSrc);
+      const chiefPointUm = chiefLocal
+        ? { xUm: chiefLocal.x * 1000, yUm: chiefLocal.y * 1000 }
         : undefined;
       const wl = Number(pointsRaw.find((p: any) => Number(p?.wavelength) > 0)?.wavelength);
 
@@ -1771,14 +1907,30 @@ export async function logNativeAstigmatismDebug(
   return invokeCommand<NativeAstigmatismDebugRequest, NativeAstigmatismDebugResponse>("log_native_astigmatism_debug", payload);
 }
 
+function hasQconSurfaceNativeLike(opticalSystemRows: any[] = []): boolean {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
+
+  for (const row of opticalSystemRows) {
+    if (!row || typeof row !== "object") continue;
+    const surfType = String((row as any)?.surfType ?? (row as any)?.["surf type"] ?? (row as any)?.type ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]+/g, "");
+    if (surfType.includes("qcon")) return true;
+  }
+  return false;
+}
+
 export async function runNativeAstigmatism(
   payload: NativeAstigmatismRequest,
 ): Promise<NativeAstigmatismResponse> {
-  if (!isTauriRuntime()) {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const forceWebQconFallback = hasQconSurfaceNativeLike(opticalSystemRows);
+
+  if (!isTauriRuntime() || forceWebQconFallback) {
     const {
       calculateAstigmatismDataNativeLike,
     } = await import("../../../evaluation/aberrations/astigmatism.ts");
-    const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
     const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
     const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
     const targetSurfaceIndex = Number.isInteger(payload?.surfaceIndex)
@@ -1809,11 +1961,28 @@ export async function runNativeAstigmatism(
       throw new Error("Web astigmatism calculation failed");
     }
 
-    return {
+    const webResult = {
       ...(result as any),
       backend: "web-rust-wasm",
       message: "Computed via Web Rust/WASM astigmatism API",
     } as NativeAstigmatismResponse;
+
+    const hasUsableRows = (() => {
+      const rows = Array.isArray((webResult as any)?.data) ? (webResult as any).data : [];
+      return rows.some((row: any) => (
+        Number.isFinite(Number(row?.meridionalDeviation)) || Number.isFinite(Number(row?.sagittalDeviation))
+      ));
+    })();
+
+    if (forceWebQconFallback && isTauriRuntime() && !hasUsableRows) {
+      try {
+        return await invokeCommand<NativeAstigmatismRequest, NativeAstigmatismResponse>("run_native_astigmatism", payload);
+      } catch {
+        // Keep web fallback result when native rescue is unavailable.
+      }
+    }
+
+    return webResult;
   }
   return invokeCommand<NativeAstigmatismRequest, NativeAstigmatismResponse>("run_native_astigmatism", payload);
 }
@@ -1823,6 +1992,7 @@ export async function runNativeTransverseAberration(
 ): Promise<NativeTransverseAberrationResponse> {
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
+  const forceWebQconFallback = hasQconSurfaceNativeLike(opticalSystemRows);
   const normalizedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
     opticalSystemRows,
     sourceRows,
@@ -1830,7 +2000,7 @@ export async function runNativeTransverseAberration(
     Number(payload?.wavelength),
   );
 
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() || forceWebQconFallback) {
     const {
       calculateTransverseAberrationAsync,
       getPrimaryWavelengthForAberration,
@@ -1882,6 +2052,7 @@ export async function runNativeTransverseRmsUm(
 ): Promise<NativeTransverseRmsResponse> {
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
+  const forceWebQconFallback = hasQconSurfaceNativeLike(opticalSystemRows);
   const normalizedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
     opticalSystemRows,
     sourceRows,
@@ -1894,7 +2065,7 @@ export async function runNativeTransverseRmsUm(
     ? componentRaw
     : "total";
 
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() || forceWebQconFallback) {
     const aberrationResponse = await runNativeTransverseAberration({
       ...payload,
       opticalSystemRows,
@@ -4077,12 +4248,55 @@ export async function runNativeFieldMtfMap(
 export async function runNativeDistortion(
   payload: NativeDistortionRequest,
 ): Promise<NativeDistortionResponse> {
-  if (!isTauriRuntime()) {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const forceWebQconFallback = hasQconSurfaceNativeLike(opticalSystemRows);
+  if (!isTauriRuntime() || forceWebQconFallback) {
+    const onProgress = typeof (payload as any)?.onProgress === "function"
+      ? (payload as any).onProgress as ((evt: { percent?: number; message?: string }) => void)
+      : null;
+    const emitProgress = (percent: number, message: string) => {
+      if (!onProgress) return;
+      try {
+        onProgress({
+          percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : undefined,
+          message,
+        });
+      } catch {
+        // Ignore progress callback failures.
+      }
+    };
     const toFiniteNumberOrNull = (value: unknown): number | null => {
       return (typeof value === "number" && Number.isFinite(value)) ? value : null;
     };
+    const getSpotGravityYUm = (row: any): number | null => {
+      const points = Array.isArray(row?.points) ? row.points : [];
+      let sumY = 0;
+      let count = 0;
+      for (const p of points) {
+        const y = Number(p?.yUm);
+        if (!Number.isFinite(y)) continue;
+        sumY += y;
+        count += 1;
+      }
+      if (count > 0) return sumY / count;
+      const chiefPointUm = row?.chiefPointUm;
+      const yChief = Number(
+        chiefPointUm && typeof chiefPointUm === "object"
+          ? chiefPointUm.yUm
+          : undefined,
+      );
+      return Number.isFinite(yChief) ? yChief : null;
+    };
+    const getSpotChiefYUm = (row: any): number | null => {
+      const chiefPointUm = row?.chiefPointUm;
+      const yChief = Number(
+        chiefPointUm && typeof chiefPointUm === "object"
+          ? chiefPointUm.yUm
+          : undefined,
+      );
+      return Number.isFinite(yChief) ? yChief : null;
+    };
 
-    const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
     const fieldSamples = Array.isArray(payload?.fieldSamples)
       ? payload.fieldSamples.map((value) => Number(value)).filter((value) => Number.isFinite(value))
       : [];
@@ -4093,37 +4307,52 @@ export async function runNativeDistortion(
       throw new Error("runNativeDistortion(web): fieldSamples is empty");
     }
 
-    const { calculateParaxialData } = await import("../../../raytracing/core/ray-paraxial.ts");
     const surfaceIndex = Number.isInteger(payload?.surfaceIndex)
       ? Math.max(0, Number(payload.surfaceIndex))
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
     const heightMode = payload?.heightMode === true;
+    const distortionMetric = String((payload as any)?.distortionMetric || "").trim().toLowerCase() === "chief-ray"
+      ? "chief-ray"
+      : "spot-gravity";
+    const getSpotDistortionYUm = (row: any): number | null => (
+      distortionMetric === "chief-ray"
+        ? getSpotChiefYUm(row)
+        : getSpotGravityYUm(row)
+    );
     const wavelength = Number.isFinite(Number(payload?.wavelength)) && Number(payload?.wavelength) > 0
       ? Number(payload.wavelength)
       : getPrimaryWavelengthUm(Array.isArray(payload?.sourceRows) ? payload.sourceRows : [], 0.5876);
-    const sourceRows = Array.isArray(payload?.sourceRows) && payload.sourceRows.length > 0
-      ? payload.sourceRows
-      : buildDefaultDistortionSourceRows(wavelength);
-    const distortionRayFanCount = 51;
+    const sourceRowsRaw = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
+    const sourceRows = buildDistortionSourceRowsForWavelength(sourceRowsRaw, wavelength);
+    const sharedParaxialWavelength = getPrimaryWavelengthUm(sourceRowsRaw, wavelength);
+    const sharedParaxialSourceRows = buildDistortionSourceRowsForWavelength(sourceRowsRaw, sharedParaxialWavelength);
+    const inputObjectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
+    const inputFieldMode = deriveGridFieldModeNativeLike(inputObjectRows);
+    const distortionRayFanCount = 21;
+    emitProgress(2, "Distortion: preparing...");
 
     // Distortion in web mode should prefer the dedicated native-like WASM path first.
     // If coverage is insufficient, we fall back to render-style spot tracing below.
     const preferRenderHighAngleRays = false;
+    const allowDirectWasmDistortion = distortionMetric === "chief-ray" && inputFieldMode !== "imageheight";
 
     // Prefer direct distortion WASM export when available.
     let directWasmError: string | null = null;
     try {
-      if (!preferRenderHighAngleRays && !directDistortionWasmUnavailableInSession) {
+      if (allowDirectWasmDistortion && !preferRenderHighAngleRays && !directDistortionWasmUnavailableInSession) {
+        emitProgress(8, "Distortion: trying direct Rust/WASM distortion...");
         const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
         const wasmApi = await preloadRustRayTracingWasm();
         if (wasmApi && typeof wasmApi.run_native_distortion_wasm_json === "function") {
           const wasmReq = {
             opticalSystemRows,
             sourceRows,
+            objectRows: inputObjectRows,
             fieldSamples,
             surfaceIndex,
             heightMode,
             wavelength,
+            distortionMetric,
           };
           const wasmRaw = wasmApi.run_native_distortion_wasm_json(JSON.stringify(wasmReq));
           const wasmResp = (typeof wasmRaw === "string") ? JSON.parse(wasmRaw) : wasmRaw;
@@ -4156,31 +4385,138 @@ export async function runNativeDistortion(
               }
             }
             const expectedPoints = Math.max(1, fieldSamples.length);
-            const minimumFinitePairs = Math.max(3, Math.ceil(expectedPoints * 0.6));
-            if (finitePairCount < minimumFinitePairs) {
+            const minimumFinitePairs = Math.min(expectedPoints, Math.max(3, Math.ceil(expectedPoints * 0.6)));
+            const hasSparseCoverage = expectedPoints >= 3 && finitePairCount < minimumFinitePairs;
+            // Skip sparse-coverage warning for tiny samples where coverage ratios are not meaningful.
+            if (hasSparseCoverage) {
               try {
-                console.warn("runNativeDistortion(web): direct WASM sparse coverage", {
-                  finitePairCount,
-                  minimumFinitePairs,
-                  expectedPoints,
-                });
+                const warnKey = `${expectedPoints}|${finitePairCount}|${minimumFinitePairs}`;
+                if (!directDistortionSparseCoverageWarnedKeys.has(warnKey)) {
+                  directDistortionSparseCoverageWarnedKeys.add(warnKey);
+                  console.warn("runNativeDistortion(web): direct WASM sparse coverage", {
+                    finitePairCount,
+                    minimumFinitePairs,
+                    expectedPoints,
+                  });
+                }
               } catch {
                 // Ignore logging failures in restricted runtimes.
               }
             }
 
-            return {
-              backend: String((wasmResp as any).backend || "web-rust-wasm"),
-              fieldValues,
-              idealHeights,
-              realHeights,
-              distortion,
-              distortionPercent,
-              meta: ((wasmResp as any).meta && typeof (wasmResp as any).meta === "object")
-                ? (wasmResp as any).meta
-                : {},
-              message: String((wasmResp as any).message || "Computed via Web Rust/WASM distortion API"),
-            };
+            // Only keep direct-WASM results when coverage is good enough.
+            // Sparse coverage creates misleading plots, so we deliberately
+            // continue to the spot-based fallback path.
+            if (!hasSparseCoverage && finitePairCount > 0) {
+              return {
+                backend: String((wasmResp as any).backend || "web-rust-wasm"),
+                fieldValues,
+                idealHeights,
+                realHeights,
+                distortion,
+                distortionPercent,
+                meta: ((wasmResp as any).meta && typeof (wasmResp as any).meta === "object")
+                  ? (wasmResp as any).meta
+                  : {},
+                message: String((wasmResp as any).message || "Computed via Web Rust/WASM distortion API"),
+              };
+            }
+
+            if (allowDirectWasmDistortion) {
+              const mergedFieldValues = [...fieldSamples];
+              const mergedIdealHeights = fieldSamples.map((_, idx) => Number(idealHeights[idx]));
+              const mergedRealHeights = fieldSamples.map((_, idx) => toFiniteNumberOrNull(realHeights[idx]));
+              const mergedDistortion = fieldSamples.map((_, idx) => toFiniteNumberOrNull(distortion[idx]));
+              const mergedDistortionPercent = fieldSamples.map((_, idx) => toFiniteNumberOrNull(distortionPercent[idx]));
+              const unresolvedIndices = [] as number[];
+              const pairCountForRecovery = mergedFieldValues.length;
+              for (let i = 0; i < pairCountForRecovery; i += 1) {
+                const y = mergedFieldValues[i];
+                const x = mergedDistortionPercent[i];
+                if (!(Number.isFinite(y) && typeof x === "number" && Number.isFinite(x))) {
+                  unresolvedIndices.push(i);
+                }
+              }
+
+              let perFieldRecoveryCount = 0;
+              for (let i = 0; i < unresolvedIndices.length; i += 1) {
+                const idx = unresolvedIndices[i];
+                const sample = fieldSamples[idx];
+                if (!Number.isFinite(Number(sample))) continue;
+                try {
+                  emitProgress(12 + (i / Math.max(1, unresolvedIndices.length)) * 36, "Distortion: recovering direct chief-ray fields...");
+                  const oneReq = {
+                    opticalSystemRows,
+                    sourceRows,
+                    objectRows: inputObjectRows,
+                    fieldSamples: [sample],
+                    surfaceIndex,
+                    heightMode,
+                    wavelength,
+                    distortionMetric,
+                  };
+                  const oneRaw = wasmApi.run_native_distortion_wasm_json(JSON.stringify(oneReq));
+                  const oneResp = (typeof oneRaw === "string") ? JSON.parse(oneRaw) : oneRaw;
+                  const oneIdeal = Array.isArray((oneResp as any)?.idealHeights) ? Number((oneResp as any).idealHeights[0]) : Number.NaN;
+                  const oneReal = Array.isArray((oneResp as any)?.realHeights) ? toFiniteNumberOrNull((oneResp as any).realHeights[0]) : null;
+                  const oneDist = Array.isArray((oneResp as any)?.distortion) ? toFiniteNumberOrNull((oneResp as any).distortion[0]) : null;
+                  const onePct = Array.isArray((oneResp as any)?.distortionPercent) ? toFiniteNumberOrNull((oneResp as any).distortionPercent[0]) : null;
+                  if (Number.isFinite(oneIdeal)) mergedIdealHeights[idx] = oneIdeal;
+                  mergedRealHeights[idx] = oneReal;
+                  mergedDistortion[idx] = oneDist;
+                  mergedDistortionPercent[idx] = onePct;
+                  if (typeof onePct === "number" && Number.isFinite(onePct)) {
+                    perFieldRecoveryCount += 1;
+                  }
+                } catch {
+                  // Keep unresolved point as null.
+                }
+              }
+
+              let recoveredFinitePairs = 0;
+              const recoveredPairCount = mergedFieldValues.length;
+              for (let i = 0; i < recoveredPairCount; i += 1) {
+                const y = mergedFieldValues[i];
+                const x = mergedDistortionPercent[i];
+                if (Number.isFinite(y) && typeof x === "number" && Number.isFinite(x)) {
+                  recoveredFinitePairs += 1;
+                }
+              }
+
+              if (recoveredFinitePairs >= minimumFinitePairs) {
+                return {
+                  backend: "web-rust-wasm-native-distortion-api-chief-direct",
+                  fieldValues: mergedFieldValues,
+                  idealHeights: mergedIdealHeights,
+                  realHeights: mergedRealHeights,
+                  distortion: mergedDistortion,
+                  distortionPercent: mergedDistortionPercent,
+                  meta: {
+                    ...(((wasmResp as any).meta && typeof (wasmResp as any).meta === "object") ? (wasmResp as any).meta : {}),
+                    distortionDefinition: "chief-ray",
+                    directChiefPerFieldRecoveryCount: perFieldRecoveryCount,
+                    finitePairCount: recoveredFinitePairs,
+                    minimumFinitePairs,
+                    expectedPoints,
+                  },
+                  message: "Computed via direct chief-ray distortion API with per-field recovery",
+                };
+              }
+            }
+
+            directWasmError = hasSparseCoverage
+              ? `direct WASM sparse coverage (finite=${finitePairCount}, minimum=${minimumFinitePairs}, expected=${expectedPoints})`
+              : `direct WASM returned no finite distortion points (expectedPoints=${expectedPoints})`;
+            try {
+              console.warn("runNativeDistortion(web): direct WASM coverage insufficient, using spot fallback", {
+                hasSparseCoverage,
+                finitePairCount,
+                minimumFinitePairs,
+                expectedPoints,
+              });
+            } catch {
+              // Ignore logging failures in restricted runtimes.
+            }
           }
         }
       }
@@ -4199,107 +4535,206 @@ export async function runNativeDistortion(
 
     const finiteSystem = isFiniteConjugateNativeLike(opticalSystemRows);
     const objectDistance = getObjectDistanceMmNativeLike(opticalSystemRows);
-    const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
-
-    // Tauri parity: estimate focal length/magnification from real chief-ray traces,
-    // not only from paraxial outputs.
-    let focalLength = Number(paraxial?.focalLength);
+    let focalLength = Number.NaN;
     let magnification = -1;
-
     try {
-      const thetaDeg = 0.1;
-      const thetaRad = thetaDeg * Math.PI / 180;
-      const focalProbeObjectRows = finiteSystem
-        ? [{
-          id: "Field-0",
-          name: "Field-0",
-          position: "Rectangle",
-          xHeight: 0,
-          yHeight: objectDistance * Math.tan(thetaRad),
-          x: 0,
-          y: objectDistance * Math.tan(thetaRad),
-        }]
-        : [{
-          id: "Field-0",
-          name: "Field-0",
+      const paraxialResp = await runNativeParaxialMetrics({
+        opticalSystemRows,
+        sourceRows: sharedParaxialSourceRows,
+        objectRows: inputObjectRows,
+      });
+      const efl = Number((paraxialResp as any)?.metrics?.EFL);
+      const fl = Number((paraxialResp as any)?.metrics?.FL);
+      const candidate = Number.isFinite(efl) && Math.abs(efl) > 1e-12 ? efl : fl;
+      if (Number.isFinite(candidate) && Math.abs(candidate) > 1e-12) {
+        focalLength = Math.abs(candidate);
+      }
+    } catch {
+      // Keep invalid focalLength and throw below.
+    }
+    if (!(Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12)) {
+      throw new Error("runNativeDistortion(web): failed to resolve paraxial focal length");
+    }
+
+    const computeParaxialIdealHeight = (sampleRaw: number): number => {
+      const sample = Number(sampleRaw);
+      if (!Number.isFinite(sample)) return Number.NaN;
+      if (!heightMode) {
+        const wParaxialRad = sample * Math.PI / 180;
+        return focalLength * Math.tan(wParaxialRad);
+      }
+      const isImageHeightMode = inputFieldMode === "imageheight" || !finiteSystem;
+      if (isImageHeightMode) {
+        const wParaxialRad = Math.atan2(sample, focalLength);
+        return focalLength * Math.tan(wParaxialRad);
+      }
+      const objectDistanceAbs = Math.abs(objectDistance);
+      if (!(Number.isFinite(objectDistanceAbs) && objectDistanceAbs > 1e-12)) {
+        return Number.NaN;
+      }
+      const wParaxialRad = Math.atan2(sample, objectDistanceAbs);
+      return focalLength * Math.tan(wParaxialRad);
+    };
+
+    // For ImageHeight distortion, prefer a direct centerline reconstruction when
+    // direct distortion coverage is sparse. This avoids unnecessary 2D grid work.
+    const enableLegacyCenterlineSpotFallback = false;
+    if (enableLegacyCenterlineSpotFallback && distortionMetric !== "chief-ray" && heightMode && inputFieldMode === "imageheight" && inputObjectRows.length > 0) {
+      try {
+        emitProgress(18, "Distortion: tracing ImageHeight centerline...");
+        const centerlineObjectRows = fieldSamples.map((sample, index) => {
+          const thetaRad = Math.atan2(Number(sample), focalLength);
+          const thetaDeg = thetaRad * 180 / Math.PI;
+          const objectDistanceAbs = Math.abs(objectDistance);
+          if (finiteSystem && Number.isFinite(objectDistanceAbs) && objectDistanceAbs > 1e-12) {
+            const objectY = objectDistanceAbs * Math.tan(thetaRad);
+            return {
+              id: `Field-${index}`,
+              name: `Field-${index}`,
+              position: "Rectangle",
+              xHeight: 0,
+              yHeight: objectY,
+              x: 0,
+              y: objectY,
+            };
+          }
+          return {
+          id: `Field-${index}`,
+          name: `Field-${index}`,
           position: "Angle",
           xHeightAngle: 0,
           yHeightAngle: thetaDeg,
           x: 0,
           y: thetaDeg,
-        }];
+          };
+        });
 
-      const focalProbeResp = await runNativeSpotRaytrace({
-        opticalSystemRows,
-        sourceRows,
-        objectRows: focalProbeObjectRows,
-        surfaceIndex,
-        rayCount: distortionRayFanCount,
-        ringCount: 1,
-        pattern: "cross",
-        wavelengthMode: "primary",
-        forceRustWasm: false,
-      });
-
-      const focalProbeSeries = Array.isArray(focalProbeResp?.series) ? focalProbeResp.series : [];
-      const focalProbeRow = focalProbeSeries[0] as any;
-      const focalChiefYUm = Number(
-        (focalProbeRow?.chiefPointUm && typeof focalProbeRow.chiefPointUm === "object" ? focalProbeRow.chiefPointUm.yUm : undefined)
-        ?? (Array.isArray(focalProbeRow?.points) ? focalProbeRow.points[0]?.yUm : undefined)
-      );
-      if (Number.isFinite(focalChiefYUm) && Math.abs(thetaRad) > 1e-12) {
-        const focalFromChief = Math.abs((focalChiefYUm / 1000) / Math.tan(thetaRad));
-        if (Number.isFinite(focalFromChief) && Math.abs(focalFromChief) > 1e-9) {
-          focalLength = focalFromChief;
-        }
-      }
-    } catch {
-      // Keep paraxial focal length fallback.
-    }
-
-    if (heightMode && finiteSystem) {
-      try {
-        const magProbeObjectRows = [{
-          id: "Field-0",
-          name: "Field-0",
-          position: "Rectangle",
-          xHeight: 0,
-          yHeight: 1,
-          x: 0,
-          y: 1,
-        }];
-
-        const magProbeResp = await runNativeSpotRaytrace({
+        emitProgress(52, "Distortion: tracing centerline rays...");
+        const centerlineResp = await runNativeSpotRaytrace({
           opticalSystemRows,
           sourceRows,
-          objectRows: magProbeObjectRows,
+          objectRows: centerlineObjectRows,
           surfaceIndex,
-          rayCount: distortionRayFanCount,
+          rayCount: 11,
           ringCount: 1,
           pattern: "cross",
           wavelengthMode: "primary",
-          forceRustWasm: false,
+          forceRustWasm: true,
+          strictChiefOnly: distortionMetric === "chief-ray",
         });
 
-        const magProbeSeries = Array.isArray(magProbeResp?.series) ? magProbeResp.series : [];
-        const magProbeRow = magProbeSeries[0] as any;
-        const magChiefYUm = Number(
-          (magProbeRow?.chiefPointUm && typeof magProbeRow.chiefPointUm === "object" ? magProbeRow.chiefPointUm.yUm : undefined)
-          ?? (Array.isArray(magProbeRow?.points) ? magProbeRow.points[0]?.yUm : undefined)
-        );
-        if (Number.isFinite(magChiefYUm)) {
-          const magFromChief = Math.abs(magChiefYUm / 1000);
-          if (Number.isFinite(magFromChief)) {
-            magnification = magFromChief;
+        const idealHeights = fieldSamples.map((sample) => computeParaxialIdealHeight(Number(sample)));
+        const realHeights = new Array(fieldSamples.length).fill(null) as Array<number | null>;
+        const centerlineSeries = Array.isArray(centerlineResp?.series) ? centerlineResp.series : [];
+        for (const row of centerlineSeries as any[]) {
+          const match = String(row?.label || "").match(/Field-(\d+)/);
+          if (!match) continue;
+          const idx = Number(match[1]);
+          if (!Number.isInteger(idx) || idx < 0 || idx >= realHeights.length) continue;
+          const yUmRaw = getSpotDistortionYUm(row);
+          const yUm = toFiniteNumberOrNull(yUmRaw);
+          if (typeof yUm === "number") {
+            realHeights[idx] = Math.abs(yUm / 1000);
           }
         }
+
+        const distortion = idealHeights.map((ideal, index) => {
+          const real = realHeights[index];
+          if (!Number.isFinite(ideal)) return null;
+          if (Math.abs(ideal) < 1e-12) return 0;
+          if (typeof real !== "number" || !Number.isFinite(real)) return null;
+          return (real - ideal) / ideal;
+        });
+        const distortionPercent = distortion.map((value) => (
+          typeof value === "number" && Number.isFinite(value) ? value * 100 : null
+        ));
+
+        let finitePairCount = 0;
+        for (let i = 0; i < fieldSamples.length; i += 1) {
+          const y = Number(fieldSamples[i]);
+          const x = distortionPercent[i];
+          if (Number.isFinite(y) && typeof x === "number" && Number.isFinite(x)) finitePairCount += 1;
+        }
+        const minimumFinitePairs = Math.min(fieldSamples.length, Math.max(3, Math.ceil(fieldSamples.length * 0.6)));
+        if (finitePairCount >= minimumFinitePairs) {
+          emitProgress(90, "Distortion: centerline reconstruction complete");
+          return {
+            backend: "web-rust-wasm-centerline-spot-fallback",
+            fieldValues: fieldSamples,
+            idealHeights,
+            realHeights,
+            distortion,
+            distortionPercent,
+            meta: {
+              wavelength,
+              surfaceIndex,
+              heightMode,
+              paraxialAngleUnit: "radian",
+              idealHeightFormula: "tan(w_paraxial_rad) * EFL",
+              distortionDefinition: distortionMetric === "chief-ray" ? "chief-ray" : "spot-gravity-centroid",
+              centerlinePointCount: fieldSamples.length,
+              finitePairCount,
+              minimumFinitePairs,
+              directWasmError,
+            },
+            message: "Computed via ImageHeight centerline spot fallback",
+          };
+        }
       } catch {
-        // Keep default -1 magnification when probe fails.
+        // Keep spot-based fallback below if centerline reconstruction fails.
       }
     }
 
+    emitProgress(62, "Distortion: running render raytrace fallback...");
+    magnification = -1;
+    const chiefRayHighAccuracy = distortionMetric === "chief-ray";
+    const distortionTraceRayCount = chiefRayHighAccuracy ? 31 : distortionRayFanCount;
+    const distortionTraceRingCount = chiefRayHighAccuracy ? 8 : 1;
+    const distortionTracePattern = chiefRayHighAccuracy ? "annular" : "cross";
+
     const objectRows = fieldSamples.map((sample, index) => {
       if (heightMode) {
+        if (inputFieldMode === "imageheight") {
+          const thetaRad = Math.atan2(Number(sample), focalLength);
+          const thetaDeg = thetaRad * 180 / Math.PI;
+          const objectDistanceAbs = Math.abs(objectDistance);
+          if (finiteSystem && Number.isFinite(objectDistanceAbs) && objectDistanceAbs > 1e-12) {
+            const objectY = objectDistanceAbs * Math.tan(thetaRad);
+            return {
+              id: `Field-${index}`,
+              name: `Field-${index}`,
+              position: "Rectangle",
+              xHeight: 0,
+              yHeight: objectY,
+              x: 0,
+              y: objectY,
+            };
+          }
+          return {
+            id: `Field-${index}`,
+            name: `Field-${index}`,
+            position: "Angle",
+            xHeightAngle: 0,
+            yHeightAngle: thetaDeg,
+            x: 0,
+            y: thetaDeg,
+          };
+        }
+        // For infinite systems, height-mode samples are image heights. Trace them
+        // as Angle rays (paraxial angle = atan(h / EFL)) so the spot raytrace can
+        // reach the image surface; the ideal height remains the input sample.
+        if (!finiteSystem && Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12) {
+          const thetaRad = Math.atan2(sample, focalLength);
+          return {
+            id: `Field-${index}`,
+            name: `Field-${index}`,
+            position: "Angle",
+            xHeightAngle: 0,
+            yHeightAngle: thetaRad * 180 / Math.PI,
+            x: 0,
+            y: thetaRad * 180 / Math.PI,
+          };
+        }
         return {
           id: `Field-${index}`,
           name: `Field-${index}`,
@@ -4334,22 +4769,231 @@ export async function runNativeDistortion(
       };
     });
 
-    const spotResponse = await runNativeSpotRaytrace({
-      opticalSystemRows,
-      sourceRows,
-      objectRows,
-      surfaceIndex,
-      // Match native distortion implementation: cross pattern with 51 rays.
-      // This keeps web fallback behavior consistent with native and avoids
-      // chief-pick instability from a single-ray synthetic pattern.
-      rayCount: distortionRayFanCount,
-      ringCount: 1,
-      pattern: "cross",
-      wavelengthMode: "primary",
-      // Use render high-angle ray generation path (non-strict).
-      // Strict mode can drop mid-field points for wide-angle systems.
-      forceRustWasm: false,
+    const traceObjectRows = objectRows;
+
+    const runRenderRaytraceForRows = async (
+      rowsForTrace: any[],
+      options?: {
+        strictChiefOnly?: boolean;
+        rayCount?: number;
+        pattern?: string;
+        preferAccurateChief?: boolean;
+      },
+    ) => {
+      const rows = Array.isArray(rowsForTrace) ? rowsForTrace : [];
+      if (rows.length === 0) {
+        return {
+          series: [],
+        } as any;
+      }
+
+      const [{ generateRayStartPointsForObject }, { detectConjugateType }] = await Promise.all([
+        import("../../../optical/ray-renderer.ts"),
+        import("../../../utils/conjugate-detection.ts"),
+      ]);
+
+      const conjugateType = String(detectConjugateType(opticalSystemRows) || "").toLowerCase() === "finite"
+        ? "finite"
+        : "infinite";
+      const strictChiefOnly = options?.strictChiefOnly === true;
+      const preferAccurateChief = options?.preferAccurateChief === true;
+      const requestedRayCount = Number.isFinite(Number(options?.rayCount))
+        ? Math.max(1, Math.min(31, Math.floor(Number(options?.rayCount))))
+        : distortionTraceRayCount;
+      const requestedPattern = strictChiefOnly
+        ? "annular"
+        : "grid";
+
+      const raySeries: any[] = [];
+      for (let idx = 0; idx < rows.length; idx += 1) {
+        const row = rows[idx];
+          let starts: any[] = [];
+          try {
+            const generated = generateRayStartPointsForObject(
+              row,
+              opticalSystemRows,
+              strictChiefOnly ? 1 : requestedRayCount,
+              null,
+              {
+                pattern: requestedPattern,
+                wavelengthUm: wavelength,
+                conjugateType,
+                // Keep fallback responsive: avoid render-only expensive chief/stop solves.
+                aimThroughStop: strictChiefOnly && preferAccurateChief,
+                useChiefRayAnalysis: strictChiefOnly && preferAccurateChief,
+                allowStopBasedOriginSolve: false,
+                originSolveTraceBackend: "rust",
+                imageHeightValidationTraceBackend: "rust",
+                targetSurfaceIndex: surfaceIndex,
+                disableCrossExtent: strictChiefOnly,
+                exactCrossBeamSampling: false,
+                displayAxisAlignedSampling: false,
+                preserveChiefNormalEmissionPlane: false,
+                crossType: "both",
+                pupilScale: 1,
+              },
+            );
+            starts = Array.isArray(generated) ? generated : [];
+          } catch {
+            // Skip this field and continue tracing remaining fields.
+            starts = [];
+          }
+
+          const startRows = Array.isArray(starts) ? starts : [];
+          let rays = startRows
+            .map((start: any) => {
+              const startP = start?.startP ?? start?.origin ?? start?.pos ?? start?.originalRay?.origin ?? start?.originalRay?.pos;
+              const dir = start?.dir ?? start?.direction ?? start?.originalRay?.direction ?? start?.originalRay?.dir;
+              const sx = Number(startP?.x);
+              const sy = Number(startP?.y);
+              const sz = Number(startP?.z);
+              const dx = Number(dir?.x);
+              const dy = Number(dir?.y);
+              const dz = Number(dir?.z);
+              if (![sx, sy, sz, dx, dy, dz].every(Number.isFinite)) return null;
+              const dNorm = Math.hypot(dx, dy, dz);
+              if (!Number.isFinite(dNorm) || dNorm <= 1e-12) return null;
+              const wl = Number(start?.wavelength ?? start?.originalRay?.wavelength ?? wavelength);
+              const type = String(start?.originalRay?.type ?? start?.type ?? "").trim().toLowerCase();
+              const isChief = start?.isChief === true || start?.originalRay?.isChief === true || type === "chief";
+              return {
+                startP: { x: sx, y: sy, z: sz },
+                dir: { x: dx / dNorm, y: dy / dNorm, z: dz / dNorm },
+                wavelengthUm: Number.isFinite(wl) && wl > 0 ? wl : wavelength,
+                pupilU: Number.isFinite(Number(start?.planeCoords?.u)) ? Number(start.planeCoords.u) : undefined,
+                pupilV: Number.isFinite(Number(start?.planeCoords?.v)) ? Number(start.planeCoords.v) : undefined,
+                isChief,
+              };
+            })
+            .filter((ray: any) => !!ray);
+
+          if (strictChiefOnly && rays.length > 0) {
+            const chief = rays.find((ray: any) => ray?.isChief === true) || rays[0];
+            rays = chief ? [{ ...chief, isChief: true }] : [];
+          }
+
+          if (rays.length > 0) {
+            raySeries.push({
+              label: String(row?.id || row?.name || `Field-${idx}`),
+              hasFieldAngle: true,
+              rays,
+            });
+          }
+
+          if (((idx + 1) % 2) === 0 || idx === rows.length - 1) {
+            const progress = 64 + ((idx + 1) / Math.max(1, rows.length)) * 18;
+            emitProgress(progress, `Distortion: generating render rays ${idx + 1}/${rows.length}...`);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          }
+      }
+
+      if (raySeries.length === 0) {
+        return {
+          backend: "web-rust-wasm-render-raytrace-fallback-empty",
+          surfaceIndex,
+          tracedRays: 0,
+          requestedRays: 0,
+          generatedRays: 0,
+          wavelengthCount: 0,
+          seriesCount: 0,
+          objectCount: rows.length,
+          raysPerSeries: 0,
+          totalAttemptedRays: 0,
+          totalHitRays: 0,
+          maxHitRays: 0,
+          meanHitRatePercent: 0,
+          seriesStats: [],
+          series: [],
+          message: "Render raytrace fallback generated no valid rays",
+        } as any;
+      }
+
+      emitProgress(84, `Distortion: tracing render rays (${raySeries.length} fields)...`);
+      const mergedSeries: any[] = [];
+      const mergedSeriesStats: any[] = [];
+      let totalAttemptedRays = 0;
+      let totalHitRays = 0;
+      let maxHitRays = 0;
+
+      for (let i = 0; i < raySeries.length; i += 1) {
+        const entry = raySeries[i];
+        const strictTrace = strictChiefOnly && preferAccurateChief;
+        try {
+          const partial = await runNativeSpotRaytrace({
+            opticalSystemRows,
+            sourceRows,
+            surfaceIndex,
+            wavelengthMode: "primary",
+            forceRustWasm: true,
+            strictChiefOnly,
+            raySeries: [entry],
+            // Keep generic fallback responsive, but allow strict low-field chief retrace when requested.
+            renderTraceBackend: strictTrace ? "rust" : "ts",
+            allowNonStrictRaytrace: strictTrace ? false : true,
+          } as any);
+
+          const partialSeries = Array.isArray((partial as any)?.series) ? (partial as any).series : [];
+          const partialStats = Array.isArray((partial as any)?.seriesStats) ? (partial as any).seriesStats : [];
+          mergedSeries.push(...partialSeries);
+          mergedSeriesStats.push(...partialStats);
+
+          const attempted = Number((partial as any)?.totalAttemptedRays);
+          const hits = Number((partial as any)?.totalHitRays);
+          const maxHits = Number((partial as any)?.maxHitRays);
+          if (Number.isFinite(attempted)) totalAttemptedRays += Math.max(0, attempted);
+          if (Number.isFinite(hits)) totalHitRays += Math.max(0, hits);
+          if (Number.isFinite(maxHits)) maxHitRays = Math.max(maxHitRays, Math.max(0, maxHits));
+        } catch {
+          // Skip failed field and continue with remaining fields.
+        }
+
+        if (((i + 1) % 2) === 0 || i === raySeries.length - 1) {
+          const progress = 84 + ((i + 1) / Math.max(1, raySeries.length)) * 10;
+          emitProgress(progress, `Distortion: tracing render rays ${i + 1}/${raySeries.length}...`);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
+
+      const wavelengthValues = mergedSeries
+        .map((s: any) => Number(s?.wavelengthUm))
+        .filter((v: number) => Number.isFinite(v) && v > 0);
+      const meanHitRatePercent = totalAttemptedRays > 0 ? (totalHitRays / totalAttemptedRays) * 100 : 0;
+
+      return {
+        backend: "web-rust-wasm-render-raytrace-fallback",
+        surfaceIndex,
+        tracedRays: totalHitRays,
+        requestedRays: totalAttemptedRays,
+        generatedRays: totalAttemptedRays,
+        wavelengthCount: new Set(wavelengthValues).size,
+        seriesCount: mergedSeries.length,
+        objectCount: rows.length,
+        raysPerSeries: mergedSeriesStats.length > 0
+          ? Math.max(0, ...mergedSeriesStats.map((s: any) => Number(s?.attemptedRays) || 0))
+          : 0,
+        totalAttemptedRays,
+        totalHitRays,
+        maxHitRays,
+        meanHitRatePercent,
+        seriesStats: mergedSeriesStats,
+        series: mergedSeries,
+        message: "Computed via render-raytrace per-field fallback",
+      } as any;
+    };
+
+    const spotResponse = await runRenderRaytraceForRows(traceObjectRows, {
+      strictChiefOnly: distortionMetric === "chief-ray",
+      rayCount: distortionMetric === "chief-ray" && heightMode ? 1 : distortionTraceRayCount,
+      pattern: distortionMetric === "chief-ray" && heightMode ? "annular" : distortionTracePattern,
+      preferAccurateChief: distortionMetric === "chief-ray" && heightMode,
     });
+    const renderRaytraceSeriesCount = Array.isArray((spotResponse as any)?.series)
+      ? (spotResponse as any).series.length
+      : 0;
+    const renderRaytraceAttemptedRays = Number((spotResponse as any)?.totalAttemptedRays);
+    const renderRaytraceHitRays = Number((spotResponse as any)?.totalHitRays);
+    const fastRenderFallbackMode = true;
+    emitProgress(94, "Distortion: finalizing...");
 
     const realHeights = new Array(fieldSamples.length).fill(null) as Array<number | null>;
     const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
@@ -4358,17 +5002,14 @@ export async function runNativeDistortion(
       if (!match) continue;
       const index = Number(match[1]);
       if (!Number.isInteger(index) || index < 0 || index >= realHeights.length) continue;
-      const chiefPointUm = row?.chiefPointUm;
-      const points = Array.isArray(row?.points) ? row.points : [];
-      const fallbackPoint = points[0] || null;
-      const yUm = Number(
-        (chiefPointUm && typeof chiefPointUm === "object" ? chiefPointUm.yUm : undefined)
-        ?? fallbackPoint?.yUm
-      );
-      if (Number.isFinite(yUm)) {
+      const yUmRaw = getSpotDistortionYUm(row);
+      const yUm = toFiniteNumberOrNull(yUmRaw);
+      if (typeof yUm === "number") {
         realHeights[index] = Math.abs(yUm / 1000);
       }
     }
+
+    let lowFieldInterpolationRecoveryCount = 0;
 
     // Recover missing fields via a second strict raytrace pass without synthetic smoothing/interpolation.
     // We only retry fields with no valid hit from the primary pass.
@@ -4379,56 +5020,111 @@ export async function runNativeDistortion(
 
     let recoveredFieldCount = 0;
     let wasmMissingRecoveryCount = 0;
+    let lowFieldChiefRecoveryCount = 0;
     let missingFieldWasmRecoveryError: string | null = null;
-    if (missingFieldIndices.length > 0) {
-      const retryObjectRows = missingFieldIndices
-        .map((index) => objectRows[index])
-        .filter((row) => !!row);
+    let missingFieldRetryFailures: Array<{ index: number; error: string }> = [];
 
-      if (retryObjectRows.length > 0) {
+    // Compute IH<=10mm chief-ray points by direct retrace (no interpolation/smoothing).
+    if (heightMode && distortionMetric === "chief-ray") {
+      const lowFieldThresholdMm = 10;
+      const lowFieldIndices = fieldSamples
+        .map((v, index) => ({ v: Number(v), index }))
+        .filter((entry) => Number.isFinite(entry.v) && entry.v >= -1e-12 && entry.v <= lowFieldThresholdMm + 1e-12)
+        .map((entry) => entry.index);
+
+      for (let i = 0; i < lowFieldIndices.length; i += 1) {
+        const targetIndex = lowFieldIndices[i];
+        if (typeof realHeights[targetIndex] === "number" && Number.isFinite(realHeights[targetIndex])) {
+          continue;
+        }
+        const row = objectRows[targetIndex];
+        if (!row) continue;
         try {
-          const retrySpotResponse = await runNativeSpotRaytrace({
-            opticalSystemRows,
-            sourceRows,
-            objectRows: retryObjectRows,
-            surfaceIndex,
-            rayCount: distortionRayFanCount,
-            ringCount: 1,
-            pattern: "cross",
-            wavelengthMode: "primary",
-            // Recovery pass keeps native-like fallback behavior where strict chief can miss.
-            forceRustWasm: false,
+          const lowFieldResp = await runRenderRaytraceForRows([row], {
+            strictChiefOnly: true,
+            rayCount: 1,
+            pattern: "annular",
+            preferAccurateChief: true,
           });
+          const lowSeries = Array.isArray(lowFieldResp?.series) ? lowFieldResp.series : [];
+          const lowRow = (lowSeries[0] ?? null) as any;
+          const yUmRaw = getSpotDistortionYUm(lowRow);
+          const yUm = toFiniteNumberOrNull(yUmRaw);
+          if (!(typeof yUm === "number")) continue;
 
+          const wasMissing = !(typeof realHeights[targetIndex] === "number" && Number.isFinite(realHeights[targetIndex]));
+          realHeights[targetIndex] = Math.abs(yUm / 1000);
+          if (wasMissing) recoveredFieldCount += 1;
+          lowFieldChiefRecoveryCount += 1;
+        } catch {
+          // Keep original value when low-field retrace fails.
+        }
+
+        if (((i + 1) % 2) === 0 || i === lowFieldIndices.length - 1) {
+          const progress = 94 + ((i + 1) / Math.max(1, lowFieldIndices.length)) * 3;
+          emitProgress(progress, `Distortion: refining low-field chief rays ${i + 1}/${lowFieldIndices.length}...`);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
+    }
+
+    if (!fastRenderFallbackMode && missingFieldIndices.length > 0) {
+      for (const missingIndex of missingFieldIndices) {
+        if (!Number.isInteger(missingIndex) || missingIndex < 0 || missingIndex >= objectRows.length) continue;
+        const row = objectRows[missingIndex];
+        if (!row) continue;
+        try {
+          const retrySpotResponse = await runRenderRaytraceForRows([row], {
+            strictChiefOnly: distortionMetric === "chief-ray",
+            rayCount: distortionTraceRayCount,
+            pattern: distortionTracePattern,
+          });
           const retrySeries = Array.isArray(retrySpotResponse?.series) ? retrySpotResponse.series : [];
-          for (const row of retrySeries as any[]) {
-            const match = String(row?.label || "").match(/Field-(\d+)/);
-            if (!match) continue;
-            const index = Number(match[1]);
-            if (!Number.isInteger(index) || index < 0 || index >= realHeights.length) continue;
-            if (typeof realHeights[index] === "number" && Number.isFinite(realHeights[index])) continue;
-
-            const chiefPointUm = row?.chiefPointUm;
-            const points = Array.isArray(row?.points) ? row.points : [];
-            const fallbackPoint = points[0] || null;
-            const yUm = Number(
-              (chiefPointUm && typeof chiefPointUm === "object" ? chiefPointUm.yUm : undefined)
-              ?? fallbackPoint?.yUm
-            );
-            if (!Number.isFinite(yUm)) continue;
-
-            realHeights[index] = Math.abs(yUm / 1000);
-            recoveredFieldCount += 1;
-          }
+          const retryRow = (retrySeries[0] ?? null) as any;
+          const yUmRaw = getSpotDistortionYUm(retryRow);
+          const yUm = toFiniteNumberOrNull(yUmRaw);
+          if (!(typeof yUm === "number")) continue;
+          realHeights[missingIndex] = Math.abs(yUm / 1000);
+          recoveredFieldCount += 1;
         } catch (retryError) {
-          try {
-            console.warn("runNativeDistortion(web): missing-field retry failed", {
-              error: retryError instanceof Error ? retryError.message : String(retryError),
-              missingFieldIndices,
-            });
-          } catch {
-            // Ignore logging failures in restricted runtimes.
-          }
+          missingFieldRetryFailures.push({
+            index: missingIndex,
+            error: retryError instanceof Error ? retryError.message : String(retryError),
+          });
+        }
+      }
+    }
+
+    if (!fastRenderFallbackMode && distortionMetric === "chief-ray") {
+      const lowFieldThresholdMm = 10;
+      const lowFieldUnresolvedIndices = realHeights
+        .map((value, index) => ({ value, index }))
+        .filter((entry) => !(typeof entry.value === "number" && Number.isFinite(entry.value)))
+        .map((entry) => entry.index)
+        .filter((index) => {
+          const fv = Number(fieldSamples[index]);
+          return Number.isFinite(fv) && fv >= -1e-12 && fv <= lowFieldThresholdMm + 1e-12;
+        });
+
+      for (const lowIdx of lowFieldUnresolvedIndices) {
+        const row = objectRows[lowIdx];
+        if (!row) continue;
+        try {
+          const strictChiefResp = await runRenderRaytraceForRows([row], {
+            strictChiefOnly: true,
+            rayCount: Math.max(121, distortionRayFanCount),
+            pattern: "annular",
+          });
+          const strictSeries = Array.isArray(strictChiefResp?.series) ? strictChiefResp.series : [];
+          const strictRow = (strictSeries[0] ?? null) as any;
+          const yUmRaw = getSpotDistortionYUm(strictRow);
+          const yUm = toFiniteNumberOrNull(yUmRaw);
+          if (!(typeof yUm === "number")) continue;
+          realHeights[lowIdx] = Math.abs(yUm / 1000);
+          recoveredFieldCount += 1;
+          lowFieldChiefRecoveryCount += 1;
+        } catch {
+          // Keep unresolved if strict chief re-search fails.
         }
       }
     }
@@ -4440,7 +5136,7 @@ export async function runNativeDistortion(
       .filter((entry) => !(typeof entry.value === "number" && Number.isFinite(entry.value)))
       .map((entry) => entry.index);
 
-    if (unresolvedFieldIndices.length > 0 && !directDistortionWasmUnavailableInSession) {
+    if (!fastRenderFallbackMode && distortionMetric === "chief-ray" && unresolvedFieldIndices.length > 0 && !directDistortionWasmUnavailableInSession) {
       try {
         const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
         const wasmApi = await preloadRustRayTracingWasm();
@@ -4449,10 +5145,12 @@ export async function runNativeDistortion(
           const wasmReq = {
             opticalSystemRows,
             sourceRows,
+            objectRows: inputObjectRows,
             fieldSamples: unresolvedFieldSamples,
             surfaceIndex,
             heightMode,
             wavelength,
+            distortionMetric,
           };
           const wasmRaw = wasmApi.run_native_distortion_wasm_json(JSON.stringify(wasmReq));
           const wasmResp = (typeof wasmRaw === "string") ? JSON.parse(wasmRaw) : wasmRaw;
@@ -4485,13 +5183,85 @@ export async function runNativeDistortion(
       }
     }
 
-    const idealHeights = fieldSamples.map((sample) => {
-      if (heightMode) {
-        return finiteSystem ? magnification * sample : sample;
+    let gridCenterlineRecoveryCount = 0;
+    if (!fastRenderFallbackMode && distortionMetric === "chief-ray" && heightMode && inputFieldMode === "imageheight" && inputObjectRows.length > 0) {
+      try {
+        const gridSizeForRecovery = Math.max(11, fieldSamples.length);
+        const gridResp = await runNativeGridDistortion({
+          opticalSystemRows,
+          sourceRows,
+          objectRows: inputObjectRows,
+          surfaceIndex,
+          gridSize: gridSizeForRecovery,
+          wavelength,
+          detailProgress: false,
+        });
+
+        const idealX = Array.isArray((gridResp as any)?.idealX) ? (gridResp as any).idealX.map((v: any) => Number(v)) : [];
+        const idealY = Array.isArray((gridResp as any)?.idealY) ? (gridResp as any).idealY.map((v: any) => Number(v)) : [];
+        const realY = Array.isArray((gridResp as any)?.realY)
+          ? (gridResp as any).realY.map((v: any) => toFiniteNumberOrNull(v))
+          : [];
+        const n = Math.min(idealX.length, idealY.length, realY.length);
+
+        let minAbsX = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < n; i += 1) {
+          const x = idealX[i];
+          if (Number.isFinite(x)) minAbsX = Math.min(minAbsX, Math.abs(x));
+        }
+
+        const centerline: Array<{ idealY: number; realY: number | null }> = [];
+        if (Number.isFinite(minAbsX)) {
+          const tol = Math.max(1e-9, minAbsX * 1e-6);
+          for (let i = 0; i < n; i += 1) {
+            const x = idealX[i];
+            const y = idealY[i];
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            if (Math.abs(Math.abs(x) - minAbsX) > tol) continue;
+            centerline.push({ idealY: y, realY: realY[i] });
+          }
+          centerline.sort((a, b) => a.idealY - b.idealY);
+        }
+
+        const finiteCenterline = centerline.filter((row) => typeof row.realY === "number" && Number.isFinite(row.realY));
+        const interpolateRealY = (target: number): number | null => {
+          if (finiteCenterline.length === 0 || !Number.isFinite(target)) return null;
+          if (target <= finiteCenterline[0].idealY) return Number(finiteCenterline[0].realY);
+          const tail = finiteCenterline[finiteCenterline.length - 1];
+          if (target >= tail.idealY) return Number(tail.realY);
+          for (let i = 1; i < finiteCenterline.length; i += 1) {
+            const left = finiteCenterline[i - 1];
+            const right = finiteCenterline[i];
+            if (!(target <= right.idealY)) continue;
+            const dy = right.idealY - left.idealY;
+            if (!Number.isFinite(dy) || Math.abs(dy) <= 1e-12) return Number(left.realY);
+            const t = (target - left.idealY) / dy;
+            const leftY = Number(left.realY);
+            const rightY = Number(right.realY);
+            if (!Number.isFinite(leftY) || !Number.isFinite(rightY)) return null;
+            return leftY + (rightY - leftY) * t;
+          }
+          return null;
+        };
+
+        for (let i = 0; i < fieldSamples.length; i += 1) {
+          const fv = Number(fieldSamples[i]);
+          if (!Number.isFinite(fv) || fv < -1e-12) continue;
+          const current = realHeights[i];
+          const looksRectangularArtifact = typeof current === "number" && Number.isFinite(current) && current <= 1e-6 && fv > 0.5;
+          const needsRecovery = !(typeof current === "number" && Number.isFinite(current)) || looksRectangularArtifact;
+          if (!needsRecovery) continue;
+          const ry = interpolateRealY(fv);
+          if (!(typeof ry === "number" && Number.isFinite(ry))) continue;
+          realHeights[i] = Math.abs(ry);
+          gridCenterlineRecoveryCount += 1;
+        }
+      } catch {
+        // Keep current chief-ray values if grid centerline recovery fails.
       }
-      const thetaRad = sample * Math.PI / 180;
-      return Number.isFinite(focalLength) ? focalLength * Math.tan(thetaRad) : Math.tan(thetaRad);
-    });
+    }
+
+    const idealHeights = fieldSamples.map((sample) => computeParaxialIdealHeight(Number(sample)));
     const distortion = realHeights.map((height, index) => {
       const ideal = Number(idealHeights[index]);
       if (!Number.isFinite(ideal)) return null;
@@ -4504,6 +5274,25 @@ export async function runNativeDistortion(
         ? value * 100
         : null
     ));
+
+    let interpolationFilledCount = 0;
+
+    const unresolvedAfterRecoveryIndices = realHeights
+      .map((value, index) => ({ value, index }))
+      .filter((entry) => !(typeof entry.value === "number" && Number.isFinite(entry.value)))
+      .map((entry) => entry.index);
+    if (missingFieldRetryFailures.length > 0 && unresolvedAfterRecoveryIndices.length > 0) {
+      try {
+        console.warn("runNativeDistortion(web): missing-field retry failed", {
+          error: missingFieldRetryFailures[0]?.error || "Unknown retry failure",
+          missingFieldIndices,
+          unresolvedAfterRecoveryIndices,
+          retryFailures: missingFieldRetryFailures,
+        });
+      } catch {
+        // Ignore logging failures in restricted runtimes.
+      }
+    }
 
     const fallbackDiagnostics = fieldSamples.map((fieldDeg, index) => ({
       index,
@@ -4520,12 +5309,21 @@ export async function runNativeDistortion(
       const out: Array<{ fromIndex: number; toIndex: number; fromValue: number; toValue: number }> = [];
       let prev: number | null = null;
       let prevIndex = -1;
+      let expectedSign = 0; // +1 increasing, -1 decreasing
       for (let i = 0; i < distortionPercent.length; i += 1) {
         const raw = distortionPercent[i];
         if (typeof raw !== "number" || !Number.isFinite(raw)) continue;
         const cur = raw;
-        if (prev !== null && cur + 1e-9 < prev) {
-          out.push({ fromIndex: prevIndex, toIndex: i, fromValue: prev, toValue: cur });
+        if (prev !== null) {
+          const delta = cur - prev;
+          if (Math.abs(delta) > 1e-9) {
+            const sign = delta > 0 ? 1 : -1;
+            if (expectedSign === 0) {
+              expectedSign = sign;
+            } else if (sign !== expectedSign) {
+              out.push({ fromIndex: prevIndex, toIndex: i, fromValue: prev, toValue: cur });
+            }
+          }
         }
         prev = cur;
         prevIndex = i;
@@ -4533,7 +5331,7 @@ export async function runNativeDistortion(
       return out;
     })();
     const diagnosticsPayload = {
-      backend: "web-rust-wasm-spot-fallback",
+      backend: "web-rust-wasm-render-raytrace-fallback",
       surfaceIndex,
       directWasmError,
       focalLength,
@@ -4541,21 +5339,28 @@ export async function runNativeDistortion(
       missingFieldCountBeforeRetry: missingFieldIndices.length,
       recoveredFieldCount,
       wasmMissingRecoveryCount,
+      lowFieldChiefRecoveryCount,
+      gridCenterlineRecoveryCount,
+      lowFieldInterpolationRecoveryCount,
       missingFieldWasmRecoveryError,
+      interpolationFilledCount,
+      renderRaytraceSeriesCount,
+      renderRaytraceAttemptedRays: Number.isFinite(renderRaytraceAttemptedRays) ? renderRaytraceAttemptedRays : 0,
+      renderRaytraceHitRays: Number.isFinite(renderRaytraceHitRays) ? renderRaytraceHitRays : 0,
+      unresolvedAfterRecoveryCount: unresolvedAfterRecoveryIndices.length,
       monotonicBreakCount: monotonicBreaks.length,
       monotonicBreaks,
+      distortionDefinition: distortionMetric === "chief-ray" ? "chief-ray" : "spot-gravity-centroid",
+      paraxialAngleUnit: "radian",
+      idealHeightFormula: "tan(w_paraxial_rad) * EFL",
       points: fallbackDiagnostics,
     };
-    try {
-      (globalThis as any).__cooptLastDistortionFallbackDiagnostics = diagnosticsPayload;
-      console.warn("runNativeDistortion(web): fallback diagnostics", diagnosticsPayload);
-      console.warn("runNativeDistortion(web): fallback diagnostics json", JSON.stringify(diagnosticsPayload));
-    } catch {
-      // Ignore logging failures in restricted runtimes.
-    }
+    // Fallback diagnostics logging is intentionally disabled in UI runtime.
+
+    emitProgress(100, "Distortion: done");
 
     return {
-      backend: "web-rust-wasm-spot-fallback",
+      backend: "web-rust-wasm-render-raytrace-fallback",
       fieldValues: fieldSamples,
       idealHeights,
       realHeights,
@@ -4564,37 +5369,68 @@ export async function runNativeDistortion(
       meta: {
         wavelength,
         focalLength: Number.isFinite(focalLength) ? focalLength : NaN,
+        paraxialReferenceMode: "strict-paraxial-trace",
+        paraxialAngleUnit: "radian",
+        idealHeightFormula: "tan(w_paraxial_rad) * EFL",
         finiteSystem,
         heightMode,
+        distortionDefinition: distortionMetric === "chief-ray" ? "chief-ray" : "spot-gravity-centroid",
         magnification: Number.isFinite(magnification) ? magnification : -1,
         surfaceIndex,
         directWasmError,
         missingFieldCountBeforeRetry: missingFieldIndices.length,
         recoveredFieldCount,
         wasmMissingRecoveryCount,
+        lowFieldChiefRecoveryCount,
+        gridCenterlineRecoveryCount,
+        lowFieldInterpolationRecoveryCount,
         missingFieldWasmRecoveryError,
-        interpolationFilledCount: 0,
+        interpolationFilledCount,
+        renderRaytraceSeriesCount,
+        renderRaytraceAttemptedRays: Number.isFinite(renderRaytraceAttemptedRays) ? renderRaytraceAttemptedRays : 0,
+        renderRaytraceHitRays: Number.isFinite(renderRaytraceHitRays) ? renderRaytraceHitRays : 0,
+        unresolvedAfterRecoveryCount: unresolvedAfterRecoveryIndices.length,
       },
       message: "Computed via Web Rust/WASM distortion API",
     };
   }
-  return invokeCommand<NativeDistortionRequest, NativeDistortionResponse>("run_native_distortion", payload);
+  const invokePayload: NativeDistortionRequest = { ...(payload || {}) };
+  delete (invokePayload as any).onProgress;
+  return invokeCommand<NativeDistortionRequest, NativeDistortionResponse>("run_native_distortion", invokePayload);
 }
 
 export async function runNativeGridDistortion(
   payload: NativeGridDistortionRequest,
 ): Promise<NativeGridDistortionResponse> {
-  if (!isTauriRuntime()) {
-    const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const forceWebQconFallback = hasQconSurfaceNativeLike(opticalSystemRows);
+  if (!isTauriRuntime() || forceWebQconFallback) {
+    const onProgress = typeof (payload as any)?.onProgress === "function"
+      ? (payload as any).onProgress as ((evt: { percent?: number; message?: string }) => void)
+      : null;
+    const emitProgress = (percent: number, message: string) => {
+      if (!onProgress) return;
+      try {
+        onProgress({
+          percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : undefined,
+          message,
+        });
+      } catch {
+        // Ignore progress callback failures.
+      }
+    };
+
     if (opticalSystemRows.length === 0) {
       throw new Error("runNativeGridDistortion(web): opticalSystemRows is empty");
     }
+
+    emitProgress(2, "Grid distortion: preparing Rust/WASM trace...");
 
     const { calculateParaxialData } = await import("../../../raytracing/core/ray-paraxial.ts");
     const surfaceIndex = Number.isInteger(payload?.surfaceIndex)
       ? Math.max(0, Number(payload.surfaceIndex))
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
-    const gridSize = Number.isInteger(payload?.gridSize) ? Math.max(2, Math.min(200, Number(payload.gridSize))) : 20;
+    const gridSize = Number.isInteger(payload?.gridSize) ? Math.max(2, Math.min(40, Number(payload.gridSize))) : 20;
     const wavelength = Number.isFinite(Number(payload?.wavelength)) && Number(payload?.wavelength) > 0
       ? Number(payload.wavelength)
       : getPrimaryWavelengthUm(Array.isArray(payload?.sourceRows) ? payload.sourceRows : [], 0.5876);
@@ -4610,6 +5446,7 @@ export async function runNativeGridDistortion(
     let focalLength = Number(paraxial?.focalLength);
     let magnification = -1;
     try {
+      emitProgress(4, "Grid distortion: estimating focal length...");
       const thetaDeg = 0.1;
       const thetaRad = thetaDeg * Math.PI / 180;
       const focalProbeObjectRows = finiteSystem
@@ -4636,11 +5473,11 @@ export async function runNativeGridDistortion(
         sourceRows,
         objectRows: focalProbeObjectRows,
         surfaceIndex,
-        rayCount: 51,
+        rayCount: 11,
         ringCount: 1,
         pattern: "cross",
         wavelengthMode: "primary",
-        forceRustWasm: false,
+        forceRustWasm: true,
       });
       const focalProbeSeries = Array.isArray(focalProbeResp?.series) ? focalProbeResp.series : [];
       const focalProbeRow = focalProbeSeries[0] as any;
@@ -4659,6 +5496,7 @@ export async function runNativeGridDistortion(
     }
     if (gridFieldMode === "height" && finiteSystem) {
       try {
+        emitProgress(7, "Grid distortion: estimating magnification...");
         const magProbeResp = await runNativeSpotRaytrace({
           opticalSystemRows,
           sourceRows,
@@ -4672,11 +5510,11 @@ export async function runNativeGridDistortion(
             y: 1,
           }],
           surfaceIndex,
-          rayCount: 51,
+          rayCount: 11,
           ringCount: 1,
           pattern: "cross",
           wavelengthMode: "primary",
-          forceRustWasm: false,
+          forceRustWasm: true,
         });
         const magProbeSeries = Array.isArray(magProbeResp?.series) ? magProbeResp.series : [];
         const magProbeRow = magProbeSeries[0] as any;
@@ -4779,32 +5617,32 @@ export async function runNativeGridDistortion(
       }
     }
 
+    emitProgress(10, "Grid distortion: grid generated, starting trace...");
+
     const traceObjectRows = gridFieldMode === "imageheight"
-      ? await normalizeTransverseObjectRowsForImageHeight(opticalSystemRows, sourceRows, objectRows, wavelength)
+      ? await normalizeTransverseObjectRowsForImageHeight(
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+        wavelength,
+        {
+          onProgress,
+          progressStart: 10,
+          progressEnd: 30,
+          progressLabel: "Grid distortion: converting image-height fields",
+        },
+      )
       : objectRows;
 
     const realX = new Array(idealX.length).fill(null) as Array<number | null>;
     const realY = new Array(idealY.length).fill(null) as Array<number | null>;
     let directChiefRayCount = 0;
 
-    const spotResponse = await runNativeSpotRaytrace({
-      opticalSystemRows,
-      sourceRows,
-      objectRows: traceObjectRows,
-      surfaceIndex,
-      rayCount: 51,
-      ringCount: 1,
-      pattern: "cross",
-      wavelengthMode: "primary",
-      forceRustWasm: false,
-    });
-
-    const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
-    for (const row of series as any[]) {
+    const assignChiefPoint = (row: any) => {
       const match = String(row?.label || "").match(/Field-(\d+)/);
-      if (!match) continue;
+      if (!match) return;
       const index = Number(match[1]);
-      if (!Number.isInteger(index) || index < 0 || index >= realX.length) continue;
+      if (!Number.isInteger(index) || index < 0 || index >= realX.length) return;
       const chiefPointUm = row?.chiefPointUm;
       const fallbackPoint = Array.isArray(row?.points) ? row.points[0] : null;
       const xMm = Number(
@@ -4819,6 +5657,56 @@ export async function runNativeGridDistortion(
         realX[index] = xMm;
         realY[index] = yMm;
         directChiefRayCount += 1;
+      }
+    };
+
+    const totalTracePoints = Math.max(1, traceObjectRows.length);
+    const detailedProgress = payload?.detailProgress === true && onProgress !== null;
+    if (detailedProgress) {
+      for (let i = 0; i < traceObjectRows.length; i += 1) {
+        const row = traceObjectRows[i];
+        const spotResponse = await runNativeSpotRaytrace({
+          opticalSystemRows,
+          sourceRows,
+          objectRows: [row],
+          surfaceIndex,
+          rayCount: 11,
+          ringCount: 1,
+          pattern: "cross",
+          wavelengthMode: "primary",
+          forceRustWasm: true,
+        });
+        const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
+        for (const s of series as any[]) {
+          assignChiefPoint(s);
+        }
+        emitProgress(
+          10 + (80 * (i + 1)) / totalTracePoints,
+          `Grid distortion tracing (Rust/WASM): point ${i + 1}/${totalTracePoints}`,
+        );
+      }
+    } else {
+      const spotResponse = await runNativeSpotRaytrace({
+        opticalSystemRows,
+        sourceRows,
+        objectRows: traceObjectRows,
+        surfaceIndex,
+        rayCount: 11,
+        ringCount: 1,
+        pattern: "cross",
+        wavelengthMode: "primary",
+        forceRustWasm: true,
+      });
+
+      const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
+      let processed = 0;
+      for (const row of series as any[]) {
+        assignChiefPoint(row);
+        processed += 1;
+        emitProgress(
+          10 + (80 * processed) / Math.max(1, totalTracePoints),
+          `Grid distortion tracing (Rust/WASM): point ${Math.min(processed, totalTracePoints)}/${totalTracePoints}`,
+        );
       }
     }
 
@@ -4853,11 +5741,15 @@ export async function runNativeGridDistortion(
         surfaceIndex,
         directChiefRayCount,
         missingFieldFallbackCount,
+        detailedProgressUsed: detailedProgress,
       },
       message: "Computed via Web Rust/WASM grid distortion API",
     };
   }
-  return invokeCommand<NativeGridDistortionRequest, NativeGridDistortionResponse>("run_native_grid_distortion", payload);
+  const invokePayload: NativeGridDistortionRequest = { ...(payload || {}) };
+  delete (invokePayload as any).onProgress;
+  delete (invokePayload as any).detailProgress;
+  return invokeCommand<NativeGridDistortionRequest, NativeGridDistortionResponse>("run_native_grid_distortion", invokePayload);
 }
 
 export async function runNativeMagnificationChromaticAberration(

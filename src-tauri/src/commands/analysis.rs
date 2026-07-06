@@ -1842,6 +1842,29 @@ fn calculate_full_system_paraxial_trace(rows: &[Value]) -> Option<ParaxialTraceR
     })
 }
 
+pub(crate) fn paraxial_effective_focal_length_mm(rows: &[Value]) -> Option<f64> {
+    calculate_full_system_paraxial_trace(rows)
+        .map(|t| t.focal_length_mm)
+        .filter(|v| v.is_finite() && v.abs() > 1e-12)
+}
+
+pub(crate) fn paraxial_height_magnification_abs(rows: &[Value]) -> Option<f64> {
+    let trace = calculate_full_system_paraxial_trace(rows)?;
+    let object_distance = trace
+        .object_distance_mm
+        .filter(|v| v.is_finite() && v.abs() > 1e-12)?;
+    let image_distance = trace.image_distance_mm;
+    if !image_distance.is_finite() {
+        return None;
+    }
+    let m = image_distance / object_distance;
+    if m.is_finite() {
+        Some(m.abs())
+    } else {
+        None
+    }
+}
+
 fn estimate_focal_length_mm(rows: &[Value], metrics: &AnalysisMetrics) -> f64 {
     let mut signed_curvature = 0.0;
     for row in rows {

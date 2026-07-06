@@ -10,9 +10,13 @@ function safeCall<T>(fn: () => T, fallback: T): T {
 }
 
 function formatRuntimeInfo(runtimeLabel: 'tauri' | 'web', backendLabel?: string): string {
+  const backend = String(backendLabel || '').toLowerCase();
+  const effectiveRuntime = backend.includes('rust-wasm')
+    ? 'rust/wasm'
+    : runtimeLabel;
   const base = backendLabel
-    ? `runtime=${runtimeLabel}, backend=${backendLabel}`
-    : `runtime=${runtimeLabel}`;
+    ? `runtime=${effectiveRuntime}, backend=${backendLabel}`
+    : `runtime=${effectiveRuntime}`;
   return base;
 }
 
@@ -137,25 +141,32 @@ function inferObjectFieldMode(objects: any[]): 'angle' | 'height' {
   return hasNumericHeight ? 'height' : 'angle';
 }
 
-function deriveFieldValues(objectRows: any[]): { fieldValues: number[]; heightMode: boolean } {
+function deriveFieldValues(objectRows: any[], requestedSamplePoints?: number): { fieldValues: number[]; heightMode: boolean } {
   const mode = inferObjectFieldMode(objectRows);
+  const parsedPoints = Number.isFinite(Number(requestedSamplePoints))
+    ? Math.floor(Number(requestedSamplePoints))
+    : 101;
+  const samplePoints = Math.max(3, Math.min(1001, parsedPoints));
   if (mode === 'height') {
     const heights = objectRows
-      .map((o) => parseFloat(o?.yHeight ?? o?.y ?? o?.height ?? o?.y_height ?? Number.NaN))
+      .map((o) => {
+        const pos = String(o?.__cooptOriginalPosition ?? o?.position ?? '').toLowerCase();
+        if (pos.includes('imageheight')) {
+          const targetY = Number(o?.__cooptImageHeightTarget?.y);
+          if (Number.isFinite(targetY)) return targetY;
+        }
+        return parseFloat(o?.yHeight ?? o?.y ?? o?.height ?? o?.y_height ?? Number.NaN);
+      })
       .filter((v) => Number.isFinite(v));
-    if (!heights.length) return { fieldValues: [0.001], heightMode: true };
-    let minH = Math.min(...heights);
-    let maxH = Math.max(...heights);
-    if (minH <= 0) {
-      minH = 0.001;
-      if (maxH < minH) maxH = minH;
-    }
+    if (!heights.length) return { fieldValues: [0], heightMode: true };
+    const minH = 0;
+    const maxH = Math.max(0, ...heights.map((v) => Math.abs(v)));
     if (minH === maxH) return { fieldValues: [minH], heightMode: true };
-    const pts = 10;
-    const fieldValues = Array.from({ length: pts }, (_, i) => {
-      const t = i / (pts - 1);
+    const fieldValues = Array.from({ length: samplePoints }, (_, i) => {
+      const t = i / (samplePoints - 1);
       return parseFloat((minH + (maxH - minH) * t).toFixed(6));
     });
+
     return { fieldValues, heightMode: true };
   }
 
@@ -189,18 +200,15 @@ function deriveDisplayFieldValues(originalObjectRows: any[], fallbackFieldValues
   if (!tags.some((tag) => tag.includes('imageheight'))) return fallbackFieldValues;
 
   const sampleCount = Math.max(1, Array.isArray(fallbackFieldValues) ? fallbackFieldValues.length : 0);
+  if (sampleCount <= 1) return fallbackFieldValues;
   const heights = rows
     .map((o) => parseFloat(o?.yHeightAngle ?? o?.y ?? o?.height ?? o?.yHeight ?? o?.y_height ?? Number.NaN))
     .filter((v) => Number.isFinite(v));
   if (!heights.length) return fallbackFieldValues;
 
-  let minH = Math.min(...heights);
-  let maxH = Math.max(...heights);
-  if (minH <= 0) {
-    minH = 0.001;
-    if (maxH < minH) maxH = minH;
-  }
-  if (sampleCount === 1 || minH === maxH) return [parseFloat(maxH.toFixed(6))];
+  const minH = 0;
+  const maxH = Math.max(0, ...heights.map((v) => Math.abs(v)));
+  if (minH === maxH) return fallbackFieldValues;
 
   return Array.from({ length: sampleCount }, (_, i) => {
     const t = i / (sampleCount - 1);
@@ -240,14 +248,10 @@ function sanitizeDistortionData(dataList: any[]): any[] {
     for (let i = 0; i < n; i++) {
       const y = Number(ys[i]);
       const xRaw = xs[i];
-      const x = (typeof xRaw === 'number' && Number.isFinite(xRaw) && Math.abs(xRaw) <= 50)
+      let x = (typeof xRaw === 'number' && Number.isFinite(xRaw))
         ? xRaw
         : null;
       if (!Number.isFinite(y)) continue;
-      // Skip fields where distortion could not be computed (null chief ray).
-      // These create visual gaps/breaks in the Plotly line; genuine missing
-      // hardware data is better omitted than shown as a disconnected segment.
-      if (x === null) continue;
       outX.push(x);
       outY.push(y);
     }
@@ -262,6 +266,72 @@ function sanitizeDistortionData(dataList: any[]): any[] {
     const xs = Array.isArray(d?.distortionPercent) ? d.distortionPercent : [];
     if (ys.length === 0 || xs.length === 0) return false;
     return xs.some((v: any) => typeof v === 'number' && Number.isFinite(v));
+  });
+}
+
+function applyDistortionHorizontalOffset(dataList: any[]): any[] {
+  return (Array.isArray(dataList) ? dataList : []).map((data) => {
+    const xs = Array.isArray(data?.distortionPercent) ? data.distortionPercent : [];
+    const ys = Array.isArray(data?.fieldValues) ? data.fieldValues : [];
+    const n = Math.min(xs.length, ys.length);
+    if (n <= 0) return data;
+
+    // Offset basis: smallest positive IH point with finite distortion.
+    const finitePairs: Array<{ y: number; x: number }> = [];
+    for (let i = 0; i < n; i++) {
+      const y = Number(ys[i]);
+      const x = Number(xs[i]);
+      if (!Number.isFinite(y) || !Number.isFinite(x)) continue;
+      finitePairs.push({ y, x });
+    }
+    if (finitePairs.length === 0) return data;
+
+    finitePairs.sort((a, b) => a.y - b.y);
+
+    const positivePairs = finitePairs.filter((p) => p.y > 1e-12);
+    const p1 = positivePairs.length > 0 ? positivePairs[0] : null;
+    const p2 = positivePairs.length > 1 ? positivePairs[1] : null;
+
+    let offset: number | null = null;
+    if (p1 && p2) {
+      const dy = p2.y - p1.y;
+      if (Math.abs(dy) > 1e-15) {
+        offset = p1.x + ((0 - p1.y) * (p2.x - p1.x)) / dy;
+      } else {
+        offset = p1.x;
+      }
+    } else if (p1) {
+      offset = p1.x;
+    }
+    if (!(typeof offset === 'number' && Number.isFinite(offset))) return data;
+
+    const shiftedX = xs.map((x: any) => {
+      const value = Number(x);
+      return Number.isFinite(value) ? (value - offset) : null;
+    });
+
+    const shiftedWithZeroAtIH0 = shiftedX.map((x: any, i: number) => {
+      const y = Number(ys[i]);
+      if (Number.isFinite(y) && Math.abs(y) <= 1e-12) return 0;
+      const xv = Number(x);
+      return Number.isFinite(xv) ? xv : null;
+    });
+
+    return {
+      ...data,
+      distortionPercent: shiftedWithZeroAtIH0,
+      fieldValues: ys,
+      meta: {
+        ...(data?.meta || {}),
+        distortionHorizontalOffsetPercent: offset,
+        distortionOffsetBasis: 'line-through-two-smallest-positive-ih-to-ih0',
+        distortionOffsetPoint1IH: p1 ? p1.y : null,
+        distortionOffsetPoint1DistPercent: p1 ? p1.x : null,
+        distortionOffsetPoint2IH: p2 ? p2.y : null,
+        distortionOffsetPoint2DistPercent: p2 ? p2.x : null,
+        ih0ForcedZeroAfterOffset: true,
+      },
+    };
   });
 }
 
@@ -365,6 +435,8 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
   const [progressText, setProgressText] = useState(type === 'distortion' ? 'Calculating distortion...' : 'Calculating grid distortion...');
   const [errorMsg, setErrorMsg] = useState('');
   const [gridSize, setGridSize] = useState('20');
+  const [samplingPointsInput, setSamplingPointsInput] = useState('101');
+  const [distRangeAbsInput, setDistRangeAbsInput] = useState('');
   const [backendInfo, setBackendInfo] = useState('');
 
   useEffect(() => {
@@ -391,7 +463,13 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
       const { opticalSystemRows, sourceRows, objectRows } = getRows();
       const normalizedObjectRows = normalizeDistortionObjectRows(objectRows, opticalSystemRows, sourceRows);
-      const { fieldValues, heightMode } = deriveFieldValues(normalizedObjectRows);
+      const requestedSamplingPoints = (() => {
+        const parsed = Math.floor(Number(samplingPointsInput));
+        if (!Number.isFinite(parsed)) return 101;
+        return Math.max(3, Math.min(1001, parsed));
+      })();
+      const distortionMetric: 'chief-ray' = 'chief-ray';
+      const { fieldValues, heightMode } = deriveFieldValues(normalizedObjectRows, requestedSamplingPoints);
       const wavelengths = deriveDistortionWavelengths(sourceRows);
       const runtimeLabel = isTauriRuntime() ? 'tauri' : 'web';
       setBackendInfo(formatRuntimeInfo(runtimeLabel));
@@ -407,13 +485,26 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
           objectRows: normalizedObjectRows,
           fieldSamples: fieldValues,
           heightMode,
+          distortionMetric,
           wavelength: wl,
+          onProgress: (evt: { percent?: number; message?: string }) => {
+            const p = Number(evt?.percent);
+            const msg = String(evt?.message || `Distortion (λ=${wl.toFixed(4)} um): tracing`);
+            if (Number.isFinite(p)) {
+              setProgress(base + (Math.max(0, Math.min(100, p)) * span) / 100, msg);
+            } else {
+              setProgress(base, msg);
+            }
+          },
         });
         const backendLabel = String(resp?.backend || "unknown");
         setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
         const responseFieldValues = Array.isArray(resp?.fieldValues) ? resp.fieldValues : fieldValues;
+        const displayFieldValues = heightMode
+          ? responseFieldValues
+          : deriveDisplayFieldValues(objectRows, responseFieldValues);
         allData.push({
-          fieldValues: deriveDisplayFieldValues(objectRows, responseFieldValues),
+          fieldValues: displayFieldValues,
           idealHeights: Array.isArray(resp?.idealHeights) ? resp.idealHeights : [],
           realHeights: Array.isArray(resp?.realHeights) ? resp.realHeights : [],
           distortion: Array.isArray(resp?.distortion) ? resp.distortion : [],
@@ -422,17 +513,27 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
         });
         setProgress(base + span, `Distortion (λ=${wl.toFixed(4)} um, backend=${backendLabel})`);
       }
-      const bestData = sanitizeDistortionData(allData);
+      const enableDisplayOffset = true;
+      const distortionData = enableDisplayOffset ? applyDistortionHorizontalOffset(allData) : allData;
+      const bestData = sanitizeDistortionData(distortionData);
       if (!bestData.length) {
         throw new Error('Distortion returned no plottable points (all chief rays failed).');
       }
-      await plotDistortionPercent(bestData, chartRef.current as any, { objectRows });
+      const distortionRangeAbs = (() => {
+        const parsed = Number(distRangeAbsInput);
+        if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+        return parsed;
+      })();
+      await plotDistortionPercent(bestData, chartRef.current as any, {
+        objectRows,
+        distortionRangeAbs,
+      });
       hideProgress();
     } catch (err: any) {
       setProgress(100, 'Failed');
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
-  }, [plotlyReady, setProgress, hideProgress]);
+  }, [plotlyReady, setProgress, hideProgress, samplingPointsInput, distRangeAbsInput]);
 
   const handleRenderGrid = useCallback(async () => {
     if (!chartRef.current) return;
@@ -443,10 +544,14 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       const { opticalSystemRows, sourceRows, objectRows } = getRows();
       const wavelength = getPrimaryWavelength();
       const runtimeLabel = isTauriRuntime() ? 'tauri' : 'web';
-      setBackendInfo(formatRuntimeInfo(runtimeLabel));
-      setProgress(5, `Grid distortion (${runtimeLabel}): preparing`);
+      const isWebRuntime = runtimeLabel === 'web';
+      const preBackendLabel = runtimeLabel === 'web' ? 'web-rust-wasm' : undefined;
+      setBackendInfo(formatRuntimeInfo(runtimeLabel, preBackendLabel));
+      setProgress(5, 'Grid distortion (Rust/WASM): preparing');
 
-      const scales = [1.0, 0.7, 0.5, 0.35, 0.2];
+      // Web Rust/WASM path already computes the full grid in one call.
+      // Keep retries minimal to avoid multiplying runtime.
+      const scales = isWebRuntime ? [1.0, 0.7] : [1.0, 0.7, 0.5, 0.35, 0.2];
       let data: any = null;
       let bestValid = -1;
       let lastScaleError: string | null = null;
@@ -498,6 +603,24 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
             objectRows: scaledObjects,
             gridSize: Number(gridSize) || 20,
             wavelength,
+            // Per-point re-tracing is very expensive on web (N separate calls).
+            // Prefer fast full-grid tracing; UI still receives stage updates.
+            detailProgress: false,
+            onProgress: isWebRuntime
+              ? (evt: { percent?: number; message?: string }) => {
+                  try {
+                    const p = Number(evt?.percent);
+                    const msg = String(evt?.message || `Grid distortion tracing... scale=${scale.toFixed(2)}`);
+                    if (Number.isFinite(p)) {
+                      const mapped = Math.max(stageBase, Math.min(95, p));
+                      setProgress(mapped, msg);
+                    } else {
+                      setProgress(pulseValue, msg);
+                    }
+                    receivedNativeProgress = true;
+                  } catch (_) {}
+                }
+              : undefined,
           });
           const candidate = {
             idealGrid: {
@@ -520,6 +643,7 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
             data = candidate;
           }
           setProgress(20 + Math.floor((si / Math.max(1, scales.length)) * 20), `Grid distortion scale=${scale.toFixed(2)} (valid=${valid}, backend=${backendLabel})`);
+          if (isWebRuntime && valid > 0) break;
           if (valid >= expectedGridPoints) break;
         } catch (err: any) {
           lastScaleError = String(err?.message ?? err ?? 'Unknown grid distortion error');
@@ -571,6 +695,28 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
                 <option key={v} value={v}>{v}×{v}</option>
               ))}
             </select>
+          </>
+        ) : null}
+        {type === 'distortion' ? (
+          <>
+            <label>Sampling Points:</label>
+            <input
+              type="text"
+              value={samplingPointsInput}
+              onChange={(e) => setSamplingPointsInput(e.target.value)}
+              inputMode="numeric"
+              placeholder="101"
+              style={{ width: 72 }}
+            />
+            <label>Dist Range ±(%):</label>
+            <input
+              type="text"
+              value={distRangeAbsInput}
+              onChange={(e) => setDistRangeAbsInput(e.target.value)}
+              inputMode="decimal"
+              placeholder="auto"
+              style={{ width: 72 }}
+            />
           </>
         ) : null}
         <button type="button" onClick={type === 'distortion' ? handleRenderDistortion : handleRenderGrid}>

@@ -4187,7 +4187,7 @@ export default function App() {
   const [renderCompareOffsetDirection, setRenderCompareOffsetDirection] = useState<RenderCompareOffsetDirection>('centered');
   const [renderCompareOffsetStepMm, setRenderCompareOffsetStepMm] = useState(20);
   const [renderCompareAlignReference, setRenderCompareAlignReference] = useState<RenderCompareAlignReference>('object');
-  const [renderRayCount, setRenderRayCount] = useState(5);
+  const [renderRayCount, setRenderRayCount] = useState(6);
   const [renderSurfaceColorsCollapsed, setRenderSurfaceColorsCollapsed] = useState(true);
   const [renderLensColorTargets, setRenderLensColorTargets] = useState<RenderLensColorTarget[]>([]);
   const [renderColorUiRevision, setRenderColorUiRevision] = useState(0);
@@ -11754,13 +11754,13 @@ const collectLegacyCrossRays = async (
             <input
               id="render-ray-count"
               type="number"
-              min={1}
+              min={6}
               step={1}
               value={renderRayCount}
               onChange={(e) => {
                 const parsed = Number.parseInt(e.target.value, 10);
                 if (!Number.isFinite(parsed)) return;
-                setRenderRayCount(Math.max(1, parsed));
+                setRenderRayCount(Math.max(6, parsed));
               }}
               style={{ width: 76, height: 28 }}
             />

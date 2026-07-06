@@ -186,7 +186,7 @@ export function plotDistortionPercent(dataArray, targetDivId = 'distortion-perce
       y: data.fieldValues,        // Vertical axis
       name: `DIST ${wavelengthNm}nm (${label})`,
       mode: 'lines',
-      connectgaps: true,
+      connectgaps: false,
       line: { color, width: 2 }
     };
   }).filter(trace => trace !== null);
@@ -202,24 +202,19 @@ export function plotDistortionPercent(dataArray, targetDivId = 'distortion-perce
   const layout = {
     title: fieldAxisLabel.title,
     xaxis: { 
-      title: 'Distortion (%)',
-      range: [-5, 5],  // 基本±5%
-      dtick: 1  // 1%刻みの目盛り
+      title: 'Distortion (%)'
     },
     yaxis: { title: fieldAxisLabel.axisTitle },
     width: 800,
     height: 600,
     showlegend: true,
-    legend: { orientation: 'v', x: 1.02, y: 1 },
-    shapes: [
-      { 
-        type: 'line', 
-        x0: 0, x1: 0, 
-        y0: minFieldValue, y1: maxFieldValue, 
-        line: { color: 'black', width: 1, dash: 'dot' } 
-      }
-    ]
+    legend: { orientation: 'v', x: 1.02, y: 1 }
   };
+
+  const rangeAbs = Number(options?.distortionRangeAbs);
+  if (Number.isFinite(rangeAbs) && rangeAbs > 0) {
+    layout.xaxis.range = [-rangeAbs, rangeAbs];
+  }
 
   const { element, plotly, isElement } = resolvePlotTarget(targetDivId);
   if (!plotly) {
