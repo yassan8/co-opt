@@ -30,6 +30,72 @@ let pendingSpotDiagramRequest: { requestId: number; options: any; requestedAt: n
 let activeSpotDiagramRequest: { requestId: number; startedAt: number } | null = null;
 let analysisRustTraceOptionsCache: { options: any; at: number; forceKey: string } | null = null;
 let analysisRustTraceOptionsPromise: Promise<any | null> | null = null;
+let transverseModulePreloadPromise: Promise<{
+    getPrimaryWavelengthForAberration: any;
+    plotTransverseAberration: any;
+    runNativeTransverseAberration: any;
+    normalizeTransverseObjectRowsForImageHeight: any;
+}> | null = null;
+let transverseNormalizationWarmKey: string | null = null;
+let transverseNormalizationWarmPromise: Promise<any[] | null> | null = null;
+
+function buildTransverseNormalizationWarmKey(opticalSystemRows: any[], sourceRows: any[], objectRows: any[], wavelength: number): string | null {
+    try {
+        return JSON.stringify({
+            opticalSystemRows,
+            sourceRows,
+            objectRows,
+            wavelength: Number.isFinite(Number(wavelength)) ? Number(wavelength) : 0.5876,
+        });
+    } catch (_) {
+        return null;
+    }
+}
+
+export function preloadTransverseAberrationModules() {
+    if (!transverseModulePreloadPromise) {
+        transverseModulePreloadPromise = Promise.all([
+            import('../evaluation/aberrations/transverse-aberration.js'),
+            import('../evaluation/aberrations/transverse-aberration-plot.js'),
+            import('../src/desktop/ipc/client.ts'),
+        ]).then(([aberrationModule, plotModule, clientModule]) => ({
+            getPrimaryWavelengthForAberration: aberrationModule.getPrimaryWavelengthForAberration,
+            plotTransverseAberration: plotModule.plotTransverseAberration,
+            runNativeTransverseAberration: clientModule.runNativeTransverseAberration,
+            normalizeTransverseObjectRowsForImageHeight: clientModule.normalizeTransverseObjectRowsForImageHeight,
+        }));
+    }
+    return transverseModulePreloadPromise;
+}
+
+export function prewarmTransverseAberrationNormalization() {
+    const tableOpticalSystem = getTableOpticalSystem();
+    const opticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
+    const tableSource = getTableSource();
+    const tableObject = getTableObject();
+    const sourceRows = getSourceRows(tableSource);
+    const objectRows = getObjectRows(tableObject);
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return Promise.resolve(null);
+
+    return preloadTransverseAberrationModules().then(async ({ getPrimaryWavelengthForAberration, normalizeTransverseObjectRowsForImageHeight }) => {
+        const normalizationWavelength = Number(getPrimaryWavelengthForAberration()) || 0.5876;
+        const key = buildTransverseNormalizationWarmKey(opticalSystemRows, sourceRows, objectRows, normalizationWavelength);
+        if (key && transverseNormalizationWarmKey === key && transverseNormalizationWarmPromise) {
+            return transverseNormalizationWarmPromise;
+        }
+        const promise = Promise.resolve(
+            normalizeTransverseObjectRowsForImageHeight(
+                opticalSystemRows,
+                Array.isArray(sourceRows) ? sourceRows : [],
+                Array.isArray(objectRows) ? objectRows : [],
+                normalizationWavelength,
+            )
+        ).then((rows: any[]) => rows).catch(() => null);
+        transverseNormalizationWarmKey = key;
+        transverseNormalizationWarmPromise = promise;
+        return promise;
+    });
+}
 
 function isSpotDiagramDebugEnabled(): boolean {
     try {
@@ -2839,10 +2905,20 @@ export async function runSpotParityDiagnostics(options: any = {}): Promise<any> 
  */
 export async function showTransverseAberrationDiagram(options: any = {}): Promise<any> {
     console.log('📊 Starting transverse aberration calculation...');
+    const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
+    const totalStartMs = nowMs();
+    let calcMs = 0;
+    let mergeMs = 0;
+    let plotMs = 0;
+    let normalizeMs = 0;
 
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
+    const profileTransverse = !!(
+        (options && typeof options === 'object' && options.profileTransverse === true) ||
+        (typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_PROFILE_TRANSVERSE === true)
+    );
 
     // Default target container is the in-page one
     let containerTarget: any = 'transverse-aberration-container';
@@ -2866,7 +2942,7 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
         try { onProgress?.({ percent: 0, message: 'Preparing transverse aberration...' }); } catch (_) {}
 
         const transverseRayCountInput = document.getElementById('transverse-ray-count-input') as HTMLInputElement | null;
-        let rayCount = 51;
+        let rayCount = 21;
         const providedRayCount = Number.isInteger(options?.rayCount) ? options.rayCount : null;
         if (providedRayCount !== null && providedRayCount > 0) {
             rayCount = providedRayCount;
@@ -2931,9 +3007,12 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
         console.log(`📊 評価面: Surface ${targetSurfaceIndex + 1}`);
         console.log(`📊 光線本数: ${rayCount}本`);
 
-        const { getPrimaryWavelengthForAberration } = await import('../evaluation/aberrations/transverse-aberration.js');
-        const { plotTransverseAberration } = await import('../evaluation/aberrations/transverse-aberration-plot.js');
-        const { runNativeTransverseAberration } = await import('../src/desktop/ipc/client.ts');
+        const {
+            getPrimaryWavelengthForAberration,
+            plotTransverseAberration,
+            runNativeTransverseAberration,
+            normalizeTransverseObjectRowsForImageHeight,
+        } = await preloadTransverseAberrationModules();
 
         const tableSource = getTableSource();
         const tableObject = getTableObject();
@@ -2950,26 +3029,42 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
             return [getPrimaryWavelengthForAberration()];
         })();
 
+        const normalizationWavelength = Number(getPrimaryWavelengthForAberration()) || Number(wavelengths[0]) || 0.5876;
+        const normalizeStartMs = nowMs();
+        const normalizedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
+            opticalSystemRows,
+            Array.isArray(sourceRows) ? sourceRows : [],
+            Array.isArray(objectRows) ? objectRows : [],
+            normalizationWavelength,
+            { preferParaxialImageHeight: true },
+        );
+        normalizeMs = nowMs() - normalizeStartMs;
+
         console.log(`📊 Wavelengths: ${wavelengths.map((wl: number) => `${wl} μm`).join(', ')}`);
 
         let mergedAberrationData: any = null;
         for (let wavelengthIndex = 0; wavelengthIndex < wavelengths.length; wavelengthIndex++) {
             const wavelength = wavelengths[wavelengthIndex];
             try { onProgress?.({ percent: 10 + Math.round((70 * wavelengthIndex) / Math.max(1, wavelengths.length)), message: `Computing transverse aberration λ=${wavelength.toFixed(4)} μm...` }); } catch (_) {}
+            const calcStartMs = nowMs();
             const aberrationData: any = await runNativeTransverseAberration({
                 opticalSystemRows,
                 sourceRows: Array.isArray(sourceRows) ? sourceRows : [],
-                objectRows: Array.isArray(objectRows) ? objectRows : [],
+                objectRows: Array.isArray(normalizedObjectRows) ? normalizedObjectRows : [],
                 surfaceIndex: targetSurfaceIndex,
                 rayCount,
                 pattern: 'cross',
                 wavelengthMode: 'primary',
                 wavelength,
+                profileTransverse,
             });
 
             if (!aberrationData) {
                 throw new Error(`Failed to calculate transverse aberration data for λ=${wavelength.toFixed(4)} μm`);
             }
+            const calcElapsedMs = nowMs() - calcStartMs;
+            calcMs += calcElapsedMs;
+            console.log(`⏱️ [TA Profile][Wavelength] λ=${wavelength.toFixed(5)}μm calc=${calcElapsedMs.toFixed(2)}ms backend=${String(aberrationData?.backend || 'unknown')}`);
 
             const wavelengthLabel = `${wavelength.toFixed(5)} μm`;
             const annotateSeries = (seriesList: any[] = []) => seriesList.map((series: any, fieldIndex: number) => ({
@@ -2986,6 +3081,7 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
             }));
 
             if (!mergedAberrationData) {
+                const mergeStartMs = nowMs();
                 mergedAberrationData = {
                     ...aberrationData,
                     wavelength: wavelength,
@@ -2998,9 +3094,12 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
                         wavelengthsUm: [...wavelengths],
                     },
                 };
+                mergeMs += nowMs() - mergeStartMs;
             } else {
+                const mergeStartMs = nowMs();
                 mergedAberrationData.meridionalData.push(...annotateSeries(Array.isArray(aberrationData?.meridionalData) ? aberrationData.meridionalData : []));
                 mergedAberrationData.sagittalData.push(...annotateSeries(Array.isArray(aberrationData?.sagittalData) ? aberrationData.sagittalData : []));
+                mergeMs += nowMs() - mergeStartMs;
             }
         }
 
@@ -3009,11 +3108,14 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
         }
 
         try { onProgress?.({ percent: 95, message: 'Rendering...' }); } catch (_) {}
+        const plotStartMs = nowMs();
         plotTransverseAberration(containerTarget, mergedAberrationData, {
             title: 'TRANSVERSE RAY ABERRATIONS',
             fixedScaleMm: 0.05,
         });
+        plotMs = nowMs() - plotStartMs;
         try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
+        console.log(`⏱️ [TA Profile][TopLevel] total=${(nowMs() - totalStartMs).toFixed(2)}ms normalize=${normalizeMs.toFixed(2)}ms calc=${calcMs.toFixed(2)}ms merge=${mergeMs.toFixed(2)}ms plot=${plotMs.toFixed(2)}ms wavelengths=${wavelengths.length} rayCount=${rayCount}`);
         console.log('✅ Transverse aberration diagram generated successfully');
         return mergedAberrationData;
     } catch (error) {
@@ -3170,7 +3272,23 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
             return unique.length > 0 ? unique : fallbackWavelengths.slice();
         })();
 
-        const referenceWavelength = 0.5876;
+        const referenceWavelength = (() => {
+            const rows = Array.isArray(sourceRows) ? sourceRows : [];
+            let firstValid: number | null = null;
+            for (const row of rows) {
+                const wl = normalizeUm(row?.wavelength ?? row?.Wavelength);
+                if (wl === null) continue;
+                if (firstValid === null) firstValid = wl;
+                const primaryFlag = row?.primary ?? row?.Primary ?? row?.isPrimary ?? row?.['Primary Wavelength'];
+                const isPrimary = typeof primaryFlag === 'boolean'
+                    ? primaryFlag
+                    : String(primaryFlag ?? '').trim().toLowerCase();
+                if (isPrimary === true || isPrimary === 'true' || isPrimary === '1' || isPrimary === 'yes' || (typeof isPrimary === 'string' && isPrimary.includes('primary'))) {
+                    return wl;
+                }
+            }
+            return firstValid ?? 0.5876;
+        })();
         if (!wavelengths.some(w => Math.abs(w - referenceWavelength) < 1e-6)) {
             wavelengths.push(referenceWavelength);
             wavelengths.sort((a, b) => a - b);

@@ -1506,6 +1506,9 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
     if (isQconMode) {
       const rust = useRustWasm ? getRustRayTracingWasmSync() : null;
       if (!rust || typeof rust.intersect_qcon_surface_batch !== 'function') {
+        if (requireRustWasm) {
+          throw new Error('Rust WASM is unavailable for QCON batch intersection');
+        }
         return list.map(ray => {
           try {
             return intersectAsphericSurface(ray, safeParams, mode, maxIter, tol, null, {
@@ -1557,18 +1560,23 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
             const ray = list[i];
             out[i] = add(ray.pos, scale(ray.dir, tHit));
           } else {
-            out[i] = intersectAsphericSurface(list[i], safeParams, mode, maxIter, tol, null, {
-              ...strictOptions,
-              useRustWasm: false,
-              requireRustWasm: false,
-              requireWasmRayTracing: false,
-              disableWasmRayTracing: true,
-              allowNonStrict: true
-            });
+            if (requireRustWasm) {
+              out[i] = null;
+            } else {
+              out[i] = intersectAsphericSurface(list[i], safeParams, mode, maxIter, tol, null, {
+                ...strictOptions,
+                useRustWasm: false,
+                requireRustWasm: false,
+                requireWasmRayTracing: false,
+                disableWasmRayTracing: true,
+                allowNonStrict: true
+              });
+            }
           }
         }
         return out;
       }
+      if (requireRustWasm) return list.map(() => null);
       return list.map(ray => {
         try {
           return intersectAsphericSurface(ray, safeParams, mode, maxIter, tol, null, {

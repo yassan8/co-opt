@@ -3464,7 +3464,7 @@ export default function LegacyPanels() {
             <h2>Transverse Aberration Diagram</h2>
             <div className="transverse-aberration-controls">
               <label htmlFor="transverse-ray-count-input">Ray number:</label>
-              <input type="number" id="transverse-ray-count-input" defaultValue={101} min={9} max={10001} step={1} />
+              <input type="number" id="transverse-ray-count-input" defaultValue={21} min={9} max={10001} step={1} />
               <span className="note">(Always normalized by stop diameter)</span>
               <button id="show-transverse-aberration-diagram-btn">Show transverse aberration diagram</button>
             </div>
@@ -3537,7 +3537,7 @@ export default function LegacyPanels() {
           <div className="magnification-chromatic-aberration-section" style={{ display: "none" }}>
             <h2>Lateral Chromatic Aberration</h2>
             <div className="magnification-chromatic-aberration-help">
-              <strong>Note:</strong> Lateral displacement is plotted relative to d-line at each object value.
+              <strong>Note:</strong> Lateral displacement is plotted relative to the primary wavelength at each object value.
             </div>
             <div className="magnification-chromatic-aberration-controls">
               <label htmlFor="mca-xmin-input">Lateral displacement:</label>
@@ -3551,6 +3551,12 @@ export default function LegacyPanels() {
               <input type="number" id="mca-ray-count-input" defaultValue={101} min={1} max={5001} step={1} />
               <label htmlFor="mca-ring-count-input" style={{ marginLeft: 10 }}>Rings:</label>
               <input type="number" id="mca-ring-count-input" defaultValue={3} min={1} max={99} step={1} />
+              <label htmlFor="mca-chief-ray-definition" style={{ marginLeft: 10 }}>Chief ray:</label>
+              <select id="mca-chief-ray-definition" defaultValue="stop-center">
+                <option value="stop-center">Stop center</option>
+                <option value="beam-midpoint">Beam midpoint</option>
+                <option value="beam-centroid">Beam centroid</option>
+              </select>
               <button id="show-magnification-chromatic-aberration-btn">Show lateral chromatic aberration</button>
             </div>
             <div id="mca-progress-wrapper" style={{ display: "none", margin: "8px 0" }}>

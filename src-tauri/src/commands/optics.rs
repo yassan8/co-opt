@@ -455,12 +455,16 @@ pub struct NativeTransverseAberrationRequest {
     pub source_rows: Vec<Value>,
     #[serde(default)]
     pub object_rows: Vec<Value>,
+    #[serde(default)]
+    pub job_id: Option<String>,
     pub surface_index: Option<usize>,
     pub ray_count: Option<u32>,
     pub ring_count: Option<u32>,
     pub pattern: Option<String>,
     pub wavelength_mode: Option<String>,
     pub wavelength: Option<f64>,
+    #[serde(default)]
+    pub profile_transverse: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -4234,6 +4238,8 @@ pub fn run_native_through_focus_mtf_map(
                         // when extracting the value at target_freq_lpmm.
                         max_frequency_lpmm: Some((target_freq_lpmm * 2.0).max(1.0)),
                         points: Some(121),
+                        sample_frequencies_lpmm: vec![],
+                        direct_eval_only: Some(false),
                     },
                     app.clone(),
                 )?;
@@ -6275,12 +6281,17 @@ pub fn run_native_astigmatism(
 
 #[tauri::command]
 pub fn run_native_transverse_aberration(
+    app: AppHandle,
     req: NativeTransverseAberrationRequest,
 ) -> Result<NativeTransverseAberrationResponse, String> {
+    let profile_transverse = req.profile_transverse;
+    let job_id = req.job_id.clone();
+    let native_total_start = Instant::now();
     if req.optical_system_rows.is_empty() {
         return Err("run_native_transverse_aberration: opticalSystemRows is empty".to_string());
     }
 
+    let surface_data_start = Instant::now();
     let rows: Vec<Value> = req
         .optical_system_rows
         .iter()
@@ -6293,6 +6304,27 @@ pub fn run_native_transverse_aberration(
     let surface_data = calculate_surface_data(&rows);
     if surface_data.len() != rows.len() {
         return Err("run_native_transverse_aberration: failed to calculate surface origins".to_string());
+    }
+    if profile_transverse {
+        let _ = app.emit(
+            "analysis-progress",
+            serde_json::json!({
+                "jobId": job_id,
+                "kind": "transverse",
+                "phase": "surface-data",
+                "message": format!("[TA Profile][Native] surfaceData={:.2}ms rows={} surfaces={}", surface_data_start.elapsed().as_secs_f64() * 1000.0, rows.len(), surface_data.len()),
+                "percent": 5.0,
+                "indeterminate": false,
+                "done": false,
+                "error": false,
+            }),
+        );
+        eprintln!(
+            "⏱️ [TA Profile][Native] surfaceData={:.2}ms rows={} surfaces={}",
+            surface_data_start.elapsed().as_secs_f64() * 1000.0,
+            rows.len(),
+            surface_data.len(),
+        );
     }
 
     let target_surface_index = req
@@ -6357,6 +6389,7 @@ pub fn run_native_transverse_aberration(
         object_rows.push(fallback);
     }
 
+    let series_start = Instant::now();
     let generated_series = build_native_object_ray_series(
         &rows,
         &surface_data,
@@ -6371,6 +6404,27 @@ pub fn run_native_transverse_aberration(
     );
     if generated_series.is_empty() {
         return Err("run_native_transverse_aberration: failed to generate native rays".to_string());
+    }
+    if profile_transverse {
+        let _ = app.emit(
+            "analysis-progress",
+            serde_json::json!({
+                "jobId": job_id,
+                "kind": "transverse",
+                "phase": "ray-series",
+                "message": format!("[TA Profile][Native] raySeriesBuild={:.2}ms series={} raysPerSeries~= {}", series_start.elapsed().as_secs_f64() * 1000.0, generated_series.len(), traced_rays_req),
+                "percent": 15.0,
+                "indeterminate": false,
+                "done": false,
+                "error": false,
+            }),
+        );
+        eprintln!(
+            "⏱️ [TA Profile][Native] raySeriesBuild={:.2}ms series={} raysPerSeries~= {}",
+            series_start.elapsed().as_secs_f64() * 1000.0,
+            generated_series.len(),
+            traced_rays_req,
+        );
     }
 
     let stop_radius = estimate_stop_radius_mm(&rows).max(1.0e-6);
@@ -6393,9 +6447,10 @@ pub fn run_native_transverse_aberration(
     let mut field_settings: Vec<NativeAstigmatismFieldSetting> = Vec::new();
     let mut meridional_data = Vec::<NativeTransverseAberrationSeries>::new();
     let mut sagittal_data = Vec::<NativeTransverseAberrationSeries>::new();
+    let mut per_series_ray_stats = Vec::<(String, usize, usize, usize)>::new();
     let mut processed_series_count = 0usize;
 
-    for (series_label, _series_color, has_field_angle, rays, wavelength_um) in generated_series {
+    for (series_index, (series_label, _series_color, has_field_angle, rays, wavelength_um)) in generated_series.into_iter().enumerate() {
         if rays.is_empty() {
             continue;
         }
@@ -6441,10 +6496,16 @@ pub fn run_native_transverse_aberration(
             + (chief_stop_hit.1 - stop_surface.origin[1]) * stop_plane_v[1]
             + (chief_stop_hit.2 - stop_surface.origin[2]) * stop_plane_v[2];
 
+        let mut attempted_rays = 0usize;
+        let mut full_hit_rays = 0usize;
+        let mut vignetted_rays = 0usize;
+
         let mut mer_points = Vec::<NativeTransverseAberrationPoint>::new();
         let mut sag_points = Vec::<NativeTransverseAberrationPoint>::new();
+        let series_start = Instant::now();
 
         for ray in &rays {
+            attempted_rays += 1;
             let ray_vec = [
                 ray.start_p.x,
                 ray.start_p.y,
@@ -6455,8 +6516,10 @@ pub fn run_native_transverse_aberration(
             ];
 
             let Some(target_hit) = trace_target_with_packed_native(ray_vec, target_surface_index, &packed_target) else {
+                vignetted_rays += 1;
                 continue;
             };
+            full_hit_rays += 1;
 
             let stop_hit = trace_target_with_packed_native(ray_vec, stop_surface_index, &packed_stop)
                 .unwrap_or(target_hit);
@@ -6472,7 +6535,12 @@ pub fn run_native_transverse_aberration(
 
             let du = ru - chief_u;
             let dv = rv - chief_v;
-            let is_meridional = du.abs() <= dv.abs();
+            let intended_u = ray.pupil_u.filter(|value| value.is_finite());
+            let intended_v = ray.pupil_v.filter(|value| value.is_finite());
+            let is_meridional = match (intended_u, intended_v) {
+                (Some(u), Some(v)) => u.abs() <= v.abs(),
+                _ => du.abs() <= dv.abs(),
+            };
 
             let denom = if stop_radius.is_finite() && stop_radius > 1.0e-9 {
                 stop_radius
@@ -6481,7 +6549,10 @@ pub fn run_native_transverse_aberration(
                 if local > 1.0e-9 { local } else { 1.0 }
             };
 
-            let pupil_coordinate = if is_meridional { dv / denom } else { du / denom };
+            let pupil_coordinate = match (intended_u, intended_v) {
+                (Some(u), Some(v)) => if is_meridional { v } else { u },
+                _ => if is_meridional { dv / denom } else { du / denom },
+            };
             let transverse_aberration = if is_meridional {
                 (target_hit.1 - chief_target_hit.1) * mirror_sign
             } else {
@@ -6534,6 +6605,14 @@ pub fn run_native_transverse_aberration(
             y: field_axis,
             position,
         };
+        let field_display_name = field_setting.display_name.clone();
+
+        per_series_ray_stats.push((
+            field_setting.display_name.clone(),
+            attempted_rays,
+            full_hit_rays,
+            vignetted_rays,
+        ));
 
         field_settings.push(NativeAstigmatismFieldSetting {
             display_name: field_setting.display_name.clone(),
@@ -6559,6 +6638,33 @@ pub fn run_native_transverse_aberration(
             offset_method: None,
             zero_aberration_position: None,
         });
+
+        if profile_transverse {
+            let _ = app.emit(
+                "analysis-progress",
+                serde_json::json!({
+                    "jobId": job_id,
+                    "kind": "transverse",
+                    "phase": "series",
+                    "message": format!("[TA Profile][Native][Series] idx={} label={} wl={:.5} rays={} attempted={} fullHit={} vignetted={} time={:.2}ms", series_index, field_display_name, wavelength_um, rays.len(), attempted_rays, full_hit_rays, vignetted_rays, series_start.elapsed().as_secs_f64() * 1000.0),
+                    "percent": 20.0 + ((series_index as f64) % 60.0),
+                    "indeterminate": false,
+                    "done": false,
+                    "error": false,
+                }),
+            );
+            eprintln!(
+                "⏱️ [TA Profile][Native][Series] idx={} label={} wl={:.5} rays={} attempted={} fullHit={} vignetted={} time={:.2}ms",
+                series_index,
+                field_display_name,
+                wavelength_um,
+                rays.len(),
+                attempted_rays,
+                full_hit_rays,
+                vignetted_rays,
+                series_start.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
 
         processed_series_count += 1;
     }
@@ -6588,6 +6694,43 @@ pub fn run_native_transverse_aberration(
     metadata.insert("seriesCount".to_string(), Value::from(processed_series_count as i64));
     metadata.insert("wavelength".to_string(), Value::from(primary_wavelength));
     metadata.insert("infiniteConjugate".to_string(), Value::from(infinite_conjugate));
+    for (display_name, attempted_rays, full_hit_rays, vignetted_rays) in per_series_ray_stats {
+        metadata.insert(
+            format!("attemptedRays:{}", display_name),
+            Value::from(attempted_rays as i64),
+        );
+        metadata.insert(
+            format!("fullHitRays:{}", display_name),
+            Value::from(full_hit_rays as i64),
+        );
+        metadata.insert(
+            format!("vignettedRays:{}", display_name),
+            Value::from(vignetted_rays as i64),
+        );
+    }
+
+    if profile_transverse {
+        let _ = app.emit(
+            "analysis-progress",
+            serde_json::json!({
+                "jobId": job_id,
+                "kind": "transverse",
+                "phase": "done",
+                "message": format!("[TA Profile][Native] total={:.2}ms series={} fields={} wavelength={:.5}", native_total_start.elapsed().as_secs_f64() * 1000.0, processed_series_count, field_settings.len(), primary_wavelength),
+                "percent": 100.0,
+                "indeterminate": false,
+                "done": true,
+                "error": false,
+            }),
+        );
+        eprintln!(
+            "⏱️ [TA Profile][Native] total={:.2}ms series={} fields={} wavelength={:.5}",
+            native_total_start.elapsed().as_secs_f64() * 1000.0,
+            processed_series_count,
+            field_settings.len(),
+            primary_wavelength,
+        );
+    }
 
     Ok(NativeTransverseAberrationResponse {
         backend: "native-rust-transverse-aberration".to_string(),
@@ -6603,6 +6746,8 @@ pub fn run_native_transverse_aberration(
         metadata,
         message: "Native Rust transverse aberration compute completed".to_string(),
     })
+
+    // The function returns above; this line is intentionally unreachable.
 }
 
 fn normalize_transverse_component_native(raw: Option<&str>) -> String {
@@ -6826,7 +6971,13 @@ pub fn compute_native_transverse_rms_batch(
 
             let du = ru - chief_u;
             let dv = rv - chief_v;
-            let transverse_aberration = if du.abs() <= dv.abs() {
+            let intended_u = ray.pupil_u.filter(|value| value.is_finite());
+            let intended_v = ray.pupil_v.filter(|value| value.is_finite());
+            let is_meridional = match (intended_u, intended_v) {
+                (Some(u), Some(v)) => u.abs() <= v.abs(),
+                _ => du.abs() <= dv.abs(),
+            };
+            let transverse_aberration = if is_meridional {
                 (target_hit.1 - chief_target_hit.1) * mirror_sign
             } else {
                 (target_hit.0 - chief_target_hit.0) * mirror_sign
@@ -6836,16 +6987,15 @@ pub fn compute_native_transverse_rms_batch(
                 continue;
             }
 
-            let pupil_coordinate = if du.abs() <= dv.abs() {
-                dv / stop_radius
-            } else {
-                du / stop_radius
+            let pupil_coordinate = match (intended_u, intended_v) {
+                (Some(u), Some(v)) => if is_meridional { v } else { u },
+                _ => if is_meridional { dv / stop_radius } else { du / stop_radius },
             };
             if !pupil_coordinate.is_finite() || pupil_coordinate.abs() > 1.0 {
                 continue;
             }
 
-            if du.abs() <= dv.abs() {
+            if is_meridional {
                 meridional_sum_sq_mm += transverse_aberration * transverse_aberration;
                 meridional_count += 1;
             } else {

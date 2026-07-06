@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   NativeChiefRayAngleRequest,
   NativeChiefRayAngleResponse,
@@ -475,6 +476,18 @@ async function computeReferenceOpdMapViaRustTracedJsMath(
 // skip repeated attempts to reduce console noise and extra overhead.
 let directDistortionWasmUnavailableInSession = false;
 const directDistortionSparseCoverageWarnedKeys = new Set<string>();
+const transverseObjectNormalizationCache = new Map<string, any[]>();
+const TRANSVERSE_OBJECT_NORMALIZATION_CACHE_LIMIT = 16;
+
+function clonePlain<T>(value: T): T {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    if (Array.isArray(value)) return value.map((item) => ({ ...(item as any) })) as T;
+    if (value && typeof value === 'object') return { ...(value as any) } as T;
+    return value;
+  }
+}
 
 function getPrimaryWavelengthFromSourceRows(sourceRows: any[] = []): number {
   let fallback = 0.5876;
@@ -504,7 +517,7 @@ function isInfiniteConjugateRows(opticalSystemRows: any[] = []): boolean {
   return text === 'INF' || text === 'INFINITY';
 }
 
-async function normalizeTransverseObjectRowsForImageHeight(
+export async function normalizeTransverseObjectRowsForImageHeight(
   opticalSystemRows: any[],
   sourceRows: any[],
   objectRows: any[],
@@ -514,8 +527,14 @@ async function normalizeTransverseObjectRowsForImageHeight(
     progressStart?: number;
     progressEnd?: number;
     progressLabel?: string;
+    preferParaxialImageHeight?: boolean;
   },
 ): Promise<any[]> {
+  const nowMs = () => ((typeof performance !== "undefined" && typeof performance.now === "function") ? performance.now() : Date.now());
+  const profileTransverse = !!(
+    (typeof globalThis !== "undefined" && (globalThis as any).__COOPT_PROFILE_TRANSVERSE === true)
+  );
+  const profileStartMs = profileTransverse ? nowMs() : 0;
   const parseFiniteNumber = (value: unknown): number | null => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -526,6 +545,7 @@ async function normalizeTransverseObjectRowsForImageHeight(
   const progressStart = Number.isFinite(Number(options?.progressStart)) ? Number(options?.progressStart) : 0;
   const progressEnd = Number.isFinite(Number(options?.progressEnd)) ? Number(options?.progressEnd) : 100;
   const progressLabel = String(options?.progressLabel || "ImageHeight conversion");
+  const preferParaxialImageHeight = options?.preferParaxialImageHeight === true;
   const emitProgress = (percent: number, message: string) => {
     if (!onProgress) return;
     try {
@@ -560,9 +580,10 @@ async function normalizeTransverseObjectRowsForImageHeight(
 
   emitProgress(progressStart, `${progressLabel}: preparing...`);
 
-  const [{ detectConjugateType }, { convertImageHeightToEffectiveObject }] = await Promise.all([
+  const importStartMs = profileTransverse ? nowMs() : 0;
+  const [{ detectConjugateType }, { calculateParaxialData }] = await Promise.all([
     import("../../../utils/conjugate-detection.ts"),
-    import("../../../optical/ray-renderer.ts"),
+    import("../../../raytracing/core/ray-paraxial.ts"),
   ]);
   const conjugateType = String(detectConjugateType(opticalSystemRows) || "").toLowerCase() === "finite"
     ? "finite"
@@ -570,6 +591,76 @@ async function normalizeTransverseObjectRowsForImageHeight(
   const wavelength = Number.isFinite(Number(explicitWavelength))
     ? Number(explicitWavelength)
     : getPrimaryWavelengthFromSourceRows(sourceRows);
+
+  if (profileTransverse) {
+    console.info(`⏱️ [TA Profile][Normalize] imports=${(nowMs() - importStartMs).toFixed(2)}ms`);
+  }
+
+  const keyStartMs = profileTransverse ? nowMs() : 0;
+  const normalizationCacheKey = (() => {
+    try {
+      return JSON.stringify({
+        opticalSystemRows,
+        wavelength: Number.isFinite(Number(wavelength)) ? Number(wavelength) : 0.5876,
+        conjugateType,
+        rows: normalizedRows,
+      });
+    } catch (_) {
+      return null;
+    }
+  })();
+  if (normalizationCacheKey && transverseObjectNormalizationCache.has(normalizationCacheKey)) {
+    if (profileTransverse) {
+      console.info(`⏱️ [TA Profile][Normalize] cacheKey=${(nowMs() - keyStartMs).toFixed(2)}ms hit=true total=${(nowMs() - profileStartMs).toFixed(2)}ms`);
+    }
+    return clonePlain(transverseObjectNormalizationCache.get(normalizationCacheKey) || []);
+  }
+
+  if (profileTransverse) {
+    console.info(`⏱️ [TA Profile][Normalize] cacheKey=${(nowMs() - keyStartMs).toFixed(2)}ms hit=false`);
+  }
+
+  const paraxialStartMs = profileTransverse ? nowMs() : 0;
+  const sharedParaxial = (() => {
+    try { return calculateParaxialData(opticalSystemRows, wavelength); } catch (_) { return null; }
+  })();
+  if (profileTransverse) {
+    console.info(`⏱️ [TA Profile][Normalize] paraxial=${(nowMs() - paraxialStartMs).toFixed(2)}ms ok=${sharedParaxial ? "true" : "false"}`);
+  }
+
+  let convertImageHeightToEffectiveObject: null | ((...args: any[]) => any) = null;
+  let sharedSurfaceOrigins: any = null;
+  const sharedImageSurfaceIndex = (() => {
+    for (let i = 0; i < opticalSystemRows.length; i++) {
+      const row = opticalSystemRows[i];
+      const pos = String((row as any)?.position ?? (row as any)?.objectType ?? (row as any)?.type ?? '').trim().toLowerCase();
+      if (pos === 'image') return i;
+    }
+    return Math.max(0, opticalSystemRows.length - 1);
+  })();
+  let sharedStopInfo: any = null;
+  let sharedStopCenter3d: any = null;
+  let sharedSolveScopeKey: string | null = null;
+
+  const needsExactSolver = !(preferParaxialImageHeight && sharedParaxial);
+  if (needsExactSolver) {
+    const exactPrepStartMs = profileTransverse ? nowMs() : 0;
+    const [{ convertImageHeightToEffectiveObject: convertFn }, { calculateSurfaceOrigins }, { findStopSurface }] = await Promise.all([
+      import("../../../optical/ray-renderer.ts"),
+      import("../../../raytracing/core/ray-tracing.ts"),
+      import("../../../optical/system-renderer.ts"),
+    ]);
+    convertImageHeightToEffectiveObject = convertFn;
+    sharedSurfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+    sharedStopInfo = findStopSurface(opticalSystemRows, sharedSurfaceOrigins);
+    sharedStopCenter3d = (() => {
+      try { return extractStopCenter3d(sharedStopInfo); } catch (_) { return null; }
+    })();
+    sharedSolveScopeKey = `${JSON.stringify(opticalSystemRows)}||${Number.isFinite(Number(wavelength)) ? Number(wavelength) : 0.5876}||${conjugateType}||rust-only`;
+    if (profileTransverse) {
+      console.info(`⏱️ [TA Profile][Normalize] exactPrep=${(nowMs() - exactPrepStartMs).toFixed(2)}ms`);
+    }
+  }
 
   const imageHeightCount = normalizedRows.reduce((acc, row) => {
     const posNorm = String((row as any)?.position ?? "").trim().toLowerCase();
@@ -588,11 +679,13 @@ async function normalizeTransverseObjectRowsForImageHeight(
 
     const preservedTarget = {
       x: parseFiniteNumber((row as any)?.__cooptImageHeightTarget?.x)
+        ?? parseFiniteNumber((row as any)?.xHeightAngle)
         ?? parseFiniteNumber((row as any)?.xHeight)
         ?? parseFiniteNumber((row as any)?.x)
         ?? parseFiniteNumber((row as any)?.["object x"])
         ?? 0,
       y: parseFiniteNumber((row as any)?.__cooptImageHeightTarget?.y)
+        ?? parseFiniteNumber((row as any)?.yHeightAngle)
         ?? parseFiniteNumber((row as any)?.yHeight)
         ?? parseFiniteNumber((row as any)?.y)
         ?? parseFiniteNumber((row as any)?.["object y"])
@@ -600,19 +693,128 @@ async function normalizeTransverseObjectRowsForImageHeight(
     };
 
     try {
-      const effective = convertImageHeightToEffectiveObject(row, opticalSystemRows, wavelength, conjugateType, {
-        skipTsValidation: true,
-        validationTraceBackend: 'rust',
-      });
+      const rowStartMs = profileTransverse ? nowMs() : 0;
+      let effective = null;
+      if (preferParaxialImageHeight && sharedParaxial) {
+        if (conjugateType === 'infinite') {
+          const focalLength = Number(sharedParaxial?.focalLength);
+          const effectiveFocalLength = (Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12)
+            ? Math.abs(focalLength)
+            : 1;
+          const solvedX = Math.atan2(Number.isFinite(preservedTarget.x) ? preservedTarget.x : 0, effectiveFocalLength) * (180 / Math.PI);
+          const solvedY = Math.atan2(Number.isFinite(preservedTarget.y) ? preservedTarget.y : 0, effectiveFocalLength) * (180 / Math.PI);
+          effective = {
+            ...row,
+            position: 'Angle',
+            __cooptEffectivePosition: 'Angle',
+            xFieldAngle: solvedX,
+            yFieldAngle: solvedY,
+            xHeightAngle: solvedX,
+            yHeightAngle: solvedY,
+            x: solvedX,
+            y: solvedY,
+            __cooptImageHeightSolve: {
+              conjugateType,
+              mode: 'infinite-angle-paraxial-fast',
+              paraxial: { x: solvedX, y: solvedY },
+              solved: { x: solvedX, y: solvedY },
+              hit: { x: preservedTarget.x, y: preservedTarget.y },
+              imageSurfaceIndex: sharedImageSurfaceIndex,
+              wavelengthUm: wavelength,
+            },
+          };
+        } else {
+          const imgDist = Number(sharedParaxial?.imageDistance);
+          const objSurf = opticalSystemRows?.[0];
+          const objDist = objSurf ? Number(objSurf.thickness) : NaN;
+          const mag = (Number.isFinite(imgDist) && Number.isFinite(objDist) && Math.abs(objDist) > 1e-12)
+            ? (imgDist / objDist)
+            : 1;
+          const absMag = Math.abs(mag);
+          const scale = absMag > 1e-12 ? 1 / absMag : 1;
+          const solvedX = preservedTarget.x * scale;
+          const solvedY = preservedTarget.y * scale;
+          effective = {
+            ...row,
+            position: 'Rectangle',
+            __cooptEffectivePosition: 'Rectangle',
+            xHeight: solvedX,
+            yHeight: solvedY,
+            xHeightAngle: solvedX,
+            yHeightAngle: solvedY,
+            x: solvedX,
+            y: solvedY,
+            __cooptImageHeightSolve: {
+              conjugateType,
+              mode: 'finite-rectangle-paraxial-fast',
+              paraxial: { x: solvedX, y: solvedY },
+              solved: { x: solvedX, y: solvedY },
+              hit: { x: preservedTarget.x, y: preservedTarget.y },
+              imageSurfaceIndex: sharedImageSurfaceIndex,
+              wavelengthUm: wavelength,
+            },
+          };
+        }
+      }
+      let usedExactSolver = false;
+      if (!effective && convertImageHeightToEffectiveObject) {
+        usedExactSolver = true;
+        effective = convertImageHeightToEffectiveObject(row, opticalSystemRows, wavelength, conjugateType, {
+          skipTsValidation: true,
+          validationTraceBackend: 'rust',
+          precomputedSurfaceOrigins: sharedSurfaceOrigins,
+          precomputedImageSurfaceIndex: sharedImageSurfaceIndex,
+          precomputedStopInfo: sharedStopInfo,
+          precomputedStopCenter3d: sharedStopCenter3d,
+          precomputedParaxial: sharedParaxial,
+          precomputedParaxialOnlyModel: false,
+          precomputedSolveScopeKey: sharedSolveScopeKey,
+        });
+      }
       if (effective && typeof effective === "object") {
+        const effectiveRow = { ...effective } as any;
+        const effectivePosition = String(effectiveRow?.__cooptEffectivePosition ?? "").trim();
+        if (effectivePosition.toLowerCase() === "rectangle") {
+          const solvedX = parseFiniteNumber(effectiveRow?.xHeight)
+            ?? parseFiniteNumber(effectiveRow?.x)
+            ?? parseFiniteNumber(effectiveRow?.xHeightAngle)
+            ?? 0;
+          const solvedY = parseFiniteNumber(effectiveRow?.yHeight)
+            ?? parseFiniteNumber(effectiveRow?.y)
+            ?? parseFiniteNumber(effectiveRow?.yHeightAngle)
+            ?? 0;
+          effectiveRow.position = "Rectangle";
+          effectiveRow.xHeight = solvedX;
+          effectiveRow.yHeight = solvedY;
+          effectiveRow.x = solvedX;
+          effectiveRow.y = solvedY;
+        } else if (effectivePosition.toLowerCase() === "angle") {
+          const solvedX = parseFiniteNumber(effectiveRow?.xFieldAngle)
+            ?? parseFiniteNumber(effectiveRow?.xAngle)
+            ?? parseFiniteNumber(effectiveRow?.xHeightAngle)
+            ?? 0;
+          const solvedY = parseFiniteNumber(effectiveRow?.yFieldAngle)
+            ?? parseFiniteNumber(effectiveRow?.yAngle)
+            ?? parseFiniteNumber(effectiveRow?.fieldAngle)
+            ?? parseFiniteNumber(effectiveRow?.yHeightAngle)
+            ?? 0;
+          effectiveRow.position = "Angle";
+          effectiveRow.xHeightAngle = solvedX;
+          effectiveRow.yHeightAngle = solvedY;
+          effectiveRow.x = solvedX;
+          effectiveRow.y = solvedY;
+        }
         convertedRows.push({
           ...row,
-          ...effective,
+          ...effectiveRow,
           __cooptImageHeightTarget: preservedTarget,
-          position: (row as any)?.position,
+          position: effectiveRow.__cooptEffectivePosition ?? effectiveRow.position ?? (row as any)?.position,
           __cooptOriginalPosition: row.position,
         });
         convertedCount += 1;
+        if (profileTransverse) {
+          console.info(`⏱️ [TA Profile][Normalize][Row] index=${rowIndex} mode=${usedExactSolver ? "exact" : "paraxial-fast"} elapsed=${(nowMs() - rowStartMs).toFixed(2)}ms`);
+        }
         const percent = progressStart + ((progressEnd - progressStart) * convertedCount) / Math.max(1, imageHeightCount);
         emitProgress(percent, `${progressLabel}: converting ${convertedCount}/${imageHeightCount}`);
         if ((convertedCount % 3) === 0) {
@@ -638,6 +840,16 @@ async function normalizeTransverseObjectRowsForImageHeight(
   }
 
   emitProgress(progressEnd, `${progressLabel}: done`);
+  if (normalizationCacheKey) {
+    transverseObjectNormalizationCache.set(normalizationCacheKey, clonePlain(convertedRows));
+    while (transverseObjectNormalizationCache.size > TRANSVERSE_OBJECT_NORMALIZATION_CACHE_LIMIT) {
+      const firstKey = transverseObjectNormalizationCache.keys().next().value;
+      if (firstKey !== undefined) transverseObjectNormalizationCache.delete(firstKey);
+    }
+  }
+  if (profileTransverse) {
+    console.info(`⏱️ [TA Profile][Normalize] total=${(nowMs() - profileStartMs).toFixed(2)}ms imageHeightRows=${imageHeightCount} preferParaxial=${preferParaxialImageHeight ? "true" : "false"}`);
+  }
   return convertedRows;
 }
 
@@ -660,25 +872,29 @@ function buildTransverseFieldSettingsFromObjectRows(objectRows: any[] = []): any
     const pointUnit = pointModeLabel === "Angle" ? "deg" : "mm";
     const imageHeightTargetX = parseNumber((row as any)?.__cooptImageHeightTarget?.x);
     const imageHeightTargetY = parseNumber((row as any)?.__cooptImageHeightTarget?.y);
-    const pointX = pointModeLabel === "Angle"
+    const displayPointX = pointModeLabel === "Angle"
       ? parseNumber((row as any)?.xFieldAngle ?? (row as any)?.xAngle ?? (row as any)?.xHeightAngle ?? (row as any)?.x)
       : pointModeLabel === "Image Height"
         ? imageHeightTargetX ?? parseNumber((row as any)?.xHeight ?? (row as any)?.x ?? (row as any)?.["object x"] ?? (row as any)?.xHeightAngle)
       : parseNumber((row as any)?.xHeight ?? (row as any)?.x ?? (row as any)?.xHeightAngle ?? (row as any)?.["object x"]);
-    const pointY = pointModeLabel === "Angle"
+    const displayPointY = pointModeLabel === "Angle"
       ? parseNumber((row as any)?.yFieldAngle ?? (row as any)?.fieldAngle ?? (row as any)?.yAngle ?? (row as any)?.yHeightAngle ?? (row as any)?.y)
       : pointModeLabel === "Image Height"
         ? imageHeightTargetY ?? parseNumber((row as any)?.yHeight ?? (row as any)?.y ?? (row as any)?.["object y"] ?? (row as any)?.yHeightAngle)
       : parseNumber((row as any)?.yHeight ?? (row as any)?.y ?? (row as any)?.yHeightAngle ?? (row as any)?.["object y"]);
-    const pointXText = Number.isFinite(pointX as number) ? (pointX as number).toFixed(3) : "0.000";
-    const pointYText = Number.isFinite(pointY as number) ? (pointY as number).toFixed(3) : "0.000";
+    const actualAngleX = parseNumber((row as any)?.xFieldAngle ?? (row as any)?.xAngle ?? (row as any)?.xHeightAngle ?? (row as any)?.x);
+    const actualAngleY = parseNumber((row as any)?.yFieldAngle ?? (row as any)?.fieldAngle ?? (row as any)?.yAngle ?? (row as any)?.yHeightAngle ?? (row as any)?.y);
+    const actualHeightX = parseNumber((row as any)?.xHeight ?? (row as any)?.x ?? (row as any)?.xHeightAngle ?? (row as any)?.["object x"]);
+    const actualHeightY = parseNumber((row as any)?.yHeight ?? (row as any)?.y ?? (row as any)?.yHeightAngle ?? (row as any)?.["object y"]);
+    const pointXText = Number.isFinite(displayPointX as number) ? (displayPointX as number).toFixed(3) : "0.000";
+    const pointYText = Number.isFinite(displayPointY as number) ? (displayPointY as number).toFixed(3) : "0.000";
     const displayNameBase = String((row as any)?.comment ?? (row as any)?.name ?? "").trim();
     const displayNameCore = `Object ${index + 1} (${pointModeLabel}: X=${pointXText} ${pointUnit}, Y=${pointYText} ${pointUnit})`;
     const displayName = displayNameBase ? `${displayNameCore} - ${displayNameBase}` : displayNameCore;
 
     if (isAngle) {
-      const xAngle = Number.isFinite(pointX as number) ? Number(pointX) : 0;
-      const yAngle = Number.isFinite(pointY as number) ? Number(pointY) : 0;
+      const xAngle = Number.isFinite(actualAngleX as number) ? Number(actualAngleX) : 0;
+      const yAngle = Number.isFinite(actualAngleY as number) ? Number(actualAngleY) : 0;
       return {
         objectIndex: index + 1,
         fieldType: "Angle",
@@ -689,8 +905,8 @@ function buildTransverseFieldSettingsFromObjectRows(objectRows: any[] = []): any
       };
     }
 
-    const xHeight = Number.isFinite(pointX as number) ? Number(pointX) : 0;
-    const yHeight = Number.isFinite(pointY as number) ? Number(pointY) : 0;
+    const xHeight = Number.isFinite(actualHeightX as number) ? Number(actualHeightX) : 0;
+    const yHeight = Number.isFinite(actualHeightY as number) ? Number(actualHeightY) : 0;
     return {
       objectIndex: index + 1,
       fieldType: "Rectangle",
@@ -1706,7 +1922,7 @@ export async function runNativeSphericalAberration(
       opticalSystemRows,
       targetSurfaceIndex,
       wavelengths,
-      Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : 51,
+      Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : 21,
       {
         requireRustWasm: true,
         referenceFocusMode: payload?.referenceFocusMode,
@@ -1990,17 +2206,27 @@ export async function runNativeAstigmatism(
 export async function runNativeTransverseAberration(
   payload: NativeTransverseAberrationRequest,
 ): Promise<NativeTransverseAberrationResponse> {
+  const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
+  const profileTransverse = !!(
+    (payload && typeof payload === 'object' && payload.profileTransverse === true) ||
+    (typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_PROFILE_TRANSVERSE === true)
+  );
+  const profileStartMs = profileTransverse ? nowMs() : 0;
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
-  const forceWebQconFallback = hasQconSurfaceNativeLike(opticalSystemRows);
+  const normalizeStartMs = profileTransverse ? nowMs() : 0;
   const normalizedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
     opticalSystemRows,
     sourceRows,
     Array.isArray(payload?.objectRows) ? payload.objectRows : [],
     Number(payload?.wavelength),
+    { preferParaxialImageHeight: true },
   );
+  if (profileTransverse) {
+    console.info(`⏱️ [TA Profile][WebPath] normalizeObjectRows=${(nowMs() - normalizeStartMs).toFixed(2)}ms rows=${normalizedObjectRows.length}`);
+  }
 
-  if (!isTauriRuntime() || forceWebQconFallback) {
+  if (!isTauriRuntime()) {
     const {
       calculateTransverseAberrationAsync,
       getPrimaryWavelengthForAberration,
@@ -2012,9 +2238,14 @@ export async function runNativeTransverseAberration(
     const wavelength = Number.isFinite(Number(payload?.wavelength))
       ? Number(payload.wavelength)
       : getPrimaryWavelengthForAberration();
+    const buildFieldsStartMs = profileTransverse ? nowMs() : 0;
     const fieldSettings = normalizedObjectRows.length > 0
       ? buildTransverseFieldSettingsFromObjectRows(normalizedObjectRows)
       : null;
+    if (profileTransverse) {
+      console.info(`⏱️ [TA Profile][WebPath] buildFieldSettings=${(nowMs() - buildFieldsStartMs).toFixed(2)}ms fields=${Array.isArray(fieldSettings) ? fieldSettings.length : 0}`);
+    }
+    const calcStartMs = profileTransverse ? nowMs() : 0;
 
     const result = await calculateTransverseAberrationAsync(
       opticalSystemRows,
@@ -2023,11 +2254,13 @@ export async function runNativeTransverseAberration(
       wavelength,
       Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : 51,
       {
-        // Keep Paraxial/ThinLens compatible with the same non-strict fallback path
-        // used by Spot Diagram and Grid Distortion in web mode.
-        requireRustWasm: false,
+        requireRustWasm: true,
       },
     );
+    if (profileTransverse) {
+      console.info(`⏱️ [TA Profile][WebPath] calculateTransverseAberrationAsync=${(nowMs() - calcStartMs).toFixed(2)}ms`);
+      console.info(`⏱️ [TA Profile][WebPath] total=${(nowMs() - profileStartMs).toFixed(2)}ms backend=web-rust-wasm`);
+    }
     if (!result) throw new Error("Web transverse aberration calculation failed");
     return {
       ...(result as any),
@@ -2035,16 +2268,45 @@ export async function runNativeTransverseAberration(
       message: "Computed via Web Rust/WASM transverse aberration API",
     } as NativeTransverseAberrationResponse;
   }
+  const jobId = String(payload?.jobId || `native-transverse-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  let unlistenNativeProfile: null | (() => void) = null;
+  if (profileTransverse) {
+    try {
+      unlistenNativeProfile = await listen('analysis-progress', (event: any) => {
+        try {
+          const data = event?.payload || {};
+          if (!data || String(data.jobId || '') !== jobId) return;
+          const message = String(data.message || data.phase || '');
+          if (message) {
+            console.info(message);
+          }
+        } catch (_) {}
+      });
+    } catch (_) {
+      unlistenNativeProfile = null;
+    }
+  }
   const normalizedPayload = {
     ...payload,
     opticalSystemRows,
     sourceRows,
     objectRows: normalizedObjectRows,
+    jobId,
+    profileTransverse: !!(
+      (payload && typeof payload === 'object' && payload.profileTransverse === true) ||
+      (typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_PROFILE_TRANSVERSE === true)
+    ),
   };
-  return invokeCommand<NativeTransverseAberrationRequest, NativeTransverseAberrationResponse>(
-    "run_native_transverse_aberration",
-    normalizedPayload,
-  );
+  try {
+    return await invokeCommand<NativeTransverseAberrationRequest, NativeTransverseAberrationResponse>(
+      "run_native_transverse_aberration",
+      normalizedPayload,
+    );
+  } finally {
+    if (typeof unlistenNativeProfile === 'function') {
+      try { unlistenNativeProfile(); } catch (_) {}
+    }
+  }
 }
 
 export async function runNativeTransverseRmsUm(
@@ -2052,7 +2314,6 @@ export async function runNativeTransverseRmsUm(
 ): Promise<NativeTransverseRmsResponse> {
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
-  const forceWebQconFallback = hasQconSurfaceNativeLike(opticalSystemRows);
   const normalizedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
     opticalSystemRows,
     sourceRows,
@@ -2065,7 +2326,7 @@ export async function runNativeTransverseRmsUm(
     ? componentRaw
     : "total";
 
-  if (!isTauriRuntime() || forceWebQconFallback) {
+  if (!isTauriRuntime()) {
     const aberrationResponse = await runNativeTransverseAberration({
       ...payload,
       opticalSystemRows,

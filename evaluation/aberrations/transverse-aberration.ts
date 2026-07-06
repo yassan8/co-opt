@@ -20,6 +20,22 @@ import { calculateEntrancePupilDiameter, calculateParaxialData } from '../../ray
 
 const TRANSVERSE_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__TRANSVERSE_DEBUG || globalThis.__OPD_DEBUG || globalThis.__PSF_DEBUG));
 
+function isTransverseProfileEnabled(options: any = null): boolean {
+    try {
+        if (options && typeof options === 'object' && options.profileTransverse === true) return true;
+        if (typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_PROFILE_TRANSVERSE === true) return true;
+        if (typeof window !== 'undefined') {
+            const qs = new URLSearchParams(window.location?.search || '');
+            const qv = String(qs.get('coopt_profile_transverse') ?? qs.get('profileTransverse') ?? '').trim().toLowerCase();
+            if (qv === '1' || qv === 'true' || qv === 'yes' || qv === 'on') return true;
+            const ls = String(window.localStorage?.getItem('coopt.profileTransverse') ?? '').trim().toLowerCase();
+            if (ls === '1' || ls === 'true' || ls === 'yes' || ls === 'on') return true;
+        }
+    } catch (_) {
+    }
+    return false;
+}
+
 function shouldEmitOptimizationWarning(key, intervalMs = 1500) {
     try {
         const g = (typeof globalThis !== 'undefined') ? globalThis : null;
@@ -98,6 +114,12 @@ function isFiniteSystem(opticalSystemRows) {
 export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIndex, fieldSettings = null, wavelength = 0.5876, rayCount = 51, options = null) {
     // デバッグモードの設定（デフォルトは静か）
     const debugMode = TRANSVERSE_DEBUG;
+    const perfProfileEnabled = isTransverseProfileEnabled(options);
+    const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
+    const totalStartMs = perfProfileEnabled ? nowMs() : 0;
+    let crossBeamTotalMs = 0;
+    let meridionalTotalMs = 0;
+    let sagittalTotalMs = 0;
     
     // フィールド設定を取得
     if (!fieldSettings) {
@@ -190,9 +212,11 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
     // 各フィールド設定について計算
     for (let i = 0; i < fieldSettings.length; i++) {
         const fieldSetting = fieldSettings[i];
+        const fieldStartMs = perfProfileEnabled ? nowMs() : 0;
 
         try {
             // 十字光線を生成（絞り面インデックスと評価面インデックスも渡す）
+            const crossStartMs = perfProfileEnabled ? nowMs() : 0;
             const crossBeamData = generateCrossBeamForField(
                 opticalSystemRows,
                 fieldSetting,
@@ -204,26 +228,56 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
                 lightweight,
                 options,
             );
+            if (perfProfileEnabled) {
+                crossBeamTotalMs += (nowMs() - crossStartMs);
+            }
             
             if (crossBeamData) {
                 // メリジオナル・サジタル光線を分離して横収差を計算（絞り半径と入射瞳半径を別々に渡す）
+                const merStartMs = perfProfileEnabled ? nowMs() : 0;
                 const meridionalResult = calculateMeridionalAberrationFromCrossBeam(
                     crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign, lightweight
                 );
+                if (perfProfileEnabled) {
+                    meridionalTotalMs += (nowMs() - merStartMs);
+                }
                 
+                const sagStartMs = perfProfileEnabled ? nowMs() : 0;
                 const sagittalResult = calculateSagittalAberrationFromCrossBeam(
                     crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign, lightweight
                 );
+                if (perfProfileEnabled) {
+                    sagittalTotalMs += (nowMs() - sagStartMs);
+                }
                 
                 aberrationData.meridionalData.push(meridionalResult);
                 aberrationData.sagittalData.push(sagittalResult);
+
+                if (perfProfileEnabled) {
+                    const pointsCount = Number(meridionalResult?.points?.length || 0) + Number(sagittalResult?.points?.length || 0);
+                    const fieldMs = nowMs() - fieldStartMs;
+                    console.info(`⏱️ [TA Profile][Field] index=${i + 1}/${fieldSettings.length} name=${fieldSetting?.displayName || i + 1} total=${fieldMs.toFixed(2)}ms points=${pointsCount}`);
+                }
                 
             } else {
                 if (debugMode) console.warn(`⚠️ フィールド ${fieldSetting.displayName} の十字光線生成に失敗`);
+                if (perfProfileEnabled) {
+                    const fieldMs = nowMs() - fieldStartMs;
+                    console.info(`⏱️ [TA Profile][Field] index=${i + 1}/${fieldSettings.length} name=${fieldSetting?.displayName || i + 1} failedCrossBeam total=${fieldMs.toFixed(2)}ms`);
+                }
             }
         } catch (error) {
             console.error(`❌ フィールド ${fieldSetting.displayName} の計算エラー:`, error);
         }
+    }
+
+    if (perfProfileEnabled) {
+        const totalMs = nowMs() - totalStartMs;
+        console.info(
+            `⏱️ [TA Profile][Summary] total=${totalMs.toFixed(2)}ms ` +
+            `crossBeam=${crossBeamTotalMs.toFixed(2)}ms meridional=${meridionalTotalMs.toFixed(2)}ms sagittal=${sagittalTotalMs.toFixed(2)}ms ` +
+            `fields=${fieldSettings.length} rayCount=${rayCount} lightweight=${lightweight}`
+        );
     }
     
     return aberrationData;
@@ -239,6 +293,9 @@ export async function calculateTransverseAberrationAsync(
     rayCount = 51,
     options = null
 ) {
+    const profileTransverse = isTransverseProfileEnabled(options);
+    const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
+    const asyncTotalStartMs = profileTransverse ? nowMs() : 0;
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
@@ -257,6 +314,10 @@ export async function calculateTransverseAberrationAsync(
     safeProgress(0, 'Starting transverse aberration...');
     await yieldToUI();
 
+    if (profileTransverse) {
+        console.info(`⏱️ [TA Profile][Async] fields=${totalFields} rayCount=${rayCount} yieldEvery=${yieldEvery}`);
+    }
+
     let baseMeta = null;
     const meridionalData = [];
     const sagittalData = [];
@@ -266,6 +327,7 @@ export async function calculateTransverseAberrationAsync(
         const pct = 5 + (85 * (i / Math.max(1, totalFields)));
         const name = fs?.displayName ? String(fs.displayName) : `Field ${i + 1}`;
         safeProgress(Math.min(95, Math.max(0, pct)), `Calculating ${name} (${i + 1}/${totalFields})...`);
+        const fieldStartMs = profileTransverse ? nowMs() : 0;
 
         const partial = calculateTransverseAberration(
             opticalSystemRows,
@@ -282,8 +344,16 @@ export async function calculateTransverseAberrationAsync(
             if (Array.isArray(partial.sagittalData)) sagittalData.push(...partial.sagittalData);
         }
 
+        if (profileTransverse) {
+            console.info(`⏱️ [TA Profile][Async][Field] index=${i + 1}/${totalFields} name=${name} calc=${(nowMs() - fieldStartMs).toFixed(2)}ms`);
+        }
+
         if (yieldEvery > 0 && ((i + 1) % yieldEvery) === 0) {
+            const yieldStartMs = profileTransverse ? nowMs() : 0;
             await yieldToUI();
+            if (profileTransverse) {
+                console.info(`⏱️ [TA Profile][Async][Yield] index=${i + 1}/${totalFields} waited=${(nowMs() - yieldStartMs).toFixed(2)}ms`);
+            }
         }
     }
 
@@ -296,6 +366,10 @@ export async function calculateTransverseAberrationAsync(
     out.targetSurface = targetSurfaceIndex;
     out.meridionalData = meridionalData;
     out.sagittalData = sagittalData;
+
+    if (profileTransverse) {
+        console.info(`⏱️ [TA Profile][Async][Summary] total=${(nowMs() - asyncTotalStartMs).toFixed(2)}ms fields=${totalFields} rayCount=${rayCount}`);
+    }
 
     safeProgress(100, 'Done');
     return out;
@@ -327,6 +401,7 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
         debugMode: debugMode,
         targetSurfaceIndex: targetSurfaceIndex, // 評価面インデックスを追加
         pupilSamplingMode,
+        profileTransverse: !!(analysisOptions && typeof analysisOptions === 'object' && analysisOptions.profileTransverse === true),
     };
     
     try {
@@ -763,6 +838,13 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
     const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
 
+    const resolvePupilCoordinate = (ray, fallbackValue) => {
+        const direct = Number(ray?.crossParameter);
+        if (Number.isFinite(direct)) return Math.max(-1, Math.min(1, direct));
+        const fallback = Number(fallbackValue);
+        return Number.isFinite(fallback) ? Math.max(-1, Math.min(1, fallback)) : 0;
+    };
+
     // 主光線の評価面での座標を取得
     const chiefIntersection = Number.isInteger(targetPointIndex)
         ? getIntersectionAtPathPoint(chiefRay, targetPointIndex, targetSurfaceInfo, mirrorSign, true)
@@ -836,7 +918,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                 const centeredStopY = stopY - pupilCenterY;
                 
                 // 🔧 FIX: 事前に計算済みのmaxAbsYを使用（ループ内で再計算しない）
-                const normalizedPupilCoord = maxAbsY > 0 ? centeredStopY / maxAbsY : 0;
+                const normalizedPupilCoord = resolvePupilCoordinate(ray, maxAbsY > 0 ? centeredStopY / maxAbsY : 0);
                 
                 const transverseAberration = intersection.y - chiefIntersection.y; // Y方向の収差
                 
@@ -902,7 +984,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                 const centeredStopY = correctedStopY - pupilCenterY;
                 
                 // 🔧 FIX: 事前に計算済みのmaxCorrectedYを使用（ループ内で再計算しない）
-                const normalizedPupilCoord = maxCorrectedY > 0 ? centeredStopY / maxCorrectedY : 0;
+                const normalizedPupilCoord = resolvePupilCoordinate(ray, maxCorrectedY > 0 ? centeredStopY / maxCorrectedY : 0);
                 
                 // 規格化座標が±1以内の光線を含める（座標分布基準）
                 if (Math.abs(normalizedPupilCoord) <= 1.0) {
@@ -976,7 +1058,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     
     // 🔧 FIX: 主光線を明示的に追加（Ray number偶数時に瞳座標=0が含まれない問題を回避）
     const chiefStopY = chiefStopIntersection ? chiefStopIntersection.y : 0;
-    const chiefNormalizedPupilCoordMeridional = maxAbsY > 0 ? (chiefStopY - pupilCenterY) / maxAbsY : 0;
+    const chiefNormalizedPupilCoordMeridional = resolvePupilCoordinate(chiefRay, maxAbsY > 0 ? (chiefStopY - pupilCenterY) / maxAbsY : 0);
     
     // 主光線が既にpoints配列に含まれているか確認（重複回避）
     const chiefAlreadyExistsMeridional = points.some(p => Math.abs(p.pupilCoordinate - chiefNormalizedPupilCoordMeridional) < 1e-9);
@@ -1146,6 +1228,13 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
     const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
 
+    const resolvePupilCoordinate = (ray, fallbackValue) => {
+        const direct = Number(ray?.crossParameter);
+        if (Number.isFinite(direct)) return Math.max(-1, Math.min(1, direct));
+        const fallback = Number(fallbackValue);
+        return Number.isFinite(fallback) ? Math.max(-1, Math.min(1, fallback)) : 0;
+    };
+
     // 主光線の評価面での座標を取得
     const chiefIntersection = Number.isInteger(targetPointIndex)
         ? getIntersectionAtPathPoint(chiefRay, targetPointIndex, targetSurfaceInfo, mirrorSign, true)
@@ -1210,7 +1299,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                 const centeredStopX = stopX - pupilCenterX;
                 
                 // 🔧 FIX: 事前に計算済みのmaxCorrectedXを使用（ループ内で再計算しない）
-                const normalizedPupilCoord = maxCorrectedX > 0 ? centeredStopX / maxCorrectedX : 0;
+                const normalizedPupilCoord = resolvePupilCoordinate(ray, maxCorrectedX > 0 ? centeredStopX / maxCorrectedX : 0);
                 
                 const transverseAberration = intersection.x - chiefIntersection.x; // X方向の収差
                 
@@ -1276,7 +1365,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                 const centeredStopX = correctedStopX - pupilCenterX;
                 
                 // 🔧 FIX: 事前に計算済みのmaxCorrectedXを使用（ループ内で再計算しない）
-                const normalizedPupilCoord = maxCorrectedX > 0 ? centeredStopX / maxCorrectedX : 0;
+                const normalizedPupilCoord = resolvePupilCoordinate(ray, maxCorrectedX > 0 ? centeredStopX / maxCorrectedX : 0);
                 
                 // 規格化座標が±1以内の光線を含める（座標分布基準）
                 if (Math.abs(normalizedPupilCoord) <= 1.0) {
@@ -1350,7 +1439,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     
     // 🔧 FIX: 主光線を明示的に追加（Ray number偶数時に瞳座標=0が含まれない問題を回避）
     const chiefStopX = chiefStopIntersection ? chiefStopIntersection.x : 0;
-    const chiefNormalizedPupilCoordSagittal = maxCorrectedX > 0 ? (chiefStopX - pupilCenterX) / maxCorrectedX : 0;
+    const chiefNormalizedPupilCoordSagittal = resolvePupilCoordinate(chiefRay, maxCorrectedX > 0 ? (chiefStopX - pupilCenterX) / maxCorrectedX : 0);
     
     // 主光線が既にpoints配列に含まれているか確認（重複回避）
     const chiefAlreadyExistsSagittal = points.some(p => Math.abs(p.pupilCoordinate - chiefNormalizedPupilCoordSagittal) < 1e-9);

@@ -285,12 +285,14 @@ export interface NativeTransverseAberrationRequest {
   opticalSystemRows: unknown[];
   sourceRows?: unknown[];
   objectRows?: unknown[];
+  jobId?: string;
   surfaceIndex?: number;
   rayCount?: number;
   ringCount?: number;
   pattern?: "annular" | "grid" | "cross";
   wavelengthMode?: "all" | "primary";
   wavelength?: number;
+  profileTransverse?: boolean;
 }
 
 export interface NativeTransverseAberrationPoint {

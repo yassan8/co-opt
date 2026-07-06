@@ -9415,16 +9415,19 @@ export function setupAnalysisWindows() {
             const openerPoints = getOpenerEl('mca-point-count-input');
             const openerRays = getOpenerEl('mca-ray-count-input');
             const openerRings = getOpenerEl('mca-ring-count-input');
+            const openerChiefRay = getOpenerEl('mca-chief-ray-definition');
             const popupMin = document.getElementById('popup-mca-xmin');
             const popupMax = document.getElementById('popup-mca-xmax');
             const popupPoints = document.getElementById('popup-mca-points');
             const popupRays = document.getElementById('popup-mca-rays');
             const popupRings = document.getElementById('popup-mca-rings');
+            const popupChiefRay = document.getElementById('popup-mca-chief-ray');
             if (openerMin && popupMin && openerMin.value !== '') popupMin.value = openerMin.value;
             if (openerMax && popupMax && openerMax.value !== '') popupMax.value = openerMax.value;
             if (openerPoints && popupPoints && openerPoints.value !== '') popupPoints.value = openerPoints.value;
             if (openerRays && popupRays && openerRays.value !== '') popupRays.value = openerRays.value;
             if (openerRings && popupRings && openerRings.value !== '') popupRings.value = openerRings.value;
+            if (openerChiefRay && popupChiefRay && openerChiefRay.value !== '') popupChiefRay.value = openerChiefRay.value;
         }
 
         window['renderMagnificationChromaticAberration'] = async () => {
@@ -15236,7 +15239,7 @@ export function setupAnalysisWindows() {
 <body>
     <div class="controls">
         <label for="popup-transverse-ray-count-input">Ray number:</label>
-        <input type="number" id="popup-transverse-ray-count-input" value="101" min="9" max="10001" step="1" />
+        <input type="number" id="popup-transverse-ray-count-input" value="21" min="9" max="10001" step="1" />
         <span class="note-inline" style="font-size:12px;color:#666;">(Always normalized by stop diameter)</span>
         <button id="popup-show-transverse-aberration-btn" type="button">Show transverse aberration diagram</button>
     </div>
@@ -15288,7 +15291,20 @@ export function setupAnalysisWindows() {
             };
 
             const popupRay = document.getElementById('popup-transverse-ray-count-input');
-            const rayCount = popupRay ? parseInt(popupRay.value, 10) : 51;
+            const rayCount = popupRay ? parseInt(popupRay.value, 10) : 21;
+            const profileTransverse = (() => {
+                try {
+                    const g = window;
+                    if (g.__COOPT_PROFILE_TRANSVERSE === true) return true;
+                    const qs = new URLSearchParams(window.location?.search || '');
+                    const qv = String(qs.get('coopt_profile_transverse') ?? qs.get('profileTransverse') ?? '').trim().toLowerCase();
+                    if (qv === '1' || qv === 'true' || qv === 'yes' || qv === 'on') return true;
+                    const ls = String(window.localStorage?.getItem('coopt.profileTransverse') ?? '').trim().toLowerCase();
+                    return ls === '1' || ls === 'true' || ls === 'yes' || ls === 'on';
+                } catch (_) {
+                    return false;
+                }
+            })();
             const openerRay = getOpenerEl('transverse-ray-count-input');
             if (openerRay && Number.isFinite(rayCount)) {
                 openerRay.value = String(rayCount);
@@ -15305,7 +15321,8 @@ export function setupAnalysisWindows() {
                 await window.opener.showTransverseAberrationDiagram({
                     rayCount: Number.isFinite(rayCount) ? rayCount : 51,
                     containerElement: containerEl,
-                    onProgress
+                    onProgress,
+                    profileTransverse,
                 });
                 hideProgress();
             } catch (err) {

@@ -6,8 +6,12 @@ import {
 export type RustRayTracingWasm = {
   intersect_aspheric_rt10: (ray: Float64Array, params: Float64Array, modeOdd: number, maxIter: number, tol: number) => number;
   intersect_aspheric_rt10_batch: (rays: Float64Array, rayCount: number, params: Float64Array, modeOdd: number, maxIter: number, tol: number) => Float64Array;
+  intersect_qcon_surface?: (ray: Float64Array, params: Float64Array, modeOdd: number, maxIter: number, tol: number) => number;
+  intersect_qcon_surface_batch?: (rays: Float64Array, rayCount: number, params: Float64Array, modeOdd: number, maxIter: number, tol: number) => Float64Array;
   surface_normal_aspheric_rt10: (pt: Float64Array, params: Float64Array, modeOdd: number) => Float64Array;
   surface_normal_aspheric_rt10_batch: (points: Float64Array, count: number, params: Float64Array, modeOdd: number) => Float64Array;
+  surface_normal_qcon_surface?: (pt: Float64Array, params: Float64Array, modeOdd: number) => Float64Array;
+  surface_normal_qcon_surface_batch?: (points: Float64Array, count: number, params: Float64Array, modeOdd: number) => Float64Array;
   batch_mat3_mul_vec3: (mat: Float64Array, vecs: Float64Array, count: number) => Float64Array;
   transform_ray_to_local_batch: (pos: Float64Array, dir: Float64Array, origin: Float64Array, invMat: Float64Array, count: number) => Float64Array;
   transform_point_to_global_batch: (points: Float64Array, origin: Float64Array, rotMat: Float64Array, count: number) => Float64Array;
@@ -322,8 +326,12 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
         const api: RustRayTracingWasm = {
           intersect_aspheric_rt10: mod.intersect_aspheric_rt10,
           intersect_aspheric_rt10_batch: mod.intersect_aspheric_rt10_batch,
+          intersect_qcon_surface: mod.intersect_qcon_surface,
+          intersect_qcon_surface_batch: mod.intersect_qcon_surface_batch,
           surface_normal_aspheric_rt10: mod.surface_normal_aspheric_rt10,
           surface_normal_aspheric_rt10_batch: mod.surface_normal_aspheric_rt10_batch,
+          surface_normal_qcon_surface: mod.surface_normal_qcon_surface,
+          surface_normal_qcon_surface_batch: mod.surface_normal_qcon_surface_batch,
           batch_mat3_mul_vec3: mod.batch_mat3_mul_vec3,
           transform_ray_to_local_batch: mod.transform_ray_to_local_batch,
           transform_point_to_global_batch: mod.transform_point_to_global_batch,

@@ -196,6 +196,13 @@ type ImageHeightSolveOptions = {
     validationTraceBackend?: 'ts' | 'rust';
     disableSolveCache?: boolean;
     disableWarmStartCache?: boolean;
+    precomputedParaxial?: any;
+    precomputedSurfaceOrigins?: any[];
+    precomputedImageSurfaceIndex?: number;
+    precomputedStopInfo?: any;
+    precomputedStopCenter3d?: any;
+    precomputedParaxialOnlyModel?: boolean;
+    precomputedSolveScopeKey?: string;
 };
 
 // Helper function to normalize hit points
@@ -253,7 +260,7 @@ export function clearRayRendererCaches(): void {
     try { imageHeightWarmStartCache.clear(); } catch (_) {}
 }
 
-function buildOpticalRowsSignature(opticalSystemRows) {
+export function buildOpticalRowsSignature(opticalSystemRows) {
     if (!Array.isArray(opticalSystemRows)) return 'no-rows';
     return opticalSystemRows
         .map((row, index) => `${index}:${stableSerializeForCache(row ?? null)}`)
@@ -2884,13 +2891,17 @@ export function convertImageHeightToEffectiveObject(
         }
         return 0;
     })();
-    const paraxialOnlyModel = isParaxialOnlyImageHeightModel(opticalSystemRows);
+    const paraxialOnlyModel = options?.precomputedParaxialOnlyModel === true
+        ? true
+        : options?.precomputedParaxialOnlyModel === false
+            ? false
+            : isParaxialOnlyImageHeightModel(opticalSystemRows);
     const skipTsValidation = options?.skipTsValidation === true;
     const validationTraceBackend: 'ts' | 'rust' = options?.validationTraceBackend === 'rust' ? 'rust' : 'ts';
     const disableSolveCache = options?.disableSolveCache === true;
     const disableWarmStartCache = options?.disableWarmStartCache === true;
     const validationMode = skipTsValidation ? 'rust-only' : `rust-${validationTraceBackend}-validated`;
-    const solveScopeKey = buildImageHeightSolveScopeKey(opticalSystemRows, wavelengthUm, conjugateType, validationMode);
+    const solveScopeKey = String(options?.precomputedSolveScopeKey || buildImageHeightSolveScopeKey(opticalSystemRows, wavelengthUm, conjugateType, validationMode));
     const cacheKey = disableSolveCache ? null : [
         buildOpticalRowsSignature(opticalSystemRows),
         stableSerializeForCache(obj),
@@ -2914,14 +2925,18 @@ export function convertImageHeightToEffectiveObject(
     };
 
     try {
-        const paraxial = calculateParaxialData(opticalSystemRows, wavelengthUm);
+        const paraxial = options?.precomputedParaxial || calculateParaxialData(opticalSystemRows, wavelengthUm);
         if (!paraxial) throw new Error('paraxial null');
 
-        const imageSurfaceIndex = findImageSurfaceIndex(opticalSystemRows);
-        const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+        const imageSurfaceIndex = Number.isInteger(options?.precomputedImageSurfaceIndex)
+            ? Number(options.precomputedImageSurfaceIndex)
+            : findImageSurfaceIndex(opticalSystemRows);
+        const surfaceOrigins = Array.isArray(options?.precomputedSurfaceOrigins)
+            ? options.precomputedSurfaceOrigins
+            : calculateSurfaceOrigins(opticalSystemRows);
         const imageSurfaceInfo = surfaceOrigins?.[imageSurfaceIndex] || null;
-        const stopInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
-        const stopCenter3d = extractStopCenter3d(stopInfo);
+        const stopInfo = options?.precomputedStopInfo || findStopSurface(opticalSystemRows, surfaceOrigins);
+        const stopCenter3d = options?.precomputedStopCenter3d || extractStopCenter3d(stopInfo);
         const imageHeightSolveContext = {
             surfaceOrigins,
             stopInfo,

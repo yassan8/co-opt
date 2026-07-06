@@ -177,7 +177,7 @@ import './optimization/suggest-design-intent.ts';
 import './tools/benchmark-tfmtf.ts';
 
 // Analysis modules
-import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, showMagnificationChromaticAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene, runSpotParityDiagnostics } from './analysis/optical-analysis.ts';
+import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, showMagnificationChromaticAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene, runSpotParityDiagnostics, preloadTransverseAberrationModules } from './analysis/optical-analysis.ts';
 
 // Performance monitoring (削除されたファイルなのでコメントアウト)
 // import { performanceMonitor } from './performance-monitor.ts';
@@ -661,6 +661,16 @@ async function initializeApplication() {
             rayCount = Math.max(9, Math.min(10001, Math.round(rayCount)));
             await showTransverseAberrationDiagram({ rayCount });
         };
+        window.setTimeout(() => {
+            try {
+                preloadTransverseAberrationModules();
+            } catch (_) {}
+        }, 0);
+        window.setTimeout(() => {
+            try {
+                // Intentionally disabled: this warm-up can block first TA run via shared promise.
+            } catch (_) {}
+        }, 0);
         window['showLongitudinalAberrationDiagram'] = showLongitudinalAberrationDiagram;
         window['showMagnificationChromaticAberrationDiagram'] = showMagnificationChromaticAberrationDiagram;
         window['showAstigmatismDiagram'] = showAstigmatismDiagram;

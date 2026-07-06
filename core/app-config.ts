@@ -46,7 +46,7 @@ export const APP_CONFIG: AppConfig = {
     DIRECTIONAL_LIGHT_POSITION: { x: -100, y: 0, z: -100 },
     DEFAULT_RAY_COUNT: 5,
     DEFAULT_SPOT_DIAGRAM_RAYS: 128,
-    DEFAULT_TRANSVERSE_RAYS: 51
+    DEFAULT_TRANSVERSE_RAYS: 21
 };
 
 // =============================================================================

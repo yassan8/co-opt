@@ -27,6 +27,12 @@
  */
 export function plotTransverseAberration(containerId, aberrationData, options = {}) {
     console.log('📊 横収差図作成開始');
+    const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
+    const profileEnabled = !!(
+        (options && typeof options === 'object' && options.profileTransverse === true) ||
+        (typeof globalThis !== 'undefined' && globalThis.__COOPT_PROFILE_TRANSVERSE === true)
+    );
+    const totalStartMs = profileEnabled ? nowMs() : 0;
     console.log('📊 [DEBUG] meridionalData数:', aberrationData?.meridionalData?.length);
     console.log('📊 [DEBUG] sagittalData数:', aberrationData?.sagittalData?.length);
     console.log('📊 [DEBUG] aberrationData詳細:', aberrationData);
@@ -65,6 +71,10 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
     };
     
     const plotOptions = { ...defaultOptions, ...options };
+    const formatBackendLabel = (data) => {
+        const backend = String(data?.backend || data?.metadata?.backend || '').trim();
+        return backend || 'unknown-backend';
+    };
 
     const parseNumber = (v) => {
         const n = Number(v);
@@ -118,6 +128,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
         if (fieldIndices.length === 0) {
             throw new Error('No transverse aberration series were available to plot.');
         }
+        const backendLabel = formatBackendLabel(aberrationData);
 
         const rowCount = fieldIndices.length;
         const leftDomain = [0.08, 0.47];
@@ -130,7 +141,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
         const fixedScaleMm = Math.abs(Number(plotOptions.fixedScaleMm)) > 0 ? Math.abs(Number(plotOptions.fixedScaleMm)) : 0.05;
         const layout = {
             title: {
-                text: plotOptions.title,
+                text: `${plotOptions.title} [${backendLabel}]`,
                 font: { size: 18 }
             },
             autosize: true,
@@ -283,12 +294,17 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
             });
         });
 
+        const plotStartMs = profileEnabled ? nowMs() : 0;
         plotlyRef.newPlot(container, traces, layout, {
             responsive: true,
             displayModeBar: true,
             modeBarButtonsToRemove: ['pan2d', 'lasso2d'],
             displaylogo: false
         });
+        if (profileEnabled) {
+            console.log(`⏱️ [TA Profile][Plotly] newPlot=${(nowMs() - plotStartMs).toFixed(2)}ms traces=${traces.length} fields=${fieldIndices.length} wavelengths=${wavelengthValues.length}`);
+            console.log(`⏱️ [TA Profile][Plotly] total=${(nowMs() - totalStartMs).toFixed(2)}ms`);
+        }
 
         if (typeof containerId === 'string') {
             updateAberrationInfoPanel(aberrationData, containerId);

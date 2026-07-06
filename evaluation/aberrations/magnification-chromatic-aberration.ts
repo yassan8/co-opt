@@ -403,29 +403,40 @@ export async function calculateMagnificationChromaticAberrationData(
         }
 
         await preloadRustRayTracingWasm();
-        const { runNativeSpotRaytrace } = await import('../../src/desktop/ipc/client.ts');
         const {
-            traceChiefRayLocalImagePointForObject,
-            convertImageHeightToEffectiveObject,
+            generateRayStartPointsForObject,
         } = await import('../../optical/ray-renderer.ts');
+        const { traceRayEvalBatchSummary } = await import('../../raytracing/core/ray-tracing.ts');
+        const { calculateParaxialData } = await import('../../raytracing/core/ray-paraxial.ts');
 
-        const tracedObjectRows = imageHeightMode
-            ? objectRowsNativeLike.map((obj) => {
-                const effectiveObj = convertImageHeightToEffectiveObject(
-                    obj,
-                    opticalSystemRows,
-                    referenceWavelength,
-                    imageHeightConjugateType === 'finite' ? 'finite' : 'infinite',
-                    {
-                        skipTsValidation: true,
-                        validationTraceBackend: 'rust',
-                    },
-                );
-                return effectiveObj && effectiveObj !== obj ? effectiveObj : obj;
-            })
-            : objectRowsNativeLike;
+        // For LCA in ImageHeight mode, avoid per-point nonlinear back-solve.
+        // Convert target image heights to a stable paraxial angle sweep once.
+        const tracedObjectRows = (() => {
+            if (!imageHeightMode) return objectRowsNativeLike;
+            const paraxial = calculateParaxialData(opticalSystemRows, referenceWavelength);
+            const focalLength = Number(paraxial?.focalLength);
+            const effectiveFocalLength = (Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12)
+                ? Math.abs(focalLength)
+                : 1;
+            return sortedFieldValues.map((sample, index) => {
+                const yMm = Number(sample);
+                const thetaDeg = Math.atan2(Number.isFinite(yMm) ? yMm : 0, effectiveFocalLength) * (180 / Math.PI);
+                return {
+                    id: `Field-${index}`,
+                    name: `Field-${index}`,
+                    position: 'Angle',
+                    xHeightAngle: 0,
+                    yHeightAngle: thetaDeg,
+                    x: 0,
+                    y: thetaDeg,
+                    __cooptImageHeightTarget: { x: 0, y: Number.isFinite(yMm) ? yMm : 0 },
+                    __cooptLcaImageHeightParaxialAngleDeg: thetaDeg,
+                };
+            });
+        })();
 
         const perWavelengthHeights = new Map<number, Array<number | null>>();
+        const perWavelengthTraceStats = new Map<number, { attempted: number; hit: number }>();
         const stopCenterMode = chiefRayMode.startsWith('stop-center');
         const beamAveragedMode = chiefRayMode.startsWith('beam-centroid') || chiefRayMode.startsWith('beam-midpoint');
         const stopCenterExactOnly = stopCenterMode;
@@ -434,74 +445,84 @@ export async function calculateMagnificationChromaticAberrationData(
         const lcaRayCount = requestedRayCount ?? defaultRayCount;
         const lcaRingCount = requestedRingCount ?? defaultRingCount;
         const lcaPattern = (stopCenterMode || beamAveragedMode) ? 'annular' : 'cross';
+        const traceConjugateType = imageHeightMode
+            ? (imageHeightConjugateType === 'finite' ? 'finite' : 'infinite')
+            : detectConjugateType(opticalSystemRows);
+        const traceOptions = {
+            useRustWasm: true,
+            requireRustWasm: true,
+            disableWasmRayTracing: false,
+            allowNonStrict: true,
+        } as any;
+
+        const traceChiefImageHeightMm = (obj: any, wl: number): number | null => {
+            const starts = generateRayStartPointsForObject(
+                obj,
+                opticalSystemRows,
+                1,
+                null,
+                {
+                    pattern: 'cross',
+                    annularRingCount: 1,
+                    wavelengthUm: wl,
+                    conjugateType: traceConjugateType,
+                    aimThroughStop: true,
+                    useChiefRayAnalysis: true,
+                    allowStopBasedOriginSolve: true,
+                    originSolveTraceBackend: 'rust',
+                    strictChiefDirectionSolve: true,
+                    targetSurfaceIndex: imageSurfaceIndex,
+                    skipImageHeightTsValidation: true,
+                    imageHeightValidationTraceBackend: 'rust',
+                },
+            );
+            const ray = Array.isArray(starts) && starts.length > 0 ? starts[0] : null;
+            const startP = ray?.startP;
+            const dir = ray?.dir;
+            if (!startP || !dir) return null;
+            const batch = [{
+                wavelength: Number(wl),
+                pos: {
+                    x: Number(startP?.x) || 0,
+                    y: Number(startP?.y) || 0,
+                    z: Number(startP?.z) || 0,
+                },
+                dir: {
+                    x: Number(dir?.x) || 0,
+                    y: Number(dir?.y) || 0,
+                    z: Number(dir?.z) || 1,
+                },
+            }];
+            const summaries = traceRayEvalBatchSummary(
+                opticalSystemRows,
+                batch,
+                1.0,
+                imageSurfaceIndex,
+                traceOptions,
+            );
+            const hitY = Number(Array.isArray(summaries) ? summaries[0]?.hitPoint?.y : NaN);
+            return Number.isFinite(hitY) ? (hitY * mirrorSign) : null;
+        };
+
         for (let wi = 0; wi < wavelengthCandidates.length; wi++) {
             const wl = wavelengthCandidates[wi];
             const imageHeights = new Array<number | null>(sortedFieldValues.length).fill(null);
-            if (stopCenterMode && stopCenterExactOnly) {
-                for (let fi = 0; fi < sortedFieldValues.length; fi++) {
-                    const obj = tracedObjectRows[fi] || {
-                        id: `Field-${fi}`,
-                        name: `Field-${fi}`,
-                        position: 'Angle',
-                        xHeightAngle: 0,
-                        yHeightAngle: sortedFieldValues[fi],
-                    };
-                    const localHit = traceChiefRayLocalImagePointForObject(
-                        opticalSystemRows,
-                        obj,
-                        wl,
-                        {
-                            traceBackend: 'rust',
-                            conjugateType: imageHeightConjugateType === 'finite' ? 'finite' : 'infinite',
-                            imageHeightValidationTraceBackend: 'rust',
-                        },
-                    );
-                    const yLocal = Number(localHit?.y);
-                    imageHeights[fi] = Number.isFinite(yLocal) ? (yLocal * mirrorSign) : null;
-                }
-            } else {
-                const sourceRowsForWl = defaultLcaSourceRows(wl);
-                const spotResponse = await runNativeSpotRaytrace({
-                    opticalSystemRows,
-                    sourceRows: sourceRowsForWl,
-                    objectRows: tracedObjectRows,
-                    surfaceIndex: imageSurfaceIndex,
-                    rayCount: lcaRayCount,
-                    ringCount: lcaRingCount,
-                    pattern: lcaPattern,
-                    wavelengthMode: 'primary',
-                    forceRustWasm: true,
-                });
-                const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
-                for (const s of series) {
-                    const objectIndex = Number(s?.objectIndex);
-                    const idx = Number.isInteger(objectIndex)
-                        ? objectIndex
-                        : parseFieldIndex(String(s?.label || ''));
-                    if (!Number.isInteger(idx) || idx < 0 || idx >= imageHeights.length) continue;
-                    imageHeights[idx] = selectImageHeightMm(s);
-                }
-                if (stopCenterMode) {
-                    for (let fi = 0; fi < imageHeights.length; fi++) {
-                        if (Number.isFinite(Number(imageHeights[fi]))) continue;
-                        const obj = tracedObjectRows[fi];
-                        if (!obj) continue;
-                        const localHit = traceChiefRayLocalImagePointForObject(
-                            opticalSystemRows,
-                            obj,
-                            wl,
-                            {
-                                traceBackend: 'rust',
-                                conjugateType: imageHeightConjugateType === 'finite' ? 'finite' : 'infinite',
-                                imageHeightValidationTraceBackend: 'rust',
-                            },
-                        );
-                        const yLocal = Number(localHit?.y);
-                        imageHeights[fi] = Number.isFinite(yLocal) ? (yLocal * mirrorSign) : null;
-                    }
-                }
+            for (let fi = 0; fi < imageHeights.length; fi++) {
+                const obj = tracedObjectRows[fi] || {
+                    id: `Field-${fi}`,
+                    name: `Field-${fi}`,
+                    position: 'Angle',
+                    xHeightAngle: 0,
+                    yHeightAngle: sortedFieldValues[fi],
+                };
+                const yLocal = traceChiefImageHeightMm(obj, wl);
+                imageHeights[fi] = Number.isFinite(Number(yLocal)) ? Number(yLocal) : null;
             }
             perWavelengthHeights.set(wl, imageHeights);
+            perWavelengthTraceStats.set(wl, {
+                attempted: imageHeights.length,
+                hit: imageHeights.filter((v) => Number.isFinite(Number(v))).length,
+            });
 
             const p = 10 + (70 * (wi + 1)) / Math.max(1, wavelengthCandidates.length);
             try { onProgress?.({ percent: p, message: `Tracing λ=${(wl * 1000).toFixed(1)}nm (Rust/WASM)...` }); } catch (_) {}
@@ -548,6 +569,8 @@ export async function calculateMagnificationChromaticAberrationData(
                 finiteCount,
                 maxAbsMm: maxAbs,
                 maxAbsUm: maxAbs * 1000,
+                attemptedRays: Number(perWavelengthTraceStats.get(wl)?.attempted || 0),
+                hitRays: Number(perWavelengthTraceStats.get(wl)?.hit || 0),
             };
         });
 
@@ -561,7 +584,7 @@ export async function calculateMagnificationChromaticAberrationData(
             imageSurfaceIndex,
             dataByWavelength,
             meta: {
-                source: 'typescript-spot-series-native-like',
+                source: 'typescript-render-raytrace-native-like',
                 requireRustWasm,
                 sourceRowCount: Array.isArray(sourceRows) ? sourceRows.length : 0,
                 finiteSystem,

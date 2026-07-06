@@ -6466,7 +6466,10 @@ function setupMagnificationChromaticAberrationButton(): void {
             } catch (_) {}
         };
 
-        w.showMagnificationChromaticAberrationDiagram({ onProgress });
+        const chiefRayEl = document.getElementById('mca-chief-ray-definition') as HTMLSelectElement | null;
+        const chiefRayDefinition = (chiefRayEl && chiefRayEl.value) ? chiefRayEl.value : 'stop-center';
+
+        w.showMagnificationChromaticAberrationDiagram({ onProgress, chiefRayDefinition });
     });
 }
 

@@ -25,28 +25,17 @@ function getWavelengthColor(wavelength) {
 
 function sanitizeLcaSeries(displacements: any[], fieldValues: any[]) {
     const n = Math.min(Array.isArray(displacements) ? displacements.length : 0, Array.isArray(fieldValues) ? fieldValues.length : 0);
-    const pairs: Array<{ x: number | null; y: number }> = [];
+    const outX: Array<number | null> = [];
+    const outY: Array<number | null> = [];
     for (let i = 0; i < n; i++) {
         const y = Number(fieldValues[i]);
         if (!Number.isFinite(y)) continue;
         const xRaw = displacements[i];
         const x = (typeof xRaw === 'number' && Number.isFinite(xRaw)) ? xRaw : null;
-        pairs.push({ x, y });
-    }
-    if (pairs.length < 2) return { x: [] as number[], y: [] as number[] };
-
-    // Keep deterministic ordering on the vertical axis.
-    pairs.sort((a, b) => a.y - b.y);
-
-    const outX: number[] = [];
-    const outY: number[] = [];
-    for (let i = 0; i < pairs.length; i++) {
-        const x = pairs[i].x;
-        const y = pairs[i].y;
-        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-        outX.push(Number(x));
+        outX.push(x);
         outY.push(y);
     }
+    if (outX.length < 2) return { x: [] as Array<number | null>, y: [] as Array<number | null> };
     return { x: outX, y: outY };
 }
 
@@ -104,12 +93,13 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
     const effectiveMaxY = Number.isFinite(maxY) && maxY > 0 ? maxY : maxField;
 
     const referencePairs = finitePairs(yAxisValues.map(() => 0), yAxisValues);
+    const referenceColor = getWavelengthColor(referenceWavelength);
     const referenceTrace = {
         x: referencePairs.x,
         y: referencePairs.y,
-        name: `d-line ${(referenceWavelength * 1000).toFixed(1)}nm`,
+        name: `Primary ${(referenceWavelength * 1000).toFixed(1)}nm`,
         mode: 'lines',
-        line: { color: '#666', width: 1, dash: 'dash' }
+        line: { color: referenceColor, width: 2 }
     };
     if (referencePairs.x.length >= 2) traces.push(referenceTrace);
 
@@ -138,6 +128,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
             y: pairs.y,
             name: `λ=${wavelengthNm}nm (max ${maxAbsUm.toFixed(3)}µm)`,
             mode: 'lines',
+            connectgaps: false,
             line: { color, width: 2 }
         });
     });
@@ -153,7 +144,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
     }
 
     const layout: any = {
-        title: `Lateral Chromatic Aberration (d-line reference) [${backendLabel}]`,
+        title: `Lateral Chromatic Aberration (primary reference) [${backendLabel}]`,
         xaxis: {
             title: 'Lateral Displacement (mm)',
             range: [xMinPlot, xMaxPlot]
