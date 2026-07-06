@@ -55,6 +55,11 @@ jobs:
       - name: Build GitHub Pages app
         run: npm run build:pages
 
+      - name: Remove invalid trailing-dot files
+        run: |
+          echo "Scanning dist for trailing-dot filenames..."
+          find dist -type f -name '*.' -print -delete
+
       - name: Detect Pages availability
         id: pages_check
         uses: actions/github-script@v7
