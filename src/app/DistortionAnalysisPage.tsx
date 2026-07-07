@@ -310,7 +310,37 @@ function applyDistortionHorizontalOffset(dataList: any[]): any[] {
       return Number.isFinite(value) ? (value - offset) : null;
     });
 
-    const shiftedWithZeroAtIH0 = shiftedX.map((x: any, i: number) => {
+    // Remove tiny floating residuals so the extrapolated y=0 intersection is exactly x=0.
+    let residualIntercept = 0;
+    {
+      const shiftedPairs: Array<{ y: number; x: number }> = [];
+      for (let i = 0; i < n; i++) {
+        const y = Number(ys[i]);
+        const x = Number(shiftedX[i]);
+        if (!Number.isFinite(y) || !Number.isFinite(x)) continue;
+        if (y <= 1e-12) continue;
+        shiftedPairs.push({ y, x });
+      }
+      shiftedPairs.sort((a, b) => a.y - b.y);
+      const s1 = shiftedPairs[0] || null;
+      const s2 = shiftedPairs[1] || null;
+      if (s1 && s2) {
+        const dy = s2.y - s1.y;
+        residualIntercept = Math.abs(dy) > 1e-15
+          ? s1.x + ((0 - s1.y) * (s2.x - s1.x)) / dy
+          : s1.x;
+      } else if (s1) {
+        residualIntercept = s1.x;
+      }
+      if (!Number.isFinite(residualIntercept)) residualIntercept = 0;
+    }
+
+    const correctedX = shiftedX.map((x: any) => {
+      const xv = Number(x);
+      return Number.isFinite(xv) ? (xv - residualIntercept) : null;
+    });
+
+    const shiftedWithZeroAtIH0 = correctedX.map((x: any, i: number) => {
       const y = Number(ys[i]);
       if (Number.isFinite(y) && Math.abs(y) <= 1e-12) return 0;
       const xv = Number(x);
@@ -324,6 +354,7 @@ function applyDistortionHorizontalOffset(dataList: any[]): any[] {
       meta: {
         ...(data?.meta || {}),
         distortionHorizontalOffsetPercent: offset,
+        distortionHorizontalOffsetResidualPercent: residualIntercept,
         distortionOffsetBasis: 'line-through-two-smallest-positive-ih-to-ih0',
         distortionOffsetPoint1IH: p1 ? p1.y : null,
         distortionOffsetPoint1DistPercent: p1 ? p1.x : null,

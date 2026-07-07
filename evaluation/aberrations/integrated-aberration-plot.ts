@@ -398,7 +398,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
                 for (let i = 0; i < pairCount; i += 1) {
                     const x = data.distortionPercent[i];
                     const y = Number(data.fieldValues[i]);
-                    if (!(typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= 50)) continue;
+                    if (!(typeof x === 'number' && Number.isFinite(x))) continue;
                     if (!Number.isFinite(y)) continue;
                     xValues.push(x);
                     yValues.push(y);

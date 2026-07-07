@@ -190,15 +190,11 @@ function deriveDisplayDistortionFieldValues(originalObjectRows: any[], fallbackF
         return Array.isArray(fallbackFieldValues) ? fallbackFieldValues : [];
     }
 
-    let minHeight = Math.min(...heights);
-    let maxHeight = Math.max(...heights);
-    if (minHeight <= 0) {
-        minHeight = 0.001;
-        if (maxHeight < minHeight) maxHeight = minHeight;
-    }
+    const minHeight = 0;
+    const maxHeight = Math.max(0, ...heights.map((value) => Math.abs(value)));
 
     if (sampleCount === 1 || minHeight === maxHeight) {
-        return [parseFloat(maxHeight.toFixed(6))];
+        return [parseFloat(minHeight.toFixed(6))];
     }
 
     return Array.from({ length: sampleCount }, (_, index) => {
@@ -207,12 +203,14 @@ function deriveDisplayDistortionFieldValues(originalObjectRows: any[], fallbackF
     });
 }
 
-function deriveIntegratedDistortionFieldValues(objectRows: any[]): { fieldValues: number[]; heightMode: boolean } {
+function deriveIntegratedDistortionFieldValues(objectRows: any[]): { fieldValues: number[]; heightMode: boolean; imageHeightMode: boolean } {
     const rows = Array.isArray(objectRows) ? objectRows : [];
     const tags = rows
-        .map((row) => String(row?.position ?? row?.fieldType ?? row?.field_type ?? row?.field ?? row?.type ?? '').toLowerCase())
+        .map((row) => String(row?.__cooptOriginalPosition ?? row?.position ?? row?.fieldType ?? row?.field_type ?? row?.field ?? row?.type ?? '').toLowerCase())
         .filter(Boolean);
+    const imageHeightMode = tags.some((tag) => tag.includes('imageheight'));
     const mode = (() => {
+        if (imageHeightMode) return 'height';
         if (tags.some((tag) => tag.includes('rect') || tag.includes('rectangle') || tag.includes('height'))) return 'height';
         if (tags.some((tag) => tag.includes('angle'))) return 'angle';
         const hasNumericHeight = rows.some((row) => {
@@ -223,24 +221,26 @@ function deriveIntegratedDistortionFieldValues(objectRows: any[]): { fieldValues
     })();
     if (mode === 'height') {
         const heights = rows
-            .map((row: any) => parseFloat(row?.yHeight ?? row?.y ?? row?.height ?? row?.y_height ?? Number.NaN))
+            .map((row: any) => {
+                if (imageHeightMode) {
+                    const targetY = Number(row?.__cooptImageHeightTarget?.y ?? row?.__cooptImageHeightTargetY);
+                    if (Number.isFinite(targetY)) return targetY;
+                }
+                return parseFloat(row?.yHeight ?? row?.y ?? row?.height ?? row?.y_height ?? Number.NaN);
+            })
             .filter((value) => Number.isFinite(value));
-        if (!heights.length) return { fieldValues: [0.001], heightMode: true };
+        if (!heights.length) return { fieldValues: [0], heightMode: true, imageHeightMode };
 
-        let minHeight = Math.min(...heights);
-        let maxHeight = Math.max(...heights);
-        if (minHeight <= 0) {
-            minHeight = 0.001;
-            if (maxHeight < minHeight) maxHeight = minHeight;
-        }
-        if (minHeight === maxHeight) return { fieldValues: [minHeight], heightMode: true };
+        const minHeight = 0;
+        const maxHeight = Math.max(...heights.map((v) => Math.abs(v)));
+        if (maxHeight <= 0) return { fieldValues: [0], heightMode: true, imageHeightMode };
 
-        const pointCount = 10;
+        const pointCount = 21;
         const fieldValues = Array.from({ length: pointCount }, (_, index) => {
             const t = index / (pointCount - 1);
             return parseFloat((minHeight + (maxHeight - minHeight) * t).toFixed(6));
         });
-        return { fieldValues, heightMode: true };
+        return { fieldValues, heightMode: true, imageHeightMode };
     }
 
     let maxAngle = 0;
@@ -266,7 +266,7 @@ function deriveIntegratedDistortionFieldValues(objectRows: any[]): { fieldValues
         fieldValues.push(parseFloat(angle.toFixed(6)));
     }
     if (fieldValues[fieldValues.length - 1] !== maxAngle) fieldValues.push(maxAngle);
-    return { fieldValues, heightMode: false };
+    return { fieldValues, heightMode: false, imageHeightMode: false };
 }
 
 function sanitizeIntegratedDistortionSeries(seriesList: Array<{ wavelength: number; data: any }>): Array<{ wavelength: number; data: any }> {
@@ -275,15 +275,14 @@ function sanitizeIntegratedDistortionSeries(seriesList: Array<{ wavelength: numb
         const xs = Array.isArray(data?.distortionPercent) ? data.distortionPercent : [];
         const ys = Array.isArray(data?.fieldValues) ? data.fieldValues : [];
         const n = Math.min(xs.length, ys.length);
-        const outX: number[] = [];
-        const outY: number[] = [];
+        const outX: Array<number | null> = [];
+        const outY: Array<number | null> = [];
 
         for (let i = 0; i < n; i += 1) {
-            const xRaw = xs[i];
-            const x = (typeof xRaw === 'number' && Number.isFinite(xRaw) && Math.abs(xRaw) <= 50) ? xRaw : null;
             const y = Number(ys[i]);
             if (!Number.isFinite(y)) continue;
-            if (x === null) continue;
+            const xRaw = xs[i];
+            const x = (typeof xRaw === 'number' && Number.isFinite(xRaw)) ? xRaw : null;
             outX.push(x);
             outY.push(y);
         }
@@ -298,27 +297,34 @@ function sanitizeIntegratedDistortionSeries(seriesList: Array<{ wavelength: numb
         };
     }).filter((series) => {
         const xs = Array.isArray(series?.data?.distortionPercent) ? series.data.distortionPercent : [];
-        return xs.some((value: any) => typeof value === 'number' && Number.isFinite(value));
+        const ys = Array.isArray(series?.data?.fieldValues) ? series.data.fieldValues : [];
+        return xs.length > 0 && ys.length > 0 && xs.some((v: any) => typeof v === 'number' && Number.isFinite(v));
     });
 }
 
-function deriveIntegratedLcaFieldValues(objectRows: any[], pointCount = 21): { fieldValues: number[]; heightMode: boolean } {
+function deriveIntegratedLcaFieldValues(objectRows: any[], pointCount = 21): { fieldValues: number[]; heightMode: boolean; imageHeightMode: boolean } {
     const rows = Array.isArray(objectRows) ? objectRows : [];
     const pickTag = (row: any) => {
-        const raw = row?.position ?? row?.fieldType ?? row?.field_type ?? row?.field ?? row?.type;
+        const raw = row?.__cooptOriginalPosition ?? row?.position ?? row?.fieldType ?? row?.field_type ?? row?.field ?? row?.type;
         return (raw ?? '').toString().toLowerCase();
     };
     const tags = rows.map(pickTag).filter(Boolean);
     const hasRect = tags.some((tag) => tag.includes('rect') || tag.includes('rectangle'));
+    const hasImageHeight = tags.some((tag) => tag.includes('imageheight'));
     const hasHeight = tags.some((tag) => tag.includes('height'));
-    const heightMode = hasRect || hasHeight || (!tags.some((tag) => tag.includes('angle')) && rows.some((row) => {
+    const heightMode = hasImageHeight || hasRect || hasHeight || (!tags.some((tag) => tag.includes('angle')) && rows.some((row) => {
         const height = parseFloat(row?.yHeight ?? row?.y ?? Number.NaN);
         return Number.isFinite(height);
     }));
+    const imageHeightMode = hasImageHeight;
 
     const rawFieldValues = rows
         .map((row: any) => {
             if (heightMode) {
+                if (imageHeightMode) {
+                    const targetY = Number(row?.__cooptImageHeightTarget?.y ?? row?.__cooptImageHeightTargetY);
+                    if (Number.isFinite(targetY)) return targetY;
+                }
                 return parseFloat(row?.yHeight ?? row?.y ?? row?.yHeightAngle ?? Number.NaN);
             }
             return parseFloat(row?.yHeightAngle ?? row?.yFieldAngle ?? row?.yAngle ?? row?.fieldAngle ?? row?.y ?? Number.NaN);
@@ -327,23 +333,23 @@ function deriveIntegratedLcaFieldValues(objectRows: any[], pointCount = 21): { f
         .map((value) => Math.abs(value));
 
     if (rawFieldValues.length === 0) {
-        return { fieldValues: [], heightMode };
+        return { fieldValues: [], heightMode, imageHeightMode };
     }
 
     const maxFieldValue = Math.max(...rawFieldValues.map((value) => Number(value)));
     if (!Number.isFinite(maxFieldValue) || maxFieldValue <= 0) {
-        return { fieldValues: [], heightMode };
+        return { fieldValues: [], heightMode, imageHeightMode };
     }
 
     if (pointCount <= 1) {
-        return { fieldValues: [maxFieldValue], heightMode };
+        return { fieldValues: [maxFieldValue], heightMode, imageHeightMode };
     }
 
     const fieldValues = Array.from({ length: pointCount }, (_, index) => {
         const value = (maxFieldValue * index) / (pointCount - 1);
         return Number(value.toFixed(6));
     });
-    return { fieldValues, heightMode };
+    return { fieldValues, heightMode, imageHeightMode };
 }
 
 function inferAstigmatismObjectFieldMode(objectRows: any[]): 'angle' | 'height' {
@@ -4317,9 +4323,9 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         
         // Decide field sweep (object angles vs object heights) based on Object table setting
         const normalizedDistortionObjectRows = normalizeDistortionObjectRowsForImageHeight(objectRows, opticalSystemRows, sourceRows);
-        const { fieldValues, heightMode } = deriveIntegratedDistortionFieldValues(normalizedDistortionObjectRows);
+        const { fieldValues, heightMode, imageHeightMode: distortionImageHeightMode } = deriveIntegratedDistortionFieldValues(normalizedDistortionObjectRows);
         
-        // 各波長で歪曲収差を計算
+        // 各波長で歪曲収差を計算（chief-ray モード - standalone Distortion と同一）
         const distortionDataByWavelengthRaw = [];
         for (let wlIndex = 0; wlIndex < wavelengths.length; wlIndex++) {
             const wavelength = wavelengths[wlIndex];
@@ -4329,6 +4335,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
                 objectRows: normalizedDistortionObjectRows,
                 fieldSamples: fieldValues,
                 heightMode,
+                distortionMetric: 'chief-ray',
                 wavelength,
             } as any);
             if (distData) {
@@ -4338,11 +4345,124 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
                     data: {
                         ...distData,
                         fieldValues: deriveDisplayDistortionFieldValues(objectRows, responseFieldValues),
+                        meta: { ...(distData?.meta || {}), wavelength },
                     }
                 });
+                console.log(`[Distortion Raw] Wave ${wlIndex}: has distortionPercent=${!!distData.distortionPercent}, length=${Array.isArray(distData.distortionPercent) ? distData.distortionPercent.length : 'N/A'}`);
             }
         }
-        const distortionDataByWavelength = sanitizeIntegratedDistortionSeries(distortionDataByWavelengthRaw);
+        void distortionImageHeightMode;
+
+        // applyDistortionHorizontalOffset: DistortionAnalysisPage.tsx の正確なロジックをコピー
+        const applyIntegratedDistortionOffset = (seriesList: any[]) => {
+            return (Array.isArray(seriesList) ? seriesList : []).map((series) => {
+                const data = series?.data || {};
+                const xs = Array.isArray(data?.distortionPercent) ? data.distortionPercent : [];
+                const ys = Array.isArray(data?.fieldValues) ? data.fieldValues : [];
+                const n = Math.min(xs.length, ys.length);
+                if (n <= 0) return series;
+
+                // Offset basis: smallest positive IH point with finite distortion.
+                const finitePairs: Array<{ y: number; x: number }> = [];
+                for (let i = 0; i < n; i++) {
+                    const y = Number(ys[i]);
+                    const x = Number(xs[i]);
+                    if (!Number.isFinite(y) || !Number.isFinite(x)) continue;
+                    finitePairs.push({ y, x });
+                }
+                if (finitePairs.length === 0) {
+                    return series;
+                }
+
+                finitePairs.sort((a, b) => a.y - b.y);
+
+                const positivePairs = finitePairs.filter((p) => p.y > 1e-12);
+                const p1 = positivePairs.length > 0 ? positivePairs[0] : null;
+                const p2 = positivePairs.length > 1 ? positivePairs[1] : null;
+
+                let offset: number | null = null;
+                if (p1 && p2) {
+                    const dy = p2.y - p1.y;
+                    if (Math.abs(dy) > 1e-15) {
+                        offset = p1.x + ((0 - p1.y) * (p2.x - p1.x)) / dy;
+                    } else {
+                        offset = p1.x;
+                    }
+                } else if (p1) {
+                    offset = p1.x;
+                }
+
+                if (!(typeof offset === 'number' && Number.isFinite(offset))) {
+                    return series;
+                }
+
+                const shiftedX = xs.map((x: any) => {
+                    const value = Number(x);
+                    return Number.isFinite(value) ? (value - offset) : null;
+                });
+
+                // Remove tiny floating residuals so the extrapolated y=0 intersection is exactly x=0.
+                let residualIntercept = 0;
+                {
+                    const shiftedPairs: Array<{ y: number; x: number }> = [];
+                    for (let i = 0; i < n; i++) {
+                        const y = Number(ys[i]);
+                        const x = Number(shiftedX[i]);
+                        if (!Number.isFinite(y) || !Number.isFinite(x)) continue;
+                        if (y <= 1e-12) continue;
+                        shiftedPairs.push({ y, x });
+                    }
+                    shiftedPairs.sort((a, b) => a.y - b.y);
+                    const s1 = shiftedPairs[0] || null;
+                    const s2 = shiftedPairs[1] || null;
+                    if (s1 && s2) {
+                        const dy = s2.y - s1.y;
+                        residualIntercept = Math.abs(dy) > 1e-15
+                            ? s1.x + ((0 - s1.y) * (s2.x - s1.x)) / dy
+                            : s1.x;
+                    } else if (s1) {
+                        residualIntercept = s1.x;
+                    }
+                    if (!Number.isFinite(residualIntercept)) residualIntercept = 0;
+                }
+
+                const correctedX = shiftedX.map((x: any) => {
+                    const xv = Number(x);
+                    return Number.isFinite(xv) ? (xv - residualIntercept) : null;
+                });
+
+                const shiftedWithZeroAtIH0 = correctedX.map((x: any, i: number) => {
+                    const y = Number(ys[i]);
+                    if (Number.isFinite(y) && Math.abs(y) <= 1e-12) return 0;
+                    const xv = Number(x);
+                    return Number.isFinite(xv) ? xv : null;
+                });
+
+                return {
+                    ...series,
+                    data: {
+                        ...data,
+                        distortionPercent: shiftedWithZeroAtIH0,
+                        fieldValues: ys,
+                        meta: {
+                            ...(data?.meta || {}),
+                            distortionHorizontalOffsetPercent: offset,
+                            distortionHorizontalOffsetResidualPercent: residualIntercept,
+                            distortionOffsetBasis: 'line-through-two-smallest-positive-ih-to-ih0',
+                            distortionOffsetPoint1IH: p1 ? p1.y : null,
+                            distortionOffsetPoint1DistPercent: p1 ? p1.x : null,
+                            distortionOffsetPoint2IH: p2 ? p2.y : null,
+                            distortionOffsetPoint2DistPercent: p2 ? p2.x : null,
+                            ih0ForcedZeroAfterOffset: true,
+                        },
+                    },
+                };
+            });
+        };
+
+        const distortionDataByWavelength = sanitizeIntegratedDistortionSeries(
+            applyIntegratedDistortionOffset(distortionDataByWavelengthRaw)
+        );
         
         if (distortionDataByWavelength.length === 0) {
             throw new Error('Failed to calculate distortion for any wavelength');
@@ -4350,7 +4470,21 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
 
         // 4. Lateral Chromatic Aberration (LCA) データを計算
         console.log('📊 Calculating lateral chromatic aberration...');
-        const { fieldValues: lcaFieldValues, heightMode: lcaHeightMode } = deriveIntegratedLcaFieldValues(objectRows, 21);
+        const lcaNormalized = normalizeDistortionObjectRowsForImageHeight(objectRows, opticalSystemRows, sourceRows);
+        const { fieldValues: lcaFieldValues, heightMode: lcaHeightMode, imageHeightMode: lcaImageHeightMode } = deriveIntegratedLcaFieldValues(lcaNormalized, 21);
+
+        // Primary wavelength from Source table (not hardcoded)
+        const lcaReferenceWavelength = (() => {
+            const normalizeUm = (raw: any) => { const n = Number(raw); return (Number.isFinite(n) && n > 0) ? (n > 10 ? n / 1000 : n) : null; };
+            for (const row of Array.isArray(sourceRows) ? sourceRows : []) {
+                const wl = normalizeUm(row?.wavelength ?? row?.Wavelength);
+                if (wl === null) continue;
+                const flag = row?.primary ?? row?.Primary ?? row?.isPrimary ?? row?.['Primary Wavelength'];
+                const isPrimary = typeof flag === 'boolean' ? flag : String(flag ?? '').trim().toLowerCase();
+                if (isPrimary === true || isPrimary === 'true' || isPrimary === '1' || isPrimary === 'yes' || (typeof isPrimary === 'string' && isPrimary.includes('primary'))) return wl;
+            }
+            return wavelengths[0] ?? 0.5876;
+        })();
 
         const lcaData = lcaFieldValues.length > 0
             ? await runNativeMagnificationChromaticAberration({
@@ -4358,8 +4492,9 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
                 sourceRows,
                 fieldSamples: lcaFieldValues,
                 wavelengths,
-                referenceWavelength: 0.5876,
+                referenceWavelength: lcaReferenceWavelength,
                 heightMode: lcaHeightMode,
+                imageHeightMode: lcaImageHeightMode,
             } as any)
             : null;
         
