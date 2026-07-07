@@ -39,6 +39,49 @@ function sanitizeLcaSeries(displacements: any[], fieldValues: any[]) {
     return { x: outX, y: outY };
 }
 
+function smoothByAdjacentWindow(x: Array<number | null>, adjacentCount: number): Array<number | null> {
+    const n = Array.isArray(x) ? x.length : 0;
+    if (n < 3) return Array.isArray(x) ? x.slice() : [];
+    const k = Math.max(0, Math.floor(Number(adjacentCount) || 0));
+    if (k <= 0) return x.slice();
+
+    const out = x.slice();
+    for (let i = 1; i < n - 1; i++) {
+        let sum = 0;
+        let count = 0;
+        let leftCount = 0;
+        let rightCount = 0;
+
+        for (let d = 1; d <= k; d++) {
+            const li = i - d;
+            if (li >= 0) {
+                const v = x[li];
+                if (typeof v === 'number' && Number.isFinite(v)) {
+                    sum += v;
+                    count += 1;
+                    leftCount += 1;
+                }
+            }
+
+            const ri = i + d;
+            if (ri < n) {
+                const v = x[ri];
+                if (typeof v === 'number' && Number.isFinite(v)) {
+                    sum += v;
+                    count += 1;
+                    rightCount += 1;
+                }
+            }
+        }
+
+        if (leftCount > 0 && rightCount > 0 && count > 0) {
+            out[i] = sum / count;
+        }
+    }
+
+    return out;
+}
+
 function formatLcaBackendLabel(data: any): string {
     const backend = String(data?.backend || data?.meta?.backend || '').trim();
     const executionMode = String(data?.meta?.executionMode || '').trim();
@@ -63,8 +106,17 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
         : 0.5876;
     const backendLabel = formatLcaBackendLabel(data);
 
-    const xMin = Number.isFinite(Number(options.xMin)) ? Number(options.xMin) : -0.05;
-    const xMax = Number.isFinite(Number(options.xMax)) ? Number(options.xMax) : 0.05;
+    const legacyXMin = Number.isFinite(Number(options.xMin)) ? Number(options.xMin) : NaN;
+    const legacyXMax = Number.isFinite(Number(options.xMax)) ? Number(options.xMax) : NaN;
+    let xRange = Number.isFinite(Number(options.xRange))
+        ? Math.abs(Number(options.xRange))
+        : (Number.isFinite(legacyXMin) && Number.isFinite(legacyXMax)
+            ? Math.max(Math.abs(legacyXMin), Math.abs(legacyXMax))
+            : 0.04);
+    if (!Number.isFinite(xRange) || xRange <= 0) xRange = 0.04;
+    const xMin = -xRange;
+    const xMax = xRange;
+    const smoothingAdjacentPoints = Math.max(0, Math.floor(Number(options.smoothingAdjacentPoints) || 0));
 
     const traces: any[] = [];
 
@@ -112,19 +164,20 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
         if (displacements.length === 0) return;
         const pairs = sanitizeLcaSeries(displacements, yAxisValues);
         if (pairs.x.length < 2) return;
-        for (const x of pairs.x) {
+        const smoothedX = smoothByAdjacentWindow(pairs.x, smoothingAdjacentPoints);
+        for (const x of smoothedX) {
             const a = Math.abs(Number(x));
             if (Number.isFinite(a) && a > globalMaxAbsDisp) globalMaxAbsDisp = a;
         }
         const wavelengthNm = (wavelength * 1000).toFixed(1);
         const color = getWavelengthColor(wavelength);
-        const maxAbsUm = pairs.x.reduce((m, v) => {
+        const maxAbsUm = smoothedX.reduce((m, v) => {
             const a = Math.abs(Number(v));
             return Number.isFinite(a) && a > m ? a : m;
         }, 0) * 1000;
 
         traces.push({
-            x: pairs.x,
+            x: smoothedX,
             y: pairs.y,
             name: `λ=${wavelengthNm}nm (max ${maxAbsUm.toFixed(3)}µm)`,
             mode: 'lines',

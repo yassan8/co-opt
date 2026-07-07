@@ -164,6 +164,107 @@ function normalizeChiefRayMode(mode: any): string {
         .replace(/-+/g, '-');
 }
 
+function summarizeFiniteSeries(values: Array<number | null>) {
+    const finite = (Array.isArray(values) ? values : [])
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value));
+    if (finite.length === 0) {
+        return {
+            finiteCount: 0,
+            minMm: null,
+            maxMm: null,
+            meanMm: null,
+            spanMm: null,
+        };
+    }
+    const minMm = Math.min(...finite);
+    const maxMm = Math.max(...finite);
+    const meanMm = finite.reduce((sum, value) => sum + value, 0) / finite.length;
+    return {
+        finiteCount: finite.length,
+        minMm,
+        maxMm,
+        meanMm,
+        spanMm: maxMm - minMm,
+    };
+}
+
+function weightedMean(values: Array<{ y: number; w: number }>): number | null {
+    let sumW = 0;
+    let sumYW = 0;
+    for (const item of values) {
+        const y = Number(item?.y);
+        const w = Number(item?.w);
+        if (!Number.isFinite(y) || !Number.isFinite(w) || w <= 0) continue;
+        sumW += w;
+        sumYW += y * w;
+    }
+    if (!Number.isFinite(sumW) || sumW <= 0) return null;
+    return sumYW / sumW;
+}
+
+function annularAreaWeights(points: any[]): Array<{ y: number; w: number }> {
+    const samples = (Array.isArray(points) ? points : [])
+        .map((point) => {
+            const y = Number(point?.yUm);
+            const u = Number(point?.pupilU);
+            const v = Number(point?.pupilV);
+            if (!Number.isFinite(y)) return null;
+            const r = (Number.isFinite(u) && Number.isFinite(v)) ? Math.hypot(u, v) : Number.NaN;
+            return { y, r };
+        })
+        .filter((item: any) => !!item);
+    if (samples.length === 0) return [];
+
+    const hasFiniteRadius = samples.some((item: any) => Number.isFinite(item.r));
+    if (!hasFiniteRadius) {
+        return samples.map((item: any) => ({ y: Number(item.y), w: 1 }));
+    }
+
+    const bins = new Map<number, { radius: number; count: number }>();
+    for (const item of samples) {
+        const r = Number(item.r);
+        if (!Number.isFinite(r)) continue;
+        const key = Math.round(r * 1000) / 1000;
+        const prev = bins.get(key);
+        bins.set(key, {
+            radius: key,
+            count: (prev?.count || 0) + 1,
+        });
+    }
+
+    const radii = Array.from(bins.values())
+        .map((bin) => Number(bin.radius))
+        .filter((radius) => Number.isFinite(radius))
+        .sort((a, b) => a - b);
+    if (radii.length === 0) {
+        return samples.map((item: any) => ({ y: Number(item.y), w: 1 }));
+    }
+
+    const areaPerKey = new Map<number, number>();
+    for (let i = 0; i < radii.length; i++) {
+        const ri = radii[i];
+        const rPrev = i > 0 ? radii[i - 1] : 0;
+        const rNext = i + 1 < radii.length ? radii[i + 1] : 1;
+        const inner = i > 0 ? (rPrev + ri) * 0.5 : 0;
+        const outer = i + 1 < radii.length ? (ri + rNext) * 0.5 : 1;
+        const annularArea = Math.max(0, (outer * outer) - (inner * inner));
+        const count = Math.max(1, Number(bins.get(ri)?.count || 1));
+        areaPerKey.set(ri, annularArea / count);
+    }
+
+    return samples.map((item: any) => {
+        const r = Number(item.r);
+        if (!Number.isFinite(r)) return { y: Number(item.y), w: 1 };
+        const key = Math.round(r * 1000) / 1000;
+        const w = Number(areaPerKey.get(key));
+        return {
+            y: Number(item.y),
+            w: (Number.isFinite(w) && w > 0) ? w : 1,
+        };
+    });
+}
+
 export async function calculateMagnificationChromaticAberrationData(
     opticalSystemRows,
     fieldValues,
@@ -341,12 +442,11 @@ export async function calculateMagnificationChromaticAberrationData(
             return ((minY + maxY) * 0.5 / 1000) * mirrorSign;
         }
         if (mode.startsWith('beam-centroid')) {
-            const ys = points
-                .map((p: any) => Number(p?.yUm))
-                .filter((v: number) => Number.isFinite(v));
-            if (ys.length === 0) return null;
-            const mean = ys.reduce((a: number, b: number) => a + b, 0) / ys.length;
-            return (mean / 1000) * mirrorSign;
+            const weighted = annularAreaWeights(points);
+            if (weighted.length === 0) return null;
+            const mean = weightedMean(weighted);
+            if (!Number.isFinite(Number(mean))) return null;
+            return (Number(mean) / 1000) * mirrorSign;
         }
         // Native-like stop-center: prefer ray closest to pupil center (u,v) when available.
         const centerByPupil = points
@@ -387,7 +487,7 @@ export async function calculateMagnificationChromaticAberrationData(
                 wavelengths: wavelengthCandidates,
                 referenceWavelength,
                 heightMode,
-                chiefRayDefinition,
+                chiefRayDefinition: chiefRayMode,
             });
 
             if (!response || typeof response !== 'object') {
@@ -504,6 +604,76 @@ export async function calculateMagnificationChromaticAberrationData(
             return Number.isFinite(hitY) ? (hitY * mirrorSign) : null;
         };
 
+        const traceSeriesImageHeightMm = (obj: any, wl: number): number | null => {
+            const starts = generateRayStartPointsForObject(
+                obj,
+                opticalSystemRows,
+                lcaRayCount,
+                null,
+                {
+                    pattern: lcaPattern,
+                    annularRingCount: lcaRingCount,
+                    wavelengthUm: wl,
+                    conjugateType: traceConjugateType,
+                    aimThroughStop: stopCenterMode,
+                    useChiefRayAnalysis: stopCenterMode,
+                    allowStopBasedOriginSolve: stopCenterMode,
+                    originSolveTraceBackend: stopCenterMode ? 'rust' : 'ts',
+                    strictChiefDirectionSolve: stopCenterMode,
+                    targetSurfaceIndex: imageSurfaceIndex,
+                    skipImageHeightTsValidation: stopCenterMode,
+                    imageHeightValidationTraceBackend: stopCenterMode ? 'rust' : 'ts',
+                },
+            );
+            const rays = Array.isArray(starts) ? starts : [];
+            if (rays.length === 0) return null;
+
+            const batch = rays
+                .map((ray: any) => {
+                    const startP = ray?.startP;
+                    const dir = ray?.dir;
+                    if (!startP || !dir) return null;
+                    return {
+                        wavelength: Number(wl),
+                        pos: {
+                            x: Number(startP?.x) || 0,
+                            y: Number(startP?.y) || 0,
+                            z: Number(startP?.z) || 0,
+                        },
+                        dir: {
+                            x: Number(dir?.x) || 0,
+                            y: Number(dir?.y) || 0,
+                            z: Number(dir?.z) || 1,
+                        },
+                    };
+                })
+                .filter((entry: any) => !!entry);
+            if (batch.length === 0) return null;
+
+            const summaries = traceRayEvalBatchSummary(
+                opticalSystemRows,
+                batch,
+                1.0,
+                imageSurfaceIndex,
+                traceOptions,
+            );
+
+            const points = batch.map((_, index) => {
+                const hitY = Number(Array.isArray(summaries) ? summaries[index]?.hitPoint?.y : NaN);
+                if (!Number.isFinite(hitY)) return null;
+                const ray = rays[index] || {};
+                return {
+                    rayIndex: index,
+                    yUm: hitY * mirrorSign * 1000,
+                    pupilU: Number(ray?.planeCoords?.u),
+                    pupilV: Number(ray?.planeCoords?.v),
+                };
+            }).filter((entry: any) => !!entry);
+
+            if (points.length === 0) return null;
+            return selectImageHeightMm({ points });
+        };
+
         for (let wi = 0; wi < wavelengthCandidates.length; wi++) {
             const wl = wavelengthCandidates[wi];
             const imageHeights = new Array<number | null>(sortedFieldValues.length).fill(null);
@@ -515,7 +685,9 @@ export async function calculateMagnificationChromaticAberrationData(
                     xHeightAngle: 0,
                     yHeightAngle: sortedFieldValues[fi],
                 };
-                const yLocal = traceChiefImageHeightMm(obj, wl);
+                const yLocal = stopCenterExactOnly
+                    ? (traceChiefImageHeightMm(obj, wl) ?? traceSeriesImageHeightMm(obj, wl))
+                    : traceSeriesImageHeightMm(obj, wl);
                 imageHeights[fi] = Number.isFinite(Number(yLocal)) ? Number(yLocal) : null;
             }
             perWavelengthHeights.set(wl, imageHeights);
@@ -573,6 +745,25 @@ export async function calculateMagnificationChromaticAberrationData(
                 hitRays: Number(perWavelengthTraceStats.get(wl)?.hit || 0),
             };
         });
+        const absoluteHeightStats = dataByWavelength.map((entry) => {
+            const wl = Number(entry?.wavelength);
+            const stats = summarizeFiniteSeries(Array.isArray(entry?.imageHeights) ? entry.imageHeights : []);
+            return {
+                wavelength: wl,
+                ...stats,
+            };
+        });
+        const referenceHeightStats = summarizeFiniteSeries(referenceHeights);
+        const referenceMeanHeightMm = Number(referenceHeightStats.meanMm);
+        const absoluteShiftVsReferenceMean = absoluteHeightStats.map((entry) => {
+            const meanMm = Number(entry?.meanMm);
+            return {
+                wavelength: Number(entry?.wavelength),
+                meanShiftMm: (Number.isFinite(meanMm) && Number.isFinite(referenceMeanHeightMm))
+                    ? (meanMm - referenceMeanHeightMm)
+                    : null,
+            };
+        });
 
         try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
         return {
@@ -592,7 +783,11 @@ export async function calculateMagnificationChromaticAberrationData(
                 lcaPattern,
                 lcaRayCount,
                 lcaRingCount,
+                chiefRayMode,
                 displacementStats,
+                absoluteHeightStats,
+                referenceHeightStats,
+                absoluteShiftVsReferenceMean,
             },
             message: 'Computed via Rust/WASM ray tracing + Rust/WASM LCA reduction on Web'
         };

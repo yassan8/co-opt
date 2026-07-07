@@ -27,12 +27,6 @@
  */
 export function plotTransverseAberration(containerId, aberrationData, options = {}) {
     console.log('📊 横収差図作成開始');
-    const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
-    const profileEnabled = !!(
-        (options && typeof options === 'object' && options.profileTransverse === true) ||
-        (typeof globalThis !== 'undefined' && globalThis.__COOPT_PROFILE_TRANSVERSE === true)
-    );
-    const totalStartMs = profileEnabled ? nowMs() : 0;
     console.log('📊 [DEBUG] meridionalData数:', aberrationData?.meridionalData?.length);
     console.log('📊 [DEBUG] sagittalData数:', aberrationData?.sagittalData?.length);
     console.log('📊 [DEBUG] aberrationData詳細:', aberrationData);
@@ -294,17 +288,12 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
             });
         });
 
-        const plotStartMs = profileEnabled ? nowMs() : 0;
         plotlyRef.newPlot(container, traces, layout, {
             responsive: true,
             displayModeBar: true,
             modeBarButtonsToRemove: ['pan2d', 'lasso2d'],
             displaylogo: false
         });
-        if (profileEnabled) {
-            console.log(`⏱️ [TA Profile][Plotly] newPlot=${(nowMs() - plotStartMs).toFixed(2)}ms traces=${traces.length} fields=${fieldIndices.length} wavelengths=${wavelengthValues.length}`);
-            console.log(`⏱️ [TA Profile][Plotly] total=${(nowMs() - totalStartMs).toFixed(2)}ms`);
-        }
 
         if (typeof containerId === 'string') {
             updateAberrationInfoPanel(aberrationData, containerId);

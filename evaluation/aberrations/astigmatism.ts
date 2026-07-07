@@ -1036,40 +1036,8 @@ function buildTargetHitForFocusSearch(rayData, opticalSystemRows, targetSurfaceI
         };
     };
 
-    const originalRay = rayData?.originalRay && rayData?.originalRay?.pos && rayData?.originalRay?.dir
-        ? {
-            pos: { ...rayData.originalRay.pos },
-            dir: { ...rayData.originalRay.dir },
-            wavelength: Number(rayData?.originalRay?.wavelength ?? rayData?.wavelength)
-        }
-        : null;
-
-    if (originalRay && Number.isFinite(originalRay.wavelength)) {
-        const directHit = traceRayHitPoint(
-            opticalSystemRows,
-            originalRay,
-            1.0,
-            targetSurfaceIndex,
-            { ...RUST_RT_OPTIONS, __returnHitDirection: true }
-        );
-        if (directHit && Number.isFinite(directHit.x) && Number.isFinite(directHit.y) && Number.isFinite(directHit.z) &&
-            Number.isFinite(directHit.dx) && Number.isFinite(directHit.dy) && Number.isFinite(directHit.dz)) {
-            const targetLocal = toLocal({ x: directHit.x, y: directHit.y, z: directHit.z });
-            const dirLocal = toLocalDelta({ x: directHit.dx, y: directHit.dy, z: directHit.dz });
-            if (Number.isFinite(targetLocal.x) && Number.isFinite(targetLocal.y) && Number.isFinite(targetLocal.z) &&
-                Number.isFinite(dirLocal.x) && Number.isFinite(dirLocal.y) && Number.isFinite(dirLocal.z)) {
-                return {
-                    hx: targetLocal.x,
-                    hy: targetLocal.y,
-                    hz: targetLocal.z,
-                    dx: dirLocal.x,
-                    dy: dirLocal.y,
-                    dz: dirLocal.z,
-                };
-            }
-        }
-    }
-
+    // Use path-segment direction only (avoid re-tracing via originalRay, which is expensive
+    // and unnecessary: the outgoing segment direction is equivalent for a flat image surface).
     if (!rayData || !Array.isArray(rayData.segments) || rayData.segments.length === 0) {
         return null;
     }
@@ -1341,30 +1309,63 @@ function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex,
         return null;
     }
 
-    const searchRange = 10.0;
-    let zMin = referenceZ - searchRange;
-    let zMax = referenceZ + searchRange;
+    const coarseSampleCount = 201;
+    let chosen = null;
 
-    const coarseSamples = [];
-    const coarseSampleCount = 41;
-    let bestZ = referenceZ;
-    let bestRms = Infinity;
+    const scanCoarse = (rangeMm) => {
+        const zMinLocal = referenceZ - rangeMm;
+        const zMaxLocal = referenceZ + rangeMm;
+        const coarseSamplesLocal = [];
+        let bestZLocal = referenceZ;
+        let bestRmsLocal = Infinity;
+        let bestSampleIndex = -1;
 
-    for (let index = 0; index < coarseSampleCount; index++) {
-        const z = zMin + (zMax - zMin) * index / (coarseSampleCount - 1);
-        const rms = calculateRMSAtZFromHitsNativeLike(fanHits, chiefHit, z, meridional);
-        if (rms !== null) {
-            coarseSamples.push([z, rms]);
-            if (rms < bestRms) {
-                bestRms = rms;
-                bestZ = z;
+        for (let index = 0; index < coarseSampleCount; index++) {
+            const z = zMinLocal + (zMaxLocal - zMinLocal) * index / (coarseSampleCount - 1);
+            const rms = calculateRMSAtZFromHitsNativeLike(fanHits, chiefHit, z, meridional);
+            if (rms !== null) {
+                coarseSamplesLocal.push([z, rms, index]);
+                if (rms < bestRmsLocal) {
+                    bestRmsLocal = rms;
+                    bestZLocal = z;
+                    bestSampleIndex = index;
+                }
             }
+        }
+
+        return {
+            zMinLocal,
+            zMaxLocal,
+            coarseSamplesLocal,
+            bestZLocal,
+            bestRmsLocal,
+            bestSampleIndex
+        };
+    };
+
+    const searchRanges = [1.0, 2.0, 5.0, 10.0];
+    for (const rangeMm of searchRanges) {
+        const scan = scanCoarse(rangeMm);
+        if (!Number.isFinite(scan.bestRmsLocal) || scan.coarseSamplesLocal.length < 3) {
+            continue;
+        }
+        const edgeMargin = 2;
+        const onLowerEdge = scan.bestSampleIndex >= 0 && scan.bestSampleIndex <= edgeMargin;
+        const onUpperEdge = scan.bestSampleIndex >= (coarseSampleCount - 1 - edgeMargin);
+        chosen = scan;
+        if (!onLowerEdge && !onUpperEdge) {
+            break;
         }
     }
 
-    if (!Number.isFinite(bestRms) || coarseSamples.length < 3) {
+    if (!chosen || !Number.isFinite(chosen.bestRmsLocal) || chosen.coarseSamplesLocal.length < 3) {
         return null;
     }
+
+    let zMin = chosen.zMinLocal;
+    let zMax = chosen.zMaxLocal;
+    const coarseSamples = chosen.coarseSamplesLocal;
+    const bestZ = chosen.bestZLocal;
 
     coarseSamples.sort((left, right) => left[0] - right[0]);
     const bestIndex = coarseSamples.findIndex(([z]) => Math.abs(z - bestZ) < 1e-12);
@@ -1408,7 +1409,56 @@ function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex,
         iteration += 1;
     }
 
-    return (a + b) * 0.5;
+    // Safeguarded Newton refinement inside the bracket from golden-section search.
+    const evalRmsAt = (z) => calculateRMSAtZFromHitsNativeLike(fanHits, chiefHit, z, meridional);
+    const bracketMin = Math.min(a, b);
+    const bracketMax = Math.max(a, b);
+    let zNewton = (a + b) * 0.5;
+    let fNewton = evalRmsAt(zNewton);
+    if (!Number.isFinite(fNewton)) {
+        return zNewton;
+    }
+
+    const newtonIterations = 3;
+    for (let i = 0; i < newtonIterations; i++) {
+        const h = Math.max(1e-4, Math.min(1e-2, (bracketMax - bracketMin) * 0.25));
+        const zp = Math.min(bracketMax, zNewton + h);
+        const zm = Math.max(bracketMin, zNewton - h);
+        if (Math.abs(zp - zm) < 1e-12) break;
+
+        const fp = evalRmsAt(zp);
+        const fm = evalRmsAt(zm);
+        if (!Number.isFinite(fp) || !Number.isFinite(fm)) break;
+
+        const hEff = (zp - zm) * 0.5;
+        if (!Number.isFinite(hEff) || Math.abs(hEff) < 1e-10) break;
+        const d1 = (fp - fm) / (2 * hEff);
+        const d2 = (fp - 2 * fNewton + fm) / (hEff * hEff);
+
+        if (!Number.isFinite(d1) || !Number.isFinite(d2) || Math.abs(d2) < 1e-10) {
+            break;
+        }
+
+        let zNext = zNewton - d1 / d2;
+        if (!Number.isFinite(zNext)) break;
+        zNext = Math.min(bracketMax, Math.max(bracketMin, zNext));
+
+        const fNext = evalRmsAt(zNext);
+        if (!Number.isFinite(fNext)) break;
+        if (fNext > fNewton && Math.abs(zNext - zNewton) > 1e-6) {
+            break;
+        }
+
+        const step = Math.abs(zNext - zNewton);
+        zNewton = zNext;
+        fNewton = fNext;
+
+        if (step < 1e-6) {
+            break;
+        }
+    }
+
+    return zNewton;
 }
 
 /**
@@ -2121,6 +2171,20 @@ function getAstigObjectPositionTag(objectRow) {
     ).trim().toLowerCase();
 }
 
+function getAstigEffectivePositionTag(objectRow) {
+    return String(
+        objectRow?.__cooptEffectivePosition
+        ?? objectRow?.effectivePosition
+        ?? objectRow?.effective_position
+        ?? objectRow?.position
+        ?? objectRow?.fieldType
+        ?? objectRow?.field_type
+        ?? objectRow?.field
+        ?? objectRow?.type
+        ?? ''
+    ).trim().toLowerCase();
+}
+
 function inferAstigObjectFieldMode(objectRows) {
     const tags = (Array.isArray(objectRows) ? objectRows : [])
         .map((row) => getAstigObjectPositionTag(row))
@@ -2137,7 +2201,7 @@ function inferAstigObjectFieldMode(objectRows) {
     return 'angle';
 }
 
-function maybeInterpolateAngleObjectRowsForAstigWeb(objectRows, infiniteConjugate) {
+function maybeInterpolateAngleObjectRowsForAstigWeb(objectRows, infiniteConjugate, totalPoints = 51) {
     if (!infiniteConjugate || !Array.isArray(objectRows) || objectRows.length === 0) {
         return Array.isArray(objectRows) ? objectRows : [];
     }
@@ -2160,7 +2224,8 @@ function maybeInterpolateAngleObjectRowsForAstigWeb(objectRows, infiniteConjugat
         return objectRows;
     }
 
-    const subdivisions = 50;
+    const sampleCount = Math.max(2, Math.round(Number(totalPoints) || 51));
+    const subdivisions = sampleCount - 1;
     const out = [];
     for (let i = 0; i <= subdivisions; i++) {
         const angle = maxYAngle * i / subdivisions;
@@ -2215,6 +2280,7 @@ function maybeInterpolateHeightObjectRowsForAstigWeb(objectRows, totalPoints = 1
     const sampleCount = Math.max(3, Math.round(Number(totalPoints) || 17));
     const representativePosition = String(firstRow?.position ?? firstRow?.fieldType ?? 'Rectangle');
     const representativeOriginalPosition = firstRow?.__cooptOriginalPosition ?? firstRow?.position ?? firstRow?.fieldType ?? firstRow?.type ?? null;
+    const representativeEffectivePosition: string | null = firstRow?.__cooptEffectivePosition ?? null;
     const hasImageHeightTargets = sourceRows.some((entry) => !!entry?.row?.__cooptImageHeightTarget);
     const minTargetY = sourceRows[0].targetY;
     const maxTargetY = sourceRows[sourceRows.length - 1].targetY;
@@ -2251,7 +2317,7 @@ function maybeInterpolateHeightObjectRowsForAstigWeb(objectRows, totalPoints = 1
             ? interpolateAt(targetY, (row) => row?.__cooptImageHeightTarget?.x ?? row?.__cooptImageHeightTargetX ?? row?.xHeight ?? row?.x ?? 0)
             : interpolateAt(targetY, (row) => row?.xHeight ?? row?.x ?? row?.xHeightAngle ?? 0);
 
-        const nextRow = {
+        const nextRow: any = {
             name: `Field${index + 1}`,
             position: representativePosition,
             x: effectiveX,
@@ -2271,6 +2337,9 @@ function maybeInterpolateHeightObjectRowsForAstigWeb(objectRows, totalPoints = 1
             nextRow.__cooptImageHeightTarget = { x: targetX, y: targetY };
             nextRow.__cooptImageHeightTargetX = targetX;
             nextRow.__cooptImageHeightTargetY = targetY;
+        }
+        if (representativeEffectivePosition) {
+            nextRow.__cooptEffectivePosition = representativeEffectivePosition;
         }
 
         interpolatedRows.push(nextRow);
@@ -2554,8 +2623,8 @@ function buildNativeLikeRayStartsForAstig(
 
     const systemMode = detectSystemConjugateMode(opticalSystemRows);
     const infiniteConjugate = systemMode === 'angle';
-    const pos = String(objectRow?.position ?? objectRow?.fieldType ?? objectRow?.type ?? '').toLowerCase();
-    const positionType = pos.includes('angle') ? 'angle' : (pos.includes('point') ? 'point' : 'rectangle');
+    const effectivePos = getAstigEffectivePositionTag(objectRow);
+    const positionType = effectivePos.includes('angle') ? 'angle' : (effectivePos.includes('point') ? 'point' : 'rectangle');
 
     const annularInsideScale = pattern === 'annular' ? (Math.max(1, ringCount) / (Math.max(1, ringCount) + 1)) : 1;
     const effectiveRadius = Math.min(samplingRadius, samplingRadius * annularInsideScale);
@@ -2587,7 +2656,21 @@ function buildNativeLikeRayStartsForAstig(
             };
         }
 
-        if (infiniteConjugate && !isOnAxis) {
+        // Fast path for ImageHeight-converted rows: use the cached solved emission origin
+        // directly, skipping the expensive grid search (searchHighFieldOriginForTargetWeb).
+        const solvedChiefOrigin = objectRow?.__cooptImageHeightSolve?.chiefRay?.origin;
+        const hasSolvedOrigin = !isOnAxis
+            && solvedChiefOrigin
+            && Number.isFinite(Number(solvedChiefOrigin.x))
+            && Number.isFinite(Number(solvedChiefOrigin.y))
+            && Number.isFinite(Number(solvedChiefOrigin.z));
+        if (hasSolvedOrigin) {
+            emissionOrigin = {
+                x: Number(solvedChiefOrigin.x),
+                y: Number(solvedChiefOrigin.y),
+                z: Number(solvedChiefOrigin.z)
+            };
+        } else if (infiniteConjugate && !isOnAxis) {
             const targetSurfaceOrigin = surfaceOrigins?.[targetSurfaceIndex]?.origin || stopOrigin;
             emissionOrigin = searchHighFieldOriginForTargetWeb(
                 emissionOrigin,
@@ -2664,7 +2747,27 @@ function buildNativeLikeRayStartsForAstig(
             let bestHits = -1;
             const probeRayCount = Math.max(25, Math.min(121, rayCount));
             let bestMode = null;
+
+            // Early-exit fast path: if scale=1.0 with origin-solve gives ≥40% hits,
+            // skip the remaining 18 mode candidates entirely.
+            {
+                const fastStarts = buildCandidateRays(1.0, true, probeRayCount);
+                const fastHits = countRaysHittingSurfaceWeb(fastStarts, opticalSystemRows, targetSurfaceIndex, wavelengthUm);
+                if (fastHits >= Math.ceil(probeRayCount * 0.4)) {
+                    return {
+                        starts: buildCandidateRays(1.0, true, rayCount),
+                        refinedOrigin: { ...emissionOrigin },
+                        mode: { scale: 1.0, allowOriginSolve: true }
+                    };
+                }
+                // Record so the full search loop doesn't re-test this candidate.
+                bestHits = fastHits;
+                best = fastStarts;
+                bestMode = { scale: 1.0, allowOriginSolve: true };
+            }
+
             for (const [scale, allowOriginSolve] of modes) {
+                if (scale === 1.0 && allowOriginSolve) continue; // already tested above
                 const starts = buildCandidateRays(scale, allowOriginSolve, probeRayCount);
                 const hits = countRaysHittingSurfaceWeb(starts, opticalSystemRows, targetSurfaceIndex, wavelengthUm);
                 const continuityPenalty = (() => {
@@ -2743,10 +2846,12 @@ function resolveNativeLikeFieldSetting(objectRow, objectIndex, infiniteConjugate
     const label = String(objectRow?.id ?? `Object ${objectIndex + 1}`);
     const displayName = String(objectRow?.name ?? objectRow?.comment ?? label);
     const pos = getAstigObjectPositionTag(objectRow);
+    const effectivePosTag = String(objectRow?.__cooptEffectivePosition ?? '').trim().toLowerCase();
     const isImageHeightField = pos.includes('imageheight');
-    const isAngleField = pos.includes('angle') && !pos.includes('rect') && !pos.includes('height')
-        ? true
-        : !!infiniteConjugate && !pos.includes('rect') && !pos.includes('height');
+    const isAngleField = effectivePosTag.includes('angle')
+        || (pos.includes('angle') && !pos.includes('rect') && !pos.includes('height')
+            ? true
+            : !!infiniteConjugate && !pos.includes('rect') && !pos.includes('height'));
     const y = isImageHeightField
         ? Number(
             objectRow?.__cooptImageHeightTarget?.y
@@ -2822,6 +2927,7 @@ export async function calculateAstigmatismDataNativeLike(
     objectRows,
     targetSurfaceIndex,
     options: {
+        pointCount?: number;
         rayCount?: number;
         ringCount?: number;
         pattern?: 'grid' | 'cross' | 'annular';
@@ -2832,6 +2938,7 @@ export async function calculateAstigmatismDataNativeLike(
     } = {}
 ) {
     const {
+        pointCount,
         rayCount = 100,
         ringCount = 10,
         pattern = 'annular',
@@ -2874,11 +2981,18 @@ export async function calculateAstigmatismDataNativeLike(
     }
     const objectFieldMode = inferAstigObjectFieldMode(effectiveObjectRows);
     const isAngleField = objectFieldMode === 'angle';
+    const samplingPointCount = Number.isFinite(Number(pointCount))
+        ? Math.max(2, Math.min(201, Math.round(Number(pointCount))))
+        : null;
     effectiveObjectRows = isAngleField
-        ? maybeInterpolateAngleObjectRowsForAstigWeb(effectiveObjectRows, infiniteConjugate)
+        ? maybeInterpolateAngleObjectRowsForAstigWeb(
+            effectiveObjectRows,
+            infiniteConjugate,
+            samplingPointCount ?? 51
+        )
         : maybeInterpolateHeightObjectRowsForAstigWeb(
             effectiveObjectRows,
-            resolveNativeLikeHeightInterpolationPointCount(effectiveObjectRows)
+            samplingPointCount ?? resolveNativeLikeHeightInterpolationPointCount(effectiveObjectRows)
         );
 
     const wavelengths = collectSpotWavelengthsForAstigWeb(sourceRows, wavelengthMode);
@@ -2994,19 +3108,6 @@ export async function calculateAstigmatismDataNativeLike(
     let primaryReferenceZ = null;
     let bestAxis = Infinity;
     const computedRows = [];
-    const previousFocusByWavelength = new Map();
-
-    const medianOr = (values, fallbackValue) => {
-        if (Array.isArray(values) && values.length > 0) {
-            const sorted = [...values].filter(v => Number.isFinite(v)).sort((a, b) => a - b);
-            if (sorted.length > 0) {
-                const n = sorted.length;
-                if ((n % 2) === 1) return sorted[Math.floor(n / 2)];
-                return 0.5 * (sorted[n / 2 - 1] + sorted[n / 2]);
-            }
-        }
-        return Number.isFinite(fallbackValue) ? fallbackValue : null;
-    };
 
     for (let index = 0; index < tracedSeries.length; index++) {
         const series = tracedSeries[index];
@@ -3071,52 +3172,9 @@ export async function calculateAstigmatismDataNativeLike(
             ringCount,
             rayCount
         );
-
-        // Native-compatible fallback path: if RMS-based focus is unstable/missing,
-        // reuse previous wavelength focus or fall back to median focus from all rays.
-        const merFocuses = [];
-        const sagFocuses = [];
-        const chiefStart = extractRayStartAndDirection(chiefEntry)?.start || null;
-        for (const ray of (series.rays || [])) {
-            if (!Array.isArray(ray?.path) || ray.path.length === 0) continue;
-            const rayDir = extractRayStartAndDirection(ray)?.dir || ray?.dir || null;
-            const focus = findAxisIntersection(
-                opticalSystemRows,
-                { segments: ray.path },
-                targetSurfaceIndex,
-                imageSurfaceInfo,
-                rayDir
-            );
-            if (!Number.isFinite(focus)) continue;
-            if (Number.isFinite(paraxialImageZ) && Math.abs(focus - paraxialImageZ) > 50) continue;
-
-            const rayStart = extractRayStartAndDirection(ray)?.start || null;
-            if (!chiefStart || !rayStart) continue;
-            const dx = Number(rayStart.x) - Number(chiefStart.x);
-            const dy = Number(rayStart.y) - Number(chiefStart.y);
-            if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
-
-            if (Math.abs(dx) <= Math.abs(dy)) {
-                merFocuses.push(focus);
-            } else {
-                sagFocuses.push(focus);
-            }
-        }
-
-        const wlKey = Math.round(series.wavelengthUm * 1_000_000);
-        const prevFocus = previousFocusByWavelength.get(wlKey) || { mer: null, sag: null };
-
-        const meridionalFocusZ = Number.isFinite(meridionalFocusRms)
-            ? meridionalFocusRms
-            : (Number.isFinite(prevFocus.mer) ? prevFocus.mer : medianOr(merFocuses, paraxialImageZ));
-        const sagittalFocusZ = Number.isFinite(sagittalFocusRms)
-            ? sagittalFocusRms
-            : (Number.isFinite(prevFocus.sag) ? prevFocus.sag : medianOr(sagFocuses, paraxialImageZ));
-
-        previousFocusByWavelength.set(wlKey, {
-            mer: Number.isFinite(meridionalFocusZ) ? meridionalFocusZ : prevFocus.mer,
-            sag: Number.isFinite(sagittalFocusZ) ? sagittalFocusZ : prevFocus.sag,
-        });
+        // Strict mode: do not synthesize focus from previous/median fallbacks.
+        const meridionalFocusZ = Number.isFinite(meridionalFocusRms) ? meridionalFocusRms : null;
+        const sagittalFocusZ = Number.isFinite(sagittalFocusRms) ? sagittalFocusRms : null;
 
         computedRows.push({
             wavelength: series.wavelengthUm,

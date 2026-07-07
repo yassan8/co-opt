@@ -114,12 +114,6 @@ function isFiniteSystem(opticalSystemRows) {
 export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIndex, fieldSettings = null, wavelength = 0.5876, rayCount = 51, options = null) {
     // デバッグモードの設定（デフォルトは静か）
     const debugMode = TRANSVERSE_DEBUG;
-    const perfProfileEnabled = isTransverseProfileEnabled(options);
-    const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
-    const totalStartMs = perfProfileEnabled ? nowMs() : 0;
-    let crossBeamTotalMs = 0;
-    let meridionalTotalMs = 0;
-    let sagittalTotalMs = 0;
     
     // フィールド設定を取得
     if (!fieldSettings) {
@@ -212,11 +206,9 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
     // 各フィールド設定について計算
     for (let i = 0; i < fieldSettings.length; i++) {
         const fieldSetting = fieldSettings[i];
-        const fieldStartMs = perfProfileEnabled ? nowMs() : 0;
 
         try {
             // 十字光線を生成（絞り面インデックスと評価面インデックスも渡す）
-            const crossStartMs = perfProfileEnabled ? nowMs() : 0;
             const crossBeamData = generateCrossBeamForField(
                 opticalSystemRows,
                 fieldSetting,
@@ -228,56 +220,26 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
                 lightweight,
                 options,
             );
-            if (perfProfileEnabled) {
-                crossBeamTotalMs += (nowMs() - crossStartMs);
-            }
             
             if (crossBeamData) {
                 // メリジオナル・サジタル光線を分離して横収差を計算（絞り半径と入射瞳半径を別々に渡す）
-                const merStartMs = perfProfileEnabled ? nowMs() : 0;
                 const meridionalResult = calculateMeridionalAberrationFromCrossBeam(
                     crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign, lightweight
                 );
-                if (perfProfileEnabled) {
-                    meridionalTotalMs += (nowMs() - merStartMs);
-                }
                 
-                const sagStartMs = perfProfileEnabled ? nowMs() : 0;
                 const sagittalResult = calculateSagittalAberrationFromCrossBeam(
                     crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign, lightweight
                 );
-                if (perfProfileEnabled) {
-                    sagittalTotalMs += (nowMs() - sagStartMs);
-                }
                 
                 aberrationData.meridionalData.push(meridionalResult);
                 aberrationData.sagittalData.push(sagittalResult);
-
-                if (perfProfileEnabled) {
-                    const pointsCount = Number(meridionalResult?.points?.length || 0) + Number(sagittalResult?.points?.length || 0);
-                    const fieldMs = nowMs() - fieldStartMs;
-                    console.info(`⏱️ [TA Profile][Field] index=${i + 1}/${fieldSettings.length} name=${fieldSetting?.displayName || i + 1} total=${fieldMs.toFixed(2)}ms points=${pointsCount}`);
-                }
                 
             } else {
                 if (debugMode) console.warn(`⚠️ フィールド ${fieldSetting.displayName} の十字光線生成に失敗`);
-                if (perfProfileEnabled) {
-                    const fieldMs = nowMs() - fieldStartMs;
-                    console.info(`⏱️ [TA Profile][Field] index=${i + 1}/${fieldSettings.length} name=${fieldSetting?.displayName || i + 1} failedCrossBeam total=${fieldMs.toFixed(2)}ms`);
-                }
             }
         } catch (error) {
             console.error(`❌ フィールド ${fieldSetting.displayName} の計算エラー:`, error);
         }
-    }
-
-    if (perfProfileEnabled) {
-        const totalMs = nowMs() - totalStartMs;
-        console.info(
-            `⏱️ [TA Profile][Summary] total=${totalMs.toFixed(2)}ms ` +
-            `crossBeam=${crossBeamTotalMs.toFixed(2)}ms meridional=${meridionalTotalMs.toFixed(2)}ms sagittal=${sagittalTotalMs.toFixed(2)}ms ` +
-            `fields=${fieldSettings.length} rayCount=${rayCount} lightweight=${lightweight}`
-        );
     }
     
     return aberrationData;
@@ -293,9 +255,6 @@ export async function calculateTransverseAberrationAsync(
     rayCount = 51,
     options = null
 ) {
-    const profileTransverse = isTransverseProfileEnabled(options);
-    const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
-    const asyncTotalStartMs = profileTransverse ? nowMs() : 0;
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
@@ -314,10 +273,6 @@ export async function calculateTransverseAberrationAsync(
     safeProgress(0, 'Starting transverse aberration...');
     await yieldToUI();
 
-    if (profileTransverse) {
-        console.info(`⏱️ [TA Profile][Async] fields=${totalFields} rayCount=${rayCount} yieldEvery=${yieldEvery}`);
-    }
-
     let baseMeta = null;
     const meridionalData = [];
     const sagittalData = [];
@@ -327,7 +282,6 @@ export async function calculateTransverseAberrationAsync(
         const pct = 5 + (85 * (i / Math.max(1, totalFields)));
         const name = fs?.displayName ? String(fs.displayName) : `Field ${i + 1}`;
         safeProgress(Math.min(95, Math.max(0, pct)), `Calculating ${name} (${i + 1}/${totalFields})...`);
-        const fieldStartMs = profileTransverse ? nowMs() : 0;
 
         const partial = calculateTransverseAberration(
             opticalSystemRows,
@@ -344,16 +298,8 @@ export async function calculateTransverseAberrationAsync(
             if (Array.isArray(partial.sagittalData)) sagittalData.push(...partial.sagittalData);
         }
 
-        if (profileTransverse) {
-            console.info(`⏱️ [TA Profile][Async][Field] index=${i + 1}/${totalFields} name=${name} calc=${(nowMs() - fieldStartMs).toFixed(2)}ms`);
-        }
-
         if (yieldEvery > 0 && ((i + 1) % yieldEvery) === 0) {
-            const yieldStartMs = profileTransverse ? nowMs() : 0;
             await yieldToUI();
-            if (profileTransverse) {
-                console.info(`⏱️ [TA Profile][Async][Yield] index=${i + 1}/${totalFields} waited=${(nowMs() - yieldStartMs).toFixed(2)}ms`);
-            }
         }
     }
 
@@ -366,10 +312,6 @@ export async function calculateTransverseAberrationAsync(
     out.targetSurface = targetSurfaceIndex;
     out.meridionalData = meridionalData;
     out.sagittalData = sagittalData;
-
-    if (profileTransverse) {
-        console.info(`⏱️ [TA Profile][Async][Summary] total=${(nowMs() - asyncTotalStartMs).toFixed(2)}ms fields=${totalFields} rayCount=${rayCount}`);
-    }
 
     safeProgress(100, 'Done');
     return out;

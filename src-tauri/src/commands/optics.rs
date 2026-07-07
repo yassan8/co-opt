@@ -6305,27 +6305,6 @@ pub fn run_native_transverse_aberration(
     if surface_data.len() != rows.len() {
         return Err("run_native_transverse_aberration: failed to calculate surface origins".to_string());
     }
-    if profile_transverse {
-        let _ = app.emit(
-            "analysis-progress",
-            serde_json::json!({
-                "jobId": job_id,
-                "kind": "transverse",
-                "phase": "surface-data",
-                "message": format!("[TA Profile][Native] surfaceData={:.2}ms rows={} surfaces={}", surface_data_start.elapsed().as_secs_f64() * 1000.0, rows.len(), surface_data.len()),
-                "percent": 5.0,
-                "indeterminate": false,
-                "done": false,
-                "error": false,
-            }),
-        );
-        eprintln!(
-            "⏱️ [TA Profile][Native] surfaceData={:.2}ms rows={} surfaces={}",
-            surface_data_start.elapsed().as_secs_f64() * 1000.0,
-            rows.len(),
-            surface_data.len(),
-        );
-    }
 
     let target_surface_index = req
         .surface_index
@@ -6404,27 +6383,6 @@ pub fn run_native_transverse_aberration(
     );
     if generated_series.is_empty() {
         return Err("run_native_transverse_aberration: failed to generate native rays".to_string());
-    }
-    if profile_transverse {
-        let _ = app.emit(
-            "analysis-progress",
-            serde_json::json!({
-                "jobId": job_id,
-                "kind": "transverse",
-                "phase": "ray-series",
-                "message": format!("[TA Profile][Native] raySeriesBuild={:.2}ms series={} raysPerSeries~= {}", series_start.elapsed().as_secs_f64() * 1000.0, generated_series.len(), traced_rays_req),
-                "percent": 15.0,
-                "indeterminate": false,
-                "done": false,
-                "error": false,
-            }),
-        );
-        eprintln!(
-            "⏱️ [TA Profile][Native] raySeriesBuild={:.2}ms series={} raysPerSeries~= {}",
-            series_start.elapsed().as_secs_f64() * 1000.0,
-            generated_series.len(),
-            traced_rays_req,
-        );
     }
 
     let stop_radius = estimate_stop_radius_mm(&rows).max(1.0e-6);
@@ -6639,32 +6597,6 @@ pub fn run_native_transverse_aberration(
             zero_aberration_position: None,
         });
 
-        if profile_transverse {
-            let _ = app.emit(
-                "analysis-progress",
-                serde_json::json!({
-                    "jobId": job_id,
-                    "kind": "transverse",
-                    "phase": "series",
-                    "message": format!("[TA Profile][Native][Series] idx={} label={} wl={:.5} rays={} attempted={} fullHit={} vignetted={} time={:.2}ms", series_index, field_display_name, wavelength_um, rays.len(), attempted_rays, full_hit_rays, vignetted_rays, series_start.elapsed().as_secs_f64() * 1000.0),
-                    "percent": 20.0 + ((series_index as f64) % 60.0),
-                    "indeterminate": false,
-                    "done": false,
-                    "error": false,
-                }),
-            );
-            eprintln!(
-                "⏱️ [TA Profile][Native][Series] idx={} label={} wl={:.5} rays={} attempted={} fullHit={} vignetted={} time={:.2}ms",
-                series_index,
-                field_display_name,
-                wavelength_um,
-                rays.len(),
-                attempted_rays,
-                full_hit_rays,
-                vignetted_rays,
-                series_start.elapsed().as_secs_f64() * 1000.0,
-            );
-        }
 
         processed_series_count += 1;
     }
@@ -6706,29 +6638,6 @@ pub fn run_native_transverse_aberration(
         metadata.insert(
             format!("vignettedRays:{}", display_name),
             Value::from(vignetted_rays as i64),
-        );
-    }
-
-    if profile_transverse {
-        let _ = app.emit(
-            "analysis-progress",
-            serde_json::json!({
-                "jobId": job_id,
-                "kind": "transverse",
-                "phase": "done",
-                "message": format!("[TA Profile][Native] total={:.2}ms series={} fields={} wavelength={:.5}", native_total_start.elapsed().as_secs_f64() * 1000.0, processed_series_count, field_settings.len(), primary_wavelength),
-                "percent": 100.0,
-                "indeterminate": false,
-                "done": true,
-                "error": false,
-            }),
-        );
-        eprintln!(
-            "⏱️ [TA Profile][Native] total={:.2}ms series={} fields={} wavelength={:.5}",
-            native_total_start.elapsed().as_secs_f64() * 1000.0,
-            processed_series_count,
-            field_settings.len(),
-            primary_wavelength,
         );
     }
 
@@ -7662,6 +7571,133 @@ fn distortion_derive_max_field_angle(object_rows: &[Value]) -> f64 {
     if max_angle > 0.0 { max_angle } else { 20.0 }
 }
 
+fn distortion_grid_field_mode(object_rows: &[Value]) -> &'static str {
+    if object_rows.iter().any(|row| {
+        let tag = get_field(row, "position")
+            .or_else(|| get_field(row, "objectType"))
+            .or_else(|| get_field(row, "type"))
+            .and_then(value_to_string)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        tag.contains("imageheight")
+    }) {
+        return "imageheight";
+    }
+
+    if object_rows.iter().any(|row| {
+        let tag = get_field(row, "position")
+            .or_else(|| get_field(row, "objectType"))
+            .or_else(|| get_field(row, "type"))
+            .and_then(value_to_string)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        tag.contains("rectangle") || tag.contains("rect") || tag.contains("height")
+    }) {
+        return "height";
+    }
+
+    if object_rows.iter().any(|row| {
+        let tag = get_field(row, "position")
+            .or_else(|| get_field(row, "objectType"))
+            .or_else(|| get_field(row, "type"))
+            .and_then(value_to_string)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        tag.contains("angle")
+    }) {
+        return "angle";
+    }
+
+    let has_numeric_height = object_rows.iter().any(|row| {
+        get_field(row, "yHeight")
+            .or_else(|| get_field(row, "height"))
+            .or_else(|| get_field(row, "object y"))
+            .and_then(value_to_f64)
+            .map(|v| v.is_finite())
+            .unwrap_or(false)
+    });
+    if has_numeric_height { "height" } else { "angle" }
+}
+
+fn distortion_grid_axis_value(row: &Value, mode: &str, axis: &str) -> f64 {
+    let from_image_target = || -> Option<f64> {
+        let key = if axis == "x" { "x" } else { "y" };
+        row.as_object()
+            .and_then(|obj| obj.get("__cooptImageHeightTarget"))
+            .and_then(|target| target.as_object())
+            .and_then(|target| target.get(key))
+            .and_then(value_to_f64)
+            .filter(|v| v.is_finite())
+    };
+
+    let pick = |keys: &[&str]| -> f64 {
+        for key in keys {
+            if let Some(v) = get_field(row, key).and_then(value_to_f64) {
+                if v.is_finite() {
+                    return v;
+                }
+            }
+        }
+        0.0
+    };
+
+    match mode {
+        "imageheight" => {
+            if let Some(v) = from_image_target() {
+                v
+            } else if axis == "x" {
+                pick(&["xHeight", "x", "object x"])
+            } else {
+                pick(&["yHeight", "y", "object y"])
+            }
+        }
+        "height" => {
+            if axis == "x" {
+                pick(&["xHeight", "x", "object x"])
+            } else {
+                pick(&["yHeight", "y", "object y"])
+            }
+        }
+        _ => {
+            if axis == "x" {
+                pick(&["xFieldAngle", "xAngle", "xHeightAngle", "x"])
+            } else {
+                pick(&["yFieldAngle", "fieldAngle", "yAngle", "yHeightAngle", "y"])
+            }
+        }
+    }
+}
+
+fn distortion_grid_axis_extents(object_rows: &[Value], mode: &str) -> (f64, f64) {
+    if object_rows.is_empty() {
+        return (20.0, 20.0);
+    }
+
+    let mut max_x = 0.0_f64;
+    let mut max_y = 0.0_f64;
+    for row in object_rows {
+        let x = distortion_grid_axis_value(row, mode, "x");
+        let y = distortion_grid_axis_value(row, mode, "y");
+        if x.is_finite() {
+            max_x = max_x.max(x.abs());
+        }
+        if y.is_finite() {
+            max_y = max_y.max(y.abs());
+        }
+    }
+
+    if !(max_x > 0.0) && max_y > 0.0 {
+        max_x = max_y;
+    }
+    if !(max_y > 0.0) && max_x > 0.0 {
+        max_y = max_x;
+    }
+    if !(max_x > 0.0) && !(max_y > 0.0) {
+        return (20.0, 20.0);
+    }
+    (max_x, max_y)
+}
+
 fn run_native_grid_distortion_impl<F>(
     req: NativeGridDistortionRequest,
     mut report_progress: F,
@@ -7693,7 +7729,13 @@ where
         .wavelength
         .filter(|w| w.is_finite() && *w > 0.0)
         .unwrap_or_else(|| get_primary_wavelength_um_native(&req.source_rows, 0.5876));
-    let max_field_angle = distortion_derive_max_field_angle(&req.object_rows);
+    let grid_field_mode = distortion_grid_field_mode(&req.object_rows);
+    let (grid_extent_x, grid_extent_y) = distortion_grid_axis_extents(&req.object_rows, grid_field_mode);
+    let max_field_angle = if grid_field_mode == "angle" {
+        grid_extent_x.max(grid_extent_y)
+    } else {
+        f64::NAN
+    };
     let mirror_sign = distortion_mirror_sign(&rows);
     let finite = !is_infinite_conjugate_native(&rows);
 
@@ -7710,8 +7752,7 @@ where
 
     let focal_length = distortion_estimate_focal_length_mm(&rows, &source_rows, surface_index, mirror_sign)
         .ok_or_else(|| "run_native_grid_distortion: failed to estimate focal length".to_string())?;
-    let max_image_height = focal_length * (max_field_angle * PI / 180.0).tan();
-    let step = (2.0 * max_image_height) / (grid_size as f64 - 1.0);
+    let focal_length_abs = focal_length.abs();
 
     let object_distance = rows
         .first()
@@ -7721,24 +7762,123 @@ where
                 .and_then(value_to_f64)
         })
         .unwrap_or(0.0);
+    let object_distance_abs = object_distance.abs();
+
+    let image_distance = if finite && focal_length_abs > 1e-12 && object_distance_abs > 1e-12 {
+        let denom = (1.0 / focal_length_abs) - (1.0 / object_distance_abs);
+        if denom.abs() > 1e-12 {
+            Some(1.0 / denom)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let image_scale_for_height = if grid_field_mode == "height" && finite {
+        image_distance
+            .map(|v| (v / object_distance_abs).abs())
+            .filter(|v| v.is_finite() && *v > 1e-9)
+            .unwrap_or(1.0)
+    } else {
+        1.0
+    };
+
+    let max_image_x = if grid_field_mode == "angle" {
+        focal_length_abs * (grid_extent_x * PI / 180.0).tan()
+    } else if grid_field_mode == "height" {
+        grid_extent_x * image_scale_for_height
+    } else {
+        grid_extent_x
+    };
+    let max_image_y = if grid_field_mode == "angle" {
+        focal_length_abs * (grid_extent_y * PI / 180.0).tan()
+    } else if grid_field_mode == "height" {
+        grid_extent_y * image_scale_for_height
+    } else {
+        grid_extent_y
+    };
+    let imageheight_to_object_scale = if grid_field_mode == "imageheight" && finite {
+        let image_distance_abs = image_distance.map(f64::abs).unwrap_or(0.0);
+        if image_distance_abs > 1e-12 && object_distance_abs > 1e-12 {
+            object_distance_abs / image_distance_abs
+        } else {
+            1.0
+        }
+    } else {
+        1.0
+    };
+
+    let grid_range_scale = std::f64::consts::SQRT_2 / 2.0;
+    let scaled_max_image_x = max_image_x * grid_range_scale;
+    let scaled_max_image_y = max_image_y * grid_range_scale;
+    let step_x = (2.0 * scaled_max_image_x) / (grid_size as f64 - 1.0);
+    let step_y = (2.0 * scaled_max_image_y) / (grid_size as f64 - 1.0);
 
     let mut ideal_x = Vec::<f64>::with_capacity(grid_size * grid_size);
     let mut ideal_y = Vec::<f64>::with_capacity(grid_size * grid_size);
     let mut object_rows = Vec::<Value>::with_capacity(grid_size * grid_size);
 
     for i in 0..grid_size {
-        let h_image_y = -max_image_height + i as f64 * step;
-        let theta_y_rad = (h_image_y / focal_length).atan();
+        let h_image_y = -scaled_max_image_y + i as f64 * step_y;
+        let theta_y_rad = (h_image_y / focal_length_abs).atan();
         let theta_y = theta_y_rad * 180.0 / PI;
         for j in 0..grid_size {
-            let h_image_x = -max_image_height + j as f64 * step;
-            let theta_x_rad = (h_image_x / focal_length).atan();
+            let h_image_x = -scaled_max_image_x + j as f64 * step_x;
+            let theta_x_rad = (h_image_x / focal_length_abs).atan();
             let theta_x = theta_x_rad * 180.0 / PI;
 
             ideal_x.push(h_image_x);
             ideal_y.push(h_image_y);
             let idx = i * grid_size + j;
-            if finite {
+            if grid_field_mode == "imageheight" {
+                if finite {
+                    let h_obj_x = h_image_x * imageheight_to_object_scale;
+                    let h_obj_y = h_image_y * imageheight_to_object_scale;
+                    object_rows.push(serde_json::json!({
+                        "id": format!("Field-{}", idx),
+                        "name": format!("Field-{}", idx),
+                        "position": "Rectangle",
+                        "xHeight": h_obj_x,
+                        "yHeight": h_obj_y,
+                        "x": h_obj_x,
+                        "y": h_obj_y,
+                        "__cooptOriginalPosition": "ImageHeight",
+                        "__cooptImageHeightTarget": { "x": h_image_x, "y": h_image_y },
+                    }));
+                } else {
+                    object_rows.push(serde_json::json!({
+                        "id": format!("Field-{}", idx),
+                        "name": format!("Field-{}", idx),
+                        "position": "Angle",
+                        "xHeightAngle": theta_x,
+                        "yHeightAngle": theta_y,
+                        "x": theta_x,
+                        "y": theta_y,
+                        "__cooptOriginalPosition": "ImageHeight",
+                        "__cooptImageHeightTarget": { "x": h_image_x, "y": h_image_y },
+                    }));
+                }
+            } else if grid_field_mode == "height" {
+                let h_obj_x = if finite && image_scale_for_height > 1e-9 {
+                    h_image_x / image_scale_for_height
+                } else {
+                    h_image_x
+                };
+                let h_obj_y = if finite && image_scale_for_height > 1e-9 {
+                    h_image_y / image_scale_for_height
+                } else {
+                    h_image_y
+                };
+                object_rows.push(serde_json::json!({
+                    "id": format!("Field-{}", idx),
+                    "name": format!("Field-{}", idx),
+                    "position": "Rectangle",
+                    "xHeight": h_obj_x,
+                    "yHeight": h_obj_y,
+                    "x": h_obj_x,
+                    "y": h_obj_y,
+                }));
+            } else if finite {
                 let h_obj_x = object_distance * theta_x_rad.tan();
                 let h_obj_y = object_distance * theta_y_rad.tan();
                 object_rows.push(serde_json::json!({
@@ -7818,6 +7958,17 @@ where
     meta.insert("wavelength".to_string(), Value::from(wavelength));
     meta.insert("focalLength".to_string(), Value::from(focal_length));
     meta.insert("finiteSystem".to_string(), Value::from(finite));
+    meta.insert("gridFieldMode".to_string(), Value::from(grid_field_mode));
+    meta.insert(
+        "objectMaxHeight".to_string(),
+        Value::from(if grid_field_mode == "height" || grid_field_mode == "imageheight" {
+            grid_extent_y
+        } else {
+            f64::NAN
+        }),
+    );
+    meta.insert("maxImageX".to_string(), Value::from(scaled_max_image_x));
+    meta.insert("maxImageY".to_string(), Value::from(scaled_max_image_y));
     meta.insert("mirrorSign".to_string(), Value::from(mirror_sign));
     meta.insert("chunkSize".to_string(), Value::from(chunk_size as i64));
     meta.insert("chunkCount".to_string(), Value::from(total_chunks as i64));
@@ -7949,6 +8100,83 @@ fn lca_select_image_height_mm(
         .map(|chief| (chief.y_um / 1000.0) * mirror_sign)
 }
 
+fn lca_trace_strict_stop_center_image_height_mm(
+    rows: &[Value],
+    surface_data: &[SurfaceInfo],
+    object_row: &Value,
+    target_surface_index: usize,
+    wavelength_um: f64,
+    mirror_sign: f64,
+) -> Option<f64> {
+    let object = object_row.as_object()?;
+    let target_surface = surface_data.get(target_surface_index)?;
+    let stop_surface_index = find_stop_surface_index_native(rows)
+        .unwrap_or_else(|| rows.len().saturating_sub(1))
+        .min(surface_data.len().saturating_sub(1));
+    let stop_surface = surface_data
+        .get(stop_surface_index)
+        .copied()
+        .unwrap_or(*surface_data.last()?);
+    let stop_plane_u = normalize3(stop_surface.rot[0], stop_surface.rot[3], stop_surface.rot[6]);
+    let stop_plane_v = normalize3(stop_surface.rot[1], stop_surface.rot[4], stop_surface.rot[7]);
+    let infinite_conjugate = is_infinite_conjugate_native(rows);
+    let object_plane_z = surface_data.first()?.origin[2];
+    let stop_radius = estimate_stop_radius_mm(rows);
+    let entrance_radius = estimate_entrance_radius_mm(rows).clamp(0.01, 500.0);
+    let sampling_radius = if stop_radius.is_finite() && stop_radius > 0.0 {
+        stop_radius.min(entrance_radius).max(0.01)
+    } else {
+        entrance_radius
+    };
+    let packed_stop = build_packed_meta(rows, surface_data, stop_surface_index, wavelength_um).ok();
+    let packed_target = build_packed_meta(rows, surface_data, target_surface_index, wavelength_um).ok()?;
+
+    let (_has_field_angle, rays, _refined_origin) = generate_ray_start_points_for_object_native(
+        rows,
+        object,
+        "NativeLcaStrictChief",
+        1,
+        "annular",
+        1,
+        wavelength_um,
+        infinite_conjugate,
+        object_plane_z,
+        stop_surface_index,
+        target_surface_index,
+        target_surface.origin,
+        stop_surface.origin,
+        stop_plane_u,
+        stop_plane_v,
+        sampling_radius,
+        packed_stop.as_ref(),
+        Some(&packed_target),
+        None,
+        true,
+    );
+    let chief = rays.iter().find(|ray| ray.is_chief).or_else(|| rays.first())?;
+    let chief_vec = [
+        chief.start_p.x,
+        chief.start_p.y,
+        chief.start_p.z,
+        chief.dir.x,
+        chief.dir.y,
+        chief.dir.z,
+    ];
+    let (hx, hy, hz, _dx, _dy, _dz) = trace_target_with_packed_native(chief_vec, target_surface_index, &packed_target)?;
+    let rel = [
+        hx - target_surface.origin[0],
+        hy - target_surface.origin[1],
+        hz - target_surface.origin[2],
+    ];
+    let local = mul_mat3_vec3(&target_surface.inv_rot, rel);
+    let y_mm = local[1] * mirror_sign;
+    if y_mm.is_finite() {
+        Some(y_mm)
+    } else {
+        None
+    }
+}
+
 fn lca_fill_missing_linear(field_values: &[f64], values: &mut [Option<f64>]) {
     if field_values.len() != values.len() || values.len() < 3 {
         return;
@@ -8023,6 +8251,10 @@ fn run_native_magnification_chromatic_aberration_impl(
         .collect();
     if rows.is_empty() {
         return Err("run_native_magnification_chromatic_aberration: normalized rows are empty".to_string());
+    }
+    let surface_data = calculate_surface_data(&rows);
+    if surface_data.len() != rows.len() {
+        return Err("run_native_magnification_chromatic_aberration: failed to calculate surface origins".to_string());
     }
 
     let image_surface_index = req
@@ -8159,14 +8391,37 @@ fn run_native_magnification_chromatic_aberration_impl(
         })?;
 
         let mut image_heights = vec![None; field_values.len()];
+        let mut series_by_index = vec![None; field_values.len()];
         for series in &spot_response.series {
             let Some(idx) = distortion_parse_field_index(&series.label) else {
                 continue;
             };
-            if idx >= image_heights.len() {
+            if idx >= series_by_index.len() {
                 continue;
             }
-            image_heights[idx] = lca_select_image_height_mm(series, &chief_ray_definition, mirror_sign);
+            series_by_index[idx] = Some(series);
+        }
+
+        for idx in 0..image_heights.len() {
+            if stop_center_mode {
+                if let Some(object_row) = object_rows.get(idx) {
+                    image_heights[idx] = lca_trace_strict_stop_center_image_height_mm(
+                        &rows,
+                        &surface_data,
+                        object_row,
+                        image_surface_index,
+                        *wl,
+                        mirror_sign,
+                    );
+                }
+                if image_heights[idx].is_some() {
+                    continue;
+                }
+            }
+
+            if let Some(series) = series_by_index[idx] {
+                image_heights[idx] = lca_select_image_height_mm(series, &chief_ray_definition, mirror_sign);
+            }
         }
 
         wavelength_heights.push((*wl, image_heights));

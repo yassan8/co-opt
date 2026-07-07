@@ -3064,7 +3064,6 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
             }
             const calcElapsedMs = nowMs() - calcStartMs;
             calcMs += calcElapsedMs;
-            console.log(`⏱️ [TA Profile][Wavelength] λ=${wavelength.toFixed(5)}μm calc=${calcElapsedMs.toFixed(2)}ms backend=${String(aberrationData?.backend || 'unknown')}`);
 
             const wavelengthLabel = `${wavelength.toFixed(5)} μm`;
             const annotateSeries = (seriesList: any[] = []) => seriesList.map((series: any, fieldIndex: number) => ({
@@ -3115,7 +3114,6 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
         });
         plotMs = nowMs() - plotStartMs;
         try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
-        console.log(`⏱️ [TA Profile][TopLevel] total=${(nowMs() - totalStartMs).toFixed(2)}ms normalize=${normalizeMs.toFixed(2)}ms calc=${calcMs.toFixed(2)}ms merge=${mergeMs.toFixed(2)}ms plot=${plotMs.toFixed(2)}ms wavelengths=${wavelengths.length} rayCount=${rayCount}`);
         console.log('✅ Transverse aberration diagram generated successfully');
         return mergedAberrationData;
     } catch (error) {
@@ -3162,18 +3160,16 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
     try {
         try { onProgress?.({ percent: 0, message: 'Preparing lateral chromatic aberration...' }); } catch (_) {}
 
-        const xMinInput = document.getElementById('mca-xmin-input') as HTMLInputElement | null;
-        const xMaxInput = document.getElementById('mca-xmax-input') as HTMLInputElement | null;
+        const xRangeInput = document.getElementById('mca-xrange-input') as HTMLInputElement | null;
+        const optXRange = (options && typeof options === 'object') ? Number((options as any).xRange) : NaN;
         const optXMin = (options && typeof options === 'object') ? Number((options as any).xMin) : NaN;
         const optXMax = (options && typeof options === 'object') ? Number((options as any).xMax) : NaN;
-        let xMin = Number.isFinite(optXMin) ? optXMin : Number(xMinInput?.value);
-        let xMax = Number.isFinite(optXMax) ? optXMax : Number(xMaxInput?.value);
-        if (!Number.isFinite(xMin)) xMin = -0.05;
-        if (!Number.isFinite(xMax)) xMax = 0.05;
-        if (xMin >= xMax) {
-            xMin = -0.05;
-            xMax = 0.05;
-        }
+        let xRange = Number.isFinite(optXRange)
+            ? Math.abs(optXRange)
+            : (Number.isFinite(optXMin) && Number.isFinite(optXMax)
+                ? Math.max(Math.abs(optXMin), Math.abs(optXMax))
+                : Number(xRangeInput?.value));
+        if (!Number.isFinite(xRange) || xRange <= 0) xRange = 0.04;
 
         const tableOpticalSystem = getTableOpticalSystem();
         const tableObject = getTableObject();
@@ -3234,15 +3230,22 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
         const pointCountInput = document.getElementById('mca-point-count-input') as HTMLInputElement | null;
         const rayCountInput = document.getElementById('mca-ray-count-input') as HTMLInputElement | null;
         const ringCountInput = document.getElementById('mca-ring-count-input') as HTMLInputElement | null;
+        const smoothingAdjacentPointsInput = document.getElementById('mca-smoothing-adjacent-points-input') as HTMLInputElement | null;
         const optPointCount = (options && typeof options === 'object') ? Number((options as any).pointCount) : NaN;
         const optRayCount = (options && typeof options === 'object') ? Number((options as any).rayCount) : NaN;
         const optRingCount = (options && typeof options === 'object') ? Number((options as any).ringCount) : NaN;
+        const optSmoothingAdjacentPoints = (options && typeof options === 'object') ? Number((options as any).smoothingAdjacentPoints) : NaN;
         let pointCount = Number.isFinite(optPointCount) ? Math.round(optPointCount) : Number(pointCountInput?.value);
         let rayCount = Number.isFinite(optRayCount) ? Math.round(optRayCount) : Number(rayCountInput?.value);
         let ringCount = Number.isFinite(optRingCount) ? Math.round(optRingCount) : Number(ringCountInput?.value);
+        let smoothingAdjacentPoints = Number.isFinite(optSmoothingAdjacentPoints)
+            ? Math.round(optSmoothingAdjacentPoints)
+            : Number(smoothingAdjacentPointsInput?.value);
         if (!Number.isFinite(pointCount) || pointCount < 2) pointCount = 11;
         if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = 101;
-        if (!Number.isFinite(ringCount) || ringCount < 1) ringCount = 3;
+        if (!Number.isFinite(ringCount) || ringCount < 1) ringCount = 30;
+        if (!Number.isFinite(smoothingAdjacentPoints) || smoothingAdjacentPoints < 0) smoothingAdjacentPoints = 1;
+        if (smoothingAdjacentPoints > 50) smoothingAdjacentPoints = 50;
 
         const fieldValues: number[] = [];
         if (pointCount <= 1) {
@@ -3311,6 +3314,12 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
         } as any);
         try {
             console.log('📊 [LCA] backend:', (data as any)?.backend || (data as any)?.meta?.backend || 'unknown');
+            if ((data as any)?.meta?.absoluteHeightStats) {
+                console.log('📊 [LCA] absoluteHeightStats:', (data as any).meta.absoluteHeightStats);
+            }
+            if ((data as any)?.meta?.absoluteShiftVsReferenceMean) {
+                console.log('📊 [LCA] absoluteShiftVsReferenceMean:', (data as any).meta.absoluteShiftVsReferenceMean);
+            }
         } catch (_) {}
 
         if (!data) {
@@ -3322,7 +3331,7 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
         const plotted = plotMagnificationChromaticAberration(
             data,
             containerTarget,
-            { xMin, xMax }
+            { xRange, smoothingAdjacentPoints }
         );
         if (!plotted) {
             throw new Error('倍率色収差: 描画可能な有効データがありません');
@@ -3527,14 +3536,39 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
             throw new Error('光学系データが見つかりません');
         }
 
+        const pointCountInput = document.getElementById('astigmatism-point-count-input') as HTMLInputElement | null;
+        const rayCountInput = document.getElementById('astigmatism-ray-count-input') as HTMLInputElement | null;
+        const ringCountInput = document.getElementById('astigmatism-ring-count-input') as HTMLInputElement | null;
+        const focusRangeInput = document.getElementById('astigmatism-focus-range-input') as HTMLInputElement | null;
+
+        const pointCountFromOption = Number(options?.pointCount);
+        const pointCountFromInput = Number(pointCountInput?.value);
+        const pointCount = Number.isFinite(pointCountFromOption)
+            ? Math.max(2, Math.min(201, Math.round(pointCountFromOption)))
+            : (Number.isFinite(pointCountFromInput)
+                ? Math.max(2, Math.min(201, Math.round(pointCountFromInput)))
+                : 21);
+
         const rayCountFromOption = Number(options?.rayCount);
+        const rayCountFromInput = Number(rayCountInput?.value);
         const rayCount = Number.isFinite(rayCountFromOption)
             ? Math.max(9, Math.min(2001, Math.round(rayCountFromOption)))
-            : 30;
+            : (Number.isFinite(rayCountFromInput)
+                ? Math.max(9, Math.min(2001, Math.round(rayCountFromInput)))
+                : 101);
         const ringCountFromOption = Number(options?.ringCount);
+        const ringCountFromInput = Number(ringCountInput?.value);
         const ringCount = Number.isFinite(ringCountFromOption)
-            ? Math.max(1, Math.min(64, Math.round(ringCountFromOption)))
-            : 32;
+            ? Math.max(1, Math.min(1024, Math.round(ringCountFromOption)))
+            : (Number.isFinite(ringCountFromInput)
+                ? Math.max(1, Math.min(1024, Math.round(ringCountFromInput)))
+                : 256);
+        const focusRangeFromOption = Number(options?.focusRange);
+        const focusRangeFromInput = Number(focusRangeInput?.value);
+        const focusRange = Number.isFinite(focusRangeFromOption)
+            ? Math.abs(focusRangeFromOption)
+            : (Number.isFinite(focusRangeFromInput) ? Math.abs(focusRangeFromInput) : 0.4);
+        const effectiveFocusRange = (Number.isFinite(focusRange) && focusRange > 0) ? focusRange : 0.4;
         const patternFromOption = String(options?.pattern || '').trim().toLowerCase();
         const pattern: 'grid' | 'cross' | 'annular' = (
             patternFromOption === 'grid' || patternFromOption === 'cross' || patternFromOption === 'annular'
@@ -3579,7 +3613,7 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
         const interpolationSubdivisionsFromOption = Number(options?.interpolationSubdivisions);
         const interpolationSubdivisions = Number.isFinite(interpolationSubdivisionsFromOption)
             ? Math.max(4, Math.min(100, Math.round(interpolationSubdivisionsFromOption)))
-            : 24;
+            : Math.max(4, Math.min(100, pointCount - 1));
 
         if (fieldMode === 'interpolate' && (processedObjectRows || []).length > 0 && !hasHeightRect) {
             // Y方向の最大角度を取得
@@ -3628,11 +3662,14 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
             sourceRows: sourceRows || [],
             objectRows: processedObjectRows || [],
             surfaceIndex: targetSurfaceIndex,
+            pointCount,
             rayCount,
             ringCount,
             pattern,
             chiefRayMode,
             wavelengthMode: 'all',
+            requireRustWasm: true,
+            forceWasmInTauri: true,
         });
         const astigBackend = String((fieldCurvesData as any)?.backend || 'tauri-native').trim();
         console.log(`[ASTIG_BACKEND] ${astigBackend}`);
@@ -3674,7 +3711,9 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
         } else {
             try { onProgress?.({ percent: 95, message: 'Rendering...' }); } catch (_) {}
             try {
-                plotAstigmaticFieldCurves(containerTarget, fieldCurvesData);
+                plotAstigmaticFieldCurves(containerTarget, fieldCurvesData, {
+                    xRange: [-effectiveFocusRange, effectiveFocusRange],
+                });
                 try { onProgress?.({ percent: 100, message: '' }); } catch (_) {}
             } catch (plotError) {
                 throw plotError;

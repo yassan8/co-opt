@@ -8521,10 +8521,14 @@ export function setupAnalysisWindows() {
             <option value="grid">Grid</option>
             <option value="annular" selected>Annular</option>
         </select>
+        <label for="popup-astigmatism-point-count" style="font-size:12px;color:#333;white-space:nowrap;">Points:</label>
+        <input id="popup-astigmatism-point-count" type="number" min="2" max="201" step="1" value="21" style="width:72px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
         <label for="popup-astigmatism-ray-count" style="font-size:12px;color:#333;white-space:nowrap;">Rays:</label>
-        <input id="popup-astigmatism-ray-count" type="number" min="9" max="2001" step="1" value="30" style="width:72px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
+        <input id="popup-astigmatism-ray-count" type="number" min="9" max="2001" step="1" value="101" style="width:72px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
         <label id="popup-astigmatism-ring-label" for="popup-astigmatism-ring-count" style="font-size:12px;color:#333;white-space:nowrap;">Rings:</label>
-        <input id="popup-astigmatism-ring-count" type="number" min="1" max="64" step="1" value="32" style="width:72px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
+        <input id="popup-astigmatism-ring-count" type="number" min="1" max="1024" step="1" value="256" style="width:72px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
+        <label for="popup-astigmatism-focus-range" style="font-size:12px;color:#333;white-space:nowrap;">Focus (+/- mm):</label>
+        <input id="popup-astigmatism-focus-range" type="number" min="0" step="0.01" value="0.4" style="width:84px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
         <button id="popup-show-astigmatism-btn" type="button">Show</button>
     </div>
     <div id="popup-astigmatism-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -8545,8 +8549,10 @@ export function setupAnalysisWindows() {
             const progressTextEl = document.getElementById('popup-astigmatism-progress-text');
             const chiefRaySelect = document.getElementById('popup-astigmatism-chief-ray');
             const beamSelect = document.getElementById('popup-astigmatism-beam');
+            const pointCountInput = document.getElementById('popup-astigmatism-point-count');
             const rayCountInput = document.getElementById('popup-astigmatism-ray-count');
             const ringCountInput = document.getElementById('popup-astigmatism-ring-count');
+            const focusRangeInput = document.getElementById('popup-astigmatism-focus-range');
             const ringCountLabel = document.getElementById('popup-astigmatism-ring-label');
             const chiefRayDefinition = (chiefRaySelect && chiefRaySelect.value) ? chiefRaySelect.value : 'stop-center';
             const beamPattern = (() => {
@@ -8554,21 +8560,37 @@ export function setupAnalysisWindows() {
                 return (v === 'cross' || v === 'grid' || v === 'annular') ? v : 'annular';
             })();
             const openerRay = (window.opener && window.opener.document)
-                ? window.opener.document.getElementById('ray-count-input')
+                ? (window.opener.document.getElementById('astigmatism-ray-count-input') || window.opener.document.getElementById('ray-count-input'))
                 : null;
             const openerRing = (window.opener && window.opener.document)
-                ? window.opener.document.getElementById('ring-count-select')
+                ? (window.opener.document.getElementById('astigmatism-ring-count-input') || window.opener.document.getElementById('ring-count-select'))
                 : null;
+            const openerPointCount = (window.opener && window.opener.document)
+                ? window.opener.document.getElementById('astigmatism-point-count-input')
+                : null;
+            const openerFocusRange = (window.opener && window.opener.document)
+                ? window.opener.document.getElementById('astigmatism-focus-range-input')
+                : null;
+            const initialPointCount = (() => {
+                const n = Number(openerPointCount && openerPointCount.value);
+                return Number.isFinite(n) ? Math.max(2, Math.min(201, Math.round(n))) : 21;
+            })();
             const initialRayCount = (() => {
                 const n = Number(openerRay && openerRay.value);
-                return Number.isFinite(n) ? Math.max(9, Math.min(2001, Math.round(n))) : 30;
+                return Number.isFinite(n) ? Math.max(9, Math.min(2001, Math.round(n))) : 101;
             })();
             const initialRingCount = (() => {
                 const n = Number(openerRing && openerRing.value);
-                return Number.isFinite(n) ? Math.max(1, Math.min(64, Math.round(n))) : 32;
+                return Number.isFinite(n) ? Math.max(1, Math.min(64, Math.round(n))) : 30;
             })();
+            const initialFocusRange = (() => {
+                const n = Number(openerFocusRange && openerFocusRange.value);
+                return (Number.isFinite(n) && n >= 0) ? n : 0.4;
+            })();
+            if (pointCountInput && !pointCountInput.value) pointCountInput.value = String(initialPointCount);
             if (rayCountInput && !rayCountInput.value) rayCountInput.value = String(initialRayCount);
             if (ringCountInput && !ringCountInput.value) ringCountInput.value = String(initialRingCount);
+            if (focusRangeInput && !focusRangeInput.value) focusRangeInput.value = String(initialFocusRange);
 
             const updateRingVisibility = () => {
                 const isAnnular = beamSelect && String(beamSelect.value || '').toLowerCase() === 'annular';
@@ -8578,6 +8600,11 @@ export function setupAnalysisWindows() {
             updateRingVisibility();
             if (beamSelect) beamSelect.addEventListener('change', updateRingVisibility);
 
+            const pointCount = (() => {
+                const fromInput = Number(pointCountInput && pointCountInput.value);
+                if (Number.isFinite(fromInput)) return Math.max(2, Math.min(201, Math.round(fromInput)));
+                return initialPointCount;
+            })();
             const rayCount = (() => {
                 const fromInput = Number(rayCountInput && rayCountInput.value);
                 if (Number.isFinite(fromInput)) return Math.max(9, Math.min(2001, Math.round(fromInput)));
@@ -8587,6 +8614,11 @@ export function setupAnalysisWindows() {
                 const fromInput = Number(ringCountInput && ringCountInput.value);
                 if (Number.isFinite(fromInput)) return Math.max(1, Math.min(64, Math.round(fromInput)));
                 return initialRingCount;
+            })();
+            const focusRange = (() => {
+                const fromInput = Number(focusRangeInput && focusRangeInput.value);
+                if (Number.isFinite(fromInput) && fromInput >= 0) return fromInput;
+                return initialFocusRange;
             })();
 
             const setProgress = (value, text) => {
@@ -8619,12 +8651,15 @@ export function setupAnalysisWindows() {
                 };
                 await window.opener.showAstigmatismDiagram({
                     containerElement: containerEl,
+                    pointCount,
                     rayCount,
                     ringCount,
+                    focusRange,
                     pattern: beamPattern,
                     requireRustWasm: true,
                     forceRustWasmTrace: true,
                     requireRustWasmTrace: true,
+                    forceWasmInTauri: true,
                     onProgress,
                     chiefRayDefinition,
                     logChiefRayDefinition: true,
@@ -8763,6 +8798,8 @@ export function setupAnalysisWindows() {
 </head>
 <body>
     <div class="controls">
+        <label for="popup-enlargement-factor-input">Enlargement Factor:</label>
+        <input id="popup-enlargement-factor-input" type="number" min="0" step="0.1" value="1" style="width:72px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
         <button id="popup-show-distortion-btn" type="button">Show distortion diagram</button>
     </div>
     <div id="popup-distortion-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -8789,6 +8826,11 @@ export function setupAnalysisWindows() {
             }
             const list = Array.isArray(dataList) ? dataList.filter(Boolean) : [];
             if (!list.length) throw new Error('No distortion data to plot');
+            const enlargementFactorInput = document.getElementById('popup-enlargement-factor-input');
+            const enlargementFactor = (() => {
+                const n = Number(enlargementFactorInput && 'value' in enlargementFactorInput ? enlargementFactorInput.value : 1);
+                return Number.isFinite(n) ? n : 1;
+            })();
 
             const traces = list.map((data) => {
                 const wavelength = Number(data?.meta?.wavelength || 0.5876);
@@ -8796,8 +8838,12 @@ export function setupAnalysisWindows() {
                 const color = getWavelengthColorLocal(wavelength);
                 const isHeightMode = !!data?.meta?.heightMode;
                 const label = isHeightMode ? 'h' : 'θ';
+                const scaledX = (Array.isArray(data?.distortionPercent) ? data.distortionPercent : []).map((value) => {
+                    const n = Number(value);
+                    return Number.isFinite(n) ? n * enlargementFactor : null;
+                });
                 return {
-                    x: Array.isArray(data?.distortionPercent) ? data.distortionPercent : [],
+                    x: scaledX,
                     y: Array.isArray(data?.fieldValues) ? data.fieldValues : [],
                     name: 'DIST ' + wavelengthNm + 'nm (' + label + ')',
                     mode: 'lines',
@@ -9003,6 +9049,8 @@ export function setupAnalysisWindows() {
             <option value="45">45×45</option>
             <option value="50">50×50</option>
         </select>
+        <label for="popup-grid-enlargement-factor-input">Enlargement Factor:</label>
+        <input id="popup-grid-enlargement-factor-input" type="number" min="0" step="0.1" value="1" style="width:72px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
         <button id="popup-show-distortion-grid-btn" type="button">Show distortion grid</button>
     </div>
     <div id="popup-distortion-grid-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -9037,6 +9085,11 @@ export function setupAnalysisWindows() {
             if (openerGrid && popupGrid) {
                 popupGrid.value = openerGrid.value;
             }
+            const openerEf = getOpenerEl('grid-enlargement-factor-input');
+            const popupEf = document.getElementById('popup-grid-enlargement-factor-input');
+            if (openerEf && popupEf) {
+                popupEf.value = openerEf.value;
+            }
         }
 
         function resizePlot() {
@@ -9065,6 +9118,74 @@ export function setupAnalysisWindows() {
             const realGrid = data.realGrid;
             const gridSize = Number(data.gridSize) || 20;
             const meta = data.meta || {};
+            const enlargementFactorInput = document.getElementById('popup-grid-enlargement-factor-input');
+            const enlargementFactor = (() => {
+                const n = Number(enlargementFactorInput && 'value' in enlargementFactorInput ? enlargementFactorInput.value : 1);
+                return Number.isFinite(n) ? n : 1;
+            })();
+            const estimateGridHorizontalOffset = () => {
+                const idealX = Array.isArray(idealGrid?.x) ? idealGrid.x : [];
+                const idealY = Array.isArray(idealGrid?.y) ? idealGrid.y : [];
+                const realX = Array.isArray(realGrid?.x) ? realGrid.x : [];
+                const n = Math.min(idealX.length, idealY.length, realX.length);
+                if (n <= 0) return null;
+
+                let minAbsY = Number.POSITIVE_INFINITY;
+                for (let i = 0; i < n; i++) {
+                    const y = Number(idealY[i]);
+                    if (Number.isFinite(y)) minAbsY = Math.min(minAbsY, Math.abs(y));
+                }
+                if (!Number.isFinite(minAbsY)) return null;
+
+                const tol = Math.max(1e-9, minAbsY * 1e-6);
+                const pairs = [];
+                for (let i = 0; i < n; i++) {
+                    const xIdeal = Number(idealX[i]);
+                    const yIdeal = Number(idealY[i]);
+                    const xReal = Number(realX[i]);
+                    if (!Number.isFinite(xIdeal) || !Number.isFinite(yIdeal) || !Number.isFinite(xReal)) continue;
+                    if (Math.abs(Math.abs(yIdeal) - minAbsY) > tol) continue;
+                    pairs.push({ xIdeal, absX: Math.abs(xIdeal), dx: xIdeal - xReal });
+                }
+
+                if (!pairs.length) return null;
+                pairs.sort((a, b) => a.absX - b.absX);
+                const nearCenter = pairs.filter((p) => p.absX <= (pairs[0]?.absX ?? 0) + 1e-9);
+                if (nearCenter.length > 0) {
+                    const mean = nearCenter.reduce((s, p) => s + p.dx, 0) / nearCenter.length;
+                    return Number.isFinite(mean) ? mean : null;
+                }
+
+                const nearest = pairs.slice(0, Math.min(3, pairs.length)).map((p) => p.dx).filter((v) => Number.isFinite(v));
+                if (!nearest.length) return null;
+                nearest.sort((a, b) => a - b);
+                return nearest[Math.floor(nearest.length / 2)];
+            };
+            const horizontalOffset = estimateGridHorizontalOffset();
+            const offsetRealGrid = {
+                x: (Array.isArray(realGrid.x) ? realGrid.x : []).map((value) => {
+                    const x = Number(value);
+                    if (!Number.isFinite(x)) return null;
+                    return Number.isFinite(Number(horizontalOffset)) ? x + Number(horizontalOffset) : x;
+                }),
+                y: realGrid.y,
+            };
+            const scaledRealGrid = {
+                x: (Array.isArray(offsetRealGrid.x) ? offsetRealGrid.x : []).map((value, index) => {
+                    const realX = Number(value);
+                    const idealX = Number((idealGrid.x || [])[index]);
+                    if (!Number.isFinite(realX) || !Number.isFinite(idealX)) return null;
+                    const distortionX = enlargementFactor * (idealX - realX);
+                    return idealX - distortionX;
+                }),
+                y: (Array.isArray(offsetRealGrid.y) ? offsetRealGrid.y : []).map((value, index) => {
+                    const realY = Number(value);
+                    const idealY = Number((idealGrid.y || [])[index]);
+                    if (!Number.isFinite(realY) || !Number.isFinite(idealY)) return null;
+                    const distortionY = enlargementFactor * (idealY - realY);
+                    return idealY - distortionY;
+                }),
+            };
             const traces = [];
 
             for (let i = 0; i < gridSize; i++) {
@@ -9110,8 +9231,8 @@ export function setupAnalysisWindows() {
                 const rowY = [];
                 for (let j = 0; j < gridSize; j++) {
                     const idx = i * gridSize + j;
-                    const x = realGrid.x[idx];
-                    const y = realGrid.y[idx];
+                    const x = scaledRealGrid.x[idx];
+                    const y = scaledRealGrid.y[idx];
                     rowX.push((x !== null && x !== undefined && isFinite(x)) ? x : null);
                     rowY.push((y !== null && y !== undefined && isFinite(y)) ? y : null);
                 }
@@ -9119,7 +9240,7 @@ export function setupAnalysisWindows() {
                     x: rowX,
                     y: rowY,
                     mode: 'lines',
-                    line: { color: realGridColor, width: 1.2 },
+                    line: { color: realGridColor, width: 1 },
                     showlegend: i === 0,
                     name: i === 0 ? 'Real Grid (λ=' + Number(meta.wavelength || 0.5876).toFixed(4) + ' μm)' : undefined,
                     hoverinfo: 'skip',
@@ -9133,8 +9254,8 @@ export function setupAnalysisWindows() {
                 const colY = [];
                 for (let i = 0; i < gridSize; i++) {
                     const idx = i * gridSize + j;
-                    const x = realGrid.x[idx];
-                    const y = realGrid.y[idx];
+                    const x = scaledRealGrid.x[idx];
+                    const y = scaledRealGrid.y[idx];
                     colX.push((x !== null && x !== undefined && isFinite(x)) ? x : null);
                     colY.push((y !== null && y !== undefined && isFinite(y)) ? y : null);
                 }
@@ -9142,7 +9263,7 @@ export function setupAnalysisWindows() {
                     x: colX,
                     y: colY,
                     mode: 'lines',
-                    line: { color: realGridColor, width: 1.2 },
+                    line: { color: realGridColor, width: 1 },
                     showlegend: false,
                     hoverinfo: 'skip',
                     connectgaps: false,
@@ -9152,10 +9273,10 @@ export function setupAnalysisWindows() {
 
             const realX = [];
             const realY = [];
-            const totalPoints = Math.max(1, Array.isArray(realGrid.x) ? realGrid.x.length : 0);
+            const totalPoints = Math.max(1, Array.isArray(scaledRealGrid.x) ? scaledRealGrid.x.length : 0);
             for (let i = 0; i < totalPoints; i++) {
-                const x = realGrid.x[i];
-                const y = realGrid.y[i];
+                const x = scaledRealGrid.x[i];
+                const y = scaledRealGrid.y[i];
                 const idealX = idealGrid.x[i];
                 const idealY = idealGrid.y[i];
                 if (x !== null && y !== null && x !== undefined && y !== undefined && isFinite(x) && isFinite(y) && isFinite(idealX) && isFinite(idealY)) {
@@ -9188,7 +9309,13 @@ export function setupAnalysisWindows() {
 
             const maxAbsIdealX = idealGrid.x.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
             const maxAbsIdealY = idealGrid.y.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
-            const equalRangeHalf = Math.max(maxAbsIdealX, maxAbsIdealY, 1e-9);
+            const maxAbsRealX = scaledRealGrid.x.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
+            const maxAbsRealY = scaledRealGrid.y.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
+            const objectMaxHeight = Number(meta?.objectMaxHeight);
+            const baseRangeHalf = (Number.isFinite(objectMaxHeight) && objectMaxHeight > 0)
+                ? Math.max(objectMaxHeight, 1e-9)
+                : Math.max(maxAbsIdealX, maxAbsIdealY, 1e-9);
+            const equalRangeHalf = Math.max(baseRangeHalf, maxAbsRealX, maxAbsRealY, 1e-9);
 
             return window.Plotly.newPlot(targetEl, traces, {
                 title: 'Grid Distortion (' + gridSize + '×' + gridSize + ', λ=' + Number(meta.wavelength || 0.5876).toFixed(4) + ' μm)',
@@ -9226,6 +9353,9 @@ export function setupAnalysisWindows() {
             const gridSize = gridSizeEl ? parseInt(gridSizeEl.value, 10) : 20;
             const openerGrid = getOpenerEl('grid-size-select');
             if (openerGrid && Number.isFinite(gridSize)) openerGrid.value = String(gridSize);
+            const popupEf = document.getElementById('popup-grid-enlargement-factor-input');
+            const openerEf = getOpenerEl('grid-enlargement-factor-input');
+            if (openerEf && popupEf) openerEf.value = String(popupEf.value || '1');
             let renderSucceeded = false;
 
             try {
@@ -9285,7 +9415,7 @@ export function setupAnalysisWindows() {
         const openMagnificationChromaticAberrationWindowBtn = document.getElementById('open-magnification-chromatic-aberration-window-btn');
         if (openMagnificationChromaticAberrationWindowBtn) {
                 openMagnificationChromaticAberrationWindowBtn.addEventListener('click', () => {
-            const popupVersion = '2026-05-16-lca-exact-chiefray-v1';
+            const popupVersion = '2026-07-07-lca-plusminus-range-v1';
                 try {
                     const namedPopup = window.open('', 'Lateral Chromatic Aberration');
                     if (namedPopup && !namedPopup.closed) {
@@ -9371,23 +9501,22 @@ export function setupAnalysisWindows() {
 </head>
 <body>
     <div class="controls">
-        <label for="popup-mca-xmin">Lateral displacement:</label>
-        <input type="number" id="popup-mca-xmin" value="-0.05" step="0.01" />
-        <span style="font-size:12px;color:#333;">to</span>
-        <input type="number" id="popup-mca-xmax" value="0.05" step="0.01" />
+        <label for="popup-mca-xrange">Lateral displacement (+/- mm):</label>
+        <input type="number" id="popup-mca-xrange" value="0.04" min="0" step="0.01" />
         <span style="font-size:12px;color:#666;">(mm)</span>
         <label for="popup-mca-points" style="margin-left:6px;">Points:</label>
         <input type="number" id="popup-mca-points" value="21" min="2" max="201" step="1" />
         <label for="popup-mca-rays" style="margin-left:6px;">Rays:</label>
         <input type="number" id="popup-mca-rays" value="101" min="1" max="5001" step="1" />
         <label for="popup-mca-rings" style="margin-left:6px;">Rings:</label>
-        <input type="number" id="popup-mca-rings" value="3" min="1" max="99" step="1" />
+        <input type="number" id="popup-mca-rings" value="30" min="1" max="99" step="1" />
         <label for="popup-mca-chief-ray" style="margin-left:6px;">Chief ray:</label>
         <select id="popup-mca-chief-ray" style="padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;">
             <option value="stop-center">Stop center</option>
-            <option value="beam-midpoint">Beam midpoint</option>
             <option value="beam-centroid">Beam centroid</option>
         </select>
+        <label for="popup-mca-smooth-n" style="margin-left:6px;">Smooth N:</label>
+        <input type="number" id="popup-mca-smooth-n" value="1" min="0" max="50" step="1" />
         <button id="popup-show-mca-btn" type="button">Show lateral chromatic aberration</button>
     </div>
     <div id="popup-mca-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -9410,24 +9539,24 @@ export function setupAnalysisWindows() {
         }
 
         function syncFromOpener() {
-            const openerMin = getOpenerEl('mca-xmin-input');
-            const openerMax = getOpenerEl('mca-xmax-input');
+            const openerRange = getOpenerEl('mca-xrange-input');
             const openerPoints = getOpenerEl('mca-point-count-input');
             const openerRays = getOpenerEl('mca-ray-count-input');
             const openerRings = getOpenerEl('mca-ring-count-input');
             const openerChiefRay = getOpenerEl('mca-chief-ray-definition');
-            const popupMin = document.getElementById('popup-mca-xmin');
-            const popupMax = document.getElementById('popup-mca-xmax');
+            const openerSmoothN = getOpenerEl('mca-smoothing-adjacent-points-input');
+            const popupRange = document.getElementById('popup-mca-xrange');
             const popupPoints = document.getElementById('popup-mca-points');
             const popupRays = document.getElementById('popup-mca-rays');
             const popupRings = document.getElementById('popup-mca-rings');
             const popupChiefRay = document.getElementById('popup-mca-chief-ray');
-            if (openerMin && popupMin && openerMin.value !== '') popupMin.value = openerMin.value;
-            if (openerMax && popupMax && openerMax.value !== '') popupMax.value = openerMax.value;
+            const popupSmoothN = document.getElementById('popup-mca-smooth-n');
+            if (openerRange && popupRange && openerRange.value !== '') popupRange.value = openerRange.value;
             if (openerPoints && popupPoints && openerPoints.value !== '') popupPoints.value = openerPoints.value;
             if (openerRays && popupRays && openerRays.value !== '') popupRays.value = openerRays.value;
             if (openerRings && popupRings && openerRings.value !== '') popupRings.value = openerRings.value;
             if (openerChiefRay && popupChiefRay && openerChiefRay.value !== '') popupChiefRay.value = openerChiefRay.value;
+            if (openerSmoothN && popupSmoothN && openerSmoothN.value !== '') popupSmoothN.value = openerSmoothN.value;
         }
 
         window['renderMagnificationChromaticAberration'] = async () => {
@@ -9452,18 +9581,18 @@ export function setupAnalysisWindows() {
                 } catch (_) {}
             };
 
-            const xMinEl = document.getElementById('popup-mca-xmin');
-            const xMaxEl = document.getElementById('popup-mca-xmax');
+            const xRangeEl = document.getElementById('popup-mca-xrange');
             const pointEl = document.getElementById('popup-mca-points');
             const rayEl = document.getElementById('popup-mca-rays');
             const ringEl = document.getElementById('popup-mca-rings');
             const chiefRayEl = document.getElementById('popup-mca-chief-ray');
-            const xMin = xMinEl ? parseFloat(xMinEl.value) : -0.5;
-            const xMax = xMaxEl ? parseFloat(xMaxEl.value) : 0.5;
+            const smoothNEl = document.getElementById('popup-mca-smooth-n');
+            const xRange = xRangeEl ? parseFloat(xRangeEl.value) : 0.04;
             const pointCount = pointEl ? parseInt(pointEl.value, 10) : 11;
             const rayCount = rayEl ? parseInt(rayEl.value, 10) : 101;
-            const ringCount = ringEl ? parseInt(ringEl.value, 10) : 3;
+            const ringCount = ringEl ? parseInt(ringEl.value, 10) : 30;
             const chiefRayDefinition = (chiefRayEl && chiefRayEl.value) ? chiefRayEl.value : 'stop-center';
+            const smoothingAdjacentPoints = smoothNEl ? parseInt(smoothNEl.value, 10) : 1;
 
             try {
                 if (!window.opener || typeof window.opener.showMagnificationChromaticAberrationDiagram !== 'function') {
@@ -9480,12 +9609,12 @@ export function setupAnalysisWindows() {
                 };
                 await window.opener.showMagnificationChromaticAberrationDiagram({
                     containerElement: containerEl,
-                    xMin,
-                    xMax,
+                    xRange,
                     pointCount,
                     rayCount,
                     ringCount,
                     chiefRayDefinition,
+                    smoothingAdjacentPoints,
                     onProgress
                 });
                 hideProgress();

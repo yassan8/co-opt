@@ -4327,8 +4327,10 @@ export default function App() {
   });
   const [astigChiefRayDefinition, setAstigChiefRayDefinition] = useState('stop-center');
   const [astigBeamPattern, setAstigBeamPattern] = useState<'cross' | 'grid' | 'annular'>('annular');
-  const [astigRayCount, setAstigRayCount] = useState(30);
-  const [astigRingCount, setAstigRingCount] = useState(32);
+  const [astigPointCount, setAstigPointCount] = useState(21);
+  const [astigRayCount, setAstigRayCount] = useState(101);
+  const [astigRingCount, setAstigRingCount] = useState(256);
+  const [astigFocusRange, setAstigFocusRange] = useState(0.4);
   const [astigStatus, setAstigStatus] = useState('');
   const [astigBusy, setAstigBusy] = useState(false);
   const [astigProgress, setAstigProgress] = useState(0);
@@ -11438,8 +11440,12 @@ const collectLegacyCrossRays = async (
           containerId: 'analysis-astig-container',
           chiefRayDefinition: astigChiefRayDefinition,
           pattern: astigBeamPattern,
+          pointCount: astigPointCount,
           rayCount: astigRayCount,
           ringCount: astigRingCount,
+          focusRange: astigFocusRange,
+          requireRustWasm: true,
+          forceWasmInTauri: true,
           onProgress: ({ percent, message }: { percent?: number; message?: string }) => {
             let nextPercent: number | null = null;
             if (typeof percent === 'number' && Number.isFinite(percent)) {
@@ -11491,6 +11497,21 @@ const collectLegacyCrossRays = async (
             <option value="grid">Grid</option>
             <option value="annular">Annular</option>
           </select>
+          <label htmlFor="analysis-astig-point-count" style={{ fontSize: 12, color: '#333' }}>Points:</label>
+          <input
+            id="analysis-astig-point-count"
+            type="number"
+            min={2}
+            max={201}
+            step={1}
+            value={astigPointCount}
+            onChange={(e) => {
+              const parsed = Number(e.target.value);
+              if (!Number.isFinite(parsed)) return;
+              setAstigPointCount(Math.max(2, Math.min(201, Math.round(parsed))));
+            }}
+            style={{ width: 78, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
+          />
           <label htmlFor="analysis-astig-ray-count" style={{ fontSize: 12, color: '#333' }}>Rays:</label>
           <input
             id="analysis-astig-ray-count"
@@ -11519,12 +11540,26 @@ const collectLegacyCrossRays = async (
                 onChange={(e) => {
                   const parsed = Number(e.target.value);
                   if (!Number.isFinite(parsed)) return;
-                  setAstigRingCount(Math.max(1, Math.min(64, Math.round(parsed))));
+                  setAstigRingCount(Math.max(1, Math.min(1024, Math.round(parsed))));
                 }}
                 style={{ width: 78, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
               />
             </>
           )}
+          <label htmlFor="analysis-astig-focus-range" style={{ fontSize: 12, color: '#333' }}>Focus (+/- mm):</label>
+          <input
+            id="analysis-astig-focus-range"
+            type="number"
+            min={0}
+            step={0.01}
+            value={astigFocusRange}
+            onChange={(e) => {
+              const parsed = Number(e.target.value);
+              if (!Number.isFinite(parsed)) return;
+              setAstigFocusRange(Math.max(0, parsed));
+            }}
+            style={{ width: 88, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
+          />
           <button
             type="button"
             onClick={rerenderAstigmatism}

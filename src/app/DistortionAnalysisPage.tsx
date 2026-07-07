@@ -434,9 +434,10 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
   const [progressValue, setProgressValue] = useState(0);
   const [progressText, setProgressText] = useState(type === 'distortion' ? 'Calculating distortion...' : 'Calculating grid distortion...');
   const [errorMsg, setErrorMsg] = useState('');
-  const [gridSize, setGridSize] = useState('20');
-  const [samplingPointsInput, setSamplingPointsInput] = useState('101');
-  const [distRangeAbsInput, setDistRangeAbsInput] = useState('');
+  const [gridSize, setGridSize] = useState('10');
+  const [samplingPointsInput, setSamplingPointsInput] = useState('21');
+  const [enlargementFactorInput, setEnlargementFactorInput] = useState('1');
+  const [distRangeAbsInput, setDistRangeAbsInput] = useState('5');
   const [backendInfo, setBackendInfo] = useState('');
 
   useEffect(() => {
@@ -465,8 +466,8 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       const normalizedObjectRows = normalizeDistortionObjectRows(objectRows, opticalSystemRows, sourceRows);
       const requestedSamplingPoints = (() => {
         const parsed = Math.floor(Number(samplingPointsInput));
-        if (!Number.isFinite(parsed)) return 101;
-        return Math.max(3, Math.min(1001, parsed));
+        if (!Number.isFinite(parsed)) return 21;
+        return Math.max(3, Math.min(21, parsed));
       })();
       const distortionMetric: 'chief-ray' = 'chief-ray';
       const { fieldValues, heightMode } = deriveFieldValues(normalizedObjectRows, requestedSamplingPoints);
@@ -524,16 +525,21 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
         if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
         return parsed;
       })();
+      const enlargementFactor = (() => {
+        const parsed = Number(enlargementFactorInput);
+        return Number.isFinite(parsed) ? parsed : 1;
+      })();
       await plotDistortionPercent(bestData, chartRef.current as any, {
         objectRows,
         distortionRangeAbs,
+        enlargementFactor,
       });
       hideProgress();
     } catch (err: any) {
       setProgress(100, 'Failed');
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
-  }, [plotlyReady, setProgress, hideProgress, samplingPointsInput, distRangeAbsInput]);
+  }, [plotlyReady, setProgress, hideProgress, samplingPointsInput, enlargementFactorInput, distRangeAbsInput]);
 
   const handleRenderGrid = useCallback(async () => {
     if (!chartRef.current) return;
@@ -542,137 +548,133 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
     try {
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
       const { opticalSystemRows, sourceRows, objectRows } = getRows();
+      const normalizedObjectRows = normalizeDistortionObjectRows(objectRows, opticalSystemRows, sourceRows);
       const wavelength = getPrimaryWavelength();
       const runtimeLabel = isTauriRuntime() ? 'tauri' : 'web';
       const isWebRuntime = runtimeLabel === 'web';
       const preBackendLabel = runtimeLabel === 'web' ? 'web-rust-wasm' : undefined;
+      const requestedGridSize = (() => {
+        const parsed = Math.floor(Number(gridSize));
+        if (!Number.isFinite(parsed)) return 10;
+        return Math.max(2, parsed);
+      })();
+      const traceGridSize = requestedGridSize + 1;
       setBackendInfo(formatRuntimeInfo(runtimeLabel, preBackendLabel));
       setProgress(5, 'Grid distortion (Rust/WASM): preparing');
 
-      // Web Rust/WASM path already computes the full grid in one call.
-      // Keep retries minimal to avoid multiplying runtime.
-      const scales = isWebRuntime ? [1.0, 0.7] : [1.0, 0.7, 0.5, 0.35, 0.2];
-      let data: any = null;
-      let bestValid = -1;
-      let lastScaleError: string | null = null;
-      const expectedGridPoints = (Number(gridSize) || 20) * (Number(gridSize) || 20);
-      for (let si = 0; si < scales.length; si++) {
-        const scale = scales[si];
-        const scaledObjects = scaleObjectRowsForGrid(objectRows, scale);
-        let pulseTimer: number | null = null;
-        let nativeUnlisten: null | (() => void) = null;
-        let receivedNativeProgress = false;
-        try {
-          const stageBase = 8 + Math.floor((si / Math.max(1, scales.length)) * 30);
-          const stageCap = Math.min(38, stageBase + 10);
-          let pulseValue = stageBase;
-          setProgress(pulseValue, `Grid distortion calculating... scale=${scale.toFixed(2)} (${runtimeLabel})`);
-          pulseTimer = window.setInterval(() => {
-            if (receivedNativeProgress) return;
-            pulseValue = Math.min(stageCap, pulseValue + 1);
-            setProgress(pulseValue, `Grid distortion calculating... scale=${scale.toFixed(2)} (${runtimeLabel})`);
-          }, 350);
+      let pulseTimer: number | null = null;
+      let nativeUnlisten: null | (() => void) = null;
+      let receivedNativeProgress = false;
+      const stageBase = 8;
+      const stageCap = 38;
+      let pulseValue = stageBase;
+      setProgress(pulseValue, `Grid distortion calculating... (${runtimeLabel})`);
+      let resp: any = null;
+      try {
+        pulseTimer = window.setInterval(() => {
+          if (receivedNativeProgress) return;
+          pulseValue = Math.min(stageCap, pulseValue + 1);
+          setProgress(pulseValue, `Grid distortion calculating... (${runtimeLabel})`);
+        }, 350);
 
-          const jobId = `native-grid-distortion-${Date.now()}-${si}-${Math.random().toString(36).slice(2, 8)}`;
-          if (isTauriRuntime()) {
-            try {
-              const mod = await import('@tauri-apps/api/event');
-              if (mod && typeof (mod as any).listen === 'function') {
-                nativeUnlisten = await (mod as any).listen('analysis-progress', (event: any) => {
-                  try {
-                    const data = event?.payload || {};
-                    if (String(data?.jobId || '') !== jobId) return;
-                    receivedNativeProgress = true;
-                    const percentRaw = Number(data?.percent);
-                    const percent = Number.isFinite(percentRaw)
-                      ? Math.max(stageBase, Math.min(39, Math.round(percentRaw * 0.39)))
-                      : null;
-                    setProgress(percent ?? pulseValue, String(data?.message || 'Grid distortion running...'));
-                  } catch (_) {}
-                });
-              }
-            } catch (_) {
-              nativeUnlisten = null;
+        const jobId = `native-grid-distortion-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        if (isTauriRuntime()) {
+          try {
+            const mod = await import('@tauri-apps/api/event');
+            if (mod && typeof (mod as any).listen === 'function') {
+              nativeUnlisten = await (mod as any).listen('analysis-progress', (event: any) => {
+                try {
+                  const data = event?.payload || {};
+                  if (String(data?.jobId || '') !== jobId) return;
+                  receivedNativeProgress = true;
+                  const percentRaw = Number(data?.percent);
+                  const percent = Number.isFinite(percentRaw)
+                    ? Math.max(stageBase, Math.min(39, Math.round(percentRaw * 0.39)))
+                    : null;
+                  setProgress(percent ?? pulseValue, String(data?.message || 'Grid distortion running...'));
+                } catch (_) {}
+              });
             }
-          }
-
-          const resp = await runNativeGridDistortion({
-            jobId,
-            opticalSystemRows,
-            sourceRows,
-            objectRows: scaledObjects,
-            gridSize: Number(gridSize) || 20,
-            wavelength,
-            // Per-point re-tracing is very expensive on web (N separate calls).
-            // Prefer fast full-grid tracing; UI still receives stage updates.
-            detailProgress: false,
-            onProgress: isWebRuntime
-              ? (evt: { percent?: number; message?: string }) => {
-                  try {
-                    const p = Number(evt?.percent);
-                    const msg = String(evt?.message || `Grid distortion tracing... scale=${scale.toFixed(2)}`);
-                    if (Number.isFinite(p)) {
-                      const mapped = Math.max(stageBase, Math.min(95, p));
-                      setProgress(mapped, msg);
-                    } else {
-                      setProgress(pulseValue, msg);
-                    }
-                    receivedNativeProgress = true;
-                  } catch (_) {}
-                }
-              : undefined,
-          });
-          const candidate = {
-            idealGrid: {
-              x: Array.isArray(resp?.idealX) ? resp.idealX : [],
-              y: Array.isArray(resp?.idealY) ? resp.idealY : [],
-            },
-            realGrid: {
-              x: Array.isArray(resp?.realX) ? resp.realX : [],
-              y: Array.isArray(resp?.realY) ? resp.realY : [],
-            },
-            gridSize: Number.isFinite(Number(resp?.gridSize)) ? Number(resp.gridSize) : (Number(gridSize) || 20),
-            maxFieldAngle: Number.isFinite(Number(resp?.maxFieldAngle)) ? Number(resp.maxFieldAngle) : 0,
-            meta: { ...(resp?.meta || {}), wavelength },
-          };
-          const backendLabel = String(resp?.backend || 'unknown');
-          setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
-          const valid = countFiniteGridPoints(candidate);
-          if (valid > bestValid) {
-            bestValid = valid;
-            data = candidate;
-          }
-          setProgress(20 + Math.floor((si / Math.max(1, scales.length)) * 20), `Grid distortion scale=${scale.toFixed(2)} (valid=${valid}, backend=${backendLabel})`);
-          if (isWebRuntime && valid > 0) break;
-          if (valid >= expectedGridPoints) break;
-        } catch (err: any) {
-          lastScaleError = String(err?.message ?? err ?? 'Unknown grid distortion error');
-          setProgress(20 + Math.floor((si / Math.max(1, scales.length)) * 20), `Grid distortion retry scale=${scale.toFixed(2)} failed`);
-          continue;
-        } finally {
-          if (typeof nativeUnlisten === 'function') {
-            try { nativeUnlisten(); } catch (_) {}
-          }
-          if (pulseTimer !== null) {
-            window.clearInterval(pulseTimer);
+          } catch (_) {
+            nativeUnlisten = null;
           }
         }
+
+        resp = await runNativeGridDistortion({
+          jobId,
+          opticalSystemRows,
+          sourceRows,
+          objectRows: normalizedObjectRows,
+          gridSize: traceGridSize,
+          wavelength,
+          // Per-point re-tracing is very expensive on web (N separate calls).
+          // Prefer fast full-grid tracing; UI still receives stage updates.
+          detailProgress: false,
+          onProgress: isWebRuntime
+            ? (evt: { percent?: number; message?: string }) => {
+                try {
+                  const p = Number(evt?.percent);
+                  const msg = String(evt?.message || 'Grid distortion tracing...');
+                  if (Number.isFinite(p)) {
+                    const mapped = Math.max(stageBase, Math.min(95, p));
+                    setProgress(mapped, msg);
+                  } else {
+                    setProgress(pulseValue, msg);
+                  }
+                  receivedNativeProgress = true;
+                } catch (_) {}
+              }
+            : undefined,
+        });
+      } finally {
+        if (typeof nativeUnlisten === 'function') {
+          try { nativeUnlisten(); } catch (_) {}
+        }
+        if (pulseTimer !== null) {
+          window.clearInterval(pulseTimer);
+        }
       }
-      if (!data) {
-        throw new Error(lastScaleError || 'Grid distortion returned no data');
+
+      if (!resp) {
+        throw new Error('Grid distortion returned no response');
       }
-      setProgress(40, `Grid distortion ${data.gridSize}×${data.gridSize}`);
+
+      const data = {
+        idealGrid: {
+          x: Array.isArray(resp?.idealX) ? resp.idealX : [],
+          y: Array.isArray(resp?.idealY) ? resp.idealY : [],
+        },
+        realGrid: {
+          x: Array.isArray(resp?.realX) ? resp.realX : [],
+          y: Array.isArray(resp?.realY) ? resp.realY : [],
+        },
+        gridSize: Number.isFinite(Number(resp?.gridSize)) ? Number(resp.gridSize) : traceGridSize,
+        maxFieldAngle: Number.isFinite(Number(resp?.maxFieldAngle)) ? Number(resp.maxFieldAngle) : 0,
+        meta: { ...(resp?.meta || {}), wavelength, requestedGridSize },
+      };
+      const backendLabel = String(resp?.backend || 'unknown');
+      setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
+      const valid = countFiniteGridPoints(data);
+      if (valid <= 0) {
+        throw new Error('Grid distortion returned no valid points');
+      }
+
+      setProgress(40, `Grid distortion ${requestedGridSize}×${requestedGridSize} (valid=${valid})`);
+      const enlargementFactor = (() => {
+        const parsed = Number(enlargementFactorInput);
+        return Number.isFinite(parsed) ? parsed : 1;
+      })();
       await plotGridDistortion(data, chartRef.current as any, (evt: any) => {
         const p = Number(evt?.percent);
         const msg = String(evt?.message || 'Grid distortion plotting...');
         setProgress(Number.isFinite(p) ? Math.max(40, Math.min(100, 40 + p * 0.6)) : 60, msg);
-      });
+      }, { enlargementFactor });
       hideProgress();
     } catch (err: any) {
       setProgress(100, 'Failed');
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
-  }, [gridSize, plotlyReady, setProgress, hideProgress]);
+  }, [gridSize, plotlyReady, setProgress, hideProgress, enlargementFactorInput]);
 
   useEffect(() => {
     hideProgress();
@@ -695,6 +697,16 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
                 <option key={v} value={v}>{v}×{v}</option>
               ))}
             </select>
+            <label>Enlargement Factor:</label>
+            <input
+              id="grid-enlargement-factor-input"
+              type="text"
+              value={enlargementFactorInput}
+              onChange={(e) => setEnlargementFactorInput(e.target.value)}
+              inputMode="decimal"
+              placeholder="1"
+              style={{ width: 72 }}
+            />
           </>
         ) : null}
         {type === 'distortion' ? (
@@ -705,7 +717,16 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
               value={samplingPointsInput}
               onChange={(e) => setSamplingPointsInput(e.target.value)}
               inputMode="numeric"
-              placeholder="101"
+              placeholder="21"
+              style={{ width: 72 }}
+            />
+            <label>Enlargement Factor:</label>
+            <input
+              type="text"
+              value={enlargementFactorInput}
+              onChange={(e) => setEnlargementFactorInput(e.target.value)}
+              inputMode="decimal"
+              placeholder="1"
               style={{ width: 72 }}
             />
             <label>Dist Range ±(%):</label>

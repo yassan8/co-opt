@@ -334,7 +334,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
     const yValueLabel = isAngleField ? 'Object Angle θ' : (hasImageHeight ? 'Image Height' : 'Object Height');
     const defaultOptions = {
         title: 'Astigmatic Field Curves',
-        xAxisTitle: 'Image Position (mm)',
+        xAxisTitle: 'Focus (mm)',
         yAxisTitle,
         showLegend: true,
         width: 800,
@@ -401,7 +401,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
                 },
                 hovertemplate: `<b>Meridional ${(wlNum * 1000).toFixed(1)}nm</b><br>` +
                               `${yValueLabel}: %{y:.4f}${yUnit}<br>` +
-                              'Z位置: %{x:.4f}mm<br>' +
+                              'Focus: %{x:.4f}mm<br>' +
                               '<extra></extra>'
             });
         }
@@ -429,7 +429,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
                 },
                 hovertemplate: `<b>Sagittal ${(wlNum * 1000).toFixed(1)}nm</b><br>` +
                               `${yValueLabel}: %{y:.4f}${yUnit}<br>` +
-                              'Z位置: %{x:.4f}mm<br>' +
+                              'Focus: %{x:.4f}mm<br>' +
                               '<extra></extra>'
             });
         }
@@ -448,7 +448,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
         ? Math.max(symmetricMin, maxAbsX * 1.1)
         : symmetricMin;
     const computedXRange = [-symmetricRange, symmetricRange];
-    const xTickStep = (Number.isFinite(maxAbsX) && maxAbsX > 0.5) ? 0.5 : 0.1;
+    const xTickStep = 0.1;
 
     // 縦軸（画角/物体高）はデータから自動算出
     const yValues = [];
@@ -464,7 +464,16 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
         const pad = span * paddingRatio;
         return [min - pad, max + pad];
     };
-    const yRange = makeRange(yValues);
+    const yRangeFromTrace = makeRange(yValues);
+    const maxFieldSettingY = fsList.reduce((max, fs) => {
+        const y = Number(fs?.y);
+        return Number.isFinite(y) ? Math.max(max, Math.abs(y)) : max;
+    }, 0);
+    const yRange = isAngleField
+        ? yRangeFromTrace
+        : ((Number.isFinite(maxFieldSettingY) && maxFieldSettingY > 0)
+            ? [0, maxFieldSettingY]
+            : yRangeFromTrace);
     
     if (traces.length === 0) {
         console.error('❌ プロット可能なデータがありません');

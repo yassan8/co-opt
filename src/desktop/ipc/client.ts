@@ -530,11 +530,6 @@ export async function normalizeTransverseObjectRowsForImageHeight(
     preferParaxialImageHeight?: boolean;
   },
 ): Promise<any[]> {
-  const nowMs = () => ((typeof performance !== "undefined" && typeof performance.now === "function") ? performance.now() : Date.now());
-  const profileTransverse = !!(
-    (typeof globalThis !== "undefined" && (globalThis as any).__COOPT_PROFILE_TRANSVERSE === true)
-  );
-  const profileStartMs = profileTransverse ? nowMs() : 0;
   const parseFiniteNumber = (value: unknown): number | null => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -580,7 +575,6 @@ export async function normalizeTransverseObjectRowsForImageHeight(
 
   emitProgress(progressStart, `${progressLabel}: preparing...`);
 
-  const importStartMs = profileTransverse ? nowMs() : 0;
   const [{ detectConjugateType }, { calculateParaxialData }] = await Promise.all([
     import("../../../utils/conjugate-detection.ts"),
     import("../../../raytracing/core/ray-paraxial.ts"),
@@ -592,11 +586,6 @@ export async function normalizeTransverseObjectRowsForImageHeight(
     ? Number(explicitWavelength)
     : getPrimaryWavelengthFromSourceRows(sourceRows);
 
-  if (profileTransverse) {
-    console.info(`⏱️ [TA Profile][Normalize] imports=${(nowMs() - importStartMs).toFixed(2)}ms`);
-  }
-
-  const keyStartMs = profileTransverse ? nowMs() : 0;
   const normalizationCacheKey = (() => {
     try {
       return JSON.stringify({
@@ -610,23 +599,12 @@ export async function normalizeTransverseObjectRowsForImageHeight(
     }
   })();
   if (normalizationCacheKey && transverseObjectNormalizationCache.has(normalizationCacheKey)) {
-    if (profileTransverse) {
-      console.info(`⏱️ [TA Profile][Normalize] cacheKey=${(nowMs() - keyStartMs).toFixed(2)}ms hit=true total=${(nowMs() - profileStartMs).toFixed(2)}ms`);
-    }
     return clonePlain(transverseObjectNormalizationCache.get(normalizationCacheKey) || []);
   }
 
-  if (profileTransverse) {
-    console.info(`⏱️ [TA Profile][Normalize] cacheKey=${(nowMs() - keyStartMs).toFixed(2)}ms hit=false`);
-  }
-
-  const paraxialStartMs = profileTransverse ? nowMs() : 0;
   const sharedParaxial = (() => {
     try { return calculateParaxialData(opticalSystemRows, wavelength); } catch (_) { return null; }
   })();
-  if (profileTransverse) {
-    console.info(`⏱️ [TA Profile][Normalize] paraxial=${(nowMs() - paraxialStartMs).toFixed(2)}ms ok=${sharedParaxial ? "true" : "false"}`);
-  }
 
   let convertImageHeightToEffectiveObject: null | ((...args: any[]) => any) = null;
   let sharedSurfaceOrigins: any = null;
@@ -644,7 +622,6 @@ export async function normalizeTransverseObjectRowsForImageHeight(
 
   const needsExactSolver = !(preferParaxialImageHeight && sharedParaxial);
   if (needsExactSolver) {
-    const exactPrepStartMs = profileTransverse ? nowMs() : 0;
     const [{ convertImageHeightToEffectiveObject: convertFn }, { calculateSurfaceOrigins }, { findStopSurface }] = await Promise.all([
       import("../../../optical/ray-renderer.ts"),
       import("../../../raytracing/core/ray-tracing.ts"),
@@ -657,9 +634,6 @@ export async function normalizeTransverseObjectRowsForImageHeight(
       try { return extractStopCenter3d(sharedStopInfo); } catch (_) { return null; }
     })();
     sharedSolveScopeKey = `${JSON.stringify(opticalSystemRows)}||${Number.isFinite(Number(wavelength)) ? Number(wavelength) : 0.5876}||${conjugateType}||rust-only`;
-    if (profileTransverse) {
-      console.info(`⏱️ [TA Profile][Normalize] exactPrep=${(nowMs() - exactPrepStartMs).toFixed(2)}ms`);
-    }
   }
 
   const imageHeightCount = normalizedRows.reduce((acc, row) => {
@@ -693,7 +667,6 @@ export async function normalizeTransverseObjectRowsForImageHeight(
     };
 
     try {
-      const rowStartMs = profileTransverse ? nowMs() : 0;
       let effective = null;
       if (preferParaxialImageHeight && sharedParaxial) {
         if (conjugateType === 'infinite') {
@@ -812,9 +785,6 @@ export async function normalizeTransverseObjectRowsForImageHeight(
           __cooptOriginalPosition: row.position,
         });
         convertedCount += 1;
-        if (profileTransverse) {
-          console.info(`⏱️ [TA Profile][Normalize][Row] index=${rowIndex} mode=${usedExactSolver ? "exact" : "paraxial-fast"} elapsed=${(nowMs() - rowStartMs).toFixed(2)}ms`);
-        }
         const percent = progressStart + ((progressEnd - progressStart) * convertedCount) / Math.max(1, imageHeightCount);
         emitProgress(percent, `${progressLabel}: converting ${convertedCount}/${imageHeightCount}`);
         if ((convertedCount % 3) === 0) {
@@ -846,9 +816,6 @@ export async function normalizeTransverseObjectRowsForImageHeight(
       const firstKey = transverseObjectNormalizationCache.keys().next().value;
       if (firstKey !== undefined) transverseObjectNormalizationCache.delete(firstKey);
     }
-  }
-  if (profileTransverse) {
-    console.info(`⏱️ [TA Profile][Normalize] total=${(nowMs() - profileStartMs).toFixed(2)}ms imageHeightRows=${imageHeightCount} preferParaxial=${preferParaxialImageHeight ? "true" : "false"}`);
   }
   return convertedRows;
 }
@@ -1190,7 +1157,7 @@ function deriveGridFieldModeNativeLike(objectRows: any[]): "angle" | "height" | 
   if (rows.some((row) => getObjectPositionTagNativeLike(row).includes("angle"))) return "angle";
 
   const hasNumericHeight = rows.some((row) => {
-    const value = Number(row?.yHeight ?? row?.y ?? row?.height ?? row?.["object y"]);
+    const value = Number(row?.yHeight ?? row?.height ?? row?.["object y"]);
     return Number.isFinite(value);
   });
   return hasNumericHeight ? "height" : "angle";
@@ -1207,15 +1174,17 @@ function readGridFieldVectorNativeLike(row: any, mode: "angle" | "height" | "ima
 
   if (mode === "imageheight") {
     return {
-      x: pick(row?.__cooptImageHeightTarget?.x, row?.xHeight, row?.x, row?.["object x"], row?.xHeightAngle),
-      y: pick(row?.__cooptImageHeightTarget?.y, row?.yHeight, row?.y, row?.["object y"], row?.yHeightAngle),
+      // Do not mix angle columns into image-height extents.
+      x: pick(row?.__cooptImageHeightTarget?.x, row?.xHeight, row?.x, row?.["object x"]),
+      y: pick(row?.__cooptImageHeightTarget?.y, row?.yHeight, row?.y, row?.["object y"]),
     };
   }
 
   if (mode === "height") {
     return {
-      x: pick(row?.xHeight, row?.x, row?.["object x"], row?.xHeightAngle),
-      y: pick(row?.yHeight, row?.y, row?.["object y"], row?.yHeightAngle),
+      // Do not mix angle columns into object-height extents.
+      x: pick(row?.xHeight, row?.x, row?.["object x"]),
+      y: pick(row?.yHeight, row?.y, row?.["object y"]),
     };
   }
 
@@ -2142,8 +2111,9 @@ export async function runNativeAstigmatism(
 ): Promise<NativeAstigmatismResponse> {
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const forceWebQconFallback = hasQconSurfaceNativeLike(opticalSystemRows);
+  const forceWasmInTauri = payload?.forceWasmInTauri === true || payload?.requireRustWasm === true;
 
-  if (!isTauriRuntime() || forceWebQconFallback) {
+  if (!isTauriRuntime() || forceWebQconFallback || forceWasmInTauri) {
     const {
       calculateAstigmatismDataNativeLike,
     } = await import("../../../evaluation/aberrations/astigmatism.ts");
@@ -2159,6 +2129,7 @@ export async function runNativeAstigmatism(
       objectRows,
       targetSurfaceIndex,
       {
+        pointCount: Number.isInteger(payload?.pointCount) ? Number(payload.pointCount) : undefined,
         rayCount: Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : 100,
         ringCount: Number.isInteger(payload?.ringCount) ? Number(payload.ringCount) : 10,
         pattern: (payload?.pattern === "grid" || payload?.pattern === "cross" || payload?.pattern === "annular")
@@ -2206,15 +2177,12 @@ export async function runNativeAstigmatism(
 export async function runNativeTransverseAberration(
   payload: NativeTransverseAberrationRequest,
 ): Promise<NativeTransverseAberrationResponse> {
-  const nowMs = () => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now());
   const profileTransverse = !!(
     (payload && typeof payload === 'object' && payload.profileTransverse === true) ||
     (typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_PROFILE_TRANSVERSE === true)
   );
-  const profileStartMs = profileTransverse ? nowMs() : 0;
   const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
-  const normalizeStartMs = profileTransverse ? nowMs() : 0;
   const normalizedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
     opticalSystemRows,
     sourceRows,
@@ -2222,9 +2190,6 @@ export async function runNativeTransverseAberration(
     Number(payload?.wavelength),
     { preferParaxialImageHeight: true },
   );
-  if (profileTransverse) {
-    console.info(`⏱️ [TA Profile][WebPath] normalizeObjectRows=${(nowMs() - normalizeStartMs).toFixed(2)}ms rows=${normalizedObjectRows.length}`);
-  }
 
   if (!isTauriRuntime()) {
     const {
@@ -2238,14 +2203,9 @@ export async function runNativeTransverseAberration(
     const wavelength = Number.isFinite(Number(payload?.wavelength))
       ? Number(payload.wavelength)
       : getPrimaryWavelengthForAberration();
-    const buildFieldsStartMs = profileTransverse ? nowMs() : 0;
     const fieldSettings = normalizedObjectRows.length > 0
       ? buildTransverseFieldSettingsFromObjectRows(normalizedObjectRows)
       : null;
-    if (profileTransverse) {
-      console.info(`⏱️ [TA Profile][WebPath] buildFieldSettings=${(nowMs() - buildFieldsStartMs).toFixed(2)}ms fields=${Array.isArray(fieldSettings) ? fieldSettings.length : 0}`);
-    }
-    const calcStartMs = profileTransverse ? nowMs() : 0;
 
     const result = await calculateTransverseAberrationAsync(
       opticalSystemRows,
@@ -2257,10 +2217,6 @@ export async function runNativeTransverseAberration(
         requireRustWasm: true,
       },
     );
-    if (profileTransverse) {
-      console.info(`⏱️ [TA Profile][WebPath] calculateTransverseAberrationAsync=${(nowMs() - calcStartMs).toFixed(2)}ms`);
-      console.info(`⏱️ [TA Profile][WebPath] total=${(nowMs() - profileStartMs).toFixed(2)}ms backend=web-rust-wasm`);
-    }
     if (!result) throw new Error("Web transverse aberration calculation failed");
     return {
       ...(result as any),
@@ -5704,95 +5660,31 @@ export async function runNativeGridDistortion(
     const gridFieldMode = deriveGridFieldModeNativeLike(inputObjectRows);
     const gridFieldExtents = deriveGridAxisExtentsNativeLike(inputObjectRows, gridFieldMode);
     const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
-    let focalLength = Number(paraxial?.focalLength);
-    let magnification = -1;
-    try {
-      emitProgress(4, "Grid distortion: estimating focal length...");
-      const thetaDeg = 0.1;
-      const thetaRad = thetaDeg * Math.PI / 180;
-      const focalProbeObjectRows = finiteSystem
-        ? [{
-          id: "Field-0",
-          name: "Field-0",
-          position: "Rectangle",
-          xHeight: 0,
-          yHeight: objectDistance * Math.tan(thetaRad),
-          x: 0,
-          y: objectDistance * Math.tan(thetaRad),
-        }]
-        : [{
-          id: "Field-0",
-          name: "Field-0",
-          position: "Angle",
-          xHeightAngle: 0,
-          yHeightAngle: thetaDeg,
-          x: 0,
-          y: thetaDeg,
-        }];
-      const focalProbeResp = await runNativeSpotRaytrace({
-        opticalSystemRows,
-        sourceRows,
-        objectRows: focalProbeObjectRows,
-        surfaceIndex,
-        rayCount: 11,
-        ringCount: 1,
-        pattern: "cross",
-        wavelengthMode: "primary",
-        forceRustWasm: true,
-      });
-      const focalProbeSeries = Array.isArray(focalProbeResp?.series) ? focalProbeResp.series : [];
-      const focalProbeRow = focalProbeSeries[0] as any;
-      const focalChiefYUm = Number(
-        (focalProbeRow?.chiefPointUm && typeof focalProbeRow.chiefPointUm === "object" ? focalProbeRow.chiefPointUm.yUm : undefined)
-        ?? (Array.isArray(focalProbeRow?.points) ? focalProbeRow.points[0]?.yUm : undefined)
-      );
-      if (Number.isFinite(focalChiefYUm) && Math.abs(thetaRad) > 1e-12) {
-        const focalFromChief = Math.abs((focalChiefYUm / 1000) / Math.tan(thetaRad));
-        if (Number.isFinite(focalFromChief) && Math.abs(focalFromChief) > 1e-9) {
-          focalLength = focalFromChief;
-        }
-      }
-    } catch {
-      // Keep paraxial focal length fallback.
-    }
-    if (gridFieldMode === "height" && finiteSystem) {
-      try {
-        emitProgress(7, "Grid distortion: estimating magnification...");
-        const magProbeResp = await runNativeSpotRaytrace({
-          opticalSystemRows,
-          sourceRows,
-          objectRows: [{
-            id: "Field-0",
-            name: "Field-0",
-            position: "Rectangle",
-            xHeight: 0,
-            yHeight: 1,
-            x: 0,
-            y: 1,
-          }],
-          surfaceIndex,
-          rayCount: 11,
-          ringCount: 1,
-          pattern: "cross",
-          wavelengthMode: "primary",
-          forceRustWasm: true,
-        });
-        const magProbeSeries = Array.isArray(magProbeResp?.series) ? magProbeResp.series : [];
-        const magProbeRow = magProbeSeries[0] as any;
-        const magChiefYUm = Number(
-          (magProbeRow?.chiefPointUm && typeof magProbeRow.chiefPointUm === "object" ? magProbeRow.chiefPointUm.yUm : undefined)
-          ?? (Array.isArray(magProbeRow?.points) ? magProbeRow.points[0]?.yUm : undefined)
-        );
-        if (Number.isFinite(magChiefYUm)) {
-          const magFromChief = Math.abs(magChiefYUm / 1000);
-          if (Number.isFinite(magFromChief) && Math.abs(magFromChief) > 1e-9) {
-            magnification = magFromChief;
-          }
-        }
-      } catch {
-        // Keep default magnification fallback.
+    emitProgress(4, "Grid distortion: estimating paraxial model...");
+    const focalLengthCandidates = [
+      Number(paraxial?.focalLength),
+      Number(paraxial?.effectiveFocalLength),
+      Number(paraxial?.focal_length),
+      Number(paraxial?.EFL),
+      Number(paraxial?.FL),
+    ];
+    let focalLength = Number.NaN;
+    for (const candidate of focalLengthCandidates) {
+      if (Number.isFinite(candidate) && Math.abs(candidate) > 1e-12) {
+        focalLength = Math.abs(candidate);
+        break;
       }
     }
+    const imageDistance = Number(paraxial?.imageDistance ?? paraxial?.image_distance);
+    const magnification = (
+      gridFieldMode === "height"
+      && finiteSystem
+      && Number.isFinite(imageDistance)
+      && Number.isFinite(objectDistance)
+      && Math.abs(objectDistance) > 1e-12
+    )
+      ? Math.abs(imageDistance / objectDistance)
+      : -1;
     const hasFiniteFocalLength = Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12;
     // Match distortion behavior: continue with a normalized focal length instead of hard-failing.
     const focalLengthForGrid = hasFiniteFocalLength ? focalLength : 1.0;
@@ -5809,37 +5701,63 @@ export async function runNativeGridDistortion(
       : gridFieldMode === "height"
         ? gridFieldExtents.y * imageScaleForHeight
         : gridFieldExtents.y;
-    const stepX = (2 * maxImageX) / Math.max(1, gridSize - 1);
-    const stepY = (2 * maxImageY) / Math.max(1, gridSize - 1);
+    const imageHeightToObjectScale = (
+      gridFieldMode === "imageheight"
+      && finiteSystem
+      && Number.isFinite(imageDistance)
+      && Number.isFinite(objectDistance)
+      && Math.abs(imageDistance) > 1e-12
+    )
+      ? Math.abs(objectDistance / imageDistance)
+      : 1.0;
+    const gridRangeScale = Math.SQRT2 / 2;
+    const scaledMaxImageX = maxImageX * gridRangeScale;
+    const scaledMaxImageY = maxImageY * gridRangeScale;
+    const stepX = (2 * scaledMaxImageX) / Math.max(1, gridSize - 1);
+    const stepY = (2 * scaledMaxImageY) / Math.max(1, gridSize - 1);
 
     const idealX: number[] = [];
     const idealY: number[] = [];
     const objectRows: any[] = [];
     for (let yi = 0; yi < gridSize; yi++) {
-      const imageY = -maxImageY + yi * stepY;
+      const imageY = -scaledMaxImageY + yi * stepY;
       const thetaYRad = Math.atan(imageY / focalLengthForGrid);
       const thetaY = (thetaYRad * 180) / Math.PI;
       for (let xi = 0; xi < gridSize; xi++) {
-        const imageX = -maxImageX + xi * stepX;
+        const imageX = -scaledMaxImageX + xi * stepX;
         const thetaXRad = Math.atan(imageX / focalLengthForGrid);
         const thetaX = (thetaXRad * 180) / Math.PI;
         const index = yi * gridSize + xi;
         idealX.push(imageX);
         idealY.push(imageY);
         if (gridFieldMode === "imageheight") {
-          objectRows.push({
-            id: `Field-${index}`,
-            name: `Field-${index}`,
-            position: "ImageHeight",
-            objectType: "ImageHeight",
-            xHeightAngle: imageX,
-            yHeightAngle: imageY,
-            xHeight: imageX,
-            yHeight: imageY,
-            x: imageX,
-            y: imageY,
-            __cooptImageHeightTarget: { x: imageX, y: imageY },
-          });
+          if (finiteSystem) {
+            const objectX = imageX * imageHeightToObjectScale;
+            const objectY = imageY * imageHeightToObjectScale;
+            objectRows.push({
+              id: `Field-${index}`,
+              name: `Field-${index}`,
+              position: "Rectangle",
+              xHeight: objectX,
+              yHeight: objectY,
+              x: objectX,
+              y: objectY,
+              __cooptOriginalPosition: "ImageHeight",
+              __cooptImageHeightTarget: { x: imageX, y: imageY },
+            });
+          } else {
+            objectRows.push({
+              id: `Field-${index}`,
+              name: `Field-${index}`,
+              position: "Angle",
+              xHeightAngle: thetaX,
+              yHeightAngle: thetaY,
+              x: thetaX,
+              y: thetaY,
+              __cooptOriginalPosition: "ImageHeight",
+              __cooptImageHeightTarget: { x: imageX, y: imageY },
+            });
+          }
         } else if (gridFieldMode === "height") {
           const objectX = finiteSystem && imageScaleForHeight > 1e-9 ? (imageX / imageScaleForHeight) : imageX;
           const objectY = finiteSystem && imageScaleForHeight > 1e-9 ? (imageY / imageScaleForHeight) : imageY;
@@ -5880,20 +5798,7 @@ export async function runNativeGridDistortion(
 
     emitProgress(10, "Grid distortion: grid generated, starting trace...");
 
-    const traceObjectRows = gridFieldMode === "imageheight"
-      ? await normalizeTransverseObjectRowsForImageHeight(
-        opticalSystemRows,
-        sourceRows,
-        objectRows,
-        wavelength,
-        {
-          onProgress,
-          progressStart: 10,
-          progressEnd: 30,
-          progressLabel: "Grid distortion: converting image-height fields",
-        },
-      )
-      : objectRows;
+    const traceObjectRows = objectRows;
 
     const realX = new Array(idealX.length).fill(null) as Array<number | null>;
     const realY = new Array(idealY.length).fill(null) as Array<number | null>;
@@ -5905,14 +5810,11 @@ export async function runNativeGridDistortion(
       const index = Number(match[1]);
       if (!Number.isInteger(index) || index < 0 || index >= realX.length) return;
       const chiefPointUm = row?.chiefPointUm;
-      const fallbackPoint = Array.isArray(row?.points) ? row.points[0] : null;
       const xMm = Number(
         (chiefPointUm && typeof chiefPointUm === "object" ? chiefPointUm.xUm : undefined)
-        ?? fallbackPoint?.xUm
       ) / 1000;
       const yMm = Number(
         (chiefPointUm && typeof chiefPointUm === "object" ? chiefPointUm.yUm : undefined)
-        ?? fallbackPoint?.yUm
       ) / 1000;
       if (Number.isFinite(xMm) && Number.isFinite(yMm)) {
         realX[index] = xMm;
@@ -5936,6 +5838,7 @@ export async function runNativeGridDistortion(
           pattern: "cross",
           wavelengthMode: "primary",
           forceRustWasm: true,
+          strictChiefOnly: true,
         });
         const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
         for (const s of series as any[]) {
@@ -5957,6 +5860,7 @@ export async function runNativeGridDistortion(
         pattern: "cross",
         wavelengthMode: "primary",
         forceRustWasm: true,
+        strictChiefOnly: true,
       });
 
       const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
@@ -5997,8 +5901,11 @@ export async function runNativeGridDistortion(
         focalLengthForGrid,
         finiteSystem,
         gridFieldMode,
-        maxImageX,
-        maxImageY,
+        objectMaxHeight: (gridFieldMode === "height" || gridFieldMode === "imageheight")
+          ? Number(gridFieldExtents.y)
+          : NaN,
+        maxImageX: scaledMaxImageX,
+        maxImageY: scaledMaxImageY,
         surfaceIndex,
         directChiefRayCount,
         missingFieldFallbackCount,
@@ -6017,7 +5924,9 @@ export async function runNativeMagnificationChromaticAberration(
   payload: NativeMagnificationChromaticAberrationRequest,
 ): Promise<NativeMagnificationChromaticAberrationResponse> {
   const tauriRuntime = isTauriRuntime();
-  if (tauriRuntime) {
+  const chiefRayDefinition = String(payload?.chiefRayDefinition || "stop-center").trim().toLowerCase();
+  const useExactStopCenterWasmInTauri = tauriRuntime && chiefRayDefinition.startsWith("stop-center");
+  if (tauriRuntime && !useExactStopCenterWasmInTauri) {
     try {
       return await invokeCommand<NativeMagnificationChromaticAberrationRequest, NativeMagnificationChromaticAberrationResponse>(
         "run_native_magnification_chromatic_aberration",
@@ -6057,6 +5966,7 @@ export async function runNativeMagnificationChromaticAberration(
     ...(normalized.meta || {}),
     executionMode: tauriRuntime ? "tauri-wasm" : "web-wasm",
     nativeTauriInvokeDisabled: true,
+    exactStopCenterChiefFallback: useExactStopCenterWasmInTauri,
   };
   normalized.imageHeightMode = payload?.imageHeightMode === true || normalized.imageHeightMode === true;
   return normalized;

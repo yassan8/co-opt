@@ -2439,19 +2439,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
     if (entranceBuildMs > 0) recordCooptPerfSample('ray.infiniteCrossBeam.entrance', entranceBuildMs);
     if (traceCrossMs > 0) recordCooptPerfSample('ray.infiniteCrossBeam.trace', traceCrossMs);
 
-    if (perfProfileEnabled) {
-        const raysTraced = Array.isArray(allTracedRays) ? allTracedRays.length : 0;
-        const raysInput = Array.isArray(allCrossBeamRays) ? allCrossBeamRays.length : 0;
-        const objectsProcessed = Math.max(1, Number(allResults.length) || 0);
-        console.info(
-            `⏱️ [TA Profile][InfiniteCrossBeam] total=${totalMs.toFixed(2)}ms ` +
-            `chiefSolve=${chiefSolveMs.toFixed(2)}ms chiefRefine=${chiefRefineMs.toFixed(2)}ms ` +
-            `boundary=${boundaryBuildMs.toFixed(2)}ms entrance=${entranceBuildMs.toFixed(2)}ms trace=${traceCrossMs.toFixed(2)}ms ` +
-            `objects=${allResults.length}/${angles.length} raysIn=${raysInput} raysOut=${raysTraced} ` +
-            `avgPerObject=${(totalMs / objectsProcessed).toFixed(2)}ms`
-        );
-    }
-
     return result;
 }
 

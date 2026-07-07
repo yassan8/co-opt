@@ -158,9 +158,72 @@ function resolvePlotTarget(target) {
   return { element: el, plotly, isElement: true };
 }
 
+function resolveEnlargementFactor(options = {}) {
+  const explicit = Number(options?.enlargementFactor);
+  if (Number.isFinite(explicit)) return explicit;
+  try {
+    const candidates = [
+      document.getElementById('enlargement-factor-input'),
+      document.getElementById('grid-enlargement-factor-input'),
+      document.getElementById('popup-enlargement-factor-input'),
+      document.getElementById('popup-grid-enlargement-factor-input'),
+    ];
+    for (const el of candidates) {
+      const raw = el && 'value' in el ? Number(el.value) : Number.NaN;
+      if (Number.isFinite(raw)) return raw;
+    }
+  } catch (_) {
+    // ignore DOM lookup failures
+  }
+  return 1;
+}
+
+function estimateGridHorizontalOffset(idealGrid, realGrid) {
+  const idealX = Array.isArray(idealGrid?.x) ? idealGrid.x : [];
+  const idealY = Array.isArray(idealGrid?.y) ? idealGrid.y : [];
+  const realX = Array.isArray(realGrid?.x) ? realGrid.x : [];
+  const n = Math.min(idealX.length, idealY.length, realX.length);
+  if (n <= 0) return null;
+
+  let minAbsY = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < n; i++) {
+    const y = Number(idealY[i]);
+    if (Number.isFinite(y)) minAbsY = Math.min(minAbsY, Math.abs(y));
+  }
+  if (!Number.isFinite(minAbsY)) return null;
+
+  const tol = Math.max(1e-9, minAbsY * 1e-6);
+  const pairs = [];
+  for (let i = 0; i < n; i++) {
+    const xIdeal = Number(idealX[i]);
+    const yIdeal = Number(idealY[i]);
+    const xReal = Number(realX[i]);
+    if (!Number.isFinite(xIdeal) || !Number.isFinite(yIdeal) || !Number.isFinite(xReal)) continue;
+    if (Math.abs(Math.abs(yIdeal) - minAbsY) > tol) continue;
+    pairs.push({ xIdeal, absX: Math.abs(xIdeal), dx: xIdeal - xReal });
+  }
+
+  if (pairs.length === 0) return null;
+  pairs.sort((a, b) => a.absX - b.absX);
+
+  // Use center-near samples first to avoid unstable extrapolation at large EF.
+  const nearCenter = pairs.filter((p) => p.absX <= (pairs[0]?.absX ?? 0) + 1e-9);
+  if (nearCenter.length > 0) {
+    const mean = nearCenter.reduce((s, p) => s + p.dx, 0) / nearCenter.length;
+    return Number.isFinite(mean) ? mean : null;
+  }
+
+  // Fallback: median of the nearest 3 points by |X|.
+  const nearest = pairs.slice(0, Math.min(3, pairs.length)).map((p) => p.dx).filter((v) => Number.isFinite(v));
+  if (nearest.length === 0) return null;
+  nearest.sort((a, b) => a - b);
+  return nearest[Math.floor(nearest.length / 2)];
+}
+
 export function plotDistortionPercent(dataArray, targetDivId = 'distortion-percent', options = {}) {
   // Handle both single data object and array of data objects
   const dataList = Array.isArray(dataArray) ? dataArray : [dataArray];
+  const enlargementFactor = resolveEnlargementFactor(options);
   
   if (dataList.length === 0 || !dataList[0]) {
     console.warn('No valid data provided for distortion percent plot');
@@ -180,9 +243,13 @@ export function plotDistortionPercent(dataArray, targetDivId = 'distortion-perce
     const wavelengthNm = (wavelength * 1000).toFixed(1);
     const color = getWavelengthColor(wavelength);
   const label = fieldAxisLabel.traceLabel;
+    const scaledDistortionPercent = data.distortionPercent.map((value) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n * enlargementFactor : null;
+    });
 
     return {
-      x: data.distortionPercent,  // Horizontal axis
+      x: scaledDistortionPercent,  // Horizontal axis
       y: data.fieldValues,        // Vertical axis
       name: `DIST ${wavelengthNm}nm (${label})`,
       mode: 'lines',
@@ -317,15 +384,17 @@ export async function generateDistortionPlots({
 }
 
 /**
- * Plot grid distortion diagram showing ideal grid (lines) and real grid (markers).
+ * Plot grid distortion diagram showing ideal and real grids as lines.
  * @param {Object} data - grid distortion data from calculateGridDistortion.
  * @param {string} targetDivId - target div ID for Plotly.
  */
 export async function plotGridDistortion(data, targetDivId = 'distortion-grid', onProgress = null) {
+  const options = arguments.length > 3 ? (arguments[3] || {}) : {};
   if (!data || !data.idealGrid || !data.realGrid) {
     console.warn('Invalid data for grid distortion plot');
     return;
   }
+  const enlargementFactor = resolveEnlargementFactor(options);
 
   const progress = (typeof onProgress === 'function') ? onProgress : null;
   const reportProgress = (percent, message) => {
@@ -335,6 +404,31 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
   };
 
   const { idealGrid, realGrid, gridSize, maxFieldAngle, meta } = data;
+  const horizontalOffset = estimateGridHorizontalOffset(idealGrid, realGrid);
+  const offsetRealGrid = {
+    x: realGrid.x.map((value) => {
+      const x = Number(value);
+      if (!Number.isFinite(x)) return null;
+      return Number.isFinite(Number(horizontalOffset)) ? x + Number(horizontalOffset) : x;
+    }),
+    y: realGrid.y,
+  };
+  const scaledRealGrid = {
+    x: offsetRealGrid.x.map((value, index) => {
+      const realX = Number(value);
+      const idealX = Number(idealGrid.x[index]);
+      if (!Number.isFinite(realX) || !Number.isFinite(idealX)) return null;
+      const distortionX = enlargementFactor * (idealX - realX);
+      return idealX - distortionX;
+    }),
+    y: offsetRealGrid.y.map((value, index) => {
+      const realY = Number(value);
+      const idealY = Number(idealGrid.y[index]);
+      if (!Number.isFinite(realY) || !Number.isFinite(idealY)) return null;
+      const distortionY = enlargementFactor * (idealY - realY);
+      return idealY - distortionY;
+    }),
+  };
   const traces = [];
 
   // Create ideal grid lines (horizontal and vertical)
@@ -349,9 +443,9 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
       x: xLine,
       y: yLine,
       mode: 'lines',
-      line: { color: '#888888', width: 1 },
+      line: { color: '#000000', width: 2 },
       showlegend: i === 0,
-      name: i === 0 ? 'Ideal Grid' : undefined,
+      name: i === 0 ? 'Theoretical Grid' : undefined,
       hoverinfo: 'skip'
     });
 
@@ -374,7 +468,7 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
       x: xLine,
       y: yLine,
       mode: 'lines',
-      line: { color: '#888888', width: 1 },
+      line: { color: '#000000', width: 2 },
       showlegend: false,
       hoverinfo: 'skip'
     });
@@ -384,7 +478,7 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
     }
   }
 
-  const realGridColor = getWavelengthColor(meta.wavelength);
+  const realGridColor = '#ff0000';
 
   // Draw real distorted grid mesh so every cell is visible.
   for (let i = 0; i < gridSize; i++) {
@@ -392,8 +486,8 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
     const rowY = [];
     for (let j = 0; j < gridSize; j++) {
       const idx = i * gridSize + j;
-      const x = realGrid.x[idx];
-      const y = realGrid.y[idx];
+      const x = scaledRealGrid.x[idx];
+      const y = scaledRealGrid.y[idx];
       rowX.push((x !== null && x !== undefined && isFinite(x)) ? x : null);
       rowY.push((y !== null && y !== undefined && isFinite(y)) ? y : null);
     }
@@ -401,9 +495,9 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
       x: rowX,
       y: rowY,
       mode: 'lines',
-      line: { color: realGridColor, width: 1.2 },
+      line: { color: realGridColor, width: 1 },
       showlegend: i === 0,
-      name: i === 0 ? `Real Grid (λ=${meta.wavelength.toFixed(4)} μm)` : undefined,
+      name: i === 0 ? `Distortion Grid (λ=${meta.wavelength.toFixed(4)} μm)` : undefined,
       hoverinfo: 'skip',
       connectgaps: false,
       type: 'scatter'
@@ -415,8 +509,8 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
     const colY = [];
     for (let i = 0; i < gridSize; i++) {
       const idx = i * gridSize + j;
-      const x = realGrid.x[idx];
-      const y = realGrid.y[idx];
+      const x = scaledRealGrid.x[idx];
+      const y = scaledRealGrid.y[idx];
       colX.push((x !== null && x !== undefined && isFinite(x)) ? x : null);
       colY.push((y !== null && y !== undefined && isFinite(y)) ? y : null);
     }
@@ -424,7 +518,7 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
       x: colX,
       y: colY,
       mode: 'lines',
-      line: { color: realGridColor, width: 1.2 },
+      line: { color: realGridColor, width: 1 },
       showlegend: false,
       hoverinfo: 'skip',
       connectgaps: false,
@@ -438,11 +532,11 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
   const realY = [];
   const blockedX = [];
   const blockedY = [];
-  const totalPoints = Math.max(1, realGrid.x.length);
+  const totalPoints = Math.max(1, scaledRealGrid.x.length);
   
-  for (let i = 0; i < realGrid.x.length; i++) {
-    const x = realGrid.x[i];
-    const y = realGrid.y[i];
+  for (let i = 0; i < scaledRealGrid.x.length; i++) {
+    const x = scaledRealGrid.x[i];
+    const y = scaledRealGrid.y[i];
     const idealX = idealGrid.x[i];
     const idealY = idealGrid.y[i];
     
@@ -469,55 +563,23 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
     }
   }
 
-  console.log(`📊 Grid distortion: ${validPointCount} valid points (${realGrid.x.length - validPointCount} failed)`);
-
-  // Add real grid points
-  traces.push({
-    x: realX,
-    y: realY,
-    mode: 'markers',
-    marker: {
-      color: realGridColor,
-      size: 6,
-      symbol: 'circle',
-      opacity: 0.9,
-      line: {
-        width: 0.8,
-        color: '#333333'
-      }
-    },
-    showlegend: false,
-    name: `Real Positions (λ=${meta.wavelength.toFixed(4)} μm)`,
-    hovertemplate: 'Real: (%{x:.3f}, %{y:.3f}) mm<extra></extra>'
-  });
-
-  if (blockedX.length > 0) {
-    traces.push({
-      x: blockedX,
-      y: blockedY,
-      mode: 'markers',
-      marker: {
-        color: '#ef4444',
-        size: 7,
-        symbol: 'x',
-        opacity: 0.8,
-        line: {
-          width: 1,
-          color: '#991b1b'
-        }
-      },
-      showlegend: true,
-      name: 'Blocked/Vignetted Samples',
-      hovertemplate: 'Blocked target: (%{x:.3f}, %{y:.3f}) mm<extra></extra>'
-    });
-  }
+  console.log(`📊 Grid distortion: ${validPointCount} valid points (${scaledRealGrid.x.length - validPointCount} failed)`);
+  const displayGridSize = Number.isFinite(Number(meta?.requestedGridSize)) && Number(meta?.requestedGridSize) > 0
+    ? Number(meta.requestedGridSize)
+    : Math.max(1, gridSize - 1);
 
   const maxAbsIdealX = idealGrid.x.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
   const maxAbsIdealY = idealGrid.y.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
-  const equalRangeHalf = Math.max(maxAbsIdealX, maxAbsIdealY, 1e-9);
+    const maxAbsRealX = scaledRealGrid.x.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
+    const maxAbsRealY = scaledRealGrid.y.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
+  const objectMaxHeight = Number(meta?.objectMaxHeight);
+    const baseRangeHalf = (Number.isFinite(objectMaxHeight) && objectMaxHeight > 0)
+    ? Math.max(objectMaxHeight, 1e-9)
+    : Math.max(maxAbsIdealX, maxAbsIdealY, 1e-9);
+    const equalRangeHalf = Math.max(baseRangeHalf, maxAbsRealX, maxAbsRealY, 1e-9);
 
   const layout = {
-    title: `Grid Distortion (${gridSize}×${gridSize}, λ=${meta.wavelength.toFixed(4)} μm, valid=${validPointCount}/${realGrid.x.length})`,
+    title: `Grid Distortion (${displayGridSize}×${displayGridSize}, λ=${meta.wavelength.toFixed(4)} μm, valid=${validPointCount}/${scaledRealGrid.x.length})`,
     xaxis: { 
       title: 'Image Height X (mm)',
       scaleanchor: 'y',

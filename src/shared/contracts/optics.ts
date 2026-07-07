@@ -250,11 +250,14 @@ export interface NativeAstigmatismRequest {
   sourceRows?: unknown[];
   objectRows?: unknown[];
   surfaceIndex?: number;
+  pointCount?: number;
   rayCount?: number;
   ringCount?: number;
   pattern?: "annular" | "grid" | "cross";
   chiefRayMode?: string;
   wavelengthMode?: "all" | "primary";
+  requireRustWasm?: boolean;
+  forceWasmInTauri?: boolean;
 }
 
 export interface NativeAstigmatismFieldData {
@@ -655,6 +658,6 @@ export interface NativeMagnificationChromaticAberrationResponse {
   referenceWavelength: number;
   imageSurfaceIndex: number;
   dataByWavelength: NativeMagnificationChromaticAberrationSeries[];
-  meta: Record<string, number | string | boolean>;
+  meta: Record<string, unknown>;
   message: string;
 }
