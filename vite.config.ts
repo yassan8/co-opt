@@ -5,6 +5,9 @@ import { resolve } from 'path';
 
 export default defineConfig({
   base: '/co-opt/',
+  worker: {
+    format: 'es'
+  },
   plugins: [
     react(),
     {

@@ -631,10 +631,9 @@ export class PSFCalculator {
             ? !!removeTilt
             : !!recenterIfWrapped;
 
-        const minRecommendedSize = 512;
         const autoZeroPad = (!zeroPadTo || zeroPadTo === 0);
         const targetSize = autoZeroPad
-            ? Math.max(samplingSize, minRecommendedSize)
+            ? Math.min(4096, Math.max(samplingSize, samplingSize * 4))
             : ((zeroPadTo > samplingSize && this.supportedSamplings.includes(zeroPadTo)) ? zeroPadTo : samplingSize);
 
         const usedPixelSize = pixelSize || this.calculatePixelSize(
@@ -869,12 +868,11 @@ export class PSFCalculator {
         emitProgress(35, 'psf-amplitude', 'Complex amplitude ready');
         
         // 2.5. Zero-padding for higher PSF resolution (optional)
-        // Auto zero-pad to minimum 512x512 for better resolution, unless disabled
-        const minRecommendedSize = 512;
+        // Auto zero-pad to OPD grid x4, unless disabled
         // If zeroPadTo is 0 or undefined, enable auto zero-padding
         const autoZeroPad = (!zeroPadTo || zeroPadTo === 0);
         let targetSize = autoZeroPad
-            ? Math.max(samplingSize, minRecommendedSize)
+            ? Math.min(4096, Math.max(samplingSize, samplingSize * 4))
             : ((zeroPadTo > samplingSize && this.supportedSamplings.includes(zeroPadTo)) ? zeroPadTo : samplingSize);
         
         if (targetSize > samplingSize) {

@@ -3655,10 +3655,10 @@ export default function LegacyPanels() {
               </label>
               <select
                 id="psf-zeropad-select"
-                title="Auto: pad to at least 512. None: no padding (fast). Or choose an explicit FFT size."
+                title="Auto 4x: FFT size = OPD grid x4. None: no padding (fast). Or choose an explicit FFT size."
                 defaultValue="auto"
               >
-                <option value="auto">Auto (≥512)</option>
+                <option value="auto">Auto 4x</option>
                 <option value="none">None</option>
                 <option value="512">512</option>
                 <option value="1024">1024</option>

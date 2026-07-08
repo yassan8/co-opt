@@ -594,9 +594,7 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
         pupilDiameterMm = Number(derived?.pupilDiameterMm);
         focalLengthMm = Number(derived?.focalLengthMm);
     }
-    const requestedFftSize = (!zeroPadTo || zeroPadTo === 0)
-        ? Math.max(samplingSize, 512)
-        : Math.max(samplingSize, zeroPadTo);
+    const requestedFftSize = samplingSize;
     const basePixelPitchUm = (wavelengthForScale * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
     const pixelSizeUm = basePixelPitchUm * (samplingSize / requestedFftSize);
     const reportProgress = (evt?: { percent?: number; message?: string }) => {
@@ -799,9 +797,7 @@ async function runDesktopNativeCompareMtfVsTfmtfForPopup(payload: {
     const targetFrequencyLpmm = Number.isFinite(Number(payload?.targetFrequencyLpmm)) ? Number(payload.targetFrequencyLpmm) : 10;
     const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
     const zeroPadToRaw = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
-    const requestedFftSize = (!zeroPadToRaw || zeroPadToRaw === 0)
-        ? Math.max(samplingSize, 512)
-        : Math.max(samplingSize, zeroPadToRaw);
+    const requestedFftSize = samplingSize;
     const opdDisplayModeRaw = String(payload?.opdDisplayMode || 'pistonTiltRemoved');
     const opdDisplayMode: 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved' =
         (opdDisplayModeRaw === 'raw' || opdDisplayModeRaw === 'pistonTiltDefocusRemoved')
@@ -10884,8 +10880,8 @@ export function setupAnalysisWindows() {
         <label for="popup-psf-object-select">Object:</label>
         <select id="popup-psf-object-select"><option value="0">1</option></select>
         <label for="popup-psf-sampling-select" title="Zero-padding increases FFT size without increasing OPD ray grid.">Zero pad:</label>
-        <select id="popup-psf-sampling-select" title="Auto: pad to at least 512. None: no padding (FFT size = OPD grid). Or choose an explicit FFT size.">
-            <option value="auto" selected>Auto (≥512)</option>
+        <select id="popup-psf-sampling-select" title="Auto 4x: FFT size = OPD grid x4. None: no padding (FFT size = OPD grid). Or choose an explicit FFT size.">
+            <option value="auto" selected>Auto 4x</option>
             <option value="none">None</option>
             <option value="512">512</option>
             <option value="1024">1024</option>
@@ -12322,9 +12318,9 @@ export function setupAnalysisWindows() {
                         throw new Error('Native Rust PSF map path is required but unavailable.');
                     }
 
-                    const minRecommendedFftSize = 512;
+                    const autoFftSize = Math.min(4096, Math.max(psfSamplingSize, psfSamplingSize * 4));
                     const requestedFftSize = (!zeroPadTo || zeroPadTo === 0)
-                        ? Math.max(psfSamplingSize, minRecommendedFftSize)
+                        ? autoFftSize
                         : Math.max(psfSamplingSize, zeroPadTo);
                     const basePixelPitchUm = (Number(wavelength) * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
                     const pixelSizeUm = basePixelPitchUm * (psfSamplingSize / requestedFftSize);

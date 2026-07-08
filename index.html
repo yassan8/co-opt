@@ -61,6 +61,36 @@
     }
   </script>
 
+  <script>
+    // Hint Canvas2D contexts for frequent readback (e.g. Plotly getImageData paths).
+    (() => {
+      if (globalThis.__cooptCanvasReadbackHintInstalled) return;
+      globalThis.__cooptCanvasReadbackHintInstalled = true;
+
+      try {
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        if (typeof originalGetContext !== 'function') return;
+
+        HTMLCanvasElement.prototype.getContext = function (type, options) {
+          if (type === '2d') {
+            const nextOptions =
+              options && typeof options === 'object'
+                ? { ...options }
+                : {};
+            if (nextOptions.willReadFrequently === undefined) {
+              nextOptions.willReadFrequently = true;
+            }
+            return originalGetContext.call(this, type, nextOptions);
+          }
+
+          return originalGetContext.call(this, type, options);
+        };
+      } catch (_) {
+        console.warn('⚠️ [Startup] Canvas readback hint patch skipped:', _);
+      }
+    })();
+  </script>
+
   <!-- Plotly.js (local bundled module to avoid COEP/CORS CDN blocking) -->
   <script type="module">
     import Plotly from 'plotly.js-dist-min';

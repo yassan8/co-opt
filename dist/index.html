@@ -42,9 +42,6 @@
   <link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator.min.css" rel="stylesheet">
   <script src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
   
-  <!-- Plotly.js最新版を追加 -->
-  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
-
   <!-- URL Share compression (global LZString) -->
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
 
@@ -53,6 +50,38 @@
 
   <!-- Import map for native module scripts loaded directly from index.html -->
 
+
+  <script>
+    // Hint Canvas2D contexts for frequent readback (e.g. Plotly getImageData paths).
+    (() => {
+      if (globalThis.__cooptCanvasReadbackHintInstalled) return;
+      globalThis.__cooptCanvasReadbackHintInstalled = true;
+
+      try {
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        if (typeof originalGetContext !== 'function') return;
+
+        HTMLCanvasElement.prototype.getContext = function (type, options) {
+          if (type === '2d') {
+            const nextOptions =
+              options && typeof options === 'object'
+                ? { ...options }
+                : {};
+            if (nextOptions.willReadFrequently === undefined) {
+              nextOptions.willReadFrequently = true;
+            }
+            return originalGetContext.call(this, type, nextOptions);
+          }
+
+          return originalGetContext.call(this, type, options);
+        };
+      } catch (_) {
+        console.warn('⚠️ [Startup] Canvas readback hint patch skipped:', _);
+      }
+    })();
+  </script>
+
+  <!-- Plotly.js (local bundled module to avoid COEP/CORS CDN blocking) -->
 
 
   <!-- Early WASM service globals (getWASMSystem/_setWASMSystem) -->
@@ -250,13 +279,13 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-CAuyjzj8.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-BsnrzpvX.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/main-xjOuQvTr.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-Py5dex48.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-Bb3_V39c.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/ray-renderer-Cd4nw383.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/surface-origins-loader-CzurNefk.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/ray-renderer-BpUyI-cM.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/surface-origins-loader-J_wbaObZ.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-BirJSHwc.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/optimizer-wasm-bridge--bYcFAxX.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/optimizer-wasm-bridge-Be8APAYN.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/app-Bbdbb2c8.css">
 </head>
 <body>

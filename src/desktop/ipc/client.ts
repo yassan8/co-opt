@@ -3190,10 +3190,7 @@ export async function runNativeThroughFocusMtfMap(
     const targetFreqLpmm = Math.max(0, Number(payload?.targetFrequencyLpmm) || 10);
     const samplingSize = Math.max(32, Math.min(4096, Math.floor(Number(payload?.samplingSize) || 256)));
 
-    const zeroPadTo = Math.floor(Number(payload?.zeroPadTo) || 0);
-    const requestedFftSize = (Number.isFinite(zeroPadTo) && zeroPadTo >= samplingSize)
-      ? zeroPadTo
-      : samplingSize;
+    const requestedFftSize = samplingSize;
     const pixelSizeUm = (Number.isFinite(Number(payload?.pixelSizeUm)) && Number(payload?.pixelSizeUm) > 0)
       ? Number(payload?.pixelSizeUm)
       : 1.0;
@@ -3392,16 +3389,7 @@ export async function runNativeFieldMtfMap(
   const sampleFromObjectRows = payload?.sampleFromObjectRows === true && normalizedInputObjectRows.length > 0;
 
   const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 256;
-  const zeroPadToRaw = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : 0;
-  // Parity with on-axis handleComputeMtf path: when zeroPad is 0 ("auto"),
-  // enforce a minimum FFT size of 512 so the pixel pitch used for PSF sampling
-  // matches the on-axis pipeline. Without this, real lens systems produce
-  // near-zero MTF because pixelSizeUm = basePitch*(sampling/FFT) collapses to
-  // the raw airy pitch and undersamples the diffraction-limited PSF lobe.
-  const minRecommendedFftSize = 512;
-  const requestedFftSize = (!zeroPadToRaw || zeroPadToRaw === 0)
-    ? Math.max(samplingSize, minRecommendedFftSize)
-    : Math.max(samplingSize, zeroPadToRaw);
+  const requestedFftSize = samplingSize;
   const axisMode = payload?.fieldAxisMode === "height" ? "height" : "angle";
   const firstFrequencyLpmm = Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload?.firstFrequencyLpmm) : 10;
   const secondFrequencyLpmm = Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload?.secondFrequencyLpmm) : 30;

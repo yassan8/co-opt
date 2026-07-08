@@ -266,11 +266,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     const legacyCandidate = Math.floor(safeNumber(samplingPoints, NaN));
     const gridCandidate = Number.isFinite(samplingCandidate) ? samplingCandidate : legacyCandidate;
     const gridSize = isPowerOfTwo(gridCandidate) ? clamp(gridCandidate, 32, 4096) : 256;
-    const zeroPadCandidate = Math.floor(safeNumber(zeroPadTo, NaN));
-    const hasExplicitZeroPad = Number.isFinite(zeroPadCandidate) && zeroPadCandidate >= gridSize && isPowerOfTwo(zeroPadCandidate);
-    const explicitZeroPadTo = hasExplicitZeroPad
-        ? clamp(zeroPadCandidate, 32, 4096)
-        : 0;
+    // MTF/TFMTF/Object MTF paths intentionally do not apply zero-padding.
+    const effectiveZeroPadTo = gridSize;
 
     const showDiffractionLimitEnabled = (typeof showDiffractionLimit === 'boolean')
         ? showDiffractionLimit
@@ -457,7 +454,10 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                 selectedObject = {
                     ...selectedObject,
                     ...effectiveObject,
-                    position: selectedObject?.position,
+                    // For infinite systems, ImageHeight is converted to an effective angle field.
+                    // Keep the original UI intent in __cooptOriginalPosition, but use the
+                    // converted type for numerical routing in MTF/Wavefront.
+                    position: effectiveObject?.position ?? 'Angle',
                     __cooptOriginalPosition: selectedObject?.position ?? effectiveObject?.__cooptOriginalPosition,
                 };
                 objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? objectTypeRaw);
@@ -857,8 +857,13 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
 
         // Internal MTF sampling floor: keep user-selected sampling as baseline,
         // but raise pupil sampling when curve density is high to avoid high-frequency elbows.
+        // TFMTF fast-sample mode must respect the requested sampling size for speed.
         const samplingFloorFromCurve = nextPowerOfTwo(Math.max(gridSize, Math.ceil(resolvedPlotPointCount * 1.5)));
-        const samplingSizeForPSF = clamp(samplingFloorFromCurve, 32, 1024);
+        const samplingSizeForPSF = fastSampleEnabled
+            ? gridSize
+            : clamp(samplingFloorFromCurve, 32, 1024);
+
+        ensureConsoleLog(`🔍 [MTF Sampling] requested=${gridSize}, fastSample=${fastSampleEnabled}, wavefrontGrid=${samplingSizeForPSF}`);
 
         const opdCalculator = createOPDCalculator(opticalSystemRows, wlLocal);
         const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
@@ -922,13 +927,41 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
 
         const shouldRetryWithStop = (message) => /entrance.*fail|entrance pupil|entrance unreachable/i.test(String(message || ''));
 
+        const wavefrontTimeoutMs = (() => {
+            const fromGlobal = (typeof globalThis !== 'undefined')
+                ? Number((globalThis as any).__COOPT_MTF_WAVEFRONT_TIMEOUT_MS)
+                : Number.NaN;
+            if (Number.isFinite(fromGlobal) && fromGlobal > 0) return Math.floor(fromGlobal);
+            return 45000;
+        })();
+
+        const withWavefrontTimeout = async <T,>(promise: Promise<T>, modeLabel: string, customFieldSetting: any): Promise<T> => {
+            let timer: any = null;
+            try {
+                const timeoutPromise = new Promise<T>((_, reject) => {
+                    timer = setTimeout(() => {
+                        reject(new Error(
+                            `Wavefront generation timeout (${wavefrontTimeoutMs} ms, mode=${modeLabel}, type=${String(customFieldSetting?.type || '')})`
+                        ));
+                    }, wavefrontTimeoutMs);
+                });
+                return await Promise.race([promise, timeoutPromise]);
+            } finally {
+                if (timer !== null) clearTimeout(timer);
+            }
+        };
+
         const runWavefrontAttempt = async (mode, customFieldSetting = fieldSetting, strictMode = true) => {
             const prevStrict = isRayTracingWasmStrict();
             try {
                 if (!strictMode) {
                     setRayTracingWasmStrict(false);
                 }
-                const map = await generateWavefrontMapForMode(mode, customFieldSetting);
+                const map = await withWavefrontTimeout(
+                    generateWavefrontMapForMode(mode, customFieldSetting),
+                    mode || 'auto',
+                    customFieldSetting
+                );
                 if (map?.error) {
                     return { map: null, error: String(map.error?.message || 'Wavefront generation failed') };
                 }
@@ -1157,21 +1190,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         const targetDfLpmm = Math.max(1e-6, requestedPlotLpmmForResolution / Math.max(1, desiredBinCount - 1));
         const minRequiredNForResolution = Math.ceil(1000.0 / (Math.max(1e-12, basePixelSizeMicronsForMTF) * targetDfLpmm));
         const minRequiredN = Math.max(minRequiredNForBins, minRequiredNForResolution);
-        const adaptiveZeroPadToRaw = nextPowerOfTwo(minRequiredN);
-        const adaptiveZeroPadTo = (adaptiveZeroPadToRaw > gridSize)
-            ? clamp(adaptiveZeroPadToRaw, 32, 4096)
-            : 0;
-        let effectiveZeroPadTo = hasExplicitZeroPad
-            ? explicitZeroPadTo
-            : adaptiveZeroPadTo;
-
-        // Safety fallback: with 32x32 and explicit "none" (zeroPadTo==sampling),
-        // MTF can become numerically unstable or too sparse for plotting in some systems.
-        // Promote to 64x64 only for this narrow edge case.
-        if (hasExplicitZeroPad && explicitZeroPadTo === gridSize && gridSize <= 32) {
-            effectiveZeroPadTo = 64;
-            console.warn('⚠️ MTF: sampling 32 with zero-pad none is unstable; promoted FFT size to 64 for robust plotting.');
-        }
+        void minRequiredN;
 
         reportProgress(localBase + localSpan * 0.75, `λ=${titleNmLocal} nm: Calculating PSF...`);
         const psfResult = await psfCalculator.calculatePSF(opdData, {
@@ -1878,7 +1897,19 @@ async function showThroughFocusMTFDiagram({
     reportProgress(10, 'Computing PSF for all defocus points...', undefined, undefined);
     
     const psfResults: Array<{ shift: number; psfGrid: Float64Array; rows: number; cols: number; metadata: any; mfResult: any }> = [];
-    const PARALLEL_DEFOCUS_BATCH_SIZE = 4;  // Parallel batch size for PSF computation
+    const defocusBatchSizeFromGlobal = (typeof globalThis !== 'undefined')
+        ? Number((globalThis as any).__COOPT_TFMTF_PARALLEL_BATCH_SIZE)
+        : Number.NaN;
+    // Default to sequential processing because shared WASM/FFT resources can stall when oversubscribed.
+    const PARALLEL_DEFOCUS_BATCH_SIZE = Number.isFinite(defocusBatchSizeFromGlobal)
+        ? Math.max(1, Math.min(8, Math.floor(defocusBatchSizeFromGlobal)))
+        : 1;
+    const defocusTimeoutMsFromGlobal = (typeof globalThis !== 'undefined')
+        ? Number((globalThis as any).__COOPT_TFMTF_DEFOCUS_TIMEOUT_MS)
+        : Number.NaN;
+    const tfmtfDefocusTimeoutMs = (Number.isFinite(defocusTimeoutMsFromGlobal) && defocusTimeoutMsFromGlobal > 0)
+        ? Math.floor(defocusTimeoutMsFromGlobal)
+        : 90000;
     
     // Divide defocus values into batches
     const batches: { shift: number; index: number }[][] = [];
@@ -1892,7 +1923,23 @@ async function showThroughFocusMTFDiagram({
 
     ensureConsoleLog(`🚀 [TFMTF] Starting PSF batch processing: ${defocusValues.length} defocus values in ${batches.length} batches (batch size: ${PARALLEL_DEFOCUS_BATCH_SIZE})`);
 
-    // Process batches sequentially, but compute items within each batch in parallel
+    const withDefocusTimeout = async <T,>(promise: Promise<T>, shiftMm: number, index: number): Promise<T> => {
+        let timer: any = null;
+        try {
+            const timeoutPromise = new Promise<T>((_, reject) => {
+                timer = setTimeout(() => {
+                    reject(new Error(
+                        `TFMTF defocus timeout (${tfmtfDefocusTimeoutMs} ms) at ${shiftMm.toFixed(4)} mm (${index + 1}/${defocusValues.length})`
+                    ));
+                }, tfmtfDefocusTimeoutMs);
+            });
+            return await Promise.race([promise, timeoutPromise]);
+        } finally {
+            if (timer !== null) clearTimeout(timer);
+        }
+    };
+
+    // Process batches sequentially, and process each batch in parallel only when explicitly enabled.
     for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
         const batch = batches[batchIdx];
         const batchNum = batchIdx + 1;
@@ -1918,20 +1965,24 @@ async function showThroughFocusMTFDiagram({
 
                 try {
                     ensureConsoleLog(`   → TFMTF Batch ${batchNum}/${batchTotal} defocus ${shift.toFixed(4)}mm: Calling showMTFDiagram`);
-                    const result = await showMTFDiagram({
-                        wavelengthMicrons,
-                        objectIndex,
-                        maxFrequencyLpmm: targetFreq,
-                        targetFrequencyLpmm: targetFreq,
-                        samplingSize: sampling,
-                        zeroPadTo,
-                        opdDisplayMode,
-                        defocusShiftMm: shift,
-                        skipPlot: true,
-                        fastSampleOnly: true,
-                        onProgress: mtfSubProgress,
-                        containerElement
-                    });
+                    const result = await withDefocusTimeout(
+                        showMTFDiagram({
+                            wavelengthMicrons,
+                            objectIndex,
+                            maxFrequencyLpmm: targetFreq,
+                            targetFrequencyLpmm: targetFreq,
+                            samplingSize: sampling,
+                            zeroPadTo,
+                            opdDisplayMode,
+                            defocusShiftMm: shift,
+                            skipPlot: true,
+                            fastSampleOnly: true,
+                            onProgress: mtfSubProgress,
+                            containerElement
+                        }),
+                        shift,
+                        index
+                    );
                     ensureConsoleLog(`   ← TFMTF completed`);
 
                     return {
