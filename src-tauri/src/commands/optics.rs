@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use rayon::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex};
 use std::collections::HashMap;
 use std::f64::consts::PI;
@@ -895,6 +894,7 @@ pub struct NativeMtfMapRequest {
     #[serde(default)]
     pub sample_frequencies_lpmm: Vec<f64>,
     pub direct_eval_only: Option<bool>,
+    pub method: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -935,6 +935,7 @@ pub struct NativeThroughFocusMtfMapRequest {
     pub zero_pad_to: Option<u32>,
     pub pixel_size_um: Option<f64>,
     pub opd_display_mode: Option<String>,
+    pub method: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -970,6 +971,7 @@ pub struct NativeFieldMtfMapRequest {
     pub wavelengths: Vec<f64>,
     pub first_frequency_lpmm: Option<f64>,
     pub second_frequency_lpmm: Option<f64>,
+    pub third_frequency_lpmm: Option<f64>,
     pub field_min: Option<f64>,
     pub field_max: Option<f64>,
     pub steps: Option<u32>,
@@ -978,6 +980,7 @@ pub struct NativeFieldMtfMapRequest {
     pub pixel_size_um: Option<f64>,
     pub opd_display_mode: Option<String>,
     pub field_axis_mode: Option<String>,
+    pub method: Option<String>,
     pub adaptive_sampling: Option<bool>,
     pub adaptive_threshold: Option<f64>,
     pub adaptive_initial_steps: Option<u32>,
@@ -992,6 +995,8 @@ pub struct NativeFieldMtfSeries {
     pub sagittal_first: Vec<f64>,
     pub meridional_second: Vec<f64>,
     pub sagittal_second: Vec<f64>,
+    pub meridional_third: Vec<f64>,
+    pub sagittal_third: Vec<f64>,
     pub field_diagnostics: Vec<NativeFieldMtfPointDiagnostic>,
 }
 
@@ -1365,7 +1370,7 @@ pub fn run_native_spot_raytrace(req: NativeSpotRaytraceRequest) -> Result<Native
             .ok_or_else(|| "run_native_spot_raytrace: packed meta cache miss".to_string())?;
         let ray_count = rays.len();
         let mut ray_hits = rays
-            .par_iter()
+            .iter()
             .enumerate()
             .filter_map(|(i, r)| {
                 let start_dir = [
@@ -2812,7 +2817,7 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
     }
 
     let row_results: Vec<(usize, usize, Vec<Option<f64>>, Vec<Option<f64>>)> = (0..grid_size)
-        .into_par_iter()
+        .into_iter()
         .map(|y| {
             let mut attempted_samples = 0usize;
             let mut hit_count = 0usize;
@@ -3211,6 +3216,238 @@ fn fft2d_forward(real: &mut [Vec<f64>], imag: &mut [Vec<f64>]) -> Result<(), Str
     gpu_fft::fft2d_forward_hybrid(real, imag, fft2d_forward_cpu)
 }
 
+fn next_power_of_two_usize(v: usize) -> usize {
+    let mut n = v.max(1);
+    n -= 1;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    if usize::BITS > 32 {
+        n |= n >> 32;
+    }
+    n + 1
+}
+
+fn fft1d_complex_inplace(data: &mut [Complex<f64>], inverse: bool) {
+    if data.is_empty() {
+        return;
+    }
+    let mut planner = FftPlanner::<f64>::new();
+    if inverse {
+        let fft = planner.plan_fft_inverse(data.len());
+        fft.process(data);
+        let scale = 1.0 / (data.len() as f64);
+        for v in data.iter_mut() {
+            *v *= scale;
+        }
+    } else {
+        let fft = planner.plan_fft_forward(data.len());
+        fft.process(data);
+    }
+}
+
+fn czt_bluestein_uniform_magnitude(
+    signal: &[f64],
+    out_count: usize,
+    start_index: f64,
+    step_index: f64,
+) -> Result<Vec<f64>, String> {
+    let n = signal.len();
+    if n == 0 || out_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let nf = n as f64;
+    let omega0 = 2.0 * std::f64::consts::PI * (start_index / nf);
+    let domega = 2.0 * std::f64::consts::PI * (step_index / nf);
+
+    let conv_len = n + out_count - 1;
+    let fft_len = next_power_of_two_usize(conv_len);
+
+    let mut a = vec![Complex::<f64>::new(0.0, 0.0); fft_len];
+    let mut b = vec![Complex::<f64>::new(0.0, 0.0); fft_len];
+
+    for ni in 0..n {
+        let x = signal[ni];
+        let nf_i = ni as f64;
+        let phase = -(omega0 * nf_i + 0.5 * domega * nf_i * nf_i);
+        let w = Complex::<f64>::new(phase.cos(), phase.sin());
+        a[ni] = w * x;
+    }
+
+    for bi in 0..conv_len {
+        let k = (bi as isize) - ((n as isize) - 1);
+        let kf = k as f64;
+        let phase = 0.5 * domega * kf * kf;
+        b[bi] = Complex::<f64>::new(phase.cos(), phase.sin());
+    }
+
+    fft1d_complex_inplace(&mut a, false);
+    fft1d_complex_inplace(&mut b, false);
+    for i in 0..fft_len {
+        a[i] *= b[i];
+    }
+    fft1d_complex_inplace(&mut a, true);
+
+    let mut out = vec![0.0_f64; out_count];
+    for mi in 0..out_count {
+        let mf = mi as f64;
+        let phase = -0.5 * domega * mf * mf;
+        let post = Complex::<f64>::new(phase.cos(), phase.sin());
+        let idx = mi + (n - 1);
+        out[mi] = (a[idx] * post).norm();
+    }
+
+    Ok(out)
+}
+
+fn dft_magnitude_at_index(signal: &[f64], index: f64) -> f64 {
+    let n = signal.len();
+    if n == 0 || !index.is_finite() {
+        return 0.0;
+    }
+    let nf = n as f64;
+    let omega = 2.0 * std::f64::consts::PI * (index / nf);
+    let mut re = 0.0_f64;
+    let mut im = 0.0_f64;
+    for (ni, x) in signal.iter().copied().enumerate() {
+        let phase = -omega * (ni as f64);
+        re += x * phase.cos();
+        im += x * phase.sin();
+    }
+    re.hypot(im)
+}
+
+fn is_nearly_uniform_axis(axis: &[f64]) -> bool {
+    if axis.len() <= 2 {
+        return true;
+    }
+    let step = axis[1] - axis[0];
+    let tol = (step.abs().max(1.0)) * 1e-9;
+    for i in 2..axis.len() {
+        let di = axis[i] - axis[i - 1];
+        if (di - step).abs() > tol {
+            return false;
+        }
+    }
+    true
+}
+
+fn build_hopkins_tcc_lag(lsf: &[f64]) -> Vec<f64> {
+    let n = lsf.len();
+    let mut lag = vec![0.0_f64; n];
+    for d in 0..n {
+        let mut acc = 0.0_f64;
+        for i in 0..(n - d) {
+            let a = lsf[i];
+            let b = lsf[i + d];
+            acc += a * b;
+        }
+        lag[d] = acc;
+    }
+    lag
+}
+
+fn eval_hopkins_tcc_mtf(
+    freqs_lpmm: &[f64],
+    lsf: &[f64],
+    dc: f64,
+    df_lpmm: f64,
+    nyquist_lpmm: f64,
+) -> Vec<f64> {
+    if freqs_lpmm.is_empty() || lsf.is_empty() {
+        return Vec::new();
+    }
+    let n = lsf.len() as f64;
+    let lag = build_hopkins_tcc_lag(lsf);
+    let dc_safe = dc.abs().max(1e-12);
+    let mut out = Vec::<f64>::with_capacity(freqs_lpmm.len());
+
+    for f in freqs_lpmm.iter().copied() {
+        let fc = f.max(0.0).min(nyquist_lpmm);
+        let idx = fc / df_lpmm.max(1e-12);
+        let base = (2.0 * PI * idx) / n.max(1.0);
+
+        // Hopkins formulation (local plane-wave + TCC matrixization),
+        // reduced to lag-domain cosine sum for real-valued LSF.
+        let mut otf_power = lag[0];
+        for d in 1..lag.len() {
+            otf_power += 2.0 * lag[d] * (base * (d as f64)).cos();
+        }
+        let mtf = (otf_power.max(0.0)).sqrt() / dc_safe;
+        out.push(mtf.clamp(0.0, 1.0));
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod czt_tests {
+    use super::{czt_bluestein_uniform_magnitude, dft_magnitude_at_index};
+
+    fn approx_eq(a: f64, b: f64, abs_eps: f64, rel_eps: f64) -> bool {
+        let diff = (a - b).abs();
+        if diff <= abs_eps {
+            return true;
+        }
+        diff <= rel_eps * a.abs().max(b.abs()).max(1.0)
+    }
+
+    fn make_signal(n: usize) -> Vec<f64> {
+        (0..n)
+            .map(|i| {
+                let t = i as f64;
+                (0.17 * t).sin() + 0.7 * (0.49 * t).cos() + 0.13 * (0.03 * t * t).sin()
+            })
+            .collect::<Vec<f64>>()
+    }
+
+    #[test]
+    fn czt_matches_dft_for_integer_bins() {
+        let signal = make_signal(257);
+        let out = czt_bluestein_uniform_magnitude(&signal, 64, 0.0, 1.0)
+            .expect("CZT integer-bin evaluation must succeed");
+        assert_eq!(out.len(), 64);
+
+        for (m, czt_mag) in out.iter().copied().enumerate() {
+            let dft_mag = dft_magnitude_at_index(&signal, m as f64);
+            assert!(
+                approx_eq(czt_mag, dft_mag, 1e-8, 1e-7),
+                "integer-bin mismatch at m={}: czt={} dft={}",
+                m,
+                czt_mag,
+                dft_mag
+            );
+        }
+    }
+
+    #[test]
+    fn czt_matches_dft_for_fractional_bins() {
+        let signal = make_signal(193);
+        let start = 0.35_f64;
+        let step = 0.77_f64;
+        let out_count = 51_usize;
+        let out = czt_bluestein_uniform_magnitude(&signal, out_count, start, step)
+            .expect("CZT fractional-bin evaluation must succeed");
+        assert_eq!(out.len(), out_count);
+
+        for (m, czt_mag) in out.iter().copied().enumerate() {
+            let idx = start + (m as f64) * step;
+            let dft_mag = dft_magnitude_at_index(&signal, idx);
+            assert!(
+                approx_eq(czt_mag, dft_mag, 1e-8, 1e-7),
+                "fractional-bin mismatch at m={} idx={}: czt={} dft={}",
+                m,
+                idx,
+                czt_mag,
+                dft_mag
+            );
+        }
+    }
+}
+
 fn fft_shift_2d(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let h = data.len();
     if h == 0 {
@@ -3434,7 +3671,7 @@ pub fn run_native_psf_map(req: NativePsfMapRequest, app: AppHandle) -> Result<Na
 
     let phase_scale = -2.0 * PI / req.wavelength_um;
     let (real, imag): (Vec<Vec<f64>>, Vec<Vec<f64>>) = (0..grid_size)
-        .into_par_iter()
+        .into_iter()
         .map(|y| {
             let mut real_row = vec![0.0_f64; width];
             let mut imag_row = vec![0.0_f64; width];
@@ -3476,7 +3713,7 @@ pub fn run_native_psf_map(req: NativePsfMapRequest, app: AppHandle) -> Result<Na
     fft2d_forward(&mut fft_real, &mut fft_imag)?;
 
     let intensity_rows: Vec<(Vec<f64>, f64)> = (0..fft_size)
-        .into_par_iter()
+        .into_iter()
         .map(|y| {
             let mut row = vec![0.0_f64; fft_size];
             let mut row_peak = 0.0_f64;
@@ -3501,7 +3738,7 @@ pub fn run_native_psf_map(req: NativePsfMapRequest, app: AppHandle) -> Result<Na
     }
 
     let (ideal_real, ideal_imag): (Vec<Vec<f64>>, Vec<Vec<f64>>) = (0..grid_size)
-        .into_par_iter()
+        .into_iter()
         .map(|y| {
             let mut real_row = vec![0.0_f64; width];
             let imag_row = vec![0.0_f64; width];
@@ -3525,7 +3762,7 @@ pub fn run_native_psf_map(req: NativePsfMapRequest, app: AppHandle) -> Result<Na
     };
     fft2d_forward(&mut ideal_fft_real, &mut ideal_fft_imag)?;
     let ideal_peak = (0..fft_size)
-        .into_par_iter()
+        .into_iter()
         .map(|y| {
             let mut row_peak = 0.0_f64;
             for x in 0..fft_size {
@@ -3537,7 +3774,7 @@ pub fn run_native_psf_map(req: NativePsfMapRequest, app: AppHandle) -> Result<Na
             }
             row_peak
         })
-        .reduce(|| 0.0_f64, f64::max);
+        .fold(0.0_f64, f64::max);
     let strehl_ratio_override = if aberrated_peak > 0.0 && ideal_peak > 0.0 {
         Some((aberrated_peak / ideal_peak).clamp(0.0, 1.0))
     } else {
@@ -3546,7 +3783,7 @@ pub fn run_native_psf_map(req: NativePsfMapRequest, app: AppHandle) -> Result<Na
 
     if aberrated_peak > 0.0 {
         intensity
-            .par_iter_mut()
+            .iter_mut()
             .for_each(|row| row.iter_mut().for_each(|v| *v /= aberrated_peak));
     }
 
@@ -3624,21 +3861,28 @@ pub fn run_native_mtf_map(req: NativeMtfMapRequest, app: AppHandle) -> Result<Na
 
         let out_points = req.points.unwrap_or(128).clamp(2, 1024) as usize;
         let direct_eval_only = req.direct_eval_only.unwrap_or(false);
-        let sampled_freqs = req
-            .sample_frequencies_lpmm
-            .iter()
-            .copied()
-            .filter(|f| f.is_finite() && *f >= 0.0)
-            .collect::<Vec<f64>>();
+        let method = req
+            .method
+            .as_ref()
+            .map(|m| m.trim().to_ascii_lowercase())
+            .unwrap_or_else(|| "hopkins-tcc".to_string());
+        let use_hopkins_tcc = matches!(method.as_str(), "hopkins-tcc" | "hopkins" | "auto");
 
-        emit_native_analysis_progress(&app, &job_id, kind, "fft", "Computing OTF from PSF...", Some(42.0));
+        emit_native_analysis_progress(&app, &job_id, kind, "lsf", "Computing 1D LSF axes from PSF...", Some(42.0));
 
-        // Match web path: compute OTF directly from PSF grid and sample [0][k]/[k][0] axes.
-        let mut real = req.psf_data.clone();
-        let mut imag = vec![vec![0.0_f64; n]; n];
-        fft2d_forward(&mut real, &mut imag)?;
+        let mut lsf_x = vec![0.0_f64; n];
+        let mut lsf_y = vec![0.0_f64; n];
+        for y in 0..n {
+            for x in 0..n {
+                let v = req.psf_data[y][x];
+                let vv = if v.is_finite() { v } else { 0.0 };
+                lsf_x[x] += vv;
+                lsf_y[y] += vv;
+            }
+        }
 
-        let dc = (real[0][0] * real[0][0] + imag[0][0] * imag[0][0]).sqrt().max(1e-12);
+        let dc_sag = lsf_x.iter().copied().sum::<f64>().abs().max(1e-12);
+        let dc_tan = lsf_y.iter().copied().sum::<f64>().abs().max(1e-12);
 
         // Physical frequency pitch from PSF sampling pitch (um).
         let df_lpmm = (1.0 / (n as f64 * req.pixel_size_um)) * 1000.0;
@@ -3647,69 +3891,110 @@ pub fn run_native_mtf_map(req: NativeMtfMapRequest, app: AppHandle) -> Result<Na
             Some(v) if v.is_finite() && v > 0.0 => v,
             _ => nyquist_lpmm,
         };
-        let max_bin = n / 2;
-        let k_data_max = ((nyquist_lpmm / df_lpmm.max(1e-12)).floor() as usize).min(max_bin);
+        let max_eval_lpmm = requested_plot_lpmm.max(0.0).min(nyquist_lpmm);
+
+        let sampled_freqs = req
+            .sample_frequencies_lpmm
+            .iter()
+            .copied()
+            .filter(|f| f.is_finite() && *f >= 0.0)
+            .map(|f| f.min(nyquist_lpmm))
+            .collect::<Vec<f64>>();
+
+        let frequency_axis = if direct_eval_only {
+            Vec::<f64>::new()
+        } else {
+            let mut out = Vec::<f64>::with_capacity(out_points);
+            for i in 0..out_points {
+                let t = (i as f64) / ((out_points.saturating_sub(1)) as f64).max(1.0);
+                out.push(max_eval_lpmm * t);
+            }
+            out
+        };
 
         emit_native_analysis_progress(&app, &job_id, kind, "sample", "Sampling MTF axes...", Some(78.0));
 
-        let mut freq_data = Vec::with_capacity(k_data_max + 1);
-        let mut tangential_raw = Vec::with_capacity(k_data_max + 1);
-        let mut sagittal_raw = Vec::with_capacity(k_data_max + 1);
+        let eval_uniform = |freqs: &[f64], lsf: &[f64], dc: f64| -> Result<Vec<f64>, String> {
+            if freqs.is_empty() {
+                return Ok(Vec::new());
+            }
+            let clamped_freqs = freqs
+                .iter()
+                .copied()
+                .map(|f| f.max(0.0).min(nyquist_lpmm))
+                .collect::<Vec<f64>>();
 
-        for k in 0..=k_data_max {
-            let f = k as f64 * df_lpmm;
-            freq_data.push(f);
-            let re_x = real[0][k];
-            let im_x = imag[0][k];
-            let re_y = real[k][0];
-            let im_y = imag[k][0];
-            let sag = (re_x.hypot(im_x) / dc).clamp(0.0, 1.0);
-            let tan = (re_y.hypot(im_y) / dc).clamp(0.0, 1.0);
-            tangential_raw.push(tan);
-            sagittal_raw.push(sag);
+            if use_hopkins_tcc {
+                return Ok(eval_hopkins_tcc_mtf(
+                    &clamped_freqs,
+                    lsf,
+                    dc,
+                    df_lpmm,
+                    nyquist_lpmm,
+                ));
+            }
+
+            if is_nearly_uniform_axis(&clamped_freqs) {
+                let start_f = clamped_freqs[0];
+                let step_f = if freqs.len() <= 1 {
+                    0.0
+                } else {
+                    clamped_freqs[1] - clamped_freqs[0]
+                };
+                let start_idx = start_f / df_lpmm.max(1e-12);
+                let step_idx = step_f / df_lpmm.max(1e-12);
+                let mags = czt_bluestein_uniform_magnitude(lsf, freqs.len(), start_idx, step_idx)?;
+                return Ok(mags
+                    .into_iter()
+                    .map(|m| (m / dc).clamp(0.0, 1.0))
+                    .collect::<Vec<f64>>());
+            }
+
+            // Non-uniform fallback (rare): direct DFT on requested points only.
+            Ok(clamped_freqs
+                .iter()
+                .copied()
+                .map(|f| {
+                    let idx = f / df_lpmm.max(1e-12);
+                    (dft_magnitude_at_index(lsf, idx) / dc).clamp(0.0, 1.0)
+                })
+                .collect::<Vec<f64>>())
+        };
+
+        let mut tangential = eval_uniform(&frequency_axis, &lsf_y, dc_tan)?;
+        let mut sagittal = eval_uniform(&frequency_axis, &lsf_x, dc_sag)?;
+        if !tangential.is_empty() {
+            tangential[0] = 1.0;
         }
-        if !tangential_raw.is_empty() {
-            tangential_raw[0] = 1.0;
-        }
-        if !sagittal_raw.is_empty() {
-            sagittal_raw[0] = 1.0;
+        if !sagittal.is_empty() {
+            sagittal[0] = 1.0;
         }
 
         let sampled_mtf_tangential = if sampled_freqs.is_empty() {
             None
         } else {
-            Some(sampled_freqs
-                .iter()
-                .map(|f| interpolate_axis_value(&freq_data, &tangential_raw, *f).clamp(0.0, 1.0))
-                .collect::<Vec<f64>>())
+            let mut vals = eval_uniform(&sampled_freqs, &lsf_y, dc_tan)?;
+            if !vals.is_empty() && sampled_freqs.first().copied().unwrap_or(1.0) <= 1e-12 {
+                vals[0] = 1.0;
+            }
+            Some(vals)
         };
         let sampled_mtf_sagittal = if sampled_freqs.is_empty() {
             None
         } else {
-            Some(sampled_freqs
-                .iter()
-                .map(|f| interpolate_axis_value(&freq_data, &sagittal_raw, *f).clamp(0.0, 1.0))
-                .collect::<Vec<f64>>())
-        };
-
-        let (frequency_axis, mut tangential, mut sagittal) = if direct_eval_only {
-            (Vec::<f64>::new(), Vec::<f64>::new(), Vec::<f64>::new())
-        } else {
-            let (frequency_axis, mut tangential) =
-                resample_curve_to_range(&freq_data, &tangential_raw, requested_plot_lpmm, out_points);
-            let (_, mut sagittal) =
-                resample_curve_to_range(&freq_data, &sagittal_raw, requested_plot_lpmm, out_points);
-            if !tangential.is_empty() {
-                tangential[0] = 1.0;
+            let mut vals = eval_uniform(&sampled_freqs, &lsf_x, dc_sag)?;
+            if !vals.is_empty() && sampled_freqs.first().copied().unwrap_or(1.0) <= 1e-12 {
+                vals[0] = 1.0;
             }
-            if !sagittal.is_empty() {
-                sagittal[0] = 1.0;
-            }
-            (frequency_axis, tangential, sagittal)
+            Some(vals)
         };
 
         Ok(NativeMtfMapResponse {
-            backend: "native-rust-mtf-map".to_string(),
+            backend: if use_hopkins_tcc {
+                "native-rust-mtf-map-hopkins-tcc".to_string()
+            } else {
+                "native-rust-mtf-map".to_string()
+            },
             frequency_axis,
             mtf_tangential: tangential,
             mtf_sagittal: sagittal,
@@ -3717,7 +4002,11 @@ pub fn run_native_mtf_map(req: NativeMtfMapRequest, app: AppHandle) -> Result<Na
             sampled_mtf_tangential,
             sampled_mtf_sagittal,
             nyquist_lpmm,
-            message: "Native Rust MTF map completed".to_string(),
+            message: if use_hopkins_tcc {
+                "Native Rust MTF map completed (Hopkins-TCC)".to_string()
+            } else {
+                "Native Rust MTF map completed".to_string()
+            },
         })
     })();
 
@@ -4240,6 +4529,7 @@ pub fn run_native_through_focus_mtf_map(
                         points: Some(121),
                         sample_frequencies_lpmm: vec![],
                         direct_eval_only: Some(false),
+                        method: req.method.clone(),
                     },
                     app.clone(),
                 )?;
@@ -4362,6 +4652,7 @@ pub fn run_native_field_mtf_map(
             .clamp(3, steps);
         let first_frequency_lpmm = req.first_frequency_lpmm.unwrap_or(10.0).max(0.0);
         let second_frequency_lpmm = req.second_frequency_lpmm.unwrap_or(30.0).max(0.0);
+        let third_frequency_lpmm = req.third_frequency_lpmm.unwrap_or(40.0).max(0.0);
         let sampling_size = req.sampling_size.unwrap_or(256).clamp(32, 4096) as usize;
         let zero_pad_to = req.zero_pad_to.unwrap_or(0) as usize;
         let requested_fft_size = resolve_mtf_fft_size(sampling_size, zero_pad_to, 121);
@@ -4448,6 +4739,8 @@ pub fn run_native_field_mtf_map(
             let mut sagittal_first = Vec::<f64>::with_capacity(x_axis.len());
             let mut meridional_second = Vec::<f64>::with_capacity(x_axis.len());
             let mut sagittal_second = Vec::<f64>::with_capacity(x_axis.len());
+            let mut meridional_third = Vec::<f64>::with_capacity(x_axis.len());
+            let mut sagittal_third = Vec::<f64>::with_capacity(x_axis.len());
             let mut field_diagnostics = Vec::<NativeFieldMtfPointDiagnostic>::with_capacity(x_axis.len());
 
             for (si, field_axis_value) in x_axis.iter().enumerate() {
@@ -4594,7 +4887,7 @@ pub fn run_native_field_mtf_map(
                     }
                 };
 
-                let eval_point = |opd: &NativeOpdMapResponse, job_suffix: &str| -> Result<(f64, f64, f64, f64, Option<f64>, Option<f64>, Option<f64>, Option<f64>), String> {
+                let eval_point = |opd: &NativeOpdMapResponse, job_suffix: &str| -> Result<(f64, f64, f64, f64, f64, f64, Option<f64>, Option<f64>, Option<f64>, Option<f64>), String> {
                     let s = sampling_size;
                     let mut grid_opd = vec![vec![0.0_f64; s]; s];
                     let mut pupil_mask = vec![vec![false; s]; s];
@@ -4642,10 +4935,11 @@ pub fn run_native_field_mtf_map(
                             job_id: Some(format!("{}-{}", sub_job, job_suffix)),
                             psf_data: psf_resp.psf_data,
                             pixel_size_um,
-                            max_frequency_lpmm: Some((first_frequency_lpmm.max(second_frequency_lpmm) * 2.0).max(1.0)),
-                            points: Some(2),
-                            sample_frequencies_lpmm: vec![first_frequency_lpmm, second_frequency_lpmm],
+                            max_frequency_lpmm: Some((first_frequency_lpmm.max(second_frequency_lpmm).max(third_frequency_lpmm) * 2.0).max(1.0)),
+                            points: Some(3),
+                            sample_frequencies_lpmm: vec![first_frequency_lpmm, second_frequency_lpmm, third_frequency_lpmm],
                             direct_eval_only: Some(true),
+                            method: req.method.clone(),
                         },
                         app.clone(),
                     )?;
@@ -4654,11 +4948,19 @@ pub fn run_native_field_mtf_map(
                     let sampled_tan = mtf_resp.sampled_mtf_tangential.clone().unwrap_or_default();
                     let sampled_sag = mtf_resp.sampled_mtf_sagittal.clone().unwrap_or_default();
 
-                    let (first_m, first_s, second_m, second_s) = if sampled_tan.len() >= 2 && sampled_sag.len() >= 2 {
+                    let (first_m, first_s, second_m, second_s, third_m, third_s) = if sampled_tan.len() >= 3 && sampled_sag.len() >= 3 {
                         if tan_axis == "x" {
-                            (sampled_sag[0], sampled_tan[0], sampled_sag[1], sampled_tan[1])
+                            (
+                                sampled_sag[0], sampled_tan[0],
+                                sampled_sag[1], sampled_tan[1],
+                                sampled_sag[2], sampled_tan[2],
+                            )
                         } else {
-                            (sampled_tan[0], sampled_sag[0], sampled_tan[1], sampled_sag[1])
+                            (
+                                sampled_tan[0], sampled_sag[0],
+                                sampled_tan[1], sampled_sag[1],
+                                sampled_tan[2], sampled_sag[2],
+                            )
                         }
                     } else {
                         let (tan_vals, sag_vals) = if tan_axis == "x" {
@@ -4671,6 +4973,8 @@ pub fn run_native_field_mtf_map(
                             nearest_axis_value(&mtf_resp.frequency_axis, sag_vals, first_frequency_lpmm),
                             nearest_axis_value(&mtf_resp.frequency_axis, tan_vals, second_frequency_lpmm),
                             nearest_axis_value(&mtf_resp.frequency_axis, sag_vals, second_frequency_lpmm),
+                            nearest_axis_value(&mtf_resp.frequency_axis, tan_vals, third_frequency_lpmm),
+                            nearest_axis_value(&mtf_resp.frequency_axis, sag_vals, third_frequency_lpmm),
                         )
                     };
 
@@ -4678,7 +4982,7 @@ pub fn run_native_field_mtf_map(
                     let first_hi = None;
                     let second_lo = None;
                     let second_hi = None;
-                    Ok((first_m, first_s, second_m, second_s, first_lo, first_hi, second_lo, second_hi))
+                    Ok((first_m, first_s, second_m, second_s, third_m, third_s, first_lo, first_hi, second_lo, second_hi))
                 };
 
                 let chosen_opd = opd_resp;
@@ -4688,15 +4992,19 @@ pub fn run_native_field_mtf_map(
                 let first_s = chosen.1;
                 let second_m = chosen.2;
                 let second_s = chosen.3;
-                let first_lo = chosen.4;
-                let first_hi = chosen.5;
-                let second_lo = chosen.6;
-                let second_hi = chosen.7;
+                let third_m = chosen.4;
+                let third_s = chosen.5;
+                let first_lo = chosen.6;
+                let first_hi = chosen.7;
+                let second_lo = chosen.8;
+                let second_hi = chosen.9;
 
                 meridional_first.push(first_m);
                 sagittal_first.push(first_s);
                 meridional_second.push(second_m);
                 sagittal_second.push(second_s);
+                meridional_third.push(third_m);
+                sagittal_third.push(third_s);
                 field_diagnostics.push(NativeFieldMtfPointDiagnostic {
                     field_value: *field_axis_value,
                     effective_pupil_sampling_mode: chosen_opd.pupil_sampling_mode.clone(),
@@ -4763,6 +5071,8 @@ pub fn run_native_field_mtf_map(
                 sagittal_first,
                 meridional_second,
                 sagittal_second,
+                meridional_third,
+                sagittal_third,
                 field_diagnostics,
             });
             wl_index += 1;

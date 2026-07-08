@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1435,7 +1434,7 @@ fn compute_sqp_like_direction(
         .collect::<Vec<_>>();
 
     let columns = (0..n)
-        .into_par_iter()
+        .into_iter()
         .map(|vi| {
             if is_stop_requested() {
                 return vec![0.0_f64; m];
@@ -1743,7 +1742,7 @@ fn approximate_augmented_gradient(
     let f0 = e0.score + rho * e0.violation_score * e0.violation_score;
     let base_values = current_values(rows, vars);
 
-    vars.par_iter()
+    vars.iter()
         .enumerate()
         .map(|(i, v)| {
             if is_stop_requested() {
@@ -2507,7 +2506,7 @@ fn prefill_parallel_opd_rms_cache<'a>(
             continue;
         }
         let results: Vec<(&RequirementSpec, Option<f64>, u128)> = group
-            .par_iter()
+            .iter()
             .map(|req| {
                 let t0 = Instant::now();
                 let value = native_opd_rms_waves(rows, source_rows, object_rows, req);
