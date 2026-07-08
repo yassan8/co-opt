@@ -7,6 +7,7 @@ co-opt_1.9.6.code-workspace.json
 
 # Tauri / Rust build output
 src-tauri/target/
+rust-wasm/target/
 
 # Node
 node_modules/
