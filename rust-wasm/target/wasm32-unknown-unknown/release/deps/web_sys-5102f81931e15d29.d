@@ -1,0 +1,10 @@
+C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\deps\web_sys-5102f81931e15d29.d: C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\lib.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\mod.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\gen_EventTarget.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\gen_Window.rs
+
+C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\deps\libweb_sys-5102f81931e15d29.rlib: C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\lib.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\mod.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\gen_EventTarget.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\gen_Window.rs
+
+C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\deps\libweb_sys-5102f81931e15d29.rmeta: C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\lib.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\mod.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\gen_EventTarget.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\gen_Window.rs
+
+C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\lib.rs:
+C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\mod.rs:
+C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\gen_EventTarget.rs:
+C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\web-sys-0.3.85\src\features\gen_Window.rs:

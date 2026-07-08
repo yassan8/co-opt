@@ -513,12 +513,20 @@ async function runDesktopNativeMtfMapForPopup(payload: {
     pixelSizeUm: number;
     maxFrequencyLpmm?: number;
     points?: number;
+    sampleFrequenciesLpmm?: number[];
+    directEvalOnly?: boolean;
+    method?: 'legacy-otf-axis' | 'hopkins-tcc' | 'malacara-wasm-required';
 }) {
     const result = await runNativeMtfMap({
         psfData: Array.isArray(payload?.psfData) ? payload.psfData : [],
         pixelSizeUm: Number(payload?.pixelSizeUm),
         maxFrequencyLpmm: Number.isFinite(Number(payload?.maxFrequencyLpmm)) ? Number(payload.maxFrequencyLpmm) : undefined,
         points: Number.isFinite(Number(payload?.points)) ? Number(payload.points) : undefined,
+        sampleFrequenciesLpmm: Array.isArray(payload?.sampleFrequenciesLpmm)
+            ? payload.sampleFrequenciesLpmm.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v >= 0)
+            : undefined,
+        directEvalOnly: payload?.directEvalOnly === true,
+        method: payload?.method || 'hopkins-tcc',
     });
     return result;
 }
@@ -537,6 +545,7 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
     zeroPadTo?: number;
     opdDisplayMode?: string;
     onProgress?: (evt: { percent?: number; message?: string }) => void;
+    method?: 'legacy-otf-axis' | 'hopkins-tcc' | 'malacara-wasm-required';
 }) {
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
     const jobId = `native-tfmtf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -644,6 +653,7 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
             zeroPadTo: requestedFftSize,
             pixelSizeUm,
             opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
+            method: payload?.method || 'hopkins-tcc',
         }, reportProgress);
     } finally {
         try {
@@ -665,6 +675,7 @@ async function runPortableThroughFocusMtfForPopup(payload: {
     zeroPadTo?: number;
     opdDisplayMode?: string;
     onProgress?: (evt: { percent?: number; message?: string }) => void;
+    method?: 'legacy-otf-axis' | 'hopkins-tcc' | 'malacara-wasm-required';
 }) {
     const hostDoc = typeof document !== 'undefined' ? document : null;
     if (!hostDoc?.body) {
@@ -1001,6 +1012,7 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
     wavelengths?: number[];
     firstFrequencyLpmm?: number;
     secondFrequencyLpmm?: number;
+    method?: 'legacy-otf-axis' | 'hopkins-tcc' | 'malacara-wasm-required';
     fieldMin?: number;
     fieldMax?: number;
     steps?: number;
@@ -1017,6 +1029,7 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
     const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
     const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
+    const mtfMethod = payload?.method || 'hopkins-tcc';
     const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
     const forcedInfinitePupilMode = __cooptGetForceInfinitePupilMode();
     let requestedPupilSamplingMode = (payload?.pupilSamplingMode === 'stop' || payload?.pupilSamplingMode === 'entrance')
@@ -1040,7 +1053,7 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
     };
 
     const firstFrequencyLpmm = Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload.firstFrequencyLpmm) : 10;
-    const secondFrequencyLpmm = Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload.secondFrequencyLpmm) : 30;
+    const secondFrequencyLpmm = Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload.secondFrequencyLpmm) : 20;
     const fieldMinRaw = Number.isFinite(Number(payload?.fieldMin)) ? Number(payload.fieldMin) : 0;
     const fieldMaxRaw = Number.isFinite(Number(payload?.fieldMax)) ? Number(payload.fieldMax) : 10;
     const fieldMin = Math.min(fieldMinRaw, fieldMaxRaw);
@@ -1429,22 +1442,12 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
                     recenterIfWrapped: false,
                 });
 
-                const mtfResp = (() => {
-                    if (runNativeMtfWasm) {
-                        const raw = runNativeMtfWasm(JSON.stringify({
-                            psfData: (psfResp as any)?.psfData,
-                            pixelSizeUm,
-                            maxFrequencyLpmm: Math.max(1, Math.max(firstFrequencyLpmm, secondFrequencyLpmm) * 2),
-                            points: 121,
-                        }));
-                        return (typeof raw === 'string') ? JSON.parse(raw) : raw;
-                    }
-                    return null;
-                })() || await runNativeMtfMap({
+                const mtfResp = await runNativeMtfMap({
                     psfData: (psfResp as any)?.psfData,
                     pixelSizeUm,
                     maxFrequencyLpmm: Math.max(1, Math.max(firstFrequencyLpmm, secondFrequencyLpmm) * 2),
                     points: 121,
+                    method: mtfMethod,
                 });
 
                 const freqAxis = Array.isArray((mtfResp as any)?.frequencyAxis) ? (mtfResp as any).frequencyAxis : [];
@@ -1530,9 +1533,11 @@ w.runDesktopNativeFieldMtfForPopup = runDesktopNativeFieldMtfForPopup;
 async function runPortableFieldMtfForPopup(payload: {
     objectIndex?: number;
     pupilSamplingMode?: 'stop' | 'entrance';
+    method?: 'legacy-otf-axis' | 'hopkins-tcc' | 'malacara-wasm-required';
     wavelengths?: number[];
     firstFrequencyLpmm?: number;
     secondFrequencyLpmm?: number;
+    thirdFrequencyLpmm?: number;
     fieldMin?: number;
     fieldMax?: number;
     steps?: number;
@@ -1557,6 +1562,7 @@ async function runPortableFieldMtfForPopup(payload: {
         wavelengths: Array.isArray(payload?.wavelengths) ? payload.wavelengths : undefined,
         firstFrequencyLpmm: Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload?.firstFrequencyLpmm) : undefined,
         secondFrequencyLpmm: Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload?.secondFrequencyLpmm) : undefined,
+        thirdFrequencyLpmm: Number.isFinite(Number(payload?.thirdFrequencyLpmm)) ? Number(payload?.thirdFrequencyLpmm) : undefined,
         fieldMin: Number.isFinite(Number(payload?.fieldMin)) ? Number(payload?.fieldMin) : undefined,
         fieldMax: Number.isFinite(Number(payload?.fieldMax)) ? Number(payload?.fieldMax) : undefined,
         steps: Number.isFinite(Number(payload?.steps)) ? Math.max(3, Math.floor(Number(payload?.steps))) : undefined,
@@ -1564,6 +1570,7 @@ async function runPortableFieldMtfForPopup(payload: {
         zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : undefined,
         opdDisplayMode: payload?.opdDisplayMode,
         fieldAxisMode: payload?.fieldAxisMode,
+        method: payload?.method,
         adaptiveSampling: payload?.adaptiveSampling,
         adaptiveThreshold: Number.isFinite(Number(payload?.adaptiveThreshold)) ? Number(payload?.adaptiveThreshold) : undefined,
         adaptiveInitialSteps: Number.isFinite(Number(payload?.adaptiveInitialSteps)) ? Math.max(3, Math.floor(Number(payload?.adaptiveInitialSteps))) : undefined,
@@ -1824,7 +1831,7 @@ async function runDesktopNativeFieldMtfDiagnosticsForPopup(payload: {
         conditions: {
             objectIndex: Number.isFinite(Number(payload?.objectIndex)) ? Number(payload?.objectIndex) : 0,
             firstFrequencyLpmm: Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload?.firstFrequencyLpmm) : 10,
-            secondFrequencyLpmm: Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload?.secondFrequencyLpmm) : 30,
+            secondFrequencyLpmm: Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload?.secondFrequencyLpmm) : 20,
             fieldMin: Number.isFinite(Number(payload?.fieldMin)) ? Number(payload?.fieldMin) : 0,
             fieldMax: Number.isFinite(Number(payload?.fieldMax)) ? Number(payload?.fieldMax) : 10,
             steps: Number.isFinite(Number(payload?.steps)) ? Number(payload?.steps) : 21,
@@ -12884,8 +12891,16 @@ export function setupAnalysisWindows() {
         <select id="popup-mtf-object-select"></select>
         <label for="popup-mtf-max-freq-input">Max (lp/mm):</label>
         <input id="popup-mtf-max-freq-input" type="number" min="0" step="1" value="100" />
+        <label for="popup-mtf-method-select">Method:</label>
+        <select id="popup-mtf-method-select">
+            <option value="hopkins-tcc" selected>Hopkins-TCC</option>
+            <option value="legacy-otf-axis">Legacy OTF Axis</option>
+        </select>
+        <label for="popup-mtf-points-input">Points:</label>
+        <input id="popup-mtf-points-input" type="number" min="2" max="2048" step="1" value="21" />
         <label for="popup-mtf-sampling-select">Sampling:</label>
         <select id="popup-mtf-sampling-select">
+            <option value="16">16x16</option>
             <option value="32">32x32</option>
             <option value="64">64x64</option>
             <option value="128">128x128</option>
@@ -12894,15 +12909,6 @@ export function setupAnalysisWindows() {
             <option value="1024">1024x1024</option>
             <option value="2048">2048x2048</option>
             <option value="4096">4096x4096</option>
-        </select>
-        <label for="popup-mtf-zeropad-select" title="Zero-padding increases FFT size without increasing OPD ray grid.">Zero pad:</label>
-        <select id="popup-mtf-zeropad-select">
-            <option value="none">None</option>
-            <option value="auto" selected>Auto</option>
-            <option value="512">512</option>
-            <option value="1024">1024</option>
-            <option value="2048">2048</option>
-            <option value="4096">4096</option>
         </select>
         <label style="display:flex;align-items:center;gap:6px;">
             <input id="popup-mtf-remove-ptd-checkbox" type="checkbox" />
@@ -13028,16 +13034,9 @@ export function setupAnalysisWindows() {
             const wlSel = document.getElementById('popup-mtf-wavelength-select');
             const prevWl = wlSel ? wlSel.value : '';
             populateSelect(wlSel, buildWavelengthOptions());
-            // Default to Primary (not All) on first open.
             if (wlSel && (!prevWl || !Array.from(wlSel.options).some(o => o.value === prevWl))) {
-                const primary = getPrimaryWavelength();
-                if (Number.isFinite(primary) && Array.from(wlSel.options).some(o => o.value === String(primary))) {
-                    wlSel.value = String(primary);
-                } else {
-                    // Fallback to first numeric wavelength if present
-                    const firstNumeric = Array.from(wlSel.options).find(o => o.value !== 'all');
-                    if (firstNumeric) wlSel.value = firstNumeric.value;
-                }
+                const allOption = Array.from(wlSel.options).find(o => o.value === 'all');
+                if (allOption) wlSel.value = allOption.value;
             }
             populateSelect(document.getElementById('popup-mtf-object-select'), buildObjectOptions());
         }
@@ -13067,8 +13066,9 @@ export function setupAnalysisWindows() {
             const wlSel = document.getElementById('popup-mtf-wavelength-select');
             const objSel = document.getElementById('popup-mtf-object-select');
             const maxEl = document.getElementById('popup-mtf-max-freq-input');
+            const pointsEl = document.getElementById('popup-mtf-points-input');
+            const methodEl = document.getElementById('popup-mtf-method-select');
             const samplingEl = document.getElementById('popup-mtf-sampling-select');
-            const zeroPadEl = document.getElementById('popup-mtf-zeropad-select');
             const removePtdEl = document.getElementById('popup-mtf-remove-ptd-checkbox');
             const showDiffLimitEl = document.getElementById('popup-mtf-show-diff-limit-checkbox');
 
@@ -13077,17 +13077,18 @@ export function setupAnalysisWindows() {
             const wavelength = (wlValue === 'all') ? 'all' : Number(wlValue);
             const objectIndex = objSel ? parseInt(objSel.value, 10) : 0;
             const maxFreq = maxEl ? Number(maxEl.value) : 100;
+            const plotPointCount = pointsEl ? Number(pointsEl.value) : 21;
+            const resolvedPointCount = Number.isFinite(plotPointCount)
+                ? Math.max(2, Math.min(2048, Math.floor(plotPointCount)))
+                : 21;
+            const mtfMethod = (methodEl && typeof methodEl.value === 'string' && methodEl.value.trim())
+                ? methodEl.value.trim()
+                : 'hopkins-tcc';
             const sampling = samplingEl ? Number(samplingEl.value) : 256;
-            const zeroPadRaw = zeroPadEl ? String(zeroPadEl.value || 'auto') : 'auto';
             const opdDisplayMode = (removePtdEl && removePtdEl.checked)
                 ? 'pistonTiltDefocusRemoved'
                 : 'pistonTiltRemoved';
             const showDiffractionLimit = !!(showDiffLimitEl && showDiffLimitEl.checked);
-            const zeroPadTo = (zeroPadRaw === 'none')
-                ? (Number.isFinite(sampling) ? sampling : 256)
-                : (zeroPadRaw === 'auto')
-                    ? 0
-                    : (Number.isFinite(parseInt(zeroPadRaw, 10)) ? parseInt(zeroPadRaw, 10) : 0);
 
             try {
                 const opener = getOpener();
@@ -13125,29 +13126,36 @@ export function setupAnalysisWindows() {
                     const sourceRows = (typeof opener.getSourceRows === 'function')
                         ? (safeCall(() => opener.getSourceRows(opener.tableSource), []) || [])
                         : [];
-                    const wavelengthList = (() => {
-                        const out = [];
-                        if (wavelength === 'all') {
-                            if (Array.isArray(sourceRows) && sourceRows.length > 0) {
-                                for (let i = 0; i < sourceRows.length; i++) {
-                                    const wl = Number(sourceRows[i]?.wavelength);
-                                    if (!Number.isFinite(wl) || wl <= 0) continue;
-                                    if (out.some(v => Math.abs(v - wl) < 1e-9)) continue;
-                                    out.push(wl);
-                                }
-                            }
-                            if (out.length === 0 && Number.isFinite(primary) && primary > 0) {
-                                out.push(primary);
-                            }
-                        } else {
+                    const wavelengthEntries = (() => {
+                        if (wavelength !== 'all') {
                             const wl = (Number.isFinite(Number(wavelength)) && Number(wavelength) > 0)
                                 ? Number(wavelength)
                                 : ((Number.isFinite(primary) && primary > 0) ? primary : 0.5876);
-                            out.push(wl);
+                            return [{ wavelength: wl, weight: 1 }];
                         }
-                        if (out.length === 0) out.push(0.5876);
-                        return out;
+                        const out = [];
+                        if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+                            for (let i = 0; i < sourceRows.length; i++) {
+                                const wl = Number(sourceRows[i]?.wavelength);
+                                if (!Number.isFinite(wl) || wl <= 0) continue;
+                                const rawW = Number(sourceRows[i]?.weight);
+                                const ww = Number.isFinite(rawW) && rawW > 0 ? rawW : 1;
+                                out.push({ wavelength: wl, weight: ww });
+                            }
+                        }
+                        if (out.length === 0) {
+                            const wl = (Number.isFinite(primary) && primary > 0) ? primary : 0.5876;
+                            out.push({ wavelength: wl, weight: 1 });
+                        }
+                        const sumW = out.reduce((acc, v) => acc + (Number(v.weight) || 0), 0);
+                        if (sumW > 0) {
+                            return out.map((v) => ({ wavelength: Number(v.wavelength), weight: Number(v.weight) / sumW }));
+                        }
+                        const uniform = 1 / Math.max(1, out.length);
+                        return out.map((v) => ({ wavelength: Number(v.wavelength), weight: uniform }));
                     })();
+                    const wavelengthList = wavelengthEntries.map((e) => Number(e.wavelength));
+                    const useWeightedComposite = (wavelength === 'all') && wavelengthEntries.length > 1;
 
                     const getColorForWavelengthPopup = (wl) => {
                         try {
@@ -13166,7 +13174,16 @@ export function setupAnalysisWindows() {
 
                     const traces = [];
                     let nyquistGlobal = 0;
+                    let compositeFreq = null;
+                    let compositeTan = null;
+                    let compositeSag = null;
+                    let compositeDiff = null;
                     const selectedObjectIndex = Number.isFinite(objectIndex) ? objectIndex : 0;
+                    const maxFreqForSampling = Number.isFinite(maxFreq) && maxFreq >= 0 ? maxFreq : 100;
+                    const sampleFrequenciesLpmm = Array.from({ length: resolvedPointCount }, (_, i) => {
+                        const t = (resolvedPointCount > 1) ? (i / (resolvedPointCount - 1)) : 0;
+                        return maxFreqForSampling * t;
+                    });
 
                     const isIdealParaxialOnlyPopup = (rows: any[]) => {
                         if (!Array.isArray(rows) || rows.length === 0) return false;
@@ -13226,6 +13243,9 @@ export function setupAnalysisWindows() {
 
                     for (let wli = 0; wli < wavelengthList.length; wli++) {
                         const wl = wavelengthList[wli];
+                        const wlWeight = Number.isFinite(Number(wavelengthEntries[wli]?.weight))
+                            ? Number(wavelengthEntries[wli].weight)
+                            : (1 / Math.max(1, wavelengthList.length));
                         const titleNm = (wl * 1000).toFixed(1);
                         const baseProgress = (wli / Math.max(1, wavelengthList.length)) * 80;
                         setProgress(10 + baseProgress, 'λ=' + titleNm + 'nm: OPD (Rust native)...');
@@ -13324,10 +13344,7 @@ export function setupAnalysisWindows() {
                             focalLengthMm = 100.0;
                         }
 
-                        const minRecommendedFftSize = 512;
-                        const requestedFftSize = (!zeroPadTo || zeroPadTo === 0)
-                            ? Math.max(wavefrontGridSize, minRecommendedFftSize)
-                            : Math.max(wavefrontGridSize, zeroPadTo);
+                        const requestedFftSize = wavefrontGridSize;
                         const basePixelPitchUm = (wl * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
                         const pixelSizeUm = basePixelPitchUm * (wavefrontGridSize / requestedFftSize);
 
@@ -13349,13 +13366,21 @@ export function setupAnalysisWindows() {
                             psfData: nativePsfResp?.psfData,
                             pixelSizeUm,
                             maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : undefined,
-                            // Keep parity with TFMTF native path which uses 121 plot points.
-                            points: 121,
+                            points: resolvedPointCount,
+                            sampleFrequenciesLpmm,
+                            directEvalOnly: true,
+                            method: mtfMethod,
                         });
 
-                        const freq = Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis : [];
-                        let tan = Array.isArray(mtfResp?.mtfTangential) ? mtfResp.mtfTangential : [];
-                        let sag = Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal : [];
+                        const freq = Array.isArray(mtfResp?.sampledFrequenciesLpmm) && mtfResp.sampledFrequenciesLpmm.length > 0
+                            ? mtfResp.sampledFrequenciesLpmm
+                            : (Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis : []);
+                        let tan = Array.isArray(mtfResp?.sampledMtfTangential) && mtfResp.sampledMtfTangential.length === freq.length
+                            ? mtfResp.sampledMtfTangential
+                            : (Array.isArray(mtfResp?.mtfTangential) ? mtfResp.mtfTangential : []);
+                        let sag = Array.isArray(mtfResp?.sampledMtfSagittal) && mtfResp.sampledMtfSagittal.length === freq.length
+                            ? mtfResp.sampledMtfSagittal
+                            : (Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal : []);
                         if (!freq.length || !tan.length || !sag.length) {
                             throw new Error('Native Rust MTF result does not contain valid curves');
                         }
@@ -13382,10 +13407,17 @@ export function setupAnalysisWindows() {
                                     psfData: idealNativePsfResp?.psfData,
                                     pixelSizeUm,
                                     maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : undefined,
-                                    points: 121,
+                                    points: resolvedPointCount,
+                                    sampleFrequenciesLpmm,
+                                    directEvalOnly: true,
+                                    method: mtfMethod,
                                 });
-                                const idealTan = Array.isArray(idealMtfResp?.mtfTangential) ? idealMtfResp.mtfTangential : [];
-                                const idealSag = Array.isArray(idealMtfResp?.mtfSagittal) ? idealMtfResp.mtfSagittal : [];
+                                const idealTan = Array.isArray(idealMtfResp?.sampledMtfTangential)
+                                    ? idealMtfResp.sampledMtfTangential
+                                    : (Array.isArray(idealMtfResp?.mtfTangential) ? idealMtfResp.mtfTangential : []);
+                                const idealSag = Array.isArray(idealMtfResp?.sampledMtfSagittal)
+                                    ? idealMtfResp.sampledMtfSagittal
+                                    : (Array.isArray(idealMtfResp?.mtfSagittal) ? idealMtfResp.mtfSagittal : []);
                                 if ((idealTan.length === freq.length) || (idealSag.length === freq.length)) {
                                     idealDiffCurveForPopup = freq.map((_, i) => {
                                         const tv = Number(idealTan[i]);
@@ -13443,23 +13475,38 @@ export function setupAnalysisWindows() {
                             }
                         }
 
-                        const color = getColorForWavelengthPopup(wl);
-                        traces.push({
-                            x: freq,
-                            y: tan,
-                            type: 'scatter',
-                            mode: 'lines',
-                            name: 'Tangential (' + titleNm + 'nm)',
-                            line: { color, width: 2, dash: 'solid' },
-                        });
-                        traces.push({
-                            x: freq,
-                            y: sag,
-                            type: 'scatter',
-                            mode: 'lines',
-                            name: 'Sagittal (' + titleNm + 'nm)',
-                            line: { color, width: 2, dash: 'dot' },
-                        });
+                        if (useWeightedComposite) {
+                            if (!compositeFreq || !compositeTan || !compositeSag) {
+                                compositeFreq = freq.slice();
+                                compositeTan = new Array(freq.length).fill(0);
+                                compositeSag = new Array(freq.length).fill(0);
+                            }
+                            const n = Math.min(compositeFreq.length, freq.length, compositeTan.length, compositeSag.length, tan.length, sag.length);
+                            for (let i = 0; i < n; i++) {
+                                const tv = Number(tan[i]);
+                                const sv = Number(sag[i]);
+                                if (Number.isFinite(tv)) compositeTan[i] += wlWeight * tv;
+                                if (Number.isFinite(sv)) compositeSag[i] += wlWeight * sv;
+                            }
+                        } else {
+                            const color = getColorForWavelengthPopup(wl);
+                            traces.push({
+                                x: freq,
+                                y: tan,
+                                type: 'scatter',
+                                mode: 'lines',
+                                name: 'Tangential (' + titleNm + 'nm)',
+                                line: { color, width: 2, dash: 'solid' },
+                            });
+                            traces.push({
+                                x: freq,
+                                y: sag,
+                                type: 'scatter',
+                                mode: 'lines',
+                                name: 'Sagittal (' + titleNm + 'nm)',
+                                line: { color, width: 2, dash: 'dot' },
+                            });
+                        }
 
                         const nyquist = Number(mtfResp?.nyquistLpmm);
                         if (Number.isFinite(nyquist) && nyquist > 0) {
@@ -13491,16 +13538,60 @@ export function setupAnalysisWindows() {
                                     }
                                 }
                                 if (Array.isArray(diffY)) {
-                                    traces.push({
-                                        x: freq,
-                                        y: diffY,
-                                        type: 'scatter',
-                                        mode: 'lines',
-                                        name: 'Diff. Limit (' + titleNm + 'nm)',
-                                        line: { color, width: 1.5, dash: 'dash' },
-                                    });
+                                    if (useWeightedComposite) {
+                                        if (!compositeDiff) {
+                                            compositeDiff = new Array(freq.length).fill(0);
+                                        }
+                                        const n = Math.min(compositeDiff.length, diffY.length);
+                                        for (let i = 0; i < n; i++) {
+                                            const dv = Number(diffY[i]);
+                                            if (Number.isFinite(dv)) compositeDiff[i] += wlWeight * dv;
+                                        }
+                                    } else {
+                                        const color = getColorForWavelengthPopup(wl);
+                                        traces.push({
+                                            x: freq,
+                                            y: diffY,
+                                            type: 'scatter',
+                                            mode: 'lines',
+                                            name: 'Diff. Limit (' + titleNm + 'nm)',
+                                            line: { color, width: 1.5, dash: 'dash' },
+                                        });
+                                    }
                                 }
                             } catch (_) {}
+                        }
+                    }
+
+                    if (useWeightedComposite && compositeFreq && compositeTan && compositeSag) {
+                        if (compositeTan.length > 0) compositeTan[0] = 1;
+                        if (compositeSag.length > 0) compositeSag[0] = 1;
+                        traces.push({
+                            x: compositeFreq,
+                            y: compositeTan,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Tangential (Weighted Composite)',
+                            line: { color: '#1f4ed8', width: 2, dash: 'solid' },
+                        });
+                        traces.push({
+                            x: compositeFreq,
+                            y: compositeSag,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Sagittal (Weighted Composite)',
+                            line: { color: '#1f4ed8', width: 2, dash: 'dot' },
+                        });
+                        if (showDiffractionLimit && Array.isArray(compositeDiff) && compositeDiff.length === compositeFreq.length) {
+                            if (compositeDiff.length > 0) compositeDiff[0] = 1;
+                            traces.push({
+                                x: compositeFreq,
+                                y: compositeDiff,
+                                type: 'scatter',
+                                mode: 'lines',
+                                name: 'Diff. Limit (Weighted Composite)',
+                                line: { color: '#1f4ed8', width: 1.5, dash: 'dash' },
+                            });
                         }
                     }
 
@@ -14346,6 +14437,11 @@ export function setupAnalysisWindows() {
         <select id="popup-through-focus-mtf-object-select"></select>
         <label for="popup-through-focus-mtf-target-freq-input">Freq (lp/mm):</label>
         <input id="popup-through-focus-mtf-target-freq-input" type="number" min="0" step="1" value="10" />
+        <label for="popup-through-focus-mtf-method-select">Method:</label>
+        <select id="popup-through-focus-mtf-method-select">
+            <option value="hopkins-tcc" selected>Hopkins-TCC</option>
+            <option value="legacy-otf-axis">Legacy OTF Axis</option>
+        </select>
         <label for="popup-through-focus-mtf-min-defocus-input">Defocus min (mm):</label>
         <input id="popup-through-focus-mtf-min-defocus-input" type="number" step="0.001" value="-0.5" />
         <label for="popup-through-focus-mtf-max-defocus-input">Defocus max (mm):</label>
@@ -14354,6 +14450,7 @@ export function setupAnalysisWindows() {
         <input id="popup-through-focus-mtf-steps-input" type="number" min="3" max="201" step="1" value="21" />
         <label for="popup-through-focus-mtf-sampling-select">Sampling:</label>
         <select id="popup-through-focus-mtf-sampling-select">
+            <option value="16">16x16</option>
             <option value="32">32x32</option>
             <option value="64">64x64</option>
             <option value="128">128x128</option>
@@ -14493,13 +14590,8 @@ export function setupAnalysisWindows() {
             const prevWl = wlSel ? wlSel.value : '';
             populateSelect(wlSel, buildWavelengthOptions());
             if (wlSel && (!prevWl || !Array.from(wlSel.options).some(o => o.value === prevWl))) {
-                const primary = getPrimaryWavelength();
-                if (Number.isFinite(primary) && Array.from(wlSel.options).some(o => o.value === String(primary))) {
-                    wlSel.value = String(primary);
-                } else {
-                    const firstNumeric = Array.from(wlSel.options).find(o => o.value !== 'all');
-                    if (firstNumeric) wlSel.value = firstNumeric.value;
-                }
+                const allOption = Array.from(wlSel.options).find(o => o.value === 'all');
+                if (allOption) wlSel.value = allOption.value;
             }
             populateSelect(document.getElementById('popup-through-focus-mtf-object-select'), buildObjectOptions());
         }
@@ -14529,6 +14621,7 @@ export function setupAnalysisWindows() {
             const wlSel = document.getElementById('popup-through-focus-mtf-wavelength-select');
             const objSel = document.getElementById('popup-through-focus-mtf-object-select');
             const targetFreqEl = document.getElementById('popup-through-focus-mtf-target-freq-input');
+            const methodEl = document.getElementById('popup-through-focus-mtf-method-select');
             const minDefocusEl = document.getElementById('popup-through-focus-mtf-min-defocus-input');
             const maxDefocusEl = document.getElementById('popup-through-focus-mtf-max-defocus-input');
             const stepsEl = document.getElementById('popup-through-focus-mtf-steps-input');
@@ -14541,6 +14634,9 @@ export function setupAnalysisWindows() {
             const wavelength = (wlValue === 'all') ? 'all' : Number(wlValue);
             const objectIndex = objSel ? parseInt(objSel.value, 10) : 0;
             const targetFrequencyLpmm = targetFreqEl ? Number(targetFreqEl.value) : 10;
+            const mtfMethod = (methodEl && typeof methodEl.value === 'string' && methodEl.value.trim())
+                ? methodEl.value.trim()
+                : 'hopkins-tcc';
             const defocusMinMm = minDefocusEl ? Number(minDefocusEl.value) : -0.5;
             const defocusMaxMm = maxDefocusEl ? Number(maxDefocusEl.value) : 0.5;
             const steps = stepsEl ? Number(stepsEl.value) : 21;
@@ -14588,29 +14684,51 @@ export function setupAnalysisWindows() {
                 const sourceRows = (typeof opener.getSourceRows === 'function')
                     ? (safeCall(() => opener.getSourceRows(opener.tableSource), []) || [])
                     : [];
-                const wavelengthList = (() => {
-                    const out = [];
-                    if (wavelength === 'all') {
-                        if (Array.isArray(sourceRows) && sourceRows.length > 0) {
-                            for (let i = 0; i < sourceRows.length; i++) {
-                                const wl = Number(sourceRows[i]?.wavelength);
-                                if (!Number.isFinite(wl) || wl <= 0) continue;
-                                if (out.some(v => Math.abs(v - wl) < 1e-9)) continue;
-                                out.push(wl);
-                            }
-                        }
-                        if (out.length === 0 && Number.isFinite(primary) && primary > 0) {
-                            out.push(primary);
-                        }
-                    } else {
+                const wavelengthEntries = (() => {
+                    if (wavelength !== 'all') {
                         const wl = (Number.isFinite(Number(wavelength)) && Number(wavelength) > 0)
                             ? Number(wavelength)
                             : ((Number.isFinite(primary) && primary > 0) ? primary : 0.5876);
-                        out.push(wl);
+                        return [{ wavelength: wl, weight: 1 }];
                     }
-                    if (out.length === 0) out.push(0.5876);
-                    return out;
+                    const out = [];
+                    if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+                        for (let i = 0; i < sourceRows.length; i++) {
+                            const wl = Number(sourceRows[i]?.wavelength);
+                            if (!Number.isFinite(wl) || wl <= 0) continue;
+                            const rawW = Number(sourceRows[i]?.weight);
+                            const ww = Number.isFinite(rawW) && rawW > 0 ? rawW : 1;
+                            out.push({ wavelength: wl, weight: ww });
+                        }
+                    }
+                    if (out.length === 0) {
+                        const wl = Number.isFinite(primary) && primary > 0 ? primary : 0.5876;
+                        out.push({ wavelength: wl, weight: 1 });
+                    }
+                    const sumW = out.reduce((acc, v) => acc + (Number(v.weight) || 0), 0);
+                    if (sumW > 0) {
+                        return out.map((v) => ({ wavelength: Number(v.wavelength), weight: Number(v.weight) / sumW }));
+                    }
+                    const uniform = 1 / Math.max(1, out.length);
+                    return out.map((v) => ({ wavelength: Number(v.wavelength), weight: uniform }));
                 })();
+                const wavelengthList = wavelengthEntries.map((e) => Number(e.wavelength));
+                const useWeightedComposite = (wavelength === 'all') && wavelengthEntries.length > 1;
+                const getCompositeWeightForWavelength = (wlUm) => {
+                    const wl = Number(wlUm);
+                    if (!(Number.isFinite(wl) && wl > 0)) return 0;
+                    let sum = 0;
+                    for (let i = 0; i < wavelengthEntries.length; i++) {
+                        const cur = wavelengthEntries[i];
+                        const curWl = Number(cur?.wavelength);
+                        if (!(Number.isFinite(curWl) && curWl > 0)) continue;
+                        if (Math.abs(curWl - wl) < 1e-9) {
+                            const ww = Number(cur?.weight);
+                            if (Number.isFinite(ww) && ww > 0) sum += ww;
+                        }
+                    }
+                    return sum;
+                };
 
                 let lastProgress = 20;
                 setProgress(lastProgress, 'Computing Through-Focus MTF...');
@@ -14624,6 +14742,7 @@ export function setupAnalysisWindows() {
                     samplingSize: Number.isFinite(sampling) ? sampling : 256,
                     zeroPadTo,
                     opdDisplayMode,
+                    method: mtfMethod,
                     onProgress: (evt) => {
                         try {
                             const p = Number(evt?.percent);
@@ -14663,29 +14782,66 @@ export function setupAnalysisWindows() {
                 };
 
                 const traces = [];
-                for (let i = 0; i < series.length; i++) {
-                    const s = series[i] || {};
-                    const wl = Number(s.wavelengthUm);
-                    const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
-                    const color = getColorForWavelengthPopup(wl);
-                    const tan = Array.isArray(s.mtfTangential) ? s.mtfTangential : [];
-                    const sag = Array.isArray(s.mtfSagittal) ? s.mtfSagittal : [];
+                if (useWeightedComposite) {
+                    const tanComposite = new Array(xAxis.length).fill(0);
+                    const sagComposite = new Array(xAxis.length).fill(0);
+                    for (let i = 0; i < series.length; i++) {
+                        const s = series[i] || {};
+                        const ww = getCompositeWeightForWavelength(s?.wavelengthUm);
+                        if (!(ww > 0)) continue;
+                        const tan = Array.isArray(s.mtfTangential) ? s.mtfTangential : [];
+                        const sag = Array.isArray(s.mtfSagittal) ? s.mtfSagittal : [];
+                        const n = Math.min(xAxis.length, tan.length, sag.length, tanComposite.length, sagComposite.length);
+                        for (let k = 0; k < n; k++) {
+                            const tv = Number(tan[k]);
+                            const sv = Number(sag[k]);
+                            if (Number.isFinite(tv)) tanComposite[k] += ww * tv;
+                            if (Number.isFinite(sv)) sagComposite[k] += ww * sv;
+                        }
+                    }
+                    if (tanComposite.length > 0) tanComposite[0] = 1;
+                    if (sagComposite.length > 0) sagComposite[0] = 1;
                     traces.push({
                         x: xAxis,
-                        y: tan,
+                        y: tanComposite,
                         type: 'scatter',
                         mode: 'lines',
-                        name: 'Meridional (' + nm + 'nm)',
-                        line: { color, width: 2, dash: 'solid' },
+                        name: 'Meridional (Weighted Composite)',
+                        line: { color: '#1f4ed8', width: 2, dash: 'solid' },
                     });
                     traces.push({
                         x: xAxis,
-                        y: sag,
+                        y: sagComposite,
                         type: 'scatter',
                         mode: 'lines',
-                        name: 'Sagittal (' + nm + 'nm)',
-                        line: { color, width: 2, dash: 'dot' },
+                        name: 'Sagittal (Weighted Composite)',
+                        line: { color: '#1f4ed8', width: 2, dash: 'dot' },
                     });
+                } else {
+                    for (let i = 0; i < series.length; i++) {
+                        const s = series[i] || {};
+                        const wl = Number(s.wavelengthUm);
+                        const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
+                        const color = getColorForWavelengthPopup(wl);
+                        const tan = Array.isArray(s.mtfTangential) ? s.mtfTangential : [];
+                        const sag = Array.isArray(s.mtfSagittal) ? s.mtfSagittal : [];
+                        traces.push({
+                            x: xAxis,
+                            y: tan,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Meridional (' + nm + 'nm)',
+                            line: { color, width: 2, dash: 'solid' },
+                        });
+                        traces.push({
+                            x: xAxis,
+                            y: sag,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Sagittal (' + nm + 'nm)',
+                            line: { color, width: 2, dash: 'dot' },
+                        });
+                    }
                 }
 
                 setProgress(85, 'Rendering Through-Focus MTF...');
@@ -14823,7 +14979,14 @@ export function setupAnalysisWindows() {
         <label for="popup-field-mtf-meridional-freq-input">1st Freq (lp/mm):</label>
         <input id="popup-field-mtf-meridional-freq-input" type="number" min="0" step="1" value="10" />
         <label for="popup-field-mtf-sagittal-freq-input">2nd Freq (lp/mm):</label>
-        <input id="popup-field-mtf-sagittal-freq-input" type="number" min="0" step="1" value="30" />
+        <input id="popup-field-mtf-sagittal-freq-input" type="number" min="0" step="1" value="20" />
+        <label for="popup-field-mtf-third-freq-input">3rd Freq (lp/mm):</label>
+        <input id="popup-field-mtf-third-freq-input" type="number" min="0" step="1" value="40" />
+        <label for="popup-field-mtf-method-select">Method:</label>
+        <select id="popup-field-mtf-method-select">
+            <option value="hopkins-tcc" selected>Hopkins-TCC</option>
+            <option value="legacy-otf-axis">Legacy OTF Axis</option>
+        </select>
         <label for="popup-field-mtf-min-field-input">Object min:</label>
         <input id="popup-field-mtf-min-field-input" type="number" step="0.001" value="0" />
         <label for="popup-field-mtf-max-field-input">Object max:</label>
@@ -14832,10 +14995,11 @@ export function setupAnalysisWindows() {
         <input id="popup-field-mtf-steps-input" type="number" min="3" max="201" step="1" value="21" />
         <label for="popup-field-mtf-sampling-select">Sampling:</label>
         <select id="popup-field-mtf-sampling-select">
-            <option value="32">32x32</option>
+            <option value="16">16x16</option>
+            <option value="32" selected>32x32</option>
             <option value="64">64x64</option>
             <option value="128">128x128</option>
-            <option value="256" selected>256x256</option>
+            <option value="256">256x256</option>
             <option value="512">512x512</option>
             <option value="1024">1024x1024</option>
             <option value="2048">2048x2048</option>
@@ -15013,13 +15177,8 @@ export function setupAnalysisWindows() {
             const prevWl = wlSel ? wlSel.value : '';
             populateSelect(wlSel, buildWavelengthOptions());
             if (wlSel && (!prevWl || !Array.from(wlSel.options).some(o => o.value === prevWl))) {
-                const primary = getPrimaryWavelength();
-                if (Number.isFinite(primary) && Array.from(wlSel.options).some(o => o.value === String(primary))) {
-                    wlSel.value = String(primary);
-                } else {
-                    const firstNumeric = Array.from(wlSel.options).find(o => o.value !== 'all');
-                    if (firstNumeric) wlSel.value = firstNumeric.value;
-                }
+                const allOption = Array.from(wlSel.options).find(o => o.value === 'all');
+                if (allOption) wlSel.value = allOption.value;
             }
 
             const axisInfo = getAxisInfo();
@@ -15058,6 +15217,8 @@ export function setupAnalysisWindows() {
             const stepsEl = document.getElementById('popup-field-mtf-steps-input');
             const meridionalEl = document.getElementById('popup-field-mtf-meridional-freq-input');
             const sagittalEl = document.getElementById('popup-field-mtf-sagittal-freq-input');
+            const thirdFreqEl = document.getElementById('popup-field-mtf-third-freq-input');
+            const methodEl = document.getElementById('popup-field-mtf-method-select');
             const samplingEl = document.getElementById('popup-field-mtf-sampling-select');
             const zeroPadEl = document.getElementById('popup-field-mtf-zeropad-select');
             const removePtdEl = document.getElementById('popup-field-mtf-remove-ptd-checkbox');
@@ -15069,7 +15230,11 @@ export function setupAnalysisWindows() {
             const fieldMax = maxFieldEl ? Number(maxFieldEl.value) : 10;
             const steps = stepsEl ? Number(stepsEl.value) : 21;
             const meridionalFreq = meridionalEl ? Number(meridionalEl.value) : 10;
-            const sagittalFreq = sagittalEl ? Number(sagittalEl.value) : 30;
+            const sagittalFreq = sagittalEl ? Number(sagittalEl.value) : 20;
+            const thirdFreq = thirdFreqEl ? Number(thirdFreqEl.value) : 40;
+            const mtfMethod = (methodEl && typeof methodEl.value === 'string' && methodEl.value.trim())
+                ? methodEl.value.trim()
+                : 'hopkins-tcc';
             const sampling = samplingEl ? Number(samplingEl.value) : 256;
             const zeroPadRaw = zeroPadEl ? String(zeroPadEl.value || 'auto') : 'auto';
             const opdDisplayMode = (removePtdEl && removePtdEl.checked)
@@ -15101,36 +15266,59 @@ export function setupAnalysisWindows() {
                 const sourceRows = (typeof opener.getSourceRows === 'function')
                     ? (safeCall(() => opener.getSourceRows(opener.tableSource), []) || [])
                     : [];
-                const wavelengthList = (() => {
-                    const out = [];
-                    if (wavelength === 'all') {
-                        if (Array.isArray(sourceRows) && sourceRows.length > 0) {
-                            for (let i = 0; i < sourceRows.length; i++) {
-                                const wl = Number(sourceRows[i]?.wavelength);
-                                if (!Number.isFinite(wl) || wl <= 0) continue;
-                                if (out.some(v => Math.abs(v - wl) < 1e-9)) continue;
-                                out.push(wl);
-                            }
-                        }
-                        if (out.length === 0 && Number.isFinite(primary) && primary > 0) {
-                            out.push(primary);
-                        }
-                    } else {
+                const wavelengthEntries = (() => {
+                    if (wavelength !== 'all') {
                         const wl = (Number.isFinite(Number(wavelength)) && Number(wavelength) > 0)
                             ? Number(wavelength)
                             : ((Number.isFinite(primary) && primary > 0) ? primary : 0.5876);
-                        out.push(wl);
+                        return [{ wavelength: wl, weight: 1 }];
                     }
-                    if (out.length === 0) out.push(0.5876);
-                    return out;
+                    const out = [];
+                    if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+                        for (let i = 0; i < sourceRows.length; i++) {
+                            const wl = Number(sourceRows[i]?.wavelength);
+                            if (!Number.isFinite(wl) || wl <= 0) continue;
+                            const rawW = Number(sourceRows[i]?.weight);
+                            const ww = Number.isFinite(rawW) && rawW > 0 ? rawW : 1;
+                            out.push({ wavelength: wl, weight: ww });
+                        }
+                    }
+                    if (out.length === 0) {
+                        const wl = Number.isFinite(primary) && primary > 0 ? primary : 0.5876;
+                        out.push({ wavelength: wl, weight: 1 });
+                    }
+                    const sumW = out.reduce((acc, v) => acc + (Number(v.weight) || 0), 0);
+                    if (sumW > 0) {
+                        return out.map((v) => ({ wavelength: Number(v.wavelength), weight: Number(v.weight) / sumW }));
+                    }
+                    const uniform = 1 / Math.max(1, out.length);
+                    return out.map((v) => ({ wavelength: Number(v.wavelength), weight: uniform }));
                 })();
+                const wavelengthList = wavelengthEntries.map((e) => Number(e.wavelength));
+                const useWeightedComposite = (wavelength === 'all') && wavelengthEntries.length > 1;
+                const getCompositeWeightForWavelength = (wlUm) => {
+                    const wl = Number(wlUm);
+                    if (!(Number.isFinite(wl) && wl > 0)) return 0;
+                    let sum = 0;
+                    for (let i = 0; i < wavelengthEntries.length; i++) {
+                        const cur = wavelengthEntries[i];
+                        const curWl = Number(cur?.wavelength);
+                        if (!(Number.isFinite(curWl) && curWl > 0)) continue;
+                        if (Math.abs(curWl - wl) < 1e-9) {
+                            const ww = Number(cur?.weight);
+                            if (Number.isFinite(ww) && ww > 0) sum += ww;
+                        }
+                    }
+                    return sum;
+                };
 
                 setProgress(20, 'Computing Object MTF (Rust native)...');
-                const nativeResp = await opener.runPortableFieldMtfForPopup({
+                const payload12 = {
                     objectIndex: 0,
                     wavelengths: wavelengthList,
                     firstFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
-                    secondFrequencyLpmm: Number.isFinite(sagittalFreq) ? sagittalFreq : 30,
+                    secondFrequencyLpmm: Number.isFinite(sagittalFreq) ? sagittalFreq : 20,
+                    thirdFrequencyLpmm: Number.isFinite(thirdFreq) ? thirdFreq : 40,
                     fieldMin: Number.isFinite(fieldMin) ? fieldMin : 0,
                     fieldMax: Number.isFinite(fieldMax) ? fieldMax : 10,
                     steps: Number.isFinite(steps) ? steps : 21,
@@ -15138,6 +15326,7 @@ export function setupAnalysisWindows() {
                     zeroPadTo,
                     opdDisplayMode,
                     fieldAxisMode: axisInfo.mode,
+                    method: mtfMethod,
                     adaptiveSampling: true,
                     adaptiveThreshold: 0.04,
                     adaptiveInitialSteps: Math.max(3, Math.floor((Number.isFinite(steps) ? steps : 21) * 0.45)),
@@ -15150,7 +15339,9 @@ export function setupAnalysisWindows() {
                             setProgress(20, msg);
                         }
                     },
-                });
+                };
+
+                const nativeResp = await opener.runPortableFieldMtfForPopup(payload12);
 
                 if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
                     throw new Error('Plotly is not available in Object MTF popup');
@@ -15206,51 +15397,153 @@ export function setupAnalysisWindows() {
                 };
 
                 const firstFreqText = String(Number.isFinite(meridionalFreq) ? meridionalFreq.toFixed(1) : '10.0');
-                const secondFreqText = String(Number.isFinite(sagittalFreq) ? sagittalFreq.toFixed(1) : '30.0');
+                const secondFreqText = String(Number.isFinite(sagittalFreq) ? sagittalFreq.toFixed(1) : '20.0');
+                const thirdFreqText = String(Number.isFinite(thirdFreq) ? thirdFreq.toFixed(1) : '40.0');
+                const freq1Color = '#1d4ed8';
+                const freq2Color = '#d97706';
+                const freq3Color = '#059669';
                 const traces = [];
-                for (let i = 0; i < series.length; i++) {
-                    const s = series[i] || {};
-                    const wl = Number(s.wavelengthUm);
-                    const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
-                    const color = getColorForWavelengthPopup(wl);
+                if (useWeightedComposite) {
+                    const meridionalFirstComposite = new Array(xAxis.length).fill(0);
+                    const sagittalFirstComposite = new Array(xAxis.length).fill(0);
+                    const meridionalSecondComposite = new Array(xAxis.length).fill(0);
+                    const sagittalSecondComposite = new Array(xAxis.length).fill(0);
+                    const meridionalThirdComposite = new Array(xAxis.length).fill(0);
+                    const sagittalThirdComposite = new Array(xAxis.length).fill(0);
+                    for (let i = 0; i < series.length; i++) {
+                        const s = series[i] || {};
+                        const ww = getCompositeWeightForWavelength(s?.wavelengthUm);
+                        if (!(ww > 0)) continue;
+                        const m1 = Array.isArray(s.meridionalFirst) ? s.meridionalFirst : [];
+                        const s1 = Array.isArray(s.sagittalFirst) ? s.sagittalFirst : [];
+                        const m2 = Array.isArray(s.meridionalSecond) ? s.meridionalSecond : [];
+                        const s2 = Array.isArray(s.sagittalSecond) ? s.sagittalSecond : [];
+                        const m3 = Array.isArray(s.meridionalThird) ? s.meridionalThird : [];
+                        const s3v = Array.isArray(s.sagittalThird) ? s.sagittalThird : [];
+                        const n = Math.min(xAxis.length, m1.length, s1.length, m2.length, s2.length, m3.length, s3v.length);
+                        for (let k = 0; k < n; k++) {
+                            const vM1 = Number(m1[k]);
+                            const vS1 = Number(s1[k]);
+                            const vM2 = Number(m2[k]);
+                            const vS2 = Number(s2[k]);
+                            const vM3 = Number(m3[k]);
+                            const vS3 = Number(s3v[k]);
+                            if (Number.isFinite(vM1)) meridionalFirstComposite[k] += ww * vM1;
+                            if (Number.isFinite(vS1)) sagittalFirstComposite[k] += ww * vS1;
+                            if (Number.isFinite(vM2)) meridionalSecondComposite[k] += ww * vM2;
+                            if (Number.isFinite(vS2)) sagittalSecondComposite[k] += ww * vS2;
+                            if (Number.isFinite(vM3)) meridionalThirdComposite[k] += ww * vM3;
+                            if (Number.isFinite(vS3)) sagittalThirdComposite[k] += ww * vS3;
+                        }
+                    }
+                    traces.push({
+                        x: xAxis,
+                        y: meridionalFirstComposite,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Meridional ' + firstFreqText + ' lp/mm (Weighted Composite)',
+                        line: { color: freq1Color, width: 2, dash: 'dot' },
+                    });
+                    traces.push({
+                        x: xAxis,
+                        y: sagittalFirstComposite,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Sagittal ' + firstFreqText + ' lp/mm (Weighted Composite)',
+                        line: { color: freq1Color, width: 2, dash: 'solid' },
+                    });
+                    traces.push({
+                        x: xAxis,
+                        y: meridionalSecondComposite,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Meridional ' + secondFreqText + ' lp/mm (Weighted Composite)',
+                        line: { color: freq2Color, width: 2, dash: 'dot' },
+                    });
+                    traces.push({
+                        x: xAxis,
+                        y: sagittalSecondComposite,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Sagittal ' + secondFreqText + ' lp/mm (Weighted Composite)',
+                        line: { color: freq2Color, width: 2, dash: 'solid' },
+                    });
+                    traces.push({
+                        x: xAxis,
+                        y: meridionalThirdComposite,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Meridional ' + thirdFreqText + ' lp/mm (Weighted Composite)',
+                        line: { color: freq3Color, width: 2, dash: 'dot' },
+                    });
+                    traces.push({
+                        x: xAxis,
+                        y: sagittalThirdComposite,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Sagittal ' + thirdFreqText + ' lp/mm (Weighted Composite)',
+                        line: { color: freq3Color, width: 2, dash: 'solid' },
+                    });
+                } else {
+                    for (let i = 0; i < series.length; i++) {
+                        const s = series[i] || {};
+                        const wl = Number(s.wavelengthUm);
+                        const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
 
-                    traces.push({
-                        x: xAxis,
-                        y: Array.isArray(s.meridionalFirst) ? s.meridionalFirst : [],
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: 'Meridional ' + firstFreqText + ' lp/mm (' + nm + 'nm)',
-                        line: { color, width: 2, dash: 'solid' },
-                    });
-                    traces.push({
-                        x: xAxis,
-                        y: Array.isArray(s.sagittalFirst) ? s.sagittalFirst : [],
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: 'Sagittal ' + firstFreqText + ' lp/mm (' + nm + 'nm)',
-                        line: { color, width: 2, dash: 'dot' },
-                    });
-                    traces.push({
-                        x: xAxis,
-                        y: Array.isArray(s.meridionalSecond) ? s.meridionalSecond : [],
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: 'Meridional ' + secondFreqText + ' lp/mm (' + nm + 'nm)',
-                        line: { color, width: 2, dash: 'dash' },
-                    });
-                    traces.push({
-                        x: xAxis,
-                        y: Array.isArray(s.sagittalSecond) ? s.sagittalSecond : [],
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: 'Sagittal ' + secondFreqText + ' lp/mm (' + nm + 'nm)',
-                        line: { color, width: 2, dash: 'dashdot' },
-                    });
+                        traces.push({
+                            x: xAxis,
+                            y: Array.isArray(s.meridionalFirst) ? s.meridionalFirst : [],
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Meridional ' + firstFreqText + ' lp/mm (' + nm + 'nm)',
+                            line: { color: freq1Color, width: 2, dash: 'dot' },
+                        });
+                        traces.push({
+                            x: xAxis,
+                            y: Array.isArray(s.sagittalFirst) ? s.sagittalFirst : [],
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Sagittal ' + firstFreqText + ' lp/mm (' + nm + 'nm)',
+                            line: { color: freq1Color, width: 2, dash: 'solid' },
+                        });
+                        traces.push({
+                            x: xAxis,
+                            y: Array.isArray(s.meridionalSecond) ? s.meridionalSecond : [],
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Meridional ' + secondFreqText + ' lp/mm (' + nm + 'nm)',
+                            line: { color: freq2Color, width: 2, dash: 'dot' },
+                        });
+                        traces.push({
+                            x: xAxis,
+                            y: Array.isArray(s.sagittalSecond) ? s.sagittalSecond : [],
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Sagittal ' + secondFreqText + ' lp/mm (' + nm + 'nm)',
+                            line: { color: freq2Color, width: 2, dash: 'solid' },
+                        });
+                        traces.push({
+                            x: xAxis,
+                            y: Array.isArray(s.meridionalThird) ? s.meridionalThird : [],
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Meridional ' + thirdFreqText + ' lp/mm (' + nm + 'nm)',
+                            line: { color: freq3Color, width: 2, dash: 'dot' },
+                        });
+                        traces.push({
+                            x: xAxis,
+                            y: Array.isArray(s.sagittalThird) ? s.sagittalThird : [],
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Sagittal ' + thirdFreqText + ' lp/mm (' + nm + 'nm)',
+                            line: { color: freq3Color, width: 2, dash: 'solid' },
+                        });
+                    }
                 }
 
                 setProgress(85, 'Rendering Object MTF...');
                 await window.Plotly.newPlot(containerEl, traces, {
-                    title: firstFreqText + ' / ' + secondFreqText + ' lp/mm',
+                    title: firstFreqText + ' / ' + secondFreqText + ' / ' + thirdFreqText + ' lp/mm',
                     xaxis: { title: axisInfo.label },
                     yaxis: { title: 'MTF', range: [0, 1.05] },
                     margin: { l: 60, r: 20, t: 50, b: 50 },

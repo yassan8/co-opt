@@ -1,0 +1,14 @@
+C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\deps\serde-bb58db696c5c56ac.d: C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\build\serde-613cff6e71eb62a0\out/private.rs
+
+C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\deps\libserde-bb58db696c5c56ac.rlib: C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\build\serde-613cff6e71eb62a0\out/private.rs
+
+C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\deps\libserde-bb58db696c5c56ac.rmeta: C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\build\serde-613cff6e71eb62a0\out/private.rs
+
+C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\yassa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+C:\Users\yassa\source\co-opt\rust-wasm\target\wasm32-unknown-unknown\release\build\serde-613cff6e71eb62a0\out/private.rs:
+
+# env-dep:OUT_DIR=C:\\Users\\yassa\\source\\co-opt\\rust-wasm\\target\\wasm32-unknown-unknown\\release\\build\\serde-613cff6e71eb62a0\\out

@@ -34,6 +34,7 @@ export const refract_ray_batch: (a: number, b: number, c: number, d: number, e: 
 export const run_native_chief_ray_angle_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
+export const run_native_mtf_malacara_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_opd_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_paraxial_metrics_wasm_json: (a: number, b: number) => [number, number, number];

@@ -2947,6 +2947,36 @@ export async function runNativeMtfMap(
   payload: NativeMtfMapRequest,
 ): Promise<NativeMtfMapResponse> {
   if (!isTauriRuntime()) {
+    if (payload?.method === "malacara-wasm-required") {
+      const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+      const api = await preloadRustRayTracingWasm();
+      if (!api || typeof (api as any).run_native_mtf_malacara_from_opd_wasm_json !== "function") {
+        throw new Error("runNativeMtfMap(web): Rust/WASM Malacara export is unavailable");
+      }
+      const reqJson = JSON.stringify({
+        displayOpdGrid: (payload as any)?.displayOpdGrid,
+        rawOpdGrid: (payload as any)?.rawOpdGrid,
+        amplitudeGrid: (payload as any)?.amplitudeGrid,
+        wavelengthUm: Number((payload as any)?.wavelengthUm),
+        fNumber: Number((payload as any)?.fNumber),
+        pupilRange: Number((payload as any)?.pupilRange),
+        maxFrequencyLpmm: Number(payload?.maxFrequencyLpmm),
+        points: Number(payload?.points),
+        tangentialDir: (payload as any)?.tangentialDir,
+        sagittalDir: (payload as any)?.sagittalDir,
+      });
+      let resp: any;
+      try {
+        resp = (api as any).run_native_mtf_malacara_from_opd_wasm_json(reqJson);
+      } catch (e: any) {
+        throw new Error(`runNativeMtfMap(web): Rust/WASM Malacara call failed (${String(e?.message || e)})`);
+      }
+      if (!resp || typeof resp !== "object") {
+        throw new Error("runNativeMtfMap(web): Rust/WASM Malacara returned invalid response");
+      }
+      return resp as NativeMtfMapResponse;
+    }
+
     const { fft2D_WASM } = await import("../../../rust-wasm/ts/raytracing/fft-wasm-wrapper.ts");
     const psf = Array.isArray(payload?.psfData) ? payload.psfData : [];
     const n = psf.length;
@@ -2956,6 +2986,101 @@ export async function runNativeMtfMap(
     const pixelSizeUm = Number(payload?.pixelSizeUm);
     if (!(Number.isFinite(pixelSizeUm) && pixelSizeUm > 0)) {
       throw new Error("runNativeMtfMap(web): pixelSizeUm must be positive");
+    }
+
+    const method = String((payload as any)?.method || "hopkins-tcc").trim().toLowerCase();
+    const useHopkinsTcc = method === "hopkins-tcc" || method === "hopkins" || method === "auto";
+
+    const dfLpmm = (1 / (n * pixelSizeUm)) * 1000;
+    const nyquistLpmm = (0.5 / pixelSizeUm) * 1000;
+    const maxFreqReq = Number.isFinite(Number(payload?.maxFrequencyLpmm)) ? Number(payload.maxFrequencyLpmm) : nyquistLpmm;
+    const maxFreq = Math.max(0, Math.min(maxFreqReq, nyquistLpmm));
+    const points = Math.max(2, Math.min(2048, Math.floor(Number(payload?.points) || 128)));
+    const directEvalOnly = !!payload?.directEvalOnly;
+    const sampledFrequenciesLpmm = (Array.isArray(payload?.sampleFrequenciesLpmm) ? payload.sampleFrequenciesLpmm : [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v) && v >= 0)
+      .map((v) => Math.min(v, nyquistLpmm));
+
+    if (useHopkinsTcc) {
+      const lsfX = Array.from({ length: n }, () => 0);
+      const lsfY = Array.from({ length: n }, () => 0);
+      for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+          const v = Number(psf[y][x]);
+          const vv = Number.isFinite(v) ? v : 0;
+          lsfX[x] += vv;
+          lsfY[y] += vv;
+        }
+      }
+
+      const buildLag = (lsf: number[]) => {
+        const lag = new Array(lsf.length).fill(0);
+        for (let d = 0; d < lsf.length; d++) {
+          let acc = 0;
+          for (let i = 0; i < lsf.length - d; i++) {
+            acc += lsf[i] * lsf[i + d];
+          }
+          lag[d] = acc;
+        }
+        return lag;
+      };
+
+      const evalHopkins = (freqs: number[], lsf: number[]) => {
+        if (!Array.isArray(freqs) || freqs.length === 0 || !Array.isArray(lsf) || lsf.length === 0) return [];
+        const lag = buildLag(lsf);
+        const dc = Math.max(1e-12, Math.abs(lsf.reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0)));
+        const nFloat = Math.max(1, lsf.length);
+        return freqs.map((fRaw) => {
+          const f = Math.max(0, Math.min(nyquistLpmm, Number(fRaw) || 0));
+          const idx = f / Math.max(1e-12, dfLpmm);
+          const base = (2 * Math.PI * idx) / nFloat;
+          let otfPower = lag[0] || 0;
+          for (let d = 1; d < lag.length; d++) {
+            otfPower += 2 * lag[d] * Math.cos(base * d);
+          }
+          const mtf = Math.sqrt(Math.max(0, otfPower)) / dc;
+          return Math.max(0, Math.min(1, mtf));
+        });
+      };
+
+      const frequencyAxis = directEvalOnly
+        ? []
+        : Array.from({ length: points }, (_, i) => {
+            const t = points > 1 ? (i / (points - 1)) : 0;
+            return maxFreq * t;
+          });
+
+      const mtfTangential = evalHopkins(frequencyAxis, lsfY);
+      const mtfSagittal = evalHopkins(frequencyAxis, lsfX);
+      if (mtfTangential.length > 0 && (frequencyAxis[0] ?? 0) <= 1e-12) mtfTangential[0] = 1;
+      if (mtfSagittal.length > 0 && (frequencyAxis[0] ?? 0) <= 1e-12) mtfSagittal[0] = 1;
+
+      const sampledMtfTangential = sampledFrequenciesLpmm.length > 0
+        ? evalHopkins(sampledFrequenciesLpmm, lsfY)
+        : undefined;
+      const sampledMtfSagittal = sampledFrequenciesLpmm.length > 0
+        ? evalHopkins(sampledFrequenciesLpmm, lsfX)
+        : undefined;
+
+      if (sampledMtfTangential && sampledMtfTangential.length > 0 && (sampledFrequenciesLpmm[0] ?? 0) <= 1e-12) {
+        sampledMtfTangential[0] = 1;
+      }
+      if (sampledMtfSagittal && sampledMtfSagittal.length > 0 && (sampledFrequenciesLpmm[0] ?? 0) <= 1e-12) {
+        sampledMtfSagittal[0] = 1;
+      }
+
+      return {
+        backend: "web-rust-wasm-hopkins-tcc",
+        frequencyAxis,
+        mtfTangential,
+        mtfSagittal,
+        sampledFrequenciesLpmm: sampledFrequenciesLpmm.length > 0 ? sampledFrequenciesLpmm : undefined,
+        sampledMtfTangential,
+        sampledMtfSagittal,
+        nyquistLpmm,
+        message: "Computed via Web Rust/WASM MTF API (Hopkins-TCC)",
+      };
     }
 
     const real = Array.from({ length: n }, (_, y) => Array.from({ length: n }, (_, x) => {
@@ -2972,10 +3097,7 @@ export async function runNativeMtfMap(
       throw new Error("runNativeMtfMap(web): invalid OTF DC component");
     }
 
-    const dfLpmm = (1 / (n * pixelSizeUm)) * 1000;
-    const nyquistLpmm = (0.5 / pixelSizeUm) * 1000;
-    const maxFreqReq = Number.isFinite(Number(payload?.maxFrequencyLpmm)) ? Number(payload.maxFrequencyLpmm) : nyquistLpmm;
-    const maxFreq = Math.max(0, Math.min(maxFreqReq, nyquistLpmm));
+    
     const kMax = Math.max(0, Math.min(Math.floor(n / 2), Math.floor(maxFreq / Math.max(dfLpmm, 1e-12))));
 
     const freqDiscrete: number[] = [];
@@ -2991,11 +3113,7 @@ export async function runNativeMtfMap(
       tangentialDiscrete.push(Math.hypot(reY, imY) / dcMag);
     }
 
-    const points = Math.max(2, Math.min(2048, Math.floor(Number(payload?.points) || freqDiscrete.length)));
-    const directEvalOnly = !!payload?.directEvalOnly;
-    const sampledFrequenciesLpmm = (Array.isArray(payload?.sampleFrequenciesLpmm) ? payload.sampleFrequenciesLpmm : [])
-      .map((v) => Number(v))
-      .filter((v) => Number.isFinite(v) && v >= 0);
+    const pointsLegacy = Math.max(2, Math.min(2048, Math.floor(Number(payload?.points) || freqDiscrete.length)));
     const sampleLinear = (xArr: number[], yArr: number[], x: number) => {
       if (xArr.length === 0 || yArr.length === 0) return 0;
       if (x <= xArr[0]) return yArr[0] ?? 0;
@@ -3023,8 +3141,8 @@ export async function runNativeMtfMap(
     const mtfSagittal: number[] = [];
     const mtfTangential: number[] = [];
     if (!directEvalOnly) {
-      for (let i = 0; i < points; i++) {
-        const f = (i / Math.max(1, points - 1)) * maxFreq;
+      for (let i = 0; i < pointsLegacy; i++) {
+        const f = (i / Math.max(1, pointsLegacy - 1)) * maxFreq;
         frequencyAxis.push(f);
         mtfSagittal.push(sampleLinear(freqDiscrete, sagittalDiscrete, f));
         mtfTangential.push(sampleLinear(freqDiscrete, tangentialDiscrete, f));
@@ -3080,6 +3198,9 @@ export async function runNativeThroughFocusMtfMap(
       ? Number(payload?.pixelSizeUm)
       : 1.0;
     const opdDisplayMode = String(payload?.opdDisplayMode || "pistonTiltRemoved");
+    const mtfMethod = (typeof (payload as any)?.method === "string" && String((payload as any).method).trim())
+      ? String((payload as any).method).trim()
+      : "hopkins-tcc";
 
     const xAxis = Array.from({ length: steps }, (_, i) => {
       const t = steps > 1 ? i / (steps - 1) : 0;
@@ -3108,15 +3229,12 @@ export async function runNativeThroughFocusMtfMap(
     // Load WASM once before the computation loops so PSF/MTF use the same
     // null-cell handling as the native Tauri path.
     let _wasmPsfFn: ((json: string) => unknown) | null = null;
-    let _wasmMtfFn: ((json: string) => unknown) | null = null;
     try {
       const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
       const rust = await preloadRustRayTracingWasm();
       const psfFn = (rust as any)?.run_native_psf_from_opd_wasm_json;
-      const mtfFn = (rust as any)?.run_native_mtf_from_psf_wasm_json;
-      if (typeof psfFn === "function" && typeof mtfFn === "function") {
+      if (typeof psfFn === "function") {
         _wasmPsfFn = psfFn;
-        _wasmMtfFn = mtfFn;
       }
     } catch (_) {}
 
@@ -3141,7 +3259,7 @@ export async function runNativeThroughFocusMtfMap(
           opdDisplayMode,
         } as NativeOpdMapRequest);
 
-        if (_wasmPsfFn !== null && _wasmMtfFn !== null) {
+        if (_wasmPsfFn !== null) {
           // ── WASM path: correctly handles null = outside-pupil cells ──────────
           // OPD grids are passed in waves (with null for outside pupil).
           // The WASM function converts waves→µm internally and skips null cells,
@@ -3157,20 +3275,16 @@ export async function runNativeThroughFocusMtfMap(
           const psfRaw = _wasmPsfFn(psfReqJson);
           const psfOut: any = typeof psfRaw === "string" ? JSON.parse(psfRaw) : psfRaw;
 
-          const mtfReqJson = JSON.stringify({
-            psfData: psfOut?.psfData,
+          const mtfResp = await runNativeMtfMap({
+            psfData: Array.isArray(psfOut?.psfData) ? psfOut.psfData : [],
             pixelSizeUm,
             maxFrequencyLpmm: Math.max(targetFreqLpmm * 2, 1),
-            targetFrequencyLpmm: targetFreqLpmm,
             points: 121,
-          });
-          const mtfRaw = _wasmMtfFn(mtfReqJson);
-          const mtfOut: any = typeof mtfRaw === "string" ? JSON.parse(mtfRaw) : mtfRaw;
+            method: mtfMethod as any,
+          } as NativeMtfMapRequest);
 
-          const tanVal = Number(mtfOut?.targetMtfTangential);
-          const sagVal = Number(mtfOut?.targetMtfSagittal);
-          tanVec.push(Number.isFinite(tanVal) ? tanVal : 0);
-          sagVec.push(Number.isFinite(sagVal) ? sagVal : 0);
+          tanVec.push(interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfTangential || [], targetFreqLpmm));
+          sagVec.push(interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfSagittal || [], targetFreqLpmm));
         } else {
           // ── TypeScript fallback: null-cell bug fixed ──────────────────────────
           // Cells with null rawOpdGrid value are outside the pupil; skip them.
@@ -3210,6 +3324,7 @@ export async function runNativeThroughFocusMtfMap(
             pixelSizeUm,
             maxFrequencyLpmm: Math.max(targetFreqLpmm * 2, 1),
             points: 121,
+            method: mtfMethod as any,
           } as NativeMtfMapRequest);
 
           tanVec.push(interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfTangential || [], targetFreqLpmm));
@@ -3290,6 +3405,7 @@ export async function runNativeFieldMtfMap(
   const axisMode = payload?.fieldAxisMode === "height" ? "height" : "angle";
   const firstFrequencyLpmm = Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload?.firstFrequencyLpmm) : 10;
   const secondFrequencyLpmm = Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload?.secondFrequencyLpmm) : 30;
+  const thirdFrequencyLpmm = Number.isFinite(Number(payload?.thirdFrequencyLpmm)) ? Number(payload?.thirdFrequencyLpmm) : 40;
   const fieldMinRaw = Number.isFinite(Number(payload?.fieldMin)) ? Number(payload?.fieldMin) : 0;
   const fieldMaxRaw = Number.isFinite(Number(payload?.fieldMax)) ? Number(payload?.fieldMax) : 10;
   const fieldMin = Math.min(fieldMinRaw, fieldMaxRaw);
@@ -3301,6 +3417,9 @@ export async function runNativeFieldMtfMap(
   const requestedPupilSamplingMode = hasExplicitPupilSamplingMode
     ? payload.pupilSamplingMode
     : (forcedPupilSamplingMode || "entrance");
+  const mtfMethod = (typeof (payload as any)?.method === "string" && String((payload as any).method).trim())
+    ? String((payload as any).method).trim()
+    : "hopkins-tcc";
   const onProgress = typeof (payload as any)?.onProgress === "function" ? (payload as any).onProgress : null;
 
   if (!preferSharedFieldMtfRoute && isTauriRuntime()) {
@@ -3790,14 +3909,18 @@ export async function runNativeFieldMtfMap(
     firstS: number;
     secondM: number;
     secondS: number;
+    thirdM: number;
+    thirdS: number;
     firstLo: number | null;
     firstHi: number | null;
     secondLo: number | null;
     secondHi: number | null;
+    thirdLo: number | null;
+    thirdHi: number | null;
   }> => {
-    const maxTargetFrequencyLpmm = Math.max(0, Number(firstFrequencyLpmm) || 0, Number(secondFrequencyLpmm) || 0);
+    const maxTargetFrequencyLpmm = Math.max(0, Number(firstFrequencyLpmm) || 0, Number(secondFrequencyLpmm) || 0, Number(thirdFrequencyLpmm) || 0);
     const mtfMaxFrequencyLpmm = Math.max(1, maxTargetFrequencyLpmm * 2);
-    const targetFreqs = [firstFrequencyLpmm, secondFrequencyLpmm]
+    const targetFreqs = [firstFrequencyLpmm, secondFrequencyLpmm, thirdFrequencyLpmm]
       .map((v) => Number(v))
       .filter((v) => Number.isFinite(v) && v >= 0);
 
@@ -3805,9 +3928,10 @@ export async function runNativeFieldMtfMap(
       psfData,
       pixelSizeUm,
       maxFrequencyLpmm: mtfMaxFrequencyLpmm,
-      points: 2,
+      points: 3,
       sampleFrequenciesLpmm: targetFreqs,
       directEvalOnly: true,
+      method: mtfMethod as any,
     } as NativeMtfMapRequest);
 
     const freqAxis = Array.isArray((mtfResp as any)?.frequencyAxis) ? (mtfResp as any).frequencyAxis : [];
@@ -3819,7 +3943,7 @@ export async function runNativeFieldMtfMap(
     const tanVals = tanAxis === "x" ? mtfSagittal : mtfTangential;
     const sagVals = tanAxis === "x" ? mtfTangential : mtfSagittal;
 
-    const hasDirectSamples = sampledTangential.length >= 2 && sampledSagittal.length >= 2;
+    const hasDirectSamples = sampledTangential.length >= 3 && sampledSagittal.length >= 3;
     const firstM = hasDirectSamples
       ? (tanAxis === "x" ? Number(sampledSagittal[0]) : Number(sampledTangential[0]))
       : interpolateAxisValue(freqAxis, tanVals, firstFrequencyLpmm);
@@ -3832,16 +3956,26 @@ export async function runNativeFieldMtfMap(
     const secondS = hasDirectSamples
       ? (tanAxis === "x" ? Number(sampledTangential[1]) : Number(sampledSagittal[1]))
       : interpolateAxisValue(freqAxis, sagVals, secondFrequencyLpmm);
+    const thirdM = hasDirectSamples
+      ? (tanAxis === "x" ? Number(sampledSagittal[2]) : Number(sampledTangential[2]))
+      : interpolateAxisValue(freqAxis, tanVals, thirdFrequencyLpmm);
+    const thirdS = hasDirectSamples
+      ? (tanAxis === "x" ? Number(sampledTangential[2]) : Number(sampledSagittal[2]))
+      : interpolateAxisValue(freqAxis, sagVals, thirdFrequencyLpmm);
 
     return {
       firstM,
       firstS,
       secondM,
       secondS,
+      thirdM,
+      thirdS,
       firstLo: findLowerBracketValue(freqAxis, firstFrequencyLpmm),
       firstHi: findUpperBracketValue(freqAxis, firstFrequencyLpmm),
       secondLo: findLowerBracketValue(freqAxis, secondFrequencyLpmm),
       secondHi: findUpperBracketValue(freqAxis, secondFrequencyLpmm),
+      thirdLo: findLowerBracketValue(freqAxis, thirdFrequencyLpmm),
+      thirdHi: findUpperBracketValue(freqAxis, thirdFrequencyLpmm),
     };
   };
 
@@ -3862,10 +3996,14 @@ export async function runNativeFieldMtfMap(
     firstS: number;
     secondM: number;
     secondS: number;
+    thirdM: number;
+    thirdS: number;
     firstLo: number | null;
     firstHi: number | null;
     secondLo: number | null;
     secondHi: number | null;
+    thirdLo: number | null;
+    thirdHi: number | null;
     wavefrontRms: number;
   }) | null> => {
     const wavefrontRms = computeFiniteGridRmsNativeLike(displayOpdGrid);
@@ -4007,6 +4145,8 @@ export async function runNativeFieldMtfMap(
         const sagittalFirstRaw: number[] = [];
         const meridionalSecondRaw: number[] = [];
         const sagittalSecondRaw: number[] = [];
+        const meridionalThirdRaw: number[] = [];
+        const sagittalThirdRaw: number[] = [];
         const fieldDiagnostics: any[] = [];
         const pixelSizeUm = await resolvePixelSizeUm(wl);
 
@@ -4078,7 +4218,7 @@ export async function runNativeFieldMtfMap(
             await maybeYieldForProgressPaint();
           }
 
-          let firstM = Number.NaN, firstS = Number.NaN, secondM = Number.NaN, secondS = Number.NaN;
+          let firstM = Number.NaN, firstS = Number.NaN, secondM = Number.NaN, secondS = Number.NaN, thirdM = Number.NaN, thirdS = Number.NaN;
           let opdRespAny: any = {};
           try {
             const opdResult = await runFieldOpdWithRetry({
@@ -4116,6 +4256,8 @@ export async function runNativeFieldMtfMap(
             firstS = samples.firstS;
             secondM = samples.secondM;
             secondS = samples.secondS;
+            thirdM = samples.thirdM;
+            thirdS = samples.thirdS;
           } catch (fieldErr: any) {
             opdRespAny = { error: String(fieldErr?.message || fieldErr || "field failed") };
           }
@@ -4124,6 +4266,8 @@ export async function runNativeFieldMtfMap(
           sagittalFirstRaw.push(Number.isFinite(firstS) ? firstS : Number.NaN);
           meridionalSecondRaw.push(Number.isFinite(secondM) ? secondM : Number.NaN);
           sagittalSecondRaw.push(Number.isFinite(secondS) ? secondS : Number.NaN);
+          meridionalThirdRaw.push(Number.isFinite(thirdM) ? thirdM : Number.NaN);
+          sagittalThirdRaw.push(Number.isFinite(thirdS) ? thirdS : Number.NaN);
 
           const sampleCount = Number(opdRespAny?.sampleCount || 0);
           const hitCount = Number(opdRespAny?.hitCount || 0);
@@ -4153,11 +4297,13 @@ export async function runNativeFieldMtfMap(
         const sagittalFirst = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalFirstRaw, xAxis) : sagittalFirstRaw;
         const meridionalSecond = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, meridionalSecondRaw, xAxis) : meridionalSecondRaw;
         const sagittalSecond = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalSecondRaw, xAxis) : sagittalSecondRaw;
+        const meridionalThird = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, meridionalThirdRaw, xAxis) : meridionalThirdRaw;
+        const sagittalThird = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalThirdRaw, xAxis) : sagittalThirdRaw;
 
         if (!sampleFromObjectRows) {
           suppressFieldCurveOutliersInPlace({
             diagnostics: fieldDiagnostics,
-            curves: [meridionalFirst, sagittalFirst, meridionalSecond, sagittalSecond],
+            curves: [meridionalFirst, sagittalFirst, meridionalSecond, sagittalSecond, meridionalThird, sagittalThird],
           });
         }
 
@@ -4168,6 +4314,8 @@ export async function runNativeFieldMtfMap(
           sagittalFirst,
           meridionalSecond,
           sagittalSecond,
+          meridionalThird,
+          sagittalThird,
           fieldDiagnostics,
         });
 
@@ -4176,6 +4324,8 @@ export async function runNativeFieldMtfMap(
           fillNaNGapsInPlace(sagittalFirst);
           fillNaNGapsInPlace(meridionalSecond);
           fillNaNGapsInPlace(sagittalSecond);
+          fillNaNGapsInPlace(meridionalThird);
+          fillNaNGapsInPlace(sagittalThird);
         }
       }
 
@@ -4217,6 +4367,8 @@ export async function runNativeFieldMtfMap(
       const sagittalFirstRaw: number[] = [];
       const meridionalSecondRaw: number[] = [];
       const sagittalSecondRaw: number[] = [];
+      const meridionalThirdRaw: number[] = [];
+      const sagittalThirdRaw: number[] = [];
       const fieldDiagnostics: any[] = [];
       const requestedPixelSizeUm = await resolvePixelSizeUm(wl);
 
@@ -4288,10 +4440,14 @@ export async function runNativeFieldMtfMap(
         let firstS = Number.NaN;
         let secondM = Number.NaN;
         let secondS = Number.NaN;
+        let thirdM = Number.NaN;
+        let thirdS = Number.NaN;
         let firstLo: number | null = null;
         let firstHi: number | null = null;
         let secondLo: number | null = null;
         let secondHi: number | null = null;
+        let thirdLo: number | null = null;
+        let thirdHi: number | null = null;
         let opdRespAny: any = {};
 
         try {
@@ -4355,10 +4511,14 @@ export async function runNativeFieldMtfMap(
           firstS = samples.firstS;
           secondM = samples.secondM;
           secondS = samples.secondS;
+          thirdM = samples.thirdM;
+          thirdS = samples.thirdS;
           firstLo = samples.firstLo;
           firstHi = samples.firstHi;
           secondLo = samples.secondLo;
           secondHi = samples.secondHi;
+          thirdLo = samples.thirdLo;
+          thirdHi = samples.thirdHi;
 
           const idealSamples = await maybeComputeIdealParaxialFieldCurveSamples({
             displayOpdGrid,
@@ -4372,10 +4532,14 @@ export async function runNativeFieldMtfMap(
             firstS = idealSamples.firstS;
             secondM = idealSamples.secondM;
             secondS = idealSamples.secondS;
+            thirdM = idealSamples.thirdM;
+            thirdS = idealSamples.thirdS;
             firstLo = idealSamples.firstLo;
             firstHi = idealSamples.firstHi;
             secondLo = idealSamples.secondLo;
             secondHi = idealSamples.secondHi;
+            thirdLo = idealSamples.thirdLo;
+            thirdHi = idealSamples.thirdHi;
             opdRespAny = {
               ...(opdRespAny || {}),
               message: `${String(opdRespAny?.message || "")}${opdRespAny?.message ? " | " : ""}ideal-diffraction-override(rms=${idealSamples.wavefrontRms.toExponential(3)})`,
@@ -4389,6 +4553,8 @@ export async function runNativeFieldMtfMap(
         sagittalFirstRaw.push(Number.isFinite(firstS) ? firstS : Number.NaN);
         meridionalSecondRaw.push(Number.isFinite(secondM) ? secondM : Number.NaN);
         sagittalSecondRaw.push(Number.isFinite(secondS) ? secondS : Number.NaN);
+        meridionalThirdRaw.push(Number.isFinite(thirdM) ? thirdM : Number.NaN);
+        sagittalThirdRaw.push(Number.isFinite(thirdS) ? thirdS : Number.NaN);
 
         const sampleCount = Number(opdRespAny?.sampleCount || 0);
         const hitCount = Number(opdRespAny?.hitCount || 0);
@@ -4423,17 +4589,21 @@ export async function runNativeFieldMtfMap(
       const sagittalFirst = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalFirstRaw, xAxis) : sagittalFirstRaw;
       const meridionalSecond = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, meridionalSecondRaw, xAxis) : meridionalSecondRaw;
       const sagittalSecond = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalSecondRaw, xAxis) : sagittalSecondRaw;
+      const meridionalThird = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, meridionalThirdRaw, xAxis) : meridionalThirdRaw;
+      const sagittalThird = sampleFromObjectRows ? resampleCurveOntoXAxis(sampleAxis, sagittalThirdRaw, xAxis) : sagittalThirdRaw;
 
       if (!sampleFromObjectRows) {
         suppressFieldCurveOutliersInPlace({
           diagnostics: fieldDiagnostics,
-          curves: [meridionalFirst, sagittalFirst, meridionalSecond, sagittalSecond],
+          curves: [meridionalFirst, sagittalFirst, meridionalSecond, sagittalSecond, meridionalThird, sagittalThird],
         });
 
         fillNaNGapsInPlace(meridionalFirst);
         fillNaNGapsInPlace(sagittalFirst);
         fillNaNGapsInPlace(meridionalSecond);
         fillNaNGapsInPlace(sagittalSecond);
+        fillNaNGapsInPlace(meridionalThird);
+        fillNaNGapsInPlace(sagittalThird);
       }
 
       series.push({
@@ -4443,6 +4613,8 @@ export async function runNativeFieldMtfMap(
         sagittalFirst,
         meridionalSecond,
         sagittalSecond,
+        meridionalThird,
+        sagittalThird,
         fieldDiagnostics,
       });
     }

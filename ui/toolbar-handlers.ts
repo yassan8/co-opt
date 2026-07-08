@@ -2488,6 +2488,37 @@ const ANALYSIS_WINDOW_SIZE_MAP: Record<AnalysisWindowKey, { width: number; heigh
   'field-mtf': { width: 1100, height: 820, title: 'Object MTF' },
 };
 
+function normalizeLocalDevUrlPort(url: URL): URL {
+  try {
+    const host = String(url.hostname || '').toLowerCase();
+    const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+    if (!isLocalHost) return url;
+    if (String(url.port || '').trim()) return url;
+
+    let fallbackPort = '';
+    try {
+      fallbackPort = String(window.location?.port || '').trim();
+    } catch (_) {}
+
+    if (!fallbackPort) {
+      try {
+        fallbackPort = String((window as any)?.opener?.location?.port || '').trim();
+      } catch (_) {}
+    }
+
+    if (!fallbackPort) {
+      fallbackPort = '4173';
+    }
+
+    if (/^\d+$/.test(fallbackPort)) {
+      url.port = fallbackPort;
+    }
+  } catch (_) {
+    // keep original URL when normalization fails
+  }
+  return url;
+}
+
 function isAnalysisWindowContext(): boolean {
   try {
     const url = new URL(window.location.href);
@@ -2553,7 +2584,7 @@ async function openDesktopAnalysisWindow(kind: AnalysisWindowKey): Promise<boole
     return true;
   }
 
-  const url = new URL(window.location.href);
+  const url = normalizeLocalDevUrlPort(new URL(window.location.href));
   url.searchParams.set('coopt_analysis_window', '1');
   url.searchParams.set('coopt_analysis', kind);
 
@@ -2608,7 +2639,7 @@ function openWebAnalysisPopup(kind: AnalysisWindowKey): boolean {
       } catch (_) {}
     }
 
-    const url = new URL(window.location.href);
+    const url = normalizeLocalDevUrlPort(new URL(window.location.href));
     url.searchParams.delete('coopt_render_window');
     url.searchParams.delete('coopt_optimize_window');
     url.searchParams.delete('coopt_settings_window');

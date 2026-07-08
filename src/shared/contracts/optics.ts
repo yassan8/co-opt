@@ -472,6 +472,15 @@ export interface NativeMtfMapRequest {
   points?: number;
   sampleFrequenciesLpmm?: number[];
   directEvalOnly?: boolean;
+  method?: "legacy-otf-axis" | "hopkins-tcc" | "malacara-wasm-required";
+  rawOpdGrid?: Array<Array<number | null>>;
+  displayOpdGrid?: Array<Array<number | null>>;
+  amplitudeGrid?: number[][];
+  pupilRange?: number;
+  wavelengthUm?: number;
+  fNumber?: number;
+  tangentialDir?: { x: number; y: number };
+  sagittalDir?: { x: number; y: number };
 }
 
 export interface NativeMtfMapResponse {
@@ -509,6 +518,7 @@ export interface NativeThroughFocusMtfMapRequest {
   zeroPadTo?: number;
   pixelSizeUm?: number;
   opdDisplayMode?: string;
+  method?: "legacy-otf-axis" | "hopkins-tcc" | "malacara-wasm-required";
 }
 
 export interface NativeThroughFocusMtfMapResponse {
@@ -525,6 +535,8 @@ export interface NativeFieldMtfSeries {
   sagittalFirst: number[];
   meridionalSecond: number[];
   sagittalSecond: number[];
+  meridionalThird?: number[];
+  sagittalThird?: number[];
   fieldDiagnostics?: NativeFieldMtfPointDiagnostic[];
 }
 
@@ -562,6 +574,7 @@ export interface NativeFieldMtfMapRequest {
   wavelengths?: number[];
   firstFrequencyLpmm?: number;
   secondFrequencyLpmm?: number;
+  thirdFrequencyLpmm?: number;
   fieldMin?: number;
   fieldMax?: number;
   steps?: number;
@@ -570,6 +583,7 @@ export interface NativeFieldMtfMapRequest {
   pixelSizeUm?: number;
   opdDisplayMode?: string;
   fieldAxisMode?: "angle" | "height";
+  method?: "legacy-otf-axis" | "hopkins-tcc" | "malacara-wasm-required";
   adaptiveSampling?: boolean;
   adaptiveThreshold?: number;
   adaptiveInitialSteps?: number;

@@ -218,6 +218,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     };
 
     const useWasmFastOnly = !!((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_WASM_FAST_ONLY);
+    const useMalacaraMtfMethod = !((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_LEGACY_OTF_AXIS === true);
     const enableMtfProfileLog = !((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_PROFILE === false);
     const useLegacyBaselineMode = (typeof legacyBaselineMode === 'boolean')
         ? legacyBaselineMode
@@ -516,6 +517,10 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     const fieldVecRaw = (/\bangle\b/.test(objectTypeLower))
         ? { x: safeNumber(fieldAngle?.x, 0), y: safeNumber(fieldAngle?.y, 0) }
         : { x: safeNumber(xHeight, 0), y: safeNumber(yHeight, 0) };
+    const isOnAxisField = Math.abs(Number(fieldAngle?.x || 0)) < 1e-12
+        && Math.abs(Number(fieldAngle?.y || 0)) < 1e-12
+        && Math.abs(Number(xHeight || 0)) < 1e-12
+        && Math.abs(Number(yHeight || 0)) < 1e-12;
 
     let tdx = fieldVecRaw.x;
     let tdy = fieldVecRaw.y;
@@ -525,6 +530,11 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     }
     const tanAxis = (Math.abs(tdx) >= Math.abs(tdy)) ? 'x' : 'y';
     const sagAxis = (tanAxis === 'x') ? 'y' : 'x';
+    const tanNorm = Math.hypot(tdx, tdy);
+    const tanDir = (tanNorm > 1e-12)
+        ? { x: tdx / tanNorm, y: tdy / tanNorm }
+        : { x: 1, y: 0 };
+    const sagDir = { x: -tanDir.y, y: tanDir.x };
 
     const psfCalculator = await getPSFCalculatorSingleton();
 
@@ -653,6 +663,156 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         return { ...curve, mtfVals };
     };
 
+    const buildDirectionalCurveFromOtf = (
+        otfReal: number[][],
+        otfImag: number[][],
+        nSize: number,
+        freqAxis: number[],
+        dfLpmmLocal: number,
+        dcMag: number,
+        dir: { x: number; y: number }
+    ) => {
+        if (!Array.isArray(otfReal) || !Array.isArray(otfImag) || nSize <= 1) return null;
+        if (!Array.isArray(freqAxis) || freqAxis.length === 0) return null;
+        if (!Number.isFinite(dfLpmmLocal) || dfLpmmLocal <= 0) return null;
+        if (!Number.isFinite(dcMag) || dcMag <= 0) return null;
+
+        const wrap = (v: number) => {
+            const m = v % nSize;
+            return m < 0 ? m + nSize : m;
+        };
+
+        const sampleComplexBilinear = (u: number, v: number) => {
+            const xu = wrap(u);
+            const yv = wrap(v);
+            const x0 = Math.floor(xu);
+            const y0 = Math.floor(yv);
+            const x1 = (x0 + 1) % nSize;
+            const y1 = (y0 + 1) % nSize;
+            const tx = xu - x0;
+            const ty = yv - y0;
+
+            const re00 = Number(otfReal?.[y0]?.[x0]) || 0;
+            const re10 = Number(otfReal?.[y0]?.[x1]) || 0;
+            const re01 = Number(otfReal?.[y1]?.[x0]) || 0;
+            const re11 = Number(otfReal?.[y1]?.[x1]) || 0;
+            const im00 = Number(otfImag?.[y0]?.[x0]) || 0;
+            const im10 = Number(otfImag?.[y0]?.[x1]) || 0;
+            const im01 = Number(otfImag?.[y1]?.[x0]) || 0;
+            const im11 = Number(otfImag?.[y1]?.[x1]) || 0;
+
+            const re0 = re00 + (re10 - re00) * tx;
+            const re1 = re01 + (re11 - re01) * tx;
+            const im0 = im00 + (im10 - im00) * tx;
+            const im1 = im01 + (im11 - im01) * tx;
+
+            return {
+                re: re0 + (re1 - re0) * ty,
+                im: im0 + (im1 - im0) * ty
+            };
+        };
+
+        const mtfVals = freqAxis.map((f, i) => {
+            if (i === 0) return 1.0;
+            const fr = Number(f);
+            if (!Number.isFinite(fr) || fr < 0) return null;
+            const kx = (fr * Number(dir?.x || 0)) / dfLpmmLocal;
+            const ky = (fr * Number(dir?.y || 0)) / dfLpmmLocal;
+            const c = sampleComplexBilinear(kx, ky);
+            const mtf = Math.hypot(c.re, c.im) / dcMag;
+            return Number.isFinite(mtf) ? Math.max(0, Math.min(1, mtf)) : null;
+        });
+
+        return { freq: freqAxis.slice(), mtfVals };
+    };
+
+    const buildDirectionalCurveFromPsf1D = (
+        psfFlat: Float64Array,
+        nSize: number,
+        freqAxis: number[],
+        dfLpmmLocal: number,
+        dir: { x: number; y: number }
+    ) => {
+        if (!(psfFlat instanceof Float64Array) || psfFlat.length !== nSize * nSize) return null;
+        if (!Array.isArray(freqAxis) || freqAxis.length === 0) return null;
+        if (!Number.isFinite(dfLpmmLocal) || dfLpmmLocal <= 0) return null;
+
+        const dirNorm = Math.hypot(Number(dir?.x || 0), Number(dir?.y || 0));
+        const dx = dirNorm > 1e-12 ? Number(dir.x) / dirNorm : 1;
+        const dy = dirNorm > 1e-12 ? Number(dir.y) / dirNorm : 0;
+        const px = -dy;
+        const py = dx;
+
+        const center = (nSize - 1) / 2;
+        const samplePsfBilinear = (x: number, y: number) => {
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return 0;
+            if (x < 0 || x > nSize - 1 || y < 0 || y > nSize - 1) return 0;
+
+            const x0 = Math.floor(x);
+            const y0 = Math.floor(y);
+            const x1 = Math.min(nSize - 1, x0 + 1);
+            const y1 = Math.min(nSize - 1, y0 + 1);
+            const tx = x - x0;
+            const ty = y - y0;
+
+            const p00 = safeNumber(psfFlat[y0 * nSize + x0], 0);
+            const p10 = safeNumber(psfFlat[y0 * nSize + x1], 0);
+            const p01 = safeNumber(psfFlat[y1 * nSize + x0], 0);
+            const p11 = safeNumber(psfFlat[y1 * nSize + x1], 0);
+
+            const p0 = p00 + (p10 - p00) * tx;
+            const p1 = p01 + (p11 - p01) * tx;
+            return p0 + (p1 - p0) * ty;
+        };
+
+        // Build 1D LSF by integrating PSF along the perpendicular direction.
+        const lsf = new Array<number>(nSize).fill(0);
+        for (let ku = 0; ku < nSize; ku++) {
+            const u = ku - center;
+            let sum = 0;
+            for (let kv = 0; kv < nSize; kv++) {
+                const v = kv - center;
+                const x = center + u * dx + v * px;
+                const y = center + u * dy + v * py;
+                sum += samplePsfBilinear(x, y);
+            }
+            lsf[ku] = sum;
+        }
+
+        const imag = new Array<number>(nSize).fill(0);
+        const fft = SimpleFFT.fft1D(lsf, imag);
+        const re = Array.isArray(fft?.real) ? fft.real : null;
+        const im = Array.isArray(fft?.imag) ? fft.imag : null;
+        if (!re || !im || re.length !== nSize || im.length !== nSize) return null;
+
+        const mag = new Array<number>(Math.floor(nSize / 2) + 1).fill(0);
+        for (let k = 0; k < mag.length; k++) {
+            mag[k] = Math.hypot(safeNumber(re[k], 0), safeNumber(im[k], 0));
+        }
+        const dcMag = Number(mag[0]);
+        if (!Number.isFinite(dcMag) || dcMag <= 0) return null;
+
+        const mtfVals = freqAxis.map((f, i) => {
+            if (i === 0) return 1.0;
+            const fr = Number(f);
+            if (!Number.isFinite(fr) || fr < 0) return null;
+            const kf = fr / dfLpmmLocal;
+            if (!Number.isFinite(kf) || kf < 0) return null;
+            if (kf >= mag.length - 1) return 0;
+
+            const k0 = Math.floor(kf);
+            const k1 = Math.min(mag.length - 1, k0 + 1);
+            const t = kf - k0;
+            const m0 = safeNumber(mag[k0], 0);
+            const m1 = safeNumber(mag[k1], 0);
+            const m = m0 + (m1 - m0) * t;
+            const v = m / dcMag;
+            return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;
+        });
+
+        return { freq: freqAxis.slice(), mtfVals };
+    };
+
     const computeCircularApertureDiffractionMtf = (freqLpmm, wavelengthMicron, fNumber) => {
         const f = Number(freqLpmm);
         const wlUm = Number(wavelengthMicron);
@@ -695,7 +855,10 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         ensureConsoleLog(`   type="${fieldSetting.type}"`);
 
 
-        const samplingSizeForPSF = gridSize;
+        // Internal MTF sampling floor: keep user-selected sampling as baseline,
+        // but raise pupil sampling when curve density is high to avoid high-frequency elbows.
+        const samplingFloorFromCurve = nextPowerOfTwo(Math.max(gridSize, Math.ceil(resolvedPlotPointCount * 1.5)));
+        const samplingSizeForPSF = clamp(samplingFloorFromCurve, 32, 1024);
 
         const opdCalculator = createOPDCalculator(opticalSystemRows, wlLocal);
         const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
@@ -726,6 +889,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                     recordRays: false,
                     progressEvery: 512,
                     profile: enableMtfProfileLog,
+                    // MTF curve shape at high spatial frequencies is sensitive to solver accuracy.
+                    // Keep full-precision tracing here even if global OPD defaults prefer fast mode.
+                    iterationReductionPreset: false,
                     suppressReferenceRayError: true,
                     zernikeMaxNoll: 37,
                     renderFromZernike: false,
@@ -983,7 +1149,15 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         // Keep MTF numerics independent of Max(lp/mm): Max should crop display range only.
         // N/2 + 1 bins exist up to Nyquist, so require N >= 2*(desiredBinCount-1).
         const minRequiredNForBins = Math.max(gridSize, 2 * (desiredBinCount - 1));
-        const adaptiveZeroPadToRaw = nextPowerOfTwo(minRequiredNForBins);
+        // Also enforce a target frequency-bin spacing so the high-frequency tail does not
+        // show artificial elbows from coarse discrete OTF bins (most visible at long wavelengths).
+        const requestedPlotLpmmForResolution = (maxLpmm > 0)
+            ? maxLpmm
+            : Math.max(0, (0.5 / Math.max(1e-12, basePixelSizeMicronsForMTF)) * 1000.0);
+        const targetDfLpmm = Math.max(1e-6, requestedPlotLpmmForResolution / Math.max(1, desiredBinCount - 1));
+        const minRequiredNForResolution = Math.ceil(1000.0 / (Math.max(1e-12, basePixelSizeMicronsForMTF) * targetDfLpmm));
+        const minRequiredN = Math.max(minRequiredNForBins, minRequiredNForResolution);
+        const adaptiveZeroPadToRaw = nextPowerOfTwo(minRequiredN);
         const adaptiveZeroPadTo = (adaptiveZeroPadToRaw > gridSize)
             ? clamp(adaptiveZeroPadToRaw, 32, 4096)
             : 0;
@@ -1055,10 +1229,183 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         const wasmMTFFn = useLegacyBaselineMode
             ? null
             : psfCalculator?.wasmCalculator?.calculateMTFAxesFromPSF;
+        const computeMalacaraCurveFromPupil = (dirVec: { x: number; y: number }, axisMaxLpmm: number, pointCount: number) => {
+            const fno = Number(fNumberForDiffraction);
+            if (!Number.isFinite(fno) || fno <= 0) return null;
+            if (!(Number.isFinite(Number(wlLocal)) && Number(wlLocal) > 0)) return null;
+            if (!Number.isFinite(Number(axisMaxLpmm)) || Number(axisMaxLpmm) < 0) return null;
+
+            const count = Math.max(2, Math.floor(Number(pointCount) || 2));
+            const cutoffLpmm = 1000.0 / (Number(wlLocal) * fno);
+            if (!Number.isFinite(cutoffLpmm) || cutoffLpmm <= 0) return null;
+
+            const nGrid = s;
+            const xMin = Number(xCoords[0]);
+            const xMax = Number(xCoords[nGrid - 1]);
+            const yMin = Number(yCoords[0]);
+            const yMax = Number(yCoords[nGrid - 1]);
+            const spanX = xMax - xMin;
+            const spanY = yMax - yMin;
+            if (!Number.isFinite(spanX) || !Number.isFinite(spanY) || spanX <= 0 || spanY <= 0) return null;
+
+            const invDx = (nGrid - 1) / spanX;
+            const invDy = (nGrid - 1) / spanY;
+            const reGrid = Array.from({ length: nGrid }, () => new Float64Array(nGrid));
+            const imGrid = Array.from({ length: nGrid }, () => new Float64Array(nGrid));
+
+            let denom = 0;
+            for (let iy = 0; iy < nGrid; iy++) {
+                for (let ix = 0; ix < nGrid; ix++) {
+                    if (!maskGrid[iy]?.[ix]) continue;
+                    const amp = Number(ampGrid[iy]?.[ix]);
+                    const opdUm = Number(opdGrid[iy]?.[ix]);
+                    if (!(Number.isFinite(amp) && amp > 0) || !Number.isFinite(opdUm)) continue;
+                    const phase = (2 * Math.PI * opdUm) / Number(wlLocal);
+                    const re = amp * Math.cos(phase);
+                    const im = amp * Math.sin(phase);
+                    reGrid[iy][ix] = re;
+                    imGrid[iy][ix] = im;
+                    denom += re * re + im * im;
+                }
+            }
+            if (!(Number.isFinite(denom) && denom > 0)) return null;
+
+            const dirNorm = Math.hypot(Number(dirVec?.x || 0), Number(dirVec?.y || 0));
+            const dxn = dirNorm > 1e-12 ? Number(dirVec.x) / dirNorm : 1;
+            const dyn = dirNorm > 1e-12 ? Number(dirVec.y) / dirNorm : 0;
+
+            const sampleComplexBilinear = (x: number, y: number) => {
+                if (x < xMin || x > xMax || y < yMin || y > yMax) return { re: 0, im: 0 };
+                const u = (x - xMin) * invDx;
+                const v = (y - yMin) * invDy;
+                const x0 = Math.max(0, Math.min(nGrid - 1, Math.floor(u)));
+                const y0 = Math.max(0, Math.min(nGrid - 1, Math.floor(v)));
+                const x1 = Math.min(nGrid - 1, x0 + 1);
+                const y1 = Math.min(nGrid - 1, y0 + 1);
+                const tx = Math.max(0, Math.min(1, u - x0));
+                const ty = Math.max(0, Math.min(1, v - y0));
+
+                const re00 = Number(reGrid[y0]?.[x0]) || 0;
+                const re10 = Number(reGrid[y0]?.[x1]) || 0;
+                const re01 = Number(reGrid[y1]?.[x0]) || 0;
+                const re11 = Number(reGrid[y1]?.[x1]) || 0;
+                const im00 = Number(imGrid[y0]?.[x0]) || 0;
+                const im10 = Number(imGrid[y0]?.[x1]) || 0;
+                const im01 = Number(imGrid[y1]?.[x0]) || 0;
+                const im11 = Number(imGrid[y1]?.[x1]) || 0;
+
+                const re0 = re00 + (re10 - re00) * tx;
+                const re1 = re01 + (re11 - re01) * tx;
+                const im0 = im00 + (im10 - im00) * tx;
+                const im1 = im01 + (im11 - im01) * tx;
+                return {
+                    re: re0 + (re1 - re0) * ty,
+                    im: im0 + (im1 - im0) * ty,
+                };
+            };
+
+            const freq: number[] = [];
+            const mtfVals: any[] = [];
+            for (let i = 0; i < count; i++) {
+                const t = (count <= 1) ? 0 : (i / (count - 1));
+                const f = axisMaxLpmm * t;
+                freq.push(f);
+                if (i === 0) {
+                    mtfVals.push(1.0);
+                    continue;
+                }
+
+                const nu = f / cutoffLpmm;
+                if (!Number.isFinite(nu) || nu >= 1) {
+                    mtfVals.push(0);
+                    continue;
+                }
+
+                // Malacara/Hopkins form on normalized pupil: center shift d = 2 * nu.
+                const shift = 2 * Math.max(0, nu) * pupilRange;
+                const sx = dxn * shift;
+                const sy = dyn * shift;
+
+                let sumRe = 0;
+                let sumIm = 0;
+                for (let iy = 0; iy < nGrid; iy++) {
+                    const py = Number(yCoords[iy]);
+                    for (let ix = 0; ix < nGrid; ix++) {
+                        const a = Number(reGrid[iy]?.[ix]) || 0;
+                        const b = Number(imGrid[iy]?.[ix]) || 0;
+                        if (!(a !== 0 || b !== 0)) continue;
+                        const px = Number(xCoords[ix]);
+                        const q = sampleComplexBilinear(px + sx, py + sy);
+                        const c = Number(q.re) || 0;
+                        const d = Number(q.im) || 0;
+                        sumRe += a * c + b * d;
+                        sumIm += b * c - a * d;
+                    }
+                }
+
+                const mtf = Math.hypot(sumRe, sumIm) / denom;
+                mtfVals.push(Number.isFinite(mtf) ? Math.max(0, Math.min(1, mtf)) : null);
+            }
+            if (mtfVals.length > 0) mtfVals[0] = 1.0;
+            return { freq, mtfVals };
+        };
+
         let tan: { freq: number[]; mtfVals: any[] } | null = null;
         let sag: { freq: number[]; mtfVals: any[] } | null = null;
 
-        if (!useLegacyBaselineMode && isTauriRuntime()) {
+        if (useMalacaraMtfMethod) {
+            // Use denser internal sampling for Malacara curves so high-frequency tail
+            // is not dominated by sparse frequency bins.
+            const nativePoints = Math.max(2, Math.min(2048, Math.max(241, resolvedPlotPointCount * 2)));
+            const maskAsNullableOpd = Array.from({ length: s }, (_, iy) =>
+                Array.from({ length: s }, (_, ix) => {
+                    if (!maskGrid[iy]?.[ix]) return null;
+                    const v = Number(opdGrid[iy]?.[ix]);
+                    return Number.isFinite(v) ? v : null;
+                })
+            );
+            const ampAsNumber = Array.from({ length: s }, (_, iy) =>
+                Array.from({ length: s }, (_, ix) => {
+                    const a = Number(ampGrid[iy]?.[ix]);
+                    return Number.isFinite(a) ? Math.max(0, a) : 0;
+                })
+            );
+            const nativeResp = await runNativeMtfMap({
+                method: 'malacara-wasm-required',
+                psfData: psf2D,
+                pixelSizeUm: pixelSizeMicrons,
+                maxFrequencyLpmm: requestedPlotLpmm,
+                points: nativePoints,
+                displayOpdGrid: maskAsNullableOpd,
+                rawOpdGrid: maskAsNullableOpd,
+                amplitudeGrid: ampAsNumber,
+                pupilRange,
+                wavelengthUm: wlLocal,
+                fNumber: fNumberForDiffraction,
+                tangentialDir: tanDir,
+                sagittalDir: sagDir,
+            } as any);
+
+            const freq = Array.isArray(nativeResp?.frequencyAxis) ? nativeResp.frequencyAxis : [];
+            const nativeTan = Array.isArray(nativeResp?.mtfTangential) ? nativeResp.mtfTangential : [];
+            const nativeSag = Array.isArray(nativeResp?.mtfSagittal) ? nativeResp.mtfSagittal : [];
+            if (!(freq.length > 1 && nativeTan.length === freq.length && nativeSag.length === freq.length)) {
+                throw new Error('Rust/WASM Malacara MTF returned invalid axis data');
+            }
+
+            tan = {
+                freq: Array.from(freq, (v: any) => Number(v)),
+                mtfVals: Array.from(nativeTan, (v: any) => Number.isFinite(Number(v)) ? Number(v) : null)
+            };
+            sag = {
+                freq: Array.from(freq, (v: any) => Number(v)),
+                mtfVals: Array.from(nativeSag, (v: any) => Number.isFinite(Number(v)) ? Number(v) : null)
+            };
+            if (tan.mtfVals.length > 0) tan.mtfVals[0] = 1.0;
+            if (sag.mtfVals.length > 0) sag.mtfVals[0] = 1.0;
+        }
+
+        if (!useMalacaraMtfMethod && !useLegacyBaselineMode && isTauriRuntime()) {
             try {
                 const nativePoints = Math.max(2, Math.min(1024, resolvedPlotPointCount));
                 const nativeResp = await runNativeMtfMap({
@@ -1095,7 +1442,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             }
         }
 
-        if ((!tan || !sag) && typeof wasmMTFFn === 'function') {
+        if (!useMalacaraMtfMethod && (!tan || !sag) && typeof wasmMTFFn === 'function') {
             try {
                 const axes = wasmMTFFn.call(psfCalculator.wasmCalculator, psfFlat, N, kDataMax);
                 if (axes?.xAxis && axes?.yAxis) {
@@ -1118,7 +1465,20 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             }
         }
 
-        if (!tan || !sag) {
+        // Sag/Tan are 1D curves in optical evaluation.
+        // Prefer 1D LSF->FFT extraction to reduce compute vs full 2D FFT.
+        if (!useMalacaraMtfMethod) try {
+            const tan1D = buildDirectionalCurveFromPsf1D(psfFlat, N, freqData, dfLpmm, tanDir);
+            const sag1D = buildDirectionalCurveFromPsf1D(psfFlat, N, freqData, dfLpmm, sagDir);
+            if (tan1D && sag1D) {
+                tan = tan1D;
+                sag = sag1D;
+            }
+        } catch (_) {
+            // keep prior extraction path
+        }
+
+        if (!useMalacaraMtfMethod && (!tan || !sag)) {
             const real = Array.from({ length: N }, (_, y) => Array.from({ length: N }, (_, x) => psfFlat[y * N + x]));
             const imag = Array.from({ length: N }, () => Array.from({ length: N }, () => 0));
             const otf = SimpleFFT.fft2D(real, imag);
@@ -1129,29 +1489,76 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                 throw new Error('Invalid OTF DC component');
             }
 
-            const sample1DAxis = (axis) => {
-            const freqAxis = [];
-            const mtfVals = [];
-            for (let k = 0; k <= kDataMax; k++) {
-                const f = k * dfLpmm;
-                let re = 0;
-                let im = 0;
-                if (axis === 'x') {
-                    re = safeNumber(otf.real?.[0]?.[k], 0);
-                    im = safeNumber(otf.imag?.[0]?.[k], 0);
-                } else {
-                    re = safeNumber(otf.real?.[k]?.[0], 0);
-                    im = safeNumber(otf.imag?.[k]?.[0], 0);
-                }
-                const mtf = Math.hypot(re, im) / dcMag;
-                freqAxis.push(f);
-                mtfVals.push(Number.isFinite(mtf) ? mtf : null);
+            const tanDirectional = buildDirectionalCurveFromOtf(
+                otf.real,
+                otf.imag,
+                N,
+                freqData,
+                dfLpmm,
+                dcMag,
+                tanDir
+            );
+            const sagDirectional = buildDirectionalCurveFromOtf(
+                otf.real,
+                otf.imag,
+                N,
+                freqData,
+                dfLpmm,
+                dcMag,
+                sagDir
+            );
+
+            if (tanDirectional && sagDirectional) {
+                tan = tanDirectional;
+                sag = sagDirectional;
+            } else {
+                const sample1DAxis = (axis) => {
+                    const freqAxis = [];
+                    const mtfVals = [];
+                    for (let k = 0; k <= kDataMax; k++) {
+                        const f = k * dfLpmm;
+                        let re = 0;
+                        let im = 0;
+                        if (axis === 'x') {
+                            re = safeNumber(otf.real?.[0]?.[k], 0);
+                            im = safeNumber(otf.imag?.[0]?.[k], 0);
+                        } else {
+                            re = safeNumber(otf.real?.[k]?.[0], 0);
+                            im = safeNumber(otf.imag?.[k]?.[0], 0);
+                        }
+                        const mtf = Math.hypot(re, im) / dcMag;
+                        freqAxis.push(f);
+                        mtfVals.push(Number.isFinite(mtf) ? mtf : null);
+                    }
+                    if (mtfVals.length > 0) mtfVals[0] = 1.0;
+                    return { freq: freqAxis, mtfVals };
+                };
+                tan = sample1DAxis(tanAxis);
+                sag = sample1DAxis(sagAxis);
             }
-            if (mtfVals.length > 0) mtfVals[0] = 1.0;
-            return { freq: freqAxis, mtfVals };
-        };
-            tan = sample1DAxis(tanAxis);
-            sag = sample1DAxis(sagAxis);
+        }
+
+        // On-axis field should be rotationally symmetric (Sag == Tan).
+        // Mirror both curves to their average to suppress numerical directional split.
+        if (isOnAxisField && tan && sag
+            && Array.isArray(tan.freq) && Array.isArray(sag.freq)
+            && Array.isArray(tan.mtfVals) && Array.isArray(sag.mtfVals)
+            && tan.freq.length === sag.freq.length
+            && tan.mtfVals.length === sag.mtfVals.length
+            && tan.mtfVals.length === tan.freq.length) {
+            const mergedVals = tan.mtfVals.map((tv: any, i: number) => {
+                const tNum = Number(tv);
+                const sNum = Number(sag.mtfVals[i]);
+                if (Number.isFinite(tNum) && Number.isFinite(sNum)) {
+                    return Math.max(0, Math.min(1, 0.5 * (tNum + sNum)));
+                }
+                if (Number.isFinite(tNum)) return Math.max(0, Math.min(1, tNum));
+                if (Number.isFinite(sNum)) return Math.max(0, Math.min(1, sNum));
+                return null;
+            });
+            if (mergedVals.length > 0) mergedVals[0] = 1.0;
+            tan = { freq: tan.freq.slice(), mtfVals: mergedVals.slice() };
+            sag = { freq: tan.freq.slice(), mtfVals: mergedVals.slice() };
         }
 
         if (fastSampleEnabled) {
@@ -1247,31 +1654,14 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                         }
 
                         if (!idealTan) {
-                            const realIdeal = Array.from({ length: Nideal }, (_, y) => Array.from({ length: Nideal }, (_, x) => idealPsfFlat[y * Nideal + x]));
-                            const imagIdeal = Array.from({ length: Nideal }, () => Array.from({ length: Nideal }, () => 0));
-                            const idealOtf = SimpleFFT.fft2D(realIdeal, imagIdeal);
-                            const dcReIdeal = safeNumber(idealOtf?.real?.[0]?.[0], 0);
-                            const dcImIdeal = safeNumber(idealOtf?.imag?.[0]?.[0], 0);
-                            const dcMagIdeal = Math.hypot(dcReIdeal, dcImIdeal);
-
-                            if (Number.isFinite(dcMagIdeal) && dcMagIdeal > 0) {
-                                const idealMtfVals = [];
-                                for (let k = 0; k <= idealKDataMax; k++) {
-                                    let re = 0;
-                                    let im = 0;
-                                    if (tanAxis === 'x') {
-                                        re = safeNumber(idealOtf.real?.[0]?.[k], 0);
-                                        im = safeNumber(idealOtf.imag?.[0]?.[k], 0);
-                                    } else {
-                                        re = safeNumber(idealOtf.real?.[k]?.[0], 0);
-                                        im = safeNumber(idealOtf.imag?.[k]?.[0], 0);
-                                    }
-                                    const mtf = Math.hypot(re, im) / dcMagIdeal;
-                                    idealMtfVals.push(Number.isFinite(mtf) ? mtf : null);
-                                }
-                                if (idealMtfVals.length > 0) idealMtfVals[0] = 1.0;
-                                idealTan = { freq: idealFreqData, mtfVals: idealMtfVals };
-                            }
+                            const idealAxisDir = (tanAxis === 'x') ? { x: 1, y: 0 } : { x: 0, y: 1 };
+                            idealTan = buildDirectionalCurveFromPsf1D(
+                                idealPsfFlat,
+                                Nideal,
+                                idealFreqData,
+                                idealDfLpmm,
+                                idealAxisDir
+                            );
                         }
 
                         if (idealTan) {
@@ -1298,9 +1688,15 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                 const v = computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction);
                 return Number.isFinite(Number(v)) ? Math.max(0, Math.min(1, Number(v))) : null;
             });
-            const physicalEnvelope = (Array.isArray(idealPsfEnvelope) && idealPsfEnvelope.some((v) => Number.isFinite(Number(v))))
-                ? idealPsfEnvelope
-                : (analyticDiffVals.some((v) => Number.isFinite(Number(v))) ? analyticDiffVals : null);
+            const physicalEnvelope = useMalacaraMtfMethod
+                ? (analyticDiffVals.some((v) => Number.isFinite(Number(v)))
+                    ? analyticDiffVals
+                    : (Array.isArray(idealPsfEnvelope) && idealPsfEnvelope.some((v) => Number.isFinite(Number(v)))
+                        ? idealPsfEnvelope
+                        : null))
+                : ((Array.isArray(idealPsfEnvelope) && idealPsfEnvelope.some((v) => Number.isFinite(Number(v))))
+                    ? idealPsfEnvelope
+                    : (analyticDiffVals.some((v) => Number.isFinite(Number(v))) ? analyticDiffVals : null));
 
             if (forceSymmetricIdealMtf) {
                 const symmetricVals = (Array.isArray(physicalEnvelope) && physicalEnvelope.length === tan.freq.length)

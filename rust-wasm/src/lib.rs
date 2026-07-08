@@ -8819,11 +8819,6 @@ pub fn run_native_chief_ray_angle_wasm_json(req_json: String) -> Result<JsValue,
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let object_rows_raw = req_obj
-        .get("objectRows")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
     let object_rows = req_obj
         .get("objectRows")
         .and_then(|v| v.as_array())
@@ -8833,7 +8828,7 @@ pub fn run_native_chief_ray_angle_wasm_json(req_json: String) -> Result<JsValue,
         return Err(JsValue::from_str("run_native_chief_ray_angle_wasm_json: objectRows is empty"));
     }
 
-    let angle_deg = compute_native_chief_ray_angle_deg_wasm(&optical_system_rows, &source_rows, &object_rows)
+    let angle_deg = compute_native_chief_ray_angle_deg_wasm(&optical_system_rows, &source_rows_raw, &object_rows)
         .ok_or_else(|| JsValue::from_str("run_native_chief_ray_angle_wasm_json: chief ray angle calculation failed"))?;
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
@@ -9004,14 +8999,18 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    let object_rows = req_obj
+        .get("objectRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let wavelength = req_obj
         .get("wavelength")
         .or_else(|| req_obj.get("wavelengthUm"))
         .and_then(value_to_f64)
         .filter(|w| w.is_finite() && *w > 0.0)
-        .unwrap_or_else(|| get_primary_wavelength_um_native(&source_rows_raw, 0.5876));
-    let source_rows = distortion_source_rows_for_wavelength_native(&source_rows_raw, wavelength);
-    let imageheight_mode = object_rows_raw.iter().any(|row| {
+        .unwrap_or_else(|| get_primary_wavelength_um_native(&source_rows, 0.5876));
+    let imageheight_mode = object_rows.iter().any(|row| {
         let tag = get_field(row, "position")
             .or_else(|| get_field(row, "objectType"))
             .or_else(|| get_field(row, "type"))
@@ -11538,6 +11537,250 @@ pub fn run_native_mtf_from_psf_wasm_json(req_json: String) -> Result<JsValue, Js
         "targetMtfTangential": target_tan,
         "targetMtfSagittal":   target_sag,
         "message": "Computed via WASM MTF (run_native_mtf_from_psf_wasm_json)"
+    })
+    .serialize(&serializer)
+    .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
+}
+
+/// Compute MTF with Malacara/Hopkins-style pupil autocorrelation directly from OPD grid.
+/// This is intended for strict Rust/WASM-only MTF in web runtime (no JS fallback).
+#[wasm_bindgen]
+pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
+    let req: Value = serde_json::from_str(&req_json)
+        .map_err(|e| JsValue::from_str(&format!("run_native_mtf_malacara_from_opd_wasm_json: JSON parse: {}", e)))?;
+
+    let display_opd = req
+        .get("displayOpdGrid")
+        .and_then(|v| v.as_array())
+        .or_else(|| req.get("rawOpdGrid").and_then(|v| v.as_array()))
+        .ok_or_else(|| JsValue::from_str("run_native_mtf_malacara_from_opd_wasm_json: displayOpdGrid/rawOpdGrid missing"))?;
+
+    let n = display_opd.len();
+    if n < 2 {
+        return Err(JsValue::from_str(
+            "run_native_mtf_malacara_from_opd_wasm_json: OPD grid must be at least 2x2",
+        ));
+    }
+
+    let wavelength_um = req
+        .get("wavelengthUm")
+        .and_then(|v| v.as_f64())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .ok_or_else(|| JsValue::from_str("run_native_mtf_malacara_from_opd_wasm_json: wavelengthUm must be > 0"))?;
+
+    let f_number = req
+        .get("fNumber")
+        .and_then(|v| v.as_f64())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .ok_or_else(|| JsValue::from_str("run_native_mtf_malacara_from_opd_wasm_json: fNumber must be > 0"))?;
+
+    let pupil_range = req
+        .get("pupilRange")
+        .and_then(|v| v.as_f64())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.0);
+
+    let max_freq_lpmm = req
+        .get("maxFrequencyLpmm")
+        .and_then(|v| v.as_f64())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .unwrap_or(0.0);
+
+    let out_points = req
+        .get("points")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(121)
+        .clamp(2, 2048) as usize;
+
+    let dir_from_req = |name: &str, default_x: f64, default_y: f64| -> (f64, f64) {
+        if let Some(obj) = req.get(name).and_then(|v| v.as_object()) {
+            let x = obj.get("x").and_then(|v| v.as_f64()).unwrap_or(default_x);
+            let y = obj.get("y").and_then(|v| v.as_f64()).unwrap_or(default_y);
+            let norm = x.hypot(y);
+            if norm > 1e-12 {
+                return (x / norm, y / norm);
+            }
+        }
+        (default_x, default_y)
+    };
+
+    let (tan_x, tan_y) = dir_from_req("tangentialDir", 1.0, 0.0);
+    let (sag_x, sag_y) = dir_from_req("sagittalDir", -tan_y, tan_x);
+
+    let amp_opt = req.get("amplitudeGrid").and_then(|v| v.as_array());
+
+    let mut re_grid = vec![vec![0.0_f64; n]; n];
+    let mut im_grid = vec![vec![0.0_f64; n]; n];
+    let mut denom = 0.0_f64;
+
+    for iy in 0..n {
+        let opd_row = display_opd.get(iy).and_then(|r| r.as_array());
+        let amp_row = amp_opt.and_then(|rows| rows.get(iy)).and_then(|r| r.as_array());
+        for ix in 0..n {
+            let opd_val = opd_row
+                .and_then(|r| r.get(ix))
+                .and_then(|v| v.as_f64());
+            let Some(opd_um) = opd_val else {
+                continue;
+            };
+            if !opd_um.is_finite() {
+                continue;
+            }
+            let amp = amp_row
+                .and_then(|r| r.get(ix))
+                .and_then(|v| v.as_f64())
+                .filter(|v| v.is_finite())
+                .unwrap_or(1.0)
+                .max(0.0);
+            if amp <= 0.0 {
+                continue;
+            }
+            let phase = (2.0 * std::f64::consts::PI * opd_um) / wavelength_um;
+            let re = amp * phase.cos();
+            let im = amp * phase.sin();
+            re_grid[iy][ix] = re;
+            im_grid[iy][ix] = im;
+            denom += re * re + im * im;
+        }
+    }
+
+    if !(denom.is_finite() && denom > 0.0) {
+        return Err(JsValue::from_str(
+            "run_native_mtf_malacara_from_opd_wasm_json: no valid pupil samples",
+        ));
+    }
+
+    let cutoff_lpmm = 1000.0 / (wavelength_um * f_number);
+    if !(cutoff_lpmm.is_finite() && cutoff_lpmm > 0.0) {
+        return Err(JsValue::from_str(
+            "run_native_mtf_malacara_from_opd_wasm_json: invalid diffraction cutoff",
+        ));
+    }
+    let axis_max_lpmm = if max_freq_lpmm > 0.0 {
+        max_freq_lpmm.min(cutoff_lpmm)
+    } else {
+        cutoff_lpmm
+    };
+
+    let x_min = -pupil_range;
+    let x_max = pupil_range;
+    let y_min = -pupil_range;
+    let y_max = pupil_range;
+    let inv_dx = (n - 1) as f64 / (x_max - x_min).max(1e-12);
+    let inv_dy = (n - 1) as f64 / (y_max - y_min).max(1e-12);
+
+    let sample_complex_bilinear = |x: f64, y: f64, re_src: &Vec<Vec<f64>>, im_src: &Vec<Vec<f64>>| -> (f64, f64) {
+        if x < x_min || x > x_max || y < y_min || y > y_max {
+            return (0.0, 0.0);
+        }
+        let u = (x - x_min) * inv_dx;
+        let v = (y - y_min) * inv_dy;
+        let x0 = u.floor().clamp(0.0, (n - 1) as f64) as usize;
+        let y0 = v.floor().clamp(0.0, (n - 1) as f64) as usize;
+        let x1 = (x0 + 1).min(n - 1);
+        let y1 = (y0 + 1).min(n - 1);
+        let tx = (u - x0 as f64).clamp(0.0, 1.0);
+        let ty = (v - y0 as f64).clamp(0.0, 1.0);
+
+        let re00 = re_src[y0][x0];
+        let re10 = re_src[y0][x1];
+        let re01 = re_src[y1][x0];
+        let re11 = re_src[y1][x1];
+        let im00 = im_src[y0][x0];
+        let im10 = im_src[y0][x1];
+        let im01 = im_src[y1][x0];
+        let im11 = im_src[y1][x1];
+
+        let re0 = re00 + (re10 - re00) * tx;
+        let re1 = re01 + (re11 - re01) * tx;
+        let im0 = im00 + (im10 - im00) * tx;
+        let im1 = im01 + (im11 - im01) * tx;
+
+        (re0 + (re1 - re0) * ty, im0 + (im1 - im0) * ty)
+    };
+
+    let pixel_step_x = (x_max - x_min) / (n.saturating_sub(1) as f64).max(1.0);
+    let pixel_step_y = (y_max - y_min) / (n.saturating_sub(1) as f64).max(1.0);
+
+    let compute_curve = |dxn: f64, dyn_: f64| -> Vec<f64> {
+        let mut out = Vec::with_capacity(out_points);
+        for i in 0..out_points {
+            if i == 0 {
+                out.push(1.0);
+                continue;
+            }
+            let t = i as f64 / (out_points.saturating_sub(1) as f64).max(1.0);
+            let f = axis_max_lpmm * t;
+            let nu = f / cutoff_lpmm;
+            if !nu.is_finite() || nu >= 1.0 {
+                out.push(0.0);
+                continue;
+            }
+            let shift = 2.0 * nu.max(0.0) * pupil_range;
+            let sx = dxn * shift;
+            let sy = dyn_ * shift;
+            // Near cutoff, the discrete pupil correlation is sensitive to subpixel aliasing.
+            // Blend in a 4-tap quarter-pixel sample to suppress high-frequency elbows.
+            let tail_blend = ((nu - 0.7) / 0.3).clamp(0.0, 1.0);
+            let jitter_x = 0.25 * pixel_step_x;
+            let jitter_y = 0.25 * pixel_step_y;
+
+            let mut sum_re = 0.0_f64;
+            let mut sum_im = 0.0_f64;
+            for iy in 0..n {
+                let py = y_min + (iy as f64 / (n.saturating_sub(1) as f64).max(1.0)) * (y_max - y_min);
+                for ix in 0..n {
+                    let a = re_grid[iy][ix];
+                    let b = im_grid[iy][ix];
+                    if a == 0.0 && b == 0.0 {
+                        continue;
+                    }
+                    let px = x_min + (ix as f64 / (n.saturating_sub(1) as f64).max(1.0)) * (x_max - x_min);
+                    let (mut c, mut d) = sample_complex_bilinear(px + sx, py + sy, &re_grid, &im_grid);
+                    if tail_blend > 0.0 {
+                        let (c1, d1) = sample_complex_bilinear(px + sx + jitter_x, py + sy + jitter_y, &re_grid, &im_grid);
+                        let (c2, d2) = sample_complex_bilinear(px + sx + jitter_x, py + sy - jitter_y, &re_grid, &im_grid);
+                        let (c3, d3) = sample_complex_bilinear(px + sx - jitter_x, py + sy + jitter_y, &re_grid, &im_grid);
+                        let (c4, d4) = sample_complex_bilinear(px + sx - jitter_x, py + sy - jitter_y, &re_grid, &im_grid);
+                        let c_lp = 0.25 * (c1 + c2 + c3 + c4);
+                        let d_lp = 0.25 * (d1 + d2 + d3 + d4);
+                        c = c * (1.0 - tail_blend) + c_lp * tail_blend;
+                        d = d * (1.0 - tail_blend) + d_lp * tail_blend;
+                    }
+                    // p * conj(q)
+                    sum_re += a * c + b * d;
+                    sum_im += b * c - a * d;
+                }
+            }
+            let mtf = (sum_re.hypot(sum_im) / denom).clamp(0.0, 1.0);
+            out.push(if mtf.is_finite() { mtf } else { 0.0 });
+        }
+        if !out.is_empty() {
+            out[0] = 1.0;
+        }
+        out
+    };
+
+    let mut frequency_axis = Vec::with_capacity(out_points);
+    for i in 0..out_points {
+        let t = i as f64 / (out_points.saturating_sub(1) as f64).max(1.0);
+        frequency_axis.push(axis_max_lpmm * t);
+    }
+
+    let mtf_tangential = compute_curve(tan_x, tan_y);
+    let mtf_sagittal = compute_curve(sag_x, sag_y);
+
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    serde_json::json!({
+        "backend": "web-rust-wasm-mtf-malacara",
+        "frequencyAxis": frequency_axis,
+        "mtfTangential": mtf_tangential,
+        "mtfSagittal": mtf_sagittal,
+        "sampledFrequenciesLpmm": Value::Null,
+        "sampledMtfTangential": Value::Null,
+        "sampledMtfSagittal": Value::Null,
+        "nyquistLpmm": cutoff_lpmm,
+        "message": "Computed via WASM Malacara MTF (run_native_mtf_malacara_from_opd_wasm_json)"
     })
     .serialize(&serializer)
     .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))

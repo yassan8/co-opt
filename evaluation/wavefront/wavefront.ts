@@ -6820,6 +6820,27 @@ export class WavefrontAberrationAnalyzer {
      * @returns {Object} 波面収差マップデータ
      */
     async generateWavefrontMap(fieldSetting, gridSize = 16, gridPattern = 'circular', options: any = {}) {
+        // Default preset: reduce iterative ray-trace cost while preserving caller overrides.
+        const normalizedOptions: any = (options && typeof options === 'object') ? { ...options } : {};
+        const enableIterationReductionPreset = normalizedOptions?.iterationReductionPreset !== false;
+        if (enableIterationReductionPreset) {
+            if (normalizedOptions.fastSolve === undefined) normalizedOptions.fastSolve = true;
+            if (normalizedOptions.fastMarginalRay === undefined) normalizedOptions.fastMarginalRay = true;
+            if (!Number.isFinite(Number(normalizedOptions.fastMaxIterations))) normalizedOptions.fastMaxIterations = 6;
+            if (normalizedOptions.fullBatchTraceExperimental === undefined) normalizedOptions.fullBatchTraceExperimental = true;
+            if (normalizedOptions.fullBatchPreferRustMetaBatch === undefined) normalizedOptions.fullBatchPreferRustMetaBatch = true;
+
+            const baseTraceOptions = (normalizedOptions.traceOptions && typeof normalizedOptions.traceOptions === 'object')
+                ? { ...normalizedOptions.traceOptions }
+                : {};
+            if (baseTraceOptions.useRustWasm === undefined) baseTraceOptions.useRustWasm = true;
+            if (baseTraceOptions.requireWasmRayTracing === undefined) baseTraceOptions.requireWasmRayTracing = true;
+            if (baseTraceOptions.requireRustWasm === undefined) baseTraceOptions.requireRustWasm = true;
+            if (baseTraceOptions.allowNonStrict === undefined) baseTraceOptions.allowNonStrict = false;
+            normalizedOptions.traceOptions = baseTraceOptions;
+        }
+        options = normalizedOptions;
+
         const cancelToken = (options && options.cancelToken) ? options.cancelToken : null;
         const throwIfCancelled = () => {
             if (cancelToken && cancelToken.aborted) {

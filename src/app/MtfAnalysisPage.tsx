@@ -8,6 +8,7 @@ export type MtfAnalysisType = 'mtf' | 'through-focus-mtf' | 'field-mtf';
 
 interface WlOption { value: string; label: string; }
 interface ObjOption { value: string; label: string; }
+type MtfMethodOption = 'hopkins-tcc' | 'legacy-otf-axis';
 
 // ─── Utility helpers (mirror the popup inline scripts) ────────────────────────
 
@@ -301,19 +302,14 @@ function getAxisInfo(): AxisInfo {
 }
 
 function defaultWavelength(options: WlOption[]): string {
+  const allOpt = options.find(o => o.value === 'all');
+  if (allOpt) return allOpt.value;
   const primary = getPrimaryWavelength();
   if (primary !== null) {
     const match = options.find(o => o.value === String(primary));
     if (match) return match.value;
   }
   return options.find(o => o.value !== 'all')?.value ?? options[0]?.value ?? '';
-}
-
-function computeZeroPadTo(zeroPad: string, sampling: number): number {
-  if (zeroPad === 'none') return Number.isFinite(sampling) ? sampling : 256;
-  if (zeroPad === 'auto') return 0;
-  const n = parseInt(zeroPad, 10);
-  return Number.isFinite(n) ? n : 0;
 }
 
 function buildWavelengthList(wlValue: string, sourceRows: any[], primary: number | null): number[] {
@@ -336,6 +332,59 @@ function buildWavelengthList(wlValue: string, sourceRows: any[], primary: number
   }
   if (out.length === 0) out.push(0.5876);
   return out;
+}
+
+function buildWeightedWavelengthEntries(
+  wlValue: string,
+  sourceRows: any[],
+  primary: number | null,
+): Array<{ wavelength: number; weight: number; label: string }> {
+  if (wlValue !== 'all') {
+    const wl = Number.isFinite(Number(wlValue)) && Number(wlValue) > 0
+      ? Number(wlValue)
+      : (primary !== null && primary > 0 ? primary : 0.5876);
+    return [{ wavelength: wl, weight: 1, label: `${(wl * 1000).toFixed(1)}nm` }];
+  }
+
+  const rows = Array.isArray(sourceRows) ? sourceRows : [];
+  const entries = rows
+    .map((row: any) => {
+      const wl = Number(row?.wavelength);
+      if (!Number.isFinite(wl) || wl <= 0) return null;
+      const rawWeight = Number(row?.weight);
+      const weight = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : 1;
+      return { wavelength: wl, weight, label: `${(wl * 1000).toFixed(1)}nm` };
+    })
+    .filter(Boolean) as Array<{ wavelength: number; weight: number; label: string }>;
+
+  if (entries.length === 0) {
+    const wl = (primary !== null && primary > 0) ? primary : 0.5876;
+    return [{ wavelength: wl, weight: 1, label: `${(wl * 1000).toFixed(1)}nm` }];
+  }
+
+  const weightSum = entries.reduce((acc, v) => acc + (Number(v.weight) || 0), 0);
+  if (weightSum > 0) {
+    return entries.map((v) => ({ ...v, weight: v.weight / weightSum }));
+  }
+  const uniform = 1 / entries.length;
+  return entries.map((v) => ({ ...v, weight: uniform }));
+}
+
+function getCompositeWeightForWavelength(
+  entries: Array<{ wavelength: number; weight: number }>,
+  wavelengthUm: number,
+): number {
+  if (!Number.isFinite(wavelengthUm) || wavelengthUm <= 0) return 0;
+  let sum = 0;
+  for (const e of entries) {
+    const wl = Number(e?.wavelength);
+    if (!Number.isFinite(wl) || wl <= 0) continue;
+    if (Math.abs(wl - wavelengthUm) < 1e-9) {
+      const w = Number(e?.weight);
+      if (Number.isFinite(w) && w > 0) sum += w;
+    }
+  }
+  return sum;
 }
 
 function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []): boolean {
@@ -452,15 +501,7 @@ const CSS = `
  }
 `;
 
-const SAMPLING_OPTIONS = ['32', '64', '128', '256', '512', '1024', '2048', '4096'];
-const ZERO_PAD_OPTIONS = [
-  { value: 'none', label: 'None' },
-  { value: 'auto', label: 'Auto' },
-  { value: '512', label: '512' },
-  { value: '1024', label: '1024' },
-  { value: '2048', label: '2048' },
-  { value: '4096', label: '4096' },
-];
+const SAMPLING_OPTIONS = ['16', '32', '64', '128', '256', '512', '1024', '2048', '4096'];
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
@@ -474,13 +515,14 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
   const [objectIdx, setObjectIdx] = useState<string>('0');
 
   // ── Shared computation params ──
-  const [sampling, setSampling] = useState('256');
-  const [zeroPad, setZeroPad] = useState('auto');
+  const [sampling, setSampling] = useState(type === 'field-mtf' ? '32' : '256');
   const [removePtd, setRemovePtd] = useState(false);
 
   // ── MTF-specific ──
-  const [maxFreq, setMaxFreq] = useState('100');
-  const [showDiffLimit, setShowDiffLimit] = useState(true);
+    const [maxFreq, setMaxFreq] = useState('100');
+    const [plotPoints, setPlotPoints] = useState('21');
+    const [showDiffLimit, setShowDiffLimit] = useState(true);
+    const [mtfMethod, setMtfMethod] = useState<MtfMethodOption>('hopkins-tcc');
 
   // ── Through-Focus specific ──
   const [targetFreq, setTargetFreq] = useState('10');
@@ -490,7 +532,8 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
 
   // ── Field MTF specific ──
   const [freq1, setFreq1] = useState('10');
-  const [freq2, setFreq2] = useState('30');
+  const [freq2, setFreq2] = useState('20');
+  const [freq3, setFreq3] = useState('40');
   const [fieldMin, setFieldMin] = useState('0');
   const [fieldMax, setFieldMax] = useState('10');
   const [fieldSteps, setFieldSteps] = useState('21');
@@ -582,12 +625,23 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     }
     const samplingN = Number(sampling) || 256;
     const maxFreqN = Number(maxFreq) || 100;
-    const zeroPadTo = computeZeroPadTo(zeroPad, samplingN);
+    const parsedPlotPoints = Math.floor(Number(plotPoints));
+    const resolvedPlotPoints = Number.isFinite(parsedPlotPoints)
+      ? Math.max(2, Math.min(2048, parsedPlotPoints))
+      : 21;
+    const maxFreqForSampling = Number.isFinite(maxFreqN) && maxFreqN >= 0 ? maxFreqN : 100;
+    const sampleFrequenciesLpmm = Array.from({ length: resolvedPlotPoints }, (_, i) => {
+      const t = resolvedPlotPoints > 1 ? (i / (resolvedPlotPoints - 1)) : 0;
+      return maxFreqForSampling * t;
+    });
+    const requestedFftSize = samplingN;
     const opdDisplayMode = removePtd ? 'pistonTiltDefocusRemoved' : 'pistonTiltRemoved';
     const objIdxN = parseInt(objectIdx, 10) || 0;
     const sourceRows: any[] = typeof host?.getSourceRows === 'function'
       ? safeCall(() => host.getSourceRows(host.tableSource), []) : [];
-    const wavelengthList = buildWavelengthList(wlValue, sourceRows, primary);
+    const wavelengthEntries = buildWeightedWavelengthEntries(wlValue, sourceRows, primary);
+    const wavelengthList = wavelengthEntries.map((e) => e.wavelength);
+    const useWeightedComposite = wlValue === 'all' && wavelengthEntries.length > 1;
     try {
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
       if (typeof host?.runDesktopNativeOpdMapForPopup !== 'function') throw new Error('runDesktopNativeOpdMapForPopup unavailable');
@@ -595,6 +649,10 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       if (typeof host?.runDesktopNativeMtfMapForPopup !== 'function') throw new Error('runDesktopNativeMtfMapForPopup unavailable');
       const traces: any[] = [];
       let nyquistGlobal = 0;
+      let compositeFreq: number[] | null = null;
+      let compositeTan: number[] | null = null;
+      let compositeSag: number[] | null = null;
+      let compositeDiff: Array<number | null> | null = null;
       const estimateFiniteGridRms = (grid: any): number => {
         if (!Array.isArray(grid) || grid.length === 0) return Number.NaN;
         let sum = 0;
@@ -622,6 +680,9 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       };
       for (let wli = 0; wli < wavelengthList.length; wli++) {
         const wl = wavelengthList[wli];
+        const wlWeight = Number.isFinite(Number(wavelengthEntries[wli]?.weight))
+          ? Number(wavelengthEntries[wli]?.weight)
+          : (1 / Math.max(1, wavelengthList.length));
         const titleNm = (wl * 1000).toFixed(1);
         const baseProgress = (wli / Math.max(1, wavelengthList.length)) * 80;
         setProgress(10 + baseProgress, `λ=${titleNm}nm: OPD...`);
@@ -682,9 +743,6 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           } catch (_) {}
         }
         if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) focalLengthMm = 100.0;
-        const minRecommendedFftSize = 512;
-        const requestedFftSize = (!zeroPadTo || zeroPadTo === 0)
-          ? Math.max(samplingN, minRecommendedFftSize) : Math.max(samplingN, zeroPadTo);
         const basePixelPitchUm = (wl * Math.abs(focalLengthMm)) / Math.max(1e-12, Math.abs(pupilDiameterMm));
         const pixelSizeUm = basePixelPitchUm * (samplingN / requestedFftSize);
         setProgress(20 + baseProgress, `λ=${titleNm}nm: PSF...`);
@@ -697,11 +755,21 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         setProgress(30 + baseProgress, `λ=${titleNm}nm: MTF...`);
         const mtfResp = await host.runDesktopNativeMtfMapForPopup({
           psfData: nativePsfResp?.psfData, pixelSizeUm,
-          maxFrequencyLpmm: Number.isFinite(maxFreqN) ? maxFreqN : undefined, points: 121,
+          maxFrequencyLpmm: Number.isFinite(maxFreqN) ? maxFreqN : undefined,
+          points: resolvedPlotPoints,
+          sampleFrequenciesLpmm,
+          directEvalOnly: true,
+          method: mtfMethod,
         });
-        const freq: number[] = Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis : [];
-        let tan: number[] = Array.isArray(mtfResp?.mtfTangential) ? mtfResp.mtfTangential : [];
-        let sag: number[] = Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal : [];
+        const freq: number[] = Array.isArray(mtfResp?.sampledFrequenciesLpmm) && mtfResp.sampledFrequenciesLpmm.length > 0
+          ? mtfResp.sampledFrequenciesLpmm
+          : (Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis : []);
+        let tan: number[] = Array.isArray(mtfResp?.sampledMtfTangential) && mtfResp.sampledMtfTangential.length === freq.length
+          ? mtfResp.sampledMtfTangential
+          : (Array.isArray(mtfResp?.mtfTangential) ? mtfResp.mtfTangential : []);
+        let sag: number[] = Array.isArray(mtfResp?.sampledMtfSagittal) && mtfResp.sampledMtfSagittal.length === freq.length
+          ? mtfResp.sampledMtfSagittal
+          : (Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal : []);
         if (!freq.length || !tan.length || !sag.length) throw new Error('MTF result does not contain valid curves');
 
         const currentWavefrontRms = estimateFiniteGridRms(displayOpdGrid);
@@ -727,10 +795,17 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
               psfData: idealNativePsfResp?.psfData,
               pixelSizeUm,
               maxFrequencyLpmm: Number.isFinite(maxFreqN) ? maxFreqN : undefined,
-              points: 121,
+              points: resolvedPlotPoints,
+              sampleFrequenciesLpmm,
+              directEvalOnly: true,
+              method: mtfMethod,
             });
-            const idealTan = Array.isArray(idealMtfResp?.mtfTangential) ? idealMtfResp.mtfTangential : [];
-            const idealSag = Array.isArray(idealMtfResp?.mtfSagittal) ? idealMtfResp.mtfSagittal : [];
+            const idealTan = Array.isArray(idealMtfResp?.sampledMtfTangential)
+              ? idealMtfResp.sampledMtfTangential
+              : (Array.isArray(idealMtfResp?.mtfTangential) ? idealMtfResp.mtfTangential : []);
+            const idealSag = Array.isArray(idealMtfResp?.sampledMtfSagittal)
+              ? idealMtfResp.sampledMtfSagittal
+              : (Array.isArray(idealMtfResp?.mtfSagittal) ? idealMtfResp.mtfSagittal : []);
             if ((idealTan.length === freq.length) || (idealSag.length === freq.length)) {
               idealDiffCurve = freq.map((_, i) => {
                 const tv = Number(idealTan[i]);
@@ -765,9 +840,24 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           sag = idealDiffCurve.slice() as number[];
         }
 
-        const color = getColorForWavelength(wl);
-        traces.push({ x: freq, y: tan, type: 'scatter', mode: 'lines', name: `Tangential (${titleNm}nm)`, line: { color, width: 2, dash: 'solid' } });
-        traces.push({ x: freq, y: sag, type: 'scatter', mode: 'lines', name: `Sagittal (${titleNm}nm)`, line: { color, width: 2, dash: 'dot' } });
+        if (useWeightedComposite) {
+          if (!compositeFreq || !compositeTan || !compositeSag) {
+            compositeFreq = freq.slice();
+            compositeTan = new Array(freq.length).fill(0);
+            compositeSag = new Array(freq.length).fill(0);
+          }
+          const n = Math.min(compositeFreq.length, freq.length, compositeTan.length, compositeSag.length, tan.length, sag.length);
+          for (let i = 0; i < n; i++) {
+            const tv = Number(tan[i]);
+            const sv = Number(sag[i]);
+            if (Number.isFinite(tv)) compositeTan[i] += wlWeight * tv;
+            if (Number.isFinite(sv)) compositeSag[i] += wlWeight * sv;
+          }
+        } else {
+          const color = getColorForWavelength(wl);
+          traces.push({ x: freq, y: tan, type: 'scatter', mode: 'lines', name: `Tangential (${titleNm}nm)`, line: { color, width: 2, dash: 'solid' } });
+          traces.push({ x: freq, y: sag, type: 'scatter', mode: 'lines', name: `Sagittal (${titleNm}nm)`, line: { color, width: 2, dash: 'dot' } });
+        }
         const nyquist = Number(mtfResp?.nyquistLpmm);
         if (Number.isFinite(nyquist) && nyquist > 0) nyquistGlobal = Math.max(nyquistGlobal, nyquist);
         if (showDiffLimit) {
@@ -790,9 +880,54 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
               }
             }
             if (Array.isArray(diffY)) {
-              traces.push({ x: freq, y: diffY, type: 'scatter', mode: 'lines', name: `Diff. Limit (${titleNm}nm)`, line: { color, width: 1.5, dash: 'dash' } });
+              if (useWeightedComposite) {
+                if (!compositeDiff || !compositeFreq) {
+                  compositeDiff = freq.map(() => 0);
+                }
+                const n = Math.min(compositeDiff.length, diffY.length);
+                for (let i = 0; i < n; i++) {
+                  const dv = Number(diffY[i]);
+                  if (Number.isFinite(dv) && compositeDiff[i] !== null) {
+                    compositeDiff[i] = Number(compositeDiff[i] || 0) + wlWeight * dv;
+                  }
+                }
+              } else {
+                const color = getColorForWavelength(wl);
+                traces.push({ x: freq, y: diffY, type: 'scatter', mode: 'lines', name: `Diff. Limit (${titleNm}nm)`, line: { color, width: 1.5, dash: 'dash' } });
+              }
             }
           } catch (_) {}
+        }
+      }
+      if (useWeightedComposite && compositeFreq && compositeTan && compositeSag) {
+        if (compositeTan.length > 0) compositeTan[0] = 1;
+        if (compositeSag.length > 0) compositeSag[0] = 1;
+        traces.push({
+          x: compositeFreq,
+          y: compositeTan,
+          type: 'scatter',
+          mode: 'lines',
+          name: 'Tangential (Weighted Composite)',
+          line: { color: '#1f4ed8', width: 2, dash: 'solid' }
+        });
+        traces.push({
+          x: compositeFreq,
+          y: compositeSag,
+          type: 'scatter',
+          mode: 'lines',
+          name: 'Sagittal (Weighted Composite)',
+          line: { color: '#1f4ed8', width: 2, dash: 'dot' }
+        });
+        if (showDiffLimit && Array.isArray(compositeDiff) && compositeDiff.length === compositeFreq.length) {
+          if (compositeDiff.length > 0 && compositeDiff[0] !== null) compositeDiff[0] = 1;
+          traces.push({
+            x: compositeFreq,
+            y: compositeDiff,
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Diff. Limit (Weighted Composite)',
+            line: { color: '#1f4ed8', width: 1.5, dash: 'dash' }
+          });
         }
       }
       if (!traces.length) throw new Error('MTF did not produce any traces');
@@ -809,7 +944,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       setProgress(100, 'Failed');
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
-  }, [w, wavelength, objectIdx, sampling, zeroPad, removePtd, maxFreq, showDiffLimit, plotlyReady, setProgress, hideProgress]);
+  }, [w, wavelength, objectIdx, sampling, removePtd, maxFreq, plotPoints, showDiffLimit, mtfMethod, plotlyReady, setProgress, hideProgress]);
 
   // ─── Compute Through-Focus MTF ─────────────────────────────────────────────
   const handleComputeThroughFocusMtf = useCallback(async () => {
@@ -824,11 +959,13 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       return;
     }
     const samplingN = Number(sampling) || 256;
-    const zeroPadTo = computeZeroPadTo(zeroPad, samplingN);
+    const zeroPadTo = samplingN;
     const opdDisplayMode = removePtd ? 'pistonTiltDefocusRemoved' : 'pistonTiltRemoved';
     const sourceRows: any[] = typeof w.getSourceRows === 'function'
       ? safeCall(() => w.getSourceRows(w.tableSource), []) : [];
-    const wavelengthList = buildWavelengthList(wlValue, sourceRows, primary);
+    const wavelengthEntries = buildWeightedWavelengthEntries(wlValue, sourceRows, primary);
+    const wavelengthList = wavelengthEntries.map((e) => e.wavelength);
+    const useWeightedComposite = wlValue === 'all' && wavelengthEntries.length > 1;
     const targetFreqN = Number(targetFreq) || 10;
     const defocusMinN = Number(defocusMin);
     const defocusMaxN = Number(defocusMax);
@@ -850,6 +987,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         objectIndex: objIdxN, wavelengths: wavelengthList,
         targetFrequencyLpmm: targetFreqN, defocusMinMm: defocusMinN, defocusMaxMm: defocusMaxN,
         steps: stepsN, samplingSize: samplingN, zeroPadTo, opdDisplayMode,
+        method: mtfMethod,
         onProgress: (evt: any) => {
           const p = Number(evt?.percent);
           const msg = String(evt?.message || 'Computing Through-Focus MTF...');
@@ -861,14 +999,51 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       const series: any[] = Array.isArray(nativeResp?.series) ? nativeResp.series : [];
       if (!xAxis.length || !series.length) throw new Error('Through-Focus MTF did not produce valid data');
       const traces: any[] = [];
-      for (const s of series) {
-        const wl = Number(s.wavelengthUm);
-        const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
-        const color = getColorForWavelength(wl);
-        const tan: number[] = Array.isArray(s.mtfTangential) ? s.mtfTangential : [];
-        const sag: number[] = Array.isArray(s.mtfSagittal) ? s.mtfSagittal : [];
-        traces.push({ x: xAxis, y: tan, type: 'scatter', mode: 'lines', name: `Meridional (${nm}nm)`, line: { color, width: 2, dash: 'solid' } });
-        traces.push({ x: xAxis, y: sag, type: 'scatter', mode: 'lines', name: `Sagittal (${nm}nm)`, line: { color, width: 2, dash: 'dot' } });
+      if (useWeightedComposite) {
+        const tanComposite = new Array(xAxis.length).fill(0);
+        const sagComposite = new Array(xAxis.length).fill(0);
+        for (const s of series) {
+          const wl = Number(s?.wavelengthUm);
+          const ww = getCompositeWeightForWavelength(wavelengthEntries, wl);
+          if (!(ww > 0)) continue;
+          const tan: number[] = Array.isArray(s?.mtfTangential) ? s.mtfTangential : [];
+          const sag: number[] = Array.isArray(s?.mtfSagittal) ? s.mtfSagittal : [];
+          const n = Math.min(xAxis.length, tanComposite.length, sagComposite.length, tan.length, sag.length);
+          for (let i = 0; i < n; i++) {
+            const tv = Number(tan[i]);
+            const sv = Number(sag[i]);
+            if (Number.isFinite(tv)) tanComposite[i] += ww * tv;
+            if (Number.isFinite(sv)) sagComposite[i] += ww * sv;
+          }
+        }
+        if (tanComposite.length > 0) tanComposite[0] = 1;
+        if (sagComposite.length > 0) sagComposite[0] = 1;
+        traces.push({
+          x: xAxis,
+          y: tanComposite,
+          type: 'scatter',
+          mode: 'lines',
+          name: 'Meridional (Weighted Composite)',
+          line: { color: '#1f4ed8', width: 2, dash: 'solid' }
+        });
+        traces.push({
+          x: xAxis,
+          y: sagComposite,
+          type: 'scatter',
+          mode: 'lines',
+          name: 'Sagittal (Weighted Composite)',
+          line: { color: '#1f4ed8', width: 2, dash: 'dot' }
+        });
+      } else {
+        for (const s of series) {
+          const wl = Number(s.wavelengthUm);
+          const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
+          const color = getColorForWavelength(wl);
+          const tan: number[] = Array.isArray(s.mtfTangential) ? s.mtfTangential : [];
+          const sag: number[] = Array.isArray(s.mtfSagittal) ? s.mtfSagittal : [];
+          traces.push({ x: xAxis, y: tan, type: 'scatter', mode: 'lines', name: `Meridional (${nm}nm)`, line: { color, width: 2, dash: 'solid' } });
+          traces.push({ x: xAxis, y: sag, type: 'scatter', mode: 'lines', name: `Sagittal (${nm}nm)`, line: { color, width: 2, dash: 'dot' } });
+        }
       }
       setProgress(85, 'Rendering...');
       await (window as any).Plotly.newPlot(container, traces, {
@@ -883,7 +1058,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       setProgress(100, 'Failed');
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
-  }, [w, wavelength, objectIdx, sampling, zeroPad, removePtd, targetFreq, defocusMin, defocusMax, tfSteps, plotlyReady, setProgress, hideProgress]);
+  }, [w, wavelength, objectIdx, sampling, removePtd, targetFreq, defocusMin, defocusMax, tfSteps, mtfMethod, plotlyReady, setProgress, hideProgress]);
 
   // ─── Compute Field MTF ─────────────────────────────────────────────────────
   // Rust+WASM native path (runNativeFieldMtfMap). Both Tauri and Web go through
@@ -900,18 +1075,21 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       return;
     }
     const samplingN = Number(sampling) || 256;
-    const zeroPadTo = computeZeroPadTo(zeroPad, samplingN);
+    const zeroPadTo = samplingN;
     const opdDisplayMode = removePtd ? 'pistonTiltDefocusRemoved' : 'pistonTiltRemoved';
     const host = getBestAnalysisWindow();
     const { opticalSystemRows, sourceRows, objectRows } = getRowsFromWindow(host);
-    const wavelengthList = buildWavelengthList(wlValue, sourceRows, primary);
+    const wavelengthEntries = buildWeightedWavelengthEntries(wlValue, sourceRows, primary);
+    const wavelengthList = wavelengthEntries.map((e) => e.wavelength);
+    const useWeightedComposite = wlValue === 'all' && wavelengthEntries.length > 1;
     const axisInfo = getAxisInfo();
     const forcedPupilSamplingMode = getForcedInfinitePupilMode();
     const fieldMinN = Number(fieldMin);
     const fieldMaxN = Number(fieldMax) || 10;
     const stepsN = Number(fieldSteps) || 21;
     const freq1N = Number(freq1) || 10;
-    const freq2N = Number(freq2) || 30;
+    const freq2N = Number(freq2) || 20;
+    const freq3N = Number(freq3) || 40;
     try {
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
       setProgress(0, 'Starting...');
@@ -920,8 +1098,10 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       const commonPayload = {
         sampleFromObjectRows: false,
         wavelengths: wavelengthList,
+        method: mtfMethod,
         firstFrequencyLpmm: freq1N,
         secondFrequencyLpmm: freq2N,
+        thirdFrequencyLpmm: freq3N,
         fieldMin: fieldMinN,
         fieldMax: fieldMaxN,
         steps: stepsN,
@@ -958,46 +1138,142 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       const series: any[] = Array.isArray((nativeResp as any)?.series) ? (nativeResp as any).series : [];
       if (!xAxis.length || !series.length) throw new Error('Object MTF did not produce valid data');
       const firstFreqText = String(Number.isFinite(freq1N) ? freq1N.toFixed(1) : '10.0');
-      const secondFreqText = String(Number.isFinite(freq2N) ? freq2N.toFixed(1) : '30.0');
+      const secondFreqText = String(Number.isFinite(freq2N) ? freq2N.toFixed(1) : '20.0');
+      const thirdFreqText = String(Number.isFinite(freq3N) ? freq3N.toFixed(1) : '40.0');
+      const freq1Color = '#1d4ed8';
+      const freq2Color = '#d97706';
+      const freq3Color = '#059669';
       const traces: any[] = [];
-      for (const s of series) {
-        const wl = Number(s.wavelengthUm);
-        const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
-        const color = getColorForWavelength(wl);
+      if (useWeightedComposite) {
+        const meridionalFirstComposite = new Array(xAxis.length).fill(0);
+        const sagittalFirstComposite = new Array(xAxis.length).fill(0);
+        const meridionalSecondComposite = new Array(xAxis.length).fill(0);
+        const sagittalSecondComposite = new Array(xAxis.length).fill(0);
+        const meridionalThirdComposite = new Array(xAxis.length).fill(0);
+        const sagittalThirdComposite = new Array(xAxis.length).fill(0);
+        for (let si = 0; si < series.length; si++) {
+          const s = series[si];
+          const wl = Number(s?.wavelengthUm);
+          const ww = getCompositeWeightForWavelength(wavelengthEntries, wl);
+          if (!(ww > 0)) continue;
+          const m1 = Array.isArray(s?.meridionalFirst) ? s.meridionalFirst : [];
+          const s1 = Array.isArray(s?.sagittalFirst) ? s.sagittalFirst : [];
+          const m2 = Array.isArray(s?.meridionalSecond) ? s.meridionalSecond : [];
+          const s2 = Array.isArray(s?.sagittalSecond) ? s.sagittalSecond : [];
+          const m3 = Array.isArray(s?.meridionalThird) ? s.meridionalThird : [];
+          const s3v = Array.isArray(s?.sagittalThird) ? s.sagittalThird : [];
+          const n = Math.min(xAxis.length, m1.length, s1.length, m2.length, s2.length, m3.length, s3v.length);
+          for (let i = 0; i < n; i++) {
+            const vM1 = Number(m1[i]);
+            const vS1 = Number(s1[i]);
+            const vM2 = Number(m2[i]);
+            const vS2 = Number(s2[i]);
+            const vM3 = Number(m3[i]);
+            const vS3 = Number(s3v[i]);
+            if (Number.isFinite(vM1)) meridionalFirstComposite[i] += ww * vM1;
+            if (Number.isFinite(vS1)) sagittalFirstComposite[i] += ww * vS1;
+            if (Number.isFinite(vM2)) meridionalSecondComposite[i] += ww * vM2;
+            if (Number.isFinite(vS2)) sagittalSecondComposite[i] += ww * vS2;
+            if (Number.isFinite(vM3)) meridionalThirdComposite[i] += ww * vM3;
+            if (Number.isFinite(vS3)) sagittalThirdComposite[i] += ww * vS3;
+          }
+        }
         traces.push({
           x: xAxis,
-          y: Array.isArray(s.meridionalFirst) ? s.meridionalFirst : [],
+          y: meridionalFirstComposite,
           type: 'scatter', mode: 'lines',
-          name: `Meridional ${firstFreqText} lp/mm (${nm}nm)`,
-          line: { color, width: 2, dash: 'solid' },
+          name: `Meridional ${firstFreqText} lp/mm (Weighted Composite)`,
+          line: { color: freq1Color, width: 2, dash: 'dot' },
         });
         traces.push({
           x: xAxis,
-          y: Array.isArray(s.sagittalFirst) ? s.sagittalFirst : [],
+          y: sagittalFirstComposite,
           type: 'scatter', mode: 'lines',
-          name: `Sagittal ${firstFreqText} lp/mm (${nm}nm)`,
-          line: { color, width: 2, dash: 'dot' },
+          name: `Sagittal ${firstFreqText} lp/mm (Weighted Composite)`,
+          line: { color: freq1Color, width: 2, dash: 'solid' },
         });
         traces.push({
           x: xAxis,
-          y: Array.isArray(s.meridionalSecond) ? s.meridionalSecond : [],
+          y: meridionalSecondComposite,
           type: 'scatter', mode: 'lines',
-          name: `Meridional ${secondFreqText} lp/mm (${nm}nm)`,
-          line: { color, width: 2, dash: 'dash' },
+          name: `Meridional ${secondFreqText} lp/mm (Weighted Composite)`,
+          line: { color: freq2Color, width: 2, dash: 'dot' },
         });
         traces.push({
           x: xAxis,
-          y: Array.isArray(s.sagittalSecond) ? s.sagittalSecond : [],
+          y: sagittalSecondComposite,
           type: 'scatter', mode: 'lines',
-          name: `Sagittal ${secondFreqText} lp/mm (${nm}nm)`,
-          line: { color, width: 2, dash: 'dashdot' },
+          name: `Sagittal ${secondFreqText} lp/mm (Weighted Composite)`,
+          line: { color: freq2Color, width: 2, dash: 'solid' },
         });
+        traces.push({
+          x: xAxis,
+          y: meridionalThirdComposite,
+          type: 'scatter', mode: 'lines',
+          name: `Meridional ${thirdFreqText} lp/mm (Weighted Composite)`,
+          line: { color: freq3Color, width: 2, dash: 'dot' },
+        });
+        traces.push({
+          x: xAxis,
+          y: sagittalThirdComposite,
+          type: 'scatter', mode: 'lines',
+          name: `Sagittal ${thirdFreqText} lp/mm (Weighted Composite)`,
+          line: { color: freq3Color, width: 2, dash: 'solid' },
+        });
+      } else {
+        for (let si = 0; si < series.length; si++) {
+          const s = series[si];
+          const wl = Number(s.wavelengthUm);
+          const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
+          traces.push({
+            x: xAxis,
+            y: Array.isArray(s.meridionalFirst) ? s.meridionalFirst : [],
+            type: 'scatter', mode: 'lines',
+            name: `Meridional ${firstFreqText} lp/mm (${nm}nm)`,
+            line: { color: freq1Color, width: 2, dash: 'dot' },
+          });
+          traces.push({
+            x: xAxis,
+            y: Array.isArray(s.sagittalFirst) ? s.sagittalFirst : [],
+            type: 'scatter', mode: 'lines',
+            name: `Sagittal ${firstFreqText} lp/mm (${nm}nm)`,
+            line: { color: freq1Color, width: 2, dash: 'solid' },
+          });
+          traces.push({
+            x: xAxis,
+            y: Array.isArray(s.meridionalSecond) ? s.meridionalSecond : [],
+            type: 'scatter', mode: 'lines',
+            name: `Meridional ${secondFreqText} lp/mm (${nm}nm)`,
+            line: { color: freq2Color, width: 2, dash: 'dot' },
+          });
+          traces.push({
+            x: xAxis,
+            y: Array.isArray(s.sagittalSecond) ? s.sagittalSecond : [],
+            type: 'scatter', mode: 'lines',
+            name: `Sagittal ${secondFreqText} lp/mm (${nm}nm)`,
+            line: { color: freq2Color, width: 2, dash: 'solid' },
+          });
+          traces.push({
+            x: xAxis,
+            y: Array.isArray(s?.meridionalThird) ? s.meridionalThird : [],
+            type: 'scatter', mode: 'lines',
+            name: `Meridional ${thirdFreqText} lp/mm (${nm}nm)`,
+            line: { color: freq3Color, width: 2, dash: 'dot' },
+          });
+          traces.push({
+            x: xAxis,
+            y: Array.isArray(s?.sagittalThird) ? s.sagittalThird : [],
+            type: 'scatter', mode: 'lines',
+            name: `Sagittal ${thirdFreqText} lp/mm (${nm}nm)`,
+            line: { color: freq3Color, width: 2, dash: 'solid' },
+          });
+        }
       }
       const nonEmptyTraces = traces.filter(t => Array.isArray(t.y) && t.y.length > 0);
       if (!nonEmptyTraces.length) throw new Error('Object MTF did not produce plottable traces');
       setProgress(90, 'Rendering...');
       await (window as any).Plotly.newPlot(container, nonEmptyTraces, {
-        title: `${firstFreqText} / ${secondFreqText} lp/mm`,
+        title: `${firstFreqText} / ${secondFreqText} / ${thirdFreqText} lp/mm`,
         xaxis: { title: axisInfo.label },
         yaxis: { title: 'MTF', range: [0, 1.05] },
         margin: { l: 60, r: 20, t: 40, b: 50 },
@@ -1011,7 +1287,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       setProgress(100, 'Failed');
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
-  }, [w, wavelength, objectIdx, sampling, zeroPad, removePtd, freq1, freq2, fieldMin, fieldMax, fieldSteps, plotlyReady, setProgress, hideProgress]);
+  }, [w, wavelength, objectIdx, sampling, removePtd, freq1, freq2, freq3, fieldMin, fieldMax, fieldSteps, mtfMethod, plotlyReady, setProgress, hideProgress]);
 
   const handleCompute = type === 'mtf' ? handleComputeMtf
     : type === 'through-focus-mtf' ? handleComputeThroughFocusMtf
@@ -1029,12 +1305,6 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     <><label>Sampling:</label>
       <select value={sampling} onChange={e => setSampling(e.target.value)}>
         {SAMPLING_OPTIONS.map(v => <option key={v} value={v}>{v}×{v}</option>)}
-      </select></>
-  );
-  const zeroPadSelect = (
-    <><label title="Zero-padding increases FFT size without increasing OPD ray grid.">Zero pad:</label>
-      <select value={zeroPad} onChange={e => setZeroPad(e.target.value)}>
-        {ZERO_PAD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select></>
   );
   const removePtdChk = (
@@ -1056,8 +1326,9 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
             </select></>
         )}
         {type === 'mtf' && (<>
-          <label>Max (lp/mm):</label>
           <input type="number" min="0" step="1" value={maxFreq} onChange={e => setMaxFreq(e.target.value)} />
+          <label>Points:</label>
+          <input type="text" value={plotPoints} onChange={e => setPlotPoints(e.target.value)} />
         </>)}
         {type === 'through-focus-mtf' && (<>
           <label>Freq (lp/mm):</label>
@@ -1074,6 +1345,8 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           <input type="number" min="0" step="1" value={freq1} onChange={e => setFreq1(e.target.value)} />
           <label>2nd Freq (lp/mm):</label>
           <input type="number" min="0" step="1" value={freq2} onChange={e => setFreq2(e.target.value)} />
+          <label>3rd Freq (lp/mm):</label>
+          <input type="number" min="0" step="1" value={freq3} onChange={e => setFreq3(e.target.value)} />
           <label>Object min:</label>
           <input type="number" step="0.001" value={fieldMin} onChange={e => setFieldMin(e.target.value)} />
           <label>Object max:</label>
@@ -1082,14 +1355,20 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           <input type="number" min="3" max="201" step="1" value={fieldSteps} onChange={e => setFieldSteps(e.target.value)} />
         </>)}
         {samplingSelect}
-        {zeroPadSelect}
         {removePtdChk}
-        {type === 'mtf' && (
+        <>
+          <label>Method:</label>
+          <select value={mtfMethod} onChange={e => setMtfMethod(e.target.value as MtfMethodOption)}>
+            <option value="hopkins-tcc">Hopkins-TCC</option>
+            <option value="legacy-otf-axis">Legacy OTF Axis</option>
+          </select>
+        </>
+        {type === 'mtf' && (<>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <input type="checkbox" checked={showDiffLimit} onChange={e => setShowDiffLimit(e.target.checked)} />
             Diffraction Limit
           </label>
-        )}
+        </>)}
         <button type="button" onClick={handleCompute}>Show {type === 'mtf' ? 'MTF' : 'Plot'}</button>
       </div>
       {progressVisible && (
