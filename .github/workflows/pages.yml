@@ -54,7 +54,9 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install wasm-pack
-        run: cargo install wasm-pack
+        run: |
+          cargo install wasm-pack
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
 
@@ -63,8 +65,6 @@ jobs:
 
       - name: Build Rust-WASM
         run: bash scripts/build-rust-wasm.sh
-        env:
-          PATH: ${{ env.PATH }}:/home/runner/.cargo/bin
 
       - name: Build GitHub Pages app
         run: npm run build:pages
