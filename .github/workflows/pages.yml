@@ -27,7 +27,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Setup Rust
@@ -54,13 +54,17 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.org/wasm-pack/installer/init.sh -sSf | sh
+        run: cargo install wasm-pack
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: true
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build Rust-WASM
         run: bash scripts/build-rust-wasm.sh
+        env:
+          PATH: ${{ env.PATH }}:/home/runner/.cargo/bin
 
       - name: Build GitHub Pages app
         run: npm run build:pages
