@@ -856,13 +856,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         ensureConsoleLog(`   type="${fieldSetting.type}"`);
 
 
-        // Internal MTF sampling floor: keep user-selected sampling as baseline,
-        // but raise pupil sampling when curve density is high to avoid high-frequency elbows.
-        // TFMTF fast-sample mode must respect the requested sampling size for speed.
-        const samplingFloorFromCurve = nextPowerOfTwo(Math.max(gridSize, Math.ceil(resolvedPlotPointCount * 1.5)));
-        const samplingSizeForPSF = fastSampleEnabled
-            ? gridSize
-            : clamp(samplingFloorFromCurve, 32, 1024);
+        // Keep the pupil grid identical to the requested sampling size so MTF
+        // and TF-MTF evaluate the same optical samples at the same frequency.
+        const samplingSizeForPSF = gridSize;
 
         ensureConsoleLog(`🔍 [MTF Sampling] requested=${gridSize}, fastSample=${fastSampleEnabled}, wavefrontGrid=${samplingSizeForPSF}`);
 

@@ -694,30 +694,28 @@ async function runPortableThroughFocusMtfForPopup(payload: {
                 uniqueWavelengths.push(value);
             }
         }
-        if (uniqueWavelengths.length > 1) {
-            return await runDesktopNativeThroughFocusMtfForPopup({
-                ...payload,
-                wavelengths: uniqueWavelengths,
-                method: 'malacara-wasm-required',
-            });
-        }
         const wavelengthMicrons: number | 'all' = uniqueWavelengths.length <= 1
             ? (uniqueWavelengths[0] ?? 0.5876)
             : 'all';
 
-        const result: any = await showThroughFocusMTFDiagram({
-            wavelengthMicrons,
-            objectIndex: Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload?.objectIndex))) : 0,
-            targetFrequencyLpmm: Number.isFinite(Number(payload?.targetFrequencyLpmm)) ? Number(payload?.targetFrequencyLpmm) : 10,
-            defocusMinMm: Number.isFinite(Number(payload?.defocusMinMm)) ? Number(payload?.defocusMinMm) : -0.5,
-            defocusMaxMm: Number.isFinite(Number(payload?.defocusMaxMm)) ? Number(payload?.defocusMaxMm) : 0.5,
-            steps: Number.isFinite(Number(payload?.steps)) ? Math.max(3, Math.floor(Number(payload?.steps))) : 21,
-            samplingSize: Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 32,
-            zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : 0,
+        const runOptions = {
+            objectIndex: Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0,
+            targetFrequencyLpmm: Number.isFinite(Number(payload?.targetFrequencyLpmm)) ? Number(payload.targetFrequencyLpmm) : 10,
+            defocusMinMm: Number.isFinite(Number(payload?.defocusMinMm)) ? Number(payload.defocusMinMm) : -0.5,
+            defocusMaxMm: Number.isFinite(Number(payload?.defocusMaxMm)) ? Number(payload.defocusMaxMm) : 0.5,
+            steps: Number.isFinite(Number(payload?.steps)) ? Math.max(3, Math.floor(Number(payload.steps))) : 21,
+            samplingSize: Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 32,
+            zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0,
             containerElement: scratch,
             onProgress: payload?.onProgress as any,
             opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
-        });
+        };
+        const results: any[] = uniqueWavelengths.length > 1
+            ? await Promise.all(uniqueWavelengths.map((wavelength) => showThroughFocusMTFDiagram({ ...runOptions, wavelengthMicrons: wavelength })))
+            : [await showThroughFocusMTFDiagram({ ...runOptions, wavelengthMicrons })];
+        const result: any = {
+            traces: results.flatMap((entry) => Array.isArray(entry?.traces) ? entry.traces : []),
+        };
 
         const traces = Array.isArray(result?.traces) ? result.traces : [];
         const seriesMap = new Map<string, { wavelengthUm: number; label: string; mtfTangential: number[]; mtfSagittal: number[]; xAxis: number[] }>();
