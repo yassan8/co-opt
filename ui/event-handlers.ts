@@ -9905,12 +9905,12 @@ export function setupAnalysisWindows() {
             <option value="heatmap">Heatmap</option>
             <option value="multifield">Multi-field Comparison</option>
         </select>
-        <label for="popup-wavefront-grid-size-select">Grid size:</label>
+        <label for="popup-wavefront-grid-size-select">sampling:</label>
         <select id="popup-wavefront-grid-size-select">
-            <option value="32">32x32</option>
+            <option value="32" selected>32x32</option>
             <option value="64">64x64</option>
             <option value="128">128x128</option>
-            <option value="256" selected>256x256</option>
+            <option value="256">256x256</option>
             <option value="512">512x512</option>
             <option value="1024">1024x1024</option>
             <option value="2048">2048x2048</option>
@@ -10888,12 +10888,12 @@ export function setupAnalysisWindows() {
             <option value="2048">2048</option>
             <option value="4096">4096</option>
         </select>
-        <label for="popup-psf-zernike-sampling-select">OPD grid:</label>
+        <label for="popup-psf-zernike-sampling-select">OPD grid sampling:</label>
         <select id="popup-psf-zernike-sampling-select" title="Ray-traced OPD grid size (number of rays traced across pupil)">
-            <option value="32">32x32</option>
+            <option value="32" selected>32x32</option>
             <option value="64">64x64</option>
             <option value="128">128x128</option>
-            <option value="256" selected>256x256</option>
+            <option value="256">256x256</option>
             <option value="512">512x512</option>
             <option value="1024">1024x1024</option>
             <option value="2048">2048x2048</option>
