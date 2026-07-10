@@ -201,6 +201,9 @@ export type RustRayTracingWasm = {
     imageHeightsFlat: Float64Array | number[]
   ) => any;
   run_native_psf_from_opd_wasm_json?: (reqJson: string) => any;
+  run_native_mtf_from_psf_wasm_json?: (reqJson: string) => any;
+  run_native_opd_psf_mtf_wasm_json?: (reqJson: string) => any;
+  run_native_opd_psf_mtf_batch_wasm_json?: (reqJson: string) => any;
   run_native_distortion_wasm_json?: (reqJson: string) => any;
   run_native_mtf_malacara_from_opd_wasm_json?: (reqJson: string) => any;
   malloc?: (size: number) => number;
@@ -386,6 +389,9 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           update_trust_region_radius: mod.update_trust_region_radius,
           compute_lca_series_from_image_heights: mod.compute_lca_series_from_image_heights,
           run_native_psf_from_opd_wasm_json: mod.run_native_psf_from_opd_wasm_json,
+          run_native_mtf_from_psf_wasm_json: mod.run_native_mtf_from_psf_wasm_json,
+          run_native_opd_psf_mtf_wasm_json: mod.run_native_opd_psf_mtf_wasm_json,
+          run_native_opd_psf_mtf_batch_wasm_json: mod.run_native_opd_psf_mtf_batch_wasm_json,
           run_native_distortion_wasm_json: mod.run_native_distortion_wasm_json,
           run_native_mtf_malacara_from_opd_wasm_json: mod.run_native_mtf_malacara_from_opd_wasm_json,
           malloc: mod.malloc,
