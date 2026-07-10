@@ -520,7 +520,6 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
 
   // ── MTF-specific ──
     const [maxFreq, setMaxFreq] = useState('100');
-    const [plotPoints, setPlotPoints] = useState('21');
     const [showDiffLimit, setShowDiffLimit] = useState(true);
     const [mtfMethod, setMtfMethod] = useState<MtfMethodOption>('hopkins-tcc');
 
@@ -625,10 +624,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     }
     const samplingN = Number(sampling) || 256;
     const maxFreqN = Number(maxFreq) || 100;
-    const parsedPlotPoints = Math.floor(Number(plotPoints));
-    const resolvedPlotPoints = Number.isFinite(parsedPlotPoints)
-      ? Math.max(2, Math.min(2048, parsedPlotPoints))
-      : 21;
+    const resolvedPlotPoints = 21; // Fixed to 21 points for MTF sampling
     const maxFreqForSampling = Number.isFinite(maxFreqN) && maxFreqN >= 0 ? maxFreqN : 100;
     const sampleFrequenciesLpmm = Array.from({ length: resolvedPlotPoints }, (_, i) => {
       const t = resolvedPlotPoints > 1 ? (i / (resolvedPlotPoints - 1)) : 0;
@@ -944,7 +940,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       setProgress(100, 'Failed');
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
-  }, [w, wavelength, objectIdx, sampling, removePtd, maxFreq, plotPoints, showDiffLimit, mtfMethod, plotlyReady, setProgress, hideProgress]);
+  }, [w, wavelength, objectIdx, sampling, removePtd, maxFreq, showDiffLimit, mtfMethod, plotlyReady, setProgress, hideProgress]);
 
   // ─── Compute Through-Focus MTF ─────────────────────────────────────────────
   const handleComputeThroughFocusMtf = useCallback(async () => {
@@ -1328,8 +1324,6 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         )}
         {type === 'mtf' && (<>
           <input type="number" min="0" step="1" value={maxFreq} onChange={e => setMaxFreq(e.target.value)} />
-          <label>Points:</label>
-          <input type="text" value={plotPoints} onChange={e => setPlotPoints(e.target.value)} />
         </>)}
         {type === 'through-focus-mtf' && (<>
           <label>Freq (lp/mm):</label>
