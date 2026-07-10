@@ -2929,6 +2929,31 @@ export async function runNativePsfMap(
   return invokeCommand<NativePsfMapRequest, NativePsfMapResponse>("run_native_psf_map", payload);
 }
 
+export async function runMtfBatchViaWasm(
+  request: any,
+): Promise<any> {
+  if (!isTauriRuntime()) {
+    const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+    const rust = await preloadRustRayTracingWasm();
+    const batchFn = (rust as any)?.run_native_opd_psf_mtf_batch_wasm_json;
+    if (typeof batchFn !== "function") {
+      const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
+      throw new Error(
+        "runMtfBatchViaWasm(web): Rust-WASM batch MTF API is unavailable. "
+        + `Reason=${initError || "missing export run_native_opd_psf_mtf_batch_wasm_json"}`,
+      );
+    }
+
+    const wasmOutRaw = batchFn(JSON.stringify(request));
+    const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
+    if (!wasmOut || typeof wasmOut !== "object") {
+      throw new Error("runMtfBatchViaWasm(web): Rust-WASM batch API returned invalid response");
+    }
+    return wasmOut;
+  }
+  return invokeCommand<any, any>("run_mtf_batch_wasm", request);
+}
+
 export async function runNativeMtfMap(
   payload: NativeMtfMapRequest,
 ): Promise<NativeMtfMapResponse> {
@@ -3234,123 +3259,125 @@ export async function runNativeThroughFocusMtfMap(
       return [getPrimaryWavelengthUm(sourceRows, 0.5876)];
     })();
 
-    const totalRuns = Math.max(1, wavelengths.length * xAxis.length);
-    let completed = 0;
     const series: Array<{ wavelengthUm: number; label: string; mtfTangential: number[]; mtfSagittal: number[] }> = [];
 
-    // Load WASM once before the computation loops so PSF/MTF use the same
-    // null-cell handling as the native Tauri path.
-    let _wasmPsfFn: ((json: string) => unknown) | null = null;
-    try {
-      const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
-      const rust = await preloadRustRayTracingWasm();
-      const psfFn = (rust as any)?.run_native_psf_from_opd_wasm_json;
-      if (typeof psfFn === "function") {
-        _wasmPsfFn = psfFn;
+    // Progress tracking helper
+    const setProgress = (percent: number, message: string) => {
+      if (typeof onProgress === "function") {
+        onProgress({
+          percent: Math.max(0, Math.min(100, percent)),
+          message,
+        });
       }
-    } catch (_) {}
+    };
 
+    // ── Batch API Path: Compute all OPD/PSF/MTF in parallel ──
+    // Build jobs for all (wavelength, defocus) combinations
+    setProgress(10, "Building batch jobs for Through-Focus MTF...");
+    
+    const jobs: any[] = [];
+    const jobIndexToCoordinates: Array<{ wi: number; si: number; wl: number; defocusMm: number }> = [];
+    
+    for (let wi = 0; wi < wavelengths.length; wi++) {
+      const wl = wavelengths[wi];
+      for (let si = 0; si < xAxis.length; si++) {
+        const defocusMm = xAxis[si];
+        const shiftedRows = cloneOpticalSystemRowsWithDefocusShiftNativeLike(opticalSystemRows as any[], defocusMm);
+        const rowsForWasm = enrichRowsWithResolvedRindexForWasm(shiftedRows, wl);
+        
+        jobs.push({
+          opdRequest: {
+            opticalSystemRows: rowsForWasm,
+            sourceRows,
+            objectRows,
+            objectIndex,
+            surfaceIndex: undefined,
+            gridSize: samplingSize,
+            wavelengthUm: wl,
+            pupilSamplingMode: payload?.pupilSamplingMode,
+            opdDisplayMode,
+          },
+          psfRequest: {
+            wavelengthUm: wl,
+            pixelSizeUm,
+            zeroPadTo: requestedFftSize,
+            removeTilt: false,
+          },
+          mtfRequest: {
+            wavelengthUm: wl,
+            maxFrequencyLpmm: Math.max(targetFreqLpmm * 2, 1),
+            points: 121,
+            method: mtfMethod,
+          },
+          meta: {
+            wi,
+            si,
+            wl,
+            defocusMm,
+            jobIndex: jobs.length,
+          },
+        });
+        jobIndexToCoordinates.push({ wi, si, wl, defocusMm });
+      }
+    }
+
+    setProgress(25, `Executing batch MTF computation (${jobs.length} jobs)...`);
+
+    // Execute batch via WASM
+    const batchResp = await runMtfBatchViaWasm({
+      jobs,
+      shared: {
+        opdRequest: {
+          opticalSystemRows,
+          sourceRows,
+          objectRows,
+          objectIndex,
+        },
+      },
+    });
+
+    if (!Array.isArray(batchResp?.results)) {
+      throw new Error("runNativeThroughFocusMtfMap(web): Batch API returned no results");
+    }
+
+    // Restore results to matrix form [wavelength][defocusStep]
+    const mtfMatrix: any[][] = Array(wavelengths.length).fill(null).map(() => Array(xAxis.length).fill(null));
+    
+    setProgress(75, "Parsing batch results...");
+    
+    for (const result of batchResp.results) {
+      const coords = jobIndexToCoordinates[result.jobIndex] || jobIndexToCoordinates[result.meta?.jobIndex];
+      if (!coords) continue;
+      
+      const { wi, si } = coords;
+      if (mtfMatrix[wi] && si < mtfMatrix[wi].length) {
+        mtfMatrix[wi][si] = result;
+      }
+    }
+
+    // Convert matrix results to series format
+    setProgress(85, "Formatting results...");
+    
     for (let wi = 0; wi < wavelengths.length; wi++) {
       const wl = wavelengths[wi];
       const tanVec: number[] = [];
       const sagVec: number[] = [];
 
       for (let si = 0; si < xAxis.length; si++) {
-        const defocusMm = xAxis[si];
-        const shiftedRows = cloneOpticalSystemRowsWithDefocusShiftNativeLike(opticalSystemRows as any[], defocusMm);
-
-        const opdResp = await runNativeOpdMap({
-          opticalSystemRows: shiftedRows,
-          sourceRows,
-          objectRows,
-          objectIndex,
-          surfaceIndex: undefined,
-          gridSize: samplingSize,
-          wavelengthUm: wl,
-          pupilSamplingMode: payload?.pupilSamplingMode,
-          opdDisplayMode,
-        } as NativeOpdMapRequest);
-
-        if (_wasmPsfFn !== null) {
-          // ── WASM path: correctly handles null = outside-pupil cells ──────────
-          // OPD grids are passed in waves (with null for outside pupil).
-          // The WASM function converts waves→µm internally and skips null cells,
-          // matching the native Tauri `run_native_psf_map` behaviour exactly.
-          const psfReqJson = JSON.stringify({
-            rawOpdGrid: opdResp.rawOpdGrid,
-            displayOpdGrid: opdResp.displayOpdGrid,
-            wavelengthUm: wl,
-            pixelSizeUm,
-            zeroPadTo: requestedFftSize,
-            removeTilt: false,
-          });
-          const psfRaw = _wasmPsfFn(psfReqJson);
-          const psfOut: any = typeof psfRaw === "string" ? JSON.parse(psfRaw) : psfRaw;
-
-          const mtfResp = await runNativeMtfMap({
-            psfData: Array.isArray(psfOut?.psfData) ? psfOut.psfData : [],
-            pixelSizeUm,
-            maxFrequencyLpmm: Math.max(targetFreqLpmm * 2, 1),
-            points: 121,
-            method: mtfMethod as any,
-          } as NativeMtfMapRequest);
-
-          tanVec.push(interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfTangential || [], targetFreqLpmm));
-          sagVec.push(interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfSagittal || [], targetFreqLpmm));
-        } else {
-          // ── TypeScript fallback: null-cell bug fixed ──────────────────────────
-          // Cells with null rawOpdGrid value are outside the pupil; skip them.
-          const s = samplingSize;
-          const gridOpd = Array.from({ length: s }, () => Array.from({ length: s }, () => 0));
-          const pupilMask = Array.from({ length: s }, () => Array.from({ length: s }, () => false));
-          const raw = Array.isArray(opdResp?.rawOpdGrid) ? opdResp.rawOpdGrid : [];
-          const display = Array.isArray(opdResp?.displayOpdGrid) ? opdResp.displayOpdGrid : [];
-          for (let iy = 0; iy < s; iy++) {
-            for (let ix = 0; ix < s; ix++) {
-              const rawCellVal = (raw as any)?.[iy]?.[ix];
-              // null / undefined → outside pupil → skip (was Number(null)=0 bug)
-              if (rawCellVal === null || rawCellVal === undefined) continue;
-              const rawCell = Number(rawCellVal);
-              if (!Number.isFinite(rawCell)) continue;
-              const displayCellVal = (display as any)?.[iy]?.[ix];
-              const dispNum = (displayCellVal !== null && displayCellVal !== undefined) ? Number(displayCellVal) : NaN;
-              const waves = Number.isFinite(dispNum) ? dispNum : rawCell;
-              pupilMask[iy][ix] = true;
-              gridOpd[iy][ix] = waves * wl;
-            }
-          }
-
-          const psfResp = await runNativePsfMap({
-            gridOpd,
-            pupilMask,
-            gridAmplitude: [],
-            wavelengthUm: wl,
-            pixelSizeUm,
-            removeTilt: false,
-            zeroPadTo: requestedFftSize,
-            recenterIfWrapped: false,
-          } as NativePsfMapRequest);
-
-          const mtfResp = await runNativeMtfMap({
-            psfData: psfResp.psfData,
-            pixelSizeUm,
-            maxFrequencyLpmm: Math.max(targetFreqLpmm * 2, 1),
-            points: 121,
-            method: mtfMethod as any,
-          } as NativeMtfMapRequest);
-
-          tanVec.push(interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfTangential || [], targetFreqLpmm));
-          sagVec.push(interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfSagittal || [], targetFreqLpmm));
+        const mtfResp = mtfMatrix[wi][si];
+        
+        if (!mtfResp) {
+          // Fallback for missing result
+          tanVec.push(0);
+          sagVec.push(0);
+          continue;
         }
 
-        completed += 1;
-        if (typeof onProgress === "function") {
-          const percent = 10 + (completed / totalRuns) * 85;
-          onProgress({
-            percent: Math.max(0, Math.min(100, percent)),
-            message: `Computing TF-MTF: λ=${(wl * 1000).toFixed(1)}nm (${wi + 1}/${wavelengths.length}), step ${si + 1}/${xAxis.length}`,
-          });
-        }
+        // Extract MTF value at targetFreqLpmm from batch result
+        const tan = interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfTangential || [], targetFreqLpmm);
+        const sag = interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfSagittal || [], targetFreqLpmm);
+        tanVec.push(tan);
+        sagVec.push(sag);
       }
 
       series.push({
@@ -3361,11 +3388,13 @@ export async function runNativeThroughFocusMtfMap(
       });
     }
 
+    setProgress(100, "Through-Focus MTF computation complete");
+
     return {
-      backend: "web-rust-wasm",
+      backend: "web-rust-wasm-batch",
       xAxis,
       series,
-      message: "Computed via Web Rust/WASM Through-Focus MTF API",
+      message: "Computed via Web Rust/WASM Through-Focus MTF Batch API (optimized)",
     };
   }
   return invokeCommand<NativeThroughFocusMtfMapRequest, NativeThroughFocusMtfMapResponse>(
