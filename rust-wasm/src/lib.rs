@@ -5,6 +5,12 @@ use js_sys::{Float64Array, Function};
 use std::cell::RefCell;
 use std::f64::consts::PI;
 
+#[cfg(feature = "wasm-threads")]
+use rayon::prelude::*;
+
+#[cfg(feature = "wasm-threads")]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
 const EPS_R: f64 = 1e-10;
 const OPT_STATUS_OK: u32 = 0;
 const OPT_STATUS_INVALID_INPUT: u32 = 1;
@@ -11988,6 +11994,22 @@ pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<Js
         .and_then(|v| v.as_u64())
         .unwrap_or(121)
         .clamp(2, 2048) as usize;
+    let sampled_frequencies_lpmm = req
+        .get("sampleFrequenciesLpmm")
+        .and_then(|v| v.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_f64())
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .collect::<Vec<f64>>()
+        })
+        .unwrap_or_default();
+    let direct_eval_only = req
+        .get("directEvalOnly")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        && !sampled_frequencies_lpmm.is_empty();
 
     let dir_from_req = |name: &str, default_x: f64, default_y: f64| -> (f64, f64) {
         if let Some(obj) = req.get(name).and_then(|v| v.as_object()) {
@@ -12099,15 +12121,13 @@ pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<Js
     let pixel_step_x = (x_max - x_min) / (n.saturating_sub(1) as f64).max(1.0);
     let pixel_step_y = (y_max - y_min) / (n.saturating_sub(1) as f64).max(1.0);
 
-    let compute_curve = |dxn: f64, dyn_: f64| -> Vec<f64> {
-        let mut out = Vec::with_capacity(out_points);
-        for i in 0..out_points {
-            if i == 0 {
+    let compute_curve = |dxn: f64, dyn_: f64, frequencies: &[f64]| -> Vec<f64> {
+        let mut out = Vec::with_capacity(frequencies.len());
+        for f in frequencies.iter().copied() {
+            if f <= 1e-12 {
                 out.push(1.0);
                 continue;
             }
-            let t = i as f64 / (out_points.saturating_sub(1) as f64).max(1.0);
-            let f = axis_max_lpmm * t;
             let nu = f / cutoff_lpmm;
             if !nu.is_finite() || nu >= 1.0 {
                 out.push(0.0);
@@ -12152,20 +12172,30 @@ pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<Js
             let mtf = (sum_re.hypot(sum_im) / denom).clamp(0.0, 1.0);
             out.push(if mtf.is_finite() { mtf } else { 0.0 });
         }
-        if !out.is_empty() {
+        if frequencies.first().is_some_and(|frequency| *frequency <= 1e-12) {
             out[0] = 1.0;
         }
         out
     };
 
-    let mut frequency_axis = Vec::with_capacity(out_points);
-    for i in 0..out_points {
-        let t = i as f64 / (out_points.saturating_sub(1) as f64).max(1.0);
-        frequency_axis.push(axis_max_lpmm * t);
-    }
-
-    let mtf_tangential = compute_curve(tan_x, tan_y);
-    let mtf_sagittal = compute_curve(sag_x, sag_y);
+    let evaluation_frequencies = if direct_eval_only {
+        sampled_frequencies_lpmm
+            .iter()
+            .map(|frequency| frequency.min(cutoff_lpmm))
+            .collect::<Vec<f64>>()
+    } else {
+        (0..out_points)
+            .map(|i| {
+                let t = i as f64 / (out_points.saturating_sub(1) as f64).max(1.0);
+                axis_max_lpmm * t
+            })
+            .collect::<Vec<f64>>()
+    };
+    let evaluated_tangential = compute_curve(tan_x, tan_y, &evaluation_frequencies);
+    let evaluated_sagittal = compute_curve(sag_x, sag_y, &evaluation_frequencies);
+    let frequency_axis = if direct_eval_only { Vec::new() } else { evaluation_frequencies.clone() };
+    let mtf_tangential = if direct_eval_only { Vec::new() } else { evaluated_tangential.clone() };
+    let mtf_sagittal = if direct_eval_only { Vec::new() } else { evaluated_sagittal.clone() };
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     serde_json::json!({
@@ -12173,9 +12203,9 @@ pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<Js
         "frequencyAxis": frequency_axis,
         "mtfTangential": mtf_tangential,
         "mtfSagittal": mtf_sagittal,
-        "sampledFrequenciesLpmm": Value::Null,
-        "sampledMtfTangential": Value::Null,
-        "sampledMtfSagittal": Value::Null,
+        "sampledFrequenciesLpmm": if direct_eval_only { Value::from(evaluation_frequencies) } else { Value::Null },
+        "sampledMtfTangential": if direct_eval_only { Value::from(evaluated_tangential) } else { Value::Null },
+        "sampledMtfSagittal": if direct_eval_only { Value::from(evaluated_sagittal) } else { Value::Null },
         "nyquistLpmm": cutoff_lpmm,
         "message": "Computed via WASM Malacara MTF (run_native_mtf_malacara_from_opd_wasm_json)"
     })
@@ -12206,6 +12236,11 @@ fn run_native_opd_psf_mtf_value_with_rows(
         .or_else(|| req.get("compactResults"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let opd_only = req
+        .get("opdOnly")
+        .or_else(|| req.get("skipPsfMtf"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let mut opd_req = req
         .get("opdRequest")
@@ -12225,6 +12260,16 @@ fn run_native_opd_psf_mtf_value_with_rows(
         .or_else(|| opd_json.get("wavelengthUm").and_then(|v| v.as_f64()))
         .filter(|v| v.is_finite() && *v > 0.0)
         .unwrap_or(0.5876);
+
+    if opd_only {
+        return Ok(serde_json::json!({
+            "backend": "web-rust-wasm-opd-batch-opd-only",
+            "opd": opd_json,
+            "psf": Value::Null,
+            "mtf": Value::Null,
+            "message": "Computed via batched WASM OPD only",
+        }));
+    }
 
     let psf_req = serde_json::json!({
         "rawOpdGrid": opd_json.get("rawOpdGrid"),
@@ -12369,8 +12414,7 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
         None
     };
 
-    let mut results = Vec::<Value>::with_capacity(jobs.len());
-    for (job_index, job) in jobs.iter().enumerate() {
+    let compute_job = |(job_index, job): (usize, &Value)| -> Result<Value, String> {
         let job_overrides_optical_rows = job
             .get("opdRequest")
             .and_then(|opd| opd.get("opticalSystemRows"))
@@ -12433,15 +12477,31 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
             effective_job,
             if can_use_shared_rows { shared_normalized_rows.as_deref() } else { None },
             if can_use_shared_rows { shared_packed_meta.as_ref() } else { None },
-        )?;
+        ).map_err(|error| format!("{error:?}"))?;
         if let Some(obj) = job_result.as_object_mut() {
             obj.insert("jobIndex".to_string(), Value::from(job_index as u64));
             if let Some(meta) = job.get("meta") {
                 obj.insert("meta".to_string(), meta.clone());
             }
         }
-        results.push(job_result);
-    }
+        Ok(job_result)
+    };
+
+    #[cfg(feature = "wasm-threads")]
+    let results: Vec<Value> = jobs
+        .par_iter()
+        .enumerate()
+        .map(compute_job)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| JsValue::from_str(&error))?;
+
+    #[cfg(not(feature = "wasm-threads"))]
+    let results: Vec<Value> = jobs
+        .iter()
+        .enumerate()
+        .map(compute_job)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| JsValue::from_str(&error))?;
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     serde_json::json!({

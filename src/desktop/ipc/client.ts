@@ -2933,7 +2933,11 @@ export async function runMtfBatchViaWasm(
   request: any,
 ): Promise<any> {
   if (!isTauriRuntime()) {
-    const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+    const {
+      preloadRustRayTracingWasm,
+      ensureRustRayTracingWasmThreadPool,
+      getRustRayTracingWasmInitError,
+    } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const batchFn = (rust as any)?.run_native_opd_psf_mtf_batch_wasm_json;
     if (typeof batchFn !== "function") {
@@ -2944,14 +2948,147 @@ export async function runMtfBatchViaWasm(
       );
     }
 
-    const wasmOutRaw = batchFn(JSON.stringify(request));
+    // Thread-pool startup can take seconds in a browser module context. Do not
+    // delay the first batch call; opt into the slower initialization explicitly.
+    const enableWasmThreads = typeof globalThis !== "undefined"
+      && (globalThis as any).__COOPT_MTF_ENABLE_RAYON === true;
+    const wasmThreadsActive = enableWasmThreads
+      ? await ensureRustRayTracingWasmThreadPool(rust)
+      : false;
+
+    const preparedRequest = request && typeof request === "object"
+      ? {
+        ...request,
+        shared: request.shared && typeof request.shared === "object"
+          ? {
+            ...request.shared,
+            opdRequest: request.shared.opdRequest && typeof request.shared.opdRequest === "object"
+              ? { ...request.shared.opdRequest }
+              : request.shared.opdRequest,
+          }
+          : request.shared,
+        jobs: Array.isArray(request.jobs)
+          ? request.jobs.map((job: any) => ({
+            ...job,
+            opdRequest: job?.opdRequest && typeof job.opdRequest === "object"
+              ? { ...job.opdRequest }
+              : job?.opdRequest,
+          }))
+          : request.jobs,
+      }
+      : request;
+    const sharedOpdRequest = preparedRequest?.shared?.opdRequest;
+    if (sharedOpdRequest && typeof sharedOpdRequest === "object") {
+      const wavelengthUm = Number(sharedOpdRequest.wavelengthUm);
+      const opticalRows = Array.isArray(sharedOpdRequest.opticalSystemRows)
+        ? sharedOpdRequest.opticalSystemRows
+        : [];
+      if (opticalRows.length > 0) {
+        const enrichedRows = enrichRowsWithResolvedRindexForWasm(opticalRows, wavelengthUm);
+        sharedOpdRequest.opticalSystemRows = enrichedRows;
+        const objectRows = Array.isArray(sharedOpdRequest.objectRows) ? sharedOpdRequest.objectRows : [];
+        if (objectRows.length > 0) {
+          sharedOpdRequest.objectRows = await normalizeTransverseObjectRowsForImageHeight(
+            enrichedRows,
+            Array.isArray(sharedOpdRequest.sourceRows) ? sharedOpdRequest.sourceRows : [],
+            objectRows,
+            wavelengthUm,
+          );
+        }
+      }
+    }
+    for (const job of Array.isArray(preparedRequest?.jobs) ? preparedRequest.jobs : []) {
+      const jobOpdRequest = job?.opdRequest;
+      if (!jobOpdRequest || typeof jobOpdRequest !== "object") continue;
+      const wavelengthUm = Number(jobOpdRequest.wavelengthUm ?? sharedOpdRequest?.wavelengthUm);
+      if (Array.isArray(jobOpdRequest.opticalSystemRows) && jobOpdRequest.opticalSystemRows.length > 0) {
+        const enrichedRows = enrichRowsWithResolvedRindexForWasm(jobOpdRequest.opticalSystemRows, wavelengthUm);
+        jobOpdRequest.opticalSystemRows = enrichedRows;
+        if (Array.isArray(jobOpdRequest.objectRows) && jobOpdRequest.objectRows.length > 0) {
+          jobOpdRequest.objectRows = await normalizeTransverseObjectRowsForImageHeight(
+            enrichedRows,
+            Array.isArray(jobOpdRequest.sourceRows) ? jobOpdRequest.sourceRows : [],
+            jobOpdRequest.objectRows,
+            wavelengthUm,
+          );
+        }
+      }
+    }
+
+    const wasmOutRaw = batchFn(JSON.stringify(preparedRequest));
     const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
     if (!wasmOut || typeof wasmOut !== "object") {
       throw new Error("runMtfBatchViaWasm(web): Rust-WASM batch API returned invalid response");
     }
-    return wasmOut;
+    return wasmThreadsActive
+      ? { ...wasmOut, backend: "web-rust-wasm-opd-psf-mtf-rayon" }
+      : wasmOut;
   }
   return invokeCommand<any, any>("run_mtf_batch_wasm", request);
+}
+
+async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
+  const jobs = Array.isArray(request?.jobs) ? request.jobs : [];
+  if (jobs.length <= 1 || typeof Worker === "undefined") {
+    return runMtfBatchViaWasm(request);
+  }
+
+  if (
+    typeof crossOriginIsolated !== "undefined"
+    && crossOriginIsolated
+    && typeof SharedArrayBuffer === "function"
+  ) {
+    return runMtfBatchViaWasm(request);
+  }
+
+  const hardwareConcurrency = typeof navigator !== "undefined"
+    ? Number(navigator.hardwareConcurrency)
+    : 4;
+  const workerCount = Math.max(1, Math.min(8, jobs.length, Number.isFinite(hardwareConcurrency) ? hardwareConcurrency : 4));
+  const chunks: unknown[][] = Array.from({ length: workerCount }, () => []);
+  jobs.forEach((job: unknown, index: number) => {
+    chunks[index % workerCount].push(job);
+  });
+
+  const workers = chunks.map(() => new Worker(
+    new URL("./tfmtf-wasm-worker.ts", import.meta.url),
+    { type: "module" },
+  ));
+  try {
+    const responses = await Promise.all(chunks.map((chunk, index) => new Promise<any>((resolve, reject) => {
+      const requestId = `tfmtf-${Date.now()}-${index}`;
+      const worker = workers[index];
+      worker.onmessage = (event: MessageEvent<any>) => {
+        const message = event.data;
+        if (message?.requestId !== requestId) return;
+        if (message.ok !== true) {
+          reject(new Error(String(message.error || "TF-MTF WASM worker failed")));
+          return;
+        }
+        resolve(message.response);
+      };
+      worker.onerror = (event) => reject(new Error(String(event.message || "TF-MTF WASM worker error")));
+      worker.postMessage({
+        requestId,
+        request: { ...request, jobs: chunk },
+      });
+    })));
+
+    const results = responses.flatMap((response) => Array.isArray(response?.results) ? response.results : []);
+    if (results.length !== jobs.length) {
+      throw new Error(`TF-MTF WASM worker pool returned ${results.length}/${jobs.length} results`);
+    }
+    return {
+      backend: "web-rust-wasm-opd-psf-mtf-worker-pool",
+      results,
+      message: `Computed ${jobs.length} TF-MTF jobs across ${workerCount} WASM workers`,
+    };
+  } catch (error) {
+    console.warn("TF-MTF WASM worker pool failed; retrying on the main WASM instance", error);
+    return runMtfBatchViaWasm(request);
+  } finally {
+    workers.forEach((worker) => worker.terminate());
+  }
 }
 
 export async function runNativeMtfMap(
@@ -3002,6 +3139,8 @@ export async function runNativeMtfMap(
         pupilRange: Number((payload as any)?.pupilRange),
         maxFrequencyLpmm: Number(payload?.maxFrequencyLpmm),
         points: Number(payload?.points),
+        sampleFrequenciesLpmm: Array.isArray(payload?.sampleFrequenciesLpmm) ? payload.sampleFrequenciesLpmm : undefined,
+        directEvalOnly: payload?.directEvalOnly === true,
         tangentialDir: (payload as any)?.tangentialDir,
         sagittalDir: (payload as any)?.sagittalDir,
       });
@@ -3260,6 +3399,15 @@ export async function runNativeThroughFocusMtfMap(
     })();
 
     const series: Array<{ wavelengthUm: number; label: string; mtfTangential: number[]; mtfSagittal: number[] }> = [];
+    const { calculateImageSpaceDiffractionParams } = await import("../../../raytracing/core/ray-paraxial.ts");
+    const selectedObject = objectRows[objectIndex] || objectRows[0] || {};
+    const selectedX = Number((selectedObject as any)?.xHeightAngle ?? (selectedObject as any)?.xHeight ?? (selectedObject as any)?.x ?? 0) || 0;
+    const selectedY = Number((selectedObject as any)?.yHeightAngle ?? (selectedObject as any)?.yHeight ?? (selectedObject as any)?.y ?? 0) || 0;
+    const directionNorm = Math.hypot(selectedX, selectedY);
+    const tangentialDir = directionNorm > 1e-12
+      ? { x: selectedX / directionNorm, y: selectedY / directionNorm }
+      : { x: 1, y: 0 };
+    const sagittalDir = { x: -tangentialDir.y, y: tangentialDir.x };
 
     // Progress tracking helper
     const setProgress = (percent: number, message: string) => {
@@ -3286,6 +3434,12 @@ export async function runNativeThroughFocusMtfMap(
         jobs.push({
           opdRequest: {
             wavelengthUm: wl,
+            opticalSystemRows,
+            sourceRows,
+            objectRows,
+            objectIndex,
+            pupilSamplingMode: payload?.pupilSamplingMode,
+            opdDisplayMode,
           },
           defocusMm,
           wavelengthUm: wl,
@@ -3297,7 +3451,7 @@ export async function runNativeThroughFocusMtfMap(
           sampleFrequenciesLpmm: [targetFreqLpmm],
           directEvalOnly: true,
           points: 2,
-          slimResults: true,
+          slimResults: false,
           method: mtfMethod,
           meta: {
             wi,
@@ -3322,6 +3476,7 @@ export async function runNativeThroughFocusMtfMap(
           sourceRows,
           objectRows,
           objectIndex,
+          wavelengthUm: wavelengths.length > 0 ? wavelengths[0] : getPrimaryWavelengthUm(sourceRows, 0.5876),
           surfaceIndex: undefined,
           gridSize: samplingSize,
           pupilSamplingMode: payload?.pupilSamplingMode,
@@ -3358,7 +3513,8 @@ export async function runNativeThroughFocusMtfMap(
       const sagVec: number[] = [];
 
       for (let si = 0; si < xAxis.length; si++) {
-        const mtfResp = mtfMatrix[wi][si]?.mtf || mtfMatrix[wi][si];
+        const result = mtfMatrix[wi][si];
+        const mtfResp = result?.mtf || result;
         
         if (!mtfResp) {
           // Fallback for missing result
@@ -3367,9 +3523,48 @@ export async function runNativeThroughFocusMtfMap(
           continue;
         }
 
-        // Extract MTF value at targetFreqLpmm from batch result
-        const tan = interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfTangential || [], targetFreqLpmm);
-        const sag = interpolateAxisValue(mtfResp.frequencyAxis || [], mtfResp.mtfSagittal || [], targetFreqLpmm);
+        let tan = Number.NaN;
+        let sag = Number.NaN;
+        const opd = result?.opd || {};
+        const displayOpdGrid = Array.isArray(opd.displayOpdGrid) ? opd.displayOpdGrid : opd.rawOpdGrid;
+        if (Array.isArray(displayOpdGrid) && displayOpdGrid.length > 1) {
+          const diffraction = calculateImageSpaceDiffractionParams(opticalSystemRows, wl);
+          const fNumber = Number(diffraction?.fNumberWorking);
+          const toMicronGrid = (grid: any) => Array.isArray(grid)
+            ? grid.map((row: any) => Array.isArray(row)
+              ? row.map((value: any) => Number.isFinite(Number(value)) ? Number(value) * wl : null)
+              : row)
+            : [];
+          const nativeMtf = await runNativeMtfMap({
+            method: "malacara-wasm-required",
+            displayOpdGrid: toMicronGrid(displayOpdGrid),
+            rawOpdGrid: toMicronGrid(Array.isArray(opd.rawOpdGrid) ? opd.rawOpdGrid : displayOpdGrid),
+            amplitudeGrid: displayOpdGrid.map((row: any[]) => row.map((value: any) => Number.isFinite(Number(value)) ? 1 : 0)),
+            wavelengthUm: wl,
+            fNumber,
+            pupilRange: 1,
+            maxFrequencyLpmm: targetFreqLpmm,
+            points: 2,
+            sampleFrequenciesLpmm: [targetFreqLpmm],
+            directEvalOnly: true,
+            tangentialDir,
+            sagittalDir,
+          } as any);
+          const sampledTan = Array.isArray(nativeMtf.sampledMtfTangential) ? Number(nativeMtf.sampledMtfTangential[0]) : Number.NaN;
+          const sampledSag = Array.isArray(nativeMtf.sampledMtfSagittal) ? Number(nativeMtf.sampledMtfSagittal[0]) : Number.NaN;
+          tan = Number.isFinite(sampledTan)
+            ? sampledTan
+            : interpolateAxisValue(nativeMtf.frequencyAxis || [], nativeMtf.mtfTangential || [], targetFreqLpmm);
+          sag = Number.isFinite(sampledSag)
+            ? sampledSag
+            : interpolateAxisValue(nativeMtf.frequencyAxis || [], nativeMtf.mtfSagittal || [], targetFreqLpmm);
+        }
+        if (!Number.isFinite(tan) || !Number.isFinite(sag)) {
+          const sampledTan = Array.isArray(mtfResp?.sampledMtfTangential) ? Number(mtfResp.sampledMtfTangential[0]) : Number(mtfResp?.targetMtfTangential);
+          const sampledSag = Array.isArray(mtfResp?.sampledMtfSagittal) ? Number(mtfResp.sampledMtfSagittal[0]) : Number(mtfResp?.targetMtfSagittal);
+          tan = Number.isFinite(sampledTan) ? sampledTan : interpolateAxisValue(mtfResp?.frequencyAxis || [], mtfResp?.mtfTangential || [], targetFreqLpmm);
+          sag = Number.isFinite(sampledSag) ? sampledSag : interpolateAxisValue(mtfResp?.frequencyAxis || [], mtfResp?.mtfSagittal || [], targetFreqLpmm);
+        }
         tanVec.push(tan);
         sagVec.push(sag);
       }

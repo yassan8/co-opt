@@ -694,6 +694,13 @@ async function runPortableThroughFocusMtfForPopup(payload: {
                 uniqueWavelengths.push(value);
             }
         }
+        if (uniqueWavelengths.length > 1) {
+            return await runDesktopNativeThroughFocusMtfForPopup({
+                ...payload,
+                wavelengths: uniqueWavelengths,
+                method: 'malacara-wasm-required',
+            });
+        }
         const wavelengthMicrons: number | 'all' = uniqueWavelengths.length <= 1
             ? (uniqueWavelengths[0] ?? 0.5876)
             : 'all';

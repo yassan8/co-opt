@@ -3,7 +3,7 @@ import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/dat
 import { calculateImageSpaceDiffractionParams } from '../raytracing/core/ray-paraxial.ts';
 import { ensureMtfWasmReady, setRayTracingWasmStrict, isRayTracingWasmStrict } from '../core/wasm-service.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
-import { runNativeMtfMap } from '../src/desktop/ipc/client.ts';
+import { runNativeMtfMap, runNativeOpdMap, runMtfBatchViaWasm } from '../src/desktop/ipc/client.ts';
 import { convertImageHeightToEffectiveObject } from '../optical/ray-renderer.ts';
 import { TFMTFWorkerPool, getGlobalTFMTFWorkerPool } from './tfmtf-worker-pool.ts';
 import { extractPSFGridFromCalculatorResult, validatePSFGrid, extractPSFMetadata } from './psf-serialization.ts';
@@ -400,6 +400,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     // Optical system and objects (use imported functions)
     const baseOpticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
     const objects = getObjectRows(window.tableObject);
+    const sourceRows = getSourceRows(window.tableSource);
     const hasOverride = !!(objectOverride && typeof objectOverride === 'object');
     if (!hasOverride) {
         if (!objects || objects.length === 0) {
@@ -889,6 +890,56 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         const generateWavefrontMapForMode = async (mode, customFieldSetting = fieldSetting) => {
             const allowWavefrontCache = (!objectOverride) && Math.abs(Number(defocusShiftMm || 0)) < 1e-12;
             return await withForcedInfinitePupilMode(mode, async () => {
+                if (!isTauriRuntime()) {
+                    try {
+                        ensureConsoleLog(`🚀 [MTF] Using native Rust/WASM OPD map for ${(wlLocal * 1000).toFixed(1)}nm`);
+                        const nativeResponse = await runNativeOpdMap({
+                            opticalSystemRows,
+                            sourceRows,
+                            objectRows: objects,
+                            objectIndex: objIndex,
+                            gridSize: samplingSizeForPSF,
+                            wavelengthUm: wlLocal,
+                            pupilSamplingMode: mode || undefined,
+                            opdDisplayMode: effectiveOpdDisplayMode,
+                        });
+                        const rawGrid = Array.isArray(nativeResponse?.rawOpdGrid) ? nativeResponse.rawOpdGrid : [];
+                        const displayGrid = Array.isArray(nativeResponse?.displayOpdGrid) ? nativeResponse.displayOpdGrid : rawGrid;
+                        const grid = effectiveOpdDisplayMode === 'raw' ? rawGrid : displayGrid;
+                        const nativeGridSize = Math.max(1, Math.min(samplingSizeForPSF, grid.length));
+                        const pupilCoordinates = [];
+                        const opds = [];
+                        for (let iy = 0; iy < nativeGridSize; iy++) {
+                            const row = Array.isArray(grid[iy]) ? grid[iy] : [];
+                            for (let ix = 0; ix < nativeGridSize; ix++) {
+                                const waves = Number(row[ix]);
+                                if (!Number.isFinite(waves)) continue;
+                                pupilCoordinates.push({
+                                    ix,
+                                    iy,
+                                    x: (ix / Math.max(1, nativeGridSize - 1)) * 2 - 1,
+                                    y: (iy / Math.max(1, nativeGridSize - 1)) * 2 - 1,
+                                });
+                                opds.push(waves * wlLocal);
+                            }
+                        }
+                        if (pupilCoordinates.length > 0) {
+                            const result = {
+                                gridSize: nativeGridSize,
+                                pupilRange: 1,
+                                pupilCoordinates,
+                                opds,
+                                display: { opds },
+                                opdGrid: grid,
+                            };
+                            ensureConsoleLog(`✅ [MTF] Native Rust/WASM OPD map: ${nativeGridSize}x${nativeGridSize}, valid=${pupilCoordinates.length}`);
+                            return result;
+                        }
+                        throw new Error('Native Rust/WASM OPD map returned no finite samples');
+                    } catch (error) {
+                        ensureConsoleError('⚠️ [MTF] Native Rust/WASM OPD map failed; falling back to Wavefront analyzer', error);
+                    }
+                }
                 ensureConsoleLog(`🔍 [Wavefront] Calling generateWavefrontMap with customFieldSetting:`, customFieldSetting);
                 const result = await analyzer.generateWavefrontMap(customFieldSetting, samplingSizeForPSF, 'circular', {
                     recordRays: false,
@@ -1879,24 +1930,186 @@ async function showThroughFocusMTFDiagram({
     });
 
     const traceMap = new Map();
-    
-    reportProgress(5, 'Initializing worker pool...', undefined, undefined);
-    
-    // Initialize worker pool for parallel MTF extraction
-    let workerPool: TFMTFWorkerPool | null = null;
+    const psfResults: Array<{ shift: number; psfGrid: Float64Array; rows: number; cols: number; metadata: any; mfResult: any }> = [];
     let useWorkerPool = true;
     
-    try {
-        workerPool = await getGlobalTFMTFWorkerPool(4);
-    } catch (error) {
-        console.warn('⚠️ [TFMTF] Failed to initialize worker pool, falling back to sequential processing:', error);
-        useWorkerPool = false;
+    reportProgress(5, 'Initializing native TF-MTF batch...', undefined, undefined);
+
+    // The native batch path keeps the optical rows shared and sends all
+    // defocus jobs through one WASM boundary. This is the cache-cold fast path.
+    if (!isTauriRuntime()) {
+        try {
+            const opticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
+            const sourceRows = getSourceRows(window.tableSource);
+            const objectRows = getObjectRows(window.tableObject);
+            const primarySource = sourceRows.find((row: any) => row?.primary === true || row?.isPrimary === true || String(row?.primary ?? '').toLowerCase().includes('primary'));
+            const primaryWavelength = Number(primarySource?.wavelength);
+            const wavelengthUm = Number.isFinite(Number(wavelengthMicrons)) && Number(wavelengthMicrons) > 0
+                ? Number(wavelengthMicrons)
+                : (Number.isFinite(primaryWavelength) && primaryWavelength > 0 ? primaryWavelength : 0.5876);
+            const selectedObject = objectRows[Number.isFinite(Number(objectIndex)) ? Math.max(0, Math.floor(Number(objectIndex))) : 0] || objectRows[0] || {};
+            const forcedPupilMode = (() => {
+                try {
+                    const value = String(globalThis?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? localStorage.getItem('coopt.forceInfinitePupilMode') ?? '').toLowerCase();
+                    return value === 'stop' || value === 'entrance' ? value : '';
+                } catch (_) { return ''; }
+            })();
+            const objectType = String(selectedObject?.position ?? selectedObject?.object ?? '').toLowerCase();
+            const pupilSamplingMode = forcedPupilMode || (objectType.includes('angle') || objectType === 'point' ? 'entrance' : 'stop');
+            const { derivePupilAndFocalLengthMmFromParaxial } = await import('./spot-diagram.js');
+            const scale = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthUm, false);
+            const pupilDiameterMm = Number(scale?.pupilDiameterMm);
+            const focalLengthMm = Number(scale?.focalLengthMm);
+            const imageSpaceDiffraction = calculateImageSpaceDiffractionParams(opticalSystemRows, wavelengthUm);
+            const fNumber = Number(imageSpaceDiffraction?.fNumberWorking);
+            const selectedX = Number(selectedObject?.xHeightAngle ?? selectedObject?.xHeight ?? selectedObject?.x ?? 0) || 0;
+            const selectedY = Number(selectedObject?.yHeightAngle ?? selectedObject?.yHeight ?? selectedObject?.y ?? 0) || 0;
+            const directionNorm = Math.hypot(selectedX, selectedY);
+            const tangentialDir = directionNorm > 1e-12
+                ? { x: selectedX / directionNorm, y: selectedY / directionNorm }
+                : { x: 1, y: 0 };
+            const sagittalDir = { x: -tangentialDir.y, y: tangentialDir.x };
+            const pixelSizeUm = Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0
+                && Number.isFinite(focalLengthMm) && focalLengthMm > 0
+                ? wavelengthUm * focalLengthMm / pupilDiameterMm
+                : 1.0;
+            const batchRequest = {
+                shared: {
+                    opdRequest: {
+                        opticalSystemRows,
+                        sourceRows,
+                        objectRows,
+                        objectIndex: Number.isFinite(Number(objectIndex)) ? Math.max(0, Math.floor(Number(objectIndex))) : 0,
+                        wavelengthUm,
+                        gridSize: sampling,
+                        pupilSamplingMode,
+                        opdDisplayMode: opdDisplayMode || 'pistonTiltRemoved',
+                    },
+                    pixelSizeUm,
+                    maxFrequencyLpmm: targetFreq,
+                    targetFrequencyLpmm: targetFreq,
+                    points: 2,
+                    sampleFrequenciesLpmm: [targetFreq],
+                    zeroPadTo: Number.isFinite(Number(zeroPadTo)) && Number(zeroPadTo) > 0 ? Math.floor(Number(zeroPadTo)) : sampling,
+                    directEvalOnly: true,
+                    slimResults: false,
+                    opdOnly: true,
+                    method: 'malacara-wasm-required',
+                },
+                jobs: defocusValues.map((defocusMm, index) => ({
+                    defocusMm,
+                    meta: { jobIndex: index, defocusMm },
+                })),
+            };
+            reportProgress(10, `Computing native batch: ${defocusValues.length} defocus points...`, undefined, undefined);
+            const batchResponse = await runMtfBatchViaWasm(batchRequest);
+            const batchResults = Array.isArray(batchResponse?.results) ? batchResponse.results : [];
+            const hasValidBatchOpd = batchResults.every((result: any) => {
+                const opd = result?.opd || {};
+                return Array.isArray(opd.displayOpdGrid) || Array.isArray(opd.rawOpdGrid);
+            });
+            if (batchResults.length !== defocusValues.length || !hasValidBatchOpd) {
+                throw new Error(`Native TF-MTF batch returned ${batchResults.length}/${defocusValues.length} results`);
+            }
+            const titleNm = (wavelengthUm * 1000).toFixed(1);
+            for (let index = 0; index < batchResults.length; index++) {
+                const result = batchResults[index];
+                const opd = result?.opd || {};
+                const displayOpdGrid = Array.isArray(opd.displayOpdGrid) ? opd.displayOpdGrid : opd.rawOpdGrid;
+                const rawOpdGrid = Array.isArray(opd.rawOpdGrid) ? opd.rawOpdGrid : displayOpdGrid;
+                const toMicronGrid = (grid: any) => Array.isArray(grid)
+                    ? grid.map((row: any) => Array.isArray(row)
+                        ? row.map((value: any) => Number.isFinite(Number(value)) ? Number(value) * wavelengthUm : null)
+                        : row)
+                    : [];
+                const nativeMtf = await runNativeMtfMap({
+                    method: 'malacara-wasm-required',
+                    displayOpdGrid: toMicronGrid(displayOpdGrid),
+                    rawOpdGrid: toMicronGrid(rawOpdGrid),
+                    amplitudeGrid: Array.from({ length: sampling }, (_, y) =>
+                        Array.from({ length: sampling }, (_, x) => Number.isFinite(Number(displayOpdGrid?.[y]?.[x])) ? 1 : 0)),
+                    wavelengthUm,
+                    fNumber,
+                    pupilRange: 1,
+                    maxFrequencyLpmm: targetFreq,
+                    points: 2,
+                    sampleFrequenciesLpmm: [targetFreq],
+                    directEvalOnly: true,
+                    tangentialDir,
+                    sagittalDir,
+                } as any);
+                const sampledTan = Array.isArray(nativeMtf?.sampledMtfTangential) ? Number(nativeMtf.sampledMtfTangential[0]) : Number.NaN;
+                const sampledSag = Array.isArray(nativeMtf?.sampledMtfSagittal) ? Number(nativeMtf.sampledMtfSagittal[0]) : Number.NaN;
+                const tanCurve = Array.isArray(nativeMtf?.mtfTangential) ? nativeMtf.mtfTangential : [];
+                const sagCurve = Array.isArray(nativeMtf?.mtfSagittal) ? nativeMtf.mtfSagittal : [];
+                const frequencyAxis = Array.isArray(nativeMtf?.frequencyAxis)
+                    ? nativeMtf.frequencyAxis
+                    : Array.isArray(nativeMtf?.frequencies)
+                        ? nativeMtf.frequencies
+                        : [];
+                const sampleAtFrequency = (curve: any[]) => {
+                    if (frequencyAxis.length === 0 || curve.length !== frequencyAxis.length) return Number.NaN;
+                    if (targetFreq <= Number(frequencyAxis[0])) return Number(curve[0]);
+                    for (let i = 1; i < frequencyAxis.length; i++) {
+                        const leftFreq = Number(frequencyAxis[i - 1]);
+                        const rightFreq = Number(frequencyAxis[i]);
+                        if (!Number.isFinite(leftFreq) || !Number.isFinite(rightFreq) || rightFreq <= leftFreq) continue;
+                        if (targetFreq <= rightFreq) {
+                            const leftValue = Number(curve[i - 1]);
+                            const rightValue = Number(curve[i]);
+                            if (!Number.isFinite(leftValue) || !Number.isFinite(rightValue)) return Number.NaN;
+                            const ratio = (targetFreq - leftFreq) / (rightFreq - leftFreq);
+                            return leftValue + ratio * (rightValue - leftValue);
+                        }
+                    }
+                    return Number(curve[curve.length - 1]);
+                };
+                const tan = Number.isFinite(sampledTan) ? sampledTan : sampleAtFrequency(tanCurve);
+                const sag = Number.isFinite(sampledSag) ? sampledSag : sampleAtFrequency(sagCurve);
+                psfResults.push({
+                    shift: defocusValues[index],
+                    psfGrid: new Float64Array(0),
+                    rows: 0,
+                    cols: 0,
+                    metadata: { wavelengthMicrons: wavelengthUm, targetFreq },
+                    mfResult: {
+                        traces: [
+                            { x: [targetFreq], y: [Number.isFinite(tan) ? tan : null], name: `Tangential (${titleNm}nm)`, mode: 'lines', line: { width: 2 } },
+                            { x: [targetFreq], y: [Number.isFinite(sag) ? sag : null], name: `Sagittal (${titleNm}nm)`, mode: 'lines', line: { width: 2, dash: 'dot' } },
+                        ],
+                    },
+                });
+                reportProgress(10 + ((index + 1) / batchResults.length) * 50, `Native batch ${index + 1}/${batchResults.length}`, undefined, undefined);
+            }
+            ensureConsoleLog(`✅ [TFMTF] Native OPD-only batch completed: ${batchResults.length} jobs, backend=${String(batchResponse?.backend || '')}`);
+            useWorkerPool = false;
+        } catch (error) {
+            ensureConsoleError('⚠️ [TFMTF] Native batch failed; falling back to per-defocus path', error);
+            psfResults.length = 0;
+        }
+    }
+
+    if (psfResults.length === defocusValues.length) {
+        reportProgress(60, 'Extracting MTF values from native batch...', undefined, undefined);
+    }
+    
+        // Legacy fallback state, used only when the native batch is unavailable.
+        let workerPool: TFMTFWorkerPool | null = null;
+        useWorkerPool = psfResults.length !== defocusValues.length;
+
+        if (useWorkerPool) {
+            try {
+                workerPool = await getGlobalTFMTFWorkerPool(4);
+            } catch (error) {
+                console.warn('⚠️ [TFMTF] Failed to initialize worker pool, falling back to sequential processing:', error);
+                useWorkerPool = false;
+            }
     }
 
     // Collect PSF data from all defocus values using parallel batch processing
+    if (psfResults.length !== defocusValues.length) {
     reportProgress(10, 'Computing PSF for all defocus points...', undefined, undefined);
     
-    const psfResults: Array<{ shift: number; psfGrid: Float64Array; rows: number; cols: number; metadata: any; mfResult: any }> = [];
     const defocusBatchSizeFromGlobal = (typeof globalThis !== 'undefined')
         ? Number((globalThis as any).__COOPT_TFMTF_PARALLEL_BATCH_SIZE)
         : Number.NaN;
@@ -2052,9 +2265,10 @@ async function showThroughFocusMTFDiagram({
 
         ensureConsoleLog(`✅ [TFMTF] Batch ${batchNum}/${batchTotal} completed: ${indexedResults.length}/${batch.length} items successful`);
     }
+    }
 
     reportProgress(60, 'Extracting MTF values from PSF...', undefined, undefined);
-    ensureConsoleLog(`✅ [TFMTF] All PSF calculations completed. Results collected: ${psfResults.length}/${defocusValues.length}`);
+    ensureConsoleLog(`✅ [TFMTF] ${useWorkerPool ? 'All PSF calculations completed' : 'All sampled MTF values completed'}. Results collected: ${psfResults.length}/${defocusValues.length}`);
 
     // レイアウト定義（プロット初期化用）
     const titleWl = (typeof wavelengthMicrons === 'string' && String(wavelengthMicrons).toLowerCase() === 'all')
