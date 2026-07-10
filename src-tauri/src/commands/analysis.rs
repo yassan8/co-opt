@@ -1536,8 +1536,15 @@ fn get_refractive_index(row: &Value) -> f64 {
         return 1.0;
     };
 
+    if let Some(v) = parse_finite_numeric(obj.get("__cooptResolvedRindex")) {
+        if v > 0.0 {
+            return v;
+        }
+    }
+
     if let Some(v) = parse_finite_numeric(
-        obj.get("__cooptActualRindex")
+        obj.get("__cooptGapRindex")
+            .or_else(|| obj.get("__cooptActualRindex"))
             .or_else(|| obj.get("rindex"))
             .or_else(|| obj.get("ref index"))
             .or_else(|| obj.get("refIndex"))
@@ -2585,6 +2592,12 @@ fn get_refractive_index_for_wavelength(row: &Value, wavelength_um: f64) -> f64 {
         return 1.0;
     };
 
+    if let Some(v) = parse_finite_numeric(obj.get("__cooptResolvedRindex")) {
+        if v > 0.0 {
+            return v;
+        }
+    }
+
     if let Some(sell) = obj
         .get("sellmeier")
         .or_else(|| obj.get("__cooptSellmeier"))
@@ -2621,7 +2634,8 @@ fn get_refractive_index_for_wavelength(row: &Value, wavelength_um: f64) -> f64 {
     }
 
     let nd = parse_finite_numeric(
-        obj.get("__cooptActualRindex")
+        obj.get("__cooptGapRindex")
+            .or_else(|| obj.get("__cooptActualRindex"))
             .or_else(|| obj.get("rindex"))
             .or_else(|| obj.get("ref index"))
             .or_else(|| obj.get("refIndex"))
@@ -2629,7 +2643,8 @@ fn get_refractive_index_for_wavelength(row: &Value, wavelength_um: f64) -> f64 {
     );
 
     let vd = parse_finite_numeric(
-        obj.get("__cooptActualAbbe")
+        obj.get("__cooptGapAbbe")
+            .or_else(|| obj.get("__cooptActualAbbe"))
             .or_else(|| obj.get("abbe"))
             .or_else(|| obj.get("Abbe"))
             .or_else(|| obj.get("vd"))

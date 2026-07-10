@@ -735,6 +735,139 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     });
   }, []);
 
+  /**
+   * Build WASM batch jobs for MTF calculation.
+   * Includes both normal MTF jobs and ideal diffraction (zero OPD) jobs.
+   * Supports shared OPD request optimization.
+   */
+  const buildMtfWasmBatchRequest = useCallback((
+    wavelengths: number[],
+    params: {
+      opticalSystemRows: any[];
+      objectIndex: number;
+      gridSize: number;
+      opdDisplayMode: string;
+      maxFrequencyLpmm?: number;
+      resolvedPlotPoints: number;
+      sampleFrequenciesLpmm: number[];
+      requestedFftSize: number;
+      mtfMethod: string;
+      showDiffLimit: boolean;
+    }
+  ) => {
+    const jobs: any[] = [];
+    let jobIndexCounter = 0;
+
+    // Phase 1: Build normal MTF jobs for each wavelength
+    for (let wli = 0; wli < wavelengths.length; wli++) {
+      const wl = wavelengths[wli];
+      jobs.push({
+        opdRequest: {
+          opticalSystemRows: params.opticalSystemRows,
+          wavelengthUm: wl,
+          displayMode: params.opdDisplayMode,
+        },
+        psfRequest: {
+          wavelengthUm: wl,
+        },
+        mtfRequest: {
+          wavelengthUm: wl,
+          maxFrequencyLpmm: params.maxFrequencyLpmm,
+          points: params.resolvedPlotPoints,
+          sampleFrequenciesLpmm: params.sampleFrequenciesLpmm,
+          method: params.mtfMethod,
+        },
+        meta: {
+          type: 'normal',
+          wli: wli,
+          wavelengthUm: wl,
+          jobIndex: jobIndexCounter,
+        },
+      });
+      jobIndexCounter++;
+    }
+
+    // Phase 2: Build ideal diffraction jobs (zero OPD) if enabled
+    if (params.showDiffLimit) {
+      for (let wli = 0; wli < wavelengths.length; wli++) {
+        const wl = wavelengths[wli];
+        jobs.push({
+          opdRequest: {
+            opticalSystemRows: params.opticalSystemRows,
+            wavelengthUm: wl,
+            displayMode: 'zero', // Signal zero OPD for ideal calculation
+          },
+          psfRequest: {
+            wavelengthUm: wl,
+          },
+          mtfRequest: {
+            wavelengthUm: wl,
+            maxFrequencyLpmm: params.maxFrequencyLpmm,
+            points: params.resolvedPlotPoints,
+            sampleFrequenciesLpmm: params.sampleFrequenciesLpmm,
+            method: params.mtfMethod,
+          },
+          meta: {
+            type: 'ideal',
+            wli: wli,
+            wavelengthUm: wl,
+            jobIndex: jobIndexCounter,
+          },
+        });
+        jobIndexCounter++;
+      }
+    }
+
+    // Phase 3: Build shared OPD request (base wavelength)
+    const baseWl = wavelengths[0] || 0.5876;
+    const shared = {
+      opdRequest: {
+        opticalSystemRows: params.opticalSystemRows,
+        wavelengthUm: baseWl,
+        displayMode: params.opdDisplayMode,
+      },
+    };
+
+    return { jobs, shared };
+  }, []);
+
+  /**
+   * Parse WASM batch MTF results, separating normal and ideal curves.
+   * Returns { normal: [...], ideal: [...] } where each contains per-wavelength MTF data.
+   */
+  const parseWasmBatchMtfResults = useCallback((results: any[], wavelengths: number[]) => {
+    const normal: any[] = Array(wavelengths.length).fill(null);
+    const ideal: any[] = Array(wavelengths.length).fill(null);
+
+    for (const result of results) {
+      const meta = result?.meta || {};
+      const type = meta.type || 'normal';
+      const wli = meta.wli;
+
+      if (!Number.isFinite(wli) || wli < 0 || wli >= wavelengths.length) continue;
+
+      const freq: number[] = Array.isArray(result?.sampledFrequenciesLpmm)
+        ? result.sampledFrequenciesLpmm
+        : (Array.isArray(result?.frequencyAxis) ? result.frequencyAxis : []);
+      const tan: number[] = Array.isArray(result?.sampledMtfTangential)
+        ? result.sampledMtfTangential
+        : (Array.isArray(result?.mtfTangential) ? result.mtfTangential : []);
+      const sag: number[] = Array.isArray(result?.sampledMtfSagittal)
+        ? result.sampledMtfSagittal
+        : (Array.isArray(result?.mtfSagittal) ? result.mtfSagittal : []);
+
+      const mtfData = { freq, tan, sag };
+
+      if (type === 'ideal') {
+        ideal[wli] = mtfData;
+      } else {
+        normal[wli] = mtfData;
+      }
+    }
+
+    return { normal, ideal };
+  }, []);
+
   // ─── Compute MTF ───────────────────────────────────────────────────────────
   const handleComputeMtf = useCallback(async () => {
     const container = chartRef.current;
