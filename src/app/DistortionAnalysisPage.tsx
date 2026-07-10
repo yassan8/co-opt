@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Plotly from 'plotly.js-dist-min';
 import { plotDistortionPercent, plotGridDistortion } from '../../evaluation/aberrations/distortion-plot.ts';
 import { runNativeDistortion, runNativeGridDistortion } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
@@ -20,21 +21,9 @@ function formatRuntimeInfo(runtimeLabel: 'tauri' | 'web', backendLabel?: string)
   return base;
 }
 
-let plotlyLoadPromise: Promise<void> | null = null;
 function loadPlotly(): Promise<void> {
-  if ((window as any).Plotly) return Promise.resolve();
-  if (plotlyLoadPromise) return plotlyLoadPromise;
-  plotlyLoadPromise = new Promise<void>((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
-    s.onload = () => resolve();
-    s.onerror = () => {
-      plotlyLoadPromise = null;
-      reject(new Error('Failed to load Plotly from CDN'));
-    };
-    document.head.appendChild(s);
-  });
-  return plotlyLoadPromise;
+  if (!(window as any).Plotly) (window as any).Plotly = Plotly;
+  return Promise.resolve();
 }
 
 function getPrimaryWavelength(): number {

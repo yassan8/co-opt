@@ -289,9 +289,29 @@ export class WavefrontPlotter {
     constructor(containerElementIdOrElement) {
         this.containerElementIdOrElement = containerElementIdOrElement;
         this.plotlyConfig = {
-            displayModeBar: true,
-            modeBarButtonsToRemove: ['pan2d', 'lasso2d'],
-            responsive: true
+            responsive: true,
+            displayModeBar: 'hover',
+            modeBarButtons: [[
+                'toImage',
+                'zoom2d',
+                'pan2d',
+                'zoomIn2d',
+                'zoomOut2d',
+                'autoScale2d',
+                'resetScale2d'
+            ]]
+        };
+        this.plotly3dConfig = {
+            ...this.plotlyConfig,
+            modeBarButtons: [[
+                'toImage',
+                'zoom3d',
+                'pan3d',
+                'orbitRotation',
+                'tableRotation',
+                'resetCameraDefault3d',
+                'resetCameraLastSave3d'
+            ]]
         };
     }
 
@@ -1418,7 +1438,7 @@ export class WavefrontPlotter {
                 connectgaps: false,
                 colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
                 showscale: true,
-                colorbar: { title: 'OPD [λ]' },
+                colorbar: { title: 'OPD [λ]', x: 1.02, len: 0.9, thickness: 16, outlinewidth: 1 },
             };
 
             // プロット設定
@@ -1443,7 +1463,7 @@ export class WavefrontPlotter {
                         eye: { x: 1.5, y: 1.5, z: 1.5 }
                     }
                 },
-                margin: { l: 0, r: 0, b: 0, t: 40 },
+                margin: { l: 0, r: 110, b: 0, t: 40 },
                 annotations: []
             };
 
@@ -1479,7 +1499,7 @@ export class WavefrontPlotter {
 
                 emitProgress(96, 'Rendering OPD surface...');
                 layout.autosize = true;
-                await plotly.newPlot(container, [surfaceData], layout, this.plotlyConfig);
+                await plotly.newPlot(container, [surfaceData], layout, this.plotly3dConfig);
                 emitProgress(100, 'Completed');
                 console.log('✅ OPD 3Dサーフェス描画完了');
             } catch (error) {
@@ -1496,7 +1516,7 @@ export class WavefrontPlotter {
                 const plotly = this.resolvePlotly(container);
                 if (container && plotly) {
                     layout.autosize = true;
-                    await plotly.newPlot(container, [fallbackData], layout, this.plotlyConfig);
+                    await plotly.newPlot(container, [fallbackData], layout, this.plotly3dConfig);
                 }
                 console.log('⚠️ フォールバックデータで描画しました');
             }
@@ -1607,7 +1627,7 @@ export class WavefrontPlotter {
                         z: dense.z,
                         colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
                         showscale: true,
-                        colorbar: { title: 'Wλ [波長]' },
+                        colorbar: { title: 'Wλ [波長]', x: 1.02, len: 0.9, thickness: 16, outlinewidth: 1 },
                         flatshading: false,
                         lighting: {
                             ambient: 0.85,
@@ -1646,7 +1666,7 @@ export class WavefrontPlotter {
                         eye: { x: 1.5, y: 1.5, z: 1.5 }
                     }
                 },
-                margin: { l: 0, r: 0, b: 0, t: 40 }
+                margin: { l: 0, r: 110, b: 0, t: 40 }
             };
 
             try {
@@ -1672,7 +1692,7 @@ export class WavefrontPlotter {
 
                 layout.autosize = true;
                 if (profileEnabled) console.time('⏱️ plotWavefrontSurface.Plotly.newPlot');
-                await plotly.newPlot(container, [surfaceData], layout, this.plotlyConfig);
+                await plotly.newPlot(container, [surfaceData], layout, this.plotly3dConfig);
                 if (profileEnabled) console.timeEnd('⏱️ plotWavefrontSurface.Plotly.newPlot');
                 console.log('✅ 波面収差 3Dサーフェス描画完了');
             } catch (error) {
@@ -1689,7 +1709,7 @@ export class WavefrontPlotter {
                 const plotly = this.resolvePlotly(container);
                 if (container && plotly) {
                     layout.autosize = true;
-                    await plotly.newPlot(container, [fallbackData], layout, this.plotlyConfig);
+                    await plotly.newPlot(container, [fallbackData], layout, this.plotly3dConfig);
                 }
                 console.log('⚠️ フォールバックデータで描画しました');
             }
@@ -1761,7 +1781,8 @@ export class WavefrontPlotter {
                 type: 'heatmap',
                 zsmooth: 'best',
                 colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
-                colorbar: { title: 'OPD [λ]' },
+                showscale: true,
+                colorbar: { title: 'OPD [λ]', x: 1.02, len: 0.9, thickness: 16, outlinewidth: 1 },
             };
             
             // 🆕 実際のデータ範囲に基づいて軸範囲を設定

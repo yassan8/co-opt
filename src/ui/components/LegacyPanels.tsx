@@ -3632,6 +3632,10 @@ export default function LegacyPanels() {
           <div className="psf-section" style={{ display: "none" }}>
             <h2>Point Spread Function</h2>
             <div className="psf-controls">
+              <label htmlFor="psf-wavelength-select">Wavelength:</label>
+              <select id="psf-wavelength-select" defaultValue="all">
+                <option value="all">All</option>
+              </select>
               <label htmlFor="psf-object-select">Object:</label>
               <select id="psf-object-select">
                 <option value="0">Object 1</option>

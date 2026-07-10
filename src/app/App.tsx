@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Plotly from 'plotly.js-dist-min';
 import * as THREE from 'three';
 import { DistortionAnalysisPage } from './DistortionAnalysisPage';
 import { MtfAnalysisPage } from './MtfAnalysisPage';
@@ -4049,6 +4050,7 @@ function RenderUcsIcon() {
 
 // ---- Settings window page component ----
 const FORCE_MODE_KEY = 'coopt.forceInfinitePupilMode';
+const OPD_REFERENCE_MODE_KEY = 'coopt.opd.referenceMode';
 const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
 const DARK_MODE_KEY = 'coopt.darkMode';
 const ALLOWED_MFR = ['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'Sumita', 'CDGM', 'Special'] as const;
@@ -4056,6 +4058,12 @@ const ALLOWED_MFR = ['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'Sumita', 'CDGM', 'Spe
 function sanitizeForceModeValue(v: any): 'stop' | 'entrance' | '' {
   const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
   return (s === 'stop' || s === 'entrance') ? s : '';
+}
+
+type OpdReferenceModeSetting = 'reference-sphere' | 'exit-pupil';
+
+function sanitizeOpdReferenceModeSetting(v: any): OpdReferenceModeSetting {
+  return String(v ?? '').trim().toLowerCase() === 'exit-pupil' ? 'exit-pupil' : 'reference-sphere';
 }
 
 function readForceModeFromUrl(): 'stop' | 'entrance' | '' {
@@ -4078,6 +4086,14 @@ function applyForceModeToWindowGlobals(m: 'stop' | 'entrance' | ''): void {
   } catch (_) {}
 }
 
+function applyOpdReferenceModeToWindowGlobals(mode: OpdReferenceModeSetting): void {
+  const w = window as any;
+  try {
+    w.__COOPT_OPD_REFERENCE_MODE = mode;
+    w.COOPT_OPD_REFERENCE_MODE = mode;
+  } catch (_) {}
+}
+
 function readCurrentForceMode(): 'stop' | 'entrance' | '' {
   try {
     const w = window as any;
@@ -4093,6 +4109,9 @@ function readCurrentForceMode(): 'stop' | 'entrance' | '' {
 
 function DesktopSettingsPage() {
   const [forceMode, setForceMode] = useState<'stop' | 'entrance' | ''>(readForceModeFromUrl);
+  const [opdReferenceMode, setOpdReferenceMode] = useState<OpdReferenceModeSetting>(() => {
+    try { return sanitizeOpdReferenceModeSetting(localStorage.getItem(OPD_REFERENCE_MODE_KEY)); } catch (_) { return 'reference-sphere'; }
+  });
   const [mfrs, setMfrs] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(GLASS_MAP_MFR_KEY) || '[]'); } catch (_) { return []; }
   });
@@ -4109,6 +4128,14 @@ function DesktopSettingsPage() {
     }).catch(() => setLoaded(true));
   }, []);
 
+  useEffect(() => {
+    readDesktopSetting(OPD_REFERENCE_MODE_KEY).then((val) => {
+      const mode = sanitizeOpdReferenceModeSetting(val || localStorage.getItem(OPD_REFERENCE_MODE_KEY));
+      setOpdReferenceMode(mode);
+      applyOpdReferenceModeToWindowGlobals(mode);
+    }).catch(() => {});
+  }, []);
+
   const handleForceModeChange = async (val: 'stop' | 'entrance' | '') => {
     setForceMode(val);
     applyForceModeToWindowGlobals(val);
@@ -4118,6 +4145,13 @@ function DesktopSettingsPage() {
       const w = window as any;
       if (typeof w.__cooptBroadcastForceInfinitePupilMode === 'function') w.__cooptBroadcastForceInfinitePupilMode(val);
     } catch (_) {}
+  };
+
+  const handleOpdReferenceModeChange = async (val: OpdReferenceModeSetting) => {
+    setOpdReferenceMode(val);
+    applyOpdReferenceModeToWindowGlobals(val);
+    try { localStorage.setItem(OPD_REFERENCE_MODE_KEY, val); } catch (_) {}
+    await writeDesktopSetting(OPD_REFERENCE_MODE_KEY, val);
   };
 
   const handleMfrChange = (mfr: string, checked: boolean) => {
@@ -4173,6 +4207,22 @@ function DesktopSettingsPage() {
           ))}
         </div>
         <div style={{ fontSize: 12, color: '#666' }}>Note: Changes take effect on the next calculation.</div>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>OPD Reference</div>
+        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+          Select the reference used for OPD, wavefront, PSF, and MTF calculations.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+          <label>
+            <input type="radio" name="opd-reference-mode" value="reference-sphere" checked={opdReferenceMode === 'reference-sphere'} onChange={() => handleOpdReferenceModeChange('reference-sphere')} />{' '}
+            Reference Sphere
+          </label>
+          <label>
+            <input type="radio" name="opd-reference-mode" value="exit-pupil" checked={opdReferenceMode === 'exit-pupil'} onChange={() => handleOpdReferenceModeChange('exit-pupil')} />{' '}
+            Exit Pupil
+          </label>
+        </div>
+        <div style={{ fontSize: 12, color: '#666' }}>Changes take effect on the next calculation.</div>
       </div>
     </div>
   );
@@ -6701,31 +6751,7 @@ export default function App() {
     if (w.Plotly && typeof w.Plotly.newPlot === 'function') {
       return;
     }
-
-    await new Promise<void>((resolve, reject) => {
-      const existing = document.querySelector('script[data-coopt-plotly="1"]') as HTMLScriptElement | null;
-      if (existing) {
-        if (w.Plotly && typeof w.Plotly.newPlot === 'function') {
-          resolve();
-          return;
-        }
-        existing.addEventListener('load', () => resolve(), { once: true });
-        existing.addEventListener('error', () => reject(new Error('Failed to load Plotly')), { once: true });
-        return;
-      }
-
-      const script = document.createElement('script');
-      script.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
-      script.async = true;
-      script.setAttribute('data-coopt-plotly', '1');
-      script.addEventListener('load', () => resolve(), { once: true });
-      script.addEventListener('error', () => reject(new Error('Failed to load Plotly')), { once: true });
-      document.head.appendChild(script);
-    });
-
-    if (!(window as any).Plotly || typeof (window as any).Plotly.newPlot !== 'function') {
-      throw new Error('Plotly is unavailable');
-    }
+    w.Plotly = Plotly;
   };
 
   const ensureRenderCanvasAttached = (): boolean => {

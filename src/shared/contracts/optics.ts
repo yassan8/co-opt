@@ -354,6 +354,14 @@ export interface NativeTransverseRmsResponse {
   message: string;
 }
 
+export type OpdReferenceMode =
+  | "reference-sphere"
+  | "exit-pupil"
+  | "image-plane"
+  | "absolute"
+  | "absolute2"
+  | "afocal-image-space";
+
 export interface NativeOpdMapRequest {
   jobId?: string;
   opticalSystemRows: unknown[];
@@ -365,6 +373,7 @@ export interface NativeOpdMapRequest {
   wavelengthUm?: number;
   pupilRadiusMm?: number;
   pupilSamplingMode?: "stop" | "entrance";
+  referenceMode?: OpdReferenceMode;
   opdDisplayMode?: "raw" | "pistonTiltRemoved" | "pistonTiltDefocusRemoved";
 }
 
@@ -383,6 +392,11 @@ export interface NativeOpdMapResponse {
   sampleCount: number;
   hitCount: number;
   pupilSamplingMode: "stop" | "entrance";
+  referenceMode?: OpdReferenceMode;
+  referenceSphereCenter?: { x: number; y: number; z: number };
+  referenceSphereRadiusMm?: number;
+  exitPupilCenter?: { x: number; y: number; z: number };
+  exitPupilRadiusMm?: number;
   rawOpdGrid: Array<Array<number | null>>;
   displayOpdGrid: Array<Array<number | null>>;
   referenceSphereOpdGrid?: Array<Array<number | null>>;
@@ -400,6 +414,7 @@ export interface NativeOpdRmsWavesRequest {
   wavelengthUm?: number;
   pupilRadiusMm?: number;
   pupilSamplingMode?: "stop" | "entrance";
+  referenceMode?: OpdReferenceMode;
   opdDisplayMode?: "raw" | "pistonTiltRemoved" | "pistonTiltDefocusRemoved";
 }
 
@@ -418,6 +433,7 @@ export interface NativeOpdRmsWavesResponse {
   sampleCount: number;
   hitCount: number;
   pupilSamplingMode: "stop" | "entrance";
+  referenceMode?: OpdReferenceMode;
   rmsWaves: number;
   message: string;
 }

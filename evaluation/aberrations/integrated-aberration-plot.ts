@@ -11,6 +11,8 @@
  * 作成日: 2025/12/18
  */
 
+import plotlyScriptUrl from 'plotly.js-dist-min/plotly.min.js?url';
+
 /**
  * 波長から色を取得（6段階スペクトル）
  */
@@ -146,7 +148,7 @@ export function plotIntegratedAberrationDiagram(longitudinalData, astigmatismDat
         <head>
             <meta charset="UTF-8">
             <title>Integrated Aberration Diagram</title>
-            <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+            <script src="${plotlyScriptUrl}"></script>
             <style>
                 body {
                     font-family: Arial, sans-serif;

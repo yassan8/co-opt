@@ -12,6 +12,8 @@
  * 作成日: 2025/07/24
  */
 
+import plotlyScriptUrl from 'plotly.js-dist-min/plotly.min.js?url';
+
 /**
  * 横収差図をPlotlyで表示
  * @param {s            // サジタル軸（右側）
@@ -506,10 +508,9 @@ export function showTransverseAberrationInNewWindow(aberrationData) {
     newWindow.document.body.style.margin = '0';
     newWindow.document.body.style.padding = '0';
 
-    // 2. Plotly.jsを新しいウィンドウに読み込み
+    // 2. popup 自身の document でローカル Plotly を初期化
     const plotlyScript = newWindow.document.createElement('script');
-    plotlyScript.src = 'https://cdn.plot.ly/plotly-latest.min.js';
-    newWindow.document.head.appendChild(plotlyScript);
+    plotlyScript.src = plotlyScriptUrl;
 
     // 3. スタイルをコピー
     Array.from(document.styleSheets).forEach(styleSheet => {
@@ -536,8 +537,8 @@ export function showTransverseAberrationInNewWindow(aberrationData) {
     container.style.padding = '20px';
     newWindow.document.body.appendChild(container);
 
-    // 5. Plotlyが読み込まれた後に横収差図を描画
-    plotlyScript.onload = () => {
+    // 5. 横収差図を描画
+    const renderPlot = () => {
         setTimeout(() => {
             try {
                 // 新しいウィンドウ用のPlotly関数を移植
@@ -773,6 +774,11 @@ export function showTransverseAberrationInNewWindow(aberrationData) {
             }
         }, 500);
     };
+    plotlyScript.addEventListener('load', renderPlot, { once: true });
+    plotlyScript.addEventListener('error', () => {
+        newWindow.document.body.innerHTML = '<pre>Failed to load local Plotly 3.7.0.</pre>';
+    }, { once: true });
+    newWindow.document.head.appendChild(plotlyScript);
 }
 
 /**

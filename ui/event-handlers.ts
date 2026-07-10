@@ -53,6 +53,7 @@ import { showThroughFocusMTFDiagram } from '../evaluation/mtf-plot.ts';
 import { readDesktopSetting, runAnalysisCompute, runNativeDistortion, runNativeFieldMtfMap, runNativeGridDistortion, runNativeMtfMap, runNativeOpdMap, runNativePsfMap, runNativeSphericalAberration, runNativeSpotRaytrace, runNativeThroughFocusMtfMap } from '../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { listen } from '@tauri-apps/api/event';
+import plotlyScriptUrl from 'plotly.js-dist-min/plotly.min.js?url';
 import { hideAnalysisProgressHud, showAnalysisProgressHud, updateAnalysisProgressHud } from './shared/analysis-progress-hud.ts';
 import type { RunAnalysisComputeRequest, RunAnalysisComputeResponse } from '../src/shared/contracts/analysis.ts';
 
@@ -186,6 +187,114 @@ function collectPopupRowsFromMainWindow(): {
     }
 
     return { opticalSystemRows, sourceRows, objectRows };
+}
+
+function sanitizeOpdReferenceModeForLog(value: any): string {
+    const mode = String(value ?? '').trim().toLowerCase();
+    if (!mode) return '';
+    switch (mode) {
+        case 'reference-sphere':
+        case 'exit-pupil':
+        case 'image-plane':
+        case 'absolute':
+        case 'absolute2':
+        case 'afocal-image-space':
+            return mode;
+        default:
+            return mode;
+    }
+}
+
+function readConfiguredOpdReferenceModeForLog(): string {
+    try {
+        const direct = sanitizeOpdReferenceModeForLog(w.__COOPT_OPD_REFERENCE_MODE ?? w.COOPT_OPD_REFERENCE_MODE);
+        if (direct) return direct;
+    } catch (_) {}
+
+    try {
+        const openerRef = window.opener as any;
+        const openerMode = sanitizeOpdReferenceModeForLog(openerRef?.__COOPT_OPD_REFERENCE_MODE ?? openerRef?.COOPT_OPD_REFERENCE_MODE);
+        if (openerMode) return openerMode;
+    } catch (_) {}
+
+    try {
+        const stored = sanitizeOpdReferenceModeForLog(localStorage.getItem('coopt.opd.referenceMode'));
+        if (stored) return stored;
+    } catch (_) {}
+
+    try {
+        const openerRef = window.opener as any;
+        const openerStored = sanitizeOpdReferenceModeForLog(openerRef?.localStorage?.getItem?.('coopt.opd.referenceMode'));
+        if (openerStored) return openerStored;
+    } catch (_) {}
+
+    return 'reference-sphere';
+}
+
+function logNativeReferenceModeForPopup(
+    metric: 'OPD' | 'PSF' | 'MTF',
+    response: any,
+    options?: {
+        hintReferenceMode?: string;
+        hintChiefReferenceMode?: string;
+        hintReferenceSphereCenter?: { x?: number; y?: number; z?: number };
+        hintReferenceSphereRadiusMm?: number;
+        backend?: string;
+        objectIndex?: number;
+        wavelengthUm?: number;
+    }
+): void {
+    try {
+        const configured = readConfiguredOpdReferenceModeForLog();
+        const referenceMode = sanitizeOpdReferenceModeForLog(
+            response?.referenceMode
+            ?? options?.hintReferenceMode
+            ?? configured
+        ) || configured;
+        const chiefReferenceMode = String(
+            response?.chiefReferenceMode
+            ?? options?.hintChiefReferenceMode
+            ?? ''
+        ).trim();
+        const backend = String(response?.backend ?? options?.backend ?? 'unknown').trim() || 'unknown';
+        const objectIndex = Number.isFinite(Number(response?.usedObjectIndex))
+            ? Number(response?.usedObjectIndex)
+            : (Number.isFinite(Number(options?.objectIndex)) ? Number(options?.objectIndex) : null);
+        const wavelengthUm = Number.isFinite(Number(response?.wavelengthUm))
+            ? Number(response?.wavelengthUm)
+            : (Number.isFinite(Number(options?.wavelengthUm)) ? Number(options?.wavelengthUm) : null);
+        const referenceSphereCenter = response?.referenceSphereCenter ?? options?.hintReferenceSphereCenter ?? null;
+        const centerX = Number(referenceSphereCenter?.x);
+        const centerY = Number(referenceSphereCenter?.y);
+        const centerZ = Number(referenceSphereCenter?.z);
+        const hasReferenceSphereCenter = Number.isFinite(centerX) && Number.isFinite(centerY) && Number.isFinite(centerZ);
+        const referenceSphereRadiusMm = Number(
+            response?.referenceSphereRadiusMm
+            ?? options?.hintReferenceSphereRadiusMm
+        );
+
+        const line =
+            '🔎 [Native ' + metric + ' reference]'
+            + ' configured=' + configured
+            + ' effective=' + referenceMode
+            + (chiefReferenceMode ? (' chief=' + chiefReferenceMode) : '')
+            + ' backend=' + backend
+            + (objectIndex !== null ? (' objectIndex=' + String(objectIndex)) : '')
+            + (wavelengthUm !== null ? (' wavelengthUm=' + String(wavelengthUm)) : '')
+            + (hasReferenceSphereCenter
+                ? (' sphereCenterMm=(' + centerX.toFixed(6) + ',' + centerY.toFixed(6) + ',' + centerZ.toFixed(6) + ')')
+                : '')
+            + (Number.isFinite(referenceSphereRadiusMm)
+                ? (' sphereRadiusMm=' + referenceSphereRadiusMm.toFixed(6))
+                : '');
+
+        console.log(line);
+        try {
+            if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
+                window.opener.console.log(line);
+            }
+        } catch (_) {}
+    } catch (_) {}
 }
 
 function collectLiveObjectRowsFromMainWindow(): any[] | null {
@@ -411,6 +520,11 @@ async function runDesktopNativeOpdMapForPopup(payload: {
             opdDisplayMode: (payload?.opdDisplayMode as any) || 'pistonTiltRemoved',
         });
 
+        logNativeReferenceModeForPopup('OPD', result, {
+            objectIndex: Number.isFinite(Number(payload?.objectIndex)) ? Number(payload?.objectIndex) : undefined,
+            wavelengthUm: Number.isFinite(Number(payload?.wavelengthUm)) ? Number(payload?.wavelengthUm) : undefined,
+        });
+
         if (!suppressProgressHud) {
             updateAnalysisProgressHud({ label: 'Native OPD done', percent: 100 });
         }
@@ -443,6 +557,11 @@ async function runDesktopNativePsfMapForPopup(payload: {
     zeroPadTo?: number;
     recenterIfWrapped?: boolean;
     suppressProgressHud?: boolean;
+    referenceModeHint?: string;
+    chiefReferenceModeHint?: string;
+    referenceSphereCenterHint?: { x?: number; y?: number; z?: number };
+    referenceSphereRadiusMmHint?: number;
+    objectIndexHint?: number;
 }) {
     const jobId = `native-psf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlistenProgress: null | (() => void) = null;
@@ -486,6 +605,15 @@ async function runDesktopNativePsfMapForPopup(payload: {
             recenterIfWrapped: !!payload?.recenterIfWrapped,
         });
 
+        logNativeReferenceModeForPopup('PSF', result, {
+            hintReferenceMode: payload?.referenceModeHint,
+            hintChiefReferenceMode: payload?.chiefReferenceModeHint,
+            hintReferenceSphereCenter: payload?.referenceSphereCenterHint,
+            hintReferenceSphereRadiusMm: payload?.referenceSphereRadiusMmHint,
+            objectIndex: Number.isFinite(Number(payload?.objectIndexHint)) ? Number(payload?.objectIndexHint) : undefined,
+            wavelengthUm: Number.isFinite(Number(payload?.wavelengthUm)) ? Number(payload?.wavelengthUm) : undefined,
+        });
+
         if (!suppressProgressHud) {
             updateAnalysisProgressHud({ label: 'Native PSF done', percent: 100 });
         }
@@ -516,6 +644,12 @@ async function runDesktopNativeMtfMapForPopup(payload: {
     sampleFrequenciesLpmm?: number[];
     directEvalOnly?: boolean;
     method?: 'legacy-otf-axis' | 'hopkins-tcc' | 'malacara-wasm-required';
+    referenceModeHint?: string;
+    chiefReferenceModeHint?: string;
+    referenceSphereCenterHint?: { x?: number; y?: number; z?: number };
+    referenceSphereRadiusMmHint?: number;
+    objectIndexHint?: number;
+    wavelengthUmHint?: number;
 }) {
     const result = await runNativeMtfMap({
         psfData: Array.isArray(payload?.psfData) ? payload.psfData : [],
@@ -528,6 +662,16 @@ async function runDesktopNativeMtfMapForPopup(payload: {
         directEvalOnly: payload?.directEvalOnly === true,
         method: payload?.method || 'hopkins-tcc',
     });
+
+    logNativeReferenceModeForPopup('MTF', result, {
+        hintReferenceMode: payload?.referenceModeHint,
+        hintChiefReferenceMode: payload?.chiefReferenceModeHint,
+        hintReferenceSphereCenter: payload?.referenceSphereCenterHint,
+        hintReferenceSphereRadiusMm: payload?.referenceSphereRadiusMmHint,
+        objectIndex: Number.isFinite(Number(payload?.objectIndexHint)) ? Number(payload?.objectIndexHint) : undefined,
+        wavelengthUm: Number.isFinite(Number(payload?.wavelengthUmHint)) ? Number(payload?.wavelengthUmHint) : undefined,
+    });
+
     return result;
 }
 
@@ -956,6 +1100,11 @@ async function runDesktopNativeCompareMtfVsTfmtfForPopup(payload: {
         zeroPadTo: requestedFftSize,
         recenterIfWrapped: false,
         suppressProgressHud: true,
+        referenceModeHint: nativeOpdResp?.referenceMode,
+        chiefReferenceModeHint: nativeOpdResp?.chiefReferenceMode,
+        referenceSphereCenterHint: nativeOpdResp?.referenceSphereCenter,
+        referenceSphereRadiusMmHint: nativeOpdResp?.referenceSphereRadiusMm,
+        objectIndexHint: Number.isFinite(objectIndex) ? objectIndex : undefined,
     });
 
     const nativeMtfResp = await runDesktopNativeMtfMapForPopup({
@@ -963,6 +1112,12 @@ async function runDesktopNativeCompareMtfVsTfmtfForPopup(payload: {
         pixelSizeUm,
         maxFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? Math.max(1, targetFrequencyLpmm) : 10,
         points: 121,
+        referenceModeHint: nativeOpdResp?.referenceMode,
+        chiefReferenceModeHint: nativeOpdResp?.chiefReferenceMode,
+        referenceSphereCenterHint: nativeOpdResp?.referenceSphereCenter,
+        referenceSphereRadiusMmHint: nativeOpdResp?.referenceSphereRadiusMm,
+        objectIndexHint: Number.isFinite(objectIndex) ? objectIndex : undefined,
+        wavelengthUmHint: wl,
     });
 
     const freqAxis = Array.isArray(nativeMtfResp?.frequencyAxis) ? nativeMtfResp.frequencyAxis : [];
@@ -6914,7 +7069,7 @@ export function setupAnalysisWindows() {
             background: #fff;
         }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="header"></div>
@@ -8271,7 +8426,7 @@ export function setupAnalysisWindows() {
         }
         #popup-longitudinal-aberration-container { height: 100%; min-height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -8513,7 +8668,7 @@ export function setupAnalysisWindows() {
         }
         #popup-astigmatic-field-curves-container { height: 100%; min-height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -8802,7 +8957,7 @@ export function setupAnalysisWindows() {
         .plot-area { width: 100%; height: 100%; min-height: 0; }
         #popup-distortion-percent { height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -9041,7 +9196,7 @@ export function setupAnalysisWindows() {
         }
         #popup-distortion-grid { width: 100%; height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -9505,7 +9660,7 @@ export function setupAnalysisWindows() {
         #popup-mca-container { flex: 1 1 auto; min-height: 0; }
         .note { padding: 6px 12px; font-size: 12px; color: #666; background: #fff; border-bottom: 1px solid #eee; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -9695,7 +9850,7 @@ export function setupAnalysisWindows() {
         }
         #popup-integrated-aberration-container { height: 100%; min-height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div id="popup-integrated-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -9861,6 +10016,8 @@ export function setupAnalysisWindows() {
             display: flex;
             flex-direction: row;
         }
+        .js-plotly-plot .modebar { opacity: 0; transition: opacity 120ms ease; }
+        .js-plotly-plot:hover .modebar { opacity: 1; }
         #popup-wavefront-container { flex: 1 1 auto; min-width: 0; min-height: 0; }
         #popup-wavefront-container-stats {
             flex: 0 0 280px;
@@ -9898,7 +10055,7 @@ export function setupAnalysisWindows() {
             }
         }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -10757,10 +10914,83 @@ export function setupAnalysisWindows() {
                 });
         }
 
+        const buildMainPsfWavelengthOptions = (): Array<{ value: string; label: string }> => {
+            const out: Array<{ value: string; label: string }> = [{ value: 'all', label: 'All' }];
+            let sourceRows: any[] = [];
+            try {
+                sourceRows = getSourceRows(w.tableSource);
+            } catch (_) {
+                sourceRows = [];
+            }
+            const primary = Number(getPrimaryWavelengthMicronsFromSourceRows(sourceRows));
+            const seen = new Set<string>();
+            for (let i = 0; i < sourceRows.length; i++) {
+                const wl = Number(sourceRows[i]?.wavelength);
+                if (!Number.isFinite(wl) || wl <= 0) continue;
+                const key = wl.toFixed(9);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                const nm = wl * 1000;
+                const label = (Number.isFinite(primary) && Math.abs(wl - primary) < 1e-9)
+                    ? (nm.toFixed(1) + ' nm (primary)')
+                    : (nm.toFixed(1) + ' nm');
+                out.push({ value: String(wl), label });
+            }
+            if (out.length === 1 && Number.isFinite(primary) && primary > 0) {
+                out.push({ value: String(primary), label: (primary * 1000).toFixed(1) + ' nm (primary)' });
+            }
+            return out;
+        };
+
+        const syncMainPsfWavelengthSelect = () => {
+            const selectEl = document.getElementById('psf-wavelength-select') as HTMLSelectElement | null;
+            if (!selectEl) return;
+            const prev = String(selectEl.value || '').trim();
+            const options = buildMainPsfWavelengthOptions();
+            selectEl.innerHTML = '';
+            for (let i = 0; i < options.length; i++) {
+                const opt = document.createElement('option');
+                opt.value = options[i].value;
+                opt.textContent = options[i].label;
+                selectEl.appendChild(opt);
+            }
+            if (prev && Array.from(selectEl.options).some((o) => String(o.value) === prev)) {
+                selectEl.value = prev;
+            } else {
+                const allOpt = Array.from(selectEl.options).find((o) => String(o.value) === 'all');
+                selectEl.value = allOpt ? String(allOpt.value) : String(selectEl.options?.[0]?.value || 'all');
+            }
+        };
+
+        try {
+            syncMainPsfWavelengthSelect();
+            const mainPsfWavelengthSelect = document.getElementById('psf-wavelength-select');
+            if (mainPsfWavelengthSelect && !(mainPsfWavelengthSelect as any).__cooptPsfWavelengthSyncBound) {
+                (mainPsfWavelengthSelect as any).__cooptPsfWavelengthSyncBound = true;
+                mainPsfWavelengthSelect.addEventListener('focus', () => {
+                    syncMainPsfWavelengthSelect();
+                });
+                mainPsfWavelengthSelect.addEventListener('change', () => {
+                    try {
+                        const popup = w.__psfPopup;
+                        if (!popup || popup.closed) return;
+                        const popupSelect = popup.document?.getElementById('popup-psf-wavelength-select') as HTMLSelectElement | null;
+                        if (!popupSelect) return;
+                        const value = String((mainPsfWavelengthSelect as HTMLSelectElement).value || '').trim();
+                        if (value && Array.from(popupSelect.options || []).some((o: any) => String(o.value) === value)) {
+                            popupSelect.value = value;
+                        }
+                    } catch (_) {}
+                });
+            }
+            w.syncMainPsfWavelengthSelect = syncMainPsfWavelengthSelect;
+        } catch (_) {}
+
         // Point Spread Function popup window button
         const openPsfWindowBtn = document.getElementById('open-psf-window-btn');
         if (openPsfWindowBtn) {
                 openPsfWindowBtn.addEventListener('click', () => {
+                        try { syncMainPsfWavelengthSelect(); } catch (_) {}
                         if (w.__psfPopup && !w.__psfPopup.closed) {
                                 // Always reopen fresh so stale about:blank popup code can't persist.
                                 try { w.__psfPopup.close(); } catch (_) {}
@@ -10873,15 +11103,44 @@ export function setupAnalysisWindows() {
             display: flex;
             flex-direction: column;
         }
-        #popup-psf-container { flex: 1 1 auto; min-height: 0; }
-        #popup-psf-container-stats { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; color: #333; border-top: 1px solid #eee; }
+        .psf-content-grid {
+            flex: 1 1 auto;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: 190px minmax(0, 1fr);
+            overflow: hidden;
+        }
+        .js-plotly-plot .modebar { opacity: 0; transition: opacity 120ms ease; }
+        .js-plotly-plot:hover .modebar { opacity: 1; }
+        #popup-psf-container { min-width: 0; min-height: 0; grid-column: 2; grid-row: 1; }
+        #popup-psf-container-stats {
+            grid-column: 1;
+            grid-row: 1;
+            padding: 12px;
+            font-size: 12px;
+            color: #333;
+            border-right: 1px solid #eee;
+            overflow: auto;
+            background: #fff;
+        }
+        #popup-psf-container-stats h4 { margin: 0 0 8px 0; font-size: 13px; }
+        #popup-psf-container-stats .stats-table { width: 100%; border-collapse: collapse; }
+        #popup-psf-container-stats .stats-table td { padding: 2px 0; vertical-align: top; }
+        #popup-psf-container-stats .stats-table td:last-child { text-align: right; white-space: nowrap; }
+        @media (max-width: 700px) {
+            .psf-content-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+            #popup-psf-container { grid-column: 1; grid-row: 1; }
+            #popup-psf-container-stats { grid-column: 1; grid-row: 2; max-height: 180px; border-right: 0; border-top: 1px solid #eee; }
+        }
         .note { padding: 8px 12px; font-size: 12px; color: #666; border-bottom: 1px solid #eee; background: #fff; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="header"></div>
     <div class="controls">
+        <label for="popup-psf-wavelength-select">Wavelength:</label>
+        <select id="popup-psf-wavelength-select"><option value="all">All</option></select>
         <label for="popup-psf-object-select">Object:</label>
         <select id="popup-psf-object-select"><option value="0">1</option></select>
         <label for="popup-psf-sampling-select" title="Zero-padding increases FFT size without increasing OPD ray grid.">Zero pad:</label>
@@ -10914,11 +11173,13 @@ export function setupAnalysisWindows() {
         <div id="popup-psf-progress-text" style="margin-bottom: 6px;">Calculating PSF...</div>
         <progress id="popup-psf-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
     </div>
-    <div class="content">
-        <div id="popup-psf-container"></div>
-        <div id="popup-psf-container-stats"></div>
-        <div id="popup-psf-opd-parity-diff" style="display:none;height:220px;border-top:1px solid #eee;"></div>
-    </div>
+        <div class="content">
+            <div class="psf-content-grid">
+                <div id="popup-psf-container-stats"></div>
+                <div id="popup-psf-container"></div>
+            </div>
+            <div id="popup-psf-opd-parity-diff" style="display:none;height:220px;border-top:1px solid #eee;"></div>
+        </div>
         <script>
         const __PSF_INITIAL_OBJECT_ROWS = ${psfInitialObjectRowsJson};
         // Debug: confirm the popup script version in console.
@@ -10987,6 +11248,77 @@ export function setupAnalysisWindows() {
             } catch (_) {
                 return null;
             }
+        }
+
+        function getPrimaryWavelengthFromOpener() {
+            try {
+                if (window.opener && typeof window.opener.getPrimaryWavelength === 'function') {
+                    const v = Number(window.opener.getPrimaryWavelength());
+                    if (Number.isFinite(v) && v > 0) return v;
+                }
+            } catch (_) {}
+            return NaN;
+        }
+
+        function buildWavelengthOptionsFromOpener() {
+            const out = [{ value: 'all', label: 'All' }];
+            let sources = [];
+            try {
+                if (window.opener && typeof window.opener.getSourceRows === 'function') {
+                    const rows = window.opener.getSourceRows(window.opener.tableSource);
+                    if (Array.isArray(rows)) sources = rows;
+                }
+            } catch (_) {}
+
+            const primary = getPrimaryWavelengthFromOpener();
+            const seen = new Set();
+            if (Array.isArray(sources)) {
+                for (let i = 0; i < sources.length; i++) {
+                    const wl = Number(sources[i] && sources[i].wavelength);
+                    if (!Number.isFinite(wl) || wl <= 0) continue;
+                    const key = wl.toFixed(9);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    const nm = wl * 1000;
+                    const label = (Number.isFinite(primary) && Math.abs(wl - primary) < 1e-9)
+                        ? (nm.toFixed(1) + ' nm (primary)')
+                        : (nm.toFixed(1) + ' nm');
+                    out.push({ value: String(wl), label: label });
+                }
+            }
+
+            if (out.length === 1 && Number.isFinite(primary) && primary > 0) {
+                out.push({ value: String(primary), label: (primary * 1000).toFixed(1) + ' nm (primary)' });
+            }
+            return out;
+        }
+
+        function syncWavelengthOptionsFromOpener() {
+            const popupSelect = document.getElementById('popup-psf-wavelength-select');
+            if (!popupSelect) return;
+            const openerSelect = getOpenerEl('psf-wavelength-select');
+            const current = String(popupSelect.value || '');
+            const options = buildWavelengthOptionsFromOpener();
+
+            popupSelect.innerHTML = '';
+            for (let i = 0; i < options.length; i++) {
+                const opt = document.createElement('option');
+                opt.value = options[i].value;
+                opt.textContent = options[i].label;
+                popupSelect.appendChild(opt);
+            }
+
+            const openerValue = openerSelect ? String(openerSelect.value || '') : '';
+            if (openerValue && Array.from(popupSelect.options).some((o) => String(o.value) === openerValue)) {
+                popupSelect.value = openerValue;
+                return;
+            }
+            if (current && Array.from(popupSelect.options).some((o) => String(o.value) === current)) {
+                popupSelect.value = current;
+                return;
+            }
+            const allOpt = Array.from(popupSelect.options).find((o) => String(o.value) === 'all');
+            popupSelect.value = allOpt ? String(allOpt.value) : String(popupSelect.options?.[0]?.value || 'all');
         }
 
         function syncObjectOptionsFromOpener() {
@@ -11173,14 +11505,21 @@ export function setupAnalysisWindows() {
         }
 
         function syncInputsFromOpener() {
+            const openerWavelength = getOpenerEl('psf-wavelength-select');
             const openerZeroPad = getOpenerEl('psf-zeropad-select');
             const openerZernikeSampling = getOpenerEl('psf-zernike-sampling-select');
             const openerLog = getOpenerEl('psf-log-scale-checkbox');
             const openerRemovePtd = getOpenerEl('psf-remove-ptd-checkbox');
+            const popupWavelength = document.getElementById('popup-psf-wavelength-select');
             const popupSampling = document.getElementById('popup-psf-sampling-select');
             const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
             const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
             const popupRemovePtd = document.getElementById('popup-psf-remove-ptd-checkbox');
+            if (popupWavelength && openerWavelength && openerWavelength.value) {
+                if (Array.from(popupWavelength.options || []).some(o => String(o.value) === String(openerWavelength.value))) {
+                    popupWavelength.value = openerWavelength.value;
+                }
+            }
             if (openerZeroPad && popupSampling && openerZeroPad.value) {
                 if (Array.from(popupSampling.options || []).some(o => String(o.value) === String(openerZeroPad.value))) {
                     popupSampling.value = openerZeroPad.value;
@@ -11295,6 +11634,7 @@ export function setupAnalysisWindows() {
             activeCancelToken = createCancelToken();
 
             const popupObject = document.getElementById('popup-psf-object-select');
+            const popupWavelength = document.getElementById('popup-psf-wavelength-select');
             const popupSampling = document.getElementById('popup-psf-sampling-select');
             const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
             const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
@@ -11306,6 +11646,8 @@ export function setupAnalysisWindows() {
             }
             const zernikeSampling = popupZernikeSampling ? parseInt(popupZernikeSampling.value, 10) : 128;
             const zeroPadRaw = popupSampling ? String(popupSampling.value || 'auto') : 'auto';
+            const wavelengthRaw = popupWavelength ? String(popupWavelength.value || '').trim() : 'all';
+            const wavelengthMode = (wavelengthRaw.toLowerCase() === 'all') ? 'all' : 'single';
             const logScale = !!(popupLog && popupLog.checked);
             const opdDisplayMode = (popupRemovePtd && popupRemovePtd.checked)
                 ? 'pistonTiltDefocusRemoved'
@@ -11313,12 +11655,18 @@ export function setupAnalysisWindows() {
             const PSF_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__PSF_DEBUG);
 
             const openerObject = getOpenerEl('psf-object-select');
+            const openerWavelength = getOpenerEl('psf-wavelength-select');
             const openerSampling = getOpenerEl('psf-sampling-select');
             const openerZeroPad = getOpenerEl('psf-zeropad-select');
             const openerZernikeSampling = getOpenerEl('psf-zernike-sampling-select');
             const openerLog = getOpenerEl('psf-log-scale-checkbox');
             const openerRemovePtd = getOpenerEl('psf-remove-ptd-checkbox');
             if (openerObject && Number.isFinite(objectIndex)) openerObject.value = String(objectIndex);
+            if (openerWavelength && popupWavelength && popupWavelength.value) {
+                if (Array.from(openerWavelength.options || []).some(o => String(o.value) === String(popupWavelength.value))) {
+                    openerWavelength.value = popupWavelength.value;
+                }
+            }
             if (openerSampling && Number.isFinite(zernikeSampling)) openerSampling.value = String(zernikeSampling);
             if (openerZeroPad && zeroPadRaw) {
                 if (Array.from(openerZeroPad.options || []).some(o => String(o.value) === String(zeroPadRaw))) {
@@ -11508,11 +11856,68 @@ export function setupAnalysisWindows() {
                         } catch (_) {}
                         return NaN;
                     })();
-                    const s0 = (sources && sources.length > 0) ? sources[0] : null;
-                    const wl0 = (s0 && s0.wavelength !== undefined && s0.wavelength !== null) ? Number(s0.wavelength) : NaN;
-                    const wavelength = Number.isFinite(primaryWl)
-                        ? primaryWl
-                        : (() => { throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.'); })();
+                    const wavelengthEntries = (() => {
+                        const out = [];
+                        if (wavelengthMode !== 'all') {
+                            const direct = Number(wavelengthRaw);
+                            const wlSingle = (Number.isFinite(direct) && direct > 0)
+                                ? direct
+                                : (Number.isFinite(primaryWl) && primaryWl > 0 ? primaryWl : NaN);
+                            if (Number.isFinite(wlSingle) && wlSingle > 0) {
+                                out.push({ wavelength: wlSingle, weight: 1 });
+                            }
+                        } else {
+                            for (let i = 0; i < sources.length; i++) {
+                                const wl = Number(sources[i]?.wavelength);
+                                if (!Number.isFinite(wl) || wl <= 0) continue;
+                                const rawWeight = Number(sources[i]?.weight);
+                                const ww = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : 1;
+                                out.push({ wavelength: wl, weight: ww });
+                            }
+                        }
+                        if (out.length === 0 && Number.isFinite(primaryWl) && primaryWl > 0) {
+                            out.push({ wavelength: primaryWl, weight: 1 });
+                        }
+                        if (out.length === 0) {
+                            throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+                        }
+
+                        const merged = [];
+                        for (let i = 0; i < out.length; i++) {
+                            const wl = Number(out[i].wavelength);
+                            const weight = Number(out[i].weight);
+                            const existing = merged.find((v) => Math.abs(v.wavelength - wl) < 1e-9);
+                            if (existing) {
+                                existing.weight += Number.isFinite(weight) ? weight : 0;
+                            } else {
+                                merged.push({ wavelength: wl, weight: Number.isFinite(weight) ? weight : 0 });
+                            }
+                        }
+
+                        const sumWeight = merged.reduce((acc, v) => acc + (Number(v.weight) || 0), 0);
+                        if (sumWeight > 0) {
+                            for (let i = 0; i < merged.length; i++) {
+                                merged[i].weight = Number(merged[i].weight) / sumWeight;
+                            }
+                        } else {
+                            const uniform = 1 / Math.max(1, merged.length);
+                            for (let i = 0; i < merged.length; i++) {
+                                merged[i].weight = uniform;
+                            }
+                        }
+
+                        if (Number.isFinite(primaryWl) && primaryWl > 0) {
+                            merged.sort((a, b) => {
+                                const ap = Math.abs(a.wavelength - primaryWl) < 1e-9 ? 0 : 1;
+                                const bp = Math.abs(b.wavelength - primaryWl) < 1e-9 ? 0 : 1;
+                                if (ap !== bp) return ap - bp;
+                                return a.wavelength - b.wavelength;
+                            });
+                        }
+                        return merged;
+                    })();
+                    const wavelength = Number(wavelengthEntries[0]?.wavelength);
+                    const useAllWavelengthComposite = (wavelengthMode === 'all') && wavelengthEntries.length > 1;
 
                     // Match showPSFDiagram(): build a fieldSetting compatible with eva-wavefront.js.
                     const objectX = pickNumber(selectedObject, ['x', 'X', 'xFieldAngle', 'xAngle', 'xHeightAngle', 'XHeightAngle', 'x_height_angle', 'x_field_angle', 'x_angle'], 0);
@@ -12341,8 +12746,13 @@ export function setupAnalysisWindows() {
                         zeroPadTo: requestedFftSize,
                         recenterIfWrapped: false,
                         suppressProgressHud: true,
+                        referenceModeHint: nativeOpdResp?.referenceMode,
+                        chiefReferenceModeHint: nativeOpdResp?.chiefReferenceMode,
+                        referenceSphereCenterHint: nativeOpdResp?.referenceSphereCenter,
+                        referenceSphereRadiusMmHint: nativeOpdResp?.referenceSphereRadiusMm,
+                        objectIndexHint: Number.isFinite(idx) ? idx : undefined,
                     }), activeCancelToken);
-                    const psfResult = {
+                    let psfResult = {
                         psfData: nativePsfResp?.psfData,
                         metrics: nativePsfResp?.metrics,
                         samplingSize: psfSamplingSize,
@@ -12355,6 +12765,8 @@ export function setupAnalysisWindows() {
                             samplingSize: psfSamplingSize,
                             fftSize: nativePsfResp?.fftSize,
                             wavelength,
+                            wavelengthMode: useAllWavelengthComposite ? 'all' : 'single',
+                            wavelengths: wavelengthEntries.map((entry) => Number(entry.wavelength)),
                             pixelSize: pixelSizeUm,
                         },
                         implementationUsed: 'NativeRust',
@@ -12388,7 +12800,7 @@ export function setupAnalysisWindows() {
                         if (statsEl) {
                             statsEl.innerHTML = '';
                             statsEl.textContent = '';
-                            statsEl.style.display = 'none';
+                            statsEl.style.display = 'block';
                             if (nativeOpdDiag && Number.isFinite(nativeOpdDiag.rmsWaves)) {
                                 const maxAllowedRmsWaves = (() => {
                                     const v = Number((typeof window !== 'undefined')
@@ -12553,13 +12965,243 @@ export function setupAnalysisWindows() {
                         } catch (_) {}
                     }
 
+                    if (useAllWavelengthComposite && Array.isArray(wavelengthEntries) && wavelengthEntries.length > 1) {
+                        const canUseNativeOpd = !!(window.opener && typeof window.opener.runDesktopNativeOpdMapForPopup === 'function');
+                        const canUseNativePsf = !!(window.opener && typeof window.opener.runDesktopNativePsfMapForPopup === 'function');
+                        if (canUseNativeOpd && canUseNativePsf) {
+                            const psfSamplingSize = Number.isFinite(zernikeSampling) ? zernikeSampling : 128;
+                            const zeroPadTo = (zeroPadRaw === 'none')
+                                ? psfSamplingSize
+                                : (zeroPadRaw === 'auto')
+                                    ? 0
+                                    : (Number.isFinite(parseInt(zeroPadRaw, 10)) ? parseInt(zeroPadRaw, 10) : 0);
+                            const autoFftSize = Math.min(4096, Math.max(psfSamplingSize, psfSamplingSize * 4));
+                            const requestedFftSize = (!zeroPadTo || zeroPadTo === 0)
+                                ? autoFftSize
+                                : Math.max(psfSamplingSize, zeroPadTo);
+
+                            const calcScale = (wl) => {
+                                let pupilDiameterMm = Number.NaN;
+                                let focalLengthMm = Number.NaN;
+                                try {
+                                    const diffParams = calculateImageSpaceDiffractionParams(opticalSystemRows, wl);
+                                    const fWork = Number(diffParams?.fNumberWorking);
+                                    const derivedFocal = Number(diffParams?.focalLengthMm);
+                                    if (Number.isFinite(fWork) && fWork > 0 && Number.isFinite(derivedFocal) && derivedFocal > 0) {
+                                        focalLengthMm = Math.abs(derivedFocal);
+                                        pupilDiameterMm = focalLengthMm / fWork;
+                                    }
+                                } catch (_) {}
+
+                                if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) {
+                                    try {
+                                        const si = Number((window.opener && typeof window.opener.findStopSurfaceIndex === 'function')
+                                            ? window.opener.findStopSurfaceIndex(opticalSystemRows)
+                                            : findStopSurfaceIndex(opticalSystemRows));
+                                        const stopRow = (Number.isFinite(si) && si >= 0) ? opticalSystemRows?.[si] : null;
+                                        const sdRaw = stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN;
+                                        const sd = Math.abs(parseFloat(sdRaw));
+                                        if (Number.isFinite(sd) && sd > 0) {
+                                            const isApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
+                                            const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
+                                            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
+                                                pupilDiameterMm = stopRadiusMm * 2;
+                                            }
+                                        }
+                                    } catch (_) {}
+                                }
+                                if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) focalLengthMm = 100.0;
+                                const basePixelPitchUm = (Number(wl) * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+                                const pixelSizeUm = basePixelPitchUm * (psfSamplingSize / requestedFftSize);
+                                return { pupilDiameterMm, focalLengthMm, pixelSizeUm };
+                            };
+
+                            const computeNativePsfForWavelength = async (wl, progressBase, progressSpan) => {
+                                onProgress({ percent: progressBase + Math.max(0, progressSpan * 0.2), message: 'OPD λ=' + (wl * 1000).toFixed(1) + 'nm...' });
+                                const nativeOpd = await raceWithCancel(window.opener.runDesktopNativeOpdMapForPopup({
+                                    objectIndex: idx,
+                                    gridSize: wavefrontGridSize,
+                                    wavelengthUm: wl,
+                                    opdDisplayMode,
+                                    suppressProgressHud: true,
+                                }), activeCancelToken);
+
+                                const sWl = wavefrontGridSize;
+                                const opdGridWl = Array.from({ length: sWl }, () => new Float32Array(sWl));
+                                const ampGridWl = Array.from({ length: sWl }, () => new Float32Array(sWl));
+                                const maskGridWl = Array.from({ length: sWl }, () => Array(sWl).fill(false));
+
+                                const displayOpdGrid = Array.isArray(nativeOpd?.displayOpdGrid) ? nativeOpd.displayOpdGrid : [];
+                                const rawOpdGrid = Array.isArray(nativeOpd?.rawOpdGrid) ? nativeOpd.rawOpdGrid : [];
+                                for (let iy = 0; iy < sWl; iy++) {
+                                    const rowDisplay = displayOpdGrid[iy] || [];
+                                    const rowRaw = rawOpdGrid[iy] || [];
+                                    for (let ix = 0; ix < sWl; ix++) {
+                                        const rawCell = rowRaw[ix];
+                                        if (rawCell === null || rawCell === undefined || rawCell === '') continue;
+                                        const vRawWaves = Number(rawCell);
+                                        if (!Number.isFinite(vRawWaves)) continue;
+                                        const displayCell = rowDisplay[ix];
+                                        const vDisplayWaves = (displayCell === null || displayCell === undefined || displayCell === '')
+                                            ? NaN
+                                            : Number(displayCell);
+                                        const vWaves = Number.isFinite(vDisplayWaves) ? vDisplayWaves : vRawWaves;
+                                        opdGridWl[iy][ix] = vWaves * wl;
+                                        ampGridWl[iy][ix] = 1.0;
+                                        maskGridWl[iy][ix] = true;
+                                    }
+                                }
+
+                                const scale = calcScale(wl);
+                                onProgress({ percent: progressBase + Math.max(0, progressSpan * 0.7), message: 'PSF λ=' + (wl * 1000).toFixed(1) + 'nm...' });
+                                const nativePsf = await raceWithCancel(window.opener.runDesktopNativePsfMapForPopup({
+                                    gridOpd: Array.from({ length: sWl }, (_, iy) => Array.from(opdGridWl[iy] || [])),
+                                    gridAmplitude: Array.from({ length: sWl }, (_, iy) => Array.from(ampGridWl[iy] || [])),
+                                    pupilMask: Array.from({ length: sWl }, (_, iy) => Array.from(maskGridWl[iy] || [])),
+                                    wavelengthUm: wl,
+                                    pixelSizeUm: scale.pixelSizeUm,
+                                    removeTilt: false,
+                                    zeroPadTo: requestedFftSize,
+                                    recenterIfWrapped: false,
+                                    suppressProgressHud: true,
+                                    referenceModeHint: nativeOpd?.referenceMode,
+                                    chiefReferenceModeHint: nativeOpd?.chiefReferenceMode,
+                                    referenceSphereCenterHint: nativeOpd?.referenceSphereCenter,
+                                    referenceSphereRadiusMmHint: nativeOpd?.referenceSphereRadiusMm,
+                                    objectIndexHint: Number.isFinite(idx) ? idx : undefined,
+                                }), activeCancelToken);
+
+                                return {
+                                    wavelength: wl,
+                                    psfData: Array.isArray(nativePsf?.psfData) ? nativePsf.psfData : [],
+                                    metrics: nativePsf?.metrics || null,
+                                    pixelSizeUm: scale.pixelSizeUm,
+                                };
+                            };
+
+                            const toFiniteMetric = (v) => {
+                                const n = Number(v);
+                                return Number.isFinite(n) ? n : NaN;
+                            };
+
+                            const firstWeight = Number(wavelengthEntries[0]?.weight);
+                            let accumulator = null;
+                            let sumWeights = 0;
+                            let weightedStrehl = 0;
+                            let strehlWeight = 0;
+                            let weightedFwhmX = 0;
+                            let weightedFwhmY = 0;
+                            let fwhmWeightX = 0;
+                            let fwhmWeightY = 0;
+
+                            const mergeComposite = (grid, weight) => {
+                                if (!Array.isArray(grid) || grid.length === 0 || !(weight > 0)) return;
+                                if (!Array.isArray(accumulator) || accumulator.length === 0) {
+                                    accumulator = grid.map((row) => Array.isArray(row) ? row.map((cell) => Number(cell) || 0) : []);
+                                    for (let iy = 0; iy < accumulator.length; iy++) {
+                                        for (let ix = 0; ix < accumulator[iy].length; ix++) {
+                                            accumulator[iy][ix] *= weight;
+                                        }
+                                    }
+                                    sumWeights += weight;
+                                    return;
+                                }
+
+                                const h = Math.min(accumulator.length, grid.length);
+                                const wMin = h > 0 ? Math.min(accumulator[0]?.length || 0, grid[0]?.length || 0) : 0;
+                                if (!(h > 0 && wMin > 0)) return;
+                                for (let iy = 0; iy < h; iy++) {
+                                    for (let ix = 0; ix < wMin; ix++) {
+                                        const v = Number(grid[iy]?.[ix]);
+                                        if (!Number.isFinite(v)) continue;
+                                        accumulator[iy][ix] += v * weight;
+                                    }
+                                }
+                                sumWeights += weight;
+                            };
+
+                            const mergeMetrics = (metrics, weight) => {
+                                if (!metrics || !(weight > 0)) return;
+                                const strehl = toFiniteMetric(metrics?.strehlRatio);
+                                const fwhmX = toFiniteMetric(metrics?.fwhm?.x);
+                                const fwhmY = toFiniteMetric(metrics?.fwhm?.y);
+                                if (Number.isFinite(strehl)) {
+                                    weightedStrehl += strehl * weight;
+                                    strehlWeight += weight;
+                                }
+                                if (Number.isFinite(fwhmX)) {
+                                    weightedFwhmX += fwhmX * weight;
+                                    fwhmWeightX += weight;
+                                }
+                                if (Number.isFinite(fwhmY)) {
+                                    weightedFwhmY += fwhmY * weight;
+                                    fwhmWeightY += weight;
+                                }
+                            };
+
+                            mergeComposite(psfResult?.psfData, Number.isFinite(firstWeight) && firstWeight > 0 ? firstWeight : 0);
+                            mergeMetrics(psfResult?.metrics, Number.isFinite(firstWeight) && firstWeight > 0 ? firstWeight : 0);
+
+                            const totalWlCount = wavelengthEntries.length;
+                            for (let wi = 1; wi < totalWlCount; wi++) {
+                                const wl = Number(wavelengthEntries[wi]?.wavelength);
+                                const ww = Number(wavelengthEntries[wi]?.weight);
+                                if (!Number.isFinite(wl) || wl <= 0 || !(ww > 0)) continue;
+                                throwIfCancelled(activeCancelToken);
+                                const start = 80 + (wi / Math.max(1, totalWlCount)) * 15;
+                                const span = 15 / Math.max(1, totalWlCount);
+                                const resp = await computeNativePsfForWavelength(wl, start, span);
+                                mergeComposite(resp?.psfData, ww);
+                                mergeMetrics(resp?.metrics, ww);
+                            }
+
+                            if (Array.isArray(accumulator) && accumulator.length > 0 && sumWeights > 0) {
+                                for (let iy = 0; iy < accumulator.length; iy++) {
+                                    for (let ix = 0; ix < accumulator[iy].length; ix++) {
+                                        accumulator[iy][ix] = accumulator[iy][ix] / sumWeights;
+                                    }
+                                }
+
+                                psfResult.psfData = accumulator;
+                                psfResult.wavelength = Number.isFinite(primaryWl) && primaryWl > 0
+                                    ? primaryWl
+                                    : Number(wavelengthEntries[0]?.wavelength);
+                                psfResult.metadata = {
+                                    ...(psfResult.metadata || {}),
+                                    wavelengthMode: 'all',
+                                    wavelengths: wavelengthEntries.map((entry) => Number(entry.wavelength)),
+                                    weights: wavelengthEntries.map((entry) => Number(entry.weight)),
+                                };
+                                psfResult.metrics = {
+                                    ...(psfResult.metrics || {}),
+                                    strehlRatio: strehlWeight > 0 ? (weightedStrehl / strehlWeight) : (psfResult?.metrics?.strehlRatio ?? null),
+                                    fwhm: {
+                                        ...(psfResult?.metrics?.fwhm || {}),
+                                        x: fwhmWeightX > 0 ? (weightedFwhmX / fwhmWeightX) : (psfResult?.metrics?.fwhm?.x ?? null),
+                                        y: fwhmWeightY > 0 ? (weightedFwhmY / fwhmWeightY) : (psfResult?.metrics?.fwhm?.y ?? null),
+                                    },
+                                };
+                            }
+                        }
+                    }
+
                     const plotter = (() => {
                         if (window.opener && window.opener.PSFPlotter) {
                             return new window.opener.PSFPlotter(containerEl);
                         }
                         throw new Error('PSFPlotter not available from opener window');
                     })();
-                    await plotter.plot2DPSF(psfResult, { logScale, title: '', recenterToCentroid: false });
+                    await plotter.plot2DPSF(psfResult, {
+                        logScale,
+                        title: '',
+                        recenterToCentroid: false,
+                        showMetrics: false,
+                    });
+                    const statsEl = document.getElementById('popup-psf-container-stats');
+                    if (statsEl && typeof plotter.displayStatistics === 'function') {
+                        plotter.displayStatistics(psfResult, statsEl);
+                        statsEl.style.display = 'block';
+                    }
                 }
 
                 hideProgress();
@@ -12611,6 +13253,7 @@ export function setupAnalysisWindows() {
         });
 
         function syncAll() {
+            syncWavelengthOptionsFromOpener();
             syncObjectOptionsFromOpener();
             syncInputsFromOpener();
         }
@@ -12627,6 +13270,8 @@ export function setupAnalysisWindows() {
                 const popupSampling = document.getElementById('popup-psf-sampling-select');
                 const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
                 const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
+                const popupWavelength = document.getElementById('popup-psf-wavelength-select');
+                if (popupWavelength && !popupWavelength.value) popupWavelength.value = 'all';
                 if (popupSampling && !popupSampling.value) popupSampling.value = 'auto';
                 if (popupZernikeSampling && !popupZernikeSampling.value) popupZernikeSampling.value = '256';
                 if (popupLog && typeof popupLog.checked !== 'boolean') popupLog.checked = false;
@@ -12692,6 +13337,7 @@ export function setupAnalysisWindows() {
                 if (mainShowPsfBtn && !(mainShowPsfBtn as any).__cooptUnifiedPsfPipelineBound) {
                     (mainShowPsfBtn as any).__cooptUnifiedPsfPipelineBound = true;
                     mainShowPsfBtn.addEventListener('click', async () => {
+                        try { syncMainPsfWavelengthSelect(); } catch (_) {}
                         const setUnifiedPsfBadge = (status: string) => {
                             try {
                                 const el = document.getElementById('psf-pipeline-badge');
@@ -12882,7 +13528,7 @@ export function setupAnalysisWindows() {
         }
         #popup-mtf-container { flex: 1 1 auto; min-height: 0; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -13360,6 +14006,11 @@ export function setupAnalysisWindows() {
                             zeroPadTo: requestedFftSize,
                             recenterIfWrapped: false,
                             suppressProgressHud: true,
+                            referenceModeHint: nativeOpdResp?.referenceMode,
+                            chiefReferenceModeHint: nativeOpdResp?.chiefReferenceMode,
+                            referenceSphereCenterHint: nativeOpdResp?.referenceSphereCenter,
+                            referenceSphereRadiusMmHint: nativeOpdResp?.referenceSphereRadiusMm,
+                            objectIndexHint: Number.isFinite(selectedObjectIndex) ? selectedObjectIndex : undefined,
                         });
 
                         setProgress(30 + baseProgress, 'λ=' + titleNm + 'nm: MTF (Rust native)...');
@@ -13371,6 +14022,12 @@ export function setupAnalysisWindows() {
                             sampleFrequenciesLpmm,
                             directEvalOnly: true,
                             method: mtfMethod,
+                            referenceModeHint: nativeOpdResp?.referenceMode,
+                            chiefReferenceModeHint: nativeOpdResp?.chiefReferenceMode,
+                            referenceSphereCenterHint: nativeOpdResp?.referenceSphereCenter,
+                            referenceSphereRadiusMmHint: nativeOpdResp?.referenceSphereRadiusMm,
+                            objectIndexHint: Number.isFinite(selectedObjectIndex) ? selectedObjectIndex : undefined,
+                            wavelengthUmHint: wl,
                         });
 
                         const freq = Array.isArray(mtfResp?.sampledFrequenciesLpmm) && mtfResp.sampledFrequenciesLpmm.length > 0
@@ -13403,6 +14060,11 @@ export function setupAnalysisWindows() {
                                     zeroPadTo: requestedFftSize,
                                     recenterIfWrapped: false,
                                     suppressProgressHud: true,
+                                    referenceModeHint: nativeOpdResp?.referenceMode,
+                                    chiefReferenceModeHint: nativeOpdResp?.chiefReferenceMode,
+                                    referenceSphereCenterHint: nativeOpdResp?.referenceSphereCenter,
+                                    referenceSphereRadiusMmHint: nativeOpdResp?.referenceSphereRadiusMm,
+                                    objectIndexHint: Number.isFinite(selectedObjectIndex) ? selectedObjectIndex : undefined,
                                 });
                                 const idealMtfResp = await opener.runDesktopNativeMtfMapForPopup({
                                     psfData: idealNativePsfResp?.psfData,
@@ -13412,6 +14074,12 @@ export function setupAnalysisWindows() {
                                     sampleFrequenciesLpmm,
                                     directEvalOnly: true,
                                     method: mtfMethod,
+                                    referenceModeHint: nativeOpdResp?.referenceMode,
+                                    chiefReferenceModeHint: nativeOpdResp?.chiefReferenceMode,
+                                    referenceSphereCenterHint: nativeOpdResp?.referenceSphereCenter,
+                                    referenceSphereRadiusMmHint: nativeOpdResp?.referenceSphereRadiusMm,
+                                    objectIndexHint: Number.isFinite(selectedObjectIndex) ? selectedObjectIndex : undefined,
+                                    wavelengthUmHint: wl,
                                 });
                                 const idealTan = Array.isArray(idealMtfResp?.sampledMtfTangential)
                                     ? idealMtfResp.sampledMtfTangential
@@ -13741,7 +14409,7 @@ export function setupAnalysisWindows() {
             min-height: 0;
         }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -14428,7 +15096,7 @@ export function setupAnalysisWindows() {
         }
         #popup-through-focus-mtf-container { flex: 1 1 auto; min-height: 0; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -14972,7 +15640,7 @@ export function setupAnalysisWindows() {
         }
         #popup-field-mtf-container { flex: 1 1 auto; min-height: 0; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -15658,7 +16326,7 @@ export function setupAnalysisWindows() {
         }
         #popup-transverse-aberration-container { height: 100%; min-height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
     <div class="controls">
@@ -15928,6 +16596,15 @@ export function setupAnalysisWindows() {
             <label><input type="radio" name="force-mode" value="entrance" /> Force <code>entrance</code></label>
         </div>
 
+        <div class="section-title">OPD Reference</div>
+        <div class="help">
+            Select the reference used for OPD calculations. Changes take effect on the next calculation.
+        </div>
+        <div class="radio-group">
+            <label><input type="radio" name="opd-reference-mode" value="reference-sphere" /> Reference Sphere</label>
+            <label><input type="radio" name="opd-reference-mode" value="exit-pupil" /> Exit Pupil</label>
+        </div>
+
         <div class="help" style="margin-top: 6px;">
             Note: Changes take effect on the next calculation.
         </div>
@@ -15936,12 +16613,17 @@ export function setupAnalysisWindows() {
 
     <script>
         const KEY = 'coopt.forceInfinitePupilMode';
+        const REFERENCE_KEY = 'coopt.opd.referenceMode';
         const isDesktopRuntime = !!(window && (window.__TAURI_INTERNALS__ || window.__TAURI__));
         const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
         const DARK_MODE_KEY = 'coopt.darkMode';
         const sanitize = (v) => {
             const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
             return (s === 'stop' || s === 'entrance') ? s : '';
+        };
+        const sanitizeReference = (v) => {
+            const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
+            return (s === 'exit-pupil' || s === 'reference-sphere') ? s : 'reference-sphere';
         };
 
         const sanitizeMfrList = (list) => {
@@ -15983,6 +16665,27 @@ export function setupAnalysisWindows() {
                 const invoke = window?.__TAURI_INTERNALS__?.invoke || window?.__TAURI__?.core?.invoke;
                 if (typeof invoke !== 'function') return;
                 await invoke('write_desktop_setting', { key: KEY, value: m || null });
+            } catch (_) {}
+        }
+
+        async function readDesktopReferenceDirect() {
+            try {
+                const invoke = window?.__TAURI_INTERNALS__?.invoke || window?.__TAURI__?.core?.invoke;
+                if (typeof invoke !== 'function') return '';
+                const raw = await invoke('read_desktop_setting', { key: REFERENCE_KEY });
+                return sanitizeReference(raw);
+            } catch (_) {
+                return '';
+            }
+        }
+
+        async function writeDesktopReferenceDirect(mode) {
+            const m = sanitizeReference(mode);
+            try {
+                const invoke = window?.__TAURI_INTERNALS__?.invoke || window?.__TAURI__?.core?.invoke;
+                if (typeof invoke === 'function') {
+                    await invoke('write_desktop_setting', { key: REFERENCE_KEY, value: m });
+                }
             } catch (_) {}
         }
 
@@ -16062,6 +16765,36 @@ export function setupAnalysisWindows() {
             writeDesktopModeDirect(m);
         }
 
+        function getCurrentReference() {
+            const targets = [window, getOpener()];
+            for (const target of targets) {
+                try {
+                    const value = target && (target.__COOPT_OPD_REFERENCE_MODE ?? target.COOPT_OPD_REFERENCE_MODE);
+                    if (value) return sanitizeReference(value);
+                } catch (_) {}
+            }
+            try {
+                const stored = localStorage.getItem(REFERENCE_KEY);
+                if (stored) return sanitizeReference(stored);
+            } catch (_) {}
+            return 'reference-sphere';
+        }
+
+        function applyReference(mode) {
+            const m = sanitizeReference(mode);
+            const targets = [window, getOpener()];
+            for (const target of targets) {
+                try {
+                    if (target) {
+                        target.__COOPT_OPD_REFERENCE_MODE = m;
+                        target.COOPT_OPD_REFERENCE_MODE = m;
+                    }
+                } catch (_) {}
+            }
+            try { localStorage.setItem(REFERENCE_KEY, m); } catch (_) {}
+            writeDesktopReferenceDirect(m);
+        }
+
         async function hydrateFromDesktopStore() {
             const direct = await readDesktopModeDirect();
             if (direct) {
@@ -16078,6 +16811,11 @@ export function setupAnalysisWindows() {
             radios.forEach(r => {
                 r.checked = (sanitize(r.value) === cur);
                 if (cur === '' && sanitize(r.value) === '') r.checked = true;
+            });
+
+            const reference = getCurrentReference();
+            document.querySelectorAll('input[name="opd-reference-mode"]').forEach(r => {
+                r.checked = sanitizeReference(r.value) === reference;
             });
 
             // Glass Map manufacturers
@@ -16135,6 +16873,12 @@ export function setupAnalysisWindows() {
             });
         });
 
+        document.querySelectorAll('input[name="opd-reference-mode"]').forEach(r => {
+            r.addEventListener('change', () => {
+                if (r.checked) applyReference(r.value);
+            });
+        });
+
         document.querySelectorAll('.glassmap-mfr-cb').forEach(cb => {
             cb.addEventListener('change', () => {
                 saveGlassMapMfrSelection();
@@ -16151,6 +16895,11 @@ export function setupAnalysisWindows() {
         window.addEventListener('focus', syncUI);
         syncUI();
         hydrateFromDesktopStore();
+        readDesktopReferenceDirect().then((mode) => {
+            if (!mode) return;
+            applyReference(mode);
+            syncUI();
+        });
     </script>
 </body>
 </html>

@@ -20,9 +20,17 @@ export class PSFPlotter {
     constructor(containerElementIdOrElement) {
         this.containerElementIdOrElement = containerElementIdOrElement;
         this.plotlyConfig = {
-            displayModeBar: true,
-            modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
-            responsive: true
+            responsive: true,
+            displayModeBar: 'hover',
+            modeBarButtons: [[
+                'toImage',
+                'zoom2d',
+                'pan2d',
+                'zoomIn2d',
+                'zoomOut2d',
+                'autoScale2d',
+                'resetScale2d'
+            ]]
         };
         this.lastPlotData = null;
     }
@@ -252,7 +260,11 @@ export class PSFPlotter {
                 showscale: true,
                 colorbar: {
                     title: logScale ? 'Log Intensity' : 'Intensity',
-                    titleside: 'right'
+                    titleside: 'right',
+                    x: 1.02,
+                    len: 0.9,
+                    thickness: 16,
+                    outlinewidth: 1
                 }
             };
 
@@ -277,7 +289,7 @@ export class PSFPlotter {
                 },
                 width: 600,
                 height: 500,
-                margin: { l: 60, r: 60, t: 80, b: 60 }
+                margin: { l: 60, r: 110, t: 80, b: 60 }
             };
 
             const container = this.resolveContainer();

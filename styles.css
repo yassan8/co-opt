@@ -3953,6 +3953,15 @@ button:active {
 }
 
 /* PSF Plot.ly container styles */
+.js-plotly-plot .modebar {
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+
+.js-plotly-plot:hover .modebar {
+    opacity: 1;
+}
+
 #psf-plotly-container {
     width: 100%;
     min-width: 800px;

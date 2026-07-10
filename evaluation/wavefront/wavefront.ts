@@ -11,7 +11,7 @@
  */
 
 import { traceRay, traceRayHitPoint, traceRayHitPointBatch, traceRayEvalBatchSummary, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.ts';
-import { getRefractiveIndex as getCatalogRefractiveIndex } from '../../raytracing/core/ray-paraxial.ts';
+import { calculateExitPupilDiameter, getRefractiveIndex as getCatalogRefractiveIndex } from '../../raytracing/core/ray-paraxial.ts';
 import { findFiniteSystemChiefRayDirection } from '../../raytracing/generation/gen-ray-cross-finite.ts';
 import { findInfiniteSystemChiefRayOrigin } from '../../raytracing/generation/gen-ray-cross-infinite.ts';
 import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from './zernike-fitting.ts';
@@ -3361,6 +3361,8 @@ ${surfaceTypeList}
      */
     calculateOPDReferenceSphere(pupilX, pupilY, fieldSetting, removeTilt = false, options = undefined) {
         const currentFieldKey = this.getFieldCacheKey(fieldSetting);
+        const referenceMode = String(options?.referenceMode || 'reference-sphere').trim().toLowerCase();
+        const geometryCacheKey = `${currentFieldKey}|${referenceMode}`;
         const needResetRef = (this.referenceOpticalPath === null || this.lastFieldKey !== currentFieldKey);
         if (needResetRef) {
             this.setReferenceRay(fieldSetting);
@@ -3368,6 +3370,8 @@ ${surfaceTypeList}
             try {
                 if (this._referenceSphereCache && typeof this._referenceSphereCache.delete === 'function') {
                     this._referenceSphereCache.delete(currentFieldKey);
+                    this._referenceSphereCache.delete(`${currentFieldKey}|reference-sphere`);
+                    this._referenceSphereCache.delete(`${currentFieldKey}|exit-pupil`);
                 }
             } catch (_) {}
         }
@@ -3417,7 +3421,7 @@ ${surfaceTypeList}
             let cachedRadius = null;
             let cachedSphereCenter = null;
             try {
-                const c = this._referenceSphereCache?.get?.(currentFieldKey);
+                const c = this._referenceSphereCache?.get?.(geometryCacheKey);
                 if (c && typeof c === 'object') {
                     cachedCenter = c.center || null;
                     cachedRadius = c.radius;
@@ -3430,7 +3434,9 @@ ${surfaceTypeList}
                 cachedCenter = this.getChiefRayImagePoint();
             }
             if (cachedRadius === null || cachedRadius === undefined) {
-                const geom = this.calculateImageSphereGeometry(cachedCenter);
+                const geom = referenceMode === 'exit-pupil'
+                    ? this.calculateExitPupilReferenceSphereGeometry(cachedCenter)
+                    : this.calculateImageSphereGeometry(cachedCenter);
                 cachedRadius = geom?.imageSphereRadius;
                 cachedSphereCenter = geom?.referenceSphereCenter;
                 // On-axis fallback: if chief ray is exactly on-axis, geometry returns Infinity.
@@ -3449,7 +3455,7 @@ ${surfaceTypeList}
                     }
                 }
                 try {
-                    this._referenceSphereCache?.set?.(currentFieldKey, { center: cachedCenter, radius: cachedRadius, sphereCenter: cachedSphereCenter });
+                    this._referenceSphereCache?.set?.(geometryCacheKey, { center: cachedCenter, radius: cachedRadius, sphereCenter: cachedSphereCenter });
                 } catch (_) {}
             }
 
@@ -3825,6 +3831,39 @@ ${surfaceTypeList}
         } catch (error) {
             console.error(`❌ 像参照球幾何計算エラー: ${error.message}`);
             return { imageSphereRadius: null, referenceSphereCenter: null, axisIntersectionZ: null };
+        }
+    }
+
+    calculateExitPupilReferenceSphereGeometry(imageSpherePoint) {
+        try {
+            const exitPupil = calculateExitPupilDiameter(this.opticalSystemRows, this.wavelength);
+            const position = Number(exitPupil?.position);
+            const diameter = Number(exitPupil?.diameter);
+            if (!Number.isFinite(position) || !Number.isFinite(diameter) || diameter <= 0) {
+                return { imageSphereRadius: Infinity, referenceSphereCenter: null, axisIntersectionZ: null };
+            }
+            const physicalOrigins = Array.isArray(this._surfaceOrigins)
+                ? this._surfaceOrigins.filter((surface) => Number.isFinite(Number(surface?.origin?.z)))
+                : [];
+            const lastSurfaceZ = physicalOrigins.length > 0
+                ? Number(physicalOrigins[physicalOrigins.length - 1].origin.z)
+                : 0;
+            const center = { x: 0, y: 0, z: lastSurfaceZ + position };
+            const dx = Number(imageSpherePoint?.x) - center.x;
+            const dy = Number(imageSpherePoint?.y) - center.y;
+            const dz = Number(imageSpherePoint?.z) - center.z;
+            const radius = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (!Number.isFinite(radius) || radius <= 0) {
+                return { imageSphereRadius: Infinity, referenceSphereCenter: null, axisIntersectionZ: null };
+            }
+            return {
+                imageSphereRadius: radius,
+                referenceSphereCenter: center,
+                axisIntersectionZ: center.z,
+                exitPupilDiameterMm: diameter,
+            };
+        } catch (_) {
+            return { imageSphereRadius: Infinity, referenceSphereCenter: null, axisIntersectionZ: null };
         }
     }
 
@@ -7807,19 +7846,23 @@ export class WavefrontAberrationAnalyzer {
             } else {
 
             const computeOPD = (opts) => {
+                const opdOptions = {
+                    ...(opts || {}),
+                    referenceMode: options?.referenceMode || 'reference-sphere',
+                };
                 if (prof) {
                     const t0 = now();
                     const v = (opdMode === 'referenceSphere')
-                        ? this.opdCalculator.calculateOPDReferenceSphere(pupilX, pupilY, fieldSetting, false, opts)
-                        : this.opdCalculator.calculateOPD(pupilX, pupilY, fieldSetting, opts);
+                        ? this.opdCalculator.calculateOPDReferenceSphere(pupilX, pupilY, fieldSetting, false, opdOptions)
+                        : this.opdCalculator.calculateOPD(pupilX, pupilY, fieldSetting, opdOptions);
                     const dt = now() - t0;
                     prof.opdCalls++;
                     prof.opdCallMs += Number.isFinite(dt) ? dt : 0;
                     return v;
                 }
                 return (opdMode === 'referenceSphere')
-                    ? this.opdCalculator.calculateOPDReferenceSphere(pupilX, pupilY, fieldSetting, false, opts)
-                    : this.opdCalculator.calculateOPD(pupilX, pupilY, fieldSetting, opts);
+                    ? this.opdCalculator.calculateOPDReferenceSphere(pupilX, pupilY, fieldSetting, false, opdOptions)
+                    : this.opdCalculator.calculateOPD(pupilX, pupilY, fieldSetting, opdOptions);
             };
 
             opd = preferFast ? computeOPD(solveOptionsFast) : computeOPD(solveOptionsSlow);

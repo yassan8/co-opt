@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Plotly from 'plotly.js-dist-min';
 import { runNativeFieldMtfMap } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
 
@@ -134,22 +135,10 @@ function getForcedInfinitePupilMode(): 'stop' | 'entrance' | '' {
   }
 }
 
-// Dynamically inject the Plotly CDN script if not already loaded.
-let plotlyLoadPromise: Promise<void> | null = null;
+// Reuse the bundled Plotly 3.7.0 build instead of loading a cross-origin CDN script.
 function loadPlotly(): Promise<void> {
-  if ((window as any).Plotly) return Promise.resolve();
-  if (plotlyLoadPromise) return plotlyLoadPromise;
-  plotlyLoadPromise = new Promise<void>((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
-    s.onload = () => resolve();
-    s.onerror = () => {
-      plotlyLoadPromise = null;
-      reject(new Error('Failed to load Plotly from CDN'));
-    };
-    document.head.appendChild(s);
-  });
-  return plotlyLoadPromise;
+  if (!(window as any).Plotly) (window as any).Plotly = Plotly;
+  return Promise.resolve();
 }
 
 let mtfRuntimeWarmupPromise: Promise<void> | null = null;
@@ -1347,7 +1336,19 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         xaxis: { title: 'Spatial frequency (lp/mm)', ...(Number.isFinite(xMax) ? { range: [0, xMax] } : {}) },
         yaxis: { title: 'MTF', range: [0, 1.05] },
         showlegend: true,
-      }, { responsive: true });
+      }, {
+        responsive: true,
+        displayModeBar: 'hover',
+        modeBarButtons: [[
+          'toImage',
+          'zoom2d',
+          'pan2d',
+          'zoomIn2d',
+          'zoomOut2d',
+          'autoScale2d',
+          'resetScale2d'
+        ]]
+      });
       hideProgress();
     } catch (err: any) {
       setProgress(100, 'Failed');
@@ -1459,7 +1460,19 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         yaxis: { title: 'MTF', range: [0, 1.05] },
         margin: { l: 60, r: 20, t: 50, b: 50 },
         showlegend: true,
-      }, { responsive: true, displaylogo: false });
+      }, {
+        responsive: true,
+        displayModeBar: 'hover',
+        modeBarButtons: [[
+          'toImage',
+          'zoom2d',
+          'pan2d',
+          'zoomIn2d',
+          'zoomOut2d',
+          'autoScale2d',
+          'resetScale2d'
+        ]]
+      });
       hideProgress();
     } catch (err: any) {
       setProgress(100, 'Failed');
@@ -1685,7 +1698,19 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         yaxis: { title: 'MTF', range: [0, 1.05] },
         margin: { l: 60, r: 20, t: 40, b: 50 },
         showlegend: true,
-      }, { responsive: true, displaylogo: false });
+      }, {
+        responsive: true,
+        displayModeBar: 'hover',
+        modeBarButtons: [[
+          'toImage',
+          'zoom2d',
+          'pan2d',
+          'zoomIn2d',
+          'zoomOut2d',
+          'autoScale2d',
+          'resetScale2d'
+        ]]
+      });
       hideProgress();
       window.requestAnimationFrame(() => {
         try { (window as any).Plotly?.Plots?.resize?.(container); } catch (_) {}

@@ -8970,38 +8970,7 @@ function __zoom_parseLawGroupNames(rawValue: any): string[] {
         if (window.Plotly && typeof window.Plotly.newPlot === 'function') {
             return;
         }
-
-        if (!__zoomPlotlyLoadPromise) {
-            __zoomPlotlyLoadPromise = new Promise<void>((resolve, reject) => {
-                const existing = document.querySelector('script[data-coopt-plotly="1"]') as HTMLScriptElement | null;
-                if (existing) {
-                    if (window.Plotly && typeof window.Plotly.newPlot === 'function') {
-                        resolve();
-                        return;
-                    }
-                    existing.addEventListener('load', () => resolve(), { once: true });
-                    existing.addEventListener('error', () => reject(new Error('Failed to load Plotly')), { once: true });
-                    return;
-                }
-
-                const script = document.createElement('script');
-                script.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
-                script.async = true;
-                script.setAttribute('data-coopt-plotly', '1');
-                script.addEventListener('load', () => resolve(), { once: true });
-                script.addEventListener('error', () => reject(new Error('Failed to load Plotly')), { once: true });
-                document.head.appendChild(script);
-            }).finally(() => {
-                if (!(window.Plotly && typeof window.Plotly.newPlot === 'function')) {
-                    __zoomPlotlyLoadPromise = null;
-                }
-            });
-        }
-
-        await __zoomPlotlyLoadPromise;
-        if (!(window.Plotly && typeof window.Plotly.newPlot === 'function')) {
-            throw new Error('Plotly is unavailable');
-        }
+        throw new Error('Plotly is unavailable; the bundled Plotly 3.7.0 module has not loaded');
     }
 
     async function __zoom_renderCompensationChart(target: HTMLElement, compensation: any): Promise<void> {

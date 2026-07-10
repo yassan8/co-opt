@@ -2,6 +2,7 @@
 // ES module entry point.
 
 import { getAllGlassDatabases } from './glass.ts';
+import plotlyScriptUrl from 'plotly.js-dist-min/plotly.min.js?url';
 
 interface GlassPoint {
   name: string;
@@ -56,11 +57,6 @@ function buildGlassPoints(): GlassPoint[] {
   return points;
 }
 
-function findPlotlyScriptSrc(): string | null {
-  const script = document.querySelector('script[src*="plotly" i]');
-  return script && (script as HTMLScriptElement).src ? (script as HTMLScriptElement).src : null;
-}
-
 /**
  * Open a popup window containing an Abbe diagram (Vd vs nd) for all glasses.
  *
@@ -83,8 +79,6 @@ export function openGlassMapWindow(
   }
 
   const points = buildGlassPoints();
-  const plotlySrc = findPlotlyScriptSrc();
-
   const w = window.open('', 'coopt_glass_map', 'popup=yes,width=800,height=600');
   if (!w) {
     alert('Popup was blocked. Please allow popups for this site and try again.');
@@ -112,7 +106,7 @@ export function openGlassMapWindow(
     .note { font-size: 12px; color: #666; margin: 0 0 10px; padding: 8px 12px; background-color: #f9f9f9; border-left: 3px solid #007acc; border-radius: 3px; }
     #plot { flex: 1; min-height: 0; }
   </style>
-  ${plotlySrc ? `<script src="${plotlySrc}"></script>` : ''}
+  <script src="${plotlyScriptUrl}"></script>
 </head>
 <body>
   <div class="wrap">
@@ -136,12 +130,6 @@ export function openGlassMapWindow(
 
       function ensurePlotlyReady() {
         if (window.Plotly) return Promise.resolve(window.Plotly);
-        try {
-          if (window.opener && window.opener.Plotly) {
-            window['Plotly'] = window.opener.Plotly;
-            return Promise.resolve(window.Plotly);
-          }
-        } catch (e) {}
         return new Promise((resolve, reject) => {
           const start = Date.now();
           const timer = setInterval(() => {
