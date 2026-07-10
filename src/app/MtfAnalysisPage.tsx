@@ -515,7 +515,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
   const [objectIdx, setObjectIdx] = useState<string>('0');
 
   // ── Shared computation params ──
-  const [sampling, setSampling] = useState(type === 'field-mtf' ? '32' : '256');
+  const [sampling, setSampling] = useState('32');
   const [removePtd, setRemovePtd] = useState(false);
 
   // ── MTF-specific ──

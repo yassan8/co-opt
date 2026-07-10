@@ -3607,7 +3607,7 @@ export default function LegacyPanels() {
                 <option value="multifield">Multi-field Comparison</option>
               </select>
               <label htmlFor="wavefront-grid-size-select">Grid size:</label>
-              <select id="wavefront-grid-size-select" defaultValue="64">
+              <select id="wavefront-grid-size-select" defaultValue="32">
                 <option value="16">16x16</option>
                 <option value="32">32x32</option>
                 <option value="64">64x64</option>
@@ -3637,7 +3637,7 @@ export default function LegacyPanels() {
                 <option value="0">Object 1</option>
               </select>
               <label htmlFor="psf-sampling-select">FFT grid:</label>
-              <select id="psf-sampling-select" defaultValue="64">
+              <select id="psf-sampling-select" defaultValue="32">
                 <option value="32">32x32</option>
                 <option value="64">64x64</option>
                 <option value="128">128x128</option>
@@ -3669,7 +3669,7 @@ export default function LegacyPanels() {
               <select
                 id="psf-zernike-sampling-select"
                 title="Ray-traced OPD grid size (number of rays traced across pupil)"
-                defaultValue="64"
+                defaultValue="32"
               >
                 <option value="32">32x32</option>
                 <option value="64">64x64</option>
