@@ -11526,6 +11526,7 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
 
     let mut real_grid = vec![vec![0.0_f64; grid_n]; grid_n];
     let mut imag_grid = vec![vec![0.0_f64; grid_n]; grid_n];
+    let mut n_pupil: usize = 0;
 
     for iy in 0..grid_n {
         let row_raw = raw_opd_arr.get(iy).and_then(|r| r.as_array());
@@ -11551,6 +11552,7 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
             let phase = phase_scale * opd_um;
             real_grid[iy][ix] = phase.cos();
             imag_grid[iy][ix] = phase.sin();
+            n_pupil += 1;
         }
     }
 
@@ -11568,17 +11570,29 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
     // ── Intensity, normalise, fftShift ────────────────────────────────────────
     let mut intensity = vec![vec![0.0_f64; fft_size]; fft_size];
     let mut peak = 0.0_f64;
+    let mut total_energy = 0.0_f64;
     for y in 0..fft_size {
         for x in 0..fft_size {
             let re = fft_real[y][x];
             let im = fft_imag[y][x];
             let v = re * re + im * im;
             intensity[y][x] = v;
+            total_energy += v;
             if v > peak {
                 peak = v;
             }
         }
     }
+
+    // Strehl = actual_peak / ideal_peak where ideal_peak = n_pupil² (unnormalized FFT)
+    let ideal_peak = (n_pupil as f64) * (n_pupil as f64);
+    let strehl_ratio = if ideal_peak > 0.0 {
+        (peak / ideal_peak).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let total_energy_norm = if peak > 0.0 { total_energy / peak } else { 0.0 };
+
     if peak > 0.0 {
         for row in &mut intensity {
             for v in row.iter_mut() {
@@ -11589,12 +11603,68 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
 
     let psf = fft_shift_2d_internal(intensity);
 
+    // ── Metrics: FWHM from shifted PSF profiles ───────────────────────────────
+    let (psf_peak_y, psf_peak_x) = {
+        let mut py = fft_size / 2;
+        let mut px = fft_size / 2;
+        let mut pv = 0.0_f64;
+        for y in 0..fft_size {
+            for x in 0..fft_size {
+                if psf[y][x] > pv {
+                    pv = psf[y][x];
+                    py = y;
+                    px = x;
+                }
+            }
+        }
+        (py, px)
+    };
+
+    let half_max = 0.5_f64; // PSF is normalized to 1.0 at peak
+    let fwhm_pixels = |profile: &[f64], center: usize| -> f64 {
+        if profile.is_empty() {
+            return 0.0;
+        }
+        let mut left = center;
+        let mut right = center;
+        for i in (0..=center.min(profile.len().saturating_sub(1))).rev() {
+            if profile[i] < half_max {
+                left = i;
+                break;
+            }
+        }
+        for i in center..profile.len() {
+            if profile[i] < half_max {
+                right = i;
+                break;
+            }
+        }
+        right.saturating_sub(left) as f64
+    };
+
+    let x_profile: &[f64] = if psf_peak_y < fft_size { &psf[psf_peak_y] } else { &[] };
+    let y_profile: Vec<f64> = (0..fft_size).map(|yy| if yy < psf.len() && psf_peak_x < psf[yy].len() { psf[yy][psf_peak_x] } else { 0.0 }).collect();
+    let fwhm_x = fwhm_pixels(x_profile, psf_peak_x) * pixel_size_um;
+    let fwhm_y = fwhm_pixels(&y_profile, psf_peak_y) * pixel_size_um;
+    let fwhm_avg = (fwhm_x + fwhm_y) * 0.5;
+
     Ok(serde_json::json!({
         "backend": "web-rust-wasm-psf",
         "gridSize": grid_n,
         "fftSize": fft_size,
         "pixelSizeUm": pixel_size_um,
         "psfData": psf,
+        "metrics": {
+            "strehlRatio": strehl_ratio,
+            "fwhm": {
+                "x": fwhm_x,
+                "y": fwhm_y,
+                "average": fwhm_avg
+            },
+            "peakIntensity": 1.0,
+            "totalEnergy": total_energy_norm
+        },
+        "strehlRatio": strehl_ratio,
         "message": "Computed via WASM PSF (run_native_psf_from_opd_wasm_json)"
     }))
 }
