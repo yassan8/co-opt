@@ -609,6 +609,132 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
   }, []);
   const hideProgress = useCallback(() => setProgressVisible(false), []);
 
+  // ── Batch MTF Helper Functions ──
+  /**
+   * Build batch job structure for MTF calculation.
+   * Uses JavaScript-level parallelization via Promise.all.
+   * Returns array of OPD/PSF/MTF calculation parameters, each with metadata.
+   */
+  const buildMtfBatchJobs = useCallback((
+    wavelengths: number[],
+    opdResponses: Array<{ displayOpdGrid: any[]; rawOpdGrid: any[] }>,
+    params: { objectIndex: number; gridSize: number; wavelengthUm?: number; opdDisplayMode: string }
+  ) => {
+    return wavelengths.map((wl, wli) => ({
+      index: wli,
+      wavelengthUm: wl,
+      objectIndex: params.objectIndex,
+      gridSize: params.gridSize,
+      opdDisplayMode: params.opdDisplayMode,
+      opdResponse: opdResponses[wli],
+      wlTitle: (wl * 1000).toFixed(1),
+    }));
+  }, []);
+
+  /**
+   * Execute batch MTF calculations in parallel using Promise.all.
+   * Each job fetches OPD, computes PSF, then MTF sequentially.
+   * Multiple jobs execute in parallel.
+   */
+  const executeMtfBatch = useCallback(async (
+    jobs: ReturnType<typeof buildMtfBatchJobs>,
+    host: any,
+    psfParams: { pixelSizeUm: number; removeTilt: boolean; zeroPadTo: number; recenterIfWrapped: boolean },
+    mtfParams: { maxFrequencyLpmm?: number; points?: number; sampleFrequenciesLpmm?: number[]; method: string }
+  ) => {
+    return Promise.all(jobs.map(async (job) => {
+      const wl = job.wavelengthUm;
+      const s = job.gridSize;
+      const opdGrid: Float32Array[] = Array.from({ length: s }, () => new Float32Array(s));
+      const ampGrid: Float32Array[] = Array.from({ length: s }, () => new Float32Array(s));
+      const maskGrid: boolean[][] = Array.from({ length: s }, () => Array(s).fill(false));
+      const displayOpdGrid = job.opdResponse?.displayOpdGrid || [];
+      const rawOpdGrid = job.opdResponse?.rawOpdGrid || [];
+      
+      // Build OPD grid from response
+      for (let iy = 0; iy < s; iy++) {
+        const rowDisplay = displayOpdGrid[iy] || [];
+        const rowRaw = rawOpdGrid[iy] || [];
+        for (let ix = 0; ix < s; ix++) {
+          const rawCell = rowRaw[ix];
+          if (rawCell === null || rawCell === undefined || rawCell === '') continue;
+          const vRawWaves = Number(rawCell);
+          if (!Number.isFinite(vRawWaves)) continue;
+          const displayCell = rowDisplay[ix];
+          const vDisplayWaves = (displayCell === null || displayCell === undefined || displayCell === '') ? NaN : Number(displayCell);
+          const vWaves = Number.isFinite(vDisplayWaves) ? vDisplayWaves : vRawWaves;
+          maskGrid[iy][ix] = true;
+          opdGrid[iy][ix] = vWaves * wl;
+          ampGrid[iy][ix] = 1.0;
+        }
+      }
+      
+      // PSF calculation
+      const nativePsfResp = await host.runDesktopNativePsfMapForPopup({
+        gridOpd: Array.from({ length: s }, (_, iy) => Array.from(opdGrid[iy] || [])),
+        gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
+        pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
+        wavelengthUm: wl,
+        pixelSizeUm: psfParams.pixelSizeUm,
+        removeTilt: psfParams.removeTilt,
+        zeroPadTo: psfParams.zeroPadTo,
+        recenterIfWrapped: psfParams.recenterIfWrapped,
+      });
+      
+      // MTF calculation
+      const mtfResp = await host.runDesktopNativeMtfMapForPopup({
+        psfData: nativePsfResp?.psfData,
+        pixelSizeUm: psfParams.pixelSizeUm,
+        maxFrequencyLpmm: mtfParams.maxFrequencyLpmm,
+        points: mtfParams.points,
+        sampleFrequenciesLpmm: mtfParams.sampleFrequenciesLpmm,
+        directEvalOnly: true,
+        method: mtfParams.method,
+      });
+      
+      return {
+        index: job.index,
+        wavelengthUm: wl,
+        psfResp: nativePsfResp,
+        mtfResp: mtfResp,
+        displayOpdGrid,
+        maskGrid,
+        ampGrid,
+      };
+    }));
+  }, []);
+
+  /**
+   * Parse MTF batch results into frequency/tan/sag curves.
+   * Each result contains PSF and MTF data for one wavelength.
+   */
+  const parseMtfBatchResults = useCallback((results: Awaited<ReturnType<typeof executeMtfBatch>>) => {
+    return results.map(result => {
+      const mtfResp = result.mtfResp;
+      const freq: number[] = Array.isArray(mtfResp?.sampledFrequenciesLpmm) && mtfResp.sampledFrequenciesLpmm.length > 0
+        ? mtfResp.sampledFrequenciesLpmm
+        : (Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis : []);
+      const tan: number[] = Array.isArray(mtfResp?.sampledMtfTangential) && mtfResp.sampledMtfTangential.length === freq.length
+        ? mtfResp.sampledMtfTangential
+        : (Array.isArray(mtfResp?.mtfTangential) ? mtfResp.mtfTangential : []);
+      const sag: number[] = Array.isArray(mtfResp?.sampledMtfSagittal) && mtfResp.sampledMtfSagittal.length === freq.length
+        ? mtfResp.sampledMtfSagittal
+        : (Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal : []);
+      
+      return {
+        index: result.index,
+        wavelengthUm: result.wavelengthUm,
+        freq,
+        tan,
+        sag,
+        displayOpdGrid: result.displayOpdGrid,
+        maskGrid: result.maskGrid,
+        ampGrid: result.ampGrid,
+        psfResp: result.psfResp,
+      };
+    });
+  }, []);
+
   // ─── Compute MTF ───────────────────────────────────────────────────────────
   const handleComputeMtf = useCallback(async () => {
     const container = chartRef.current;
@@ -674,15 +800,18 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         const variance = Math.max(0, (sumSq / count) - (mean * mean));
         return Math.sqrt(variance);
       };
-      for (let wli = 0; wli < wavelengthList.length; wli++) {
+
+      // ── Phase 1: Parallel OPD acquisition ──
+      setProgress(5, 'Fetching OPD maps (parallel)...');
+      const opdResponses = await Promise.all(
+        wavelengthList.map(wl => 
+          host.runDesktopNativeOpdMapForPopup({ objectIndex: objIdxN, gridSize: samplingN, wavelengthUm: wl, opdDisplayMode })
+        )
+      );
+
+      // ── Phase 2: Build OPD grids from responses (sequential but fast) ──
+      const opdGrids = opdResponses.map((nativeOpdResp, wli) => {
         const wl = wavelengthList[wli];
-        const wlWeight = Number.isFinite(Number(wavelengthEntries[wli]?.weight))
-          ? Number(wavelengthEntries[wli]?.weight)
-          : (1 / Math.max(1, wavelengthList.length));
-        const titleNm = (wl * 1000).toFixed(1);
-        const baseProgress = (wli / Math.max(1, wavelengthList.length)) * 80;
-        setProgress(10 + baseProgress, `λ=${titleNm}nm: OPD...`);
-        const nativeOpdResp = await host.runDesktopNativeOpdMapForPopup({ objectIndex: objIdxN, gridSize: samplingN, wavelengthUm: wl, opdDisplayMode });
         const s = samplingN;
         const opdGrid: Float32Array[] = Array.from({ length: s }, () => new Float32Array(s));
         const ampGrid: Float32Array[] = Array.from({ length: s }, () => new Float32Array(s));
@@ -705,8 +834,16 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
             ampGrid[iy][ix] = 1.0;
           }
         }
-        const opticalRows: any[] = typeof host?.getOpticalSystemRows === 'function'
-          ? safeCall(() => host.getOpticalSystemRows(host.tableOpticalSystem), []) : [];
+        return { opdGrid, ampGrid, maskGrid, displayOpdGrid };
+      });
+
+      // ── Phase 3: Calculate PSF parameters (pupil diameter, focal length) ──
+      const opticalRows: any[] = typeof host?.getOpticalSystemRows === 'function'
+        ? safeCall(() => host.getOpticalSystemRows(host.tableOpticalSystem), []) : [];
+      const pupilDiameters: number[] = [];
+      const focalLengths: number[] = [];
+
+      for (const wl of wavelengthList) {
         let pupilDiameterMm = 10.0;
         let focalLengthMm = NaN;
         try {
@@ -739,16 +876,25 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           } catch (_) {}
         }
         if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) focalLengthMm = 100.0;
-        const basePixelPitchUm = (wl * Math.abs(focalLengthMm)) / Math.max(1e-12, Math.abs(pupilDiameterMm));
+        
+        pupilDiameters.push(pupilDiameterMm);
+        focalLengths.push(focalLengthMm);
+      }
+
+      // ── Phase 4: Parallel PSF+MTF calculations ──
+      setProgress(10, 'Computing PSF/MTF (parallel)...');
+      const psfMtfCalculations = wavelengthList.map(async (wl, wli) => {
+        const basePixelPitchUm = (wl * Math.abs(focalLengths[wli])) / Math.max(1e-12, Math.abs(pupilDiameters[wli]));
         const pixelSizeUm = basePixelPitchUm * (samplingN / requestedFftSize);
-        setProgress(20 + baseProgress, `λ=${titleNm}nm: PSF...`);
+        const grids = opdGrids[wli];
+
         const nativePsfResp = await host.runDesktopNativePsfMapForPopup({
-          gridOpd: Array.from({ length: s }, (_, iy) => Array.from(opdGrid[iy] || [])),
-          gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
-          pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
+          gridOpd: Array.from({ length: samplingN }, (_, iy) => Array.from(grids.opdGrid[iy] || [])),
+          gridAmplitude: Array.from({ length: samplingN }, (_, iy) => Array.from(grids.ampGrid[iy] || [])),
+          pupilMask: Array.from({ length: samplingN }, (_, iy) => Array.from(grids.maskGrid[iy] || [])),
           wavelengthUm: wl, pixelSizeUm, removeTilt: false, zeroPadTo: requestedFftSize, recenterIfWrapped: false,
         });
-        setProgress(30 + baseProgress, `λ=${titleNm}nm: MTF...`);
+
         const mtfResp = await host.runDesktopNativeMtfMapForPopup({
           psfData: nativePsfResp?.psfData, pixelSizeUm,
           maxFrequencyLpmm: Number.isFinite(maxFreqN) ? maxFreqN : undefined,
@@ -757,6 +903,27 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           directEvalOnly: true,
           method: mtfMethod,
         });
+
+        return { wli, wl, nativePsfResp, mtfResp, pixelSizeUm, grids };
+      });
+
+      const psfMtfResults = await Promise.all(psfMtfCalculations);
+
+      // ── Phase 5: Process results and render ──
+      for (const result of psfMtfResults) {
+        const { wli, wl, nativePsfResp, mtfResp, pixelSizeUm, grids } = result;
+        const displayOpdGrid = grids.displayOpdGrid;
+        const maskGrid = grids.maskGrid;
+        const ampGrid = grids.ampGrid;
+        const s = samplingN;
+        
+        const wlWeight = Number.isFinite(Number(wavelengthEntries[wli]?.weight))
+          ? Number(wavelengthEntries[wli]?.weight)
+          : (1 / Math.max(1, wavelengthList.length));
+        const titleNm = (wl * 1000).toFixed(1);
+        const baseProgress = (wli / Math.max(1, wavelengthList.length)) * 80;
+        setProgress(45 + baseProgress, `λ=${titleNm}nm: Processing...`);
+
         const freq: number[] = Array.isArray(mtfResp?.sampledFrequenciesLpmm) && mtfResp.sampledFrequenciesLpmm.length > 0
           ? mtfResp.sampledFrequenciesLpmm
           : (Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis : []);
