@@ -3665,7 +3665,7 @@ export default function LegacyPanels() {
                 <option value="2048">2048</option>
                 <option value="4096">4096</option>
               </select>
-              <label htmlFor="psf-zernike-sampling-select">sampling:</label>
+              <label htmlFor="psf-zernike-sampling-select">OPD grid sampling:</label>
               <select
                 id="psf-zernike-sampling-select"
                 title="Ray-traced OPD grid size (number of rays traced across pupil)"
