@@ -550,7 +550,7 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
     const jobId = `native-tfmtf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlistenProgress: null | (() => void) = null;
-    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
+    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 32;
     const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
     const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
     const fieldSetting = buildPopupFieldSettingFromObjectRows(
@@ -705,7 +705,7 @@ async function runPortableThroughFocusMtfForPopup(payload: {
             defocusMinMm: Number.isFinite(Number(payload?.defocusMinMm)) ? Number(payload?.defocusMinMm) : -0.5,
             defocusMaxMm: Number.isFinite(Number(payload?.defocusMaxMm)) ? Number(payload?.defocusMaxMm) : 0.5,
             steps: Number.isFinite(Number(payload?.steps)) ? Math.max(3, Math.floor(Number(payload?.steps))) : 21,
-            samplingSize: Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 256,
+            samplingSize: Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 32,
             zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : 0,
             containerElement: scratch,
             onProgress: payload?.onProgress as any,
@@ -795,7 +795,7 @@ async function runDesktopNativeCompareMtfVsTfmtfForPopup(payload: {
     const { opticalSystemRows, sourceRows } = collectPopupRowsFromMainWindow();
     const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
     const targetFrequencyLpmm = Number.isFinite(Number(payload?.targetFrequencyLpmm)) ? Number(payload.targetFrequencyLpmm) : 10;
-    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
+    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 32;
     const zeroPadToRaw = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
     const requestedFftSize = samplingSize;
     const opdDisplayModeRaw = String(payload?.opdDisplayMode || 'pistonTiltRemoved');
@@ -1023,7 +1023,7 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
     }
 
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
-    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
+    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 32;
     const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
     const mtfMethod = payload?.method || 'hopkins-tcc';
     const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
@@ -1831,7 +1831,7 @@ async function runDesktopNativeFieldMtfDiagnosticsForPopup(payload: {
             fieldMin: Number.isFinite(Number(payload?.fieldMin)) ? Number(payload?.fieldMin) : 0,
             fieldMax: Number.isFinite(Number(payload?.fieldMax)) ? Number(payload?.fieldMax) : 10,
             steps: Number.isFinite(Number(payload?.steps)) ? Number(payload?.steps) : 21,
-            samplingSize: Number.isFinite(Number(payload?.samplingSize)) ? Number(payload?.samplingSize) : 256,
+            samplingSize: Number.isFinite(Number(payload?.samplingSize)) ? Number(payload?.samplingSize) : 32,
             zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Number(payload?.zeroPadTo) : 0,
             opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
             fieldAxisMode: payload?.fieldAxisMode === 'height' ? 'height' : 'angle',
@@ -14735,7 +14735,7 @@ export function setupAnalysisWindows() {
                     defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.5,
                     defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.5,
                     steps: Number.isFinite(steps) ? steps : 21,
-                    samplingSize: Number.isFinite(sampling) ? sampling : 256,
+                    samplingSize: Number.isFinite(sampling) ? sampling : 32,
                     zeroPadTo,
                     opdDisplayMode,
                     method: mtfMethod,
@@ -15319,7 +15319,7 @@ export function setupAnalysisWindows() {
                     fieldMin: Number.isFinite(fieldMin) ? fieldMin : 0,
                     fieldMax: Number.isFinite(fieldMax) ? fieldMax : 10,
                     steps: Number.isFinite(steps) ? steps : 21,
-                    samplingSize: Number.isFinite(sampling) ? sampling : 256,
+                    samplingSize: Number.isFinite(sampling) ? sampling : 32,
                     zeroPadTo,
                     opdDisplayMode,
                     fieldAxisMode: axisInfo.mode,

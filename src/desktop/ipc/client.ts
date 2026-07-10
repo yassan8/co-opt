@@ -78,6 +78,7 @@ import type {
 import type { InvokeRequestEnvelope } from "../../shared/contracts/ipc";
 import { isTauriRuntime } from "../runtime";
 import { asphericSag } from "../../../raytracing/core/ray-tracing.ts";
+import { getRefractiveIndex as getParaxialRefractiveIndex } from "../../../raytracing/core/ray-paraxial.ts";
 
 export async function readDesktopSetting(key: string): Promise<string | null> {
   const k = String(key ?? "").trim();
@@ -135,6 +136,30 @@ function assertArrayField(value: unknown, fieldName: string, commandName: string
   if (!Array.isArray(value)) {
     throw new Error(`${commandName} requires ${fieldName} to be an array`);
   }
+}
+
+function enrichRowsWithResolvedRindexForWasm(rows: any[], wavelengthUm: number): any[] {
+  if (!Array.isArray(rows) || rows.length === 0) return Array.isArray(rows) ? rows : [];
+  const wl = Number.isFinite(Number(wavelengthUm)) && Number(wavelengthUm) > 0 ? Number(wavelengthUm) : 0.5876;
+  let changed = false;
+  const mapped = rows.map((row: any) => {
+    if (!row || typeof row !== "object") return row;
+    let resolved = Number.NaN;
+    try {
+      resolved = Number(getParaxialRefractiveIndex(row, wl));
+    } catch (_) {
+      resolved = Number.NaN;
+    }
+    if (!Number.isFinite(resolved) || resolved <= 0) return row;
+    const prev = Number((row as any)?.__cooptResolvedRindex);
+    if (Number.isFinite(prev) && Math.abs(prev - resolved) <= 1e-12) return row;
+    changed = true;
+    return {
+      ...row,
+      __cooptResolvedRindex: resolved,
+    };
+  });
+  return changed ? mapped : rows;
 }
 
 function isOpdDebugEnabled(): boolean {
@@ -2045,6 +2070,23 @@ export async function runNativeSeidel(
   if (!isTauriRuntime()) {
     if (opticalSystemRows.length === 0) throw new Error("runNativeSeidel(web): opticalSystemRows is empty");
 
+    const wavelengthUm = (() => {
+      if (Number.isFinite(referenceWavelengthUm) && referenceWavelengthUm > 0) return referenceWavelengthUm;
+      for (const row of sourceRows) {
+        const primaryRaw = String((row as any)?.primary ?? '').trim().toLowerCase();
+        const primaryBool = Boolean((row as any)?.primary === true || (row as any)?.isPrimary === true);
+        const wl = Number((row as any)?.wavelength);
+        if ((primaryBool || primaryRaw.includes('primary')) && Number.isFinite(wl) && wl > 0) {
+          return wl;
+        }
+      }
+      for (const row of sourceRows) {
+        const wl = Number((row as any)?.wavelength);
+        if (Number.isFinite(wl) && wl > 0) return wl;
+      }
+      return 0.5876;
+    })();
+    const rowsForWasm = enrichRowsWithResolvedRindexForWasm(opticalSystemRows, wavelengthUm);
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const runNativeWasm = (rust as any)?.run_native_seidel_wasm_json;
@@ -2057,7 +2099,7 @@ export async function runNativeSeidel(
     }
 
     const wasmOutRaw = runNativeWasm(JSON.stringify({
-      opticalSystemRows,
+      opticalSystemRows: rowsForWasm,
       sourceRows,
       objectRows,
       afocal,
@@ -2662,27 +2704,13 @@ export async function runNativeOpdMap(
     const gridSize = Number.isFinite(Number(payload?.gridSize)) ? Math.max(17, Math.floor(Number(payload.gridSize))) : 129;
     const requestedPupilSamplingMode = (payload?.pupilSamplingMode === "stop" || payload?.pupilSamplingMode === "entrance")
       ? payload.pupilSamplingMode
-      : (isInfiniteConjugateRows(opticalSystemRows) ? "entrance" : "stop");
+      : "stop";
     const opdDisplayMode = String(payload?.opdDisplayMode || "pistonTiltRemoved");
     const targetSurface = Number.isInteger(payload?.surfaceIndex) && Number(payload.surfaceIndex) >= 0
       ? Number(payload.surfaceIndex)
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
 
-    if (isImageHeightNativeObjectRow(selectedObject) || isAngle) {
-      return clampIdealParaxialNativeOpdResponse(
-        opticalSystemRows,
-        await computeReferenceOpdMapViaRustTracedJsMath(
-          opticalSystemRows,
-          objectRows,
-          objectIndex,
-          wavelengthUm,
-          gridSize,
-          requestedPupilSamplingMode,
-          opdDisplayMode,
-        ),
-      );
-    }
-
+    const rowsForWasm = enrichRowsWithResolvedRindexForWasm(opticalSystemRows, wavelengthUm);
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const runNativeWasm = (rust as any)?.run_native_opd_map_wasm_json;
@@ -2695,7 +2723,7 @@ export async function runNativeOpdMap(
     }
 
     const wasmOutRaw = runNativeWasm(JSON.stringify({
-      opticalSystemRows,
+      opticalSystemRows: rowsForWasm,
       sourceRows,
       objectRows,
       objectIndex,
@@ -2792,42 +2820,13 @@ export async function runNativeOpdRmsWaves(
     const gridSize = Number.isFinite(Number(payload?.gridSize)) ? Math.max(17, Math.floor(Number(payload.gridSize))) : 129;
     const requestedPupilSamplingMode = (payload?.pupilSamplingMode === "stop" || payload?.pupilSamplingMode === "entrance")
       ? payload.pupilSamplingMode
-      : (isInfiniteConjugateRows(opticalSystemRows) ? "entrance" : "stop");
+      : "stop";
     const opdDisplayMode = String(payload?.opdDisplayMode || "pistonTiltRemoved");
     const targetSurface = Number.isInteger(payload?.surfaceIndex) && Number(payload.surfaceIndex) >= 0
       ? Number(payload.surfaceIndex)
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
 
-    if (isImageHeightNativeObjectRow(requestedObject)) {
-      const mapResponse = await computeReferenceOpdMapViaRustTracedJsMath(
-        opticalSystemRows,
-        objectRows,
-        objectIndex,
-        wavelengthUm,
-        gridSize,
-        requestedPupilSamplingMode,
-        opdDisplayMode,
-      );
-      return clampIdealParaxialNativeOpdRmsResponse(opticalSystemRows, {
-        backend: String(mapResponse?.backend || "web-rust-wasm-js-reference"),
-        chiefReferenceMode: String(mapResponse?.chiefReferenceMode || ""),
-        targetSurface: Number.isFinite(Number(mapResponse?.targetSurface)) ? Number(mapResponse.targetSurface) : targetSurface,
-        stopSurface: Number.isFinite(Number(mapResponse?.stopSurface)) ? Number(mapResponse.stopSurface) : 0,
-        requestedObjectIndex: objectIndex,
-        usedObjectIndex: Number.isFinite(Number(mapResponse?.usedObjectIndex)) ? Number(mapResponse.usedObjectIndex) : objectIndex,
-        usedObjectPosition: String(mapResponse?.usedObjectPosition || (isAngle ? "angle" : "height")),
-        usedObjectX: Number.isFinite(Number(mapResponse?.usedObjectX)) ? Number(mapResponse.usedObjectX) : xVal,
-        usedObjectY: Number.isFinite(Number(mapResponse?.usedObjectY)) ? Number(mapResponse.usedObjectY) : yVal,
-        wavelengthUm,
-        gridSize: Number.isFinite(Number(mapResponse?.gridSize)) ? Number(mapResponse.gridSize) : gridSize,
-        sampleCount: Number.isFinite(Number(mapResponse?.sampleCount)) ? Number(mapResponse.sampleCount) : 0,
-        hitCount: Number.isFinite(Number(mapResponse?.hitCount)) ? Number(mapResponse.hitCount) : 0,
-        pupilSamplingMode: mapResponse?.pupilSamplingMode === "entrance" ? "entrance" : "stop",
-        rmsWaves: computeFiniteGridRmsNativeLike(Array.isArray(mapResponse?.displayOpdGrid) ? mapResponse.displayOpdGrid : []),
-        message: String(mapResponse?.message || "Computed via JS reference-sphere math with Rust/WASM ray tracing"),
-      } as NativeOpdRmsWavesResponse);
-    }
-
+    const rowsForWasm = enrichRowsWithResolvedRindexForWasm(opticalSystemRows, wavelengthUm);
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const runNativeWasm = (rust as any)?.run_native_opd_rms_waves_wasm_json;
@@ -2840,7 +2839,7 @@ export async function runNativeOpdRmsWaves(
     }
 
     const wasmOutRaw = runNativeWasm(JSON.stringify({
-      opticalSystemRows,
+      opticalSystemRows: rowsForWasm,
       sourceRows,
       objectRows,
       objectIndex,
@@ -2882,61 +2881,48 @@ export async function runNativePsfMap(
   payload: NativePsfMapRequest,
 ): Promise<NativePsfMapResponse> {
   if (!isTauriRuntime()) {
-    const { PSFCalculator } = await import("../../../evaluation/psf/psf-calculator.ts");
     const size = Array.isArray(payload?.gridOpd) ? payload.gridOpd.length : 0;
     if (size <= 0) throw new Error("runNativePsfMap(web): gridOpd is empty");
-
-    const toGrid = (src: any, fallback = 0) =>
-      Array.from({ length: size }, (_, y) =>
-        Float32Array.from(
-          Array.from({ length: size }, (_, x) => {
-            const v = Number(src?.[y]?.[x]);
-            return Number.isFinite(v) ? v : fallback;
-          }),
-        ),
+    const wavelengthUm = Number(payload?.wavelengthUm) || 0.5876;
+    const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+    const rust = await preloadRustRayTracingWasm();
+    const runNativePsfWasm = (rust as any)?.run_native_psf_from_opd_wasm_json;
+    if (typeof runNativePsfWasm !== "function") {
+      const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
+      throw new Error(
+        "runNativePsfMap(web): Rust-WASM PSF API is unavailable. "
+        + `Reason=${initError || "missing export run_native_psf_from_opd_wasm_json"}`,
       );
-    const opdGrid = toGrid(payload.gridOpd, 0);
-    const ampGrid = toGrid(payload.gridAmplitude, 1);
-    const maskGrid = Array.from({ length: size }, (_, y) =>
-      Array.from({ length: size }, (_, x) => !!payload?.pupilMask?.[y]?.[x]),
-    );
-    const xCoords = Array.from({ length: size }, (_, i) => -1 + (2 * i) / Math.max(1, size - 1));
-    const yCoords = xCoords.slice();
+    }
 
-    const calc = new PSFCalculator();
-    const res = await calc.calculatePSF(
-      {
-        wavelength: Number(payload?.wavelengthUm) || 0.5876,
-        gridData: {
-          opd: opdGrid,
-          amplitude: ampGrid,
-          pupilMask: maskGrid,
-          xCoords,
-          yCoords,
-        },
-      },
-      {
-        samplingSize: size,
-        wavelength: Number(payload?.wavelengthUm) || 0.5876,
-        pixelSize: Number.isFinite(Number(payload?.pixelSizeUm)) ? Number(payload?.pixelSizeUm) : null,
-        removeTilt: payload?.removeTilt !== false,
-        zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Number(payload.zeroPadTo) : 0,
-        recenterIfWrapped: payload?.recenterIfWrapped === true,
-        // Web native mode must stay on Rust/WASM FFT path.
-        forceWasmFFT: true,
-      },
+    const rawOpdGrid = Array.from({ length: size }, (_, y) =>
+      Array.from({ length: size }, (_, x) => {
+        if (!payload?.pupilMask?.[y]?.[x]) return null;
+        const opdUm = Number(payload?.gridOpd?.[y]?.[x]);
+        if (!Number.isFinite(opdUm)) return null;
+        return opdUm / Math.max(1e-12, wavelengthUm);
+      }),
     );
+    const displayOpdGrid = rawOpdGrid;
+    const psfRaw = runNativePsfWasm(JSON.stringify({
+      rawOpdGrid,
+      displayOpdGrid,
+      wavelengthUm,
+      pixelSizeUm: Number.isFinite(Number(payload?.pixelSizeUm)) ? Number(payload?.pixelSizeUm) : 1,
+      removeTilt: payload?.removeTilt === true,
+      zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Number(payload.zeroPadTo) : 0,
+    }));
+    const res: any = (typeof psfRaw === "string") ? JSON.parse(psfRaw) : psfRaw;
+
     return {
-      backend: "web-rust-wasm",
+      backend: String((res as any)?.backend || "web-rust-wasm-psf"),
       gridSize: size,
       fftSize: Array.isArray((res as any)?.psfData) ? (res as any).psfData.length : size,
       psfData: Array.isArray((res as any)?.psfData) ? (res as any).psfData : [],
       metrics: ((res as any)?.metrics || {}) as any,
-      pixelSizeUm: Number.isFinite(Number((res as any)?.metadata?.pixelSize))
-        ? Number((res as any).metadata.pixelSize)
-        : (Number.isFinite(Number((res as any)?.options?.pixelSize))
-            ? Number((res as any).options.pixelSize)
-            : undefined),
+      pixelSizeUm: Number.isFinite(Number((res as any)?.pixelSizeUm))
+        ? Number((res as any).pixelSizeUm)
+        : (Number.isFinite(Number(payload?.pixelSizeUm)) ? Number(payload?.pixelSizeUm) : undefined),
       message: "Computed via Web Rust/WASM PSF API",
     };
   }
@@ -2947,6 +2933,35 @@ export async function runNativeMtfMap(
   payload: NativeMtfMapRequest,
 ): Promise<NativeMtfMapResponse> {
   if (!isTauriRuntime()) {
+    const requestedMethod = String((payload as any)?.method || "hopkins-tcc").trim().toLowerCase();
+    if (requestedMethod !== "malacara-wasm-required") {
+      const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+      const api = await preloadRustRayTracingWasm();
+      const fn = (api as any)?.run_native_mtf_from_psf_wasm_json;
+      if (typeof fn !== "function") {
+        const initError = String(getRustRayTracingWasmInitError?.() || "").trim();
+        throw new Error(
+          "runNativeMtfMap(web): Rust-WASM MTF API is unavailable. "
+          + `Reason=${initError || "missing export run_native_mtf_from_psf_wasm_json"}`,
+        );
+      }
+      const reqJson = JSON.stringify({
+        psfData: payload?.psfData,
+        pixelSizeUm: Number(payload?.pixelSizeUm),
+        maxFrequencyLpmm: Number(payload?.maxFrequencyLpmm),
+        targetFrequencyLpmm: Number((payload as any)?.targetFrequencyLpmm),
+        sampleFrequenciesLpmm: Array.isArray(payload?.sampleFrequenciesLpmm) ? payload.sampleFrequenciesLpmm : undefined,
+        directEvalOnly: payload?.directEvalOnly === true,
+        points: Number(payload?.points),
+      });
+      const raw = fn(reqJson);
+      const resp: any = (typeof raw === "string") ? JSON.parse(raw) : raw;
+      if (!resp || typeof resp !== "object") {
+        throw new Error("runNativeMtfMap(web): Rust-WASM MTF returned invalid response");
+      }
+      return resp as NativeMtfMapResponse;
+    }
+
     if (payload?.method === "malacara-wasm-required") {
       const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
       const api = await preloadRustRayTracingWasm();
@@ -3188,7 +3203,7 @@ export async function runNativeThroughFocusMtfMap(
     const maxMm = Math.max(defocusMin, defocusMax);
     const steps = Math.max(3, Math.min(201, Math.floor(Number(payload?.steps) || 21)));
     const targetFreqLpmm = Math.max(0, Number(payload?.targetFrequencyLpmm) || 10);
-    const samplingSize = Math.max(32, Math.min(4096, Math.floor(Number(payload?.samplingSize) || 256)));
+    const samplingSize = Math.max(32, Math.min(4096, Math.floor(Number(payload?.samplingSize) || 32)));
 
     const requestedFftSize = samplingSize;
     const pixelSizeUm = (Number.isFinite(Number(payload?.pixelSizeUm)) && Number(payload?.pixelSizeUm) > 0)
@@ -3388,7 +3403,7 @@ export async function runNativeFieldMtfMap(
   const preferSharedFieldMtfRoute = !isTauriRuntime();
   const sampleFromObjectRows = payload?.sampleFromObjectRows === true && normalizedInputObjectRows.length > 0;
 
-  const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 256;
+  const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 32;
   const requestedFftSize = samplingSize;
   const axisMode = payload?.fieldAxisMode === "height" ? "height" : "angle";
   const firstFrequencyLpmm = Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload?.firstFrequencyLpmm) : 10;

@@ -265,7 +265,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     const samplingCandidate = Math.floor(safeNumber(samplingSize, NaN));
     const legacyCandidate = Math.floor(safeNumber(samplingPoints, NaN));
     const gridCandidate = Number.isFinite(samplingCandidate) ? samplingCandidate : legacyCandidate;
-    const gridSize = isPowerOfTwo(gridCandidate) ? clamp(gridCandidate, 32, 4096) : 256;
+    const gridSize = isPowerOfTwo(gridCandidate) ? clamp(gridCandidate, 32, 4096) : 32;
     // MTF/TFMTF/Object MTF paths intentionally do not apply zero-padding.
     const effectiveZeroPadTo = gridSize;
 

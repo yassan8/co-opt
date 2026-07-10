@@ -1421,7 +1421,7 @@ async function initializeApplication() {
                     wavelengthMicrons: options.wavelengthMicrons ?? 'all',
                     objectIndex: Number.isFinite(Number(options.objectIndex)) ? Number(options.objectIndex) : 0,
                     maxFrequencyLpmm: Number.isFinite(Number(options.maxFrequencyLpmm)) ? Number(options.maxFrequencyLpmm) : 100,
-                    samplingSize: Number.isFinite(Number(options.samplingSize)) ? Number(options.samplingSize) : 256,
+                    samplingSize: Number.isFinite(Number(options.samplingSize)) ? Number(options.samplingSize) : 32,
                     samplingPoints: Number.isFinite(Number(options.samplingPoints)) ? Number(options.samplingPoints) : 64,
                     opdDisplayMode: options.opdDisplayMode ?? 'pistonTiltRemoved',
                     containerElement: container,
@@ -1439,7 +1439,7 @@ async function initializeApplication() {
                 const traceCallsPerMs = elapsedMs > 0 ? (traceCalls / elapsedMs) : 0;
                 const result = {
                     elapsedMs,
-                    samplingSize: Number.isFinite(Number(options.samplingSize)) ? Number(options.samplingSize) : 256,
+                    samplingSize: Number.isFinite(Number(options.samplingSize)) ? Number(options.samplingSize) : 32,
                     samplingPoints: Number.isFinite(Number(options.samplingPoints)) ? Number(options.samplingPoints) : 64,
                     wavelengthMicrons: options.wavelengthMicrons ?? 'all',
                     maxFrequencyLpmm: Number.isFinite(Number(options.maxFrequencyLpmm)) ? Number(options.maxFrequencyLpmm) : 100,
@@ -1567,7 +1567,7 @@ async function initializeApplication() {
                 ? 'all'
                 : (Number.isFinite(Number(options?.wavelengthMicrons)) ? Number(options.wavelengthMicrons) : 0.5876);
             const objIndex = Number.isFinite(Number(options?.objectIndex)) ? Number(options.objectIndex) : 0;
-            const samplingSize = Number.isFinite(Number(options?.samplingSize)) ? Number(options.samplingSize) : 256;
+            const samplingSize = Number.isFinite(Number(options?.samplingSize)) ? Number(options.samplingSize) : 32;
             const zeroPadTo = Number.isFinite(Number(options?.zeroPadTo)) ? Number(options.zeroPadTo) : 0;
             const opdDisplayMode = String(options?.opdDisplayMode || 'pistonTiltRemoved');
 
@@ -1679,7 +1679,7 @@ async function initializeApplication() {
             const wl = (options?.wavelengthMicrons === 'all')
                 ? 'all'
                 : (Number.isFinite(Number(options?.wavelengthMicrons)) ? Number(options.wavelengthMicrons) : 0.5876);
-            const samplingSize = Number.isFinite(Number(options?.samplingSize)) ? Number(options.samplingSize) : 256;
+            const samplingSize = Number.isFinite(Number(options?.samplingSize)) ? Number(options.samplingSize) : 32;
             const zeroPadTo = Number.isFinite(Number(options?.zeroPadTo)) ? Number(options.zeroPadTo) : 0;
             const fieldMin = Number.isFinite(Number(options?.fieldMin)) ? Number(options.fieldMin) : 0;
             const fieldMax = Number.isFinite(Number(options?.fieldMax)) ? Number(options.fieldMax) : 10;
