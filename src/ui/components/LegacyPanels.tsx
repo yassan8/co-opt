@@ -3606,7 +3606,7 @@ export default function LegacyPanels() {
                 <option value="heatmap">Heatmap</option>
                 <option value="multifield">Multi-field Comparison</option>
               </select>
-              <label htmlFor="wavefront-grid-size-select">Grid size:</label>
+              <label htmlFor="wavefront-grid-size-select">sampling:</label>
               <select id="wavefront-grid-size-select" defaultValue="32">
                 <option value="16">16x16</option>
                 <option value="32">32x32</option>
@@ -3665,7 +3665,7 @@ export default function LegacyPanels() {
                 <option value="2048">2048</option>
                 <option value="4096">4096</option>
               </select>
-              <label htmlFor="psf-zernike-sampling-select">OPD grid:</label>
+              <label htmlFor="psf-zernike-sampling-select">sampling:</label>
               <select
                 id="psf-zernike-sampling-select"
                 title="Ray-traced OPD grid size (number of rays traced across pupil)"
