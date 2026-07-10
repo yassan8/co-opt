@@ -14795,8 +14795,9 @@ export function setupAnalysisWindows() {
                             if (Number.isFinite(sv)) sagComposite[k] += ww * sv;
                         }
                     }
-                    if (tanComposite.length > 0) tanComposite[0] = 1;
-                    if (sagComposite.length > 0) sagComposite[0] = 1;
+                    // NOTE: do NOT force tanComposite[0] = 1 here. Index 0 is defocusMinMm on the
+                    // defocus axis, not the DC (0 lp/mm) component of a frequency axis. Forcing 1.0
+                    // was incorrectly treating the defocus axis as a spatial-frequency axis.
                     traces.push({
                         x: xAxis,
                         y: tanComposite,
