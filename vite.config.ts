@@ -11,6 +11,23 @@ export default defineConfig({
   plugins: [
     react(),
     {
+      name: 'coopt-wasm-thread-headers',
+      configureServer(server) {
+        server.middlewares.use((_request, response, next) => {
+          response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+          response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+          next();
+        });
+      },
+      configurePreviewServer(server) {
+        server.middlewares.use((_request, response, next) => {
+          response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+          response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+          next();
+        });
+      }
+    },
+    {
       name: 'inject-main-script',
       transformIndexHtml: {
         order: 'post',

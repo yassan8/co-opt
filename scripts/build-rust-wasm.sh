@@ -18,11 +18,32 @@ echo "✅ [Rust-WASM] wasm-pack: $(wasm-pack --version)"
 
 cd "$RUST_WASM_DIR"
 
-wasm-pack build \
-  --target web \
-  --release \
-  --out-dir pkg \
-  --out-name surface_origins
+if [[ "${COOPT_WASM_THREADS:-0}" == "1" ]]; then
+  echo "🧵 [Rust-WASM] building SharedArrayBuffer/threaded package"
+  export RUSTUP_TOOLCHAIN="nightly-2024-08-02"
+  export RUSTFLAGS="-C target-feature=+atomics,+bulk-memory -C link-arg=--import-memory -C link-arg=--shared-memory -C link-arg=--max-memory=2147483648 -C link-arg=--export=__heap_base -C link-arg=--export=__data_end"
+  cargo build \
+    --target wasm32-unknown-unknown \
+    --release \
+    --features wasm-threads \
+    -Z build-std=panic_abort,std
+  rm -rf pkg
+  mkdir -p pkg
+  wasm-bindgen \
+    --target web \
+    --out-dir pkg \
+    --out-name surface_origins \
+    "target/wasm32-unknown-unknown/release/surface_origins.wasm"
+  if [[ -f "$PUBLIC_PKG_DIR/package.json" ]]; then
+    cp "$PUBLIC_PKG_DIR/package.json" pkg/package.json
+  fi
+else
+  wasm-pack build \
+    --target web \
+    --release \
+    --out-dir pkg \
+    --out-name surface_origins
+fi
 
 mkdir -p "$PUBLIC_PKG_DIR"
 rm -rf "$PUBLIC_PKG_DIR"/*

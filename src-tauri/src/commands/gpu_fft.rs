@@ -1,5 +1,5 @@
 //! GPU-accelerated FFT using Apple Accelerate framework (macOS only)
-//! 
+//!
 //! This module provides an Accelerate-based 2D FFT implementation for PSF calculations
 //! that automatically uses Apple Silicon GPU/AMX hardware acceleration.
 //! Falls back to CPU rustfft on non-macOS platforms.
@@ -14,7 +14,7 @@ extern "C" {
     // FFT setup
     fn vDSP_create_fftsetup(log2n: c_uint, radix: c_int) -> *mut std::ffi::c_void;
     fn vDSP_destroy_fftsetup(setup: *mut std::ffi::c_void);
-    
+
     // 1D FFT (we'll use this for 2D by doing row + column transforms)
     fn vDSP_fft_zip(
         setup: *mut std::ffi::c_void,
@@ -69,37 +69,42 @@ pub fn fft2d_forward_gpu(real: &mut [Vec<f64>], imag: &mut [Vec<f64>]) -> Result
     if w == 0 {
         return Err("fft2d_forward_gpu: empty row".to_string());
     }
-    
+
     // Validate dimensions are powers of 2 (required by vDSP)
     if !w.is_power_of_two() || !h.is_power_of_two() {
-        return Err(format!("fft2d_forward_gpu: dimensions must be power of 2, got {}x{}", w, h));
+        return Err(format!(
+            "fft2d_forward_gpu: dimensions must be power of 2, got {}x{}",
+            w, h
+        ));
     }
-    
+
     let log2w = w.trailing_zeros();
     let log2h = h.trailing_zeros();
-    
+
     // Convert f64 to f32 (vDSP uses single precision)
-    let mut real_f32: Vec<Vec<f32>> = real.iter()
+    let mut real_f32: Vec<Vec<f32>> = real
+        .iter()
         .map(|row| row.iter().map(|&x| x as f32).collect())
         .collect();
-    let mut imag_f32: Vec<Vec<f32>> = imag.iter()
+    let mut imag_f32: Vec<Vec<f32>> = imag
+        .iter()
         .map(|row| row.iter().map(|&x| x as f32).collect())
         .collect();
-    
+
     unsafe {
         // Create FFT setup for rows
         let setup_row = vDSP_create_fftsetup(log2w, 2);
         if setup_row.is_null() {
             return Err("Failed to create vDSP FFT setup for rows".to_string());
         }
-        
+
         // FFT on each row
         for y in 0..h {
             let split = DSPSplitComplex {
                 realp: real_f32[y].as_mut_ptr(),
                 imagp: imag_f32[y].as_mut_ptr(),
             };
-            
+
             vDSP_fft_zip(
                 setup_row,
                 &split as *const _ as *const _,
@@ -108,25 +113,25 @@ pub fn fft2d_forward_gpu(real: &mut [Vec<f64>], imag: &mut [Vec<f64>]) -> Result
                 1, // forward direction
             );
         }
-        
+
         vDSP_destroy_fftsetup(setup_row);
-        
+
         // Create FFT setup for columns
         let setup_col = vDSP_create_fftsetup(log2h, 2);
         if setup_col.is_null() {
             return Err("Failed to create vDSP FFT setup for columns".to_string());
         }
-        
+
         // Transpose and FFT on each column
         for x in 0..w {
             let mut col_real: Vec<f32> = (0..h).map(|y| real_f32[y][x]).collect();
             let mut col_imag: Vec<f32> = (0..h).map(|y| imag_f32[y][x]).collect();
-            
+
             let split = DSPSplitComplex {
                 realp: col_real.as_mut_ptr(),
                 imagp: col_imag.as_mut_ptr(),
             };
-            
+
             vDSP_fft_zip(
                 setup_col,
                 &split as *const _ as *const _,
@@ -134,17 +139,17 @@ pub fn fft2d_forward_gpu(real: &mut [Vec<f64>], imag: &mut [Vec<f64>]) -> Result
                 log2h,
                 1, // forward direction
             );
-            
+
             // Copy back
             for y in 0..h {
                 real_f32[y][x] = col_real[y];
                 imag_f32[y][x] = col_imag[y];
             }
         }
-        
+
         vDSP_destroy_fftsetup(setup_col);
     }
-    
+
     // Convert back to f64
     for y in 0..h {
         for x in 0..w {
@@ -152,7 +157,7 @@ pub fn fft2d_forward_gpu(real: &mut [Vec<f64>], imag: &mut [Vec<f64>]) -> Result
             imag[y][x] = imag_f32[y][x] as f64;
         }
     }
-    
+
     Ok(())
 }
 
@@ -163,9 +168,9 @@ pub fn fft2d_forward_gpu(_real: &mut [Vec<f64>], _imag: &mut [Vec<f64>]) -> Resu
 
 /// Hybrid FFT: Try GPU first, fall back to CPU if unavailable
 pub fn fft2d_forward_hybrid(
-    real: &mut [Vec<f64>], 
+    real: &mut [Vec<f64>],
     imag: &mut [Vec<f64>],
-    cpu_fallback: impl FnOnce(&mut [Vec<f64>], &mut [Vec<f64>]) -> Result<(), String>
+    cpu_fallback: impl FnOnce(&mut [Vec<f64>], &mut [Vec<f64>]) -> Result<(), String>,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -179,7 +184,7 @@ pub fn fft2d_forward_hybrid(
             }
         }
     }
-    
+
     // Fall back to CPU
     cpu_fallback(real, imag)
 }

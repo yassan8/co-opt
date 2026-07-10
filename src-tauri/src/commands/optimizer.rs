@@ -1,33 +1,19 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 use tauri::AppHandle;
 
-use crate::commands::analysis::{
-    run_native_seidel,
-    NativeSeidelRequest,
-    compute_paraxial_metrics,
-};
+use crate::commands::analysis::{compute_paraxial_metrics, run_native_seidel, NativeSeidelRequest};
 use crate::commands::optics::{
-    compute_native_transverse_rms_batch,
-    compute_native_chief_ray_angle_deg,
-    compute_finite_opd_grid_rms_waves,
-    reduce_native_transverse_rms_stats,
-    run_native_opd_map,
-    run_native_spherical_aberration,
-    NativeOpdMapRequest,
-    run_native_spot_raytrace,
-    run_native_transverse_rms_um,
-    NativeSphericalAberrationPoint,
-    NativeSphericalAberrationRequest,
-    NativeSphericalAberrationSeries,
-    NativeTransverseAberrationSeries,
+    aspheric_sag, compute_finite_opd_grid_rms_waves, compute_native_chief_ray_angle_deg,
+    compute_native_transverse_rms_batch, reduce_native_transverse_rms_stats, run_native_opd_map,
+    run_native_spherical_aberration, run_native_spot_raytrace, run_native_transverse_rms_um,
+    NativeOpdMapRequest, NativeSphericalAberrationPoint, NativeSphericalAberrationRequest,
+    NativeSphericalAberrationSeries, NativeSpotRaytraceRequest, NativeTransverseAberrationSeries,
     NativeTransverseRmsRequest,
-    NativeSpotRaytraceRequest,
-    aspheric_sag,
 };
 
 const STEP_FRACTION: f64 = 0.02;
@@ -56,8 +42,7 @@ static OPTIMIZER_PROFILE: LazyLock<Mutex<Option<OptimizerProfileAccumulator>>> =
     LazyLock::new(|| Mutex::new(None));
 static OPTIMIZER_APP_HANDLE: LazyLock<Mutex<Option<AppHandle>>> =
     LazyLock::new(|| Mutex::new(None));
-static OPTIMIZER_SYSTEM_CONFIG: LazyLock<Mutex<Option<Value>>> =
-    LazyLock::new(|| Mutex::new(None));
+static OPTIMIZER_SYSTEM_CONFIG: LazyLock<Mutex<Option<Value>>> = LazyLock::new(|| Mutex::new(None));
 
 struct OptimizerAppHandleGuard;
 struct OptimizerSystemConfigGuard;
@@ -97,11 +82,17 @@ impl Drop for OptimizerSystemConfigGuard {
 }
 
 fn with_optimizer_app_handle<R>(f: impl FnOnce(&AppHandle) -> R) -> Option<R> {
-    OPTIMIZER_APP_HANDLE.lock().ok().and_then(|slot| slot.as_ref().map(f))
+    OPTIMIZER_APP_HANDLE
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(f))
 }
 
 fn with_optimizer_system_config<R>(f: impl FnOnce(&Value) -> R) -> Option<R> {
-    OPTIMIZER_SYSTEM_CONFIG.lock().ok().and_then(|slot| slot.as_ref().map(f))
+    OPTIMIZER_SYSTEM_CONFIG
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(f))
 }
 
 #[derive(Clone, Default)]
@@ -262,24 +253,28 @@ struct OptimizerProfileAccumulator {
 
 impl OptimizerProfileAccumulator {
     fn into_report(self) -> OptimizeProfileReport {
-        let mut operand_entries = self.operand_entries.into_iter().map(|(key, entry)| {
-            let total_ms = entry.total_nanos as f64 / 1_000_000.0;
-            let avg_ms = if entry.count > 0 {
-                total_ms / entry.count as f64
-            } else {
-                0.0
-            };
-            OptimizeOperandProfileEntry {
-                key,
-                operand: entry.operand,
-                count: entry.count,
-                cache_hits: entry.cache_hits,
-                cache_misses: entry.cache_misses,
-                total_ms,
-                avg_ms,
-                max_ms: entry.max_nanos as f64 / 1_000_000.0,
-            }
-        }).collect::<Vec<_>>();
+        let mut operand_entries = self
+            .operand_entries
+            .into_iter()
+            .map(|(key, entry)| {
+                let total_ms = entry.total_nanos as f64 / 1_000_000.0;
+                let avg_ms = if entry.count > 0 {
+                    total_ms / entry.count as f64
+                } else {
+                    0.0
+                };
+                OptimizeOperandProfileEntry {
+                    key,
+                    operand: entry.operand,
+                    count: entry.count,
+                    cache_hits: entry.cache_hits,
+                    cache_misses: entry.cache_misses,
+                    total_ms,
+                    avg_ms,
+                    max_ms: entry.max_nanos as f64 / 1_000_000.0,
+                }
+            })
+            .collect::<Vec<_>>();
         operand_entries.sort_by(|a, b| {
             b.total_ms
                 .partial_cmp(&a.total_ms)
@@ -329,7 +324,10 @@ fn optimizer_profile_record_requirement_pass() {
 fn optimizer_profile_record_cache_hit(cache_key: &str, operand: &str) {
     if let Ok(mut slot) = OPTIMIZER_PROFILE.lock() {
         if let Some(accum) = slot.as_mut() {
-            let entry = accum.operand_entries.entry(cache_key.to_string()).or_default();
+            let entry = accum
+                .operand_entries
+                .entry(cache_key.to_string())
+                .or_default();
             if entry.operand.is_empty() {
                 entry.operand = operand.to_string();
             }
@@ -341,7 +339,10 @@ fn optimizer_profile_record_cache_hit(cache_key: &str, operand: &str) {
 fn optimizer_profile_record_operand_eval(cache_key: &str, operand: &str, elapsed_nanos: u128) {
     if let Ok(mut slot) = OPTIMIZER_PROFILE.lock() {
         if let Some(accum) = slot.as_mut() {
-            let entry = accum.operand_entries.entry(cache_key.to_string()).or_default();
+            let entry = accum
+                .operand_entries
+                .entry(cache_key.to_string())
+                .or_default();
             if entry.operand.is_empty() {
                 entry.operand = operand.to_string();
             }
@@ -390,9 +391,13 @@ struct EvalState {
 }
 
 #[tauri::command]
-pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<OptimizeStepResponse, String> {
+pub fn run_optimizer_step(
+    app: AppHandle,
+    req: OptimizeStepRequest,
+) -> Result<OptimizeStepResponse, String> {
     let _app_guard = OptimizerAppHandleGuard::install(app);
-    let _system_config_guard = OptimizerSystemConfigGuard::install(req.system_config_snapshot.clone());
+    let _system_config_guard =
+        OptimizerSystemConfigGuard::install(req.system_config_snapshot.clone());
     let enable_profile = req.profile.unwrap_or(false);
     optimizer_profile_begin(enable_profile);
 
@@ -440,24 +445,24 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
     let active_config_id = value_to_string(req.active_config_id.as_ref());
     let mut vars = collect_optimizable_variables(&rows);
     let variable_count = vars.len();
-        if let Some(sid) = session_id.as_ref() {
-            if reset_session {
-                if let Ok(mut map) = OPTIMIZER_SESSIONS.lock() {
-                    map.remove(sid);
-                }
+    if let Some(sid) = session_id.as_ref() {
+        if reset_session {
+            if let Ok(mut map) = OPTIMIZER_SESSIONS.lock() {
+                map.remove(sid);
             }
-            if let Ok(map) = OPTIMIZER_SESSIONS.lock() {
-                if let Some(sess) = map.get(sid) {
-                    for v in &mut vars {
-                        if let Some(step) = sess.step_by_var_id.get(&v.id) {
-                            if step.is_finite() {
-                                v.step = step.abs().max(MIN_STEP);
-                            }
+        }
+        if let Ok(map) = OPTIMIZER_SESSIONS.lock() {
+            if let Some(sess) = map.get(sid) {
+                for v in &mut vars {
+                    if let Some(step) = sess.step_by_var_id.get(&v.id) {
+                        if step.is_finite() {
+                            v.step = step.abs().max(MIN_STEP);
                         }
                     }
                 }
             }
         }
+    }
 
     let requirements = collect_requirements(
         req.system_requirements_rows.as_deref().unwrap_or(&[]),
@@ -468,7 +473,8 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
         return Err("No active System Requirements (check enabled/weight/operand).".to_string());
     }
 
-    let invalid_requirements = collect_invalid_requirements(&rows, &source_rows, &object_rows, &requirements);
+    let invalid_requirements =
+        collect_invalid_requirements(&rows, &source_rows, &object_rows, &requirements);
     if invalid_requirements.len() == requirements.len() {
         let ops = invalid_requirements
             .iter()
@@ -499,7 +505,9 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
             requirement_count: Some(requirements.len()),
             residual_count: Some(requirements.len()),
             rho: None,
-            feasible: Some(before_eval.violation_score.is_finite() && before_eval.violation_score <= 1e-9),
+            feasible: Some(
+                before_eval.violation_score.is_finite() && before_eval.violation_score <= 1e-9,
+            ),
         });
     }
 
@@ -519,7 +527,9 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
                 requirement_count: Some(requirements.len()),
                 residual_count: Some(requirements.len()),
                 rho: None,
-                feasible: Some(before_eval.violation_score.is_finite() && before_eval.violation_score <= 1e-9),
+                feasible: Some(
+                    before_eval.violation_score.is_finite() && before_eval.violation_score <= 1e-9,
+                ),
             });
         }
         return Ok(OptimizeStepResponse {
@@ -630,8 +640,7 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
             }
             let mut st = map.get(sid).cloned().unwrap_or_default();
             if let Some(previous_best_eval) = st.best_eval {
-                if is_better_eval(previous_best_eval, overall_best_eval)
-                    && !st.best_rows.is_empty()
+                if is_better_eval(previous_best_eval, overall_best_eval) && !st.best_rows.is_empty()
                 {
                     overall_best_eval = previous_best_eval;
                     overall_best_rows = st.best_rows.clone();
@@ -667,7 +676,10 @@ pub fn run_optimizer_step(app: AppHandle, req: OptimizeStepRequest) -> Result<Op
             requirement_count: Some(requirements.len()),
             residual_count: Some(requirements.len()),
             rho: None,
-            feasible: Some(overall_best_eval.violation_score.is_finite() && overall_best_eval.violation_score <= 1e-9),
+            feasible: Some(
+                overall_best_eval.violation_score.is_finite()
+                    && overall_best_eval.violation_score <= 1e-9,
+            ),
         });
     }
 
@@ -791,7 +803,10 @@ fn run_cd(
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
                         rho: None,
-                        feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
+                        feasible: Some(
+                            best_eval.violation_score.is_finite()
+                                && best_eval.violation_score <= 1e-9,
+                        ),
                     });
                 }
             } else {
@@ -812,7 +827,10 @@ fn run_cd(
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
                         rho: None,
-                        feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
+                        feasible: Some(
+                            best_eval.violation_score.is_finite()
+                                && best_eval.violation_score <= 1e-9,
+                        ),
                     });
                 }
             }
@@ -893,7 +911,9 @@ fn run_lm(
                     requirement_count: Some(requirements.len()),
                     residual_count: Some(requirements.len()),
                     rho: None,
-                    feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
+                    feasible: Some(
+                        best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9,
+                    ),
                 });
             }
         } else {
@@ -915,7 +935,9 @@ fn run_lm(
                     requirement_count: Some(requirements.len()),
                     residual_count: Some(requirements.len()),
                     rho: None,
-                    feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
+                    feasible: Some(
+                        best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9,
+                    ),
                 });
             }
             if stall_count >= STALL_LIMIT {
@@ -941,10 +963,22 @@ fn run_kkt(
 ) -> (String, u32, EvalState, Option<KktRuntimeState>) {
     let mut best_eval = evaluate_state(rows, source_rows, object_rows, vars, requirements);
     let mut completed_iterations = 0;
-    let mut rho = if state.rho.is_finite() && state.rho > 0.0 { state.rho } else { tuning.penalty_parameter };
+    let mut rho = if state.rho.is_finite() && state.rho > 0.0 {
+        state.rho
+    } else {
+        tuning.penalty_parameter
+    };
     let mut stall_count = state.stall_count;
-    let mut mu_total = if state.mu_total.is_finite() && state.mu_total >= 0.0 { state.mu_total } else { 0.0 };
-    let mut penalty = if state.penalty.is_finite() && state.penalty > 0.0 { state.penalty } else { rho };
+    let mut mu_total = if state.mu_total.is_finite() && state.mu_total >= 0.0 {
+        state.mu_total
+    } else {
+        0.0
+    };
+    let mut penalty = if state.penalty.is_finite() && state.penalty > 0.0 {
+        state.penalty
+    } else {
+        rho
+    };
     let mut hdiag = state.hdiag;
     let mut prev_x = state.prev_x;
     let mut prev_grad = state.prev_grad;
@@ -954,7 +988,15 @@ fn run_kkt(
             "kkt".to_string(),
             0,
             best_eval,
-            Some(KktRuntimeState { rho, stall_count, mu_total, penalty, hdiag, prev_x, prev_grad }),
+            Some(KktRuntimeState {
+                rho,
+                stall_count,
+                mu_total,
+                penalty,
+                hdiag,
+                prev_x,
+                prev_grad,
+            }),
         );
     }
 
@@ -972,7 +1014,14 @@ fn run_kkt(
         }
         completed_iterations = iter;
         let base_values = current_values(rows, vars);
-        let grad = approximate_augmented_gradient(rows, source_rows, object_rows, vars, requirements, penalty);
+        let grad = approximate_augmented_gradient(
+            rows,
+            source_rows,
+            object_rows,
+            vars,
+            requirements,
+            penalty,
+        );
         if hdiag.len() != vars.len() {
             hdiag = initial_hdiag_from_grad(&grad, penalty, vars.len());
         }
@@ -988,10 +1037,21 @@ fn run_kkt(
             penalty,
             &hdiag,
         );
-        let (mut direction, mut direction_reason, mut used_sqp_direction, mut predicted_reduction) = match sqp_direction {
-            Ok(d) => (d.direction, "sqp-ok".to_string(), true, d.predicted_reduction),
-            Err(reason) => (grad.iter().map(|g| -g).collect(), reason.to_string(), false, f64::NAN),
-        };
+        let (mut direction, mut direction_reason, mut used_sqp_direction, mut predicted_reduction) =
+            match sqp_direction {
+                Ok(d) => (
+                    d.direction,
+                    "sqp-ok".to_string(),
+                    true,
+                    d.predicted_reduction,
+                ),
+                Err(reason) => (
+                    grad.iter().map(|g| -g).collect(),
+                    reason.to_string(),
+                    false,
+                    f64::NAN,
+                ),
+            };
         let grad_dot_dir = grad
             .iter()
             .zip(direction.iter())
@@ -1051,7 +1111,10 @@ fn run_kkt(
             tuning,
             filter_c,
         ) {
-            LineSearchResult::Accepted { eval: trial_eval, alpha } => {
+            LineSearchResult::Accepted {
+                eval: trial_eval,
+                alpha,
+            } => {
                 ls_reason = format!("armijo-alpha={:.3e}", alpha);
                 best_trial = trial_eval;
                 accepted = true;
@@ -1070,14 +1133,20 @@ fn run_kkt(
             }
             stall_count = 0;
             // ALM-style multiplier and penalty updates.
-            mu_total = (mu_total + penalty * best_eval.violation_score).max(0.0).min(1e12);
+            mu_total = (mu_total + penalty * best_eval.violation_score)
+                .max(0.0)
+                .min(1e12);
             if best_eval.violation_score > (0.9 * prev_violation) {
                 penalty = (penalty * tuning.penalty_increase_factor).min(1e6);
             } else if best_eval.violation_score < (0.5 * prev_violation) {
                 penalty = (penalty * 0.9).max(1e-6);
             }
             rho = penalty;
-            let penalty_tag = if rho >= 999_999.0 { " [penalty-capped]" } else { "" };
+            let penalty_tag = if rho >= 999_999.0 {
+                " [penalty-capped]"
+            } else {
+                ""
+            };
             prev_x = base_values;
             prev_grad = grad;
             if emit_progress {
@@ -1088,9 +1157,15 @@ fn run_kkt(
                     best: best_eval.score,
                     accepted: true,
                     message: Some(if used_sqp_direction {
-                        format!("kkt sqp-armijo accepted ({}, {}){}", direction_reason, ls_reason, penalty_tag)
+                        format!(
+                            "kkt sqp-armijo accepted ({}, {}){}",
+                            direction_reason, ls_reason, penalty_tag
+                        )
                     } else {
-                        format!("kkt grad-armijo accepted ({}, {}){}", direction_reason, ls_reason, penalty_tag)
+                        format!(
+                            "kkt grad-armijo accepted ({}, {}){}",
+                            direction_reason, ls_reason, penalty_tag
+                        )
                     }),
                     variable_id: None,
                     method: Some("kkt".to_string()),
@@ -1099,7 +1174,9 @@ fn run_kkt(
                     requirement_count: Some(requirements.len()),
                     residual_count: Some(requirements.len()),
                     rho: Some(rho),
-                    feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
+                    feasible: Some(
+                        best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9,
+                    ),
                 });
             }
         } else {
@@ -1119,7 +1196,11 @@ fn run_kkt(
                     best_score_values = current_values(rows, vars);
                 }
                 stall_count = 0;
-                let penalty_tag = if rho >= 999_999.0 { " [penalty-capped]" } else { "" };
+                let penalty_tag = if rho >= 999_999.0 {
+                    " [penalty-capped]"
+                } else {
+                    ""
+                };
                 prev_x = base_values;
                 prev_grad = grad;
                 if emit_progress {
@@ -1129,7 +1210,10 @@ fn run_kkt(
                         current: best_eval.score,
                         best: best_eval.score,
                         accepted: true,
-                        message: Some(format!("kkt fallback-cd accepted ({}, {}){}", direction_reason, ls_reason, penalty_tag)),
+                        message: Some(format!(
+                            "kkt fallback-cd accepted ({}, {}){}",
+                            direction_reason, ls_reason, penalty_tag
+                        )),
                         variable_id: None,
                         method: Some("kkt".to_string()),
                         violation_score: Some(best_eval.violation_score),
@@ -1137,14 +1221,21 @@ fn run_kkt(
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
                         rho: Some(rho),
-                        feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
+                        feasible: Some(
+                            best_eval.violation_score.is_finite()
+                                && best_eval.violation_score <= 1e-9,
+                        ),
                     });
                 }
             } else {
                 stall_count += 1;
                 penalty = (penalty * tuning.penalty_increase_factor).min(1e6);
                 rho = penalty;
-                let penalty_tag = if rho >= 999_999.0 { " [penalty-capped]" } else { "" };
+                let penalty_tag = if rho >= 999_999.0 {
+                    " [penalty-capped]"
+                } else {
+                    ""
+                };
                 if emit_progress {
                     events.push(OptimizeProgressEvent {
                         phase: "reject".to_string(),
@@ -1152,7 +1243,10 @@ fn run_kkt(
                         current: best_eval.score,
                         best: best_eval.score,
                         accepted: false,
-                        message: Some(format!("kkt step rejected ({}, {}){}", direction_reason, ls_reason, penalty_tag)),
+                        message: Some(format!(
+                            "kkt step rejected ({}, {}){}",
+                            direction_reason, ls_reason, penalty_tag
+                        )),
                         variable_id: None,
                         method: Some("kkt".to_string()),
                         violation_score: Some(best_eval.violation_score),
@@ -1160,7 +1254,10 @@ fn run_kkt(
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
                         rho: Some(rho),
-                        feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
+                        feasible: Some(
+                            best_eval.violation_score.is_finite()
+                                && best_eval.violation_score <= 1e-9,
+                        ),
                     });
                 }
                 if stall_count >= STALL_LIMIT {
@@ -1177,7 +1274,15 @@ fn run_kkt(
         "kkt".to_string(),
         completed_iterations,
         best_score_eval,
-        Some(KktRuntimeState { rho, stall_count, mu_total, penalty, hdiag, prev_x, prev_grad }),
+        Some(KktRuntimeState {
+            rho,
+            stall_count,
+            mu_total,
+            penalty,
+            hdiag,
+            prev_x,
+            prev_grad,
+        }),
     )
 }
 
@@ -1241,7 +1346,11 @@ fn try_coordinate_nudge(
         }
     }
 
-    if accepted { Some(best_eval) } else { None }
+    if accepted {
+        Some(best_eval)
+    } else {
+        None
+    }
 }
 
 fn current_values(rows: &[Value], vars: &[VariableSpec]) -> Vec<f64> {
@@ -1258,7 +1367,13 @@ fn restore_values(rows: &mut [Value], vars: &[VariableSpec], values: &[f64]) {
     }
 }
 
-fn apply_direction_step(rows: &mut [Value], vars: &[VariableSpec], base_values: &[f64], direction: &[f64], alpha: f64) {
+fn apply_direction_step(
+    rows: &mut [Value],
+    vars: &[VariableSpec],
+    base_values: &[f64],
+    direction: &[f64],
+    alpha: f64,
+) {
     for i in 0..vars.len() {
         let x0 = *base_values.get(i).unwrap_or(&vars[i].baseline);
         let d = *direction.get(i).unwrap_or(&0.0);
@@ -1268,7 +1383,9 @@ fn apply_direction_step(rows: &mut [Value], vars: &[VariableSpec], base_values: 
 }
 
 fn augmented_cost(eval: EvalState, mu_total: f64, penalty: f64) -> f64 {
-    eval.score + mu_total * eval.violation_score + 0.5 * penalty * eval.violation_score * eval.violation_score
+    eval.score
+        + mu_total * eval.violation_score
+        + 0.5 * penalty * eval.violation_score * eval.violation_score
 }
 
 enum LineSearchResult {
@@ -1329,7 +1446,13 @@ fn armijo_line_search_kkt(
     LineSearchResult::Rejected("armijo-max-backtrack")
 }
 
-fn apply_trial_step(rows: &mut [Value], vars: &[VariableSpec], base_values: &[f64], grad: &[f64], alpha: f64) {
+fn apply_trial_step(
+    rows: &mut [Value],
+    vars: &[VariableSpec],
+    base_values: &[f64],
+    grad: &[f64],
+    alpha: f64,
+) {
     for i in 0..vars.len() {
         let x0 = *base_values.get(i).unwrap_or(&vars[i].baseline);
         let g = *grad.get(i).unwrap_or(&0.0);
@@ -1409,7 +1532,8 @@ fn compute_sqp_like_direction(
 
     restore_values(rows, vars, base_values);
     let residuals = evaluate_constraint_residuals(rows, source_rows, object_rows, requirements);
-    let active = select_active_constraint_indices(requirements, &residuals, MAX_SQP_ACTIVE_CONSTRAINTS);
+    let active =
+        select_active_constraint_indices(requirements, &residuals, MAX_SQP_ACTIVE_CONSTRAINTS);
     if active.is_empty() {
         return Err("sqp-active-set-empty");
     }
@@ -1457,7 +1581,11 @@ fn compute_sqp_like_direction(
                 .map(|(ri, &r1)| {
                     let r0 = active_residuals.get(ri).copied().unwrap_or(f64::MAX / 8.0);
                     let dr = (r1 - r0) / h;
-                    if dr.is_finite() { dr } else { 0.0 }
+                    if dr.is_finite() {
+                        dr
+                    } else {
+                        0.0
+                    }
                 })
                 .collect::<Vec<_>>()
         })
@@ -1545,7 +1673,12 @@ fn evaluate_constraint_residuals(
 ) -> Vec<f64> {
     let mut out = Vec::with_capacity(requirements.len());
     for req in requirements {
-        out.push(evaluate_constraint_residual_for_requirement(rows, source_rows, object_rows, req));
+        out.push(evaluate_constraint_residual_for_requirement(
+            rows,
+            source_rows,
+            object_rows,
+            req,
+        ));
     }
     out
 }
@@ -1562,7 +1695,14 @@ fn evaluate_active_constraint_residuals(
         .map(|&idx| {
             requirements
                 .get(idx)
-                .map(|req| evaluate_constraint_residual_for_requirement(rows, source_rows, object_rows, req))
+                .map(|req| {
+                    evaluate_constraint_residual_for_requirement(
+                        rows,
+                        source_rows,
+                        object_rows,
+                        req,
+                    )
+                })
                 .unwrap_or(f64::MAX / 8.0)
         })
         .collect()
@@ -1759,7 +1899,11 @@ fn approximate_augmented_gradient(
             } else {
                 0.0
             };
-            if g.is_finite() { g } else { 0.0 }
+            if g.is_finite() {
+                g
+            } else {
+                0.0
+            }
         })
         .collect()
 }
@@ -1773,7 +1917,9 @@ fn collect_optimizable_variables(rows: &[Value]) -> Vec<VariableSpec> {
         };
         for (key, value) in obj {
             let key_norm = key.trim();
-            if !(key_norm.starts_with("optimize") || key_norm.starts_with("__cooptGapOptimize")) || !is_variable_flag(value) {
+            if !(key_norm.starts_with("optimize") || key_norm.starts_with("__cooptGapOptimize"))
+                || !is_variable_flag(value)
+            {
                 continue;
             }
 
@@ -1838,7 +1984,9 @@ fn collect_requirements(rows: &[Value], active_config_id: &str) -> Vec<Requireme
                 id: value_to_string(r.get("id")),
                 config_id: req_config_id,
                 enabled,
-                cache_key: build_requirement_cache_key(&operand, &param1, &param2, &param3, &param4, &param5, &op),
+                cache_key: build_requirement_cache_key(
+                    &operand, &param1, &param2, &param3, &param4, &param5, &op,
+                ),
                 operand,
                 op,
                 target: to_finite_number(r.get("target"), 0.0),
@@ -1863,7 +2011,10 @@ fn build_requirement_cache_key(
     param5: &str,
     op: &str,
 ) -> String {
-    format!("{}|{}|{}|{}|{}|{}|{}", operand, param1, param2, param3, param4, param5, op)
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}",
+        operand, param1, param2, param3, param4, param5, op
+    )
 }
 
 fn normalize_operand(raw: String) -> String {
@@ -1907,7 +2058,8 @@ fn evaluate_state(
     }
 
     // TS parity: optimize requirement score first (violation + soft; soft is currently 0 here).
-    let (requirement_score, violation_score) = evaluate_requirements(rows, source_rows, object_rows, requirements);
+    let (requirement_score, violation_score) =
+        evaluate_requirements(rows, source_rows, object_rows, requirements);
     let score = requirement_score;
     EvalState {
         geometry_merit,
@@ -1988,13 +2140,30 @@ fn estimate_geometry_merit(rows: &[Value], vars: &[VariableSpec]) -> f64 {
     merit
 }
 
-fn evaluate_requirements(rows: &[Value], source_rows: &[Value], object_rows: &[Value], requirements: &[RequirementSpec]) -> (f64, f64) {
+fn evaluate_requirements(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    requirements: &[RequirementSpec],
+) -> (f64, f64) {
     optimizer_profile_record_requirement_pass();
     let mut score = 0.0_f64;
     let mut violation_score = 0.0_f64;
     let mut operand_cache: HashMap<&str, Option<f64>> = HashMap::with_capacity(requirements.len());
-    let mut prefetched_cache_keys = prefill_batched_transverse_rms_cache(rows, source_rows, object_rows, requirements, &mut operand_cache);
-    prefetched_cache_keys.extend(prefill_parallel_opd_rms_cache(rows, source_rows, object_rows, requirements, &mut operand_cache));
+    let mut prefetched_cache_keys = prefill_batched_transverse_rms_cache(
+        rows,
+        source_rows,
+        object_rows,
+        requirements,
+        &mut operand_cache,
+    );
+    prefetched_cache_keys.extend(prefill_parallel_opd_rms_cache(
+        rows,
+        source_rows,
+        object_rows,
+        requirements,
+        &mut operand_cache,
+    ));
 
     for req in requirements {
         if is_stop_requested() {
@@ -2040,7 +2209,12 @@ fn evaluate_requirements(rows: &[Value], source_rows: &[Value], object_rows: &[V
     (score, violation_score)
 }
 
-fn evaluate_operand_value(rows: &[Value], source_rows: &[Value], object_rows: &[Value], req: &RequirementSpec) -> Option<f64> {
+fn evaluate_operand_value(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    req: &RequirementSpec,
+) -> Option<f64> {
     match req.operand.as_str() {
         "OBJD" => first_row_value(rows, "thickness"),
         "TSL" => Some(sum_finite_thickness(rows)),
@@ -2048,27 +2222,26 @@ fn evaluate_operand_value(rows: &[Value], source_rows: &[Value], object_rows: &[
             .and_then(|(_, obj)| obj.get("thickness").and_then(parse_number)),
 
         // ── Paraxial metrics (proper ray tracing via analysis.rs) ──
-        "FL" | "EFL" | "BFL" | "IMD"
-        | "BEXP" | "EXPD" | "EXPP" | "ENPD" | "ENPP" | "ENPM"
+        "FL" | "EFL" | "BFL" | "IMD" | "BEXP" | "EXPD" | "EXPP" | "ENPD" | "ENPP" | "ENPM"
         | "PMAG" | "FNO_OBJ" | "FNO_IMG" | "FNO_WRK" | "NA_OBJ" | "NA_IMG" => {
             let m = compute_paraxial_metrics(rows, source_rows, object_rows);
             let v = match req.operand.as_str() {
-                "FL"      => m.fl,
-                "EFL"     => m.efl,
-                "BFL"     => m.bfl,
-                "IMD"     => m.imd,
-                "BEXP"    => m.bexp,
-                "EXPD"    => m.expd,
-                "EXPP"    => m.expp,
-                "ENPD"    => m.enpd,
-                "ENPP"    => m.enpp,
-                "ENPM"    => m.enpm,
-                "PMAG"    => m.pmag,
+                "FL" => m.fl,
+                "EFL" => m.efl,
+                "BFL" => m.bfl,
+                "IMD" => m.imd,
+                "BEXP" => m.bexp,
+                "EXPD" => m.expd,
+                "EXPP" => m.expp,
+                "ENPD" => m.enpd,
+                "ENPP" => m.enpp,
+                "ENPM" => m.enpm,
+                "PMAG" => m.pmag,
                 "FNO_OBJ" => m.fno_obj,
                 "FNO_IMG" => m.fno_img,
                 "FNO_WRK" => m.fno_wrk,
-                "NA_OBJ"  => m.na_obj,
-                "NA_IMG"  => m.na_img,
+                "NA_OBJ" => m.na_obj,
+                "NA_IMG" => m.na_img,
                 _ => 0.0,
             };
             Some(v)
@@ -2121,7 +2294,8 @@ fn evaluate_edge_thickness(rows: &[Value], req: &RequirementSpec) -> Option<f64>
     // Height: param2 or fallback to semidia
     let mut height = parse_number_from_str(&req.param2).unwrap_or(0.0);
     if !height.is_finite() || height <= 0.0 {
-        height = obj.get("semidia")
+        height = obj
+            .get("semidia")
             .and_then(parse_number)
             .filter(|v| v.is_finite() && *v > 0.0)
             .unwrap_or(10.0);
@@ -2134,8 +2308,12 @@ fn evaluate_edge_thickness(rows: &[Value], req: &RequirementSpec) -> Option<f64>
     let next_idx = surf_idx + 1;
     if next_idx < rows.len() {
         if let Some(next_obj) = rows[next_idx].as_object() {
-            let next_material = next_obj.get("material")
-                .and_then(|v| match v { Value::String(s) => Some(s.as_str()), _ => None })
+            let next_material = next_obj
+                .get("material")
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.as_str()),
+                    _ => None,
+                })
                 .unwrap_or("")
                 .trim()
                 .to_lowercase();
@@ -2146,14 +2324,22 @@ fn evaluate_edge_thickness(rows: &[Value], req: &RequirementSpec) -> Option<f64>
     }
 
     let edge = thickness - sag_front + sag_back;
-    if edge.is_finite() { Some(edge) } else { None }
+    if edge.is_finite() {
+        Some(edge)
+    } else {
+        None
+    }
 }
 
 /// Compute aspheric sag at given height for a surface row.
 fn compute_surface_sag(obj: &serde_json::Map<String, Value>, height: f64, direction: &str) -> f64 {
-    let surf_type = obj.get("surfType")
+    let surf_type = obj
+        .get("surfType")
         .or_else(|| obj.get("type"))
-        .and_then(|v| match v { Value::String(s) => Some(s.as_str()), _ => None })
+        .and_then(|v| match v {
+            Value::String(s) => Some(s.as_str()),
+            _ => None,
+        })
         .unwrap_or("")
         .trim()
         .to_lowercase();
@@ -2161,7 +2347,8 @@ fn compute_surface_sag(obj: &serde_json::Map<String, Value>, height: f64, direct
     // TS parity for EDGE on toric surfaces: respect param3 (x/y/radial)
     if surf_type == "toric" {
         let radius_x = parse_radius_allow_inf(obj.get("radiusX"));
-        let radius_y = parse_radius_allow_inf(obj.get("radiusY")).or_else(|| parse_radius_allow_inf(obj.get("radius")));
+        let radius_y = parse_radius_allow_inf(obj.get("radiusY"))
+            .or_else(|| parse_radius_allow_inf(obj.get("radius")));
         let conic = obj.get("conic").and_then(parse_number).unwrap_or(0.0);
         let axis_deg = obj.get("axis").and_then(parse_number).unwrap_or(0.0);
 
@@ -2206,7 +2393,11 @@ fn compute_surface_sag(obj: &serde_json::Map<String, Value>, height: f64, direct
     let mode_odd = surf_type.contains("odd");
 
     let sag = aspheric_sag(height, radius, conic, &coefs, mode_odd);
-    if sag.is_finite() { sag } else { 0.0 }
+    if sag.is_finite() {
+        sag
+    } else {
+        0.0
+    }
 }
 
 fn native_seidel_operand(
@@ -2345,7 +2536,10 @@ fn native_transverse_rms_um(
         ring_count: Some(10),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
-        wavelength: Some(resolve_requirement_wavelength_um(source_rows, &req_spec.param1)),
+        wavelength: Some(resolve_requirement_wavelength_um(
+            source_rows,
+            &req_spec.param1,
+        )),
         component: Some(normalize_ta_component(&req_spec.param3).to_string()),
     };
 
@@ -2415,7 +2609,10 @@ fn evaluate_batched_transverse_rms<'a>(
         ring_count: Some(10),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
-        wavelength: Some(resolve_requirement_wavelength_um(source_rows, &first.param1)),
+        wavelength: Some(resolve_requirement_wavelength_um(
+            source_rows,
+            &first.param1,
+        )),
         component: Some("total".to_string()),
     };
 
@@ -2466,7 +2663,8 @@ fn prefill_batched_transverse_rms_cache<'a>(
             continue;
         }
         let t0 = Instant::now();
-        let Some(results) = evaluate_batched_transverse_rms(rows, source_rows, object_rows, &group) else {
+        let Some(results) = evaluate_batched_transverse_rms(rows, source_rows, object_rows, &group)
+        else {
             continue;
         };
         let elapsed_nanos = t0.elapsed().as_nanos();
@@ -2532,7 +2730,8 @@ fn native_spherical_aberration_um(
     req_spec: &RequirementSpec,
 ) -> Option<f64> {
     let wavelength = resolve_requirement_wavelength_um(source_rows, &req_spec.param1);
-    let series = run_native_spherical_aberration_for_requirement(rows, source_rows, object_rows, req_spec)?;
+    let series =
+        run_native_spherical_aberration_for_requirement(rows, source_rows, object_rows, req_spec)?;
     let points = series_points_for_wavelength(&series, wavelength)?;
     let paraxial = points.first()?.longitudinal_aberration;
     let marginal = points.last()?.longitudinal_aberration;
@@ -2546,7 +2745,8 @@ fn native_longitudinal_aberration_rms_um(
     req_spec: &RequirementSpec,
 ) -> Option<f64> {
     let wavelength = resolve_requirement_wavelength_um(source_rows, &req_spec.param1);
-    let series = run_native_spherical_aberration_for_requirement(rows, source_rows, object_rows, req_spec)?;
+    let series =
+        run_native_spherical_aberration_for_requirement(rows, source_rows, object_rows, req_spec)?;
     let points = series_points_for_wavelength(&series, wavelength)?;
     if points.len() < 2 {
         return None;
@@ -2648,7 +2848,11 @@ fn native_zernike_coeff(
             if j < 4 {
                 continue;
             }
-            let value = if unit == "um" { coeff * wavelength_um } else { *coeff };
+            let value = if unit == "um" {
+                coeff * wavelength_um
+            } else {
+                *coeff
+            };
             sum_sq += value * value;
         }
         return Some(sum_sq.sqrt());
@@ -2657,7 +2861,11 @@ fn native_zernike_coeff(
     let (n, m) = noll_to_nm(noll_index)?;
     let osa_index = osa_index_from_nm(n, m)?;
     let coeff = *coeffs_waves.get(osa_index).unwrap_or(&0.0);
-    Some(if unit == "um" { coeff * wavelength_um } else { coeff })
+    Some(if unit == "um" {
+        coeff * wavelength_um
+    } else {
+        coeff
+    })
 }
 
 fn zernike_points_from_opd_grid(grid: &[Vec<Option<f64>>]) -> Option<Vec<(f64, f64, f64)>> {
@@ -2679,7 +2887,11 @@ fn zernike_points_from_opd_grid(grid: &[Vec<Option<f64>>]) -> Option<Vec<(f64, f
             points.push((nx, ny, opd));
         }
     }
-    if points.is_empty() { None } else { Some(points) }
+    if points.is_empty() {
+        None
+    } else {
+        Some(points)
+    }
 }
 
 fn fit_zernike_weighted(points: &[(f64, f64, f64)], max_order: usize) -> Option<Vec<f64>> {
@@ -2695,7 +2907,8 @@ fn fit_zernike_weighted(points: &[(f64, f64, f64)], max_order: usize) -> Option<
         return None;
     }
 
-    let opd_mean = valid_points.iter().map(|(_, _, opd)| *opd).sum::<f64>() / valid_points.len() as f64;
+    let opd_mean =
+        valid_points.iter().map(|(_, _, opd)| *opd).sum::<f64>() / valid_points.len() as f64;
     for (_, _, opd) in &mut valid_points {
         *opd -= opd_mean;
     }
@@ -2802,7 +3015,10 @@ fn maybe_remove_zernike_outliers(points: Vec<(f64, f64, f64)>) -> Vec<(f64, f64,
     let Some(median) = median_finite(&mut values) else {
         return points;
     };
-    let mut abs_dev = values.iter().map(|v| (v - median).abs()).collect::<Vec<_>>();
+    let mut abs_dev = values
+        .iter()
+        .map(|v| (v - median).abs())
+        .collect::<Vec<_>>();
     let Some(mad) = median_finite(&mut abs_dev) else {
         return points;
     };
@@ -2943,7 +3159,9 @@ fn zernike_radial(n: usize, m_abs: usize, rho: f64) -> f64 {
     for k in 0..=k_max {
         let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
         let coeff = sign * (factorial((n - k) as u64) as f64)
-            / ((factorial(k as u64) * factorial(((n + m_abs) / 2 - k) as u64) * factorial(((n - m_abs) / 2 - k) as u64)) as f64);
+            / ((factorial(k as u64)
+                * factorial(((n + m_abs) / 2 - k) as u64)
+                * factorial(((n - m_abs) / 2 - k) as u64)) as f64);
         radial += coeff * rho.powi((n - 2 * k) as i32);
     }
     radial
@@ -2991,7 +3209,11 @@ fn noll_to_nm(noll: usize) -> Option<(usize, isize)> {
 
 fn osa_index_from_nm(n: usize, m: isize) -> Option<usize> {
     let value = (n as isize) * ((n + 2) as isize) / 2 + m;
-    if value < 0 { None } else { Some(value as usize) }
+    if value < 0 {
+        None
+    } else {
+        Some(value as usize)
+    }
 }
 
 fn parse_zernike_unit(raw: &str) -> &'static str {
@@ -3031,7 +3253,12 @@ fn native_principal_point_for_range(
         .take(subsystem.len().saturating_sub(2))
         .filter(|row| !is_gap_optical_row(row) && !is_coord_trans_optical_row(row))
         .collect::<Vec<_>>();
-    if effective_surfaces.len() == 1 && effective_surfaces.first().map(|row| is_thin_lens_surface_row(row)).unwrap_or(false) {
+    if effective_surfaces.len() == 1
+        && effective_surfaces
+            .first()
+            .map(|row| is_thin_lens_surface_row(row))
+            .unwrap_or(false)
+    {
         return Some(0.0);
     }
 
@@ -3045,7 +3272,11 @@ fn native_principal_point_for_range(
     Some(reverse_metrics.bfl - reverse_metrics.efl)
 }
 
-fn resolve_subsystem_surface_range(rows: &[Value], req_spec: &RequirementSpec, allow_zoom_group: bool) -> Option<(usize, usize)> {
+fn resolve_subsystem_surface_range(
+    rows: &[Value],
+    req_spec: &RequirementSpec,
+    allow_zoom_group: bool,
+) -> Option<(usize, usize)> {
     let param2_raw = req_spec.param2.trim();
     let param3_raw = req_spec.param3.trim();
     let mode_raw = req_spec.param4.trim().to_ascii_uppercase();
@@ -3079,10 +3310,17 @@ fn resolve_subsystem_surface_range(rows: &[Value], req_spec: &RequirementSpec, a
 }
 
 fn min_max_surface_ids(surface_ids: &[usize]) -> Option<(usize, usize)> {
-    Some((surface_ids.iter().copied().min()?, surface_ids.iter().copied().max()?))
+    Some((
+        surface_ids.iter().copied().min()?,
+        surface_ids.iter().copied().max()?,
+    ))
 }
 
-fn block_scope_surface_ids(rows: &[Value], req_spec: &RequirementSpec, raw_scope: &str) -> Option<Vec<usize>> {
+fn block_scope_surface_ids(
+    rows: &[Value],
+    req_spec: &RequirementSpec,
+    raw_scope: &str,
+) -> Option<Vec<usize>> {
     let tokens = raw_scope
         .split(',')
         .map(str::trim)
@@ -3108,7 +3346,11 @@ fn block_scope_surface_ids(rows: &[Value], req_spec: &RequirementSpec, raw_scope
     collect_surface_ids_for_block_ids(rows, &matched_block_ids)
 }
 
-fn zoom_group_surface_ids(rows: &[Value], req_spec: &RequirementSpec, zoom_label: &str) -> Option<Vec<usize>> {
+fn zoom_group_surface_ids(
+    rows: &[Value],
+    req_spec: &RequirementSpec,
+    zoom_label: &str,
+) -> Option<Vec<usize>> {
     let target = zoom_label.trim().to_ascii_uppercase();
     if target.is_empty() {
         return None;
@@ -3127,7 +3369,11 @@ fn zoom_group_surface_ids(rows: &[Value], req_spec: &RequirementSpec, zoom_label
                 let zoom_group = block
                     .get("parameters")
                     .and_then(Value::as_object)
-                    .map(|params| value_to_string(params.get("zoomGroup")).trim().to_ascii_uppercase())
+                    .map(|params| {
+                        value_to_string(params.get("zoomGroup"))
+                            .trim()
+                            .to_ascii_uppercase()
+                    })
                     .unwrap_or_default();
                 if zoom_group == target && surface_count_from_block_type(&block_type) > 0 {
                     Some(block_id)
@@ -3136,7 +3382,8 @@ fn zoom_group_surface_ids(rows: &[Value], req_spec: &RequirementSpec, zoom_label
                 }
             })
             .collect::<Vec<_>>()
-    }).unwrap_or_default();
+    })
+    .unwrap_or_default();
 
     collect_surface_ids_for_block_ids(rows, &block_ids)
 }
@@ -3156,17 +3403,24 @@ fn block_ids_for_scope_token(req_spec: &RequirementSpec, token: &str) -> Vec<Str
                 if block_id.is_empty() {
                     return None;
                 }
-                let name = value_to_string(block.get("name")).trim().to_ascii_uppercase();
-                let block_type = value_to_string(block.get("type").or_else(|| block.get("blockType"))).trim().to_ascii_uppercase();
+                let name = value_to_string(block.get("name"))
+                    .trim()
+                    .to_ascii_uppercase();
+                let block_type =
+                    value_to_string(block.get("type").or_else(|| block.get("blockType")))
+                        .trim()
+                        .to_ascii_uppercase();
                 let candidate = format!("{}-{}", block_type, block_id.to_ascii_uppercase());
-                if block_id.to_ascii_uppercase() == target || name == target || candidate == target {
+                if block_id.to_ascii_uppercase() == target || name == target || candidate == target
+                {
                     Some(block_id)
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>()
-    }).unwrap_or_default()
+    })
+    .unwrap_or_default()
 }
 
 fn blocks_for_requirement_config<'a>(cfg: &'a Value, req_spec: &RequirementSpec) -> Vec<&'a Value> {
@@ -3180,7 +3434,11 @@ fn blocks_for_requirement_config<'a>(cfg: &'a Value, req_spec: &RequirementSpec)
     let config = configs
         .iter()
         .find(|entry| value_to_string(entry.get("id")).trim() == req_config_id)
-        .or_else(|| configs.iter().find(|entry| value_to_string(entry.get("id")).trim() == active_id.trim()))
+        .or_else(|| {
+            configs
+                .iter()
+                .find(|entry| value_to_string(entry.get("id")).trim() == active_id.trim())
+        })
         .or_else(|| configs.first());
 
     config
@@ -3203,7 +3461,9 @@ fn collect_surface_ids_for_block_ids(rows: &[Value], block_ids: &[String]) -> Op
         let Some(obj) = row.as_object() else {
             continue;
         };
-        let object_type = value_to_string(obj.get("object type").or_else(|| obj.get("object"))).trim().to_ascii_lowercase();
+        let object_type = value_to_string(obj.get("object type").or_else(|| obj.get("object")))
+            .trim()
+            .to_ascii_lowercase();
         if object_type == "object" || object_type == "image" {
             continue;
         }
@@ -3211,8 +3471,13 @@ fn collect_surface_ids_for_block_ids(rows: &[Value], block_ids: &[String]) -> Op
         if block_id.is_empty() || !block_ids.iter().any(|id| id == &block_id) {
             continue;
         }
-        let block_type = value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType"))).trim().to_ascii_lowercase();
-        let surface_role = value_to_string(obj.get("_surfaceRole").or_else(|| obj.get("surfaceRole"))).trim().to_ascii_lowercase();
+        let block_type = value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType")))
+            .trim()
+            .to_ascii_lowercase();
+        let surface_role =
+            value_to_string(obj.get("_surfaceRole").or_else(|| obj.get("surfaceRole")))
+                .trim()
+                .to_ascii_lowercase();
         if (block_type == "paraxial" || block_type == "thinlens") && surface_role == "back" {
             continue;
         }
@@ -3233,19 +3498,28 @@ fn collect_surface_ids_for_block_ids(rows: &[Value], block_ids: &[String]) -> Op
 fn surface_count_from_block_type(block_type_raw: &str) -> usize {
     match block_type_raw.trim().to_ascii_lowercase().as_str() {
         "gap" | "coordbreak" | "coordtrans" | "coordtransform" => 0,
-        "objectsurface" | "objectplane" | "stop" | "imagesurface" | "planarmirror" | "surface" | "paraxial" | "thinlens" => 1,
+        "objectsurface" | "objectplane" | "stop" | "imagesurface" | "planarmirror" | "surface"
+        | "paraxial" | "thinlens" => 1,
         "lens" | "toriclens" | "cementedlens" => 2,
         "doublet" | "triplet" | "prismgroup" | "group3" => 3,
         _ => 1,
     }
 }
 
-fn build_isolated_surface_range_system(rows: &[Value], start_surf: usize, end_surf: usize) -> Option<Vec<Value>> {
+fn build_isolated_surface_range_system(
+    rows: &[Value],
+    start_surf: usize,
+    end_surf: usize,
+) -> Option<Vec<Value>> {
     let (start_surf, end_surf) = expand_principal_point_surface_range(rows, start_surf, end_surf)?;
     build_subsystem_by_surface_ids(rows, start_surf, end_surf)
 }
 
-fn expand_principal_point_surface_range(rows: &[Value], start_surf: usize, end_surf: usize) -> Option<(usize, usize)> {
+fn expand_principal_point_surface_range(
+    rows: &[Value],
+    start_surf: usize,
+    end_surf: usize,
+) -> Option<(usize, usize)> {
     if rows.is_empty() || end_surf < start_surf {
         return None;
     }
@@ -3253,11 +3527,21 @@ fn expand_principal_point_surface_range(rows: &[Value], start_surf: usize, end_s
     let end_row = rows.iter().find_map(|row| {
         let obj = row.as_object()?;
         let id = obj.get("id").and_then(parse_usize_value)?;
-        if id == end_surf { Some(obj) } else { None }
+        if id == end_surf {
+            Some(obj)
+        } else {
+            None
+        }
     });
-    let end_block_id = end_row.map(|obj| value_to_string(obj.get("_blockId"))).unwrap_or_default();
+    let end_block_id = end_row
+        .map(|obj| value_to_string(obj.get("_blockId")))
+        .unwrap_or_default();
     let end_block_type = end_row
-        .map(|obj| value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType"))).trim().to_ascii_lowercase())
+        .map(|obj| {
+            value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType")))
+                .trim()
+                .to_ascii_lowercase()
+        })
         .unwrap_or_default();
 
     if (end_block_type == "paraxial" || end_block_type == "thinlens") && !end_block_id.is_empty() {
@@ -3271,8 +3555,14 @@ fn expand_principal_point_surface_range(rows: &[Value], start_surf: usize, end_s
             if value_to_string(obj.get("_blockId")).trim() != end_block_id {
                 continue;
             }
-            let block_type = value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType"))).trim().to_ascii_lowercase();
-            let surface_role = value_to_string(obj.get("_surfaceRole").or_else(|| obj.get("surfaceRole"))).trim().to_ascii_lowercase();
+            let block_type =
+                value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType")))
+                    .trim()
+                    .to_ascii_lowercase();
+            let surface_role =
+                value_to_string(obj.get("_surfaceRole").or_else(|| obj.get("surfaceRole")))
+                    .trim()
+                    .to_ascii_lowercase();
             if (block_type == "paraxial" || block_type == "thinlens") && surface_role == "back" {
                 if let Some(back_surface_id) = obj.get("id").and_then(parse_usize_value) {
                     normalized_end = normalized_end.max(back_surface_id);
@@ -3284,7 +3574,11 @@ fn expand_principal_point_surface_range(rows: &[Value], start_surf: usize, end_s
     Some((start_surf, normalized_end))
 }
 
-fn build_subsystem_by_surface_ids(rows: &[Value], start_surf: usize, end_surf: usize) -> Option<Vec<Value>> {
+fn build_subsystem_by_surface_ids(
+    rows: &[Value],
+    start_surf: usize,
+    end_surf: usize,
+) -> Option<Vec<Value>> {
     if rows.is_empty() || end_surf < start_surf {
         return None;
     }
@@ -3357,7 +3651,10 @@ fn create_reversed_isolated_optical_system(rows: &[Value]) -> Option<Vec<Value>>
         let mut reversed = obj.clone();
         let combined_power = obj.get("__cooptCombinedPower").and_then(parse_number);
         if combined_power.map(|v| v.is_finite()).unwrap_or(false) {
-            reversed.insert("__cooptCombinedPower".to_string(), Value::from(combined_power.unwrap_or(0.0)));
+            reversed.insert(
+                "__cooptCombinedPower".to_string(),
+                Value::from(combined_power.unwrap_or(0.0)),
+            );
             reversed.insert("radius".to_string(), Value::String("Infinity".to_string()));
         } else if let Some(radius) = obj.get("radius").and_then(parse_number) {
             if radius.is_finite() {
@@ -3367,12 +3664,30 @@ fn create_reversed_isolated_optical_system(rows: &[Value]) -> Option<Vec<Value>>
 
         if i > 1 {
             if let Some(prev_obj) = rows[i - 1].as_object() {
-                reversed.insert("thickness".to_string(), prev_obj.get("thickness").cloned().unwrap_or(Value::from(0.0)));
-                reversed.insert("material".to_string(), prev_obj.get("material").cloned().unwrap_or(Value::String(String::new())));
+                reversed.insert(
+                    "thickness".to_string(),
+                    prev_obj
+                        .get("thickness")
+                        .cloned()
+                        .unwrap_or(Value::from(0.0)),
+                );
+                reversed.insert(
+                    "material".to_string(),
+                    prev_obj
+                        .get("material")
+                        .cloned()
+                        .unwrap_or(Value::String(String::new())),
+                );
                 if let Some(rindex) = prev_obj.get("rindex").cloned() {
                     reversed.insert("rindex".to_string(), rindex);
                 }
-                if let Some(abbe) = prev_obj.get("abbe").or_else(|| prev_obj.get("Abbe")).or_else(|| prev_obj.get("vd")).or_else(|| prev_obj.get("Vd")).cloned() {
+                if let Some(abbe) = prev_obj
+                    .get("abbe")
+                    .or_else(|| prev_obj.get("Abbe"))
+                    .or_else(|| prev_obj.get("vd"))
+                    .or_else(|| prev_obj.get("Vd"))
+                    .cloned()
+                {
                     reversed.insert("abbe".to_string(), abbe);
                 }
             }
@@ -3428,8 +3743,13 @@ fn is_coord_trans_optical_row(row: &Value) -> bool {
     ];
     fields.into_iter().flatten().any(|value| {
         let s = value_to_string(Some(value)).trim().to_ascii_lowercase();
-        s == "ct" || s == "coordtrans" || s == "coordinatebreak" || s == "coord trans" || s == "coordinate break"
-            || s.contains("coord trans") || s.contains("coordinate break")
+        s == "ct"
+            || s == "coordtrans"
+            || s == "coordinatebreak"
+            || s == "coord trans"
+            || s == "coordinate break"
+            || s.contains("coord trans")
+            || s.contains("coordinate break")
     })
 }
 
@@ -3454,7 +3774,10 @@ fn is_gap_optical_row(row: &Value) -> bool {
         obj.get("Comment"),
     ];
     fields.into_iter().flatten().any(|value| {
-        let s = value_to_string(Some(value)).trim().to_ascii_lowercase().replace([' ', '_', '-'], "");
+        let s = value_to_string(Some(value))
+            .trim()
+            .to_ascii_lowercase()
+            .replace([' ', '_', '-'], "");
         s == "gap" || s == "airgap"
     })
 }
@@ -3463,9 +3786,14 @@ fn is_thin_lens_surface_row(row: &Value) -> bool {
     let Some(obj) = row.as_object() else {
         return false;
     };
-    let block_type = value_to_string(obj.get("_blockType").or_else(|| obj.get("blockType")).or_else(|| obj.get("block_type")).or_else(|| obj.get("blockTypeName")))
-        .trim()
-        .to_ascii_lowercase();
+    let block_type = value_to_string(
+        obj.get("_blockType")
+            .or_else(|| obj.get("blockType"))
+            .or_else(|| obj.get("block_type"))
+            .or_else(|| obj.get("blockTypeName")),
+    )
+    .trim()
+    .to_ascii_lowercase();
     block_type == "thinlens" || block_type == "paraxial"
 }
 
@@ -3500,9 +3828,15 @@ fn series_points_for_wavelength<'a>(
     let mut points = series
         .points
         .iter()
-        .filter(|point| point.pupil_coordinate.is_finite() && point.longitudinal_aberration.is_finite())
+        .filter(|point| {
+            point.pupil_coordinate.is_finite() && point.longitudinal_aberration.is_finite()
+        })
         .collect::<Vec<_>>();
-    points.sort_by(|a, b| a.pupil_coordinate.partial_cmp(&b.pupil_coordinate).unwrap_or(std::cmp::Ordering::Equal));
+    points.sort_by(|a, b| {
+        a.pupil_coordinate
+            .partial_cmp(&b.pupil_coordinate)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Some(points)
 }
 
@@ -3537,7 +3871,10 @@ fn normalize_ta_component(raw: &str) -> &'static str {
     "total"
 }
 
-fn resolve_surface_row_by_param1<'a>(rows: &'a [Value], param1: &str) -> Option<(usize, &'a serde_json::Map<String, Value>)> {
+fn resolve_surface_row_by_param1<'a>(
+    rows: &'a [Value],
+    param1: &str,
+) -> Option<(usize, &'a serde_json::Map<String, Value>)> {
     let n = parse_usize_str(param1)?;
 
     // Prefer stable surface id match.
@@ -3583,7 +3920,14 @@ fn parse_radius_allow_inf(v: Option<&Value>) -> Option<f64> {
     None
 }
 
-fn toric_surface_sag(x: f64, y: f64, radius_x: f64, radius_y: f64, conic: f64, axis_deg: f64) -> f64 {
+fn toric_surface_sag(
+    x: f64,
+    y: f64,
+    radius_x: f64,
+    radius_y: f64,
+    conic: f64,
+    axis_deg: f64,
+) -> f64 {
     let axis = axis_deg.to_radians();
     let cos_a = axis.cos();
     let sin_a = axis.sin();
@@ -3610,7 +3954,11 @@ fn toric_surface_sag(x: f64, y: f64, radius_x: f64, radius_y: f64, conic: f64, a
     let sx = sag_axis(x_rot, radius_x).unwrap_or(0.0);
     let sy = sag_axis(y_rot, radius_y).unwrap_or(0.0);
     let s = sx + sy;
-    if s.is_finite() { s } else { 0.0 }
+    if s.is_finite() {
+        s
+    } else {
+        0.0
+    }
 }
 
 fn collect_ta_stats(series_list: &[NativeTransverseAberrationSeries]) -> (f64, usize) {
@@ -3633,7 +3981,9 @@ fn image_surface_index(rows: &[Value]) -> usize {
         let Some(obj) = row.as_object() else {
             continue;
         };
-        let object_type = value_to_string(obj.get("object type")).trim().to_lowercase();
+        let object_type = value_to_string(obj.get("object type"))
+            .trim()
+            .to_lowercase();
         if object_type == "image" {
             return i;
         }
@@ -3794,9 +4144,7 @@ fn primary_flag_truthy(v: &Value) -> bool {
         Value::Bool(b) => *b,
         Value::Number(n) => n.as_i64().map(|x| x == 1).unwrap_or(false),
         _ => {
-            let s = value_to_string(Some(v))
-                .trim()
-                .to_ascii_lowercase();
+            let s = value_to_string(Some(v)).trim().to_ascii_lowercase();
             s == "1"
                 || s == "true"
                 || s == "yes"
@@ -3941,9 +4289,7 @@ fn is_variable_flag(v: &Value) -> bool {
     match v {
         Value::String(s) => {
             let t = s.trim();
-            t.eq_ignore_ascii_case("v")
-                || t.eq_ignore_ascii_case("true")
-                || t == "1"
+            t.eq_ignore_ascii_case("v") || t.eq_ignore_ascii_case("true") || t == "1"
         }
         Value::Bool(b) => *b,
         Value::Number(n) => n.as_i64().unwrap_or_default() != 0,
@@ -4020,7 +4366,10 @@ fn set_numeric_field(rows: &mut [Value], row_index: usize, field_key: &str, valu
         .unwrap_or(false);
 
     if should_store_as_string {
-        obj.insert(field_key.to_string(), Value::String(format_float_for_cell(value)));
+        obj.insert(
+            field_key.to_string(),
+            Value::String(format_float_for_cell(value)),
+        );
     } else {
         obj.insert(field_key.to_string(), Value::from(value));
     }
@@ -4091,7 +4440,15 @@ mod tests {
             id: "req-1".to_string(),
             config_id: "cfg-1".to_string(),
             enabled: true,
-            cache_key: build_requirement_cache_key(&operand, &param1, &param2_string, &param3_string, &param4_string, &param5, &op),
+            cache_key: build_requirement_cache_key(
+                &operand,
+                &param1,
+                &param2_string,
+                &param3_string,
+                &param4_string,
+                &param5,
+                &op,
+            ),
             operand,
             op,
             target: 0.0,
@@ -4201,5 +4558,9 @@ fn to_finite_number(v: Option<&Value>, default: f64) -> f64 {
     let Some(x) = v.and_then(parse_number) else {
         return default;
     };
-    if x.is_finite() { x } else { default }
+    if x.is_finite() {
+        x
+    } else {
+        default
+    }
 }

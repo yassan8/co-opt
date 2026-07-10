@@ -206,6 +206,7 @@ export type RustRayTracingWasm = {
   run_native_opd_psf_mtf_batch_wasm_json?: (reqJson: string) => any;
   run_native_distortion_wasm_json?: (reqJson: string) => any;
   run_native_mtf_malacara_from_opd_wasm_json?: (reqJson: string) => any;
+  initThreadPool?: (numThreads: number) => Promise<void>;
   malloc?: (size: number) => number;
   free?: (ptr: number) => void;
   memory?: { buffer: ArrayBuffer };
@@ -215,7 +216,11 @@ let rustWasmApi: RustRayTracingWasm | null = null;
 let rustWasmInitPromise: Promise<RustRayTracingWasm | null> | null = null;
 let rustWasmInitError: string | null = null;
 let rustWasmLastInitAttemptMs = 0;
+let rustWasmThreadPoolPromise: Promise<boolean> | null = null;
+let rustWasmThreadPoolInitialized = false;
+let rustWasmThreadPoolInitError: string | null = null;
 const RUST_WASM_RETRY_COOLDOWN_MS = 1000;
+const RUST_WASM_THREAD_POOL_INIT_TIMEOUT_MS = 3000;
 const isNodeRuntime = (() => {
   const hasProcessNode = (typeof process !== 'undefined') && !!(process as any)?.versions?.node;
   const hasBrowserGlobals = (
@@ -313,6 +318,52 @@ export function getRustRayTracingWasmInitError(): string | null {
   return rustWasmInitError;
 }
 
+export function getRustRayTracingWasmThreadPoolInitError(): string | null {
+  return rustWasmThreadPoolInitError;
+}
+
+export async function ensureRustRayTracingWasmThreadPool(
+  api: RustRayTracingWasm,
+): Promise<boolean> {
+  if (rustWasmThreadPoolInitialized) return true;
+  if (typeof api.initThreadPool !== 'function') return false;
+  if (isNodeRuntime) return false;
+
+  const isolated = (globalThis as any).crossOriginIsolated === true;
+  const hasSharedArrayBuffer = typeof (globalThis as any).SharedArrayBuffer === 'function';
+  if (!isolated || !hasSharedArrayBuffer) {
+    rustWasmThreadPoolInitError = !isolated
+      ? 'crossOriginIsolated is false; WASM threads are disabled.'
+      : 'SharedArrayBuffer is unavailable; WASM threads are disabled.';
+    return false;
+  }
+
+  if (!rustWasmThreadPoolPromise) {
+    const hardwareConcurrency = Number((globalThis as any).navigator?.hardwareConcurrency || 1);
+    const threadCount = Math.max(1, Math.min(4, Math.floor(hardwareConcurrency)));
+    const timeoutPromise = new Promise<boolean>((resolve) => {
+      setTimeout(() => {
+        rustWasmThreadPoolInitError = `WASM thread pool initialization timed out after ${RUST_WASM_THREAD_POOL_INIT_TIMEOUT_MS} ms`;
+        resolve(false);
+      }, RUST_WASM_THREAD_POOL_INIT_TIMEOUT_MS);
+    });
+    rustWasmThreadPoolPromise = Promise.race([
+      api.initThreadPool(threadCount).then(() => true),
+      timeoutPromise,
+    ])
+      .then(() => {
+        if (rustWasmThreadPoolInitError) return false;
+        rustWasmThreadPoolInitialized = true;
+        return true;
+      })
+      .catch((error) => {
+        rustWasmThreadPoolInitError = String((error as any)?.message || error || 'WASM thread pool init failed');
+        return false;
+      });
+  }
+  return rustWasmThreadPoolPromise;
+}
+
 export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | null> {
   if (rustWasmApi) return rustWasmApi;
   const now = Date.now();
@@ -394,6 +445,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           run_native_opd_psf_mtf_batch_wasm_json: mod.run_native_opd_psf_mtf_batch_wasm_json,
           run_native_distortion_wasm_json: mod.run_native_distortion_wasm_json,
           run_native_mtf_malacara_from_opd_wasm_json: mod.run_native_mtf_malacara_from_opd_wasm_json,
+          initThreadPool: mod.initThreadPool,
           malloc: mod.malloc,
           free: mod.free,
           memory: mod.memory || initExports?.memory

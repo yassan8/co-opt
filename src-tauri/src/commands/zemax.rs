@@ -57,7 +57,10 @@ pub fn generate_zmx_text(req: GenerateZmxTextRequest) -> Result<GenerateZmxTextR
         .to_uppercase();
 
     let mut lines: Vec<String> = Vec::new();
-    lines.push(format!("UNIT {}", if units.is_empty() { "MM" } else { &units }));
+    lines.push(format!(
+        "UNIT {}",
+        if units.is_empty() { "MM" } else { &units }
+    ));
     if !title.trim().is_empty() {
         lines.push(format!("NAME \"{}\"", title.trim()));
     }
@@ -115,7 +118,11 @@ pub fn generate_zmx_text(req: GenerateZmxTextRequest) -> Result<GenerateZmxTextR
         lines.push(format!("CURV {}", fmt(curv)));
 
         let thickness = get_number(row, &["thickness"]);
-        let disz = if thickness.is_finite() { thickness } else { 0.0 };
+        let disz = if thickness.is_finite() {
+            thickness
+        } else {
+            0.0
+        };
         lines.push(format!("DISZ {}", fmt(disz)));
 
         let material = normalize_material_name(&get_string(row, &["material"]));
@@ -197,7 +204,10 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
                                     }));
                                 }
                                 for (idx, val) in values.iter().enumerate() {
-                                    if let Some(obj) = object_rows.get_mut(start + idx).and_then(Value::as_object_mut) {
+                                    if let Some(obj) = object_rows
+                                        .get_mut(start + idx)
+                                        .and_then(Value::as_object_mut)
+                                    {
                                         obj.insert("xHeightAngle".to_string(), json!(val));
                                     }
                                 }
@@ -215,7 +225,10 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
                                     }));
                                 }
                                 for (idx, val) in values.iter().enumerate() {
-                                    if let Some(obj) = object_rows.get_mut(start + idx).and_then(Value::as_object_mut) {
+                                    if let Some(obj) = object_rows
+                                        .get_mut(start + idx)
+                                        .and_then(Value::as_object_mut)
+                                    {
                                         obj.insert("yHeightAngle".to_string(), json!(val));
                                     }
                                 }
@@ -238,7 +251,14 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
 
         let key = tokens[0].to_uppercase();
 
-        if key != "XFLN" && key != "YFLN" && key != "WAVL" && key != "WL" && key != "WWGT" && key != "FWGT" && key != "WTW" {
+        if key != "XFLN"
+            && key != "YFLN"
+            && key != "WAVL"
+            && key != "WL"
+            && key != "WWGT"
+            && key != "FWGT"
+            && key != "WTW"
+        {
             last_system_list_key = None;
         }
 
@@ -280,7 +300,10 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
         }
 
         if key == "PWAV" {
-            let idx = tokens.get(1).and_then(|v| parse_num(v)).map(|n| n.max(1.0) as usize);
+            let idx = tokens
+                .get(1)
+                .and_then(|v| parse_num(v))
+                .map(|n| n.max(1.0) as usize);
             if let Some(i) = idx {
                 primary_wavelength_index = Some(i);
             }
@@ -288,7 +311,10 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
         }
 
         if key == "REF" {
-            let idx = tokens.get(1).and_then(|v| parse_num(v)).map(|n| n.max(1.0) as usize);
+            let idx = tokens
+                .get(1)
+                .and_then(|v| parse_num(v))
+                .map(|n| n.max(1.0) as usize);
             if let Some(i) = idx {
                 otx_primary_wavelength_index = Some(i);
             }
@@ -552,9 +578,15 @@ pub fn parse_zmx_text(req: ParseZmxTextRequest) -> Result<ParseZmxTextResponse, 
             }));
         }
         if !source_rows.is_empty() {
-            let one_based = primary_wavelength_index.or(otx_primary_wavelength_index).unwrap_or(1).max(1);
+            let one_based = primary_wavelength_index
+                .or(otx_primary_wavelength_index)
+                .unwrap_or(1)
+                .max(1);
             let bounded = one_based.min(source_rows.len());
-            if let Some(primary) = source_rows.get_mut(bounded - 1).and_then(Value::as_object_mut) {
+            if let Some(primary) = source_rows
+                .get_mut(bounded - 1)
+                .and_then(Value::as_object_mut)
+            {
                 primary.insert("primary".to_string(), json!("Primary Wavelength"));
             }
         }

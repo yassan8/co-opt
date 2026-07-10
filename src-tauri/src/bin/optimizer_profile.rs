@@ -7,8 +7,10 @@ use co_opt_pro_lib::commands::optimizer::OptimizeStepRequest;
 use serde_json::Value;
 
 fn load_project(path: &str) -> Result<Value, String> {
-    let text = fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path, err))?;
-    serde_json::from_str::<Value>(&text).map_err(|err| format!("failed to parse {} as JSON: {}", path, err))
+    let text =
+        fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path, err))?;
+    serde_json::from_str::<Value>(&text)
+        .map_err(|err| format!("failed to parse {} as JSON: {}", path, err))
 }
 
 fn build_request(project: &Value, max_iterations: u32) -> OptimizeStepRequest {
@@ -65,18 +67,27 @@ fn build_request(project: &Value, max_iterations: u32) -> OptimizeStepRequest {
 
 fn parse_args() -> Result<(String, u32, u32), String> {
     let mut args = env::args().skip(1);
-    let input = args
-        .next()
-        .ok_or_else(|| "usage: cargo run --bin optimizer_profile -- <project.json> [iterations] [repeat]".to_string())?;
+    let input = args.next().ok_or_else(|| {
+        "usage: cargo run --bin optimizer_profile -- <project.json> [iterations] [repeat]"
+            .to_string()
+    })?;
     let iterations = args
         .next()
-        .map(|value| value.parse::<u32>().map_err(|err| format!("invalid iterations '{}': {}", value, err)))
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|err| format!("invalid iterations '{}': {}", value, err))
+        })
         .transpose()?
         .unwrap_or(1)
         .max(1);
     let repeat = args
         .next()
-        .map(|value| value.parse::<u32>().map_err(|err| format!("invalid repeat '{}': {}", value, err)))
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|err| format!("invalid repeat '{}': {}", value, err))
+        })
         .transpose()?
         .unwrap_or(1)
         .max(1);
@@ -124,8 +135,15 @@ fn run() -> Result<(), String> {
         let started_at = Instant::now();
         let mut resp = run_optimizer_step(app.handle().clone(), req)?;
         let elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0;
-        let profile = resp.profile.take().ok_or_else(|| "missing optimizer profile report".to_string())?;
-        let total_operand_ms: f64 = profile.operand_entries.iter().map(|entry| entry.total_ms).sum();
+        let profile = resp
+            .profile
+            .take()
+            .ok_or_else(|| "missing optimizer profile report".to_string())?;
+        let total_operand_ms: f64 = profile
+            .operand_entries
+            .iter()
+            .map(|entry| entry.total_ms)
+            .sum();
         println!(
             "optimizer-profile run={} vars={} iter={} merit_before={:.6} merit_after={:.6} eval_calls={} req_passes={} elapsed_ms={:.3} operand_total_ms={:.3}",
             run_index + 1,
@@ -145,7 +163,8 @@ fn run() -> Result<(), String> {
     }
 
     let resp = final_response.ok_or_else(|| "optimizer profile produced no runs".to_string())?;
-    let profile = final_profile.ok_or_else(|| "optimizer profile produced no report".to_string())?;
+    let profile =
+        final_profile.ok_or_else(|| "optimizer profile produced no report".to_string())?;
     let elapsed_min = elapsed_runs.iter().copied().fold(f64::INFINITY, f64::min);
     let elapsed_median = median(&mut elapsed_runs);
     let operand_min = operand_totals.iter().copied().fold(f64::INFINITY, f64::min);

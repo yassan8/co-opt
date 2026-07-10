@@ -1,7 +1,7 @@
+use chrono::Local;
+use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use chrono::Local;
-use rustfft::{FftPlanner, num_complex::Complex};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Deserialize)]
@@ -258,7 +258,9 @@ pub struct NativeSeidelResponse {
 }
 
 #[tauri::command]
-pub fn recommend_wavefront_grid(req: RecommendWavefrontGridRequest) -> Result<GridRecommendation, String> {
+pub fn recommend_wavefront_grid(
+    req: RecommendWavefrontGridRequest,
+) -> Result<GridRecommendation, String> {
     let field_angle = req.field_angle_deg.unwrap_or(0.0);
     let factor = field_factor(field_angle);
 
@@ -310,7 +312,9 @@ pub fn recommend_wavefront_grid_for_time(
 }
 
 #[tauri::command]
-pub fn run_analysis_preview(req: RunAnalysisPreviewRequest) -> Result<RunAnalysisPreviewResponse, String> {
+pub fn run_analysis_preview(
+    req: RunAnalysisPreviewRequest,
+) -> Result<RunAnalysisPreviewResponse, String> {
     let kind = req.kind.trim().to_lowercase();
     if kind != "opd"
         && kind != "through-focus-spot"
@@ -624,11 +628,7 @@ pub fn run_system_data_report(
         .unwrap_or(paraxial_focal);
 
     let text = if kind == "paraxial" {
-        format_paraxial_report(
-            wl,
-            &req.optical_system_rows,
-            paraxial_trace.as_ref(),
-        )
+        format_paraxial_report(wl, &req.optical_system_rows, paraxial_trace.as_ref())
     } else if kind == "seidel" {
         format_seidel_report(
             "Seidel Coefficients (Imaging)",
@@ -666,7 +666,11 @@ pub fn run_system_data_report(
         "aberrationScale": metrics.aberration_scale,
     });
 
-    Ok(RunSystemDataReportResponse { kind, text, summary })
+    Ok(RunSystemDataReportResponse {
+        kind,
+        text,
+        summary,
+    })
 }
 
 #[tauri::command]
@@ -677,11 +681,8 @@ pub fn run_native_paraxial_metrics(
         return Err("run_native_paraxial_metrics: opticalSystemRows is empty".to_string());
     }
 
-    let metrics = compute_paraxial_metrics(
-        &req.optical_system_rows,
-        &req.source_rows,
-        &req.object_rows,
-    );
+    let metrics =
+        compute_paraxial_metrics(&req.optical_system_rows, &req.source_rows, &req.object_rows);
 
     Ok(NativeParaxialMetricsResponse {
         backend: "tauri-native".to_string(),
@@ -710,9 +711,7 @@ pub fn run_native_paraxial_metrics(
 }
 
 #[tauri::command]
-pub fn run_native_seidel(
-    req: NativeSeidelRequest,
-) -> Result<NativeSeidelResponse, String> {
+pub fn run_native_seidel(req: NativeSeidelRequest) -> Result<NativeSeidelResponse, String> {
     if req.optical_system_rows.is_empty() {
         return Err("run_native_seidel: opticalSystemRows is empty".to_string());
     }
@@ -848,7 +847,11 @@ fn collect_metrics(rows: &[Value]) -> AnalysisMetrics {
     let curvature_energy = rows
         .iter()
         .filter_map(Value::as_object)
-        .filter_map(|r| r.get("radius").or_else(|| r.get("curvature")).or_else(|| r.get("Radius")))
+        .filter_map(|r| {
+            r.get("radius")
+                .or_else(|| r.get("curvature"))
+                .or_else(|| r.get("Radius"))
+        })
         .filter_map(parse_numeric)
         .filter(|v| v.is_finite())
         .map(f64::abs)
@@ -972,9 +975,17 @@ fn build_psf_grid_from_opd_with_phase_scale(opd: &[Vec<f64>], phase_scale: f64) 
     let mut pupil = vec![vec![Complex::new(0.0, 0.0); n]; n];
 
     for y in 0..n {
-        let yn = if center > 0.0 { (y as f64 - center) / center } else { 0.0 };
+        let yn = if center > 0.0 {
+            (y as f64 - center) / center
+        } else {
+            0.0
+        };
         for x in 0..n {
-            let xn = if center > 0.0 { (x as f64 - center) / center } else { 0.0 };
+            let xn = if center > 0.0 {
+                (x as f64 - center) / center
+            } else {
+                0.0
+            };
             let r2 = xn * xn + yn * yn;
             if r2 <= 1.0 {
                 let phase = std::f64::consts::TAU * opd[y][x] * phase_scale;
@@ -1031,9 +1042,17 @@ fn build_opd_variant(
     };
 
     for y in 0..n {
-        let yn = if center > 0.0 { (y as f64 - center) / center } else { 0.0 };
+        let yn = if center > 0.0 {
+            (y as f64 - center) / center
+        } else {
+            0.0
+        };
         for x in 0..n {
-            let xn = if center > 0.0 { (x as f64 - center) / center } else { 0.0 };
+            let xn = if center > 0.0 {
+                (x as f64 - center) / center
+            } else {
+                0.0
+            };
             let r2 = xn * xn + yn * yn;
             if r2 > 1.0 {
                 out[y][x] = 0.0;
@@ -1104,8 +1123,18 @@ fn build_through_focus_spot(
             } else {
                 1.0
             };
-            let opd = build_opd_variant(&base_opd, defocus - center, defocus_scale, 0.15 * df, metrics);
-            let phase_scale = if wl_scale.abs() > 1e-12 { 1.0 / wl_scale } else { 1.0 };
+            let opd = build_opd_variant(
+                &base_opd,
+                defocus - center,
+                defocus_scale,
+                0.15 * df,
+                metrics,
+            );
+            let phase_scale = if wl_scale.abs() > 1e-12 {
+                1.0 / wl_scale
+            } else {
+                1.0
+            };
             let psf = build_psf_grid_from_opd_with_phase_scale(&opd, phase_scale);
             let (sigma_x, sigma_y) = estimate_spot_sigma_um_from_psf(
                 &psf,
@@ -1115,14 +1144,10 @@ fn build_through_focus_spot(
                 anisotropy_gain,
             );
 
-            let coma_shift_x = base_scale_um
-                * (0.01 + 0.06 * metrics.aberration_scale)
-                * df
-                * (wl_scale - 1.0);
-            let coma_shift_y = base_scale_um
-                * (0.008 + 0.04 * metrics.aberration_scale)
-                * df
-                * (1.0 - wl_scale);
+            let coma_shift_x =
+                base_scale_um * (0.01 + 0.06 * metrics.aberration_scale) * df * (wl_scale - 1.0);
+            let coma_shift_y =
+                base_scale_um * (0.008 + 0.04 * metrics.aberration_scale) * df * (1.0 - wl_scale);
 
             let points = build_spot_points_from_pattern(
                 &base_pattern,
@@ -1168,17 +1193,22 @@ fn build_spot_diagram(
         } else {
             1.0
         };
-        let phase_scale = if wl_scale.abs() > 1e-12 { 1.0 / wl_scale } else { 1.0 };
+        let phase_scale = if wl_scale.abs() > 1e-12 {
+            1.0 / wl_scale
+        } else {
+            1.0
+        };
         let psf = build_psf_grid_from_opd_with_phase_scale(&base_opd, phase_scale);
-        let (sigma_x, sigma_y) = estimate_spot_sigma_um_from_psf(
-            &psf,
-            spot_scale,
-            wl_scale,
-            1.0,
-            anisotropy_gain,
-        );
+        let (sigma_x, sigma_y) =
+            estimate_spot_sigma_um_from_psf(&psf, spot_scale, wl_scale, 1.0, anisotropy_gain);
         let chroma_shift = spot_scale * 0.04 * (wl_scale - 1.0);
-        let points = build_spot_points_from_pattern(&base_pattern, sigma_x, sigma_y, chroma_shift, -0.65 * chroma_shift);
+        let points = build_spot_points_from_pattern(
+            &base_pattern,
+            sigma_x,
+            sigma_y,
+            chroma_shift,
+            -0.65 * chroma_shift,
+        );
 
         out.push(SpotDiagramSeries {
             label: wavelength.label,
@@ -1245,8 +1275,8 @@ fn collect_spot_wavelengths(source_rows: &[Value], wavelength_mode: &str) -> Vec
     }
 
     let palette = [
-        "#2563eb", "#16a34a", "#dc2626", "#7c3aed", "#ea580c", "#0891b2", "#4f46e5",
-        "#0f766e", "#b91c1c", "#1d4ed8",
+        "#2563eb", "#16a34a", "#dc2626", "#7c3aed", "#ea580c", "#0891b2", "#4f46e5", "#0f766e",
+        "#b91c1c", "#1d4ed8",
     ];
     for (idx, wl) in all.iter().enumerate() {
         let name = if (*wl - primary).abs() < 1e-6 {
@@ -1264,7 +1294,11 @@ fn collect_spot_wavelengths(source_rows: &[Value], wavelength_mode: &str) -> Vec
     result
 }
 
-fn build_spot_pattern_points(ray_count: usize, ring_count: usize, pattern: &str) -> Vec<(f64, f64)> {
+fn build_spot_pattern_points(
+    ray_count: usize,
+    ring_count: usize,
+    pattern: &str,
+) -> Vec<(f64, f64)> {
     let rays = ray_count.clamp(9, 20001);
     let mut points = Vec::<(f64, f64)>::with_capacity(rays);
 
@@ -1362,9 +1396,17 @@ fn estimate_spot_sigma_um_from_psf(
     let mut myy = 0.0;
 
     for (iy, row) in psf.iter().enumerate() {
-        let y = if center > 0.0 { (iy as f64 - center) / center } else { 0.0 };
+        let y = if center > 0.0 {
+            (iy as f64 - center) / center
+        } else {
+            0.0
+        };
         for (ix, v) in row.iter().enumerate() {
-            let x = if center > 0.0 { (ix as f64 - center) / center } else { 0.0 };
+            let x = if center > 0.0 {
+                (ix as f64 - center) / center
+            } else {
+                0.0
+            };
             let w = (*v).max(0.0);
             sum += w;
             mxx += w * x * x;
@@ -1440,7 +1482,12 @@ fn detect_stop_surface_index(rows: &[Value]) -> Option<usize> {
     }
 
     let mut valid = Vec::<usize>::new();
-    for (i, row) in rows.iter().enumerate().skip(1).take(rows.len().saturating_sub(2)) {
+    for (i, row) in rows
+        .iter()
+        .enumerate()
+        .skip(1)
+        .take(rows.len().saturating_sub(2))
+    {
         if is_image_surface(row) || is_coord_trans_surface(row) {
             continue;
         }
@@ -1592,10 +1639,7 @@ fn is_mirror_surface(row: &Value) -> bool {
     let Some(obj) = row.as_object() else {
         return false;
     };
-    let material = obj
-        .get("material")
-        .map(value_to_lower)
-        .unwrap_or_default();
+    let material = obj.get("material").map(value_to_lower).unwrap_or_default();
     material == "mirror"
 }
 
@@ -1606,7 +1650,11 @@ fn calculate_marginal_alpha_at_stop(rows: &[Value], stop_index: usize) -> f64 {
     };
     let stop_thickness = get_safe_thickness(stop_row);
     let stop_n = get_refractive_index(stop_row);
-    let effective_thickness = if stop_thickness.abs() <= 1e-15 { 1e-18 } else { stop_thickness };
+    let effective_thickness = if stop_thickness.abs() <= 1e-15 {
+        1e-18
+    } else {
+        stop_thickness
+    };
     if !stop_n.is_finite() || stop_n.abs() <= 1e-12 {
         return 0.0;
     }
@@ -1643,14 +1691,22 @@ fn trace_paraxial_ray_from_stop(rows: &[Value], stop_index: usize) -> Option<Sto
         }
 
         if i < rows.len().saturating_sub(2) {
-            let effective_thickness = if thickness.abs() <= 1e-15 { 1e-18 } else { thickness };
+            let effective_thickness = if thickness.abs() <= 1e-15 {
+                1e-18
+            } else {
+                thickness
+            };
             if effective_thickness > 0.0 && next_n.abs() > 1e-12 {
                 h = h - effective_thickness * alpha / next_n;
             }
         }
     }
 
-    let image_distance_mm = if alpha.abs() > 1e-10 { h / alpha } else { f64::INFINITY };
+    let image_distance_mm = if alpha.abs() > 1e-10 {
+        h / alpha
+    } else {
+        f64::INFINITY
+    };
 
     Some(StopRayTraceResult {
         image_distance_mm,
@@ -1687,7 +1743,10 @@ fn build_reversed_system_for_entrance(rows: &[Value], stop_index: usize) -> Vec<
                     map.insert("material".to_string(), v.clone());
                 }
                 let prev_row = Value::Object(prev.clone());
-                map.insert("rindex".to_string(), Value::from(get_refractive_index(&prev_row)));
+                map.insert(
+                    "rindex".to_string(),
+                    Value::from(get_refractive_index(&prev_row)),
+                );
             }
         } else {
             map.insert("thickness".to_string(), Value::from(0.0));
@@ -1701,7 +1760,11 @@ fn build_reversed_system_for_entrance(rows: &[Value], stop_index: usize) -> Vec<
     reversed
 }
 
-fn estimate_entrance_pupil(rows: &[Value], stop_index: usize, stop_diameter: f64) -> Option<PupilEstimate> {
+fn estimate_entrance_pupil(
+    rows: &[Value],
+    stop_index: usize,
+    stop_diameter: f64,
+) -> Option<PupilEstimate> {
     if stop_diameter <= 0.0 {
         return None;
     }
@@ -1780,7 +1843,11 @@ fn calculate_paraxial_trace_core(rows: &[Value], initial_alpha: f64) -> Option<(
         };
         alpha += phi * h;
 
-        if j < rows.len().saturating_sub(2) && thickness.is_finite() && thickness > 0.0 && next_n.abs() > 1e-12 {
+        if j < rows.len().saturating_sub(2)
+            && thickness.is_finite()
+            && thickness > 0.0
+            && next_n.abs() > 1e-12
+        {
             h = h - thickness * alpha / next_n;
         }
 
@@ -1899,7 +1966,13 @@ fn estimate_focal_length_mm(rows: &[Value], metrics: &AnalysisMetrics) -> f64 {
 fn value_to_lower(v: &Value) -> String {
     match v {
         Value::String(s) => s.trim().to_lowercase(),
-        Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Value::Bool(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
         Value::Number(n) => n.to_string().to_lowercase(),
         _ => String::new(),
     }
@@ -1936,13 +2009,28 @@ fn format_paraxial_report(
         (1.0_f64, stop_diameter)
     };
 
-    let (focal_length, back_focal_length, image_distance, object_distance, total_length, beta, fno_work, fno_img, na_img, exit_pos_from_image) = if let Some(t) = trace {
+    let (
+        focal_length,
+        back_focal_length,
+        image_distance,
+        object_distance,
+        total_length,
+        beta,
+        fno_work,
+        fno_img,
+        na_img,
+        exit_pos_from_image,
+    ) = if let Some(t) = trace {
         let object_distance = t
             .object_distance_mm
             .map(|v| format!("{:.6} mm", v))
             .unwrap_or_else(|| "Infinity (infinite object)".to_string());
         let beta = if let Some(d0) = t.object_distance_mm {
-            if t.final_alpha.abs() > 1e-10 { (-1.0 / d0) / t.final_alpha } else { 0.0 }
+            if t.final_alpha.abs() > 1e-10 {
+                (-1.0 / d0) / t.final_alpha
+            } else {
+                0.0
+            }
         } else {
             0.0
         };
@@ -2013,17 +2101,52 @@ fn format_paraxial_report(
         &format!("Object Distance:                  {}", object_distance),
         &format!("Total System Length:              {} mm", total_length),
         &format!("Exit Pupil Magnification (βexp): {:.6}", exit_pupil_mag),
-        &format!("Exit Pupil Diameter (ExPD):     {:.6} mm", exit_pupil_diameter),
-        &format!("Paraxial Magnification:           {:.6}", if beta.is_finite() { beta } else { 0.0 }),
-        &format!("Object Space F#:                  {:.6}", if fno_work.is_finite() && beta.abs() > 1e-10 { (fno_work / beta).abs() } else { 0.0_f64 }),
-        &format!("Image Space F#:                   {:.6}", if fno_img.is_finite() { fno_img } else { 0.0 }),
-        &format!("Paraxial Working F#:              {:.6}", if fno_work.is_finite() { fno_work } else { 0.0 }),
-        &format!("Object Space NA:                  {:.6}", if na_img.is_finite() && beta.is_finite() { (na_img * beta).abs() } else { 0.0 }),
-        &format!("Image Space NA:                   {:.6}", if na_img.is_finite() { na_img } else { 0.0 }),
+        &format!(
+            "Exit Pupil Diameter (ExPD):     {:.6} mm",
+            exit_pupil_diameter
+        ),
+        &format!(
+            "Paraxial Magnification:           {:.6}",
+            if beta.is_finite() { beta } else { 0.0 }
+        ),
+        &format!(
+            "Object Space F#:                  {:.6}",
+            if fno_work.is_finite() && beta.abs() > 1e-10 {
+                (fno_work / beta).abs()
+            } else {
+                0.0_f64
+            }
+        ),
+        &format!(
+            "Image Space F#:                   {:.6}",
+            if fno_img.is_finite() { fno_img } else { 0.0 }
+        ),
+        &format!(
+            "Paraxial Working F#:              {:.6}",
+            if fno_work.is_finite() { fno_work } else { 0.0 }
+        ),
+        &format!(
+            "Object Space NA:                  {:.6}",
+            if na_img.is_finite() && beta.is_finite() {
+                (na_img * beta).abs()
+            } else {
+                0.0
+            }
+        ),
+        &format!(
+            "Image Space NA:                   {:.6}",
+            if na_img.is_finite() { na_img } else { 0.0 }
+        ),
         "",
         "=== Pupil Calculation ===",
-        &format!("Exit Pupil Diameter:              {:.6} mm", exit_pupil_diameter),
-        &format!("Exit Pupil Position:              {:.6} mm (from Image)", exit_pos_from_image),
+        &format!(
+            "Exit Pupil Diameter:              {:.6} mm",
+            exit_pupil_diameter
+        ),
+        &format!(
+            "Exit Pupil Position:              {:.6} mm (from Image)",
+            exit_pos_from_image
+        ),
         &format!("Exit Pupil Magnification:         {:.6}", exit_pupil_mag),
         &format!(
             "Entrance Pupil Position:          {:.6} mm",
@@ -2031,7 +2154,10 @@ fn format_paraxial_report(
         ),
         &format!(
             "Entrance Pupil Diameter:          {:.6} mm",
-            entrance.as_ref().map(|v| v.diameter_mm).unwrap_or(stop_diameter)
+            entrance
+                .as_ref()
+                .map(|v| v.diameter_mm)
+                .unwrap_or(stop_diameter)
         ),
         &format!(
             "Entrance Pupil Magnification:     {:.6}",
@@ -2062,7 +2188,10 @@ fn format_seidel_report(
     let mut lines = Vec::<String>::new();
     lines.push(format!("{}", title));
     lines.push("=== Third-Order Aberration Coefficients ===".to_string());
-    lines.push(format!("Reference Focal Length: {:.6} mm", reference_focal_length));
+    lines.push(format!(
+        "Reference Focal Length: {:.6} mm",
+        reference_focal_length
+    ));
     lines.push(format!("Wavelength: {:.7} μm", wavelength_um));
     if let Some((w_short, w_long)) = wavelength_range {
         lines.push(format!(
@@ -2108,9 +2237,16 @@ fn format_seidel_report(
     ));
 
     if afocal {
-        let marginal = trace_ray_surface_states_with_wavelength(rows, initial_alpha_for_marginal(rows), wavelength_um);
+        let marginal = trace_ray_surface_states_with_wavelength(
+            rows,
+            initial_alpha_for_marginal(rows),
+            wavelength_um,
+        );
         lines.push(String::new());
-        lines.push("=== Paraxial Marginal Ray Trace Data (Normalized by Reference Focal Length) ===".to_string());
+        lines.push(
+            "=== Paraxial Marginal Ray Trace Data (Normalized by Reference Focal Length) ==="
+                .to_string(),
+        );
         lines.push(format!(
             "{:>7}\t{:<8}\t{:>13}\t{:>13}\t{:>13}\t{:>15}\t{:>15}",
             "Surface", "Object", "Radius", "Thickness", "Index", "Angle", "Height"
@@ -2172,8 +2308,16 @@ fn format_seidel_report(
     }
 
     if let Some((w_short, w_long)) = wavelength_range {
-        let marginal_short = trace_ray_surface_states_with_wavelength(rows, initial_alpha_for_marginal(rows), w_short);
-        let marginal_long = trace_ray_surface_states_with_wavelength(rows, initial_alpha_for_marginal(rows), w_long);
+        let marginal_short = trace_ray_surface_states_with_wavelength(
+            rows,
+            initial_alpha_for_marginal(rows),
+            w_short,
+        );
+        let marginal_long = trace_ray_surface_states_with_wavelength(
+            rows,
+            initial_alpha_for_marginal(rows),
+            w_long,
+        );
         append_marginal_trace_table(&mut lines, rows, stop_index, w_short, &marginal_short);
         append_marginal_trace_table(&mut lines, rows, stop_index, w_long, &marginal_long);
     }
@@ -2282,7 +2426,11 @@ fn initial_alpha_for_chief(rows: &[Value], stop_index: usize) -> f64 {
     (stop_radius / object_distance).clamp(0.0001, 0.2)
 }
 
-fn trace_ray_surface_states_with_wavelength(rows: &[Value], mut alpha: f64, wavelength_um: f64) -> Vec<RaySurfaceState> {
+fn trace_ray_surface_states_with_wavelength(
+    rows: &[Value],
+    mut alpha: f64,
+    wavelength_um: f64,
+) -> Vec<RaySurfaceState> {
     let mut states = Vec::new();
     if rows.is_empty() {
         return states;
@@ -2329,7 +2477,11 @@ fn trace_ray_surface_states_with_wavelength(rows: &[Value], mut alpha: f64, wave
             n_after: next_n,
         });
 
-        if j < rows.len().saturating_sub(1) && thickness.is_finite() && thickness > 0.0 && next_n.abs() > 1e-12 {
+        if j < rows.len().saturating_sub(1)
+            && thickness.is_finite()
+            && thickness > 0.0
+            && next_n.abs() > 1e-12
+        {
             h -= thickness * alpha / next_n;
         }
 
@@ -2346,11 +2498,21 @@ fn compute_seidel_surface_coefficients(
     reference_wavelength_um: f64,
     wavelength_range: Option<(f64, f64)>,
 ) -> (Vec<SeidelSurfaceCoeff>, SeidelTotals) {
-    let marginal = trace_ray_surface_states_with_wavelength(rows, initial_alpha_for_marginal(rows), reference_wavelength_um);
-    let chief = trace_ray_surface_states_with_wavelength(rows, initial_alpha_for_chief(rows, stop_index), reference_wavelength_um);
+    let marginal = trace_ray_surface_states_with_wavelength(
+        rows,
+        initial_alpha_for_marginal(rows),
+        reference_wavelength_um,
+    );
+    let chief = trace_ray_surface_states_with_wavelength(
+        rows,
+        initial_alpha_for_chief(rows, stop_index),
+        reference_wavelength_um,
+    );
     let (short_wl, long_wl) = wavelength_range.unwrap_or((0.486_132_7, 0.656_272_5));
-    let marginal_short = trace_ray_surface_states_with_wavelength(rows, initial_alpha_for_marginal(rows), short_wl);
-    let marginal_long = trace_ray_surface_states_with_wavelength(rows, initial_alpha_for_marginal(rows), long_wl);
+    let marginal_short =
+        trace_ray_surface_states_with_wavelength(rows, initial_alpha_for_marginal(rows), short_wl);
+    let marginal_long =
+        trace_ray_surface_states_with_wavelength(rows, initial_alpha_for_marginal(rows), long_wl);
 
     let mut totals = SeidelTotals {
         i: 0.0,
@@ -2380,7 +2542,10 @@ fn compute_seidel_surface_coefficients(
             .map(value_to_lower)
             .map(|s| s == "gap")
             .unwrap_or(false);
-        let is_mirror = rows.get(m.surface_index).map(is_mirror_surface).unwrap_or(false);
+        let is_mirror = rows
+            .get(m.surface_index)
+            .map(is_mirror_surface)
+            .unwrap_or(false);
         if is_gap && !is_mirror {
             continue;
         }
@@ -2443,8 +2608,12 @@ fn compute_seidel_surface_coefficients(
             scale * j * iv
         };
 
-        let short_state = marginal_short.iter().find(|x| x.surface_index == m.surface_index);
-        let long_state = marginal_long.iter().find(|x| x.surface_index == m.surface_index);
+        let short_state = marginal_short
+            .iter()
+            .find(|x| x.surface_index == m.surface_index);
+        let long_state = marginal_long
+            .iter()
+            .find(|x| x.surface_index == m.surface_index);
         let (lca, tca) = compute_chromatic_lca_tca_for_surface(
             rows,
             m.surface_index,
@@ -2463,16 +2632,15 @@ fn compute_seidel_surface_coefficients(
         } else if is_mirror {
             "MIRROR".to_string()
         } else {
-            row
-                .and_then(|o| {
-                    o.get("object type")
-                        .or_else(|| o.get("object"))
-                        .or_else(|| o.get("surf type"))
-                })
-                .and_then(Value::as_str)
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_default()
+            row.and_then(|o| {
+                o.get("object type")
+                    .or_else(|| o.get("object"))
+                    .or_else(|| o.get("surf type"))
+            })
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default()
         };
 
         totals.i += i;
@@ -2516,10 +2684,8 @@ fn estimate_refractive_index_from_nd_vd(nd: f64, vd: f64, wavelength_um: f64) ->
             + 0.088_927_f64 * lambda2
             + 0.373_49_f64 / denom
             + 0.005_799_f64 / denom2;
-        let b = 0.001_25_f64
-            - 0.007_068_f64 * lambda2
-            + 0.001_071_f64 / denom
-            - 0.000_218_f64 / denom2;
+        let b =
+            0.001_25_f64 - 0.007_068_f64 * lambda2 + 0.001_071_f64 / denom - 0.000_218_f64 / denom2;
         let n_est = 1.0 + (nd - 1.0) * (1.0 + b + (a / vd));
         if n_est < 1.0 || n_est > 3.0 || !n_est.is_finite() {
             nd
@@ -2529,7 +2695,10 @@ fn estimate_refractive_index_from_nd_vd(nd: f64, vd: f64, wavelength_um: f64) ->
     }
 }
 
-fn calculate_refractive_index_sellmeier(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+fn calculate_refractive_index_sellmeier(
+    coeffs: &Map<String, Value>,
+    wavelength_um: f64,
+) -> Option<f64> {
     if wavelength_um <= 0.0 {
         return None;
     }
@@ -2553,7 +2722,10 @@ fn calculate_refractive_index_sellmeier(coeffs: &Map<String, Value>, wavelength_
     }
 }
 
-fn calculate_refractive_index_schott(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+fn calculate_refractive_index_schott(
+    coeffs: &Map<String, Value>,
+    wavelength_um: f64,
+) -> Option<f64> {
     if wavelength_um <= 0.0 {
         return None;
     }
@@ -2833,9 +3005,24 @@ pub(crate) fn compute_paraxial_metrics(
     _object_rows: &[Value],
 ) -> ParaxialMetrics {
     let zero = ParaxialMetrics {
-        fl: 0.0, efl: 0.0, bfl: 0.0, imd: 0.0, objd: 0.0, tsl: 0.0,
-        bexp: 0.0, expd: 0.0, expp: 0.0, enpd: 0.0, enpp: 0.0, enpm: 0.0,
-        pmag: 0.0, fno_obj: 0.0, fno_img: 0.0, fno_wrk: 0.0, na_obj: 0.0, na_img: 0.0,
+        fl: 0.0,
+        efl: 0.0,
+        bfl: 0.0,
+        imd: 0.0,
+        objd: 0.0,
+        tsl: 0.0,
+        bexp: 0.0,
+        expd: 0.0,
+        expp: 0.0,
+        enpd: 0.0,
+        enpp: 0.0,
+        enpm: 0.0,
+        pmag: 0.0,
+        fno_obj: 0.0,
+        fno_img: 0.0,
+        fno_wrk: 0.0,
+        na_obj: 0.0,
+        na_img: 0.0,
     };
     if rows.is_empty() {
         return zero;
@@ -2894,12 +3081,21 @@ pub(crate) fn compute_paraxial_metrics(
         .filter(|v| v.is_finite() && *v > 1e-12)
         .unwrap_or(stop_diameter);
 
-    let enpd = safe0(entrance.as_ref().map(|v| v.diameter_mm).unwrap_or(stop_diameter));
+    let enpd = safe0(
+        entrance
+            .as_ref()
+            .map(|v| v.diameter_mm)
+            .unwrap_or(stop_diameter),
+    );
     let enpp = safe0(entrance.as_ref().map(|v| v.position_mm).unwrap_or(0.0));
     let enpm = safe0(entrance.as_ref().map(|v| v.magnification).unwrap_or(1.0));
 
     let beta = if let Some(d0) = t.object_distance_mm {
-        if t.final_alpha.abs() > 1e-10 { (-1.0 / d0) / t.final_alpha } else { 0.0 }
+        if t.final_alpha.abs() > 1e-10 {
+            (-1.0 / d0) / t.final_alpha
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
@@ -2938,12 +3134,31 @@ pub(crate) fn compute_paraxial_metrics(
     let _ = source_rows; // consumed indirectly via detect_primary_wavelength if needed
 
     ParaxialMetrics {
-        fl, efl, bfl, imd, objd, tsl,
-        bexp, expd, expp, enpd, enpp, enpm, pmag,
-        fno_obj, fno_img, fno_wrk, na_obj, na_img,
+        fl,
+        efl,
+        bfl,
+        imd,
+        objd,
+        tsl,
+        bexp,
+        expd,
+        expp,
+        enpd,
+        enpp,
+        enpm,
+        pmag,
+        fno_obj,
+        fno_img,
+        fno_wrk,
+        na_obj,
+        na_img,
     }
 }
 
 fn safe0(v: f64) -> f64 {
-    if v.is_finite() { v } else { 0.0 }
+    if v.is_finite() {
+        v
+    } else {
+        0.0
+    }
 }

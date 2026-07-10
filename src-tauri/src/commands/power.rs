@@ -41,7 +41,8 @@ fn begin_optimizer_activity(reason: &str) -> Option<usize> {
         let options = NS_ACTIVITY_USER_INITIATED
             | NS_ACTIVITY_SUDDEN_TERMINATION_DISABLED
             | NS_ACTIVITY_AUTOMATIC_TERMINATION_DISABLED;
-        let activity: id = msg_send![process_info, beginActivityWithOptions: options reason: reason_ns];
+        let activity: id =
+            msg_send![process_info, beginActivityWithOptions: options reason: reason_ns];
         if activity == nil {
             None
         } else {

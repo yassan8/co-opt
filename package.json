@@ -46,6 +46,7 @@
     "diag:zernike-fit": "node --experimental-strip-types diagnostics/zernike-fit-benchmark.mjs",
     "diag:zernike-fit-ab": "node --experimental-strip-types diagnostics/zernike-fit-ab-benchmark.mjs",
     "wasm:rebuild": "bash ./scripts/build-rust-wasm.sh",
+    "wasm:rebuild:threads": "bash -c 'COOPT_WASM_THREADS=1 bash ./scripts/build-rust-wasm.sh'",
     "state:inventory": "node tools/state-inventory.mjs",
     "pr:all": "bash ./scripts/pr-all.sh"
   },

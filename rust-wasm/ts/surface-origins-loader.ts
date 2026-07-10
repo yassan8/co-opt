@@ -19,9 +19,6 @@ export async function ensureSurfaceOriginsModuleLoaded(): Promise<any | null> {
   g.__cooptSurfaceOriginsModuleLoadPromise = (async () => {
     try {
       const mod = await import('../../public/rust-wasm/pkg/surface_origins.js');
-      if (typeof mod?.default === 'function') {
-        await mod.default();
-      }
       g.__cooptSurfaceOriginsModule = mod;
       g.__cooptSurfaceOriginsModuleError = null;
       g.__cooptSurfaceOriginsModulePromise = Promise.resolve(mod);

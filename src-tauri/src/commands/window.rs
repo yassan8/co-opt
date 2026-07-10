@@ -1,7 +1,7 @@
 use serde_json::Value;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
-use std::time::Duration;
 use std::thread::sleep;
+use std::time::Duration;
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// Open (or focus) the render window from the Rust backend.
 /// Accepts the full URL from the JS caller, so it works in both dev and production.
@@ -37,13 +37,14 @@ pub async fn open_render_window(app: AppHandle, url: String) -> Result<(), Strin
 /// This bypasses fragile cross-webview storage/event timing issues.
 #[tauri::command]
 pub async fn sync_render_rows(app: AppHandle, rows: Value) -> Result<(), String> {
-        let Some(window) = app.get_webview_window("render-window") else {
-                return Ok(());
-        };
+    let Some(window) = app.get_webview_window("render-window") else {
+        return Ok(());
+    };
 
-        let rows_json = serde_json::to_string(&rows).map_err(|e| format!("rows serialize failed: {e}"))?;
-        let script = format!(
-                r#"
+    let rows_json =
+        serde_json::to_string(&rows).map_err(|e| format!("rows serialize failed: {e}"))?;
+    let script = format!(
+        r#"
                 try {{
                     const rows = {rows_json};
                     window.__cooptPendingRenderRows = Array.isArray(rows) ? rows : [];
@@ -72,8 +73,8 @@ pub async fn sync_render_rows(app: AppHandle, rows: Value) -> Result<(), String>
                     }}
                 }} catch (_e) {{}}
                 "#
-        );
+    );
 
-        window.eval(&script).map_err(|e| e.to_string())?;
-        Ok(())
+    window.eval(&script).map_err(|e| e.to_string())?;
+    Ok(())
 }

@@ -2948,10 +2948,16 @@ export async function runMtfBatchViaWasm(
       );
     }
 
-    // Thread-pool startup can take seconds in a browser module context. Do not
-    // delay the first batch call; opt into the slower initialization explicitly.
+    // On isolated pages, initialize Rayon automatically so the first analysis
+    // does not pay the thread-pool startup cost.
     const enableWasmThreads = typeof globalThis !== "undefined"
-      && (globalThis as any).__COOPT_MTF_ENABLE_RAYON === true;
+      && (
+        (globalThis as any).__COOPT_MTF_ENABLE_RAYON === true
+        || (
+          (globalThis as any).crossOriginIsolated === true
+          && typeof (globalThis as any).SharedArrayBuffer === "function"
+        )
+      );
     const wasmThreadsActive = enableWasmThreads
       ? await ensureRustRayTracingWasmThreadPool(rust)
       : false;
@@ -2977,6 +2983,20 @@ export async function runMtfBatchViaWasm(
           : request.jobs,
       }
       : request;
+    const enrichedRowsCache = new Map<string, any[]>();
+    let enrichedRowsCacheHits = 0;
+    const getCachedEnrichedRows = (rows: any[], wavelengthUm: number): any[] => {
+      const numericWavelength = Number.isFinite(wavelengthUm) && wavelengthUm > 0 ? wavelengthUm : 0.5876;
+      const cacheKey = numericWavelength.toFixed(9);
+      const cached = enrichedRowsCache.get(cacheKey);
+      if (cached) {
+        enrichedRowsCacheHits += 1;
+        return cached;
+      }
+      const enriched = enrichRowsWithResolvedRindexForWasm(rows, numericWavelength);
+      enrichedRowsCache.set(cacheKey, enriched);
+      return enriched;
+    };
     const sharedOpdRequest = preparedRequest?.shared?.opdRequest;
     if (sharedOpdRequest && typeof sharedOpdRequest === "object") {
       const wavelengthUm = Number(sharedOpdRequest.wavelengthUm);
@@ -2984,7 +3004,7 @@ export async function runMtfBatchViaWasm(
         ? sharedOpdRequest.opticalSystemRows
         : [];
       if (opticalRows.length > 0) {
-        const enrichedRows = enrichRowsWithResolvedRindexForWasm(opticalRows, wavelengthUm);
+        const enrichedRows = getCachedEnrichedRows(opticalRows, wavelengthUm);
         sharedOpdRequest.opticalSystemRows = enrichedRows;
         const objectRows = Array.isArray(sharedOpdRequest.objectRows) ? sharedOpdRequest.objectRows : [];
         if (objectRows.length > 0) {
@@ -3002,7 +3022,7 @@ export async function runMtfBatchViaWasm(
       if (!jobOpdRequest || typeof jobOpdRequest !== "object") continue;
       const wavelengthUm = Number(jobOpdRequest.wavelengthUm ?? sharedOpdRequest?.wavelengthUm);
       if (Array.isArray(jobOpdRequest.opticalSystemRows) && jobOpdRequest.opticalSystemRows.length > 0) {
-        const enrichedRows = enrichRowsWithResolvedRindexForWasm(jobOpdRequest.opticalSystemRows, wavelengthUm);
+        const enrichedRows = getCachedEnrichedRows(jobOpdRequest.opticalSystemRows, wavelengthUm);
         jobOpdRequest.opticalSystemRows = enrichedRows;
         if (Array.isArray(jobOpdRequest.objectRows) && jobOpdRequest.objectRows.length > 0) {
           jobOpdRequest.objectRows = await normalizeTransverseObjectRowsForImageHeight(
@@ -3015,7 +3035,26 @@ export async function runMtfBatchViaWasm(
       }
     }
 
-    const wasmOutRaw = batchFn(JSON.stringify(preparedRequest));
+    let sharedSourceRowsRemoved = 0;
+    const sharedSourceRows = sharedOpdRequest && typeof sharedOpdRequest === "object"
+      && Array.isArray(sharedOpdRequest.sourceRows)
+      ? sharedOpdRequest.sourceRows
+      : null;
+    if (sharedSourceRows) {
+      for (const job of Array.isArray(preparedRequest?.jobs) ? preparedRequest.jobs : []) {
+        const jobOpdRequest = job?.opdRequest;
+        if (!jobOpdRequest || typeof jobOpdRequest !== "object") continue;
+        if (Array.isArray(jobOpdRequest.sourceRows)) {
+          delete jobOpdRequest.sourceRows;
+          sharedSourceRowsRemoved += 1;
+        }
+      }
+    }
+
+    const requestJson = JSON.stringify(preparedRequest);
+    console.info(`[TFMTF BatchPrep] jobs=${Array.isArray(preparedRequest?.jobs) ? preparedRequest.jobs.length : 0}, wavelengthRowCacheHits=${enrichedRowsCacheHits}, cachedWavelengths=${enrichedRowsCache.size}, sharedSourceRowsRemoved=${sharedSourceRowsRemoved}, requestChars=${requestJson.length}`);
+
+    const wasmOutRaw = batchFn(requestJson);
     const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
     if (!wasmOut || typeof wasmOut !== "object") {
       throw new Error("runMtfBatchViaWasm(web): Rust-WASM batch API returned invalid response");
@@ -3029,7 +3068,13 @@ export async function runMtfBatchViaWasm(
 
 async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
   const jobs = Array.isArray(request?.jobs) ? request.jobs : [];
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const logElapsed = () => {
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    return Math.max(0, now - startedAt).toFixed(1);
+  };
   if (jobs.length <= 1 || typeof Worker === "undefined") {
+    console.info(`[TFMTF WorkerPool] bypassed: jobs=${jobs.length}, worker=${typeof Worker !== "undefined"}, elapsed=${logElapsed()}ms`);
     return runMtfBatchViaWasm(request);
   }
 
@@ -3038,13 +3083,18 @@ async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
     && crossOriginIsolated
     && typeof SharedArrayBuffer === "function"
   ) {
-    return runMtfBatchViaWasm(request);
+    console.info(`[TFMTF WorkerPool] bypassed: crossOriginIsolated=true, using Rayon WASM path, jobs=${jobs.length}`);
+    const rayonResponse = await runMtfBatchViaWasm(request);
+    const rayonNow = typeof performance !== "undefined" ? performance.now() : Date.now();
+    console.info(`[TFMTF WorkerPool] Rayon finished: jobs=${jobs.length}, elapsed=${Math.max(0, rayonNow - startedAt).toFixed(1)}ms`);
+    return rayonResponse;
   }
 
   const hardwareConcurrency = typeof navigator !== "undefined"
     ? Number(navigator.hardwareConcurrency)
     : 4;
   const workerCount = Math.max(1, Math.min(8, jobs.length, Number.isFinite(hardwareConcurrency) ? hardwareConcurrency : 4));
+  console.info(`[TFMTF WorkerPool] starting: jobs=${jobs.length}, workers=${workerCount}, hardwareConcurrency=${hardwareConcurrency}`);
   const chunks: unknown[][] = Array.from({ length: workerCount }, () => []);
   jobs.forEach((job: unknown, index: number) => {
     chunks[index % workerCount].push(job);
@@ -3084,10 +3134,11 @@ async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
       message: `Computed ${jobs.length} TF-MTF jobs across ${workerCount} WASM workers`,
     };
   } catch (error) {
-    console.warn("TF-MTF WASM worker pool failed; retrying on the main WASM instance", error);
+    console.warn(`[TFMTF WorkerPool] failed after ${logElapsed()}ms; retrying on the main WASM instance`, error);
     return runMtfBatchViaWasm(request);
   } finally {
     workers.forEach((worker) => worker.terminate());
+    console.info(`[TFMTF WorkerPool] finished: jobs=${jobs.length}, workers=${workerCount}, elapsed=${logElapsed()}ms`);
   }
 }
 
@@ -3451,7 +3502,7 @@ export async function runNativeThroughFocusMtfMap(
           sampleFrequenciesLpmm: [targetFreqLpmm],
           directEvalOnly: true,
           points: 2,
-          slimResults: false,
+          slimResults: true,
           method: mtfMethod,
           meta: {
             wi,
@@ -3468,7 +3519,7 @@ export async function runNativeThroughFocusMtfMap(
     setProgress(25, `Executing batch MTF computation (${jobs.length} jobs)...`);
 
     // Execute batch via WASM
-    const batchResp = await runMtfBatchViaWasm({
+    const batchResp = await runMtfBatchViaWasmWorkerPool({
       jobs,
       shared: {
         opdRequest: {
@@ -3637,7 +3688,7 @@ export async function runNativeFieldMtfMap(
   const forcedPupilSamplingMode = readForcedInfinitePupilMode();
   const requestedPupilSamplingMode = hasExplicitPupilSamplingMode
     ? payload.pupilSamplingMode
-    : (forcedPupilSamplingMode || "entrance");
+    : (forcedPupilSamplingMode || "stop");
   const mtfMethod = (typeof (payload as any)?.method === "string" && String((payload as any).method).trim())
     ? String((payload as any).method).trim()
     : "hopkins-tcc";
@@ -4561,6 +4612,210 @@ export async function runNativeFieldMtfMap(
   } catch (_) {
     // Keep platform fallback below.
   }
+  }
+
+  // Reuse the TF-MTF batch kernel for browser Object MTF. Each field sample is
+  // an independent OPD -> PSF -> direct-frequency MTF job, so Rayon can work
+  // across fields and the JS/WASM boundary is crossed once per wavelength.
+  const batchCompatibleMtfMethod = ["hopkins-tcc", "hopkins", "auto"].includes(mtfMethod.toLowerCase());
+  if (!isTauriRuntime() && batchCompatibleMtfMethod && !isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows)) {
+    try {
+      const batchSeries: any[] = [];
+      const targetFrequencies = [firstFrequencyLpmm, secondFrequencyLpmm, thirdFrequencyLpmm]
+        .map((frequency) => Number(frequency))
+        .filter((frequency) => Number.isFinite(frequency) && frequency >= 0);
+      const maxFrequencyLpmm = Math.max(1, ...targetFrequencies) * 2;
+
+      for (const wl of wavelengths) {
+        const activeSamples = sampleFromObjectRows
+          ? await buildObjectRowSamples(wl)
+          : xAxis.map((fieldValue) => ({
+            fieldValue,
+            objectRowIndex: objectIndex,
+            objectRowsForCall: cloneObjectRowsForCall(cloneObjectRowsForField(fieldValue, wl, axisMode, objectIndex)),
+            fieldVector: { x: 0, y: fieldValue },
+          }));
+        const batchPixelSizeUm = await resolvePixelSizeUm(wl);
+        const regularMtfSurfaceIndex = (() => {
+          let imageIndex = -1;
+          for (let index = 0; index < opticalSystemRows.length; index += 1) {
+            const row = opticalSystemRows[index] || {};
+            const objectType = String(
+              row?.["object type"] ?? row?.object ?? row?.Object ?? row?.position ?? "",
+            ).trim().toLowerCase();
+            if (objectType === "image") imageIndex = index;
+          }
+          return imageIndex >= 0 ? imageIndex : Math.max(0, opticalSystemRows.length - 1);
+        })();
+        const jobs = activeSamples.map((sample, fieldIndex) => ({
+          opdRequest: {
+            sourceRows,
+            objectRows: sample.objectRowsForCall,
+            objectIndex: sample.objectRowIndex,
+            // Match runDesktopNativeOpdMapForPopup, which fixes the image
+            // evaluation surface for regular MTF.
+            surfaceIndex: regularMtfSurfaceIndex,
+            gridSize: samplingSize,
+            wavelengthUm: wl,
+            pupilSamplingMode: requestedPupilSamplingMode
+              || (axisMode === "angle" && Math.abs(Number(sample.fieldValue)) > 1e-12 ? "entrance" : undefined),
+            opdDisplayMode,
+          },
+          wavelengthUm: wl,
+          pixelSizeUm: batchPixelSizeUm,
+          zeroPadTo: requestedFftSize,
+          removeTilt: false,
+          maxFrequencyLpmm,
+          sampleFrequenciesLpmm: targetFrequencies,
+          directEvalOnly: true,
+          points: targetFrequencies.length,
+          slimResults: true,
+          method: mtfMethod,
+          meta: { fieldIndex, fieldValue: sample.fieldValue },
+        }));
+
+        if (onProgress) {
+          onProgress({
+            percent: 25,
+            message: `Executing Object MTF batch (${jobs.length} fields)...`,
+          });
+        }
+        const batchResp = await runMtfBatchViaWasmWorkerPool({
+          jobs,
+          shared: {
+            opdRequest: {
+              opticalSystemRows,
+              sourceRows,
+              objectRows: activeSamples[0]?.objectRowsForCall || objectRows,
+              objectIndex,
+              wavelengthUm: wl,
+              surfaceIndex: regularMtfSurfaceIndex,
+              gridSize: samplingSize,
+              pupilSamplingMode: requestedPupilSamplingMode,
+              opdDisplayMode,
+            },
+          },
+        });
+        if (!Array.isArray(batchResp?.results) || batchResp.results.length !== jobs.length) {
+          throw new Error(`Object MTF batch returned ${batchResp?.results?.length || 0}/${jobs.length} results`);
+        }
+
+        const resultByField = new Map<number, any>();
+        for (const result of batchResp.results) {
+          const fieldIndex = Number(result?.meta?.fieldIndex ?? result?.jobIndex);
+          if (Number.isInteger(fieldIndex)) resultByField.set(fieldIndex, result);
+        }
+        const meridionalFirst: number[] = [];
+        const sagittalFirst: number[] = [];
+        const meridionalSecond: number[] = [];
+        const sagittalSecond: number[] = [];
+        const meridionalThird: number[] = [];
+        const sagittalThird: number[] = [];
+        const fieldDiagnostics: any[] = [];
+
+        activeSamples.forEach((sample, fieldIndex) => {
+          const result = resultByField.get(fieldIndex);
+          const mtf = result?.mtf || {};
+          const sampledTan = Array.isArray(mtf.sampledMtfTangential) ? mtf.sampledMtfTangential : [];
+          const sampledSag = Array.isArray(mtf.sampledMtfSagittal) ? mtf.sampledMtfSagittal : [];
+          const tanAxis = inferTanAxis(sample.fieldValue, sample.fieldVector);
+          const tanValues = tanAxis === "x" ? sampledSag : sampledTan;
+          const sagValues = tanAxis === "x" ? sampledTan : sampledSag;
+          const valueAt = (values: any[], index: number) => {
+            const value = Number(values[index]);
+            return Number.isFinite(value) ? value : Number.NaN;
+          };
+          const firstM = valueAt(tanValues, 0);
+          const firstS = valueAt(sagValues, 0);
+          const secondM = valueAt(tanValues, 1);
+          const secondS = valueAt(sagValues, 1);
+          const thirdM = valueAt(tanValues, 2);
+          const thirdS = valueAt(sagValues, 2);
+          const opd = result?.opd || {};
+          if (fieldIndex === 0 && Math.abs(Number(firstFrequencyLpmm) - 10) < 1e-9) {
+            console.info("[Object MTF Compare] batch", {
+              wavelengthUm: wl,
+              fieldValue: sample.fieldValue,
+              samplingSize,
+              pixelSizeUm: batchPixelSizeUm,
+              frequencyLpmm: targetFrequencies,
+              tangentialAt10: firstM,
+              sagittalAt10: firstS,
+              opdBackend: result?.backend,
+              opdTargetSurface: opd?.targetSurface,
+              opdPupilSamplingMode: opd?.pupilSamplingMode,
+              opdPupilRadiusMm: opd?.effectivePupilRadiusMm,
+              opdHitRate: Number(opd?.sampleCount) > 0
+                ? Number(opd?.hitCount || 0) / Number(opd?.sampleCount)
+                : 0,
+            });
+          }
+          meridionalFirst.push(firstM);
+          sagittalFirst.push(firstS);
+          meridionalSecond.push(secondM);
+          sagittalSecond.push(secondS);
+          meridionalThird.push(thirdM);
+          sagittalThird.push(thirdS);
+          const sampleCount = Number(opd.sampleCount || 0);
+          const hitCount = Number(opd.hitCount || 0);
+          fieldDiagnostics.push({
+            fieldValue: sample.fieldValue,
+            effectivePupilSamplingMode: String(opd.pupilSamplingMode || ""),
+            effectivePupilRadiusMm: Number(opd.effectivePupilRadiusMm),
+            usedObjectPosition: String(opd.usedObjectPosition || ""),
+            targetSurfaceIndex: Number(opd.targetSurface),
+            usedObjectIndex: Number(opd.usedObjectIndex),
+            opdSampleCount: sampleCount,
+            opdHitCount: hitCount,
+            opdHitRate: sampleCount > 0 ? hitCount / sampleCount : 0,
+            opdMessage: String(opd.message || "Computed via Object MTF batch"),
+            firstFrequencyLpmm,
+            firstValueMeridional: firstM,
+            firstValueSagittal: firstS,
+            secondFrequencyLpmm,
+            secondValueMeridional: secondM,
+            secondValueSagittal: secondS,
+          });
+        });
+
+        if (!sampleFromObjectRows) {
+          suppressFieldCurveOutliersInPlace({
+            diagnostics: fieldDiagnostics,
+            curves: [meridionalFirst, sagittalFirst, meridionalSecond, sagittalSecond, meridionalThird, sagittalThird],
+          });
+          fillNaNGapsInPlace(meridionalFirst);
+          fillNaNGapsInPlace(sagittalFirst);
+          fillNaNGapsInPlace(meridionalSecond);
+          fillNaNGapsInPlace(sagittalSecond);
+          fillNaNGapsInPlace(meridionalThird);
+          fillNaNGapsInPlace(sagittalThird);
+        }
+        batchSeries.push({
+          wavelengthUm: wl,
+          label: `${(wl * 1000).toFixed(1)}nm`,
+          meridionalFirst,
+          sagittalFirst,
+          meridionalSecond,
+          sagittalSecond,
+          meridionalThird,
+          sagittalThird,
+          fieldDiagnostics,
+        });
+      }
+
+      if (onProgress) {
+        onProgress({ percent: 100, message: "Object MTF batch computation complete" });
+      }
+      return {
+        backend: "web-rust-wasm-object-mtf-batch",
+        xAxis,
+        axisMode,
+        series: batchSeries,
+        message: "Object MTF computed via Web Rust/WASM OPD-PSF-MTF batch API",
+      };
+    } catch (batchError) {
+      console.warn("[Object MTF Batch] falling back to retry-capable field path", batchError);
+    }
   }
 
   if (!isTauriRuntime()) {

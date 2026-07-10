@@ -157,8 +157,20 @@ function warmupMtfRuntime(): Promise<void> {
   if (mtfRuntimeWarmupPromise) return mtfRuntimeWarmupPromise;
   mtfRuntimeWarmupPromise = (async () => {
     try {
-      const { preloadRustRayTracingWasm } = await import('../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts');
-      await preloadRustRayTracingWasm();
+      const {
+        preloadRustRayTracingWasm,
+        ensureRustRayTracingWasmThreadPool,
+      } = await import('../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts');
+      const rust = await preloadRustRayTracingWasm();
+      if (
+        rust
+        && typeof ensureRustRayTracingWasmThreadPool === 'function'
+        && typeof globalThis !== 'undefined'
+        && (globalThis as any).crossOriginIsolated === true
+        && typeof (globalThis as any).SharedArrayBuffer === 'function'
+      ) {
+        await ensureRustRayTracingWasmThreadPool(rust);
+      }
     } catch (_) {
       // Keep first compute path functional even if warmup fails.
     }
@@ -503,6 +515,78 @@ const CSS = `
 
 const SAMPLING_OPTIONS = ['16', '32', '64', '128', '256', '512', '1024', '2048', '4096'];
 
+function buildPchipCurve(xValues: number[], yValues: number[], pointCount = 101): { x: number[]; y: number[] } {
+  const points = xValues
+    .map((x, index) => ({ x: Number(x), y: Number(yValues[index]) }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((left, right) => left.x - right.x);
+  const uniquePoints: Array<{ x: number; y: number }> = [];
+  for (const point of points) {
+    const previous = uniquePoints[uniquePoints.length - 1];
+    if (previous && Math.abs(previous.x - point.x) <= 1e-12) previous.y = point.y;
+    else uniquePoints.push(point);
+  }
+  if (uniquePoints.length < 2) {
+    return { x: uniquePoints.map((point) => point.x), y: uniquePoints.map((point) => point.y) };
+  }
+
+  const count = Math.max(2, Math.floor(pointCount));
+  const x = Array.from({ length: count }, (_, index) => {
+    const ratio = index / (count - 1);
+    return uniquePoints[0].x + ratio * (uniquePoints[uniquePoints.length - 1].x - uniquePoints[0].x);
+  });
+  const h = uniquePoints.slice(1).map((point, index) => point.x - uniquePoints[index].x);
+  const delta = uniquePoints.slice(1).map((point, index) => (point.y - uniquePoints[index].y) / h[index]);
+  const slopes = new Array(uniquePoints.length).fill(0);
+  if (uniquePoints.length === 2) {
+    slopes[0] = delta[0];
+    slopes[1] = delta[0];
+  } else {
+    for (let index = 1; index < uniquePoints.length - 1; index++) {
+      const previousDelta = delta[index - 1];
+      const nextDelta = delta[index];
+      if (previousDelta * nextDelta <= 0) continue;
+      const previousH = h[index - 1];
+      const nextH = h[index];
+      const weight = (2 * nextH + previousH) / (nextH + previousH);
+      slopes[index] = (weight + 1) / (weight / previousDelta + (2 - weight) / nextDelta);
+    }
+    const endpointSlope = (first: boolean) => {
+      const index = first ? 0 : delta.length - 1;
+      const adjacent = first ? 1 : delta.length - 2;
+      const span = first ? h[0] : h[h.length - 1];
+      const nextSpan = first ? h[1] : h[h.length - 2];
+      const candidate = ((2 * span + nextSpan) * delta[index] - span * delta[adjacent]) / (span + nextSpan);
+      if (candidate * delta[index] <= 0) return 0;
+      if (Math.abs(candidate) > 3 * Math.abs(delta[index])) return 3 * delta[index];
+      return candidate;
+    };
+    slopes[0] = endpointSlope(true);
+    slopes[slopes.length - 1] = endpointSlope(false);
+  }
+
+  const y = x.map((target) => {
+    let segment = h.length - 1;
+    for (let index = 0; index < h.length; index++) {
+      if (target <= uniquePoints[index + 1].x) {
+        segment = index;
+        break;
+      }
+    }
+    const left = uniquePoints[segment];
+    const right = uniquePoints[segment + 1];
+    const span = right.x - left.x;
+    const t = Math.max(0, Math.min(1, (target - left.x) / span));
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * left.y
+      + (t3 - 2 * t2 + t) * span * slopes[segment]
+      + (-2 * t3 + 3 * t2) * right.y
+      + (t3 - t2) * span * slopes[segment + 1];
+  });
+  return { x, y };
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
@@ -515,7 +599,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
   const [objectIdx, setObjectIdx] = useState<string>('0');
 
   // ── Shared computation params ──
-  const [sampling, setSampling] = useState('32');
+  const [sampling, setSampling] = useState(() => type === 'through-focus-mtf' ? '64' : '32');
   const [removePtd, setRemovePtd] = useState(false);
 
   // ── MTF-specific ──
@@ -1067,6 +1151,24 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           ? mtfResp.sampledMtfSagittal
           : (Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal : []);
         if (!freq.length || !tan.length || !sag.length) throw new Error('MTF result does not contain valid curves');
+        if (freq.some((value) => Math.abs(Number(value) - 10) < 1e-9)) {
+          console.info('[MTF Compare] regular', {
+            wavelengthUm: wl,
+            objectIndex: objIdxN,
+            samplingSize: samplingN,
+            pixelSizeUm,
+            frequencyLpmm: freq,
+            tangentialAt10: tan[freq.findIndex((value) => Math.abs(Number(value) - 10) < 1e-9)],
+            sagittalAt10: sag[freq.findIndex((value) => Math.abs(Number(value) - 10) < 1e-9)],
+            opdBackend: opdResponses[wli]?.backend,
+            opdTargetSurface: opdResponses[wli]?.targetSurface,
+            opdPupilSamplingMode: opdResponses[wli]?.pupilSamplingMode,
+            opdPupilRadiusMm: opdResponses[wli]?.effectivePupilRadiusMm,
+            opdHitRate: Number(opdResponses[wli]?.sampleCount) > 0
+              ? Number(opdResponses[wli]?.hitCount || 0) / Number(opdResponses[wli]?.sampleCount)
+              : 0,
+          });
+        }
 
         const currentWavefrontRms = estimateFiniteGridRms(displayOpdGrid);
         const forceIdealParaxialMtf = isIdealParaxialOnlySystem(opticalRows)
@@ -1173,7 +1275,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
             if (Array.isArray(idealDiffCurve) && idealDiffCurve.length === freq.length) {
               diffY = idealDiffCurve.slice();
             } else {
-              const fNumber = Math.abs(focalLengthMm) / Math.max(1e-12, Math.abs(pupilDiameterMm));
+              const fNumber = Math.abs(focalLengths[wli]) / Math.max(1e-12, Math.abs(pupilDiameters[wli]));
               if (Number.isFinite(fNumber) && fNumber > 0) {
                 const cutoff = 1000.0 / (Math.max(1e-12, wl) * fNumber);
                 diffY = freq.map(f => {
@@ -1280,11 +1382,9 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     const objIdxN = parseInt(objectIdx, 10) || 0;
     try {
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
-      const throughFocusRunner = (!isTauriRuntime() && typeof w.runPortableThroughFocusMtfForPopup === 'function')
-        ? w.runPortableThroughFocusMtfForPopup
-        : (typeof w.runDesktopNativeThroughFocusMtfForPopup === 'function'
-          ? w.runDesktopNativeThroughFocusMtfForPopup
-          : (typeof w.runPortableThroughFocusMtfForPopup === 'function' ? w.runPortableThroughFocusMtfForPopup : null));
+      const throughFocusRunner = typeof w.runDesktopNativeThroughFocusMtfForPopup === 'function'
+        ? w.runDesktopNativeThroughFocusMtfForPopup
+        : (typeof w.runPortableThroughFocusMtfForPopup === 'function' ? w.runPortableThroughFocusMtfForPopup : null);
       if (typeof throughFocusRunner !== 'function') throw new Error('Through-Focus MTF runner unavailable');
       setProgress(0, 'Starting...');
       await new Promise(r => setTimeout(r, 0));
@@ -1309,9 +1409,14 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       if (useWeightedComposite) {
         const tanComposite = new Array(xAxis.length).fill(0);
         const sagComposite = new Array(xAxis.length).fill(0);
+        const availableWeight = series.reduce((sum, entry) => {
+          const weight = getCompositeWeightForWavelength(wavelengthEntries, Number(entry?.wavelengthUm));
+          return sum + (weight > 0 ? weight : 0);
+        }, 0);
         for (const s of series) {
           const wl = Number(s?.wavelengthUm);
-          const ww = getCompositeWeightForWavelength(wavelengthEntries, wl);
+          const rawWeight = getCompositeWeightForWavelength(wavelengthEntries, wl);
+          const ww = availableWeight > 0 ? rawWeight / availableWeight : 0;
           if (!(ww > 0)) continue;
           const tan: number[] = Array.isArray(s?.mtfTangential) ? s.mtfTangential : [];
           const sag: number[] = Array.isArray(s?.mtfSagittal) ? s.mtfSagittal : [];
@@ -1326,22 +1431,12 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         // NOTE: Do NOT force [0] = 1 for defocus-axis TF-MTF. The [0] position
         // represents defocusMinMm, not the DC (0 frequency) component.
         // Only frequency-axis MTF should have [0] = 1 (representing 0 lp/mm).
-        traces.push({
-          x: xAxis,
-          y: tanComposite,
-          type: 'scatter',
-          mode: 'lines',
-          name: 'Meridional (Weighted Composite)',
-          line: { color: '#1f4ed8', width: 2, dash: 'solid' }
-        });
-        traces.push({
-          x: xAxis,
-          y: sagComposite,
-          type: 'scatter',
-          mode: 'lines',
-          name: 'Sagittal (Weighted Composite)',
-          line: { color: '#1f4ed8', width: 2, dash: 'dot' }
-        });
+        const tanCurve = buildPchipCurve(xAxis, tanComposite);
+        const sagCurve = buildPchipCurve(xAxis, sagComposite);
+        traces.push({ x: tanCurve.x, y: tanCurve.y, type: 'scatter', mode: 'lines', name: 'Meridional (Weighted Composite)', line: { color: '#1f4ed8', width: 2, dash: 'solid' } });
+        traces.push({ x: xAxis, y: tanComposite, type: 'scatter', mode: 'markers', name: 'Meridional computed points', showlegend: false, marker: { color: '#1f4ed8', size: 6 } });
+        traces.push({ x: sagCurve.x, y: sagCurve.y, type: 'scatter', mode: 'lines', name: 'Sagittal (Weighted Composite)', line: { color: '#1f4ed8', width: 2, dash: 'dot' } });
+        traces.push({ x: xAxis, y: sagComposite, type: 'scatter', mode: 'markers', name: 'Sagittal computed points', showlegend: false, marker: { color: '#1f4ed8', size: 6, symbol: 'diamond' } });
       } else {
         for (const s of series) {
           const wl = Number(s.wavelengthUm);
@@ -1349,8 +1444,12 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           const color = getColorForWavelength(wl);
           const tan: number[] = Array.isArray(s.mtfTangential) ? s.mtfTangential : [];
           const sag: number[] = Array.isArray(s.mtfSagittal) ? s.mtfSagittal : [];
-          traces.push({ x: xAxis, y: tan, type: 'scatter', mode: 'lines', name: `Meridional (${nm}nm)`, line: { color, width: 2, dash: 'solid' } });
-          traces.push({ x: xAxis, y: sag, type: 'scatter', mode: 'lines', name: `Sagittal (${nm}nm)`, line: { color, width: 2, dash: 'dot' } });
+          const tanCurve = buildPchipCurve(xAxis, tan);
+          const sagCurve = buildPchipCurve(xAxis, sag);
+          traces.push({ x: tanCurve.x, y: tanCurve.y, type: 'scatter', mode: 'lines', name: `Meridional (${nm}nm)`, line: { color, width: 2, dash: 'solid' } });
+          traces.push({ x: xAxis, y: tan, type: 'scatter', mode: 'markers', name: `Meridional computed points (${nm}nm)`, showlegend: false, marker: { color, size: 6 } });
+          traces.push({ x: sagCurve.x, y: sagCurve.y, type: 'scatter', mode: 'lines', name: `Sagittal (${nm}nm)`, line: { color, width: 2, dash: 'dot' } });
+          traces.push({ x: xAxis, y: sag, type: 'scatter', mode: 'markers', name: `Sagittal computed points (${nm}nm)`, showlegend: false, marker: { color, size: 6, symbol: 'diamond' } });
         }
       }
       setProgress(85, 'Rendering...');
