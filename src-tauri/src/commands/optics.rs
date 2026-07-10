@@ -880,6 +880,9 @@ pub struct NativePsfMapResponse {
     pub fft_size: usize,
     pub psf_data: Vec<Vec<f64>>,
     pub metrics: NativePsfMetrics,
+    pub strehl_ratio: f64,
+    pub aberrated_peak: f64,
+    pub ideal_peak: f64,
     pub message: String,
 }
 
@@ -928,6 +931,8 @@ pub struct NativeThroughFocusMtfMapRequest {
     #[serde(default)]
     pub wavelengths: Vec<f64>,
     pub target_frequency_lpmm: Option<f64>,
+    #[serde(default)]
+    pub target_frequencies_lpmm: Vec<f64>,
     pub defocus_min_mm: Option<f64>,
     pub defocus_max_mm: Option<f64>,
     pub steps: Option<u32>,
@@ -949,10 +954,23 @@ pub struct NativeThroughFocusMtfSeries {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NativeThroughFocusMtfBatchSeries {
+    pub wavelength_um: f64,
+    pub label: String,
+    pub mtf_tangential_by_frequency: Vec<Vec<f64>>,
+    pub mtf_sagittal_by_frequency: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NativeThroughFocusMtfMapResponse {
     pub backend: String,
     pub x_axis: Vec<f64>,
     pub series: Vec<NativeThroughFocusMtfSeries>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_frequencies_lpmm: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_series: Option<Vec<NativeThroughFocusMtfBatchSeries>>,
     pub message: String,
 }
 
@@ -965,6 +983,7 @@ pub struct NativeFieldMtfMapRequest {
     pub source_rows: Vec<Value>,
     #[serde(default)]
     pub object_rows: Vec<Value>,
+    pub use_tf_mtf_parity: Option<bool>,
     pub object_index: Option<usize>,
     pub pupil_sampling_mode: Option<String>,
     #[serde(default)]
@@ -2698,9 +2717,10 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
             }
             let last = [probe_hit[2], probe_hit[3], probe_hit[4]];
             let prev = [probe_prev_hit[2], probe_prev_hit[3], probe_prev_hit[4]];
-            if let Some((center, radius)) = compute_reference_sphere_geometry(prev, last) {
-                if radius.is_finite() && radius >= 1.0e-6 && radius <= 1.0e6 {
-                    reference_sphere_geometry = Some((center, radius));
+            if let Some((center, _)) = compute_reference_sphere_geometry(prev, last) {
+                let chief_radius = distance3(chief_image_point, center);
+                if chief_radius.is_finite() && chief_radius >= 1.0e-6 && chief_radius <= 1.0e6 {
+                    reference_sphere_geometry = Some((center, chief_radius));
                     break;
                 }
             }
@@ -3817,6 +3837,9 @@ pub fn run_native_psf_map(req: NativePsfMapRequest, app: AppHandle) -> Result<Na
         fft_size,
         psf_data: psf,
         metrics,
+        strehl_ratio: strehl_ratio_override.unwrap_or(0.0),
+        aberrated_peak,
+        ideal_peak,
         message: "Native Rust PSF map completed".to_string(),
     })
     })();
@@ -4193,7 +4216,9 @@ fn resolve_mtf_fft_size(sampling_size: usize, explicit_zero_pad_to: usize, desir
     if explicit_zero_pad_to > 0 {
         return sampling_size.max(explicit_zero_pad_to).clamp(32, 4096);
     }
-    let min_required_for_bins = 2usize.saturating_mul(desired_plot_points.saturating_sub(1));
+    let min_required_for_bins = sampling_size
+        .saturating_mul(4)
+        .max(desired_plot_points);
     let target = sampling_size.max(min_required_for_bins);
     next_power_of_two_clamped(target, 32, 4096)
 }
@@ -4396,8 +4421,26 @@ pub fn run_native_through_focus_mtf_map(
 
         let min_mm = req.defocus_min_mm.unwrap_or(-0.1);
         let max_mm = req.defocus_max_mm.unwrap_or(0.1);
-        let steps = req.steps.unwrap_or(21).clamp(3, 201) as usize;
+        let collapsed_defocus = (max_mm - min_mm).abs() < 1e-12;
+        let min_steps = if collapsed_defocus { 1 } else { 3 };
+        let default_steps = if collapsed_defocus { 1 } else { 21 };
+        let steps = req.steps.unwrap_or(default_steps).clamp(min_steps, 201) as usize;
         let target_freq_lpmm = req.target_frequency_lpmm.unwrap_or(10.0).max(0.0);
+        let mut target_freqs_lpmm = req
+            .target_frequencies_lpmm
+            .iter()
+            .copied()
+            .filter(|f| f.is_finite() && *f >= 0.0)
+            .collect::<Vec<f64>>();
+        target_freqs_lpmm.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        target_freqs_lpmm.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        if target_freqs_lpmm.is_empty() {
+            target_freqs_lpmm.push(target_freq_lpmm);
+        }
+        let max_target_freq_lpmm = target_freqs_lpmm
+            .iter()
+            .copied()
+            .fold(0.0_f64, |acc, v| acc.max(v));
         let sampling_size = req.sampling_size.unwrap_or(256).clamp(32, 4096) as usize;
         let zero_pad_to = req.zero_pad_to.unwrap_or(0) as usize;
         let requested_fft_size = resolve_mtf_fft_size(sampling_size, zero_pad_to, 121);
@@ -4438,6 +4481,7 @@ pub fn run_native_through_focus_mtf_map(
         let mut completed = 0usize;
 
         let mut series = Vec::<NativeThroughFocusMtfSeries>::with_capacity(wavelengths.len());
+        let mut batch_series = Vec::<NativeThroughFocusMtfBatchSeries>::with_capacity(wavelengths.len());
         for (wi, wl) in wavelengths.iter().copied().enumerate() {
             let pixel_size_um = resolve_mtf_pixel_size_um_native(
                 req.pixel_size_um,
@@ -4448,8 +4492,12 @@ pub fn run_native_through_focus_mtf_map(
                 sampling_size,
                 requested_fft_size,
             );
-            let mut tan_vec = Vec::<f64>::with_capacity(x_axis.len());
-            let mut sag_vec = Vec::<f64>::with_capacity(x_axis.len());
+            let mut tan_vec_by_freq = (0..target_freqs_lpmm.len())
+                .map(|_| Vec::<f64>::with_capacity(x_axis.len()))
+                .collect::<Vec<Vec<f64>>>();
+            let mut sag_vec_by_freq = (0..target_freqs_lpmm.len())
+                .map(|_| Vec::<f64>::with_capacity(x_axis.len()))
+                .collect::<Vec<Vec<f64>>>();
 
             for (si, defocus_mm) in x_axis.iter().enumerate() {
                 let shifted_rows = clone_optical_system_rows_with_defocus_shift_native(
@@ -4523,29 +4571,43 @@ pub fn run_native_through_focus_mtf_map(
                         job_id: Some(sub_job),
                         psf_data: psf_resp.psf_data,
                         pixel_size_um,
-                        // Compute beyond target frequency to avoid endpoint-clamp bias
-                        // when extracting the value at target_freq_lpmm.
-                        max_frequency_lpmm: Some((target_freq_lpmm * 2.0).max(1.0)),
-                        points: Some(121),
-                        sample_frequencies_lpmm: vec![],
+                        max_frequency_lpmm: Some((max_target_freq_lpmm * 2.0).max(1.0)),
+                        points: Some(target_freqs_lpmm.len().max(2) as u32),
+                        sample_frequencies_lpmm: target_freqs_lpmm.clone(),
                         direct_eval_only: Some(false),
                         method: req.method.clone(),
                     },
                     app.clone(),
                 )?;
 
-                let tan = interpolate_axis_value(
-                    &mtf_resp.frequency_axis,
-                    &mtf_resp.mtf_tangential,
-                    target_freq_lpmm,
-                );
-                let sag = interpolate_axis_value(
-                    &mtf_resp.frequency_axis,
-                    &mtf_resp.mtf_sagittal,
-                    target_freq_lpmm,
-                );
-                tan_vec.push(tan);
-                sag_vec.push(sag);
+                let sampled_tan = mtf_resp.sampled_mtf_tangential.clone().unwrap_or_default();
+                let sampled_sag = mtf_resp.sampled_mtf_sagittal.clone().unwrap_or_default();
+                for fi in 0..target_freqs_lpmm.len() {
+                    let tan = sampled_tan
+                        .get(fi)
+                        .copied()
+                        .filter(|v| v.is_finite())
+                        .unwrap_or_else(|| {
+                            interpolate_axis_value(
+                                &mtf_resp.frequency_axis,
+                                &mtf_resp.mtf_tangential,
+                                target_freqs_lpmm[fi],
+                            )
+                        });
+                    let sag = sampled_sag
+                        .get(fi)
+                        .copied()
+                        .filter(|v| v.is_finite())
+                        .unwrap_or_else(|| {
+                            interpolate_axis_value(
+                                &mtf_resp.frequency_axis,
+                                &mtf_resp.mtf_sagittal,
+                                target_freqs_lpmm[fi],
+                            )
+                        });
+                    tan_vec_by_freq[fi].push(tan);
+                    sag_vec_by_freq[fi].push(sag);
+                }
 
                 completed += 1;
                 let progress = 10.0 + (completed as f64 / total_runs as f64) * 85.0;
@@ -4569,8 +4631,21 @@ pub fn run_native_through_focus_mtf_map(
             series.push(NativeThroughFocusMtfSeries {
                 wavelength_um: wl,
                 label: format!("{:.1}nm", wl * 1000.0),
-                mtf_tangential: tan_vec,
-                mtf_sagittal: sag_vec,
+                mtf_tangential: tan_vec_by_freq
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| vec![0.0; x_axis.len()]),
+                mtf_sagittal: sag_vec_by_freq
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| vec![0.0; x_axis.len()]),
+            });
+
+            batch_series.push(NativeThroughFocusMtfBatchSeries {
+                wavelength_um: wl,
+                label: format!("{:.1}nm", wl * 1000.0),
+                mtf_tangential_by_frequency: tan_vec_by_freq,
+                mtf_sagittal_by_frequency: sag_vec_by_freq,
             });
         }
 
@@ -4578,6 +4653,12 @@ pub fn run_native_through_focus_mtf_map(
             backend: "native-rust-through-focus-mtf".to_string(),
             x_axis,
             series,
+            target_frequencies_lpmm: if target_freqs_lpmm.len() > 1 {
+                Some(target_freqs_lpmm)
+            } else {
+                None
+            },
+            batch_series: if batch_series.is_empty() { None } else { Some(batch_series) },
             message: "Native Rust Through-Focus MTF completed".to_string(),
         })
     })();
@@ -4631,6 +4712,7 @@ pub fn run_native_field_mtf_map(
             object_index,
             req.field_axis_mode.as_deref(),
         );
+        let use_tf_mtf_parity = req.use_tf_mtf_parity.unwrap_or(false);
         let fixed_eval_surface_index = find_evaluation_surface_index_native(&normalized_optical_rows)
             .min(normalized_optical_rows.len().saturating_sub(1));
         let requested_pupil_sampling_mode = req
@@ -4757,6 +4839,152 @@ pub fn run_native_field_mtf_map(
                     (wl * 1_000_000.0).round() as i64,
                     si
                 );
+
+                if use_tf_mtf_parity {
+                    let opd_resp = run_native_opd_map(
+                        NativeOpdMapRequest {
+                            job_id: Some(format!("{}-tfparity-opd", sub_job)),
+                            optical_system_rows: req.optical_system_rows.clone(),
+                            source_rows: req.source_rows.clone(),
+                            object_rows: object_rows.clone(),
+                            object_index: Some(object_index),
+                            surface_index: None,
+                            grid_size: Some(sampling_size as u32),
+                            wavelength_um: Some(wl),
+                            pupil_radius_mm: None,
+                            pupil_sampling_mode: requested_pupil_sampling_mode.clone(),
+                            opd_display_mode: Some(opd_display_mode.clone()),
+                        },
+                        app.clone(),
+                    )?;
+
+                    let s = sampling_size;
+                    let mut grid_opd = vec![vec![0.0_f64; s]; s];
+                    let mut pupil_mask = vec![vec![false; s]; s];
+                    for iy in 0..s {
+                        let row_display = opd_resp.display_opd_grid.get(iy);
+                        let row_raw = opd_resp.raw_opd_grid.get(iy);
+                        for ix in 0..s {
+                            let raw_cell = row_raw.and_then(|r| r.get(ix)).and_then(|v| *v);
+                            let Some(v_raw_waves) = raw_cell else {
+                                continue;
+                            };
+                            if !v_raw_waves.is_finite() {
+                                continue;
+                            }
+
+                            let v_display_waves = row_display
+                                .and_then(|r| r.get(ix))
+                                .and_then(|v| *v)
+                                .filter(|v| v.is_finite());
+                            let v_waves = v_display_waves.unwrap_or(v_raw_waves);
+
+                            pupil_mask[iy][ix] = true;
+                            grid_opd[iy][ix] = v_waves * wl;
+                        }
+                    }
+
+                    let psf_resp = run_native_psf_map(
+                        NativePsfMapRequest {
+                            job_id: Some(format!("{}-tfparity-psf", sub_job)),
+                            grid_opd,
+                            pupil_mask,
+                            grid_amplitude: vec![],
+                            wavelength_um: wl,
+                            pixel_size_um: Some(pixel_size_um),
+                            remove_tilt: Some(false),
+                            zero_pad_to: Some(requested_fft_size as u32),
+                            recenter_if_wrapped: Some(false),
+                        },
+                        app.clone(),
+                    )?;
+
+                    let mtf_resp = run_native_mtf_map(
+                        NativeMtfMapRequest {
+                            job_id: Some(format!("{}-tfparity-mtf", sub_job)),
+                            psf_data: psf_resp.psf_data,
+                            pixel_size_um,
+                            max_frequency_lpmm: Some((first_frequency_lpmm.max(second_frequency_lpmm).max(third_frequency_lpmm) * 2.0).max(1.0)),
+                            points: Some(3),
+                            sample_frequencies_lpmm: vec![first_frequency_lpmm, second_frequency_lpmm, third_frequency_lpmm],
+                            direct_eval_only: Some(false),
+                            method: req.method.clone(),
+                        },
+                        app.clone(),
+                    )?;
+
+                    let sampled_tan = mtf_resp.sampled_mtf_tangential.clone().unwrap_or_default();
+                    let sampled_sag = mtf_resp.sampled_mtf_sagittal.clone().unwrap_or_default();
+                    let get_sampled = |arr: &Vec<f64>, fi: usize| -> f64 {
+                        arr.get(fi).copied().filter(|v| v.is_finite()).unwrap_or(0.0)
+                    };
+
+                    let raw_t0 = get_sampled(&sampled_tan, 0);
+                    let raw_s0 = get_sampled(&sampled_sag, 0);
+                    let raw_t1 = get_sampled(&sampled_tan, 1);
+                    let raw_s1 = get_sampled(&sampled_sag, 1);
+                    let raw_t2 = get_sampled(&sampled_tan, 2);
+                    let raw_s2 = get_sampled(&sampled_sag, 2);
+
+                    let first_m = raw_t0;
+                    let first_s = raw_s0;
+                    let second_m = raw_t1;
+                    let second_s = raw_s1;
+                    let third_m = raw_t2;
+                    let third_s = raw_s2;
+
+                    meridional_first.push(first_m);
+                    sagittal_first.push(first_s);
+                    meridional_second.push(second_m);
+                    sagittal_second.push(second_s);
+                    meridional_third.push(third_m);
+                    sagittal_third.push(third_s);
+                    field_diagnostics.push(NativeFieldMtfPointDiagnostic {
+                        field_value: *field_axis_value,
+                        effective_pupil_sampling_mode: opd_resp.pupil_sampling_mode.clone(),
+                        effective_pupil_radius_mm: opd_resp.effective_pupil_radius_mm,
+                        used_object_position: Some(opd_resp.used_object_position.clone()),
+                        target_surface_index: opd_resp.target_surface,
+                        used_object_index: opd_resp.used_object_index,
+                        opd_sample_count: opd_resp.sample_count,
+                        opd_hit_count: opd_resp.hit_count,
+                        opd_hit_rate: if opd_resp.sample_count > 0 {
+                            opd_resp.hit_count as f64 / opd_resp.sample_count as f64
+                        } else {
+                            0.0
+                        },
+                        opd_message: "Computed via direct TF-MTF parity path (defocus=0)".to_string(),
+                        first_frequency_lpmm,
+                        first_bracket_low_lpmm: None,
+                        first_bracket_high_lpmm: None,
+                        first_value_meridional: first_m,
+                        first_value_sagittal: first_s,
+                        second_frequency_lpmm,
+                        second_bracket_low_lpmm: None,
+                        second_bracket_high_lpmm: None,
+                        second_value_meridional: second_m,
+                        second_value_sagittal: second_s,
+                    });
+
+                    completed += 1;
+                    let progress = 10.0 + (completed as f64 / total_runs as f64) * 85.0;
+                    emit_native_analysis_progress(
+                        &app,
+                        &job_id,
+                        kind,
+                        "compute",
+                        &format!(
+                            "Computing Object MTF (TF parity): λ={:.1}nm ({}/{}), field {}/{}",
+                            wl * 1000.0,
+                            wl_index + 1,
+                            wavelengths.len(),
+                            si + 1,
+                            x_axis.len()
+                        ),
+                        Some(progress),
+                    );
+                    continue;
+                }
 
                 let primary_mode = if let Some(forced_mode) = requested_pupil_sampling_mode.as_deref() {
                     Some(forced_mode)
@@ -4938,7 +5166,7 @@ pub fn run_native_field_mtf_map(
                             max_frequency_lpmm: Some((first_frequency_lpmm.max(second_frequency_lpmm).max(third_frequency_lpmm) * 2.0).max(1.0)),
                             points: Some(3),
                             sample_frequencies_lpmm: vec![first_frequency_lpmm, second_frequency_lpmm, third_frequency_lpmm],
-                            direct_eval_only: Some(true),
+                            direct_eval_only: Some(false),
                             method: req.method.clone(),
                         },
                         app.clone(),
@@ -5079,11 +5307,19 @@ pub fn run_native_field_mtf_map(
         }
 
         Ok(NativeFieldMtfMapResponse {
-            backend: "native-rust-field-mtf".to_string(),
+            backend: if use_tf_mtf_parity {
+                "native-rust-field-mtf-tf-parity".to_string()
+            } else {
+                "native-rust-field-mtf".to_string()
+            },
             x_axis,
             axis_mode,
             series,
-            message: "Native Rust Object MTF completed".to_string(),
+            message: if use_tf_mtf_parity {
+                "Native Rust Object MTF completed (TF-MTF parity)".to_string()
+            } else {
+                "Native Rust Object MTF completed".to_string()
+            },
         })
     })();
 
@@ -10658,7 +10894,47 @@ fn calculate_refractive_index_schott(coeffs: &Map<String, Value>, wavelength_um:
 }
 
 fn get_correct_refractive_index(row: &Value, wavelength_um: f64) -> f64 {
+    if let Some(n) = get_field(row, "__cooptResolvedRindex")
+        .and_then(value_to_f64)
+        .filter(|v| v.is_finite() && *v > 0.0)
+    {
+        return n;
+    }
+
     if let Some(obj) = row.as_object() {
+        if let Some(gap_material) = obj.get("__cooptGapMaterial").and_then(value_to_string) {
+            let material = gap_material.trim().to_ascii_lowercase();
+            if material.is_empty() || material == "air" || material == "empty" || material == "0" {
+                return 1.0;
+            }
+            let n = parse_refractive_index_from_material(&gap_material);
+            if n > 0.0 {
+                let vd = obj
+                    .get("__cooptGapAbbe")
+                    .and_then(value_to_f64)
+                    .filter(|v| v.is_finite() && *v > 0.0);
+                if let Some(vd_val) = vd {
+                    return estimate_refractive_index_from_nd_vd(n, vd_val, wavelength_um);
+                }
+                return n;
+            }
+        }
+
+        let gap_nd = obj
+            .get("__cooptGapRindex")
+            .and_then(value_to_f64)
+            .filter(|v| v.is_finite() && *v > 0.0);
+        if let Some(nd_val) = gap_nd {
+            let gap_vd = obj
+                .get("__cooptGapAbbe")
+                .and_then(value_to_f64)
+                .filter(|v| v.is_finite() && *v > 0.0);
+            if let Some(vd_val) = gap_vd {
+                return estimate_refractive_index_from_nd_vd(nd_val, vd_val, wavelength_um);
+            }
+            return nd_val;
+        }
+
         if let Some(sell) = obj
             .get("sellmeier")
             .or_else(|| obj.get("__cooptSellmeier"))

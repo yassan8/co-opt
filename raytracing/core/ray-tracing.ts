@@ -3215,8 +3215,8 @@ function __getCorrectRefractiveIndex_impl(surface, wavelength = 0.5875618) {
   // For CoordTrans rows, use preserved gap material (the medium AFTER the CoordTrans)
   // or actual material from previous surface
   const effectiveMaterial = surface.__cooptGapMaterial ?? surface.__cooptActualMaterial ?? surface.material;
-  const effectiveRindex = surface.__cooptActualRindex ?? surface.rindex;
-  const effectiveAbbe = surface.__cooptActualAbbe ?? surface.abbe;
+  const effectiveRindex = surface.__cooptGapRindex ?? surface.__cooptActualRindex ?? surface.rindex;
+  const effectiveAbbe = surface.__cooptGapAbbe ?? surface.__cooptActualAbbe ?? surface.abbe;
 
   // Create a temporary object with the effective values for refraction lookup
   const effectiveSurface = {
