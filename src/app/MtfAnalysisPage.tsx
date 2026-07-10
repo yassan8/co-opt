@@ -1016,8 +1016,9 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
             if (Number.isFinite(sv)) sagComposite[i] += ww * sv;
           }
         }
-        if (tanComposite.length > 0) tanComposite[0] = 1;
-        if (sagComposite.length > 0) sagComposite[0] = 1;
+        // NOTE: Do NOT force [0] = 1 for defocus-axis TF-MTF. The [0] position
+        // represents defocusMinMm, not the DC (0 frequency) component.
+        // Only frequency-axis MTF should have [0] = 1 (representing 0 lp/mm).
         traces.push({
           x: xAxis,
           y: tanComposite,
