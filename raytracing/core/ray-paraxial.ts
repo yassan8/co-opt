@@ -1858,17 +1858,28 @@ function calculateStrictExitPupil(opticalSystemRows, stopIndex, stopRadius, wave
     return { position: 0, diameter: stopDiameter, magnification: 1, isValid: true };
   }
 
-  const { matrix, nOut } = buildParaxialTransferMatrix(opticalSystemRows, stopIndex, last, wavelength, meridian);
-  const A = Number(matrix?.[0]?.[0]);
-  const B = Number(matrix?.[0]?.[1]);
-  const C = Number(matrix?.[1]?.[0]);
-  const D = Number(matrix?.[1]?.[1]);
+  // Build matrix from stop through to image plane (includes last surface refraction + BFL gap),
+  // then remove the BFL propagation so we have the state just after last surface's refraction.
+  const { matrix: rawMatrix, nOut } = buildParaxialTransferMatrix(opticalSystemRows, stopIndex, last + 1, wavelength, meridian);
+  const nImg = (Number.isFinite(nOut) && Math.abs(nOut) > 1e-12) ? nOut : 1.0;
+
+  // Remove trailing BFL propagation: M_target = T_bfl^{-1} * rawMatrix
+  //   T_bfl^{-1} = [[1, +bfl/n], [0, 1]]
+  //   => A_t = rawA + (bfl/n)*rawC,  B_t = rawB + (bfl/n)*rawD,  C_t = rawC,  D_t = rawD
+  const lastSurface = opticalSystemRows[last];
+  const bflMm = Number.isFinite(getSafeThickness(lastSurface)) ? getSafeThickness(lastSurface) : 0;
+  const bflOverN = bflMm / nImg;
+
+  const A = (rawMatrix?.[0]?.[0] ?? 1) + bflOverN * (rawMatrix?.[1]?.[0] ?? 0);
+  const B = (rawMatrix?.[0]?.[1] ?? 0) + bflOverN * (rawMatrix?.[1]?.[1] ?? 1);
+  const C = rawMatrix?.[1]?.[0] ?? 0;
+  const D = rawMatrix?.[1]?.[1] ?? 1;
   if (!Number.isFinite(A) || !Number.isFinite(B) || !Number.isFinite(C) || !Number.isFinite(D) || Math.abs(D) < 1e-12) {
     return { position: 0, diameter: stopDiameter, magnification: 1, isValid: false };
   }
 
-  // Append image-side translation T(L): B_total = B - (L/n_img)*D = 0
-  const nImg = (Number.isFinite(nOut) && Math.abs(nOut) > 1e-12) ? nOut : 1.0;
+  // This code uses h_new = h - (t/n)*alpha, so the propagation-by-L condition is:
+  // h_exit = B - (L/nImg)*D = 0  →  L = B*nImg/D  (positive formula matches convention)
   const lFromLastSurface = (B * nImg) / D;
   const magnification = A - (lFromLastSurface / nImg) * C;
   const exitDiameter = Math.abs(magnification) * stopDiameter;
@@ -1976,10 +1987,27 @@ export function calculateImageSpaceDiffractionParams(opticalSystemRows, waveleng
     const entrancePupilDiameterMm = Number(paraxial?.entrancePupilDiameter);
     const exitPupilDiameterMm = Number(paraxial?.exitPupilDetails?.diameter ?? paraxial?.exitPupilDiameter);
     const exitPupilPositionMm = Number(paraxial?.exitPupilDetails?.position);
+    const objectThicknessRaw = String((opticalSystemRows?.[0] as any)?.thickness ?? '').trim().toUpperCase();
+    const isInfiniteConjugate = (objectThicknessRaw === 'INF' || objectThicknessRaw === 'INFINITY');
+
+    const fNumberImageSpace = (
+      Number.isFinite(focalLengthMm)
+      && Number.isFinite(entrancePupilDiameterMm)
+      && Math.abs(entrancePupilDiameterMm) > 1e-12
+    )
+      ? (Math.abs(focalLengthMm) / Math.abs(entrancePupilDiameterMm))
+      : NaN;
 
     let fNumberWorking = NaN;
 
+    // For infinite conjugates, match Optalix-style first-order definitions:
+    // NA_img = 1/(2*FNO) with FNO = f'/EnPD.
+    if (isInfiniteConjugate && Number.isFinite(fNumberImageSpace) && fNumberImageSpace > 0) {
+      fNumberWorking = fNumberImageSpace;
+    }
+
     if (
+      !(Number.isFinite(fNumberWorking) && fNumberWorking > 0) &&
       Number.isFinite(imageDistanceMm) &&
       Number.isFinite(exitPupilPositionMm) &&
       Number.isFinite(exitPupilDiameterMm) &&
@@ -1995,12 +2023,8 @@ export function calculateImageSpaceDiffractionParams(opticalSystemRows, waveleng
 
     // Fallback to f'/EnPD when working F# is unavailable.
     if (!(Number.isFinite(fNumberWorking) && fNumberWorking > 0)) {
-      if (
-        Number.isFinite(focalLengthMm) &&
-        Number.isFinite(entrancePupilDiameterMm) &&
-        Math.abs(entrancePupilDiameterMm) > 1e-12
-      ) {
-        fNumberWorking = Math.abs(focalLengthMm) / Math.abs(entrancePupilDiameterMm);
+      if (Number.isFinite(fNumberImageSpace) && fNumberImageSpace > 0) {
+        fNumberWorking = fNumberImageSpace;
       }
     }
 
@@ -2571,9 +2595,11 @@ export function calculatePrincipalPointPositions(opticalSystemRows, wavelength =
       };
     }
 
+    // SH1 = EFL - BFL_rev = reverseEFL - reverseBFL
+    // (front principal plane measured from first surface, positive = toward image)
     const frontPrincipalFromFirstSurfaceMm = (Number.isFinite(reverseBackFocalLengthMm) && Number.isFinite(reverseEffectiveFocalLengthMm))
-      ? (reverseBackFocalLengthMm - reverseEffectiveFocalLengthMm)
-      : (frontFocalLengthMm - effectiveFocalLengthMm);
+      ? (reverseEffectiveFocalLengthMm - reverseBackFocalLengthMm)
+      : (effectiveFocalLengthMm + frontFocalLengthMm); // frontFocalLengthMm = -reverseBFL
     const rearPrincipalFromLastSurfaceMm = backFocalLengthMm - effectiveFocalLengthMm;
     const rearPrincipalFromFirstSurfaceMm = lastSurfacePositionMm + rearPrincipalFromLastSurfaceMm;
 

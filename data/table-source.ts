@@ -873,6 +873,21 @@ function notifyPrimaryWavelengthChanged(): void {
     w.updateAllRefractiveIndices();
   }
 
+  // System Data テキストを更新（タイミング問題回避のため少し遅延させて実行）
+  try {
+    setTimeout(() => {
+      try {
+        if (typeof w.outputParaxialDataToDebug === 'function') {
+          const ta = typeof document !== 'undefined'
+            ? (document.getElementById('system-data') as HTMLTextAreaElement | null)
+            : null;
+          if (ta) ta.value = '';
+          w.outputParaxialDataToDebug(w.tableOpticalSystem ?? null);
+        }
+      } catch (_) {}
+    }, 0);
+  } catch (_) {}
+
   try {
     w.dispatchEvent?.(new CustomEvent('coopt:primary-wavelength-updated'));
   } catch (_) {}

@@ -5,7 +5,7 @@
 
 import { 
     calculateParaxialData,
-    calculateFullSystemParaxialTrace
+  calculatePrincipalPointPositions
 } from '../raytracing/core/ray-paraxial.ts';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
 import { getPrimaryWavelength as getPrimaryWavelengthFallback } from '../data/glass.ts';
@@ -67,16 +67,17 @@ function resolvePrimaryWavelengthFromRows(sourceRows: any[] | null | undefined):
 }
 
 function resolvePrimaryWavelength(): number {
-  try {
-    const persistedValue = resolvePrimaryWavelengthFromRows(tryLoadPersistedSourceTableData());
-    if (Number.isFinite(persistedValue) && persistedValue > 0) return persistedValue;
-  } catch (_) {}
-
+  // Prefer live DOM/table value so wavelength changes take effect immediately.
   try {
     if (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function') {
       const liveValue = Number(window.getPrimaryWavelength());
       if (Number.isFinite(liveValue) && liveValue > 0) return liveValue;
     }
+  } catch (_) {}
+
+  try {
+    const persistedValue = resolvePrimaryWavelengthFromRows(tryLoadPersistedSourceTableData());
+    if (Number.isFinite(persistedValue) && persistedValue > 0) return persistedValue;
   } catch (_) {}
 
   try {
@@ -677,22 +678,33 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
       debugOutput += `Primary Wavelength:               ${primaryWavelength} μm\n`;
       debugOutput += `Focal Length (FL):                ${paraxialData.focalLength?.toFixed(6) || 'N/A'} mm\n`;
       
-      // Calculate EFL using h[1] / α[IMG-1] formula considering actual object thickness
+      // Matrix-based first-order values (ABCD): EFL/BFL/principal planes.
       let eflValue = 'N/A';
+      let bflValue = paraxialData.backFocalLength?.toFixed(6) || 'N/A';
+      let sh1Value = 'N/A';
+      let sh2Value = 'N/A';
       try {
-        // Use the actual optical system with current object thickness for EFL calculation
-        const eflResult = calculateFullSystemParaxialTrace(opticalSystemRows, primaryWavelength);
-        duLog('🔍 EFL calculation result:', eflResult);
-        if (eflResult && Math.abs(eflResult.finalAlpha) > 1e-10) {
-          const efl = 1.0 / eflResult.finalAlpha; // h[1] = 1.0, so EFL = h[1] / α[IMG-1]
-          eflValue = efl.toFixed(6);
+        const principal = calculatePrincipalPointPositions(opticalSystemRows, primaryWavelength);
+        duLog('🔍 Principal point calculation result:', principal);
+        if (principal && Number.isFinite(Number(principal.effectiveFocalLengthMm))) {
+          eflValue = Number(principal.effectiveFocalLengthMm).toFixed(6);
+        }
+        if (principal && Number.isFinite(Number(principal.backFocalLengthMm))) {
+          bflValue = Number(principal.backFocalLengthMm).toFixed(6);
+        }
+        if (principal && Number.isFinite(Number(principal.frontPrincipalFromFirstSurfaceMm))) {
+          sh1Value = Number(principal.frontPrincipalFromFirstSurfaceMm).toFixed(6);
+        }
+        if (principal && Number.isFinite(Number(principal.rearPrincipalFromLastSurfaceMm))) {
+          sh2Value = Number(principal.rearPrincipalFromLastSurfaceMm).toFixed(6);
         }
       } catch (error) {
-        duWarn('EFL calculation error:', error);
+        duWarn('Principal point calculation error:', error);
       }
       debugOutput += `Effective Focal Length (EFL):     ${eflValue} mm\n`;
-      
-      debugOutput += `Back Focal Length (BFL):          ${paraxialData.backFocalLength?.toFixed(6) || 'N/A'} mm\n`;
+      debugOutput += `SH1 (Princ.Plane 1):              ${sh1Value} mm\n`;
+      debugOutput += `SH2 (Princ.Plane 2):              ${sh2Value} mm\n`;
+      debugOutput += `Back Focal Length (BFL):          ${bflValue} mm\n`;
       debugOutput += `Image Distance:                   ${paraxialData.imageDistance?.toFixed(6) || 'N/A'} mm\n`;
       
       // Object and Image Distances
@@ -777,8 +789,10 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
       
       // Image Space F# = f' / EnPD
       let imageSpaceFNumber = 'N/A';
+      let imageSpaceFNumberValue = NaN;
       if (focalLength && entrancePupil && entrancePupil.diameter) {
         const fNumberImg = focalLength / entrancePupil.diameter;
+        imageSpaceFNumberValue = fNumberImg;
         imageSpaceFNumber = fNumberImg.toFixed(6);
       }
       debugOutput += `Image Space F#:                   ${imageSpaceFNumber}\n`;
@@ -795,7 +809,10 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
         exitPupilDiameterForWorkingF = paraxialData.exitPupilDetails.diameter;
       }
       
-      if (exitPupilPositionFromOrigin !== null && exitPupilDiameterForWorkingF && paraxialData.imageDistance) {
+      const isInfiniteConjugate = (objectDistanceStr === "INF" || objectDistanceStr === "INFINITY");
+      if (isInfiniteConjugate && Number.isFinite(imageSpaceFNumberValue) && imageSpaceFNumberValue > 0) {
+        paraxialWorkingFNumber = imageSpaceFNumberValue.toFixed(6);
+      } else if (exitPupilPositionFromOrigin !== null && exitPupilDiameterForWorkingF && paraxialData.imageDistance) {
         const fNumberWork = (-exitPupilPositionFromOrigin + paraxialData.imageDistance) / exitPupilDiameterForWorkingF;
         paraxialWorkingFNumber = fNumberWork.toFixed(6);
       }
@@ -827,25 +844,21 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
       // 新しい計算式の結果を優先表示
       if (paraxialData.exitPupilDetails && paraxialData.exitPupilDetails.diameter !== null) {
         debugOutput += `Exit Pupil Diameter:              ${paraxialData.exitPupilDetails.diameter.toFixed(6)} mm\n`;
-        // Exit Pupil PositionをImage面からの距離として表示
-        const exitPupilPosFromOrigin = paraxialData.exitPupilDetails.position;
-        const imageDistance = paraxialData.imageDistance;
-        let exitPupilPosFromImage = 'N/A';
-        if (exitPupilPosFromOrigin !== null && exitPupilPosFromOrigin !== undefined && imageDistance) {
-          exitPupilPosFromImage = (exitPupilPosFromOrigin - imageDistance).toFixed(6);
-        }
-        debugOutput += `Exit Pupil Position:              ${exitPupilPosFromImage} mm (from Image)\n`;
+        // Exit Pupil Positionを最終面からの距離として表示
+        const exitPupilPosFromLastSurface = paraxialData.exitPupilDetails.position;
+        const exitPupilPosStr = (exitPupilPosFromLastSurface !== null && exitPupilPosFromLastSurface !== undefined)
+          ? Number(exitPupilPosFromLastSurface).toFixed(6)
+          : 'N/A';
+        debugOutput += `Exit Pupil Position:              ${exitPupilPosStr} mm (from last surface)\n`;
         debugOutput += `Exit Pupil Magnification:         ${paraxialData.exitPupilDetails.magnification?.toFixed(6) || 'N/A'}\n`;
       } else if (paraxialData.newSpecPupils && paraxialData.newSpecPupils.exitPupil) {
         const exitPupil = paraxialData.newSpecPupils.exitPupil;
-        // Exit Pupil PositionをImage面からの距離として表示
-        const exitPupilPosFromOrigin = exitPupil.position;
-        const imageDistance = paraxialData.imageDistance;
-        let exitPupilPosFromImage = 'N/A';
-        if (exitPupilPosFromOrigin !== null && exitPupilPosFromOrigin !== undefined && imageDistance) {
-          exitPupilPosFromImage = (exitPupilPosFromOrigin - imageDistance).toFixed(6);
-        }
-        debugOutput += `Exit Pupil Position:              ${exitPupilPosFromImage} mm (from Image)\n`;
+        // Exit Pupil Positionを最終面からの距離として表示
+        const exitPupilPosFromLastSurf = exitPupil.position;
+        const exitPupilPosStr2 = (exitPupilPosFromLastSurf !== null && exitPupilPosFromLastSurf !== undefined)
+          ? Number(exitPupilPosFromLastSurf).toFixed(6)
+          : 'N/A';
+        debugOutput += `Exit Pupil Position:              ${exitPupilPosStr2} mm (from last surface)\n`;
   debugOutput += `Exit Pupil Diameter:              ${exitPupil.diameter?.toFixed(6) || 'N/A'} mm\n`;
         debugOutput += `Exit Pupil Magnification:         ${exitPupil.magnification?.toFixed(6) || 'N/A'}\n`;
       }
