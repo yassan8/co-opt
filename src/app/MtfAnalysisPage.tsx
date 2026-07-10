@@ -774,21 +774,27 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           && Number.isFinite(currentWavefrontRms)
           && currentWavefrontRms <= 2e-2;
         let idealDiffCurve: Array<number | null> | null = null;
-        if (showDiffLimit || forceIdealParaxialMtf) {
+        
+        // ── Parallel ideal diffraction calculation ──
+        const computeIdealDiffCurve = (async () => {
+          if (!showDiffLimit && !forceIdealParaxialMtf) return null;
           try {
             const zeroOpdGrid = Array.from({ length: s }, () => Array(s).fill(0));
-            const idealNativePsfResp = await host.runDesktopNativePsfMapForPopup({
-              gridOpd: zeroOpdGrid,
-              gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
-              pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
-              wavelengthUm: wl,
-              pixelSizeUm,
-              removeTilt: false,
-              zeroPadTo: requestedFftSize,
-              recenterIfWrapped: false,
-            });
-            const idealMtfResp = await host.runDesktopNativeMtfMapForPopup({
-              psfData: idealNativePsfResp?.psfData,
+            const [idealPsfResp, idealMtfResp] = await Promise.all([
+              host.runDesktopNativePsfMapForPopup({
+                gridOpd: zeroOpdGrid,
+                gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
+                pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
+                wavelengthUm: wl,
+                pixelSizeUm,
+                removeTilt: false,
+                zeroPadTo: requestedFftSize,
+                recenterIfWrapped: false,
+              }),
+              Promise.resolve(null), // placeholder for PSF completion
+            ]);
+            const idealMtfRespResult = await host.runDesktopNativeMtfMapForPopup({
+              psfData: idealPsfResp?.psfData,
               pixelSizeUm,
               maxFrequencyLpmm: Number.isFinite(maxFreqN) ? maxFreqN : undefined,
               points: resolvedPlotPoints,
@@ -796,14 +802,14 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
               directEvalOnly: true,
               method: mtfMethod,
             });
-            const idealTan = Array.isArray(idealMtfResp?.sampledMtfTangential)
-              ? idealMtfResp.sampledMtfTangential
-              : (Array.isArray(idealMtfResp?.mtfTangential) ? idealMtfResp.mtfTangential : []);
-            const idealSag = Array.isArray(idealMtfResp?.sampledMtfSagittal)
-              ? idealMtfResp.sampledMtfSagittal
-              : (Array.isArray(idealMtfResp?.mtfSagittal) ? idealMtfResp.mtfSagittal : []);
+            const idealTan = Array.isArray(idealMtfRespResult?.sampledMtfTangential)
+              ? idealMtfRespResult.sampledMtfTangential
+              : (Array.isArray(idealMtfRespResult?.mtfTangential) ? idealMtfRespResult.mtfTangential : []);
+            const idealSag = Array.isArray(idealMtfRespResult?.sampledMtfSagittal)
+              ? idealMtfRespResult.sampledMtfSagittal
+              : (Array.isArray(idealMtfRespResult?.mtfSagittal) ? idealMtfRespResult.mtfSagittal : []);
             if ((idealTan.length === freq.length) || (idealSag.length === freq.length)) {
-              idealDiffCurve = freq.map((_, i) => {
+              const curve = freq.map((_, i) => {
                 const tv = Number(idealTan[i]);
                 const sv = Number(idealSag[i]);
                 if (Number.isFinite(tv) && Number.isFinite(sv)) return Math.max(0, Math.min(1, 0.5 * (tv + sv)));
@@ -811,12 +817,17 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
                 if (Number.isFinite(sv)) return Math.max(0, Math.min(1, sv));
                 return null;
               });
-              if (idealDiffCurve.length > 0 && idealDiffCurve[0] !== null) idealDiffCurve[0] = 1.0;
+              if (curve.length > 0 && curve[0] !== null) curve[0] = 1.0;
+              return curve;
             }
+            return null;
           } catch (_) {
-            idealDiffCurve = null;
+            return null;
           }
-        }
+        })();
+        
+        // Execute ideal diffraction in parallel with subsequent calculations
+        idealDiffCurve = await computeIdealDiffCurve;
 
         const clampToEnvelope = (vals: number[]) => vals.map((v, i) => {
           const raw = Number(v);
