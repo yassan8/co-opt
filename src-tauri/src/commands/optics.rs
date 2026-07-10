@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use rayon::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex};
 use std::collections::HashMap;
 use std::f64::consts::PI;
@@ -4283,6 +4284,104 @@ fn clone_optical_system_rows_with_defocus_shift_native(rows: &[Value], defocus_s
     cloned
 }
 
+fn compute_native_through_focus_job(
+    app: &AppHandle,
+    job_id: String,
+    optical_system_rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    object_index: usize,
+    wavelength_um: f64,
+    defocus_mm: f64,
+    sampling_size: usize,
+    requested_fft_size: usize,
+    pixel_size_um: f64,
+    max_target_freq_lpmm: f64,
+    target_freqs_lpmm: &[f64],
+    pupil_sampling_mode: Option<String>,
+    opd_display_mode: String,
+    method: Option<String>,
+) -> Result<(Vec<f64>, Vec<f64>), String> {
+    let shifted_rows = clone_optical_system_rows_with_defocus_shift_native(optical_system_rows, defocus_mm);
+    let opd_resp = run_native_opd_map(
+        NativeOpdMapRequest {
+            job_id: Some(job_id.clone()),
+            optical_system_rows: shifted_rows,
+            source_rows: source_rows.to_vec(),
+            object_rows: object_rows.to_vec(),
+            object_index: Some(object_index),
+            surface_index: None,
+            grid_size: Some(sampling_size as u32),
+            wavelength_um: Some(wavelength_um),
+            pupil_radius_mm: None,
+            pupil_sampling_mode,
+            opd_display_mode: Some(opd_display_mode),
+        },
+        app.clone(),
+    )?;
+
+    let mut grid_opd = vec![vec![0.0_f64; sampling_size]; sampling_size];
+    let mut pupil_mask = vec![vec![false; sampling_size]; sampling_size];
+    for iy in 0..sampling_size {
+        let row_display = opd_resp.display_opd_grid.get(iy);
+        let row_raw = opd_resp.raw_opd_grid.get(iy);
+        for ix in 0..sampling_size {
+            let raw_cell = row_raw.and_then(|row| row.get(ix)).and_then(|value| *value);
+            let Some(raw_waves) = raw_cell else { continue };
+            if !raw_waves.is_finite() { continue }
+            let display_waves = row_display
+                .and_then(|row| row.get(ix))
+                .and_then(|value| *value)
+                .filter(|value| value.is_finite())
+                .unwrap_or(raw_waves);
+            pupil_mask[iy][ix] = true;
+            grid_opd[iy][ix] = display_waves * wavelength_um;
+        }
+    }
+
+    let psf_resp = run_native_psf_map(
+        NativePsfMapRequest {
+            job_id: Some(job_id.clone()),
+            grid_opd,
+            pupil_mask,
+            grid_amplitude: vec![],
+            wavelength_um,
+            pixel_size_um: Some(pixel_size_um),
+            remove_tilt: Some(false),
+            zero_pad_to: Some(requested_fft_size as u32),
+            recenter_if_wrapped: Some(false),
+        },
+        app.clone(),
+    )?;
+    let mtf_resp = run_native_mtf_map(
+        NativeMtfMapRequest {
+            job_id: Some(job_id),
+            psf_data: psf_resp.psf_data,
+            pixel_size_um,
+            max_frequency_lpmm: Some((max_target_freq_lpmm * 2.0).max(1.0)),
+            points: Some(target_freqs_lpmm.len().max(2) as u32),
+            sample_frequencies_lpmm: target_freqs_lpmm.to_vec(),
+            direct_eval_only: Some(false),
+            method,
+        },
+        app.clone(),
+    )?;
+
+    let sampled_tan = mtf_resp.sampled_mtf_tangential.unwrap_or_default();
+    let sampled_sag = mtf_resp.sampled_mtf_sagittal.unwrap_or_default();
+    let mut tan = Vec::with_capacity(target_freqs_lpmm.len());
+    let mut sag = Vec::with_capacity(target_freqs_lpmm.len());
+    for (index, target_freq) in target_freqs_lpmm.iter().copied().enumerate() {
+        tan.push(sampled_tan.get(index).copied().filter(|value| value.is_finite()).unwrap_or_else(|| {
+            interpolate_axis_value(&mtf_resp.frequency_axis, &mtf_resp.mtf_tangential, target_freq)
+        }));
+        sag.push(sampled_sag.get(index).copied().filter(|value| value.is_finite()).unwrap_or_else(|| {
+            interpolate_axis_value(&mtf_resp.frequency_axis, &mtf_resp.mtf_sagittal, target_freq)
+        }));
+    }
+    Ok((tan, sag))
+}
+
 fn infer_field_axis_mode_native(
     optical_system_rows: &[Value],
     object_rows: &[Value],
@@ -4499,134 +4598,51 @@ pub fn run_native_through_focus_mtf_map(
                 .map(|_| Vec::<f64>::with_capacity(x_axis.len()))
                 .collect::<Vec<Vec<f64>>>();
 
-            for (si, defocus_mm) in x_axis.iter().enumerate() {
-                let shifted_rows = clone_optical_system_rows_with_defocus_shift_native(
-                    &req.optical_system_rows,
-                    *defocus_mm,
-                );
-
-                let sub_job = format!("{}-w{}-s{}", job_id, (wl * 1_000_000.0).round() as i64, si);
-
-                let opd_resp = run_native_opd_map(
-                    NativeOpdMapRequest {
-                        job_id: Some(sub_job.clone()),
-                        optical_system_rows: shifted_rows,
-                        source_rows: req.source_rows.clone(),
-                        object_rows: req.object_rows.clone(),
-                        object_index: Some(object_index),
-                        surface_index: None,
-                        grid_size: Some(sampling_size as u32),
-                        wavelength_um: Some(wl),
-                        pupil_radius_mm: None,
-                        pupil_sampling_mode: requested_pupil_sampling_mode.clone(),
-                        opd_display_mode: Some(opd_display_mode.clone()),
-                    },
-                    app.clone(),
-                )?;
-
-                let s = sampling_size;
-                let mut grid_opd = vec![vec![0.0_f64; s]; s];
-                let mut pupil_mask = vec![vec![false; s]; s];
-
-                for iy in 0..s {
-                    let row_display = opd_resp.display_opd_grid.get(iy);
-                    let row_raw = opd_resp.raw_opd_grid.get(iy);
-                    for ix in 0..s {
-                        let raw_cell = row_raw.and_then(|r| r.get(ix)).and_then(|v| *v);
-                        let Some(v_raw_waves) = raw_cell else {
-                            continue;
-                        };
-                        if !v_raw_waves.is_finite() {
-                            continue;
-                        }
-
-                        let v_display_waves = row_display
-                            .and_then(|r| r.get(ix))
-                            .and_then(|v| *v)
-                            .filter(|v| v.is_finite());
-                        let v_waves = v_display_waves.unwrap_or(v_raw_waves);
-
-                        pupil_mask[iy][ix] = true;
-                        grid_opd[iy][ix] = v_waves * wl;
-                    }
-                }
-
-                let psf_resp = run_native_psf_map(
-                    NativePsfMapRequest {
-                        job_id: Some(sub_job.clone()),
-                        grid_opd,
-                        pupil_mask,
-                        grid_amplitude: vec![],
-                        wavelength_um: wl,
-                        pixel_size_um: Some(pixel_size_um),
-                        remove_tilt: Some(false),
-                        zero_pad_to: Some(requested_fft_size as u32),
-                        recenter_if_wrapped: Some(false),
-                    },
-                    app.clone(),
-                )?;
-
-                let mtf_resp = run_native_mtf_map(
-                    NativeMtfMapRequest {
-                        job_id: Some(sub_job),
-                        psf_data: psf_resp.psf_data,
+            let job_results = x_axis
+                .par_iter()
+                .enumerate()
+                .map(|(si, defocus_mm)| {
+                    let sub_job = format!("{}-w{}-s{}", job_id, (wl * 1_000_000.0).round() as i64, si);
+                    compute_native_through_focus_job(
+                        &app,
+                        sub_job,
+                        &req.optical_system_rows,
+                        &req.source_rows,
+                        &req.object_rows,
+                        object_index,
+                        wl,
+                        *defocus_mm,
+                        sampling_size,
+                        requested_fft_size,
                         pixel_size_um,
-                        max_frequency_lpmm: Some((max_target_freq_lpmm * 2.0).max(1.0)),
-                        points: Some(target_freqs_lpmm.len().max(2) as u32),
-                        sample_frequencies_lpmm: target_freqs_lpmm.clone(),
-                        direct_eval_only: Some(false),
-                        method: req.method.clone(),
-                    },
-                    app.clone(),
-                )?;
+                        max_target_freq_lpmm,
+                        &target_freqs_lpmm,
+                        requested_pupil_sampling_mode.clone(),
+                        opd_display_mode.clone(),
+                        req.method.clone(),
+                    )
+                    .map(|values| (si, values))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-                let sampled_tan = mtf_resp.sampled_mtf_tangential.clone().unwrap_or_default();
-                let sampled_sag = mtf_resp.sampled_mtf_sagittal.clone().unwrap_or_default();
+            let mut ordered_results = job_results;
+            ordered_results.sort_by_key(|(si, _)| *si);
+            for (_si, (tan, sag)) in ordered_results {
                 for fi in 0..target_freqs_lpmm.len() {
-                    let tan = sampled_tan
-                        .get(fi)
-                        .copied()
-                        .filter(|v| v.is_finite())
-                        .unwrap_or_else(|| {
-                            interpolate_axis_value(
-                                &mtf_resp.frequency_axis,
-                                &mtf_resp.mtf_tangential,
-                                target_freqs_lpmm[fi],
-                            )
-                        });
-                    let sag = sampled_sag
-                        .get(fi)
-                        .copied()
-                        .filter(|v| v.is_finite())
-                        .unwrap_or_else(|| {
-                            interpolate_axis_value(
-                                &mtf_resp.frequency_axis,
-                                &mtf_resp.mtf_sagittal,
-                                target_freqs_lpmm[fi],
-                            )
-                        });
-                    tan_vec_by_freq[fi].push(tan);
-                    sag_vec_by_freq[fi].push(sag);
+                    tan_vec_by_freq[fi].push(tan.get(fi).copied().unwrap_or(0.0));
+                    sag_vec_by_freq[fi].push(sag.get(fi).copied().unwrap_or(0.0));
                 }
-
                 completed += 1;
-                let progress = 10.0 + (completed as f64 / total_runs as f64) * 85.0;
-                emit_native_analysis_progress(
-                    &app,
-                    &job_id,
-                    kind,
-                    "compute",
-                    &format!(
-                        "Computing TF-MTF: λ={:.1}nm ({}/{}), step {}/{}",
-                        wl * 1000.0,
-                        wi + 1,
-                        wavelengths.len(),
-                        si + 1,
-                        x_axis.len()
-                    ),
-                    Some(progress),
-                );
             }
+            let progress = 10.0 + (completed as f64 / total_runs as f64) * 85.0;
+            emit_native_analysis_progress(
+                &app,
+                &job_id,
+                kind,
+                "compute",
+                &format!("Computed TF-MTF wavelength {}/{}", wi + 1, wavelengths.len()),
+                Some(progress),
+            );
 
             series.push(NativeThroughFocusMtfSeries {
                 wavelength_um: wl,

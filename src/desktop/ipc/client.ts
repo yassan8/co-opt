@@ -3282,33 +3282,23 @@ export async function runNativeThroughFocusMtfMap(
       const wl = wavelengths[wi];
       for (let si = 0; si < xAxis.length; si++) {
         const defocusMm = xAxis[si];
-        const shiftedRows = cloneOpticalSystemRowsWithDefocusShiftNativeLike(opticalSystemRows as any[], defocusMm);
-        const rowsForWasm = enrichRowsWithResolvedRindexForWasm(shiftedRows, wl);
         
         jobs.push({
           opdRequest: {
-            opticalSystemRows: rowsForWasm,
-            sourceRows,
-            objectRows,
-            objectIndex,
-            surfaceIndex: undefined,
-            gridSize: samplingSize,
             wavelengthUm: wl,
-            pupilSamplingMode: payload?.pupilSamplingMode,
-            opdDisplayMode,
           },
-          psfRequest: {
-            wavelengthUm: wl,
-            pixelSizeUm,
-            zeroPadTo: requestedFftSize,
-            removeTilt: false,
-          },
-          mtfRequest: {
-            wavelengthUm: wl,
-            maxFrequencyLpmm: Math.max(targetFreqLpmm * 2, 1),
-            points: 121,
-            method: mtfMethod,
-          },
+          defocusMm,
+          wavelengthUm: wl,
+          pixelSizeUm,
+          zeroPadTo: requestedFftSize,
+          removeTilt: false,
+          maxFrequencyLpmm: Math.max(targetFreqLpmm * 2, 1),
+          targetFrequencyLpmm: targetFreqLpmm,
+          sampleFrequenciesLpmm: [targetFreqLpmm],
+          directEvalOnly: true,
+          points: 2,
+          slimResults: true,
+          method: mtfMethod,
           meta: {
             wi,
             si,
@@ -3332,6 +3322,10 @@ export async function runNativeThroughFocusMtfMap(
           sourceRows,
           objectRows,
           objectIndex,
+          surfaceIndex: undefined,
+          gridSize: samplingSize,
+          pupilSamplingMode: payload?.pupilSamplingMode,
+          opdDisplayMode,
         },
       },
     });
@@ -3364,7 +3358,7 @@ export async function runNativeThroughFocusMtfMap(
       const sagVec: number[] = [];
 
       for (let si = 0; si < xAxis.length; si++) {
-        const mtfResp = mtfMatrix[wi][si];
+        const mtfResp = mtfMatrix[wi][si]?.mtf || mtfMatrix[wi][si];
         
         if (!mtfResp) {
           // Fallback for missing result

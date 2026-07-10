@@ -12286,6 +12286,36 @@ fn run_native_opd_psf_mtf_value(req: &Value) -> Result<Value, JsValue> {
     run_native_opd_psf_mtf_value_with_rows(req, None, None)
 }
 
+fn clone_optical_rows_with_defocus(rows: &[Value], defocus_mm: f64) -> Vec<Value> {
+    let mut cloned = rows.to_vec();
+    if !defocus_mm.is_finite() || defocus_mm.abs() < 1e-15 {
+        return cloned;
+    }
+
+    let image_index = cloned.iter().position(|row| {
+        let object_type = row
+            .get("object type")
+            .or_else(|| row.get("object"))
+            .and_then(value_to_string)
+            .unwrap_or_default();
+        object_type.eq_ignore_ascii_case("image")
+    });
+    let target_index = match image_index {
+        Some(index) if index > 0 => index - 1,
+        _ if cloned.len() >= 2 => cloned.len() - 2,
+        _ => 0,
+    };
+    if let Some(target) = cloned.get_mut(target_index).and_then(Value::as_object_mut) {
+        let thickness = target
+            .get("thickness")
+            .or_else(|| target.get("Thickness"))
+            .and_then(value_to_f64)
+            .unwrap_or(0.0);
+        target.insert("thickness".to_string(), Value::from(thickness + defocus_mm));
+    }
+    cloned
+}
+
 #[wasm_bindgen]
 pub fn run_native_opd_psf_mtf_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
     let req: Value = serde_json::from_str(&req_json)
@@ -12345,9 +12375,12 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
             .get("opdRequest")
             .and_then(|opd| opd.get("opticalSystemRows"))
             .is_some();
-        let can_use_shared_rows = shared_normalized_rows.is_some() && !job_overrides_optical_rows;
+        let defocus_mm = job.get("defocusMm").and_then(value_to_f64);
+        let can_use_shared_rows = shared_normalized_rows.is_some()
+            && !job_overrides_optical_rows
+            && defocus_mm.is_none();
         let merged_job;
-        let effective_job = if let Some(shared_obj) = shared {
+        let merged_effective_job = if let Some(shared_obj) = shared {
             let mut merged = Map::<String, Value>::new();
             for (key, value) in shared_obj {
                 if key != "opdRequest" {
@@ -12381,6 +12414,21 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
         } else {
             job
         };
+        let defocus_job = defocus_mm.map(|defocus| {
+            let mut owned = merged_effective_job.clone();
+            let base_rows = shared
+                .and_then(|obj| obj.get("opdRequest"))
+                .and_then(|opd| opd.get("opticalSystemRows"))
+                .and_then(Value::as_array)
+                .map(|rows| clone_optical_rows_with_defocus(rows, defocus));
+            if let Some(rows) = base_rows {
+                if let Some(opd) = owned.get_mut("opdRequest").and_then(Value::as_object_mut) {
+                    opd.insert("opticalSystemRows".to_string(), Value::Array(rows));
+                }
+            }
+            owned
+        });
+        let effective_job = defocus_job.as_ref().unwrap_or(merged_effective_job);
         let mut job_result = run_native_opd_psf_mtf_value_with_rows(
             effective_job,
             if can_use_shared_rows { shared_normalized_rows.as_deref() } else { None },
