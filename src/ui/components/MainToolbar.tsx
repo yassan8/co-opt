@@ -238,6 +238,7 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
             <option value="magnification-chromatic-aberration">Lateral Chromatic Aberration</option>
             <option value="integrated-aberration">Integrated Aberration</option>
             <option value="transverse-aberration">Transverse Aberration</option>
+            <option value="opd-fan">Optical Path Difference Fan</option>
             <option value="opd">Optical Path Difference</option>
             <option value="psf">Point Spread Function</option>
             <option value="mtf">Modulation Transfer Function</option>
@@ -315,6 +316,12 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
           title="Open Transverse Aberration view"
         >
           Transverse Aberration
+        </button>
+        <button
+          id="open-opd-fan-window-btn"
+          title="Open Optical Path Difference Fan view"
+        >
+          Optical Path Difference Fan
         </button>
         <button
           id="open-opd-window-btn"

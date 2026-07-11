@@ -890,7 +890,12 @@ function notifyPrimaryWavelengthChanged(): void {
 
   try {
     w.dispatchEvent?.(new CustomEvent('coopt:primary-wavelength-updated'));
+    if (w.opener && w.opener !== w) {
+      w.opener.dispatchEvent?.(new CustomEvent('coopt:primary-wavelength-updated'));
+    }
   } catch (_) {}
+  try { w.__cooptRefreshOpdFan?.(); } catch (_) {}
+  try { w.opener?.__cooptRefreshOpdFan?.(); } catch (_) {}
 
   // Render uses getPrimaryWavelength() at draw time, so changing the primary
   // source wavelength must trigger a redraw to pick up the new value.

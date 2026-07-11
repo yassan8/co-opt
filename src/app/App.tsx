@@ -4060,10 +4060,11 @@ function sanitizeForceModeValue(v: any): 'stop' | 'entrance' | '' {
   return (s === 'stop' || s === 'entrance') ? s : '';
 }
 
-type OpdReferenceModeSetting = 'reference-sphere' | 'exit-pupil';
+type OpdReferenceModeSetting = 'exit-pupil' | 'image-plane';
 
 function sanitizeOpdReferenceModeSetting(v: any): OpdReferenceModeSetting {
-  return String(v ?? '').trim().toLowerCase() === 'exit-pupil' ? 'exit-pupil' : 'reference-sphere';
+  const mode = String(v ?? '').trim().toLowerCase();
+  return mode === 'exit-pupil' || mode === 'image-plane' ? mode : 'exit-pupil';
 }
 
 function readForceModeFromUrl(): 'stop' | 'entrance' | '' {
@@ -4110,7 +4111,7 @@ function readCurrentForceMode(): 'stop' | 'entrance' | '' {
 function DesktopSettingsPage() {
   const [forceMode, setForceMode] = useState<'stop' | 'entrance' | ''>(readForceModeFromUrl);
   const [opdReferenceMode, setOpdReferenceMode] = useState<OpdReferenceModeSetting>(() => {
-    try { return sanitizeOpdReferenceModeSetting(localStorage.getItem(OPD_REFERENCE_MODE_KEY)); } catch (_) { return 'reference-sphere'; }
+    try { return sanitizeOpdReferenceModeSetting(localStorage.getItem(OPD_REFERENCE_MODE_KEY)); } catch (_) { return 'exit-pupil'; }
   });
   const [mfrs, setMfrs] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(GLASS_MAP_MFR_KEY) || '[]'); } catch (_) { return []; }
@@ -4214,12 +4215,12 @@ function DesktopSettingsPage() {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
           <label>
-            <input type="radio" name="opd-reference-mode" value="reference-sphere" checked={opdReferenceMode === 'reference-sphere'} onChange={() => handleOpdReferenceModeChange('reference-sphere')} />{' '}
-            Reference Sphere
-          </label>
-          <label>
             <input type="radio" name="opd-reference-mode" value="exit-pupil" checked={opdReferenceMode === 'exit-pupil'} onChange={() => handleOpdReferenceModeChange('exit-pupil')} />{' '}
             Exit Pupil
+          </label>
+          <label>
+            <input type="radio" name="opd-reference-mode" value="image-plane" checked={opdReferenceMode === 'image-plane'} onChange={() => handleOpdReferenceModeChange('image-plane')} />{' '}
+            Image Plane
           </label>
         </div>
         <div style={{ fontSize: 12, color: '#666' }}>Changes take effect on the next calculation.</div>
@@ -9353,6 +9354,7 @@ const collectLegacyCrossRays = async (
       'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
       'integrated-aberration': 'open-integrated-aberration-window-btn',
       'transverse-aberration': 'open-transverse-aberration-window-btn',
+      'opd-fan': 'open-opd-fan-window-btn',
       'opd': 'open-opd-window-btn',
       'psf': 'open-psf-window-btn',
       'mtf': 'open-mtf-window-btn',
@@ -9370,6 +9372,7 @@ const collectLegacyCrossRays = async (
       'magnification-chromatic-aberration': 'Lateral Chromatic Aberration',
       'integrated-aberration': 'Integrated Aberration',
       'transverse-aberration': 'Transverse Aberration',
+      'opd-fan': 'Optical Path Difference Fan',
       'opd': 'Optical Path Difference',
       'psf': 'Point Spread Function',
       'mtf': 'Modulation Transfer Function',
@@ -12340,6 +12343,7 @@ const collectLegacyCrossRays = async (
     { value: 'magnification-chromatic-aberration',label: 'Lateral Chromatic Aberration' },
     { value: 'integrated-aberration',             label: 'Integrated Aberration' },
     { value: 'transverse-aberration',             label: 'Transverse Aberration' },
+    { value: 'opd-fan',                           label: 'Optical Path Difference Fan' },
     { value: 'opd',                               label: 'OPD' },
     { value: 'psf',                               label: 'PSF' },
     { value: 'mtf',                               label: 'MTF' },

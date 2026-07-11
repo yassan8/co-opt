@@ -2945,10 +2945,9 @@ export function convertImageHeightToEffectiveObject(
 
         if (conjugateType === 'infinite') {
             const efl = Number(paraxial.focalLength);
-            if (!Number.isFinite(efl) || Math.abs(efl) < 1e-12) throw new Error('invalid efl');
-
-            const paraxialAngleXDeg = Math.atan2(targetX, efl) * (180 / Math.PI);
-            const paraxialAngleYDeg = Math.atan2(targetY, efl) * (180 / Math.PI);
+            const hasFiniteEfl = Number.isFinite(efl) && Math.abs(efl) >= 1e-12;
+            const paraxialAngleXDeg = hasFiniteEfl ? Math.atan2(targetX, efl) * (180 / Math.PI) : targetX;
+            const paraxialAngleYDeg = hasFiniteEfl ? Math.atan2(targetY, efl) * (180 / Math.PI) : targetY;
             const warmStart = disableWarmStartCache
                 ? {
                     x: paraxialAngleXDeg,

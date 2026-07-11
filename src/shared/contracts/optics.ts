@@ -371,9 +371,18 @@ export interface NativeOpdMapRequest {
   surfaceIndex?: number;
   gridSize?: number;
   wavelengthUm?: number;
+  opdReferenceWavelengthUm?: number;
+  opdWaveNormalization?: "reference" | "trace";
   pupilRadiusMm?: number;
+  entrancePupilPositionFromFirstSurfaceMm?: number;
+  exitPupilPositionFromLastSurfaceMm?: number;
   pupilSamplingMode?: "stop" | "entrance";
   referenceMode?: OpdReferenceMode;
+  referenceSphereGeometry?: {
+    center: { x: number; y: number; z: number };
+    radiusMm: number;
+    direction: { x: number; y: number; z: number };
+  };
   opdDisplayMode?: "raw" | "pistonTiltRemoved" | "pistonTiltDefocusRemoved";
 }
 
@@ -388,13 +397,20 @@ export interface NativeOpdMapResponse {
   usedObjectX: number;
   usedObjectY: number;
   wavelengthUm: number;
+  opdReferenceWavelengthUm?: number;
   gridSize: number;
+  effectivePupilRadiusMm?: number;
+  chiefOplUm?: number;
+  chiefReferenceSphereOpdUm?: number;
+  entrancePupilCoordinateXGrid?: Array<Array<number | null>>;
+  entrancePupilCoordinateYGrid?: Array<Array<number | null>>;
   sampleCount: number;
   hitCount: number;
   pupilSamplingMode: "stop" | "entrance";
   referenceMode?: OpdReferenceMode;
   referenceSphereCenter?: { x: number; y: number; z: number };
   referenceSphereRadiusMm?: number;
+  referenceSphereDirection?: { x: number; y: number; z: number };
   exitPupilCenter?: { x: number; y: number; z: number };
   exitPupilRadiusMm?: number;
   rawOpdGrid: Array<Array<number | null>>;

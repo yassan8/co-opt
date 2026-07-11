@@ -3460,6 +3460,7 @@ ${surfaceTypeList}
             }
 
             const ref = this.calculateOPDFromReferenceSphere(marginalRay, marginalOpticalPath, fieldSetting, removeTilt, {
+                referenceMode,
                 imageSphereCenter: cachedCenter,
                 imageSphereRadius: cachedRadius,
                 _imageSphereGeometry: {
@@ -3608,17 +3609,8 @@ ${surfaceTypeList}
      */
 
     /**
-     * 参照球面を用いた光路差（OPD）計算【理論修正版】
-     * 
-     * 【修正理由】
-     * 前の実装では軸外でtilt成分が異常に大きくなる問題があった。
-     * これは参照球面の定義と光路差計算の理論的誤りによるもの。
-     * 
-     * 【正しい理論】
-     * 1. 軸外OPD = 周辺光線光路長 - 修正参照光路長
-     * 2. 修正参照光路長 = 主光線光路長 + 幾何学的光路差補正
-     * 3. 幾何学的光路差補正 = (周辺光線像点距離 - 参照球半径)
-     * 4. Tilt成分の適切な処理が必要
+     * 主光線と周辺光線の追跡済み光路長からOPDを計算する。
+     * 参照球の幾何はmetadataにのみ使用し、像面交点から球中心までの距離では補正しない。
      * 
      * @param {Object} marginalRay - 周辺光線データ
      * @param {number} marginalOpticalPath - 周辺光線の光路長
@@ -3686,64 +3678,18 @@ ${surfaceTypeList}
             const marginalImagePoint = getRayImagePoint(marginalRay);
             if (!marginalImagePoint) throw new Error('周辺光線の像面交点が不足しています');
 
-            // Calculate distances from image points to reference sphere center
-            const chiefDist = Math.sqrt(
-                (chiefImagePoint.x - referenceSphereCenter.x)**2 + 
-                (chiefImagePoint.y - referenceSphereCenter.y)**2 + 
-                (chiefImagePoint.z - referenceSphereCenter.z)**2
-            );
-            
             const marginalDist = Math.sqrt(
                 (marginalImagePoint.x - referenceSphereCenter.x)**2 + 
                 (marginalImagePoint.y - referenceSphereCenter.y)**2 + 
                 (marginalImagePoint.z - referenceSphereCenter.z)**2
             );
 
-            // Refractive index in image space
-            const nImg = (() => {
-                try {
-                    const margPath = this.getPathData(marginalRay);
-                    const segIdx = Math.max(0, (margPath?.length || 2) - 2);
-                    const n = this.getRefractiveIndex(segIdx);
-                    return (Number.isFinite(n) && n > 0) ? n : 1.0;
-                } catch (_) {
-                    return 1.0;
-                }
-            })();
-
-            let opd, spherePathDifference, referenceOpticalPathCorrected;
-            
-            if (useSimplifiedMode) {
-                // Simplified mode: image plane reference with geometric correction
-                // Even without a reference sphere, we need to correct for position differences
-                // on the image plane. Use chief ray image point as reference.
-                
-                // Calculate distance from marginal image point to chief image point
-                const dx = marginalImagePoint.x - chiefImagePoint.x;
-                const dy = marginalImagePoint.y - chiefImagePoint.y;
-                const dz = marginalImagePoint.z - chiefImagePoint.z;
-                const imagePlaneDistance = Math.sqrt(dx*dx + dy*dy + dz*dz); // mm
-                
-                // Geometric correction: subtract the straight-line distance on image plane
-                const geometricCorrection = imagePlaneDistance * nImg * 1000; // mm to μm
-                
-                // OPD = optical path difference - geometric distance difference
-                opd = (marginalOpticalPath - this.referenceOpticalPath) - geometricCorrection;
-                spherePathDifference = imagePlaneDistance; // mm
-                referenceOpticalPathCorrected = this.referenceOpticalPath;
-                
-            } else {
-                // Standard mode: OPD calculation based on reference sphere
-                // OPD = (marginal optical path - marginal geometric distance to sphere)
-                //     - (chief optical path - chief geometric distance to sphere)
-                // Since chief ray defines the sphere (chiefDist ≈ radius), the second term ≈ 0
-                const marginalGeometricCorrection = (marginalDist - referenceSphereRadius) * nImg * 1000; // mm to μm
-                const chiefGeometricCorrection = (chiefDist - referenceSphereRadius) * nImg * 1000; // mm to μm
-                
-                opd = (marginalOpticalPath - marginalGeometricCorrection) - (this.referenceOpticalPath - chiefGeometricCorrection);
-                spherePathDifference = marginalDist - referenceSphereRadius; // mm
-                referenceOpticalPathCorrected = this.referenceOpticalPath - chiefGeometricCorrection;
-            }
+            const referenceMode = String(precomputed?.referenceMode || 'reference-sphere').trim().toLowerCase();
+            const opd = referenceMode === 'image-plane'
+                ? this.referenceOpticalPath - marginalOpticalPath
+                : marginalOpticalPath - this.referenceOpticalPath;
+            const spherePathDifference = 0;
+            const referenceOpticalPathCorrected = this.referenceOpticalPath;
 
             return {
                 success: true,
@@ -3759,7 +3705,7 @@ ${surfaceTypeList}
                 referenceOpticalPathCorrected: referenceOpticalPathCorrected,
                 marginalOpticalPath,
                 referenceChiefPath: this.referenceOpticalPath,
-                referenceMode: useSimplifiedMode ? 'imagePlaneSimplified' : 'axisCenterStandardSphere'
+                referenceMode: referenceMode === 'image-plane' ? 'imagePlaneOplDifference' : 'chiefOplDifference'
             };
         } catch (error) {
             console.warn(`⚠️ 参照球計算に失敗: ${error.message}`);
@@ -7816,7 +7762,12 @@ export class WavefrontAberrationAnalyzer {
             const preferFast = true;
             // For entrance-pupil mode, keep the sampling scale fixed to the (design) stop radius,
             // and mask non-traceable regions as invalid (do NOT shrink the pupil to make everything valid).
-            const pupilScaleRadiusMm = (isInfiniteField && passMode === 'entrance') ? stopRadius : undefined;
+            const requestedPupilScaleRadiusMm = Number(options?.pupilScaleRadiusMm);
+            const pupilScaleRadiusMm = (isInfiniteField && passMode === 'entrance')
+                ? ((Number.isFinite(requestedPupilScaleRadiusMm) && requestedPupilScaleRadiusMm > 0)
+                    ? requestedPupilScaleRadiusMm
+                    : stopRadius)
+                : undefined;
             const solveOptionsFast = originDeltaHints
                 ? { originDeltaHints, fastMarginalRay: true, pupilScaleRadiusMm, ...(traceOptionsPatch || {}) }
                 : { fastMarginalRay: true, pupilScaleRadiusMm, ...(traceOptionsPatch || {}) };

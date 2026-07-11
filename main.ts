@@ -177,7 +177,7 @@ import './optimization/suggest-design-intent.ts';
 import './tools/benchmark-tfmtf.ts';
 
 // Analysis modules
-import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, showMagnificationChromaticAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene, runSpotParityDiagnostics, preloadTransverseAberrationModules } from './analysis/optical-analysis.ts';
+import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showOpticalPathDifferenceFan, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, showMagnificationChromaticAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene, runSpotParityDiagnostics, preloadTransverseAberrationModules } from './analysis/optical-analysis.ts';
 
 // Performance monitoring (削除されたファイルなのでコメントアウト)
 // import { performanceMonitor } from './performance-monitor.ts';
@@ -649,6 +649,7 @@ async function initializeApplication() {
         window['clearAllDrawing'] = clearAllDrawing;
         window['showSpotDiagram'] = showSpotDiagram;
         window['showTransverseAberrationDiagram'] = showTransverseAberrationDiagram;
+        window['showOpticalPathDifferenceFan'] = showOpticalPathDifferenceFan;
         window['showTransverseAberration'] = async () => {
             const transverseRayCountInput = document.getElementById('transverse-ray-count-input') as HTMLInputElement | null;
             let rayCount = 51;

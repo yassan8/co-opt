@@ -228,7 +228,7 @@ function readConfiguredOpdReferenceModeForLog(): string {
         if (openerStored) return openerStored;
     } catch (_) {}
 
-    return 'reference-sphere';
+    return 'exit-pupil';
 }
 
 function logNativeReferenceModeForPopup(
@@ -16446,6 +16446,133 @@ export function setupAnalysisWindows() {
                 });
         }
 
+        // Optical Path Difference Fan popup window button
+        const openOpdFanWindowBtn = document.getElementById('open-opd-fan-window-btn');
+        if (openOpdFanWindowBtn) {
+                openOpdFanWindowBtn.addEventListener('click', () => {
+                        if (w.__opdFanPopup && !w.__opdFanPopup.closed) {
+                                try { w.__opdFanPopup.focus(); } catch (_) {}
+                                try { w.__opdFanPopup.renderOpdFan?.(); } catch (_) {}
+                                return;
+                        }
+
+                        const popup = consumePreopenedAnalysisPopup('Optical Path Difference Fan', 'width=980,height=760');
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__opdFanPopup = popup;
+
+                        popup.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Optical Path Difference Fan</title>
+    <style>
+        html, body { height: 100%; }
+        body { margin: 0; font-family: Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; background: #f4f4f4; }
+        .controls { padding: 10px 12px; background: #f8f8f8; border-bottom: 1px solid #ddd; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; flex: 0 0 auto; }
+        .controls label, .note { font-size: 12px; color: #333; white-space: nowrap; }
+        .controls input, .controls select { padding: 5px 8px; font-size: 12px; border: 1px solid #bbb; border-radius: 4px; background: white; }
+        .controls input { width: 80px; }
+        .controls button { padding: 6px 10px; border: 1px solid #bbb; background: #f8f8f8; cursor: pointer; border-radius: 4px; font-size: 12px; color: #333; }
+        .controls button:hover { background: #e9e9e9; }
+        .controls button:disabled { cursor: wait; opacity: 0.6; }
+        .content { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; background: white; }
+        #popup-opd-fan-container { width: 100%; min-height: 100%; }
+    </style>
+    <script src="${plotlyScriptUrl}"></script>
+</head>
+<body>
+    <div class="controls">
+        <label for="popup-opd-fan-grid-size">Pupil sampling:</label>
+        <select id="popup-opd-fan-grid-size">
+            <option value="33">33</option>
+            <option value="65">65</option>
+            <option value="129" selected>129</option>
+        </select>
+        <label for="popup-opd-fan-scale">Aberration scale (± waves):</label>
+        <input type="number" id="popup-opd-fan-scale" value="1" min="0.001" step="0.01" />
+        <span class="note">Entrance pupil / image-point reference sphere / raw OPD</span>
+        <button id="popup-show-opd-fan-btn" type="button">Show OPD Fan</button>
+    </div>
+    <div id="popup-opd-fan-progress" style="display:none;padding:8px 12px;border-bottom:1px solid #eee;background:#fff;font-size:12px;color:#555;"></div>
+    <div class="content"><div id="popup-opd-fan-container"></div></div>
+    <script>
+        const scaleInput = document.getElementById('popup-opd-fan-scale');
+        const gridInput = document.getElementById('popup-opd-fan-grid-size');
+        try {
+            const savedScale = Number(localStorage.getItem('coopt.opdFan.scaleWaves'));
+            const savedGrid = Number(localStorage.getItem('coopt.opdFan.gridSize'));
+            if (Number.isFinite(savedScale) && savedScale > 0) scaleInput.value = String(savedScale);
+            if ([33, 65, 129].includes(savedGrid)) gridInput.value = String(savedGrid);
+        } catch (_) {}
+
+        window.renderOpdFan = async () => {
+            const container = document.getElementById('popup-opd-fan-container');
+            const progress = document.getElementById('popup-opd-fan-progress');
+            const button = document.getElementById('popup-show-opd-fan-btn');
+            const aberrationScaleWaves = Number(scaleInput.value);
+            const gridSize = Number(gridInput.value);
+            if (!Number.isFinite(aberrationScaleWaves) || aberrationScaleWaves <= 0) {
+                scaleInput.reportValidity();
+                return;
+            }
+            try {
+                localStorage.setItem('coopt.opdFan.scaleWaves', String(aberrationScaleWaves));
+                localStorage.setItem('coopt.opdFan.gridSize', String(gridSize));
+            } catch (_) {}
+            container.innerHTML = '';
+            progress.style.display = 'block';
+            button.disabled = true;
+            try {
+                if (!window.opener || typeof window.opener.showOpticalPathDifferenceFan !== 'function') throw new Error('OPD Fan analysis is not available on opener');
+                await window.opener.showOpticalPathDifferenceFan({
+                    containerElement: container,
+                    gridSize,
+                    aberrationScaleWaves,
+                    onProgress: (event) => { progress.textContent = event?.message || 'Computing OPD Fan...'; },
+                });
+                progress.style.display = 'none';
+            } catch (error) {
+                console.error(error);
+                const message = String(error?.message || error || 'Unknown error');
+                container.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate OPD Fan.<br><span style="font-size:12px;color:#555;">' + message.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span></div>';
+                progress.textContent = 'Failed';
+            } finally {
+                button.disabled = false;
+            }
+        };
+        document.getElementById('popup-show-opd-fan-btn').addEventListener('click', () => window.renderOpdFan());
+        window.addEventListener('load', () => window.renderOpdFan());
+        let primaryWavelengthRefreshTimer = null;
+        const refreshForPrimaryWavelength = () => {
+            if (primaryWavelengthRefreshTimer !== null) clearTimeout(primaryWavelengthRefreshTimer);
+            primaryWavelengthRefreshTimer = setTimeout(() => {
+                primaryWavelengthRefreshTimer = null;
+                window.renderOpdFan();
+            }, 0);
+        };
+        const analysisHost = window.parent && window.parent !== window ? window.parent : window.opener;
+        try { analysisHost?.addEventListener('coopt:primary-wavelength-updated', refreshForPrimaryWavelength); } catch (_) {}
+        try { analysisHost.__cooptRefreshOpdFan = refreshForPrimaryWavelength; } catch (_) {}
+        window.addEventListener('beforeunload', () => {
+            try { analysisHost?.removeEventListener('coopt:primary-wavelength-updated', refreshForPrimaryWavelength); } catch (_) {}
+            try {
+                if (analysisHost?.__cooptRefreshOpdFan === refreshForPrimaryWavelength) {
+                    delete analysisHost.__cooptRefreshOpdFan;
+                }
+            } catch (_) {}
+        });
+    </script>
+</body>
+</html>
+                        `);
+                        try { popup.document.close(); } catch (_) {}
+                });
+        }
+
         // Settings popup (environment settings)
         const openSettingsBtn = document.getElementById('open-settings-btn');
         const openSettingsPopup = () => {
@@ -16601,8 +16728,8 @@ export function setupAnalysisWindows() {
             Select the reference used for OPD calculations. Changes take effect on the next calculation.
         </div>
         <div class="radio-group">
-            <label><input type="radio" name="opd-reference-mode" value="reference-sphere" /> Reference Sphere</label>
             <label><input type="radio" name="opd-reference-mode" value="exit-pupil" /> Exit Pupil</label>
+            <label><input type="radio" name="opd-reference-mode" value="image-plane" /> Image Plane</label>
         </div>
 
         <div class="help" style="margin-top: 6px;">
@@ -16623,7 +16750,7 @@ export function setupAnalysisWindows() {
         };
         const sanitizeReference = (v) => {
             const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
-            return (s === 'exit-pupil' || s === 'reference-sphere') ? s : 'reference-sphere';
+            return s === 'image-plane' ? s : 'exit-pupil';
         };
 
         const sanitizeMfrList = (list) => {
@@ -16777,7 +16904,7 @@ export function setupAnalysisWindows() {
                 const stored = localStorage.getItem(REFERENCE_KEY);
                 if (stored) return sanitizeReference(stored);
             } catch (_) {}
-            return 'reference-sphere';
+            return 'exit-pupil';
         }
 
         function applyReference(mode) {
@@ -17190,6 +17317,7 @@ export function setupTransformationControls(): void {
                     'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
                     'integrated-aberration': 'open-integrated-aberration-window-btn',
                     'transverse-aberration': 'open-transverse-aberration-window-btn',
+                    'opd-fan': 'open-opd-fan-window-btn',
                     'opd': 'open-opd-window-btn',
                     'psf': 'open-psf-window-btn',
                     'mtf': 'open-mtf-window-btn',

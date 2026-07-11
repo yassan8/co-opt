@@ -3142,6 +3142,156 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
 }
 
 /**
+ * Show optical path difference fan referred to the normalized entrance pupil.
+ */
+export async function showOpticalPathDifferenceFan(options: any = {}): Promise<any> {
+    const containerTarget = options?.containerElement || options?.containerId || 'opd-fan-container';
+    const onProgress = typeof options?.onProgress === 'function' ? options.onProgress : null;
+    const gridSizeInput = Math.floor(Number(options?.gridSize));
+    const gridSize = Number.isFinite(gridSizeInput) ? Math.max(17, Math.min(513, gridSizeInput | 1)) : 129;
+    const aberrationScaleWaves = Math.abs(Number(options?.aberrationScaleWaves));
+    if (!Number.isFinite(aberrationScaleWaves) || aberrationScaleWaves <= 0) {
+        throw new Error('Aberration scale must be greater than zero.');
+    }
+
+    const opticalSystemRows = getOpticalSystemRows(getTableOpticalSystem());
+    const sourceRows = getSourceRows(getTableSource());
+    const objectRows = getObjectRows(getTableObject());
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) throw new Error('光学系データが見つかりません');
+    if (!Array.isArray(objectRows) || objectRows.length === 0) throw new Error('Object data was not found.');
+
+    const wavelengths = [...new Set((Array.isArray(sourceRows) ? sourceRows : [])
+        .map((row: any) => Number(row?.wavelength))
+        .filter((wavelength: number) => Number.isFinite(wavelength) && wavelength > 0))];
+    if (wavelengths.length === 0) throw new Error('Valid wavelength data was not found.');
+
+    const [{ runNativeOpdMap, readConfiguredOpdReferenceMode }, { extractOpdFanSections, plotOpdFan }] = await Promise.all([
+        import('../src/desktop/ipc/client.ts'),
+        import('../evaluation/wavefront/opd-fan-plot.ts'),
+    ]);
+    const { calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculatePupilsByNewSpec } = await import('../raytracing/core/ray-paraxial.ts');
+    const referenceMode = readConfiguredOpdReferenceMode();
+    const livePrimaryWavelengthUm = Number((w as any)?.getPrimaryWavelength?.());
+    const primaryWavelengthUm = Number.isFinite(livePrimaryWavelengthUm) && livePrimaryWavelengthUm > 0
+        ? livePrimaryWavelengthUm
+        : getPrimaryWavelengthFromSourceRows(sourceRows);
+    const primaryEntrancePupilDiameterMm = Number(calculateEntrancePupilDiameter(opticalSystemRows, primaryWavelengthUm));
+    const primaryEntrancePupilRadiusMm = Number.isFinite(primaryEntrancePupilDiameterMm) && primaryEntrancePupilDiameterMm > 0
+        ? primaryEntrancePupilDiameterMm / 2
+        : undefined;
+    const primaryEntrancePupilPositionFromFirstSurfaceMm = Number(
+        calculatePupilsByNewSpec(opticalSystemRows, primaryWavelengthUm)?.entrancePupil?.position,
+    );
+    const primaryExitPupilPositionFromLastSurfaceMm = Number(calculateExitPupilDiameter(opticalSystemRows, primaryWavelengthUm)?.position);
+    const total = objectRows.length * wavelengths.length;
+    const series: any[] = [];
+    const skippedSeries: Array<{ objectIndex: number; wavelengthUm: number; reason: string }> = [];
+    const opdMapCache = new Map<string, any>();
+    let backend = '';
+    let completed = 0;
+
+    const runOpdMapFor = async (requestedObjectIndex: number, requestedWavelengthUm: number, referenceSphereGeometry?: any) => {
+        const cacheKey = `${requestedObjectIndex}|${requestedWavelengthUm}|${referenceSphereGeometry ? JSON.stringify(referenceSphereGeometry) : ''}`;
+        const cachedResult = opdMapCache.get(cacheKey);
+        if (cachedResult) return cachedResult;
+        const result = await runNativeOpdMap({
+            opticalSystemRows,
+            sourceRows: Array.isArray(sourceRows) ? sourceRows : [],
+            objectRows,
+            objectIndex: requestedObjectIndex,
+            gridSize,
+            wavelengthUm: requestedWavelengthUm,
+            opdReferenceWavelengthUm: primaryWavelengthUm,
+            opdWaveNormalization: 'trace',
+            pupilRadiusMm: primaryEntrancePupilRadiusMm,
+            entrancePupilPositionFromFirstSurfaceMm: Number.isFinite(primaryEntrancePupilPositionFromFirstSurfaceMm)
+                ? primaryEntrancePupilPositionFromFirstSurfaceMm
+                : undefined,
+            exitPupilPositionFromLastSurfaceMm: Number.isFinite(primaryExitPupilPositionFromLastSurfaceMm)
+                ? primaryExitPupilPositionFromLastSurfaceMm
+                : undefined,
+            pupilSamplingMode: 'entrance',
+            referenceMode,
+            referenceSphereGeometry,
+            opdDisplayMode: 'raw',
+        });
+        opdMapCache.set(cacheKey, result);
+        return result;
+    };
+
+    for (let objectIndex = 0; objectIndex < objectRows.length; objectIndex++) {
+        const objectRow: any = objectRows[objectIndex] || {};
+        const position = String(objectRow?.position ?? objectRow?.Position ?? '').toLowerCase();
+        const isAngle = position.includes('angle') || position === 'point';
+        const x = Number(objectRow?.xHeightAngle ?? objectRow?.x ?? 0) || 0;
+        const y = Number(objectRow?.yHeightAngle ?? objectRow?.y ?? 0) || 0;
+        const unit = isAngle ? 'deg' : 'mm';
+        const fieldLabel = `Object ${objectIndex + 1} (${isAngle ? 'Angle' : 'Height'}: X=${x.toFixed(3)} ${unit}, Y=${y.toFixed(3)} ${unit})`;
+
+        for (const wavelengthUm of wavelengths) {
+            onProgress?.({ percent: Math.round((completed / total) * 90), message: `Computing Object ${objectIndex + 1}, λ=${wavelengthUm.toFixed(5)} μm...` });
+            try {
+                const primaryResult = wavelengthUm === primaryWavelengthUm
+                    ? await runOpdMapFor(objectIndex, primaryWavelengthUm)
+                    : await runOpdMapFor(objectIndex, primaryWavelengthUm);
+                const primaryReferenceSphereGeometry = primaryResult?.referenceSphereCenter
+                    && Number.isFinite(Number(primaryResult?.referenceSphereRadiusMm))
+                    && primaryResult?.referenceSphereDirection
+                    ? {
+                        center: primaryResult.referenceSphereCenter,
+                        radiusMm: Number(primaryResult.referenceSphereRadiusMm),
+                        direction: primaryResult.referenceSphereDirection,
+                    }
+                    : undefined;
+                const result = wavelengthUm === primaryWavelengthUm
+                    ? primaryResult
+                    : await runOpdMapFor(objectIndex, wavelengthUm, primaryReferenceSphereGeometry);
+                const displayOpdGrid = Array.isArray(result?.displayOpdGrid) ? result.displayOpdGrid : result?.rawOpdGrid;
+                const sections = extractOpdFanSections(
+                    displayOpdGrid,
+                    result?.entrancePupilCoordinateXGrid,
+                    result?.entrancePupilCoordinateYGrid,
+                    Number(result?.usedObjectX),
+                    Number(result?.usedObjectY),
+                );
+                backend ||= String(result?.backend || '');
+                series.push({
+                    fieldIndex: objectIndex,
+                    fieldLabel,
+                    wavelengthUm,
+                    opdReferenceWavelengthUm: Number(result?.opdReferenceWavelengthUm),
+                    wavelengthLabel: `${wavelengthUm.toFixed(5)} μm`,
+                    ...sections,
+                });
+            } catch (error) {
+                skippedSeries.push({ objectIndex, wavelengthUm, reason: String((error as any)?.message || error) });
+                console.warn(`[OPD Fan] Skipped Object ${objectIndex + 1}, λ=${wavelengthUm.toFixed(5)} μm:`, error);
+            } finally {
+                completed += 1;
+            }
+        }
+    }
+
+    if (series.length === 0) {
+        const reason = skippedSeries[0]?.reason || 'No finite central entrance-pupil sections were returned.';
+        throw new Error(`No OPD Fan series could be calculated. ${reason}`);
+    }
+
+    const data = {
+        backend,
+        referenceMode,
+        primaryWavelengthUm,
+        opdDisplayMode: 'raw',
+        series,
+        skippedSeries,
+    };
+    onProgress?.({ percent: 95, message: 'Rendering OPD Fan...' });
+    plotOpdFan(containerTarget, data, { aberrationScaleWaves });
+    onProgress?.({ percent: 100, message: 'Done' });
+    return data;
+}
+
+/**
  * Show lateral chromatic aberration diagram (倍率色収差図)
  */
 export async function showMagnificationChromaticAberrationDiagram(options: any = {}): Promise<void> {
