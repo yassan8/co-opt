@@ -36,4 +36,26 @@ export async function ensureSurfaceOriginsModuleLoaded(): Promise<any | null> {
   return await g.__cooptSurfaceOriginsModuleLoadPromise;
 }
 
+export async function reloadSurfaceOriginsModule(): Promise<any | null> {
+  const g = globalThis as any;
+  delete g.__cooptSurfaceOriginsModule;
+  delete g.__cooptSurfaceOriginsModulePromise;
+  delete g.__cooptSurfaceOriginsModuleLoadPromise;
+  const cacheKey = Date.now();
+  try {
+    const moduleUrl = new URL('../../public/rust-wasm/pkg/surface_origins.js', import.meta.url);
+    moduleUrl.searchParams.set('v', String(cacheKey));
+    const mod = await import(/* @vite-ignore */ moduleUrl.href);
+    g.__cooptSurfaceOriginsModule = mod;
+    g.__cooptSurfaceOriginsModuleError = null;
+    g.__cooptSurfaceOriginsModulePromise = Promise.resolve(mod);
+    return mod;
+  } catch (error) {
+    console.warn('⚠️ [Startup] Rust/Wasm surface_origins reload failed:', error);
+    g.__cooptSurfaceOriginsModuleError = error;
+    g.__cooptSurfaceOriginsModulePromise = Promise.resolve(null);
+    throw error;
+  }
+}
+
 void ensureSurfaceOriginsModuleLoaded();

@@ -1,0 +1,57 @@
+{
+  "1": {
+    "1": { "pistonDefocus": 0.03212 },
+    "2": { "pistonDefocus": 0.01318 },
+    "3": { "pistonDefocus": 0.00639 }
+  },
+  "2": {
+    "1": { "pistonDefocus": 0.66157 },
+    "2": { "pistonDefocus": 0.58901 },
+    "3": { "pistonDefocus": 0.52447 }
+  },
+  "3": {
+    "1": { "pistonDefocus": 0.81482 },
+    "2": { "pistonDefocus": 0.74126 },
+    "3": { "pistonDefocus": 0.66701 }
+  },
+  "4": {
+    "1": { "pistonDefocus": 0.57981 },
+    "2": { "pistonDefocus": 0.53493 },
+    "3": { "pistonDefocus": 0.48690 }
+  },
+  "5": {
+    "1": { "pistonDefocus": 0.60353 },
+    "2": { "pistonDefocus": 0.47361 },
+    "3": { "pistonDefocus": 0.40070 }
+  },
+  "6": {
+    "1": { "pistonDefocus": 0.80896 },
+    "2": { "pistonDefocus": 0.59900 },
+    "3": { "pistonDefocus": 0.48769 }
+  },
+  "7": {
+    "1": { "pistonDefocus": 1.00045 },
+    "2": { "pistonDefocus": 0.74424 },
+    "3": { "pistonDefocus": 0.61067 }
+  },
+  "8": {
+    "1": { "pistonDefocus": 1.12608 },
+    "2": { "pistonDefocus": 0.80025 },
+    "3": { "pistonDefocus": 0.64396 }
+  },
+  "9": {
+    "1": { "pistonDefocus": 1.16044 },
+    "2": { "pistonDefocus": 0.71443 },
+    "3": { "pistonDefocus": 0.53197 }
+  },
+  "10": {
+    "1": { "pistonDefocus": 1.12305 },
+    "2": { "pistonDefocus": 0.58494 },
+    "3": { "pistonDefocus": 0.39740 }
+  },
+  "11": {
+    "1": { "pistonDefocus": 1.12610 },
+    "2": { "pistonDefocus": 0.51868 },
+    "3": { "pistonDefocus": 0.33770 }
+  }
+}

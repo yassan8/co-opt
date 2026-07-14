@@ -66,7 +66,7 @@ export function extractOpdFanSections(
                 : { x: 0, y: 1 };
             const sagittalUnit = { x: -tangentialUnit.y, y: tangentialUnit.x };
             const nominalStep = 2 / Math.max(1, gridSize - 1);
-            const bandHalfWidth = Math.max(nominalStep * 0.55, 0.01);
+            const bandHalfWidth = Math.max(nominalStep * 0.30, 0.005);
             const maxAxisGap = Math.max(nominalStep * 1.75, 0.04);
             const axisSamples = samples.map((sample) => {
                 const tangentialCoordinate = sample.x * tangentialUnit.x + sample.y * tangentialUnit.y;
@@ -171,8 +171,8 @@ export function plotOpdFan(containerTarget: string | HTMLElement, data: OpdFanDa
 
     const fieldIndices = [...new Set(data.series.map((series) => series.fieldIndex))].sort((a, b) => b - a);
     const availableHeight = Math.max(0, container.parentElement?.clientHeight || container.clientHeight || 0);
-    const rowHeightPx = compactLayout ? 210 : 230;
-    const rowGapPx = 14;
+    const rowHeightPx = compactLayout ? 180 : 200;
+    const rowGapPx = 15;
     const plotChromeHeightPx = compactLayout ? 245 : 200;
     const plotHeight = Math.max(
         availableHeight,
@@ -181,8 +181,14 @@ export function plotOpdFan(containerTarget: string | HTMLElement, data: OpdFanDa
     container.style.height = `${plotHeight}px`;
     container.style.minHeight = `${plotHeight}px`;
     const wavelengths = [...new Set(data.series.map((series) => series.wavelengthUm))].sort((a, b) => a - b);
-    const styles = ['#0057b8', '#16803a', '#d12626', '#7b3fb2', '#007b83'];
-    const styleByWavelength = new Map(wavelengths.map((wavelength, index) => [wavelength, styles[index % styles.length]]));
+    const wavelengthStyles = [
+        { color: '#0000fe', dash: 'dash' },
+        { color: '#7ffe7e', dash: 'solid' },
+        { color: '#fe0000', dash: 'dashdot' },
+        { color: '#8b5cf6', dash: 'longdash' },
+        { color: '#0f766e', dash: 'dot' },
+    ];
+    const styleByWavelength = new Map(wavelengths.map((wavelength, index) => [wavelength, wavelengthStyles[index % wavelengthStyles.length]]));
     const pupilAxisLimit = 1;
     const pupilTickValues = [-1, -0.5, 0, 0.5, 1];
     const axisName = (base: string, index: number) => index === 1 ? base : `${base}${index}`;
@@ -194,27 +200,21 @@ export function plotOpdFan(containerTarget: string | HTMLElement, data: OpdFanDa
     const rowSpan = (1 - rowGap * Math.max(0, fieldIndices.length - 1)) / fieldIndices.length;
     const traces: any[] = [];
     const annotations: any[] = [
+        { text: 'OPTICAL PATH DIFFERENCE FAN', x: 0.5, y: 1.12, xref: 'paper', yref: 'paper', xanchor: 'center', yanchor: 'bottom', showarrow: false, font: { size: compactLayout ? 14 : 18, color: '#333' } },
         { text: 'tangential', x: (leftDomain[0] + leftDomain[1]) / 2, y: 1.01, xref: 'paper', yref: 'paper', xanchor: 'center', yanchor: 'bottom', showarrow: false, font: { size: 14, color: '#333' } },
         { text: 'sagittal', x: (rightDomain[0] + rightDomain[1]) / 2, y: 1.01, xref: 'paper', yref: 'paper', xanchor: 'center', yanchor: 'bottom', showarrow: false, font: { size: 14, color: '#333' } },
         { text: 'Normalized Entrance Pupil', x: 0.5, y: -0.14, xref: 'paper', yref: 'paper', showarrow: false, font: { size: 13, color: '#333' } },
     ];
     const legendShown = new Set<string>();
     const layout: any = {
-        title: {
-            text: 'OPTICAL PATH DIFFERENCE FAN',
-            font: { size: compactLayout ? 14 : 18 },
-            x: leftDomain[0],
-            xanchor: 'left',
-            y: 0.985,
-            yanchor: 'top',
-        },
+        title: { text: '' },
         autosize: true,
         height: plotHeight,
         showlegend: true,
         legend: compactLayout
             ? { x: 0.5, y: -0.22, xanchor: 'center', yanchor: 'top', orientation: 'h', bgcolor: 'rgba(255,255,255,0.9)', bordercolor: 'rgba(0,0,0,0.2)', borderwidth: 1 }
             : { x: 0.94, y: 1, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.85)', bordercolor: 'rgba(0,0,0,0.2)', borderwidth: 1 },
-        margin: compactLayout ? { l: 60, r: 25, t: 90, b: 155 } : { l: 90, r: 220, t: 90, b: 110 },
+        margin: compactLayout ? { l: 60, r: 25, t: 130, b: 155 } : { l: 90, r: 220, t: 130, b: 110 },
         annotations,
     };
 
@@ -254,7 +254,11 @@ export function plotOpdFan(containerTarget: string | HTMLElement, data: OpdFanDa
                 name: series.wavelengthLabel,
                 legendgroup: legendKey,
                 showlegend: !legendShown.has(legendKey),
-                line: { color: styleByWavelength.get(series.wavelengthUm), width: 2 },
+                line: {
+                    color: styleByWavelength.get(series.wavelengthUm)?.color,
+                    width: 2,
+                    dash: styleByWavelength.get(series.wavelengthUm)?.dash || 'solid',
+                },
                 xaxis: axisRef('x', axisIndex),
                 yaxis: axisRef('y', axisIndex),
                 hovertemplate: `<b>${sectionLabel}</b><br>Entrance pupil: %{x:.3f}<br>OPD: %{y:.5f} waves<extra>${series.wavelengthLabel}</extra>`,

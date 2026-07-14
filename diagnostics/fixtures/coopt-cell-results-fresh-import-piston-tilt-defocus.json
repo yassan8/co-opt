@@ -1,0 +1,57 @@
+{
+  "1": {
+    "1": { "pistonTiltDefocus": 0.03215 },
+    "2": { "pistonTiltDefocus": 0.01323 },
+    "3": { "pistonTiltDefocus": 0.00642 }
+  },
+  "2": {
+    "1": { "pistonTiltDefocus": 0.19068 },
+    "2": { "pistonTiltDefocus": 0.17105 },
+    "3": { "pistonTiltDefocus": 0.15327 }
+  },
+  "3": {
+    "1": { "pistonTiltDefocus": 0.34749 },
+    "2": { "pistonTiltDefocus": 0.30114 },
+    "3": { "pistonTiltDefocus": 0.26466 }
+  },
+  "4": {
+    "1": { "pistonTiltDefocus": 0.48655 },
+    "2": { "pistonTiltDefocus": 0.39686 },
+    "3": { "pistonTiltDefocus": 0.33674 }
+  },
+  "5": {
+    "1": { "pistonTiltDefocus": 0.64849 },
+    "2": { "pistonTiltDefocus": 0.50217 },
+    "3": { "pistonTiltDefocus": 0.41123 }
+  },
+  "6": {
+    "1": { "pistonTiltDefocus": 0.86506 },
+    "2": { "pistonTiltDefocus": 0.65111 },
+    "3": { "pistonTiltDefocus": 0.52190 }
+  },
+  "7": {
+    "1": { "pistonTiltDefocus": 1.06079 },
+    "2": { "pistonTiltDefocus": 0.77348 },
+    "3": { "pistonTiltDefocus": 0.60593 }
+  },
+  "8": {
+    "1": { "pistonTiltDefocus": 1.11834 },
+    "2": { "pistonTiltDefocus": 0.76057 },
+    "3": { "pistonTiltDefocus": 0.56499 }
+  },
+  "9": {
+    "1": { "pistonTiltDefocus": 1.03737 },
+    "2": { "pistonTiltDefocus": 0.62583 },
+    "3": { "pistonTiltDefocus": 0.42108 }
+  },
+  "10": {
+    "1": { "pistonTiltDefocus": 0.96726 },
+    "2": { "pistonTiltDefocus": 0.51901 },
+    "3": { "pistonTiltDefocus": 0.32511 }
+  },
+  "11": {
+    "1": { "pistonTiltDefocus": 1.03969 },
+    "2": { "pistonTiltDefocus": 0.52482 },
+    "3": { "pistonTiltDefocus": 0.32751 }
+  }
+}

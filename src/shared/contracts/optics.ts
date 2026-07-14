@@ -56,6 +56,7 @@ export interface NativeSpotSeriesStats {
 
 export interface NativeSpotRaytraceRequest {
   opticalSystemRows: unknown[];
+  referenceOpticalSystemRows?: unknown[];
   sourceRows?: unknown[];
   objectRows?: unknown[];
   surfaceIndex?: number;
@@ -362,9 +363,45 @@ export type OpdReferenceMode =
   | "absolute2"
   | "afocal-image-space";
 
+export type OpdChiefRayMode =
+  | "stop-center"
+  | "entrance-pupil-center"
+  | "transmitted-pupil-center";
+
+export type OpdPupilNormalizationMode =
+  | "fixed-entrance-pupil"
+  | "effective-transmitted-pupil";
+
+export type OpdExitPupilReferencePointMode =
+  | "chief-ray-intersection"
+  | "exit-pupil-center";
+
+export interface OpdReferenceSphereOptions {
+  referenceSphereWavelengthMode?: "primary-wavelength" | "per-wavelength";
+  opdDisplayMode?: "raw" | "pistonRemoved" | "pistonTiltRemoved" | "pistonDefocusRemoved" | "pistonTiltDefocusRemoved";
+  exitPupilPositionSign?: "as-is" | "negated";
+  exitPupilPlaneDefinition?: "surface-local-axis" | "global-z";
+  chiefImagePoint?:
+    | "chief-ray-image-point"
+    | "paraxial-image-point"
+    | "sagittal-best-focus-point"
+    | "tangential-best-focus-point"
+    | "tan-sag-mid-focus-point"
+    | "rms-wavefront-best-focus-point"
+    | "circle-of-least-confusion-point"
+    | "defocus-zero-reference-point"
+    | "weighted-tan-sag-focus-point"
+    | "per-wavelength-best-focus-point"
+    | "target-surface-center";
+  sphereIntersection?: "exit-pupil-side" | "opposite-side";
+  opticalPathSign?: "positive" | "negative";
+  exitPupilDirection?: "image-to-exit-pupil" | "exit-pupil-to-image";
+}
+
 export interface NativeOpdMapRequest {
   jobId?: string;
   opticalSystemRows: unknown[];
+  referenceOpticalSystemRows?: unknown[];
   sourceRows?: unknown[];
   objectRows?: unknown[];
   objectIndex?: number;
@@ -377,18 +414,39 @@ export interface NativeOpdMapRequest {
   entrancePupilPositionFromFirstSurfaceMm?: number;
   exitPupilPositionFromLastSurfaceMm?: number;
   pupilSamplingMode?: "stop" | "entrance";
+  chiefRayMode?: OpdChiefRayMode;
+  referenceRayPupilCoordinate?: { x: number; y: number };
+  sampleRayLaunchOrigin?: { x: number; y: number; z: number };
+  preserveImageHeightChiefRay?: boolean;
+  resolveImageHeightChiefRayInRuntime?: boolean;
+  pupilNormalizationMode?: OpdPupilNormalizationMode;
+  exitPupilReferencePointMode?: OpdExitPupilReferencePointMode;
+  referenceSphereOptions?: OpdReferenceSphereOptions;
   referenceMode?: OpdReferenceMode;
   referenceSphereGeometry?: {
     center: { x: number; y: number; z: number };
     radiusMm: number;
     direction: { x: number; y: number; z: number };
   };
-  opdDisplayMode?: "raw" | "pistonTiltRemoved" | "pistonTiltDefocusRemoved";
+  opdDisplayMode?: "raw" | "pistonRemoved" | "pistonTiltRemoved" | "pistonDefocusRemoved" | "pistonTiltDefocusRemoved";
 }
 
 export interface NativeOpdMapResponse {
   backend: string;
   chiefReferenceMode?: string;
+  chiefRayLaunchOrigin?: { x: number; y: number; z: number };
+  imageHeightChiefRayApplied?: boolean;
+  imageHeightChiefRayPreserved?: boolean;
+  imageHeightChiefRayRuntimeResolved?: boolean;
+  imageHeightChiefDirection?: { x: number; y: number; z: number };
+  imageHeightRuntimeSolvedAngle?: { x: number; y: number; z: number };
+  imageHeightSolverHit?: { x: number; y: number; z: number };
+  imageHeightSolverSurfaceIndex?: number;
+  chiefStopPoint?: { x: number; y: number; z: number };
+  chiefStopDirection?: { x: number; y: number; z: number };
+  chiefSurfaceTrace?: Array<{ surfaceIndex: number; point: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } }>;
+  sampleRayLaunchOriginApplied?: boolean;
+  transmittedPupilCenterUv?: { u: number; v: number };
   targetSurface: number;
   stopSurface: number;
   requestedObjectIndex?: number;
@@ -396,24 +454,114 @@ export interface NativeOpdMapResponse {
   usedObjectPosition: string;
   usedObjectX: number;
   usedObjectY: number;
+  imageHeightTargetX?: number;
+  imageHeightTargetY?: number;
+  chiefImageLocalPoint?: { x: number; y: number; z: number };
   wavelengthUm: number;
+  referenceSphereWavelengthUsed?: number;
+  primaryReferenceGeometryApplied?: boolean;
+  currentReferenceSphereRadiusMm?: number;
+  primaryReferenceSphereRadiusMm?: number;
   opdReferenceWavelengthUm?: number;
   gridSize: number;
   effectivePupilRadiusMm?: number;
+  pupilMaskGrid?: Array<Array<boolean | null>>;
+  referenceSphereOpdGrid?: Array<Array<number | null>>;
   chiefOplUm?: number;
   chiefReferenceSphereOpdUm?: number;
+  opdTermSamples?: Array<{
+    label: string;
+    pupilU: number;
+    pupilV: number;
+    chiefOplUm: number;
+    marginalOplUm: number;
+    chiefPreTargetOplUm?: number;
+    marginalPreTargetOplUm?: number;
+    beforeTargetOpdUm?: number;
+    targetSegmentOpdUm?: number;
+    chiefSphereOplUm?: number;
+    marginalSphereOplUm?: number;
+    referenceOpdUm?: number;
+    spherePathDeltaUm?: number;
+  }>;
   entrancePupilCoordinateXGrid?: Array<Array<number | null>>;
   entrancePupilCoordinateYGrid?: Array<Array<number | null>>;
   sampleCount: number;
   hitCount: number;
+  referenceCorrectedSampleCount?: number;
+  referenceOpdRmsUm?: number;
+  trackedOpdRmsUm?: number;
+  beforeTargetTrackedOpdRmsUm?: number;
+  targetSegmentOpdRmsUm?: number;
+  spherePathDeltaRmsUm?: number;
+  spherePathOptimalScale?: number;
+  spherePathOptimalRmsUm?: number;
+  currentReferenceOpdRmsUm?: number;
+  alternateSphereIntersection?: "exit-pupil-side" | "opposite-side";
+  alternateReferenceOpdRmsUm?: number;
+  targetOriginReferenceOpdRmsUm?: number;
+  imageSpaceN?: number;
+  airReferenceOpdRmsUm?: number;
+  alternateOpticalPathSign?: "positive" | "negative";
+  alternateSignReferenceOpdRmsUm?: number;
+  axisReferenceSphereRmsUm?: number;
+  sphereRadiusOptimalScale?: number;
+  sphereRadiusOptimalRmsUm?: number;
   pupilSamplingMode: "stop" | "entrance";
+  chiefRayMode?: OpdChiefRayMode;
+  referenceRayPupilCoordinate?: { x: number; y: number };
+  pupilNormalizationMode?: OpdPupilNormalizationMode;
+  exitPupilReferencePointMode?: OpdExitPupilReferencePointMode;
   referenceMode?: OpdReferenceMode;
   referenceSphereCenter?: { x: number; y: number; z: number };
   referenceSphereRadiusMm?: number;
   referenceSphereDirection?: { x: number; y: number; z: number };
+  chiefImagePoint?: { x: number; y: number; z: number };
+  paraxialImagePoint?: { x: number; y: number; z: number };
+  sagittalBestFocusPoint?: { x: number; y: number; z: number };
+  tangentialBestFocusPoint?: { x: number; y: number; z: number };
+  rmsBestFocusPoint?: { x: number; y: number; z: number };
+  rmsBestFocusDiagnostics?: {
+    baseZ: number;
+    searchMinZ: number;
+    searchMaxZ: number;
+    searchRangeMode: "derived" | "derived-ray-bundle" | "fallback";
+    rayCount: number;
+    paraxialRmsMm: number;
+    bestFocusRmsMm: number;
+    improvementMm: number;
+    bestFocusDeltaZ: number;
+  };
+  selectedImagePoint?: { x: number; y: number; z: number };
+  selectedImagePointMode?: string;
   exitPupilCenter?: { x: number; y: number; z: number };
   exitPupilRadiusMm?: number;
+  displayFit?: {
+    sampleCount: number;
+    basis: string;
+    piston: number;
+    tiltX: number;
+    tiltY: number;
+    defocus: number;
+    defocusScale: number;
+    defocusMeanRadiusSquared?: number;
+    coordinateSource?: "entrance-pupil" | "grid-index-fallback";
+    physicalCoordinateSampleCount?: number;
+  };
+  wavefrontFit?: {
+    sampleCount: number;
+    basis: string;
+    piston: number;
+    tiltX: number;
+    tiltY: number;
+    defocus: number;
+    defocusScale: number;
+    defocusMeanRadiusSquared?: number;
+    coordinateSource?: "entrance-pupil" | "grid-index-fallback";
+    physicalCoordinateSampleCount?: number;
+  };
   rawOpdGrid: Array<Array<number | null>>;
+  unreferencedOpdGrid?: Array<Array<number | null>>;
   displayOpdGrid: Array<Array<number | null>>;
   referenceSphereOpdGrid?: Array<Array<number | null>>;
   message: string;
@@ -422,6 +570,7 @@ export interface NativeOpdMapResponse {
 export interface NativeOpdRmsWavesRequest {
   jobId?: string;
   opticalSystemRows: unknown[];
+  referenceOpticalSystemRows?: unknown[];
   sourceRows?: unknown[];
   objectRows?: unknown[];
   objectIndex?: number;
@@ -430,13 +579,26 @@ export interface NativeOpdRmsWavesRequest {
   wavelengthUm?: number;
   pupilRadiusMm?: number;
   pupilSamplingMode?: "stop" | "entrance";
+  chiefRayMode?: OpdChiefRayMode;
+  sampleRayLaunchOrigin?: { x: number; y: number; z: number };
+  pupilNormalizationMode?: OpdPupilNormalizationMode;
+  exitPupilReferencePointMode?: OpdExitPupilReferencePointMode;
+  referenceSphereOptions?: OpdReferenceSphereOptions;
   referenceMode?: OpdReferenceMode;
-  opdDisplayMode?: "raw" | "pistonTiltRemoved" | "pistonTiltDefocusRemoved";
+  referenceSphereGeometry?: {
+    center: { x: number; y: number; z: number };
+    radiusMm: number;
+    direction: { x: number; y: number; z: number };
+  };
+  opdDisplayMode?: "raw" | "pistonRemoved" | "pistonTiltRemoved" | "pistonDefocusRemoved" | "pistonTiltDefocusRemoved";
 }
 
 export interface NativeOpdRmsWavesResponse {
   backend: string;
   chiefReferenceMode?: string;
+  chiefRayLaunchOrigin?: { x: number; y: number; z: number };
+  sampleRayLaunchOriginApplied?: boolean;
+  transmittedPupilCenterUv?: { u: number; v: number };
   targetSurface: number;
   stopSurface: number;
   requestedObjectIndex?: number;
@@ -444,12 +606,80 @@ export interface NativeOpdRmsWavesResponse {
   usedObjectPosition: string;
   usedObjectX: number;
   usedObjectY: number;
+  imageHeightTargetX?: number;
+  imageHeightTargetY?: number;
   wavelengthUm: number;
   gridSize: number;
   sampleCount: number;
   hitCount: number;
+  pupilMaskGrid?: Array<Array<boolean | null>>;
+  unreferencedOpdGrid?: Array<Array<number | null>>;
+  opdTermSamples?: NativeOpdMapResponse['opdTermSamples'];
+  referenceSphereWavelengthUsed?: number;
+  primaryReferenceGeometryApplied?: boolean;
+  currentReferenceSphereRadiusMm?: number;
+  primaryReferenceSphereRadiusMm?: number;
+  referenceCorrectedSampleCount?: number;
+  referenceOpdRmsUm?: number;
+  trackedOpdRmsUm?: number;
+  beforeTargetTrackedOpdRmsUm?: number;
+  targetSegmentOpdRmsUm?: number;
+  spherePathDeltaRmsUm?: number;
+  spherePathOptimalScale?: number;
+  spherePathOptimalRmsUm?: number;
+  currentReferenceOpdRmsUm?: number;
+  alternateSphereIntersection?: "exit-pupil-side" | "opposite-side";
+  alternateReferenceOpdRmsUm?: number;
+  targetOriginReferenceOpdRmsUm?: number;
+  imageSpaceN?: number;
+  airReferenceOpdRmsUm?: number;
+  alternateOpticalPathSign?: "positive" | "negative";
+  alternateSignReferenceOpdRmsUm?: number;
+  axisReferenceSphereRmsUm?: number;
+  sphereRadiusOptimalScale?: number;
+  sphereRadiusOptimalRmsUm?: number;
   pupilSamplingMode: "stop" | "entrance";
+  referenceSphereCenter?: { x: number; y: number; z: number };
+  referenceSphereRadiusMm?: number;
+  referenceSphereDirection?: { x: number; y: number; z: number };
+  chiefImagePoint?: { x: number; y: number; z: number };
+  paraxialImagePoint?: { x: number; y: number; z: number };
+  sagittalBestFocusPoint?: { x: number; y: number; z: number };
+  tangentialBestFocusPoint?: { x: number; y: number; z: number };
+  rmsBestFocusPoint?: { x: number; y: number; z: number };
+  rmsBestFocusDiagnostics?: {
+    baseZ: number;
+    searchMinZ: number;
+    searchMaxZ: number;
+    searchRangeMode: "derived" | "derived-ray-bundle" | "fallback";
+    rayCount: number;
+    paraxialRmsMm: number;
+    bestFocusRmsMm: number;
+    improvementMm: number;
+    bestFocusDeltaZ: number;
+  };
+  selectedImagePoint?: { x: number; y: number; z: number };
+  selectedImagePointMode?: string;
+  exitPupilCenter?: { x: number; y: number; z: number };
   referenceMode?: OpdReferenceMode;
+  /** RMS of the current display mode, used for individual-cell reporting. */
+  displayRmsWaves?: number;
+  /** RMS of the unprocessed reference-sphere OPD, used for total reporting. */
+  referenceRmsWaves?: number;
+  displayFit?: {
+    sampleCount: number;
+    basis: string;
+    piston: number;
+    tiltX: number;
+    tiltY: number;
+    defocus: number;
+    defocusScale: number;
+    defocusMeanRadiusSquared?: number;
+    coordinateSource?: "entrance-pupil" | "grid-index-fallback";
+    physicalCoordinateSampleCount?: number;
+  };
+  referenceSphereCenter?: { x: number; y: number; z: number };
+  referenceSphereRadiusMm?: number;
   rmsWaves: number;
   message: string;
 }

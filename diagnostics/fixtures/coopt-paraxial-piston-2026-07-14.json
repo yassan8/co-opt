@@ -1,0 +1,62 @@
+{
+  "source": "browser System Console output",
+  "command": "wav 32 point=paraxial mode=piston detail=1",
+  "reference": "exit-pupil / paraxial-image-point / pistonRemoved / fixed-entrance-pupil",
+  "wavelengthsUm": [0.475, 0.55, 0.625],
+  "relativeWeights": [0.135, 1, 0.302],
+  "1": {
+    "1": { "piston": 0.23029 },
+    "2": { "piston": 0.15779 },
+    "3": { "piston": 0.54413 }
+  },
+  "2": {
+    "1": { "piston": 1.00180 },
+    "2": { "piston": 0.90855 },
+    "3": { "piston": 0.95250 }
+  },
+  "3": {
+    "1": { "piston": 1.16117 },
+    "2": { "piston": 1.09862 },
+    "3": { "piston": 1.08041 }
+  },
+  "4": {
+    "1": { "piston": 0.72009 },
+    "2": { "piston": 0.73297 },
+    "3": { "piston": 0.73937 }
+  },
+  "5": {
+    "1": { "piston": 0.74643 },
+    "2": { "piston": 0.60802 },
+    "3": { "piston": 0.52988 }
+  },
+  "6": {
+    "1": { "piston": 1.04944 },
+    "2": { "piston": 0.78899 },
+    "3": { "piston": 0.62422 }
+  },
+  "7": {
+    "1": { "piston": 1.20805 },
+    "2": { "piston": 0.91299 },
+    "3": { "piston": 0.72775 }
+  },
+  "8": {
+    "1": { "piston": 1.22632 },
+    "2": { "piston": 0.91355 },
+    "3": { "piston": 0.72797 }
+  },
+  "9": {
+    "1": { "piston": 1.14880 },
+    "2": { "piston": 0.82595 },
+    "3": { "piston": 0.66823 }
+  },
+  "10": {
+    "1": { "piston": 1.06136 },
+    "2": { "piston": 0.72134 },
+    "3": { "piston": 0.63485 }
+  },
+  "11": {
+    "1": { "piston": 1.07873 },
+    "2": { "piston": 0.57969 },
+    "3": { "piston": 0.56248 }
+  }
+}

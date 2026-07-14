@@ -3,7 +3,7 @@
 
 // @ts-nocheck
 
-import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, calculateRefractiveIndexHerzberger } from '../../data/glass.ts';
+import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, calculateRefractiveIndexHerzberger, calculateRefractiveIndexHikari } from '../../data/glass.ts';
 import { hikariGlassDB } from '../../data/hikari_catalog.ts';
 
 // デバッグレベル設定（0: エラーのみ、1: 警告+エラー、2: 情報+警告+エラー、3: すべて）
@@ -1593,7 +1593,9 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
       const glassData = getGlassData(effectiveMaterial);
       if (glassData) {
         // 指定波長での屈折率を計算
-        if (String(glassData.manufacturer || '').toUpperCase() === 'HIKARI' && glassData.nd && glassData.vd) {
+        if (String(glassData.manufacturer || '').toUpperCase() === 'HIKARI' && glassData.dispersion) {
+          return calculateRefractiveIndexHikari(glassData.dispersion, wavelength);
+        } else if (String(glassData.manufacturer || '').toUpperCase() === 'HIKARI' && glassData.nd && glassData.vd) {
           return estimateRefractiveIndexFromNdVd(glassData.nd, glassData.vd, wavelength);
         } else if (glassData.sellmeier) {
           const refractiveIndex = calculateRefractiveIndex(glassData.sellmeier, wavelength);

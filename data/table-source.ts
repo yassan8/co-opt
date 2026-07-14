@@ -52,7 +52,7 @@ interface TableSourceAPI {
 const initialTableData: SourceRow[] = [
   {
     id: 1,
-    wavelength: 0.4358343,  // g線 (mercury spectral line 435.8 nm)
+    wavelength: 0.475,  // Optalix comparison wavelength 475 nm
     weight: 1.0,
     primary: "",
     angle: 0

@@ -1,0 +1,57 @@
+{
+  "1": {
+    "1": { "raw": 0.09752, "piston": 0.03215, "pistonDefocus": 0.03212, "pistonDefocusScaled0895": 0.03212 },
+    "2": { "raw": 0.21417, "piston": 0.12569, "pistonDefocus": 0.01318, "pistonDefocusScaled0895": 0.02937 },
+    "3": { "raw": 0.63300, "piston": 0.32653, "pistonDefocus": 0.00639, "pistonDefocusScaled0895": 0.06885 }
+  },
+  "2": {
+    "1": { "raw": 0.66560, "piston": 0.66272, "pistonDefocus": 0.66167, "pistonDefocusScaled0895": 0.66171 },
+    "2": { "raw": 0.67425, "piston": 0.60803, "pistonDefocus": 0.58921, "pistonDefocusScaled0895": 0.59005 },
+    "3": { "raw": 0.89534, "piston": 0.62774, "pistonDefocus": 0.52475, "pistonDefocusScaled0895": 0.52971 }
+  },
+  "3": {
+    "1": { "raw": 0.89099, "piston": 0.82140, "pistonDefocus": 0.81538, "pistonDefocusScaled0895": 0.81565 },
+    "2": { "raw": 0.90795, "piston": 0.76320, "pistonDefocus": 0.74192, "pistonDefocusScaled0895": 0.74287 },
+    "3": { "raw": 1.09620, "piston": 0.75774, "pistonDefocus": 0.66802, "pistonDefocusScaled0895": 0.67223 }
+  },
+  "4": {
+    "1": { "raw": 0.73422, "piston": 0.58937, "pistonDefocus": 0.58158, "pistonDefocusScaled0895": 0.58192 },
+    "2": { "raw": 0.74628, "piston": 0.55354, "pistonDefocus": 0.53686, "pistonDefocusScaled0895": 0.53761 },
+    "3": { "raw": 0.95532, "piston": 0.57414, "pistonDefocus": 0.49054, "pistonDefocusScaled0895": 0.49452 }
+  },
+  "5": {
+    "1": { "raw": 0.65998, "piston": 0.60512, "pistonDefocus": 0.60468, "pistonDefocusScaled0895": 0.60470 },
+    "2": { "raw": 0.53775, "piston": 0.47465, "pistonDefocus": 0.47441, "pistonDefocusScaled0895": 0.47442 },
+    "3": { "raw": 0.66218, "piston": 0.43836, "pistonDefocus": 0.40649, "pistonDefocusScaled0895": 0.40795 }
+  },
+  "6": {
+    "1": { "raw": 0.80915, "piston": 0.80898, "pistonDefocus": 0.80770, "pistonDefocusScaled0895": 0.80776 },
+    "2": { "raw": 0.61113, "piston": 0.60507, "pistonDefocus": 0.59322, "pistonDefocusScaled0895": 0.59375 },
+    "3": { "raw": 0.50716, "piston": 0.48893, "pistonDefocus": 0.48887, "pistonDefocusScaled0895": 0.48887 }
+  },
+  "7": {
+    "1": { "raw": 1.00838, "piston": 1.00042, "pistonDefocus": 0.99777, "pistonDefocusScaled0895": 0.99789 },
+    "2": { "raw": 0.84899, "piston": 0.76516, "pistonDefocus": 0.72726, "pistonDefocusScaled0895": 0.72897 },
+    "3": { "raw": 0.64789, "piston": 0.61827, "pistonDefocus": 0.60102, "pistonDefocusScaled0895": 0.60179 }
+  },
+  "8": {
+    "1": { "raw": 1.14214, "piston": 1.12629, "pistonDefocus": 1.12287, "pistonDefocusScaled0895": 1.12302 },
+    "2": { "raw": 1.05170, "piston": 0.84929, "pistonDefocus": 0.76473, "pistonDefocusScaled0895": 0.76866 },
+    "3": { "raw": 0.86355, "piston": 0.69235, "pistonDefocus": 0.61347, "pistonDefocusScaled0895": 0.61716 }
+  },
+  "9": {
+    "1": { "raw": 1.18366, "piston": 1.16108, "pistonDefocus": 1.15750, "pistonDefocusScaled0895": 1.15765 },
+    "2": { "raw": 1.22469, "piston": 0.83251, "pistonDefocus": 0.65161, "pistonDefocusScaled0895": 0.66063 },
+    "3": { "raw": 1.12913, "piston": 0.70265, "pistonDefocus": 0.46637, "pistonDefocusScaled0895": 0.47925 }
+  },
+  "10": {
+    "1": { "raw": 1.13718, "piston": 1.12516, "pistonDefocus": 1.12356, "pistonDefocusScaled0895": 1.12363 },
+    "2": { "raw": 1.33737, "piston": 0.78661, "pistonDefocus": 0.50358, "pistonDefocusScaled0895": 0.51926 },
+    "3": { "raw": 1.38164, "piston": 0.73045, "pistonDefocus": 0.30543, "pistonDefocusScaled0895": 0.33560 }
+  },
+  "11": {
+    "1": { "raw": 1.20800, "piston": 1.17126, "pistonDefocus": 1.15536, "pistonDefocusScaled0895": 1.15606 },
+    "2": { "raw": 1.14404, "piston": 0.66999, "pistonDefocus": 0.45673, "pistonDefocusScaled0895": 0.46800 },
+    "3": { "raw": 1.35322, "piston": 0.67950, "pistonDefocus": 0.27275, "pistonDefocusScaled0895": 0.30197 }
+  }
+}

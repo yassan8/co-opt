@@ -18,6 +18,10 @@ import type {
   NativeTransverseRmsResponse,
   NativeOpdMapRequest,
   NativeOpdMapResponse,
+  OpdChiefRayMode,
+  OpdPupilNormalizationMode,
+  OpdExitPupilReferencePointMode,
+  OpdReferenceSphereOptions,
   OpdReferenceMode,
   NativeOpdRmsWavesRequest,
   NativeOpdRmsWavesResponse,
@@ -200,6 +204,145 @@ function sanitizeOpdReferenceMode(value: unknown): OpdReferenceMode {
     default:
       return "exit-pupil";
   }
+}
+
+function sanitizeOpdChiefRayMode(value: unknown): OpdChiefRayMode {
+  const mode = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (mode === "entrance-pupil-center" || mode === "transmitted-pupil-center") return mode;
+  return "stop-center";
+}
+
+function sanitizeOpdPupilNormalizationMode(value: unknown): OpdPupilNormalizationMode {
+  return typeof value === "string" && value.trim().toLowerCase() === "effective-transmitted-pupil"
+    ? "effective-transmitted-pupil"
+    : "fixed-entrance-pupil";
+}
+
+function sanitizeOpdExitPupilReferencePointMode(value: unknown): OpdExitPupilReferencePointMode {
+  const mode = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return mode === "exit-pupil-center" ? "exit-pupil-center" : "chief-ray-intersection";
+}
+
+export function readConfiguredOpdExitPupilReferencePointMode(): OpdExitPupilReferencePointMode {
+  try {
+    const g = (typeof globalThis !== "undefined") ? (globalThis as any) : null;
+    const direct = sanitizeOpdExitPupilReferencePointMode(
+      g?.__COOPT_OPD_EXIT_PUPIL_REFERENCE_POINT_MODE ?? g?.COOPT_OPD_EXIT_PUPIL_REFERENCE_POINT_MODE,
+    );
+    if (direct !== "chief-ray-intersection"
+      || g?.__COOPT_OPD_EXIT_PUPIL_REFERENCE_POINT_MODE
+      || g?.COOPT_OPD_EXIT_PUPIL_REFERENCE_POINT_MODE) return direct;
+    const opener = g?.opener;
+    const openerValue = opener?.__COOPT_OPD_EXIT_PUPIL_REFERENCE_POINT_MODE
+      ?? opener?.COOPT_OPD_EXIT_PUPIL_REFERENCE_POINT_MODE;
+    if (openerValue !== undefined && openerValue !== null && String(openerValue).trim()) {
+      return sanitizeOpdExitPupilReferencePointMode(openerValue);
+    }
+  } catch (_) {
+    // Ignore cross-window access failures and use local storage/default below.
+  }
+  try {
+    const stored = localStorage.getItem("coopt.opd.exitPupilReferencePointMode");
+    if (stored) return sanitizeOpdExitPupilReferencePointMode(stored);
+  } catch (_) {
+    // Ignore unavailable storage.
+  }
+  return "chief-ray-intersection";
+}
+
+export function readConfiguredOpdReferenceSphereOptions(): OpdReferenceSphereOptions {
+  const defaults: OpdReferenceSphereOptions = {
+    referenceSphereWavelengthMode: "primary-wavelength",
+    opdDisplayMode: "raw",
+    exitPupilPositionSign: "as-is",
+    exitPupilPlaneDefinition: "surface-local-axis",
+    chiefImagePoint: "chief-ray-image-point",
+    sphereIntersection: "exit-pupil-side",
+    opticalPathSign: "positive",
+    exitPupilDirection: "image-to-exit-pupil",
+  };
+  try {
+    const g = (typeof globalThis !== "undefined") ? (globalThis as any) : null;
+    const raw = g?.__COOPT_OPD_REFERENCE_SPHERE_OPTIONS
+      ?? g?.COOPT_OPD_REFERENCE_SPHERE_OPTIONS
+      ?? localStorage.getItem("coopt.opd.referenceSphereOptions");
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (parsed && typeof parsed === "object") {
+      return {
+        ...defaults,
+        ...parsed,
+        referenceSphereWavelengthMode: parsed.referenceSphereWavelengthMode === "per-wavelength"
+          ? "per-wavelength"
+          : defaults.referenceSphereWavelengthMode,
+        opdDisplayMode: parsed.opdDisplayMode === "pistonRemoved"
+          || parsed.opdDisplayMode === "pistonTiltRemoved"
+          || parsed.opdDisplayMode === "pistonDefocusRemoved"
+          || parsed.opdDisplayMode === "pistonTiltDefocusRemoved"
+          ? parsed.opdDisplayMode
+          : defaults.opdDisplayMode,
+        chiefImagePoint: parsed.chiefImagePoint === "paraxial-image-point"
+          || parsed.chiefImagePoint === "sagittal-best-focus-point"
+          || parsed.chiefImagePoint === "tangential-best-focus-point"
+          || parsed.chiefImagePoint === "tan-sag-mid-focus-point"
+          || parsed.chiefImagePoint === "rms-wavefront-best-focus-point"
+          || parsed.chiefImagePoint === "circle-of-least-confusion-point"
+          || parsed.chiefImagePoint === "defocus-zero-reference-point"
+          || parsed.chiefImagePoint === "weighted-tan-sag-focus-point"
+          || parsed.chiefImagePoint === "per-wavelength-best-focus-point"
+          || parsed.chiefImagePoint === "target-surface-center"
+          ? parsed.chiefImagePoint
+          : defaults.chiefImagePoint,
+      };
+    }
+  } catch (_) {
+    // Ignore unavailable or malformed settings and use defaults.
+  }
+  return defaults;
+}
+
+export function readConfiguredOpdChiefRayMode(): OpdChiefRayMode {
+  try {
+    const g = (typeof globalThis !== "undefined") ? (globalThis as any) : null;
+    const direct = sanitizeOpdChiefRayMode(g?.__COOPT_OPD_CHIEF_RAY_MODE ?? g?.COOPT_OPD_CHIEF_RAY_MODE);
+    if (direct !== "stop-center" || g?.__COOPT_OPD_CHIEF_RAY_MODE || g?.COOPT_OPD_CHIEF_RAY_MODE) return direct;
+    const opener = g?.opener;
+    const openerValue = opener?.__COOPT_OPD_CHIEF_RAY_MODE ?? opener?.COOPT_OPD_CHIEF_RAY_MODE;
+    if (openerValue !== undefined && openerValue !== null && String(openerValue).trim()) {
+      return sanitizeOpdChiefRayMode(openerValue);
+    }
+  } catch (_) {
+    // Ignore cross-window access failures and use local storage/default below.
+  }
+  try {
+    const stored = localStorage.getItem("coopt.opd.chiefRayMode");
+    if (stored) return sanitizeOpdChiefRayMode(stored);
+  } catch (_) {
+    // Ignore unavailable storage.
+  }
+  return "stop-center";
+}
+
+export function readConfiguredOpdPupilNormalizationMode(): OpdPupilNormalizationMode {
+  try {
+    const g = (typeof globalThis !== "undefined") ? (globalThis as any) : null;
+    const direct = sanitizeOpdPupilNormalizationMode(
+      g?.__COOPT_OPD_PUPIL_NORMALIZATION_MODE ?? g?.COOPT_OPD_PUPIL_NORMALIZATION_MODE,
+    );
+    if (direct !== "fixed-entrance-pupil" || g?.__COOPT_OPD_PUPIL_NORMALIZATION_MODE || g?.COOPT_OPD_PUPIL_NORMALIZATION_MODE) return direct;
+    const openerValue = g?.opener?.__COOPT_OPD_PUPIL_NORMALIZATION_MODE ?? g?.opener?.COOPT_OPD_PUPIL_NORMALIZATION_MODE;
+    if (openerValue !== undefined && openerValue !== null && String(openerValue).trim()) {
+      return sanitizeOpdPupilNormalizationMode(openerValue);
+    }
+  } catch (_) {
+    // Ignore cross-window access failures and use local storage/default below.
+  }
+  try {
+    const stored = localStorage.getItem("coopt.opd.pupilNormalizationMode");
+    if (stored) return sanitizeOpdPupilNormalizationMode(stored);
+  } catch (_) {
+    // Ignore unavailable storage.
+  }
+  return "fixed-entrance-pupil";
 }
 
 export function readConfiguredOpdReferenceMode(): OpdReferenceMode {
@@ -1537,8 +1680,11 @@ function applyOpdDisplayModeGridNativeLike(
   const w = Array.isArray(rawGrid[0]) ? rawGrid[0].length : 0;
   if (w <= 0) return rawGrid.map((row) => row.slice());
 
-  const removeDefocus = m === "pistontiltdefocusremoved";
-  const basisDim = removeDefocus ? 4 : 3;
+  const removeTilt = m === "pistontiltremoved" || m === "pistontiltdefocusremoved";
+  const removeDefocus = m === "pistondefocusremoved" || m === "pistontiltdefocusremoved";
+  const removePiston = m === "pistonremoved" || removeTilt || removeDefocus;
+  if (!removePiston) return rawGrid.map((row) => row.slice());
+  const basisDim = removeTilt && removeDefocus ? 4 : (removeTilt || removeDefocus ? 3 : 1);
 
   let pupilRadius = 0;
   for (let iy = 0; iy < h; iy++) {
@@ -1574,9 +1720,13 @@ function applyOpdDisplayModeGridNativeLike(
       const rn2 = xn * xn + yn * yn;
       if (!Number.isFinite(rn2) || rn2 > 1.0 + 1e-9) continue;
 
-      const phi = removeDefocus
+      const phi = removeTilt && removeDefocus
         ? [1.0, xn, yn, 2.0 * rn2 - 1.0]
-        : [1.0, u, v, 0.0];
+        : removeTilt
+          ? [1.0, u, v, 0.0]
+          : removeDefocus
+            ? [1.0, 2.0 * rn2 - 1.0, 0.0, 0.0]
+            : [1.0, 0.0, 0.0, 0.0];
       for (let i = 0; i < basisDim; i++) {
         rhs[i] += phi[i] * z;
         for (let j = 0; j < basisDim; j++) {
@@ -1614,9 +1764,13 @@ function applyOpdDisplayModeGridNativeLike(
         continue;
       }
 
-      let fit = coeff[0] + coeff[1] * u + coeff[2] * v;
-      if (removeDefocus) {
+      let fit = coeff[0];
+      if (removeTilt && removeDefocus) {
         fit = coeff[0] + coeff[1] * xn + coeff[2] * yn + coeff[3] * (2.0 * rn2 - 1.0);
+      } else if (removeTilt) {
+        fit = coeff[0] + coeff[1] * u + coeff[2] * v;
+      } else if (removeDefocus) {
+        fit = coeff[0] + coeff[1] * (2.0 * rn2 - 1.0);
       }
       out[iy][ix] = z - fit;
     }
@@ -2180,6 +2334,13 @@ export async function runNativeSeidel(
       return 0.5876;
     })();
     const rowsForWasm = enrichRowsWithResolvedRindexForWasm(opticalSystemRows, wavelengthUm);
+    const referenceWavelengthMode = String(referenceSphereOptions.referenceSphereWavelengthMode || "primary-wavelength");
+    const referenceWavelength = referenceWavelengthMode === "primary-wavelength"
+      ? getPrimaryWavelengthFromSourceRows(sourceRows)
+      : wavelengthUm;
+    const referenceRowsForWasm = referenceWavelengthMode === "primary-wavelength"
+      ? enrichRowsWithResolvedRindexForWasm(opticalSystemRows, referenceWavelength)
+      : undefined;
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const runNativeWasm = (rust as any)?.run_native_seidel_wasm_json;
@@ -2193,6 +2354,7 @@ export async function runNativeSeidel(
 
     const wasmOutRaw = runNativeWasm(JSON.stringify({
       opticalSystemRows: rowsForWasm,
+      referenceOpticalSystemRows: referenceRowsForWasm,
       sourceRows,
       objectRows,
       afocal,
@@ -2561,24 +2723,102 @@ function isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows: any[] = []): bool
 
 function computeFiniteGridRmsNativeLike(grid: any): number {
   if (!Array.isArray(grid) || grid.length === 0) return Number.NaN;
-  let sum = 0;
-  let sumSq = 0;
-  let count = 0;
+  let directSumSq = 0;
+  let directCount = 0;
   for (const row of grid) {
     if (!Array.isArray(row)) continue;
     for (const value of row) {
+      if (value === null || value === undefined) continue;
       const numeric = Number(value);
-      if (numeric === 0) continue;
       if (!Number.isFinite(numeric)) continue;
-      sum += numeric;
-      sumSq += numeric * numeric;
+      directSumSq += numeric * numeric;
+      directCount += 1;
+    }
+  }
+  if (directCount === 0) return Number.NaN;
+  return Math.sqrt(Math.max(0, directSumSq / directCount));
+
+  /* istanbul ignore next: retained below only for historical fallback reference. */
+  const height = grid.length;
+  const width = grid.reduce((max: number, row: any) => Array.isArray(row) ? Math.max(max, row.length) : max, 0);
+  if (width === 0) return Number.NaN;
+  let count = 0;
+  let sumX = 0;
+  let sumY = 0;
+  let sumXX = 0;
+  let sumXY = 0;
+  let sumYY = 0;
+  let sumZ = 0;
+  let sumXZ = 0;
+  let sumYZ = 0;
+  let fallbackSum = 0;
+  let fallbackSumSq = 0;
+  const coordinate = (index: number, length: number) => length <= 1 ? 0 : -1 + (2 * index) / (length - 1);
+
+  for (let iy = 0; iy < height; iy += 1) {
+    const row = grid[iy];
+    if (!Array.isArray(row)) continue;
+    const y = coordinate(iy, height);
+    for (let ix = 0; ix < row.length; ix += 1) {
+      const value = Number(row[ix]);
+      if (!Number.isFinite(value)) continue;
+      const x = coordinate(ix, width);
       count += 1;
+      sumX += x;
+      sumY += y;
+      sumXX += x * x;
+      sumXY += x * y;
+      sumYY += y * y;
+      sumZ += value;
+      sumXZ += x * value;
+      sumYZ += y * value;
+      fallbackSum += value;
+      fallbackSumSq += value * value;
     }
   }
   if (count === 0) return Number.NaN;
-  const mean = sum / count;
-  const variance = Math.max(0, (sumSq / count) - (mean * mean));
-  return Math.sqrt(variance);
+
+  const matrix = [
+    [count, sumX, sumY, sumZ],
+    [sumX, sumXX, sumXY, sumXZ],
+    [sumY, sumXY, sumYY, sumYZ],
+  ];
+  for (let column = 0; column < 3; column += 1) {
+    let pivot = column;
+    for (let row = column + 1; row < 3; row += 1) {
+      if (Math.abs(matrix[row][column]) > Math.abs(matrix[pivot][column])) pivot = row;
+    }
+    if (Math.abs(matrix[pivot][column]) < 1e-18) {
+      const mean = fallbackSum / count;
+      return Math.sqrt(Math.max(0, fallbackSumSq / count - mean * mean));
+    }
+    if (pivot !== column) [matrix[column], matrix[pivot]] = [matrix[pivot], matrix[column]];
+    const divisor = matrix[column][column];
+    for (let index = column; index < 4; index += 1) matrix[column][index] /= divisor;
+    for (let row = 0; row < 3; row += 1) {
+      if (row === column) continue;
+      const factor = matrix[row][column];
+      for (let index = column; index < 4; index += 1) matrix[row][index] -= factor * matrix[column][index];
+    }
+  }
+
+  const piston = matrix[0][3];
+  const tiltX = matrix[1][3];
+  const tiltY = matrix[2][3];
+  let residualSumSq = 0;
+  for (let iy = 0; iy < height; iy += 1) {
+    const row = grid[iy];
+    if (!Array.isArray(row)) continue;
+    const y = coordinate(iy, height);
+    for (let ix = 0; ix < row.length; ix += 1) {
+      const value = Number(row[ix]);
+      if (!Number.isFinite(value)) continue;
+      const x = coordinate(ix, width);
+      const residual = value - (piston + tiltX * x + tiltY * y);
+      residualSumSq += residual * residual;
+    }
+  }
+  return Math.sqrt(Math.max(0, residualSumSq / count));
 }
 
 function parseThinLensFocalValueNativeLike(value: unknown): number {
@@ -2733,18 +2973,29 @@ function clampIdealParaxialNativeOpdRmsResponse(
   opticalSystemRows: any[] = [],
   response: NativeOpdRmsWavesResponse,
 ): NativeOpdRmsWavesResponse {
+  const displayRmsWaves = Number(response?.rmsWaves);
+  const referenceOpdRmsUm = Number(response?.referenceOpdRmsUm);
+  const wavelengthUm = Number(response?.wavelengthUm);
+  const namedResponse = {
+    ...response,
+    displayRmsWaves: Number.isFinite(displayRmsWaves) ? displayRmsWaves : undefined,
+    referenceRmsWaves: Number.isFinite(referenceOpdRmsUm) && Number.isFinite(wavelengthUm) && wavelengthUm > 0
+      ? referenceOpdRmsUm / wavelengthUm
+      : undefined,
+  } as NativeOpdRmsWavesResponse;
   if (!isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows) || !response || typeof response !== "object") {
-    return response;
+    return namedResponse;
   }
 
-  const displayRms = Number((response as any).rmsWaves);
+  const displayRms = Number((namedResponse as any).rmsWaves);
   if (!(Number.isFinite(displayRms) && displayRms <= 2e-2)) {
-    return response;
+    return namedResponse;
   }
 
   return {
-    ...response,
+    ...namedResponse,
     rmsWaves: 0,
+    displayRmsWaves: 0,
     message: String((response as any).message || "") + " [ideal-paraxial-display-normalized]",
   } as NativeOpdRmsWavesResponse;
 }
@@ -2775,6 +3026,7 @@ export async function runNativeOpdMap(
       ...response,
       opdReferenceWavelengthUm: referenceWavelengthUm,
       rawOpdGrid: scaleGrid(response.rawOpdGrid) as Array<Array<number | null>>,
+      unreferencedOpdGrid: scaleGrid(response.unreferencedOpdGrid),
       displayOpdGrid: scaleGrid(response.displayOpdGrid) as Array<Array<number | null>>,
       referenceSphereOpdGrid: scaleGrid(response.referenceSphereOpdGrid),
     };
@@ -2792,14 +3044,20 @@ export async function runNativeOpdMap(
   const requestedPupilSamplingMode = (payload?.pupilSamplingMode === "stop" || payload?.pupilSamplingMode === "entrance")
     ? payload.pupilSamplingMode
     : "stop";
-  if (!isTauriRuntime() || configuredReferenceMode === "exit-pupil" || requestedPupilSamplingMode === "entrance") {
+  const requestedChiefRayMode = sanitizeOpdChiefRayMode(payload?.chiefRayMode);
+  const pupilNormalizationMode = sanitizeOpdPupilNormalizationMode(payload?.pupilNormalizationMode);
+  const requestedExitPupilReferencePointMode = sanitizeOpdExitPupilReferencePointMode(
+    payload?.exitPupilReferencePointMode,
+  );
+  const referenceSphereOptions = payload?.referenceSphereOptions || readConfiguredOpdReferenceSphereOptions();
+  if (!isTauriRuntime() || configuredReferenceMode !== "exit-pupil" || requestedPupilSamplingMode === "entrance") {
     if (opticalSystemRows.length === 0) throw new Error("runNativeOpdMap(web): opticalSystemRows is empty");
 
     const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
     const inputObjectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
-    const objectRows = inputObjectRows;
+    let objectRows = inputObjectRows;
     const objectIndex = Number.isInteger(payload?.objectIndex) ? Math.max(0, Number(payload.objectIndex)) : 0;
-    const selectedObject = objectRows[objectIndex] || objectRows[0] || {};
+    let selectedObject = objectRows[objectIndex] || objectRows[0] || {};
     const wavelengthUm = (() => {
       const explicit = Number(payload?.wavelengthUm);
       if (Number.isFinite(explicit) && explicit > 0) return explicit;
@@ -2817,6 +3075,14 @@ export async function runNativeOpdMap(
       }
       return 0.5876;
     })();
+    objectRows = await normalizeTransverseObjectRowsForImageHeight(
+      opticalSystemRows,
+      sourceRows,
+      inputObjectRows,
+      wavelengthUm,
+      { preferParaxialImageHeight: false },
+    );
+    selectedObject = objectRows[objectIndex] || objectRows[0] || {};
     const objectType = String((selectedObject as any)?.position ?? (selectedObject as any)?.object ?? '').toLowerCase();
     const isAngle = objectType.includes("angle") || objectType === "point";
     const xVal = Number((selectedObject as any)?.xHeightAngle ?? (selectedObject as any)?.xFieldAngle ?? (selectedObject as any)?.xHeight ?? (selectedObject as any)?.x ?? 0) || 0;
@@ -2829,6 +3095,13 @@ export async function runNativeOpdMap(
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
 
     const rowsForWasm = enrichRowsWithResolvedRindexForWasm(opticalSystemRows, wavelengthUm);
+    const referenceWavelengthMode = String(referenceSphereOptions.referenceSphereWavelengthMode || "primary-wavelength");
+    const referenceWavelength = referenceWavelengthMode === "primary-wavelength"
+      ? getPrimaryWavelengthFromSourceRows(sourceRows)
+      : wavelengthUm;
+    const referenceRowsForWasm = referenceWavelengthMode === "primary-wavelength"
+      ? enrichRowsWithResolvedRindexForWasm(opticalSystemRows, referenceWavelength)
+      : undefined;
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const runNativeWasm = (rust as any)?.run_native_opd_map_wasm_json;
@@ -2842,6 +3115,7 @@ export async function runNativeOpdMap(
 
     const wasmOutRaw = runNativeWasm(JSON.stringify({
       opticalSystemRows: rowsForWasm,
+      referenceOpticalSystemRows: referenceRowsForWasm,
       sourceRows,
       objectRows,
       objectIndex,
@@ -2862,6 +3136,14 @@ export async function runNativeOpdMap(
         ? Number(payload.exitPupilPositionFromLastSurfaceMm)
         : undefined,
       pupilSamplingMode: requestedPupilSamplingMode,
+      chiefRayMode: requestedChiefRayMode,
+      referenceRayPupilCoordinate: payload?.referenceRayPupilCoordinate,
+      sampleRayLaunchOrigin: payload?.sampleRayLaunchOrigin,
+      preserveImageHeightChiefRay: payload?.preserveImageHeightChiefRay === true,
+      resolveImageHeightChiefRayInRuntime: payload?.resolveImageHeightChiefRayInRuntime === true,
+      pupilNormalizationMode,
+      exitPupilReferencePointMode: requestedExitPupilReferencePointMode,
+      referenceSphereOptions,
       referenceMode,
       referenceSphereGeometry: payload?.referenceSphereGeometry,
       opdDisplayMode,
@@ -2882,6 +3164,45 @@ export async function runNativeOpdMap(
     return scaleToReferenceWavelength(clampIdealParaxialNativeOpdResponse(opticalSystemRows, {
       backend: String(wasmOut?.backend || "web-rust-wasm-native-api"),
       chiefReferenceMode: String(wasmOut?.chiefReferenceMode || ""),
+      chiefRayLaunchOrigin: wasmOut?.chiefRayLaunchOrigin && typeof wasmOut.chiefRayLaunchOrigin === "object"
+        ? normalizeNativePoint(wasmOut.chiefRayLaunchOrigin)
+        : undefined,
+      imageHeightChiefRayApplied: wasmOut?.imageHeightChiefRayApplied === true,
+      imageHeightChiefRayPreserved: wasmOut?.imageHeightChiefRayPreserved === true,
+      imageHeightChiefRayRuntimeResolved: wasmOut?.imageHeightChiefRayRuntimeResolved === true,
+      imageHeightChiefDirection: wasmOut?.imageHeightChiefDirection && typeof wasmOut.imageHeightChiefDirection === "object"
+        ? normalizeNativePoint(wasmOut.imageHeightChiefDirection)
+        : undefined,
+      imageHeightRuntimeSolvedAngle: wasmOut?.imageHeightRuntimeSolvedAngle && typeof wasmOut.imageHeightRuntimeSolvedAngle === "object"
+        ? normalizeNativePoint(wasmOut.imageHeightRuntimeSolvedAngle)
+        : undefined,
+      imageHeightSolverHit: wasmOut?.imageHeightSolverHit && typeof wasmOut.imageHeightSolverHit === "object"
+        ? normalizeNativePoint(wasmOut.imageHeightSolverHit)
+        : undefined,
+      imageHeightSolverSurfaceIndex: Number.isInteger(Number(wasmOut?.imageHeightSolverSurfaceIndex))
+        ? Number(wasmOut.imageHeightSolverSurfaceIndex)
+        : undefined,
+      chiefStopPoint: wasmOut?.chiefStopPoint && typeof wasmOut.chiefStopPoint === "object"
+        ? normalizeNativePoint(wasmOut.chiefStopPoint)
+        : undefined,
+      chiefStopDirection: wasmOut?.chiefStopDirection && typeof wasmOut.chiefStopDirection === "object"
+        ? normalizeNativePoint(wasmOut.chiefStopDirection)
+        : undefined,
+      chiefSurfaceTrace: Array.isArray(wasmOut?.chiefSurfaceTrace)
+        ? wasmOut.chiefSurfaceTrace.map((entry: any) => ({
+            surfaceIndex: Number(entry?.surfaceIndex),
+            point: normalizeNativePoint(entry?.point),
+            direction: normalizeNativePoint(entry?.direction),
+          })).filter((entry: any) => Number.isInteger(entry.surfaceIndex)
+            && Number.isFinite(entry.point?.x) && Number.isFinite(entry.point?.y) && Number.isFinite(entry.point?.z)
+            && Number.isFinite(entry.direction?.x) && Number.isFinite(entry.direction?.y) && Number.isFinite(entry.direction?.z))
+        : undefined,
+      sampleRayLaunchOriginApplied: wasmOut?.sampleRayLaunchOriginApplied === true,
+      transmittedPupilCenterUv: Array.isArray(wasmOut?.transmittedPupilCenterUv)
+        && Number.isFinite(Number(wasmOut.transmittedPupilCenterUv[0]))
+        && Number.isFinite(Number(wasmOut.transmittedPupilCenterUv[1]))
+        ? { u: Number(wasmOut.transmittedPupilCenterUv[0]), v: Number(wasmOut.transmittedPupilCenterUv[1]) }
+        : undefined,
       targetSurface: Number.isFinite(Number(wasmOut?.targetSurface)) ? Number(wasmOut.targetSurface) : targetSurface,
       stopSurface: Number.isFinite(Number(wasmOut?.stopSurface)) ? Number(wasmOut.stopSurface) : 0,
       requestedObjectIndex: objectIndex,
@@ -2889,7 +3210,26 @@ export async function runNativeOpdMap(
       usedObjectPosition: String(wasmOut?.usedObjectPosition || (isAngle ? "angle" : "height")),
       usedObjectX: Number.isFinite(Number(wasmOut?.usedObjectX)) ? Number(wasmOut.usedObjectX) : xVal,
       usedObjectY: Number.isFinite(Number(wasmOut?.usedObjectY)) ? Number(wasmOut.usedObjectY) : yVal,
+      imageHeightTargetX: Number.isFinite(Number(selectedObject?.__cooptImageHeightTarget?.x))
+        ? Number(selectedObject.__cooptImageHeightTarget.x)
+        : undefined,
+      imageHeightTargetY: Number.isFinite(Number(selectedObject?.__cooptImageHeightTarget?.y))
+        ? Number(selectedObject.__cooptImageHeightTarget.y)
+        : undefined,
+      chiefImageLocalPoint: wasmOut?.chiefImageLocalPoint && typeof wasmOut.chiefImageLocalPoint === "object"
+        ? normalizeNativePoint(wasmOut.chiefImageLocalPoint)
+        : undefined,
       wavelengthUm,
+      referenceSphereWavelengthUsed: Number.isFinite(Number(wasmOut?.referenceSphereWavelengthUsed))
+        ? Number(wasmOut.referenceSphereWavelengthUsed)
+        : undefined,
+      primaryReferenceGeometryApplied: wasmOut?.primaryReferenceGeometryApplied === true,
+      currentReferenceSphereRadiusMm: wasmOut?.currentReferenceSphereRadiusMm != null && Number.isFinite(Number(wasmOut.currentReferenceSphereRadiusMm))
+        ? Number(wasmOut.currentReferenceSphereRadiusMm)
+        : undefined,
+      primaryReferenceSphereRadiusMm: wasmOut?.primaryReferenceSphereRadiusMm != null && Number.isFinite(Number(wasmOut.primaryReferenceSphereRadiusMm))
+        ? Number(wasmOut.primaryReferenceSphereRadiusMm)
+        : undefined,
       opdReferenceWavelengthUm: Number.isFinite(Number(wasmOut?.opdReferenceWavelengthUm))
         ? Number(wasmOut.opdReferenceWavelengthUm)
         : undefined,
@@ -2897,11 +3237,23 @@ export async function runNativeOpdMap(
       effectivePupilRadiusMm: Number.isFinite(Number(wasmOut?.effectivePupilRadiusMm))
         ? Number(wasmOut.effectivePupilRadiusMm)
         : undefined,
+      pupilMaskGrid: Array.isArray(wasmOut?.pupilMaskGrid)
+        ? wasmOut.pupilMaskGrid
+        : undefined,
+      displayFit: wasmOut?.displayFit && typeof wasmOut.displayFit === "object"
+        ? wasmOut.displayFit
+        : undefined,
+      wavefrontFit: wasmOut?.wavefrontFit && typeof wasmOut.wavefrontFit === "object"
+        ? wasmOut.wavefrontFit
+        : undefined,
       chiefOplUm: Number.isFinite(Number(wasmOut?.chiefOplUm))
         ? Number(wasmOut.chiefOplUm)
         : undefined,
       chiefReferenceSphereOpdUm: Number.isFinite(Number(wasmOut?.chiefReferenceSphereOpdUm))
         ? Number(wasmOut.chiefReferenceSphereOpdUm)
+        : undefined,
+      opdTermSamples: Array.isArray(wasmOut?.opdTermSamples)
+        ? wasmOut.opdTermSamples
         : undefined,
       referenceSphereCenter: wasmOut?.referenceSphereCenter && typeof wasmOut.referenceSphereCenter === "object"
         ? normalizeNativePoint(wasmOut.referenceSphereCenter)
@@ -2912,6 +3264,33 @@ export async function runNativeOpdMap(
       referenceSphereDirection: wasmOut?.referenceSphereDirection && typeof wasmOut.referenceSphereDirection === "object"
         ? normalizeNativePoint(wasmOut.referenceSphereDirection)
         : undefined,
+      chiefImagePoint: wasmOut?.chiefImagePoint && typeof wasmOut.chiefImagePoint === "object"
+        ? normalizeNativePoint(wasmOut.chiefImagePoint)
+        : undefined,
+      paraxialImagePoint: wasmOut?.paraxialImagePoint && typeof wasmOut.paraxialImagePoint === "object"
+        ? normalizeNativePoint(wasmOut.paraxialImagePoint)
+        : undefined,
+      sagittalBestFocusPoint: wasmOut?.sagittalBestFocusPoint && typeof wasmOut.sagittalBestFocusPoint === "object"
+        ? normalizeNativePoint(wasmOut.sagittalBestFocusPoint)
+        : undefined,
+      tangentialBestFocusPoint: wasmOut?.tangentialBestFocusPoint && typeof wasmOut.tangentialBestFocusPoint === "object"
+        ? normalizeNativePoint(wasmOut.tangentialBestFocusPoint)
+        : undefined,
+      rmsBestFocusPoint: wasmOut?.rmsBestFocusPoint && typeof wasmOut.rmsBestFocusPoint === "object"
+        ? normalizeNativePoint(wasmOut.rmsBestFocusPoint)
+        : undefined,
+      rmsBestFocusDiagnostics: wasmOut?.rmsBestFocusDiagnostics && typeof wasmOut.rmsBestFocusDiagnostics === "object"
+        ? wasmOut.rmsBestFocusDiagnostics
+        : undefined,
+      selectedImagePoint: wasmOut?.selectedImagePoint && typeof wasmOut.selectedImagePoint === "object"
+        ? normalizeNativePoint(wasmOut.selectedImagePoint)
+        : undefined,
+      selectedImagePointMode: typeof wasmOut?.selectedImagePointMode === "string"
+        ? wasmOut.selectedImagePointMode
+        : undefined,
+      exitPupilCenter: wasmOut?.exitPupilCenter && typeof wasmOut.exitPupilCenter === "object"
+        ? normalizeNativePoint(wasmOut.exitPupilCenter)
+        : undefined,
       entrancePupilCoordinateXGrid: Array.isArray(wasmOut?.entrancePupilCoordinateXGrid)
         ? wasmOut.entrancePupilCoordinateXGrid
         : undefined,
@@ -2920,9 +3299,80 @@ export async function runNativeOpdMap(
         : undefined,
       sampleCount: Number.isFinite(Number(wasmOut?.sampleCount)) ? Number(wasmOut.sampleCount) : 0,
       hitCount: Number.isFinite(Number(wasmOut?.hitCount)) ? Number(wasmOut.hitCount) : 0,
+      referenceCorrectedSampleCount: Number.isFinite(Number(wasmOut?.referenceCorrectedSampleCount))
+        ? Number(wasmOut.referenceCorrectedSampleCount)
+        : undefined,
+      referenceOpdRmsUm: Number.isFinite(Number(wasmOut?.referenceOpdRmsUm))
+        ? Number(wasmOut.referenceOpdRmsUm)
+        : undefined,
+      trackedOpdRmsUm: Number.isFinite(Number(wasmOut?.trackedOpdRmsUm))
+        ? Number(wasmOut.trackedOpdRmsUm)
+        : undefined,
+      beforeTargetTrackedOpdRmsUm: Number.isFinite(Number(wasmOut?.beforeTargetTrackedOpdRmsUm))
+        ? Number(wasmOut.beforeTargetTrackedOpdRmsUm)
+        : undefined,
+      targetSegmentOpdRmsUm: Number.isFinite(Number(wasmOut?.targetSegmentOpdRmsUm))
+        ? Number(wasmOut.targetSegmentOpdRmsUm)
+        : undefined,
+      spherePathDeltaRmsUm: Number.isFinite(Number(wasmOut?.spherePathDeltaRmsUm))
+        ? Number(wasmOut.spherePathDeltaRmsUm)
+        : undefined,
+      spherePathOptimalScale: Number.isFinite(Number(wasmOut?.spherePathOptimalScale))
+        ? Number(wasmOut.spherePathOptimalScale)
+        : undefined,
+      spherePathOptimalRmsUm: Number.isFinite(Number(wasmOut?.spherePathOptimalRmsUm))
+        ? Number(wasmOut.spherePathOptimalRmsUm)
+        : undefined,
+      currentReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.currentReferenceOpdRmsUm))
+        ? Number(wasmOut.currentReferenceOpdRmsUm)
+        : undefined,
+      alternateSphereIntersection: wasmOut?.alternateSphereIntersection === "opposite-side"
+        ? "opposite-side"
+        : wasmOut?.alternateSphereIntersection === "exit-pupil-side"
+          ? "exit-pupil-side"
+          : undefined,
+      alternateReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.alternateReferenceOpdRmsUm))
+        ? Number(wasmOut.alternateReferenceOpdRmsUm)
+        : undefined,
+      targetOriginReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.targetOriginReferenceOpdRmsUm))
+        ? Number(wasmOut.targetOriginReferenceOpdRmsUm)
+        : undefined,
+      imageSpaceN: Number.isFinite(Number(wasmOut?.imageSpaceN))
+        ? Number(wasmOut.imageSpaceN)
+        : undefined,
+      airReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.airReferenceOpdRmsUm))
+        ? Number(wasmOut.airReferenceOpdRmsUm)
+        : undefined,
+      alternateOpticalPathSign: wasmOut?.alternateOpticalPathSign === "negative"
+        ? "negative"
+        : wasmOut?.alternateOpticalPathSign === "positive"
+          ? "positive"
+          : undefined,
+      alternateSignReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.alternateSignReferenceOpdRmsUm))
+        ? Number(wasmOut.alternateSignReferenceOpdRmsUm)
+        : undefined,
+      axisReferenceSphereRmsUm: Number.isFinite(Number(wasmOut?.axisReferenceSphereRmsUm))
+        ? Number(wasmOut.axisReferenceSphereRmsUm)
+        : undefined,
+      sphereRadiusOptimalScale: Number.isFinite(Number(wasmOut?.sphereRadiusOptimalScale))
+        ? Number(wasmOut.sphereRadiusOptimalScale)
+        : undefined,
+      sphereRadiusOptimalRmsUm: Number.isFinite(Number(wasmOut?.sphereRadiusOptimalRmsUm))
+        ? Number(wasmOut.sphereRadiusOptimalRmsUm)
+        : undefined,
       pupilSamplingMode: String(wasmOut?.pupilSamplingMode || requestedPupilSamplingMode),
+      chiefRayMode: sanitizeOpdChiefRayMode(wasmOut?.chiefRayMode || requestedChiefRayMode),
+      pupilNormalizationMode: sanitizeOpdPupilNormalizationMode(
+        wasmOut?.pupilNormalizationMode || pupilNormalizationMode,
+      ),
+      exitPupilReferencePointMode: sanitizeOpdExitPupilReferencePointMode(
+        wasmOut?.exitPupilReferencePointMode || requestedExitPupilReferencePointMode,
+      ),
       referenceMode: sanitizeOpdReferenceMode(wasmOut?.referenceMode || referenceMode),
       rawOpdGrid,
+      unreferencedOpdGrid: Array.isArray(wasmOut?.unreferencedOpdGrid)
+        ? wasmOut.unreferencedOpdGrid
+        : undefined,
       displayOpdGrid,
       referenceSphereOpdGrid,
       message: String(wasmOut?.message || "Computed via Rust-WASM native OPD API"),
@@ -2952,17 +3402,22 @@ export async function runNativeOpdRmsWaves(
     const displayGrid = Array.isArray(mapResponse.displayOpdGrid)
       ? mapResponse.displayOpdGrid
       : mapResponse.rawOpdGrid;
-    const rmsWaves = computeFiniteGridRmsNativeLike(displayGrid);
+    const rmsGrid = String(normalizedPayload.opdDisplayMode || "raw").trim().toLowerCase() === "raw"
+      ? mapResponse.rawOpdGrid
+      : displayGrid;
+    const rmsWaves = computeFiniteGridRmsNativeLike(rmsGrid);
     let sampleCount = 0;
-    for (const row of displayGrid || []) {
+    for (const row of rmsGrid || []) {
       if (!Array.isArray(row)) continue;
       for (const value of row) {
+        if (value === null || value === undefined) continue;
         if (Number.isFinite(Number(value))) sampleCount += 1;
       }
     }
     return {
       backend: `${mapResponse.backend}:rms`,
       chiefReferenceMode: mapResponse.chiefReferenceMode,
+      transmittedPupilCenterUv: mapResponse.transmittedPupilCenterUv,
       targetSurface: mapResponse.targetSurface,
       stopSurface: mapResponse.stopSurface,
       requestedObjectIndex: mapResponse.requestedObjectIndex,
@@ -2971,9 +3426,53 @@ export async function runNativeOpdRmsWaves(
       usedObjectX: mapResponse.usedObjectX,
       usedObjectY: mapResponse.usedObjectY,
       wavelengthUm: mapResponse.wavelengthUm,
+      chiefOplUm: mapResponse.chiefOplUm,
+      chiefReferenceSphereOpdUm: mapResponse.chiefReferenceSphereOpdUm,
+      referenceSphereWavelengthUsed: mapResponse.referenceSphereWavelengthUsed,
+      primaryReferenceGeometryApplied: mapResponse.primaryReferenceGeometryApplied,
+      currentReferenceSphereRadiusMm: mapResponse.currentReferenceSphereRadiusMm,
+      primaryReferenceSphereRadiusMm: mapResponse.primaryReferenceSphereRadiusMm,
       gridSize: mapResponse.gridSize,
+      effectivePupilRadiusMm: mapResponse.effectivePupilRadiusMm,
+      pupilMaskGrid: mapResponse.pupilMaskGrid,
+      unreferencedOpdGrid: mapResponse.unreferencedOpdGrid,
+      opdTermSamples: mapResponse.opdTermSamples,
       sampleCount,
       hitCount: mapResponse.hitCount,
+      referenceCorrectedSampleCount: mapResponse.referenceCorrectedSampleCount,
+      referenceOpdRmsUm: mapResponse.referenceOpdRmsUm,
+      trackedOpdRmsUm: mapResponse.trackedOpdRmsUm,
+      beforeTargetTrackedOpdRmsUm: mapResponse.beforeTargetTrackedOpdRmsUm,
+      targetSegmentOpdRmsUm: mapResponse.targetSegmentOpdRmsUm,
+      spherePathDeltaRmsUm: mapResponse.spherePathDeltaRmsUm,
+      spherePathOptimalScale: mapResponse.spherePathOptimalScale,
+      spherePathOptimalRmsUm: mapResponse.spherePathOptimalRmsUm,
+      currentReferenceOpdRmsUm: mapResponse.currentReferenceOpdRmsUm,
+      alternateSphereIntersection: mapResponse.alternateSphereIntersection,
+      alternateReferenceOpdRmsUm: mapResponse.alternateReferenceOpdRmsUm,
+      targetOriginReferenceOpdRmsUm: mapResponse.targetOriginReferenceOpdRmsUm,
+      imageSpaceN: mapResponse.imageSpaceN,
+      airReferenceOpdRmsUm: mapResponse.airReferenceOpdRmsUm,
+      alternateOpticalPathSign: mapResponse.alternateOpticalPathSign,
+      alternateSignReferenceOpdRmsUm: mapResponse.alternateSignReferenceOpdRmsUm,
+      axisReferenceSphereRmsUm: mapResponse.axisReferenceSphereRmsUm,
+      sphereRadiusOptimalScale: mapResponse.sphereRadiusOptimalScale,
+      sphereRadiusOptimalRmsUm: mapResponse.sphereRadiusOptimalRmsUm,
+      referenceSphereCenter: mapResponse.referenceSphereCenter,
+      referenceSphereRadiusMm: mapResponse.referenceSphereRadiusMm,
+      referenceSphereDirection: mapResponse.referenceSphereDirection,
+      chiefImagePoint: mapResponse.chiefImagePoint,
+      paraxialImagePoint: mapResponse.paraxialImagePoint,
+      sagittalBestFocusPoint: mapResponse.sagittalBestFocusPoint,
+      tangentialBestFocusPoint: mapResponse.tangentialBestFocusPoint,
+      rmsBestFocusPoint: mapResponse.rmsBestFocusPoint,
+      rmsBestFocusDiagnostics: mapResponse.rmsBestFocusDiagnostics,
+      selectedImagePoint: mapResponse.selectedImagePoint,
+      selectedImagePointMode: mapResponse.selectedImagePointMode,
+      exitPupilCenter: mapResponse.exitPupilCenter,
+      displayFit: mapResponse.displayFit,
+      wavefrontFit: mapResponse.wavefrontFit,
+      referenceSphereOpdGrid: mapResponse.referenceSphereOpdGrid,
       pupilSamplingMode: mapResponse.pupilSamplingMode,
       referenceMode: mapResponse.referenceMode,
       rmsWaves,
@@ -3023,6 +3522,13 @@ export async function runNativeOpdRmsWaves(
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
 
     const rowsForWasm = enrichRowsWithResolvedRindexForWasm(opticalSystemRows, wavelengthUm);
+    const referenceWavelengthMode = String(payload?.referenceSphereOptions?.referenceSphereWavelengthMode || "primary-wavelength");
+    const referenceWavelength = referenceWavelengthMode === "primary-wavelength"
+      ? getPrimaryWavelengthFromSourceRows(sourceRows)
+      : wavelengthUm;
+    const referenceRowsForWasm = referenceWavelengthMode === "primary-wavelength"
+      ? enrichRowsWithResolvedRindexForWasm(opticalSystemRows, referenceWavelength)
+      : undefined;
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const runNativeWasm = (rust as any)?.run_native_opd_rms_waves_wasm_json;
@@ -3036,6 +3542,7 @@ export async function runNativeOpdRmsWaves(
 
     const wasmOutRaw = runNativeWasm(JSON.stringify({
       opticalSystemRows: rowsForWasm,
+      referenceOpticalSystemRows: referenceRowsForWasm,
       sourceRows,
       objectRows,
       objectIndex,
@@ -3043,13 +3550,29 @@ export async function runNativeOpdRmsWaves(
       gridSize,
       wavelengthUm,
       pupilSamplingMode: requestedPupilSamplingMode,
+      chiefRayMode: payload?.chiefRayMode,
+      referenceRayPupilCoordinate: payload?.referenceRayPupilCoordinate,
+      sampleRayLaunchOrigin: payload?.sampleRayLaunchOrigin,
+      pupilNormalizationMode: payload?.pupilNormalizationMode,
+      exitPupilReferencePointMode: payload?.exitPupilReferencePointMode,
+      referenceSphereOptions: payload?.referenceSphereOptions,
       referenceMode,
+      referenceSphereGeometry: payload?.referenceSphereGeometry,
       opdDisplayMode,
     }));
     const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
     return clampIdealParaxialNativeOpdRmsResponse(opticalSystemRows, {
       backend: String(wasmOut?.backend || "web-rust-wasm-native-api"),
       chiefReferenceMode: String(wasmOut?.chiefReferenceMode || ""),
+      chiefRayLaunchOrigin: wasmOut?.chiefRayLaunchOrigin && typeof wasmOut.chiefRayLaunchOrigin === "object"
+        ? normalizeNativePoint(wasmOut.chiefRayLaunchOrigin)
+        : undefined,
+      sampleRayLaunchOriginApplied: wasmOut?.sampleRayLaunchOriginApplied === true,
+      transmittedPupilCenterUv: Array.isArray(wasmOut?.transmittedPupilCenterUv)
+        && Number.isFinite(Number(wasmOut.transmittedPupilCenterUv[0]))
+        && Number.isFinite(Number(wasmOut.transmittedPupilCenterUv[1]))
+        ? { u: Number(wasmOut.transmittedPupilCenterUv[0]), v: Number(wasmOut.transmittedPupilCenterUv[1]) }
+        : undefined,
       targetSurface: Number.isFinite(Number(wasmOut?.targetSurface)) ? Number(wasmOut.targetSurface) : targetSurface,
       stopSurface: Number.isFinite(Number(wasmOut?.stopSurface)) ? Number(wasmOut.stopSurface) : 0,
       requestedObjectIndex: objectIndex,
@@ -3057,12 +3580,134 @@ export async function runNativeOpdRmsWaves(
       usedObjectPosition: String(wasmOut?.usedObjectPosition || (isAngle ? "angle" : "height")),
       usedObjectX: Number.isFinite(Number(wasmOut?.usedObjectX)) ? Number(wasmOut.usedObjectX) : xVal,
       usedObjectY: Number.isFinite(Number(wasmOut?.usedObjectY)) ? Number(wasmOut.usedObjectY) : yVal,
+      imageHeightTargetX: Number.isFinite(Number(requestedObject?.__cooptImageHeightTarget?.x))
+        ? Number(requestedObject.__cooptImageHeightTarget.x)
+        : undefined,
+      imageHeightTargetY: Number.isFinite(Number(requestedObject?.__cooptImageHeightTarget?.y))
+        ? Number(requestedObject.__cooptImageHeightTarget.y)
+        : undefined,
       wavelengthUm,
+      chiefOplUm: Number.isFinite(Number(wasmOut?.chiefOplUm))
+        ? Number(wasmOut.chiefOplUm)
+        : undefined,
+      chiefReferenceSphereOpdUm: Number.isFinite(Number(wasmOut?.chiefReferenceSphereOpdUm))
+        ? Number(wasmOut.chiefReferenceSphereOpdUm)
+        : undefined,
+      referenceSphereWavelengthUsed: Number.isFinite(Number(wasmOut?.referenceSphereWavelengthUsed))
+        ? Number(wasmOut.referenceSphereWavelengthUsed)
+        : undefined,
+      primaryReferenceGeometryApplied: wasmOut?.primaryReferenceGeometryApplied === true,
+      currentReferenceSphereRadiusMm: wasmOut?.currentReferenceSphereRadiusMm != null && Number.isFinite(Number(wasmOut.currentReferenceSphereRadiusMm))
+        ? Number(wasmOut.currentReferenceSphereRadiusMm)
+        : undefined,
+      primaryReferenceSphereRadiusMm: wasmOut?.primaryReferenceSphereRadiusMm != null && Number.isFinite(Number(wasmOut.primaryReferenceSphereRadiusMm))
+        ? Number(wasmOut.primaryReferenceSphereRadiusMm)
+        : undefined,
       gridSize: Number.isFinite(Number(wasmOut?.gridSize)) ? Number(wasmOut.gridSize) : gridSize,
+      effectivePupilRadiusMm: Number.isFinite(Number(wasmOut?.effectivePupilRadiusMm))
+        ? Number(wasmOut.effectivePupilRadiusMm)
+        : undefined,
+      pupilMaskGrid: Array.isArray(wasmOut?.pupilMaskGrid)
+        ? wasmOut.pupilMaskGrid
+        : undefined,
+      unreferencedOpdGrid: Array.isArray(wasmOut?.unreferencedOpdGrid)
+        ? wasmOut.unreferencedOpdGrid
+        : undefined,
       sampleCount: Number.isFinite(Number(wasmOut?.sampleCount)) ? Number(wasmOut.sampleCount) : 0,
       hitCount: Number.isFinite(Number(wasmOut?.hitCount)) ? Number(wasmOut.hitCount) : 0,
+      referenceCorrectedSampleCount: Number.isFinite(Number(wasmOut?.referenceCorrectedSampleCount))
+        ? Number(wasmOut.referenceCorrectedSampleCount)
+        : undefined,
+      referenceOpdRmsUm: Number.isFinite(Number(wasmOut?.referenceOpdRmsUm))
+        ? Number(wasmOut.referenceOpdRmsUm)
+        : undefined,
+      trackedOpdRmsUm: Number.isFinite(Number(wasmOut?.trackedOpdRmsUm))
+        ? Number(wasmOut.trackedOpdRmsUm)
+        : undefined,
+      beforeTargetTrackedOpdRmsUm: Number.isFinite(Number(wasmOut?.beforeTargetTrackedOpdRmsUm))
+        ? Number(wasmOut.beforeTargetTrackedOpdRmsUm)
+        : undefined,
+      targetSegmentOpdRmsUm: Number.isFinite(Number(wasmOut?.targetSegmentOpdRmsUm))
+        ? Number(wasmOut.targetSegmentOpdRmsUm)
+        : undefined,
+      spherePathDeltaRmsUm: Number.isFinite(Number(wasmOut?.spherePathDeltaRmsUm))
+        ? Number(wasmOut.spherePathDeltaRmsUm)
+        : undefined,
+      spherePathOptimalScale: Number.isFinite(Number(wasmOut?.spherePathOptimalScale))
+        ? Number(wasmOut.spherePathOptimalScale)
+        : undefined,
+      spherePathOptimalRmsUm: Number.isFinite(Number(wasmOut?.spherePathOptimalRmsUm))
+        ? Number(wasmOut.spherePathOptimalRmsUm)
+        : undefined,
+      currentReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.currentReferenceOpdRmsUm))
+        ? Number(wasmOut.currentReferenceOpdRmsUm)
+        : undefined,
+      alternateSphereIntersection: wasmOut?.alternateSphereIntersection === "opposite-side"
+        ? "opposite-side"
+        : wasmOut?.alternateSphereIntersection === "exit-pupil-side"
+          ? "exit-pupil-side"
+          : undefined,
+      alternateReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.alternateReferenceOpdRmsUm))
+        ? Number(wasmOut.alternateReferenceOpdRmsUm)
+        : undefined,
+      targetOriginReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.targetOriginReferenceOpdRmsUm))
+        ? Number(wasmOut.targetOriginReferenceOpdRmsUm)
+        : undefined,
+      imageSpaceN: Number.isFinite(Number(wasmOut?.imageSpaceN))
+        ? Number(wasmOut.imageSpaceN)
+        : undefined,
+      airReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.airReferenceOpdRmsUm))
+        ? Number(wasmOut.airReferenceOpdRmsUm)
+        : undefined,
+      alternateOpticalPathSign: wasmOut?.alternateOpticalPathSign === "negative"
+        ? "negative"
+        : wasmOut?.alternateOpticalPathSign === "positive"
+          ? "positive"
+          : undefined,
+      alternateSignReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.alternateSignReferenceOpdRmsUm))
+        ? Number(wasmOut.alternateSignReferenceOpdRmsUm)
+        : undefined,
+      axisReferenceSphereRmsUm: Number.isFinite(Number(wasmOut?.axisReferenceSphereRmsUm))
+        ? Number(wasmOut.axisReferenceSphereRmsUm)
+        : undefined,
+      sphereRadiusOptimalScale: Number.isFinite(Number(wasmOut?.sphereRadiusOptimalScale))
+        ? Number(wasmOut.sphereRadiusOptimalScale)
+        : undefined,
+      sphereRadiusOptimalRmsUm: Number.isFinite(Number(wasmOut?.sphereRadiusOptimalRmsUm))
+        ? Number(wasmOut.sphereRadiusOptimalRmsUm)
+        : undefined,
       pupilSamplingMode: wasmOut?.pupilSamplingMode === "entrance" ? "entrance" : "stop",
       referenceMode: sanitizeOpdReferenceMode(wasmOut?.referenceMode || referenceMode),
+      referenceSphereCenter: wasmOut?.referenceSphereCenter && typeof wasmOut.referenceSphereCenter === "object"
+        ? normalizeNativePoint(wasmOut.referenceSphereCenter)
+        : undefined,
+      referenceSphereRadiusMm: Number.isFinite(Number(wasmOut?.referenceSphereRadiusMm))
+        ? Number(wasmOut.referenceSphereRadiusMm)
+        : undefined,
+      chiefImagePoint: wasmOut?.chiefImagePoint && typeof wasmOut.chiefImagePoint === "object"
+        ? normalizeNativePoint(wasmOut.chiefImagePoint)
+        : undefined,
+      paraxialImagePoint: wasmOut?.paraxialImagePoint && typeof wasmOut.paraxialImagePoint === "object"
+        ? normalizeNativePoint(wasmOut.paraxialImagePoint)
+        : undefined,
+      sagittalBestFocusPoint: wasmOut?.sagittalBestFocusPoint && typeof wasmOut.sagittalBestFocusPoint === "object"
+        ? normalizeNativePoint(wasmOut.sagittalBestFocusPoint)
+        : undefined,
+      tangentialBestFocusPoint: wasmOut?.tangentialBestFocusPoint && typeof wasmOut.tangentialBestFocusPoint === "object"
+        ? normalizeNativePoint(wasmOut.tangentialBestFocusPoint)
+        : undefined,
+      rmsBestFocusPoint: wasmOut?.rmsBestFocusPoint && typeof wasmOut.rmsBestFocusPoint === "object"
+        ? normalizeNativePoint(wasmOut.rmsBestFocusPoint)
+        : undefined,
+      rmsBestFocusDiagnostics: wasmOut?.rmsBestFocusDiagnostics && typeof wasmOut.rmsBestFocusDiagnostics === "object"
+        ? wasmOut.rmsBestFocusDiagnostics
+        : undefined,
+      selectedImagePoint: wasmOut?.selectedImagePoint && typeof wasmOut.selectedImagePoint === "object"
+        ? normalizeNativePoint(wasmOut.selectedImagePoint)
+        : undefined,
+      selectedImagePointMode: typeof wasmOut?.selectedImagePointMode === "string"
+        ? wasmOut.selectedImagePointMode
+        : undefined,
       rmsWaves: Number(wasmOut?.rmsWaves),
       message: String(wasmOut?.message || "Computed via Rust-WASM native OPD RMS API"),
     } as NativeOpdRmsWavesResponse);

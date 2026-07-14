@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use wasm_bindgen::prelude::*;
@@ -1467,93 +1469,18 @@ fn compute_finite_opd_grid_rms_waves(grid: &[Vec<Option<f64>>]) -> Option<f64> {
     if width == 0 {
         return None;
     }
-
-    let map_coord = |index: usize, len: usize| -> f64 {
-        if len <= 1 {
-            0.0
-        } else {
-            -1.0 + 2.0 * (index as f64) / ((len - 1) as f64)
-        }
-    };
-
     let mut count = 0usize;
-    let mut sum_x = 0.0_f64;
-    let mut sum_y = 0.0_f64;
-    let mut sum_xx = 0.0_f64;
-    let mut sum_xy = 0.0_f64;
-    let mut sum_yy = 0.0_f64;
-    let mut sum_z = 0.0_f64;
-    let mut sum_xz = 0.0_f64;
-    let mut sum_yz = 0.0_f64;
-    let mut fallback_sum = 0.0_f64;
-    let mut fallback_sum_sq = 0.0_f64;
-
-    for (iy, row) in grid.iter().enumerate() {
-        let y = map_coord(iy, height);
-        for (ix, value) in row.iter().enumerate() {
-            let Some(v) = *value else {
-                continue;
-            };
-            if !v.is_finite() {
-                continue;
-            }
-            let x = map_coord(ix, width);
-
+    let mut sum_sq = 0.0_f64;
+    for row in grid.iter() {
+        for value in row.iter() {
+            let Some(v) = *value else { continue; };
+            if !v.is_finite() { continue; }
             count += 1;
-            sum_x += x;
-            sum_y += y;
-            sum_xx += x * x;
-            sum_xy += x * y;
-            sum_yy += y * y;
-            sum_z += v;
-            sum_xz += x * v;
-            sum_yz += y * v;
-
-            fallback_sum += v;
-            fallback_sum_sq += v * v;
+            sum_sq += v * v;
         }
     }
-
-    if count == 0 {
-        return None;
-    }
-
-    if count >= 6 {
-        let system = [
-            [count as f64, sum_x, sum_y, sum_z],
-            [sum_x, sum_xx, sum_xy, sum_xz],
-            [sum_y, sum_xy, sum_yy, sum_yz],
-        ];
-        if let Some((a0, b0, c0)) = solve_augmented_3x3(system) {
-            let mut residual_count = 0usize;
-            let mut residual_sum_sq = 0.0_f64;
-            for (iy, row) in grid.iter().enumerate() {
-                let y = map_coord(iy, height);
-                for (ix, value) in row.iter().enumerate() {
-                    let Some(v) = *value else {
-                        continue;
-                    };
-                    if !v.is_finite() {
-                        continue;
-                    }
-                    let x = map_coord(ix, width);
-                    let residual = v - (a0 + b0 * x + c0 * y);
-                    if !residual.is_finite() {
-                        continue;
-                    }
-                    residual_sum_sq += residual * residual;
-                    residual_count += 1;
-                }
-            }
-            if residual_count > 0 {
-                return Some((residual_sum_sq / residual_count as f64).sqrt());
-            }
-        }
-    }
-
-    let mean = fallback_sum / count as f64;
-    let variance = ((fallback_sum_sq / count as f64) - (mean * mean)).max(0.0);
-    Some(variance.sqrt())
+    if count == 0 { return None; }
+    Some((sum_sq / count as f64).sqrt())
 }
 
 fn distance3(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -1586,6 +1513,8 @@ fn optical_path_to_reference_sphere(
     sphere_radius: f64,
     object_side_direction: [f64; 3],
     image_space_n: f64,
+    sphere_intersection: &str,
+    optical_path_sign: &str,
 ) -> Option<f64> {
     if (ray_state[0] - 1.0).abs() > f64::EPSILON
         || !ray_state[1].is_finite()
@@ -1613,7 +1542,11 @@ fn optical_path_to_reference_sphere(
     }
     let root = discriminant.sqrt();
     let mut selected_t = f64::NAN;
-    let mut selected_score = f64::NEG_INFINITY;
+    let mut selected_score = if sphere_intersection == "opposite-side" {
+        f64::INFINITY
+    } else {
+        f64::NEG_INFINITY
+    };
     for t in [-projection - root, -projection + root] {
         if !t.is_finite() || t < -1.0e-9 {
             continue;
@@ -1626,7 +1559,12 @@ fn optical_path_to_reference_sphere(
         let score = radial[0] * object_side_direction[0]
             + radial[1] * object_side_direction[1]
             + radial[2] * object_side_direction[2];
-        if score > selected_score {
+        let is_better = if sphere_intersection == "opposite-side" {
+            score < selected_score
+        } else {
+            score > selected_score
+        };
+        if is_better {
             selected_score = score;
             selected_t = t;
         }
@@ -1634,7 +1572,12 @@ fn optical_path_to_reference_sphere(
     if !selected_t.is_finite() {
         return None;
     }
-    let optical_path_um = ray_state[1] + selected_t * image_space_n * 1000.0;
+    let sphere_path_um = selected_t * image_space_n * 1000.0;
+    let optical_path_um = if optical_path_sign == "negative" {
+        ray_state[1] - sphere_path_um
+    } else {
+        ray_state[1] + sphere_path_um
+    };
     optical_path_um.is_finite().then_some(optical_path_um)
 }
 
@@ -1644,6 +1587,8 @@ struct NativeOpdMapWasmResponseForScalar {
     backend: String,
     #[serde(default)]
     chief_reference_mode: Option<String>,
+    #[serde(default)]
+    transmitted_pupil_center_uv: Option<[f64; 2]>,
     target_surface: usize,
     stop_surface: usize,
     #[serde(default)]
@@ -1656,9 +1601,49 @@ struct NativeOpdMapWasmResponseForScalar {
     grid_size: usize,
     sample_count: usize,
     hit_count: usize,
+    #[serde(default)]
+    reference_corrected_sample_count: Option<usize>,
+    #[serde(default)]
+    reference_opd_rms_um: Option<f64>,
+    #[serde(default)]
+    tracked_opd_rms_um: Option<f64>,
+    #[serde(default)]
+    before_target_tracked_opd_rms_um: Option<f64>,
+    #[serde(default)]
+    target_segment_opd_rms_um: Option<f64>,
+    #[serde(default)]
+    current_reference_opd_rms_um: Option<f64>,
+    #[serde(default)]
+    alternate_reference_opd_rms_um: Option<f64>,
+    #[serde(default)]
+    target_origin_reference_opd_rms_um: Option<f64>,
+    #[serde(default)]
+    air_reference_opd_rms_um: Option<f64>,
+    #[serde(default)]
+    alternate_sign_reference_opd_rms_um: Option<f64>,
+    #[serde(default)]
+    axis_reference_sphere_rms_um: Option<f64>,
     pupil_sampling_mode: String,
     #[serde(default)]
+    reference_sphere_center: Option<[f64; 3]>,
+    #[serde(default)]
+    reference_sphere_radius_mm: Option<f64>,
+    #[serde(default)]
+    reference_sphere_direction: Option<[f64; 3]>,
+    #[serde(default)]
+    exit_pupil_center: Option<[f64; 3]>,
+    #[serde(default)]
     reference_sphere_opd_grid: Option<Vec<Vec<Option<f64>>>>,
+    #[serde(default)]
+    unreferenced_opd_grid: Option<Vec<Vec<Option<f64>>>>,
+    #[serde(default)]
+    chief_ray_launch_origin: Option<[f64; 3]>,
+    #[serde(default)]
+    sample_ray_launch_origin_applied: Option<bool>,
+    #[serde(default)]
+    pupil_mask_grid: Option<Vec<Vec<Option<bool>>>>,
+    #[serde(default)]
+    display_fit: Option<Value>,
     display_opd_grid: Vec<Vec<Option<f64>>>,
     message: String,
 }
@@ -4595,64 +4580,125 @@ fn solve_linear(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     Some(b)
 }
 
-fn apply_display_mode_grid(raw: &[Vec<Option<f64>>], mode: &str) -> Vec<Vec<Option<f64>>> {
+fn apply_display_mode_grid(
+    raw: &[Vec<Option<f64>>],
+    entrance_x: &[Vec<Option<f64>>],
+    entrance_y: &[Vec<Option<f64>>],
+    pupil_mask: &[Vec<Option<bool>>],
+    mode: &str,
+) -> (Vec<Vec<Option<f64>>>, Value) {
     let n = raw.len();
     if n == 0 {
-        return Vec::new();
+        return (Vec::new(), Value::Null);
     }
-    let remove_defocus = mode.eq_ignore_ascii_case("pistonTiltDefocusRemoved");
-    let remove_plane = mode.eq_ignore_ascii_case("pistonTiltRemoved") || remove_defocus;
-    if !remove_plane {
-        return raw.to_vec();
+    let mode_text = mode.trim();
+    let scaled_defocus = mode_text
+        .strip_prefix("pistonDefocusScaled:")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 1.0));
+    let remove_tilt = mode.eq_ignore_ascii_case("pistonTiltRemoved")
+        || mode.eq_ignore_ascii_case("pistonTiltDefocusRemoved");
+    let remove_defocus = scaled_defocus.map(|value| value > 1e-12).unwrap_or(false)
+        || mode.eq_ignore_ascii_case("pistonDefocusRemoved")
+        || mode.eq_ignore_ascii_case("pistonTiltDefocusRemoved");
+    let defocus_scale = scaled_defocus.unwrap_or(1.0);
+    let remove_piston = scaled_defocus.is_some()
+        || mode.eq_ignore_ascii_case("pistonRemoved")
+        || remove_tilt
+        || remove_defocus;
+    if !remove_piston {
+        return (raw.to_vec(), Value::Null);
     }
 
-    let k = if remove_defocus { 4 } else { 3 };
-    let mut normal = vec![vec![0.0_f64; k]; k];
-    let mut rhs = vec![0.0_f64; k];
-    let mut count = 0usize;
-
+    let sample_coordinates = |iy: usize, ix: usize| {
+        let physical_x = entrance_x.get(iy).and_then(|row| row.get(ix)).and_then(|value| *value);
+        let physical_y = entrance_y.get(iy).and_then(|row| row.get(ix)).and_then(|value| *value);
+        match (physical_x, physical_y) {
+            (Some(x), Some(y)) if x.is_finite() && y.is_finite() => (x, y, true),
+            _ => {
+                let x = if n > 1 { (2.0 * ix as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
+                let y = if n > 1 { (2.0 * iy as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
+                (x, y, false)
+            },
+        }
+    };
+    let mut samples = Vec::<(usize, usize, f64, f64, f64, bool)>::new();
     for iy in 0..n {
         for ix in 0..n {
             let Some(z) = raw[iy][ix] else { continue; };
-            let x = if n > 1 { (2.0 * ix as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
-            let y = if n > 1 { (2.0 * iy as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
-            let basis = if remove_defocus {
-                [1.0, x, y, x * x + y * y]
-            } else {
+            if pupil_mask.get(iy).and_then(|row| row.get(ix)).and_then(|value| *value) == Some(false) {
+                continue;
+            }
+            let (x, y, physical) = sample_coordinates(iy, ix);
+            samples.push((iy, ix, z, x, y, physical));
+        }
+    }
+    let defocus_mean_radius_squared = if remove_defocus && !samples.is_empty() {
+        samples.iter().map(|sample| sample.3 * sample.3 + sample.4 * sample.4).sum::<f64>() / samples.len() as f64
+    } else {
+        0.0
+    };
+    let physical_coordinate_sample_count = samples.iter().filter(|sample| sample.5).count();
+    let k = if remove_tilt && remove_defocus { 4 } else if remove_tilt { 3 } else if remove_defocus { 2 } else { 1 };
+    let mut normal = vec![vec![0.0_f64; k]; k];
+    let mut rhs = vec![0.0_f64; k];
+    let count = samples.len();
+
+    for (_, _, z, x, y, _) in samples.iter().copied() {
+            let orthogonal_defocus = x * x + y * y - defocus_mean_radius_squared;
+            let basis = if remove_tilt && remove_defocus {
+                [1.0, x, y, orthogonal_defocus]
+            } else if remove_tilt {
                 [1.0, x, y, 0.0]
+            } else if remove_defocus {
+                [1.0, orthogonal_defocus, 0.0, 0.0]
+            } else {
+                [1.0, 0.0, 0.0, 0.0]
             };
-            count += 1;
             for r in 0..k {
                 rhs[r] += basis[r] * z;
                 for c in 0..k {
                     normal[r][c] += basis[r] * basis[c];
                 }
             }
-        }
     }
 
     if count <= k {
-        return raw.to_vec();
+        return (raw.to_vec(), Value::Null);
     }
     let Some(coeff) = solve_linear(normal, rhs) else {
-        return raw.to_vec();
+        return (raw.to_vec(), Value::Null);
     };
 
+    let fit_diagnostic = serde_json::json!({
+        "sampleCount": count,
+        "basis": if remove_tilt && remove_defocus { "pistonTiltDefocus" } else if remove_tilt { "pistonTilt" } else if remove_defocus { "pistonDefocus" } else { "piston" },
+        "piston": coeff.first().copied().unwrap_or(0.0),
+        "tiltX": if remove_tilt { coeff.get(1).copied().unwrap_or(0.0) } else { 0.0 },
+        "tiltY": if remove_tilt { coeff.get(2).copied().unwrap_or(0.0) } else { 0.0 },
+        "defocus": if remove_tilt && remove_defocus { coeff.get(3).copied().unwrap_or(0.0) } else if remove_defocus { coeff.get(1).copied().unwrap_or(0.0) } else { 0.0 },
+        "defocusScale": if remove_defocus { defocus_scale } else { 0.0 },
+        "defocusMeanRadiusSquared": if remove_defocus { Some(defocus_mean_radius_squared) } else { None },
+        "coordinateSource": if physical_coordinate_sample_count == count { "entrance-pupil" } else { "grid-index-fallback" },
+        "physicalCoordinateSampleCount": physical_coordinate_sample_count
+    });
+
     let mut out = vec![vec![None; n]; n];
-    for iy in 0..n {
-        for ix in 0..n {
-            let Some(z) = raw[iy][ix] else { continue; };
-            let x = if n > 1 { (2.0 * ix as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
-            let y = if n > 1 { (2.0 * iy as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
-            let fit = if remove_defocus {
-                coeff[0] + coeff[1] * x + coeff[2] * y + coeff[3] * (x * x + y * y)
-            } else {
+    for (iy, ix, z, x, y, _) in samples {
+            let orthogonal_defocus = x * x + y * y - defocus_mean_radius_squared;
+            let fit = if remove_tilt && remove_defocus {
+                coeff[0] + coeff[1] * x + coeff[2] * y + defocus_scale * coeff[3] * orthogonal_defocus
+            } else if remove_tilt {
                 coeff[0] + coeff[1] * x + coeff[2] * y
+            } else if remove_defocus {
+                coeff[0] + defocus_scale * coeff[1] * orthogonal_defocus
+            } else {
+                coeff[0]
             };
             out[iy][ix] = Some(z - fit);
-        }
     }
-    out
+    (out, fit_diagnostic)
 }
 
 #[derive(Clone)]
@@ -4986,7 +5032,16 @@ fn get_primary_wavelength_um_native(source_rows: &[Value], default_wavelength: f
                 _ => None,
             })
             .unwrap_or(false);
-        if !is_primary {
+        let primary_marker = get_field(row, "primary")
+            .or_else(|| get_field(row, "Primary"))
+            .or_else(|| get_field(row, "Primary Wavelength"))
+            .and_then(value_to_string)
+            .map(|value| {
+                let text = value.trim().to_ascii_lowercase();
+                text == "true" || text == "1" || text == "yes" || text.contains("primary")
+            })
+            .unwrap_or(false);
+        if !is_primary && !primary_marker {
             return None;
         }
         get_field(row, "wavelength")
@@ -7721,6 +7776,11 @@ fn run_native_opd_map_value_with_rows(
         .and_then(value_to_f64)
         .filter(|v| v.is_finite() && *v > 0.0)
         .unwrap_or(0.5876);
+    let source_rows_for_metrics = req_obj
+        .get("sourceRows")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
     let opd_reference_wavelength_um = req_obj
         .get("opdReferenceWavelengthUm")
         .and_then(value_to_f64)
@@ -7743,6 +7803,73 @@ fn run_native_opd_map_value_with_rows(
     if reference_mode == "reference-sphere" {
         reference_mode = "exit-pupil".to_string();
     }
+    let exit_pupil_reference_point_mode = req_obj
+        .get("exitPupilReferencePointMode")
+        .and_then(value_to_string)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| value == "exit-pupil-center")
+        .unwrap_or_else(|| "chief-ray-intersection".to_string());
+    let reference_sphere_options = req_obj.get("referenceSphereOptions");
+    let reference_option = |name: &str, default_value: &str| -> String {
+        reference_sphere_options
+            .and_then(|value| value.get(name))
+            .and_then(value_to_string)
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| default_value.to_string())
+    };
+    let exit_pupil_position_sign = reference_option("exitPupilPositionSign", "as-is");
+    let exit_pupil_plane_definition = reference_option("exitPupilPlaneDefinition", "global-z");
+    let reference_sphere_wavelength_mode = reference_option("referenceSphereWavelengthMode", "primary-wavelength");
+    let primary_reference_wavelength = get_primary_wavelength_um_native(&source_rows_for_metrics, wavelength_um);
+    let reference_sphere_wavelength_used = if reference_sphere_wavelength_mode == "per-wavelength" {
+        wavelength_um
+    } else {
+        primary_reference_wavelength
+    };
+    let mut primary_reference_geometry_applied = false;
+    let chief_image_point_mode = reference_option("chiefImagePoint", "chief-ray-image-point");
+    let sphere_intersection = reference_option("sphereIntersection", "exit-pupil-side");
+    let optical_path_sign = reference_option("opticalPathSign", "positive");
+    let exit_pupil_direction_mode = reference_option("exitPupilDirection", "image-to-exit-pupil");
+    let requested_chief_ray_mode = req_obj
+        .get("chiefRayMode")
+        .and_then(value_to_string)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| value == "entrance-pupil-center" || value == "transmitted-pupil-center")
+        .unwrap_or_else(|| "stop-center".to_string());
+    let reference_ray_pupil_coordinate = req_obj
+        .get("referenceRayPupilCoordinate")
+        .and_then(|value| value.as_object())
+        .and_then(|value| Some([
+            value.get("x").and_then(value_to_f64)?,
+            value.get("y").and_then(value_to_f64)?,
+        ]))
+        .filter(|coordinate| coordinate.iter().all(|value| value.is_finite()))
+        .unwrap_or([0.0, 0.0]);
+    let sample_ray_launch_origin = req_obj
+        .get("sampleRayLaunchOrigin")
+        .and_then(|value| value.as_object())
+        .and_then(|value| Some([
+            value.get("x").and_then(value_to_f64)?,
+            value.get("y").and_then(value_to_f64)?,
+            value.get("z").and_then(value_to_f64)?,
+        ]))
+        .filter(|origin| origin.iter().all(|value| value.is_finite()));
+    let preserve_image_height_chief_ray = req_obj
+        .get("preserveImageHeightChiefRay")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let _resolve_image_height_chief_ray_in_runtime = req_obj
+        .get("resolveImageHeightChiefRayInRuntime")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let pupil_normalization_mode = req_obj
+        .get("pupilNormalizationMode")
+        .and_then(value_to_string)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| value == "effective-transmitted-pupil")
+        .unwrap_or_else(|| "fixed-entrance-pupil".to_string());
     let omit_reference_sphere_opd_grid = req_obj
         .get("omitReferenceSphereOpdGrid")
         .or_else(|| req_obj.get("omitReferenceGrid"))
@@ -7847,46 +7974,29 @@ fn run_native_opd_map_value_with_rows(
     let height_object_x = get_object_numeric(selected_object_map, &["xHeight", "x", "X"]).unwrap_or(0.0);
     let height_object_y = get_object_numeric(selected_object_map, &["yHeight", "y", "Y", "height"]).unwrap_or(0.0);
 
-    let image_height_target = selected_object_map
-        .get("__cooptImageHeightTarget")
-        .and_then(|v| v.as_object());
-    let reported_object_position = if is_original_image_height {
-        "ImageHeight".to_string()
-    } else {
-        used_object_position.clone()
-    };
-    let reported_object_x = if is_original_image_height {
-        image_height_target
-            .and_then(|v| v.get("x"))
-            .and_then(value_to_f64)
-            .unwrap_or(height_object_x)
-    } else if use_infinite_mode {
-        angle_object_x
-    } else {
-        height_object_x
-    };
-    let reported_object_y = if is_original_image_height {
-        image_height_target
-            .and_then(|v| v.get("y"))
-            .and_then(value_to_f64)
-            .unwrap_or(height_object_y)
-    } else if use_infinite_mode {
-        angle_object_y
-    } else {
-        height_object_y
-    };
-
     let (used_object_x, used_object_y) = if use_infinite_mode {
         if is_angle_object { (angle_object_x, angle_object_y) } else { (0.0, 0.0) }
     } else {
         (height_object_x, height_object_y)
     };
+    let reported_object_position = if use_infinite_mode {
+        "Angle".to_string()
+    } else {
+        used_object_position.clone()
+    };
+    let reported_object_x = used_object_x;
+    let reported_object_y = used_object_y;
 
     let stop_radius = estimate_stop_radius_from_row(&rows[stop_surface_index]).max(0.01);
     let requested_pupil_radius = req_obj
         .get("pupilRadiusMm")
         .and_then(value_to_f64)
         .filter(|value| value.is_finite() && *value > 0.0);
+    let requested_pupil_radius = if pupil_normalization_mode == "effective-transmitted-pupil" {
+        None
+    } else {
+        requested_pupil_radius
+    };
     let requested_entrance_pupil_position = req_obj
         .get("entrancePupilPositionFromFirstSurfaceMm")
         .and_then(value_to_f64)
@@ -7924,7 +8034,7 @@ fn run_native_opd_map_value_with_rows(
         .get("__cooptImageHeightSolve")
         .and_then(|v| v.get("chiefRay"))
         .and_then(|v| v.as_object());
-    let image_height_chief_origin = image_height_chief_ray
+    let mut image_height_chief_origin = image_height_chief_ray
         .and_then(|v| v.get("origin"))
         .and_then(|v| v.as_object())
         .and_then(|origin| {
@@ -7937,7 +8047,7 @@ fn run_native_opd_map_value_with_rows(
                 None
             }
         });
-    let image_height_chief_dir = image_height_chief_ray
+    let mut image_height_chief_dir = image_height_chief_ray
         .and_then(|v| v.get("dir"))
         .and_then(|v| v.as_object())
         .and_then(|dir| {
@@ -7951,10 +8061,86 @@ fn run_native_opd_map_value_with_rows(
                 None
             }
         });
+    let image_height_solver_hit = selected_object_map
+        .get("__cooptImageHeightSolve")
+        .and_then(|value| value.get("hit"))
+        .and_then(|value| value.as_object())
+        .and_then(|hit| {
+            let x = hit.get("x").and_then(value_to_f64)?;
+            let y = hit.get("y").and_then(value_to_f64)?;
+            if x.is_finite() && y.is_finite() {
+                Some([x, y, hit.get("z").and_then(value_to_f64).filter(|z| z.is_finite()).unwrap_or(0.0)])
+            } else {
+                None
+            }
+        });
+    let image_height_solver_surface_index = selected_object_map
+        .get("__cooptImageHeightSolve")
+        .and_then(|value| value.get("imageSurfaceIndex"))
+        .and_then(value_to_f64)
+        .filter(|index| index.is_finite() && *index >= 0.0)
+        .map(|index| index as usize);
     let has_image_height_chief_override = use_infinite_mode
         && is_original_image_height
         && image_height_chief_origin.is_some()
         && image_height_chief_dir.is_some();
+    let mut image_height_runtime_solved_angle: Option<[f64; 3]> = None;
+    let mut image_height_chief_runtime_resolved = false;
+    if has_image_height_chief_override {
+        let target_x = selected_object_map
+            .get("__cooptImageHeightTarget")
+            .and_then(|value| value.get("x"))
+            .and_then(value_to_f64)
+            .unwrap_or(0.0);
+        let target_y = selected_object_map
+            .get("__cooptImageHeightTarget")
+            .and_then(|value| value.get("y"))
+            .and_then(value_to_f64)
+            .unwrap_or(0.0);
+        if target_x.is_finite() && target_y.is_finite() {
+            let initial_x = angle_object_x;
+            let initial_y = angle_object_y;
+            if let Some((solved_x, solved_y, _)) = solve_image_height_pair_native(
+                target_x,
+                target_y,
+                initial_x,
+                initial_y,
+                0,
+                &mut |candidate_x, candidate_y| trace_image_height_infinite_candidate_local_exact_native(
+                    &rows,
+                    packed_stop,
+                    packed_target,
+                    object_space_n,
+                    wavelength_um,
+                    stop_surface_index,
+                    target_surface_index,
+                    stop_center,
+                    candidate_x,
+                    candidate_y,
+                ),
+            ) {
+                if let Some((origin, direction, _)) = trace_image_height_infinite_chief_ray_exact_native(
+                    &rows,
+                    packed_stop,
+                    packed_target,
+                    object_space_n,
+                    wavelength_um,
+                    stop_surface_index,
+                    target_surface_index,
+                    stop_center,
+                    solved_x,
+                    solved_y,
+                ) {
+                    image_height_chief_origin = Some(origin);
+                    image_height_chief_dir = Some(direction);
+                    image_height_runtime_solved_angle = Some([solved_x, solved_y, 0.0]);
+                    image_height_chief_runtime_resolved = true;
+                }
+            }
+        }
+    }
+    let preserve_image_height_chief_ray = (preserve_image_height_chief_ray || image_height_chief_runtime_resolved)
+        && has_image_height_chief_override;
 
     let object_plane_z = packed_meta.row_origins.get(2).copied().unwrap_or(0.0);
     let mut infinite_direction = build_direction_from_field_angles_native(used_object_x, used_object_y);
@@ -8261,9 +8447,34 @@ fn run_native_opd_map_value_with_rows(
         }
     };
 
-    let mut chief_start_dir = build_marginal_ray(0.0, 0.0, sampling_radius, effective_emission_origin)
+    let use_real_entrance_pupil_chief = use_infinite_mode
+        && requested_chief_ray_mode == "entrance-pupil-center"
+        && requested_entrance_pupil_position.is_some();
+    let use_transmitted_pupil_chief = use_infinite_mode
+        && requested_chief_ray_mode == "transmitted-pupil-center";
+    if use_real_entrance_pupil_chief {
+        // The real entrance-pupil center is the back-projection of the chief ray
+        // through the stop center, not the geometric center of the entrance plane.
+        // The latter is wrong for off-axis fields and decentered/tilted systems.
+        if let Some(center) = solve_ray_origin_to_stop_point_fast_native(
+            effective_emission_origin,
+            infinite_direction,
+            stop_center_for_sampling,
+            stop_surface_index,
+            &packed_stop,
+            object_space_n,
+        ) {
+            effective_emission_origin = apply_symmetry_axis_lock(center);
+        }
+    }
+
+    let mut chief_start_dir = build_marginal_ray(reference_ray_pupil_coordinate[0], reference_ray_pupil_coordinate[1], sampling_radius, effective_emission_origin)
         .ok_or_else(|| JsValue::from_str("run_native_opd_map_wasm_json: chief ray not found"))?;
-    let mut chief_reference_mode = "center-chief".to_string();
+    let mut chief_reference_mode = if use_real_entrance_pupil_chief {
+        "entrance-pupil-center-chief".to_string()
+    } else {
+        "center-chief".to_string()
+    };
     let mut chief_target_hit = trace_single_ray_hit_point_with_meta_core(
         &chief_start_dir,
         target_surface_index,
@@ -8301,7 +8512,15 @@ fn run_native_opd_map_value_with_rows(
             )
             .unwrap_or(estimated_entrance_origin)
         };
-        if let Some(entrance_chief_ray) = build_marginal_ray(0.0, 0.0, entrance_radius.max(0.01), entrance_origin) {
+        let chief_search_radius = estimate_entrance_radius_from_rows(&rows)
+            .max(stop_radius)
+            .max(entrance_radius)
+            .max(0.01);
+        let chief_fallback_radius = estimate_effective_entrance_radius(
+            entrance_origin,
+            chief_search_radius,
+        );
+        if let Some(entrance_chief_ray) = build_marginal_ray(reference_ray_pupil_coordinate[0], reference_ray_pupil_coordinate[1], chief_fallback_radius, entrance_origin) {
             let entrance_target_hit = trace_single_ray_hit_point_with_meta_core(
                 &entrance_chief_ray,
                 target_surface_index,
@@ -8339,6 +8558,7 @@ fn run_native_opd_map_value_with_rows(
     );
     let mut stop_sampling_fallback_to_entrance = false;
     let mut effective_sampling_radius = sampling_radius;
+    let mut transmitted_pupil_center_uv: Option<(f64, f64)> = None;
 
     if (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON && !prefer_entrance_sampling && use_infinite_mode {
         if let Some(grid_brent_origin) = search_entrance_origin_grid_brent_native(
@@ -8450,53 +8670,73 @@ fn run_native_opd_map_value_with_rows(
         effective_pupil_sampling_mode = "entrance";
         effective_sampling_radius = entrance_radius.max(0.01);
 
-        if use_infinite_mode {
+        if use_infinite_mode && !preserve_image_height_chief_ray {
             let estimated_entrance_origin = estimate_entrance_center_origin_native(
                 &rows,
                 &packed_meta.row_origins,
                 stop_center_for_sampling,
                 infinite_direction,
             );
-            // JS parity: the JS entrance pupil center is the launch point of the
-            // chief ray that passes through the effective stop center (exact
-            // Newton solve), matching findInfiniteSystemChiefRayOrigin usage.
-            let newton_entrance_origin = solve_ray_origin_to_stop_point_fast_native(
-                if estimated_entrance_origin[0].is_finite()
-                    && estimated_entrance_origin[1].is_finite()
-                    && estimated_entrance_origin[2].is_finite()
-                {
-                    estimated_entrance_origin
-                } else {
-                    infinite_emission_origin
-                },
-                infinite_direction,
-                stop_center_for_sampling,
-                stop_surface_index,
-                &packed_stop,
-                object_space_n,
-            );
-            effective_emission_origin = apply_symmetry_axis_lock(
-                if let Some(origin) = newton_entrance_origin {
-                    origin
-                } else if estimated_entrance_origin[0].is_finite()
-                    && estimated_entrance_origin[1].is_finite()
-                    && estimated_entrance_origin[2].is_finite()
-                {
-                    estimated_entrance_origin
-                } else {
-                    search_entrance_origin_grid_brent_native(
-                        &rows,
-                        &packed_meta.row_origins,
-                        stop_center_for_sampling,
-                        infinite_direction,
-                        stop_surface_index,
-                        &packed_stop,
-                        object_space_n,
-                        entrance_radius,
-                    )
-                    .unwrap_or(estimated_entrance_origin)
+            if use_real_entrance_pupil_chief {
+                if let Some(center) = solve_ray_origin_to_stop_point_fast_native(
+                    if estimated_entrance_origin[0].is_finite()
+                        && estimated_entrance_origin[1].is_finite()
+                        && estimated_entrance_origin[2].is_finite()
+                    {
+                        estimated_entrance_origin
+                    } else {
+                        infinite_emission_origin
+                    },
+                    infinite_direction,
+                    stop_center_for_sampling,
+                    stop_surface_index,
+                    &packed_stop,
+                    object_space_n,
+                ) {
+                    effective_emission_origin = apply_symmetry_axis_lock(center);
                 }
-            );
+            } else {
+                // JS parity: the JS entrance pupil center is the launch point of the
+                // chief ray that passes through the effective stop center (exact
+                // Newton solve), matching findInfiniteSystemChiefRayOrigin usage.
+                let newton_entrance_origin = solve_ray_origin_to_stop_point_fast_native(
+                    if estimated_entrance_origin[0].is_finite()
+                        && estimated_entrance_origin[1].is_finite()
+                        && estimated_entrance_origin[2].is_finite()
+                    {
+                        estimated_entrance_origin
+                    } else {
+                        infinite_emission_origin
+                    },
+                    infinite_direction,
+                    stop_center_for_sampling,
+                    stop_surface_index,
+                    &packed_stop,
+                    object_space_n,
+                );
+                effective_emission_origin = apply_symmetry_axis_lock(
+                    if let Some(origin) = newton_entrance_origin {
+                        origin
+                    } else if estimated_entrance_origin[0].is_finite()
+                        && estimated_entrance_origin[1].is_finite()
+                        && estimated_entrance_origin[2].is_finite()
+                    {
+                        estimated_entrance_origin
+                    } else {
+                        search_entrance_origin_grid_brent_native(
+                            &rows,
+                            &packed_meta.row_origins,
+                            stop_center_for_sampling,
+                            infinite_direction,
+                            stop_surface_index,
+                            &packed_stop,
+                            object_space_n,
+                            entrance_radius,
+                        )
+                        .unwrap_or(estimated_entrance_origin)
+                    }
+                );
+            }
             effective_sampling_radius = if requested_pupil_radius.is_some() {
                 entrance_radius.max(0.01)
             } else {
@@ -8506,8 +8746,59 @@ fn run_native_opd_map_value_with_rows(
                 )
             };
 
+            if use_transmitted_pupil_chief {
+                let probe_grid = 17usize;
+                let mut sum_u = 0.0;
+                let mut sum_v = 0.0;
+                let mut valid_count = 0usize;
+                for probe_y in 0..probe_grid {
+                    for probe_x in 0..probe_grid {
+                        let probe_u = -1.0 + 2.0 * (probe_x as f64) / ((probe_grid - 1) as f64);
+                        let probe_v = -1.0 + 2.0 * (probe_y as f64) / ((probe_grid - 1) as f64);
+                        if probe_u * probe_u + probe_v * probe_v > 1.0 + 1.0e-9 {
+                            continue;
+                        }
+                        let Some(probe_ray) = build_marginal_ray(
+                            probe_u,
+                            probe_v,
+                            effective_sampling_radius,
+                            effective_emission_origin,
+                        ) else {
+                            continue;
+                        };
+                        let probe_hit = trace_single_ray_hit_point_with_meta_core(
+                            &probe_ray,
+                            target_surface_index,
+                            object_space_n,
+                            &packed_target.row_meta,
+                            &packed_target.row_params,
+                            &packed_target.row_origins,
+                            &packed_target.row_inv_rots,
+                            &packed_target.row_rots,
+                            packed_target.row_count,
+                        );
+                        if (probe_hit[0] - 1.0).abs() <= f64::EPSILON {
+                            sum_u += probe_u;
+                            sum_v += probe_v;
+                            valid_count += 1;
+                        }
+                    }
+                }
+                if valid_count > 0 {
+                    transmitted_pupil_center_uv = Some((
+                        sum_u / valid_count as f64,
+                        sum_v / valid_count as f64,
+                    ));
+                }
+            }
+
             if let Some(entrance_chief_ray) =
-                build_marginal_ray(0.0, 0.0, effective_sampling_radius, effective_emission_origin)
+                build_marginal_ray(
+                    transmitted_pupil_center_uv.map(|(u, _)| u).unwrap_or(0.0),
+                    transmitted_pupil_center_uv.map(|(_, v)| v).unwrap_or(0.0),
+                    effective_sampling_radius,
+                    effective_emission_origin,
+                )
             {
                 let entrance_target_hit = trace_single_ray_hit_point_with_meta_core(
                     &entrance_chief_ray,
@@ -8527,12 +8818,65 @@ fn run_native_opd_map_value_with_rows(
             }
         }
 
-        chief_reference_mode = if prefer_entrance_sampling {
+        chief_reference_mode = if use_real_entrance_pupil_chief {
+            format!("entrance-pupil-center-chief-requested(r={:.3})", effective_sampling_radius)
+        } else if use_transmitted_pupil_chief {
+            let (u, v) = transmitted_pupil_center_uv.unwrap_or((0.0, 0.0));
+            format!("transmitted-pupil-center-chief-requested(u={:.4},v={:.4},r={:.3})", u, v, effective_sampling_radius)
+        } else if prefer_entrance_sampling {
             format!("entrance-chief-requested(estimate-first,r={:.3})", effective_sampling_radius)
         } else {
             format!("entrance-chief-fallback(estimate-first,r={:.3})", effective_sampling_radius)
         };
     }
+
+    if reference_ray_pupil_coordinate[0].abs() > 1.0e-12
+        || reference_ray_pupil_coordinate[1].abs() > 1.0e-12
+    {
+        chief_reference_mode.push_str("-reference-ray");
+    }
+
+    let chief_stop_state = trace_single_ray_hit_state_with_meta_core(
+        &chief_start_dir,
+        stop_surface_index,
+        object_space_n,
+        &packed_stop.row_meta,
+        &packed_stop.row_params,
+        &packed_stop.row_origins,
+        &packed_stop.row_inv_rots,
+        &packed_stop.row_rots,
+        packed_stop.row_count,
+    );
+    let chief_stop_state = ((chief_stop_state[0] - 1.0).abs() <= f64::EPSILON
+        && chief_stop_state[2..8].iter().all(|value| value.is_finite()))
+        .then_some(chief_stop_state);
+    let chief_surface_trace: Vec<Value> = (0..packed_target.row_count).filter_map(|surface_index| {
+        let state = trace_single_ray_hit_state_with_meta_core(
+            &chief_start_dir, surface_index, object_space_n,
+            &packed_target.row_meta, &packed_target.row_params, &packed_target.row_origins,
+            &packed_target.row_inv_rots, &packed_target.row_rots, packed_target.row_count,
+        );
+        if (state[0] - 1.0).abs() > f64::EPSILON || !state[2..8].iter().all(|value| value.is_finite()) {
+            return None;
+        }
+        let point_base = surface_index * 3;
+        let rotation_base = surface_index * 9;
+        if point_base + 2 >= packed_target.row_origins.len() || rotation_base + 8 >= packed_target.row_inv_rots.len() {
+            return None;
+        }
+        let inv = &packed_target.row_inv_rots[rotation_base..rotation_base + 9];
+        let local_point = mul_mat3_vec3(&[inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7], inv[8]], [
+            state[2] - packed_target.row_origins[point_base],
+            state[3] - packed_target.row_origins[point_base + 1],
+            state[4] - packed_target.row_origins[point_base + 2],
+        ]);
+        let local_direction = mul_mat3_vec3(&[inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7], inv[8]], [state[5], state[6], state[7]]);
+        Some(serde_json::json!({
+            "surfaceIndex": surface_index,
+            "point": local_point,
+            "direction": local_direction,
+        }))
+    }).collect();
 
     let chief_opl = chief_target_hit[1];
     if !chief_opl.is_finite() {
@@ -8540,6 +8884,25 @@ fn run_native_opd_map_value_with_rows(
     }
 
     let chief_image_point = [chief_target_hit[2], chief_target_hit[3], chief_target_hit[4]];
+    let chief_image_local_point = trace_surface_local_with_packed(
+        chief_start_dir,
+        target_surface_index,
+        object_space_n,
+        &packed_target,
+    );
+    let target_surface_origin = [
+        packed_target.row_origins.get(target_surface_index * 3).copied().unwrap_or(chief_image_point[0]),
+        packed_target.row_origins.get(target_surface_index * 3 + 1).copied().unwrap_or(chief_image_point[1]),
+        packed_target.row_origins.get(target_surface_index * 3 + 2).copied().unwrap_or(chief_image_point[2]),
+    ];
+    // The paraxial point is the chief-ray transverse image height projected onto
+    // the nominal image surface plane. The sagittal best-focus point is obtained
+    // by intersecting the two symmetric sagittal marginal rays in image space.
+    let paraxial_image_point = [
+        chief_image_point[0],
+        chief_image_point[1],
+        target_surface_origin[2],
+    ];
     let chief_prev_state = if target_surface_index > 0 {
         let prev_hit = trace_single_ray_hit_state_with_meta_core(
             &chief_start_dir,
@@ -8564,47 +8927,491 @@ fn run_native_opd_map_value_with_rows(
     } else {
         None
     };
+    let chief_target_state = chief_prev_state.as_ref().and_then(|previous_state| {
+        ((chief_target_hit[0] - 1.0).abs() <= f64::EPSILON).then_some([
+            1.0,
+            chief_target_hit[1],
+            chief_target_hit[2],
+            chief_target_hit[3],
+            chief_target_hit[4],
+            previous_state[5],
+            previous_state[6],
+            previous_state[7],
+        ])
+    });
+    let focus_point_for_axis = |axis: usize| -> Option<[f64; 3]> {
+        let chief_state = chief_prev_state.as_ref()?;
+        if target_surface_index == 0 {
+            return None;
+        }
+        let mut focus_states: Vec<[f64; 8]> = Vec::new();
+        for pupil_u in [-0.7_f64, 0.7_f64] {
+            let (u, v) = if axis == 0 { (pupil_u, 0.0) } else { (0.0, pupil_u) };
+            let Some(ray) = build_marginal_ray(u, v, effective_sampling_radius, effective_emission_origin) else {
+                continue;
+            };
+            let state = trace_single_ray_hit_state_with_meta_core(
+                &ray,
+                target_surface_index - 1,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            if (state[0] - 1.0).abs() <= f64::EPSILON
+                && state[4].is_finite()
+                && state[2 + axis].is_finite()
+                && state[5 + axis].is_finite()
+                && state[7].is_finite()
+                && state[7].abs() > 1.0e-12
+            {
+                focus_states.push(state);
+            }
+        }
+        if focus_states.len() != 2 {
+            return None;
+        }
+        let first = focus_states[0];
+        let second = focus_states[1];
+        let first_slope = first[5 + axis] / first[7];
+        let second_slope = second[5 + axis] / second[7];
+        let denominator = first_slope - second_slope;
+        if denominator.abs() <= 1.0e-12 {
+            return None;
+        }
+        let focus_z = (second[2] - first[2] + first_slope * first[4] - second_slope * second[4]) / denominator;
+        if !focus_z.is_finite() {
+            return None;
+        }
+        let chief_slope_x = chief_state[5] / chief_state[7];
+        let chief_slope_y = chief_state[6] / chief_state[7];
+        Some([
+            chief_state[2] + chief_slope_x * (focus_z - chief_state[4]),
+            chief_state[3] + chief_slope_y * (focus_z - chief_state[4]),
+            focus_z,
+        ])
+    };
+    let sagittal_best_focus_point = focus_point_for_axis(0);
+    let tangential_best_focus_point = focus_point_for_axis(1);
+    let tan_sag_mid_focus_point = match (tangential_best_focus_point, sagittal_best_focus_point) {
+        (Some(tangential), Some(sagittal)) => {
+            let mid_z = 0.5 * (tangential[2] + sagittal[2]);
+            let chief_state = chief_prev_state.as_ref();
+            chief_state.map(|state| {
+                let chief_slope_x = state[5] / state[7];
+                let chief_slope_y = state[6] / state[7];
+                [
+                    state[2] + chief_slope_x * (mid_z - state[4]),
+                    state[3] + chief_slope_y * (mid_z - state[4]),
+                    mid_z,
+                ]
+            })
+        }
+        _ => None,
+    };
+    let (rms_best_focus_point, rms_best_focus_diagnostics) = {
+        let chief_state = chief_prev_state.as_ref();
+        if target_surface_index == 0 || chief_state.is_none() {
+            (None, None)
+        } else {
+            let base_z = paraxial_image_point[2];
+            let mut focus_candidate_zs = Vec::new();
+            for candidate in [
+                sagittal_best_focus_point,
+                tangential_best_focus_point,
+                tan_sag_mid_focus_point,
+            ].into_iter().flatten() {
+                if candidate[2].is_finite() {
+                    focus_candidate_zs.push(candidate[2]);
+                }
+            }
+            let (mut search_min_z, mut search_max_z, mut search_range_mode) = if focus_candidate_zs.is_empty() {
+                (base_z - 10.0, base_z + 10.0, "fallback")
+            } else {
+                let candidate_min_z = focus_candidate_zs.iter().copied().fold(base_z, f64::min);
+                let candidate_max_z = focus_candidate_zs.iter().copied().fold(base_z, f64::max);
+                let candidate_span = (candidate_max_z - candidate_min_z)
+                    .max((base_z - candidate_min_z).abs())
+                    .max((candidate_max_z - base_z).abs());
+                let expansion = candidate_span.max(f64::EPSILON);
+                (
+                    candidate_min_z.min(base_z) - expansion,
+                    candidate_max_z.max(base_z) + expansion,
+                    "derived",
+                )
+            };
+            let mut rays: Vec<[f64; 6]> = Vec::new();
+            for grid_y in 0..=12 {
+                for grid_x in 0..=12 {
+                    let pupil_u = -1.0 + 2.0 * (grid_x as f64) / 12.0;
+                    let pupil_v = -1.0 + 2.0 * (grid_y as f64) / 12.0;
+                    if pupil_u * pupil_u + pupil_v * pupil_v > 1.0 {
+                        continue;
+                    }
+                    let Some(ray) = build_marginal_ray(
+                        pupil_u,
+                        pupil_v,
+                        effective_sampling_radius,
+                        effective_emission_origin,
+                    ) else {
+                        continue;
+                    };
+                    let state = trace_single_ray_hit_state_with_meta_core(
+                        &ray,
+                        target_surface_index - 1,
+                        object_space_n,
+                        &packed_target.row_meta,
+                        &packed_target.row_params,
+                        &packed_target.row_origins,
+                        &packed_target.row_inv_rots,
+                        &packed_target.row_rots,
+                        packed_target.row_count,
+                    );
+                    if (state[0] - 1.0).abs() <= f64::EPSILON
+                        && state[2].is_finite()
+                        && state[3].is_finite()
+                        && state[4].is_finite()
+                        && state[5].is_finite()
+                        && state[6].is_finite()
+                        && state[7].is_finite()
+                        && state[7].abs() > 1.0e-12
+                    {
+                        rays.push([state[2], state[3], state[4], state[5], state[6], state[7]]);
+                    }
+                }
+            }
+            if focus_candidate_zs.is_empty() && rays.len() >= 3 {
+                let chief = chief_state.unwrap();
+                let chief_slope_x = chief[5] / chief[7];
+                let chief_slope_y = chief[6] / chief[7];
+                let mut ray_focus_zs = Vec::new();
+                for ray in &rays {
+                    let ray_slope_x = ray[3] / ray[5];
+                    let ray_slope_y = ray[4] / ray[5];
+                    let chief_x_at_ray_z = chief[2] + chief_slope_x * (ray[2] - chief[4]);
+                    let chief_y_at_ray_z = chief[3] + chief_slope_y * (ray[2] - chief[4]);
+                    let relative_slope_x = ray_slope_x - chief_slope_x;
+                    let relative_slope_y = ray_slope_y - chief_slope_y;
+                    if relative_slope_x.abs() > 1.0e-12 {
+                        let z = ray[2] - (ray[0] - chief_x_at_ray_z) / relative_slope_x;
+                        if z.is_finite() { ray_focus_zs.push(z); }
+                    }
+                    if relative_slope_y.abs() > 1.0e-12 {
+                        let z = ray[2] - (ray[1] - chief_y_at_ray_z) / relative_slope_y;
+                        if z.is_finite() { ray_focus_zs.push(z); }
+                    }
+                }
+                if ray_focus_zs.len() >= 3 {
+                    ray_focus_zs.sort_by(|first, second| first.total_cmp(second));
+                    let low = ray_focus_zs[ray_focus_zs.len() / 10];
+                    let high = ray_focus_zs[(ray_focus_zs.len() * 9 / 10).min(ray_focus_zs.len() - 1)];
+                    let span = (high - low).abs().max((base_z - low).abs()).max((high - base_z).abs());
+                    let expansion = span.max(f64::EPSILON);
+                    search_min_z = low.min(base_z) - expansion;
+                    search_max_z = high.max(base_z) + expansion;
+                    search_range_mode = "derived-ray-bundle";
+                }
+            }
+            if rays.len() < 3 {
+                (None, None)
+            } else {
+                let search_half_width = 0.5 * (search_max_z - search_min_z);
+                let search_center_z = 0.5 * (search_min_z + search_max_z);
+                let rms_at = |z: f64| -> f64 {
+                    let mut sum_x = 0.0;
+                    let mut sum_y = 0.0;
+                    let mut points: Vec<[f64; 2]> = Vec::with_capacity(rays.len());
+                    for ray in &rays {
+                        let dz = z - ray[2];
+                        let x = ray[0] + ray[3] / ray[5] * dz;
+                        let y = ray[1] + ray[4] / ray[5] * dz;
+                        if x.is_finite() && y.is_finite() {
+                            sum_x += x;
+                            sum_y += y;
+                            points.push([x, y]);
+                        }
+                    }
+                    if points.len() < 3 {
+                        return f64::INFINITY;
+                    }
+                    let mean_x = sum_x / points.len() as f64;
+                    let mean_y = sum_y / points.len() as f64;
+                    (points.iter().map(|point| {
+                        (point[0] - mean_x).powi(2) + (point[1] - mean_y).powi(2)
+                    }).sum::<f64>() / points.len() as f64).sqrt()
+                };
+                let mut best_z = base_z;
+                let mut best_rms = f64::INFINITY;
+                let coarse_steps = 40;
+                for step in 0..=coarse_steps {
+                    let z = search_center_z - search_half_width
+                        + 2.0 * search_half_width * (step as f64) / coarse_steps as f64;
+                    let rms = rms_at(z);
+                    if rms < best_rms {
+                        best_rms = rms;
+                        best_z = z;
+                    }
+                }
+                let mut refine_half_width = (2.0 * search_half_width) / coarse_steps as f64;
+                for _ in 0..4 {
+                    let center_z = best_z;
+                    let refine_steps = 20;
+                    for step in 0..=refine_steps {
+                        let z = center_z - refine_half_width
+                            + 2.0 * refine_half_width * (step as f64) / refine_steps as f64;
+                        let rms = rms_at(z);
+                        if rms < best_rms {
+                            best_rms = rms;
+                            best_z = z;
+                        }
+                    }
+                    refine_half_width /= refine_steps as f64;
+                }
+                let state = chief_state.unwrap();
+                let chief_slope_x = state[5] / state[7];
+                let chief_slope_y = state[6] / state[7];
+                let point = Some([
+                    state[2] + chief_slope_x * (best_z - state[4]),
+                    state[3] + chief_slope_y * (best_z - state[4]),
+                    best_z,
+                ]);
+                let paraxial_rms_mm = rms_at(base_z);
+                let diagnostics = Some(serde_json::json!({
+                    "baseZ": base_z,
+                    "searchMinZ": search_min_z,
+                    "searchMaxZ": search_max_z,
+                    "searchRangeMode": search_range_mode,
+                    "rayCount": rays.len(),
+                    "paraxialRmsMm": paraxial_rms_mm,
+                    "bestFocusRmsMm": best_rms,
+                    "improvementMm": paraxial_rms_mm - best_rms,
+                    "bestFocusDeltaZ": best_z - base_z,
+                }));
+                (point, diagnostics)
+            }
+        }
+    };
+    let weighted_tan_sag_focus_point = match (tangential_best_focus_point, sagittal_best_focus_point) {
+        (Some(tangential), Some(sagittal)) => {
+            let field_magnitude = used_object_x.abs() + used_object_y.abs();
+            let tangential_weight = if field_magnitude <= 1.0e-12 {
+                0.5
+            } else {
+                used_object_y.abs() / field_magnitude
+            };
+            let sagittal_weight = 1.0 - tangential_weight;
+            let focus_z = tangential_weight * tangential[2] + sagittal_weight * sagittal[2];
+            chief_prev_state.as_ref().map(|state| {
+                let chief_slope_x = state[5] / state[7];
+                let chief_slope_y = state[6] / state[7];
+                [
+                    state[2] + chief_slope_x * (focus_z - state[4]),
+                    state[3] + chief_slope_y * (focus_z - state[4]),
+                    focus_z,
+                ]
+            })
+        }
+        _ => None,
+    };
     let image_space_n = if target_surface_index > 0 {
         let n = get_correct_refractive_index(&rows[target_surface_index - 1], wavelength_um);
         if n.is_finite() && n > 0.0 { n } else { 1.0 }
     } else {
         1.0
     };
-    let exit_pupil_reference = req_obj
+    let reference_image_space_n = image_space_n;
+    let configured_exit_pupil_position = req_obj
         .get("exitPupilPositionFromLastSurfaceMm")
         .and_then(value_to_f64)
-        .filter(|position| position.is_finite())
+        .filter(|position| position.is_finite());
+    let derived_exit_pupil_position = configured_exit_pupil_position.or_else(|| {
+        let metrics = compute_native_paraxial_metrics_wasm(&rows, &source_rows_for_metrics, &object_rows);
+        if metrics.expp.is_finite() { Some(metrics.expp) } else { None }
+    });
+    let exit_pupil_reference = derived_exit_pupil_position
         .and_then(|position| {
             if target_surface_index == 0 {
                 return None;
             }
-            let last_surface_z = packed_target.row_origins.get((target_surface_index - 1) * 3 + 2).copied()?;
-            let exit_pupil_z = last_surface_z + position;
+            let last_surface_base = (target_surface_index - 1) * 3;
+            let last_surface_rot_base = (target_surface_index - 1) * 9;
+            let last_surface_z = packed_target.row_origins.get(last_surface_base + 2).copied()?;
+            let signed_position = if exit_pupil_position_sign == "negated" { -position } else { position };
+            let exit_pupil_z = last_surface_z + signed_position;
             let chief_state = chief_prev_state.as_ref()?;
             let chief_direction = normalize3(chief_state[5], chief_state[6], chief_state[7]);
             if !chief_direction.iter().all(|value| value.is_finite()) || chief_direction[2].abs() <= 1.0e-12 {
                 return None;
             }
             let distance_to_exit_pupil = (exit_pupil_z - chief_state[4]) / chief_direction[2];
-            let exit_pupil_point = [
+            let chief_ray_exit_pupil_point = [
                 chief_state[2] + chief_direction[0] * distance_to_exit_pupil,
                 chief_state[3] + chief_direction[1] * distance_to_exit_pupil,
                 exit_pupil_z,
             ];
-            let radius = distance3(chief_image_point, exit_pupil_point);
+            let surface_axis_exit_pupil_point = if last_surface_base + 2 < packed_target.row_origins.len()
+                && last_surface_rot_base + 8 < packed_target.row_rots.len()
+            {
+                let origin = [
+                    packed_target.row_origins[last_surface_base],
+                    packed_target.row_origins[last_surface_base + 1],
+                    packed_target.row_origins[last_surface_base + 2],
+                ];
+                let axis_w = normalize3(
+                    packed_target.row_rots[last_surface_rot_base + 2],
+                    packed_target.row_rots[last_surface_rot_base + 5],
+                    packed_target.row_rots[last_surface_rot_base + 8],
+                );
+                Some([
+                    origin[0] + axis_w[0] * signed_position,
+                    origin[1] + axis_w[1] * signed_position,
+                    origin[2] + axis_w[2] * signed_position,
+                ])
+            } else {
+                None
+            };
+            let exit_pupil_point = if exit_pupil_reference_point_mode == "exit-pupil-center" {
+                if exit_pupil_plane_definition == "surface-local-axis" {
+                    surface_axis_exit_pupil_point.unwrap_or(chief_ray_exit_pupil_point)
+                } else {
+                    [
+                        packed_target.row_origins[last_surface_base],
+                        packed_target.row_origins[last_surface_base + 1],
+                        exit_pupil_z,
+                    ]
+                }
+            } else {
+                chief_ray_exit_pupil_point
+            };
+            let reference_center = match chief_image_point_mode.as_str() {
+                "paraxial-image-point" => paraxial_image_point,
+                "sagittal-best-focus-point" => sagittal_best_focus_point.unwrap_or(paraxial_image_point),
+                "tangential-best-focus-point" => tangential_best_focus_point.unwrap_or(paraxial_image_point),
+                "tan-sag-mid-focus-point" => tan_sag_mid_focus_point.unwrap_or(paraxial_image_point),
+                "rms-wavefront-best-focus-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
+                "circle-of-least-confusion-point" => tan_sag_mid_focus_point.unwrap_or(paraxial_image_point),
+                "defocus-zero-reference-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
+                "weighted-tan-sag-focus-point" => weighted_tan_sag_focus_point.unwrap_or(paraxial_image_point),
+                "per-wavelength-best-focus-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
+                "target-surface-center" => target_surface_origin,
+                _ => chief_image_point,
+            };
+            let radius = distance3(reference_center, exit_pupil_point);
             if !radius.is_finite() || radius <= 1.0e-9 {
                 return None;
             }
-            let exit_pupil_direction = [
-                exit_pupil_point[0] - chief_image_point[0],
-                exit_pupil_point[1] - chief_image_point[1],
-                exit_pupil_point[2] - chief_image_point[2],
+            let mut exit_pupil_direction = [
+                exit_pupil_point[0] - reference_center[0],
+                exit_pupil_point[1] - reference_center[1],
+                exit_pupil_point[2] - reference_center[2],
             ];
-            Some((chief_image_point, radius, exit_pupil_direction, exit_pupil_point))
+            if exit_pupil_direction_mode == "exit-pupil-to-image" {
+                exit_pupil_direction = [
+                    -exit_pupil_direction[0],
+                    -exit_pupil_direction[1],
+                    -exit_pupil_direction[2],
+                ];
+            }
+            let exit_pupil_direction = normalize3(
+                exit_pupil_direction[0],
+                exit_pupil_direction[1],
+                exit_pupil_direction[2],
+            );
+            Some((reference_center, radius, exit_pupil_direction, exit_pupil_point))
         });
     let reference_sphere_geometry = exit_pupil_reference
         .as_ref()
-        .and_then(|(_, _, _, exit_pupil_point)| reference_sphere_geometry_from_chief(chief_image_point, *exit_pupil_point));
+        .and_then(|(center, _, _, exit_pupil_point)| reference_sphere_geometry_from_chief(*center, *exit_pupil_point));
+    let primary_reference_geometry = if reference_sphere_wavelength_mode == "primary-wavelength"
+        && req_obj.get("__cooptReferenceGeometryOnly").and_then(|value| value.as_bool()) != Some(true)
+        && req_obj.get("referenceSphereGeometry").is_none()
+    {
+        let primary_wavelength = primary_reference_wavelength;
+        if primary_wavelength.is_finite() && primary_wavelength > 0.0
+            && (primary_wavelength - wavelength_um).abs() > 1.0e-12
+        {
+            let mut reference_request = req.clone();
+            if let Some(reference_object) = reference_request.as_object_mut() {
+                reference_object.insert("wavelengthUm".to_string(), Value::from(primary_wavelength));
+                reference_object.insert("gridSize".to_string(), Value::from(17_u64));
+                reference_object.insert("__cooptReferenceGeometryOnly".to_string(), Value::Bool(true));
+                if let Some(reference_rows) = req_obj.get("referenceOpticalSystemRows") {
+                    reference_object.insert("opticalSystemRows".to_string(), reference_rows.clone());
+                }
+            }
+            run_native_opd_map_value(&reference_request).ok().and_then(|value| {
+                let center = value.get("referenceSphereCenter").and_then(|value| value.as_array()).and_then(|values| Some([
+                    values.get(0).and_then(value_to_f64)?,
+                    values.get(1).and_then(value_to_f64)?,
+                    values.get(2).and_then(value_to_f64)?,
+                ]));
+                let direction = value.get("referenceSphereDirection").and_then(|value| value.as_array()).and_then(|values| Some([
+                    values.get(0).and_then(value_to_f64)?,
+                    values.get(1).and_then(value_to_f64)?,
+                    values.get(2).and_then(value_to_f64)?,
+                ]));
+                let radius = value.get("referenceSphereRadiusMm").and_then(value_to_f64);
+                match (center, radius, direction) {
+                    (Some(center), Some(radius), Some(direction))
+                        if center.iter().all(|value| value.is_finite())
+                            && direction.iter().all(|value| value.is_finite())
+                            && radius.is_finite()
+                            && radius > 0.0 => {
+                                primary_reference_geometry_applied = true;
+                                Some((center, radius, normalize3(direction[0], direction[1], direction[2])))
+                            },
+                    _ => None,
+                }
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let axis_reference_geometry = if req_obj.get("referenceSphereGeometry").is_none()
+        && req_obj.get("__cooptReferenceGeometryOnly").and_then(|value| value.as_bool()) != Some(true)
+        && primary_reference_wavelength.is_finite()
+        && primary_reference_wavelength > 0.0
+    {
+        let mut reference_request = req.clone();
+        if let Some(reference_object) = reference_request.as_object_mut() {
+            reference_object.insert("wavelengthUm".to_string(), Value::from(primary_reference_wavelength));
+            reference_object.insert("gridSize".to_string(), Value::from(17_u64));
+            reference_object.insert("__cooptReferenceGeometryOnly".to_string(), Value::Bool(true));
+            reference_object.insert("exitPupilReferencePointMode".to_string(), Value::from("exit-pupil-center"));
+            if let Some(reference_rows) = req_obj.get("referenceOpticalSystemRows") {
+                reference_object.insert("opticalSystemRows".to_string(), reference_rows.clone());
+            }
+        }
+        run_native_opd_map_value(&reference_request).ok().and_then(|value| {
+            let center = value.get("referenceSphereCenter").and_then(|value| value.as_array()).and_then(|values| Some([
+                values.get(0).and_then(value_to_f64)?,
+                values.get(1).and_then(value_to_f64)?,
+                values.get(2).and_then(value_to_f64)?,
+            ]));
+            let direction = value.get("referenceSphereDirection").and_then(|value| value.as_array()).and_then(|values| Some([
+                values.get(0).and_then(value_to_f64)?,
+                values.get(1).and_then(value_to_f64)?,
+                values.get(2).and_then(value_to_f64)?,
+            ]));
+            let radius = value.get("referenceSphereRadiusMm").and_then(value_to_f64);
+            match (center, radius, direction) {
+                (Some(center), Some(radius), Some(direction))
+                    if center.iter().all(|value| value.is_finite())
+                        && direction.iter().all(|value| value.is_finite())
+                        && radius.is_finite()
+                        && radius > 0.0 =>
+                    Some((center, radius, normalize3(direction[0], direction[1], direction[2]))),
+                _ => None,
+            }
+        })
+    } else {
+        None
+    };
     let mut selected_reference_geometry = if reference_mode == "reference-sphere" {
         reference_sphere_geometry
     } else if reference_mode == "exit-pupil" {
@@ -8612,6 +9419,24 @@ fn run_native_opd_map_value_with_rows(
     } else {
         None
     };
+    let current_reference_geometry = selected_reference_geometry;
+    let current_reference_sphere_radius_mm = selected_reference_geometry.as_ref().map(|(_, radius, _)| *radius);
+    let mut primary_reference_sphere_radius_mm = if reference_sphere_wavelength_mode == "primary-wavelength"
+        && (primary_reference_wavelength - wavelength_um).abs() <= 1.0e-12
+    {
+        current_reference_sphere_radius_mm
+    } else {
+        None
+    };
+    if let Some(geometry) = primary_reference_geometry {
+        primary_reference_sphere_radius_mm = Some(geometry.1);
+        // Keep the image point selected for the traced wavelength. The primary
+        // wavelength controls the reference sphere radius, not the evaluated
+        // wavelength's chief-ray image point.
+        selected_reference_geometry = current_reference_geometry
+            .map(|(center, _, direction)| (center, geometry.1, direction))
+            .or(Some(geometry));
+    }
     if let Some(geometry) = req_obj.get("referenceSphereGeometry").and_then(|value| value.as_object()) {
         let center = geometry.get("center").and_then(|value| value.as_object());
         let direction = geometry.get("direction").and_then(|value| value.as_object());
@@ -8643,14 +9468,141 @@ fn run_native_opd_map_value_with_rows(
             *center,
             *radius,
             *image_side_direction,
-            image_space_n,
+            reference_image_space_n,
+            &sphere_intersection,
+            &optical_path_sign,
         ),
         _ => None,
     };
+    let alternate_sphere_intersection = if sphere_intersection == "opposite-side" {
+        "exit-pupil-side"
+    } else {
+        "opposite-side"
+    };
+    let chief_alternate_reference_sphere_opl = match (chief_prev_state.as_ref(), selected_reference_geometry.as_ref()) {
+        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
+            state,
+            *center,
+            *radius,
+            *image_side_direction,
+            reference_image_space_n,
+            alternate_sphere_intersection,
+            &optical_path_sign,
+        ),
+        _ => None,
+    };
+    let chief_current_reference_opl = match (chief_prev_state.as_ref(), current_reference_geometry.as_ref()) {
+        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
+            state,
+            *center,
+            *radius,
+            *image_side_direction,
+            image_space_n,
+            &sphere_intersection,
+            &optical_path_sign,
+        ),
+        _ => None,
+    };
+    let chief_air_reference_sphere_opl = match (chief_prev_state.as_ref(), selected_reference_geometry.as_ref()) {
+        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
+            state,
+            *center,
+            *radius,
+            *image_side_direction,
+            1.0,
+            &sphere_intersection,
+            &optical_path_sign,
+        ),
+        _ => None,
+    };
+    let alternate_optical_path_sign = if optical_path_sign == "negative" {
+        "positive"
+    } else {
+        "negative"
+    };
+    let chief_alternate_sign_reference_sphere_opl = match (chief_prev_state.as_ref(), selected_reference_geometry.as_ref()) {
+        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
+            state,
+            *center,
+            *radius,
+            *image_side_direction,
+            reference_image_space_n,
+            &sphere_intersection,
+            alternate_optical_path_sign,
+        ),
+        _ => None,
+    };
+    let chief_axis_reference_sphere_opl = match (chief_prev_state.as_ref(), axis_reference_geometry.as_ref()) {
+        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
+            state,
+            *center,
+            *radius,
+            *image_side_direction,
+            reference_image_space_n,
+            &sphere_intersection,
+            &optical_path_sign,
+        ),
+        _ => None,
+    };
+    let radius_probe_scales = [0.50_f64, 0.65, 0.80, 0.90, 1.0, 1.10, 1.25, 1.50, 2.0];
+    let chief_radius_probe_opls: Vec<Option<f64>> = radius_probe_scales.iter().map(|scale| {
+        match (chief_prev_state.as_ref(), selected_reference_geometry.as_ref()) {
+            (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
+                state,
+                *center,
+                *radius * *scale,
+                *image_side_direction,
+                reference_image_space_n,
+                &sphere_intersection,
+                &optical_path_sign,
+            ),
+            _ => None,
+        }
+    }).collect();
     let chief_reference_sphere_opd_um = chief_reference_sphere_opl.map(|reference_opl| chief_opl - reference_opl);
     let mut sample_count = 0usize;
     let mut hit_count = 0usize;
+    let mut reference_corrected_sample_count = 0usize;
+    let mut reference_opd_sum_sq_um = 0.0_f64;
+    let mut tracked_opd_sum_sq_um = 0.0_f64;
+    let mut tracked_opd_sample_count = 0usize;
+    let mut sphere_path_delta_sum_sq_um = 0.0_f64;
+    let mut tracked_sphere_delta_sum_um2 = 0.0_f64;
+    let mut sphere_path_delta_sample_count = 0usize;
+    let mut current_reference_opd_sum_sq_um = 0.0_f64;
+    let mut current_reference_sample_count = 0usize;
+    let mut alternate_reference_opd_sum_sq_um = 0.0_f64;
+    let mut alternate_reference_sample_count = 0usize;
+    let mut target_origin_reference_opd_sum_sq_um = 0.0_f64;
+    let mut target_origin_reference_sample_count = 0usize;
+    let mut air_reference_opd_sum_sq_um = 0.0_f64;
+    let mut air_reference_sample_count = 0usize;
+    let mut alternate_sign_reference_opd_sum_sq_um = 0.0_f64;
+    let mut alternate_sign_reference_sample_count = 0usize;
+    let mut axis_reference_opd_sum_sq_um = 0.0_f64;
+    let mut axis_reference_sample_count = 0usize;
+    let mut radius_probe_sums: Vec<f64> = vec![0.0; radius_probe_scales.len()];
+    let mut radius_probe_counts: Vec<usize> = vec![0; radius_probe_scales.len()];
+    let mut before_target_tracked_opd_sum_sq_um = 0.0_f64;
+    let mut before_target_tracked_opd_sample_count = 0usize;
+    let mut target_segment_opd_sum_sq_um = 0.0_f64;
+    let mut target_segment_opd_sample_count = 0usize;
     let mut raw_grid = vec![vec![None::<f64>; grid_size]; grid_size];
+    let mut unreferenced_grid = vec![vec![None::<f64>; grid_size]; grid_size];
+    let mut reference_sphere_grid = vec![vec![None::<f64>; grid_size]; grid_size];
+    let mut pupil_mask_grid = vec![vec![None::<bool>; grid_size]; grid_size];
+    let grid_index_for_pupil_coordinate = |coordinate: f64| -> usize {
+        (((coordinate + 1.0) * (grid_size.saturating_sub(1)) as f64 / 2.0).round() as isize)
+            .clamp(0, grid_size.saturating_sub(1) as isize) as usize
+    };
+    let opd_term_sample_targets = [
+        ("near-axis", 0.0, 0.0),
+        ("upper", 0.0, 0.7),
+        ("lower", 0.0, -0.7),
+        ("right", 0.7, 0.0),
+        ("left", -0.7, 0.0),
+    ];
+    let mut opd_term_samples = Vec::new();
     let entrance_pupil_geometry = requested_entrance_pupil_position.and_then(|position| {
         let first_surface_index = rows.iter().position(|row| {
             !is_coord_trans_row(row) && !is_object_row(row) && !is_gap_row(row)
@@ -8709,8 +9661,14 @@ fn run_native_opd_map_value_with_rows(
                 continue;
             }
             sample_count += 1;
+            pupil_mask_grid[y][x] = Some(false);
 
-            let Some(ray) = build_marginal_ray(u, v, effective_sampling_radius, effective_emission_origin) else {
+            let Some(ray) = build_marginal_ray(
+                u,
+                v,
+                effective_sampling_radius,
+                sample_ray_launch_origin.unwrap_or(effective_emission_origin),
+            ) else {
                 continue;
             };
             if let Some((center, axis_u, axis_v, axis_w)) = entrance_pupil_geometry.as_ref() {
@@ -8730,14 +9688,23 @@ fn run_native_opd_map_value_with_rows(
                         pupil_point[1] - center[1],
                         pupil_point[2] - center[2],
                     ];
-                    let coordinate_x = (relative[0] * axis_u[0]
+                    let (center_u, center_v) = transmitted_pupil_center_uv.unwrap_or((0.0, 0.0));
+                    let normalization_radius = if requested_pupil_radius.is_some() {
+                        entrance_radius
+                    } else {
+                        effective_sampling_radius
+                    };
+                    let effective_relative_x = relative[0] * axis_u[0]
                         + relative[1] * axis_u[1]
-                        + relative[2] * axis_u[2])
-                        / entrance_radius;
-                    let coordinate_y = (relative[0] * axis_v[0]
+                        + relative[2] * axis_u[2]
+                        - center_u * effective_sampling_radius;
+                    let effective_relative_y = relative[0] * axis_v[0]
                         + relative[1] * axis_v[1]
-                        + relative[2] * axis_v[2])
-                        / entrance_radius;
+                        + relative[2] * axis_v[2]
+                        - center_v * effective_sampling_radius;
+                    let coordinate_x = effective_relative_x
+                        / normalization_radius;
+                    let coordinate_y = effective_relative_y / normalization_radius;
                     if coordinate_x.is_finite() && coordinate_y.is_finite() {
                         entrance_coordinate_x_grid[y][x] = Some(coordinate_x);
                         entrance_coordinate_y_grid[y][x] = Some(coordinate_y);
@@ -8763,6 +9730,7 @@ fn run_native_opd_map_value_with_rows(
             if !ray_opl.is_finite() {
                 continue;
             }
+            pupil_mask_grid[y][x] = Some(true);
             let marginal_prev_state = if target_surface_index > 0 {
                 let state = trace_single_ray_hit_state_with_meta_core(
                     &ray,
@@ -8779,6 +9747,18 @@ fn run_native_opd_map_value_with_rows(
             } else {
                 None
             };
+            let marginal_target_state = marginal_prev_state.as_ref().and_then(|previous_state| {
+                ((target_hit[0] - 1.0).abs() <= f64::EPSILON).then_some([
+                    1.0,
+                    target_hit[1],
+                    target_hit[2],
+                    target_hit[3],
+                    target_hit[4],
+                    previous_state[5],
+                    previous_state[6],
+                    previous_state[7],
+                ])
+            });
             let corrected_opl_pair = match (
                 marginal_prev_state.as_ref(),
                 selected_reference_geometry.as_ref(),
@@ -8789,10 +9769,16 @@ fn run_native_opd_map_value_with_rows(
                     *center,
                     *radius,
                     *image_side_direction,
-                    image_space_n,
+                    reference_image_space_n,
+                    &sphere_intersection,
+                    &optical_path_sign,
                 ).map(|marginal_reference_opl| (chief_reference_opl, marginal_reference_opl)),
                 _ => None,
             };
+            let has_reference_sphere_opd = corrected_opl_pair.is_some();
+            if has_reference_sphere_opd {
+                reference_corrected_sample_count += 1;
+            }
             let (opd_first, opd_second) = corrected_opl_pair.unwrap_or_else(|| {
                 (chief_opl, ray_opl)
             });
@@ -8801,9 +9787,241 @@ fn run_native_opd_map_value_with_rows(
             } else {
                 opd_reference_wavelength_um
             };
+            let unreferenced_opd_waves = (chief_opl - ray_opl) / opd_wave_denominator;
+            if unreferenced_opd_waves.is_finite() {
+                unreferenced_grid[y][x] = Some(unreferenced_opd_waves);
+            }
+            let tracked_opd_um = chief_opl - ray_opl;
+            if tracked_opd_um.is_finite() {
+                tracked_opd_sum_sq_um += tracked_opd_um * tracked_opd_um;
+                tracked_opd_sample_count += 1;
+            }
+            if let (Some(chief_state), Some(marginal_state)) = (chief_prev_state.as_ref(), marginal_prev_state.as_ref()) {
+                let before_target_tracked_opd_um = chief_state[1] - marginal_state[1];
+                let target_segment_opd_um = tracked_opd_um - before_target_tracked_opd_um;
+                if before_target_tracked_opd_um.is_finite() {
+                    before_target_tracked_opd_sum_sq_um += before_target_tracked_opd_um * before_target_tracked_opd_um;
+                    before_target_tracked_opd_sample_count += 1;
+                }
+                if target_segment_opd_um.is_finite() {
+                    target_segment_opd_sum_sq_um += target_segment_opd_um * target_segment_opd_um;
+                    target_segment_opd_sample_count += 1;
+                }
+            }
+            if has_reference_sphere_opd {
+                let reference_opd_waves = (opd_first - opd_second) / opd_wave_denominator;
+                if reference_opd_waves.is_finite() {
+                    reference_sphere_grid[y][x] = Some(reference_opd_waves);
+                }
+            }
             let opd_waves = (opd_first - opd_second) / opd_wave_denominator;
             if !opd_waves.is_finite() {
                 continue;
+            }
+            if has_reference_sphere_opd {
+                let reference_opd_um = opd_first - opd_second;
+                if reference_opd_um.is_finite() {
+                    reference_opd_sum_sq_um += reference_opd_um * reference_opd_um;
+                    let sphere_path_delta_um = reference_opd_um - tracked_opd_um;
+                    if sphere_path_delta_um.is_finite() {
+                        sphere_path_delta_sum_sq_um += sphere_path_delta_um * sphere_path_delta_um;
+                        tracked_sphere_delta_sum_um2 += tracked_opd_um * sphere_path_delta_um;
+                        sphere_path_delta_sample_count += 1;
+                    }
+                }
+            }
+            if let Some((label, _, _)) = opd_term_sample_targets.iter().find(|(_, sample_u, sample_v)| {
+                x == grid_index_for_pupil_coordinate(*sample_u)
+                    && y == grid_index_for_pupil_coordinate(*sample_v)
+            }) {
+                let chief_pre_target_opl_um = chief_prev_state.as_ref().map(|state| state[1]);
+                let marginal_pre_target_opl_um = marginal_prev_state.as_ref().map(|state| state[1]);
+                let before_target_opd_um = chief_pre_target_opl_um.zip(marginal_pre_target_opl_um)
+                    .map(|(chief, marginal)| chief - marginal);
+                let target_segment_opd_um = before_target_opd_um.map(|before| tracked_opd_um - before);
+                let chief_sphere_opl_um = corrected_opl_pair.map(|(chief, _)| chief);
+                let marginal_sphere_opl_um = corrected_opl_pair.map(|(_, marginal)| marginal);
+                let reference_opd_um = chief_sphere_opl_um.zip(marginal_sphere_opl_um)
+                    .map(|(chief, marginal)| chief - marginal);
+                opd_term_samples.push(serde_json::json!({
+                    "label": label,
+                    "pupilU": u,
+                    "pupilV": v,
+                    "chiefOplUm": chief_opl,
+                    "marginalOplUm": ray_opl,
+                    "chiefPreTargetOplUm": chief_pre_target_opl_um,
+                    "marginalPreTargetOplUm": marginal_pre_target_opl_um,
+                    "beforeTargetOpdUm": before_target_opd_um,
+                    "targetSegmentOpdUm": target_segment_opd_um,
+                    "chiefSphereOplUm": chief_sphere_opl_um,
+                    "marginalSphereOplUm": marginal_sphere_opl_um,
+                    "referenceOpdUm": reference_opd_um,
+                    "spherePathDeltaUm": reference_opd_um.map(|reference| reference - tracked_opd_um),
+                }));
+            }
+            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_alternate_opl)) = (
+                marginal_prev_state.as_ref(),
+                selected_reference_geometry.as_ref(),
+                chief_alternate_reference_sphere_opl,
+            ) {
+                if let Some(alternate_marginal_opl) = optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    reference_image_space_n,
+                    alternate_sphere_intersection,
+                    &optical_path_sign,
+                ) {
+                    let alternate_reference_opd_um = chief_alternate_opl - alternate_marginal_opl;
+                    if alternate_reference_opd_um.is_finite() {
+                        alternate_reference_sample_count += 1;
+                        alternate_reference_opd_sum_sq_um += alternate_reference_opd_um * alternate_reference_opd_um;
+                    }
+                }
+            }
+            if let (Some(chief_state), Some(marginal_state), Some((center, radius, image_side_direction))) = (
+                chief_target_state.as_ref(),
+                marginal_target_state.as_ref(),
+                selected_reference_geometry.as_ref(),
+            ) {
+                let chief_target_reference_opl = optical_path_to_reference_sphere(
+                    chief_state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    reference_image_space_n,
+                    &sphere_intersection,
+                    &optical_path_sign,
+                );
+                let marginal_target_reference_opl = optical_path_to_reference_sphere(
+                    marginal_state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    reference_image_space_n,
+                    &sphere_intersection,
+                    &optical_path_sign,
+                );
+                if let (Some(chief_reference_opl), Some(marginal_reference_opl)) =
+                    (chief_target_reference_opl, marginal_target_reference_opl)
+                {
+                    let target_origin_reference_opd_um = chief_reference_opl - marginal_reference_opl;
+                    if target_origin_reference_opd_um.is_finite() {
+                        target_origin_reference_sample_count += 1;
+                        target_origin_reference_opd_sum_sq_um += target_origin_reference_opd_um * target_origin_reference_opd_um;
+                    }
+                }
+            }
+            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_air_opl)) = (
+                marginal_prev_state.as_ref(),
+                selected_reference_geometry.as_ref(),
+                chief_air_reference_sphere_opl,
+            ) {
+                if let Some(air_marginal_reference_opl) = optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    1.0,
+                    &sphere_intersection,
+                    &optical_path_sign,
+                ) {
+                    let air_reference_opd_um = chief_air_opl - air_marginal_reference_opl;
+                    if air_reference_opd_um.is_finite() {
+                        air_reference_sample_count += 1;
+                        air_reference_opd_sum_sq_um += air_reference_opd_um * air_reference_opd_um;
+                    }
+                }
+            }
+            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_alternate_sign_opl)) = (
+                marginal_prev_state.as_ref(),
+                selected_reference_geometry.as_ref(),
+                chief_alternate_sign_reference_sphere_opl,
+            ) {
+                if let Some(alternate_sign_marginal_opl) = optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    reference_image_space_n,
+                    &sphere_intersection,
+                    alternate_optical_path_sign,
+                ) {
+                    let alternate_sign_reference_opd_um = chief_alternate_sign_opl - alternate_sign_marginal_opl;
+                    if alternate_sign_reference_opd_um.is_finite() {
+                        alternate_sign_reference_sample_count += 1;
+                        alternate_sign_reference_opd_sum_sq_um += alternate_sign_reference_opd_um * alternate_sign_reference_opd_um;
+                    }
+                }
+            }
+            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_axis_opl)) = (
+                marginal_prev_state.as_ref(),
+                axis_reference_geometry.as_ref(),
+                chief_axis_reference_sphere_opl,
+            ) {
+                if let Some(axis_marginal_reference_opl) = optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    reference_image_space_n,
+                    &sphere_intersection,
+                    &optical_path_sign,
+                ) {
+                    let axis_reference_opd_um = chief_axis_opl - axis_marginal_reference_opl;
+                    if axis_reference_opd_um.is_finite() {
+                        axis_reference_sample_count += 1;
+                        axis_reference_opd_sum_sq_um += axis_reference_opd_um * axis_reference_opd_um;
+                    }
+                }
+            }
+            if let (Some(state), Some((center, radius, image_side_direction))) = (
+                marginal_prev_state.as_ref(),
+                selected_reference_geometry.as_ref(),
+            ) {
+                for (index, scale) in radius_probe_scales.iter().enumerate() {
+                    let Some(chief_probe_opl) = chief_radius_probe_opls.get(index).and_then(|value| *value) else {
+                        continue;
+                    };
+                    let Some(marginal_probe_opl) = optical_path_to_reference_sphere(
+                        state,
+                        *center,
+                        *radius * *scale,
+                        *image_side_direction,
+                        reference_image_space_n,
+                        &sphere_intersection,
+                        &optical_path_sign,
+                    ) else {
+                        continue;
+                    };
+                    let radius_probe_opd_um = chief_probe_opl - marginal_probe_opl;
+                    if radius_probe_opd_um.is_finite() {
+                        radius_probe_sums[index] += radius_probe_opd_um * radius_probe_opd_um;
+                        radius_probe_counts[index] += 1;
+                    }
+                }
+            }
+            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_current_opl)) = (
+                marginal_prev_state.as_ref(),
+                current_reference_geometry.as_ref(),
+                chief_current_reference_opl,
+            ) {
+                if let Some(current_marginal_opl) = optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    image_space_n,
+                    &sphere_intersection,
+                    &optical_path_sign,
+                ) {
+                    let current_reference_opd_um = chief_current_opl - current_marginal_opl;
+                    if current_reference_opd_um.is_finite() {
+                        current_reference_sample_count += 1;
+                        current_reference_opd_sum_sq_um += current_reference_opd_um * current_reference_opd_um;
+                    }
+                }
             }
             raw_grid[y][x] = Some(opd_waves);
             hit_count += 1;
@@ -8833,7 +10051,14 @@ fn run_native_opd_map_value_with_rows(
         ));
     }
 
-    let display_grid = apply_display_mode_grid(&raw_grid, &opd_display_mode);
+    let (display_grid, display_fit) = apply_display_mode_grid(
+        &raw_grid,
+        &entrance_coordinate_x_grid,
+        &entrance_coordinate_y_grid,
+        &pupil_mask_grid,
+        &opd_display_mode,
+    );
+    let wavefront_fit = display_fit.clone();
     let to_json_grid = |src: &[Vec<Option<f64>>]| -> Value {
         Value::Array(
             src.iter().map(|row| {
@@ -8843,6 +10068,18 @@ fn run_native_opd_map_value_with_rows(
                             Some(x) if x.is_finite() => Value::from(*x),
                             _ => Value::Null,
                         }
+                    }).collect()
+                )
+            }).collect()
+        )
+    };
+    let to_json_bool_grid = |src: &[Vec<Option<bool>>]| -> Value {
+        Value::Array(
+            src.iter().map(|row| {
+                Value::Array(
+                    row.iter().map(|v| match v {
+                        Some(value) => Value::from(*value),
+                        None => Value::Null,
                     }).collect()
                 )
             }).collect()
@@ -8861,22 +10098,148 @@ fn run_native_opd_map_value_with_rows(
         "gridSize": grid_size,
         "sampleCount": sample_count,
         "hitCount": hit_count,
+        "referenceCorrectedSampleCount": reference_corrected_sample_count,
+        "referenceOpdRmsUm": if reference_corrected_sample_count > 0 {
+            Some((reference_opd_sum_sq_um / reference_corrected_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "trackedOpdRmsUm": if tracked_opd_sample_count > 0 {
+            Some((tracked_opd_sum_sq_um / tracked_opd_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "beforeTargetTrackedOpdRmsUm": if before_target_tracked_opd_sample_count > 0 {
+            Some((before_target_tracked_opd_sum_sq_um / before_target_tracked_opd_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "targetSegmentOpdRmsUm": if target_segment_opd_sample_count > 0 {
+            Some((target_segment_opd_sum_sq_um / target_segment_opd_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "spherePathDeltaRmsUm": if sphere_path_delta_sample_count > 0 {
+            Some((sphere_path_delta_sum_sq_um / sphere_path_delta_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "spherePathOptimalScale": if sphere_path_delta_sum_sq_um > 1.0e-18 {
+            Some((-tracked_sphere_delta_sum_um2 / sphere_path_delta_sum_sq_um).clamp(-4.0, 4.0))
+        } else {
+            None
+        },
+        "spherePathOptimalRmsUm": if sphere_path_delta_sample_count > 0 && sphere_path_delta_sum_sq_um > 1.0e-18 {
+            let alpha = -tracked_sphere_delta_sum_um2 / sphere_path_delta_sum_sq_um;
+            let min_sum_sq = (tracked_opd_sum_sq_um
+                + 2.0 * alpha * tracked_sphere_delta_sum_um2
+                + alpha * alpha * sphere_path_delta_sum_sq_um).max(0.0);
+            Some((min_sum_sq / sphere_path_delta_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "currentReferenceOpdRmsUm": if current_reference_sample_count > 0 {
+            Some((current_reference_opd_sum_sq_um / current_reference_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "alternateSphereIntersection": alternate_sphere_intersection,
+        "alternateReferenceOpdRmsUm": if alternate_reference_sample_count > 0 {
+            Some((alternate_reference_opd_sum_sq_um / alternate_reference_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "targetOriginReferenceOpdRmsUm": if target_origin_reference_sample_count > 0 {
+            Some((target_origin_reference_opd_sum_sq_um / target_origin_reference_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "imageSpaceN": image_space_n,
+        "airReferenceOpdRmsUm": if air_reference_sample_count > 0 {
+            Some((air_reference_opd_sum_sq_um / air_reference_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "alternateOpticalPathSign": alternate_optical_path_sign,
+        "alternateSignReferenceOpdRmsUm": if alternate_sign_reference_sample_count > 0 {
+            Some((alternate_sign_reference_opd_sum_sq_um / alternate_sign_reference_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "axisReferenceSphereRmsUm": if axis_reference_sample_count > 0 {
+            Some((axis_reference_opd_sum_sq_um / axis_reference_sample_count as f64).sqrt())
+        } else {
+            None
+        },
+        "sphereRadiusOptimalScale": radius_probe_sums.iter().zip(radius_probe_counts.iter()).enumerate()
+            .filter_map(|(index, (sum_sq, count))| (*count > 0).then_some((radius_probe_scales[index], (*sum_sq / *count as f64).sqrt())))
+            .min_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|value| value.0),
+        "sphereRadiusOptimalRmsUm": radius_probe_sums.iter().zip(radius_probe_counts.iter())
+            .filter_map(|(sum_sq, count)| (*count > 0).then_some((*sum_sq / *count as f64).sqrt()))
+            .min_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)),
         "wavelengthUm": wavelength_um,
+        "referenceSphereWavelengthUsed": reference_sphere_wavelength_used,
+        "primaryReferenceGeometryApplied": primary_reference_geometry_applied,
+        "currentReferenceSphereRadiusMm": current_reference_sphere_radius_mm,
+        "primaryReferenceSphereRadiusMm": primary_reference_sphere_radius_mm,
         "opdReferenceWavelengthUm": opd_reference_wavelength_um,
         "chiefOplUm": chief_opl,
+        "chiefRayLaunchOrigin": [chief_start_dir[0], chief_start_dir[1], chief_start_dir[2]],
+        "imageHeightChiefRayApplied": has_image_height_chief_override,
+        "imageHeightChiefRayPreserved": preserve_image_height_chief_ray,
+        "imageHeightChiefRayRuntimeResolved": image_height_chief_runtime_resolved,
+        "imageHeightChiefDirection": image_height_chief_dir,
+        "imageHeightRuntimeSolvedAngle": image_height_runtime_solved_angle,
+        "imageHeightSolverHit": image_height_solver_hit,
+        "imageHeightSolverSurfaceIndex": image_height_solver_surface_index,
+        "chiefStopPoint": chief_stop_state.map(|state| [state[2], state[3], state[4]]),
+        "chiefStopDirection": chief_stop_state.map(|state| [state[5], state[6], state[7]]),
+        "chiefSurfaceTrace": chief_surface_trace,
+        "sampleRayLaunchOriginApplied": sample_ray_launch_origin.is_some(),
         "chiefReferenceSphereOpdUm": chief_reference_sphere_opd_um,
+        "opdTermSamples": opd_term_samples,
         "effectivePupilRadiusMm": effective_sampling_radius,
+        "pupilMaskGrid": to_json_bool_grid(&pupil_mask_grid),
         "entrancePupilCoordinateXGrid": to_json_grid(&entrance_coordinate_x_grid),
         "entrancePupilCoordinateYGrid": to_json_grid(&entrance_coordinate_y_grid),
         "pupilSamplingMode": effective_pupil_sampling_mode,
+        "chiefRayMode": requested_chief_ray_mode,
+        "pupilNormalizationMode": pupil_normalization_mode,
+        "exitPupilReferencePointMode": exit_pupil_reference_point_mode,
         "referenceMode": reference_mode,
         "referenceSphereCenter": selected_reference_geometry.as_ref().map(|(center, _, _)| *center),
         "referenceSphereRadiusMm": selected_reference_geometry.as_ref().map(|(_, radius, _)| *radius),
         "referenceSphereDirection": selected_reference_geometry.as_ref().map(|(_, _, direction)| *direction),
+        "chiefImagePoint": chief_image_point,
+        "chiefImageLocalPoint": chief_image_local_point,
+        "paraxialImagePoint": paraxial_image_point,
+        "sagittalBestFocusPoint": sagittal_best_focus_point,
+        "tangentialBestFocusPoint": tangential_best_focus_point,
+        "rmsBestFocusPoint": rms_best_focus_point,
+        "rmsBestFocusDiagnostics": rms_best_focus_diagnostics,
+        "selectedImagePoint": match chief_image_point_mode.as_str() {
+            "paraxial-image-point" => Some(paraxial_image_point),
+            "sagittal-best-focus-point" => sagittal_best_focus_point.or(Some(paraxial_image_point)),
+            "tangential-best-focus-point" => tangential_best_focus_point.or(Some(paraxial_image_point)),
+            "tan-sag-mid-focus-point" => tan_sag_mid_focus_point.or(Some(paraxial_image_point)),
+            "rms-wavefront-best-focus-point" => rms_best_focus_point.or(Some(paraxial_image_point)),
+            "circle-of-least-confusion-point" => tan_sag_mid_focus_point.or(Some(paraxial_image_point)),
+            "defocus-zero-reference-point" => rms_best_focus_point.or(Some(paraxial_image_point)),
+            "weighted-tan-sag-focus-point" => weighted_tan_sag_focus_point.or(Some(paraxial_image_point)),
+            "per-wavelength-best-focus-point" => rms_best_focus_point.or(Some(paraxial_image_point)),
+            "target-surface-center" => Some(target_surface_origin),
+            _ => Some(chief_image_point),
+        },
+        "selectedImagePointMode": chief_image_point_mode,
+        "displayFit": display_fit,
+        "wavefrontFit": wavefront_fit,
         "exitPupilCenter": exit_pupil_reference.as_ref().map(|(_, _, _, point)| *point),
         "chiefReferenceMode": chief_reference_mode,
+        "transmittedPupilCenterUv": transmitted_pupil_center_uv.map(|(u, v)| [u, v]),
         "rawOpdGrid": to_json_grid(&raw_grid),
-        "referenceSphereOpdGrid": if omit_reference_sphere_opd_grid { Value::Null } else { to_json_grid(&raw_grid) },
+        "unreferencedOpdGrid": to_json_grid(&unreferenced_grid),
+        "referenceSphereOpdGrid": if omit_reference_sphere_opd_grid { Value::Null } else { to_json_grid(&reference_sphere_grid) },
         "displayOpdGrid": to_json_grid(&display_grid),
         "message": if let Some(warn) = sparse_entrance_warning.as_deref() {
             if prefer_entrance_sampling {
@@ -8925,6 +10288,9 @@ pub fn run_native_opd_rms_waves_wasm_json(req_json: String) -> Result<JsValue, J
     serde_json::json!({
         "backend": format!("{}+scalar-rms", map_response.backend),
         "chiefReferenceMode": map_response.chief_reference_mode,
+        "transmittedPupilCenterUv": map_response.transmitted_pupil_center_uv,
+        "chiefRayLaunchOrigin": map_response.chief_ray_launch_origin,
+        "sampleRayLaunchOriginApplied": map_response.sample_ray_launch_origin_applied,
         "targetSurface": map_response.target_surface,
         "stopSurface": map_response.stop_surface,
         "requestedObjectIndex": map_response.requested_object_index,
@@ -8936,7 +10302,26 @@ pub fn run_native_opd_rms_waves_wasm_json(req_json: String) -> Result<JsValue, J
         "gridSize": map_response.grid_size,
         "sampleCount": map_response.sample_count,
         "hitCount": map_response.hit_count,
+        "referenceCorrectedSampleCount": map_response.reference_corrected_sample_count,
+        "referenceOpdRmsUm": map_response.reference_opd_rms_um,
+        "trackedOpdRmsUm": map_response.tracked_opd_rms_um,
+        "beforeTargetTrackedOpdRmsUm": map_response.before_target_tracked_opd_rms_um,
+        "targetSegmentOpdRmsUm": map_response.target_segment_opd_rms_um,
+        "currentReferenceOpdRmsUm": map_response.current_reference_opd_rms_um,
+        "alternateReferenceOpdRmsUm": map_response.alternate_reference_opd_rms_um,
+        "targetOriginReferenceOpdRmsUm": map_response.target_origin_reference_opd_rms_um,
+        "airReferenceOpdRmsUm": map_response.air_reference_opd_rms_um,
+        "alternateSignReferenceOpdRmsUm": map_response.alternate_sign_reference_opd_rms_um,
+        "axisReferenceSphereRmsUm": map_response.axis_reference_sphere_rms_um,
         "pupilSamplingMode": map_response.pupil_sampling_mode,
+        "pupilMaskGrid": map_response.pupil_mask_grid,
+        "referenceSphereOpdGrid": map_response.reference_sphere_opd_grid,
+        "unreferencedOpdGrid": map_response.unreferenced_opd_grid,
+        "displayFit": map_response.display_fit,
+        "referenceSphereCenter": map_response.reference_sphere_center,
+        "referenceSphereRadiusMm": map_response.reference_sphere_radius_mm,
+        "referenceSphereDirection": map_response.reference_sphere_direction,
+        "exitPupilCenter": map_response.exit_pupil_center,
         "rmsWaves": rms_waves,
         "message": format!("{} [native scalar RMS]", map_response.message),
     })
@@ -12470,4 +13855,52 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
     })
     .serialize(&serializer)
     .map_err(|e| JsValue::from_str(&format!("run_native_opd_psf_mtf_batch_wasm_json: serialize error: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_display_mode_grid;
+
+    fn test_grid() -> (Vec<Vec<Option<f64>>>, Vec<Vec<Option<f64>>>, Vec<Vec<Option<f64>>>, Vec<Vec<Option<bool>>>) {
+        (
+            vec![
+                vec![Some(1.0), Some(2.0), Some(3.0)],
+                vec![Some(4.0), Some(5.0), Some(6.0)],
+                vec![Some(7.0), Some(8.0), Some(9.0)],
+            ],
+            vec![
+                vec![Some(-1.0), Some(0.0), Some(1.0)],
+                vec![Some(-1.0), Some(0.0), Some(1.0)],
+                vec![Some(-1.0), Some(0.0), Some(1.0)],
+            ],
+            vec![
+                vec![Some(-1.0), Some(-1.0), Some(-1.0)],
+                vec![Some(0.0), Some(0.0), Some(0.0)],
+                vec![Some(1.0), Some(1.0), Some(1.0)],
+            ],
+            vec![vec![Some(true); 3]; 3],
+        )
+    }
+
+    #[test]
+    fn display_fit_reports_requested_piston_mode() {
+        let (raw, entrance_x, entrance_y, pupil_mask) = test_grid();
+        let (_, piston_fit) = apply_display_mode_grid(
+            &raw,
+            &entrance_x,
+            &entrance_y,
+            &pupil_mask,
+            "pistonRemoved",
+        );
+        let (_, defocus_fit) = apply_display_mode_grid(
+            &raw,
+            &entrance_x,
+            &entrance_y,
+            &pupil_mask,
+            "pistonDefocusRemoved",
+        );
+
+        assert_eq!(piston_fit["basis"], "piston");
+        assert_eq!(defocus_fit["basis"], "pistonDefocus");
+    }
 }

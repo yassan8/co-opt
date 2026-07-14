@@ -1,4 +1,4 @@
-import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, getGlassDataWithSellmeier, getAllGlassDatabases, getPrimaryWavelength } from './glass.ts';
+import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, calculateRefractiveIndexHikari, getGlassDataWithSellmeier, getAllGlassDatabases, getPrimaryWavelength } from './glass.ts';
 import { loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, getActiveConfiguration } from './table-configuration.ts';
 import { configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from './block-schema.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
@@ -1612,7 +1612,9 @@ export function updateOpticalPropertiesFromMaterial(rowIndex, materialName) {
         // 4. 主波長に対する屈折率をセルマイヤ式で算出する
         let calculatedRI = glassData.nd; // デフォルトはd線の屈折率
         
-        if (glassData.sellmeier) {
+        if (glassData.dispersion) {
+          calculatedRI = calculateRefractiveIndexHikari(glassData.dispersion, primaryWavelength);
+        } else if (glassData.sellmeier) {
             calculatedRI = calculateRefractiveIndex(glassData.sellmeier, primaryWavelength);
         }
         
@@ -2185,7 +2187,9 @@ function autoSetGlassByProperties(rowIndex, field, value) {
                 const glassDataWithSellmeier = getGlassDataWithSellmeier(closestGlass.name);
                 let calculatedRI = closestGlass.nd; // デフォルトはd線の屈折率
                 
-                if (glassDataWithSellmeier && glassDataWithSellmeier.sellmeier) {
+                if (glassDataWithSellmeier && glassDataWithSellmeier.dispersion) {
+                  calculatedRI = calculateRefractiveIndexHikari(glassDataWithSellmeier.dispersion, primaryWavelength);
+                } else if (glassDataWithSellmeier && glassDataWithSellmeier.sellmeier) {
                     calculatedRI = calculateRefractiveIndex(glassDataWithSellmeier.sellmeier, primaryWavelength);
                     console.log(`✅ Calculated RI for ${primaryWavelength}μm: ${calculatedRI.toFixed(6)}`);
                 }
@@ -3255,7 +3259,9 @@ function autoSetGlassByProperties(rowIndex, field, value) {
                 const glassDataWithSellmeier = getGlassDataWithSellmeier(closestGlass.name);
                 let calculatedRI = closestGlass.nd; // デフォルトはd線の屈折率
                 
-                if (glassDataWithSellmeier && glassDataWithSellmeier.sellmeier) {
+                if (glassDataWithSellmeier && glassDataWithSellmeier.dispersion) {
+                  calculatedRI = calculateRefractiveIndexHikari(glassDataWithSellmeier.dispersion, primaryWavelength);
+                } else if (glassDataWithSellmeier && glassDataWithSellmeier.sellmeier) {
                     calculatedRI = calculateRefractiveIndex(glassDataWithSellmeier.sellmeier, primaryWavelength);
                     console.log(`✅ Calculated RI for ${primaryWavelength}μm: ${calculatedRI.toFixed(6)}`);
                 }

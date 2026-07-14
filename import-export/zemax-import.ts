@@ -879,7 +879,7 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
     if (sourceRows[primaryOneBased - 1]) sourceRows[primaryOneBased - 1].primary = 'Primary Wavelength';
   }
 
-  /** @type {{id:number, xHeightAngle:number, yHeightAngle:number, position:string, angle:number}[]} */
+  /** @type {any[]} */
   const objectRows = [];
   const fieldCount = Math.max(fieldXs.length, fieldYs.length, fieldWs.length);
   if (fieldCount > 0) {
@@ -893,13 +893,18 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       const x = Number.isFinite(fieldXs[i]) ? fieldXs[i] : 0;
       const y = Number.isFinite(fieldYs[i]) ? fieldYs[i] : 0;
       // co-opt currently doesn't store per-field weight, but keep a stable row even if FWGN is present.
-      objectRows.push({
+      const objectRow = {
         id: i + 1,
         xHeightAngle: x,
         yHeightAngle: y,
         position: fieldPosition,
         angle: 0
-      });
+      };
+      if (fieldPosition === 'ImageHeight') {
+        objectRow.__cooptOriginalPosition = 'ImageHeight';
+        objectRow.__cooptImageHeightTarget = { x, y };
+      }
+      objectRows.push(objectRow);
     }
   }
 

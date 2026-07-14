@@ -290,7 +290,9 @@ async function importSurfaceOriginsModule(): Promise<any> {
 async function initRustRayTracingModule(mod: any): Promise<any> {
   if (typeof mod?.default !== 'function') return null;
   if (!isNodeRuntime) {
-    const exportsObj = await mod.default();
+    const reloadWasmUrl = (globalThis as any).__cooptSurfaceOriginsReloadWasmUrl;
+    const exportsObj = await mod.default(reloadWasmUrl || undefined);
+    delete (globalThis as any).__cooptSurfaceOriginsReloadWasmUrl;
     return exportsObj || null;
   }
 
@@ -316,6 +318,27 @@ export function getRustRayTracingWasmSync(): RustRayTracingWasm | null {
 
 export function getRustRayTracingWasmInitError(): string | null {
   return rustWasmInitError;
+}
+
+export async function reloadRustRayTracingWasm(): Promise<RustRayTracingWasm | null> {
+  if (isNodeRuntime) return preloadRustRayTracingWasm();
+  rustWasmApi = null;
+  rustWasmInitPromise = null;
+  rustWasmInitError = null;
+  rustWasmThreadPoolPromise = null;
+  rustWasmThreadPoolInitialized = false;
+  rustWasmThreadPoolInitError = null;
+  try {
+    const loader = await import('../surface-origins-loader.ts');
+    const mod = await loader.reloadSurfaceOriginsModule?.();
+    if (!mod) throw new Error('surface_origins reload did not return a module');
+    (globalThis as any).__cooptSurfaceOriginsReloadWasmUrl = `${normalizeBaseUrl()}rust-wasm/pkg/surface_origins_bg.wasm?v=${Date.now()}`;
+    const api = await preloadRustRayTracingWasm();
+    return api;
+  } catch (error) {
+    rustWasmInitError = String((error as any)?.message || error || 'Rust WASM reload failed');
+    return null;
+  }
 }
 
 export function getRustRayTracingWasmThreadPoolInitError(): string | null {

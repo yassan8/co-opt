@@ -8663,7 +8663,8 @@ export function setupAnalysisWindows() {
         .content {
             flex: 1 1 auto;
             min-height: 0;
-            overflow: hidden;
+            overflow-x: hidden;
+            overflow-y: auto;
             background: white;
         }
         #popup-astigmatic-field-curves-container { height: 100%; min-height: 100%; }
@@ -9191,7 +9192,8 @@ export function setupAnalysisWindows() {
         .content {
             flex: 1 1 auto;
             min-height: 0;
-            overflow: hidden;
+            overflow-x: hidden;
+            overflow-y: auto;
             background: white;
         }
         #popup-distortion-grid { width: 100%; height: 100%; }
@@ -9845,7 +9847,8 @@ export function setupAnalysisWindows() {
         .content {
             flex: 1 1 auto;
             min-height: 0;
-            overflow: hidden;
+            overflow-x: hidden;
+            overflow-y: auto;
             background: white;
         }
         #popup-integrated-aberration-container { height: 100%; min-height: 100%; }
@@ -16251,6 +16254,20 @@ export function setupAnalysisWindows() {
                         if (w.__transverseAberrationPopup && !w.__transverseAberrationPopup.closed) {
                                 try { w.__transverseAberrationPopup.focus(); } catch (_) {}
                     try {
+                        const doc = w.__transverseAberrationPopup.document;
+                        const content = doc?.querySelector?.('.content');
+                        if (content && content.style) {
+                            content.style.overflowX = 'hidden';
+                            content.style.overflowY = 'auto';
+                        }
+                        const container = doc?.getElementById?.('popup-transverse-aberration-container');
+                        if (container && container.style) {
+                            container.style.width = '100%';
+                            container.style.minHeight = '100%';
+                            container.style.height = 'auto';
+                        }
+                    } catch (_) {}
+                    try {
                         if (typeof w.__transverseAberrationPopup.renderTransverseAberration === 'function') {
                             w.__transverseAberrationPopup.renderTransverseAberration();
                         }
@@ -16321,10 +16338,11 @@ export function setupAnalysisWindows() {
         .content {
             flex: 1 1 auto;
             min-height: 0;
-            overflow: hidden;
+            overflow-x: hidden;
+            overflow-y: auto;
             background: white;
         }
-        #popup-transverse-aberration-container { height: 100%; min-height: 100%; }
+        #popup-transverse-aberration-container { width: 100%; min-height: 100%; }
     </style>
     <script src="${plotlyScriptUrl}"></script>
 </head>

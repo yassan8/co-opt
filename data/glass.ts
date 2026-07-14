@@ -4362,6 +4362,51 @@ export function calculateRefractiveIndexHerzberger(nd, vd, wavelength) {
 }
 
 /**
+ * Calculate refractive index using the HIKARI catalog dispersion equation.
+ *
+ * n(lambda)^2 = A0 + A1*lambda^2 + A2*lambda^4 + A3*lambda^-2
+ *             + A4*lambda^-4 + A5*lambda^-6 + A6*lambda^-8
+ *             + A7*lambda^-10 + A8*lambda^-12
+ *
+ * HIKARI catalog wavelengths are expressed in micrometers.
+ */
+export function calculateRefractiveIndexHikari(dispersionCoeffs, wavelength) {
+  const lambda = Number(wavelength);
+  if (!dispersionCoeffs || !Number.isFinite(lambda) || lambda <= 0) {
+    return 1.0;
+  }
+
+  const coefficients = [
+    dispersionCoeffs.A0,
+    dispersionCoeffs.A1,
+    dispersionCoeffs.A2,
+    dispersionCoeffs.A3,
+    dispersionCoeffs.A4,
+    dispersionCoeffs.A5,
+    dispersionCoeffs.A6,
+    dispersionCoeffs.A7,
+    dispersionCoeffs.A8,
+  ].map(Number);
+  if (coefficients.some((coefficient) => !Number.isFinite(coefficient))) {
+    return 1.0;
+  }
+
+  const lambda2 = lambda * lambda;
+  const nSquared = coefficients[0]
+    + coefficients[1] * lambda2
+    + coefficients[2] * lambda2 * lambda2
+    + coefficients[3] / lambda2
+    + coefficients[4] / (lambda2 * lambda2)
+    + coefficients[5] / (lambda2 * lambda2 * lambda2)
+    + coefficients[6] / (lambda2 ** 4)
+    + coefficients[7] / (lambda2 ** 5)
+    + coefficients[8] / (lambda2 ** 6);
+
+  const n = Math.sqrt(nSquared);
+  return Number.isFinite(n) && n >= 1.0 && n <= 3.0 ? n : 1.0;
+}
+
+/**
  * Calculate refractive index using Schott equation (used by CDGM)
  * Schott formula: n² = A0 + A1*λ² + A2*λ⁻² + A3*λ⁻⁴ + A4*λ⁻⁶ + A5*λ⁻⁸
  * @param {Object} schottCoeffs - Schott coefficients {A0, A1, A2, A3, A4, A5}
@@ -4445,8 +4490,10 @@ export function calculateGlassRefractiveIndex(glassData, wavelength) {
   if (!glassData || wavelength <= 0) {
     return 1.0;
   }
-  
-  if (glassData.sellmeier) {
+
+  if (glassData.dispersion) {
+    return calculateRefractiveIndexHikari(glassData.dispersion, wavelength);
+  } else if (glassData.sellmeier) {
     return calculateRefractiveIndex(glassData.sellmeier, wavelength);
   } else if (glassData.schott) {
     return calculateRefractiveIndexSchott(glassData.schott, wavelength);

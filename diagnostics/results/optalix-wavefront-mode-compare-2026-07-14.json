@@ -1,0 +1,175 @@
+{
+  "reference": "diagnostics\\fixtures\\optalix-3g-images-87-03.json",
+  "input": "diagnostics\\fixtures\\coopt-paraxial-piston-2026-07-14.json",
+  "wavelengthsUm": [
+    0.475,
+    0.55,
+    0.625
+  ],
+  "relativeWeights": [
+    0.135,
+    1,
+    0.302
+  ],
+  "weighting": "per-Field RMS from three wavelength cells, using relative wavelength weights",
+  "fields": [
+    {
+      "field": 1,
+      "optalix": 0.1542082954166077,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.29074400809727385,
+      "pistonAbsError": 0.13653571268066617,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 2,
+      "optalix": 0.8366836004324262,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.9270319619382682,
+      "pistonAbsError": 0.09034836150584202,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 3,
+      "optalix": 0.9464448118128053,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 1.1008659952845776,
+      "pistonAbsError": 0.15442118347177236,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 4,
+      "optalix": 0.6183386010449621,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.7331214913815238,
+      "pistonAbsError": 0.11478289033656175,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 5,
+      "optalix": 0.6676152823590751,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.6071357202624306,
+      "pistonAbsError": 0.06047956209664451,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 6,
+      "optalix": 0.902515460583747,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.7864804425733123,
+      "pistonAbsError": 0.1160350180104347,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 7,
+      "optalix": 1.0421157119565372,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.910203869319821,
+      "pistonAbsError": 0.13191184263671618,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 8,
+      "optalix": 1.033232265070984,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.9129230621973891,
+      "pistonAbsError": 0.12030920287359492,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 9,
+      "optalix": 0.9469785707276208,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.8322028348969008,
+      "pistonAbsError": 0.11477573583071998,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 10,
+      "optalix": 0.78321250575044,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.7433880681223787,
+      "pistonAbsError": 0.039824437628061315,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    },
+    {
+      "field": 11,
+      "optalix": 0.6335671855661132,
+      "raw": null,
+      "rawAbsError": null,
+      "piston": 0.640047337792588,
+      "pistonAbsError": 0.0064801522264748,
+      "pistonDefocus": null,
+      "pistonDefocusAbsError": null,
+      "pistonDefocusScaled0895": null,
+      "pistonDefocusScaled0895AbsError": null
+    }
+  ],
+  "summary": {
+    "raw": {
+      "comparedFields": 0,
+      "fieldMeanAbsoluteError": null,
+      "fieldRmsError": null,
+      "fieldWins": 0
+    },
+    "piston": {
+      "comparedFields": 11,
+      "fieldMeanAbsoluteError": 0.09871855448158988,
+      "fieldRmsError": 0.10771352163939978,
+      "fieldWins": 11
+    },
+    "pistonDefocus": {
+      "comparedFields": 0,
+      "fieldMeanAbsoluteError": null,
+      "fieldRmsError": null,
+      "fieldWins": 0
+    },
+    "pistonDefocusScaled0895": {
+      "comparedFields": 0,
+      "fieldMeanAbsoluteError": null,
+      "fieldRmsError": null,
+      "fieldWins": 0
+    }
+  }
+}

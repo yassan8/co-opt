@@ -3165,12 +3165,16 @@ export async function showOpticalPathDifferenceFan(options: any = {}): Promise<a
         .filter((wavelength: number) => Number.isFinite(wavelength) && wavelength > 0))];
     if (wavelengths.length === 0) throw new Error('Valid wavelength data was not found.');
 
-    const [{ runNativeOpdMap, readConfiguredOpdReferenceMode }, { extractOpdFanSections, plotOpdFan }] = await Promise.all([
+    const [{ runNativeOpdMap, readConfiguredOpdReferenceMode, readConfiguredOpdChiefRayMode, readConfiguredOpdPupilNormalizationMode, readConfiguredOpdExitPupilReferencePointMode, readConfiguredOpdReferenceSphereOptions }, { extractOpdFanSections, plotOpdFan }] = await Promise.all([
         import('../src/desktop/ipc/client.ts'),
         import('../evaluation/wavefront/opd-fan-plot.ts'),
     ]);
     const { calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculatePupilsByNewSpec } = await import('../raytracing/core/ray-paraxial.ts');
     const referenceMode = readConfiguredOpdReferenceMode();
+    const chiefRayMode = readConfiguredOpdChiefRayMode();
+    const pupilNormalizationMode = readConfiguredOpdPupilNormalizationMode();
+    const exitPupilReferencePointMode = readConfiguredOpdExitPupilReferencePointMode();
+    const referenceSphereOptions = readConfiguredOpdReferenceSphereOptions();
     const livePrimaryWavelengthUm = Number((w as any)?.getPrimaryWavelength?.());
     const primaryWavelengthUm = Number.isFinite(livePrimaryWavelengthUm) && livePrimaryWavelengthUm > 0
         ? livePrimaryWavelengthUm
@@ -3211,9 +3215,13 @@ export async function showOpticalPathDifferenceFan(options: any = {}): Promise<a
                 ? primaryExitPupilPositionFromLastSurfaceMm
                 : undefined,
             pupilSamplingMode: 'entrance',
+            chiefRayMode,
+            pupilNormalizationMode,
+            exitPupilReferencePointMode,
+            referenceSphereOptions,
             referenceMode,
             referenceSphereGeometry,
-            opdDisplayMode: 'raw',
+            opdDisplayMode: referenceSphereOptions.opdDisplayMode || 'raw',
         });
         opdMapCache.set(cacheKey, result);
         return result;
@@ -3243,9 +3251,12 @@ export async function showOpticalPathDifferenceFan(options: any = {}): Promise<a
                         direction: primaryResult.referenceSphereDirection,
                     }
                     : undefined;
+                const referenceSphereGeometryForWavelength = referenceSphereOptions.referenceSphereWavelengthMode === 'per-wavelength'
+                    ? undefined
+                    : primaryReferenceSphereGeometry;
                 const result = wavelengthUm === primaryWavelengthUm
                     ? primaryResult
-                    : await runOpdMapFor(objectIndex, wavelengthUm, primaryReferenceSphereGeometry);
+                    : await runOpdMapFor(objectIndex, wavelengthUm, referenceSphereGeometryForWavelength);
                 const displayOpdGrid = Array.isArray(result?.displayOpdGrid) ? result.displayOpdGrid : result?.rawOpdGrid;
                 const sections = extractOpdFanSections(
                     displayOpdGrid,

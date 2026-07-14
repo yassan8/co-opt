@@ -127,9 +127,21 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
         const backendLabel = formatBackendLabel(aberrationData);
 
         const rowCount = fieldIndices.length;
+        const compactLayout = container.clientWidth > 0 && container.clientWidth < 760;
+        const availableHeight = Math.max(0, container.parentElement?.clientHeight || container.clientHeight || 0);
+        const rowHeightPx = compactLayout ? 180 : 200;
+        const rowGapPx = 15;
+        const plotChromeHeightPx = compactLayout ? 245 : 200;
+        const plotHeight = Math.max(
+            availableHeight,
+            plotChromeHeightPx + rowCount * rowHeightPx + Math.max(0, rowCount - 1) * rowGapPx,
+        );
+        container.style.height = `${plotHeight}px`;
+        container.style.minHeight = `${plotHeight}px`;
         const leftDomain = [0.08, 0.47];
         const rightDomain = [0.53, 0.92];
-        const rowGap = rowCount > 1 ? 0.05 : 0.08;
+        const plotAreaHeightPx = Math.max(1, plotHeight - plotChromeHeightPx);
+        const rowGap = rowCount > 1 ? rowGapPx / plotAreaHeightPx : 0;
         const rowSpan = (1 - rowGap * Math.max(0, rowCount - 1)) / rowCount;
         const traces = [];
         const annotations = [];
@@ -141,6 +153,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                 font: { size: 18 }
             },
             autosize: true,
+            height: plotHeight,
             showlegend: plotOptions.showLegend,
             legend: {
                 x: 0.94,
@@ -158,10 +171,11 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
         annotations.push({
             text: 'tangential',
             x: (leftDomain[0] + leftDomain[1]) / 2,
-            y: 1.03,
+            y: 1.01,
             xref: 'paper',
             yref: 'paper',
             xanchor: 'center',
+            yanchor: 'bottom',
             showarrow: false,
             align: 'center',
             font: { size: 14, color: '#333' }
@@ -169,10 +183,11 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
         annotations.push({
             text: 'sagittal',
             x: (rightDomain[0] + rightDomain[1]) / 2,
-            y: 1.03,
+            y: 1.01,
             xref: 'paper',
             yref: 'paper',
             xanchor: 'center',
+            yanchor: 'bottom',
             showarrow: false,
             align: 'center',
             font: { size: 14, color: '#333' }

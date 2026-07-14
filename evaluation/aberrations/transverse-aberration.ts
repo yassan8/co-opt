@@ -780,9 +780,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
     const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
 
-    const resolvePupilCoordinate = (ray, fallbackValue) => {
-        const direct = Number(ray?.crossParameter);
-        if (Number.isFinite(direct)) return Math.max(-1, Math.min(1, direct));
+    const resolvePupilCoordinate = (_ray, fallbackValue) => {
         const fallback = Number(fallbackValue);
         return Number.isFinite(fallback) ? Math.max(-1, Math.min(1, fallback)) : 0;
     };
@@ -841,7 +839,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     const sampledMaxAbsY = stopYCoordinates.length > 0
         ? Math.max(...stopYCoordinates.map((value) => Math.abs(value - pupilCenterY)))
         : 0;
-    const maxAbsY = sampledMaxAbsY > 0 ? sampledMaxAbsY : entrancePupilRadius;
+    const maxAbsY = entrancePupilRadius > 0 ? entrancePupilRadius : sampledMaxAbsY;
     const maxCorrectedY = maxAbsY;
     
     // メリジオナル光線の横収差を計算（座標分布に基づく正規化）
@@ -1170,9 +1168,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
     const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
 
-    const resolvePupilCoordinate = (ray, fallbackValue) => {
-        const direct = Number(ray?.crossParameter);
-        if (Number.isFinite(direct)) return Math.max(-1, Math.min(1, direct));
+    const resolvePupilCoordinate = (_ray, fallbackValue) => {
         const fallback = Number(fallbackValue);
         return Number.isFinite(fallback) ? Math.max(-1, Math.min(1, fallback)) : 0;
     };
@@ -1223,7 +1219,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     const sampledMaxAbsX = stopXCoordinates.length > 0
         ? Math.max(...stopXCoordinates.map((value) => Math.abs(value - pupilCenterX)))
         : 0;
-    const maxCorrectedX = sampledMaxAbsX > 0 ? sampledMaxAbsX : entrancePupilRadius;
+    const maxCorrectedX = entrancePupilRadius > 0 ? entrancePupilRadius : sampledMaxAbsX;
     
     // サジタル光線の横収差を計算（座標分布に基づく正規化）
     sagittalRays.forEach((ray, index) => {

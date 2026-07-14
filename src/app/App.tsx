@@ -4051,6 +4051,10 @@ function RenderUcsIcon() {
 // ---- Settings window page component ----
 const FORCE_MODE_KEY = 'coopt.forceInfinitePupilMode';
 const OPD_REFERENCE_MODE_KEY = 'coopt.opd.referenceMode';
+const OPD_CHIEF_RAY_MODE_KEY = 'coopt.opd.chiefRayMode';
+const OPD_PUPIL_NORMALIZATION_MODE_KEY = 'coopt.opd.pupilNormalizationMode';
+const OPD_EXIT_PUPIL_REFERENCE_POINT_MODE_KEY = 'coopt.opd.exitPupilReferencePointMode';
+const OPD_REFERENCE_SPHERE_OPTIONS_KEY = 'coopt.opd.referenceSphereOptions';
 const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
 const DARK_MODE_KEY = 'coopt.darkMode';
 const ALLOWED_MFR = ['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'Sumita', 'CDGM', 'Special'] as const;
@@ -4061,10 +4065,77 @@ function sanitizeForceModeValue(v: any): 'stop' | 'entrance' | '' {
 }
 
 type OpdReferenceModeSetting = 'exit-pupil' | 'image-plane';
+type OpdChiefRayModeSetting = 'stop-center' | 'entrance-pupil-center' | 'transmitted-pupil-center';
+type OpdPupilNormalizationModeSetting = 'fixed-entrance-pupil' | 'effective-transmitted-pupil';
+type OpdExitPupilReferencePointModeSetting = 'chief-ray-intersection' | 'exit-pupil-center';
+type OpdReferenceSphereOptionsSetting = {
+  referenceSphereWavelengthMode: 'primary-wavelength' | 'per-wavelength';
+  opdDisplayMode: 'raw' | 'pistonRemoved' | 'pistonTiltRemoved' | 'pistonDefocusRemoved' | 'pistonTiltDefocusRemoved';
+  exitPupilPositionSign: 'as-is' | 'negated';
+  exitPupilPlaneDefinition: 'surface-local-axis' | 'global-z';
+  chiefImagePoint: 'chief-ray-image-point' | 'paraxial-image-point' | 'sagittal-best-focus-point' | 'tangential-best-focus-point' | 'tan-sag-mid-focus-point' | 'rms-wavefront-best-focus-point' | 'circle-of-least-confusion-point' | 'defocus-zero-reference-point' | 'weighted-tan-sag-focus-point' | 'per-wavelength-best-focus-point' | 'target-surface-center';
+  sphereIntersection: 'exit-pupil-side' | 'opposite-side';
+  opticalPathSign: 'positive' | 'negative';
+  exitPupilDirection: 'image-to-exit-pupil' | 'exit-pupil-to-image';
+};
+
+const DEFAULT_OPD_REFERENCE_SPHERE_OPTIONS: OpdReferenceSphereOptionsSetting = {
+  referenceSphereWavelengthMode: 'primary-wavelength',
+  opdDisplayMode: 'raw',
+  exitPupilPositionSign: 'as-is',
+  exitPupilPlaneDefinition: 'surface-local-axis',
+  chiefImagePoint: 'chief-ray-image-point',
+  sphereIntersection: 'exit-pupil-side',
+  opticalPathSign: 'positive',
+  exitPupilDirection: 'image-to-exit-pupil',
+};
 
 function sanitizeOpdReferenceModeSetting(v: any): OpdReferenceModeSetting {
   const mode = String(v ?? '').trim().toLowerCase();
   return mode === 'exit-pupil' || mode === 'image-plane' ? mode : 'exit-pupil';
+}
+
+function sanitizeOpdChiefRayModeSetting(v: any): OpdChiefRayModeSetting {
+  const mode = String(v ?? '').trim().toLowerCase();
+  return mode === 'entrance-pupil-center' || mode === 'transmitted-pupil-center' ? mode : 'stop-center';
+}
+
+function sanitizeOpdPupilNormalizationModeSetting(v: any): OpdPupilNormalizationModeSetting {
+  return String(v ?? '').trim().toLowerCase() === 'effective-transmitted-pupil'
+    ? 'effective-transmitted-pupil'
+    : 'fixed-entrance-pupil';
+}
+
+function sanitizeOpdExitPupilReferencePointModeSetting(v: any): OpdExitPupilReferencePointModeSetting {
+  const mode = String(v ?? '').trim().toLowerCase();
+  return mode === 'exit-pupil-center' ? mode : 'chief-ray-intersection';
+}
+
+function sanitizeOpdReferenceSphereOptionsSetting(v: any): OpdReferenceSphereOptionsSetting {
+  const raw = v && typeof v === 'object' ? v : {};
+  return {
+    referenceSphereWavelengthMode: raw.referenceSphereWavelengthMode === 'per-wavelength' ? 'per-wavelength' : 'primary-wavelength',
+    opdDisplayMode: raw.opdDisplayMode === 'pistonRemoved' || raw.opdDisplayMode === 'pistonTiltRemoved' || raw.opdDisplayMode === 'pistonDefocusRemoved' || raw.opdDisplayMode === 'pistonTiltDefocusRemoved'
+      ? raw.opdDisplayMode
+      : 'raw',
+    exitPupilPositionSign: raw.exitPupilPositionSign === 'negated' ? 'negated' : 'as-is',
+    exitPupilPlaneDefinition: raw.exitPupilPlaneDefinition === 'global-z' ? 'global-z' : 'surface-local-axis',
+    chiefImagePoint: raw.chiefImagePoint === 'paraxial-image-point'
+      || raw.chiefImagePoint === 'sagittal-best-focus-point'
+      || raw.chiefImagePoint === 'tangential-best-focus-point'
+      || raw.chiefImagePoint === 'tan-sag-mid-focus-point'
+      || raw.chiefImagePoint === 'rms-wavefront-best-focus-point'
+      || raw.chiefImagePoint === 'circle-of-least-confusion-point'
+      || raw.chiefImagePoint === 'defocus-zero-reference-point'
+      || raw.chiefImagePoint === 'weighted-tan-sag-focus-point'
+      || raw.chiefImagePoint === 'per-wavelength-best-focus-point'
+      || raw.chiefImagePoint === 'target-surface-center'
+      ? raw.chiefImagePoint
+      : 'chief-ray-image-point',
+    sphereIntersection: raw.sphereIntersection === 'opposite-side' ? 'opposite-side' : 'exit-pupil-side',
+    opticalPathSign: raw.opticalPathSign === 'negative' ? 'negative' : 'positive',
+    exitPupilDirection: raw.exitPupilDirection === 'exit-pupil-to-image' ? 'exit-pupil-to-image' : 'image-to-exit-pupil',
+  };
 }
 
 function readForceModeFromUrl(): 'stop' | 'entrance' | '' {
@@ -4095,6 +4166,38 @@ function applyOpdReferenceModeToWindowGlobals(mode: OpdReferenceModeSetting): vo
   } catch (_) {}
 }
 
+function applyOpdChiefRayModeToWindowGlobals(mode: OpdChiefRayModeSetting): void {
+  const w = window as any;
+  try {
+    w.__COOPT_OPD_CHIEF_RAY_MODE = mode;
+    w.COOPT_OPD_CHIEF_RAY_MODE = mode;
+  } catch (_) {}
+}
+
+function applyOpdPupilNormalizationModeToWindowGlobals(mode: OpdPupilNormalizationModeSetting): void {
+  const w = window as any;
+  try {
+    w.__COOPT_OPD_PUPIL_NORMALIZATION_MODE = mode;
+    w.COOPT_OPD_PUPIL_NORMALIZATION_MODE = mode;
+  } catch (_) {}
+}
+
+function applyOpdExitPupilReferencePointModeToWindowGlobals(mode: OpdExitPupilReferencePointModeSetting): void {
+  const w = window as any;
+  try {
+    w.__COOPT_OPD_EXIT_PUPIL_REFERENCE_POINT_MODE = mode;
+    w.COOPT_OPD_EXIT_PUPIL_REFERENCE_POINT_MODE = mode;
+  } catch (_) {}
+}
+
+function applyOpdReferenceSphereOptionsToWindowGlobals(options: OpdReferenceSphereOptionsSetting): void {
+  const w = window as any;
+  try {
+    w.__COOPT_OPD_REFERENCE_SPHERE_OPTIONS = options;
+    w.COOPT_OPD_REFERENCE_SPHERE_OPTIONS = options;
+  } catch (_) {}
+}
+
 function readCurrentForceMode(): 'stop' | 'entrance' | '' {
   try {
     const w = window as any;
@@ -4113,6 +4216,22 @@ function DesktopSettingsPage() {
   const [opdReferenceMode, setOpdReferenceMode] = useState<OpdReferenceModeSetting>(() => {
     try { return sanitizeOpdReferenceModeSetting(localStorage.getItem(OPD_REFERENCE_MODE_KEY)); } catch (_) { return 'exit-pupil'; }
   });
+  const [opdChiefRayMode, setOpdChiefRayMode] = useState<OpdChiefRayModeSetting>(() => {
+    try { return sanitizeOpdChiefRayModeSetting(localStorage.getItem(OPD_CHIEF_RAY_MODE_KEY)); } catch (_) { return 'stop-center'; }
+  });
+  const [opdPupilNormalizationMode, setOpdPupilNormalizationMode] = useState<OpdPupilNormalizationModeSetting>(() => {
+    try { return sanitizeOpdPupilNormalizationModeSetting(localStorage.getItem(OPD_PUPIL_NORMALIZATION_MODE_KEY)); } catch (_) { return 'fixed-entrance-pupil'; }
+  });
+  const [opdExitPupilReferencePointMode, setOpdExitPupilReferencePointMode] = useState<OpdExitPupilReferencePointModeSetting>(() => {
+    try {
+      return sanitizeOpdExitPupilReferencePointModeSetting(localStorage.getItem(OPD_EXIT_PUPIL_REFERENCE_POINT_MODE_KEY));
+    } catch (_) { return 'chief-ray-intersection'; }
+  });
+  const [opdReferenceSphereOptions, setOpdReferenceSphereOptions] = useState<OpdReferenceSphereOptionsSetting>(() => {
+    try {
+      return sanitizeOpdReferenceSphereOptionsSetting(JSON.parse(localStorage.getItem(OPD_REFERENCE_SPHERE_OPTIONS_KEY) || '{}'));
+    } catch (_) { return DEFAULT_OPD_REFERENCE_SPHERE_OPTIONS; }
+  });
   const [mfrs, setMfrs] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(GLASS_MAP_MFR_KEY) || '[]'); } catch (_) { return []; }
   });
@@ -4130,10 +4249,45 @@ function DesktopSettingsPage() {
   }, []);
 
   useEffect(() => {
+    readDesktopSetting(OPD_PUPIL_NORMALIZATION_MODE_KEY).then((val) => {
+      const mode = sanitizeOpdPupilNormalizationModeSetting(val || localStorage.getItem(OPD_PUPIL_NORMALIZATION_MODE_KEY));
+      setOpdPupilNormalizationMode(mode);
+      applyOpdPupilNormalizationModeToWindowGlobals(mode);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    readDesktopSetting(OPD_REFERENCE_SPHERE_OPTIONS_KEY).then((val) => {
+      const parsed = val ? JSON.parse(val) : JSON.parse(localStorage.getItem(OPD_REFERENCE_SPHERE_OPTIONS_KEY) || '{}');
+      const options = sanitizeOpdReferenceSphereOptionsSetting(parsed);
+      setOpdReferenceSphereOptions(options);
+      applyOpdReferenceSphereOptionsToWindowGlobals(options);
+    }).catch(() => applyOpdReferenceSphereOptionsToWindowGlobals(opdReferenceSphereOptions));
+  }, []);
+
+  useEffect(() => {
+    readDesktopSetting(OPD_EXIT_PUPIL_REFERENCE_POINT_MODE_KEY).then((val) => {
+      const mode = sanitizeOpdExitPupilReferencePointModeSetting(
+        val || localStorage.getItem(OPD_EXIT_PUPIL_REFERENCE_POINT_MODE_KEY),
+      );
+      setOpdExitPupilReferencePointMode(mode);
+      applyOpdExitPupilReferencePointModeToWindowGlobals(mode);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     readDesktopSetting(OPD_REFERENCE_MODE_KEY).then((val) => {
       const mode = sanitizeOpdReferenceModeSetting(val || localStorage.getItem(OPD_REFERENCE_MODE_KEY));
       setOpdReferenceMode(mode);
       applyOpdReferenceModeToWindowGlobals(mode);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    readDesktopSetting(OPD_CHIEF_RAY_MODE_KEY).then((val) => {
+      const mode = sanitizeOpdChiefRayModeSetting(val || localStorage.getItem(OPD_CHIEF_RAY_MODE_KEY));
+      setOpdChiefRayMode(mode);
+      applyOpdChiefRayModeToWindowGlobals(mode);
     }).catch(() => {});
   }, []);
 
@@ -4153,6 +4307,36 @@ function DesktopSettingsPage() {
     applyOpdReferenceModeToWindowGlobals(val);
     try { localStorage.setItem(OPD_REFERENCE_MODE_KEY, val); } catch (_) {}
     await writeDesktopSetting(OPD_REFERENCE_MODE_KEY, val);
+  };
+
+  const handleOpdChiefRayModeChange = async (val: OpdChiefRayModeSetting) => {
+    setOpdChiefRayMode(val);
+    applyOpdChiefRayModeToWindowGlobals(val);
+    try { localStorage.setItem(OPD_CHIEF_RAY_MODE_KEY, val); } catch (_) {}
+    await writeDesktopSetting(OPD_CHIEF_RAY_MODE_KEY, val);
+  };
+
+  const handleOpdPupilNormalizationModeChange = async (val: OpdPupilNormalizationModeSetting) => {
+    setOpdPupilNormalizationMode(val);
+    applyOpdPupilNormalizationModeToWindowGlobals(val);
+    try { localStorage.setItem(OPD_PUPIL_NORMALIZATION_MODE_KEY, val); } catch (_) {}
+    await writeDesktopSetting(OPD_PUPIL_NORMALIZATION_MODE_KEY, val);
+  };
+
+  const handleOpdExitPupilReferencePointModeChange = async (val: OpdExitPupilReferencePointModeSetting) => {
+    setOpdExitPupilReferencePointMode(val);
+    applyOpdExitPupilReferencePointModeToWindowGlobals(val);
+    try { localStorage.setItem(OPD_EXIT_PUPIL_REFERENCE_POINT_MODE_KEY, val); } catch (_) {}
+    await writeDesktopSetting(OPD_EXIT_PUPIL_REFERENCE_POINT_MODE_KEY, val);
+  };
+
+  const handleOpdReferenceSphereOptionChange = async (key: keyof OpdReferenceSphereOptionsSetting, value: string) => {
+    const next = sanitizeOpdReferenceSphereOptionsSetting({ ...opdReferenceSphereOptions, [key]: value });
+    setOpdReferenceSphereOptions(next);
+    applyOpdReferenceSphereOptionsToWindowGlobals(next);
+    const serialized = JSON.stringify(next);
+    try { localStorage.setItem(OPD_REFERENCE_SPHERE_OPTIONS_KEY, serialized); } catch (_) {}
+    await writeDesktopSetting(OPD_REFERENCE_SPHERE_OPTIONS_KEY, serialized);
   };
 
   const handleMfrChange = (mfr: string, checked: boolean) => {
@@ -4224,6 +4408,158 @@ function DesktopSettingsPage() {
           </label>
         </div>
         <div style={{ fontSize: 12, color: '#666' }}>Changes take effect on the next calculation.</div>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>OPD Chief Ray</div>
+        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+          Select the center used by the chief ray for OPD reference calculations.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+          <label>
+            <input type="radio" name="opd-chief-ray-mode" value="stop-center" checked={opdChiefRayMode === 'stop-center'} onChange={() => handleOpdChiefRayModeChange('stop-center')} />{' '}
+            Stop Center
+          </label>
+          <label>
+            <input type="radio" name="opd-chief-ray-mode" value="entrance-pupil-center" checked={opdChiefRayMode === 'entrance-pupil-center'} onChange={() => handleOpdChiefRayModeChange('entrance-pupil-center')} />{' '}
+            Entrance Pupil Center
+          </label>
+          <label>
+            <input type="radio" name="opd-chief-ray-mode" value="transmitted-pupil-center" checked={opdChiefRayMode === 'transmitted-pupil-center'} onChange={() => handleOpdChiefRayModeChange('transmitted-pupil-center')} />{' '}
+            Transmitted Pupil Center
+          </label>
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>OPD Pupil Normalization</div>
+        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+          Select whether the OPD Fan coordinate uses the fixed paraxial entrance pupil or the transmitted pupil envelope.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+          <label>
+            <input type="radio" name="opd-pupil-normalization-mode" value="fixed-entrance-pupil" checked={opdPupilNormalizationMode === 'fixed-entrance-pupil'} onChange={() => handleOpdPupilNormalizationModeChange('fixed-entrance-pupil')} />{' '}
+            Fixed Entrance Pupil
+          </label>
+          <label>
+            <input type="radio" name="opd-pupil-normalization-mode" value="effective-transmitted-pupil" checked={opdPupilNormalizationMode === 'effective-transmitted-pupil'} onChange={() => handleOpdPupilNormalizationModeChange('effective-transmitted-pupil')} />{' '}
+            Effective Transmitted Pupil
+          </label>
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>Exit Pupil Reference Point</div>
+        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+          Select the point on the exit pupil used to define the reference sphere.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+          <label>
+            <input type="radio" name="opd-exit-pupil-reference-point-mode" value="chief-ray-intersection" checked={opdExitPupilReferencePointMode === 'chief-ray-intersection'} onChange={() => handleOpdExitPupilReferencePointModeChange('chief-ray-intersection')} />{' '}
+            Chief Ray / Exit Pupil Intersection
+          </label>
+          <label>
+            <input type="radio" name="opd-exit-pupil-reference-point-mode" value="exit-pupil-center" checked={opdExitPupilReferencePointMode === 'exit-pupil-center'} onChange={() => handleOpdExitPupilReferencePointModeChange('exit-pupil-center')} />{' '}
+            Exit Pupil Center
+          </label>
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>Reference Sphere Conventions</div>
+        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+          Configure the geometric and sign conventions used by the OPD reference sphere.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 1fr) minmax(180px, 1fr)', gap: 8, margin: '8px 0 12px 0' }}>
+          <label>Reference sphere wavelength
+            <select value={opdReferenceSphereOptions.referenceSphereWavelengthMode} onChange={e => handleOpdReferenceSphereOptionChange('referenceSphereWavelengthMode', e.target.value)}>
+              <option value="primary-wavelength">Primary wavelength</option><option value="per-wavelength">Per wavelength</option>
+            </select>
+          </label>
+          <div>
+            <div style={{ marginBottom: 4 }}>OPD defocus treatment</div>
+            <label style={{ display: 'block', marginBottom: 4 }}>
+              <input type="radio" name="opd-display-mode" value="raw" checked={opdReferenceSphereOptions.opdDisplayMode === 'raw'} onChange={() => handleOpdReferenceSphereOptionChange('opdDisplayMode', 'raw')} />{' '}
+              Raw
+            </label>
+            <label style={{ display: 'block', marginBottom: 4 }}>
+              <input type="radio" name="opd-display-mode" value="pistonRemoved" checked={opdReferenceSphereOptions.opdDisplayMode === 'pistonRemoved'} onChange={() => handleOpdReferenceSphereOptionChange('opdDisplayMode', 'pistonRemoved')} />{' '}
+              Remove piston
+            </label>
+            <label style={{ display: 'block', marginBottom: 4 }}>
+              <input type="radio" name="opd-display-mode" value="pistonTiltRemoved" checked={opdReferenceSphereOptions.opdDisplayMode === 'pistonTiltRemoved'} onChange={() => handleOpdReferenceSphereOptionChange('opdDisplayMode', 'pistonTiltRemoved')} />{' '}
+              Remove piston / tilt
+            </label>
+            <label style={{ display: 'block', marginBottom: 4 }}>
+              <input type="radio" name="opd-display-mode" value="pistonDefocusRemoved" checked={opdReferenceSphereOptions.opdDisplayMode === 'pistonDefocusRemoved'} onChange={() => handleOpdReferenceSphereOptionChange('opdDisplayMode', 'pistonDefocusRemoved')} />{' '}
+              Remove piston / defocus
+            </label>
+            <label style={{ display: 'block' }}>
+              <input type="radio" name="opd-display-mode" value="pistonTiltDefocusRemoved" checked={opdReferenceSphereOptions.opdDisplayMode === 'pistonTiltDefocusRemoved'} onChange={() => handleOpdReferenceSphereOptionChange('opdDisplayMode', 'pistonTiltDefocusRemoved')} />{' '}
+              Remove piston / tilt / defocus
+            </label>
+          </div>
+          <label>Exit pupil position sign
+            <select value={opdReferenceSphereOptions.exitPupilPositionSign} onChange={e => handleOpdReferenceSphereOptionChange('exitPupilPositionSign', e.target.value)}>
+              <option value="as-is">As configured</option><option value="negated">Negated</option>
+            </select>
+          </label>
+          <label>Exit pupil plane
+            <select value={opdReferenceSphereOptions.exitPupilPlaneDefinition} onChange={e => handleOpdReferenceSphereOptionChange('exitPupilPlaneDefinition', e.target.value)}>
+              <option value="surface-local-axis">Surface local axis</option><option value="global-z">Global Z plane</option>
+            </select>
+          </label>
+          <div>
+            <div style={{ marginBottom: 4 }}>Image point reference</div>
+            <label style={{ display: 'block', marginBottom: 4 }}>
+              <input type="radio" name="opd-image-point-reference" value="chief-ray-image-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'chief-ray-image-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'chief-ray-image-point')} />{' '}
+              Chief-ray image point
+            </label>
+            <label style={{ display: 'block', marginBottom: 4 }}>
+              <input type="radio" name="opd-image-point-reference" value="paraxial-image-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'paraxial-image-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'paraxial-image-point')} />{' '}
+              Paraxial image point
+            </label>
+            <label style={{ display: 'block' }}>
+              <input type="radio" name="opd-image-point-reference" value="sagittal-best-focus-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'sagittal-best-focus-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'sagittal-best-focus-point')} />{' '}
+              Sagittal best-focus point
+            </label>
+            <label style={{ display: 'block', marginTop: 4 }}>
+              <input type="radio" name="opd-image-point-reference" value="tangential-best-focus-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'tangential-best-focus-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'tangential-best-focus-point')} />{' '}
+              Tangential best-focus point
+            </label>
+            <label style={{ display: 'block', marginTop: 4 }}>
+              <input type="radio" name="opd-image-point-reference" value="tan-sag-mid-focus-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'tan-sag-mid-focus-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'tan-sag-mid-focus-point')} />{' '}
+              Tan/Sag mid-focus point
+            </label>
+            <label style={{ display: 'block', marginTop: 4 }}>
+              <input type="radio" name="opd-image-point-reference" value="rms-wavefront-best-focus-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'rms-wavefront-best-focus-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'rms-wavefront-best-focus-point')} />{' '}
+              Minimum RMS wavefront focus
+            </label>
+            <label style={{ display: 'block', marginTop: 4 }}>
+              <input type="radio" name="opd-image-point-reference" value="circle-of-least-confusion-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'circle-of-least-confusion-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'circle-of-least-confusion-point')} />{' '}
+              Circle of least confusion
+            </label>
+            <label style={{ display: 'block', marginTop: 4 }}>
+              <input type="radio" name="opd-image-point-reference" value="defocus-zero-reference-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'defocus-zero-reference-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'defocus-zero-reference-point')} />{' '}
+              Defocus-zero reference point
+            </label>
+            <label style={{ display: 'block', marginTop: 4 }}>
+              <input type="radio" name="opd-image-point-reference" value="weighted-tan-sag-focus-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'weighted-tan-sag-focus-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'weighted-tan-sag-focus-point')} />{' '}
+              Weighted Tan/Sag focus
+            </label>
+            <label style={{ display: 'block', marginTop: 4 }}>
+              <input type="radio" name="opd-image-point-reference" value="per-wavelength-best-focus-point" checked={opdReferenceSphereOptions.chiefImagePoint === 'per-wavelength-best-focus-point'} onChange={() => handleOpdReferenceSphereOptionChange('chiefImagePoint', 'per-wavelength-best-focus-point')} />{' '}
+              Per-wavelength best focus
+            </label>
+          </div>
+          <label>Sphere intersection
+            <select value={opdReferenceSphereOptions.sphereIntersection} onChange={e => handleOpdReferenceSphereOptionChange('sphereIntersection', e.target.value)}>
+              <option value="exit-pupil-side">Exit-pupil side</option><option value="opposite-side">Opposite side</option>
+            </select>
+          </label>
+          <label>Optical path sign
+            <select value={opdReferenceSphereOptions.opticalPathSign} onChange={e => handleOpdReferenceSphereOptionChange('opticalPathSign', e.target.value)}>
+              <option value="positive">Positive</option><option value="negative">Negative</option>
+            </select>
+          </label>
+          <label>Exit pupil direction
+            <select value={opdReferenceSphereOptions.exitPupilDirection} onChange={e => handleOpdReferenceSphereOptionChange('exitPupilDirection', e.target.value)}>
+              <option value="image-to-exit-pupil">Image to exit pupil</option><option value="exit-pupil-to-image">Exit pupil to image</option>
+            </select>
+          </label>
+        </div>
       </div>
     </div>
   );
@@ -12540,6 +12876,1174 @@ const collectLegacyCrossRays = async (
     appendSystemTextLine(`${iterCol}${minCol}${eqCol}${ineqCol}${dampingCol}${improvCol}`);
   };
 
+  const deriveWavefrontPupilRadiusMm = (opticalSystemRows: any[], objectRows: any[]) => {
+    const readPositive = (row: any, keys: string[]) => {
+      for (const key of keys) {
+        const value = Number(row?.[key]);
+        if (Number.isFinite(value) && value > 0) return Math.abs(value);
+      }
+      return Number.NaN;
+    };
+    const isStop = (row: any) => String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase() === 'stop';
+    const stopRow = opticalSystemRows.find(isStop);
+    if (!stopRow) return { radiusMm: undefined, source: 'unavailable' };
+
+    const stopAperture = readPositive(stopRow, ['aperture', 'Aperture']);
+    const stopSemidia = readPositive(stopRow, ['__cooptActualSemidia', '__cooptExplicitApertureSemidia', 'semidia', 'Semidia', 'Semi Diameter']);
+    let radiusMm = Number.isFinite(stopAperture) ? stopAperture * 0.5 : stopSemidia;
+    if (!(Number.isFinite(radiusMm) && radiusMm > 0)) return { radiusMm: undefined, source: 'unavailable' };
+
+    for (const row of opticalSystemRows) {
+      if (isStop(row)) continue;
+      const clearAperture = readPositive(row, ['__cooptActualSemidia', '__cooptExplicitApertureSemidia', 'semidia', 'Semidia', 'Semi Diameter']);
+      if (Number.isFinite(clearAperture)) radiusMm = Math.min(radiusMm, clearAperture);
+    }
+
+    let vignetteFactor = 1;
+    for (const row of [...opticalSystemRows, ...objectRows]) {
+      for (const key of ['vignettingFactor', 'vignetteFactor', 'vignetting', 'vignette', 'vignettingX', 'vignettingY', 'vignetteX', 'vignetteY']) {
+        const value = Number(row?.[key]);
+        if (Number.isFinite(value) && value >= 0 && value <= 1) vignetteFactor = Math.min(vignetteFactor, value);
+      }
+    }
+    radiusMm *= vignetteFactor;
+    return {
+      radiusMm: Number.isFinite(radiusMm) && radiusMm > 0 ? radiusMm : undefined,
+      source: vignetteFactor < 1 ? 'stop-clear-aperture-vignetting' : 'stop-clear-aperture',
+    };
+  };
+
+  const runWavefrontRmsConsoleCommand = async (
+    requestedGridSize = 129,
+    requestedPupilRadiusMm?: number,
+    requestedWavelengthsUm?: number[],
+    requestedRelativeWeights?: number[],
+    requestedSphereWavelengthMode?: 'primary-wavelength' | 'per-wavelength',
+    requestedChiefImagePoint?: 'chief-ray-image-point' | 'paraxial-image-point' | 'target-surface-center' | 'per-wavelength-best-focus-point',
+    requestedDisplayMode?: 'raw' | 'pistonRemoved' | 'pistonTiltRemoved' | 'referenceSphereTiltRemoved' | 'pistonDefocusRemoved' | 'pistonTiltDefocusRemoved',
+    requestedPupilNormalizationMode?: 'fixed-entrance-pupil' | 'effective-transmitted-pupil',
+    requestedDefocusScale?: number,
+    requestedFixedReferenceSphereGeometry = false,
+    requestedExitPupilReferencePointMode?: 'chief-ray-intersection' | 'exit-pupil-center',
+    requestedFieldMode: 'primary-fixed' | 'per-wavelength' = 'primary-fixed',
+    requestedChiefRayMode?: 'stop-center' | 'entrance-pupil-center' | 'transmitted-pupil-center',
+    requestedReferenceRayPupilCoordinate?: { x: number; y: number },
+    requestedDetailedDiagnostics = false,
+    requestedOpdTermDiagnostics = false,
+  ) => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const hostWindow = getRenderHostWindow();
+      const opdReferenceMode = sanitizeOpdReferenceModeSetting(
+        (hostWindow as any).__COOPT_OPD_REFERENCE_MODE || localStorage.getItem(OPD_REFERENCE_MODE_KEY),
+      );
+      const opdChiefRayMode = requestedChiefRayMode || sanitizeOpdChiefRayModeSetting(
+        (hostWindow as any).__COOPT_OPD_CHIEF_RAY_MODE || localStorage.getItem(OPD_CHIEF_RAY_MODE_KEY),
+      );
+      const referenceRayPupilCoordinate = requestedReferenceRayPupilCoordinate;
+      const configuredPupilNormalizationMode = sanitizeOpdPupilNormalizationModeSetting(
+        (hostWindow as any).__COOPT_OPD_PUPIL_NORMALIZATION_MODE || localStorage.getItem(OPD_PUPIL_NORMALIZATION_MODE_KEY),
+      );
+      const opdPupilNormalizationMode = requestedPupilNormalizationMode || configuredPupilNormalizationMode;
+      const opdExitPupilReferencePointMode = requestedExitPupilReferencePointMode || sanitizeOpdExitPupilReferencePointModeSetting(
+        (hostWindow as any).__COOPT_OPD_EXIT_PUPIL_REFERENCE_POINT_MODE || localStorage.getItem(OPD_EXIT_PUPIL_REFERENCE_POINT_MODE_KEY),
+      );
+      let opdReferenceSphereOptions = DEFAULT_OPD_REFERENCE_SPHERE_OPTIONS;
+      try {
+        const storedOptions = (hostWindow as any).__COOPT_OPD_REFERENCE_SPHERE_OPTIONS
+          || JSON.parse(localStorage.getItem(OPD_REFERENCE_SPHERE_OPTIONS_KEY) || '{}');
+        opdReferenceSphereOptions = sanitizeOpdReferenceSphereOptionsSetting(storedOptions);
+      } catch (_) {}
+      if (requestedSphereWavelengthMode) {
+        opdReferenceSphereOptions = { ...opdReferenceSphereOptions, referenceSphereWavelengthMode: requestedSphereWavelengthMode };
+      }
+      if (requestedChiefImagePoint) {
+        opdReferenceSphereOptions = { ...opdReferenceSphereOptions, chiefImagePoint: requestedChiefImagePoint };
+      }
+      const systemConfig = getSystemConfigFromWindow(hostWindow);
+      const activeConfig = getActiveConfigFromSystemConfig(systemConfig);
+      const opticalSystemRows = getConfigRowsForRender(hostWindow, activeConfig, systemConfig);
+      const renderedObjectRows = Array.isArray(activeConfig?.object) && activeConfig.object.length > 0
+        ? activeConfig.object
+        : getRenderObjectRows(hostWindow, opticalSystemRows);
+      const objectRows = renderedObjectRows.map((row: any) => {
+        const originalPosition = String(row?.__cooptOriginalPosition ?? '').trim().toLowerCase();
+        const target = row?.__cooptImageHeightTarget;
+        if (originalPosition !== 'imageheight' || !target || !Number.isFinite(Number(target.y))) return row;
+        return {
+          ...row,
+          position: 'ImageHeight',
+          xHeight: Number(target.x ?? 0),
+          yHeight: Number(target.y),
+          xHeightAngle: Number(target.x ?? 0),
+          yHeightAngle: Number(target.y),
+          x: Number(target.x ?? 0),
+          y: Number(target.y),
+        };
+      });
+      const sourceRows = getRenderSourceRows(hostWindow);
+      const pupilRadiusOverrideMm = Number.isFinite(Number(requestedPupilRadiusMm)) && Number(requestedPupilRadiusMm) > 0
+        ? Number(requestedPupilRadiusMm)
+        : undefined;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      if (opticalSystemRows.length === 0 || objectRows.length === 0 || sourceRows.length === 0) {
+        appendSystemTextLine('wav: optical system, object, or wavelength data is unavailable.');
+        return;
+      }
+
+      const rawWavelengths = (requestedWavelengthsUm
+        ? requestedWavelengthsUm.map((wavelengthUm, index) => ({
+          index,
+          wavelengthUm: Number(wavelengthUm),
+          relativeWeight: Number(requestedRelativeWeights?.[index] ?? sourceRows[index]?.relativeWeight ?? sourceRows[index]?.relWeight ?? sourceRows[index]?.weight ?? sourceRows[index]?.weighting ?? (index === 0 ? 1 : 0)),
+        }))
+        : sourceRows.map((row: any, index: number) => ({
+          index,
+          wavelengthUm: Number(row?.wavelength ?? row?.Wavelength),
+          relativeWeight: Number(row?.relativeWeight ?? row?.relWeight ?? row?.weight ?? row?.weighting ?? (index === 0 ? 1 : 0)),
+        })))
+      .filter((entry) => Number.isFinite(entry.wavelengthUm) && entry.wavelengthUm > 0);
+      if (rawWavelengths.length === 0) {
+        appendSystemTextLine('wav: no valid wavelengths were found.');
+        return;
+      }
+      const primaryIndex = requestedWavelengthsUm
+        ? rawWavelengths.reduce((bestIndex, entry, index, entries) => (
+          entry.relativeWeight > entries[bestIndex].relativeWeight ? index : bestIndex
+        ), 0)
+        : rawWavelengths.findIndex((entry) => {
+          const row: any = sourceRows[entry.index] || {};
+          const rawPrimary = row?.isPrimary ?? row?.primary ?? row?.Primary ?? row?.['Primary Wavelength'];
+          const primaryText = String(rawPrimary ?? '').trim().toLowerCase();
+          return rawPrimary === true
+            || primaryText === 'true'
+            || primaryText === '1'
+            || primaryText === 'yes'
+            || primaryText.includes('primary');
+        });
+      const primaryWeight = (primaryIndex >= 0 ? rawWavelengths[primaryIndex]?.relativeWeight : undefined)
+        || rawWavelengths.find((entry) => entry.relativeWeight > 0)?.relativeWeight
+        || 1;
+      const wavelengths = rawWavelengths.map((entry) => ({
+        ...entry,
+        relativeWeight: entry.relativeWeight / primaryWeight,
+      }));
+      const rmsDisplayMode = opdReferenceSphereOptions.opdDisplayMode || 'raw';
+      const effectiveRmsDisplayMode = Number.isFinite(requestedDefocusScale)
+        ? `pistonDefocusScaled:${Math.max(0, Math.min(1, Number(requestedDefocusScale))).toFixed(6)}`
+        : requestedDisplayMode || rmsDisplayMode;
+      const backendRmsDisplayMode = effectiveRmsDisplayMode === 'referenceSphereTiltRemoved'
+        ? 'pistonTiltRemoved'
+        : effectiveRmsDisplayMode;
+
+      appendSystemTextLine('WAVEFRONT ABERRATION (co-opt RMS/lambda)');
+      appendSystemTextLine(`Wavelengths: ${wavelengths.map((entry) => `${entry.index + 1}=${entry.wavelengthUm.toFixed(6)}um`).join(', ')}`);
+      const primaryWavelength = primaryIndex >= 0
+        ? rawWavelengths[primaryIndex]?.wavelengthUm
+        : rawWavelengths[0]?.wavelengthUm;
+      if (requestedDetailedDiagnostics) {
+        appendSystemTextLine(`Reference: ${opdReferenceMode} | Image point: ${opdReferenceSphereOptions.chiefImagePoint} | RMS: ${effectiveRmsDisplayMode} | Pupil: ${opdPupilNormalizationMode}`);
+        if (requestedFixedReferenceSphereGeometry) appendSystemTextLine('Reference sphere geometry: fixed from chief-ray primary-wavelength result per Field');
+        appendSystemTextLine(`Reference sphere wavelength: ${opdReferenceSphereOptions.referenceSphereWavelengthMode} (primary=${Number(primaryWavelength ?? 0).toFixed(6)}um)`);
+        appendSystemTextLine(`Pupil radius: ${pupilRadiusOverrideMm != null ? `${pupilRadiusOverrideMm.toFixed(6)} mm (command override)` : 'native-derived from optical system and vignetting'}`);
+      }
+      appendSystemTextLine(`OPD conditions: ${requestedFieldMode === 'per-wavelength' ? 'Per-wavelength Field' : 'Primary-fixed Field'} | ${pupilRadiusOverrideMm != null ? 'command pupil override' : 'native-derived pupil'} | reference ray X=${Number(referenceRayPupilCoordinate?.x ?? 0).toFixed(6)}, Y=${Number(referenceRayPupilCoordinate?.y ?? 0).toFixed(6)}`);
+      appendSystemTextLine(' Field  Wavel.  Rel.Wgt        RMS/lambda');
+      appendSystemTextLine('------------------------------------------');
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const [{ normalizeTransverseObjectRowsForImageHeight, runNativeOpdMap, runNativeOpdRmsWaves }, { calculateExitPupilDiameter, calculatePupilsByNewSpec }] = await Promise.all([
+        import('../desktop/ipc/client.ts'),
+        import('../../raytracing/core/ray-paraxial.ts'),
+      ]);
+      const tracedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+        Number(primaryWavelength),
+      );
+      const tracedObjectRowsByWavelength = requestedFieldMode === 'per-wavelength'
+        ? new Map(await Promise.all(wavelengths.map(async (wavelength) => [
+          wavelength.index,
+          await normalizeTransverseObjectRowsForImageHeight(
+            opticalSystemRows,
+            sourceRows,
+            objectRows,
+            wavelength.wavelengthUm,
+          ),
+        ] as const)))
+        : undefined;
+      const entrancePupilPositionFromFirstSurfaceMm = Number(
+        calculatePupilsByNewSpec(opticalSystemRows, Number(primaryWavelength))?.entrancePupil?.position,
+      );
+      const exitPupilPositionFromLastSurfaceMm = Number(
+        calculateExitPupilDiameter(opticalSystemRows, Number(primaryWavelength))?.position,
+      );
+      const summarizePupilMask = (mask: any) => {
+        if (!Array.isArray(mask) || mask.length === 0) return null;
+        const height = mask.length;
+        const width = mask.reduce((max: number, row: any) => Math.max(max, Array.isArray(row) ? row.length : 0), 0);
+        if (width === 0) return null;
+        const centerX = (width - 1) / 2;
+        const centerY = (height - 1) / 2;
+        const scale = Math.max(centerX, centerY) || 1;
+        let candidateCount = 0;
+        let validCount = 0;
+        let sumU = 0;
+        let sumV = 0;
+        let minU = Infinity;
+        let maxU = -Infinity;
+        let minV = Infinity;
+        let maxV = -Infinity;
+        let maxRadius = 0;
+        for (let rowIndex = 0; rowIndex < height; rowIndex += 1) {
+          const row = Array.isArray(mask[rowIndex]) ? mask[rowIndex] : [];
+          for (let columnIndex = 0; columnIndex < width; columnIndex += 1) {
+            const value = row[columnIndex];
+            if (value === null || value === undefined) continue;
+            candidateCount += 1;
+            if (value !== true) continue;
+            validCount += 1;
+            const u = (columnIndex - centerX) / scale;
+            const v = (rowIndex - centerY) / scale;
+            const radius = Math.hypot(u, v);
+            sumU += u;
+            sumV += v;
+            minU = Math.min(minU, u);
+            maxU = Math.max(maxU, u);
+            minV = Math.min(minV, v);
+            maxV = Math.max(maxV, v);
+            maxRadius = Math.max(maxRadius, radius);
+          }
+        }
+        if (validCount === 0) return { candidateCount, validCount, validRatio: 0 };
+        return {
+          candidateCount,
+          validCount,
+          validRatio: validCount / Math.max(1, candidateCount),
+          centroidU: sumU / validCount,
+          centroidV: sumV / validCount,
+          minU,
+          maxU,
+          minV,
+          maxV,
+          maxRadius,
+        };
+      };
+      const conditionReferenceGrid = (grid: any) => {
+        if (!Array.isArray(grid) || grid.length === 0) return null;
+        const rowIndex = (grid.length - 1) / 2;
+        if (!Number.isInteger(rowIndex) || !Array.isArray(grid[rowIndex])) return null;
+        const width = grid[rowIndex].length;
+        if (width === 0) return null;
+        const sampleColumn = (-1 / 32 + 1) * (width - 1) / 2;
+        const leftColumn = Math.floor(sampleColumn);
+        const rightColumn = Math.ceil(sampleColumn);
+        if (grid[rowIndex][leftColumn] == null || grid[rowIndex][rightColumn] == null) return null;
+        const leftValue = Number(grid[rowIndex][leftColumn]);
+        const rightValue = Number(grid[rowIndex][rightColumn]);
+        if (!Number.isFinite(leftValue) || !Number.isFinite(rightValue)) return null;
+        const fraction = sampleColumn - leftColumn;
+        const referenceValue = leftValue + (rightValue - leftValue) * fraction;
+        let squareSum = 0;
+        let finiteCount = 0;
+        const conditionedGrid = grid.map((row: any) => Array.isArray(row) ? row.map((value: any) => {
+          if (value == null) return null;
+          const numericValue = Number(value);
+          if (!Number.isFinite(numericValue)) return null;
+          const conditionedValue = numericValue - referenceValue;
+          squareSum += conditionedValue * conditionedValue;
+          finiteCount += 1;
+          return conditionedValue;
+        }) : []);
+        return finiteCount > 0
+          ? { grid: conditionedGrid, rmsWaves: Math.sqrt(squareSum / finiteCount), referenceValue }
+          : null;
+      };
+      let weightedSquareSum = 0;
+      let weightSum = 0;
+      let validSampleWeightedSquareSum = 0;
+      let validSampleWeightSum = 0;
+      let referenceWeightedSquareSum = 0;
+      let referenceWeightSum = 0;
+      let pooledReferenceSquareSum = 0;
+      let pooledReferenceSampleWeight = 0;
+      let backendName = '';
+      for (let objectIndex = 0; objectIndex < objectRows.length; objectIndex += 1) {
+        let fixedReferenceSphereGeometry: {
+          center: { x: number; y: number; z: number };
+          radiusMm: number;
+          direction: { x: number; y: number; z: number };
+        } | undefined;
+        if (requestedFixedReferenceSphereGeometry) {
+          try {
+            const chiefGeometryResult: any = await runNativeOpdRmsWaves({
+              opticalSystemRows,
+              sourceRows,
+              objectRows: tracedObjectRows,
+              objectIndex,
+              wavelengthUm: Number(primaryWavelength),
+              gridSize: requestedGridSize,
+              pupilRadiusMm: pupilRadiusOverrideMm,
+              entrancePupilPositionFromFirstSurfaceMm: Number.isFinite(entrancePupilPositionFromFirstSurfaceMm)
+                ? entrancePupilPositionFromFirstSurfaceMm
+                : undefined,
+              exitPupilPositionFromLastSurfaceMm: Number.isFinite(exitPupilPositionFromLastSurfaceMm)
+                ? exitPupilPositionFromLastSurfaceMm
+                : undefined,
+              pupilSamplingMode: 'entrance',
+              chiefRayMode: opdChiefRayMode,
+              referenceRayPupilCoordinate,
+              pupilNormalizationMode: opdPupilNormalizationMode,
+              exitPupilReferencePointMode: opdExitPupilReferencePointMode,
+              referenceSphereOptions: { ...opdReferenceSphereOptions, chiefImagePoint: 'chief-ray-image-point' },
+              referenceMode: opdReferenceMode,
+              opdDisplayMode: 'raw',
+            });
+            const center = chiefGeometryResult?.referenceSphereCenter;
+            const direction = chiefGeometryResult?.referenceSphereDirection;
+            const radiusMm = Number(chiefGeometryResult?.referenceSphereRadiusMm);
+            if (center && direction && Number.isFinite(radiusMm) && radiusMm > 0) {
+              fixedReferenceSphereGeometry = {
+                center: { x: Number(center.x), y: Number(center.y), z: Number(center.z) },
+                radiusMm,
+                direction: { x: Number(direction.x), y: Number(direction.y), z: Number(direction.z) },
+              };
+            }
+          } catch (_) {
+            appendSystemTextLine(`  Field ${objectIndex + 1}: fixed chief reference geometry unavailable`);
+          }
+        }
+        for (const wavelength of wavelengths) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          let result: any;
+          try {
+            const fieldObjectRows = tracedObjectRowsByWavelength?.get(wavelength.index) || tracedObjectRows;
+            result = await runNativeOpdRmsWaves({
+              opticalSystemRows,
+              sourceRows,
+              objectRows: fieldObjectRows,
+              objectIndex,
+              wavelengthUm: wavelength.wavelengthUm,
+              gridSize: requestedGridSize,
+              pupilRadiusMm: pupilRadiusOverrideMm,
+              entrancePupilPositionFromFirstSurfaceMm: Number.isFinite(entrancePupilPositionFromFirstSurfaceMm)
+                ? entrancePupilPositionFromFirstSurfaceMm
+                : undefined,
+              exitPupilPositionFromLastSurfaceMm: Number.isFinite(exitPupilPositionFromLastSurfaceMm)
+                ? exitPupilPositionFromLastSurfaceMm
+                : undefined,
+              pupilSamplingMode: 'entrance',
+              chiefRayMode: opdChiefRayMode,
+              referenceRayPupilCoordinate,
+              pupilNormalizationMode: opdPupilNormalizationMode,
+              exitPupilReferencePointMode: opdExitPupilReferencePointMode,
+              referenceSphereOptions: opdReferenceSphereOptions,
+              referenceSphereGeometry: fixedReferenceSphereGeometry,
+              referenceMode: opdReferenceMode,
+              opdDisplayMode: backendRmsDisplayMode,
+            });
+          } catch (error) {
+            appendSystemTextLine(`  Field ${objectIndex + 1} Wavel. ${wavelength.index + 1}: failed: ${String((error as any)?.message || error)}`);
+            continue;
+          }
+          if (!backendName && result?.backend) backendName = String(result.backend);
+          const maskSummary = summarizePupilMask(result?.pupilMaskGrid);
+          if (requestedDetailedDiagnostics && maskSummary) {
+            appendSystemTextLine(`  Mask Field ${objectIndex + 1} Wavel. ${wavelength.index + 1}: valid=${maskSummary.validCount}/${maskSummary.candidateCount} ratio=${maskSummary.validRatio.toFixed(4)}${maskSummary.validCount > 0 ? ` centroid=(${maskSummary.centroidU.toFixed(4)},${maskSummary.centroidV.toFixed(4)}) bounds=(${maskSummary.minU.toFixed(4)},${maskSummary.maxU.toFixed(4)})x(${maskSummary.minV.toFixed(4)},${maskSummary.maxV.toFixed(4)}) rmax=${maskSummary.maxRadius.toFixed(4)}` : ''}`);
+          }
+          const conditionedReference = conditionReferenceGrid(result?.referenceSphereOpdGrid);
+          const nativeRms = Number(result?.displayRmsWaves ?? result?.rmsWaves);
+          const rms = effectiveRmsDisplayMode === 'raw' && conditionedReference
+            ? conditionedReference.rmsWaves
+            : nativeRms;
+          if (!Number.isFinite(rms)) continue;
+          const validSampleCount = maskSummary?.validCount ?? Number(result?.sampleCount ?? 0);
+          if (requestedDetailedDiagnostics) {
+            const sphereCenter = result?.referenceSphereCenter;
+            const sphereText = sphereCenter
+              ? ` sphere=(${Number(sphereCenter.x).toFixed(3)},${Number(sphereCenter.y).toFixed(3)},${Number(sphereCenter.z).toFixed(3)}) r=${Number(result?.referenceSphereRadiusMm ?? 0).toFixed(3)}`
+              : '';
+            const direction = result?.referenceSphereDirection;
+            const directionText = direction
+              ? ` dir=(${Number(direction.x).toFixed(6)},${Number(direction.y).toFixed(6)},${Number(direction.z).toFixed(6)})`
+              : '';
+            const exitPupilPoint = result?.exitPupilCenter;
+            const exitPupilText = exitPupilPoint
+              ? ` exit=(${Number(exitPupilPoint.x).toFixed(3)},${Number(exitPupilPoint.y).toFixed(3)},${Number(exitPupilPoint.z).toFixed(3)})`
+              : '';
+            const gridSize = Number(result?.gridSize ?? requestedGridSize);
+            const candidateCount = maskSummary?.candidateCount
+              ?? (gridSize > 1 ? Math.round(Math.PI * ((gridSize - 1) / 2) ** 2) : 1);
+            const hitCount = Number(result?.hitCount ?? 0);
+            const validRatio = candidateCount > 0 ? validSampleCount / candidateCount : 0;
+            const geometrySource = result?.primaryReferenceGeometryApplied === true
+              ? 'cross-wavelength-primary'
+              : Math.abs(Number(wavelength.wavelengthUm) - Number(result?.referenceSphereWavelengthUsed)) <= 1e-12
+                ? 'native-primary'
+                : 'per-wavelength';
+            const currentRadiusText = Number.isFinite(Number(result?.currentReferenceSphereRadiusMm))
+              ? Number(result.currentReferenceSphereRadiusMm).toFixed(6)
+              : 'n/a';
+            const primaryRadiusText = result?.primaryReferenceSphereRadiusMm != null && Number.isFinite(Number(result.primaryReferenceSphereRadiusMm))
+              ? Number(result.primaryReferenceSphereRadiusMm).toFixed(6)
+              : 'n/a';
+            const formatPoint = (point: any) => point && [point.x, point.y, point.z].every((value: any) => Number.isFinite(Number(value)))
+              ? `(${Number(point.x).toFixed(6)},${Number(point.y).toFixed(6)},${Number(point.z).toFixed(6)})`
+              : 'unavailable';
+            const selectedPointText = formatPoint(result?.selectedImagePoint);
+            const rmsBestFocusPointText = formatPoint(result?.rmsBestFocusPoint);
+            appendSystemTextLine(`  Field ${objectIndex + 1} input: ${String(result?.usedObjectPosition || 'unknown')} target=(${Number(result?.imageHeightTargetX ?? 0).toFixed(6)},${Number(result?.imageHeightTargetY ?? 0).toFixed(6)}) angle=(${Number(result?.usedObjectX ?? 0).toFixed(6)},${Number(result?.usedObjectY ?? 0).toFixed(6)})${sphereText}${directionText}${exitPupilText} refWl=${Number(result?.referenceSphereWavelengthUsed ?? 0).toFixed(6)} geometry=${geometrySource} radius=${currentRadiusText}->${primaryRadiusText} pupilRadius=${Number(result?.effectivePupilRadiusMm ?? 0).toFixed(6)} chiefMode=${String(result?.chiefReferenceMode ?? 'unknown')} corrected=${Number(result?.referenceCorrectedSampleCount ?? 0)} grid=${gridSize} hit=${hitCount}/${candidateCount} finite=${validSampleCount} validRatio=${validRatio.toFixed(4)} trackedRmsUm=${Number(result?.trackedOpdRmsUm ?? 0).toFixed(6)} beforeTargetRmsUm=${Number(result?.beforeTargetTrackedOpdRmsUm ?? 0).toFixed(6)} targetSegmentRmsUm=${Number(result?.targetSegmentOpdRmsUm ?? 0).toFixed(6)} sphereDeltaRmsUm=${Number(result?.spherePathDeltaRmsUm ?? 0).toFixed(6)} pathScale*=${Number(result?.spherePathOptimalScale ?? 0).toFixed(6)} minRmsUm=${Number(result?.spherePathOptimalRmsUm ?? 0).toFixed(6)} refRmsUm=${Number(result?.referenceOpdRmsUm ?? 0).toFixed(6)} currentRmsUm=${Number(result?.currentReferenceOpdRmsUm ?? 0).toFixed(6)} alternate(${String(result?.alternateSphereIntersection ?? 'unknown')})RmsUm=${Number(result?.alternateReferenceOpdRmsUm ?? 0).toFixed(6)} targetOriginRmsUm=${Number(result?.targetOriginReferenceOpdRmsUm ?? 0).toFixed(6)} imageSpaceN=${Number(result?.imageSpaceN ?? 0).toFixed(6)} airRmsUm=${Number(result?.airReferenceOpdRmsUm ?? 0).toFixed(6)} alternateSign(${String(result?.alternateOpticalPathSign ?? 'unknown')})RmsUm=${Number(result?.alternateSignReferenceOpdRmsUm ?? 0).toFixed(6)} axisReferenceRmsUm=${Number(result?.axisReferenceSphereRmsUm ?? 0).toFixed(6)} radiusScale*=${Number(result?.sphereRadiusOptimalScale ?? 0).toFixed(6)} radiusRmsUm=${Number(result?.sphereRadiusOptimalRmsUm ?? 0).toFixed(6)}`);
+            appendSystemTextLine(`       imagePointMode=${String(result?.selectedImagePointMode ?? 'unknown')} selected=${selectedPointText} rmsBestFocus=${rmsBestFocusPointText}`);
+            const focusDiagnostics = result?.rmsBestFocusDiagnostics;
+            if (focusDiagnostics) {
+              appendSystemTextLine(`       rmsFocus range=${String(focusDiagnostics.searchRangeMode)} baseZ=${Number(focusDiagnostics.baseZ).toFixed(6)} deltaZ=${Number(focusDiagnostics.bestFocusDeltaZ).toFixed(6)} paraxialRmsMm=${Number(focusDiagnostics.paraxialRmsMm).toFixed(6)} bestRmsMm=${Number(focusDiagnostics.bestFocusRmsMm).toFixed(6)} improvementMm=${Number(focusDiagnostics.improvementMm).toFixed(6)} rays=${Number(focusDiagnostics.rayCount)}`);
+            }
+          }
+          const relativeWeight = Number.isFinite(wavelength.relativeWeight) ? wavelength.relativeWeight : 0;
+          const fieldText = String(objectIndex + 1).padStart(6, ' ');
+          const wavelengthText = String(wavelength.index + 1).padStart(7, ' ');
+          const weightText = relativeWeight.toFixed(3).padStart(9, ' ');
+          const rmsText = rms.toFixed(5).padStart(16, ' ');
+          appendSystemTextLine(`${fieldText}${wavelengthText}${weightText}${rmsText}`);
+          const diagnosticWavelength = Math.max(1e-12, Number(wavelength.wavelengthUm));
+          const trackedRmsUm = Number(result?.trackedOpdRmsUm);
+          const referenceRmsUm = Number(result?.referenceOpdRmsUm);
+          if (requestedDetailedDiagnostics && (Number.isFinite(trackedRmsUm) || Number.isFinite(referenceRmsUm))) {
+            appendSystemTextLine(`       diagnostic preRef=${Number.isFinite(trackedRmsUm) ? (trackedRmsUm * 1000 / diagnosticWavelength).toFixed(5) : 'n/a'} postRef=${Number.isFinite(referenceRmsUm) ? (referenceRmsUm * 1000 / diagnosticWavelength).toFixed(5) : 'n/a'} waves valid=${Number(result?.referenceCorrectedSampleCount ?? result?.hitCount ?? 0)}`);
+          }
+          const displayFit = result?.wavefrontFit || result?.displayFit;
+          if (requestedDetailedDiagnostics && displayFit && Number.isFinite(Number(displayFit.piston))) {
+            appendSystemTextLine(`       fit basis=${String(displayFit.basis ?? 'unknown')} coord=${String(displayFit.coordinateSource ?? 'unknown')} samples=${Number(displayFit.sampleCount ?? 0)} physical=${Number(displayFit.physicalCoordinateSampleCount ?? 0)} meanR2=${Number(displayFit.defocusMeanRadiusSquared ?? 0).toFixed(6)} pistonWaves=${Number(displayFit.piston).toFixed(6)} defocusWaves=${Number(displayFit.defocus ?? 0).toFixed(6)} scale=${Number(displayFit.defocusScale ?? 0).toFixed(6)} tilt=retained`);
+          }
+          if (requestedOpdTermDiagnostics && Array.isArray(result?.opdTermSamples)) {
+            for (const sample of result.opdTermSamples) {
+              appendSystemTextLine(`       opdTerms ${String(sample?.label ?? 'sample')} uv=(${Number(sample?.pupilU ?? 0).toFixed(4)},${Number(sample?.pupilV ?? 0).toFixed(4)}) tracked=${(Number(sample?.chiefOplUm) - Number(sample?.marginalOplUm)).toFixed(6)}um beforeTarget=${Number(sample?.beforeTargetOpdUm ?? 0).toFixed(6)}um targetSegment=${Number(sample?.targetSegmentOpdUm ?? 0).toFixed(6)}um sphereDelta=${Number(sample?.spherePathDeltaUm ?? 0).toFixed(6)}um reference=${Number(sample?.referenceOpdUm ?? 0).toFixed(6)}um`);
+            }
+          }
+          if (relativeWeight > 0) {
+            weightedSquareSum += relativeWeight * rms * rms;
+            weightSum += relativeWeight;
+            const validSampleWeight = Math.max(0, validSampleCount);
+            validSampleWeightedSquareSum += relativeWeight * validSampleWeight * rms * rms;
+            validSampleWeightSum += relativeWeight * validSampleWeight;
+            const referenceRmsWaves = conditionedReference?.rmsWaves
+              ?? Number(result?.referenceRmsWaves ?? result?.referenceOpdRmsUm / Math.max(1e-12, Number(wavelength.wavelengthUm)));
+            if (Number.isFinite(referenceRmsWaves)) {
+              referenceWeightedSquareSum += relativeWeight * referenceRmsWaves * referenceRmsWaves;
+              referenceWeightSum += relativeWeight;
+            }
+            const referenceGrid = conditionedReference?.grid ?? result?.referenceSphereOpdGrid;
+            if (Array.isArray(referenceGrid)) {
+              let pooledFiniteCount = 0;
+              let pooledSquareSum = 0;
+              for (const gridRow of referenceGrid) {
+                if (!Array.isArray(gridRow)) continue;
+                for (const value of gridRow) {
+                  const opdWaves = Number(value);
+                  if (!Number.isFinite(opdWaves)) continue;
+                  pooledFiniteCount += 1;
+                  pooledSquareSum += opdWaves * opdWaves;
+                }
+              }
+              pooledReferenceSquareSum += relativeWeight * pooledSquareSum;
+              pooledReferenceSampleWeight += relativeWeight * pooledFiniteCount;
+            }
+          }
+        }
+      }
+      if (weightSum > 0) {
+        appendSystemTextLine('------------------------------------------');
+        appendSystemTextLine(` Individual-cell RMS/lambda: ${(Math.sqrt(weightedSquareSum / weightSum)).toFixed(5).padStart(16, ' ')}`);
+        if (validSampleWeightSum > 0) {
+          appendSystemTextLine(` Valid-sample-weighted RMS/lambda: ${(Math.sqrt(validSampleWeightedSquareSum / validSampleWeightSum)).toFixed(5).padStart(16, ' ')}`);
+        }
+        if (referenceWeightSum > 0) {
+          appendSystemTextLine(` Reference-sphere total RMS/lambda: ${(Math.sqrt(referenceWeightedSquareSum / referenceWeightSum)).toFixed(5).padStart(16, ' ')}`);
+        }
+        if (pooledReferenceSampleWeight > 0) {
+          appendSystemTextLine(` Pooled reference-ray RMS/lambda: ${(Math.sqrt(pooledReferenceSquareSum / pooledReferenceSampleWeight)).toFixed(5).padStart(16, ' ')}`);
+        }
+      }
+      if (backendName) appendSystemTextLine(`Backend: ${backendName}`);
+    } catch (error) {
+      appendSystemTextLine(`wav: failed: ${String((error as any)?.message || error)}`);
+    }
+  };
+
+  const runChiefRayOpdConsoleCommand = async (
+    requestedDetailedDiagnostics = false,
+    requestedChiefRayMode: 'stop-center' | 'entrance-pupil-center' | 'transmitted-pupil-center' = 'stop-center',
+    requestedChiefImagePoint: 'chief-ray-image-point' | 'paraxial-image-point' | 'target-surface-center' = 'chief-ray-image-point',
+    requestedExitPupilReferencePointMode: 'chief-ray-intersection' | 'exit-pupil-center' = 'chief-ray-intersection',
+    requestedComparisonRay: { x: number; y: number } = { x: -1 / 32, y: 0 },
+    requestedPupilSamplingMode: 'entrance' | 'stop' = 'entrance',
+    requestedPupilFit = false,
+    requestedGlobalReferenceSphere = false,
+    requestedOpdBasis: 'sphere' | 'chief' = 'sphere',
+    requestedPupilRadiusMode: 'effective' | 'nominal' | 'per-wavelength-nominal' = 'effective',
+    requestedDirectOpd = false,
+    requestedRsiPrimaryLaunchBlend = 0,
+    requestedPreserveImageHeightChiefRay = false,
+    requestedResolveImageHeightChiefRayInRuntime = false,
+  ) => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    try {
+      const hostWindow = getRenderHostWindow();
+      const systemConfig = getSystemConfigFromWindow(hostWindow);
+      const activeConfig = getActiveConfigFromSystemConfig(systemConfig);
+      const opticalSystemRows = getConfigRowsForRender(hostWindow, activeConfig, systemConfig);
+      const objectRows = getRenderObjectRows(hostWindow, opticalSystemRows);
+      const sourceRows = getRenderSourceRows(hostWindow);
+      if (opticalSystemRows.length === 0 || objectRows.length === 0 || sourceRows.length === 0) {
+        appendSystemTextLine('opd: optical system, object, or wavelength data is unavailable.');
+        return;
+      }
+      const wavelengths = sourceRows.map((row: any, index: number) => ({
+        index,
+        wavelengthUm: Number(row?.wavelength ?? row?.Wavelength),
+      })).filter((entry) => Number.isFinite(entry.wavelengthUm) && entry.wavelengthUm > 0);
+      if (wavelengths.length === 0) {
+        appendSystemTextLine('opd: no valid wavelengths were found.');
+        return;
+      }
+      const primaryIndex = wavelengths.findIndex((entry) => {
+        const row: any = sourceRows[entry.index] || {};
+        const rawPrimary = row?.isPrimary ?? row?.primary ?? row?.Primary ?? row?.['Primary Wavelength'];
+        const primaryText = String(rawPrimary ?? '').trim().toLowerCase();
+        return rawPrimary === true || primaryText === 'true' || primaryText === '1'
+          || primaryText === 'yes' || primaryText.includes('primary');
+      });
+      const resolvedPrimaryIndex = primaryIndex >= 0 ? primaryIndex : 0;
+      const primaryWavelength = wavelengths[resolvedPrimaryIndex].wavelengthUm;
+      const [{ normalizeTransverseObjectRowsForImageHeight, runNativeOpdMap }, { calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculatePupilsByNewSpec }] = await Promise.all([
+        import('../desktop/ipc/client.ts'),
+        import('../../raytracing/core/ray-paraxial.ts'),
+      ]);
+      const tracedObjectRows = await normalizeTransverseObjectRowsForImageHeight(
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+        primaryWavelength,
+      );
+      const entrancePupilPosition = Number(calculatePupilsByNewSpec(opticalSystemRows, primaryWavelength)?.entrancePupil?.position);
+      const exitPupilPosition = Number(calculateExitPupilDiameter(opticalSystemRows, primaryWavelength)?.position);
+      const nominalEntrancePupilDiameter = Number(calculateEntrancePupilDiameter(opticalSystemRows, primaryWavelength));
+      const nominalEntrancePupilRadius = nominalEntrancePupilDiameter > 0 && Number.isFinite(nominalEntrancePupilDiameter)
+        ? nominalEntrancePupilDiameter / 2
+        : undefined;
+      const requestedPupilRadiusMm = requestedPupilRadiusMode === 'nominal' ? nominalEntrancePupilRadius : undefined;
+      const chiefOplUm: number[][] = [];
+      const sampledOpdMm: Array<Array<number | null>> = [];
+      const referenceSphereOpdGridsMm: Array<Array<Array<Array<number | null>>>> = [];
+      const chiefRelativeOpdGridsMm: Array<Array<Array<Array<number | null>>>> = [];
+      const transmittedPupilCenters: Array<Array<{ u: number; v: number } | undefined>> = [];
+      const tracedFieldInputs: Array<{
+        position: string;
+        x: number;
+        y: number;
+        chiefLaunchOrigin?: { x: number; y: number; z: number };
+        imageHeightChiefRayApplied: boolean;
+        imageHeightChiefRayPreserved: boolean;
+        imageHeightChiefRayRuntimeResolved: boolean;
+        imageHeightChiefDirection?: { x: number; y: number; z: number };
+        imageHeightRuntimeSolvedAngle?: { x: number; y: number; z: number };
+        imageHeightSolverHit?: { x: number; y: number; z: number };
+        imageHeightSolverSurfaceIndex?: number;
+        chiefStopPoint?: { x: number; y: number; z: number };
+        chiefStopDirection?: { x: number; y: number; z: number };
+        chiefImagePoint?: { x: number; y: number; z: number };
+        chiefImageLocalPoint?: { x: number; y: number; z: number };
+        chiefSurfaceTrace?: Array<{ surfaceIndex: number; point: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } }>;
+        sourcePosition: string;
+        imageHeightTargetY?: number;
+        imageHeightSolveMode?: string;
+      } | undefined> = [];
+      let primaryLaunchOverrideRequestedCount = 0;
+      let primaryLaunchOverrideAppliedCount = 0;
+      let globalReferenceSphereGeometry: { center: any; radiusMm: number; direction: any } | undefined;
+      const comparisonGridSize = 129;
+      const comparisonRelativeApertureX = requestedComparisonRay.x;
+      const comparisonRelativeApertureY = requestedComparisonRay.y;
+      const comparisonGridIndex = (relativeAperture: number) => Math.round((relativeAperture + 1) * (comparisonGridSize - 1) / 2);
+      const comparisonXIndex = comparisonGridIndex(comparisonRelativeApertureX);
+      const comparisonYIndex = comparisonGridIndex(comparisonRelativeApertureY);
+        const referenceRayPupilCoordinate = requestedOpdBasis === 'chief'
+          ? { x: 0, y: 0 }
+          : requestedComparisonRay;
+      // Chief-relative display needs the unreferenced OPD grid, which the RMS wrapper does not preserve.
+      const runOpdComparison = runNativeOpdMap;
+      for (let objectIndex = 0; objectIndex < objectRows.length; objectIndex += 1) {
+        const referenceSphereOptions = {
+          referenceSphereWavelengthMode: 'primary-wavelength' as const,
+          chiefImagePoint: requestedChiefImagePoint,
+          sphereIntersection: 'exit-pupil-side' as const,
+          exitPupilDirection: 'image-to-exit-pupil' as const,
+        };
+        const primaryResult: any = await runOpdComparison({
+          opticalSystemRows,
+          sourceRows,
+          objectRows: tracedObjectRows,
+          objectIndex,
+          wavelengthUm: primaryWavelength,
+          gridSize: comparisonGridSize,
+          pupilRadiusMm: requestedPupilRadiusMode === 'per-wavelength-nominal'
+            ? nominalEntrancePupilRadius
+            : requestedPupilRadiusMm,
+          entrancePupilPositionFromFirstSurfaceMm: Number.isFinite(entrancePupilPosition) ? entrancePupilPosition : undefined,
+          exitPupilPositionFromLastSurfaceMm: Number.isFinite(exitPupilPosition) ? exitPupilPosition : undefined,
+          pupilSamplingMode: requestedPupilSamplingMode,
+          chiefRayMode: requestedChiefRayMode,
+            referenceRayPupilCoordinate,
+          preserveImageHeightChiefRay: requestedPreserveImageHeightChiefRay,
+          resolveImageHeightChiefRayInRuntime: requestedResolveImageHeightChiefRayInRuntime,
+          pupilNormalizationMode: 'fixed-entrance-pupil',
+          exitPupilReferencePointMode: requestedExitPupilReferencePointMode,
+          referenceMode: 'reference-sphere',
+          referenceSphereOptions,
+          referenceSphereGeometry: requestedGlobalReferenceSphere ? globalReferenceSphereGeometry : undefined,
+          opdDisplayMode: 'raw',
+        });
+        const calculatedReferenceSphereGeometry = primaryResult?.referenceSphereCenter
+          && Number.isFinite(Number(primaryResult?.referenceSphereRadiusMm))
+          && primaryResult?.referenceSphereDirection
+          ? {
+              center: primaryResult.referenceSphereCenter,
+              radiusMm: Number(primaryResult.referenceSphereRadiusMm),
+              direction: primaryResult.referenceSphereDirection,
+            }
+          : undefined;
+        if (requestedGlobalReferenceSphere && !globalReferenceSphereGeometry) {
+          globalReferenceSphereGeometry = calculatedReferenceSphereGeometry;
+        }
+        const referenceSphereGeometry = requestedGlobalReferenceSphere
+          ? globalReferenceSphereGeometry
+          : calculatedReferenceSphereGeometry;
+        const primaryChiefLaunchOrigin = primaryResult?.chiefRayLaunchOrigin;
+        const primaryImageHeightChiefDirection = primaryResult?.imageHeightChiefDirection;
+        const primaryImageHeightRuntimeSolvedAngle = primaryResult?.imageHeightRuntimeSolvedAngle;
+        const primaryImageHeightSolverHit = primaryResult?.imageHeightSolverHit;
+        const primaryChiefStopPoint = primaryResult?.chiefStopPoint;
+        const primaryChiefStopDirection = primaryResult?.chiefStopDirection;
+        const primaryChiefImagePoint = primaryResult?.chiefImagePoint;
+        const primaryChiefImageLocalPoint = primaryResult?.chiefImageLocalPoint;
+        const tracedObjectRow = tracedObjectRows[objectIndex] || {};
+        const imageHeightTargetY = Number(tracedObjectRow?.__cooptImageHeightTarget?.y);
+        const toNativePoint = (value: any): { x: number; y: number; z: number } | undefined => (
+          [value?.x, value?.y, value?.z].every((coordinate) => Number.isFinite(Number(coordinate)))
+            ? { x: Number(value.x), y: Number(value.y), z: Number(value.z) }
+            : undefined
+        );
+        tracedFieldInputs[objectIndex] = {
+          position: String(primaryResult?.usedObjectPosition || 'unknown'),
+          x: Number(primaryResult?.usedObjectX),
+          y: Number(primaryResult?.usedObjectY),
+          chiefLaunchOrigin: toNativePoint(primaryChiefLaunchOrigin),
+          imageHeightChiefRayApplied: primaryResult?.imageHeightChiefRayApplied === true,
+          imageHeightChiefRayPreserved: primaryResult?.imageHeightChiefRayPreserved === true,
+          imageHeightChiefRayRuntimeResolved: primaryResult?.imageHeightChiefRayRuntimeResolved === true,
+          imageHeightChiefDirection: toNativePoint(primaryImageHeightChiefDirection),
+          imageHeightRuntimeSolvedAngle: toNativePoint(primaryImageHeightRuntimeSolvedAngle),
+          imageHeightSolverHit: toNativePoint(primaryImageHeightSolverHit),
+          imageHeightSolverSurfaceIndex: Number.isInteger(Number(primaryResult?.imageHeightSolverSurfaceIndex))
+            ? Number(primaryResult.imageHeightSolverSurfaceIndex)
+            : undefined,
+          chiefStopPoint: toNativePoint(primaryChiefStopPoint),
+          chiefStopDirection: toNativePoint(primaryChiefStopDirection),
+          chiefImagePoint: toNativePoint(primaryChiefImagePoint),
+          chiefImageLocalPoint: toNativePoint(primaryChiefImageLocalPoint),
+          chiefSurfaceTrace: Array.isArray(primaryResult?.chiefSurfaceTrace) ? primaryResult.chiefSurfaceTrace : undefined,
+          sourcePosition: String(tracedObjectRow?.__cooptOriginalPosition ?? tracedObjectRow?.position ?? 'unknown'),
+          imageHeightTargetY: Number.isFinite(imageHeightTargetY) ? imageHeightTargetY : undefined,
+          imageHeightSolveMode: typeof tracedObjectRow?.__cooptImageHeightSolve?.mode === 'string'
+            ? tracedObjectRow.__cooptImageHeightSolve.mode
+            : undefined,
+        };
+        const fieldValues: number[] = [];
+        for (const wavelength of wavelengths) {
+          const request = {
+            opticalSystemRows,
+            sourceRows,
+            objectRows: tracedObjectRows,
+            objectIndex,
+            wavelengthUm: wavelength.wavelengthUm,
+            gridSize: comparisonGridSize,
+            pupilRadiusMm: requestedPupilRadiusMode === 'per-wavelength-nominal'
+              ? Number(calculateEntrancePupilDiameter(opticalSystemRows, wavelength.wavelengthUm)) / 2
+              : requestedPupilRadiusMm,
+            entrancePupilPositionFromFirstSurfaceMm: Number.isFinite(entrancePupilPosition) ? entrancePupilPosition : undefined,
+            exitPupilPositionFromLastSurfaceMm: Number.isFinite(exitPupilPosition) ? exitPupilPosition : undefined,
+            pupilSamplingMode: requestedPupilSamplingMode,
+            chiefRayMode: requestedChiefRayMode,
+              referenceRayPupilCoordinate,
+            preserveImageHeightChiefRay: requestedPreserveImageHeightChiefRay,
+            resolveImageHeightChiefRayInRuntime: requestedResolveImageHeightChiefRayInRuntime,
+            pupilNormalizationMode: 'fixed-entrance-pupil',
+            exitPupilReferencePointMode: requestedExitPupilReferencePointMode,
+            referenceMode: 'reference-sphere',
+            referenceSphereOptions,
+            referenceSphereGeometry,
+            opdDisplayMode: 'raw',
+          };
+          let result: any = await runOpdComparison(request);
+          if (requestedRsiPrimaryLaunchBlend > 0 && wavelength.index !== resolvedPrimaryIndex) {
+            const currentChiefLaunchOrigin = result?.chiefRayLaunchOrigin;
+            const originValues = [primaryChiefLaunchOrigin?.x, primaryChiefLaunchOrigin?.y, primaryChiefLaunchOrigin?.z,
+              currentChiefLaunchOrigin?.x, currentChiefLaunchOrigin?.y, currentChiefLaunchOrigin?.z];
+            if (originValues.every((value) => Number.isFinite(Number(value)))) {
+              const blend = requestedRsiPrimaryLaunchBlend;
+              result = await runOpdComparison({
+                ...request,
+                sampleRayLaunchOrigin: {
+                  x: Number(currentChiefLaunchOrigin.x) + blend * (Number(primaryChiefLaunchOrigin.x) - Number(currentChiefLaunchOrigin.x)),
+                  y: Number(currentChiefLaunchOrigin.y) + blend * (Number(primaryChiefLaunchOrigin.y) - Number(currentChiefLaunchOrigin.y)),
+                  z: Number(currentChiefLaunchOrigin.z) + blend * (Number(primaryChiefLaunchOrigin.z) - Number(currentChiefLaunchOrigin.z)),
+                },
+              });
+            }
+            primaryLaunchOverrideRequestedCount += 1;
+            if (result?.sampleRayLaunchOriginApplied === true) primaryLaunchOverrideAppliedCount += 1;
+          }
+          const oplUm = Number(result?.chiefOplUm);
+          if (!Number.isFinite(oplUm)) throw new Error(`Field ${objectIndex + 1} Colour ${wavelength.index + 1}: chief OPL unavailable`);
+          fieldValues[wavelength.index] = oplUm;
+          transmittedPupilCenters[objectIndex] ??= [];
+          const transmittedPupilCenter = result?.transmittedPupilCenterUv;
+          const legacyTransmittedPupilCenter = /\(u=([-+\d.eE]+),v=([-+\d.eE]+),r=/.exec(String(result?.chiefReferenceMode || ''));
+          const transmittedPupilU = Number.isFinite(Number(transmittedPupilCenter?.u))
+            ? Number(transmittedPupilCenter.u)
+            : Number(legacyTransmittedPupilCenter?.[1]);
+          const transmittedPupilV = Number.isFinite(Number(transmittedPupilCenter?.v))
+            ? Number(transmittedPupilCenter.v)
+            : Number(legacyTransmittedPupilCenter?.[2]);
+          transmittedPupilCenters[objectIndex][wavelength.index] = Number.isFinite(transmittedPupilU)
+            && Number.isFinite(transmittedPupilV)
+            ? { u: transmittedPupilU, v: transmittedPupilV }
+            : undefined;
+          if (!sampledOpdMm[objectIndex]) sampledOpdMm[objectIndex] = [];
+          const referenceSphereGrid = result?.referenceSphereOpdGrid;
+          referenceSphereOpdGridsMm[objectIndex] ??= [];
+          referenceSphereOpdGridsMm[objectIndex][wavelength.index] = Array.isArray(referenceSphereGrid)
+            ? referenceSphereGrid.map((row: unknown) => Array.isArray(row)
+              ? row.map((value) => {
+                  const waves = Number(value);
+                  return Number.isFinite(waves) ? waves * wavelength.wavelengthUm / 1000 : null;
+                })
+              : [])
+            : [];
+          const chiefRelativeGrid = result?.unreferencedOpdGrid;
+          chiefRelativeOpdGridsMm[objectIndex] ??= [];
+          chiefRelativeOpdGridsMm[objectIndex][wavelength.index] = Array.isArray(chiefRelativeGrid)
+            ? chiefRelativeGrid.map((row: unknown) => Array.isArray(row)
+              ? row.map((value) => {
+                  const waves = Number(value);
+                  return Number.isFinite(waves) ? waves * wavelength.wavelengthUm / 1000 : null;
+                })
+              : [])
+            : [];
+          const sampledOpdWaves = Number(referenceSphereGrid?.[comparisonYIndex]?.[comparisonXIndex]);
+          sampledOpdMm[objectIndex][wavelength.index] = Number.isFinite(sampledOpdWaves)
+            ? sampledOpdWaves * wavelength.wavelengthUm / 1000
+            : null;
+        }
+        chiefOplUm[objectIndex] = fieldValues;
+      }
+      appendSystemTextLine(requestedDirectOpd
+        ? `OPTICAL PATH DIFFERENCE (co-opt ${requestedOpdBasis === 'chief' ? 'chief-relative' : 'reference-sphere'} single ray, mm)`
+        : requestedOpdBasis === 'chief'
+        ? 'OPTICAL PATH DIFFERENCE (co-opt chief-relative single ray, mm)'
+        : 'OPTICAL PATH DIFFERENCE (co-opt reference-sphere comparison ray, mm)');
+      const pupilDescription = requestedPupilRadiusMode === 'per-wavelength-nominal'
+        ? `per-wavelength-nominal(${wavelengths.map((wavelength) => `${(Number(calculateEntrancePupilDiameter(opticalSystemRows, wavelength.wavelengthUm)) / 2).toFixed(6)}mm`).join('/')})`
+        : requestedPupilRadiusMm != null
+          ? `nominal(${requestedPupilRadiusMm.toFixed(6)}mm)`
+          : 'effective';
+      appendSystemTextLine(`Ray: relative aperture X=${comparisonRelativeApertureX.toFixed(6)}, Y=${comparisonRelativeApertureY.toFixed(6)}; reference: ${requestedDirectOpd ? (requestedOpdBasis === 'chief' ? 'same Field and wavelength chief ray' : 'same Field and wavelength reference sphere') : requestedOpdBasis === 'chief' ? 'same Field and wavelength chief ray' : 'Field 1 and Primary Colour'}; sphere: ${requestedGlobalReferenceSphere ? 'Field 1 Primary shared globally' : 'primary shared per Field'}; chief=${requestedChiefRayMode}; point=${requestedChiefImagePoint}; exit=${requestedExitPupilReferencePointMode}; sampling=${requestedPupilSamplingMode}${requestedRsiPrimaryLaunchBlend > 0 ? `+primary-launch(${requestedRsiPrimaryLaunchBlend.toFixed(6)})` : ''}; pupil=${pupilDescription}; fit-basis=${requestedOpdBasis}`);
+      appendSystemTextLine(requestedDirectOpd
+        ? (requestedOpdBasis === 'chief' ? 'Sign: chief OPL minus sampled-ray OPL' : 'Sign: reference-sphere OPL minus sampled-ray OPL')
+        : requestedOpdBasis === 'chief'
+        ? 'Sign: chief OPL minus sampled-ray OPL'
+        : 'Sign: spectral direction normalized about Primary Colour');
+      if (requestedRsiPrimaryLaunchBlend > 0) {
+        appendSystemTextLine(`RSI primary-launch override: native applied=${primaryLaunchOverrideAppliedCount}/${primaryLaunchOverrideRequestedCount}`);
+      }
+      appendSystemTextLine(' Field  Colour                 OPD (mm)');
+      for (let objectIndex = 0; objectIndex < chiefOplUm.length; objectIndex += 1) {
+        for (const wavelength of wavelengths) {
+          if (requestedDirectOpd || requestedOpdBasis === 'chief') {
+            const directOpdMm = (requestedOpdBasis === 'chief'
+              ? chiefRelativeOpdGridsMm
+              : referenceSphereOpdGridsMm)[objectIndex]?.[wavelength.index]?.[comparisonYIndex]?.[comparisonXIndex];
+            const directText = directOpdMm != null && Number.isFinite(directOpdMm)
+              ? Number(directOpdMm).toFixed(12).padStart(22)
+              : 'n/a'.padStart(22);
+            appendSystemTextLine(` ${String(objectIndex + 1).padStart(5)} ${String(wavelength.index + 1).padStart(7)} ${directText}`);
+            if (requestedDetailedDiagnostics && wavelength.index === resolvedPrimaryIndex) {
+              const tracedFieldInput = tracedFieldInputs[objectIndex];
+              if (tracedFieldInput) {
+                const launch = tracedFieldInput.chiefLaunchOrigin;
+                const imageHeightChiefDirection = tracedFieldInput.imageHeightChiefDirection;
+                const imageHeightRuntimeSolvedAngle = tracedFieldInput.imageHeightRuntimeSolvedAngle;
+                const imageHeightSolverHit = tracedFieldInput.imageHeightSolverHit;
+                const stopPoint = tracedFieldInput.chiefStopPoint;
+                const stopDirection = tracedFieldInput.chiefStopDirection;
+                const imagePoint = tracedFieldInput.chiefImagePoint;
+                const imageLocalPoint = tracedFieldInput.chiefImageLocalPoint;
+                const sourceField = `; sourceField position=${tracedFieldInput.sourcePosition}`
+                  + (Number.isFinite(tracedFieldInput.imageHeightTargetY) ? ` imageHeightY=${tracedFieldInput.imageHeightTargetY.toFixed(9)}` : '')
+                  + (tracedFieldInput.imageHeightSolveMode ? ` solve=${tracedFieldInput.imageHeightSolveMode}` : '');
+                const imageHit = imagePoint ? `; chiefImage x=${imagePoint.x.toFixed(9)} y=${imagePoint.y.toFixed(9)} z=${imagePoint.z.toFixed(9)}`
+                  + (Number.isFinite(tracedFieldInput.imageHeightTargetY) ? ` residualY=${(imagePoint.y - tracedFieldInput.imageHeightTargetY).toFixed(9)}` : '')
+                  : '';
+                const imageLocalHit = imageLocalPoint ? `; chiefImageLocal x=${imageLocalPoint.x.toFixed(9)} y=${imageLocalPoint.y.toFixed(9)} z=${imageLocalPoint.z.toFixed(9)}`
+                  + (Number.isFinite(tracedFieldInput.imageHeightTargetY) ? ` residualY=${(imageLocalPoint.y - tracedFieldInput.imageHeightTargetY).toFixed(9)}` : '')
+                  : '';
+                appendSystemTextLine(
+                  `       nativeField position=${tracedFieldInput.position} x=${tracedFieldInput.x.toFixed(9)} y=${tracedFieldInput.y.toFixed(9)}`
+                  + (launch ? `; chiefLaunch x=${launch.x.toFixed(9)} y=${launch.y.toFixed(9)} z=${launch.z.toFixed(9)}` : '')
+                  + `; imageHeightChief applied=${tracedFieldInput.imageHeightChiefRayApplied ? '1' : '0'} preserved=${tracedFieldInput.imageHeightChiefRayPreserved ? '1' : '0'} runtime=${tracedFieldInput.imageHeightChiefRayRuntimeResolved ? '1' : '0'}`
+                  + (imageHeightChiefDirection ? ` dirY=${imageHeightChiefDirection.y.toFixed(9)} dirZ=${imageHeightChiefDirection.z.toFixed(9)}` : '')
+                  + (imageHeightRuntimeSolvedAngle ? ` runtimeAngleY=${imageHeightRuntimeSolvedAngle.y.toFixed(9)}` : '')
+                  + (imageHeightSolverHit ? `; solverHit x=${imageHeightSolverHit.x.toFixed(9)} y=${imageHeightSolverHit.y.toFixed(9)} z=${imageHeightSolverHit.z.toFixed(9)} surface=${tracedFieldInput.imageHeightSolverSurfaceIndex ?? 'unknown'}` : '')
+                  + (stopPoint ? `; chiefStop x=${stopPoint.x.toFixed(9)} y=${stopPoint.y.toFixed(9)} z=${stopPoint.z.toFixed(9)}` : '')
+                  + (stopDirection ? `; chiefStopDir x=${stopDirection.x.toFixed(9)} y=${stopDirection.y.toFixed(9)} z=${stopDirection.z.toFixed(9)}` : '')
+                  + imageHit
+                  + imageLocalHit
+                  + sourceField
+                );
+                if (objectIndex === tracedFieldInputs.length - 1 && Array.isArray(tracedFieldInput.chiefSurfaceTrace)) {
+                  appendSystemTextLine('       PRIMARY CHIEF SURFACE TRACE (local coordinates)');
+                  for (const state of tracedFieldInput.chiefSurfaceTrace) {
+                    appendSystemTextLine(`       REL ${String(state.surfaceIndex + 1).padStart(3)} X=${state.point.x.toFixed(5)} Y=${state.point.y.toFixed(5)} Z=${state.point.z.toFixed(5)} CX=${state.direction.x.toFixed(7)} CY=${state.direction.y.toFixed(7)} CZ=${state.direction.z.toFixed(7)}`);
+                  }
+                }
+              }
+            }
+            continue;
+          }
+          const sampleMm = sampledOpdMm[objectIndex]?.[wavelength.index];
+          const fieldPrimaryMm = sampledOpdMm[objectIndex]?.[resolvedPrimaryIndex];
+          const axialColourMm = sampledOpdMm[0]?.[wavelength.index];
+          const axialPrimaryMm = sampledOpdMm[0]?.[resolvedPrimaryIndex];
+          if (![sampleMm, fieldPrimaryMm, axialColourMm, axialPrimaryMm].every((value) => value != null && Number.isFinite(value))) {
+            appendSystemTextLine(` ${String(objectIndex + 1).padStart(5)} ${String(wavelength.index + 1).padStart(7)} ${'n/a'.padStart(22)}`);
+            continue;
+          }
+          const rawValueMm = Number(sampleMm) - Number(fieldPrimaryMm) - Number(axialColourMm) + Number(axialPrimaryMm);
+          const rawChiefOplMm = (chiefOplUm[objectIndex][wavelength.index]
+            - chiefOplUm[objectIndex][resolvedPrimaryIndex]
+            - chiefOplUm[0][wavelength.index]
+            + chiefOplUm[0][resolvedPrimaryIndex]) / 1000;
+          const spectralDirection = Math.sign(primaryWavelength - wavelength.wavelengthUm);
+          const valueMm = spectralDirection === 0 ? 0 : rawValueMm * spectralDirection;
+          const chiefOplValueMm = spectralDirection === 0 ? 0 : rawChiefOplMm * spectralDirection;
+          appendSystemTextLine(` ${String(objectIndex + 1).padStart(5)} ${String(wavelength.index + 1).padStart(7)} ${valueMm.toFixed(12).padStart(22)}`);
+          if (requestedDetailedDiagnostics) {
+            const tracedFieldInput = tracedFieldInputs[objectIndex];
+            if (wavelength.index === resolvedPrimaryIndex && tracedFieldInput) {
+              const launch = tracedFieldInput.chiefLaunchOrigin;
+              const imageHeightChiefDirection = tracedFieldInput.imageHeightChiefDirection;
+              const imageHeightRuntimeSolvedAngle = tracedFieldInput.imageHeightRuntimeSolvedAngle;
+              const imageHeightSolverHit = tracedFieldInput.imageHeightSolverHit;
+              const stopPoint = tracedFieldInput.chiefStopPoint;
+              const stopDirection = tracedFieldInput.chiefStopDirection;
+              const imagePoint = tracedFieldInput.chiefImagePoint;
+              const imageLocalPoint = tracedFieldInput.chiefImageLocalPoint;
+              const sourceField = `; sourceField position=${tracedFieldInput.sourcePosition}`
+                + (Number.isFinite(tracedFieldInput.imageHeightTargetY) ? ` imageHeightY=${tracedFieldInput.imageHeightTargetY.toFixed(9)}` : '')
+                + (tracedFieldInput.imageHeightSolveMode ? ` solve=${tracedFieldInput.imageHeightSolveMode}` : '');
+              const imageHit = imagePoint ? `; chiefImage x=${imagePoint.x.toFixed(9)} y=${imagePoint.y.toFixed(9)} z=${imagePoint.z.toFixed(9)}`
+                + (Number.isFinite(tracedFieldInput.imageHeightTargetY) ? ` residualY=${(imagePoint.y - tracedFieldInput.imageHeightTargetY).toFixed(9)}` : '')
+                : '';
+              const imageLocalHit = imageLocalPoint ? `; chiefImageLocal x=${imageLocalPoint.x.toFixed(9)} y=${imageLocalPoint.y.toFixed(9)} z=${imageLocalPoint.z.toFixed(9)}`
+                + (Number.isFinite(tracedFieldInput.imageHeightTargetY) ? ` residualY=${(imageLocalPoint.y - tracedFieldInput.imageHeightTargetY).toFixed(9)}` : '')
+                : '';
+              appendSystemTextLine(
+                `       nativeField position=${tracedFieldInput.position} x=${tracedFieldInput.x.toFixed(9)} y=${tracedFieldInput.y.toFixed(9)}`
+                + (launch ? `; chiefLaunch x=${launch.x.toFixed(9)} y=${launch.y.toFixed(9)} z=${launch.z.toFixed(9)}` : '')
+                + `; imageHeightChief applied=${tracedFieldInput.imageHeightChiefRayApplied ? '1' : '0'} preserved=${tracedFieldInput.imageHeightChiefRayPreserved ? '1' : '0'} runtime=${tracedFieldInput.imageHeightChiefRayRuntimeResolved ? '1' : '0'}`
+                + (imageHeightChiefDirection ? ` dirY=${imageHeightChiefDirection.y.toFixed(9)} dirZ=${imageHeightChiefDirection.z.toFixed(9)}` : '')
+                + (imageHeightRuntimeSolvedAngle ? ` runtimeAngleY=${imageHeightRuntimeSolvedAngle.y.toFixed(9)}` : '')
+                + (imageHeightSolverHit ? `; solverHit x=${imageHeightSolverHit.x.toFixed(9)} y=${imageHeightSolverHit.y.toFixed(9)} z=${imageHeightSolverHit.z.toFixed(9)} surface=${tracedFieldInput.imageHeightSolverSurfaceIndex ?? 'unknown'}` : '')
+                + (stopPoint ? `; chiefStop x=${stopPoint.x.toFixed(9)} y=${stopPoint.y.toFixed(9)} z=${stopPoint.z.toFixed(9)}` : '')
+                + (stopDirection ? `; chiefStopDir x=${stopDirection.x.toFixed(9)} y=${stopDirection.y.toFixed(9)} z=${stopDirection.z.toFixed(9)}` : '')
+                + imageHit
+                + imageLocalHit
+                + sourceField
+              );
+            }
+            appendSystemTextLine(`       chiefOpl=${(chiefOplUm[objectIndex][wavelength.index] / 1000).toFixed(12)} mm referenceRayDoubleDifference=${valueMm.toFixed(12)} mm chiefOplDoubleDifference=${chiefOplValueMm.toFixed(12)} mm`);
+            const transmittedPupilCenter = transmittedPupilCenters[objectIndex]?.[wavelength.index];
+            if (transmittedPupilCenter) appendSystemTextLine(`       transmittedPupilCenter=(u=${transmittedPupilCenter.u.toFixed(6)}, v=${transmittedPupilCenter.v.toFixed(6)})`);
+          }
+        }
+      }
+      if (requestedPupilFit) {
+        const comparedOpdGridsMm = requestedOpdBasis === 'chief'
+          ? chiefRelativeOpdGridsMm
+          : referenceSphereOpdGridsMm;
+        const optalixOpdMm = [
+          [0, 0, 0],
+          [-0.1390136788e-6, 0, -0.1704400887e-7],
+          [-0.5399195118e-6, 0, -0.2118370048e-6],
+          [-0.1149045936e-5, 0, -0.4508545359e-6],
+          [-0.1897933338e-5, 0, -0.7449473429e-6],
+          [-0.2705162210e-5, 0, -0.1062509376e-5],
+          [-0.3458456163e-5, 0, -0.1359999430e-5],
+          [-0.4043324140e-5, 0, -0.1593527671e-5],
+          [-0.4358425116e-5, 0, -0.1724933917e-5],
+          [-0.4348004005e-5, 0, -0.1733990111e-5],
+          [-0.4017089637e-5, 0, -0.1623581745e-5],
+        ];
+        type FitCandidate = { x: number; y: number; maeMm: number; rmseMm: number };
+        const gridSize = comparedOpdGridsMm[0]?.[0]?.length ?? 0;
+        const bestCandidates: Record<string, FitCandidate | undefined> = {};
+        const calculateMetrics = (valuesMm: number[][], colourIndexes: number[]) => {
+          let sumAbs = 0;
+          let sumSquares = 0;
+          let count = 0;
+          for (let fieldIndex = 1; fieldIndex < objectRows.length; fieldIndex += 1) {
+            for (const colourIndex of colourIndexes) {
+              const deltaMm = valuesMm[fieldIndex]?.[colourIndex] - optalixOpdMm[fieldIndex][colourIndex];
+              if (!Number.isFinite(deltaMm)) continue;
+              sumAbs += Math.abs(deltaMm);
+              sumSquares += deltaMm * deltaMm;
+              count += 1;
+            }
+          }
+          return count > 0 ? { maeMm: sumAbs / count, rmseMm: Math.sqrt(sumSquares / count) } : undefined;
+        };
+        const evaluateCandidate = (xIndex: number, yIndex: number, colourIndexes: number[]): FitCandidate | undefined => {
+          let sumAbs = 0;
+          let sumSquares = 0;
+          let count = 0;
+          for (let fieldIndex = 1; fieldIndex < objectRows.length; fieldIndex += 1) {
+            for (const colourIndex of colourIndexes) {
+              const sampleMm = comparedOpdGridsMm[fieldIndex]?.[colourIndex]?.[yIndex]?.[xIndex];
+              const fieldPrimaryMm = comparedOpdGridsMm[fieldIndex]?.[resolvedPrimaryIndex]?.[yIndex]?.[xIndex];
+              const axialColourMm = comparedOpdGridsMm[0]?.[colourIndex]?.[yIndex]?.[xIndex];
+              const axialPrimaryMm = comparedOpdGridsMm[0]?.[resolvedPrimaryIndex]?.[yIndex]?.[xIndex];
+              if (![sampleMm, fieldPrimaryMm, axialColourMm, axialPrimaryMm].every((value) => value != null && Number.isFinite(value))) return undefined;
+              const direction = Math.sign(primaryWavelength - wavelengths[colourIndex].wavelengthUm);
+              const predictedMm = direction * (Number(sampleMm) - Number(fieldPrimaryMm) - Number(axialColourMm) + Number(axialPrimaryMm));
+              const deltaMm = predictedMm - optalixOpdMm[fieldIndex][colourIndex];
+              sumAbs += Math.abs(deltaMm);
+              sumSquares += deltaMm * deltaMm;
+              count += 1;
+            }
+          }
+          return count > 0 ? {
+            x: -1 + 2 * xIndex / (gridSize - 1),
+            y: -1 + 2 * yIndex / (gridSize - 1),
+            maeMm: sumAbs / count,
+            rmseMm: Math.sqrt(sumSquares / count),
+          } : undefined;
+        };
+        for (let yIndex = 0; yIndex < gridSize; yIndex += 1) {
+          for (let xIndex = 0; xIndex < gridSize; xIndex += 1) {
+            const pupilX = -1 + 2 * xIndex / (gridSize - 1);
+            const pupilY = -1 + 2 * yIndex / (gridSize - 1);
+            if (pupilX * pupilX + pupilY * pupilY > 1 + 1e-9) continue;
+            for (const [label, colourIndexes] of [['combined', [0, 2]], ['colour-1', [0]], ['colour-3', [2]]] as const) {
+              const candidate = evaluateCandidate(xIndex, yIndex, colourIndexes);
+              if (candidate && (!bestCandidates[label] || candidate.maeMm < bestCandidates[label]!.maeMm)) bestCandidates[label] = candidate;
+            }
+          }
+        }
+        appendSystemTextLine(`OPTALIX FIXED-PUPIL 2D FIT (Fields 2-11; ${requestedOpdBasis === 'chief' ? 'chief-relative OPD' : 'referenceRayDoubleDifference'})`);
+        for (const label of ['combined', 'colour-1', 'colour-3']) {
+          const candidate = bestCandidates[label];
+          if (candidate) appendSystemTextLine(` ${label.padEnd(10)} ray=(${candidate.x.toFixed(6)}, ${candidate.y.toFixed(6)}) MAE=${(candidate.maeMm * 1e6).toFixed(6)} um RMSE=${(candidate.rmseMm * 1e6).toFixed(6)} um`);
+        }
+        const pupilMeanMm = comparedOpdGridsMm.map((field) => field.map((grid) => {
+          let sum = 0;
+          let count = 0;
+          for (const row of grid || []) {
+            for (const value of row || []) {
+              if (value != null && Number.isFinite(value)) {
+                sum += value;
+                count += 1;
+              }
+            }
+          }
+          return count > 0 ? sum / count : Number.NaN;
+        }));
+        const pupilMeanDoubleDifferenceMm = pupilMeanMm.map((field, fieldIndex) => field.map((value, colourIndex) => {
+          const direction = Math.sign(primaryWavelength - wavelengths[colourIndex].wavelengthUm);
+          return direction * (value - pupilMeanMm[fieldIndex][resolvedPrimaryIndex] - pupilMeanMm[0][colourIndex] + pupilMeanMm[0][resolvedPrimaryIndex]);
+        }));
+        const pupilMeanMetrics = calculateMetrics(pupilMeanDoubleDifferenceMm, [0, 2]);
+        if (pupilMeanMetrics) appendSystemTextLine(` pupil-mean  ray=(pupil average) MAE=${(pupilMeanMetrics.maeMm * 1e6).toFixed(6)} um RMSE=${(pupilMeanMetrics.rmseMm * 1e6).toFixed(6)} um`);
+        if (requestedOpdBasis === 'chief') {
+          type FieldPrimaryCandidate = FitCandidate & { sign: number };
+          let bestFieldPrimary: FieldPrimaryCandidate | undefined;
+          for (let yIndex = 0; yIndex < gridSize; yIndex += 1) {
+            for (let xIndex = 0; xIndex < gridSize; xIndex += 1) {
+              const pupilX = -1 + 2 * xIndex / (gridSize - 1);
+              const pupilY = -1 + 2 * yIndex / (gridSize - 1);
+              if (pupilX * pupilX + pupilY * pupilY > 1 + 1e-9) continue;
+              for (const sign of [1, -1]) {
+                let sumAbs = 0;
+                let sumSquares = 0;
+                let count = 0;
+                let valid = true;
+                for (let fieldIndex = 0; fieldIndex < objectRows.length && valid; fieldIndex += 1) {
+                  for (const colourIndex of [0, 2]) {
+                    const sampleMm = chiefRelativeOpdGridsMm[fieldIndex]?.[colourIndex]?.[yIndex]?.[xIndex];
+                    const primaryMm = chiefRelativeOpdGridsMm[fieldIndex]?.[resolvedPrimaryIndex]?.[yIndex]?.[xIndex];
+                    if (![sampleMm, primaryMm].every((value) => value != null && Number.isFinite(value))) {
+                      valid = false;
+                      break;
+                    }
+                    const predictedMm = sign * (Number(sampleMm) - Number(primaryMm));
+                    const deltaMm = predictedMm - optalixOpdMm[fieldIndex][colourIndex];
+                    sumAbs += Math.abs(deltaMm);
+                    sumSquares += deltaMm * deltaMm;
+                    count += 1;
+                  }
+                }
+                const candidate = valid && count > 0 ? {
+                  x: pupilX,
+                  y: pupilY,
+                  sign,
+                  maeMm: sumAbs / count,
+                  rmseMm: Math.sqrt(sumSquares / count),
+                } : undefined;
+                if (candidate && (!bestFieldPrimary || candidate.maeMm < bestFieldPrimary.maeMm)) bestFieldPrimary = candidate;
+              }
+            }
+          }
+          if (bestFieldPrimary) {
+            appendSystemTextLine(` chief-primary ray=(${bestFieldPrimary.x.toFixed(6)}, ${bestFieldPrimary.y.toFixed(6)}) sign=${bestFieldPrimary.sign > 0 ? '+' : '-'} MAE=${(bestFieldPrimary.maeMm * 1e6).toFixed(6)} um RMSE=${(bestFieldPrimary.rmseMm * 1e6).toFixed(6)} um`);
+          }
+          let bestChiefAbsolute: FieldPrimaryCandidate | undefined;
+          for (let yIndex = 0; yIndex < gridSize; yIndex += 1) {
+            for (let xIndex = 0; xIndex < gridSize; xIndex += 1) {
+              const pupilX = -1 + 2 * xIndex / (gridSize - 1);
+              const pupilY = -1 + 2 * yIndex / (gridSize - 1);
+              if (pupilX * pupilX + pupilY * pupilY > 1 + 1e-9) continue;
+              for (const sign of [1, -1]) {
+                let sumAbs = 0;
+                let sumSquares = 0;
+                let count = 0;
+                let valid = true;
+                for (let fieldIndex = 0; fieldIndex < objectRows.length && valid; fieldIndex += 1) {
+                  for (const colourIndex of wavelengths.map(({ index }) => index)) {
+                    const sampleMm = chiefRelativeOpdGridsMm[fieldIndex]?.[colourIndex]?.[yIndex]?.[xIndex];
+                    if (!(sampleMm != null && Number.isFinite(sampleMm))) {
+                      valid = false;
+                      break;
+                    }
+                    const deltaMm = sign * Number(sampleMm) - optalixOpdMm[fieldIndex][colourIndex];
+                    sumAbs += Math.abs(deltaMm);
+                    sumSquares += deltaMm * deltaMm;
+                    count += 1;
+                  }
+                }
+                const candidate = valid && count > 0 ? {
+                  x: pupilX,
+                  y: pupilY,
+                  sign,
+                  maeMm: sumAbs / count,
+                  rmseMm: Math.sqrt(sumSquares / count),
+                } : undefined;
+                if (candidate && (!bestChiefAbsolute || candidate.maeMm < bestChiefAbsolute.maeMm)) bestChiefAbsolute = candidate;
+              }
+            }
+          }
+          if (bestChiefAbsolute) {
+            appendSystemTextLine(` chief-absolute ray=(${bestChiefAbsolute.x.toFixed(6)}, ${bestChiefAbsolute.y.toFixed(6)}) sign=${bestChiefAbsolute.sign > 0 ? '+' : '-'} MAE=${(bestChiefAbsolute.maeMm * 1e6).toFixed(6)} um RMSE=${(bestChiefAbsolute.rmseMm * 1e6).toFixed(6)} um`);
+          }
+          type ChiefOplCandidate = { sign: number; maeMm: number; rmseMm: number };
+          let bestChiefOplPrimary: ChiefOplCandidate | undefined;
+          for (const sign of [1, -1]) {
+            let sumAbs = 0;
+            let sumSquares = 0;
+            let count = 0;
+            let valid = true;
+            for (let fieldIndex = 0; fieldIndex < objectRows.length && valid; fieldIndex += 1) {
+              const primaryOplUm = chiefOplUm[fieldIndex]?.[resolvedPrimaryIndex];
+              if (!Number.isFinite(primaryOplUm)) {
+                valid = false;
+                break;
+              }
+              for (const colourIndex of wavelengths.map(({ index }) => index)) {
+                const sampleOplUm = chiefOplUm[fieldIndex]?.[colourIndex];
+                if (!Number.isFinite(sampleOplUm)) {
+                  valid = false;
+                  break;
+                }
+                const predictedMm = sign * (sampleOplUm - primaryOplUm) / 1000;
+                const deltaMm = predictedMm - optalixOpdMm[fieldIndex][colourIndex];
+                sumAbs += Math.abs(deltaMm);
+                sumSquares += deltaMm * deltaMm;
+                count += 1;
+              }
+            }
+            const candidate = valid && count > 0 ? {
+              sign,
+              maeMm: sumAbs / count,
+              rmseMm: Math.sqrt(sumSquares / count),
+            } : undefined;
+            if (candidate && (!bestChiefOplPrimary || candidate.maeMm < bestChiefOplPrimary.maeMm)) bestChiefOplPrimary = candidate;
+          }
+          if (bestChiefOplPrimary) {
+            appendSystemTextLine(` chief-opl-primary ray=(stop-center) sign=${bestChiefOplPrimary.sign > 0 ? '+' : '-'} MAE=${(bestChiefOplPrimary.maeMm * 1e6).toFixed(6)} um RMSE=${(bestChiefOplPrimary.rmseMm * 1e6).toFixed(6)} um`);
+          }
+        }
+        type ChiefOplCrossTermCandidate = { mode: 'raw' | 'spectral'; sign: number; maeMm: number; rmseMm: number };
+        let bestChiefOplCrossTerm: ChiefOplCrossTermCandidate | undefined;
+        for (const mode of ['raw', 'spectral'] as const) {
+          for (const sign of [1, -1]) {
+            let sumAbs = 0;
+            let sumSquares = 0;
+            let count = 0;
+            let valid = true;
+            for (let fieldIndex = 0; fieldIndex < objectRows.length && valid; fieldIndex += 1) {
+              const fieldPrimaryOplUm = chiefOplUm[fieldIndex]?.[resolvedPrimaryIndex];
+              const axialPrimaryOplUm = chiefOplUm[0]?.[resolvedPrimaryIndex];
+              if (!(Number.isFinite(fieldPrimaryOplUm) && Number.isFinite(axialPrimaryOplUm))) {
+                valid = false;
+                break;
+              }
+              for (const wavelength of wavelengths) {
+                const sampleOplUm = chiefOplUm[fieldIndex]?.[wavelength.index];
+                const axialOplUm = chiefOplUm[0]?.[wavelength.index];
+                if (!(Number.isFinite(sampleOplUm) && Number.isFinite(axialOplUm))) {
+                  valid = false;
+                  break;
+                }
+                const spectralDirection = mode === 'spectral'
+                  ? Math.sign(primaryWavelength - wavelength.wavelengthUm)
+                  : 1;
+                const predictedMm = sign * spectralDirection * (
+                  sampleOplUm - fieldPrimaryOplUm - axialOplUm + axialPrimaryOplUm
+                ) / 1000;
+                const deltaMm = predictedMm - optalixOpdMm[fieldIndex][wavelength.index];
+                sumAbs += Math.abs(deltaMm);
+                sumSquares += deltaMm * deltaMm;
+                count += 1;
+              }
+            }
+            const candidate = valid && count > 0 ? {
+              mode,
+              sign,
+              maeMm: sumAbs / count,
+              rmseMm: Math.sqrt(sumSquares / count),
+            } : undefined;
+            if (candidate && (!bestChiefOplCrossTerm || candidate.maeMm < bestChiefOplCrossTerm.maeMm)) bestChiefOplCrossTerm = candidate;
+          }
+        }
+        if (bestChiefOplCrossTerm) {
+          appendSystemTextLine(` chief-opl-cross-term ray=(stop-center) mode=${bestChiefOplCrossTerm.mode} sign=${bestChiefOplCrossTerm.sign > 0 ? '+' : '-'} MAE=${(bestChiefOplCrossTerm.maeMm * 1e6).toFixed(6)} um RMSE=${(bestChiefOplCrossTerm.rmseMm * 1e6).toFixed(6)} um`);
+        }
+      }
+      appendSystemTextLine(`Backend: ${String(chiefOplUm.length > 0 ? 'web-rust-wasm-native-api:map' : 'unknown')}`);
+    } catch (error) {
+      appendSystemTextLine(`opd: failed: ${String((error as any)?.message || error)}`);
+    }
+  };
+
   const runSystemTextCommand = (rawCommand: string) => {
     const command = String(rawCommand ?? '').trim();
     if (!command) return;
@@ -12548,13 +14052,198 @@ const collectLegacyCrossRays = async (
       return next.slice(0, 30);
     });
     const lower = command.toLowerCase();
+    if (lower === 'wav') {
+      setSystemTextLines([]);
+    }
     if (lower === 'cls') {
       setSystemTextLines([]);
       return;
     }
     appendSystemTextLine(`> ${command}`);
     if (lower === 'help') {
-      appendSystemTextLine('Commands: cls, help');
+      appendSystemTextLine('Commands: cls, help, wasm reload, opd [chief=stop|entrance|transmitted] [point=chief|paraxial|target] [exit=chief|center] [ray=x,y] [sampling=entrance|stop] [pupil=effective|nominal|per-wavelength-nominal] [sphere=field|global] [basis=sphere|chief] [direct=1] [rsi=0..1] [imgchief=1|runtime] [fit=1] [detail=1], wav [grid] [pupil=radius] [sphere=primary|per-wavelength] [point=chief|paraxial|target|per-wavelength-best-focus|paraxial-fixed-sphere|per-wavelength-best-focus-fixed-sphere] [exit=chief|center] [mode=raw|piston|piston-tilt|reference-sphere-tilt|piston-defocus|piston-tilt-defocus] [defocus=0..1] [norm=fixed|effective] [detail=1] [wl=w1,w2,...] [wt=w1,w2,...]');
+      return;
+    }
+    if (lower === 'wasm reload') {
+      void (async () => {
+        try {
+          const { reloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import('../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts');
+          const api = await reloadRustRayTracingWasm();
+          appendSystemTextLine(api
+            ? 'wasm: reloaded current artifact.'
+            : `wasm: reload failed: ${String(getRustRayTracingWasmInitError?.() || 'unknown initialization error')}`);
+        } catch (error) {
+          appendSystemTextLine(`wasm: reload failed: ${String((error as any)?.message || error)}`);
+        }
+      })();
+      return;
+    }
+    if (lower === 'opd' || lower.startsWith('opd ')) {
+      const detailArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^detail=/i.test(argument));
+      const requestedDetailedDiagnostics = detailArgument
+        ? ['1', 'true', 'yes', 'on'].includes(detailArgument.slice(detailArgument.indexOf('=') + 1).toLowerCase())
+        : false;
+      const chiefArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^chief=/i.test(argument));
+      const chiefValue = chiefArgument?.slice(chiefArgument.indexOf('=') + 1).toLowerCase();
+      const requestedChiefRayMode = chiefValue === 'entrance'
+        ? 'entrance-pupil-center'
+        : chiefValue === 'transmitted'
+          ? 'transmitted-pupil-center'
+          : 'stop-center';
+      const pointArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^point=/i.test(argument));
+      const pointValue = pointArgument?.slice(pointArgument.indexOf('=') + 1).toLowerCase();
+      const requestedChiefImagePoint = pointValue === 'paraxial'
+        ? 'paraxial-image-point'
+        : pointValue === 'target'
+          ? 'target-surface-center'
+          : 'chief-ray-image-point';
+      const exitArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^exit=/i.test(argument));
+      const exitValue = exitArgument?.slice(exitArgument.indexOf('=') + 1).toLowerCase();
+      const requestedExitPupilReferencePointMode = exitValue === 'center'
+        ? 'exit-pupil-center'
+        : 'chief-ray-intersection';
+      const rayArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^ray=/i.test(argument));
+      const rayValues = rayArgument?.slice(rayArgument.indexOf('=') + 1).split(',').map(Number);
+      const requestedComparisonRay = rayValues?.length === 2
+        && rayValues.every((value) => Number.isFinite(value) && Math.abs(value) <= 1)
+        ? { x: rayValues[0], y: rayValues[1] }
+        : undefined;
+      const samplingArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^sampling=/i.test(argument));
+      const requestedPupilSamplingMode = samplingArgument?.slice(samplingArgument.indexOf('=') + 1).toLowerCase() === 'stop'
+        ? 'stop'
+        : 'entrance';
+      const fitArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^fit=/i.test(argument));
+      const requestedPupilFit = fitArgument
+        ? ['1', 'true', 'yes', 'on'].includes(fitArgument.slice(fitArgument.indexOf('=') + 1).toLowerCase())
+        : false;
+      const sphereArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^sphere=/i.test(argument));
+      const requestedGlobalReferenceSphere = sphereArgument?.slice(sphereArgument.indexOf('=') + 1).toLowerCase() === 'global';
+      const basisArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^basis=/i.test(argument));
+      const requestedOpdBasis = basisArgument?.slice(basisArgument.indexOf('=') + 1).toLowerCase() === 'chief'
+        ? 'chief'
+        : 'sphere';
+      const pupilArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^pupil=/i.test(argument));
+      const pupilValue = pupilArgument?.slice(pupilArgument.indexOf('=') + 1).toLowerCase();
+      const requestedPupilRadiusMode = pupilValue === 'per-wavelength-nominal'
+        ? 'per-wavelength-nominal'
+        : pupilValue === 'nominal'
+          ? 'nominal'
+          : 'effective';
+      const directArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^direct=/i.test(argument));
+      const requestedDirectOpd = directArgument
+        ? ['1', 'true', 'yes', 'on'].includes(directArgument.slice(directArgument.indexOf('=') + 1).toLowerCase())
+        : false;
+      const rsiArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^rsi=/i.test(argument));
+      const rsiValue = rsiArgument?.slice(rsiArgument.indexOf('=') + 1).toLowerCase();
+      const requestedRsiPrimaryLaunchBlend = ['true', 'yes', 'on'].includes(String(rsiValue))
+        ? 1
+        : Math.min(1, Math.max(0, Number(rsiValue)));
+      const imageHeightChiefArgument = command.slice(3).trim().split(/\s+/).find((argument) => /^imgchief=/i.test(argument));
+      const imageHeightChiefValue = imageHeightChiefArgument?.slice(imageHeightChiefArgument.indexOf('=') + 1).toLowerCase();
+      const requestedResolveImageHeightChiefRayInRuntime = imageHeightChiefValue === 'runtime';
+      const requestedPreserveImageHeightChiefRay = imageHeightChiefArgument
+        ? requestedResolveImageHeightChiefRayInRuntime || ['1', 'true', 'yes', 'on'].includes(String(imageHeightChiefValue))
+        : false;
+      void runChiefRayOpdConsoleCommand(requestedDetailedDiagnostics, requestedChiefRayMode, requestedChiefImagePoint, requestedExitPupilReferencePointMode, requestedComparisonRay, requestedPupilSamplingMode, requestedPupilFit, requestedGlobalReferenceSphere, requestedOpdBasis, requestedPupilRadiusMode, requestedDirectOpd, Number.isFinite(requestedRsiPrimaryLaunchBlend) ? requestedRsiPrimaryLaunchBlend : 0, requestedPreserveImageHeightChiefRay, requestedResolveImageHeightChiefRayInRuntime);
+      return;
+    }
+    if (lower === 'wav' || lower.startsWith('wav ')) {
+      const commandArguments = command.slice(3).trim().split(/\s+/).filter(Boolean);
+      const gridArgument = Number(commandArguments[0]);
+      const pupilArgument = commandArguments.find((argument) => /^pupil=/i.test(argument));
+      const requestedPupilRadiusMm = pupilArgument ? Number(pupilArgument.slice(pupilArgument.indexOf('=') + 1)) : undefined;
+      const wavelengthArgument = commandArguments.find((argument) => /^wl=/i.test(argument));
+      const requestedWavelengthsUm = wavelengthArgument
+        ? wavelengthArgument.slice(wavelengthArgument.indexOf('=') + 1).split(',').map(Number).filter((value) => Number.isFinite(value) && value > 0)
+        : undefined;
+      const weightArgument = commandArguments.find((argument) => /^wt=/i.test(argument));
+      const requestedRelativeWeights = weightArgument
+        ? weightArgument.slice(weightArgument.indexOf('=') + 1).split(',').map(Number).filter((value) => Number.isFinite(value) && value >= 0)
+        : undefined;
+      const sphereArgument = commandArguments.find((argument) => /^sphere=/i.test(argument));
+      const sphereValue = sphereArgument?.slice(sphereArgument.indexOf('=') + 1).toLowerCase();
+      const requestedSphereWavelengthMode = sphereValue === 'per-wavelength'
+        ? 'per-wavelength'
+        : sphereValue === 'primary'
+          ? 'primary-wavelength'
+          : undefined;
+      const pointArgument = commandArguments.find((argument) => /^point=/i.test(argument));
+      const pointValue = pointArgument?.slice(pointArgument.indexOf('=') + 1).toLowerCase();
+      const fixedReferenceSphereGeometry = pointValue?.endsWith('-fixed-sphere') === true;
+      const imagePointValue = fixedReferenceSphereGeometry
+        ? pointValue?.slice(0, -'-fixed-sphere'.length)
+        : pointValue;
+      const requestedChiefImagePoint = imagePointValue === 'paraxial'
+        ? 'paraxial-image-point'
+        : imagePointValue === 'target'
+          ? 'target-surface-center'
+          : imagePointValue === 'per-wavelength-best-focus'
+            ? 'per-wavelength-best-focus-point'
+          : imagePointValue === 'chief'
+            ? 'chief-ray-image-point'
+            : undefined;
+      const modeArgument = commandArguments.find((argument) => /^mode=/i.test(argument));
+      const modeValue = modeArgument?.slice(modeArgument.indexOf('=') + 1).toLowerCase();
+      const requestedDisplayMode = modeValue === 'piston-tilt-defocus'
+        ? 'pistonTiltDefocusRemoved'
+        : modeValue === 'piston-tilt'
+        ? 'pistonTiltRemoved'
+        : modeValue === 'reference-sphere-tilt'
+        ? 'referenceSphereTiltRemoved'
+        : modeValue === 'piston-defocus'
+        ? 'pistonDefocusRemoved'
+        : modeValue === 'piston'
+          ? 'pistonRemoved'
+          : modeValue === 'raw'
+            ? 'raw'
+            : undefined;
+      const normArgument = commandArguments.find((argument) => /^norm=/i.test(argument));
+      const normValue = normArgument?.slice(normArgument.indexOf('=') + 1).toLowerCase();
+      const requestedPupilNormalizationMode = normValue === 'effective'
+        ? 'effective-transmitted-pupil'
+        : normValue === 'fixed'
+          ? 'fixed-entrance-pupil'
+          : undefined;
+      const exitArgument = commandArguments.find((argument) => /^exit=/i.test(argument));
+      const exitValue = exitArgument?.slice(exitArgument.indexOf('=') + 1).toLowerCase();
+      const requestedExitPupilReferencePointMode = exitValue === 'center'
+        ? 'exit-pupil-center'
+        : exitValue === 'chief'
+          ? 'chief-ray-intersection'
+          : undefined;
+      const fieldArgument = commandArguments.find((argument) => /^field=/i.test(argument));
+      const fieldValue = fieldArgument?.slice(fieldArgument.indexOf('=') + 1).toLowerCase();
+      const requestedFieldMode = fieldValue === 'per-wavelength'
+        ? 'per-wavelength'
+        : 'primary-fixed';
+      const chiefArgument = commandArguments.find((argument) => /^chief=/i.test(argument));
+      const chiefValue = chiefArgument?.slice(chiefArgument.indexOf('=') + 1).toLowerCase();
+      const requestedChiefRayMode = chiefValue === 'entrance'
+        ? 'entrance-pupil-center'
+        : chiefValue === 'transmitted'
+          ? 'transmitted-pupil-center'
+          : chiefValue === 'stop'
+            ? 'stop-center'
+            : undefined;
+      const referenceRayArgument = commandArguments.find((argument) => /^ref-ray=/i.test(argument));
+      const referenceRayValue = referenceRayArgument?.slice(referenceRayArgument.indexOf('=') + 1).toLowerCase();
+      const requestedReferenceRayPupilCoordinate = referenceRayValue === 'near-chief'
+        ? { x: -1 / 32, y: 0 }
+        : undefined;
+      const termsArgument = commandArguments.find((argument) => /^terms=/i.test(argument));
+      const requestedOpdTermDiagnostics = termsArgument?.slice(termsArgument.indexOf('=') + 1) === '1';
+      const defocusArgument = commandArguments.find((argument) => /^defocus=/i.test(argument));
+      const requestedDefocusScale = defocusArgument
+        ? Number(defocusArgument.slice(defocusArgument.indexOf('=') + 1))
+        : undefined;
+      const detailArgument = commandArguments.find((argument) => /^detail=/i.test(argument));
+      const requestedDetailedDiagnostics = detailArgument
+        ? ['1', 'true', 'yes', 'on'].includes(detailArgument.slice(detailArgument.indexOf('=') + 1).toLowerCase())
+        : false;
+      const gridSize = Number.isFinite(gridArgument)
+        ? Math.max(17, Math.min(257, Math.floor(gridArgument)))
+        : 129;
+      void runWavefrontRmsConsoleCommand(gridSize, requestedPupilRadiusMm, requestedWavelengthsUm, requestedRelativeWeights, requestedSphereWavelengthMode, requestedChiefImagePoint, requestedDisplayMode, requestedPupilNormalizationMode, requestedDefocusScale, fixedReferenceSphereGeometry, requestedExitPupilReferencePointMode, requestedFieldMode, requestedChiefRayMode, requestedReferenceRayPupilCoordinate, requestedDetailedDiagnostics, requestedOpdTermDiagnostics);
       return;
     }
     appendSystemTextLine(`Command not identified : ${command}`);
