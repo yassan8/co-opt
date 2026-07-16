@@ -1,0 +1,18 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wav-reference-origin-capture.txt'
+
+print 'field wavelength pupil_y path_s1_s16 opl_s1_s16 path_s2_s16 opl_s2_s16 path_s15_s16 opl_s15_s16 opd_waves'
+
+do $wavelength = 1,3
+  do $pupil_y = -0.75,0.75,0.75
+    print 6 $wavelength $pupil_y &
+      [PATH s1..16 w$wavelength f6 0 $pupil_y] &
+      [OPL s1..16 w$wavelength f6 0 $pupil_y] &
+      [PATH s2..16 w$wavelength f6 0 $pupil_y] &
+      [OPL s2..16 w$wavelength f6 0 $pupil_y] &
+      [PATH s15..16 w$wavelength f6 0 $pupil_y] &
+      [OPL s15..16 w$wavelength f6 0 $pupil_y] &
+      [OPD f6 w$wavelength 0 $pupil_y]
+  enddo
+enddo
+
+out t

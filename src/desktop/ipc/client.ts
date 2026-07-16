@@ -196,6 +196,8 @@ function sanitizeOpdReferenceMode(value: unknown): OpdReferenceMode {
   const mode = typeof value === "string" ? value.trim().toLowerCase() : "";
   switch (mode) {
     case "exit-pupil":
+    case "image-sphere":
+    case "optalix-direct":
     case "image-plane":
     case "absolute":
     case "absolute2":
@@ -2338,9 +2340,13 @@ export async function runNativeSeidel(
     const referenceWavelength = referenceWavelengthMode === "primary-wavelength"
       ? getPrimaryWavelengthFromSourceRows(sourceRows)
       : wavelengthUm;
-    const referenceRowsForWasm = referenceWavelengthMode === "primary-wavelength"
-      ? enrichRowsWithResolvedRindexForWasm(opticalSystemRows, referenceWavelength)
+    const diagnosticReferenceRows = Array.isArray((payload as any)?.referenceOpticalSystemRows)
+      ? (payload as any).referenceOpticalSystemRows
       : undefined;
+    const referenceRowsForWasm = diagnosticReferenceRows
+      || (referenceWavelengthMode === "primary-wavelength"
+        ? enrichRowsWithResolvedRindexForWasm(opticalSystemRows, referenceWavelength)
+        : undefined);
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const runNativeWasm = (rust as any)?.run_native_seidel_wasm_json;
@@ -3135,12 +3141,17 @@ export async function runNativeOpdMap(
       exitPupilPositionFromLastSurfaceMm: Number.isFinite(Number(payload?.exitPupilPositionFromLastSurfaceMm))
         ? Number(payload.exitPupilPositionFromLastSurfaceMm)
         : undefined,
+      pupilGridSampling: (payload as any)?.pupilGridSampling,
       pupilSamplingMode: requestedPupilSamplingMode,
       chiefRayMode: requestedChiefRayMode,
       referenceRayPupilCoordinate: payload?.referenceRayPupilCoordinate,
       sampleRayLaunchOrigin: payload?.sampleRayLaunchOrigin,
       preserveImageHeightChiefRay: payload?.preserveImageHeightChiefRay === true,
       resolveImageHeightChiefRayInRuntime: payload?.resolveImageHeightChiefRayInRuntime === true,
+      aimPupilSamplesToStop: payload?.aimPupilSamplesToStop === true,
+      aimPupilSamplesAtReferenceWavelength: (payload as any)?.aimPupilSamplesAtReferenceWavelength === true,
+      includeMeridionalTermSamples: (payload as any)?.includeMeridionalTermSamples === true,
+      excludeObjectSpaceOpl: (payload as any)?.excludeObjectSpaceOpl === true,
       pupilNormalizationMode,
       exitPupilReferencePointMode: requestedExitPupilReferencePointMode,
       referenceSphereOptions,
@@ -3189,13 +3200,24 @@ export async function runNativeOpdMap(
         ? normalizeNativePoint(wasmOut.chiefStopDirection)
         : undefined,
       chiefSurfaceTrace: Array.isArray(wasmOut?.chiefSurfaceTrace)
-        ? wasmOut.chiefSurfaceTrace.map((entry: any) => ({
-            surfaceIndex: Number(entry?.surfaceIndex),
-            point: normalizeNativePoint(entry?.point),
-            direction: normalizeNativePoint(entry?.direction),
-          })).filter((entry: any) => Number.isInteger(entry.surfaceIndex)
-            && Number.isFinite(entry.point?.x) && Number.isFinite(entry.point?.y) && Number.isFinite(entry.point?.z)
-            && Number.isFinite(entry.direction?.x) && Number.isFinite(entry.direction?.y) && Number.isFinite(entry.direction?.z))
+        ? wasmOut.chiefSurfaceTrace.map((entry: any) => entry?.diagnostic === "firstSurfaceTraceStatusCounts"
+          ? {
+              diagnostic: entry.diagnostic,
+              status3Count: Number(entry.status3Count),
+              status4Count: Number(entry.status4Count),
+              statusOtherCount: Number(entry.statusOtherCount),
+              validCount: Number(entry.validCount),
+            }
+          : {
+              surfaceIndex: Number(entry?.surfaceIndex),
+              oplUm: Number.isFinite(Number(entry?.oplUm)) ? Number(entry.oplUm) : undefined,
+              globalPoint: normalizeNativePoint(entry?.globalPoint),
+              point: normalizeNativePoint(entry?.point),
+              direction: normalizeNativePoint(entry?.direction),
+            }).filter((entry: any) => entry.diagnostic === "firstSurfaceTraceStatusCounts"
+            || (Number.isInteger(entry.surfaceIndex)
+              && Number.isFinite(entry.point?.x) && Number.isFinite(entry.point?.y) && Number.isFinite(entry.point?.z)
+              && Number.isFinite(entry.direction?.x) && Number.isFinite(entry.direction?.y) && Number.isFinite(entry.direction?.z)))
         : undefined,
       sampleRayLaunchOriginApplied: wasmOut?.sampleRayLaunchOriginApplied === true,
       transmittedPupilCenterUv: Array.isArray(wasmOut?.transmittedPupilCenterUv)
@@ -3239,6 +3261,12 @@ export async function runNativeOpdMap(
         : undefined,
       pupilMaskGrid: Array.isArray(wasmOut?.pupilMaskGrid)
         ? wasmOut.pupilMaskGrid
+        : undefined,
+      entrancePupilCoordinateXGrid: Array.isArray(wasmOut?.entrancePupilCoordinateXGrid)
+        ? wasmOut.entrancePupilCoordinateXGrid
+        : undefined,
+      entrancePupilCoordinateYGrid: Array.isArray(wasmOut?.entrancePupilCoordinateYGrid)
+        ? wasmOut.entrancePupilCoordinateYGrid
         : undefined,
       displayFit: wasmOut?.displayFit && typeof wasmOut.displayFit === "object"
         ? wasmOut.displayFit
@@ -3314,6 +3342,12 @@ export async function runNativeOpdMap(
       targetSegmentOpdRmsUm: Number.isFinite(Number(wasmOut?.targetSegmentOpdRmsUm))
         ? Number(wasmOut.targetSegmentOpdRmsUm)
         : undefined,
+      firstSurfaceOpdRmsUm: Number.isFinite(Number(wasmOut?.firstSurfaceOpdRmsUm))
+        ? Number(wasmOut.firstSurfaceOpdRmsUm)
+        : undefined,
+      firstSurfaceExcludedOpdRmsUm: Number.isFinite(Number(wasmOut?.firstSurfaceExcludedOpdRmsUm))
+        ? Number(wasmOut.firstSurfaceExcludedOpdRmsUm)
+        : undefined,
       spherePathDeltaRmsUm: Number.isFinite(Number(wasmOut?.spherePathDeltaRmsUm))
         ? Number(wasmOut.spherePathDeltaRmsUm)
         : undefined,
@@ -3343,6 +3377,15 @@ export async function runNativeOpdMap(
       airReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.airReferenceOpdRmsUm))
         ? Number(wasmOut.airReferenceOpdRmsUm)
         : undefined,
+      imagePlaneReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.imagePlaneReferenceOpdRmsUm))
+        ? Number(wasmOut.imagePlaneReferenceOpdRmsUm)
+        : undefined,
+      stopImageReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.stopImageReferenceOpdRmsUm))
+        ? Number(wasmOut.stopImageReferenceOpdRmsUm)
+        : undefined,
+      stopReferenceOpdRmsUm: Number.isFinite(Number(wasmOut?.stopReferenceOpdRmsUm))
+        ? Number(wasmOut.stopReferenceOpdRmsUm)
+        : undefined,
       alternateOpticalPathSign: wasmOut?.alternateOpticalPathSign === "negative"
         ? "negative"
         : wasmOut?.alternateOpticalPathSign === "positive"
@@ -3370,6 +3413,8 @@ export async function runNativeOpdMap(
       ),
       referenceMode: sanitizeOpdReferenceMode(wasmOut?.referenceMode || referenceMode),
       rawOpdGrid,
+      rawWasmRmsWaves: computeFiniteGridRmsNativeLike(rawOpdGrid),
+      rawWasmOpdWaveNormalization: String(payload?.opdWaveNormalization || "primary"),
       unreferencedOpdGrid: Array.isArray(wasmOut?.unreferencedOpdGrid)
         ? wasmOut.unreferencedOpdGrid
         : undefined,
@@ -3417,6 +3462,16 @@ export async function runNativeOpdRmsWaves(
     return {
       backend: `${mapResponse.backend}:rms`,
       chiefReferenceMode: mapResponse.chiefReferenceMode,
+      chiefRayLaunchOrigin: mapResponse.chiefRayLaunchOrigin,
+      chiefSurfaceTrace: mapResponse.chiefSurfaceTrace,
+      imageHeightChiefRayApplied: mapResponse.imageHeightChiefRayApplied,
+      imageHeightChiefRayPreserved: mapResponse.imageHeightChiefRayPreserved,
+      imageHeightChiefRayRuntimeResolved: mapResponse.imageHeightChiefRayRuntimeResolved,
+      imageHeightChiefDirection: mapResponse.imageHeightChiefDirection,
+      imageHeightRuntimeSolvedAngle: mapResponse.imageHeightRuntimeSolvedAngle,
+      imageHeightSolverHit: mapResponse.imageHeightSolverHit,
+      imageHeightSolverSurfaceIndex: mapResponse.imageHeightSolverSurfaceIndex,
+      sampleRayLaunchOriginApplied: mapResponse.sampleRayLaunchOriginApplied,
       transmittedPupilCenterUv: mapResponse.transmittedPupilCenterUv,
       targetSurface: mapResponse.targetSurface,
       stopSurface: mapResponse.stopSurface,
@@ -3435,6 +3490,9 @@ export async function runNativeOpdRmsWaves(
       gridSize: mapResponse.gridSize,
       effectivePupilRadiusMm: mapResponse.effectivePupilRadiusMm,
       pupilMaskGrid: mapResponse.pupilMaskGrid,
+      entrancePupilCoordinateXGrid: (mapResponse as any).entrancePupilCoordinateXGrid,
+      entrancePupilCoordinateYGrid: (mapResponse as any).entrancePupilCoordinateYGrid,
+      displayOpdGrid: mapResponse.displayOpdGrid,
       unreferencedOpdGrid: mapResponse.unreferencedOpdGrid,
       opdTermSamples: mapResponse.opdTermSamples,
       sampleCount,
@@ -3549,10 +3607,30 @@ export async function runNativeOpdRmsWaves(
       surfaceIndex: targetSurface,
       gridSize,
       wavelengthUm,
+      opdReferenceWavelengthUm: Number.isFinite(Number(payload?.opdReferenceWavelengthUm))
+        ? Number(payload.opdReferenceWavelengthUm)
+        : undefined,
+      opdWaveNormalization: payload?.opdWaveNormalization,
+      pupilRadiusMm: Number.isFinite(Number(payload?.pupilRadiusMm)) && Number(payload.pupilRadiusMm) > 0
+        ? Number(payload.pupilRadiusMm)
+        : undefined,
+      entrancePupilPositionFromFirstSurfaceMm: Number.isFinite(Number(payload?.entrancePupilPositionFromFirstSurfaceMm))
+        ? Number(payload.entrancePupilPositionFromFirstSurfaceMm)
+        : undefined,
+      exitPupilPositionFromLastSurfaceMm: Number.isFinite(Number(payload?.exitPupilPositionFromLastSurfaceMm))
+        ? Number(payload.exitPupilPositionFromLastSurfaceMm)
+        : undefined,
+      pupilGridSampling: payload?.pupilGridSampling,
       pupilSamplingMode: requestedPupilSamplingMode,
       chiefRayMode: payload?.chiefRayMode,
       referenceRayPupilCoordinate: payload?.referenceRayPupilCoordinate,
       sampleRayLaunchOrigin: payload?.sampleRayLaunchOrigin,
+      preserveImageHeightChiefRay: payload?.preserveImageHeightChiefRay === true,
+      resolveImageHeightChiefRayInRuntime: payload?.resolveImageHeightChiefRayInRuntime === true,
+      aimPupilSamplesToStop: payload?.aimPupilSamplesToStop === true,
+      aimPupilSamplesAtReferenceWavelength: payload?.aimPupilSamplesAtReferenceWavelength === true,
+      includeMeridionalTermSamples: payload?.includeMeridionalTermSamples === true,
+      excludeObjectSpaceOpl: (payload as any)?.excludeObjectSpaceOpl === true,
       pupilNormalizationMode: payload?.pupilNormalizationMode,
       exitPupilReferencePointMode: payload?.exitPupilReferencePointMode,
       referenceSphereOptions: payload?.referenceSphereOptions,

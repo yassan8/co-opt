@@ -1,0 +1,12 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wavefront-nrays-capture.txt'
+
+print 'field wavelength nrays'
+print 6 2 [NRAYS w2 f6]
+print 11 2 [NRAYS w2 f11]
+
+print '=== WAV FIELD 6 ==='
+wav f6
+print '=== WAV FIELD 11 ==='
+wav f11
+
+out t

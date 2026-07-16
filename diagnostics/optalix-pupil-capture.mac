@@ -1,0 +1,6 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-pupil-capture.txt'
+
+print 'epd sap sep'
+print [EPD] [SAP] [SEP]
+
+out t

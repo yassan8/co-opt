@@ -13029,10 +13029,9 @@ const collectLegacyCrossRays = async (
         ...entry,
         relativeWeight: entry.relativeWeight / primaryWeight,
       }));
-      const rmsDisplayMode = opdReferenceSphereOptions.opdDisplayMode || 'raw';
       const effectiveRmsDisplayMode = Number.isFinite(requestedDefocusScale)
         ? `pistonDefocusScaled:${Math.max(0, Math.min(1, Number(requestedDefocusScale))).toFixed(6)}`
-        : requestedDisplayMode || rmsDisplayMode;
+        : requestedDisplayMode || 'pistonRemoved';
       const backendRmsDisplayMode = effectiveRmsDisplayMode === 'referenceSphereTiltRemoved'
         ? 'pistonTiltRemoved'
         : effectiveRmsDisplayMode;
@@ -13073,9 +13072,13 @@ const collectLegacyCrossRays = async (
           ),
         ] as const)))
         : undefined;
-      const entrancePupilPositionFromFirstSurfaceMm = Number(
-        calculatePupilsByNewSpec(opticalSystemRows, Number(primaryWavelength))?.entrancePupil?.position,
-      );
+      const primaryPupils = calculatePupilsByNewSpec(opticalSystemRows, Number(primaryWavelength));
+      const entrancePupilPositionFromFirstSurfaceMm = Number(primaryPupils?.entrancePupil?.position);
+      const derivedEntrancePupilDiameterMm = Number(primaryPupils?.entrancePupil?.diameter);
+      const effectivePupilRadiusMm = pupilRadiusOverrideMm
+        ?? (Number.isFinite(derivedEntrancePupilDiameterMm) && derivedEntrancePupilDiameterMm > 0
+          ? derivedEntrancePupilDiameterMm / 2
+          : undefined);
       const exitPupilPositionFromLastSurfaceMm = Number(
         calculateExitPupilDiameter(opticalSystemRows, Number(primaryWavelength))?.position,
       );
@@ -13184,7 +13187,7 @@ const collectLegacyCrossRays = async (
               objectIndex,
               wavelengthUm: Number(primaryWavelength),
               gridSize: requestedGridSize,
-              pupilRadiusMm: pupilRadiusOverrideMm,
+              pupilRadiusMm: effectivePupilRadiusMm,
               entrancePupilPositionFromFirstSurfaceMm: Number.isFinite(entrancePupilPositionFromFirstSurfaceMm)
                 ? entrancePupilPositionFromFirstSurfaceMm
                 : undefined,
@@ -13226,7 +13229,7 @@ const collectLegacyCrossRays = async (
               objectIndex,
               wavelengthUm: wavelength.wavelengthUm,
               gridSize: requestedGridSize,
-              pupilRadiusMm: pupilRadiusOverrideMm,
+              pupilRadiusMm: effectivePupilRadiusMm,
               entrancePupilPositionFromFirstSurfaceMm: Number.isFinite(entrancePupilPositionFromFirstSurfaceMm)
                 ? entrancePupilPositionFromFirstSurfaceMm
                 : undefined,
@@ -13293,7 +13296,11 @@ const collectLegacyCrossRays = async (
               : 'unavailable';
             const selectedPointText = formatPoint(result?.selectedImagePoint);
             const rmsBestFocusPointText = formatPoint(result?.rmsBestFocusPoint);
-            appendSystemTextLine(`  Field ${objectIndex + 1} input: ${String(result?.usedObjectPosition || 'unknown')} target=(${Number(result?.imageHeightTargetX ?? 0).toFixed(6)},${Number(result?.imageHeightTargetY ?? 0).toFixed(6)}) angle=(${Number(result?.usedObjectX ?? 0).toFixed(6)},${Number(result?.usedObjectY ?? 0).toFixed(6)})${sphereText}${directionText}${exitPupilText} refWl=${Number(result?.referenceSphereWavelengthUsed ?? 0).toFixed(6)} geometry=${geometrySource} radius=${currentRadiusText}->${primaryRadiusText} pupilRadius=${Number(result?.effectivePupilRadiusMm ?? 0).toFixed(6)} chiefMode=${String(result?.chiefReferenceMode ?? 'unknown')} corrected=${Number(result?.referenceCorrectedSampleCount ?? 0)} grid=${gridSize} hit=${hitCount}/${candidateCount} finite=${validSampleCount} validRatio=${validRatio.toFixed(4)} trackedRmsUm=${Number(result?.trackedOpdRmsUm ?? 0).toFixed(6)} beforeTargetRmsUm=${Number(result?.beforeTargetTrackedOpdRmsUm ?? 0).toFixed(6)} targetSegmentRmsUm=${Number(result?.targetSegmentOpdRmsUm ?? 0).toFixed(6)} sphereDeltaRmsUm=${Number(result?.spherePathDeltaRmsUm ?? 0).toFixed(6)} pathScale*=${Number(result?.spherePathOptimalScale ?? 0).toFixed(6)} minRmsUm=${Number(result?.spherePathOptimalRmsUm ?? 0).toFixed(6)} refRmsUm=${Number(result?.referenceOpdRmsUm ?? 0).toFixed(6)} currentRmsUm=${Number(result?.currentReferenceOpdRmsUm ?? 0).toFixed(6)} alternate(${String(result?.alternateSphereIntersection ?? 'unknown')})RmsUm=${Number(result?.alternateReferenceOpdRmsUm ?? 0).toFixed(6)} targetOriginRmsUm=${Number(result?.targetOriginReferenceOpdRmsUm ?? 0).toFixed(6)} imageSpaceN=${Number(result?.imageSpaceN ?? 0).toFixed(6)} airRmsUm=${Number(result?.airReferenceOpdRmsUm ?? 0).toFixed(6)} alternateSign(${String(result?.alternateOpticalPathSign ?? 'unknown')})RmsUm=${Number(result?.alternateSignReferenceOpdRmsUm ?? 0).toFixed(6)} axisReferenceRmsUm=${Number(result?.axisReferenceSphereRmsUm ?? 0).toFixed(6)} radiusScale*=${Number(result?.sphereRadiusOptimalScale ?? 0).toFixed(6)} radiusRmsUm=${Number(result?.sphereRadiusOptimalRmsUm ?? 0).toFixed(6)}`);
+            const runtimeAngle = result?.imageHeightRuntimeSolvedAngle;
+            const runtimeAngleText = runtimeAngle
+              ? `->(${Number(runtimeAngle.x).toFixed(6)},${Number(runtimeAngle.y).toFixed(6)}) runtime=${result?.imageHeightChiefRayRuntimeResolved === true ? 'resolved' : 'not-resolved'} preserved=${result?.imageHeightChiefRayPreserved === true ? 'yes' : 'no'}`
+              : '';
+            appendSystemTextLine(`  Field ${objectIndex + 1} input: ${String(result?.usedObjectPosition || 'unknown')} target=(${Number(result?.imageHeightTargetX ?? 0).toFixed(6)},${Number(result?.imageHeightTargetY ?? 0).toFixed(6)}) angle=(${Number(result?.usedObjectX ?? 0).toFixed(6)},${Number(result?.usedObjectY ?? 0).toFixed(6)})${runtimeAngleText}${sphereText}${directionText}${exitPupilText} refWl=${Number(result?.referenceSphereWavelengthUsed ?? 0).toFixed(6)} geometry=${geometrySource} radius=${currentRadiusText}->${primaryRadiusText} pupilRadius=${Number(result?.effectivePupilRadiusMm ?? 0).toFixed(6)} chiefMode=${String(result?.chiefReferenceMode ?? 'unknown')} corrected=${Number(result?.referenceCorrectedSampleCount ?? 0)} grid=${gridSize} hit=${hitCount}/${candidateCount} finite=${validSampleCount} validRatio=${validRatio.toFixed(4)} trackedRmsUm=${Number(result?.trackedOpdRmsUm ?? 0).toFixed(6)} beforeTargetRmsUm=${Number(result?.beforeTargetTrackedOpdRmsUm ?? 0).toFixed(6)} targetSegmentRmsUm=${Number(result?.targetSegmentOpdRmsUm ?? 0).toFixed(6)} sphereDeltaRmsUm=${Number(result?.spherePathDeltaRmsUm ?? 0).toFixed(6)} pathScale*=${Number(result?.spherePathOptimalScale ?? 0).toFixed(6)} minRmsUm=${Number(result?.spherePathOptimalRmsUm ?? 0).toFixed(6)} refRmsUm=${Number(result?.referenceOpdRmsUm ?? 0).toFixed(6)} currentRmsUm=${Number(result?.currentReferenceOpdRmsUm ?? 0).toFixed(6)} alternate(${String(result?.alternateSphereIntersection ?? 'unknown')})RmsUm=${Number(result?.alternateReferenceOpdRmsUm ?? 0).toFixed(6)} targetOriginRmsUm=${Number(result?.targetOriginReferenceOpdRmsUm ?? 0).toFixed(6)} imageSpaceN=${Number(result?.imageSpaceN ?? 0).toFixed(6)} airRmsUm=${Number(result?.airReferenceOpdRmsUm ?? 0).toFixed(6)} alternateSign(${String(result?.alternateOpticalPathSign ?? 'unknown')})RmsUm=${Number(result?.alternateSignReferenceOpdRmsUm ?? 0).toFixed(6)} axisReferenceRmsUm=${Number(result?.axisReferenceSphereRmsUm ?? 0).toFixed(6)} radiusScale*=${Number(result?.sphereRadiusOptimalScale ?? 0).toFixed(6)} radiusRmsUm=${Number(result?.sphereRadiusOptimalRmsUm ?? 0).toFixed(6)}`);
             appendSystemTextLine(`       imagePointMode=${String(result?.selectedImagePointMode ?? 'unknown')} selected=${selectedPointText} rmsBestFocus=${rmsBestFocusPointText}`);
             const focusDiagnostics = result?.rmsBestFocusDiagnostics;
             if (focusDiagnostics) {

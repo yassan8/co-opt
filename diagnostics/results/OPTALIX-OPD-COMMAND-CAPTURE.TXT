@@ -1,0 +1,55 @@
+ marker field wavelength pupil_y
+ 999 6 1 -1
+ OPD ( Field  6; Colour  1 ) = -0.1048751270E-04
+ 999 6 1 -0.75
+ OPD ( Field  6; Colour  1 ) = -0.7421182481E-05
+ 999 6 1 -0.5
+ OPD ( Field  6; Colour  1 ) = -0.5317626957E-05
+ 999 6 1 -0.25
+ OPD ( Field  6; Colour  1 ) = -0.3744450723E-05
+ 999 6 1 0.0E+00
+ OPD ( Field  6; Colour  1 ) = -0.2705162210E-05
+ 999 6 1 0.25
+ OPD ( Field  6; Colour  1 ) = -0.2015629981E-05
+ 999 6 1 0.5
+ OPD ( Field  6; Colour  1 ) = -0.1530819212E-05
+ 999 6 1 0.75
+ OPD ( Field  6; Colour  1 ) = -0.1765589104E-05
+ 999 6 1 1
+ OPD ( Field  6; Colour  1 ) = -0.3527438551E-05
+ 999 6 2 -1
+ OPD ( Field  6; Colour  2 ) =   0.000000000
+ 999 6 2 -0.75
+ OPD ( Field  6; Colour  2 ) =   0.000000000
+ 999 6 2 -0.5
+ OPD ( Field  6; Colour  2 ) =   0.000000000
+ 999 6 2 -0.25
+ OPD ( Field  6; Colour  2 ) =   0.000000000
+ 999 6 2 0.0E+00
+ OPD ( Field  6; Colour  2 ) =   0.000000000
+ 999 6 2 0.25
+ OPD ( Field  6; Colour  2 ) =   0.000000000
+ 999 6 2 0.5
+ OPD ( Field  6; Colour  2 ) =   0.000000000
+ 999 6 2 0.75
+ OPD ( Field  6; Colour  2 ) =   0.000000000
+ 999 6 2 1
+ OPD ( Field  6; Colour  2 ) =   0.000000000
+ 999 6 3 -1
+ OPD ( Field  6; Colour  3 ) = -0.3080337208E-05
+ 999 6 3 -0.75
+ OPD ( Field  6; Colour  3 ) = -0.8121355322E-06
+ 999 6 3 -0.5
+ OPD ( Field  6; Colour  3 ) = -0.2237797432E-06
+ 999 6 3 -0.25
+ OPD ( Field  6; Colour  3 ) = -0.4658067496E-06
+ 999 6 3 0.0E+00
+ OPD ( Field  6; Colour  3 ) = -0.1062509376E-05
+ 999 6 3 0.25
+ OPD ( Field  6; Colour  3 ) = -0.1927764728E-05
+ 999 6 3 0.5
+ OPD ( Field  6; Colour  3 ) = -0.2976792203E-05
+ 999 6 3 0.75
+ OPD ( Field  6; Colour  3 ) = -0.3628594719E-05
+ 999 6 3 1
+ OPD ( Field  6; Colour  3 ) = -0.3199120627E-05

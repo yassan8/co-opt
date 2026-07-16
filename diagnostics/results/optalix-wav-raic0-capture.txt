@@ -1,0 +1,51 @@
+ === SAVED RAIC FILE TEST ===
+ Run this macro once after loading each RAIC test OTX file.
+ === WAV FIELD 1 ===
+
+
+ WAVEFRONT ABERRATION:
+
+ Field  Wavel.  Rel.Wgt        RMS/lambda
+     1      1     0.135           0.04656
+     1      2     1.000           0.25221
+     1      3     0.302           0.19326
+                               ----------
+                                  0.26784
+ === WAV FIELD 6 ===
+
+
+ WAVEFRONT ABERRATION:
+
+ Field  Wavel.  Rel.Wgt        RMS/lambda
+     6      1     0.135           0.42096
+     6      2     1.000           0.99924
+     6      3     0.302           0.53183
+                               ----------
+                                  1.00729
+ === WAV FIELD 11 ===
+
+
+ WAVEFRONT ABERRATION:
+
+ Field  Wavel.  Rel.Wgt        RMS/lambda
+    11      1     0.135           0.41465
+    11      2     1.000           0.72747
+    11      3     0.302           0.30121
+                               ----------
+                                  0.74220
+ field wavelength pupil_x pupil_y opd
+ 6 1 0.0E+00 -0.75 0.0E+00
+ 6 1 0.0E+00 0.0E+00 0.0E+00
+ 6 1 0.0E+00 0.75 0.0E+00
+ 6 1 -0.75 0.0E+00 0.0E+00
+ 6 1 0.75 0.0E+00 0.0E+00
+ 6 2 0.0E+00 -0.75 0.0E+00
+ 6 2 0.0E+00 0.0E+00 0.0E+00
+ 6 2 0.0E+00 0.75 0.0E+00
+ 6 2 -0.75 0.0E+00 0.0E+00
+ 6 2 0.75 0.0E+00 0.0E+00
+ 6 3 0.0E+00 -0.75 0.0E+00
+ 6 3 0.0E+00 0.0E+00 0.0E+00
+ 6 3 0.0E+00 0.75 0.0E+00
+ 6 3 -0.75 0.0E+00 0.0E+00
+ 6 3 0.75 0.0E+00 0.0E+00

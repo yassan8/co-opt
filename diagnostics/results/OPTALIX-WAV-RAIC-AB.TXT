@@ -1,0 +1,4 @@
+ Command not identified : raic 1
+ Macro terminated at line            4
+ Could not open file: C:\ProgramData\OpTaliX\macro\c:/Users/yassa/source/co-opt/diagnostics/optalix-wav-map-export.mac
+ Could not open file: C:\ProgramData\OpTaliX\macro\c:/Users/yassa/source/co-opt/diagnostics/optalix-wav-map-export.mac

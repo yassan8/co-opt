@@ -1,0 +1,13 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-opl-interval-capture.txt'
+
+print 'field wavelength surface chief_opl sample_opl'
+
+do $wavelength = 1,3
+  do $surface = 2,16
+    print 6 $wavelength $surface &
+      [OPL s1..$surface w$wavelength f6 0 0] &
+      [OPL s1..$surface w$wavelength f6 0 0.75]
+  enddo
+enddo
+
+out t

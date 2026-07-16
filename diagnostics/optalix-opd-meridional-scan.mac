@@ -1,0 +1,29 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-opd-meridional-scan.txt'
+
+print 'field wavelength pupil_x pupil_y opd_mm'
+
+do $wavelength = 1,3
+  print 6 $wavelength 0 -1.0 [OPD f6 w$wavelength 0 -1.0]
+  print 6 $wavelength 0 -0.9 [OPD f6 w$wavelength 0 -0.9]
+  print 6 $wavelength 0 -0.8 [OPD f6 w$wavelength 0 -0.8]
+  print 6 $wavelength 0 -0.7 [OPD f6 w$wavelength 0 -0.7]
+  print 6 $wavelength 0 -0.6 [OPD f6 w$wavelength 0 -0.6]
+  print 6 $wavelength 0 -0.5 [OPD f6 w$wavelength 0 -0.5]
+  print 6 $wavelength 0 -0.4 [OPD f6 w$wavelength 0 -0.4]
+  print 6 $wavelength 0 -0.3 [OPD f6 w$wavelength 0 -0.3]
+  print 6 $wavelength 0 -0.2 [OPD f6 w$wavelength 0 -0.2]
+  print 6 $wavelength 0 -0.1 [OPD f6 w$wavelength 0 -0.1]
+  print 6 $wavelength 0 0.0 [OPD f6 w$wavelength 0 0.0]
+  print 6 $wavelength 0 0.1 [OPD f6 w$wavelength 0 0.1]
+  print 6 $wavelength 0 0.2 [OPD f6 w$wavelength 0 0.2]
+  print 6 $wavelength 0 0.3 [OPD f6 w$wavelength 0 0.3]
+  print 6 $wavelength 0 0.4 [OPD f6 w$wavelength 0 0.4]
+  print 6 $wavelength 0 0.5 [OPD f6 w$wavelength 0 0.5]
+  print 6 $wavelength 0 0.6 [OPD f6 w$wavelength 0 0.6]
+  print 6 $wavelength 0 0.7 [OPD f6 w$wavelength 0 0.7]
+  print 6 $wavelength 0 0.8 [OPD f6 w$wavelength 0 0.8]
+  print 6 $wavelength 0 0.9 [OPD f6 w$wavelength 0 0.9]
+  print 6 $wavelength 0 1.0 [OPD f6 w$wavelength 0 1.0]
+enddo
+
+out t

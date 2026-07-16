@@ -1,0 +1,28 @@
+ RAIM TEL
+ Error: Telecentric object beam requires finite object distance !
+ Error: Telecentric object beam requires definition
+ of numerical aperture (NAO) !
+
+
+ WAVEFRONT ABERRATION:
+
+ Field  Wavel.  Rel.Wgt        RMS/lambda
+     6      1     0.135           0.03193
+     6      2     1.000           0.15866
+     6      3     0.302           0.16727
+                               ----------
+                                  0.19413
+ RAIM STO
+
+
+ WAVEFRONT ABERRATION:
+
+ Field  Wavel.  Rel.Wgt        RMS/lambda
+     6      1     0.135           0.42446
+     6      2     1.000           1.02767
+     6      3     0.302           0.52679
+                               ----------
+                                  1.02619
+ Error: Telecentric object beam requires finite object distance !
+ Error: Telecentric object beam requires definition
+ of numerical aperture (NAO) !

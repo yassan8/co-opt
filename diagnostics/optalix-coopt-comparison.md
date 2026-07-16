@@ -295,3 +295,31 @@ Browser/WASM native requestでは、TypeScript側で波長ごとに解決した`
 co-opt内部のbackend差を除外するため、同一条件でJavaScript ray traceとRust-WASM ray traceのOPD mapを比較しました。`12820` valid samplesで、OPD umおよびOPD wavesのmax、mean、RMS差はすべて`0`でした。
 
 したがって、現在のOptalix差はco-optのJS/WASM実装分岐では説明できません。残差はOptalix側のcatalog係数・補間、reference construction、pupil sample集合、またはray-level RMS集計のいずれかに限定されます。
+
+### Primary ImageHeight angle固定 A/B
+
+Primary `0.550 um`で解いたImageHeight field angleだけを3波長で固定し、stop-center chiefのoriginとdirectionは各波長で再構築しました。runtime angleは全Fieldの3波長で一致し、Field 11ではすべて`31.673493 deg`でした。
+
+しかし、piston-only 33-cell比較はW1 MAE=`0.81992 waves`、W2 MAE=`0.00344 waves`、W3 MAE=`0.36908 waves`でした。直前値はそれぞれ約`0.82034 / 0.00315 / 0.36929 waves`であり、W1/W3の改善は`0.0005 waves`未満、W2はわずかに悪化しました。Individual-cell RMSも`0.94033`から`0.94016 waves`への微小変化に留まりました。
+
+したがって、primary ImageHeight angle固定はchromatic WAV差の主因ではありません。専用の`freezeImageHeightFieldAngle`経路は削除し、derived entrance pupilとruntime ImageHeight診断だけを維持します。
+
+## 2026-07-14: attached OTX direct capture
+
+起動中のOpTaliX V12.70で`\\SynologyNAS\Temp\lens_data\3G_IMAGE_F35_FNO_2.2_87_03.otx`を直接照会した。bare `WAV`の代表値はField 1が`0.03194 / 0.15866 / 0.16727`、Field 6が`0.42446 / 1.02767 / 0.52679`、Field 11が`0.41579 / 0.73617 / 0.30397`だった。既存fixtureとの差は光学状態の微差であり、以後はこのactive OTX値を比較対象とする。
+
+`IND`出力とattached JSONを比較した結果、全glass、全3波長の屈折率は小数9桁まで一致した。catalog/private-glass係数差はW1/W3不一致の原因ではない。
+
+OpTaliX lens databaseの`Y/Z/CY/CZ`とco-opt native `chiefSurfaceTrace`を全surfaceで比較した。ImageHeight field angleはprimary wavelengthでnative solveし、そのdirectionを全波長で共有しつつ、各波長でoriginだけstop centerへaimする必要がある。この変更後、Field 6 chief rayのOpTaliXとの差はfirst surfaceで約`3.7e-6 mm`以下、image surfaceで約`1.3e-6 mm`以下、stopで約`1e-7 mm`となった。
+
+chief ray parity後もgrid 129 piston RMSはField 6が`1.260751 / 1.028663 / 0.817019`、Field 11が`1.702716 / 0.717674 / 0.581245`で、W1/W3はほぼ未改善だった。chief-ray wavelength re-aimは実在するsemantics差だったが、WAV RMS差の主因ではない。
+
+Field 6、relative pupil `(0.75, 0)`のmarginal rayはsurface 1からOpTaliXとずれる。co-optはfirst-surface sagが約`0.036 mm`大きく、ray heightが外側にある。単純な`stop` samplingへの変更はW2を`0.999 -> 0.827`まで悪化させたため棄却した。次の比較対象は、OpTaliX relative-pupil座標から実ray launchを作るmappingであり、reference sphereやglass indexではない。
+
+### Exact sagittal pupil mapping
+
+OpTaliXのrelative pupil `(0.75, 0)`は、Field 6のstop面で全波長とも`X=5.1002 mm`付近を通る。attached JSONのstop semidiameterは`6.8 mm`であり、これは`0.75 * 6.8 = 5.1 mm`と一致する。co-optの対応座標は`u=-0.75, v=0`であるため、infinite-conjugate pupil basisの向きをstop local basisへ変換し、固定field directionのままoriginを物理stop座標へaimした。
+
+このrayは全16面でOpTaliXと一致し、3波長のposition RMSは`0.000105..0.000118 mm`、direction RMSは約`3e-6`だった。したがって、少なくともsagittal axisではOpTaliXのrelative pupil mappingを再現できた。
+
+しかしgrid 17のpiston RMSは、entrance baselineからstop-aimed mappingへ変更してもField 6で`1.19372 / 0.99913 / 0.79370`から`1.25589 / 1.00990 / 0.79179`へ変化するだけで、active OpTaliXの`0.42446 / 1.02767 / 0.52679`には近づかなかった。W2もわずかに悪化するためproduction defaultには採用しない。first-surface marginal offsetは実在するが、W1/W3 WAV残差の主因ではない。次はmeridional relative-pupil rayを直接取得するか、pupil mappingから独立したray-level OPD conventionを比較する。

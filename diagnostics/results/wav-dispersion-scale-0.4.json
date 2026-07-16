@@ -1,0 +1,836 @@
+{
+  "source": "\\\\synologynas\\Temp\\lens_data\\3G_IMAGES_87_03.json",
+  "gridSize": 17,
+  "referenceSphereWavelengthMode": "primary-wavelength",
+  "hikariDispersionScale": 0.4,
+  "pupilRadiusMm": 7.945371732390671,
+  "entrancePupilPositionFromFirstSurfaceMm": 11.417101543467968,
+  "exitPupilPositionFromLastSurfaceMm": -22.67022248855135,
+  "results": [
+    {
+      "field": 1,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.23757276034956343,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 193,
+            "piston": -0.3405699735435746,
+            "sampleCount": 193,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.19724155420066342,
+          "trackedOpdRmsUm": 0.21405138666983947,
+          "spherePathDeltaRmsUm": 0.3800285833748468
+        }
+      }
+    },
+    {
+      "field": 1,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.158356953674209,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 193,
+            "piston": -0.254228513078519,
+            "sampleCount": 193,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.1647330906218446,
+          "trackedOpdRmsUm": 0.19046587928478473,
+          "spherePathDeltaRmsUm": 0.2582320029636413
+        }
+      }
+    },
+    {
+      "field": 1,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.2913603084091325,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 193,
+            "piston": -0.5031303097112735,
+            "sampleCount": 193,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.36337767557194944,
+          "trackedOpdRmsUm": 0.25598479129254487,
+          "spherePathDeltaRmsUm": 0.5612369568197425
+        }
+      }
+    },
+    {
+      "field": 2,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.1088407941765048,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 189,
+            "piston": -0.48818344815248543,
+            "sampleCount": 189,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.575485776270085,
+          "trackedOpdRmsUm": 0.5200465946681787,
+          "spherePathDeltaRmsUm": 0.6615806561280494
+        }
+      }
+    },
+    {
+      "field": 2,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.9698765036281142,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 189,
+            "piston": -0.373420041335334,
+            "sampleCount": 189,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.5716040108913998,
+          "trackedOpdRmsUm": 0.6724520939087008,
+          "spherePathDeltaRmsUm": 0.8137458787307449
+        }
+      }
+    },
+    {
+      "field": 2,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.8989022061958917,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 189,
+            "piston": -0.5977005888568726,
+            "sampleCount": 189,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.6746732919485033,
+          "trackedOpdRmsUm": 0.5347650300008536,
+          "spherePathDeltaRmsUm": 0.6603588836180546
+        }
+      }
+    },
+    {
+      "field": 3,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.2033897516742218,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 187,
+            "piston": -0.6666812364930025,
+            "sampleCount": 187,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.6534679058468674,
+          "trackedOpdRmsUm": 1.4287461180663426,
+          "spherePathDeltaRmsUm": 1.3409114751969353
+        }
+      }
+    },
+    {
+      "field": 3,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.077477989036987,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 187,
+            "piston": -0.4964576151756132,
+            "sampleCount": 187,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.6524931161390338,
+          "trackedOpdRmsUm": 1.6693223188089703,
+          "spherePathDeltaRmsUm": 1.6748919499634272
+        }
+      }
+    },
+    {
+      "field": 3,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.9880805858049714,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 187,
+            "piston": -0.6885372368776972,
+            "sampleCount": 187,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.7527000280790892,
+          "trackedOpdRmsUm": 1.5566605741626178,
+          "spherePathDeltaRmsUm": 1.409000560012712
+        }
+      }
+    },
+    {
+      "field": 4,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.7228912573023812,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 187,
+            "piston": -0.5011352241465091,
+            "sampleCount": 187,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.41781327324387457,
+          "trackedOpdRmsUm": 1.5346359054456282,
+          "spherePathDeltaRmsUm": 1.407835177983338
+        }
+      }
+    },
+    {
+      "field": 4,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.6822874721306837,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 187,
+            "piston": -0.2986417516311764,
+            "sampleCount": 187,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.4096311570904419,
+          "trackedOpdRmsUm": 1.9218963054607896,
+          "spherePathDeltaRmsUm": 1.9206393040916476
+        }
+      }
+    },
+    {
+      "field": 4,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.6136173403511247,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 187,
+            "piston": -0.4890009517943296,
+            "sampleCount": 187,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.4903953169523625,
+          "trackedOpdRmsUm": 1.8771881960531378,
+          "spherePathDeltaRmsUm": 1.7416848620105272
+        }
+      }
+    },
+    {
+      "field": 5,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.8320646950392501,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 183,
+            "piston": -0.10860042495458576,
+            "sampleCount": 183,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.3985829438148811,
+          "trackedOpdRmsUm": 1.115861182720517,
+          "spherePathDeltaRmsUm": 1.1899968418338995
+        }
+      }
+    },
+    {
+      "field": 5,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.7288961749057734,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 183,
+            "piston": 0.10679600156533803,
+            "sampleCount": 183,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.40517310309562765,
+          "trackedOpdRmsUm": 1.412126616646727,
+          "spherePathDeltaRmsUm": 1.5445769702588896
+        }
+      }
+    },
+    {
+      "field": 5,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.6024639645188715,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 183,
+            "piston": -0.09514136701298102,
+            "sampleCount": 183,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.38120630295735153,
+          "trackedOpdRmsUm": 1.4916913536545602,
+          "spherePathDeltaRmsUm": 1.5140529350622305
+        }
+      }
+    },
+    {
+      "field": 6,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.1333177499426481,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 178,
+            "piston": 0.2904953255382062,
+            "sampleCount": 178,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.5557290217557449,
+          "trackedOpdRmsUm": 1.745330529905559,
+          "spherePathDeltaRmsUm": 1.878960045580606
+        }
+      }
+    },
+    {
+      "field": 6,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.9991288319489796,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 178,
+            "piston": 0.5280675382229221,
+            "sampleCount": 178,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.6215520160826091,
+          "trackedOpdRmsUm": 1.154303496788172,
+          "spherePathDeltaRmsUm": 1.462930749604181
+        }
+      }
+    },
+    {
+      "field": 6,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.8378823677529996,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 178,
+            "piston": 0.318640052017447,
+            "sampleCount": 178,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.5602658217244731,
+          "trackedOpdRmsUm": 1.3219350080208803,
+          "spherePathDeltaRmsUm": 1.5162898862381033
+        }
+      }
+    },
+    {
+      "field": 7,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.3202566798418514,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 178,
+            "piston": 0.5492674156785644,
+            "sampleCount": 178,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.6792288064636975,
+          "trackedOpdRmsUm": 2.8731996918258633,
+          "spherePathDeltaRmsUm": 2.913729978578483
+        }
+      }
+    },
+    {
+      "field": 7,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.1638425837010562,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 178,
+            "piston": 0.8707068794917915,
+            "sampleCount": 178,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.7994245799092999,
+          "trackedOpdRmsUm": 1.5760555942544536,
+          "spherePathDeltaRmsUm": 1.8010553750221518
+        }
+      }
+    },
+    {
+      "field": 7,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.9852245944897668,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 178,
+            "piston": 0.6763241486379279,
+            "sampleCount": 178,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.746889867953044,
+          "trackedOpdRmsUm": 1.6374154110779744,
+          "spherePathDeltaRmsUm": 1.854827182486206
+        }
+      }
+    },
+    {
+      "field": 8,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.3002340355928037,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 168,
+            "piston": 0.8639269720800966,
+            "sampleCount": 168,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.7415141553372895,
+          "trackedOpdRmsUm": 3.3244506702296794,
+          "spherePathDeltaRmsUm": 3.237047628393403
+        }
+      }
+    },
+    {
+      "field": 8,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.1732364237379882,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 168,
+            "piston": 1.2398696492805146,
+            "sampleCount": 168,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.9388357348816292,
+          "trackedOpdRmsUm": 2.0407848024235746,
+          "spherePathDeltaRmsUm": 2.050149675959153
+        }
+      }
+    },
+    {
+      "field": 8,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.9882039073086105,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 168,
+            "piston": 1.0608487408929728,
+            "sampleCount": 168,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.9061308140320379,
+          "trackedOpdRmsUm": 2.124826603227809,
+          "spherePathDeltaRmsUm": 2.2497463191521416
+        }
+      }
+    },
+    {
+      "field": 9,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.1470351971204307,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 159,
+            "piston": 1.031723077257833,
+            "sampleCount": 159,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.7328162085493336,
+          "trackedOpdRmsUm": 5.019206547674728,
+          "spherePathDeltaRmsUm": 4.822660980555817
+        }
+      }
+    },
+    {
+      "field": 9,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 1.0771548096744394,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 159,
+            "piston": 1.500160558737586,
+            "sampleCount": 159,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 1.0157510109588788,
+          "trackedOpdRmsUm": 3.9023142788777037,
+          "spherePathDeltaRmsUm": 3.6065160301980694
+        }
+      }
+    },
+    {
+      "field": 9,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.916575230252713,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 159,
+            "piston": 1.357627468105438,
+            "sampleCount": 159,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 1.0237916839169487,
+          "trackedOpdRmsUm": 4.011164442959815,
+          "spherePathDeltaRmsUm": 3.844130881506739
+        }
+      }
+    },
+    {
+      "field": 10,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.9638396242775917,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 150,
+            "piston": 0.716181857982373,
+            "sampleCount": 150,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.570376565462494,
+          "trackedOpdRmsUm": 8.054621526918606,
+          "spherePathDeltaRmsUm": 8.041957131442345
+        }
+      }
+    },
+    {
+      "field": 10,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.8942145158804582,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 150,
+            "piston": 1.3552482168811055,
+            "sampleCount": 150,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.8930207121089909,
+          "trackedOpdRmsUm": 7.333814064168522,
+          "spherePathDeltaRmsUm": 7.1604612347310255
+        }
+      }
+    },
+    {
+      "field": 10,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.7809528275629901,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 150,
+            "piston": 1.3038524859941878,
+            "sampleCount": 150,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.9499010277622043,
+          "trackedOpdRmsUm": 7.702694339189283,
+          "spherePathDeltaRmsUm": 7.599428729459739
+        }
+      }
+    },
+    {
+      "field": 11,
+      "wavelengthUm": 0.475,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.9973763398448169,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 128,
+            "piston": -0.3134040943520009,
+            "sampleCount": 128,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.49659238186339877,
+          "trackedOpdRmsUm": 11.811309945227276,
+          "spherePathDeltaRmsUm": 12.107426346813158
+        }
+      }
+    },
+    {
+      "field": 11,
+      "wavelengthUm": 0.55,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.6631992480577186,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 128,
+            "piston": 0.5040511426118017,
+            "sampleCount": 128,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.4581538945488265,
+          "trackedOpdRmsUm": 8.418785125658356,
+          "spherePathDeltaRmsUm": 8.418690482506033
+        }
+      }
+    },
+    {
+      "field": 11,
+      "wavelengthUm": 0.625,
+      "modes": {
+        "pistonRemoved": {
+          "rmsWaves": 0.5428606117582558,
+          "fit": {
+            "basis": "piston",
+            "coordinateSource": "entrance-pupil",
+            "defocus": 0,
+            "defocusMeanRadiusSquared": null,
+            "defocusScale": 0,
+            "physicalCoordinateSampleCount": 128,
+            "piston": 0.6046884822633727,
+            "sampleCount": 128,
+            "tiltX": 0,
+            "tiltY": 0
+          },
+          "validSampleCount": null,
+          "referenceOpdRmsUm": 0.5078854002982802,
+          "trackedOpdRmsUm": 7.947682207464469,
+          "spherePathDeltaRmsUm": 7.898824197060852
+        }
+      }
+    }
+  ]
+}

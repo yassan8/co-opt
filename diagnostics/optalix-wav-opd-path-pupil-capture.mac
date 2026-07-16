@@ -1,0 +1,23 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wav-opd-path-pupil-capture.txt'
+
+raim sto
+print '=== WAV SUMMARY: FIELD 6 ==='
+wav f6
+
+print 'field wavelength pupil_x pupil_y opd path_s1_s15 opl_s1_s15 path_s1_s16 opl_s1_s16'
+
+do $wavelength = 1,3
+  print 6 $wavelength 0.0 -1.0 [OPD f6 w$wavelength 0.0 -1.0] [PATH s1..15 w$wavelength f6 0.0 -1.0] [OPL s1..15 w$wavelength f6 0.0 -1.0] [PATH s1..16 w$wavelength f6 0.0 -1.0] [OPL s1..16 w$wavelength f6 0.0 -1.0]
+  print 6 $wavelength 0.0 -0.75 [OPD f6 w$wavelength 0.0 -0.75] [PATH s1..15 w$wavelength f6 0.0 -0.75] [OPL s1..15 w$wavelength f6 0.0 -0.75] [PATH s1..16 w$wavelength f6 0.0 -0.75] [OPL s1..16 w$wavelength f6 0.0 -0.75]
+  print 6 $wavelength 0.0 -0.5 [OPD f6 w$wavelength 0.0 -0.5] [PATH s1..15 w$wavelength f6 0.0 -0.5] [OPL s1..15 w$wavelength f6 0.0 -0.5] [PATH s1..16 w$wavelength f6 0.0 -0.5] [OPL s1..16 w$wavelength f6 0.0 -0.5]
+  print 6 $wavelength 0.0 -0.25 [OPD f6 w$wavelength 0.0 -0.25] [PATH s1..15 w$wavelength f6 0.0 -0.25] [OPL s1..15 w$wavelength f6 0.0 -0.25] [PATH s1..16 w$wavelength f6 0.0 -0.25] [OPL s1..16 w$wavelength f6 0.0 -0.25]
+  print 6 $wavelength 0.0 0.0 [OPD f6 w$wavelength 0.0 0.0] [PATH s1..15 w$wavelength f6 0.0 0.0] [OPL s1..15 w$wavelength f6 0.0 0.0] [PATH s1..16 w$wavelength f6 0.0 0.0] [OPL s1..16 w$wavelength f6 0.0 0.0]
+  print 6 $wavelength 0.0 0.25 [OPD f6 w$wavelength 0.0 0.25] [PATH s1..15 w$wavelength f6 0.0 0.25] [OPL s1..15 w$wavelength f6 0.0 0.25] [PATH s1..16 w$wavelength f6 0.0 0.25] [OPL s1..16 w$wavelength f6 0.0 0.25]
+  print 6 $wavelength 0.0 0.5 [OPD f6 w$wavelength 0.0 0.5] [PATH s1..15 w$wavelength f6 0.0 0.5] [OPL s1..15 w$wavelength f6 0.0 0.5] [PATH s1..16 w$wavelength f6 0.0 0.5] [OPL s1..16 w$wavelength f6 0.0 0.5]
+  print 6 $wavelength 0.0 0.75 [OPD f6 w$wavelength 0.0 0.75] [PATH s1..15 w$wavelength f6 0.0 0.75] [OPL s1..15 w$wavelength f6 0.0 0.75] [PATH s1..16 w$wavelength f6 0.0 0.75] [OPL s1..16 w$wavelength f6 0.0 0.75]
+  print 6 $wavelength 0.0 1.0 [OPD f6 w$wavelength 0.0 1.0] [PATH s1..15 w$wavelength f6 0.0 1.0] [OPL s1..15 w$wavelength f6 0.0 1.0] [PATH s1..16 w$wavelength f6 0.0 1.0] [OPL s1..16 w$wavelength f6 0.0 1.0]
+  print 6 $wavelength -0.75 0.0 [OPD f6 w$wavelength -0.75 0.0] [PATH s1..15 w$wavelength f6 -0.75 0.0] [OPL s1..15 w$wavelength f6 -0.75 0.0] [PATH s1..16 w$wavelength f6 -0.75 0.0] [OPL s1..16 w$wavelength f6 -0.75 0.0]
+  print 6 $wavelength 0.75 0.0 [OPD f6 w$wavelength 0.75 0.0] [PATH s1..15 w$wavelength f6 0.75 0.0] [OPL s1..15 w$wavelength f6 0.75 0.0] [PATH s1..16 w$wavelength f6 0.75 0.0] [OPL s1..16 w$wavelength f6 0.75 0.0]
+enddo
+
+out t

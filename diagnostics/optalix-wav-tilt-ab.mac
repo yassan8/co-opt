@@ -1,0 +1,10 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wav-tilt-ab.txt'
+
+raim sto
+print 'WAV DEFAULT'
+wav f6
+
+print 'WAV TLT'
+wav tlt f6
+
+out t

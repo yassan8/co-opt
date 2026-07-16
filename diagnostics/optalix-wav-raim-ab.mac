@@ -1,0 +1,12 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wav-raim-ab.txt'
+
+print 'RAIM TEL'
+raim tel
+wav f6
+
+print 'RAIM STO'
+raim sto
+wav f6
+
+raim tel
+out t

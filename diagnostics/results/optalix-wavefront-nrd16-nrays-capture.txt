@@ -1,0 +1,25 @@
+ field wavelength nrays
+ 6 2 178
+ 11 2 128
+ === WAV FIELD 6 ===
+
+
+ WAVEFRONT ABERRATION:
+
+ Field  Wavel.  Rel.Wgt        RMS/lambda
+     6      1     0.135           0.41235
+     6      2     1.000           0.97163
+     6      3     0.302           0.52452
+                               ----------
+                                  0.98307
+ === WAV FIELD 11 ===
+
+
+ WAVEFRONT ABERRATION:
+
+ Field  Wavel.  Rel.Wgt        RMS/lambda
+    11      1     0.135           0.39260
+    11      2     1.000           0.65745
+    11      3     0.302           0.29215
+                               ----------
+                                  0.68359

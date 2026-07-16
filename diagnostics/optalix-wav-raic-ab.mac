@@ -1,0 +1,15 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wav-raic-ab.txt'
+
+raim sto
+raic 1
+print 'RAIC 1'
+print 'w1 sample path' [PATH s1..16 w1 f6 0 0.75]
+wav f6
+
+raic 0
+print 'RAIC 0'
+print 'w1 sample path' [PATH s1..16 w1 f6 0 0.75]
+wav f6
+
+raic 1
+out t

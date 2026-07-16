@@ -1,0 +1,14 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-chief-ray-capture.txt'
+
+print 'field wavelength surface y z cy cz'
+do $wavelength = 1,3
+  do $surface = 1,16
+    print 6 $wavelength $surface &
+      [Y s$surface w$wavelength f6 0 0] &
+      [Z s$surface w$wavelength f6 0 0] &
+      [CY s$surface w$wavelength f6 0 0] &
+      [CZ s$surface w$wavelength f6 0 0]
+  enddo
+enddo
+
+out t

@@ -1,0 +1,6 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wavefront-native-export-log.txt'
+
+print '=== NATIVE WAVEFRONT EXPORT: DEFAULT FIELD AND WAVELENGTH ==='
+exp wav file c:/temp/wavefront.opd
+
+out t

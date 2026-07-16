@@ -1,0 +1,19 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wav-target-surface15-capture.txt'
+
+print 'field wavelength pupil_y surface path opl'
+
+do $wavelength = 1,3
+  do $surface = 15,15
+    print 6 $wavelength -0.75 $surface &
+      [PATH s1..$surface w$wavelength f6 0 -0.75] &
+      [OPL s1..$surface w$wavelength f6 0 -0.75]
+    print 6 $wavelength 0 $surface &
+      [PATH s1..$surface w$wavelength f6 0 0] &
+      [OPL s1..$surface w$wavelength f6 0 0]
+    print 6 $wavelength 0.75 $surface &
+      [PATH s1..$surface w$wavelength f6 0 0.75] &
+      [OPL s1..$surface w$wavelength f6 0 0.75]
+  enddo
+enddo
+
+out t

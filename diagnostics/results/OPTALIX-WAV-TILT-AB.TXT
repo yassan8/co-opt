@@ -1,0 +1,22 @@
+ WAV DEFAULT
+
+
+ WAVEFRONT ABERRATION:
+
+ Field  Wavel.  Rel.Wgt        RMS/lambda
+     6      1     0.135           0.42446
+     6      2     1.000           1.02767
+     6      3     0.302           0.52679
+                               ----------
+                                  1.02619
+ WAV TLT
+
+
+ WAVEFRONT ABERRATION:
+
+ Field  Wavel.  Rel.Wgt        RMS/lambda
+     6      1     0.135           0.42446
+     6      2     1.000           1.02767
+     6      3     0.302           0.52679
+                               ----------
+                                  1.02619

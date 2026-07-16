@@ -1,0 +1,5 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wav-map-export.txt'
+
+wav f6
+
+out t

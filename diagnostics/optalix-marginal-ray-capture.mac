@@ -1,0 +1,16 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-marginal-ray-capture.txt'
+
+print 'field wavelength surface x y z cx cy cz'
+do $wavelength = 1,3
+  do $surface = 1,16
+    print 6 $wavelength $surface &
+      [X s$surface w$wavelength f6 0.75 0] &
+      [Y s$surface w$wavelength f6 0.75 0] &
+      [Z s$surface w$wavelength f6 0.75 0] &
+      [CX s$surface w$wavelength f6 0.75 0] &
+      [CY s$surface w$wavelength f6 0.75 0] &
+      [CZ s$surface w$wavelength f6 0.75 0]
+  enddo
+enddo
+
+out t

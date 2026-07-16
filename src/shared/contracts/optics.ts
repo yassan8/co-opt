@@ -357,6 +357,8 @@ export interface NativeTransverseRmsResponse {
 
 export type OpdReferenceMode =
   | "reference-sphere"
+  | "image-sphere"
+  | "optalix-direct"
   | "exit-pupil"
   | "image-plane"
   | "absolute"
@@ -419,6 +421,8 @@ export interface NativeOpdMapRequest {
   sampleRayLaunchOrigin?: { x: number; y: number; z: number };
   preserveImageHeightChiefRay?: boolean;
   resolveImageHeightChiefRayInRuntime?: boolean;
+  aimPupilSamplesToStop?: boolean;
+  aimPupilSamplesAtReferenceWavelength?: boolean;
   pupilNormalizationMode?: OpdPupilNormalizationMode;
   exitPupilReferencePointMode?: OpdExitPupilReferencePointMode;
   referenceSphereOptions?: OpdReferenceSphereOptions;
@@ -444,7 +448,7 @@ export interface NativeOpdMapResponse {
   imageHeightSolverSurfaceIndex?: number;
   chiefStopPoint?: { x: number; y: number; z: number };
   chiefStopDirection?: { x: number; y: number; z: number };
-  chiefSurfaceTrace?: Array<{ surfaceIndex: number; point: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } }>;
+  chiefSurfaceTrace?: Array<{ surfaceIndex: number; oplUm?: number; point: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } }>;
   sampleRayLaunchOriginApplied?: boolean;
   transmittedPupilCenterUv?: { u: number; v: number };
   targetSurface: number;
@@ -477,12 +481,25 @@ export interface NativeOpdMapResponse {
     marginalOplUm: number;
     chiefPreTargetOplUm?: number;
     marginalPreTargetOplUm?: number;
+    chiefPreTargetPoint?: [number, number, number];
+    marginalPreTargetPoint?: [number, number, number];
+    chiefPreTargetDirection?: [number, number, number];
+    marginalPreTargetDirection?: [number, number, number];
+    marginalTargetPoint?: [number, number, number];
+    marginalTargetDirection?: [number, number, number];
     beforeTargetOpdUm?: number;
     targetSegmentOpdUm?: number;
     chiefSphereOplUm?: number;
     marginalSphereOplUm?: number;
     referenceOpdUm?: number;
     spherePathDeltaUm?: number;
+    surfaceTrace?: Array<{
+      surfaceIndex: number;
+      oplUm: number;
+      globalPoint?: { x: number; y: number; z: number };
+      point: { x: number; y: number; z: number };
+      direction: { x: number; y: number; z: number };
+    }>;
   }>;
   entrancePupilCoordinateXGrid?: Array<Array<number | null>>;
   entrancePupilCoordinateYGrid?: Array<Array<number | null>>;
@@ -576,9 +593,12 @@ export interface NativeOpdRmsWavesRequest {
   objectIndex?: number;
   surfaceIndex?: number;
   gridSize?: number;
+  globalPoint?: { x: number; y: number; z: number };
   wavelengthUm?: number;
   pupilRadiusMm?: number;
   pupilSamplingMode?: "stop" | "entrance";
+  aimPupilSamplesToStop?: boolean;
+  aimPupilSamplesAtReferenceWavelength?: boolean;
   chiefRayMode?: OpdChiefRayMode;
   sampleRayLaunchOrigin?: { x: number; y: number; z: number };
   pupilNormalizationMode?: OpdPupilNormalizationMode;
@@ -597,6 +617,13 @@ export interface NativeOpdRmsWavesResponse {
   backend: string;
   chiefReferenceMode?: string;
   chiefRayLaunchOrigin?: { x: number; y: number; z: number };
+  imageHeightChiefRayApplied?: boolean;
+  imageHeightChiefRayPreserved?: boolean;
+  imageHeightChiefRayRuntimeResolved?: boolean;
+  imageHeightChiefDirection?: { x: number; y: number; z: number };
+  imageHeightRuntimeSolvedAngle?: { x: number; y: number; z: number };
+  imageHeightSolverHit?: { x: number; y: number; z: number };
+  imageHeightSolverSurfaceIndex?: number;
   sampleRayLaunchOriginApplied?: boolean;
   transmittedPupilCenterUv?: { u: number; v: number };
   targetSurface: number;

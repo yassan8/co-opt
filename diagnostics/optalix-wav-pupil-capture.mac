@@ -1,0 +1,26 @@
+out fil 'c:/Users/yassa/source/co-opt/diagnostics/results/optalix-wav-pupil-capture.txt'
+
+print '=== WAV SUMMARY: DEFAULT ==='
+wav f6
+
+print '=== WAV SUMMARY: TILT REMOVED ==='
+wav tlt f6
+
+print '=== OPD SAMPLE GRID: FIELD 6 ==='
+print 'field wavelength pupil_x pupil_y opd_mm'
+
+do $wavelength = 1,3
+  print 6 $wavelength 0.0 -1.0 [OPD f6 w$wavelength 0.0 -1.0]
+  print 6 $wavelength 0.0 -0.75 [OPD f6 w$wavelength 0.0 -0.75]
+  print 6 $wavelength 0.0 -0.5 [OPD f6 w$wavelength 0.0 -0.5]
+  print 6 $wavelength 0.0 -0.25 [OPD f6 w$wavelength 0.0 -0.25]
+  print 6 $wavelength 0.0 0.0 [OPD f6 w$wavelength 0.0 0.0]
+  print 6 $wavelength 0.0 0.25 [OPD f6 w$wavelength 0.0 0.25]
+  print 6 $wavelength 0.0 0.5 [OPD f6 w$wavelength 0.0 0.5]
+  print 6 $wavelength 0.0 0.75 [OPD f6 w$wavelength 0.0 0.75]
+  print 6 $wavelength 0.0 1.0 [OPD f6 w$wavelength 0.0 1.0]
+  print 6 $wavelength -0.75 0.0 [OPD f6 w$wavelength -0.75 0.0]
+  print 6 $wavelength 0.75 0.0 [OPD f6 w$wavelength 0.75 0.0]
+enddo
+
+out t
