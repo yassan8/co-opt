@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1600, initial-scale=1">
+<title>co-opt / OpTaliX Wavefront Parity</title>
+<style>
+  :root { --ink:#17212b; --muted:#61707d; --line:#d9e1e5; --paper:#f7f5ef; --white:#fff; --teal:#087f73; --teal2:#42b9a7; --red:#d1493f; --gold:#e7a62b; }
+  * { box-sizing:border-box; }
+  html,body { width:1600px; height:900px; margin:0; overflow:hidden; }
+  body { font-family:"Yu Gothic UI","Yu Gothic",Meiryo,sans-serif; color:var(--ink); background-color:var(--paper); background-image:linear-gradient(rgba(23,33,43,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(23,33,43,.035) 1px,transparent 1px); background-size:32px 32px; }
+  main { width:1600px; height:900px; padding:46px 58px 34px; display:grid; grid-template-rows:132px 1fr 112px; gap:22px; }
+  header { display:flex; align-items:flex-start; justify-content:space-between; border-bottom:3px solid var(--ink); padding-bottom:20px; }
+  h1 { margin:0; font-size:50px; line-height:1.05; letter-spacing:0; font-weight:800; }
+  h1 span { color:var(--teal); }
+  .subtitle { margin-top:12px; font-size:21px; color:var(--muted); font-weight:600; }
+  .badge { margin-top:3px; padding:12px 18px; background:var(--teal); color:#fff; font-size:20px; font-weight:800; border-radius:5px; }
+  .content { display:grid; grid-template-columns:1.14fr .86fr; gap:24px; min-height:0; }
+  section { background:rgba(255,255,255,.94); border:1px solid var(--line); border-radius:7px; padding:24px 26px; min-height:0; }
+  h2 { margin:0 0 8px; font-size:27px; letter-spacing:0; }
+  .section-note { color:var(--muted); font-size:16px; margin-bottom:12px; }
+  .chart { width:100%; height:326px; display:block; }
+  .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:8px; }
+  .metric { border-top:4px solid var(--teal); padding:11px 8px 0; }
+  .metric strong { display:block; font-size:27px; line-height:1.1; color:var(--teal); }
+  .metric span { display:block; margin-top:5px; color:var(--muted); font-size:14px; }
+  .bars { margin-top:18px; display:grid; gap:19px; }
+  .bar-row { display:grid; grid-template-columns:50px 1fr 130px; align-items:center; gap:12px; }
+  .wl { font-size:20px; font-weight:800; }
+  .track { height:42px; position:relative; background:#edf1f2; border-radius:3px; overflow:hidden; }
+  .coopt { position:absolute; left:0; top:5px; height:14px; background:var(--red); }
+  .optalix { position:absolute; left:0; bottom:5px; height:14px; background:var(--teal); }
+  .values { font-size:14px; line-height:1.5; font-variant-numeric:tabular-nums; }
+  .values b { color:var(--red); }
+  .legend { display:flex; gap:20px; color:var(--muted); font-size:14px; margin-top:14px; }
+  .key::before { content:""; display:inline-block; width:16px; height:8px; margin-right:7px; vertical-align:1px; background:var(--teal); }
+  .key.red::before { background:var(--red); }
+  .finding { margin-top:22px; border-left:5px solid var(--gold); padding:10px 0 10px 15px; font-size:19px; line-height:1.55; font-weight:700; }
+  footer { display:grid; grid-template-columns:1fr 56px 1fr 56px 1fr; align-items:center; gap:10px; }
+  .step { height:92px; background:var(--white); border-top:5px solid var(--ink); padding:13px 17px; }
+  .step b { display:block; font-size:18px; margin-bottom:5px; }
+  .step span { font-size:14px; color:var(--muted); line-height:1.35; }
+  .step.ok { border-color:var(--teal); }
+  .step.todo { border-color:var(--red); }
+  .arrow { font-size:38px; text-align:center; color:var(--muted); }
+  svg text { font-family:"Yu Gothic UI","Yu Gothic",Meiryo,sans-serif; fill:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>波面収差の再現性：<span>主波長は一致</span></h1>
+      <div class="subtitle">co-opt × OpTaliX / RMS in waves</div>
+    </div>
+    <div class="badge">7日間の切り分け結果</div>
+  </header>
+
+  <div class="content">
+    <section>
+      <h2>主波長 W2（0.550 µm）— 11 Fields</h2>
+      <div class="section-note">piston除去・Primary-fixed Field・Design Intent由来pupil</div>
+      <svg class="chart" viewBox="0 0 800 326" role="img" aria-label="W2 field comparison chart">
+        <g stroke="#d9e1e5" stroke-width="1">
+          <line x1="54" y1="270" x2="774" y2="270"/><line x1="54" y1="190" x2="774" y2="190"/><line x1="54" y1="110" x2="774" y2="110"/><line x1="54" y1="30" x2="774" y2="30"/>
+        </g>
+        <g font-size="13"><text x="14" y="275">0.0</text><text x="14" y="195">0.4</text><text x="14" y="115">0.8</text><text x="14" y="35">1.2</text></g>
+        <polyline fill="none" stroke="#087f73" stroke-width="5" points="70,238.3 140,74.5 210,50.5 280,131.9 350,119.8 420,64.5 490,31.6 560,34.6 630,52.8 700,91.1 770,122.8"/>
+        <polyline fill="none" stroke="#d1493f" stroke-width="2.5" stroke-dasharray="7 6" points="70,238.3 140,74.7 210,50.5 280,131.9 350,119.8 420,64.7 490,31.4 560,34.4 630,52.8 700,91.4 770,126.5"/>
+        <g fill="#087f73">
+          <circle cx="70" cy="238.3" r="5"/><circle cx="140" cy="74.5" r="5"/><circle cx="210" cy="50.5" r="5"/><circle cx="280" cy="131.9" r="5"/><circle cx="350" cy="119.8" r="5"/><circle cx="420" cy="64.5" r="5"/><circle cx="490" cy="31.6" r="5"/><circle cx="560" cy="34.6" r="5"/><circle cx="630" cy="52.8" r="5"/><circle cx="700" cy="91.1" r="5"/><circle cx="770" cy="122.8" r="5"/>
+        </g>
+        <g font-size="13" text-anchor="middle"><text x="70" y="300">F1</text><text x="140" y="300">F2</text><text x="210" y="300">F3</text><text x="280" y="300">F4</text><text x="350" y="300">F5</text><text x="420" y="300">F6</text><text x="490" y="300">F7</text><text x="560" y="300">F8</text><text x="630" y="300">F9</text><text x="700" y="300">F10</text><text x="770" y="300">F11</text></g>
+        <g font-size="14"><line x1="550" y1="315" x2="582" y2="315" stroke="#087f73" stroke-width="5"/><text x="590" y="320">OpTaliX</text><line x1="670" y1="315" x2="702" y2="315" stroke="#d1493f" stroke-width="3" stroke-dasharray="7 5"/><text x="710" y="320">co-opt</text></g>
+      </svg>
+      <div class="metrics">
+        <div class="metric"><strong>0.00228</strong><span>11-field MAE [waves]</span></div>
+        <div class="metric"><strong>1.02866</strong><span>F6 co-opt / OpTaliX 1.02767</span></div>
+        <div class="metric"><strong>±0.0015</strong><span>F1–F10 最大差</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Field 6 — 波長別の残差</h2>
+      <div class="section-note">同じField・同じpupilでも、非主波長だけ残る</div>
+      <div class="bars">
+        <div class="bar-row"><div class="wl">W1</div><div class="track"><div class="coopt" style="width:90.2%"></div><div class="optalix" style="width:30.3%"></div></div><div class="values"><b>1.26277</b><br>0.42446</div></div>
+        <div class="bar-row"><div class="wl">W2</div><div class="track"><div class="coopt" style="width:73.5%"></div><div class="optalix" style="width:73.4%"></div></div><div class="values"><b>1.02866</b><br>1.02767</div></div>
+        <div class="bar-row"><div class="wl">W3</div><div class="track"><div class="coopt" style="width:58.3%"></div><div class="optalix" style="width:37.6%"></div></div><div class="values"><b>0.81612</b><br>0.52679</div></div>
+      </div>
+      <div class="legend"><span class="key red">co-opt</span><span class="key">OpTaliX</span></div>
+      <div class="finding">W2が一致するため、基本ray trace・Field・pupil・piston処理は整合。残差はW1/W3の波長依存reference constructionに限定。</div>
+    </section>
+  </div>
+
+  <footer>
+    <div class="step ok"><b>1. Sample ray geometry</b><span>surface 1 → image面まで約10⁻⁷で一致</span></div>
+    <div class="arrow">→</div>
+    <div class="step ok"><b>2. Primary wavelength</b><span>W2の11-field RMSを再現</span></div>
+    <div class="arrow">→</div>
+    <div class="step todo"><b>3. Remaining work</b><span>OpTaliX固有のW1/W3 reference initializer</span></div>
+  </footer>
+</main>
+</body>
+</html>
