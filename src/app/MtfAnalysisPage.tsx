@@ -7,6 +7,14 @@ import { isTauriRuntime } from '../../src/desktop/runtime.ts';
 
 export type MtfAnalysisType = 'mtf' | 'through-focus-mtf' | 'field-mtf';
 
+const formatAnalysisProgress = (label: 'Through-Focus MTF' | 'Field MTF', message: unknown): string => {
+  const normalized = String(message || 'Computing...')
+    .replace(/Object MTF/gi, 'Field MTF');
+  return normalized.toLowerCase().includes(label.toLowerCase())
+    ? normalized
+    : `${label}: ${normalized}`;
+};
+
 interface WlOption { value: string; label: string; }
 interface ObjOption { value: string; label: string; }
 type MtfMethodOption = 'hopkins-tcc' | 'legacy-otf-axis';
@@ -625,7 +633,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     const titleMap: Record<string, string> = {
       'mtf': 'Modulation Transfer Function',
       'through-focus-mtf': 'Through-Focus MTF',
-      'field-mtf': 'Object MTF',
+      'field-mtf': 'Field MTF (Test)',
     };
     document.title = titleMap[type] ?? 'Analysis';
   }, [type]);
@@ -1387,10 +1395,10 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         ? w.runDesktopNativeThroughFocusMtfForPopup
         : (typeof w.runPortableThroughFocusMtfForPopup === 'function' ? w.runPortableThroughFocusMtfForPopup : null);
       if (typeof throughFocusRunner !== 'function') throw new Error('Through-Focus MTF runner unavailable');
-      setProgress(0, 'Starting...');
+      setProgress(0, formatAnalysisProgress('Through-Focus MTF', 'Starting...'));
       await new Promise(r => setTimeout(r, 0));
       let lastProgress = 20;
-      setProgress(lastProgress, 'Computing Through-Focus MTF...');
+      setProgress(lastProgress, formatAnalysisProgress('Through-Focus MTF', 'Computing...'));
       const nativeResp = await throughFocusRunner({
         objectIndex: objIdxN, wavelengths: wavelengthList,
         targetFrequencyLpmm: targetFreqN, defocusMinMm: defocusMinN, defocusMaxMm: defocusMaxN,
@@ -1398,7 +1406,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         method: mtfMethod,
         onProgress: (evt: any) => {
           const p = Number(evt?.percent);
-          const msg = String(evt?.message || 'Computing Through-Focus MTF...');
+          const msg = formatAnalysisProgress('Through-Focus MTF', evt?.message || 'Computing...');
           if (Number.isFinite(p)) { lastProgress = Math.max(lastProgress, p); setProgress(lastProgress, msg); }
           else setProgress(lastProgress, msg);
         },
@@ -1453,7 +1461,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
           traces.push({ x: xAxis, y: sag, type: 'scatter', mode: 'markers', name: `Sagittal computed points (${nm}nm)`, showlegend: false, marker: { color, size: 6, symbol: 'diamond' } });
         }
       }
-      setProgress(85, 'Rendering...');
+      setProgress(85, formatAnalysisProgress('Through-Focus MTF', 'Rendering...'));
       await (window as any).Plotly.newPlot(container, traces, {
         title: `${Number.isFinite(targetFreqN) ? targetFreqN.toFixed(1) : 10} lp/mm`,
         xaxis: { title: 'Defocus shift (mm)' },
@@ -1475,7 +1483,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       });
       hideProgress();
     } catch (err: any) {
-      setProgress(100, 'Failed');
+      setProgress(100, formatAnalysisProgress('Through-Focus MTF', 'Failed'));
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
   }, [w, wavelength, objectIdx, sampling, removePtd, targetFreq, defocusMin, defocusMax, tfSteps, mtfMethod, plotlyReady, setProgress, hideProgress]);
@@ -1512,9 +1520,9 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
     const freq3N = Number(freq3) || 40;
     try {
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
-      setProgress(0, 'Starting...');
+      setProgress(0, formatAnalysisProgress('Field MTF', 'Starting...'));
       await new Promise(r => setTimeout(r, 0));
-      setProgress(20, 'Computing Object MTF via Rust...');
+      setProgress(20, formatAnalysisProgress('Field MTF', 'Computing via Rust...'));
       const commonPayload = {
         sampleFromObjectRows: false,
         wavelengths: wavelengthList,
@@ -1532,7 +1540,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         fieldAxisMode: axisInfo.mode,
         onProgress: (evt: any) => {
           const p = Number(evt?.percent);
-          const msg = String(evt?.message || 'Computing Object MTF via Rust...');
+          const msg = formatAnalysisProgress('Field MTF', evt?.message || 'Computing via Rust...');
           if (Number.isFinite(p)) setProgress(p, msg);
           else setProgress(20, msg);
         },
@@ -1556,7 +1564,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       }
       const xAxis: number[] = Array.isArray((nativeResp as any)?.xAxis) ? (nativeResp as any).xAxis : [];
       const series: any[] = Array.isArray((nativeResp as any)?.series) ? (nativeResp as any).series : [];
-      if (!xAxis.length || !series.length) throw new Error('Object MTF did not produce valid data');
+      if (!xAxis.length || !series.length) throw new Error('Field MTF did not produce valid data');
       const firstFreqText = String(Number.isFinite(freq1N) ? freq1N.toFixed(1) : '10.0');
       const secondFreqText = String(Number.isFinite(freq2N) ? freq2N.toFixed(1) : '20.0');
       const thirdFreqText = String(Number.isFinite(freq3N) ? freq3N.toFixed(1) : '40.0');
@@ -1690,8 +1698,8 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         }
       }
       const nonEmptyTraces = traces.filter(t => Array.isArray(t.y) && t.y.length > 0);
-      if (!nonEmptyTraces.length) throw new Error('Object MTF did not produce plottable traces');
-      setProgress(90, 'Rendering...');
+      if (!nonEmptyTraces.length) throw new Error('Field MTF did not produce plottable traces');
+      setProgress(90, formatAnalysisProgress('Field MTF', 'Rendering...'));
       await (window as any).Plotly.newPlot(container, nonEmptyTraces, {
         title: `${firstFreqText} / ${secondFreqText} / ${thirdFreqText} lp/mm`,
         xaxis: { title: axisInfo.label },
@@ -1716,7 +1724,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         try { (window as any).Plotly?.Plots?.resize?.(container); } catch (_) {}
       });
     } catch (err: any) {
-      setProgress(100, 'Failed');
+      setProgress(100, formatAnalysisProgress('Field MTF', 'Failed'));
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
   }, [w, wavelength, objectIdx, sampling, removePtd, freq1, freq2, freq3, fieldMin, fieldMax, fieldSteps, mtfMethod, plotlyReady, setProgress, hideProgress]);

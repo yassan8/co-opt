@@ -238,13 +238,13 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
             <option value="magnification-chromatic-aberration">Lateral Chromatic Aberration</option>
             <option value="integrated-aberration">Integrated Aberration</option>
             <option value="transverse-aberration">Transverse Aberration</option>
-            <option value="opd-fan">Optical Path Difference Fan</option>
-            <option value="opd">Optical Path Difference</option>
-            <option value="psf">Point Spread Function</option>
-            <option value="mtf">Modulation Transfer Function</option>
+            <option value="opd-fan">OPD Fan (Test)</option>
+            <option value="opd">OPD (Test)</option>
+            <option value="psf">PSF (Test)</option>
+            <option value="mtf">MTF (Test)</option>
             <option value="through-focus-spot">Through-Focus Spot</option>
-            <option value="through-focus-mtf">Through-Focus MTF</option>
-            <option value="field-mtf">Object MTF</option>
+            <option value="through-focus-mtf">Through-Focus MTF (Test)</option>
+            <option value="field-mtf">Field MTF (Test)</option>
           </select>
         </div>
       </div>
@@ -277,9 +277,9 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
         </button>
         <button
           id="open-field-mtf-window-btn"
-          title="Open Object MTF view"
+          title="Open Field MTF view"
         >
-          Object MTF
+          Field MTF
         </button>
         <button
           id="open-astigmatism-window-btn"

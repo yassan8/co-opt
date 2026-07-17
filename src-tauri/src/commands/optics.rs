@@ -1390,7 +1390,7 @@ pub fn run_native_spot_raytrace(req: NativeSpotRaytraceRequest) -> Result<Native
             .ok_or_else(|| "run_native_spot_raytrace: packed meta cache miss".to_string())?;
         let ray_count = rays.len();
         let mut ray_hits = rays
-            .iter()
+            .par_iter()
             .enumerate()
             .filter_map(|(i, r)| {
                 let start_dir = [

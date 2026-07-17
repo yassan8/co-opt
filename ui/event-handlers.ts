@@ -7078,7 +7078,7 @@ export function setupAnalysisWindows() {
         <select id="popup-surface-number-select"></select>
 
         <label for="popup-ray-count-input">Ray number:</label>
-        <input type="number" id="popup-ray-count-input" value="128" min="1" step="1" />
+        <input type="number" id="popup-ray-count-input" value="101" min="1" step="1" />
 
         <label for="popup-ring-count-select">Ring count:</label>
         <select id="popup-ring-count-select">
@@ -7626,24 +7626,10 @@ export function setupAnalysisWindows() {
         }
 
         function syncInputsFromOpener() {
-            const openerRay = getOpenerEl('ray-count-input');
             const openerRing = getOpenerEl('ring-count-select');
-            const popupRay = document.getElementById('popup-ray-count-input');
             const popupRing = document.getElementById('popup-ring-count-select');
 
-            if (popupRay && openerRay && popupRay.value !== openerRay.value) popupRay.value = openerRay.value;
             if (popupRing && openerRing && popupRing.value !== openerRing.value) popupRing.value = openerRing.value;
-
-            // pattern
-            const annular = getOpenerEl('annular-pattern-btn');
-            const popupPattern = document.getElementById('popup-pattern-select');
-            if (popupPattern) {
-                const userLocked = popupPattern.dataset && popupPattern.dataset.userLocked === '1';
-                if (!userLocked) {
-                    const isAnnular = !!annular && annular.classList.contains('active');
-                    popupPattern.value = isAnnular ? 'annular' : 'grid';
-                }
-            }
         }
 
         function setPopupPattern(pattern) {
@@ -7972,10 +7958,16 @@ export function setupAnalysisWindows() {
                                     const name = String(row?.name ?? '').trim();
                                     if (name) return name;
                                     const pos = String(row?.position ?? row?.object ?? '').trim();
-                                    if (pos) return 'Object ' + String(objectIndex + 1) + ' (' + pos + ')';
+                                    if (pos) return 'Field ' + String(objectIndex + 1) + ' (' + pos + ')';
                                 }
                             } catch (_) {}
-                            return 'Object ' + String(objectIndex + 1);
+                            return 'Field ' + String(objectIndex + 1);
+                        };
+                        const toFieldLabel = (rawLabel, fallbackIndex) => {
+                            const text = String(rawLabel || '').trim();
+                            if (/^field\b/i.test(text)) return text;
+                            if (/^object\b/i.test(text)) return text.replace(/^object\b/i, 'Field');
+                            return 'Field ' + (text || String(fallbackIndex + 1));
                         };
 
                         const groupedByObject = new Map();
@@ -8135,7 +8127,7 @@ export function setupAnalysisWindows() {
                                 y: Math.min(1.0, y1 + 0.015),
                                 xref: 'paper',
                                 yref: 'paper',
-                                text: String(objectLabel || ('Object ' + String(i + 1))),
+                                text: toFieldLabel(objectLabel, i),
                                 showarrow: false,
                                 font: { size: 12, color: '#111827' },
                                 xanchor: 'center',
@@ -14402,14 +14394,15 @@ export function setupAnalysisWindows() {
         .content {
             flex: 1 1 auto;
             min-height: 0;
-            overflow: hidden;
+            overflow: auto;
             background: white;
             display: flex;
             flex-direction: column;
         }
         #popup-through-focus-spot-container {
-            flex: 1 1 auto;
-            min-height: 0;
+            flex: 0 0 auto;
+            width: 100%;
+            min-height: 420px;
         }
     </style>
     <script src="${plotlyScriptUrl}"></script>
@@ -14422,11 +14415,8 @@ export function setupAnalysisWindows() {
             <option value="primary">Primary</option>
         </select>
 
-        <label for="popup-through-focus-spot-min-defocus-input">Defocus min (mm):</label>
-        <input id="popup-through-focus-spot-min-defocus-input" type="number" step="0.001" value="-0.5" />
-
-        <label for="popup-through-focus-spot-max-defocus-input">Defocus max (mm):</label>
-        <input id="popup-through-focus-spot-max-defocus-input" type="number" step="0.001" value="0.5" />
+        <label for="popup-through-focus-spot-defocus-input">Defocus ±mm:</label>
+        <input id="popup-through-focus-spot-defocus-input" type="number" min="0" step="0.001" value="0.5" />
 
         <label for="popup-through-focus-spot-steps-input">Steps:</label>
         <input id="popup-through-focus-spot-steps-input" type="number" min="3" max="61" step="1" value="5" />
@@ -14435,7 +14425,7 @@ export function setupAnalysisWindows() {
         <input id="popup-through-focus-spot-scale-input" type="number" min="1" step="1" value="100" />
 
         <label for="popup-through-focus-spot-ray-count-input">Ray number:</label>
-        <input type="number" id="popup-through-focus-spot-ray-count-input" value="501" min="1" max="20001" step="1" />
+        <input type="number" id="popup-through-focus-spot-ray-count-input" value="101" min="1" max="20001" step="1" />
 
         <label for="popup-through-focus-spot-ring-count-select">Ring count:</label>
         <select id="popup-through-focus-spot-ring-count-select">
@@ -14494,19 +14484,9 @@ export function setupAnalysisWindows() {
         }
 
         function syncInputsFromOpener() {
-            const openerRay = getOpenerEl('ray-count-input');
             const openerRing = getOpenerEl('ring-count-select');
-            const popupRay = document.getElementById('popup-through-focus-spot-ray-count-input');
             const popupRing = document.getElementById('popup-through-focus-spot-ring-count-select');
-            if (popupRay && openerRay && popupRay.value !== openerRay.value) popupRay.value = openerRay.value;
             if (popupRing && openerRing && popupRing.value !== openerRing.value) popupRing.value = openerRing.value;
-
-            const annular = getOpenerEl('annular-pattern-btn');
-            const popupPattern = document.getElementById('popup-through-focus-spot-pattern-select');
-            if (popupPattern) {
-                const isAnnular = !!annular && annular.classList.contains('active');
-                popupPattern.value = isAnnular ? 'annular' : 'grid';
-            }
         }
 
         function setPopupPattern(pattern) {
@@ -14519,6 +14499,28 @@ export function setupAnalysisWindows() {
 
         function syncAll() {
             syncInputsFromOpener();
+        }
+
+        function observeThroughFocusSpotSize(containerEl, minimumHeight) {
+            const contentEl = containerEl ? containerEl.parentElement : null;
+            if (!containerEl || !contentEl || !window.Plotly) return;
+
+            try { window.__cooptTfSpotResizeObserver?.disconnect(); } catch (_) {}
+            let resizeFrame = 0;
+            const resizePlot = () => {
+                if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
+                resizeFrame = window.requestAnimationFrame(() => {
+                    const availableHeight = Math.floor(contentEl.clientHeight || 0);
+                    const targetHeight = Math.max(minimumHeight, availableHeight);
+                    containerEl.style.height = targetHeight + 'px';
+                    containerEl.style.minHeight = minimumHeight + 'px';
+                    try { window.Plotly.relayout(containerEl, { height: targetHeight }); } catch (_) {}
+                });
+            };
+            const observer = new ResizeObserver(resizePlot);
+            observer.observe(contentEl);
+            window.__cooptTfSpotResizeObserver = observer;
+            resizePlot();
         }
 
         window.renderThroughFocusSpot = async () => {
@@ -14541,8 +14543,7 @@ export function setupAnalysisWindows() {
             const openerRing = getOpenerEl('ring-count-select');
 
             const wlModeEl = document.getElementById('popup-through-focus-spot-wavelength-mode-select');
-            const minDefocusEl = document.getElementById('popup-through-focus-spot-min-defocus-input');
-            const maxDefocusEl = document.getElementById('popup-through-focus-spot-max-defocus-input');
+            const defocusEl = document.getElementById('popup-through-focus-spot-defocus-input');
             const stepsEl = document.getElementById('popup-through-focus-spot-steps-input');
             const scaleEl = document.getElementById('popup-through-focus-spot-scale-input');
             const rayEl = document.getElementById('popup-through-focus-spot-ray-count-input');
@@ -14609,8 +14610,9 @@ export function setupAnalysisWindows() {
                 const selectedRingCount = ringEl && ringEl.value !== '' ? parseInt(ringEl.value, 10) : undefined;
                 const selectedPattern = patternEl ? String(patternEl.value || 'annular') : 'annular';
                 const selectedWavelengthMode = wlModeEl ? String(wlModeEl.value || 'all') : 'all';
-                const minDefocusMm = toFiniteNumber(minDefocusEl ? minDefocusEl.value : -0.5, -0.5);
-                const maxDefocusMm = toFiniteNumber(maxDefocusEl ? maxDefocusEl.value : 0.5, 0.5);
+                const defocusMagnitudeMm = Math.abs(toFiniteNumber(defocusEl ? defocusEl.value : 0.5, 0.5));
+                const minDefocusMm = -defocusMagnitudeMm;
+                const maxDefocusMm = defocusMagnitudeMm;
                 const steps = clamp(toInt(stepsEl ? stepsEl.value : 5, 5), 3, 61);
                 const scaleUm = Math.max(1, toFiniteNumber(scaleEl ? scaleEl.value : 100, 100));
                 const halfScaleUm = scaleUm * 0.5;
@@ -14974,10 +14976,12 @@ export function setupAnalysisWindows() {
                     }
 
                     setProgress(92, 'Rendering Through-Focus Spot...');
+                    const minimumPlotHeight = Math.max(420, rows * 145 + 90);
                     await window.Plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
                     try {
                         if (progressWrapper) progressWrapper.style.display = 'none';
                     } catch (_) {}
+                    observeThroughFocusSpotSize(containerEl, minimumPlotHeight);
                     return;
                 }
 

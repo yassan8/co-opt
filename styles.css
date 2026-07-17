@@ -4197,25 +4197,6 @@ h4 {
     overflow: hidden;
 }
 
-.requirements-list-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 8px 12px;
-    border-bottom: 1px solid #e5e7eb;
-    background: #f8fafc;
-    color: #334155;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.requirements-list-meta {
-    font-size: 11px;
-    font-weight: 500;
-    color: #64748b;
-}
-
 .merit-function-buttons-container {
     display: flex;
     gap: 8px;
@@ -5589,16 +5570,6 @@ body.dark-mode .requirements-list-panel {
     border-color: var(--border-color) !important;
 }
 
-body.dark-mode .requirements-list-header {
-    background-color: var(--bg-secondary) !important;
-    border-bottom-color: var(--border-color) !important;
-    color: var(--text-primary) !important;
-}
-
-body.dark-mode .requirements-list-meta {
-    color: var(--text-secondary) !important;
-}
-
 body.dark-mode #table-system-requirements .sr-table tbody tr {
     background-color: var(--bg-primary) !important;
     color: var(--text-primary) !important;
@@ -5962,4 +5933,84 @@ body.dark-mode .block-inspector-icon-btn {
 body.dark-mode .block-inspector-icon-btn:hover {
     background-color: var(--bg-hover) !important;
     border-color: var(--accent-color) !important;
+}
+
+#table-system-requirements.requirements-react-table {
+    overflow: auto;
+}
+
+#table-system-requirements .requirements-react-empty {
+    padding: 18px;
+    text-align: center;
+    color: #6b7280;
+    font-style: italic;
+}
+
+#table-system-requirements .requirements-react-detailsButton {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 400;
+    text-align: left;
+    cursor: pointer;
+}
+
+#table-system-requirements .requirements-react-memo {
+    width: 100%;
+    border: 0;
+    background: #fffbeb;
+    color: #78716c;
+    font-style: italic;
+}
+
+#table-system-requirements .requirements-react-details {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+    gap: 10px;
+    font: inherit;
+}
+
+#table-system-requirements .requirements-react-details .sr-inline-editor-title,
+#table-system-requirements .requirements-react-parameters,
+#table-system-requirements .requirements-react-constraints,
+#table-system-requirements .requirements-react-field--wide {
+    grid-column: 1 / -1;
+}
+
+#table-system-requirements .requirements-react-parameters,
+#table-system-requirements .requirements-react-constraints {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(130px, 1fr));
+    gap: 10px;
+}
+
+#table-system-requirements .requirements-react-field {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    font: inherit;
+}
+
+#table-system-requirements .requirements-react-field input,
+#table-system-requirements .requirements-react-field select,
+#table-system-requirements .requirements-react-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    font-weight: 400;
+}
+
+#table-system-requirements .requirements-react-field textarea {
+    min-height: 72px;
+    resize: vertical;
+}
+
+@media (max-width: 900px) {
+    #table-system-requirements .requirements-react-details,
+    #table-system-requirements .requirements-react-parameters,
+    #table-system-requirements .requirements-react-constraints {
+        grid-template-columns: repeat(2, minmax(140px, 1fr));
+    }
 }

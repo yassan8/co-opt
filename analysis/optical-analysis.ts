@@ -5,7 +5,6 @@ declare global {
   }
 }
 const w: Record<string, any> = window;
-
 /**
  * Optical Analysis Module
  * Handles PSF, spot diagram, and aberration analysis functions
@@ -781,7 +780,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         // NOTE: Spot Diagram UI uses a CB-invariant "surface id" (Object=0, first physical surface=1, ...).
         // We resolve that id to an actual row index after loading opticalSystemRows.
         let surfaceIndex = 0;  // temporarily treated as surfaceId
-        let rayCount = 501;    // Default ray count
+        let rayCount = 101;    // Default ray count
         let wavelength = 550;  // Default wavelength (nm)
         let ringCount = 3;     // Default annular ring count
         
@@ -2449,7 +2448,28 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
         }
 
         reportProgress(98, 'Rendering plot...');
+        const minimumPlotHeight = Number(layout.height);
+        containerEl.style.flexShrink = '0';
+        containerEl.style.minHeight = `${minimumPlotHeight}px`;
         await plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
+        try { (containerEl as any).__cooptTfSpotResizeObserver?.disconnect?.(); } catch (_) {}
+        const contentEl = containerEl.parentElement;
+        let resizeFrame = 0;
+        const resizePlot = () => {
+            if (resizeFrame) targetWindow.cancelAnimationFrame(resizeFrame);
+            resizeFrame = targetWindow.requestAnimationFrame(() => {
+                const availableHeight = Math.floor(contentEl?.clientHeight || 0);
+                const targetHeight = Math.max(minimumPlotHeight, availableHeight);
+                containerEl.style.height = `${targetHeight}px`;
+                try { plotly.relayout(containerEl, { height: targetHeight }); } catch (_) {}
+            });
+        };
+        if (contentEl && typeof targetWindow.ResizeObserver === 'function') {
+            const resizeObserver = new targetWindow.ResizeObserver(resizePlot);
+            resizeObserver.observe(contentEl);
+            (containerEl as any).__cooptTfSpotResizeObserver = resizeObserver;
+        }
+        resizePlot();
         reportProgress(100, 'Done');
     } catch (error: any) {
         const container = typeof containerTarget === 'string'
@@ -2696,7 +2716,7 @@ export async function runSpotParityDiagnostics(options: any = {}): Promise<any> 
         : Math.max(0, opticalSystemRows.length - 1);
     const surfaceNumber = surfaceIndex + 1;
 
-    const rayCount = clamp(parseIntOr(options?.rayCount, 501), 9, 20001);
+    const rayCount = clamp(parseIntOr(options?.rayCount, 101), 9, 20001);
     const ringCount = clamp(parseIntOr(options?.ringCount, 10), 1, 64);
     const pattern = String(options?.pattern || getSpotDiagramPattern() || 'annular').toLowerCase() === 'grid'
         ? 'grid'

@@ -617,6 +617,26 @@ class SystemRequirementsEditor {
       console.warn('[Requirements] Table container not found');
       return;
     }
+    if (container.dataset.reactManaged === 'true') {
+      this._tableRoot = null;
+      this._tbody = null;
+      this._renderBody = () => this._notifyReactTable();
+      this.table = {
+        getData: () => this.getData(),
+        setData: (rows: any[]) => this.setData(rows),
+        updateData: (updates: any[]) => {
+          if (!Array.isArray(updates)) return;
+          for (const update of updates) {
+            const row = this.requirements.find((entry: any) => String(entry?.id) === String(update?.id));
+            if (row) Object.assign(row, update);
+          }
+          this.saveToStorage();
+          this._notifyReactTable();
+        }
+      };
+      this._notifyReactTable();
+      return;
+    }
     
     // Clear only table-related content, preserve other elements
     container.innerHTML = '';
@@ -1138,6 +1158,38 @@ class SystemRequirementsEditor {
         cfgSel.appendChild(opt);
       }
       cfgSel.value = (row.configId === undefined || row.configId === null) ? '' : String(row.configId);
+      const makeScopeSelect = (
+        field: 'fieldScope' | 'wavelengthScope',
+        allLabel: string,
+        itemOptions: Array<{ value: string; label: string }>
+      ): HTMLSelectElement => {
+        const select = document.createElement('select');
+        select.style.width = '100%';
+        select.style.fontSize = '12px';
+        const options = [
+          { value: 'DEFAULT', label: 'Operand default' },
+          { value: 'ALL', label: allLabel },
+          ...itemOptions.filter((option) => String(option.value ?? '').trim() !== '')
+        ];
+        for (const option of options) {
+          const element = document.createElement('option');
+          element.value = option.value;
+          element.textContent = option.label;
+          select.appendChild(element);
+        }
+        select.value = String(row?.[field] ?? '').trim().toUpperCase() || 'DEFAULT';
+        select.addEventListener('focus', onCellFocus);
+        select.addEventListener('blur', onCellBlur);
+        select.addEventListener('change', () => {
+          row[field] = select.value;
+          this.saveToStorage();
+          updateSummary();
+          this.scheduleEvaluateAndUpdate();
+        });
+        return select;
+      };
+      const fieldScopeSelect = makeScopeSelect('fieldScope', 'All fields', getCachedObjectOptions(row?.configId));
+      const wavelengthScopeSelect = makeScopeSelect('wavelengthScope', 'All wavelengths', this._getWavelengthOptions());
       const populateObjectSelect = (selectEl: HTMLSelectElement | null, cfgId: string): void => {
         if (!selectEl) return;
         const prev = selectEl.value;
@@ -2251,6 +2303,10 @@ class SystemRequirementsEditor {
         const opSummary = String(row?.op || '=').trim() || '=';
         const pieces = [];
         if (configLabel) pieces.push(configLabel);
+        const fieldScope = String(row?.fieldScope ?? '').trim().toUpperCase();
+        const wavelengthScope = String(row?.wavelengthScope ?? '').trim().toUpperCase();
+        if (fieldScope && fieldScope !== 'DEFAULT') pieces.push(`Field=${fieldScope}`);
+        if (wavelengthScope && wavelengthScope !== 'DEFAULT') pieces.push(`Wave=${wavelengthScope}`);
         if (values.length > 0) pieces.push(values.join(', '));
         if (targetSummary) pieces.push(`${opSummary} ${targetSummary}`);
         if (weightSummary) pieces.push(`w=${weightSummary}`);
@@ -2494,6 +2550,8 @@ class SystemRequirementsEditor {
         editorTitle.textContent = 'Details';
         editorWrap.appendChild(editorTitle);
         editorWrap.appendChild(makeEditorField('Config', cfgSel));
+        editorWrap.appendChild(makeEditorField('Field', fieldScopeSelect));
+        editorWrap.appendChild(makeEditorField('Wavelength', wavelengthScopeSelect));
         editorWrap.appendChild(makeEditorField('Parameters', paramsExpanded, true));
 
         const constraintsGrid = document.createElement('div');
@@ -2726,6 +2784,59 @@ class SystemRequirementsEditor {
     }
   }
 
+  _getOperandScopeParamKey(operand: any, scope: 'field' | 'wavelength'): string | null {
+    const definition = OPERAND_DEFINITIONS[String(operand ?? '').trim()];
+    const parameters = Array.isArray(definition?.parameters) ? definition.parameters : [];
+    for (const parameter of parameters) {
+      const label = String(parameter?.label ?? '').toLowerCase();
+      const description = String(parameter?.description ?? '').toLowerCase();
+      const matches = scope === 'field'
+        ? label.includes('field idx') || label.includes('object idx') || description.includes('object row')
+        : label.includes('λ') || description.includes('source row');
+      if (matches) return String(parameter?.key ?? '').trim() || null;
+    }
+    return null;
+  }
+
+  _normalizeRequirementWavelengthScope(row: any): any {
+    if (!row || typeof row !== 'object' || row.rowType === 'memo') return row;
+    const wavelengthKey = this._getOperandScopeParamKey(row.operand, 'wavelength');
+    if (!wavelengthKey) return row;
+    const scope = String(row.wavelengthScope ?? '').trim();
+    if (!scope || scope.toUpperCase() === 'DEFAULT') {
+      const legacyValue = String(row[wavelengthKey] ?? '').trim();
+      row.wavelengthScope = legacyValue && legacyValue !== '0' ? legacyValue : 'PRIMARY';
+    }
+    row[wavelengthKey] = '';
+    return row;
+  }
+
+  _buildScopedOperandObjects(row: any, baseOperand: any): any[] {
+    const fieldKey = this._getOperandScopeParamKey(row?.operand, 'field');
+    const wavelengthKey = this._getOperandScopeParamKey(row?.operand, 'wavelength');
+    const getValues = (scopeValue: any, options: Array<{ value: string }>, supported: boolean): Array<string | null> => {
+      if (!supported) return [null];
+      const scope = String(scopeValue ?? '').trim().toUpperCase();
+      if (!scope || scope === 'DEFAULT') return [null];
+      if (scope === 'PRIMARY') return [''];
+      if (scope !== 'ALL') return [String(scopeValue)];
+      const values = options.map((option) => String(option.value ?? '').trim()).filter(Boolean);
+      return values.length > 0 ? values : [null];
+    };
+    const fieldValues = getValues(row?.fieldScope, this._getObjectOptions(row?.configId), !!fieldKey);
+    const wavelengthValues = getValues(row?.wavelengthScope, this._getWavelengthOptions(), !!wavelengthKey);
+    const operands: any[] = [];
+    for (const fieldValue of fieldValues) {
+      for (const wavelengthValue of wavelengthValues) {
+        const scoped = { ...baseOperand };
+        if (fieldKey && fieldValue !== null) scoped[fieldKey] = fieldValue;
+        if (wavelengthKey && wavelengthValue !== null) scoped[wavelengthKey] = wavelengthValue;
+        operands.push(scoped);
+      }
+    }
+    return operands.length > 0 ? operands : [baseOperand];
+  }
+
   _getObjectOptions(configId: any = null): Array<{ value: string; label: string }> {
     try {
       // Try to get from active config first
@@ -2789,6 +2900,15 @@ class SystemRequirementsEditor {
     if (typeof this._renderBody === 'function') {
       this._renderBody(() => '', () => '', () => null);
     }
+    this._notifyReactTable();
+  }
+
+  _notifyReactTable(): void {
+    try {
+      window.dispatchEvent(new CustomEvent('coopt:requirements-data-changed', {
+        detail: { rows: this._cloneLiveRequirementsRows(), at: Date.now() }
+      }));
+    } catch (_) {}
   }
 
   async _yieldToUI(): Promise<void> {
@@ -3186,6 +3306,8 @@ class SystemRequirementsEditor {
       param3: '',
       param4: '',
       param5: '',
+      fieldScope: 'ALL',
+      wavelengthScope: 'ALL',
       op: '=',
       tol: 0,
       target: 0,
@@ -3814,10 +3936,20 @@ class SystemRequirementsEditor {
 
       let current: any = null;
       try {
-        if (editor && typeof editor.calculateOperandValueAsync === 'function') {
-          current = await editor.calculateOperandValueAsync(opObj);
-        } else {
-          current = editor.calculateOperandValue(opObj);
+        const scopedOperands = this._buildScopedOperandObjects(row, opObj);
+        let worstAmount = Number.NEGATIVE_INFINITY;
+        for (const scopedOperand of scopedOperands) {
+          const candidate = editor && typeof editor.calculateOperandValueAsync === 'function'
+            ? await editor.calculateOperandValueAsync(scopedOperand)
+            : editor.calculateOperandValue(scopedOperand);
+          const sanitizedCandidate = this._sanitizeCurrentForUI(candidate);
+          const candidateAmount = sanitizedCandidate.ok
+            ? this.computeViolationAmount(op, sanitizedCandidate.current, target, tol)
+            : Number.POSITIVE_INFINITY;
+          if (current === null || candidateAmount > worstAmount) {
+            current = candidate;
+            worstAmount = candidateAmount;
+          }
         }
 
         // If this is a Spot Size operand, capture its debug snapshot keyed by requirement row id.
@@ -4131,12 +4263,14 @@ class SystemRequirementsEditor {
         param3,
         param4,
         param5,
+        fieldScope,
+        wavelengthScope,
         op,
         tol,
         target,
         weight
       } = r;
-      return { id, enabled, operand, rationale, rationaleHeight, configId, param1, param2, param3, param4, param5, op, tol, target, weight };
+      return { id, enabled, operand, rationale, rationaleHeight, configId, param1, param2, param3, param4, param5, fieldScope, wavelengthScope, op, tol, target, weight };
     });
   }
 
@@ -4211,10 +4345,11 @@ class SystemRequirementsEditor {
       // Normalize to a real id so merit evaluation can load the intended config.
       r.configId = this._normalizeConfigId(r.configId, systemConfig, activeConfigId);
 
-      return r;
+      return this._normalizeRequirementWavelengthScope(r);
     });
     this.updateRowNumbers();
     if (typeof this._renderBody === 'function') this._renderBody(() => '', () => '', () => null);
+    this._notifyReactTable();
   }
 
   loadFromStorage(): void {
@@ -4267,7 +4402,7 @@ class SystemRequirementsEditor {
         } else {
           r.configId = String(r.configId);
         }
-        return r;
+        return this._normalizeRequirementWavelengthScope(r);
       });
 
       this.updateRowNumbers();

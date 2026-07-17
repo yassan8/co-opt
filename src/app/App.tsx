@@ -17,7 +17,6 @@ import {
   handleLoad,
   handleLoadDefault,
   handleNewFile,
-  handleOptimize,
   handleSave,
   handleShareUrl,
 } from "../../ui/toolbar-handlers";
@@ -5169,6 +5168,15 @@ export default function App() {
       }
     } catch (_) {}
     try {
+      const parentWindow = currentWindow.parent;
+      if (parentWindow && parentWindow !== currentWindow && !parentWindow.closed) {
+        try {
+          currentWindow.__cooptOptimizeHostWindow = parentWindow;
+        } catch (_) {}
+        return parentWindow;
+      }
+    } catch (_) {}
+    try {
       const openerWindow = currentWindow.opener;
       if (openerWindow && !openerWindow.closed) {
         try {
@@ -9714,7 +9722,7 @@ const collectLegacyCrossRays = async (
       'mtf': 'Modulation Transfer Function',
       'through-focus-spot': 'Through-Focus Spot',
       'through-focus-mtf': 'Through-Focus MTF',
-      'field-mtf': 'Object MTF',
+      'field-mtf': 'Field MTF (Test)',
     };
     const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid']);
 
@@ -12526,7 +12534,7 @@ const collectLegacyCrossRays = async (
     icon: string;
   }> = [
     { key: 'configuration', label: 'Config', icon: '🧭' },
-    { key: 'source', label: 'Sources / Objects', icon: '🔎' },
+    { key: 'source', label: 'Sources / Fields', icon: '🔎' },
     { key: 'intent', label: 'Design Intent', icon: '🧩' },
     { key: 'requirements', label: 'Requirements', icon: '📏' },
     { key: 'literature', label: 'Patent', icon: '📚' },
@@ -12679,13 +12687,13 @@ const collectLegacyCrossRays = async (
     { value: 'magnification-chromatic-aberration',label: 'Lateral Chromatic Aberration' },
     { value: 'integrated-aberration',             label: 'Integrated Aberration' },
     { value: 'transverse-aberration',             label: 'Transverse Aberration' },
-    { value: 'opd-fan',                           label: 'Optical Path Difference Fan' },
-    { value: 'opd',                               label: 'OPD' },
-    { value: 'psf',                               label: 'PSF' },
-    { value: 'mtf',                               label: 'MTF' },
+    { value: 'opd-fan',                           label: 'OPD Fan (Test)' },
+    { value: 'opd',                               label: 'OPD (Test)' },
+    { value: 'psf',                               label: 'PSF (Test)' },
+    { value: 'mtf',                               label: 'MTF (Test)' },
     { value: 'through-focus-spot',                label: 'Through-Focus Spot' },
-    { value: 'through-focus-mtf',                 label: 'Through-Focus MTF' },
-    { value: 'field-mtf',                         label: 'Object MTF' },
+    { value: 'through-focus-mtf',                 label: 'Through-Focus MTF (Test)' },
+    { value: 'field-mtf',                         label: 'Field MTF (Test)' },
   ];
 
   const getNextMdiZIndex = () => {
@@ -12731,11 +12739,13 @@ const collectLegacyCrossRays = async (
     };
   };
 
-  const buildMdiModeUrl = (mode: 'render' | 'analysis' | 'settings', analysis?: string) => {
+  const buildMdiModeUrl = (mode: 'render' | 'analysis' | 'settings' | 'optimize', analysis?: string) => {
     const url = new URL(window.location.href);
     url.search = '';
     if (mode === 'render') {
       url.searchParams.set('coopt_render_window', '1');
+    } else if (mode === 'optimize') {
+      url.searchParams.set('coopt_optimize_window', '1');
     } else if (mode === 'settings') {
       url.searchParams.set('coopt_settings_window', '1');
     } else {
@@ -12815,6 +12825,10 @@ const collectLegacyCrossRays = async (
 
   const openSettingsMdiWindow = () => {
     openMdiAuxWindow('settings', 'Settings', buildMdiModeUrl('settings'), { width: 520, height: 620, x: 220, y: 110 });
+  };
+
+  const openOptimizeMdiWindow = () => {
+    openMdiAuxWindow('optimize', 'Optimize Progress', buildMdiModeUrl('optimize'), { width: 620, height: 680, x: 200, y: 80 });
   };
 
   const focusSystemConsoleWindow = () => {
@@ -14735,7 +14749,7 @@ const collectLegacyCrossRays = async (
         <div className={`app-shell__menu${openMenu === 'run' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('run')}>
           <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'run'} onClick={toggleWorkspaceMenu('run')}>Run</button>
           <div className="app-shell__menuPanel" role="menu">
-            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleOptimize)}>Optimize</button>
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(openOptimizeMdiWindow)}>Optimize</button>
           </div>
         </div>
         <div className={`app-shell__menu${openMenu === 'analysis' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('analysis')}>

@@ -40,6 +40,7 @@ import {
 } from '../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
+import { OPERAND_DEFINITIONS } from '../ui/editors/merit-function-inspector.ts';
 
 let __optimizerStopRequested = false;
 
@@ -202,6 +203,11 @@ async function runOptimizationMvpnative(options = {}) {
     } catch (_) {}
     return null;
   })();
+  const scopedSystemRequirementsRows = expandRequirementScopesForOptimizer(
+    systemRequirementsRows,
+    systemConfigSnapshot,
+    activeConfigId
+  );
   const maxIterations = Number.isFinite(Number(opts.maxIterations))
     ? Math.max(1, Math.floor(Number(opts.maxIterations)))
     : 24;
@@ -305,7 +311,7 @@ async function runOptimizationMvpnative(options = {}) {
           objectRows,
           activeConfigId,
           systemConfigSnapshot,
-          systemRequirementsRows,
+          systemRequirementsRows: scopedSystemRequirementsRows,
           sessionId,
           resetSession: consumedIterations === 0,
           maxIterations: iterBudget,
@@ -3865,12 +3871,62 @@ function normalizeRequirementRow(raw, systemConfig, activeConfigId) {
     param2: r.param2,
     param3: r.param3,
     param4: r.param4,
+    param5: r.param5,
+    fieldScope: r.fieldScope,
+    wavelengthScope: r.wavelengthScope,
     op,
     tol,
     target,
     weight,
     rationale: r.rationale
   };
+}
+
+function getRequirementScopeParamKey(operand, scope) {
+  const definition = OPERAND_DEFINITIONS[String(operand ?? '').trim()];
+  const parameters = Array.isArray(definition?.parameters) ? definition.parameters : [];
+  for (const parameter of parameters) {
+    const label = String(parameter?.label ?? '').toLowerCase();
+    const description = String(parameter?.description ?? '').toLowerCase();
+    const matches = scope === 'field'
+      ? label.includes('field idx') || label.includes('object idx') || description.includes('object row')
+      : label.includes('λ') || description.includes('source row');
+    if (matches) return String(parameter?.key ?? '').trim() || null;
+  }
+  return null;
+}
+
+function expandRequirementScopesForOptimizer(rows, systemConfig, fallbackConfigId) {
+  const sourceRows = Array.isArray(systemConfig?.source) ? systemConfig.source : [];
+  const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+  const expanded = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row !== 'object') continue;
+    const configId = String(row.configId ?? fallbackConfigId ?? '').trim();
+    const config = configs.find((entry) => String(entry?.id ?? '') === configId) || configs[0] || null;
+    const objectRows = Array.isArray(config?.object) ? config.object : [];
+    const fieldKey = getRequirementScopeParamKey(row.operand, 'field');
+    const wavelengthKey = getRequirementScopeParamKey(row.operand, 'wavelength');
+    const resolveValues = (scopeValue, count, supported) => {
+      if (!supported) return [null];
+      const scope = String(scopeValue ?? '').trim().toUpperCase();
+      if (!scope || scope === 'DEFAULT') return [null];
+      if (scope === 'PRIMARY') return [''];
+      if (scope !== 'ALL') return [String(scopeValue)];
+      return count > 0 ? Array.from({ length: count }, (_, index) => String(index + 1)) : [null];
+    };
+    const fieldValues = resolveValues(row.fieldScope, objectRows.length, !!fieldKey);
+    const wavelengthValues = resolveValues(row.wavelengthScope, sourceRows.length, !!wavelengthKey);
+    for (const fieldValue of fieldValues) {
+      for (const wavelengthValue of wavelengthValues) {
+        const scoped = { ...row };
+        if (fieldKey && fieldValue !== null) scoped[fieldKey] = fieldValue;
+        if (wavelengthKey && wavelengthValue !== null) scoped[wavelengthKey] = wavelengthValue;
+        expanded.push(scoped);
+      }
+    }
+  }
+  return expanded;
 }
 
 function getSystemRequirementsRaw(systemConfig, overrideRows = null) {
@@ -6736,7 +6792,11 @@ export async function runOptimizationMVP(options = {}) {
   const requirements = (Array.isArray(requirementsRaw) ? requirementsRaw : [])
     .map(r => normalizeRequirementRow(r, systemConfig, activeConfigId));
 
-  const expandedRequirements = expandRequirementsForTargetConfigs(requirements, targetConfigIds, activeConfigId)
+  const expandedRequirements = expandRequirementScopesForOptimizer(
+    expandRequirementsForTargetConfigs(requirements, targetConfigIds, activeConfigId),
+    systemConfig,
+    activeConfigId
+  )
     .filter(r => {
       const w = toFiniteNumber(r.weight, 1);
       return w > 0;

@@ -1,6 +1,6 @@
 export default function SourceObjectSection() {
   return (
-    <section className="source-object-container" aria-label="Source and Object">
+    <section className="source-object-container" aria-label="Source and Field">
       <div className="source-section ide-section-card">
         <div className="source-object-toolbar ide-toolbar" role="toolbar" aria-label="Source controls">
           <button id="add-source-btn" type="button">Add Source</button>
@@ -10,9 +10,9 @@ export default function SourceObjectSection() {
       </div>
 
       <div className="object-section ide-section-card">
-        <div className="source-object-toolbar ide-toolbar" role="toolbar" aria-label="Object controls">
-          <button id="add-object-btn" type="button">Add Object</button>
-          <button id="delete-object-btn" type="button">Delete Object</button>
+        <div className="source-object-toolbar ide-toolbar" role="toolbar" aria-label="Field controls">
+          <button id="add-object-btn" type="button">Add Field</button>
+          <button id="delete-object-btn" type="button">Delete Field</button>
           <button id="object-angle-btn" type="button">Angle</button>
         {/* <button id="object-height-circle-btn">Height Circle</button> */}
           <button id="object-height-rect-btn" type="button">Height Rect</button>

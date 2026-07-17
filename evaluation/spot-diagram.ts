@@ -1716,6 +1716,7 @@ export async function generateSpotDiagramAsync(
             raysGenerated: 0,
             raysTried: 0,
             traceRayCalls: 0,
+            traceRayBatchCalls: 0,
             traceRaySuccesses: 0,
             pupilAttempts: 0,
             startGenerationCacheHits: 0,
@@ -2137,6 +2138,76 @@ export async function generateSpotDiagramAsync(
                 return rows;
             })();
 
+            const enableSpotTraceDebugLog = !!(enhancedOptions && typeof enhancedOptions === 'object' && enhancedOptions.enableSpotTraceDebugLog === true);
+            if (!enableSpotFailureDiagnostics && !enableSpotTraceDebugLog && targetPointIndex !== null && targetSurfaceIndex >= 0 && maxRaysThisObject > 0) {
+                try {
+                    const opticalRowsCopy = sharedOpticalRows || __spot_cloneRowsPreserveSpecialNumbers(opticalSystemRows);
+                    const rayBundle = [];
+                    const rayBundleIndices = [];
+                    for (let i = 0; i < maxRaysThisObject; i++) {
+                        const rayStart = starts[i];
+                        if (!rayStart?.startP || !rayStart?.dir) continue;
+                        rayBundle.push({
+                            pos: rayStart.startP,
+                            dir: rayStart.dir,
+                            wavelength: Number(primaryWavelength?.wavelength) || 0.5876
+                        });
+                        rayBundleIndices.push(i);
+                    }
+                    const traceStartMs = nowMs();
+                    const hitPoints = traceRayHitPointBatch(opticalRowsCopy, rayBundle, 1.0, targetSurfaceIndex, traceOptions);
+                    asyncProfile.timingsMs.traceRay += Math.max(0, nowMs() - traceStartMs);
+                    asyncProfile.counters.traceRayCalls += rayBundle.length;
+                    asyncProfile.counters.traceRayBatchCalls += 1;
+                    asyncProfile.counters.raysTried += rayBundle.length;
+                    for (let batchIndex = 0; batchIndex < hitPoints.length; batchIndex++) {
+                        const i = rayBundleIndices[batchIndex];
+                        const rayStart = starts[i];
+                        const hitPointGlobal = hitPoints[batchIndex];
+                        if (!hitPointGlobal) {
+                            __spot_recordTraceFailure(diag, null, 'NOT_REACHED_TARGET', opticalSystemRows, null);
+                            continue;
+                        }
+                        const surfaceInfo = surfaceInfoList[targetSurfaceIndex];
+                        const hitPointLocal = surfaceInfo ? transformPointToLocal(hitPointGlobal, surfaceInfo) : hitPointGlobal;
+                        if (!hitPointLocal || typeof hitPointLocal.x !== 'number' || typeof hitPointLocal.y !== 'number') {
+                            __spot_recordTraceFailure(diag, null, 'INVALID_HIT_POINT', opticalSystemRows, null);
+                            continue;
+                        }
+                        const u = Number(rayStart?.planeCoords?.u);
+                        const v = Number(rayStart?.planeCoords?.v);
+                        const centerByPlaneCoords = Number.isFinite(u) && Number.isFinite(v) && Math.abs(u) <= 1e-12 && Math.abs(v) <= 1e-12;
+                        pts.push({
+                            x: hitPointGlobal.x,
+                            y: hitPointGlobal.y,
+                            z: hitPointLocal.z,
+                            globalX: hitPointGlobal.x,
+                            globalY: hitPointGlobal.y,
+                            globalZ: hitPointGlobal.z,
+                            wavelength: primaryWavelength.wavelength,
+                            wavelengthName: primaryWavelength.name,
+                            isPrimary: true,
+                            objectId: obj.id,
+                            rayIndex: i,
+                            isChiefRay: rayStart.isChief === true || centerByPlaneCoords || (!strictChiefRayMarker && rayStart.isChief === undefined && i === 0),
+                            pupilU: Number.isFinite(u) ? u : undefined,
+                            pupilV: Number.isFinite(v) ? v : undefined,
+                        });
+                        ok++;
+                        asyncProfile.counters.traceRaySuccesses += 1;
+                    }
+                    completedWork += rayBundle.length;
+                    if (onProgress) {
+                        const pct = 5 + (85 * (completedWork / estimatedTotalWork));
+                        safeProgress(Math.min(90, Math.max(0, pct)), `Tracing rays (${completedWork}/${estimatedTotalWork})...`);
+                    }
+                    await yieldToUI();
+                    return { starts, ok, spotPoints: pts, diagnostics: diag, originSolveTraceBackend: attemptOriginSolveTraceBackend };
+                } catch (_) {
+                    // Fall through to scalar tracing for unsupported systems or unexpected batch failures.
+                }
+            }
+
             for (let i = 0; i < maxRaysThisObject; i++) {
                 const rayStart = starts[i];
                 if (!rayStart || !rayStart.startP || !rayStart.dir) continue;
@@ -2155,7 +2226,7 @@ export async function generateSpotDiagramAsync(
                         dir: rayStart.dir,
                         wavelength: Number(primaryWavelength?.wavelength) || 0.5876
                     };
-                    const traceDebugLog = (enhancedOptions && typeof enhancedOptions === 'object' && enhancedOptions.enableSpotTraceDebugLog === true)
+                    const traceDebugLog = enableSpotTraceDebugLog
                         ? []
                         : null;
                     const traceStartMs = nowMs();
@@ -3121,7 +3192,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             warningContainer.style.cssText = 'margin-bottom: 30px; padding: 15px; border: 2px solid #ff9800; border-radius: 5px; background-color: #fff3e0;';
             
             const warningTitle = doc.createElement('h4');
-            warningTitle.textContent = `Object ${objectData.objectId} (${objectData.objectType})`;
+            warningTitle.textContent = `Field ${objectData.objectId} (${objectData.objectType})`;
             warningTitle.style.cssText = 'margin: 0 0 10px 0; color: #e65100;';
             warningContainer.appendChild(warningTitle);
             
@@ -3215,7 +3286,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         const chiefAngleInfo = Number.isFinite(Number(objectData.chiefRayAngleDeg))
             ? ` • Chief@Image(deg): ${fmtAngle(objectData.chiefRayAngleDeg)}`
             : '';
-        objectTitle.textContent = `Object ${objectData.objectId} (${objectData.objectType}) - Success: ${rayInfo} rays (${successRate}%)${ringInfo}${angleInfo}${chiefAngleInfo}`;
+        objectTitle.textContent = `Field ${objectData.objectId} (${objectData.objectType}) - Success: ${rayInfo} rays (${successRate}%)${ringInfo}${angleInfo}${chiefAngleInfo}`;
         objectTitle.style.cssText = 'margin: 0 0 10px 0; color: #555;';
         graphContainer.appendChild(objectTitle);
         
@@ -3457,7 +3528,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             text: hoverTexts,
             mode: 'markers',
             type: 'scattergl',
-            name: `Object ${objectData.objectId}`,
+            name: `Field ${objectData.objectId}`,
             marker: {
                 color: colors,
                 size: 6,
@@ -3511,7 +3582,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
                     font: { size: 12, color: '#333' }
                 },
                 {
-                    text: `Object ${objectData.objectId}`,
+                    text: `Field ${objectData.objectId}`,
                     x: 1,
                     y: 1.05,
                     xref: 'paper',
@@ -3851,7 +3922,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         stats.style.cssText = 'padding: 10px; background: #f9f9f9; border-left: 3px solid #0066cc; margin: 10px 0;';
         
         stats.innerHTML = `
-            <div><strong>Object ${objectData.objectId} Statistics:</strong></div>
+            <div><strong>Field ${objectData.objectId} Statistics:</strong></div>
             <div>Valid rays: ${objectData.spotPoints.length} / ${objectData.totalRays} (${(objectData.successRate * 100).toFixed(1)}%)</div>
             <div>RMS X: ${rmsXUm.toFixed(3)} µm</div>
             <div>RMS Y: ${rmsYUm.toFixed(3)} µm</div>

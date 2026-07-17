@@ -463,7 +463,7 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
 
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
-    const headers = ['Object', 'On', xTitle, yTitle, 'Position'];
+    const headers = ['Field', 'On', xTitle, yTitle, 'Position'];
     headers.forEach(text => {
       const th = document.createElement('th');
       th.textContent = text;
@@ -579,7 +579,7 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
       const inputEnabled = document.createElement('input');
       inputEnabled.type = 'checkbox';
       inputEnabled.checked = rowData.enabled !== false;
-      inputEnabled.title = 'Enable object for chief-ray related calculations';
+      inputEnabled.title = 'Enable field for chief-ray related calculations';
       inputEnabled.addEventListener('change', () => {
         const oldValue = rowData.enabled !== false;
         rowData.enabled = inputEnabled.checked;
