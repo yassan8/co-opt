@@ -112,14 +112,6 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "Optical System表のthicknessを合計した全長(mm)を返します。INF/Infinityは合計に含めません。"
   },
-  "DBLT_K": {
-    name: "Doublet Bending K",
-    description: "Common curvature offset K added to C1/C2/C3 of a Doublet",
-    parameters: [
-      { key: "param1", label: "Doublet", description: "Doublet blockId or display label" }
-    ],
-    notes: "For a Doublet, K is defined by C1' = C1 + K, C2' = C2 + K, C3' = C3 + K. This preserves Φ1=(N1-1)(C1-C2) and Φ2=(N2-1)(C2-C3), so thin-lens power split and achromat condition stay unchanged while shape bends." 
-  },
   "BEXP": {
     name: "Exit Pupil Magnification (βexp)",
     description: "Exit pupil magnification (System Data)",
@@ -667,7 +659,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
   'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'LCA_RMS_UM', 'CRA_DEG', 'OPD_RMS_WAVES',
   'ZERN_COEFF',
-  'EDGE', 'ALL_EDGE_ELEMENT', 'EDGE_AIR', 'ALL_EDGE_AIR', 'CTCT', 'DBLT_K', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
+  'EDGE', 'ALL_EDGE_ELEMENT', 'EDGE_AIR', 'ALL_EDGE_AIR', 'CTCT', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
 ]);
 
 /**

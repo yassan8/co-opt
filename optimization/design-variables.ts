@@ -6,13 +6,6 @@
  */
 
 import { getGlassDataWithSellmeier } from '../data/glass.ts';
-import {
-  getDoubletBendingCurrentValue,
-  isDoubletBendingBlock,
-  resolveDoubletBendingUpdate,
-  storeDoubletBendingBaseCurvatures,
-  syncDoubletBendingState,
-} from './doublet-bending.ts';
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -73,11 +66,6 @@ function parseRadiusCurvature(value) {
 function isLensBlock(block) {
   const blockType = String(block?.blockType ?? '').trim();
   return blockType === 'Lens' || blockType === 'PositiveLens';
-}
-
-function isDoubletBlock(block) {
-  const blockType = String(block?.blockType ?? '').trim();
-  return blockType === 'Doublet';
 }
 
 function getBendingConfig(block) {
@@ -169,12 +157,6 @@ function syncDerivedLensBendingValue(block) {
   if (!isPlainObject(block)) return;
   const params = ensureBlockParameters(block);
   if (!params) return;
-  if (isDoubletBendingBlock(block)) {
-    const bending = syncDoubletBendingState(block);
-    params.bending = bending;
-    syncLegacyVariableValue(block, 'bending', bending);
-    return;
-  }
   if (!getBendingConfig(block)) return;
   const bending = computeLensBendingValue(block);
   params.bending = bending;
@@ -215,9 +197,6 @@ function isDerivedGapThicknessVariable(block, key) {
 function getValueFromBlock(block, key) {
   if (!isPlainObject(block)) return '';
   if (String(key ?? '').trim().toLowerCase() === 'bending') {
-    if (isDoubletBendingBlock(block)) {
-      return getDoubletBendingCurrentValue(block);
-    }
     if (getBendingConfig(block)) {
       return computeLensBendingValue(block);
     }
@@ -318,6 +297,7 @@ export function listDesignVariablesFromBlocks(blocksOrConfig) {
       if (!shouldMarkV(entry)) continue;
       if (isUnsupportedCategoricalKey(key)) continue;
       if (isDerivedGapThicknessVariable(b, key)) continue;
+      if (blockType === 'Doublet' && String(key).trim().toLowerCase() === 'bending') continue;
 
       const value = normalizeMaybeNumber(getValueFromBlock(b, key));
       out.push({
@@ -359,23 +339,6 @@ export function setDesignVariableValue(config, variableId, newValue) {
   if (!params) return false;
 
   const bendingConfig = getBendingConfig(block);
-  const isDoubletBending = isDoubletBendingBlock(block);
-
-  if (String(key).trim().toLowerCase() === 'bending' && isDoubletBending) {
-    const resolved = resolveDoubletBendingUpdate(block, newValue);
-    if (!resolved) return false;
-
-    params.radius1 = resolved.newRadius1;
-    params.radius2 = resolved.newRadius2;
-    params.radius3 = resolved.newRadius3;
-    params.bending = resolved.bending;
-    storeDoubletBendingBaseCurvatures(block, resolved.baseCurvatures);
-    syncLegacyVariableValue(block, 'radius1', resolved.newRadius1);
-    syncLegacyVariableValue(block, 'radius2', resolved.newRadius2);
-    syncLegacyVariableValue(block, 'radius3', resolved.newRadius3);
-    syncLegacyVariableValue(block, 'bending', resolved.bending);
-    return true;
-  }
 
   if (String(key).trim().toLowerCase() === 'bending' && bendingConfig) {
     const resolved = resolveLensBendingUpdate(block, newValue);
@@ -396,10 +359,6 @@ export function setDesignVariableValue(config, variableId, newValue) {
 
   // Keep legacy duplicated storage in sync, if present.
   syncLegacyVariableValue(block, key, normalized);
-  if (isDoubletBending && /^(radius1|radius2|radius3)$/i.test(String(key ?? '').trim())) {
-    const bending = syncDoubletBendingState(block);
-    syncLegacyVariableValue(block, 'bending', bending);
-  }
   if (bendingConfig && (bendingConfig.syncKeys.test(String(key ?? '').trim()) || String(key ?? '').trim().toLowerCase() === 'bending')) {
     syncDerivedLensBendingValue(block);
   }

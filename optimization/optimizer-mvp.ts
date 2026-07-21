@@ -16,7 +16,6 @@
 
 import { expandBlocksIntoConfiguration, expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
 import { listDesignVariablesFromBlocks, setDesignVariableValue } from './design-variables.ts';
-import { getDoubletBendingCurrentValue, isDoubletBendingBlock } from './doublet-bending.ts';
 import { findSimilarGlassesByNdVd, getGlassDataWithSellmeier } from '../data/glass.ts';
 import { loadSystemConfigurations, saveSystemConfigurations } from '../data/table-configuration.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
@@ -482,7 +481,7 @@ function getActiveRequirementRowsForOptimizer(options = {}) {
 function findUnsupportedNativeRequirementOperands(requirementRows = []) {
   const supported = new Set([
     'OBJD', 'TSL', 'CTCT',
-    'FL', 'EFL', 'EFFL', 'BFL', 'IMD',
+    'IMD',
     'BEXP', 'EXPD', 'EXPP', 'ENPD', 'ENPP', 'ENPM',
     'PMAG', 'FNO_OBJ', 'FNO_IMG', 'FNO_WRK', 'NA_OBJ', 'NA_IMG',
     'EDGE',
@@ -3356,9 +3355,6 @@ function getOptimizerBlockValue(block, key) {
 
 function computeLensBendingValueForOptimizer(block) {
   if (!isPlainObject(block)) return '';
-  if (isDoubletBendingBlock(block)) {
-    return getDoubletBendingCurrentValue(block);
-  }
   const config = getBendingConfigForOptimizer(block);
   if (!config) return '';
 
@@ -3907,6 +3903,10 @@ function expandRequirementScopesForOptimizer(rows, systemConfig, fallbackConfigI
     const objectRows = Array.isArray(config?.object) ? config.object : [];
     const fieldKey = getRequirementScopeParamKey(row.operand, 'field');
     const wavelengthKey = getRequirementScopeParamKey(row.operand, 'wavelength');
+    const usesWeightedAllWavelengths = ['FL', 'EFL', 'EFFL', 'PP1', 'PP2', 'BFL'].includes(
+      String(row.operand ?? '').trim().toUpperCase()
+    )
+      && String(row.wavelengthScope ?? '').trim().toUpperCase() === 'ALL';
     const resolveValues = (scopeValue, count, supported) => {
       if (!supported) return [null];
       const scope = String(scopeValue ?? '').trim().toUpperCase();
@@ -3916,7 +3916,9 @@ function expandRequirementScopesForOptimizer(rows, systemConfig, fallbackConfigI
       return count > 0 ? Array.from({ length: count }, (_, index) => String(index + 1)) : [null];
     };
     const fieldValues = resolveValues(row.fieldScope, objectRows.length, !!fieldKey);
-    const wavelengthValues = resolveValues(row.wavelengthScope, sourceRows.length, !!wavelengthKey);
+    const wavelengthValues = usesWeightedAllWavelengths
+      ? ['ALL_WEIGHTED']
+      : resolveValues(row.wavelengthScope, sourceRows.length, !!wavelengthKey);
     for (const fieldValue of fieldValues) {
       for (const wavelengthValue of wavelengthValues) {
         const scoped = { ...row };

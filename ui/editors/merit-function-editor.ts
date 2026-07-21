@@ -44,7 +44,6 @@ import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } f
 import { loadTableData as loadMeritFunctionTableData, saveTableData as saveMeritFunctionTableData } from '../../data/table-merit-function.ts';
 import { loadLastSpotSettings } from '../spot-diagram-settings-storage.ts';
 import { getLastWavefrontMap } from '../../evaluation/wavefront/last-wavefront-runtime.ts';
-import { getDoubletBendingCurrentK } from '../../optimization/doublet-bending.ts';
 
 function tryLoadSystemConfigurations(): any {
     try {
@@ -1756,6 +1755,24 @@ class MeritFunctionEditor {
         if (!operand || !operand.operand) return 0;
 
         const opticalSystemData = this.getOpticalSystemDataByConfigId(operand.configId);
+        const operandType = String(operand.operand).trim().toUpperCase();
+        const usesWeightedAllWavelengths = ['FL', 'EFL', 'EFFL', 'PP1', 'PP2', 'BFL'].includes(operandType)
+            && String(operand.param1 ?? '').trim().toUpperCase() === 'ALL_WEIGHTED';
+        if (usesWeightedAllWavelengths) {
+            const { source: sourceRows } = this.getConfigTablesByConfigId(operand.configId);
+            let weightedValue = 0;
+            let totalWeight = 0;
+            for (let index = 0; index < sourceRows.length; index++) {
+                const wavelength = Number(sourceRows[index]?.wavelength ?? sourceRows[index]?.Wavelength);
+                const weight = Number(sourceRows[index]?.weight ?? sourceRows[index]?.Weight);
+                if (!(Number.isFinite(wavelength) && wavelength > 0 && Number.isFinite(weight) && weight > 0)) continue;
+                const value = Number(this.calculateOperandValue({ ...operand, param1: String(index + 1) }));
+                if (!Number.isFinite(value)) continue;
+                weightedValue += weight * value;
+                totalWeight += weight;
+            }
+            return totalWeight > 0 ? weightedValue / totalWeight : 0;
+        }
 
         const isOperandActiveConfig = (() => {
             try {
@@ -2380,9 +2397,6 @@ class MeritFunctionEditor {
                 return useMinimum ? Math.min(...finiteValues) : Math.max(...finiteValues);
             }
 
-            case 'DBLT_K':
-                return this.calculateDoubletBendingK(operand);
-
             case 'ZERN_COEFF': {
                 const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
                 const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
@@ -2581,6 +2595,7 @@ class MeritFunctionEditor {
             case 'FL':
             case 'EFL':
             case 'BFL':
+                return this.calculateOperandValue(operand);
             case 'IMD':
             case 'OBJD':
             case 'TSL':
@@ -5899,7 +5914,7 @@ class MeritFunctionEditor {
 
     calculatePrimarySystemMetric(operand: any, opticalSystemData: any[], key: string): number {
         if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
-        
+
         if (key === 'EFL') {
             const rawScope = (() => {
                 const param4 = String(operand?.param4 ?? '').trim();
@@ -5932,42 +5947,6 @@ class MeritFunctionEditor {
         
         const metrics = this.getPrimarySystemMetricsCached(operand, opticalSystemData);
         return this.safeFiniteNumberOrZero(metrics ? metrics[key] : 0);
-    }
-
-    calculateDoubletBendingK(operand: any): number {
-        const rawSelection = String(operand?.param1 ?? '').trim();
-        if (!rawSelection) return 0;
-
-        try {
-            const sys = tryLoadSystemConfigurations();
-            const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
-            const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null)
-                ? String(sys.activeConfigId).trim()
-                : '';
-            const hint = (operand?.configId === undefined || operand?.configId === null)
-                ? ''
-                : String(operand.configId).trim();
-
-            let cfg = null;
-            if (hint) {
-                cfg = configs.find((c: any) => c && String(c.id).trim() === hint)
-                    || configs.find((c: any) => c && String(c.name).trim() === hint)
-                    || null;
-            }
-            if (!cfg && activeId) {
-                cfg = configs.find((c: any) => c && String(c.id).trim() === activeId) || null;
-            }
-            if (!cfg) cfg = configs[0] || null;
-
-            const blockId = this._convertLabelToBlockId(rawSelection, operand?.configId);
-            const blocks = Array.isArray(cfg?.blocks) ? cfg.blocks : [];
-            const block = blocks.find((entry: any) => entry && String(entry.blockId ?? '').trim() === String(blockId).trim()) || null;
-            if (!block || String(block?.blockType ?? '').trim() !== 'Doublet') return 0;
-            return this.safeFiniteNumberOrZero(getDoubletBendingCurrentK(block));
-        } catch (err) {
-            console.error('[DBLT_K] Error calculating doublet bending K:', err);
-            return 0;
-        }
     }
 
     calculateEFLForBlock(operand: any, opticalSystemData: any[], blockLabel: string): number {

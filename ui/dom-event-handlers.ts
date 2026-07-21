@@ -128,14 +128,6 @@ import { getWindowDebugBagValue } from '../utils/window-debug-bag.ts';
 import { setupOpticalSystemChangeListeners, setupAnalysisWindows } from './event-handlers.ts';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
-import {
-    DOUBLET_BENDING_BASE_KEY,
-    getDoubletBendingCurrentValue,
-    isDoubletBendingBlock,
-    resolveDoubletBendingUpdate,
-    storeDoubletBendingBaseCurvatures,
-    syncDoubletBendingState,
-} from '../optimization/doublet-bending.ts';
 import { calculateParaxialData, getRefractiveIndex } from '../raytracing/core/ray-paraxial.ts';
 import {
     loadSystemConfigurations as loadSystemConfigurationsFromTableConfig,
@@ -7120,6 +7112,7 @@ function __blocks_getVisibleParameterKeys(block: any): string[] {
         const kl = String(key ?? '').trim().toLowerCase();
         if (kl === 'chiefrayshiftx' || kl === 'chiefrayshifty' || kl === 'chiefrayshiftz') return false;
         if (kl === 'zoomgroupaprofile' || kl === 'zoomgroupbprofile') return false;
+        if (blockType === 'Doublet' && kl === 'bending') return false;
         if ((blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && (kl === 'zoomposition' || kl === 'zoomgroupprofiles')) return false;
         if (blockType === 'Paraxial') {
             if (kl === 'material' || kl === 'abbe' || kl === 'vd' || kl === 'nd' || kl === 'rindex' || kl === 'bending') return false;
@@ -7154,7 +7147,7 @@ function __blocks_getVisibleParameterKeys(block: any): string[] {
         if (!keys.includes('focalLengthX')) keys.push('focalLengthX');
         if (!keys.includes('focalLengthY')) keys.push('focalLengthY');
     }
-    if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') {
+    if (blockType === 'Lens' || blockType === 'PositiveLens') {
         if (!keys.includes('bending')) keys.push('bending');
     }
     if ((blockType === 'Lens' || blockType === 'PositiveLens') && !keys.includes('rindex')) keys.push('rindex');
@@ -7836,12 +7829,6 @@ function cooptGetBendingConfigForBlock(blockOrType: any): {
 }
 
 function cooptComputeLensBendingValue(blockOrParams: any, blockType: string = 'Lens'): number | '' {
-    if (isDoubletBendingBlock(blockType)) {
-        const block = (blockOrParams && typeof blockOrParams === 'object' && (blockOrParams.parameters || blockOrParams.variables))
-            ? blockOrParams
-            : { blockType, parameters: blockOrParams };
-        return getDoubletBendingCurrentValue(block);
-    }
     const config = cooptGetBendingConfigForBlock(blockType);
     if (!config) return '';
     const block = (blockOrParams && typeof blockOrParams === 'object' && (blockOrParams.parameters || blockOrParams.variables))
@@ -8463,47 +8450,7 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     if (!block) return;
 
     const blockType = String(block?.blockType ?? '').trim();
-    if ((blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') && String(path) === 'parameters.bending') {
-        if (blockType === 'Doublet') {
-            const bendingUpdate = resolveDoubletBendingUpdate(block, newValue);
-            if (!bendingUpdate) {
-                try { refreshBlockInspector(); } catch (_) {}
-                return;
-            }
-
-            const oldBase = cooptCloneJsonValue(block?.metadata?.[DOUBLET_BENDING_BASE_KEY]);
-            try {
-                if (w.undoHistory && w.CompoundCommand && w.SetBlockParameterCommand && !w.undoHistory.isExecuting) {
-                    const cmd = new w.CompoundCommand(`Set ${String(blockId)}.bending`);
-                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), 'parameters.radius1', bendingUpdate.oldRadius1, bendingUpdate.newRadius1));
-                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), 'parameters.radius2', bendingUpdate.oldRadius2, bendingUpdate.newRadius2));
-                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), 'parameters.radius3', bendingUpdate.oldRadius3, bendingUpdate.newRadius3));
-                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), 'parameters.bending', block?.parameters?.bending, bendingUpdate.bending));
-                    cmd.addCommand(new w.SetBlockParameterCommand(activeConfig.name, String(blockId), `metadata.${DOUBLET_BENDING_BASE_KEY}`, oldBase, cooptCloneJsonValue(bendingUpdate.baseCurvatures)));
-                    w.undoHistory.record(cmd);
-                }
-            } catch (_) {}
-
-            cooptSetNestedValue(block, 'parameters.radius1', bendingUpdate.newRadius1);
-            cooptSetNestedValue(block, 'parameters.radius2', bendingUpdate.newRadius2);
-            cooptSetNestedValue(block, 'parameters.radius3', bendingUpdate.newRadius3);
-            cooptSetNestedValue(block, 'parameters.bending', bendingUpdate.bending);
-            cooptSetNestedValue(block, `metadata.${DOUBLET_BENDING_BASE_KEY}`, cooptCloneJsonValue(bendingUpdate.baseCurvatures));
-            if (block.variables?.radius1 && typeof block.variables.radius1 === 'object' && Object.prototype.hasOwnProperty.call(block.variables.radius1, 'value')) {
-                block.variables.radius1.value = bendingUpdate.newRadius1;
-            }
-            if (block.variables?.radius2 && typeof block.variables.radius2 === 'object' && Object.prototype.hasOwnProperty.call(block.variables.radius2, 'value')) {
-                block.variables.radius2.value = bendingUpdate.newRadius2;
-            }
-            if (block.variables?.radius3 && typeof block.variables.radius3 === 'object' && Object.prototype.hasOwnProperty.call(block.variables.radius3, 'value')) {
-                block.variables.radius3.value = bendingUpdate.newRadius3;
-            }
-            if (block.variables?.bending && typeof block.variables.bending === 'object' && Object.prototype.hasOwnProperty.call(block.variables.bending, 'value')) {
-                block.variables.bending.value = bendingUpdate.bending;
-            }
-        }
-
-        if (blockType !== 'Doublet') {
+    if ((blockType === 'Lens' || blockType === 'PositiveLens') && String(path) === 'parameters.bending') {
             const bendingUpdate = cooptResolveLensBendingUpdate(block, newValue);
             if (!bendingUpdate) {
                 try { refreshBlockInspector(); } catch (_) {}
@@ -8541,7 +8488,6 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
             if (block.variables?.bending && typeof block.variables.bending === 'object' && Object.prototype.hasOwnProperty.call(block.variables.bending, 'value')) {
                 block.variables.bending.value = Number(newValue);
             }
-        }
     } else {
 
         if (oldValue !== newValue) {
@@ -8554,16 +8500,6 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
         }
 
         cooptSetNestedValue(block, path, newValue);
-    }
-    if (blockType === 'Doublet' && /^parameters\.radius[123]$/.test(String(path))) {
-        const bending = syncDoubletBendingState(block);
-        if (block.variables?.bending && typeof block.variables.bending === 'object' && Object.prototype.hasOwnProperty.call(block.variables.bending, 'value')) {
-            block.variables.bending.value = bending;
-        }
-        const baseCurvatures = cooptCloneJsonValue(block?.metadata?.[DOUBLET_BENDING_BASE_KEY]);
-        if (baseCurvatures) {
-            storeDoubletBendingBaseCurvatures(block, baseCurvatures);
-        }
     }
     if (blockType === 'ImageSurface' && String(path) === 'parameters.semidia') {
         const semidiaText = String(newValue ?? '').trim().toLowerCase();
@@ -10956,6 +10892,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (shouldHideExpandedField(kl)) return false;
                 if (kl === 'chiefrayshiftx' || kl === 'chiefrayshifty' || kl === 'chiefrayshiftz') return false;
                 if (kl === 'zoomgroupaprofile' || kl === 'zoomgroupbprofile') return false;
+                if (blockType === 'Doublet' && kl === 'bending') return false;
                 if ((blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && (kl === 'zoomposition' || kl === 'zoomgroupprofiles')) return false;
                 if (blockType === 'Paraxial') {
                     if (kl === 'material' || kl === 'abbe' || kl === 'vd' || kl === 'nd' || kl === 'rindex' || kl === 'bending') return false;
@@ -10998,7 +10935,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (!allParamKeys.includes('focalLengthX')) allParamKeys.push('focalLengthX');
                 if (!allParamKeys.includes('focalLengthY')) allParamKeys.push('focalLengthY');
             }
-            if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') {
+            if (blockType === 'Lens' || blockType === 'PositiveLens') {
                 if (!allParamKeys.includes('bending')) allParamKeys.push('bending');
             }
             if ((blockType === 'Lens' || blockType === 'PositiveLens') && !allParamKeys.includes('abbe')) {
@@ -12469,7 +12406,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (key === 'zoomGroup' && (value === undefined || value === null || String(value).trim() === '')) {
                         value = 'Fixed';
                     }
-                    if ((blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Doublet') && key === 'bending') {
+                    if ((blockType === 'Lens' || blockType === 'PositiveLens') && key === 'bending') {
                         value = cooptComputeLensBendingValue(expandedBlock, blockType);
                     }
                     if (blockType === 'ImageSurface' && key === 'semidiaMode' && (value === undefined || value === null || String(value).trim() === '')) {

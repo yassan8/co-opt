@@ -5936,7 +5936,33 @@ body.dark-mode .block-inspector-icon-btn:hover {
 }
 
 #table-system-requirements.requirements-react-table {
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: clip;
+}
+
+.win-mdi-window--requirements .win-mdi-content {
+    overflow-y: auto;
+}
+
+.win-mdi-window--requirements #requirements-container {
+    flex: 0 0 auto;
+    min-height: 100%;
+    height: auto;
+    overflow: visible;
+}
+
+.win-mdi-window--requirements .requirements-layout {
+    flex: 0 0 auto;
+    min-height: 0;
+    height: auto;
+    overflow: visible;
+}
+
+.win-mdi-window--requirements #table-system-requirements.requirements-react-table {
+    flex: 0 0 auto;
+    min-height: 0;
+    height: auto;
+    max-height: none;
 }
 
 #table-system-requirements .requirements-react-empty {
@@ -6013,4 +6039,72 @@ body.dark-mode .block-inspector-icon-btn:hover {
     #table-system-requirements .requirements-react-constraints {
         grid-template-columns: repeat(2, minmax(140px, 1fr));
     }
+}
+
+#table-system-requirements .requirements-react-moveCell {
+    display: grid;
+    grid-template-columns: 18px minmax(18px, auto) 18px;
+    align-items: center;
+    gap: 3px;
+    min-width: 70px;
+    padding-right: 4px !important;
+}
+
+#table-system-requirements .requirements-react-dragHandle,
+#table-system-requirements .requirements-react-moveButtons button {
+    width: 18px;
+    height: 18px;
+    min-height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 2px;
+    background: transparent;
+    color: #64748b;
+    font: inherit;
+    line-height: 18px;
+    cursor: pointer;
+}
+
+#table-system-requirements .requirements-react-dragHandle {
+    cursor: grab;
+    letter-spacing: -2px;
+}
+
+#table-system-requirements .requirements-react-dragHandle:active {
+    cursor: grabbing;
+}
+
+#table-system-requirements .requirements-react-moveButtons {
+    display: grid;
+    grid-template-rows: 9px 9px;
+}
+
+#table-system-requirements .requirements-react-moveButtons button {
+    height: 9px;
+    min-height: 9px;
+    font-size: 10px;
+    line-height: 9px;
+}
+
+#table-system-requirements .requirements-react-dragHandle:hover,
+#table-system-requirements .requirements-react-moveButtons button:hover:not(:disabled) {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+#table-system-requirements .requirements-react-moveButtons button:disabled {
+    opacity: 0.25;
+    cursor: default;
+}
+
+#table-system-requirements .sr-table tbody tr.sr-dragging {
+    opacity: 0.45;
+}
+
+#table-system-requirements .sr-table tbody tr.sr-drop-before td {
+    box-shadow: inset 0 2px 0 #2563eb;
+}
+
+#table-system-requirements .sr-table tbody tr.sr-drop-after td {
+    box-shadow: inset 0 -2px 0 #2563eb;
 }

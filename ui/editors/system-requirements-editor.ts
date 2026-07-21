@@ -386,7 +386,6 @@ class SystemRequirementsEditor {
         EDGE_AIR: 'Edge Air Gap',
         ALL_EDGE_AIR: 'All Edge Air Gap',
         CTCT: 'Center Thickness',
-        DBLT_K: 'Doublet Bending K',
         CRA_DEG: 'Chief@Image (deg)',
         GAP: 'Gap Thickness',
         THIC: 'All Thickness',
@@ -1409,33 +1408,6 @@ class SystemRequirementsEditor {
           }
           
           control.value = String(row[field] || semidia);
-        } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'DBLT_K') {
-          control = document.createElement('select');
-          control.style.width = '100%';
-          control.style.fontSize = '12px';
-          control.style.height = '24px';
-          control.style.lineHeight = '24px';
-          control.style.padding = '2px 4px';
-          control.style.boxSizing = 'border-box';
-
-          try {
-            const blocks = getCachedBlocksForConfigHint(row?.configId);
-            const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
-            for (const block of blocks || []) {
-              if (!block || typeof block !== 'object') continue;
-              if (String(block?.blockType ?? '').trim() !== 'Doublet') continue;
-              const blockId = String(block?.blockId ?? '').trim();
-              if (!blockId) continue;
-              const opt = document.createElement('option');
-              opt.value = blockId;
-              opt.textContent = displayLabelById.get(blockId) || blockId;
-              control.appendChild(opt);
-            }
-          } catch (err) {
-            console.warn('Failed to populate DBLT_K param1 dropdown:', err);
-          }
-
-          control.value = String(row[field] || '');
         } else if ((field === 'param1' || field === 'param3') && String(row?.operand ?? '').trim() === 'REQMATH') {
           control = document.createElement('select');
           control.style.width = '100%';
@@ -2277,10 +2249,6 @@ class SystemRequirementsEditor {
               displayVal = String(val || '+').trim() || '+';
             } else if ((operandName === 'GAP' || operandName === 'THIC' || operandName === 'ALL_EDGE_AIR' || operandName === 'ALL_EDGE_ELEMENT') && i === 1) {
               displayVal = String(val).trim().toUpperCase() === 'MAX' ? 'Max' : 'Min';
-            } else if (operandName === 'DBLT_K' && i === 1) {
-              const blocks = getCachedBlocksForConfigHint(row?.configId);
-              const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
-              displayVal = displayLabelById.get(String(val).trim()) || String(val);
             } else if (label === 'Scope') {
               displayVal = getRequirementScopeLabel(row?.configId, val);
             } else if (label.includes('Field idx') || label.includes('Object idx')) {
@@ -2814,6 +2782,10 @@ class SystemRequirementsEditor {
   _buildScopedOperandObjects(row: any, baseOperand: any): any[] {
     const fieldKey = this._getOperandScopeParamKey(row?.operand, 'field');
     const wavelengthKey = this._getOperandScopeParamKey(row?.operand, 'wavelength');
+    const usesWeightedAllWavelengths = ['FL', 'EFL', 'EFFL', 'PP1', 'PP2', 'BFL'].includes(
+      String(row?.operand ?? '').trim().toUpperCase()
+    )
+      && String(row?.wavelengthScope ?? '').trim().toUpperCase() === 'ALL';
     const getValues = (scopeValue: any, options: Array<{ value: string }>, supported: boolean): Array<string | null> => {
       if (!supported) return [null];
       const scope = String(scopeValue ?? '').trim().toUpperCase();
@@ -2824,7 +2796,9 @@ class SystemRequirementsEditor {
       return values.length > 0 ? values : [null];
     };
     const fieldValues = getValues(row?.fieldScope, this._getObjectOptions(row?.configId), !!fieldKey);
-    const wavelengthValues = getValues(row?.wavelengthScope, this._getWavelengthOptions(), !!wavelengthKey);
+    const wavelengthValues = usesWeightedAllWavelengths
+      ? ['ALL_WEIGHTED']
+      : getValues(row?.wavelengthScope, this._getWavelengthOptions(), !!wavelengthKey);
     const operands: any[] = [];
     for (const fieldValue of fieldValues) {
       for (const wavelengthValue of wavelengthValues) {
