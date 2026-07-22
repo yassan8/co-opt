@@ -792,10 +792,12 @@ class SystemRequirementsEditor {
       this.scheduleEvaluateAndUpdate();
     };
 
-    const formatCurrentCell = (v: any): string => {
+    const formatCurrentCell = (v: any, operand?: any): string => {
       if (v === null || v === undefined) return '';
       const n = Number(v);
-      return Number.isFinite(n) ? n.toFixed(6) : String(v);
+      if (!Number.isFinite(n)) return String(v);
+      const formatted = n.toFixed(6);
+      return String(operand ?? '').trim().toUpperCase() === 'DIST' ? `${formatted}%` : formatted;
     };
 
     const formatScoreCell = (v: any): string => {
@@ -1066,7 +1068,13 @@ class SystemRequirementsEditor {
         row.operand = operandSel.value;
 
         // Initialize default params for specific operands
-        if (row.operand === 'TA_RMS_UM') {
+        if (['MTFT', 'MTFS', 'MTFA'].includes(row.operand)) {
+          row.param1 = '';      // Source: Primary wavelength
+          row.param2 = '1';     // Field: first row
+          row.param3 = '';
+          row.param4 = '10';    // Frequency: 10 lp/mm
+          row.param5 = '32';    // Analysis MTF default sampling
+        } else if (row.operand === 'TA_RMS_UM') {
           row.param1 = '';   // Source: Primary wavelength
           row.param2 = '1';  // Object: first row
           row.param3 = '';   // Component: total
@@ -1125,7 +1133,7 @@ class SystemRequirementsEditor {
 
       const tdCur = mkTd(widths.current, leftPx);
       tdCur.style.textAlign = 'center';
-      tdCur.textContent = formatCurrentCell(row.current);
+      tdCur.textContent = formatCurrentCell(row.current, row.operand);
       tdCur.dataset.role = 'current';
       tr.appendChild(tdCur);
       leftPx += widths.current;
@@ -1218,6 +1226,7 @@ class SystemRequirementsEditor {
         const isWavelengthParam = paramLabel.includes('λ') || paramDesc.toLowerCase().includes('source row');
         const isObjectParam = paramLabel.includes('Field idx') || paramLabel.includes('Object idx');
         const isMetricParam = paramLabel === 'Metric';
+        const isMtfTypeParam = paramLabel === 'MTF Type';
         const isComponentParam = paramLabel === 'Component';
         const isRaynumParam = paramLabel === 'Raynum';
         const isUnitParam = paramLabel === 'Unit';
@@ -1886,12 +1895,15 @@ class SystemRequirementsEditor {
           control.style.padding = '2px 4px';
           control.style.boxSizing = 'border-box';
           const options = [
-            { value: '', label: '(default 32)' },
+            { value: '16', label: '16×16' },
             { value: '32', label: '32×32' },
             { value: '64', label: '64×64' },
             { value: '128', label: '128×128' },
             { value: '256', label: '256×256' },
-            { value: '512', label: '512×512' }
+            { value: '512', label: '512×512' },
+            { value: '1024', label: '1024×1024' },
+            { value: '2048', label: '2048×2048' },
+            { value: '4096', label: '4096×4096' }
           ];
           for (const opt of options) {
             const el = document.createElement('option');
@@ -1939,6 +1951,21 @@ class SystemRequirementsEditor {
             control.appendChild(el);
           }
           control.value = String(row[field] || '0');
+        } else if (isMtfTypeParam) {
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          for (const value of ['MTFT', 'MTFS', 'MTFA']) {
+            const el = document.createElement('option');
+            el.value = value;
+            el.textContent = value;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || 'MTFA').trim().toUpperCase();
         } else if (isMetricParam) {
           // Metric dropdown: rms or dia
           control = document.createElement('select');
@@ -2768,6 +2795,11 @@ class SystemRequirementsEditor {
 
   _normalizeRequirementWavelengthScope(row: any): any {
     if (!row || typeof row !== 'object' || row.rowType === 'memo') return row;
+    if (String(row.operand ?? '').trim().toUpperCase() === 'MTF') {
+      const legacyType = String(row.param3 ?? '').trim().toUpperCase();
+      row.operand = legacyType === 'MTFT' || legacyType === 'MTFS' ? legacyType : 'MTFA';
+      row.param3 = '';
+    }
     const wavelengthKey = this._getOperandScopeParamKey(row.operand, 'wavelength');
     if (!wavelengthKey) return row;
     const scope = String(row.wavelengthScope ?? '').trim();
@@ -2782,7 +2814,12 @@ class SystemRequirementsEditor {
   _buildScopedOperandObjects(row: any, baseOperand: any): any[] {
     const fieldKey = this._getOperandScopeParamKey(row?.operand, 'field');
     const wavelengthKey = this._getOperandScopeParamKey(row?.operand, 'wavelength');
-    const usesWeightedAllWavelengths = ['FL', 'EFL', 'EFFL', 'PP1', 'PP2', 'BFL'].includes(
+    const usesWeightedAllWavelengths = [
+      'FL', 'EFL', 'EFFL', 'PP1', 'PP2', 'BFL',
+      'IMD', 'BEXP', 'EXPD', 'EXPP', 'ENPD', 'ENPP', 'ENPM',
+      'PMAG', 'FNO_OBJ', 'FNO_IMG', 'FNO_WRK', 'NA_OBJ', 'NA_IMG',
+      'MTFT', 'MTFS', 'MTFA',
+    ].includes(
       String(row?.operand ?? '').trim().toUpperCase()
     )
       && String(row?.wavelengthScope ?? '').trim().toUpperCase() === 'ALL';
@@ -3712,7 +3749,11 @@ class SystemRequirementsEditor {
           if (curEl) {
             const v = u.current;
             const n = Number(v);
-            curEl.textContent = (v === null || v === undefined) ? '' : (Number.isFinite(n) ? n.toFixed(6) : String(v));
+            const row = this.requirements.find((entry: any) => entry && String(entry.id) === String(u.id));
+            const formatted = Number.isFinite(n) ? n.toFixed(6) : String(v);
+            curEl.textContent = (v === null || v === undefined)
+              ? ''
+              : (String(row?.operand ?? '').trim().toUpperCase() === 'DIST' ? `${formatted}%` : formatted);
           }
           if (stEl) stEl.textContent = String(u.status ?? '').trim();
           if (scoreEl) {
@@ -4025,7 +4066,11 @@ class SystemRequirementsEditor {
             if (curEl) {
               const v = u.current;
               const n = Number(v);
-              curEl.textContent = (v === null || v === undefined) ? '' : (Number.isFinite(n) ? n.toFixed(6) : String(v));
+              const row = this.requirements.find((entry: any) => entry && String(entry.id) === String(u.id));
+              const formatted = Number.isFinite(n) ? n.toFixed(6) : String(v);
+              curEl.textContent = (v === null || v === undefined)
+                ? ''
+                : (String(row?.operand ?? '').trim().toUpperCase() === 'DIST' ? `${formatted}%` : formatted);
             }
             if (stEl) stEl.textContent = String(u.status ?? '').trim();
             if (scoreEl) {

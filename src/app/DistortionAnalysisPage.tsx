@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import { plotDistortionPercent, plotGridDistortion } from '../../evaluation/aberrations/distortion-plot.ts';
+import { applyDistortionHorizontalOffset as applySharedDistortionHorizontalOffset } from '../../evaluation/aberrations/distortion-display.ts';
 import { runNativeDistortion, runNativeGridDistortion } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
 
@@ -535,7 +536,7 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
         setProgress(base + span, `Distortion (λ=${wl.toFixed(4)} um, backend=${backendLabel})`);
       }
       const enableDisplayOffset = true;
-      const distortionData = enableDisplayOffset ? applyDistortionHorizontalOffset(allData) : allData;
+      const distortionData = enableDisplayOffset ? applySharedDistortionHorizontalOffset(allData) : allData;
       const bestData = sanitizeDistortionData(distortionData);
       if (!bestData.length) {
         throw new Error('Distortion returned no plottable points (all chief rays failed).');

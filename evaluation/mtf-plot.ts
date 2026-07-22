@@ -69,6 +69,7 @@ type MtfPlotOptions = {
     wavelengthMicrons?: number | string;
     objectIndex?: number;
     objectOverride?: Record<string, any> | null;
+    opticalSystemRowsOverride?: any[] | null;
     maxFrequencyLpmm?: number;
     targetFrequencyLpmm?: number;
     samplingSize?: number;
@@ -180,7 +181,7 @@ function ensureConsoleError(...args) {
     } catch (_) {}
 }
 
-async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, maxFrequencyLpmm, targetFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount, fastSampleOnly }: MtfPlotOptions = {}) {
+async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, opticalSystemRowsOverride, maxFrequencyLpmm, targetFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount, fastSampleOnly }: MtfPlotOptions = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -398,7 +399,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     reportProgress(10, 'Preparing optical system...');
 
     // Optical system and objects (use imported functions)
-    const baseOpticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
+    const baseOpticalSystemRows = Array.isArray(opticalSystemRowsOverride) && opticalSystemRowsOverride.length > 0
+        ? opticalSystemRowsOverride
+        : getOpticalSystemRows(window.tableOpticalSystem);
     const objects = getObjectRows(window.tableObject);
     const sourceRows = getSourceRows(window.tableSource);
     const hasOverride = !!(objectOverride && typeof objectOverride === 'object');

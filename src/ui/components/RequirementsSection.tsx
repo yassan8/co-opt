@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import { InspectorManager, OPERAND_DEFINITIONS } from '../../../ui/editors/merit-function-inspector';
 
@@ -21,10 +21,12 @@ const cloneRows = (rows: any): RequirementRow[] => {
   try { return JSON.parse(JSON.stringify(Array.isArray(rows) ? rows : [])); } catch (_) { return []; }
 };
 
-const formatValue = (value: any): string => {
+const formatValue = (value: any, operand?: any): string => {
   if (value === null || value === undefined || value === '') return '';
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toFixed(6) : String(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  const formatted = numeric.toFixed(6);
+  return String(operand ?? '').trim().toUpperCase() === 'DIST' ? `${formatted}%` : formatted;
 };
 
 const operandLabel = (key: string): string => {
@@ -151,6 +153,7 @@ const getHeightOptions = (row: RequirementRow): SelectOption[] | null => {
 };
 
 const getOperandDefaults = (operand: string): RequirementRow => {
+  if (['MTFT', 'MTFS', 'MTFA'].includes(operand)) return { param1: '', param2: '1', param3: '', param4: '10', param5: '32' };
   if (operand === 'TA_RMS_UM') return { param1: '', param2: '1', param3: '', param4: '' };
   if (operand === 'OPD_RMS_WAVES') return { param1: '', param2: '1', param3: '', param4: '' };
   if (operand === 'ZERN_COEFF') return { param1: '', param2: '1', param3: '', param4: '', param5: '0' };
@@ -165,6 +168,7 @@ export default function RequirementsSection() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
+  const copiedRowRef = useRef<RequirementRow | null>(null);
 
   const getEditor = () => (window as any).systemRequirementsEditor;
   const refresh = () => setRows(cloneRows(getEditor()?.getData?.()));
@@ -227,6 +231,45 @@ export default function RequirementsSection() {
     setSelectedId(null);
     setExpandedId(null);
   };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!selectedId) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, select, textarea, [contenteditable="true"]')) return;
+
+      const isModifier = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (event.key === 'Delete') {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteSelected();
+        return;
+      }
+      if (isModifier && key === 'c') {
+        const selectedRow = rows.find((row) => String(row.id) === selectedId);
+        if (!selectedRow) return;
+        copiedRowRef.current = cloneRows([selectedRow])[0] ?? null;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (isModifier && key === 'v' && copiedRowRef.current) {
+        const selectedIndex = rows.findIndex((row) => String(row.id) === selectedId);
+        const insertIndex = selectedIndex >= 0 ? selectedIndex + 1 : rows.length;
+        const nextRows = [...rows];
+        nextRows.splice(insertIndex, 0, cloneRows([copiedRowRef.current])[0]);
+        event.preventDefault();
+        event.stopPropagation();
+        commitRows(nextRows);
+        setSelectedId(String(insertIndex + 1));
+        setExpandedId(null);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [rows, selectedId]);
 
   const reorderRow = (sourceId: string, targetId: string, after: boolean) => {
     if (sourceId === targetId) return;
@@ -360,7 +403,7 @@ export default function RequirementsSection() {
                     {moveCell(id, index)}
                     <td><input type="checkbox" checked={row.enabled !== false} onChange={(event) => patchRow(id, { enabled: event.target.checked })} /></td>
                     <td><select value={String(row.operand || '')} onChange={(event) => patchRow(id, { operand: event.target.value, ...getOperandDefaults(event.target.value) })}>{REQUIREMENT_OPERAND_KEYS.map((key) => <option key={key} value={key}>{operandLabel(key)}</option>)}</select></td>
-                    <td>{`${row.op || '='} ${row.target ?? 0}`}</td><td>{formatValue(row.current)}</td><td>{row.status || ''}</td>
+                    <td>{`${row.op || '='} ${row.target ?? 0}`}</td><td>{formatValue(row.current, row.operand)}</td><td>{row.status || ''}</td>
                     <td><button type="button" className="requirements-react-detailsButton" onClick={(event) => { event.stopPropagation(); setSelectedId(id); setExpandedId(isExpanded ? null : id); }}>{summary}</button></td>
                     <td>{formatValue(row._contribution)}</td>
                   </tr>
@@ -382,6 +425,7 @@ function RequirementDetails({ row, rows, patch, configurationOptions, wavelength
 }) {
   const parameters = Array.isArray(OPERAND_DEFINITIONS[String(row.operand)]?.parameters) ? OPERAND_DEFINITIONS[String(row.operand)].parameters : [];
   const wavelengthParamKey = getScopeParamKey(row.operand, 'wavelength');
+  const fieldParamKey = getScopeParamKey(row.operand, 'field');
   const input = (label: string, key: string, type: 'text' | 'number' = 'text') => <label className="requirements-react-field"><span>{label}</span><input type={type} value={row[key] ?? ''} onChange={(event) => patch({ [key]: event.target.value }, false)} onBlur={() => (window as any).systemRequirementsEditor?.scheduleEvaluateAndUpdate?.()} /></label>;
   const inputWithList = (label: string, key: string, options: SelectOption[]) => {
     const listId = `requirement-${row.id}-${key}-options`;
@@ -395,11 +439,12 @@ function RequirementDetails({ row, rows, patch, configurationOptions, wavelength
     const description = String(parameter?.description ?? '');
     if ((label === 'Field idx' || label === 'Object idx') && fieldOptions.length > 0) return fieldOptions;
     if (label === 'Axis') return [{ value: '', label: '(Default)' }, { value: 'X', label: 'X' }, { value: 'Y', label: 'Y' }];
+    if (label === 'MTF Type') return ['MTFT', 'MTFS', 'MTFA'].map((value) => ({ value, label: value }));
     if (label === 'Metric') return [{ value: '', label: '(default rms)' }, { value: 'rms', label: 'RMS' }, { value: 'dia', label: 'Diameter' }];
     if (label === 'Component') return [{ value: '', label: '(default total)' }, { value: 'total', label: 'Total' }, { value: 'meridional', label: 'Meridional' }, { value: 'sagittal', label: 'Sagittal' }];
     if (label === 'Raynum') return ['11', '21', '51', '101', '501'].map((value) => ({ value, label: value }));
     if (label === 'Unit') return [{ value: '', label: '(default waves)' }, { value: 'waves', label: 'waves' }, { value: 'um', label: 'µm' }];
-    if (label === 'Sampling') return ['', '32', '64', '128', '256', '512'].map((value) => ({ value, label: value ? `${value}×${value}` : '(default 32)' }));
+    if (label === 'Sampling') return ['16', '32', '64', '128', '256', '512', '1024', '2048', '4096'].map((value) => ({ value, label: `${value}×${value}` }));
     if (label === 'n (Noll)') return ZERNIKE_NOLL_LABELS.map((option, index) => ({ value: String(index), label: option }));
     if (label === 'Mode' && ['GAP', 'THIC', 'ALL_EDGE_AIR', 'ALL_EDGE_ELEMENT', 'RADI_ALL'].includes(operand)) return [{ value: 'MIN', label: 'Min' }, { value: 'MAX', label: 'Max' }];
     if (label === 'Mode') {
@@ -453,7 +498,7 @@ function RequirementDetails({ row, rows, patch, configurationOptions, wavelength
     {select('Wavelength', 'wavelengthScope', wavelengthOptions)}
     {select('Field', 'fieldScope', fieldOptions)}
     <div className="requirements-react-parameters">
-      {parameters.filter((parameter: any) => String(parameter?.key ?? '') !== wavelengthParamKey).map((parameter: any, index: number) => <Fragment key={String(parameter?.key || `param${index + 1}`)}>{parameterControl(parameter, index)}</Fragment>)}
+      {parameters.filter((parameter: any) => ![wavelengthParamKey, fieldParamKey].includes(String(parameter?.key ?? ''))).map((parameter: any, index: number) => <Fragment key={String(parameter?.key || `param${index + 1}`)}>{parameterControl(parameter, index)}</Fragment>)}
     </div>
     <div className="requirements-react-constraints">
       {select('Operand', 'op', ['=', '<=', '>='].map((value) => ({ value, label: value })))}

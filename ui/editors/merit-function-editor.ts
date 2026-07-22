@@ -36,6 +36,7 @@ import { asphericSurfaceZ, toricSurfaceZ } from '../../optical/surface-math.ts';
 import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.ts';
 import { calculateTransverseAberration } from '../../evaluation/aberrations/transverse-aberration.ts';
 import { calculateChiefRayNewton } from '../../evaluation/aberrations/transverse-aberration.ts';
+import { applyDistortionHorizontalOffset } from '../../evaluation/aberrations/distortion-display.ts';
 import { generateCrossBeam } from '../../raytracing/generation/gen-ray-cross-finite.ts';
 import { generateInfiniteSystemCrossBeam } from '../../raytracing/generation/gen-ray-cross-infinite.ts';
 import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.ts';
@@ -44,6 +45,7 @@ import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } f
 import { loadTableData as loadMeritFunctionTableData, saveTableData as saveMeritFunctionTableData } from '../../data/table-merit-function.ts';
 import { loadLastSpotSettings } from '../spot-diagram-settings-storage.ts';
 import { getLastWavefrontMap } from '../../evaluation/wavefront/last-wavefront-runtime.ts';
+import { showMTFDiagram } from '../../evaluation/mtf-plot.ts';
 
 function tryLoadSystemConfigurations(): any {
     try {
@@ -1756,7 +1758,11 @@ class MeritFunctionEditor {
 
         const opticalSystemData = this.getOpticalSystemDataByConfigId(operand.configId);
         const operandType = String(operand.operand).trim().toUpperCase();
-        const usesWeightedAllWavelengths = ['FL', 'EFL', 'EFFL', 'PP1', 'PP2', 'BFL'].includes(operandType)
+        const usesWeightedAllWavelengths = [
+            'FL', 'EFL', 'EFFL', 'PP1', 'PP2', 'BFL',
+            'IMD', 'BEXP', 'EXPD', 'EXPP', 'ENPD', 'ENPP', 'ENPM',
+            'PMAG', 'FNO_OBJ', 'FNO_IMG', 'FNO_WRK', 'NA_OBJ', 'NA_IMG',
+        ].includes(operandType)
             && String(operand.param1 ?? '').trim().toUpperCase() === 'ALL_WEIGHTED';
         if (usesWeightedAllWavelengths) {
             const { source: sourceRows } = this.getConfigTablesByConfigId(operand.configId);
@@ -1841,6 +1847,8 @@ class MeritFunctionEditor {
             case 'REAY':
             case 'RSCE':
             case 'TRAC':
+                return 0;
+
             case 'DIST':
                 return 0;
 
@@ -2595,10 +2603,7 @@ class MeritFunctionEditor {
             case 'FL':
             case 'EFL':
             case 'BFL':
-                return this.calculateOperandValue(operand);
             case 'IMD':
-            case 'OBJD':
-            case 'TSL':
             case 'BEXP':
             case 'EXPD':
             case 'EXPP':
@@ -2610,7 +2615,15 @@ class MeritFunctionEditor {
             case 'FNO_IMG':
             case 'FNO_WRK':
             case 'NA_OBJ':
-            case 'NA_IMG': {
+            case 'NA_IMG':
+                return this.calculateOperandValue(operand);
+            case 'MTF':
+            case 'MTFT':
+            case 'MTFS':
+            case 'MTFA':
+                return this.calculateMtfRequirementAsync(operand, opticalSystemData);
+            case 'OBJD':
+            case 'TSL': {
                 if (disableRequirementRustFirst) return this.calculateOperandValue(operand);
                 const nativeVal = await this.calculatePrimarySystemMetricViaNativeAsync(operand, opticalSystemData, operand.operand);
                 if (Number.isFinite(nativeVal as any)) {
@@ -2656,6 +2669,8 @@ class MeritFunctionEditor {
                 }
                 return this.calculateOperandValue(operand);
             }
+            case 'DIST':
+                return this.calculateDistortionAtMaxFieldAsync(operand, opticalSystemData);
             case 'CRA_DEG': {
                 return withRequirementRustRayTracing(async () => {
                     const renderVal = await this.calculateChiefRayAngleDegViaRenderAsync(operand, opticalSystemData);
@@ -2684,6 +2699,158 @@ class MeritFunctionEditor {
             }
             default:
                 return this.calculateOperandValue(operand);
+        }
+    }
+
+    async calculateDistortionAtMaxFieldAsync(operand: any, opticalSystemData: any[]): Promise<number> {
+        try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 1e9;
+
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand?.configId, {
+                preferConfigTables: true
+            });
+            if (!Array.isArray(objectRows) || objectRows.length === 0) return 1e9;
+
+            const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+            const objectThickness = Number(opticalSystemData?.[0]?.thickness);
+            const conjugateType = Number.isFinite(objectThickness) && objectThickness < 1e9 ? 'finite' : 'infinite';
+            const normalizedObjectRows = objectRows.map((row: any) => {
+                if (!row || typeof row !== 'object') return row;
+                const normalized = { ...row };
+                if (normalized.xHeightAngle == null && normalized.x != null) normalized.xHeightAngle = normalized.x;
+                if (normalized.yHeightAngle == null && normalized.y != null) normalized.yHeightAngle = normalized.y;
+                if (normalized.position == null && normalized.objectType != null) normalized.position = normalized.objectType;
+                const position = String(normalized.position ?? '').trim().toLowerCase();
+                if (position !== 'imageheight') return normalized;
+                try {
+                    const effective = convertImageHeightToEffectiveObject(
+                        normalized,
+                        opticalSystemData,
+                        wavelength,
+                        conjugateType
+                    );
+                    return effective && typeof effective === 'object'
+                        ? { ...normalized, ...effective, position: normalized.position, __cooptOriginalPosition: normalized.position }
+                        : normalized;
+                } catch {
+                    return normalized;
+                }
+            });
+
+            const tags = normalizedObjectRows
+                .map((row: any) => String(row?.__cooptOriginalPosition ?? row?.position ?? row?.fieldType ?? row?.type ?? '').trim().toLowerCase())
+                .filter(Boolean);
+            const heightMode = tags.some((tag: string) => tag.includes('rect') || tag.includes('height'))
+                && !tags.some((tag: string) => tag.includes('angle'));
+            const fieldValues = normalizedObjectRows
+                .map((row: any) => {
+                    if (heightMode) {
+                        const position = String(row?.__cooptOriginalPosition ?? row?.position ?? '').trim().toLowerCase();
+                        if (position.includes('imageheight')) {
+                            const imageHeightTarget = Number(row?.__cooptImageHeightTarget?.y);
+                            if (Number.isFinite(imageHeightTarget)) return Math.abs(imageHeightTarget);
+                            const specifiedImageHeight = Number(row?.yHeightAngle ?? row?.y);
+                            if (Number.isFinite(specifiedImageHeight)) return Math.abs(specifiedImageHeight);
+                        }
+                        const value = Number(row?.yHeight ?? row?.y ?? row?.height ?? row?.y_height);
+                        return Number.isFinite(value) ? Math.abs(value) : Number.NaN;
+                    }
+                    const angleCandidates = [
+                        row?.xFieldAngle,
+                        row?.xAngle,
+                        row?.xHeightAngle,
+                        row?.x,
+                        row?.yFieldAngle,
+                        row?.yAngle,
+                        row?.yHeightAngle,
+                        row?.fieldAngle,
+                        row?.y
+                    ]
+                        .map((value: any) => Number(value))
+                        .filter((value: number) => Number.isFinite(value))
+                        .map((value: number) => Math.abs(value));
+                    return angleCandidates.length > 0 ? Math.max(...angleCandidates) : Number.NaN;
+                })
+                .filter((value: number) => Number.isFinite(value));
+            if (fieldValues.length === 0) return 1e9;
+
+            const maxField = Math.max(...fieldValues);
+            if (!Number.isFinite(maxField)) return 1e9;
+            if (maxField <= 1e-12) return 0;
+
+            const fieldSamples: number[] = [];
+            if (heightMode) {
+                const sampleCount = 21;
+                for (let index = 0; index < sampleCount; index++) {
+                    fieldSamples.push(Number((maxField * index / (sampleCount - 1)).toFixed(6)));
+                }
+            } else {
+                const step = maxField <= 5
+                    ? 0.5
+                    : (maxField <= 15 ? 1 : (maxField <= 40 ? 2 : Math.ceil(maxField / 25)));
+                const minField = maxField * 0.001;
+                for (let field = minField; field <= maxField + 1e-9; field += step) {
+                    fieldSamples.push(Number(field.toFixed(6)));
+                }
+                if (Math.abs((fieldSamples[fieldSamples.length - 1] ?? 0) - maxField) > 1e-9) {
+                    fieldSamples.push(maxField);
+                }
+            }
+
+            const cfgKey = operand?.configId ? String(operand.configId) : 'active';
+            const cacheKey = `distortion-max:${cfgKey}:wl=${wavelength}:field=${maxField}:height=${heightMode}`;
+            const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
+            if (Number.isFinite(cached)) return Number(cached);
+
+            const ipcMod = await import('../../src/desktop/ipc/client.ts');
+            if (!ipcMod || typeof ipcMod.runNativeDistortion !== 'function') return 1e9;
+            const response = await ipcMod.runNativeDistortion({
+                opticalSystemRows: opticalSystemData,
+                sourceRows,
+                objectRows: normalizedObjectRows,
+                fieldSamples,
+                heightMode,
+                distortionMetric: 'chief-ray',
+                wavelength
+            });
+            const responseFields = Array.isArray(response?.fieldValues) ? response.fieldValues : fieldSamples;
+            const correctedData = applyDistortionHorizontalOffset([{
+                fieldValues: responseFields,
+                distortionPercent: Array.isArray(response?.distortionPercent) ? response.distortionPercent : [],
+                meta: response?.meta || {}
+            }])[0];
+            const responseValues = Array.isArray(correctedData?.distortionPercent)
+                ? correctedData.distortionPercent
+                : [];
+            let maxFieldIndex = -1;
+            let maxResolvedField = Number.NEGATIVE_INFINITY;
+            for (let index = 0; index < Math.min(responseFields.length, responseValues.length); index++) {
+                const responseField = Number(responseFields[index]);
+                const responseValue = Number(responseValues[index]);
+                if (!Number.isFinite(responseField) || !Number.isFinite(responseValue)) continue;
+                if (responseField >= maxResolvedField) {
+                    maxResolvedField = responseField;
+                    maxFieldIndex = index;
+                }
+            }
+            const distortionPercent = maxFieldIndex >= 0 ? Number(responseValues[maxFieldIndex]) : Number.NaN;
+            if (!Number.isFinite(distortionPercent)) return 1e9;
+
+            this.stampRequirementBackend('distortion', {
+                backend: String(response?.backend || response?.meta?.backend || 'unknown'),
+                route: 'ipc-wrapper',
+                operand: 'DIST',
+                configId: operand?.configId ?? '',
+                wavelength,
+                maxField,
+                maxResolvedField,
+                heightMode,
+                distortionPercent
+            });
+            if (this._runtimeCache) this._runtimeCache.set(cacheKey, distortionPercent);
+            return distortionPercent;
+        } catch {
+            return 1e9;
         }
     }
 
@@ -3324,7 +3491,7 @@ class MeritFunctionEditor {
         }
     }
 
-    private stampRequirementBackend(kind: 'spot' | 'ta' | 'cra' | 'paraxial' | 'seidel' | 'lca', payload: Record<string, any>): void {
+    private stampRequirementBackend(kind: 'spot' | 'ta' | 'cra' | 'paraxial' | 'seidel' | 'lca' | 'distortion', payload: Record<string, any>): void {
         try {
             if (typeof window === 'undefined') return;
 
@@ -3338,7 +3505,9 @@ class MeritFunctionEditor {
                         ? '__cooptLastChiefRayDebug'
                         : (kind === 'paraxial'
                             ? '__cooptLastParaxialMetricsDebug'
-                            : (kind === 'lca' ? '__cooptLastLcaDebug' : '__cooptLastSeidelDebug'))));
+                            : (kind === 'lca'
+                                ? '__cooptLastLcaDebug'
+                                : (kind === 'distortion' ? '__cooptLastDistortionDebug' : '__cooptLastSeidelDebug')))));
             const currentStore = (w as any)[storeKey];
             const nextStore = (currentStore && typeof currentStore === 'object') ? currentStore : {};
             Object.assign(nextStore, {
@@ -4692,6 +4861,68 @@ class MeritFunctionEditor {
         }
     }
 
+    async calculateMtfRequirementAsync(operand: any, opticalSystemData: any[]): Promise<number> {
+        if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
+
+        const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand?.configId);
+        if (String(operand?.param1 ?? '').trim().toUpperCase() === 'ALL_WEIGHTED') {
+            let weightedValue = 0;
+            let totalWeight = 0;
+            for (let index = 0; index < sourceRows.length; index++) {
+                const wavelength = Number(sourceRows[index]?.wavelength ?? sourceRows[index]?.Wavelength);
+                const weight = Number(sourceRows[index]?.weight ?? sourceRows[index]?.Weight);
+                if (!(Number.isFinite(wavelength) && wavelength > 0 && Number.isFinite(weight) && weight > 0)) continue;
+                const value = await this.calculateMtfRequirementAsync(
+                    { ...operand, param1: String(index + 1) },
+                    opticalSystemData
+                );
+                if (!Number.isFinite(value)) continue;
+                weightedValue += weight * value;
+                totalWeight += weight;
+            }
+            return totalWeight > 0 ? weightedValue / totalWeight : 0;
+        }
+        const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+        const objectIndex = Math.max(0, Math.floor(Number(operand?.param2 || 1)) - 1);
+        const objectOverride = Array.isArray(objectRows) ? objectRows[objectIndex] : null;
+        if (!objectOverride) return 0;
+
+        const operandType = String(operand?.operand ?? '').trim().toUpperCase();
+        const mtfTypeRaw = operandType === 'MTFT' || operandType === 'MTFS' || operandType === 'MTFA'
+            ? operandType
+            : String(operand?.param3 ?? 'MTFA').trim().toUpperCase();
+        const mtfType = mtfTypeRaw === 'MTFT' || mtfTypeRaw === 'MTFS' ? mtfTypeRaw : 'MTFA';
+        const frequency = Math.max(0, Number(operand?.param4) || 10);
+        const requestedSampling = Math.floor(Number(operand?.param5) || 32);
+        const samplingOptions = new Set([16, 32, 64, 128, 256, 512, 1024, 2048, 4096]);
+        const sampling = samplingOptions.has(requestedSampling) ? requestedSampling : 32;
+
+        const result = await showMTFDiagram({
+            wavelengthMicrons: wavelength,
+            objectIndex,
+            objectOverride,
+            opticalSystemRowsOverride: opticalSystemData,
+            maxFrequencyLpmm: frequency,
+            targetFrequencyLpmm: frequency,
+            samplingSize: sampling,
+            skipPlot: true,
+            showDiffractionLimit: false,
+            fastSampleOnly: true,
+        });
+        const traces = Array.isArray(result?.traces) ? result.traces : [];
+        const tangentialTrace = traces.find((trace: any) => /tangential|meridional/i.test(String(trace?.name ?? '')));
+        const sagittalTrace = traces.find((trace: any) => /sagittal/i.test(String(trace?.name ?? '')));
+        const tangential = Number(tangentialTrace?.y?.[0]);
+        const sagittal = Number(sagittalTrace?.y?.[0]);
+
+        if (mtfType === 'MTFT') return Number.isFinite(tangential) ? tangential : 0;
+        if (mtfType === 'MTFS') return Number.isFinite(sagittal) ? sagittal : 0;
+        if (Number.isFinite(tangential) && Number.isFinite(sagittal)) return 0.5 * (tangential + sagittal);
+        if (Number.isFinite(tangential)) return tangential;
+        if (Number.isFinite(sagittal)) return sagittal;
+        return 0;
+    }
+
     async calculateSeidelTotalViaNativeAsync(operand: any, opticalSystemData: any[], key: string): Promise<number | null> {
         try {
             const normalizedKey = String(key ?? '').trim().toUpperCase();
@@ -5703,7 +5934,14 @@ class MeritFunctionEditor {
         const idx = Number.isFinite(Number(sourceIndex1Based)) ? Math.floor(Number(sourceIndex1Based)) : 1;
         const index0 = Math.max(0, idx - 1);
         const row = Array.isArray(sourceRows) ? sourceRows[index0] : null;
-        const wl = row ? Number(row.wavelength) : NaN;
+        const wl = row
+            ? Number(
+                row.wavelength
+                ?? row.Wavelength
+                ?? row.lambda
+                ?? row.Lambda
+            )
+            : NaN;
         return (Number.isFinite(wl) && wl > 0) ? wl : 0.5875618;
     }
 

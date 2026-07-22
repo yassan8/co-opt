@@ -424,15 +424,12 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     notes: "Calculates transverse ray aberration at image surface. Essential for aberration correction."
   },
   "DIST": {
-    name: "DIST",
-    description: "Distortion",
+    name: "Distortion (%)",
+    description: "Distortion at the maximum field (%)",
     parameters: [
-      { key: "param1", label: "Field" },
-      { key: "param2", label: "Type (0=%, 1=abs)" },
-      { key: "param3", label: "Reserved" },
-      { key: "param4", label: "Reserved" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
-    notes: "Controls optical distortion at specified field point. Target 0 for no distortion."
+    notes: "Returns the signed distortion percentage at the maximum absolute field defined in the Object table. The Requirement wavelength selector chooses the Source row; Primary uses the primary wavelength and All evaluates every configured wavelength. Target 0 for no distortion."
   },
   "COMA": {
     name: "COMA",
@@ -500,27 +497,50 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "Ensures surface curvature stays below maximum value. Prevents flat surfaces."
   },
-  "MTFS": {
-    name: "MTFS",
-    description: "MTF Sagittal",
-    parameters: [
-      { key: "param1", label: "Frequency (lp/mm)" },
-      { key: "param2", label: "Field" },
-      { key: "param3", label: "Reserved" },
-      { key: "param4", label: "Reserved" }
-    ],
-    notes: "Measures sagittal MTF at specified frequency. Target 1.0 for diffraction limit."
-  },
   "MTFT": {
     name: "MTFT",
     description: "MTF Meridional",
     parameters: [
-      { key: "param1", label: "Frequency (lp/mm)" },
-      { key: "param2", label: "Field" },
-      { key: "param3", label: "Reserved" },
-      { key: "param4", label: "Reserved" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "Field idx", description: "Object row (1-based)" },
+      { key: "param4", label: "Freq (lp/mm)", description: "Spatial frequency" },
+      { key: "param5", label: "Sampling", description: "Analysis MTF sampling grid" }
     ],
-    notes: "Measures meridional MTF at specified frequency. Target 1.0 for diffraction limit."
+    notes: "Evaluates tangential/meridional Analysis MTF at the selected wavelength, field, frequency, and sampling."
+  },
+  "MTFS": {
+    name: "MTFS",
+    description: "MTF Sagittal",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "Field idx", description: "Object row (1-based)" },
+      { key: "param4", label: "Freq (lp/mm)", description: "Spatial frequency" },
+      { key: "param5", label: "Sampling", description: "Analysis MTF sampling grid" }
+    ],
+    notes: "Evaluates sagittal Analysis MTF at the selected wavelength, field, frequency, and sampling."
+  },
+  "MTFA": {
+    name: "MTFA",
+    description: "MTF Average",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "Field idx", description: "Object row (1-based)" },
+      { key: "param4", label: "Freq (lp/mm)", description: "Spatial frequency" },
+      { key: "param5", label: "Sampling", description: "Analysis MTF sampling grid" }
+    ],
+    notes: "Evaluates the tangential/sagittal average Analysis MTF at the selected wavelength, field, frequency, and sampling."
+  },
+  "MTF": {
+    name: "MTF",
+    description: "Modulation Transfer Function",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "Field idx", description: "Object row (1-based)" },
+      { key: "param3", label: "MTF Type", description: "MTFT, MTFS, or MTFA" },
+      { key: "param4", label: "Freq (lp/mm)", description: "Spatial frequency" },
+      { key: "param5", label: "Sampling", description: "Analysis MTF sampling grid" }
+    ],
+    notes: "Evaluates Analysis MTF at the selected wavelength, field, frequency, and sampling. MTFT is tangential/meridional, MTFS is sagittal, and MTFA is their average."
   },
   "EDGE": {
     name: "EDGE",
@@ -657,7 +677,8 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'TOT3_SPH', 'TOT3_COMA', 'TOT3_ASTI', 'TOT3_FCUR', 'TOT3_DIST', 'TOT3_PETZ',
   'TOT_LCA', 'TOT_TCA',
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
-  'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'LCA_RMS_UM', 'CRA_DEG', 'OPD_RMS_WAVES',
+  'MTFT', 'MTFS', 'MTFA',
+  'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'LCA_RMS_UM', 'CRA_DEG', 'DIST', 'OPD_RMS_WAVES',
   'ZERN_COEFF',
   'EDGE', 'ALL_EDGE_ELEMENT', 'EDGE_AIR', 'ALL_EDGE_AIR', 'CTCT', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
 ]);
