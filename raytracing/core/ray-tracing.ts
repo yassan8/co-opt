@@ -116,6 +116,7 @@ let __wasmTraceBatchCachedOrigins = null;
 let __wasmTraceBatchCachedRotations = null;
 let __wasmTraceBatchCachedInvRotations = null;
 let __wasmTraceBatchCachedRowCount = 0;
+let __rustTraceMetadataCache = null;
 
 function __getQconTraceRuntimeConfig() {
   try {
@@ -157,6 +158,10 @@ export function clearRayTracingTransientCaches(): void {
   __wasmTraceBatchCachedRotations = null;
   __wasmTraceBatchCachedInvRotations = null;
   __wasmTraceBatchCachedRowCount = 0;
+  __rustTraceMetadataCache = null;
+  try {
+    getRustRayTracingWasmSync()?.clear_trace_system_metadata_cache?.();
+  } catch (_) {}
 }
 
 function __computeWasmTraceBatchSystemHash(effectiveSystemRows, surfaceData, wavelengthRef) {
@@ -3837,6 +3842,31 @@ export function traceRayHitPointBatch(opticalSystemRows, rays, n0 = 1.0, targetS
   }));
 }
 
+export function traceRaySpotMetricBatch(opticalSystemRows, rays, referencePoint, n0 = 1.0, targetSurfaceIndex = null, options = null) {
+  const list = Array.isArray(rays) ? rays : [];
+  const idx = Number(targetSurfaceIndex);
+  const referenceX = Number(referencePoint?.x);
+  const referenceY = Number(referencePoint?.y);
+  if (!list.length || !Number.isInteger(idx) || idx < 0 || !Number.isFinite(referenceX) || !Number.isFinite(referenceY)) {
+    return null;
+  }
+
+  const effectiveSystemRows = opticalSystemRows.slice(0, idx + 1);
+  const surfaceData = __getCachedSurfaceData(opticalSystemRows, idx, effectiveSystemRows);
+  if (!surfaceData || __getLockstepBatchIncompatReason(effectiveSystemRows, idx) !== null) {
+    return null;
+  }
+
+  const result = __traceRayEvalBatch_rustMeta(opticalSystemRows, list, n0, idx, {
+    ...(options && typeof options === 'object' ? options : null),
+    useRustWasm: true,
+    __effectiveSystemRows: effectiveSystemRows,
+    __surfaceData: surfaceData,
+    __spotMetricReference: { x: referenceX, y: referenceY }
+  });
+  return result && !Array.isArray(result) ? result : null;
+}
+
 export function traceRayEvalBatchSummary(opticalSystemRows, rays, n0 = 1.0, maxSurfaceIndex = null, options = null) {
   const list = Array.isArray(rays) ? rays : [];
   if (!list.length) return [];
@@ -4298,6 +4328,19 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
       for (let r = 0; r < list.length; r++) alive[r] = 0;
       break;
     }
+    const isIdentityRotation = (() => {
+      const matrix = surfaceInfo.rotationMatrix;
+      if (!Array.isArray(matrix) || matrix.length < 3) return false;
+      for (let rowIndex = 0; rowIndex < 3; rowIndex++) {
+        const matrixRow = matrix[rowIndex];
+        if (!Array.isArray(matrixRow) || matrixRow.length < 3) return false;
+        for (let columnIndex = 0; columnIndex < 3; columnIndex++) {
+          const expected = rowIndex === columnIndex ? 1 : 0;
+          if (Math.abs(Number(matrixRow[columnIndex]) - expected) > 1e-14) return false;
+        }
+      }
+      return true;
+    })();
 
     const buffers = __ensureRustTransformBuffers(list.length);
     const posFlat = buffers ? buffers.pos : [];
@@ -4329,11 +4372,24 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
 
     const aliveCount = localRayIndex.length;
     let localTransformOut = null;
-    if (useRustWasm && buffers && aliveCount > 0) {
+    if (!isIdentityRotation && useRustWasm && buffers && aliveCount > 0) {
       localTransformOut = __transformRayToLocalBatchTryRust(posFlat, dirFlat, surfaceInfo.origin, inverseMatrix, aliveCount);
     }
     const localPosBatch = (() => {
       if (aliveCount <= 0) return null;
+      if (isIdentityRotation) {
+        const out = new Array(aliveCount);
+        for (let k = 0; k < aliveCount; k++) {
+          const ridx = localRayIndex[k];
+          const pos = rayState[ridx].pos;
+          out[k] = vec3(
+            pos.x - surfaceInfo.origin.x,
+            pos.y - surfaceInfo.origin.y,
+            pos.z - surfaceInfo.origin.z
+          );
+        }
+        return out;
+      }
       if (localTransformOut) {
         const out = new Array(aliveCount);
         for (let k = 0; k < aliveCount; k++) {
@@ -4357,6 +4413,13 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     })();
     const localDirBatch = (() => {
       if (aliveCount <= 0) return null;
+      if (isIdentityRotation) {
+        const out = new Array(aliveCount);
+        for (let k = 0; k < aliveCount; k++) {
+          out[k] = rayState[localRayIndex[k]].dir;
+        }
+        return out;
+      }
       if (localTransformOut) {
         const out = new Array(aliveCount);
         for (let k = 0; k < aliveCount; k++) {
@@ -4431,6 +4494,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     const rotatedHitBatch = (() => {
       try {
         if (!Array.isArray(localHits) || !localHits.length) return null;
+        if (isIdentityRotation) return null;
         const flat = new Float64Array(localHits.length * 3);
         let hasAny = false;
         for (let iHit = 0; iHit < localHits.length; iHit++) {
@@ -4576,6 +4640,13 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
       }
 
       const globalHitPoint = (() => {
+        if (isIdentityRotation) {
+          return vec3(
+            hitPoint.x + surfaceInfo.origin.x,
+            hitPoint.y + surfaceInfo.origin.y,
+            hitPoint.z + surfaceInfo.origin.z
+          );
+        }
         const rotated = rotatedHitBatch?.[k];
         if (rotated) {
           return rotatedHitIsGlobal ? rotated : add(rotated, surfaceInfo.origin);
@@ -4613,6 +4684,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
 
     const globalNormalBatch = (() => {
       if (!pendingNormalRows.length) return null;
+      if (isIdentityRotation) return null;
       if (useRustWasm) {
         const rustOut = __batchMat3MulVec3TryRust(surfaceInfo.rotationMatrix, pendingNormalFlat, pendingNormalRows.length);
         if (rustOut) return rustOut;
@@ -4630,7 +4702,9 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
           const item = pendingNormalRows[p];
           const ridx = item.ridx;
           const s = rayState[ridx];
-          const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal));
+          const globalNormal = norm(isIdentityRotation
+            ? item.normal
+            : (globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal)));
           const j = p * 3;
           buffers.dirs[j] = s.dir.x;
           buffers.dirs[j + 1] = s.dir.y;
@@ -4663,7 +4737,9 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
           if (!alive[ridx]) continue;
           const dotProduct = dot(item.localRay.dir, item.normal);
           if (dotProduct < 0) {
-            const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal));
+            const globalNormal = norm(isIdentityRotation
+              ? item.normal
+              : (globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, item.normal)));
             const s = rayState[ridx];
             const j = mirrorCount * 3;
             buffers.dirs[j] = s.dir.x;
@@ -4693,7 +4769,9 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
       const s = rayState[ridx];
       const localRay = item.localRay;
       const normal = item.normal;
-      const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, normal));
+      const globalNormal = norm(isIdentityRotation
+        ? normal
+        : (globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, normal)));
 
       if (isMirror) {
         // Mirror parity with scalar path:
@@ -5613,6 +5691,7 @@ function __traceSingleRayHitPoint_rustMeta(opticalSystemRows, ray0, n0, targetSu
 
 function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurfaceIndex, options) {
   try {
+    const spotMetricReference = options?.__spotMetricReference;
     if (__rtRowsContainQcon(opticalSystemRows)) return null;
     const list = Array.isArray(rays) ? rays : [];
     if (!list.length) return null;
@@ -5634,15 +5713,21 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
     const rayCount = list.length;
     if (!(rowCount > 0) || targetSurfaceIndex >= rowCount) return null;
 
-    const rowMeta = new Int32Array(rowCount * 4);
-    const rowParams = new Float64Array(rowCount * 24);
-    const rowOrigins = new Float64Array(rowCount * 3);
-    const rowRots = new Float64Array(rowCount * 9);
-    const rowInvRots = new Float64Array(rowCount * 9);
-
     const wavelengthRef = Number(list[0]?.wavelength) || 0.55;
+    const systemHash = __computeWasmTraceBatchSystemHash(effectiveSystemRows, surfaceData, wavelengthRef);
+    const cachedMetadata = (
+      __rustTraceMetadataCache
+      && __rustTraceMetadataCache.rust === rust
+      && __rustTraceMetadataCache.systemHash === systemHash
+      && __rustTraceMetadataCache.rowCount === rowCount
+    ) ? __rustTraceMetadataCache : null;
+    const rowMeta = cachedMetadata?.rowMeta || new Int32Array(rowCount * 4);
+    const rowParams = cachedMetadata?.rowParams || new Float64Array(rowCount * 24);
+    const rowOrigins = cachedMetadata?.rowOrigins || new Float64Array(rowCount * 3);
+    const rowRots = cachedMetadata?.rowRots || new Float64Array(rowCount * 9);
+    const rowInvRots = cachedMetadata?.rowInvRots || new Float64Array(rowCount * 9);
 
-    for (let i = 0; i < rowCount; i++) {
+    if (!cachedMetadata) for (let i = 0; i < rowCount; i++) {
       const row = effectiveSystemRows[i] || {};
       const sInfo = surfaceData[i] || {};
 
@@ -5796,6 +5881,31 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
       rowInvRots[r + 8] = Number(invRot?.[2]?.[2]) || 0;
     }
 
+    let metadataHandle = Number(cachedMetadata?.handle) || 0;
+    if (!cachedMetadata && typeof rust.register_trace_system_metadata === 'function') {
+      metadataHandle = Number(rust.register_trace_system_metadata(
+        rowMeta,
+        rowParams,
+        rowOrigins,
+        rowInvRots,
+        rowRots,
+        rowCount
+      )) || 0;
+      if (metadataHandle > 0) {
+        __rustTraceMetadataCache = {
+          rust,
+          systemHash,
+          rowCount,
+          handle: metadataHandle,
+          rowMeta,
+          rowParams,
+          rowOrigins,
+          rowInvRots,
+          rowRots
+        };
+      }
+    }
+
     const raysFlat = new Float64Array(rayCount * 6);
     for (let i = 0; i < rayCount; i++) {
       const ray = list[i] || {};
@@ -5809,6 +5919,52 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
     }
 
     const nStart = Number.isFinite(Number(n0)) && Number(n0) > 0 ? Number(n0) : 1.0;
+    const spotMetricFn = rust?.trace_ray_batch_spot_metrics_with_meta;
+    if (
+      spotMetricReference
+      && typeof spotMetricFn === 'function'
+      && Number.isFinite(Number(spotMetricReference.x))
+      && Number.isFinite(Number(spotMetricReference.y))
+    ) {
+      const cachedSpotMetricFn = rust?.trace_ray_batch_spot_metrics_cached;
+      const metricRaw = metadataHandle > 0 && typeof cachedSpotMetricFn === 'function'
+        ? cachedSpotMetricFn(
+            raysFlat,
+            rayCount,
+            targetSurfaceIndex,
+            nStart,
+            Number(spotMetricReference.x),
+            Number(spotMetricReference.y),
+            metadataHandle
+          )
+        : spotMetricFn(
+            raysFlat,
+            rayCount,
+            targetSurfaceIndex,
+            nStart,
+            Number(spotMetricReference.x),
+            Number(spotMetricReference.y),
+            rowMeta,
+            rowParams,
+            rowOrigins,
+            rowInvRots,
+            rowRots,
+            rowCount
+          );
+      if (!metricRaw || typeof (metricRaw as any).length !== 'number' || (metricRaw as any).length < 8) return null;
+      const validCount = Number((metricRaw as any)[0]);
+      if (!(validCount > 0)) return null;
+      return {
+        validCount,
+        centroidX: Number((metricRaw as any)[1]),
+        centroidY: Number((metricRaw as any)[2]),
+        rmsX: Number((metricRaw as any)[3]),
+        rmsY: Number((metricRaw as any)[4]),
+        rmsTotal: Number((metricRaw as any)[5]),
+        diameter: Number((metricRaw as any)[6]),
+        backend: metadataHandle > 0 ? 'rust-wasm-cached-metadata' : 'rust-wasm-packed'
+      };
+    }
     const raw = fn(
       raysFlat,
       rayCount,

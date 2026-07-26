@@ -189,6 +189,9 @@ pub struct OptimizeProgressEvent {
     pub variable_id: Option<String>,
     pub method: Option<String>,
     pub violation_score: Option<f64>,
+    pub equal_violation: Option<f64>,
+    pub inequal_violation: Option<f64>,
+    pub damping_factor: Option<f64>,
     pub soft_penalty: Option<f64>,
     pub requirement_count: Option<usize>,
     pub residual_count: Option<usize>,
@@ -387,6 +390,9 @@ struct EvalState {
     geometry_merit: f64,
     requirement_score: f64,
     violation_score: f64,
+    squared_violation_score: f64,
+    equal_violation: f64,
+    inequal_violation: f64,
     score: f64,
 }
 
@@ -501,6 +507,9 @@ pub fn run_optimizer_step(
             variable_id: None,
             method: Some(method.clone()),
             violation_score: Some(before_eval.violation_score),
+            equal_violation: Some(before_eval.equal_violation),
+            inequal_violation: Some(before_eval.inequal_violation),
+            damping_factor: Some(1.0),
             soft_penalty: Some(0.0),
             requirement_count: Some(requirements.len()),
             residual_count: Some(requirements.len()),
@@ -523,6 +532,9 @@ pub fn run_optimizer_step(
                 variable_id: None,
                 method: Some(method.clone()),
                 violation_score: Some(before_eval.violation_score),
+                equal_violation: Some(before_eval.equal_violation),
+                inequal_violation: Some(before_eval.inequal_violation),
+                damping_factor: Some(1.0),
                 soft_penalty: Some(0.0),
                 requirement_count: Some(requirements.len()),
                 residual_count: Some(requirements.len()),
@@ -672,6 +684,9 @@ pub fn run_optimizer_step(
             variable_id: None,
             method: Some(mode_used.clone()),
             violation_score: Some(overall_best_eval.violation_score),
+            equal_violation: Some(overall_best_eval.equal_violation),
+            inequal_violation: Some(overall_best_eval.inequal_violation),
+            damping_factor: None,
             soft_penalty: Some(0.0),
             requirement_count: Some(requirements.len()),
             residual_count: Some(requirements.len()),
@@ -799,6 +814,9 @@ fn run_cd(
                         variable_id: Some(variable_id),
                         method: Some("cd".to_string()),
                         violation_score: Some(best_eval.violation_score),
+                        equal_violation: Some(best_eval.equal_violation),
+                        inequal_violation: Some(best_eval.inequal_violation),
+                        damping_factor: None,
                         soft_penalty: Some(0.0),
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
@@ -823,6 +841,9 @@ fn run_cd(
                         variable_id: Some(variable_id),
                         method: Some("cd".to_string()),
                         violation_score: Some(best_eval.violation_score),
+                        equal_violation: Some(best_eval.equal_violation),
+                        inequal_violation: Some(best_eval.inequal_violation),
+                        damping_factor: None,
                         soft_penalty: Some(0.0),
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
@@ -863,6 +884,7 @@ fn run_lm(
     let mut completed_iterations = 0;
     let mut lambda = 1e-2;
     let mut stall_count = 0_u32;
+    let mut damping_factor = 1.0;
 
     if vars.is_empty() {
         return ("lm".to_string(), 0, best_eval, None);
@@ -888,6 +910,7 @@ fn run_lm(
             if is_better_eval(e, best_eval) {
                 trial_eval = e;
                 accepted = true;
+                damping_factor = alpha / (1.0 + lambda);
                 break;
             }
         }
@@ -907,6 +930,9 @@ fn run_lm(
                     variable_id: None,
                     method: Some("lm".to_string()),
                     violation_score: Some(best_eval.violation_score),
+                    equal_violation: Some(best_eval.equal_violation),
+                    inequal_violation: Some(best_eval.inequal_violation),
+                    damping_factor: Some(damping_factor),
                     soft_penalty: Some(0.0),
                     requirement_count: Some(requirements.len()),
                     residual_count: Some(requirements.len()),
@@ -931,6 +957,9 @@ fn run_lm(
                     variable_id: None,
                     method: Some("lm".to_string()),
                     violation_score: Some(best_eval.violation_score),
+                    equal_violation: Some(best_eval.equal_violation),
+                    inequal_violation: Some(best_eval.inequal_violation),
+                    damping_factor: None,
                     soft_penalty: Some(0.0),
                     requirement_count: Some(requirements.len()),
                     residual_count: Some(requirements.len()),
@@ -1085,13 +1114,12 @@ fn run_kkt(
             direction_reason = "sqp-non-descent".to_string();
             predicted_reduction = f64::NAN;
         }
-        let aug_base = best_eval.score
-            + mu_total * best_eval.violation_score
-            + 0.5 * penalty * best_eval.violation_score * best_eval.violation_score;
+        let aug_base = augmented_cost(best_eval, mu_total, penalty);
         let filter_c = KKT_FILTER_ACCEPTANCE_C;
 
         let mut accepted = false;
         let mut best_trial = best_eval;
+        let mut damping_factor = f64::NAN;
 
         let ls_reason: String;
         match armijo_line_search_kkt(
@@ -1118,6 +1146,7 @@ fn run_kkt(
                 ls_reason = format!("armijo-alpha={:.3e}", alpha);
                 best_trial = trial_eval;
                 accepted = true;
+                damping_factor = alpha;
             }
             LineSearchResult::Rejected(reason) => {
                 ls_reason = reason.to_string();
@@ -1170,6 +1199,9 @@ fn run_kkt(
                     variable_id: None,
                     method: Some("kkt".to_string()),
                     violation_score: Some(best_eval.violation_score),
+                    equal_violation: Some(best_eval.equal_violation),
+                    inequal_violation: Some(best_eval.inequal_violation),
+                    damping_factor: Some(damping_factor),
                     soft_penalty: Some(0.0),
                     requirement_count: Some(requirements.len()),
                     residual_count: Some(requirements.len()),
@@ -1217,6 +1249,9 @@ fn run_kkt(
                         variable_id: None,
                         method: Some("kkt".to_string()),
                         violation_score: Some(best_eval.violation_score),
+                        equal_violation: Some(best_eval.equal_violation),
+                        inequal_violation: Some(best_eval.inequal_violation),
+                        damping_factor: Some(1.0),
                         soft_penalty: Some(0.0),
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
@@ -1250,6 +1285,9 @@ fn run_kkt(
                         variable_id: None,
                         method: Some("kkt".to_string()),
                         violation_score: Some(best_eval.violation_score),
+                        equal_violation: Some(best_eval.equal_violation),
+                        inequal_violation: Some(best_eval.inequal_violation),
+                        damping_factor: None,
                         soft_penalty: Some(0.0),
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
@@ -1384,8 +1422,8 @@ fn apply_direction_step(
 
 fn augmented_cost(eval: EvalState, mu_total: f64, penalty: f64) -> f64 {
     eval.score
-        + mu_total * eval.violation_score
-        + 0.5 * penalty * eval.violation_score * eval.violation_score
+    + mu_total * eval.squared_violation_score.sqrt()
+    + 0.5 * penalty * eval.squared_violation_score
 }
 
 enum LineSearchResult {
@@ -1879,7 +1917,7 @@ fn approximate_augmented_gradient(
     rho: f64,
 ) -> Vec<f64> {
     let e0 = evaluate_state(rows, source_rows, object_rows, vars, requirements);
-    let f0 = e0.score + rho * e0.violation_score * e0.violation_score;
+    let f0 = e0.score + rho * e0.squared_violation_score;
     let base_values = current_values(rows, vars);
 
     vars.iter()
@@ -1893,7 +1931,7 @@ fn approximate_augmented_gradient(
             let mut trial_rows = rows.to_vec();
             set_numeric_field(&mut trial_rows, v.row_index, &v.field_key, x0 + h);
             let e1 = evaluate_state(&trial_rows, source_rows, object_rows, vars, requirements);
-            let f1 = e1.score + rho * e1.violation_score * e1.violation_score;
+            let f1 = e1.score + rho * e1.squared_violation_score;
             let g = if f1.is_finite() && f0.is_finite() {
                 (f1 - f0) / h
             } else {
@@ -2053,18 +2091,24 @@ fn evaluate_state(
             geometry_merit,
             requirement_score: 0.0,
             violation_score: 0.0,
+            squared_violation_score: 0.0,
+            equal_violation: 0.0,
+            inequal_violation: 0.0,
             score: geometry_merit,
         };
     }
 
     // TS parity: optimize requirement score first (violation + soft; soft is currently 0 here).
-    let (requirement_score, violation_score) =
+    let (requirement_score, violation_score, squared_violation_score, equal_violation, inequal_violation) =
         evaluate_requirements(rows, source_rows, object_rows, requirements);
     let score = requirement_score;
     EvalState {
         geometry_merit,
         requirement_score,
         violation_score,
+        squared_violation_score,
+        equal_violation,
+        inequal_violation,
         score,
     }
 }
@@ -2145,10 +2189,13 @@ fn evaluate_requirements(
     source_rows: &[Value],
     object_rows: &[Value],
     requirements: &[RequirementSpec],
-) -> (f64, f64) {
+) -> (f64, f64, f64, f64, f64) {
     optimizer_profile_record_requirement_pass();
     let mut score = 0.0_f64;
     let mut violation_score = 0.0_f64;
+    let mut squared_violation_score = 0.0_f64;
+    let mut equal_violation = 0.0_f64;
+    let mut inequal_violation = 0.0_f64;
     let mut operand_cache: HashMap<&str, Option<f64>> = HashMap::with_capacity(requirements.len());
     let mut prefetched_cache_keys = prefill_batched_transverse_rms_cache(
         rows,
@@ -2199,14 +2246,32 @@ fn evaluate_requirements(
         }
         if weighted > 0.0 && weighted.is_finite() {
             violation_score += weighted;
+            squared_violation_score += req.weight.max(0.0) * amount * amount;
+            if req.op == "=" {
+                equal_violation += weighted;
+            } else {
+                inequal_violation += weighted;
+            }
         }
     }
 
-    if !score.is_finite() {
-        return (f64::MAX / 4.0, f64::MAX / 4.0);
+    if !score.is_finite() || !squared_violation_score.is_finite() {
+        return (
+            f64::MAX / 4.0,
+            f64::MAX / 4.0,
+            f64::MAX / 4.0,
+            f64::MAX / 4.0,
+            f64::MAX / 4.0,
+        );
     }
 
-    (score, violation_score)
+    (
+        score,
+        violation_score,
+        squared_violation_score,
+        equal_violation,
+        inequal_violation,
+    )
 }
 
 fn evaluate_operand_value(
@@ -2220,6 +2285,7 @@ fn evaluate_operand_value(
         "TSL" => Some(sum_finite_thickness(rows)),
         "CTCT" => resolve_surface_row_by_param1(rows, &req.param1)
             .and_then(|(_, obj)| obj.get("thickness").and_then(parse_number)),
+        "SDIST" => evaluate_surface_distance(rows, &req.param1, &req.param2),
 
         // ── Paraxial metrics (proper ray tracing via analysis.rs) ──
         "FL" | "EFL" | "BFL" | "IMD" | "BEXP" | "EXPD" | "EXPP" | "ENPD" | "ENPP" | "ENPM"
@@ -2329,6 +2395,120 @@ fn evaluate_edge_thickness(rows: &[Value], req: &RequirementSpec) -> Option<f64>
     } else {
         None
     }
+}
+
+fn evaluate_surface_distance(rows: &[Value], start_selection: &str, end_selection: &str) -> Option<f64> {
+    let start_index = resolve_row_index_by_id_or_position(rows, start_selection)?;
+    let end_index = resolve_row_index_by_id_or_position(rows, end_selection)?;
+    if start_index == end_index {
+        return Some(0.0);
+    }
+    let first_index = start_index.min(end_index);
+    let last_index = start_index.max(end_index);
+
+    let mut total = 0.0;
+    let mut saw_finite = false;
+    for index in first_index..last_index {
+        let Some(obj) = rows.get(index).and_then(Value::as_object) else {
+            continue;
+        };
+        let object_type = value_to_string(
+            obj.get("object type")
+                .or_else(|| obj.get("object"))
+                .or_else(|| obj.get("objectType"))
+                .or_else(|| obj.get("type")),
+        )
+        .trim()
+        .to_ascii_lowercase();
+        if object_type == "object"
+            || object_type == "image"
+            || object_type == "ct"
+            || object_type.contains("coordinate")
+            || object_type.contains("coordtrans")
+        {
+            continue;
+        }
+
+        let Some(thickness) = read_requirement_gap_thickness(rows, index) else {
+            continue;
+        };
+        total += thickness;
+        saw_finite = true;
+    }
+
+    saw_finite.then_some(total)
+}
+
+fn resolve_row_index_by_id_or_position(rows: &[Value], selection: &str) -> Option<usize> {
+    let selection = selection.trim();
+    if selection.is_empty() {
+        return None;
+    }
+
+    if let Some(index) = rows.iter().position(|row| {
+        row.as_object()
+            .map(|obj| value_to_string(obj.get("id")).trim() == selection)
+            .unwrap_or(false)
+    }) {
+        return Some(index);
+    }
+
+    let normalized_position = selection
+        .strip_prefix("Surface ")
+        .or_else(|| selection.strip_prefix("surface "))
+        .or_else(|| selection.strip_prefix("Surf "))
+        .or_else(|| selection.strip_prefix("surf "))
+        .unwrap_or(selection)
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim();
+    if let Some(index) = rows.iter().position(|row| {
+        row.as_object()
+            .map(|obj| value_to_string(obj.get("id")).trim() == normalized_position)
+            .unwrap_or(false)
+    }) {
+        return Some(index);
+    }
+    let position = parse_usize_str(normalized_position)?;
+    position.checked_sub(1).filter(|index| *index < rows.len())
+}
+
+fn read_requirement_gap_thickness(rows: &[Value], row_index: usize) -> Option<f64> {
+    let obj = rows.get(row_index)?.as_object()?;
+    if let Some(thickness) = obj
+        .get("__cooptGapThickness")
+        .and_then(parse_number)
+        .filter(|value| value.is_finite())
+    {
+        return Some(thickness);
+    }
+
+    let direct_thickness = obj.get("thickness").and_then(parse_number);
+    if direct_thickness.is_some_and(|value| value.is_finite() && value.abs() > 1e-12) {
+        return direct_thickness;
+    }
+
+    let block_id = value_to_string(obj.get("_blockId"));
+    if !block_id.trim().is_empty() {
+        for related_row in rows {
+            let Some(related_obj) = related_row.as_object() else {
+                continue;
+            };
+            if value_to_string(related_obj.get("_blockId")).trim() != block_id.trim() {
+                continue;
+            }
+            if let Some(thickness) = related_obj
+                .get("__cooptGapThickness")
+                .and_then(parse_number)
+                .filter(|value| value.is_finite())
+            {
+                return Some(thickness);
+            }
+        }
+    }
+
+    direct_thickness.filter(|value| value.is_finite())
 }
 
 /// Compute aspheric sag at given height for a surface row.
@@ -4163,8 +4343,9 @@ fn parse_spot_ray_count(param4: &str) -> u32 {
     if ray_count < 1 {
         ray_count = 501;
     }
-    if ray_count > 5000 {
-        ray_count = 5000;
+    const MAX_OPTIMIZER_SPOT_RAYS: i64 = 1024 * 1024;
+    if ray_count > MAX_OPTIMIZER_SPOT_RAYS {
+        ray_count = MAX_OPTIMIZER_SPOT_RAYS;
     }
     ray_count as u32
 }
@@ -4428,6 +4609,42 @@ fn parse_number_from_str(s: &str) -> Option<f64> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn kkt_augmented_cost_uses_independent_squared_violations() {
+        let rows = vec![serde_json::json!({ "thickness": 7.0 })];
+        let mut first = make_requirement("", "", "");
+        first.operand = "OBJD".to_string();
+        first.op = "<=".to_string();
+        first.target = 4.0;
+        first.cache_key = build_requirement_cache_key(
+            &first.operand,
+            &first.param1,
+            &first.param2,
+            &first.param3,
+            &first.param4,
+            &first.param5,
+            &first.op,
+        );
+        let mut second = first.clone();
+        second.target = 3.0;
+        let (score, violation, squared_violation, equal_violation, inequal_violation) =
+            evaluate_requirements(&rows, &[], &[], &[first, second]);
+
+        let eval = EvalState {
+            geometry_merit: 0.0,
+            requirement_score: score,
+            violation_score: violation,
+            squared_violation_score: squared_violation,
+            equal_violation,
+            inequal_violation,
+            score,
+        };
+
+        assert_eq!(score, 7.0);
+        assert_eq!(squared_violation, 25.0);
+        assert_eq!(augmented_cost(eval, 2.0, 4.0), 67.0);
+    }
+
     fn make_requirement(param2: &str, param3: &str, param4: &str) -> RequirementSpec {
         let operand = "PP1".to_string();
         let op = "=".to_string();
@@ -4488,6 +4705,54 @@ mod tests {
                 }
             ]
         })
+    }
+
+    #[test]
+    fn evaluates_surface_distance_by_string_ids_and_skips_coordinate_rows() {
+        let rows = vec![
+            serde_json::json!({ "id": "object", "object type": "Object", "thickness": "Infinity" }),
+            serde_json::json!({ "id": "surface-a", "thickness": 2.5 }),
+            serde_json::json!({ "id": "coordinate", "object type": "Coordinate Break", "thickness": 100.0 }),
+            serde_json::json!({ "id": "gap", "__cooptGapThickness": 1.25 }),
+            serde_json::json!({ "id": "surface-b", "thickness": 4.0 }),
+        ];
+
+        assert_eq!(
+            evaluate_surface_distance(&rows, "surface-a", "surface-b"),
+            Some(3.75)
+        );
+        assert_eq!(
+            evaluate_surface_distance(&rows, "surface-b", "surface-a"),
+            Some(3.75)
+        );
+    }
+
+    #[test]
+    fn evaluates_surface_distance_by_one_based_row_position() {
+        let rows = vec![
+            serde_json::json!({ "id": "object", "object type": "Object", "thickness": "Infinity" }),
+            serde_json::json!({ "id": "first", "thickness": 3.0 }),
+            serde_json::json!({ "id": "second", "thickness": 2.0 }),
+            serde_json::json!({ "id": "third", "thickness": 1.0 }),
+        ];
+
+        assert_eq!(evaluate_surface_distance(&rows, "2", "4"), Some(5.0));
+        assert_eq!(evaluate_surface_distance(&rows, "Surface 2", "4: third"), Some(5.0));
+        assert_eq!(evaluate_surface_distance(&rows, "Surf 2", "Surface 2"), Some(0.0));
+        assert_eq!(evaluate_surface_distance(&rows, "missing", "4"), None);
+    }
+
+    #[test]
+    fn resolves_labeled_surface_numbers_as_ids_before_row_positions() {
+        let rows = vec![
+            serde_json::json!({ "id": 0, "object type": "Object", "thickness": "Infinity" }),
+            serde_json::json!({ "id": 1, "thickness": 3.0 }),
+            serde_json::json!({ "id": 2, "thickness": 2.0 }),
+            serde_json::json!({ "id": 3, "thickness": 1.0 }),
+        ];
+
+        assert_eq!(evaluate_surface_distance(&rows, "1", "3"), Some(5.0));
+        assert_eq!(evaluate_surface_distance(&rows, "Surface 1", "Surf 3"), Some(5.0));
     }
 
     #[test]

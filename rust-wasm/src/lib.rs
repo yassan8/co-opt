@@ -34,8 +34,21 @@ struct ChiefRayOriginSeedFamilyNative {
     entries: Vec<ChiefRayOriginSeedEntryNative>,
 }
 
+#[derive(Clone)]
+struct TraceSystemMetadataCacheEntry {
+    handle: u32,
+    row_meta: Vec<i32>,
+    row_params: Vec<f64>,
+    row_origins: Vec<f64>,
+    row_inv_rots: Vec<f64>,
+    row_rots: Vec<f64>,
+    row_count: usize,
+}
+
 thread_local! {
     static CHIEF_RAY_ORIGIN_SEED_CACHE_NATIVE: RefCell<Vec<ChiefRayOriginSeedFamilyNative>> = RefCell::new(Vec::new());
+    static TRACE_SYSTEM_METADATA_CACHE: RefCell<Vec<TraceSystemMetadataCacheEntry>> = RefCell::new(Vec::new());
+    static TRACE_SYSTEM_METADATA_NEXT_HANDLE: RefCell<u32> = RefCell::new(1);
 }
 
 fn build_chief_ray_origin_seed_family_key_native(
@@ -2676,7 +2689,11 @@ fn parse_qcon_params(params: &[f64]) -> (f64, f64, f64, f64, f64, [f64; 10]) {
 
 fn resolve_qcon_scale(semidia: f64, radius: f64, qcon_nrad: f64) -> f64 {
     if qcon_nrad.is_finite() && qcon_nrad > 0.0 {
-        return qcon_nrad.abs();
+        return if semidia.is_finite() && semidia > 0.0 {
+            qcon_nrad.abs().max(semidia.abs())
+        } else {
+            qcon_nrad.abs()
+        };
     }
     if semidia.is_finite() && semidia > 0.0 {
         return semidia.abs();
@@ -4272,6 +4289,227 @@ pub fn trace_ray_batch_hit_point_with_meta(
         out[obase + 5] = 0.0;
     }
 
+    out
+}
+
+#[wasm_bindgen]
+pub fn trace_ray_batch_spot_metrics_with_meta(
+    rays: &[f64],
+    ray_count: usize,
+    target_surface_index: usize,
+    n_start: f64,
+    reference_x: f64,
+    reference_y: f64,
+    row_meta: &[i32],
+    row_params: &[f64],
+    row_origins: &[f64],
+    row_inv_rots: &[f64],
+    row_rots: &[f64],
+    row_count: usize,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; 8];
+    let has_global_invalid = ray_count == 0
+        || !reference_x.is_finite()
+        || !reference_y.is_finite()
+        || row_count == 0
+        || target_surface_index >= row_count
+        || row_meta.len() < row_count * 4
+        || row_params.len() < row_count * 24
+        || row_origins.len() < row_count * 3
+        || row_inv_rots.len() < row_count * 9
+        || row_rots.len() < row_count * 9
+        || rays.len() < ray_count * 6;
+    if has_global_invalid {
+        return out;
+    }
+
+    let mut count = 0usize;
+    let mut sum_x = 0.0_f64;
+    let mut sum_y = 0.0_f64;
+    let mut sum_dx2 = 0.0_f64;
+    let mut sum_dy2 = 0.0_f64;
+    let mut max_r2 = 0.0_f64;
+
+    for i in 0..ray_count {
+        let rbase = i * 6;
+        let result = trace_single_ray_hit_point_with_meta_core(
+            &rays[rbase..(rbase + 6)],
+            target_surface_index,
+            n_start,
+            row_meta,
+            row_params,
+            row_origins,
+            row_inv_rots,
+            row_rots,
+            row_count,
+        );
+        let x = result[2];
+        let y = result[3];
+        if result[0] != 1.0 || !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+
+        let dx = x - reference_x;
+        let dy = y - reference_y;
+        let r2 = dx * dx + dy * dy;
+        count += 1;
+        sum_x += x;
+        sum_y += y;
+        sum_dx2 += dx * dx;
+        sum_dy2 += dy * dy;
+        max_r2 = max_r2.max(r2);
+    }
+
+    if count == 0 {
+        return out;
+    }
+
+    let count_f64 = count as f64;
+    let rms_x = (sum_dx2 / count_f64).sqrt();
+    let rms_y = (sum_dy2 / count_f64).sqrt();
+    out[0] = count_f64;
+    out[1] = sum_x / count_f64;
+    out[2] = sum_y / count_f64;
+    out[3] = rms_x;
+    out[4] = rms_y;
+    out[5] = (rms_x * rms_x + rms_y * rms_y).sqrt();
+    out[6] = 2.0 * max_r2.sqrt();
+    out[7] = 1.0;
+    out
+}
+
+#[wasm_bindgen]
+pub fn register_trace_system_metadata(
+    row_meta: &[i32],
+    row_params: &[f64],
+    row_origins: &[f64],
+    row_inv_rots: &[f64],
+    row_rots: &[f64],
+    row_count: usize,
+) -> u32 {
+    if row_count == 0
+        || row_meta.len() < row_count * 4
+        || row_params.len() < row_count * 24
+        || row_origins.len() < row_count * 3
+        || row_inv_rots.len() < row_count * 9
+        || row_rots.len() < row_count * 9
+    {
+        return 0;
+    }
+
+    let handle = TRACE_SYSTEM_METADATA_NEXT_HANDLE.with(|next| {
+        let mut value = next.borrow_mut();
+        let handle = *value;
+        *value = value.wrapping_add(1).max(1);
+        handle
+    });
+    let entry = TraceSystemMetadataCacheEntry {
+        handle,
+        row_meta: row_meta[..row_count * 4].to_vec(),
+        row_params: row_params[..row_count * 24].to_vec(),
+        row_origins: row_origins[..row_count * 3].to_vec(),
+        row_inv_rots: row_inv_rots[..row_count * 9].to_vec(),
+        row_rots: row_rots[..row_count * 9].to_vec(),
+        row_count,
+    };
+    TRACE_SYSTEM_METADATA_CACHE.with(|cache| {
+        let mut entries = cache.borrow_mut();
+        entries.push(entry);
+        if entries.len() > 8 {
+            entries.remove(0);
+        }
+    });
+    handle
+}
+
+#[wasm_bindgen]
+pub fn clear_trace_system_metadata_cache() {
+    TRACE_SYSTEM_METADATA_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+#[wasm_bindgen]
+pub fn trace_ray_batch_spot_metrics_cached(
+    rays: &[f64],
+    ray_count: usize,
+    target_surface_index: usize,
+    n_start: f64,
+    reference_x: f64,
+    reference_y: f64,
+    metadata_handle: u32,
+) -> Vec<f64> {
+    let cached = TRACE_SYSTEM_METADATA_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|entry| entry.handle == metadata_handle)
+            .cloned()
+    });
+    let Some(entry) = cached else {
+        return vec![0.0_f64; 8];
+    };
+    trace_ray_batch_spot_metrics_with_meta(
+        rays,
+        ray_count,
+        target_surface_index,
+        n_start,
+        reference_x,
+        reference_y,
+        &entry.row_meta,
+        &entry.row_params,
+        &entry.row_origins,
+        &entry.row_inv_rots,
+        &entry.row_rots,
+        entry.row_count,
+    )
+}
+
+#[wasm_bindgen]
+pub fn trace_spot_metric_jobs_cached(
+    rays: &[f64],
+    ray_offsets: &[u32],
+    ray_counts: &[u32],
+    target_surface_indices: &[u32],
+    n_starts: &[f64],
+    reference_xs: &[f64],
+    reference_ys: &[f64],
+    metadata_handles: &[u32],
+    job_count: usize,
+) -> Vec<f64> {
+    if job_count == 0
+        || ray_offsets.len() < job_count
+        || ray_counts.len() < job_count
+        || target_surface_indices.len() < job_count
+        || n_starts.len() < job_count
+        || reference_xs.len() < job_count
+        || reference_ys.len() < job_count
+        || metadata_handles.len() < job_count
+    {
+        return Vec::new();
+    }
+
+    let mut out = vec![0.0_f64; job_count * 8];
+    for job_index in 0..job_count {
+        let ray_offset = ray_offsets[job_index] as usize;
+        let ray_count = ray_counts[job_index] as usize;
+        let ray_start = match ray_offset.checked_mul(6) {
+            Some(value) => value,
+            None => continue,
+        };
+        let ray_end = match ray_count.checked_mul(6).and_then(|len| ray_start.checked_add(len)) {
+            Some(value) if value <= rays.len() => value,
+            _ => continue,
+        };
+        let metrics = trace_ray_batch_spot_metrics_cached(
+            &rays[ray_start..ray_end],
+            ray_count,
+            target_surface_indices[job_index] as usize,
+            n_starts[job_index],
+            reference_xs[job_index],
+            reference_ys[job_index],
+            metadata_handles[job_index],
+        );
+        out[job_index * 8..(job_index + 1) * 8].copy_from_slice(&metrics);
+    }
     out
 }
 
@@ -14385,7 +14623,15 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
 
 #[cfg(test)]
 mod tests {
-    use super::apply_display_mode_grid;
+    use super::{
+        apply_display_mode_grid,
+        clear_trace_system_metadata_cache,
+        register_trace_system_metadata,
+        trace_ray_batch_hit_point_with_meta,
+        trace_ray_batch_spot_metrics_cached,
+        trace_spot_metric_jobs_cached,
+        trace_ray_batch_spot_metrics_with_meta,
+    };
 
     fn test_grid() -> (Vec<Vec<Option<f64>>>, Vec<Vec<Option<f64>>>, Vec<Vec<Option<f64>>>, Vec<Vec<Option<bool>>>) {
         (
@@ -14428,5 +14674,117 @@ mod tests {
 
         assert_eq!(piston_fit["basis"], "piston");
         assert_eq!(defocus_fit["basis"], "pistonDefocus");
+    }
+
+    #[test]
+    fn spot_metrics_match_batch_hits() {
+        let rays = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            0.0, 2.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let row_meta = vec![0, 2, 0, 0];
+        let mut row_params = vec![0.0; 24];
+        row_params[0] = f64::INFINITY;
+        row_params[12] = f64::INFINITY;
+        row_params[17] = f64::INFINITY;
+        row_params[20] = 1.0;
+        let row_origins = vec![0.0, 0.0, 10.0];
+        let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+
+        let hits = trace_ray_batch_hit_point_with_meta(
+            &rays, 3, 0, 1.0, &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+        );
+        let metrics = trace_ray_batch_spot_metrics_with_meta(
+            &rays, 3, 0, 1.0, 0.0, 0.0, &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+        );
+
+        let valid_hits: Vec<(f64, f64)> = hits
+            .chunks_exact(6)
+            .filter(|hit| hit[0] == 1.0)
+            .map(|hit| (hit[2], hit[3]))
+            .collect();
+        let count = valid_hits.len() as f64;
+        let centroid_x = valid_hits.iter().map(|point| point.0).sum::<f64>() / count;
+        let centroid_y = valid_hits.iter().map(|point| point.1).sum::<f64>() / count;
+        let mean_r2 = valid_hits
+            .iter()
+            .map(|point| point.0 * point.0 + point.1 * point.1)
+            .sum::<f64>() / count;
+        let max_r2 = valid_hits
+            .iter()
+            .map(|point| point.0 * point.0 + point.1 * point.1)
+            .fold(0.0_f64, f64::max);
+
+        assert_eq!(metrics[0], count);
+        assert!((metrics[1] - centroid_x).abs() < 1e-12);
+        assert!((metrics[2] - centroid_y).abs() < 1e-12);
+        assert!((metrics[5] - mean_r2.sqrt()).abs() < 1e-12);
+        assert!((metrics[6] - 2.0 * max_r2.sqrt()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cached_spot_metrics_match_direct_metadata_path() {
+        clear_trace_system_metadata_cache();
+        let rays = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let row_meta = vec![0, 2, 0, 0];
+        let mut row_params = vec![0.0; 24];
+        row_params[0] = f64::INFINITY;
+        row_params[12] = f64::INFINITY;
+        row_params[17] = f64::INFINITY;
+        row_params[20] = 1.0;
+        let row_origins = vec![0.0, 0.0, 10.0];
+        let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let direct = trace_ray_batch_spot_metrics_with_meta(
+            &rays, 2, 0, 1.0, 0.0, 0.0, &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+        );
+        let handle = register_trace_system_metadata(
+            &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+        );
+        assert!(handle > 0);
+        let cached = trace_ray_batch_spot_metrics_cached(&rays, 2, 0, 1.0, 0.0, 0.0, handle);
+        assert_eq!(cached, direct);
+
+        clear_trace_system_metadata_cache();
+        assert_eq!(trace_ray_batch_spot_metrics_cached(&rays, 2, 0, 1.0, 0.0, 0.0, handle)[0], 0.0);
+    }
+
+    #[test]
+    fn cached_spot_job_batch_matches_individual_jobs() {
+        clear_trace_system_metadata_cache();
+        let row_meta = vec![0, 2, 0, 0];
+        let mut row_params = vec![0.0; 24];
+        row_params[0] = f64::INFINITY;
+        row_params[12] = f64::INFINITY;
+        row_params[17] = f64::INFINITY;
+        row_params[20] = 1.0;
+        let row_origins = vec![0.0, 0.0, 10.0];
+        let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let handle = register_trace_system_metadata(
+            &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+        );
+        let rays = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 1.0,
+            0.0, 2.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let first = trace_ray_batch_spot_metrics_cached(&rays[..12], 2, 0, 1.0, 0.0, 0.0, handle);
+        let second = trace_ray_batch_spot_metrics_cached(&rays[12..], 1, 0, 1.0, 0.0, 0.0, handle);
+        let batched = trace_spot_metric_jobs_cached(
+            &rays,
+            &[0, 2],
+            &[2, 1],
+            &[0, 0],
+            &[1.0, 1.0],
+            &[0.0, 0.0],
+            &[0.0, 0.0],
+            &[handle, handle],
+            2,
+        );
+        assert_eq!(&batched[..8], first.as_slice());
+        assert_eq!(&batched[8..], second.as_slice());
     }
 }

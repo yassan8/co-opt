@@ -526,7 +526,12 @@ function resolveRequirementRowIndexByIdOrIndex(rows: any[], selectionRaw: any): 
     const byIdIndex = rows.findIndex((row: any) => row && String(row?.id ?? '').trim() === raw);
     if (byIdIndex >= 0) return byIdIndex;
 
-    const index1 = Math.floor(Number(raw));
+    const labeledSurface = /^(?:surf(?:ace)?\s*)?(\d+)(?:\s*:.*)?$/i.exec(raw);
+    const normalizedSelection = labeledSurface?.[1] ?? raw;
+    const byNormalizedIdIndex = rows.findIndex((row: any) => row && String(row?.id ?? '').trim() === normalizedSelection);
+    if (byNormalizedIdIndex >= 0) return byNormalizedIdIndex;
+
+    const index1 = Math.floor(Number(normalizedSelection));
     if (!Number.isFinite(index1) || index1 < 1) return -1;
     const index0 = index1 - 1;
     return (index0 >= 0 && index0 < rows.length) ? index0 : -1;
@@ -544,6 +549,7 @@ function calculateRequirementSurfaceDistance(rows: any[], startSelectionRaw: any
     const startHit = resolveRequirementSurfaceBySelection(rows, startSelectionRaw);
     const endHit = resolveRequirementSurfaceBySelection(rows, endSelectionRaw);
     if (!startHit || !endHit) return NaN;
+    if (startHit.index === endHit.index) return 0;
 
     const startIndex = Math.min(startHit.index, endHit.index);
     const endIndex = Math.max(startHit.index, endHit.index);
@@ -3651,6 +3657,14 @@ class MeritFunctionEditor {
             if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = defaultRayCount;
             if (rayCount > 5000) rayCount = 5000;
 
+            const meritFast = (typeof globalThis !== 'undefined' && w.__cooptMeritFastMode) || null;
+            if (meritFast?.enabled === true) {
+                const fastRayCount = Math.floor(Number(meritFast.spotRayCount));
+                if (Number.isFinite(fastRayCount) && fastRayCount > 0) {
+                    rayCount = fastRayCount;
+                }
+            }
+
             const param5Raw = (operand.param5 !== undefined && operand.param5 !== null) ? String(operand.param5).trim() : '';
             let targetSurfaceNumber1: number | null = null;
             if (param5Raw !== '') {
@@ -3687,9 +3701,25 @@ class MeritFunctionEditor {
 
             const surfaceNumber1 = targetSurfaceIndex + 1;
             const pattern = (options.pattern === 'grid' || options.pattern === 'annular') ? options.pattern : 'annular';
-            const ringCount = (options.annularRingCount !== undefined && options.annularRingCount !== null)
+            let ringCount = (options.annularRingCount !== undefined && options.annularRingCount !== null)
                 ? Math.max(1, Math.floor(Number(options.annularRingCount)))
                 : 10;
+            if (pattern === 'annular' && meritFast?.enabled === true) {
+                const fastRingCount = Math.floor(Number(meritFast.spotAnnularRingCount));
+                if (Number.isFinite(fastRingCount) && fastRingCount > 0) {
+                    ringCount = Math.min(ringCount, fastRingCount);
+                }
+            }
+            const exactChief = this.resolveExactChiefSpotPoint(
+                opticalSystemData,
+                objectRow,
+                wavelength,
+                targetSurfaceIndex,
+            );
+            const useCompactSpotMetric = !(
+                typeof globalThis !== 'undefined'
+                && (globalThis as any).__cooptDisableCompactSpotMetric === true
+            );
 
             // Prefer desktop native Rust spot tracing on Tauri for optimizer hot path.
             const nativeSpotMetric = await this.calculateSpotSizeUmViaNativeAsync({
@@ -3727,21 +3757,24 @@ class MeritFunctionEditor {
                 {
                     physicalVignetting: true,
                     pattern,
+                    spotMetricReferencePoint: useCompactSpotMetric ? exactChief : null,
                     traceOptions: { ...REQUIREMENT_SPOT_TRACE_OVERRIDE }
                 }
             );
+
+            const spotMetric = spotResult?.spotData?.[0]?.spotMetric;
+            if (spotMetric && Number(spotMetric.validCount) > 0) {
+                const metricMm = metric === 'diameter'
+                    ? Number(spotMetric.diameter)
+                    : Number(spotMetric.rmsTotal);
+                if (Number.isFinite(metricMm)) return metricMm * 1000;
+            }
 
             const hits = (spotResult && Array.isArray(spotResult.spotData) && spotResult.spotData.length > 0)
                 ? (spotResult.spotData[0]?.spotPoints || [])
                 : [];
             if (!Array.isArray(hits) || hits.length <= 0) return 1e9;
 
-            const exactChief = this.resolveExactChiefSpotPoint(
-                opticalSystemData,
-                objectRow,
-                wavelength,
-                targetSurfaceIndex,
-            );
             let chief = exactChief
                 ? { x: exactChief.x, y: exactChief.y }
                 : (hits.find((h: any) => h && h.isChiefRay) || null);
@@ -5132,6 +5165,13 @@ class MeritFunctionEditor {
             const meritFast = (typeof globalThis !== 'undefined' && w.__cooptMeritFastMode) || null;
             const fastModeEnabled = !!(meritFast && typeof meritFast === 'object');
 
+            if (meritFast?.enabled === true) {
+                const fastRayCount = Math.floor(Number(meritFast.spotRayCount));
+                if (Number.isFinite(fastRayCount) && fastRayCount > 0) {
+                    rayCount = fastRayCount;
+                }
+            }
+
             const rayCountOverride = options.rayCountOverride;
             if (Number.isFinite(rayCountOverride) && rayCountOverride > 0) {
                 rayCount = Math.floor(rayCountOverride);
@@ -5430,24 +5470,31 @@ class MeritFunctionEditor {
             stampSpotDebug({ pattern });
 
             const effectiveAnnularRingCount = (() => {
+                const capForFastMode = (value: number) => {
+                    if (meritFast?.enabled !== true) return value;
+                    const fastRingCount = Math.floor(Number(meritFast.spotAnnularRingCount));
+                    return Number.isFinite(fastRingCount) && fastRingCount > 0
+                        ? Math.min(value, fastRingCount)
+                        : value;
+                };
                 if (options.annularRingCount !== undefined && options.annularRingCount !== null) {
-                    return Math.max(1, Math.floor(Number(options.annularRingCount)));
+                    return capForFastMode(Math.max(1, Math.floor(Number(options.annularRingCount))));
                 }
 
                 // Requirements default: annular uses 10 rings (matches inspector/spec note).
                 // Rectangle/grid ignores ring count, so this mainly affects annular operands.
-                if (!useUiDefaults) return 10;
+                if (!useUiDefaults) return capForFastMode(10);
 
                 const ringCount = Number(lastSpotSettings.ringCount);
-                if (Number.isFinite(ringCount) && ringCount > 0) return Math.floor(ringCount);
+                if (Number.isFinite(ringCount) && ringCount > 0) return capForFastMode(Math.floor(ringCount));
 
                 const sel = document.getElementById('ring-count-select') as HTMLSelectElement | null;
                 if (sel && sel.value) {
                     const v = Number(sel.value);
-                    if (Number.isFinite(v) && v > 0) return Math.floor(v);
+                    if (Number.isFinite(v) && v > 0) return capForFastMode(Math.floor(v));
                 }
 
-                return 3;
+                return capForFastMode(3);
             })();
 
             const surfaceNumber1 = targetSurfaceIndex + 1;

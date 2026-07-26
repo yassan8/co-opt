@@ -180,6 +180,10 @@ export function cholesky_factorization(a_flat, n) {
     return v2;
 }
 
+export function clear_trace_system_metadata_cache() {
+    wasm.clear_trace_system_metadata_cache();
+}
+
 /**
  * @param {Float64Array} field_values
  * @param {Float64Array} wavelengths
@@ -555,6 +559,30 @@ export function refract_ray_batch(dirs, normals, n1, n2, count) {
     var v5 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v5;
+}
+
+/**
+ * @param {Int32Array} row_meta
+ * @param {Float64Array} row_params
+ * @param {Float64Array} row_origins
+ * @param {Float64Array} row_inv_rots
+ * @param {Float64Array} row_rots
+ * @param {number} row_count
+ * @returns {number}
+ */
+export function register_trace_system_metadata(row_meta, row_params, row_origins, row_inv_rots, row_rots, row_count) {
+    const ptr0 = passArray32ToWasm0(row_meta, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(row_params, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(row_origins, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF64ToWasm0(row_inv_rots, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF64ToWasm0(row_rots, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ret = wasm.register_trace_system_metadata(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, row_count);
+    return ret >>> 0;
 }
 
 /**
@@ -1079,6 +1107,59 @@ export function trace_ray_batch_hit_point_with_meta(rays, ray_count, target_surf
 }
 
 /**
+ * @param {Float64Array} rays
+ * @param {number} ray_count
+ * @param {number} target_surface_index
+ * @param {number} n_start
+ * @param {number} reference_x
+ * @param {number} reference_y
+ * @param {number} metadata_handle
+ * @returns {Float64Array}
+ */
+export function trace_ray_batch_spot_metrics_cached(rays, ray_count, target_surface_index, n_start, reference_x, reference_y, metadata_handle) {
+    const ptr0 = passArrayF64ToWasm0(rays, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.trace_ray_batch_spot_metrics_cached(ptr0, len0, ray_count, target_surface_index, n_start, reference_x, reference_y, metadata_handle);
+    var v2 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v2;
+}
+
+/**
+ * @param {Float64Array} rays
+ * @param {number} ray_count
+ * @param {number} target_surface_index
+ * @param {number} n_start
+ * @param {number} reference_x
+ * @param {number} reference_y
+ * @param {Int32Array} row_meta
+ * @param {Float64Array} row_params
+ * @param {Float64Array} row_origins
+ * @param {Float64Array} row_inv_rots
+ * @param {Float64Array} row_rots
+ * @param {number} row_count
+ * @returns {Float64Array}
+ */
+export function trace_ray_batch_spot_metrics_with_meta(rays, ray_count, target_surface_index, n_start, reference_x, reference_y, row_meta, row_params, row_origins, row_inv_rots, row_rots, row_count) {
+    const ptr0 = passArrayF64ToWasm0(rays, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray32ToWasm0(row_meta, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(row_params, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF64ToWasm0(row_origins, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF64ToWasm0(row_inv_rots, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArrayF64ToWasm0(row_rots, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ret = wasm.trace_ray_batch_spot_metrics_with_meta(ptr0, len0, ray_count, target_surface_index, n_start, reference_x, reference_y, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, row_count);
+    var v7 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v7;
+}
+
+/**
  * Phase 3: High-performance batch tracing with system metadata embedded in JSON
  * Full ray-tracing loop implemented in Rust with direct WASM memory access
  * Input: rayArrayPtr (pointer to rays in WASM heap), systemMetaJSON (metadata as JSON), rowCount, nStart
@@ -1128,6 +1209,41 @@ export function trace_single_ray_hit_point_with_meta(ray, target_surface_index, 
     var v7 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v7;
+}
+
+/**
+ * @param {Float64Array} rays
+ * @param {Uint32Array} ray_offsets
+ * @param {Uint32Array} ray_counts
+ * @param {Uint32Array} target_surface_indices
+ * @param {Float64Array} n_starts
+ * @param {Float64Array} reference_xs
+ * @param {Float64Array} reference_ys
+ * @param {Uint32Array} metadata_handles
+ * @param {number} job_count
+ * @returns {Float64Array}
+ */
+export function trace_spot_metric_jobs_cached(rays, ray_offsets, ray_counts, target_surface_indices, n_starts, reference_xs, reference_ys, metadata_handles, job_count) {
+    const ptr0 = passArrayF64ToWasm0(rays, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray32ToWasm0(ray_offsets, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray32ToWasm0(ray_counts, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray32ToWasm0(target_surface_indices, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF64ToWasm0(n_starts, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArrayF64ToWasm0(reference_xs, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ptr6 = passArrayF64ToWasm0(reference_ys, wasm.__wbindgen_malloc);
+    const len6 = WASM_VECTOR_LEN;
+    const ptr7 = passArray32ToWasm0(metadata_handles, wasm.__wbindgen_malloc);
+    const len7 = WASM_VECTOR_LEN;
+    const ret = wasm.trace_spot_metric_jobs_cached(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, job_count);
+    var v9 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v9;
 }
 
 /**

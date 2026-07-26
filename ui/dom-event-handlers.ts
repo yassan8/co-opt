@@ -167,7 +167,9 @@ import { basenameFromPath } from '../src/desktop/runtime.ts';
 import {
     requiresExpandedRowsForDesignIntentChange,
     requiresBlockInspectorRefreshForDesignIntentChange,
-    requiresZoomUiRefreshForDesignIntentChange
+    requiresZoomUiRefreshForDesignIntentChange,
+    reconcileDesignIntentVariableValues,
+    syncDesignIntentParameterToVariable
 } from './design-intent-refresh-policy.ts';
 import { clearOptimizerStop } from '../src/desktop/ipc/client.ts';
 import { createOPDCalculator, createWavefrontAnalyzer } from '../evaluation/wavefront/wavefront.ts';
@@ -2891,6 +2893,9 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     // Save to localStorage for table loading
     try {
         clearTableProjectionKeys();
+        if (effectiveSource === undefined || effectiveSource === null) {
+            effectiveSource = loadSourceTableData();
+        }
         if (effectiveSource) {
             saveSourceTableData(effectiveSource as any);
         }
@@ -3921,7 +3926,8 @@ function setupOptimizeDesignIntentButton(): void {
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         Method
         <select id="opt-method" style="padding:4px 6px;">
-            <option value="kkt" selected>Augmented Lagrangian (AL)</option>
+            <option value="kkt-sqp" selected>KKT-SQP</option>
+            <option value="kkt">AL + Gauss-Newton</option>
             <option value="global">Global (Escape Function)</option>
             <option value="lm">Levenberg-Marquardt (LM)</option>
             <option value="cd">Coordinate Descent (CD)</option>
@@ -4521,13 +4527,11 @@ function setupOptimizeDesignIntentButton(): void {
                     }
                 } catch (_) {}
 
-                const cur = Number(p?.current);
-                const progressViolationScore = Number(p?.violationScore);
                 const snap = getRequirementScoreSnapshot();
                 const tableRequirementScore = Number(snap.score);
                 const displayCurrentScore = Number.isFinite(tableRequirementScore)
                     ? tableRequirementScore
-                    : (Number.isFinite(cur) ? cur : Number.NaN);
+                    : Number.NaN;
                 if (Number.isFinite(displayCurrentScore)) {
                     bestRequirementScore = Number.isFinite(bestRequirementScore)
                         ? Math.min(bestRequirementScore, displayCurrentScore)
@@ -5022,12 +5026,12 @@ function setupOptimizeDesignIntentButton(): void {
                     }
 
                     const resolveOptMethod = (): string => {
-                        let method = 'kkt'; // default (AL)
+                        let method = 'kkt-sqp';
                         try {
                             if (popup && !popup.closed) {
                                 const el = popup.document.getElementById('opt-method') as HTMLSelectElement | null;
                                 const v = el ? String(el.value).toLowerCase().trim() : '';
-                                if (v === 'cd' || v === 'lm' || v === 'kkt' || v === 'global') {
+                                if (v === 'cd' || v === 'lm' || v === 'kkt' || v === 'kkt-sqp' || v === 'global') {
                                     method = v;
                                 }
                             }
@@ -8500,6 +8504,7 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
         }
 
         cooptSetNestedValue(block, path, newValue);
+        syncDesignIntentParameterToVariable(block, path, newValue);
     }
     if (blockType === 'ImageSurface' && String(path) === 'parameters.semidia') {
         const semidiaText = String(newValue ?? '').trim().toLowerCase();
@@ -8529,9 +8534,12 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
         w.__cooptPreferRuntimeSystemConfig = true;
     } catch (_) {}
 
+    const activeConfigId = String(systemConfig?.activeConfigId ?? activeConfig?.id ?? '');
+    __cooptRememberBlockVariablesForConfig(activeConfigId, [block]);
+
     __cooptBlockParamPendingRefresh = {
         systemConfig,
-        activeConfigId: String(systemConfig?.activeConfigId ?? activeConfig?.id ?? ''),
+        activeConfigId,
         changedPath: String(path ?? '')
     };
 
@@ -12817,10 +12825,6 @@ function __cooptIsPlainRecord(value: any): value is Record<string, any> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function __cooptIsGlassFamilyKey(key: string): boolean {
-    return /^(?:material|rindex|abbe|vd|nd)\d*$/i.test(String(key ?? '').trim());
-}
-
 function __cooptMergeVariableSnapshot(snapshotVars: any, currentVars: any, currentParams?: any): Record<string, any> {
     const snapshot = __cooptIsPlainRecord(snapshotVars) ? snapshotVars : {};
     const current = __cooptIsPlainRecord(currentVars) ? currentVars : {};
@@ -12837,7 +12841,7 @@ function __cooptMergeVariableSnapshot(snapshotVars: any, currentVars: any, curre
                 ...(__cooptIsPlainRecord(currentEntry.optimize) ? currentEntry.optimize : {}),
             };
         }
-        if (Object.prototype.hasOwnProperty.call(params, key) && (__cooptIsGlassFamilyKey(key) || !Object.prototype.hasOwnProperty.call(mergedEntry, 'value'))) {
+        if (Object.prototype.hasOwnProperty.call(params, key)) {
             mergedEntry.value = params[key];
         }
         merged[key] = mergedEntry;
@@ -12990,6 +12994,9 @@ export function refreshBlockInspector(): void {
         }
 
         if (Array.isArray(blocks) && blocks.length > 0 && activeConfigId) {
+            for (const block of blocks) {
+                reconcileDesignIntentVariableValues(block);
+            }
             const restoredCount = __cooptRestoreBlockVariablesFromCache(activeConfigId, blocks);
             if (restoredCount > 0) {
                 try {

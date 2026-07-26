@@ -1,0 +1,254 @@
+{
+  "input": "defaults/default-load.json",
+  "objectIndex1": 1,
+  "sampling": 32,
+  "wavelengthUm": 0.5875618,
+  "samplePoints": 740,
+  "fieldSetting": {
+    "type": "Angle",
+    "position": "Angle",
+    "x": 0,
+    "y": 0,
+    "fieldAngle": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  "maxAbsDiffWaves": 7.771561172376096e-16,
+  "rmsHighOrderDiffWaves": 1.4654635373270354e-16,
+  "pass": true,
+  "thresholds": {
+    "failMaxDiffWaves": 0.002,
+    "failRmsDiffWaves": 0.001
+  },
+  "perIndex": [
+    {
+      "index": 0,
+      "tsWaves": 0.9972100815040507,
+      "rustParityWaves": 0.9972100815040507,
+      "absDiffWaves": 0
+    },
+    {
+      "index": 1,
+      "tsWaves": -2.290425178695562e-13,
+      "rustParityWaves": -2.290425178695562e-13,
+      "absDiffWaves": 0
+    },
+    {
+      "index": 2,
+      "tsWaves": -2.2903930627789004e-13,
+      "rustParityWaves": -2.2903930627789004e-13,
+      "absDiffWaves": 0
+    },
+    {
+      "index": 3,
+      "tsWaves": 1.7822683299187648e-18,
+      "rustParityWaves": 2.801965140543663e-18,
+      "absDiffWaves": 1.0196968106248982e-18
+    },
+    {
+      "index": 4,
+      "tsWaves": 0.6239904076773813,
+      "rustParityWaves": 0.6239904076773821,
+      "absDiffWaves": 7.771561172376096e-16
+    },
+    {
+      "index": 5,
+      "tsWaves": 1.9132978162718956e-16,
+      "rustParityWaves": 2.505709402999984e-16,
+      "absDiffWaves": 5.924115867280884e-17
+    },
+    {
+      "index": 6,
+      "tsWaves": -4.161257932213823e-13,
+      "rustParityWaves": -4.1614405012914155e-13,
+      "absDiffWaves": 1.8256907759227375e-17
+    },
+    {
+      "index": 7,
+      "tsWaves": -7.17864310434207e-14,
+      "rustParityWaves": -7.191582193416152e-14,
+      "absDiffWaves": 1.2939089074081864e-16
+    },
+    {
+      "index": 8,
+      "tsWaves": -7.21469289989296e-14,
+      "rustParityWaves": -7.213381154562444e-14,
+      "absDiffWaves": 1.3117453305166433e-17
+    },
+    {
+      "index": 9,
+      "tsWaves": 4.1617526985043445e-13,
+      "rustParityWaves": 4.1617699514322543e-13,
+      "absDiffWaves": 1.7252927909742933e-18
+    },
+    {
+      "index": 10,
+      "tsWaves": -3.717144584121554e-18,
+      "rustParityWaves": 8.5703330164342e-18,
+      "absDiffWaves": 1.2287477600555754e-17
+    },
+    {
+      "index": 11,
+      "tsWaves": 1.1690545007972908e-17,
+      "rustParityWaves": -6.302247719051771e-18,
+      "absDiffWaves": 1.7992792727024678e-17
+    },
+    {
+      "index": 12,
+      "tsWaves": -0.11307247905870427,
+      "rustParityWaves": -0.11307247905870413,
+      "absDiffWaves": 1.3877787807814457e-16
+    },
+    {
+      "index": 13,
+      "tsWaves": 4.165265065441642e-17,
+      "rustParityWaves": 9.473130512288261e-17,
+      "absDiffWaves": 5.3078654468466194e-17
+    },
+    {
+      "index": 14,
+      "tsWaves": -0.0009727936137054004,
+      "rustParityWaves": -0.00097279361370531,
+      "absDiffWaves": 9.042246118529107e-17
+    },
+    {
+      "index": 15,
+      "tsWaves": -2.38353168688122e-13,
+      "rustParityWaves": -2.383289621238871e-13,
+      "absDiffWaves": 2.4206564234917216e-17
+    },
+    {
+      "index": 16,
+      "tsWaves": 2.5607505468341587e-13,
+      "rustParityWaves": 2.560867867741904e-13,
+      "absDiffWaves": 1.1732090774522879e-17
+    },
+    {
+      "index": 17,
+      "tsWaves": 1.4944331489994965e-13,
+      "rustParityWaves": 1.4932132317633296e-13,
+      "absDiffWaves": 1.2199172361668578e-16
+    },
+    {
+      "index": 18,
+      "tsWaves": 1.4948015132441135e-13,
+      "rustParityWaves": 1.4947884378093902e-13,
+      "absDiffWaves": 1.3075434723271382e-18
+    },
+    {
+      "index": 19,
+      "tsWaves": -2.560957428776908e-13,
+      "rustParityWaves": -2.561015281767862e-13,
+      "absDiffWaves": 5.785299095400282e-18
+    },
+    {
+      "index": 20,
+      "tsWaves": -2.383361524318375e-13,
+      "rustParityWaves": -2.3834870055810447e-13,
+      "absDiffWaves": 1.2548126266957274e-17
+    },
+    {
+      "index": 21,
+      "tsWaves": 5.860583351947517e-18,
+      "rustParityWaves": 6.355524898810531e-18,
+      "absDiffWaves": 4.94941546863014e-19
+    },
+    {
+      "index": 22,
+      "tsWaves": 5.524868135943022e-18,
+      "rustParityWaves": 1.8349422340702346e-19,
+      "absDiffWaves": 5.341373912535999e-18
+    },
+    {
+      "index": 23,
+      "tsWaves": -1.9348420307170232e-18,
+      "rustParityWaves": 1.2581703319853028e-18,
+      "absDiffWaves": 3.1930123627023262e-18
+    },
+    {
+      "index": 24,
+      "tsWaves": -0.13156956281533844,
+      "rustParityWaves": -0.13156956281533827,
+      "absDiffWaves": 1.6653345369377348e-16
+    },
+    {
+      "index": 25,
+      "tsWaves": 4.502031568640092e-17,
+      "rustParityWaves": 1.0594218775030441e-16,
+      "absDiffWaves": 6.092187206390349e-17
+    },
+    {
+      "index": 26,
+      "tsWaves": -0.001025048309200786,
+      "rustParityWaves": -0.0010250483092006455,
+      "absDiffWaves": 1.4051260155412137e-16
+    },
+    {
+      "index": 27,
+      "tsWaves": 1.3738998286832587e-16,
+      "rustParityWaves": 1.3623086433712843e-16,
+      "absDiffWaves": 1.1591185311974363e-18
+    },
+    {
+      "index": 28,
+      "tsWaves": 1.931337632833668e-13,
+      "rustParityWaves": 1.931091224792148e-13,
+      "absDiffWaves": 2.464080415201495e-17
+    },
+    {
+      "index": 29,
+      "tsWaves": 2.1684033058161545e-13,
+      "rustParityWaves": 2.168167764457174e-13,
+      "absDiffWaves": 2.3554135898052865e-17
+    },
+    {
+      "index": 30,
+      "tsWaves": 5.11601178981405e-13,
+      "rustParityWaves": 5.116264972599584e-13,
+      "absDiffWaves": 2.5318278553372376e-17
+    },
+    {
+      "index": 31,
+      "tsWaves": 1.804543097834497e-13,
+      "rustParityWaves": 1.8051154164446427e-13,
+      "absDiffWaves": 5.723186101456822e-17
+    },
+    {
+      "index": 32,
+      "tsWaves": 1.8044145477859298e-13,
+      "rustParityWaves": 1.8041040861029747e-13,
+      "absDiffWaves": 3.1046168295511675e-17
+    },
+    {
+      "index": 33,
+      "tsWaves": -5.115784584208401e-13,
+      "rustParityWaves": -5.115878266903282e-13,
+      "absDiffWaves": 9.368269488092291e-18
+    },
+    {
+      "index": 34,
+      "tsWaves": 2.168279849416637e-13,
+      "rustParityWaves": 2.1682569657172684e-13,
+      "absDiffWaves": 2.288369936856202e-18
+    },
+    {
+      "index": 35,
+      "tsWaves": -1.9314768653914007e-13,
+      "rustParityWaves": -1.9311046604706415e-13,
+      "absDiffWaves": 3.722049207592154e-17
+    },
+    {
+      "index": 36,
+      "tsWaves": 6.0563064668343345e-18,
+      "rustParityWaves": -5.85088818189999e-18,
+      "absDiffWaves": 1.1907194648734325e-17
+    },
+    {
+      "index": 37,
+      "tsWaves": -1.0875304454581487e-17,
+      "rustParityWaves": -5.435732374810412e-18,
+      "absDiffWaves": 5.439572079771075e-18
+    }
+  ]
+}

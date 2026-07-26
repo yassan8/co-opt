@@ -10,6 +10,7 @@ export const bfgs_update: (a: number, b: number, c: any, d: number, e: number, f
 export const build_normal_equations: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
 export const calculate_surface_origins: (a: number, b: number) => [number, number, number];
 export const cholesky_factorization: (a: number, b: number, c: number) => [number, number];
+export const clear_trace_system_metadata_cache: () => void;
 export const compute_lca_series_from_image_heights: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
 export const compute_native_opd_grid_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
 export const fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
@@ -31,6 +32,7 @@ export const optimize_system_in_wasm: (a: number, b: number) => [number, number,
 export const qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
 export const reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+export const register_trace_system_metadata: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
 export const run_native_chief_ray_angle_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
@@ -59,8 +61,11 @@ export const trace_image_height_infinite_candidate_exact_with_rows: (a: any, b: 
 export const trace_image_height_infinite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
 export const trace_image_height_infinite_chief_ray_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
 export const trace_ray_batch_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number];
+export const trace_ray_batch_spot_metrics_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+export const trace_ray_batch_spot_metrics_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
 export const trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const trace_single_ray_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];
+export const trace_spot_metric_jobs_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number];
 export const transform_point_to_global_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
 export const transform_ray_to_local_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
 export const update_trust_region_radius: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;

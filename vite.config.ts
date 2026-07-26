@@ -78,6 +78,7 @@ export default defineConfig({
         main: "main.ts",
       },
       output: {
+        assetFileNames: 'assets/[name]-[hash][extname]',
         entryFileNames: (chunkInfo) => {
           // Keep main.js with a stable name for script tags
           if (chunkInfo.name === 'main') {

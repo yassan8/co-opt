@@ -32,6 +32,12 @@ import { convertImageHeightToEffectiveObject, generateRayStartPointsForObject, s
 import { findStopSurface } from "../../optical/system-renderer.ts";
 import { detectConjugateType } from "../../utils/conjugate-detection.ts";
 import { getLoadedFileName, getLoadedFileWarn } from "../../ui/loaded-file-storage";
+import {
+  loadOptimizeRayGridSize,
+  OPTIMIZE_RAY_GRID_SIZES,
+  saveOptimizeRayGridSize,
+  type OptimizeRayGridSize,
+} from "../../ui/optimization-settings-storage.ts";
 import { getRustRayTracingWasmSync } from "../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts";
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
@@ -221,7 +227,7 @@ const RENDER_3D_SURFACE_MESH_SEGMENTS = 64;
 const RENDER_3D_TORIC_MESH_SEGMENTS = 96;
 const RENDER_IMAGEHEIGHT_APPROX_CACHE_LIMIT = 512;
 const RENDER_LEGACY_CROSS_RAYS_CACHE_LIMIT = 48;
-const RENDER_IMAGEHEIGHT_EXACT_CROSS_CACHE_VERSION = 'imageheight-exact-cross-v6';
+const RENDER_IMAGEHEIGHT_EXACT_CROSS_CACHE_VERSION = 'imageheight-exact-cross-v8';
 
 const RENDER_AUTO_APERTURE_MARGIN_FACTOR = 1.10;
 const RENDER_AUTO_APERTURE_MARGIN_MM = 0.05;
@@ -1391,30 +1397,6 @@ function buildExactRenderRaysForImageHeightObjects(
       const chiefPlaneU = Number(chiefStartCandidate?.planeCoords?.u ?? chiefStart?.planeCoords?.u);
       const chiefPlaneV = Number(chiefStartCandidate?.planeCoords?.v ?? chiefStart?.planeCoords?.v);
       const solvedChiefLocalHit = separatedResolvedRow?.__cooptImageHeightSolve?.hit || null;
-      let imageHeightTargetLocalOffset: { x: number; y: number } | null = null;
-      const marginalReferenceStart = tracedRayStarts[chiefIndex]?.startP && tracedRayStarts[chiefIndex]?.dir
-        ? tracedRayStarts[chiefIndex]
-        : (chiefStartCandidate?.startP && chiefStartCandidate?.dir ? chiefStartCandidate : (renderRayStarts[chiefIndex] || null));
-      if (targetSurfaceInfo && marginalReferenceStart?.startP && marginalReferenceStart?.dir && solvedChiefLocalHit) {
-        const tracedChiefTargetPoint = traceRayHitPoint(
-          opticalSystemRows,
-          { pos: marginalReferenceStart.startP, dir: marginalReferenceStart.dir, wavelength: wavelengthUm },
-          1.0,
-          targetSurfaceIndex,
-          traceOptions,
-        );
-        const tracedChiefLocalHit = tracedChiefTargetPoint ? transformPointToLocal(tracedChiefTargetPoint, targetSurfaceInfo) : null;
-        const solvedX = Number(solvedChiefLocalHit?.x);
-        const solvedY = Number(solvedChiefLocalHit?.y);
-        const tracedX = Number(tracedChiefLocalHit?.x);
-        const tracedY = Number(tracedChiefLocalHit?.y);
-        if ([solvedX, solvedY, tracedX, tracedY].every(Number.isFinite)) {
-          imageHeightTargetLocalOffset = {
-            x: solvedX - tracedX,
-            y: solvedY - tracedY,
-          };
-        }
-      }
 
       tracedRayStarts.forEach((rayStart: any, rayIndex: number) => {
         if (!rayStart?.startP || !rayStart?.dir) {
@@ -1448,21 +1430,9 @@ function buildExactRenderRaysForImageHeightObjects(
         const solvedChiefTargetPoint = rayIndex === chiefIndex && solvedChiefLocalHit
           ? buildRenderGlobalPointFromLocal(solvedChiefLocalHit, targetSurfaceInfo)
           : null;
-        let correctedMarginalTargetPoint = null;
-        if (rayIndex !== chiefIndex && imageHeightTargetLocalOffset && tracedTargetPoint && targetSurfaceInfo) {
-          const tracedLocalPoint = transformPointToLocal(tracedTargetPoint, targetSurfaceInfo);
-          const correctedLocalPoint = tracedLocalPoint ? {
-            x: Number(tracedLocalPoint.x) + imageHeightTargetLocalOffset.x,
-            y: Number(tracedLocalPoint.y) + imageHeightTargetLocalOffset.y,
-            z: Number.isFinite(Number(tracedLocalPoint.z)) ? Number(tracedLocalPoint.z) : 0,
-          } : null;
-          correctedMarginalTargetPoint = correctedLocalPoint
-            ? buildRenderGlobalPointFromLocal(correctedLocalPoint, targetSurfaceInfo)
-            : null;
-        }
         const preciseTargetPoint = isFiniteRenderPoint(solvedChiefTargetPoint)
           ? solvedChiefTargetPoint
-          : (isFiniteRenderPoint(correctedMarginalTargetPoint) ? correctedMarginalTargetPoint : tracedTargetPoint);
+          : tracedTargetPoint;
         if (isFiniteRenderPoint(preciseTargetPoint)) {
           rayPath = replaceRenderTargetPointInRayPath(rayPath, opticalSystemRows, targetSurfaceIndex, preciseTargetPoint);
         }
@@ -2640,24 +2610,6 @@ function getRenderImageHeightTargetForAxis(
 }
 
 function getExactImageHeightChiefStart(resolvedRow: any, fallbackRayStart: any, label: string): any {
-  const fallbackPlaneU = Number(fallbackRayStart?.planeCoords?.u);
-  const fallbackPlaneV = Number(fallbackRayStart?.planeCoords?.v);
-  const fallbackIsCenterChief = !!(
-    fallbackRayStart?.startP
-    && fallbackRayStart?.dir
-    && (
-      fallbackRayStart?.isChief === true
-      || (Math.abs(fallbackPlaneU) <= 1e-9 && Math.abs(fallbackPlaneV) <= 1e-9)
-    )
-  );
-  if (fallbackIsCenterChief) {
-    return {
-      ...fallbackRayStart,
-      isChief: true,
-      description: fallbackRayStart?.description || label,
-    };
-  }
-
   const chiefOrigin = resolvedRow?.__cooptImageHeightSolve?.chiefRay?.origin;
   const chiefDir = resolvedRow?.__cooptImageHeightSolve?.chiefRay?.dir;
   const ox = Number(chiefOrigin?.x);
@@ -2666,7 +2618,15 @@ function getExactImageHeightChiefStart(resolvedRow: any, fallbackRayStart: any, 
   const dx = Number(chiefDir?.x);
   const dy = Number(chiefDir?.y);
   const dz = Number(chiefDir?.z);
-  if (![ox, oy, oz, dx, dy, dz].every(Number.isFinite)) return fallbackRayStart;
+  if (![ox, oy, oz, dx, dy, dz].every(Number.isFinite)) {
+    return fallbackRayStart?.startP && fallbackRayStart?.dir
+      ? {
+        ...fallbackRayStart,
+        isChief: true,
+        description: fallbackRayStart?.description || label,
+      }
+      : fallbackRayStart;
+  }
 
   return {
     ...(fallbackRayStart && typeof fallbackRayStart === 'object' ? fallbackRayStart : {}),
@@ -4237,6 +4197,7 @@ function DesktopSettingsPage() {
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     try { return localStorage.getItem(DARK_MODE_KEY) === 'true'; } catch (_) { return false; }
   });
+  const [optimizeRayGridSize, setOptimizeRayGridSize] = useState<OptimizeRayGridSize>(loadOptimizeRayGridSize);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -4352,6 +4313,11 @@ function DesktopSettingsPage() {
     try { if (o && typeof o.__cooptSetDarkMode === 'function') o.__cooptSetDarkMode(enabled); } catch (_) {}
   };
 
+  const handleOptimizeRayGridSizeChange = (value: string) => {
+    const next = saveOptimizeRayGridSize(value);
+    setOptimizeRayGridSize(next);
+  };
+
   const mfrSet = new Set(mfrs.map(s => String(s).toUpperCase()));
 
   return (
@@ -4374,6 +4340,23 @@ function DesktopSettingsPage() {
         <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>Enable VS Code-style dark mode for the entire UI.</div>
         <label style={{ margin: '8px 0 14px 0', display: 'block' }}>
           <input type="checkbox" checked={darkMode} onChange={e => handleDarkModeChange(e.target.checked)} />{' '}Enable Dark Mode
+        </label>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>Optimize Ray Grid Size</div>
+        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+          Select the pupil sampling density used by Spot operands during optimization.
+        </div>
+        <label style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) minmax(140px, 1fr)', alignItems: 'center', gap: 8, margin: '8px 0 14px 0' }}>
+          Ray grid
+          <select
+            aria-label="Optimize Ray Grid Size"
+            value={optimizeRayGridSize}
+            onChange={e => handleOptimizeRayGridSizeChange(e.target.value)}
+          >
+            {OPTIMIZE_RAY_GRID_SIZES.map(size => (
+              <option key={size} value={size}>{size}x{size}</option>
+            ))}
+          </select>
         </label>
 
         <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Infinite Field: Pupil Sampling Mode</div>
@@ -4648,6 +4631,7 @@ export default function App() {
   const optimizeConsoleHeaderWrittenRef = useRef(false);
   const optimizeConsolePrevMinRef = useRef<number>(Number.NaN);
   const optimizeConsoleLastIterRef = useRef<number>(-1);
+  const optimizeConsoleStartedAtRef = useRef<number>(0);
   const [treeOpenGroups, setTreeOpenGroups] = useState<Set<string>>(new Set(['panels', 'analysis']));
   const renderScaleRafRef = useRef<number | null>(null);
   const optimizeDisplaySleepBlockTokenRef = useRef<string | null>(null);
@@ -4770,7 +4754,7 @@ export default function App() {
       return false;
     }
   })();
-  const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'>('kkt');
+  const [optMethod, setOptMethod] = useState<'kkt-sqp' | 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'>('kkt-sqp');
   const [optMaxIterations, setOptMaxIterations] = useState(10);
   const [optMaxEscapeLoops, setOptMaxEscapeLoops] = useState(4);
   const [optEscapeFunctionWidth, setOptEscapeFunctionWidth] = useState(1);
@@ -5153,6 +5137,10 @@ export default function App() {
 
   const getRenderHostWindow = (): any => {
     try {
+      const parentWindow = (window as any).parent;
+      if (parentWindow && parentWindow !== window && !parentWindow.closed) return parentWindow;
+    } catch (_) {}
+    try {
       const openerWindow = (window as any).opener;
       if (openerWindow && !openerWindow.closed) return openerWindow;
     } catch (_) {}
@@ -5186,6 +5174,70 @@ export default function App() {
       }
     } catch (_) {}
     return currentWindow;
+  };
+
+  const appendSystemTextLine = (lineRaw: any) => {
+    const line = String(lineRaw ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!line) return;
+    setSystemTextLines((prev) => {
+      const next = [...prev, ...line.split('\n')];
+      if (next.length > 3000) {
+        return next.slice(next.length - 3000);
+      }
+      return next;
+    });
+  };
+
+  const formatOptimizeConsoleCell = (value: number, width: number, fractionDigits = 6) => {
+    if (!Number.isFinite(value)) return ''.padStart(width, ' ');
+    const abs = Math.abs(value);
+    const text = (abs >= 1e6 || (abs > 0 && abs < 1e-4))
+      ? value.toExponential(3)
+      : value.toFixed(fractionDigits);
+    return text.length >= width ? text : text.padStart(width, ' ');
+  };
+
+  const appendOptimizeConsoleLine = (line: string) => {
+    try {
+      const hostWindow = getRenderHostWindow() as any;
+      if (hostWindow && hostWindow !== window && typeof hostWindow.__cooptTextWindowWrite === 'function') {
+        hostWindow.__cooptTextWindowWrite(line);
+        return;
+      }
+    } catch (_) {}
+    appendSystemTextLine(line);
+  };
+
+  const appendOptimizeConsoleHeader = () => {
+    appendOptimizeConsoleLine('Iter    Elapsed           Min.          Equal.        Inequal.     DampingF.        Improv.');
+  };
+
+  const formatOptimizeElapsed = (elapsedMs: number) => {
+    const totalTenths = Math.max(0, Math.floor((Number(elapsedMs) || 0) / 100));
+    const hours = Math.floor(totalTenths / 36000);
+    const minutes = Math.floor((totalTenths % 36000) / 600);
+    const seconds = Math.floor((totalTenths % 600) / 10);
+    const tenths = totalTenths % 10;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${tenths}`;
+  };
+
+  const appendOptimizeConsoleRow = (row: {
+    iter: number;
+    min: number;
+    equal: number;
+    inequal: number;
+    damping: number;
+    improv: number;
+    elapsedMs: number;
+  }) => {
+    const iterCol = String(Math.max(0, Math.floor(Number(row.iter) || 0))).padStart(4, ' ');
+    const elapsedCol = formatOptimizeElapsed(row.elapsedMs).padStart(11, ' ');
+    const minCol = formatOptimizeConsoleCell(row.min, 14, 6);
+    const eqCol = formatOptimizeConsoleCell(row.equal, 14, 6);
+    const ineqCol = formatOptimizeConsoleCell(row.inequal, 14, 6);
+    const dampingCol = formatOptimizeConsoleCell(row.damping, 12, 6);
+    const improvCol = formatOptimizeConsoleCell(row.improv, 14, 5);
+    appendOptimizeConsoleLine(`${iterCol}${elapsedCol}${minCol}${eqCol}${ineqCol}${dampingCol}${improvCol}`);
   };
 
   const getOptimizeSyncTargetWindow = (): any => {
@@ -8975,9 +9027,14 @@ const collectLegacyCrossRays = async (
       } catch (_) {}
       return false;
     };
+    const releasePendingSystemConfigPreference = () => {
+      if (renderRedrawInFlightRef.current) return;
+      if (renderNeedsVisibilityReplayRef.current) return;
+      if (Array.isArray(renderPendingRowsRef.current) && renderPendingRowsRef.current.length > 0) return;
+      try { delete w.__cooptPreferRuntimeSystemConfig; } catch (_) {}
+    };
     w.__cooptRenderWindowRedraw = async (rows?: any[], syncStamp?: string, objectRows?: any[]) => {
       const normalizedSyncStamp = String(syncStamp ?? '').trim();
-      let appliedPendingSystemConfig = false;
       try {
         const pendingSystemConfig = w.__cooptPendingRenderSystemConfig;
         if (pendingSystemConfig && typeof pendingSystemConfig === 'object') {
@@ -8989,7 +9046,6 @@ const collectLegacyCrossRays = async (
             w.__cooptSystemConfig = clonedPendingSystemConfig;
             w.__cooptPreferRuntimeSystemConfig = true;
           } catch (_) {}
-          appliedPendingSystemConfig = true;
         }
       } catch (_) {
       } finally {
@@ -9013,6 +9069,7 @@ const collectLegacyCrossRays = async (
         }
         const redrawSignature = buildRenderSyncSignature(rows, Array.isArray(objectRows) ? objectRows : [], { useLiveRayCount: true });
         if (!renderNeedsVisibilityReplayRef.current && redrawSignature === renderLastCompletedSyncSignatureRef.current && !renderRedrawInFlightRef.current) {
+          releasePendingSystemConfigPreference();
           return;
         }
         renderPendingRowsRef.current = rows;
@@ -9086,6 +9143,7 @@ const collectLegacyCrossRays = async (
       } catch (_) {
       } finally {
         renderRedrawInFlightRef.current = false;
+        releasePendingSystemConfigPreference();
       }
     };
 
@@ -9103,12 +9161,15 @@ const collectLegacyCrossRays = async (
       const queuedObjectRows = Array.isArray(renderPendingObjectRowsRef.current) ? renderPendingObjectRowsRef.current : null;
       renderNeedsVisibilityReplayRef.current = false;
       if (queuedRows && queuedRows.length > 0 && typeof w.__cooptRenderWindowRedraw === 'function') {
-        void Promise.resolve(w.__cooptRenderWindowRedraw(queuedRows, undefined, queuedObjectRows || undefined));
+        void Promise.resolve(w.__cooptRenderWindowRedraw(queuedRows, undefined, queuedObjectRows || undefined))
+          .finally(releasePendingSystemConfigPreference);
         return;
       }
-      scheduleRenderRedraw().catch(() => {
-        setRenderWindowStatus('Draw failed');
-      });
+      scheduleRenderRedraw()
+        .catch(() => {
+          setRenderWindowStatus('Draw failed');
+        })
+        .finally(releasePendingSystemConfigPreference);
     };
 
     document.addEventListener('visibilitychange', onVisibilityChange);
@@ -10323,6 +10384,7 @@ const collectLegacyCrossRays = async (
       optimizeConsoleHeaderWrittenRef.current = false;
       optimizeConsolePrevMinRef.current = Number.NaN;
       optimizeConsoleLastIterRef.current = -1;
+      optimizeConsoleStartedAtRef.current = Date.now();
       setOptRunning(true);
       optimizeDisplaySleepBlockTokenRef.current = sleepBlockToken || null;
       if (sleepBlockToken) {
@@ -10344,6 +10406,8 @@ const collectLegacyCrossRays = async (
         percent: 0,
         progressEvents: [],
       }));
+      appendOptimizeConsoleHeader();
+      optimizeConsoleHeaderWrittenRef.current = true;
 
       const sourceRows = (() => {
         try {
@@ -10860,6 +10924,7 @@ const collectLegacyCrossRays = async (
             onProgress: (ev: any) => {
             const phase = String(ev?.phase ?? 'running');
             const phaseLower = phase.toLowerCase();
+            const elapsedMs = Math.max(0, Date.now() - optimizeConsoleStartedAtRef.current);
             const progressMethod = String(ev?.method ?? (optMethod || 'kkt')).trim().toLowerCase();
             const iter = Number(ev?.iter ?? 0);
             const requirementSnapshots = Array.isArray(ev?.requirementSnapshots) ? ev.requirementSnapshots : [];
@@ -10876,25 +10941,44 @@ const collectLegacyCrossRays = async (
             // during optimization creates competing state writers; final done/stop
             // snapshot application below is the only host-facing update path.
             const snap = getRequirementTableScoreSnapshot();
-            const progressCurrentScore = Number(ev?.current);
             const progressBestScore = Number(ev?.best);
-            const progressViolationScore = Number(ev?.violationScore);
             const snapshotScore = getRequirementSnapshotScore(requirementSnapshots);
+            const eventRequirementScore = Number(ev?.requirementScore);
             const tableScore = Number(snap.score);
-            // ev.current = violationScore + softPenalty (total Requirement score)
-            // ev.violationScore = hard violations only (fall back)
-            const displayScore = Number.isFinite(snapshotScore)
-              ? snapshotScore
-              : (Number.isFinite(progressCurrentScore)
-                ? progressCurrentScore
-                : (Number.isFinite(progressViolationScore)
-                  ? progressViolationScore
-                  : (Number.isFinite(tableScore) ? tableScore : Number.NaN)));
-            const requirementDisplayScore = Number.isFinite(displayScore)
+            // Only externally meaningful Requirement scores may reach the console.
+            // KKT/SQP objective, merit, violation, and best values stay internal.
+            const displayScore = Number.isFinite(eventRequirementScore)
+              ? eventRequirementScore
+              : (Number.isFinite(snapshotScore)
+                ? snapshotScore
+                : (phaseLower === 'start' && Number.isFinite(tableScore) ? tableScore : Number.NaN));
+            const scorelessStart = phaseLower === 'start'
+              && !Number.isFinite(eventRequirementScore)
+              && !Number.isFinite(snapshotScore);
+            const requirementDisplayScore = !scorelessStart && Number.isFinite(displayScore)
               ? displayScore
-              : (Number.isFinite(progressBestScore)
-                ? progressBestScore
-                : (Number.isFinite(tableScore) ? tableScore : Number.NaN));
+              : Number.NaN;
+
+            if (phaseLower === 'initializing') {
+              const candidate = Math.max(1, Math.floor(Number(ev?.candidate) || 1));
+              const candidates = Math.max(candidate, Math.floor(Number(ev?.candidates) || candidate));
+              const initializationStatus = String(ev?.status ?? '').trim().toLowerCase();
+              const bestCandidate = Number(ev?.best);
+              if (initializationStatus === 'start' && candidate === 1) {
+                appendOptimizeConsoleLine(`[${formatOptimizeElapsed(elapsedMs)}] Initializing Qcon candidates 1/${candidates}...`);
+              } else if (initializationStatus === 'progress') {
+                const localIteration = Math.max(1, Math.floor(Number(ev?.localIteration) || 1));
+                const localIterations = Math.max(localIteration, Math.floor(Number(ev?.localIterations) || localIteration));
+                appendOptimizeConsoleLine(
+                  `[${formatOptimizeElapsed(elapsedMs)}] Qcon candidate ${candidate}/${candidates}, local iteration ${localIteration}/${localIterations}`
+                );
+              } else if (initializationStatus === 'done') {
+                const bestText = Number.isFinite(bestCandidate)
+                  ? `  Best ${formatOptimizeConsoleCell(bestCandidate, 14, 6).trim()}`
+                  : '';
+                appendOptimizeConsoleLine(`[${formatOptimizeElapsed(elapsedMs)}] Initialized Qcon candidate ${candidate}/${candidates}${bestText}`);
+              }
+            }
 
             const equalViolation = Number(
               ev?.equalViolation ??
@@ -10906,35 +10990,45 @@ const collectLegacyCrossRays = async (
               ev?.inequalViolation ??
               ev?.inequalityViolation ??
               ev?.ineqViolation ??
-              ev?.violationScore ??
               Number.NaN
             );
             const dampingFactor = Number(
               ev?.dampingFactor ??
+              ev?.lmDamp ??
               ev?.damping ??
               ev?.lambda ??
               ev?.stepScale ??
               Number.NaN
             );
             const previousMin = optimizeConsolePrevMinRef.current;
-            const improvement = (Number.isFinite(previousMin) && Number.isFinite(requirementDisplayScore))
-              ? (previousMin - requirementDisplayScore)
+            const improvement = (Number.isFinite(previousMin) && previousMin !== 0 && Number.isFinite(requirementDisplayScore))
+              ? (previousMin - requirementDisplayScore) / Math.abs(previousMin)
               : Number.NaN;
             const iterInt = Number.isFinite(iter) ? Math.max(0, Math.floor(iter)) : -1;
-            if (iterInt >= 0 && optimizeConsoleLastIterRef.current !== iterInt) {
+            const consoleIter = (progressMethod === 'kkt' || progressMethod === 'kkt-sqp') && phaseLower !== 'start'
+              ? iterInt + 1
+              : iterInt;
+            const isConsoleProgressPhase = phaseLower === 'start'
+              || phaseLower === 'iter'
+              || phaseLower === 'kkt-iter';
+            if (isConsoleProgressPhase
+              && Number.isFinite(requirementDisplayScore)
+              && consoleIter >= 0
+              && consoleIter > optimizeConsoleLastIterRef.current) {
               if (!optimizeConsoleHeaderWrittenRef.current) {
                 appendOptimizeConsoleHeader();
                 optimizeConsoleHeaderWrittenRef.current = true;
               }
               appendOptimizeConsoleRow({
-                iter: iterInt,
+                iter: consoleIter,
                 min: requirementDisplayScore,
                 equal: equalViolation,
                 inequal: inequalityViolation,
                 damping: dampingFactor,
                 improv: improvement,
+                elapsedMs,
               });
-              optimizeConsoleLastIterRef.current = iterInt;
+              optimizeConsoleLastIterRef.current = consoleIter;
               if (Number.isFinite(requirementDisplayScore)) {
                 optimizeConsolePrevMinRef.current = requirementDisplayScore;
               }
@@ -10942,6 +11036,16 @@ const collectLegacyCrossRays = async (
 
             if (phaseLower === 'accept') tsAcceptCount += 1;
             if (phaseLower === 'reject') tsRejectCount += 1;
+            const acceptedRows = Array.isArray(ev?.rows) ? ev.rows : [];
+            if (optAutoRenderOnAccept
+              && acceptedRows.length > 0
+              && (phaseLower === 'accept' || ev?.accepted === true)) {
+              const now = Date.now();
+              if ((now - lastRenderSyncAt) >= RENDER_SYNC_MIN_INTERVAL_MS) {
+                lastRenderSyncAt = now;
+                requestRenderSync(acceptedRows);
+              }
+            }
             if (Number.isFinite(progressBestScore)) {
               tsBestScore = Math.min(tsBestScore, progressBestScore);
             }
@@ -10974,12 +11078,12 @@ const collectLegacyCrossRays = async (
               acceptCount: tsAcceptCount,
               rejectCount: tsRejectCount,
               issue: '-',
-              percent: maxIterations > 0 ? Math.round((Math.max(0, iter) / maxIterations) * 100) : 0,
+              percent: phaseLower === 'initializing'
+                ? Math.round((Math.max(0, Number(ev?.candidate) || 0) / Math.max(1, Number(ev?.candidates) || 1)) * 100)
+                : (maxIterations > 0 ? Math.round((Math.max(0, iter) / maxIterations) * 100) : 0),
               best: Number.isFinite(tsBestRequirementScore)
                 ? tsBestRequirementScore
-                : (Number.isFinite(tsBestScore)
-                  ? tsBestScore
-                  : prev.best),
+                : prev.best,
               bestRequirementScore: Number.isFinite(tsBestRequirementScore)
                 ? tsBestRequirementScore
                 : prev.bestRequirementScore,
@@ -11395,12 +11499,6 @@ const collectLegacyCrossRays = async (
           } catch (_) {}
         }
 
-        const resultBestScore = Number(tsResult?.best);
-        const resultObjectiveScore = Number(tsResult?.objectiveScore);
-        if (Number.isFinite(resultBestScore)) {
-          tsBestScore = Math.min(tsBestScore, resultBestScore);
-        }
-
         const pickBestFiniteMin = (...values: number[]) => {
           let best = Number.NaN;
           for (const value of values) {
@@ -11410,12 +11508,7 @@ const collectLegacyCrossRays = async (
           return best;
         };
 
-        const abortedTrackedBest = pickBestFiniteMin(
-          tsBestRequirementScore,
-          tsBestScore,
-          resultBestScore,
-          resultObjectiveScore
-        );
+        const abortedTrackedBest = pickBestFiniteMin(tsBestRequirementScore, finalTableScore);
 
         if (tsAborted && Number.isFinite(abortedTrackedBest)) {
           finalTableScore = abortedTrackedBest;
@@ -11464,47 +11557,27 @@ const collectLegacyCrossRays = async (
           }
         } catch (_) {}
 
-        const doneTrackedBestRequirementScore = pickBestFiniteMin(
-          tsBestRequirementScore,
-          resultBestScore,
-          resultObjectiveScore,
-          tsBestScore
-        );
+        const doneTrackedBestRequirementScore = pickBestFiniteMin(tsBestRequirementScore, finalTableScore);
 
         const finalScore = tsAborted
-          ? (Number.isFinite(abortedTrackedBest)
-            ? abortedTrackedBest
-            : (Number.isFinite(resultBestScore)
-              ? resultBestScore
-              : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN)))
+          ? abortedTrackedBest
           : (Number.isFinite(doneTrackedBestRequirementScore)
             ? doneTrackedBestRequirementScore
             : (Number.isFinite(finalTableScore)
               ? finalTableScore
-              : (Number.isFinite(resultBestScore)
-                ? resultBestScore
-                : (Number.isFinite(resultObjectiveScore) ? resultObjectiveScore : Number.NaN))));
+              : Number.NaN));
         const finalBest = tsAborted
-          ? (Number.isFinite(abortedTrackedBest)
-            ? abortedTrackedBest
-            : (Number.isFinite(resultBestScore) ? resultBestScore : finalScore))
+          ? abortedTrackedBest
           : (Number.isFinite(tsBestRequirementScore)
             ? tsBestRequirementScore
             : (Number.isFinite(finalTableScore)
               ? finalTableScore
-              : (Number.isFinite(resultBestScore)
-                ? resultBestScore
-                : (Number.isFinite(tsBestScore)
-                  ? tsBestScore
-                  : finalScore))));
+              : finalScore));
 
         try {
           if ((window as any).__COOPT_AL_DIAG === true) {
             console.log('🩺 [AL-DIAG] done score aggregation', {
               tsAborted,
-              resultBestScore,
-              resultObjectiveScore,
-              tsBestScore,
               tsBestRequirementScore,
               finalTableScore,
               doneTrackedBestRequirementScore,
@@ -11678,9 +11751,10 @@ const collectLegacyCrossRays = async (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
             Method
-            <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'))} style={{ padding: '4px 6px' }}>
-              <option value="kkt">Augmented Lagrangian (AL)</option>
-              <option value="global-al">Global AL (KKT + Escape Function)</option>
+            <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt-sqp' | 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'))} style={{ padding: '4px 6px' }}>
+              <option value="kkt-sqp">KKT-SQP</option>
+              <option value="kkt">AL + Gauss-Newton</option>
+              <option value="global-al">Global AL + Gauss-Newton (Escape Function)</option>
               <option value="global-lm">Global LM (LM + Escape Function)</option>
               <option value="lm">Levenberg-Marquardt (LM)</option>
               <option value="cd">Coordinate Descent (CD)</option>
@@ -12846,48 +12920,6 @@ const collectLegacyCrossRays = async (
         },
       };
     });
-  };
-
-  const appendSystemTextLine = (lineRaw: any) => {
-    const line = String(lineRaw ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    if (!line) return;
-    setSystemTextLines((prev) => {
-      const next = [...prev, ...line.split('\n')];
-      if (next.length > 3000) {
-        return next.slice(next.length - 3000);
-      }
-      return next;
-    });
-  };
-
-  const formatOptimizeConsoleCell = (value: number, width: number, fractionDigits = 6) => {
-    if (!Number.isFinite(value)) return '-'.padStart(width, ' ');
-    const abs = Math.abs(value);
-    const text = (abs >= 1e6 || (abs > 0 && abs < 1e-4))
-      ? value.toExponential(3)
-      : value.toFixed(fractionDigits);
-    return text.length >= width ? text : text.padStart(width, ' ');
-  };
-
-  const appendOptimizeConsoleHeader = () => {
-    appendSystemTextLine('Iter            Min.          Equal.        Inequal.     DampingF.        Improv.');
-  };
-
-  const appendOptimizeConsoleRow = (row: {
-    iter: number;
-    min: number;
-    equal: number;
-    inequal: number;
-    damping: number;
-    improv: number;
-  }) => {
-    const iterCol = String(Math.max(0, Math.floor(Number(row.iter) || 0))).padStart(4, ' ');
-    const minCol = formatOptimizeConsoleCell(row.min, 14, 6);
-    const eqCol = formatOptimizeConsoleCell(row.equal, 14, 6);
-    const ineqCol = formatOptimizeConsoleCell(row.inequal, 14, 6);
-    const dampingCol = formatOptimizeConsoleCell(row.damping, 12, 6);
-    const improvCol = formatOptimizeConsoleCell(row.improv, 14, 6);
-    appendSystemTextLine(`${iterCol}${minCol}${eqCol}${ineqCol}${dampingCol}${improvCol}`);
   };
 
   const deriveWavefrontPupilRadiusMm = (opticalSystemRows: any[], objectRows: any[]) => {
@@ -14323,12 +14355,7 @@ const collectLegacyCrossRays = async (
     if (signature === lastOptimizeLogSignatureRef.current) return;
     lastOptimizeLogSignatureRef.current = signature;
 
-    if (optRunning) {
-      appendSystemTextLine(
-        `[Optimize] phase=${phase || 'running'} iter=${iterations} score=${Number.isFinite(score) ? score.toFixed(6) : '-'} best=${Number.isFinite(best) ? best.toFixed(6) : '-'} H=${optEscapeFunctionHeight} W=${optEscapeFunctionWidth}`
-      );
-      return;
-    }
+    if (optRunning) return;
 
     if (phase === 'done' || phase === 'stopped' || phase === 'error') {
       appendSystemTextLine(

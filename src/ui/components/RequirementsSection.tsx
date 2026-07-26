@@ -60,18 +60,20 @@ const getOpticalRows = (configId: any): any[] => {
   } catch (_) { return []; }
 };
 
-const isSelectableSurface = (row: any): boolean => {
+const isSelectableSurface = (row: any, includeImage = false): boolean => {
   const type = String(row?.['object type'] ?? row?.object ?? row?.surfType ?? '').trim().toLowerCase();
-  return !!row && type !== 'object' && type !== 'image' && type !== 'gap'
+  return !!row && type !== 'object' && (includeImage || type !== 'image') && type !== 'gap'
     && type !== 'ct' && !type.includes('coordinate') && !type.includes('coordtrans');
 };
 
-const getSurfaceOptions = (row: RequirementRow, includeTotal = false): SelectOption[] => {
+const getSurfaceOptions = (row: RequirementRow, includeTotal = false, includeImage = false): SelectOption[] => {
   const options = includeTotal ? [{ value: '0', label: '0: Total' }] : [];
   getOpticalRows(row.configId).forEach((surface, index) => {
-    if (!isSelectableSurface(surface)) return;
+    if (!isSelectableSurface(surface, includeImage)) return;
     const value = String(surface?.id ?? index + 1);
-    options.push({ value, label: `${value}: ${String(surface?.comment || surface?.label || `Surface ${value}`)}` });
+    const type = String(surface?.['object type'] ?? surface?.object ?? surface?.surfType ?? '').trim().toLowerCase();
+    const label = surface?.comment || surface?.label || (type === 'image' ? 'Image' : `Surface ${value}`);
+    options.push({ value, label: `${value}: ${String(label)}` });
   });
   return options;
 };
@@ -152,12 +154,20 @@ const getHeightOptions = (row: RequirementRow): SelectOption[] | null => {
   }));
 };
 
-const getOperandDefaults = (operand: string): RequirementRow => {
+const getOperandDefaults = (operand: string, row: RequirementRow): RequirementRow => {
   if (['MTFT', 'MTFS', 'MTFA'].includes(operand)) return { param1: '', param2: '1', param3: '', param4: '10', param5: '32' };
   if (operand === 'TA_RMS_UM') return { param1: '', param2: '1', param3: '', param4: '' };
   if (operand === 'OPD_RMS_WAVES') return { param1: '', param2: '1', param3: '', param4: '' };
   if (operand === 'ZERN_COEFF') return { param1: '', param2: '1', param3: '', param4: '', param5: '0' };
   if (operand === 'CRA_DEG') return { param1: '1', param2: '', param3: '', param4: '', param5: '' };
+  if (operand === 'SDIST') {
+    const surfaces = getSurfaceOptions(row, false, true);
+    return {
+      param1: surfaces[0]?.value ?? '',
+      param2: surfaces[1]?.value ?? surfaces[0]?.value ?? '',
+      param3: '', param4: '', param5: ''
+    };
+  }
   if (['RADI_ALL', 'ALL_EDGE_AIR', 'ALL_EDGE_ELEMENT'].includes(operand)) return { param1: 'MIN', param2: '', param3: '', param4: '', param5: '' };
   return { param1: '', param2: '', param3: '', param4: '', param5: '' };
 };
@@ -402,7 +412,7 @@ export default function RequirementsSection() {
                   <tr className={dragClass} onClick={() => setSelectedId(id)} {...rowDragProps(id)}>
                     {moveCell(id, index)}
                     <td><input type="checkbox" checked={row.enabled !== false} onChange={(event) => patchRow(id, { enabled: event.target.checked })} /></td>
-                    <td><select value={String(row.operand || '')} onChange={(event) => patchRow(id, { operand: event.target.value, ...getOperandDefaults(event.target.value) })}>{REQUIREMENT_OPERAND_KEYS.map((key) => <option key={key} value={key}>{operandLabel(key)}</option>)}</select></td>
+                    <td><select value={String(row.operand || '')} onChange={(event) => patchRow(id, { operand: event.target.value, ...getOperandDefaults(event.target.value, row) })}>{REQUIREMENT_OPERAND_KEYS.map((key) => <option key={key} value={key}>{operandLabel(key)}</option>)}</select></td>
                     <td>{`${row.op || '='} ${row.target ?? 0}`}</td><td>{formatValue(row.current, row.operand)}</td><td>{row.status || ''}</td>
                     <td><button type="button" className="requirements-react-detailsButton" onClick={(event) => { event.stopPropagation(); setSelectedId(id); setExpandedId(isExpanded ? null : id); }}>{summary}</button></td>
                     <td>{formatValue(row._contribution)}</td>
@@ -468,7 +478,10 @@ function RequirementDetails({ row, rows, patch, configurationOptions, wavelength
     if (key === 'param1' && operand === 'EDGE') return getElementAndGapOptions(row, 'elements');
     if (key === 'param1' && operand === 'EDGE_AIR') return getElementAndGapOptions(row, 'gaps');
     if (key === 'param1' && operand === 'CTCT') return getElementAndGapOptions(row, 'both');
-    if ((key === 'param1' && operand === 'RADI') || ((key === 'param1' || key === 'param2') && operand === 'SDIST')) return getSurfaceOptions(row);
+    if ((key === 'param1' && operand === 'RADI') || ((key === 'param1' || key === 'param2') && operand === 'SDIST')) {
+      const options = getSurfaceOptions(row, false, operand === 'SDIST');
+      return operand === 'SDIST' ? [{ value: '', label: '(select surface)' }, ...options] : options;
+    }
     if (key === 'param2' && ['EDGE', 'EDGE_AIR', 'ALL_EDGE_ELEMENT'].includes(operand)) return getHeightOptions(row);
     if (key === 'param3' && ['EDGE', 'ALL_EDGE_ELEMENT', 'EDGE_AIR'].includes(operand)) return [{ value: '', label: '(Radial)' }, { value: 'X', label: 'X' }, { value: 'Y', label: 'Y' }];
     if (key === 'param5' && operand.startsWith('SPOT_SIZE')) return [{ value: '', label: '(Image)' }, ...getSurfaceOptions(row)];

@@ -38,6 +38,8 @@ export function calculate_surface_origins(optical_system_rows: any[]): any;
  */
 export function cholesky_factorization(a_flat: Float64Array, n: number): Float64Array;
 
+export function clear_trace_system_metadata_cache(): void;
+
 export function compute_lca_series_from_image_heights(field_values: Float64Array, wavelengths: Float64Array, reference_wavelength: number, image_heights_flat: Float64Array): any;
 
 export function compute_native_opd_grid_rms_waves_wasm_json(req_json: string): any;
@@ -102,6 +104,8 @@ export function qr_factorization(a_flat: Float64Array, rows: number, cols: numbe
 export function reflect_ray_batch(dirs: Float64Array, normals: Float64Array, count: number): Float64Array;
 
 export function refract_ray_batch(dirs: Float64Array, normals: Float64Array, n1: Float64Array, n2: Float64Array, count: number): Float64Array;
+
+export function register_trace_system_metadata(row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): number;
 
 export function run_native_chief_ray_angle_wasm_json(req_json: string): any;
 
@@ -196,6 +200,10 @@ export function trace_image_height_infinite_chief_ray_exact_with_rows(optical_sy
 
 export function trace_ray_batch_hit_point_with_meta(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): Float64Array;
 
+export function trace_ray_batch_spot_metrics_cached(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, reference_x: number, reference_y: number, metadata_handle: number): Float64Array;
+
+export function trace_ray_batch_spot_metrics_with_meta(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, reference_x: number, reference_y: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): Float64Array;
+
 /**
  * Phase 3: High-performance batch tracing with system metadata embedded in JSON
  * Full ray-tracing loop implemented in Rust with direct WASM memory access
@@ -205,6 +213,8 @@ export function trace_ray_batch_hit_point_with_meta(rays: Float64Array, ray_coun
 export function trace_ray_batch_with_system_json(ray_array_ptr: number, system_meta_json: string, row_count: number, n_start: number): any;
 
 export function trace_single_ray_hit_point_with_meta(ray: Float64Array, target_surface_index: number, n_start: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): Float64Array;
+
+export function trace_spot_metric_jobs_cached(rays: Float64Array, ray_offsets: Uint32Array, ray_counts: Uint32Array, target_surface_indices: Uint32Array, n_starts: Float64Array, reference_xs: Float64Array, reference_ys: Float64Array, metadata_handles: Uint32Array, job_count: number): Float64Array;
 
 export function transform_point_to_global_batch(points: Float64Array, origin: Float64Array, rot_mat: Float64Array, count: number): Float64Array;
 
@@ -248,6 +258,7 @@ export interface InitOutput {
     readonly build_normal_equations: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly calculate_surface_origins: (a: number, b: number) => [number, number, number];
     readonly cholesky_factorization: (a: number, b: number, c: number) => [number, number];
+    readonly clear_trace_system_metadata_cache: () => void;
     readonly compute_lca_series_from_image_heights: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
     readonly compute_native_opd_grid_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
     readonly fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
@@ -269,6 +280,7 @@ export interface InitOutput {
     readonly qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
     readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly register_trace_system_metadata: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
     readonly run_native_chief_ray_angle_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
@@ -297,8 +309,11 @@ export interface InitOutput {
     readonly trace_image_height_infinite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
     readonly trace_image_height_infinite_chief_ray_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
     readonly trace_ray_batch_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number];
+    readonly trace_ray_batch_spot_metrics_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly trace_ray_batch_spot_metrics_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
     readonly trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly trace_single_ray_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];
+    readonly trace_spot_metric_jobs_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number];
     readonly transform_point_to_global_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly transform_ray_to_local_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly update_trust_region_radius: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;

@@ -1,4 +1,4 @@
-export type OptimizerMethod = "cd" | "lm" | "kkt" | "global-al" | "global-lm";
+export type OptimizerMethod = "cd" | "lm" | "kkt" | "kkt-sqp" | "global-al" | "global-lm";
 
 export interface OptimizeStepRequest {
   opticalSystemRows: unknown[];
@@ -49,6 +49,9 @@ export interface OptimizeProgressEvent {
   variableId?: string;
   method?: OptimizerMethod | string;
   violationScore?: number;
+  equalViolation?: number;
+  inequalViolation?: number;
+  dampingFactor?: number;
   softPenalty?: number;
   requirementCount?: number;
   residualCount?: number;

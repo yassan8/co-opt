@@ -58,6 +58,49 @@ export type RustRayTracingWasm = {
     rowRots: Float64Array,
     rowCount: number
   ) => Float64Array | number[];
+  trace_ray_batch_spot_metrics_with_meta?: (
+    rays: Float64Array,
+    rayCount: number,
+    targetSurfaceIndex: number,
+    nStart: number,
+    referenceX: number,
+    referenceY: number,
+    rowMeta: Int32Array,
+    rowParams: Float64Array,
+    rowOrigins: Float64Array,
+    rowInvRots: Float64Array,
+    rowRots: Float64Array,
+    rowCount: number
+  ) => Float64Array | number[];
+  register_trace_system_metadata?: (
+    rowMeta: Int32Array,
+    rowParams: Float64Array,
+    rowOrigins: Float64Array,
+    rowInvRots: Float64Array,
+    rowRots: Float64Array,
+    rowCount: number
+  ) => number;
+  clear_trace_system_metadata_cache?: () => void;
+  trace_ray_batch_spot_metrics_cached?: (
+    rays: Float64Array,
+    rayCount: number,
+    targetSurfaceIndex: number,
+    nStart: number,
+    referenceX: number,
+    referenceY: number,
+    metadataHandle: number
+  ) => Float64Array | number[];
+  trace_spot_metric_jobs_cached?: (
+    rays: Float64Array,
+    rayOffsets: Uint32Array,
+    rayCounts: Uint32Array,
+    targetSurfaceIndices: Uint32Array,
+    nStarts: Float64Array,
+    referenceXs: Float64Array,
+    referenceYs: Float64Array,
+    metadataHandles: Uint32Array,
+    jobCount: number
+  ) => Float64Array | number[];
   solve_ray_origins_to_stop_points_with_meta_batch?: (
     initialOrigins: Float64Array,
     dirs: Float64Array,
@@ -421,6 +464,10 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           generate_annular_offsets_flat: mod.generate_annular_offsets_flat,
           generate_centered_grid_offsets_flat: mod.generate_centered_grid_offsets_flat,
           generate_parallel_start_points_flat: mod.generate_parallel_start_points_flat,
+          register_trace_system_metadata: mod.register_trace_system_metadata,
+          clear_trace_system_metadata_cache: mod.clear_trace_system_metadata_cache,
+          trace_ray_batch_spot_metrics_cached: mod.trace_ray_batch_spot_metrics_cached,
+          trace_spot_metric_jobs_cached: mod.trace_spot_metric_jobs_cached,
           trace_ray_batch_with_system_json: mod.trace_ray_batch_with_system_json,
           run_native_chief_ray_angle_wasm_json: mod.run_native_chief_ray_angle_wasm_json,
           run_native_paraxial_metrics_wasm_json: mod.run_native_paraxial_metrics_wasm_json,
@@ -430,6 +477,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           compute_native_opd_grid_rms_waves_wasm_json: mod.compute_native_opd_grid_rms_waves_wasm_json,
           trace_single_ray_hit_point_with_meta: mod.trace_single_ray_hit_point_with_meta,
           trace_ray_batch_hit_point_with_meta: mod.trace_ray_batch_hit_point_with_meta,
+          trace_ray_batch_spot_metrics_with_meta: mod.trace_ray_batch_spot_metrics_with_meta,
           solve_ray_origins_to_stop_points_with_meta_batch: mod.solve_ray_origins_to_stop_points_with_meta_batch,
           solve_image_height_component_with_rows: mod.solve_image_height_component_with_rows,
           solve_image_height_pair_with_rows: mod.solve_image_height_pair_with_rows,

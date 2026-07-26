@@ -2,6 +2,8 @@ import {
   requiresExpandedRowsForDesignIntentChange,
   requiresBlockInspectorRefreshForDesignIntentChange,
   requiresZoomUiRefreshForDesignIntentChange,
+  reconcileDesignIntentVariableValues,
+  syncDesignIntentParameterToVariable,
 } from '../ui/design-intent-refresh-policy.ts';
 
 const cases = [
@@ -50,9 +52,28 @@ const results = cases.map((entry) => {
 
 const failed = results.filter((entry) => !entry.ok);
 
-console.log('DI_REFRESH_POLICY_REPORT', JSON.stringify(results, null, 2));
-if (failed.length > 0) {
-  console.error('DI_REFRESH_POLICY_FAIL', JSON.stringify(failed, null, 2));
+const optimizedQconBlock = {
+  parameters: { frontCoef1: 1.25 },
+  variables: { frontCoef1: { value: 1.25, optimize: { mode: 'V' } } },
+};
+optimizedQconBlock.parameters.frontCoef1 = 0;
+const syncedZero = syncDesignIntentParameterToVariable(optimizedQconBlock, 'parameters.frontCoef1', 0);
+const zeroPreserved = syncedZero === true
+  && Object.is(optimizedQconBlock.parameters.frontCoef1, 0)
+  && Object.is(optimizedQconBlock.variables.frontCoef1.value, 0);
+
+let repeatedRefreshPreserved = true;
+for (let cycle = 0; cycle < 8; cycle += 1) {
+  optimizedQconBlock.variables.frontCoef1.value = 1.25;
+  reconcileDesignIntentVariableValues(optimizedQconBlock);
+  repeatedRefreshPreserved = repeatedRefreshPreserved
+    && Object.is(optimizedQconBlock.parameters.frontCoef1, 0)
+    && Object.is(optimizedQconBlock.variables.frontCoef1.value, 0);
+}
+
+console.log('DI_REFRESH_POLICY_REPORT', JSON.stringify({ results, zeroPreserved, repeatedRefreshPreserved }, null, 2));
+if (failed.length > 0 || !zeroPreserved || !repeatedRefreshPreserved) {
+  console.error('DI_REFRESH_POLICY_FAIL', JSON.stringify({ failed, zeroPreserved, repeatedRefreshPreserved, optimizedQconBlock }, null, 2));
   process.exit(1);
 }
 

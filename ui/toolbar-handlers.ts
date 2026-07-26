@@ -749,6 +749,7 @@ function buildAllDataForShareExport(): any {
 
   return __compactSharePayloadValue({
     configurations: shareConfigurations,
+    source: w.tableSource ? w.tableSource.getData() : [],
     meritFunction: w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [],
     systemRequirements: w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : []
   }) ?? { configurations: shareConfigurations };
@@ -2391,7 +2392,7 @@ export function handleRender3D(): void {
           try {
             const cm = (window as any).ConfigurationManager;
             if (cm && typeof cm.saveCurrentToActiveConfiguration === 'function') {
-              cm.saveCurrentToActiveConfiguration();
+              cm.saveCurrentToActiveConfiguration({ syncExpandedRowsToBlocks: false });
             }
           } catch (_) {}
 
@@ -2413,7 +2414,7 @@ export function handleRender3D(): void {
         try {
           const cm = (window as any).ConfigurationManager;
           if (cm && typeof cm.saveCurrentToActiveConfiguration === 'function') {
-            cm.saveCurrentToActiveConfiguration();
+            cm.saveCurrentToActiveConfiguration({ syncExpandedRowsToBlocks: false });
           }
         } catch (_) {}
         try { w.popup3DWindow.close(); } catch (_) {}
@@ -2423,7 +2424,7 @@ export function handleRender3D(): void {
       try {
         const cm = (window as any).ConfigurationManager;
         if (cm && typeof cm.saveCurrentToActiveConfiguration === 'function') {
-          cm.saveCurrentToActiveConfiguration();
+          cm.saveCurrentToActiveConfiguration({ syncExpandedRowsToBlocks: false });
         }
       } catch (_) {}
 

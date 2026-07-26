@@ -2,7 +2,7 @@
 // 仕様書に基づくスポットダイアグラム機能
 
 // @ts-nocheck
-import { traceRay, traceRayHitPointBatch, calculateSurfaceOrigins, transformPointToLocal } from '../raytracing/core/ray-tracing.ts';
+import { traceRay, traceRayHitPointBatch, traceRaySpotMetricBatch, calculateSurfaceOrigins, transformPointToLocal } from '../raytracing/core/ray-tracing.ts';
 import { findStopSurfaceIndex, calculateFocalLength, calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 import { generateRayStartPointsForObject } from '../optical/ray-renderer.ts';
 import { detectConjugateType, ConjugateType } from '../utils/conjugate-detection.ts';
@@ -319,6 +319,8 @@ function generateRayStartPointsForSpot(obj, opticalSystemRows, rayNumber, apertu
 // スポットダイアグラムの生成
 export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, surfaceNumber, rayNumber = 128, ringCount = 3, options = {}) {
     // console.log('🎯 Generating spot diagram...');
+
+    const conjugateType = options?.conjugateType || detectConjugateType(opticalSystemRows, options);
     
     // 現在のカラーモードを表示
     const currentColorMode = window.rayColorMode || window.getRayColorMode?.() || 'object';
@@ -458,6 +460,15 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
 
     // 各Object毎にスポットを計算
     const spotData = [];
+    const totalObjects = objectRows.length;
+    const failFastConsecutiveNoSuccessObjects = (() => {
+        const raw = Number(options?.failFastConsecutiveNoSuccessObjects);
+        if (!Number.isFinite(raw) || raw <= 0) return 0;
+        return Math.max(1, Math.floor(raw));
+    })();
+    let consecutiveNoSuccessObjects = 0;
+    let failFastAborted = false;
+    let failFastAbortAtObject = null;
     
     for (let objectIndex = 0; objectIndex < objectRows.length; objectIndex++) {
         const obj = objectRows[objectIndex];
@@ -1804,6 +1815,11 @@ export async function generateSpotDiagramAsync(
     })();
     const collectTraceFailureDetails = (enableSpotFailureDiagnostics || enableSpotRetryDiagnostics) === true;
     const collectRetryAttemptDetails = enableSpotRetryDiagnostics === true;
+    const spotMetricReferencePoint = (() => {
+        const x = Number(enhancedOptions?.spotMetricReferencePoint?.x);
+        const y = Number(enhancedOptions?.spotMetricReferencePoint?.y);
+        return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+    })();
     asyncProfile.flags = {
         failureDiagnostics: enableSpotFailureDiagnostics,
         retryDiagnostics: enableSpotRetryDiagnostics
@@ -1933,6 +1949,7 @@ export async function generateSpotDiagramAsync(
         let annularRingsUsed = 0;
         let selectedRingOverride = Number(ringCount ?? 0);
         let spotPoints = [];
+        let spotMetric = null;
         let successfulRays = 0;
         let diagnostics = null;
         let pupilScaleUsed = null;
@@ -2155,7 +2172,82 @@ export async function generateSpotDiagramAsync(
                         rayBundleIndices.push(i);
                     }
                     const traceStartMs = nowMs();
+                    if (spotMetricReferencePoint) {
+                        const metric = traceRaySpotMetricBatch(
+                            opticalRowsCopy,
+                            rayBundle,
+                            spotMetricReferencePoint,
+                            1.0,
+                            targetSurfaceIndex,
+                            traceOptions
+                        );
+                        if (metric && Number(metric.validCount) > 0) {
+                            asyncProfile.timingsMs.traceRay += Math.max(0, nowMs() - traceStartMs);
+                            asyncProfile.counters.traceRayCalls += rayBundle.length;
+                            asyncProfile.counters.traceRayBatchCalls += 1;
+                            asyncProfile.counters.raysTried += rayBundle.length;
+                            asyncProfile.counters.traceRaySuccesses += Number(metric.validCount);
+                            completedWork += rayBundle.length;
+                            return {
+                                starts,
+                                ok: Number(metric.validCount),
+                                spotPoints: [],
+                                spotMetric: metric,
+                                diagnostics: diag,
+                                originSolveTraceBackend: attemptOriginSolveTraceBackend
+                            };
+                        }
+                    }
                     const hitPoints = traceRayHitPointBatch(opticalRowsCopy, rayBundle, 1.0, targetSurfaceIndex, traceOptions);
+                    if (spotMetricReferencePoint) {
+                        let validCount = 0;
+                        let sumX = 0;
+                        let sumY = 0;
+                        let sumDx2 = 0;
+                        let sumDy2 = 0;
+                        let maxR2 = 0;
+                        for (const hitPoint of hitPoints) {
+                            const x = Number(hitPoint?.x);
+                            const y = Number(hitPoint?.y);
+                            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                            const dx = x - spotMetricReferencePoint.x;
+                            const dy = y - spotMetricReferencePoint.y;
+                            const r2 = dx * dx + dy * dy;
+                            validCount += 1;
+                            sumX += x;
+                            sumY += y;
+                            sumDx2 += dx * dx;
+                            sumDy2 += dy * dy;
+                            if (r2 > maxR2) maxR2 = r2;
+                        }
+                        if (validCount > 0) {
+                            const rmsX = Math.sqrt(sumDx2 / validCount);
+                            const rmsY = Math.sqrt(sumDy2 / validCount);
+                            asyncProfile.timingsMs.traceRay += Math.max(0, nowMs() - traceStartMs);
+                            asyncProfile.counters.traceRayCalls += rayBundle.length;
+                            asyncProfile.counters.traceRayBatchCalls += 1;
+                            asyncProfile.counters.raysTried += rayBundle.length;
+                            asyncProfile.counters.traceRaySuccesses += validCount;
+                            completedWork += rayBundle.length;
+                            return {
+                                starts,
+                                ok: validCount,
+                                spotPoints: [],
+                                spotMetric: {
+                                    validCount,
+                                    centroidX: sumX / validCount,
+                                    centroidY: sumY / validCount,
+                                    rmsX,
+                                    rmsY,
+                                    rmsTotal: Math.hypot(rmsX, rmsY),
+                                    diameter: 2 * Math.sqrt(maxR2),
+                                    backend: 'ts-lockstep-compact'
+                                },
+                                diagnostics: diag,
+                                originSolveTraceBackend: attemptOriginSolveTraceBackend
+                            };
+                        }
+                    }
                     asyncProfile.timingsMs.traceRay += Math.max(0, nowMs() - traceStartMs);
                     asyncProfile.counters.traceRayCalls += rayBundle.length;
                     asyncProfile.counters.traceRayBatchCalls += 1;
@@ -2441,6 +2533,7 @@ export async function generateSpotDiagramAsync(
 
                         if (r.ok > 0) {
                             spotPoints = r.spotPoints;
+                            spotMetric = r.spotMetric || null;
                             successfulRays = r.ok;
                             pupilScaleUsed = s;
                             aimThroughStopUsed = !!aim;
@@ -2540,6 +2633,27 @@ export async function generateSpotDiagramAsync(
 
         annularRingsUsed = Number(rayStartPoints?.annularRingsUsed ?? 0);
         selectedRingOverride = Number(rayStartPoints?.selectedRingOverride ?? ringCount ?? 0);
+
+        if (spotMetric) {
+            spotData.push({
+                objectId,
+                objectType,
+                objectIndex,
+                spotPoints: [],
+                spotMetric,
+                successRate: successfulRays / rayStartPoints.length,
+                totalRays: rayStartPoints.length,
+                successfulRays,
+                pupilScaleUsed,
+                aimThroughStopUsed,
+                physicalVignettingUsed: physicalVignetting,
+                annularRingsUsed,
+                selectedRingOverride,
+                diagnostics
+            });
+            consecutiveNoSuccessObjects = 0;
+            continue;
+        }
 
         // Rays were traced inside traceOnceWithScale(); keep rayStartPoints for emission-pattern diagnostics.
 

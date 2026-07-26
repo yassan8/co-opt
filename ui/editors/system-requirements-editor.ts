@@ -1096,6 +1096,26 @@ class SystemRequirementsEditor {
           row.param3 = '';
           row.param4 = '';
           row.param5 = '';
+        } else if (row.operand === 'SDIST') {
+          const surfaceIds: string[] = [];
+          try {
+            const opticalRows = (getOpticalSystemRows as any)(null);
+            if (Array.isArray(opticalRows)) {
+              for (let i = 0; i < opticalRows.length; i++) {
+                const surface = opticalRows[i];
+                if (!surface) continue;
+                const type = String(surface['object type'] || surface.object || surface.surfType || '').trim().toLowerCase();
+                if (type === 'object' || type === 'gap' || type === 'ct'
+                  || type.includes('coordinate') || type.includes('coordtrans')) continue;
+                surfaceIds.push(String(surface.id ?? i + 1));
+              }
+            }
+          } catch (_) {}
+          row.param1 = surfaceIds[0] ?? '';
+          row.param2 = surfaceIds[1] ?? surfaceIds[0] ?? '';
+          row.param3 = '';
+          row.param4 = '';
+          row.param5 = '';
         } else if (row.operand === 'RADI_ALL' || row.operand === 'ALL_EDGE_AIR' || row.operand === 'ALL_EDGE_ELEMENT') {
           row.param1 = 'MIN';
           row.param2 = '';
@@ -1520,6 +1540,13 @@ class SystemRequirementsEditor {
           control.style.padding = '2px 4px';
           control.style.boxSizing = 'border-box';
 
+          if (String(row?.operand ?? '').trim() === 'SDIST') {
+            const emptyOption = document.createElement('option');
+            emptyOption.value = '';
+            emptyOption.textContent = '(select surface)';
+            control.appendChild(emptyOption);
+          }
+
           try {
             const opticalRows = (getOpticalSystemRows as any)(null);
             if (Array.isArray(opticalRows)) {
@@ -1532,10 +1559,11 @@ class SystemRequirementsEditor {
                 const isImage = objType === 'Image';
                 const isCT = objType === 'CT' || objType.includes('Coordinate') || objType.includes('CoordTrans');
                 const isGap = objType === 'GAP' || objType.toLowerCase() === 'gap';
-                if (isObject || isImage || isCT || isGap) continue;
+                const isSurfaceDistance = String(row?.operand ?? '').trim() === 'SDIST';
+                if (isObject || (!isSurfaceDistance && isImage) || isCT || isGap) continue;
 
                 const surfId = surfRow.id !== undefined && surfRow.id !== null ? String(surfRow.id) : String(i + 1);
-                const surfLabel = surfRow.comment || surfRow.label || `Surface ${surfId}`;
+                const surfLabel = surfRow.comment || surfRow.label || (isImage ? 'Image' : `Surface ${surfId}`);
                 const opt = document.createElement('option');
                 opt.value = surfId;
                 opt.textContent = `${surfId}: ${surfLabel}`;

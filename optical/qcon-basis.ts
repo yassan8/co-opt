@@ -65,7 +65,12 @@ function jacobiPolynomialWithDerivative(n: number, alpha: number, beta: number, 
 
 export function resolveQconScale(params: any, radiusFallback: number): number {
   const nrad = Number(params?.qconNrad ?? params?.qconNRadius ?? params?.nrad ?? params?.NRAD);
-  if (Number.isFinite(nrad) && nrad > 0) return Math.abs(nrad);
+  const semidia = Number(params?.semidia ?? params?.SemiDia ?? params?.semiDia ?? params?.semiDiameter ?? params?.semidiameter);
+  if (Number.isFinite(nrad) && nrad > 0) {
+    return Number.isFinite(semidia) && semidia > 0
+      ? Math.max(Math.abs(nrad), Math.abs(semidia))
+      : Math.abs(nrad);
+  }
 
   const diameterLike = [
     params?.diameter,
@@ -83,7 +88,7 @@ export function resolveQconScale(params: any, radiusFallback: number): number {
   }
 
   const candidates = [
-    params?.semidia,
+    semidia,
     params?.SemiDia,
     params?.semiDia,
     params?.semiDiameter,

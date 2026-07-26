@@ -26,6 +26,10 @@ interface Block {
   metadata?: Record<string, any>;
 }
 
+interface SaveConfigurationOptions {
+  syncExpandedRowsToBlocks?: boolean;
+}
+
 const STORAGE_KEY = "systemConfigurations";
 
 const CONFIG_DEBUG = !!(typeof globalThis !== 'undefined' && w.__CONFIG_DEBUG);
@@ -123,7 +127,7 @@ function mergeVariableEntriesFromBaseline(currentVars: any, baselineVars: any, c
         ...(isPlainObjectRecord(currentEntry.optimize) ? currentEntry.optimize : {}),
       };
     }
-    if (!Object.prototype.hasOwnProperty.call(mergedEntry, 'value') && Object.prototype.hasOwnProperty.call(params, key)) {
+    if (Object.prototype.hasOwnProperty.call(params, key)) {
       mergedEntry.value = params[key];
     }
     merged[key] = mergedEntry;
@@ -690,7 +694,7 @@ export function setActiveConfiguration(configId: number | string): boolean {
 }
 
 // 現在のテーブルデータをアクティブなConfigurationに保存
-export function saveCurrentToActiveConfiguration(): void {
+export function saveCurrentToActiveConfiguration(options: SaveConfigurationOptions = {}): void {
   cfgLog('🔵 [Configuration] Saving current table data to active configuration...');
   
   let systemConfig = loadSystemConfigurations();
@@ -739,7 +743,7 @@ export function saveCurrentToActiveConfiguration(): void {
     activeConfig.opticalSystem = opticalRowsFromTable;
   } else {
     try {
-      if (Array.isArray(opticalRowsFromTable) && opticalRowsFromTable.length > 0 && typeof w.__cooptSyncRowsBackToActiveBlocks === 'function') {
+      if (options.syncExpandedRowsToBlocks !== false && Array.isArray(opticalRowsFromTable) && opticalRowsFromTable.length > 0 && typeof w.__cooptSyncRowsBackToActiveBlocks === 'function') {
         const clonedRows = cloneSystemConfiguration<any[]>(opticalRowsFromTable) ?? opticalRowsFromTable;
         const clonedObjectRows = Array.isArray(objectDataFromTable)
           ? (cloneSystemConfiguration<any[]>(objectDataFromTable) ?? objectDataFromTable)
