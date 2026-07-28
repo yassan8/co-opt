@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -6,14 +7,16 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 use tauri::AppHandle;
 
-use crate::commands::analysis::{compute_paraxial_metrics, run_native_seidel, NativeSeidelRequest};
+use crate::commands::analysis::{
+    compute_paraxial_metrics, run_native_seidel, NativeSeidelRequest, ParaxialMetrics,
+};
 use crate::commands::optics::{
     aspheric_sag, compute_finite_opd_grid_rms_waves, compute_native_chief_ray_angle_deg,
     compute_native_transverse_rms_batch, reduce_native_transverse_rms_stats, run_native_opd_map,
     run_native_spherical_aberration, run_native_spot_raytrace, run_native_transverse_rms_um,
     NativeOpdMapRequest, NativeSphericalAberrationPoint, NativeSphericalAberrationRequest,
-    NativeSphericalAberrationSeries, NativeSpotRaytraceRequest, NativeTransverseAberrationSeries,
-    NativeTransverseRmsRequest,
+    NativeSphericalAberrationSeries, NativeSpotRaytraceRequest, NativeSpotSeries,
+    NativeTransverseAberrationSeries, NativeTransverseRmsRequest,
 };
 
 const STEP_FRACTION: f64 = 0.02;
@@ -37,6 +40,8 @@ const KKT_PENALTY_INCREASE_FACTOR: f64 = 1.5;
 
 static OPTIMIZER_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static OPTIMIZER_SESSIONS: LazyLock<Mutex<HashMap<String, OptimizerSessionState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static CANDIDATE_EVALUATOR_SESSIONS: LazyLock<Mutex<HashMap<String, CandidateEvaluatorSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static OPTIMIZER_PROFILE: LazyLock<Mutex<Option<OptimizerProfileAccumulator>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -136,6 +141,9 @@ pub fn optimizer_drop_session(req: OptimizerDropSessionRequest) -> bool {
     if let Ok(mut m) = OPTIMIZER_SESSIONS.lock() {
         m.remove(session_id.trim());
     }
+    if let Ok(mut m) = CANDIDATE_EVALUATOR_SESSIONS.lock() {
+        m.remove(session_id.trim());
+    }
     true
 }
 
@@ -143,6 +151,308 @@ pub fn optimizer_drop_session(req: OptimizerDropSessionRequest) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerDropSessionRequest {
     pub session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluateOptimizerCandidatesRequest {
+    #[serde(default)]
+    pub candidates: Vec<HashMap<String, Vec<Value>>>,
+    #[serde(default)]
+    pub candidate_deltas: Vec<Vec<CandidateCellUpdate>>,
+    #[serde(default)]
+    pub candidate_vectors: Vec<Vec<f64>>,
+    pub variable_bindings: Option<Vec<CandidateVariableBinding>>,
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub reset_session: bool,
+    pub base_rows_by_config: Option<HashMap<String, Vec<Value>>>,
+    #[serde(default)]
+    pub source_rows: Vec<Value>,
+    #[serde(default)]
+    pub object_rows: Vec<Value>,
+    #[serde(default)]
+    pub system_requirements_rows: Vec<Value>,
+    pub active_config_id: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateCellUpdate {
+    pub config_id: String,
+    pub row_index: usize,
+    pub field_key: String,
+    #[serde(default)]
+    pub remove: bool,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateVariableBinding {
+    pub variable_index: usize,
+    pub config_id: String,
+    pub row_index: usize,
+    pub field_key: String,
+    pub input_baseline: f64,
+    pub output_baseline: f64,
+    pub slope: f64,
+}
+
+#[derive(Clone)]
+struct CandidateEvaluatorSession {
+    base_rows_by_config: HashMap<String, Vec<Value>>,
+    source_rows: Vec<Value>,
+    object_rows: Vec<Value>,
+    requirements: Vec<RequirementSpec>,
+    requirements_by_config: Vec<(String, Vec<usize>, Vec<RequirementSpec>)>,
+    variable_bindings: Vec<CandidateVariableBinding>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluateOptimizerCandidatesResponse {
+    pub currents_per_candidate: Vec<Vec<Option<f64>>>,
+    pub candidate_count: usize,
+    pub requirement_count: usize,
+    pub session_reused: bool,
+    pub applied_update_count: usize,
+    pub elapsed_ms: f64,
+}
+
+#[tauri::command]
+pub fn evaluate_optimizer_candidates(
+    req: EvaluateOptimizerCandidatesRequest,
+) -> Result<EvaluateOptimizerCandidatesResponse, String> {
+    if req.candidates.is_empty()
+        && req.candidate_deltas.is_empty()
+        && req.candidate_vectors.is_empty()
+    {
+        return Err("evaluate_optimizer_candidates: candidates is empty".to_string());
+    }
+    let session_id = req
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let uses_session = !req.candidate_deltas.is_empty() || !req.candidate_vectors.is_empty();
+    let session_reused = uses_session && req.base_rows_by_config.is_none();
+    let evaluator_session = if !uses_session {
+        build_candidate_evaluator_session(
+            HashMap::new(),
+            req.source_rows.clone(),
+            req.object_rows.clone(),
+            &req.system_requirements_rows,
+            Vec::new(),
+        )?
+    } else {
+        let mut sessions = CANDIDATE_EVALUATOR_SESSIONS
+            .lock()
+            .map_err(|_| "evaluate_optimizer_candidates: session lock failed".to_string())?;
+        if req.reset_session {
+            if let Some(id) = session_id {
+                sessions.remove(id);
+            }
+        }
+        if let Some(base_rows_by_config) = req.base_rows_by_config.clone() {
+            let session = build_candidate_evaluator_session(
+                base_rows_by_config,
+                req.source_rows.clone(),
+                req.object_rows.clone(),
+                &req.system_requirements_rows,
+                req.variable_bindings.clone().unwrap_or_default(),
+            )?;
+            if let Some(id) = session_id {
+                sessions.insert(id.to_string(), session.clone());
+                if sessions.len() > 64 {
+                    if let Some(oldest_id) = sessions.keys().next().cloned() {
+                        sessions.remove(&oldest_id);
+                    }
+                }
+            }
+            session
+        } else {
+            let id = session_id.ok_or_else(|| {
+                "evaluate_optimizer_candidates: delta request needs sessionId".to_string()
+            })?;
+            sessions.get(id).cloned().ok_or_else(|| {
+                "evaluate_optimizer_candidates: candidate session not found".to_string()
+            })?
+        }
+    };
+
+    let applied_update_count = if !req.candidate_vectors.is_empty() {
+        req.candidate_vectors.len() * evaluator_session.variable_bindings.len()
+    } else {
+        req.candidate_deltas.iter().map(Vec::len).sum()
+    };
+    let candidates = if !req.candidate_vectors.is_empty() {
+        req.candidate_vectors
+            .iter()
+            .map(|values| apply_candidate_vector(&evaluator_session, values))
+            .collect::<Result<Vec<_>, _>>()?
+    } else if req.candidate_deltas.is_empty() {
+        req.candidates
+    } else {
+        req.candidate_deltas
+            .iter()
+            .map(|updates| apply_candidate_updates(&evaluator_session.base_rows_by_config, updates))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let started_at = Instant::now();
+    let currents_per_candidate = candidates
+        .par_iter()
+        .map(|rows_by_config| {
+            let mut currents = vec![None; evaluator_session.requirements.len()];
+            for (config_id, indexes, scoped_requirements) in
+                &evaluator_session.requirements_by_config
+            {
+                let Some(rows) = rows_by_config.get(config_id) else {
+                    continue;
+                };
+                let scoped_currents = evaluate_requirement_currents(
+                    rows,
+                    &evaluator_session.source_rows,
+                    &evaluator_session.object_rows,
+                    scoped_requirements,
+                );
+                for (position, index) in indexes.iter().enumerate() {
+                    currents[*index] = scoped_currents.get(position).copied().flatten();
+                }
+            }
+            currents
+        })
+        .collect::<Vec<_>>();
+
+    Ok(EvaluateOptimizerCandidatesResponse {
+        candidate_count: currents_per_candidate.len(),
+        requirement_count: evaluator_session.requirements.len(),
+        session_reused,
+        applied_update_count,
+        currents_per_candidate,
+        elapsed_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+    })
+}
+
+fn build_candidate_evaluator_session(
+    base_rows_by_config: HashMap<String, Vec<Value>>,
+    source_rows: Vec<Value>,
+    object_rows: Vec<Value>,
+    requirement_rows: &[Value],
+    variable_bindings: Vec<CandidateVariableBinding>,
+) -> Result<CandidateEvaluatorSession, String> {
+    let requirements = collect_requirements(requirement_rows, "");
+    if requirements.len() != requirement_rows.len() {
+        return Err(
+            "evaluate_optimizer_candidates: requirement filtering changed the requested order"
+                .to_string(),
+        );
+    }
+    let mut indexes_by_config: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, requirement) in requirements.iter().enumerate() {
+        indexes_by_config
+            .entry(requirement.config_id.clone())
+            .or_default()
+            .push(index);
+    }
+    let requirements_by_config = indexes_by_config
+        .into_iter()
+        .map(|(config_id, indexes)| {
+            let scoped_requirements = indexes
+                .iter()
+                .map(|index| requirements[*index].clone())
+                .collect::<Vec<_>>();
+            (config_id, indexes, scoped_requirements)
+        })
+        .collect();
+    Ok(CandidateEvaluatorSession {
+        base_rows_by_config,
+        source_rows,
+        object_rows,
+        requirements,
+        requirements_by_config,
+        variable_bindings,
+    })
+}
+
+fn apply_candidate_vector(
+    session: &CandidateEvaluatorSession,
+    values: &[f64],
+) -> Result<HashMap<String, Vec<Value>>, String> {
+    let mut rows_by_config = session.base_rows_by_config.clone();
+    for binding in &session.variable_bindings {
+        let input = values.get(binding.variable_index).copied().ok_or_else(|| {
+            format!(
+                "evaluate_optimizer_candidates: variable {} is missing",
+                binding.variable_index
+            )
+        })?;
+        let output = binding.output_baseline
+            + binding.slope * (input - binding.input_baseline);
+        if !input.is_finite() || !output.is_finite() {
+            return Err("evaluate_optimizer_candidates: non-finite vector value".to_string());
+        }
+        let rows = rows_by_config.get_mut(&binding.config_id).ok_or_else(|| {
+            format!("evaluate_optimizer_candidates: unknown config {}", binding.config_id)
+        })?;
+        let row = rows.get_mut(binding.row_index).ok_or_else(|| {
+            format!(
+                "evaluate_optimizer_candidates: row {} is out of range for config {}",
+                binding.row_index, binding.config_id
+            )
+        })?;
+        let object = row.as_object_mut().ok_or_else(|| {
+            format!(
+                "evaluate_optimizer_candidates: row {} in config {} is not an object",
+                binding.row_index, binding.config_id
+            )
+        })?;
+        let store_as_string = object
+            .get(&binding.field_key)
+            .map(Value::is_string)
+            .unwrap_or(false);
+        let value = if store_as_string {
+            Value::String(format_float_for_cell(output))
+        } else {
+            Value::from(output)
+        };
+        object.insert(binding.field_key.clone(), value);
+    }
+    Ok(rows_by_config)
+}
+
+fn apply_candidate_updates(
+    base_rows_by_config: &HashMap<String, Vec<Value>>,
+    updates: &[CandidateCellUpdate],
+) -> Result<HashMap<String, Vec<Value>>, String> {
+    let mut rows_by_config = base_rows_by_config.clone();
+    for update in updates {
+        let rows = rows_by_config.get_mut(&update.config_id).ok_or_else(|| {
+            format!("evaluate_optimizer_candidates: unknown config {}", update.config_id)
+        })?;
+        let row = rows.get_mut(update.row_index).ok_or_else(|| {
+            format!(
+                "evaluate_optimizer_candidates: row {} is out of range for config {}",
+                update.row_index, update.config_id
+            )
+        })?;
+        let object = row.as_object_mut().ok_or_else(|| {
+            format!(
+                "evaluate_optimizer_candidates: row {} in config {} is not an object",
+                update.row_index, update.config_id
+            )
+        })?;
+        if update.field_key.is_empty() {
+            return Err("evaluate_optimizer_candidates: fieldKey is empty".to_string());
+        }
+        if update.remove {
+            object.remove(&update.field_key);
+        } else {
+            object.insert(update.field_key.clone(), update.value.clone());
+        }
+    }
+    Ok(rows_by_config)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1920,7 +2230,7 @@ fn approximate_augmented_gradient(
     let f0 = e0.score + rho * e0.squared_violation_score;
     let base_values = current_values(rows, vars);
 
-    vars.iter()
+    vars.par_iter()
         .enumerate()
         .map(|(i, v)| {
             if is_stop_requested() {
@@ -2196,43 +2506,15 @@ fn evaluate_requirements(
     let mut squared_violation_score = 0.0_f64;
     let mut equal_violation = 0.0_f64;
     let mut inequal_violation = 0.0_f64;
-    let mut operand_cache: HashMap<&str, Option<f64>> = HashMap::with_capacity(requirements.len());
-    let mut prefetched_cache_keys = prefill_batched_transverse_rms_cache(
-        rows,
-        source_rows,
-        object_rows,
-        requirements,
-        &mut operand_cache,
-    );
-    prefetched_cache_keys.extend(prefill_parallel_opd_rms_cache(
-        rows,
-        source_rows,
-        object_rows,
-        requirements,
-        &mut operand_cache,
-    ));
+    let currents = evaluate_requirement_currents(rows, source_rows, object_rows, requirements);
 
-    for req in requirements {
+    for (req, raw_current) in requirements.iter().zip(currents.into_iter()) {
         if is_stop_requested() {
             break;
         }
         if !req.enabled {
             continue;
         }
-
-        let cache_key = req.cache_key.as_str();
-        let raw_current = if let Some(v) = operand_cache.get(cache_key) {
-            if !prefetched_cache_keys.contains(cache_key) {
-                optimizer_profile_record_cache_hit(cache_key, &req.operand);
-            }
-            *v
-        } else {
-            let t0 = Instant::now();
-            let v = evaluate_operand_value(rows, source_rows, object_rows, req);
-            optimizer_profile_record_operand_eval(cache_key, &req.operand, t0.elapsed().as_nanos());
-            operand_cache.insert(cache_key, v);
-            v
-        };
         let (ok, current) = sanitize_operand_current(raw_current);
         let amount = if ok {
             compute_violation_amount(&req.op, current, req.target, req.tol)
@@ -2272,6 +2554,130 @@ fn evaluate_requirements(
         equal_violation,
         inequal_violation,
     )
+}
+
+fn evaluate_requirement_currents(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    requirements: &[RequirementSpec],
+) -> Vec<Option<f64>> {
+    let mut operand_cache: HashMap<&str, Option<f64>> = HashMap::with_capacity(requirements.len());
+    let mut prefetched_cache_keys = prefill_paraxial_metrics_cache(
+        rows,
+        source_rows,
+        object_rows,
+        requirements,
+        &mut operand_cache,
+    );
+    prefetched_cache_keys.extend(prefill_parallel_spot_cache(
+        rows,
+        source_rows,
+        object_rows,
+        requirements,
+        &mut operand_cache,
+    ));
+    prefetched_cache_keys.extend(prefill_batched_transverse_rms_cache(
+        rows,
+        source_rows,
+        object_rows,
+        requirements,
+        &mut operand_cache,
+    ));
+    prefetched_cache_keys.extend(prefill_parallel_opd_rms_cache(
+        rows,
+        source_rows,
+        object_rows,
+        requirements,
+        &mut operand_cache,
+    ));
+
+    requirements.iter().map(|req| {
+        if is_stop_requested() {
+            return None;
+        }
+        if !req.enabled {
+            return None;
+        }
+
+        let cache_key = req.cache_key.as_str();
+        if let Some(v) = operand_cache.get(cache_key) {
+            if !prefetched_cache_keys.contains(cache_key) {
+                optimizer_profile_record_cache_hit(cache_key, &req.operand);
+            }
+            *v
+        } else {
+            let t0 = Instant::now();
+            let v = evaluate_operand_value(rows, source_rows, object_rows, req);
+            optimizer_profile_record_operand_eval(cache_key, &req.operand, t0.elapsed().as_nanos());
+            operand_cache.insert(cache_key, v);
+            v
+        }
+    }).collect()
+}
+
+fn paraxial_metric_value(metrics: &ParaxialMetrics, operand: &str) -> Option<f64> {
+    Some(match operand {
+        "FL" => metrics.fl,
+        "EFL" => metrics.efl,
+        "BFL" => metrics.bfl,
+        "IMD" => metrics.imd,
+        "BEXP" => metrics.bexp,
+        "EXPD" => metrics.expd,
+        "EXPP" => metrics.expp,
+        "ENPD" => metrics.enpd,
+        "ENPP" => metrics.enpp,
+        "ENPM" => metrics.enpm,
+        "PMAG" => metrics.pmag,
+        "FNO_OBJ" => metrics.fno_obj,
+        "FNO_IMG" => metrics.fno_img,
+        "FNO_WRK" => metrics.fno_wrk,
+        "NA_OBJ" => metrics.na_obj,
+        "NA_IMG" => metrics.na_img,
+        _ => return None,
+    })
+}
+
+fn is_shared_paraxial_metric_operand(operand: &str) -> bool {
+    matches!(
+        operand,
+        "FL" | "EFL" | "BFL" | "IMD" | "BEXP" | "EXPD" | "EXPP" | "ENPD" | "ENPP"
+            | "ENPM" | "PMAG" | "FNO_OBJ" | "FNO_IMG" | "FNO_WRK" | "NA_OBJ" | "NA_IMG"
+    )
+}
+
+fn prefill_paraxial_metrics_cache<'a>(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    requirements: &'a [RequirementSpec],
+    operand_cache: &mut HashMap<&'a str, Option<f64>>,
+) -> HashSet<&'a str> {
+    let mut seen_cache_keys = HashSet::new();
+    let paraxial_requirements = requirements
+        .iter()
+        .filter(|req| {
+            req.enabled
+                && is_shared_paraxial_metric_operand(&req.operand)
+                && seen_cache_keys.insert(req.cache_key.as_str())
+        })
+        .collect::<Vec<_>>();
+    if paraxial_requirements.len() < 2 {
+        return HashSet::new();
+    }
+
+    let started_at = Instant::now();
+    let metrics = compute_paraxial_metrics(rows, source_rows, object_rows);
+    let share_nanos = started_at.elapsed().as_nanos() / paraxial_requirements.len() as u128;
+    let mut prefetched = HashSet::with_capacity(paraxial_requirements.len());
+    for req in paraxial_requirements {
+        let cache_key = req.cache_key.as_str();
+        let value = paraxial_metric_value(&metrics, &req.operand);
+        operand_cache.insert(cache_key, value);
+        prefetched.insert(cache_key);
+        optimizer_profile_record_operand_eval(cache_key, &req.operand, share_nanos);
+    }
+    prefetched
 }
 
 fn evaluate_operand_value(
@@ -2671,6 +3077,7 @@ fn native_spot_size_um(
         ring_count: Some(10),
         pattern: Some(pattern.to_string()),
         wavelength_mode: Some("primary".to_string()),
+        independent_object_origins: true,
         ray_series: Vec::new(),
     };
 
@@ -2699,6 +3106,136 @@ fn native_spot_size_um(
         return Some(2.0 * max_r2.sqrt());
     }
     Some((sum_sq / count as f64).sqrt())
+}
+
+fn spot_metric_from_series(series: &NativeSpotSeries, metric: &str) -> Option<f64> {
+    let mut sum_sq = 0.0_f64;
+    let mut max_r2 = 0.0_f64;
+    let mut count = 0usize;
+    for point in &series.points {
+        let x = point.x_um;
+        let y = point.y_um;
+        if x.is_finite() && y.is_finite() {
+            let radius_squared = x * x + y * y;
+            sum_sq += radius_squared;
+            max_r2 = max_r2.max(radius_squared);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    if matches!(metric.trim().to_lowercase().as_str(), "diameter" | "dia") {
+        Some(2.0 * max_r2.sqrt())
+    } else {
+        Some((sum_sq / count as f64).sqrt())
+    }
+}
+
+fn evaluate_batched_spot_requirements<'a>(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    requirements: &[&'a RequirementSpec],
+) -> Option<Vec<(&'a RequirementSpec, Option<f64>)>> {
+    let first = *requirements.first()?;
+    let mut batched_object_rows = Vec::with_capacity(requirements.len());
+    for requirement in requirements {
+        let selected = select_object_rows_for_requirement(object_rows, &requirement.param2);
+        if selected.len() != 1 {
+            return None;
+        }
+        batched_object_rows.push(selected[0].clone());
+    }
+
+    let pattern = if first.operand == "SPOT_SIZE_RECT" {
+        "grid"
+    } else {
+        "annular"
+    };
+    let response = run_native_spot_raytrace(NativeSpotRaytraceRequest {
+        optical_system_rows: rows.to_vec(),
+        source_rows: source_rows_for_wavelength_param(source_rows, &first.param1),
+        object_rows: batched_object_rows,
+        surface_index: Some(image_surface_index(rows)),
+        ray_count: Some(parse_spot_ray_count(&first.param4)),
+        ring_count: Some(10),
+        pattern: Some(pattern.to_string()),
+        wavelength_mode: Some("primary".to_string()),
+        independent_object_origins: true,
+        ray_series: Vec::new(),
+    })
+    .ok()?;
+    if response.series.len() != requirements.len() {
+        return None;
+    }
+
+    Some(
+        requirements
+            .iter()
+            .zip(response.series.iter())
+            .map(|(requirement, series)| {
+                (*requirement, spot_metric_from_series(series, &requirement.param3))
+            })
+            .collect(),
+    )
+}
+
+fn prefill_parallel_spot_cache<'a>(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+    requirements: &'a [RequirementSpec],
+    operand_cache: &mut HashMap<&'a str, Option<f64>>,
+) -> HashSet<&'a str> {
+    let mut seen_cache_keys = HashSet::new();
+    let mut groups: HashMap<String, Vec<&RequirementSpec>> = HashMap::new();
+    for requirement in requirements {
+        if !requirement.enabled
+            || !matches!(
+                requirement.operand.as_str(),
+                "SPOT_SIZE_ANNULAR" | "SPOT_SIZE_RECT" | "SPOT_SIZE_CURRENT"
+            )
+            || !seen_cache_keys.insert(requirement.cache_key.as_str())
+        {
+            continue;
+        }
+        let pattern = if requirement.operand == "SPOT_SIZE_RECT" {
+            "grid"
+        } else {
+            "annular"
+        };
+        let group_key = format!("{}|{}|{}", pattern, requirement.param1, requirement.param4);
+        groups.entry(group_key).or_default().push(requirement);
+    }
+
+    let results = groups
+        .into_values()
+        .filter(|group| group.len() >= 2)
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .filter_map(|group| {
+            let t0 = Instant::now();
+            let values = evaluate_batched_spot_requirements(rows, source_rows, object_rows, &group)?;
+            let share_nanos = t0.elapsed().as_nanos() / values.len().max(1) as u128;
+            Some((values, share_nanos))
+        })
+        .collect::<Vec<_>>();
+
+    let mut prefetched = HashSet::new();
+    for (values, share_nanos) in results {
+        for (requirement, value) in values {
+            let cache_key = requirement.cache_key.as_str();
+            operand_cache.insert(cache_key, value);
+            prefetched.insert(cache_key);
+            optimizer_profile_record_operand_eval(
+                cache_key,
+                &requirement.operand,
+                share_nanos,
+            );
+        }
+    }
+    prefetched
 }
 
 fn native_transverse_rms_um(
@@ -4608,6 +5145,307 @@ fn parse_number_from_str(s: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_spot_fields_match_individual_evaluations() {
+        OPTIMIZER_STOP_REQUESTED.store(false, Ordering::SeqCst);
+        let rows = vec![
+            serde_json::json!({
+                "id": 0, "object type": "Object", "surfType": "Spherical",
+                "radius": "INF", "thickness": 10.0, "material": "AIR", "semidia": 10.0
+            }),
+            serde_json::json!({
+                "id": 1, "object type": "Stop", "surfType": "Spherical",
+                "radius": "INF", "thickness": 20.0, "material": "AIR", "semidia": 5.0
+            }),
+            serde_json::json!({
+                "id": 2, "object type": "Image", "surfType": "Spherical",
+                "radius": "INF", "thickness": 0.0, "material": "AIR", "semidia": 10.0
+            }),
+        ];
+        let source_rows = vec![serde_json::json!({
+            "id": 1, "wavelength": 0.5875618, "weight": 1,
+            "primary": "Primary Wavelength"
+        })];
+        let object_rows = vec![
+            serde_json::json!({
+                "id": 1, "name": "Field-0", "position": "Rectangle",
+                "xHeight": 0.0, "yHeight": 0.0
+            }),
+            serde_json::json!({
+                "id": 2, "name": "Field-1", "position": "Rectangle",
+                "xHeight": 0.0, "yHeight": 4.0
+            }),
+        ];
+        let requirement_rows = vec![
+            serde_json::json!({
+                "id": "spot-field-1", "enabled": true, "operand": "SPOT_SIZE_ANNULAR",
+                "op": "<=", "target": 0.0, "weight": 1.0,
+                "param1": "1", "param2": "1", "param3": "rms", "param4": "16"
+            }),
+            serde_json::json!({
+                "id": "spot-field-2", "enabled": true, "operand": "SPOT_SIZE_ANNULAR",
+                "op": "<=", "target": 0.0, "weight": 1.0,
+                "param1": "1", "param2": "2", "param3": "rms", "param4": "16"
+            }),
+        ];
+        let requirements = collect_requirements(&requirement_rows, "");
+        let individual = requirements
+            .iter()
+            .map(|requirement| {
+                native_spot_size_um(
+                    &rows,
+                    &source_rows,
+                    &object_rows,
+                    requirement,
+                    "annular",
+                )
+                .expect("individual Spot evaluation should succeed")
+            })
+            .collect::<Vec<_>>();
+        let requirement_refs = requirements.iter().collect::<Vec<_>>();
+        let batched = evaluate_batched_spot_requirements(
+            &rows,
+            &source_rows,
+            &object_rows,
+            &requirement_refs,
+        )
+        .expect("batched Spot evaluation should succeed");
+
+        assert_eq!(batched.len(), individual.len());
+        for (index, (_, value)) in batched.iter().enumerate() {
+            let actual = value.expect("batched Spot metric should be finite");
+            let expected = individual[index];
+            let tolerance = 1e-10 * expected.abs().max(1.0);
+            assert!((actual - expected).abs() <= tolerance);
+        }
+    }
+
+    #[test]
+    fn candidate_batch_preserves_order_and_configuration_scope() {
+        OPTIMIZER_STOP_REQUESTED.store(false, Ordering::SeqCst);
+        let requirement_rows = vec![
+            serde_json::json!({
+                "id": "wide-objd", "configId": "wide", "enabled": true,
+                "operand": "OBJD", "op": "=", "target": 0.0, "weight": 1.0
+            }),
+            serde_json::json!({
+                "id": "tele-objd", "configId": "tele", "enabled": true,
+                "operand": "OBJD", "op": "=", "target": 0.0, "weight": 1.0
+            }),
+        ];
+        let candidates = vec![
+            HashMap::from([
+                ("wide".to_string(), vec![serde_json::json!({ "thickness": 5.0 })]),
+                ("tele".to_string(), vec![serde_json::json!({ "thickness": 50.0 })]),
+            ]),
+            HashMap::from([
+                ("wide".to_string(), vec![serde_json::json!({ "thickness": 7.0 })]),
+                ("tele".to_string(), vec![serde_json::json!({ "thickness": 70.0 })]),
+            ]),
+        ];
+
+        let response = evaluate_optimizer_candidates(EvaluateOptimizerCandidatesRequest {
+            candidates,
+            candidate_deltas: Vec::new(),
+            candidate_vectors: Vec::new(),
+            variable_bindings: None,
+            session_id: None,
+            reset_session: false,
+            base_rows_by_config: None,
+            source_rows: Vec::new(),
+            object_rows: Vec::new(),
+            system_requirements_rows: requirement_rows,
+            active_config_id: Some(Value::String("wide".to_string())),
+        })
+        .expect("candidate batch should evaluate");
+
+        assert_eq!(response.currents_per_candidate.len(), 2);
+        assert_eq!(response.currents_per_candidate[0], vec![Some(5.0), Some(50.0)]);
+        assert_eq!(response.currents_per_candidate[1], vec![Some(7.0), Some(70.0)]);
+    }
+
+    #[test]
+    fn candidate_delta_session_matches_full_row_batch() {
+        OPTIMIZER_STOP_REQUESTED.store(false, Ordering::SeqCst);
+        let requirement_rows = vec![serde_json::json!({
+            "id": "wide-objd", "configId": "wide", "enabled": true,
+            "operand": "OBJD", "op": "=", "target": 0.0, "weight": 1.0
+        })];
+        let base_rows_by_config = HashMap::from([(
+            "wide".to_string(),
+            vec![serde_json::json!({ "thickness": 5.0, "radius": 40.0 })],
+        )]);
+        let full = evaluate_optimizer_candidates(EvaluateOptimizerCandidatesRequest {
+            candidates: vec![HashMap::from([(
+                "wide".to_string(),
+                vec![serde_json::json!({ "thickness": 7.0, "radius": 40.0 })],
+            )])],
+            candidate_deltas: Vec::new(),
+            candidate_vectors: Vec::new(),
+            variable_bindings: None,
+            session_id: None,
+            reset_session: false,
+            base_rows_by_config: None,
+            source_rows: Vec::new(),
+            object_rows: Vec::new(),
+            system_requirements_rows: requirement_rows.clone(),
+            active_config_id: Some(Value::String("wide".to_string())),
+        })
+        .expect("full-row batch should evaluate");
+        let delta = evaluate_optimizer_candidates(EvaluateOptimizerCandidatesRequest {
+            candidates: Vec::new(),
+            candidate_deltas: vec![vec![CandidateCellUpdate {
+                config_id: "wide".to_string(),
+                row_index: 0,
+                field_key: "thickness".to_string(),
+                remove: false,
+                value: serde_json::json!(7.0),
+            }]],
+            candidate_vectors: Vec::new(),
+            variable_bindings: None,
+            session_id: Some("candidate-delta-parity".to_string()),
+            reset_session: true,
+            base_rows_by_config: Some(base_rows_by_config),
+            source_rows: Vec::new(),
+            object_rows: Vec::new(),
+            system_requirements_rows: requirement_rows,
+            active_config_id: Some(Value::String("wide".to_string())),
+        })
+        .expect("delta batch should evaluate");
+
+        assert_eq!(delta.currents_per_candidate, full.currents_per_candidate);
+        assert!(!delta.session_reused);
+        assert_eq!(delta.applied_update_count, 1);
+
+        let reused = evaluate_optimizer_candidates(EvaluateOptimizerCandidatesRequest {
+            candidates: Vec::new(),
+            candidate_deltas: vec![vec![CandidateCellUpdate {
+                config_id: "wide".to_string(),
+                row_index: 0,
+                field_key: "thickness".to_string(),
+                remove: false,
+                value: serde_json::json!(9.0),
+            }]],
+            candidate_vectors: Vec::new(),
+            variable_bindings: None,
+            session_id: Some("candidate-delta-parity".to_string()),
+            reset_session: false,
+            base_rows_by_config: None,
+            source_rows: Vec::new(),
+            object_rows: Vec::new(),
+            system_requirements_rows: Vec::new(),
+            active_config_id: None,
+        })
+        .expect("stored delta session should evaluate without repeated metadata");
+        assert_eq!(reused.currents_per_candidate, vec![vec![Some(9.0)]]);
+        assert!(reused.session_reused);
+        assert_eq!(reused.applied_update_count, 1);
+        optimizer_drop_session(OptimizerDropSessionRequest {
+            session_id: "candidate-delta-parity".to_string(),
+        });
+    }
+
+    #[test]
+    fn candidate_vector_session_matches_full_row_batch() {
+        OPTIMIZER_STOP_REQUESTED.store(false, Ordering::SeqCst);
+        let requirement_rows = vec![serde_json::json!({
+            "id": "wide-objd", "configId": "wide", "enabled": true,
+            "operand": "OBJD", "op": "=", "target": 0.0, "weight": 1.0
+        })];
+        let response = evaluate_optimizer_candidates(EvaluateOptimizerCandidatesRequest {
+            candidates: Vec::new(),
+            candidate_deltas: Vec::new(),
+            candidate_vectors: vec![vec![7.0], vec![9.0]],
+            variable_bindings: Some(vec![CandidateVariableBinding {
+                variable_index: 0,
+                config_id: "wide".to_string(),
+                row_index: 0,
+                field_key: "thickness".to_string(),
+                input_baseline: 5.0,
+                output_baseline: 5.0,
+                slope: 1.0,
+            }]),
+            session_id: Some("candidate-vector-parity".to_string()),
+            reset_session: true,
+            base_rows_by_config: Some(HashMap::from([(
+                "wide".to_string(),
+                vec![serde_json::json!({ "thickness": 5.0 })],
+            )])),
+            source_rows: Vec::new(),
+            object_rows: Vec::new(),
+            system_requirements_rows: requirement_rows,
+            active_config_id: Some(Value::String("wide".to_string())),
+        })
+        .expect("vector batch should evaluate");
+
+        assert_eq!(
+            response.currents_per_candidate,
+            vec![vec![Some(7.0)], vec![Some(9.0)]]
+        );
+        assert_eq!(response.applied_update_count, 2);
+        optimizer_drop_session(OptimizerDropSessionRequest {
+            session_id: "candidate-vector-parity".to_string(),
+        });
+    }
+
+    #[test]
+    fn parallel_augmented_gradient_matches_serial_finite_difference() {
+        OPTIMIZER_STOP_REQUESTED.store(false, Ordering::SeqCst);
+        let mut rows = vec![
+            serde_json::json!({ "thickness": 5.0, "radius": 40.0 }),
+            serde_json::json!({ "thickness": 2.0, "radius": -35.0 }),
+        ];
+        let vars = vec![
+            VariableSpec {
+                row_index: 0,
+                field_key: "thickness".to_string(),
+                id: "v0".to_string(),
+                baseline: 4.5,
+                scale: 1.0,
+                step: 0.1,
+            },
+            VariableSpec {
+                row_index: 1,
+                field_key: "radius".to_string(),
+                id: "v1".to_string(),
+                baseline: -30.0,
+                scale: 10.0,
+                step: 0.1,
+            },
+        ];
+        let requirements = Vec::new();
+        let e0 = evaluate_state(&rows, &[], &[], &vars, &requirements);
+        let f0 = e0.score + 2.0 * e0.squared_violation_score;
+        let serial = vars
+            .iter()
+            .map(|variable| {
+                let x0 = get_numeric_field(&rows, variable.row_index, &variable.field_key)
+                    .unwrap_or(variable.baseline);
+                let h = (variable.scale * 1e-3).max(MIN_STEP);
+                let mut trial_rows = rows.clone();
+                set_numeric_field(
+                    &mut trial_rows,
+                    variable.row_index,
+                    &variable.field_key,
+                    x0 + h,
+                );
+                let e1 = evaluate_state(&trial_rows, &[], &[], &vars, &requirements);
+                (e1.score + 2.0 * e1.squared_violation_score - f0) / h
+            })
+            .collect::<Vec<_>>();
+
+        let parallel = approximate_augmented_gradient(
+            &mut rows,
+            &[],
+            &[],
+            &vars,
+            &requirements,
+            2.0,
+        );
+
+        assert_eq!(parallel, serial);
+    }
 
     #[test]
     fn kkt_augmented_cost_uses_independent_squared_violations() {

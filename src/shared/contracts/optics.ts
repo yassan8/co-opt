@@ -66,6 +66,7 @@ export interface NativeSpotRaytraceRequest {
   wavelengthMode?: string;
   forceRustWasm?: boolean;
   strictChiefOnly?: boolean;
+  independentObjectOrigins?: boolean;
   raySeries?: NativeSpotInputSeries[];
 }
 

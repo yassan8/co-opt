@@ -2613,7 +2613,9 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         if (!candidateConfig.meritFunction && Array.isArray(allData?.meritFunction)) {
             candidateConfig.meritFunction = allData.meritFunction;
         }
-        if (!candidateConfig.systemRequirements && Array.isArray(allData?.systemRequirements)) {
+        if (Array.isArray(allData?.systemRequirements)
+            && allData.systemRequirements.length > 0
+            && (!Array.isArray(candidateConfig.systemRequirements) || candidateConfig.systemRequirements.length === 0)) {
             candidateConfig.systemRequirements = allData.systemRequirements;
         }
     } catch (_) {}

@@ -41,9 +41,15 @@ import {
   solveQpSubproblemUnconstrainedWasm
 } from '../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
-import { runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
+import { evaluateOptimizerCandidates, runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
 import { OPERAND_DEFINITIONS } from '../ui/editors/merit-function-inspector.ts';
 import { loadOptimizeRayGridSize, optimizeRayCountFromGridSize } from '../ui/optimization-settings-storage.ts';
+import { adaptiveSpotRayCountAtIteration, createAdaptiveSpotSamplingPlan } from './adaptive-spot-sampling.ts';
+import { buildSqpLineSearchAlphas, isBetterSqpLookaheadCandidate } from './sqp-step-lookahead.ts';
+import {
+  initializeAdaptiveSqpDamping,
+  updateAdaptiveSqpDamping,
+} from './adaptive-sqp-damping.ts';
 
 let __optimizerStopRequested = false;
 
@@ -118,7 +124,7 @@ async function runOptimizationMvpnative(options = {}) {
     return { ok: false, reason: 'No opticalSystemRows for native optimization' };
   }
 
-  const systemRequirementsRows = applyOptimizerSpotRayCount((() => {
+  const systemRequirementsRows = applyOptimizerRequirementSampling((() => {
     if (Array.isArray(opts.systemRequirementsRows) && opts.systemRequirementsRows.length > 0) {
       return opts.systemRequirementsRows;
     }
@@ -139,7 +145,7 @@ async function runOptimizationMvpnative(options = {}) {
         }
       } catch (_) {}
       return [];
-    })(), opts.spotRayCountFast);
+    })(), opts.spotRayCountFast, opts.mtfSamplingSizeFast);
 
   const sourceRows = (() => {
     if (Array.isArray(opts.sourceRows) && opts.sourceRows.length > 0) {
@@ -214,6 +220,12 @@ async function runOptimizationMvpnative(options = {}) {
   const maxIterations = Number.isFinite(Number(opts.maxIterations))
     ? Math.max(1, Math.floor(Number(opts.maxIterations)))
     : 24;
+  const adaptiveSpotSamplingPlan = createAdaptiveSpotSamplingPlan(
+    opts.spotRayCountFast,
+    maxIterations,
+    opts.adaptiveSpotSampling !== false,
+    opts.adaptiveSpotFinalFraction,
+  );
   const shouldSkipLiveTableSync = (() => {
     try {
       return isTauriRuntime();
@@ -295,6 +307,8 @@ async function runOptimizationMvpnative(options = {}) {
   let aborted = false;
   let errorMessage: string | null = null;
   let finalDisplayScore = Number.NaN;
+  let lastNativeSpotRayCount = Number.NaN;
+  let forceFinalSpotSampling = false;
 
   try {
     while (consumedIterations < maxIterations) {
@@ -304,7 +318,27 @@ async function runOptimizationMvpnative(options = {}) {
         break;
       }
 
-      const iterBudget = Math.max(1, Math.min(chunkIterations, maxIterations - consumedIterations));
+      const nativeSpotRayCount = adaptiveSpotRayCountAtIteration(
+        adaptiveSpotSamplingPlan,
+        consumedIterations,
+        forceFinalSpotSampling,
+      );
+      const samplingStageChanged = nativeSpotRayCount !== lastNativeSpotRayCount;
+      const iterationsUntilSamplingTransition = adaptiveSpotSamplingPlan.enabled
+        && !forceFinalSpotSampling
+        && nativeSpotRayCount !== adaptiveSpotSamplingPlan.finalRayCount
+        ? adaptiveSpotSamplingPlan.transitionIteration - consumedIterations
+        : Number.MAX_SAFE_INTEGER;
+      const iterBudget = Math.max(1, Math.min(
+        chunkIterations,
+        maxIterations - consumedIterations,
+        iterationsUntilSamplingTransition,
+      ));
+      const chunkRequirementRows = applyOptimizerRequirementSampling(
+        scopedSystemRequirementsRows,
+        nativeSpotRayCount,
+        opts.mtfSamplingSizeFast,
+      );
       let resp: any = null;
       
       try {
@@ -314,9 +348,9 @@ async function runOptimizationMvpnative(options = {}) {
           objectRows,
           activeConfigId,
           systemConfigSnapshot,
-          systemRequirementsRows: scopedSystemRequirementsRows,
+          systemRequirementsRows: chunkRequirementRows,
           sessionId,
-          resetSession: consumedIterations === 0,
+          resetSession: consumedIterations === 0 || samplingStageChanged,
           maxIterations: iterBudget,
           method,
           emitProgress: true,
@@ -350,6 +384,7 @@ async function runOptimizationMvpnative(options = {}) {
       }
 
       lastResp = resp;
+      lastNativeSpotRayCount = nativeSpotRayCount;
       const iterDone = Number.isFinite(Number(resp?.iterations))
         ? Math.max(0, Math.floor(Number(resp.iterations)))
         : iterBudget;
@@ -378,12 +413,21 @@ async function runOptimizationMvpnative(options = {}) {
         for (const ev of resp.progressEvents) {
           const localIter = Number.isFinite(Number(ev?.iter)) ? Math.max(0, Number(ev.iter)) : 0;
           const globalIter = Math.min(maxIterations, consumedIterations + localIter);
+          const isInitialStart = consumedIterations === 0
+            && localIter === 0
+            && String(ev?.phase || '').trim().toLowerCase() === 'start';
+          const progressCurrent = isInitialStart && Number.isFinite(initialDisplayScore)
+            ? initialDisplayScore
+            : ev?.current;
+          const progressBest = isInitialStart && Number.isFinite(initialDisplayScore)
+            ? initialDisplayScore
+            : ev?.best;
           try {
             onProgress({
               phase: ev?.phase,
               iter: globalIter,
-              current: ev?.current,
-              best: ev?.best,
+              current: progressCurrent,
+              best: progressBest,
               accepted: ev?.accepted,
               rows: ev?.accepted ? rowsWorking : undefined,
               variableId: ev?.variableId,
@@ -392,6 +436,8 @@ async function runOptimizationMvpnative(options = {}) {
               equalViolation: ev?.equalViolation,
               inequalViolation: ev?.inequalViolation,
               dampingFactor: ev?.dampingFactor,
+              rho: ev?.rho,
+              alpha: ev?.alpha,
               feasible: ev?.feasible,
               softPenalty: ev?.softPenalty,
             });
@@ -408,6 +454,10 @@ async function runOptimizationMvpnative(options = {}) {
         break;
       }
       if (!!resp?.converged || iterDone <= 0) {
+        if (adaptiveSpotSamplingPlan.enabled && nativeSpotRayCount !== adaptiveSpotSamplingPlan.finalRayCount) {
+          forceFinalSpotSampling = true;
+          continue;
+        }
         break;
       }
     }
@@ -444,6 +494,9 @@ async function runOptimizationMvpnative(options = {}) {
     aborted,
     before: Number(resp?.meritBefore) || 0,
     best: Number(resp?.meritAfter) || 0,
+    requirementScoreBefore: Number.isFinite(initialDisplayScore)
+      ? initialDisplayScore
+      : Number(resp?.requirementScoreBefore ?? resp?.meritBefore) || 0,
     iterations: consumedIterations > 0 ? consumedIterations : (Number(resp?.iterations) || 0),
     variables: Number(resp?.variableCount) || 0,
     method: String(resp?.modeUsed || method),
@@ -485,19 +538,23 @@ function getActiveRequirementRowsForOptimizer(options = {}) {
   return [];
 }
 
-function applyOptimizerSpotRayCount(requirementRows, rayCount) {
+function applyOptimizerRequirementSampling(requirementRows, rayCount, mtfSamplingSize) {
   if (!Array.isArray(requirementRows)) return [];
   const count = Math.max(1, Math.floor(Number(rayCount) || 1));
+  const mtfSampling = Math.max(16, Math.min(4096, Math.floor(Number(mtfSamplingSize) || 16)));
   return requirementRows.map((row) => {
     const operand = String(row?.operand ?? '').trim().toUpperCase();
-    return operand === 'SPOT_SIZE_ANNULAR' || operand === 'SPOT_SIZE_RECT' || operand === 'SPOT_SIZE_CURRENT'
-      ? { ...row, param4: String(count) }
-      : row;
+    if (operand === 'SPOT_SIZE_ANNULAR' || operand === 'SPOT_SIZE_RECT' || operand === 'SPOT_SIZE_CURRENT') {
+      return { ...row, param4: String(count) };
+    }
+    if (operand === 'MTFT' || operand === 'MTFS' || operand === 'MTFA' || operand === 'MTF') {
+      return { ...row, param5: String(mtfSampling) };
+    }
+    return row;
   });
 }
 
-function findUnsupportedNativeRequirementOperands(requirementRows = []) {
-  const supported = new Set([
+const NATIVE_OPTIMIZER_REQUIREMENT_OPERANDS = new Set([
     'OBJD', 'TSL', 'CTCT', 'SDIST',
     'IMD',
     'BEXP', 'EXPD', 'EXPP', 'ENPD', 'ENPP', 'ENPM',
@@ -507,7 +564,13 @@ function findUnsupportedNativeRequirementOperands(requirementRows = []) {
     'TA_RMS_UM',
     'TOT3_SPH', 'TOT3_COMA', 'TOT3_ASTI', 'TOT3_FCUR', 'TOT3_DIST', 'TOT_LCA', 'TOT_TCA',
     'REAY', 'RSCE', 'TRAC', 'DIST'
-  ]);
+]);
+
+function isNativeOptimizerRequirementOperand(operand) {
+  return NATIVE_OPTIMIZER_REQUIREMENT_OPERANDS.has(String(operand ?? '').trim().toUpperCase());
+}
+
+function findUnsupportedNativeRequirementOperands(requirementRows = []) {
 
   const unsupported = new Set();
   for (const row of Array.isArray(requirementRows) ? requirementRows : []) {
@@ -516,7 +579,7 @@ function findUnsupportedNativeRequirementOperands(requirementRows = []) {
     const operand = String(row.operand ?? '').trim();
     const weight = Number(row.weight ?? 1);
     if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
-    if (!supported.has(operand)) unsupported.add(operand);
+    if (!isNativeOptimizerRequirementOperand(operand)) unsupported.add(operand);
   }
   return Array.from(unsupported);
 }
@@ -600,6 +663,72 @@ function setScenarioOverrideGlobal(value) {
     try { delete (window as any).__cooptScenarioOverride; } catch (_) {}
   } catch (_) {
     // ignore
+  }
+}
+
+function optimizerOperandCacheKey(item) {
+  const requirement = item?.req || {};
+  return [
+    String(item?.configId ?? ''),
+    String(item?.scenarioId ?? ''),
+    String(requirement?.operand ?? ''),
+    String(requirement?.param1 ?? ''),
+    String(requirement?.param2 ?? ''),
+    String(requirement?.param3 ?? ''),
+    String(requirement?.param4 ?? ''),
+    String(requirement?.param5 ?? '')
+  ].join('|');
+}
+
+async function prefetchOptimizerSpotRequirementGroups(editor, items, operandValueCache) {
+  if (!editor || typeof editor.calculateSpotSizeBatchViaNativeAsync !== 'function') return;
+  if (typeof window !== 'undefined' && (window as any).__cooptDisableRequirementRustFirst === true) return;
+  const groups = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const requirement = item?.req;
+    const operand = String(requirement?.operand ?? '').trim().toUpperCase();
+    if (!requirement?.enabled || !['SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT', 'SPOT_SIZE_CURRENT'].includes(operand)) continue;
+    const cacheKey = optimizerOperandCacheKey(item);
+    if (operandValueCache.has(cacheKey)) continue;
+    const pattern = operand === 'SPOT_SIZE_RECT' ? 'grid' : 'annular';
+    const groupKey = [
+      String(item?.configId ?? ''),
+      String(item?.scenarioId ?? ''),
+      pattern,
+      String(requirement?.param1 ?? ''),
+      String(requirement?.param4 ?? ''),
+      String(requirement?.param5 ?? '')
+    ].join('|');
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push({ item, cacheKey });
+  }
+
+  const previousOverride = getScenarioOverrideGlobal();
+  const overrideMap = previousOverride && typeof previousOverride === 'object' ? { ...previousOverride } : {};
+  try {
+    for (const group of groups.values()) {
+      if (!Array.isArray(group) || group.length < 2) continue;
+      const firstItem = group[0]?.item;
+      const configId = String(firstItem?.configId ?? '');
+      if (firstItem?.scenarioId) overrideMap[configId] = String(firstItem.scenarioId);
+      else delete overrideMap[configId];
+      setScenarioOverrideGlobal(overrideMap);
+      const values = await editor.calculateSpotSizeBatchViaNativeAsync(group.map(entry => ({
+        ...entry.item.req,
+        configId,
+      })));
+      if (!Array.isArray(values) || values.length !== group.length) continue;
+      for (let index = 0; index < group.length; index++) {
+        const value = Number(values[index]);
+        if (!Number.isFinite(value)) continue;
+        operandValueCache.set(group[index].cacheKey, value);
+        bumpOptimizerProfileCount('operandValueCacheHits', 1);
+        bumpOptimizerProfileCount('spotRequirementBatchValues', 1);
+      }
+      bumpOptimizerProfileCount('spotRequirementBatchCalls', 1);
+    }
+  } finally {
+    setScenarioOverrideGlobal(previousOverride && typeof previousOverride === 'object' ? previousOverride : null);
   }
 }
 
@@ -3916,9 +4045,6 @@ function getRequirementScopeParamKey(operand, scope) {
 }
 
 function expandRequirementScopesForOptimizer(rows, systemConfig, fallbackConfigId, sourceRowsOverride = null) {
-  const sourceRows = Array.isArray(sourceRowsOverride) && sourceRowsOverride.length > 0
-    ? sourceRowsOverride
-    : (Array.isArray(systemConfig?.source) ? systemConfig.source : []);
   const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
   const expanded = [];
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -3926,9 +4052,19 @@ function expandRequirementScopesForOptimizer(rows, systemConfig, fallbackConfigI
     const configId = String(row.configId ?? fallbackConfigId ?? '').trim();
     const config = configs.find((entry) => String(entry?.id ?? '') === configId) || configs[0] || null;
     const objectRows = Array.isArray(config?.object) ? config.object : [];
+    const sourceRows = Array.isArray(sourceRowsOverride) && sourceRowsOverride.length > 0
+      ? sourceRowsOverride
+      : (Array.isArray(config?.source) && config.source.length > 0
+        ? config.source
+        : (Array.isArray(systemConfig?.source) ? systemConfig.source : []));
     const fieldKey = getRequirementScopeParamKey(row.operand, 'field');
     const wavelengthKey = getRequirementScopeParamKey(row.operand, 'wavelength');
-    const usesWeightedAllWavelengths = ['FL', 'EFL', 'EFFL', 'PP1', 'PP2', 'BFL'].includes(
+    const usesWeightedAllWavelengths = [
+      'FL', 'EFL', 'EFFL', 'PP1', 'PP2', 'BFL',
+      'IMD', 'BEXP', 'EXPD', 'EXPP', 'ENPD', 'ENPP', 'ENPM',
+      'PMAG', 'FNO_OBJ', 'FNO_IMG', 'FNO_WRK', 'NA_OBJ', 'NA_IMG',
+      'MTFT', 'MTFS', 'MTFA',
+    ].includes(
       String(row.operand ?? '').trim().toUpperCase()
     )
       && String(row.wavelengthScope ?? '').trim().toUpperCase() === 'ALL';
@@ -5707,14 +5843,19 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
  */
 export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
+  const configuredRayGridSize = loadOptimizeRayGridSize();
   const configuredSpotRayCount = Number.isFinite(Number(opts.spotRayCountFast))
     ? Math.max(1, Math.floor(Number(opts.spotRayCountFast)))
-    : optimizeRayCountFromGridSize(loadOptimizeRayGridSize());
+    : optimizeRayCountFromGridSize(configuredRayGridSize);
+  const configuredMtfSamplingSize = Number.isFinite(Number(opts.mtfSamplingSizeFast))
+    ? Math.max(16, Math.min(4096, Math.floor(Number(opts.mtfSamplingSizeFast))))
+    : Math.max(16, configuredRayGridSize);
   const optsWithSpeedPreset = {
     ...opts,
     spotRayCountFast: configuredSpotRayCount,
+    mtfSamplingSizeFast: configuredMtfSamplingSize,
     systemRequirementsRows: Array.isArray(opts.systemRequirementsRows)
-      ? applyOptimizerSpotRayCount(opts.systemRequirementsRows, configuredSpotRayCount)
+      ? applyOptimizerRequirementSampling(opts.systemRequirementsRows, configuredSpotRayCount, configuredMtfSamplingSize)
       : opts.systemRequirementsRows,
     forceNative: opts.forceNative === undefined ? true : !!opts.forceNative,
     kktUseWasmPilotOptimizer: opts.kktUseWasmPilotOptimizer !== false,
@@ -5966,6 +6107,13 @@ export async function runOptimizationMVP(options = {}) {
       kktAnalyticEqualityRows: 0,
       kktAnalyticEqualityCalibratedRows: 0,
       kktFiniteDiffResidualEvals: 0,
+      kktNativeBatchFdCalls: 0,
+      kktNativeBatchFdHits: 0,
+      kktNativeBatchFdFallbacks: 0,
+      kktNativeBatchFdCandidates: 0,
+      kktNativeBatchFdDeltaUpdates: 0,
+      kktNativeBatchFdSessionReuses: 0,
+      kktNativeBatchFdMs: 0,
       kktJacobianFullCalls: 0,
       kktJacobianPartialCalls: 0,
       kktJacobianReuseCalls: 0,
@@ -6086,6 +6234,13 @@ export async function runOptimizationMVP(options = {}) {
         __profile.kktAnalyticEqualityRows = Number(__profile.counts.kktAnalyticEqualityRows) || 0;
         __profile.kktAnalyticEqualityCalibratedRows = Number(__profile.counts.kktAnalyticEqualityCalibratedRows) || 0;
         __profile.kktFiniteDiffResidualEvals = Number(__profile.counts.kktFiniteDiffResidualEvals) || 0;
+        __profile.kktNativeBatchFdCalls = Number(__profile.counts.kktNativeBatchFdCalls) || 0;
+        __profile.kktNativeBatchFdHits = Number(__profile.counts.kktNativeBatchFdHits) || 0;
+        __profile.kktNativeBatchFdFallbacks = Number(__profile.counts.kktNativeBatchFdFallbacks) || 0;
+        __profile.kktNativeBatchFdCandidates = Number(__profile.counts.kktNativeBatchFdCandidates) || 0;
+        __profile.kktNativeBatchFdDeltaUpdates = Number(__profile.counts.kktNativeBatchFdDeltaUpdates) || 0;
+        __profile.kktNativeBatchFdSessionReuses = Number(__profile.counts.kktNativeBatchFdSessionReuses) || 0;
+        __profile.kktNativeBatchFdMs = Number(__profile.counts.kktNativeBatchFdMs) || 0;
         __profile.kktJacobianFullCalls = Number(__profile.counts.kktJacobianFullCalls) || 0;
         __profile.kktJacobianPartialCalls = Number(__profile.counts.kktJacobianPartialCalls) || 0;
         __profile.kktJacobianReuseCalls = Number(__profile.counts.kktJacobianReuseCalls) || 0;
@@ -6584,10 +6739,21 @@ export async function runOptimizationMVP(options = {}) {
   const spotFastMode = (opts.spotFastMode === undefined) ? true : !!opts.spotFastMode;
   const spotAnnularRingCountFast = Number.isFinite(Number(opts.spotAnnularRingCountFast))
     ? Math.max(1, Math.min(50, Math.floor(Number(opts.spotAnnularRingCountFast))))
-    : 6;
+    : 10;
   const spotRayCountFast = Number.isFinite(Number(opts.spotRayCountFast))
     ? Math.max(5, Math.min(1024 * 1024, Math.floor(Number(opts.spotRayCountFast))))
     : 1 + 8 * spotAnnularRingCountFast;
+  const mtfSamplingSizeFast = Number.isFinite(Number(opts.mtfSamplingSizeFast))
+    ? Math.max(16, Math.min(4096, Math.floor(Number(opts.mtfSamplingSizeFast))))
+    : 32;
+  const spotSamplingPlan = createAdaptiveSpotSamplingPlan(
+    spotRayCountFast,
+    maxIterations,
+    opts.adaptiveSpotSampling === true,
+    opts.adaptiveSpotFinalFraction,
+  );
+  let activeSpotRayCount = adaptiveSpotRayCountAtIteration(spotSamplingPlan, 0);
+  const activeSpotAnnularRingCount = () => spotAnnularRingCountFast;
   const shouldStop = (context: string = '') => {
     const internalStop = !!__optimizerStopRequested;
     const legacyStop = (() => {
@@ -6995,8 +7161,9 @@ export async function runOptimizationMVP(options = {}) {
 
       globalThis.__cooptMeritFastMode = {
         enabled: true,
-        spotRayCount: spotRayCountFast,
-        spotAnnularRingCount: spotAnnularRingCountFast,
+        spotRayCount: activeSpotRayCount,
+        spotAnnularRingCount: activeSpotAnnularRingCount(),
+        mtfSamplingSize: mtfSamplingSizeFast,
         // Keep semantics aligned with Requirements/Spot Diagram (surfaceIndex, primary wavelength, etc.)
         // while still avoiding reading live UI tables for non-active configs.
         spotUseUiDefaults: true,
@@ -9321,11 +9488,14 @@ export async function runOptimizationMVP(options = {}) {
       if (onProgress && !hasHeavyAsyncRequirementOperands) {
         try {
           const initialRequirementScore = Number(initialStateEval?.requirementScore);
+          const initialProgressScore = Number.isFinite(initialRequirementScore)
+            ? initialRequirementScore
+            : initialScore;
           onProgress({
             phase: 'start',
             iter: 0,
-            current: Number.isFinite(initialRequirementScore) ? initialRequirementScore : initialScore,
-            best: initialScore,
+            current: initialProgressScore,
+            best: initialProgressScore,
             method: constrainedMethod,
             multiScenario,
             requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
@@ -9549,7 +9719,7 @@ export async function runOptimizationMVP(options = {}) {
         await nextFrame();
       };
 
-      const evalSQPAtXUncached = async (x: number[]) => {
+      const evalSQPAtXUncached = async (x: number[], seededOperandValues: Map<string, number> | null = null) => {
         const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
         if (!editor || typeof editor.calculateOperandValue !== 'function') {
           return { objective: 1e9, requirementScore: 1e3, constraints: [], feasible: false, residuals: [] };
@@ -9612,6 +9782,10 @@ export async function runOptimizationMVP(options = {}) {
 
           const items = Array.isArray(residualItems) ? residualItems : [];
           const worstContributionByRequirement = new Map<string, number>();
+          const operandValueCache = seededOperandValues instanceof Map
+            ? new Map<string, number>(seededOperandValues)
+            : new Map<string, number>();
+          await prefetchOptimizerSpotRequirementGroups(editor, items, operandValueCache);
           let __evalItemCount = 0;
           for (const it of items) {
             if ((++__evalItemCount & 7) === 0) await maybeYieldKktCpu();
@@ -9638,10 +9812,12 @@ export async function runOptimizationMVP(options = {}) {
               weight: r.weight
             };
 
-            const currentRaw = hasHeavyAsyncRequirementOperands
-              && typeof editor.calculateOperandValueAsync === 'function'
-              ? await editor.calculateOperandValueAsync(opObj)
-              : editor.calculateOperandValue(opObj);
+            const opCacheKey = optimizerOperandCacheKey(it);
+            const currentRaw = operandValueCache.has(opCacheKey)
+              ? operandValueCache.get(opCacheKey)
+              : hasHeavyAsyncRequirementOperands && typeof editor.calculateOperandValueAsync === 'function'
+                ? await editor.calculateOperandValueAsync(opObj)
+                : editor.calculateOperandValue(opObj);
             const s = sanitizeOperandCurrentForScore(currentRaw);
             const requirementKey = String(r.id ?? `${cfgId}|${r.operand}`);
             if (!s.ok || !Number.isFinite(s.current)) {
@@ -10080,6 +10256,428 @@ export async function runOptimizationMVP(options = {}) {
         return out;
       };
 
+      const kktNativeBatchFdEnabled = opts?.kktUseNativeBatchFd !== false
+        && useKktSqp
+        && isTauriRuntime()
+        && !multiScenario;
+      const nativeBatchResidualItems = Array.isArray(residualItems)
+        ? residualItems.filter((item: any) => {
+            const requirement = item?.req;
+            const weight = Math.max(0, toFiniteNumber(requirement?.weight, 1))
+              * Math.max(0, toFiniteNumber(item?.scenarioWeight, 1));
+            return !!(requirement?.enabled
+              && isNativeOptimizerRequirementOperand(requirement?.operand)
+              && weight > 0);
+          })
+        : [];
+      const nativeBatchCoversAllResidualItems = nativeBatchResidualItems.length === residualItems.length;
+      const nativeBatchRequirementRows = nativeBatchResidualItems.map((item: any) => {
+        const requirement = item.req;
+        return {
+          id: requirement.id,
+          configId: String(requirement.configId ?? activeConfigId ?? ''),
+          enabled: true,
+          operand: requirement.operand,
+          op: requirement.op,
+          target: requirement.target,
+          tol: requirement.tol,
+          weight: requirement.weight,
+          param1: requirement.param1,
+          param2: requirement.param2,
+          param3: requirement.param3,
+          param4: requirement.param4,
+          param5: requirement.param5,
+        };
+      });
+      const nativeBatchSourceRows = (() => {
+        if (Array.isArray(opts?.sourceRows)) return opts.sourceRows;
+        try {
+          const rows = (window as any)?.tableSource?.getData?.();
+          return Array.isArray(rows) ? rows : [];
+        } catch (_) {
+          return [];
+        }
+      })();
+      const nativeBatchObjectRows = (() => {
+        if (Array.isArray(opts?.objectRows)) return opts.objectRows;
+        try {
+          const rows = (window as any)?.tableObject?.getData?.();
+          return Array.isArray(rows) ? rows : [];
+        } catch (_) {
+          return [];
+        }
+      })();
+      let nativeBatchFdParityStatus: 'unchecked' | 'passed' | 'failed' = 'unchecked';
+      const nativeBatchEvaluatorSessionId = `kkt-candidates-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+      let nativeBatchBaseRowsByConfig: Record<string, any[]> | null = null;
+      let nativeBatchSessionInitialized = false;
+      let nativeBatchVariableBindings: Array<{
+        variableIndex: number;
+        configId: string;
+        rowIndex: number;
+        fieldKey: string;
+        inputBaseline: number;
+        outputBaseline: number;
+        slope: number;
+      }> | null | undefined;
+
+      const buildNativeCandidateRows = (candidateX: number[]): Record<string, any[]> | null => {
+        try {
+          const candidateBlocksByConfigId = snapshotBlocksByConfigId(blocksByConfigId);
+          const candidateState = {
+            blocksByConfigId: candidateBlocksByConfigId,
+            targetConfigIds,
+            activeConfigId,
+          };
+          for (let index = 0; index < varIds.length && index < candidateX.length; index++) {
+            setJointDesignVariableValue(candidateState, varIds[index], candidateX[index]);
+          }
+          const rowsByConfig: Record<string, any[]> = {};
+          for (const configId of targetConfigIds) {
+            const configBlocks = candidateBlocksByConfigId[String(configId)];
+            const expanded = expandBlocksForOptimization(configBlocks);
+            if (!Array.isArray(expanded?.rows)) return null;
+            rowsByConfig[String(configId)] = expanded.rows;
+          }
+          return rowsByConfig;
+        } catch (_) {
+          return null;
+        }
+      };
+
+      const buildNativeCandidateDeltas = (
+        baseRowsByConfig: Record<string, any[]>,
+        candidateRowsByConfig: Record<string, any[]>,
+      ): Array<{ configId: string; rowIndex: number; fieldKey: string; remove?: boolean; value: any }> | null => {
+        const updates: Array<{ configId: string; rowIndex: number; fieldKey: string; remove?: boolean; value: any }> = [];
+        for (const configId of targetConfigIds) {
+          const key = String(configId);
+          const baseRows = baseRowsByConfig[key];
+          const candidateRows = candidateRowsByConfig[key];
+          if (!Array.isArray(baseRows) || !Array.isArray(candidateRows) || baseRows.length !== candidateRows.length) {
+            return null;
+          }
+          for (let rowIndex = 0; rowIndex < baseRows.length; rowIndex++) {
+            const baseRow = baseRows[rowIndex];
+            const candidateRow = candidateRows[rowIndex];
+            if (!baseRow || typeof baseRow !== 'object' || !candidateRow || typeof candidateRow !== 'object') {
+              if (JSON.stringify(baseRow) !== JSON.stringify(candidateRow)) return null;
+              continue;
+            }
+            const fieldKeys = new Set([...Object.keys(baseRow), ...Object.keys(candidateRow)]);
+            for (const fieldKey of fieldKeys) {
+              const baseHasField = Object.prototype.hasOwnProperty.call(baseRow, fieldKey);
+              const candidateHasField = Object.prototype.hasOwnProperty.call(candidateRow, fieldKey);
+              const baseValue = baseRow[fieldKey];
+              const candidateValue = candidateRow[fieldKey];
+              if (baseHasField === candidateHasField
+                && (Object.is(baseValue, candidateValue)
+                  || JSON.stringify(baseValue) === JSON.stringify(candidateValue))) {
+                continue;
+              }
+              updates.push({
+                configId: key,
+                rowIndex,
+                fieldKey,
+                remove: !candidateHasField,
+                value: candidateHasField ? candidateValue : null,
+              });
+            }
+          }
+        }
+        return updates;
+      };
+
+      const calibrateNativeVariableBindings = () => {
+        const baselineRows = buildNativeCandidateRows(initialX);
+        if (!baselineRows) return null;
+        const bindings: Array<{
+          variableIndex: number;
+          configId: string;
+          rowIndex: number;
+          fieldKey: string;
+          inputBaseline: number;
+          outputBaseline: number;
+          slope: number;
+        }> = [];
+        const occupiedCells = new Set<string>();
+        for (let variableIndex = 0; variableIndex < initialX.length; variableIndex++) {
+          const inputBaseline = Number(initialX[variableIndex]);
+          const scale = Math.abs(Number(varScales[variableIndex])) || 1;
+          const probeStep = Math.max(1e-7, scale * 1e-4, Math.abs(inputBaseline) * 1e-6);
+          const plusX = initialX.slice();
+          const minusX = initialX.slice();
+          plusX[variableIndex] = inputBaseline + probeStep;
+          minusX[variableIndex] = inputBaseline - probeStep;
+          const plusRows = buildNativeCandidateRows(plusX);
+          const minusRows = buildNativeCandidateRows(minusX);
+          if (!plusRows || !minusRows) return null;
+          const plusUpdates = buildNativeCandidateDeltas(baselineRows, plusRows);
+          const minusUpdates = buildNativeCandidateDeltas(baselineRows, minusRows);
+          if (!plusUpdates || !minusUpdates || plusUpdates.length === 0) return null;
+          const minusByCell = new Map(minusUpdates.map(update => [
+            `${update.configId}|${update.rowIndex}|${update.fieldKey}`,
+            update,
+          ]));
+          if (minusByCell.size !== plusUpdates.length) return null;
+          for (const plusUpdate of plusUpdates) {
+            const cellKey = `${plusUpdate.configId}|${plusUpdate.rowIndex}|${plusUpdate.fieldKey}`;
+            const minusUpdate = minusByCell.get(cellKey);
+            const baseValue = baselineRows[plusUpdate.configId]?.[plusUpdate.rowIndex]?.[plusUpdate.fieldKey];
+            const outputBaseline = Number(baseValue);
+            const plusValue = Number(plusUpdate.value);
+            const minusValue = Number(minusUpdate?.value);
+            if (plusUpdate.remove || minusUpdate?.remove
+              || !Number.isFinite(outputBaseline)
+              || !Number.isFinite(plusValue)
+              || !Number.isFinite(minusValue)
+              || occupiedCells.has(cellKey)) {
+              return null;
+            }
+            const slopePlus = (plusValue - outputBaseline) / probeStep;
+            const slopeMinus = (outputBaseline - minusValue) / probeStep;
+            const slopeTolerance = 1e-7 * Math.max(1, Math.abs(slopePlus), Math.abs(slopeMinus));
+            if (!Number.isFinite(slopePlus)
+              || !Number.isFinite(slopeMinus)
+              || Math.abs(slopePlus - slopeMinus) > slopeTolerance) {
+              return null;
+            }
+            occupiedCells.add(cellKey);
+            bindings.push({
+              variableIndex,
+              configId: plusUpdate.configId,
+              rowIndex: plusUpdate.rowIndex,
+              fieldKey: plusUpdate.fieldKey,
+              inputBaseline,
+              outputBaseline,
+              slope: 0.5 * (slopePlus + slopeMinus),
+            });
+          }
+        }
+        return { baselineRows, bindings };
+      };
+
+      const buildKktEvaluationFromNativeCurrents = (currents: Array<number | null>) => {
+        let objective = 0;
+        let requirementScore = 0;
+        const constraints: number[] = [];
+        const residuals: number[] = [];
+        const worstContributionByRequirement = new Map<string, number>();
+
+        for (let index = 0; index < nativeBatchResidualItems.length; index++) {
+          const item = nativeBatchResidualItems[index];
+          const requirement = item.req;
+          const weight = Math.max(0, toFiniteNumber(requirement.weight, 1))
+            * Math.max(0, toFiniteNumber(item?.scenarioWeight, 1));
+          const sanitized = sanitizeOperandCurrentForScore(currents[index]);
+          const current = sanitized.ok && Number.isFinite(sanitized.current)
+            ? sanitized.current
+            : Number.NaN;
+          const target = toFiniteNumber(requirement.target, 0);
+          const tolerance = Math.max(0, toFiniteNumber(requirement.tol, 0));
+          const violationAmount = Number.isFinite(current)
+            ? Math.max(0, computeViolationAmount(requirement.op, current, target, tolerance))
+            : __INVALID_OPERAND_PENALTY_AMOUNT;
+          const requirementKey = String(requirement.id ?? `${String(item?.configId ?? '')}|${requirement.operand}`);
+          const contribution = weight * violationAmount;
+          worstContributionByRequirement.set(
+            requirementKey,
+            Math.max(worstContributionByRequirement.get(requirementKey) || 0, contribution),
+          );
+          const scale = Math.max(1, Math.abs(tolerance));
+          const weightedResidual = Math.sqrt(weight) * (violationAmount / scale);
+          objective += weightedResidual * weightedResidual;
+          residuals.push(weightedResidual);
+
+          if (kktRequirementsAsConstraints && requirement.op === '<=') {
+            constraints.push(Number.isFinite(current)
+              ? Math.sqrt(weight) * (current - target - tolerance)
+              : __INVALID_OPERAND_PENALTY_AMOUNT);
+          } else if (kktRequirementsAsConstraints && requirement.op === '>=') {
+            constraints.push(Number.isFinite(current)
+              ? Math.sqrt(weight) * ((target - tolerance) - current)
+              : __INVALID_OPERAND_PENALTY_AMOUNT);
+          }
+        }
+        for (const contribution of worstContributionByRequirement.values()) {
+          requirementScore += contribution;
+        }
+        return {
+          objective,
+          requirementScore,
+          constraints,
+          feasible: constraints.every(value => value <= 0),
+          residuals,
+        };
+      };
+
+      const buildNativeOperandValueCache = (currents: Array<number | null>): Map<string, number> | null => {
+        if (!Array.isArray(currents) || currents.length !== nativeBatchResidualItems.length) return null;
+        const cache = new Map<string, number>();
+        for (let index = 0; index < nativeBatchResidualItems.length; index++) {
+          const value = Number(currents[index]);
+          if (!Number.isFinite(value)) continue;
+          cache.set(optimizerOperandCacheKey(nativeBatchResidualItems[index]), value);
+        }
+        return cache.size > 0 ? cache : null;
+      };
+
+      const evalAugmentedResidualsNativeBatch = async (
+        candidatePoints: number[][],
+        lambdaVec: number[],
+        penaltyMu: number,
+        maxViolContext: number,
+      ): Promise<number[][] | null> => {
+        if (!kktNativeBatchFdEnabled
+          || nativeBatchFdParityStatus === 'failed'
+          || candidatePoints.length < 2
+          || nativeBatchRequirementRows.length === 0) {
+          return null;
+        }
+        const batchStartedAt = nowMs();
+        if (__profile?.counts) {
+          __profile.counts.kktNativeBatchFdCalls = (Number(__profile.counts.kktNativeBatchFdCalls) || 0) + 1;
+          __profile.counts.kktNativeBatchFdCandidates = (Number(__profile.counts.kktNativeBatchFdCandidates) || 0) + candidatePoints.length;
+        }
+        if (nativeBatchVariableBindings === undefined) {
+          const calibration = calibrateNativeVariableBindings();
+          nativeBatchVariableBindings = calibration?.bindings || null;
+          nativeBatchBaseRowsByConfig = calibration?.baselineRows || null;
+        }
+        const useVectorCandidates = Array.isArray(nativeBatchVariableBindings)
+          && nativeBatchVariableBindings.length > 0
+          && nativeBatchBaseRowsByConfig !== null;
+        const initializeNativeSession = nativeBatchBaseRowsByConfig !== null
+          && !nativeBatchSessionInitialized;
+        let candidates: Array<Record<string, any[]>> = [];
+        let candidateDeltas: any[][] = [];
+        if (!useVectorCandidates) {
+          candidates = candidatePoints.map(buildNativeCandidateRows).filter(Boolean) as Array<Record<string, any[]>>;
+          if (candidates.length !== candidatePoints.length) return null;
+          const baseRowsByConfig = nativeBatchBaseRowsByConfig || candidates[0];
+          nativeBatchBaseRowsByConfig = baseRowsByConfig;
+          candidateDeltas = candidates.map(candidate => buildNativeCandidateDeltas(baseRowsByConfig, candidate) as any[]);
+          if (candidateDeltas.some(updates => !Array.isArray(updates))) return null;
+        }
+        const baseRowsByConfig = nativeBatchBaseRowsByConfig as Record<string, any[]>;
+        try {
+          const response = await evaluateOptimizerCandidates({
+            candidateDeltas: useVectorCandidates ? undefined : candidateDeltas,
+            candidateVectors: useVectorCandidates ? candidatePoints : undefined,
+            variableBindings: initializeNativeSession && useVectorCandidates
+              ? nativeBatchVariableBindings as any[]
+              : undefined,
+            sessionId: nativeBatchEvaluatorSessionId,
+            resetSession: initializeNativeSession,
+            baseRowsByConfig: initializeNativeSession ? baseRowsByConfig : undefined,
+            sourceRows: initializeNativeSession ? nativeBatchSourceRows : undefined,
+            objectRows: initializeNativeSession ? nativeBatchObjectRows : undefined,
+            systemRequirementsRows: initializeNativeSession ? nativeBatchRequirementRows : undefined,
+            activeConfigId: initializeNativeSession ? String(activeConfigId ?? '') : undefined,
+          });
+          if (initializeNativeSession) {
+            nativeBatchSessionInitialized = true;
+            if (__profile?.counts) {
+              __profile.counts.kktNativeBatchFdSessionInitializations = 1;
+            }
+          }
+          if (__profile?.counts) {
+            __profile.counts.kktNativeBatchFdDeltaUpdates = (Number(__profile.counts.kktNativeBatchFdDeltaUpdates) || 0)
+              + (Number(response?.appliedUpdateCount) || 0);
+            if (response?.sessionReused) {
+              __profile.counts.kktNativeBatchFdSessionReuses = (Number(__profile.counts.kktNativeBatchFdSessionReuses) || 0) + 1;
+            }
+            if (useVectorCandidates) {
+              __profile.counts.kktNativeBatchFdVectorCandidates = (Number(__profile.counts.kktNativeBatchFdVectorCandidates) || 0)
+                + candidatePoints.length;
+            }
+          }
+          if (!Array.isArray(response?.currentsPerCandidate)
+            || response.currentsPerCandidate.length !== candidatePoints.length) {
+            if (__profile?.counts) {
+              __profile.counts.kktNativeBatchFdFallbacks = (Number(__profile.counts.kktNativeBatchFdFallbacks) || 0) + 1;
+              __profile.counts.kktNativeBatchFdMs = (Number(__profile.counts.kktNativeBatchFdMs) || 0) + (nowMs() - batchStartedAt);
+            }
+            return null;
+          }
+          let residuals: number[][];
+          if (nativeBatchCoversAllResidualItems) {
+            residuals = response.currentsPerCandidate.map((currents) => {
+                if (!Array.isArray(currents) || currents.length !== nativeBatchResidualItems.length) return [];
+                const base = buildKktEvaluationFromNativeCurrents(currents);
+                const residualVector = Array.isArray(base.residuals) ? base.residuals.slice() : [];
+                return residualVector.concat(base.constraints);
+              });
+          } else {
+            residuals = [];
+            if (__profile?.counts) {
+              __profile.counts.kktNativeBatchFdPartialCalls = (Number(__profile.counts.kktNativeBatchFdPartialCalls) || 0) + 1;
+              __profile.counts.kktNativeBatchFdPartialCandidates = (Number(__profile.counts.kktNativeBatchFdPartialCandidates) || 0)
+                + response.currentsPerCandidate.length;
+              __profile.counts.kktNativeBatchFdNativeRows = (Number(__profile.counts.kktNativeBatchFdNativeRows) || 0)
+                + response.currentsPerCandidate.length * nativeBatchResidualItems.length;
+            }
+            for (let candidateIndex = 0; candidateIndex < response.currentsPerCandidate.length; candidateIndex++) {
+              const currents = response.currentsPerCandidate[candidateIndex];
+              const seededValues = buildNativeOperandValueCache(currents);
+              if (!seededValues) {
+                residuals.push([]);
+                continue;
+              }
+              const base = await evalSQPAtXUncached(candidatePoints[candidateIndex], seededValues);
+              const residualVector = Array.isArray(base.residuals) ? base.residuals.slice() : [];
+              residuals.push(residualVector.concat(Array.isArray(base.constraints) ? base.constraints : []));
+            }
+          }
+          if (nativeBatchFdParityStatus === 'unchecked') {
+            const reference = await evalAugmentedResiduals(
+              candidatePoints[0],
+              lambdaVec,
+              penaltyMu,
+              maxViolContext,
+            );
+            const expected = Array.isArray(reference?.residuals) ? reference.residuals : [];
+            const actual = residuals[0] || [];
+            const parityOk = expected.length === actual.length && expected.every((value, index) => {
+              const candidateValue = Number(actual[index]);
+              const referenceValue = Number(value);
+              if (!Number.isFinite(candidateValue) || !Number.isFinite(referenceValue)) {
+                return candidateValue === referenceValue;
+              }
+              const tolerance = 1e-8 * Math.max(1, Math.abs(referenceValue));
+              return Math.abs(candidateValue - referenceValue) <= tolerance;
+            });
+            nativeBatchFdParityStatus = parityOk ? 'passed' : 'failed';
+            if (!parityOk) {
+              nativeBatchBaseRowsByConfig = null;
+              nativeBatchSessionInitialized = false;
+              nativeBatchVariableBindings = null;
+              try { await dropOptimizerSession(nativeBatchEvaluatorSessionId); } catch (_) {}
+              if (__profile?.counts) {
+                __profile.counts.kktNativeBatchFdFallbacks = (Number(__profile.counts.kktNativeBatchFdFallbacks) || 0) + 1;
+                __profile.counts.kktNativeBatchFdMs = (Number(__profile.counts.kktNativeBatchFdMs) || 0) + (nowMs() - batchStartedAt);
+              }
+              return null;
+            }
+          }
+          if (__profile?.counts) {
+            __profile.counts.kktNativeBatchFdHits = (Number(__profile.counts.kktNativeBatchFdHits) || 0) + 1;
+            __profile.counts.kktNativeBatchFdMs = (Number(__profile.counts.kktNativeBatchFdMs) || 0) + (nowMs() - batchStartedAt);
+          }
+          return residuals;
+        } catch (_) {
+          nativeBatchBaseRowsByConfig = null;
+          nativeBatchSessionInitialized = false;
+          nativeBatchVariableBindings = undefined;
+          try { await dropOptimizerSession(nativeBatchEvaluatorSessionId); } catch (_) {}
+          if (__profile?.counts) {
+            __profile.counts.kktNativeBatchFdFallbacks = (Number(__profile.counts.kktNativeBatchFdFallbacks) || 0) + 1;
+            __profile.counts.kktNativeBatchFdMs = (Number(__profile.counts.kktNativeBatchFdMs) || 0) + (nowMs() - batchStartedAt);
+          }
+          return null;
+        }
+      };
+
       const finiteDiffJacobian = async (x: number[], r0: number[], lambdaVec: number[], mu: number, maxViol: number = 1.0, baseResidualCount: number = 0) => {
         const __fdT0 = nowMs();
         const n = x.length;
@@ -10108,9 +10706,39 @@ export async function runOptimizationMVP(options = {}) {
 
         let effectiveEvals = 0;
         let groupCount = 0;
-        if (canUseGrouping) {
-          const allCols = Array.from({ length: n }, (_, i) => i).filter((col) => !analyticEqCols.has(col));
-          const groups = buildDisjointColumnGroups(allCols, jacobianColumnSupports || [], kktFdGroupingMaxCols);
+        const activeCols = Array.from({ length: n }, (_, i) => i).filter((col) => !analyticEqCols.has(col));
+        const nativeGroups = canUseGrouping
+          ? buildDisjointColumnGroups(activeCols, jacobianColumnSupports || [], kktFdGroupingMaxCols)
+          : activeCols.map((col) => [col]);
+        const nativeCandidatePoints = nativeGroups.map((group) => {
+          const xp = x.slice();
+          for (const col of group) xp[col] = x[col] + fdSteps[col];
+          return xp;
+        });
+        const nativeBatchResiduals = await evalAugmentedResidualsNativeBatch(nativeCandidatePoints, lambdaVec, mu, maxViol);
+        const nativeBatchComplete = Array.isArray(nativeBatchResiduals)
+          && nativeBatchResiduals.length === nativeGroups.length
+          && nativeBatchResiduals.every((residuals) => Array.isArray(residuals) && residuals.length === m);
+
+        if (nativeBatchComplete && nativeBatchResiduals) {
+          groupCount = nativeGroups.length;
+          effectiveEvals = nativeGroups.length;
+          for (let groupIndex = 0; groupIndex < nativeGroups.length; groupIndex++) {
+            const group = nativeGroups[groupIndex];
+            const r1 = nativeBatchResiduals[groupIndex];
+            for (const col of group) {
+              const eps = fdSteps[col];
+              const supportRows = Array.isArray(jacobianColumnSupports?.[col]) ? jacobianColumnSupports[col] : [];
+              const rowsToUpdate = supportRows.length > 0 ? supportRows : Array.from({ length: m }, (_, row) => row);
+              for (const row of rowsToUpdate) {
+                if (!(row >= 0 && row < m)) continue;
+                const deriv = (r1[row] - r0[row]) / eps;
+                J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+              }
+            }
+          }
+        } else if (canUseGrouping) {
+          const groups = nativeGroups;
           groupCount = groups.length;
           for (const group of groups) {
             if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
@@ -10148,8 +10776,6 @@ export async function runOptimizationMVP(options = {}) {
           const batchPoints = useWasmBatchFd
             ? __profileBucketWrap('time_wasm_call', () => generateFiniteDifferencePerturbationPointsWasm(x, fdSteps))
             : null;
-
-          const activeCols = Array.from({ length: n }, (_, i) => i).filter((col) => !analyticEqCols.has(col));
 
           for (const i of activeCols) {
             if (shouldStopKKT()) throw Object.assign(new Error('stop'), { __cooptStop: true });
@@ -10291,7 +10917,33 @@ export async function runOptimizationMVP(options = {}) {
           : validCols.map((col) => [col]);
 
         let effectiveEvals = 0;
-        if (!canUseGrouping && useWasmBatchFd && validCols.length > 0) {
+        const nativeCandidatePoints = groups.map((group) => {
+          const xp = x.slice();
+          for (const col of group) xp[col] = x[col] + stepByCol[col];
+          return xp;
+        });
+        const nativeBatchResiduals = await evalAugmentedResidualsNativeBatch(nativeCandidatePoints, lambdaVec, mu, maxViol);
+        const nativeBatchComplete = Array.isArray(nativeBatchResiduals)
+          && nativeBatchResiduals.length === groups.length
+          && nativeBatchResiduals.every((residuals) => Array.isArray(residuals) && residuals.length === m);
+
+        if (nativeBatchComplete && nativeBatchResiduals) {
+          effectiveEvals = groups.length;
+          for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+            const group = groups[groupIndex];
+            const r1 = nativeBatchResiduals[groupIndex];
+            for (const col of group) {
+              const eps = stepByCol[col];
+              const supportRows = Array.isArray(jacobianColumnSupports?.[col]) ? jacobianColumnSupports[col] : [];
+              const rowsToUpdate = supportRows.length > 0 ? supportRows : Array.from({ length: m }, (_, row) => row);
+              for (const row of rowsToUpdate) {
+                if (!(row >= 0 && row < m)) continue;
+                const deriv = (r1[row] - r0[row]) / eps;
+                J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+              }
+            }
+          }
+        } else if (!canUseGrouping && useWasmBatchFd && validCols.length > 0) {
           const partialSteps = new Array(n).fill(0);
           const perturbedResidualsActive: number[][] = [];
           for (const col of validCols) {
@@ -10670,7 +11322,11 @@ export async function runOptimizationMVP(options = {}) {
 
       let mu = Math.max(1, Number.isFinite(Number(opts?.kktPenalty)) ? Number(opts.kktPenalty) : 1);
       let lambdaVec: number[] = [];
-      let lmDamp = 2e-4;  // 【最適刖5e-4→2e-4：初期ダンピングをさらに小さく、爆速探索
+      let lmDamp = Number.isFinite(Number(opts?.kktSqpInitialDamping))
+        ? Math.max(1e-12, Number(opts.kktSqpInitialDamping))
+        : 2e-4;
+      let lmDampRejectMultiplier = 2;
+      const lmDampHessianScale = 1;
       let lastMaxViol = Infinity;  // Track maxViol for stagnation detection
       let violStagnationIter = 0;  // Count iterations without improvement
       let kktRejectStreak = 0;  // 【追加】Auto soft-restart: detect if stuck in reject-repeat cycle
@@ -11063,6 +11719,7 @@ export async function runOptimizationMVP(options = {}) {
         completedIterations = iter + 1;
         const __iterT0 = nowMs();
         let postEvalCached: any = null;
+        let samplingTransitionEval: any = null;
         // 【高速化】受理時に評価した composite を反復末尾の進捗評価で再利用するためのキャッシュ。
         // 設計変数が変化する経路（stagnation auto-restart）では null に戻して無効化する。
         let iterAcceptedCompositeEval: any = null;
@@ -11079,8 +11736,75 @@ export async function runOptimizationMVP(options = {}) {
             break;
           }
 
+          const desiredSpotRayCount = adaptiveSpotRayCountAtIteration(spotSamplingPlan, iter);
+          if (desiredSpotRayCount !== activeSpotRayCount) {
+            activeSpotRayCount = desiredSpotRayCount;
+            try {
+              const fastMode = (globalThis as any).__cooptMeritFastMode;
+              if (fastMode && typeof fastMode === 'object') {
+                fastMode.spotRayCount = activeSpotRayCount;
+                fastMode.spotAnnularRingCount = activeSpotAnnularRingCount();
+              }
+            } catch (_) {}
+
+            lastJ = null;
+            lastX = null;
+            lastR = null;
+            broydenSkipCount = 0;
+            jacobianReuseSinceRefresh = 0;
+            forceJacobianRefreshNextIter = true;
+            poorModelStreak = 0;
+            resetSqpBfgsState();
+            kktRejectStreak = 0;
+            nonmonotoneAcceptStreak = 0;
+            trustRegionDeltaEff = kktInitialTrustRegion;
+            lambdaVec = [];
+
+            bestFeasibleEval = null;
+            bestInfeasibleEval = null;
+            bestScoreEval = null;
+            bestScoreBlocksSnapshot = null;
+            applyXToDesignState(currentX);
+            samplingTransitionEval = await evalSQPAtX(currentX);
+            const rebasedEval = withAppliedXSnapshot(
+              currentX,
+              kktEvaluationToComposite(samplingTransitionEval),
+            );
+            recordEval(rebasedEval);
+            bestX = currentX.slice();
+            bestScoreXSnapshot = currentX.slice();
+            bestScore = Number.isFinite(Number(rebasedEval?.score))
+              ? Number(rebasedEval.score)
+              : Number.POSITIVE_INFINITY;
+            bestEval = rebasedEval;
+            lastAcceptedScore = bestScore;
+            const rebasedConstraints = (samplingTransitionEval?.constraints || []).map(c => Math.max(0, Number(c) || 0));
+            const rebasedViolation = Math.sqrt(rebasedConstraints.reduce((acc, value) => acc + value * value, 0));
+            const rebasedObjective = Number(samplingTransitionEval?.objective);
+            bestMerit = (Number.isFinite(rebasedObjective) ? rebasedObjective : Number.POSITIVE_INFINITY)
+              + rebasedViolation * 10000;
+            lastMaxViol = Number.POSITIVE_INFINITY;
+            violStagnationIter = 0;
+            prevConvCost = Number.POSITIVE_INFINITY;
+            feasibleConvStreak = 0;
+            stagnationIter = 0;
+            plateauNoImproveIters = 0;
+            plateauBestRef = bestScore;
+            plateauViolRef = Number.POSITIVE_INFINITY;
+            tailNoImproveIters = 0;
+            tailBestRef = bestScore;
+            windowTailRefIter = iter;
+            windowTailRefBest = bestScore;
+            noBestImproveRef = bestScore;
+            noBestImproveIters = 0;
+            lastBestIter = iter;
+            highViolRef = Number.POSITIVE_INFINITY;
+            highViolStallIters = 0;
+            bestScoreHistory.length = 0;
+          }
+
         // Check current feasibility
-        const preEval = await evalSQPAtX(currentX);
+        const preEval = samplingTransitionEval || await evalSQPAtX(currentX);
         const preFeasible = preEval.feasible || (preEval.constraints || []).every(c => c <= 1e-3);
         
         // 【追加】現在の最大制約違反を計算（適応的beta用）
@@ -11395,7 +12119,16 @@ export async function runOptimizationMVP(options = {}) {
         }
 
         if (useKktSqp && !dx) {
-          lmDamp = Math.min(1e8, Math.max(1e-10, lmDamp * 10));
+          const failedSolveDamping = updateAdaptiveSqpDamping(
+            { damping: lmDamp, rejectMultiplier: lmDampRejectMultiplier },
+            {
+              accepted: false,
+              gainRatio: 0,
+              hessianScale: lmDampHessianScale,
+            },
+          );
+          lmDamp = failedSolveDamping.damping;
+          lmDampRejectMultiplier = failedSolveDamping.rejectMultiplier;
           forceJacobianRefreshNextIter = true;
           lastJ = null;
           lastX = null;
@@ -11641,13 +12374,16 @@ export async function runOptimizationMVP(options = {}) {
           maxAbs = Math.max(maxAbs, Math.abs(di));
         }
         
-        // 【修正】ステップが小さすぎる場合は再度damping をリセット
-        // これにより、ill-conditioning から逃げることができる
         if (maxAbs < 1e-8 && lmDamp > 1e-3) {
-          lmDamp = 5e-4;  // 【最適化】リセット時も初期値に合わせる
-          // 【修正】ここで mu を上げると、ストール時に「壁を高くする」悪循環になるので削除
-          // The wall (penalty) is the problem when stalled; raising it won't help
-          continue;  // Skip this iteration and recalculate
+          const resetDamping = initializeAdaptiveSqpDamping(
+            2e-4,
+            lmDampHessianScale,
+            2e-4,
+          );
+          lmDamp = resetDamping.damping;
+          lmDampRejectMultiplier = resetDamping.rejectMultiplier;
+          forceJacobianRefreshNextIter = true;
+          continue;
         }
         
         // 【修正】固定の delta ではなく、適応的トラスト領域を適用する
@@ -11672,10 +12408,11 @@ export async function runOptimizationMVP(options = {}) {
 
         const kktSqpLineSearchMaxBacktrack = Number.isFinite(Number(opts?.kktSqpLineSearchMaxBacktrack))
           ? Math.max(1, Math.floor(Number(opts.kktSqpLineSearchMaxBacktrack)))
-          : Math.min(8, lineSearchMaxBacktrack);
-        const alphas = Array.from(
-          { length: Math.max(1, useKktSqp ? kktSqpLineSearchMaxBacktrack : lineSearchMaxBacktrack) },
-          (_, index) => Math.pow(0.5, index)
+          : Math.min(2, lineSearchMaxBacktrack);
+        const kktSqpStepLookahead = useKktSqp && opts?.kktSqpStepLookahead !== false;
+        const alphas = buildSqpLineSearchAlphas(
+          useKktSqp ? kktSqpLineSearchMaxBacktrack : lineSearchMaxBacktrack,
+          kktSqpStepLookahead,
         );
         
         let accepted = false;
@@ -11686,6 +12423,8 @@ export async function runOptimizationMVP(options = {}) {
         let acceptedAlpha = 1;
         let acceptedDxStep: number[] | null = null;
         let acceptedSqpModelStep = false;
+        let acceptedMaxViolation = currentMaxViol;
+        let allowSqpLookahead = false;
         // 【追加】LM法と同じく、二次モデルによる予測減少量(pred)を計算する関数
         const predictedReductionForStep = (dxStep: number[]) => {
           try {
@@ -11730,8 +12469,17 @@ export async function runOptimizationMVP(options = {}) {
 
         let lastAlpha = 0; // Track last alpha tried for progress reporting
         for (const alpha of alphas) {
+          const isLookaheadAlpha = useKktSqp && alpha > 1;
+          if (isLookaheadAlpha && !allowSqpLookahead) continue;
+          if (__profile && __profile.counts) {
+            __profile.counts.kktCandidateEvalCount = (Number(__profile.counts.kktCandidateEvalCount) || 0) + 1;
+            if (alpha < 1) {
+              __profile.counts.kktLineSearchBacktracks = (Number(__profile.counts.kktLineSearchBacktracks) || 0) + 1;
+            }
+          }
           const dxStep = dx.map(v => alpha * v);
           const trialX = clampToBounds(currentX.map((x, i) => x + dxStep[i]));
+          const actualDxStep = trialX.map((value, index) => value - currentX[index]);
           const aug1 = await evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
           const r1 = aug1.residuals;
           const cost1 = useKktSqp
@@ -11762,21 +12510,29 @@ export async function runOptimizationMVP(options = {}) {
           const scoreDominantProgress = improvedScore;
           const violationDominantProgress = improvedViolation && nonWorsenedCost && nonWorsenedScore;
           const safeFeasibilityTransition = becameFeasible && (nonWorsenedCost || nonWorsenedScore);
-          const acceptTrial = preFeasible
-            ? (costDominantProgress || scoreDominantProgress)
-            : (safeFeasibilityTransition || costDominantProgress || scoreDominantProgress || violationDominantProgress);
+          const acceptTrial = currentConstraints.length === 0
+            ? scoreDominantProgress
+            : (preFeasible
+              ? (costDominantProgress || scoreDominantProgress)
+              : (safeFeasibilityTransition || costDominantProgress || scoreDominantProgress || violationDominantProgress));
 
           if (acceptTrial) {
+            const replaceAccepted = !accepted || !isLookaheadAlpha || isBetterSqpLookaheadCandidate(
+              { score: acceptedScore, maxViolation: acceptedMaxViolation },
+              { score: score1, maxViolation: trialMaxViol },
+            );
+            if (isLookaheadAlpha && !replaceAccepted) break;
             accepted = true;
             acceptedSqpModelStep = useKktSqp;
             nextX = trialX;
             acceptedCost = cost1;
             acceptedScore = score1;
             acceptedAlpha = alpha;
-            acceptedDxStep = dxStep.slice();
+            acceptedDxStep = actualDxStep;
+            acceptedMaxViolation = trialMaxViol;
             
             // 【追加】予測と実際の減少量の比 (rho) を計算
-            const pred = predictedReductionForStep(dxStep);
+            const pred = predictedReductionForStep(actualDxStep);
             const act = cost0 - cost1;
             acceptedRho = (Number.isFinite(act) && Number.isFinite(pred) && pred > 1e-30) ? (act / pred) : 0;
             
@@ -11785,12 +12541,24 @@ export async function runOptimizationMVP(options = {}) {
             lastX = currentX.slice();
             lastR = r0.slice();
             
-            // 【最適化】Feasibleで最初の試行（alpha=1）に成功したら即座に終了
-            if (preFeasible && alpha === 1) {
-              break;  // Full step accepted, no need to try smaller steps
+            if (useKktSqp && alpha === 1) {
+              allowSqpLookahead = kktSqpStepLookahead
+                && improvedScore
+                && nonWorsenedViolation;
+              if (allowSqpLookahead) {
+                if (__profile && __profile.counts) {
+                  __profile.counts.kktSqpLookaheadEligible = (Number(__profile.counts.kktSqpLookaheadEligible) || 0) + 1;
+                }
+                continue;
+              }
             }
-            break;  // Accept and move to damping update
+            if (isLookaheadAlpha && __profile && __profile.counts) {
+              __profile.counts.kktSqpLookaheadAccepted = (Number(__profile.counts.kktSqpLookaheadAccepted) || 0) + 1;
+            }
+            if (isLookaheadAlpha && alpha < 2) continue;
+            break;
           }
+          if (isLookaheadAlpha) break;
         }
 
         if (!accepted && useKktSqp && n > 0) {
@@ -11877,9 +12645,19 @@ export async function runOptimizationMVP(options = {}) {
             forceJacobianRefreshNextIter = true;
           }
           
-          // 【改善】3.0→2.0：さらに穏やかに増加して探索を続ける
-          lmDamp = Math.min(1e12, lmDamp * 2.0);  // More conservative increase
-          if (lmDamp > 1e9) lmDamp = 2e-4;  // スタック時はリセット（初期値に合わせる）
+          const rejectedDamping = updateAdaptiveSqpDamping(
+            { damping: lmDamp, rejectMultiplier: lmDampRejectMultiplier },
+            {
+              accepted: false,
+              gainRatio: 0,
+              hessianScale: lmDampHessianScale,
+            },
+          );
+          lmDamp = rejectedDamping.damping;
+          lmDampRejectMultiplier = rejectedDamping.rejectMultiplier;
+          applyXToDesignState(currentX);
+          postEvalCached = preEval;
+          iterAcceptedCompositeEval = kktEvaluationToComposite(preEval);
           
           // 【追加】リジェクト（失敗）時は歩幅の限界を狭めてより慎重にする
           const rejectedRadius = updateTrustRegionRadiusWithOptionalWasm({
@@ -11951,6 +12729,7 @@ export async function runOptimizationMVP(options = {}) {
             // lambdaVec = [];         <-- 削除：ラグランジュ乗数の蓄積を保つ
             
             lmDamp = 1e-1;  // 安全な初期ダンピング値
+            lmDampRejectMultiplier = 2;
             kktRejectStreak = 0;
             violStagnationIter = 0;
             currentX = bestX.slice();  // 一番良かった場所から再開
@@ -12016,21 +12795,11 @@ export async function runOptimizationMVP(options = {}) {
             }
           }
           
-          // 成功：現在位置を更新し、ダンピングを rho に応じて滑らかに減らす（LM法と同じ戦略）
-          const rhoThreshold = 0.25;  // Accept range: rho > 0.25 means good prediction
           const acceptedPredictedReduction = predictedReductionForStep(acceptedDxStep || dx.map(v => acceptedAlpha * v));
           const acceptedActualReduction = Number.isFinite(cost0) && Number.isFinite(acceptedCost)
             ? (cost0 - acceptedCost)
             : 0;
-          let factor;
-          if (acceptedRho > rhoThreshold) {
-            // 【最適化】予測が良い場合はより積極的に減らす
-            const smoothTerm = Math.pow(2 * acceptedRho - 1, 3);
-            factor = Math.max(1.0 / 8.0, 1.0 - smoothTerm);  // 0.125-1.0（さらに積極的）
-            factor = Math.max(0.08, Math.min(1.0, factor));  // 0.1→0.08：より積極的な減少
-            
-            // 【追加】予測精度が非常に高い場合は、トラスト領域を拡大して一気に進む
-            if (acceptedRho > 0.75) {
+          if (acceptedRho > 0.75) {
               const expandedRadius = updateTrustRegionRadiusWithOptionalWasm({
                 predictedReduction: acceptedPredictedReduction,
                 actualReduction: acceptedActualReduction,
@@ -12043,16 +12812,9 @@ export async function runOptimizationMVP(options = {}) {
               trustRegionDeltaEff = Number.isFinite(expandedRadius)
                 ? expandedRadius
                 : Math.min(2.0, trustRegionDeltaEff * 1.25);
-            } else if (acceptedAlpha === 1 && acceptedRho > rhoThreshold) {
-              trustRegionDeltaEff = Math.min(2.0, trustRegionDeltaEff * 1.1);
-            }
-          } else if (acceptedRho > 0.004) {
-            // 【改善】予測がまあまあ（0.004 < rho <= 0.25）の場合も穏やかに減らす
-            factor = 0.75;  // 0.85 → 0.75（さらに積極的）
+          } else if (acceptedAlpha === 1 && acceptedRho > 0.25) {
+            trustRegionDeltaEff = Math.min(2.0, trustRegionDeltaEff * 1.1);
           } else {
-            // 【改善】予測が悪い（rho <= 0.004）場合は増やす（ただしLM並みには保つ）
-            factor = 1.5;  // 2.0 → 1.5（やや穏やかに）
-            // 【追加】予測精度が低い場合は、トラスト領域を少し縮小する
             const reducedRadius = updateTrustRegionRadiusWithOptionalWasm({
               predictedReduction: acceptedPredictedReduction,
               actualReduction: acceptedActualReduction,
@@ -12066,7 +12828,16 @@ export async function runOptimizationMVP(options = {}) {
               ? reducedRadius
               : Math.max(0.01, trustRegionDeltaEff * 0.9);
           }
-          lmDamp = Math.max(1e-12, lmDamp * factor);
+          const acceptedDamping = updateAdaptiveSqpDamping(
+            { damping: lmDamp, rejectMultiplier: lmDampRejectMultiplier },
+            {
+              accepted: true,
+              gainRatio: acceptedRho,
+              hessianScale: lmDampHessianScale,
+            },
+          );
+          lmDamp = acceptedDamping.damping;
+          lmDampRejectMultiplier = acceptedDamping.rejectMultiplier;
 
           // 【高速化】evalSQPAtX(currentX) を一度だけ計算し、ベスト更新ログ・bestMerit 計算で共有する
           // （以前は新ベスト達成時に同じ x で 2 回呼んでいた。kktEvalCache はあるが冗長を排除）
@@ -12229,6 +13000,7 @@ export async function runOptimizationMVP(options = {}) {
           iterAcceptedCompositeEval = null;
 
           lmDamp = 2e-4;
+          lmDampRejectMultiplier = 2;
           trustRegionDeltaEff = kktInitialTrustRegion;
           kktRejectStreak = 0;
           lastJ = null;

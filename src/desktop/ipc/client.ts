@@ -69,6 +69,8 @@ import type {
   NewProjectTemplateResponse,
 } from "../../shared/contracts/project";
 import type {
+  EvaluateOptimizerCandidatesRequest,
+  EvaluateOptimizerCandidatesResponse,
   OptimizeStepRequest,
   OptimizeStepResponse,
   OptimizerDropSessionRequest,
@@ -7563,6 +7565,15 @@ export async function parseZmxText(payload: ParseZmxTextRequest): Promise<ParseZ
 
 export async function runOptimizerStep(payload: OptimizeStepRequest): Promise<OptimizeStepResponse> {
   return invokeCommand<OptimizeStepRequest, OptimizeStepResponse>("run_optimizer_step", payload);
+}
+
+export async function evaluateOptimizerCandidates(
+  payload: EvaluateOptimizerCandidatesRequest,
+): Promise<EvaluateOptimizerCandidatesResponse> {
+  return invokeCommand<EvaluateOptimizerCandidatesRequest, EvaluateOptimizerCandidatesResponse>(
+    "evaluate_optimizer_candidates",
+    payload,
+  );
 }
 
 export async function requestOptimizerStop(): Promise<boolean> {

@@ -62,6 +62,7 @@ pub(crate) fn compute_native_chief_ray_angle_deg(
         &resolved_source_rows,
         "primary",
         false,
+        false,
     );
 
     for (_series_label, _series_color, _has_field_angle, rays, wavelength_um) in generated_series {
@@ -258,6 +259,8 @@ pub struct NativeSpotRaytraceRequest {
     pub ring_count: Option<u32>,
     pub pattern: Option<String>,
     pub wavelength_mode: Option<String>,
+    #[serde(default)]
+    pub independent_object_origins: bool,
     #[serde(default)]
     pub ray_series: Vec<NativeSpotInputSeries>,
 }
@@ -1328,6 +1331,7 @@ pub fn run_native_spot_raytrace(req: NativeSpotRaytraceRequest) -> Result<Native
             &req.source_rows,
             &wavelength_mode,
             false,
+            req.independent_object_origins,
         );
     }
 
@@ -6433,6 +6437,7 @@ pub fn run_native_astigmatism(
         &req.source_rows,
         &wavelength_mode,
         false,
+        false,
     );
     if generated_series.is_empty() {
         return Err("run_native_astigmatism: failed to generate native rays".to_string());
@@ -6942,6 +6947,7 @@ pub fn run_native_transverse_aberration(
         &source_rows_effective,
         &wavelength_mode,
         false,
+        false,
     );
     if generated_series.is_empty() {
         return Err("run_native_transverse_aberration: failed to generate native rays".to_string());
@@ -7354,6 +7360,7 @@ pub fn compute_native_transverse_rms_batch(
         &source_rows_effective,
         &wavelength_mode,
         false,
+        false,
     );
     if generated_series.is_empty() {
         return Err("run_native_transverse_rms_um: failed to generate native rays".to_string());
@@ -7539,6 +7546,7 @@ fn build_native_object_ray_series(
     source_rows: &[Value],
     wavelength_mode: &str,
     preserve_pupil_shape: bool,
+    independent_object_origins: bool,
 ) -> Vec<(String, String, bool, Vec<NativeSpotInputRay>, f64)> {
     let mut out = Vec::<(String, String, bool, Vec<NativeSpotInputRay>, f64)>::new();
     if object_rows.is_empty() || surface_data.is_empty() {
@@ -7611,12 +7619,18 @@ fn build_native_object_ray_series(
                 sampling_radius,
                 stop_packed.as_ref(),
                 target_packed.as_ref(),
-                previous_angle_origin_by_wl[wl_idx],
+                if independent_object_origins {
+                    None
+                } else {
+                    previous_angle_origin_by_wl[wl_idx]
+                },
                 preserve_pupil_shape,
             );
 
-            if let Some(origin) = refined_emission_origin {
-                previous_angle_origin_by_wl[wl_idx] = Some(origin);
+            if !independent_object_origins {
+                if let Some(origin) = refined_emission_origin {
+                    previous_angle_origin_by_wl[wl_idx] = Some(origin);
+                }
             }
 
             if !rays.is_empty() {
@@ -7810,6 +7824,7 @@ fn distortion_estimate_focal_length_mm(
         ring_count: Some(1),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
+        independent_object_origins: false,
         ray_series: Vec::new(),
     };
     let response = run_native_spot_raytrace(req).ok()?;
@@ -7882,6 +7897,7 @@ fn distortion_estimate_height_magnification(
         ring_count: Some(1),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
+        independent_object_origins: false,
         ray_series: Vec::new(),
     };
     let response = run_native_spot_raytrace(req).ok()?;
@@ -8018,6 +8034,7 @@ fn run_native_distortion_impl(
         ring_count: Some(1),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
+        independent_object_origins: false,
         ray_series: Vec::new(),
     })?;
 
@@ -8493,6 +8510,7 @@ where
             ring_count: Some(1),
             pattern: Some("cross".to_string()),
             wavelength_mode: Some("primary".to_string()),
+            independent_object_origins: false,
             ray_series: Vec::new(),
         })?;
 
@@ -8949,6 +8967,7 @@ fn run_native_magnification_chromatic_aberration_impl(
             ring_count: Some(lca_ring_count),
             pattern: Some(lca_pattern.to_string()),
             wavelength_mode: Some("primary".to_string()),
+            independent_object_origins: false,
             ray_series: Vec::new(),
         })?;
 

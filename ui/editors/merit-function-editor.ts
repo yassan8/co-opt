@@ -3905,6 +3905,124 @@ class MeritFunctionEditor {
         }
     }
 
+    async calculateSpotSizeBatchViaNativeAsync(operands: any[]): Promise<Array<number | null>> {
+        const rows = Array.isArray(operands) ? operands : [];
+        if (rows.length === 0) return [];
+        try {
+            const first = rows[0];
+            const opticalSystemData = this.getOpticalSystemDataByConfigId(first?.configId);
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) {
+                return rows.map(() => null);
+            }
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(first?.configId, {
+                preferConfigTables: true,
+            });
+            const wavelength = String(first?.param1 ?? '').trim() === ''
+                ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+                : this.getSystemWavelengthFromOperandOrPrimary(first, sourceRows);
+            const meritFast = (typeof globalThis !== 'undefined' && w.__cooptMeritFastMode) || null;
+            const pattern = String(first?.operand ?? '').trim().toUpperCase() === 'SPOT_SIZE_RECT' ? 'grid' : 'annular';
+            const defaultRayCount = pattern === 'annular' ? 101 : 501;
+            const configuredRayCount = Math.floor(Number(first?.param4));
+            const fastRayCount = meritFast?.enabled === true ? Math.floor(Number(meritFast.spotRayCount)) : Number.NaN;
+            const rayCount = Math.min(5000, Math.max(1,
+                Number.isFinite(fastRayCount) && fastRayCount > 0
+                    ? fastRayCount
+                    : (Number.isFinite(configuredRayCount) && configuredRayCount > 0 ? configuredRayCount : defaultRayCount)
+            ));
+            const fastRingCount = meritFast?.enabled === true ? Math.floor(Number(meritFast.spotAnnularRingCount)) : Number.NaN;
+            const ringCount = Number.isFinite(fastRingCount) && fastRingCount > 0 ? Math.min(10, fastRingCount) : 10;
+            const imageSurfaceIndex = (() => {
+                for (let index = opticalSystemData.length - 1; index >= 0; index--) {
+                    const row = opticalSystemData[index];
+                    const objectType = String(row?.['object type'] || row?.objectType || row?.object || '').trim().toLowerCase();
+                    if (objectType === 'image') return index;
+                }
+                return opticalSystemData.length - 1;
+            })();
+            const targetSurfaceNumber = Math.floor(Number(first?.param5));
+            const targetSurfaceIndex = (() => {
+                if (!(Number.isFinite(targetSurfaceNumber) && targetSurfaceNumber > 0)) return imageSurfaceIndex;
+                try {
+                    const options = generateSurfaceOptions(opticalSystemData);
+                    const match = Array.isArray(options)
+                        ? options.find((option: any) => Number(option?.value) === targetSurfaceNumber || Number(option?.surfaceId) === targetSurfaceNumber)
+                        : null;
+                    if (match && Number.isInteger(match.rowIndex) && match.rowIndex >= 0 && match.rowIndex < opticalSystemData.length) {
+                        return match.rowIndex;
+                    }
+                } catch (_) {}
+                const rowIndex = targetSurfaceNumber - 1;
+                return rowIndex >= 0 && rowIndex < opticalSystemData.length ? rowIndex : imageSurfaceIndex;
+            })();
+            const objectIndices = rows.map((operand) => {
+                const objectIndex = Math.max(0, Math.floor(Number(operand?.param2) || 1) - 1);
+                return objectIndex;
+            });
+            const uniqueObjectIndices = Array.from(new Set(objectIndices));
+            const selectedObjects = uniqueObjectIndices.map((objectIndex) => objectRows?.[objectIndex] || null);
+            if (selectedObjects.some((row) => !row || typeof row !== 'object')) {
+                return rows.map(() => null);
+            }
+
+            const ipcMod = await import('../../src/desktop/ipc/client.ts');
+            if (!ipcMod || typeof ipcMod.runNativeSpotRaytrace !== 'function') {
+                return rows.map(() => null);
+            }
+            const response = await ipcMod.runNativeSpotRaytrace({
+                opticalSystemRows: opticalSystemData,
+                sourceRows: __cooptBuildPrimaryOnlySourceRows(sourceRows, wavelength),
+                objectRows: selectedObjects,
+                surfaceIndex: targetSurfaceIndex,
+                rayCount,
+                ringCount,
+                pattern,
+                wavelengthMode: 'primary',
+                independentObjectOrigins: true,
+            });
+            const series = Array.isArray(response?.series) ? response.series : [];
+            if (series.length !== selectedObjects.length) return rows.map(() => null);
+            const seriesIndexByObject = new Map(uniqueObjectIndices.map((objectIndex, seriesIndex) => [objectIndex, seriesIndex]));
+
+            return rows.map((operand, index) => {
+                const seriesIndex = seriesIndexByObject.get(objectIndices[index]);
+                if (!Number.isInteger(seriesIndex)) return null;
+                const spotSeries = series[Number(seriesIndex)];
+                const points = Array.isArray(spotSeries?.points) ? spotSeries.points : [];
+                if (points.length === 0) return null;
+                const exactChief = this.resolveExactChiefSpotPoint(
+                    opticalSystemData,
+                    objectRows[objectIndices[index]],
+                    wavelength,
+                    targetSurfaceIndex,
+                );
+                const responseChief = spotSeries?.chiefPointUm;
+                const chiefX = exactChief ? exactChief.x * 1000 : Number(responseChief?.xUm ?? points[0]?.xUm);
+                const chiefY = exactChief ? exactChief.y * 1000 : Number(responseChief?.yUm ?? points[0]?.yUm);
+                if (!Number.isFinite(chiefX) || !Number.isFinite(chiefY)) return null;
+                let sumSquared = 0;
+                let maxRadiusSquared = 0;
+                let count = 0;
+                for (const point of points) {
+                    const dx = Number(point?.xUm) - chiefX;
+                    const dy = Number(point?.yUm) - chiefY;
+                    if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
+                    const radiusSquared = dx * dx + dy * dy;
+                    sumSquared += radiusSquared;
+                    maxRadiusSquared = Math.max(maxRadiusSquared, radiusSquared);
+                    count++;
+                }
+                if (count === 0) return null;
+                const metric = String(operand?.param3 ?? '').trim().toLowerCase();
+                return metric === 'diameter' || metric === 'dia'
+                    ? 2 * Math.sqrt(maxRadiusSquared)
+                    : Math.sqrt(sumSquared / count);
+            });
+        } catch (_) {
+            return rows.map(() => null);
+        }
+    }
+
     calculateLongitudinalAberrationRmsUm(operand: any, opticalSystemData: any[]): number {
         if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
 
@@ -4928,25 +5046,58 @@ class MeritFunctionEditor {
         const frequency = Math.max(0, Number(operand?.param4) || 10);
         const requestedSampling = Math.floor(Number(operand?.param5) || 32);
         const samplingOptions = new Set([16, 32, 64, 128, 256, 512, 1024, 2048, 4096]);
-        const sampling = samplingOptions.has(requestedSampling) ? requestedSampling : 32;
-
-        const result = await showMTFDiagram({
-            wavelengthMicrons: wavelength,
+        const configuredSampling = samplingOptions.has(requestedSampling) ? requestedSampling : 32;
+        const meritFast = (typeof globalThis !== 'undefined' && w.__cooptMeritFastMode) || null;
+        const fastSampling = Math.floor(Number(meritFast?.mtfSamplingSize));
+        const sampling = meritFast?.enabled === true && samplingOptions.has(fastSampling)
+            ? Math.max(16, fastSampling)
+            : Math.max(16, configuredSampling);
+        const scenarioId = (() => {
+            try {
+                return String((w as any).__cooptScenarioOverride?.[String(operand?.configId ?? '')] ?? '');
+            } catch (_) {
+                return '';
+            }
+        })();
+        const objectSignature = JSON.stringify(objectOverride);
+        const cacheKey = [
+            'mtf-requirement',
+            String(operand?.configId ?? ''),
+            scenarioId,
+            wavelength,
             objectIndex,
-            objectOverride,
-            opticalSystemRowsOverride: opticalSystemData,
-            maxFrequencyLpmm: frequency,
-            targetFrequencyLpmm: frequency,
-            samplingSize: sampling,
-            skipPlot: true,
-            showDiffractionLimit: false,
-            fastSampleOnly: true,
-        });
-        const traces = Array.isArray(result?.traces) ? result.traces : [];
-        const tangentialTrace = traces.find((trace: any) => /tangential|meridional/i.test(String(trace?.name ?? '')));
-        const sagittalTrace = traces.find((trace: any) => /sagittal/i.test(String(trace?.name ?? '')));
-        const tangential = Number(tangentialTrace?.y?.[0]);
-        const sagittal = Number(sagittalTrace?.y?.[0]);
+            objectSignature,
+            frequency,
+            sampling,
+        ].join(':');
+        let metrics = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
+        if (!metrics) {
+            metrics = (async () => {
+                const result = await showMTFDiagram({
+                    wavelengthMicrons: wavelength,
+                    objectIndex,
+                    objectOverride,
+                    opticalSystemRowsOverride: opticalSystemData,
+                    maxFrequencyLpmm: frequency,
+                    targetFrequencyLpmm: frequency,
+                    samplingSize: sampling,
+                    skipPlot: true,
+                    showDiffractionLimit: false,
+                    fastSampleOnly: true,
+                });
+                const traces = Array.isArray(result?.traces) ? result.traces : [];
+                const tangentialTrace = traces.find((trace: any) => /tangential|meridional/i.test(String(trace?.name ?? '')));
+                const sagittalTrace = traces.find((trace: any) => /sagittal/i.test(String(trace?.name ?? '')));
+                return {
+                    tangential: Number(tangentialTrace?.y?.[0]),
+                    sagittal: Number(sagittalTrace?.y?.[0]),
+                };
+            })();
+            if (this._runtimeCache) this._runtimeCache.set(cacheKey, metrics);
+        }
+        metrics = await metrics;
+        const tangential = Number(metrics?.tangential);
+        const sagittal = Number(metrics?.sagittal);
 
         if (mtfType === 'MTFT') return Number.isFinite(tangential) ? tangential : 0;
         if (mtfType === 'MTFS') return Number.isFinite(sagittal) ? sagittal : 0;

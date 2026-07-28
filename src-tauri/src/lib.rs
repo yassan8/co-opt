@@ -27,6 +27,7 @@ pub fn run() {
             commands::optics::run_native_grid_distortion,
             commands::optics::run_native_magnification_chromatic_aberration,
             commands::optimizer::run_optimizer_step,
+            commands::optimizer::evaluate_optimizer_candidates,
             commands::optimizer::optimizer_request_stop,
             commands::optimizer::optimizer_clear_stop,
             commands::optimizer::optimizer_drop_session,

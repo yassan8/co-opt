@@ -39,6 +39,12 @@ import {
   type OptimizeRayGridSize,
 } from "../../ui/optimization-settings-storage.ts";
 import { getRustRayTracingWasmSync } from "../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts";
+import {
+  formatOptimizeConsoleCell,
+  formatOptimizeConsoleHeader,
+  formatOptimizeConsoleRow,
+  formatOptimizeElapsed,
+} from './optimize-console-format.ts';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
@@ -5188,15 +5194,6 @@ export default function App() {
     });
   };
 
-  const formatOptimizeConsoleCell = (value: number, width: number, fractionDigits = 6) => {
-    if (!Number.isFinite(value)) return ''.padStart(width, ' ');
-    const abs = Math.abs(value);
-    const text = (abs >= 1e6 || (abs > 0 && abs < 1e-4))
-      ? value.toExponential(3)
-      : value.toFixed(fractionDigits);
-    return text.length >= width ? text : text.padStart(width, ' ');
-  };
-
   const appendOptimizeConsoleLine = (line: string) => {
     try {
       const hostWindow = getRenderHostWindow() as any;
@@ -5209,35 +5206,19 @@ export default function App() {
   };
 
   const appendOptimizeConsoleHeader = () => {
-    appendOptimizeConsoleLine('Iter    Elapsed           Min.          Equal.        Inequal.     DampingF.        Improv.');
-  };
-
-  const formatOptimizeElapsed = (elapsedMs: number) => {
-    const totalTenths = Math.max(0, Math.floor((Number(elapsedMs) || 0) / 100));
-    const hours = Math.floor(totalTenths / 36000);
-    const minutes = Math.floor((totalTenths % 36000) / 600);
-    const seconds = Math.floor((totalTenths % 600) / 10);
-    const tenths = totalTenths % 10;
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${tenths}`;
+    appendOptimizeConsoleLine(formatOptimizeConsoleHeader());
   };
 
   const appendOptimizeConsoleRow = (row: {
     iter: number;
-    min: number;
-    equal: number;
-    inequal: number;
-    damping: number;
-    improv: number;
     elapsedMs: number;
+    min: number;
+    damping: number;
+    rho: number;
+    alpha: number;
+    improv: number;
   }) => {
-    const iterCol = String(Math.max(0, Math.floor(Number(row.iter) || 0))).padStart(4, ' ');
-    const elapsedCol = formatOptimizeElapsed(row.elapsedMs).padStart(11, ' ');
-    const minCol = formatOptimizeConsoleCell(row.min, 14, 6);
-    const eqCol = formatOptimizeConsoleCell(row.equal, 14, 6);
-    const ineqCol = formatOptimizeConsoleCell(row.inequal, 14, 6);
-    const dampingCol = formatOptimizeConsoleCell(row.damping, 12, 6);
-    const improvCol = formatOptimizeConsoleCell(row.improv, 14, 5);
-    appendOptimizeConsoleLine(`${iterCol}${elapsedCol}${minCol}${eqCol}${ineqCol}${dampingCol}${improvCol}`);
+    appendOptimizeConsoleLine(formatOptimizeConsoleRow(row));
   };
 
   const getOptimizeSyncTargetWindow = (): any => {
@@ -10069,28 +10050,6 @@ const collectLegacyCrossRays = async (
       };
     };
 
-    const maybeAutoRender = async (rowsSnapshot: any[], options?: { force?: boolean }) => {
-      // Always refresh the render when forced (e.g. on optimization completion)
-      // so the displayed optical system reflects the applied best result even
-      // when the live auto-render-on-accept toggle is disabled.
-      if (!optAutoRenderOnAccept && options?.force !== true) return;
-      try {
-        const rows = Array.isArray(rowsSnapshot) ? rowsSnapshot : [];
-        const objectRows = getRenderObjectRows(window as any, rows);
-        const systemConfig = getSystemConfigFromWindow(window as any) || null;
-        const syncToken = `${Date.now()}-opt-auto-render`;
-        const w = window as any;
-        if (systemConfig) {
-          try { w.__cooptPendingRenderSystemConfig = systemConfig; } catch (_) {}
-        }
-        if (typeof w.__cooptRenderWindowRedraw === 'function') {
-          void w.__cooptRenderWindowRedraw(rows, syncToken, objectRows);
-        } else if (typeof w.drawOpticalSystem === 'function') {
-          w.drawOpticalSystem();
-        }
-      } catch (_) {}
-    };
-
     const runOptimize = async () => {
       if (optRunning) return;
       const w = window as any;
@@ -10589,8 +10548,8 @@ const collectLegacyCrossRays = async (
           return Array.isArray(rowsForRender) ? (cloneJsonLocal(rowsForRender) || rowsForRender) : [];
         };
 
-        const performRenderSync = async (rowsForRender: any[], options?: { finalizeAutoSemidia?: boolean }) => {
-          if (!optAutoRenderOnAccept) return;
+        const performRenderSync = async (rowsForRender: any[], options?: { finalizeAutoSemidia?: boolean; force?: boolean }) => {
+          if (!optAutoRenderOnAccept && options?.force !== true) return;
 
           const renderRows = await materializeAutoImageSemidiaForRender(rowsForRender, options?.finalizeAutoSemidia === true);
 
@@ -10710,6 +10669,20 @@ const collectLegacyCrossRays = async (
                 popup.postMessage({ action: 'request-redraw', rows: renderRows, objectRows, systemConfig, ts: payloadToken, token: payloadToken }, '*');
                 await new Promise<void>((resolve) => setTimeout(resolve, 180));
               }
+            }
+          } catch (_) {}
+          try {
+            const renderIframe = hostWindow?.document?.querySelector?.('iframe[title="Render"]') as HTMLIFrameElement | null;
+            const embeddedRenderWindow = renderIframe?.contentWindow as any;
+            if (embeddedRenderWindow && typeof embeddedRenderWindow.__cooptRenderWindowRedraw === 'function') {
+              if (systemConfig) {
+                try {
+                  embeddedRenderWindow.__cooptPendingRenderSystemConfig = systemConfig;
+                  embeddedRenderWindow.__cooptSystemConfig = systemConfig;
+                  embeddedRenderWindow.__cooptPreferRuntimeSystemConfig = true;
+                } catch (_) {}
+              }
+              await Promise.resolve(embeddedRenderWindow.__cooptRenderWindowRedraw(renderRows, payloadToken, objectRows));
             }
           } catch (_) {}
           try {
@@ -10980,18 +10953,6 @@ const collectLegacyCrossRays = async (
               }
             }
 
-            const equalViolation = Number(
-              ev?.equalViolation ??
-              ev?.equalityViolation ??
-              ev?.eqViolation ??
-              Number.NaN
-            );
-            const inequalityViolation = Number(
-              ev?.inequalViolation ??
-              ev?.inequalityViolation ??
-              ev?.ineqViolation ??
-              Number.NaN
-            );
             const dampingFactor = Number(
               ev?.dampingFactor ??
               ev?.lmDamp ??
@@ -11000,6 +10961,8 @@ const collectLegacyCrossRays = async (
               ev?.stepScale ??
               Number.NaN
             );
+            const rho = Number(ev?.rho ?? Number.NaN);
+            const alpha = Number(ev?.alpha ?? Number.NaN);
             const previousMin = optimizeConsolePrevMinRef.current;
             const improvement = (Number.isFinite(previousMin) && previousMin !== 0 && Number.isFinite(requirementDisplayScore))
               ? (previousMin - requirementDisplayScore) / Math.abs(previousMin)
@@ -11021,12 +10984,12 @@ const collectLegacyCrossRays = async (
               }
               appendOptimizeConsoleRow({
                 iter: consoleIter,
-                min: requirementDisplayScore,
-                equal: equalViolation,
-                inequal: inequalityViolation,
-                damping: dampingFactor,
-                improv: improvement,
                 elapsedMs,
+                min: requirementDisplayScore,
+                damping: dampingFactor,
+                rho,
+                alpha,
+                improv: improvement,
               });
               optimizeConsoleLastIterRef.current = consoleIter;
               if (Number.isFinite(requirementDisplayScore)) {
@@ -11366,7 +11329,7 @@ const collectLegacyCrossRays = async (
               ? (cloneJsonLocal(committedRowsSnapshot) || committedRowsSnapshot)
               : [];
             if (Array.isArray(rowsAfter) && rowsAfter.length > 0) {
-              await maybeAutoRender(rowsAfter, { force: true });
+              await performRenderSync(rowsAfter, { finalizeAutoSemidia: true, force: true });
               const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
               const applyCreatedAt = Date.now();
               const shouldBroadcastRowsSync = isTauriRuntime() || !hostResultSnapshotApplied;

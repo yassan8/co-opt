@@ -402,7 +402,9 @@ export function normalizeDesign(raw) {
   // Case 1: already canonical save wrapper: { configurations: <systemConfigurations> }
   if (isPlainObject(raw.configurations) && Array.isArray(raw.configurations.configurations)) {
     // Compatibility: allow top-level systemRequirements field and merge into configurations.
-    if (Array.isArray(raw.systemRequirements) && !Array.isArray(raw.configurations.systemRequirements)) {
+    if (Array.isArray(raw.systemRequirements)
+      && raw.systemRequirements.length > 0
+      && (!Array.isArray(raw.configurations.systemRequirements) || raw.configurations.systemRequirements.length === 0)) {
       raw.configurations.systemRequirements = raw.systemRequirements;
     }
     return { normalized: raw, issues };
@@ -411,7 +413,9 @@ export function normalizeDesign(raw) {
   // Case 2: legacy save format: { source, object, opticalSystem, meritFunction, systemData, configurations?: ... }
   if (isPlainObject(raw.configurations) && raw.configurations.configurations) {
     // Compatibility: allow top-level systemRequirements field and merge into configurations.
-    if (Array.isArray(raw.systemRequirements) && !Array.isArray(raw.configurations.systemRequirements)) {
+    if (Array.isArray(raw.systemRequirements)
+      && raw.systemRequirements.length > 0
+      && (!Array.isArray(raw.configurations.systemRequirements) || raw.configurations.systemRequirements.length === 0)) {
       raw.configurations.systemRequirements = raw.systemRequirements;
     }
     // weird but accept

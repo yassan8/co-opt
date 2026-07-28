@@ -56,6 +56,7 @@ export interface OptimizeProgressEvent {
   requirementCount?: number;
   residualCount?: number;
   rho?: number;
+  alpha?: number;
   feasible?: boolean;
 }
 
@@ -76,4 +77,45 @@ export interface OptimizeStepResponse {
 
 export interface OptimizerDropSessionRequest {
   sessionId: string;
+}
+
+export interface OptimizerCandidateCellUpdate {
+  configId: string;
+  rowIndex: number;
+  fieldKey: string;
+  remove?: boolean;
+  value: unknown;
+}
+
+export interface OptimizerCandidateVariableBinding {
+  variableIndex: number;
+  configId: string;
+  rowIndex: number;
+  fieldKey: string;
+  inputBaseline: number;
+  outputBaseline: number;
+  slope: number;
+}
+
+export interface EvaluateOptimizerCandidatesRequest {
+  candidates?: Array<Record<string, unknown[]>>;
+  candidateDeltas?: OptimizerCandidateCellUpdate[][];
+  candidateVectors?: number[][];
+  variableBindings?: OptimizerCandidateVariableBinding[];
+  sessionId?: string;
+  resetSession?: boolean;
+  baseRowsByConfig?: Record<string, unknown[]>;
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+  systemRequirementsRows?: unknown[];
+  activeConfigId?: string | number;
+}
+
+export interface EvaluateOptimizerCandidatesResponse {
+  currentsPerCandidate: Array<Array<number | null>>;
+  candidateCount: number;
+  requirementCount: number;
+  sessionReused: boolean;
+  appliedUpdateCount: number;
+  elapsedMs: number;
 }

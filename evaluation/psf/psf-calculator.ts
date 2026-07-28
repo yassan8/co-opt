@@ -311,7 +311,7 @@ export class PSFCalculator {
 
     constructor() {
         this.lastCalculationData = null;
-                this.supportedSamplings = [32, 64, 128, 256, 512, 1024, 2048, 4096];
+                this.supportedSamplings = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
         this.wasmCalculator = null;
         this.useWasm = true; // WASM使用フラグ
         this.performanceMode = 'auto'; // 'auto', 'wasm', 'javascript'
