@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   initializeAdaptiveSqpDamping,
+  shouldRollbackRejectedSqpState,
   sqpHessianDiagonalScale,
   updateAdaptiveSqpDamping,
 } from '../optimization/adaptive-sqp-damping.ts';
@@ -30,6 +31,7 @@ state = updateAdaptiveSqpDamping(state, {
   hessianScale,
 });
 assert.ok(state.damping > beforePoorAccept);
+assert.ok(state.damping <= beforePoorAccept * 2);
 
 const beforeReject = state.damping;
 state = updateAdaptiveSqpDamping(state, {
@@ -38,7 +40,7 @@ state = updateAdaptiveSqpDamping(state, {
   hessianScale,
 });
 assert.equal(state.damping, beforeReject * 2);
-assert.equal(state.rejectMultiplier, 4);
+assert.equal(state.rejectMultiplier, 2);
 
 const beforeSecondReject = state.damping;
 state = updateAdaptiveSqpDamping(state, {
@@ -46,11 +48,20 @@ state = updateAdaptiveSqpDamping(state, {
   gainRatio: 0,
   hessianScale,
 });
-assert.equal(state.damping, beforeSecondReject * 4);
-assert.equal(state.rejectMultiplier, 8);
+assert.equal(state.damping, beforeSecondReject * 2);
+assert.equal(state.rejectMultiplier, 2);
+
+const beforeAcceptedModelMismatch = state.damping;
+state = updateAdaptiveSqpDamping(state, {
+  accepted: true,
+  gainRatio: -2.5,
+  hessianScale,
+});
+assert.equal(state.damping, beforeAcceptedModelMismatch);
+assert.equal(state.rejectMultiplier, 2);
 
 let stalled = { damping: 1e-12, rejectMultiplier: 2 };
-for (let attempt = 0; attempt < 7; attempt++) {
+for (let attempt = 0; attempt < 50; attempt++) {
   stalled = updateAdaptiveSqpDamping(stalled, {
     accepted: false,
     gainRatio: 0,
@@ -58,5 +69,10 @@ for (let attempt = 0; attempt < 7; attempt++) {
   });
 }
 assert.ok(stalled.damping >= 1e-4);
+assert.ok(stalled.damping <= 0.1);
+
+assert.equal(shouldRollbackRejectedSqpState([10, -2], [10, -2], [10, 1]), false);
+assert.equal(shouldRollbackRejectedSqpState([10 + Number.EPSILON, -2], [10, -2], [10, 1]), false);
+assert.equal(shouldRollbackRejectedSqpState([10.01, -2], [10, -2], [10, 1]), true);
 
 console.log('Adaptive SQP damping smoke: PASS');

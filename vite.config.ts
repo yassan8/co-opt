@@ -5,6 +5,11 @@ import { resolve } from 'path';
 
 export default defineConfig({
   base: '/co-opt/',
+  server: {
+    watch: {
+      ignored: ['**/src-tauri/target/**']
+    }
+  },
   worker: {
     format: 'es'
   },

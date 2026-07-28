@@ -1,5 +1,12 @@
 /* globalThis loader for Rust/Wasm surface_origins */
 
+function getSurfaceOriginsModuleUrl(cacheKey?: number): string {
+  const rawBase = String(import.meta.env.BASE_URL || '/');
+  const base = `${rawBase.startsWith('/') ? rawBase : `/${rawBase}`}${rawBase.endsWith('/') ? '' : '/'}`;
+  const url = `${base}rust-wasm/pkg/surface_origins.js`;
+  return Number.isFinite(cacheKey) ? `${url}?v=${cacheKey}` : url;
+}
+
 export async function ensureSurfaceOriginsModuleLoaded(): Promise<any | null> {
   const g = globalThis as any;
 
@@ -18,7 +25,8 @@ export async function ensureSurfaceOriginsModuleLoaded(): Promise<any | null> {
 
   g.__cooptSurfaceOriginsModuleLoadPromise = (async () => {
     try {
-      const mod = await import('../../public/rust-wasm/pkg/surface_origins.js');
+      const moduleUrl = getSurfaceOriginsModuleUrl();
+      const mod = await import(/* @vite-ignore */ moduleUrl);
       g.__cooptSurfaceOriginsModule = mod;
       g.__cooptSurfaceOriginsModuleError = null;
       g.__cooptSurfaceOriginsModulePromise = Promise.resolve(mod);
@@ -43,9 +51,8 @@ export async function reloadSurfaceOriginsModule(): Promise<any | null> {
   delete g.__cooptSurfaceOriginsModuleLoadPromise;
   const cacheKey = Date.now();
   try {
-    const moduleUrl = new URL('../../public/rust-wasm/pkg/surface_origins.js', import.meta.url);
-    moduleUrl.searchParams.set('v', String(cacheKey));
-    const mod = await import(/* @vite-ignore */ moduleUrl.href);
+    const moduleUrl = getSurfaceOriginsModuleUrl(cacheKey);
+    const mod = await import(/* @vite-ignore */ moduleUrl);
     g.__cooptSurfaceOriginsModule = mod;
     g.__cooptSurfaceOriginsModuleError = null;
     g.__cooptSurfaceOriginsModulePromise = Promise.resolve(mod);

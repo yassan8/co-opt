@@ -52,6 +52,8 @@ import {
 } from './sqp-step-lookahead.ts';
 import {
   initializeAdaptiveSqpDamping,
+  shouldRollbackRejectedSqpState,
+  sqpHessianDiagonalScale,
   updateAdaptiveSqpDamping,
 } from './adaptive-sqp-damping.ts';
 
@@ -920,9 +922,19 @@ export async function profileOptimizationRun(baseOptions = {}) {
     ? {
         kktFiniteDiffJacobianMs: Number(profile.counts.kktFiniteDiffJacobianMs) || 0,
         kktCandidateEvalCount: Number(profile.counts.kktCandidateEvalCount) || 0,
+        kktMtfBatchCalls: Number(profile.counts.kktMtfBatchCalls) || 0,
+        kktMtfBatchJobs: Number(profile.counts.kktMtfBatchJobs) || 0,
+        kktMtfBatchMs: Number(profile.counts.kktMtfBatchMs) || 0,
+        kktMtfBatchRayonCalls: Number(profile.counts.kktMtfBatchRayonCalls) || 0,
+        kktMtfBatchFailures: Number(profile.counts.kktMtfBatchFailures) || 0,
+        kktNativeBatchFdParityPassed: Number(profile.counts.kktNativeBatchFdParityPassed) || 0,
+        kktNativeBatchFdParityFailed: Number(profile.counts.kktNativeBatchFdParityFailed) || 0,
         kktAcceptedSteps: Number(profile.counts.kktAcceptedSteps) || 0,
         kktRejectedSteps: Number(profile.counts.kktRejectedSteps) || 0,
         kktLineSearchBacktracks: Number(profile.counts.kktLineSearchBacktracks) || 0,
+        kktSqpScoreProbeRecoveries: Number(profile.counts.kktSqpScoreProbeRecoveries) || 0,
+        kktSqpScoreProbeEvaluations: Number(profile.counts.kktSqpScoreProbeEvaluations) || 0,
+        kktSqpCoordinateProbeAccepts: Number(profile.counts.kktSqpCoordinateProbeAccepts) || 0,
         calculateOperandValueCalls: Number(profile.counts.calculateOperandValueCalls) || 0,
         operandValueCacheHits: Number(profile.counts.operandValueCacheHits) || 0,
         operandValueCacheMisses: Number(profile.counts.operandValueCacheMisses) || 0
@@ -10530,7 +10542,12 @@ export async function runOptimizationMVP(options = {}) {
         candidateRows: Array<Record<string, any[]>>,
       ): Promise<Array<Map<string, number>> | null> => {
         const editor = (typeof window !== 'undefined') ? (window as any).meritFunctionEditor : null;
-        if (!editor || typeof editor.getConfigTablesByConfigId !== 'function') return null;
+        if (!editor || typeof editor.getConfigTablesByConfigId !== 'function') {
+          if (__profile?.counts) {
+            __profile.counts.kktMtfBatchMissingEditor = (Number(__profile.counts.kktMtfBatchMissingEditor) || 0) + 1;
+          }
+          return null;
+        }
         const mtfItems = (Array.isArray(residualItems) ? residualItems : []).filter((item: any) => {
           const requirement = item?.req;
           const operand = String(requirement?.operand ?? '').trim().toUpperCase();
@@ -10541,7 +10558,12 @@ export async function runOptimizationMVP(options = {}) {
             && String(requirement?.param1 ?? '').trim().toUpperCase() !== 'ALL_WEIGHTED'
             && weight > 0);
         });
-        if (mtfItems.length === 0 || candidateRows.length === 0) return null;
+        if (mtfItems.length === 0 || candidateRows.length === 0) {
+          if (__profile?.counts) {
+            __profile.counts.kktMtfBatchNoEligibleItems = (Number(__profile.counts.kktMtfBatchNoEligibleItems) || 0) + 1;
+          }
+          return null;
+        }
 
         const groups = new Map<string, any>();
         for (const item of mtfItems) {
@@ -10561,7 +10583,22 @@ export async function runOptimizationMVP(options = {}) {
           const sampling = meritFast?.enabled === true && samplingOptions.has(fastSampling)
             ? Math.max(16, fastSampling)
             : Math.max(16, configuredSampling);
-          if (!(Number.isFinite(wavelength) && wavelength > 0) || !objectRows[objectIndex]) continue;
+          if (!(Number.isFinite(wavelength) && wavelength > 0) || !objectRows[objectIndex]) {
+            if (__profile?.counts) {
+              __profile.counts.kktMtfBatchInvalidGroupInputs = (Number(__profile.counts.kktMtfBatchInvalidGroupInputs) || 0) + 1;
+              if (!Array.isArray(__profile.mtfBatchInvalidGroupInputs)) __profile.mtfBatchInvalidGroupInputs = [];
+              __profile.mtfBatchInvalidGroupInputs.push({
+                configId,
+                param1: requirement?.param1,
+                param2: requirement?.param2,
+                wavelength,
+                sourceCount: sourceRows.length,
+                objectIndex,
+                objectCount: objectRows.length,
+              });
+            }
+            continue;
+          }
           const groupKey = [configId, wavelength, objectIndex, frequency, sampling].join('|');
           const group = groups.get(groupKey) || {
             configId,
@@ -10576,13 +10613,23 @@ export async function runOptimizationMVP(options = {}) {
           group.items.push(item);
           groups.set(groupKey, group);
         }
-        if (groups.size === 0) return null;
+        if (groups.size === 0) {
+          if (__profile?.counts) {
+            __profile.counts.kktMtfBatchEmptyGroups = (Number(__profile.counts.kktMtfBatchEmptyGroups) || 0) + 1;
+          }
+          return null;
+        }
 
         const jobs: any[] = [];
         for (let candidateIndex = 0; candidateIndex < candidateRows.length; candidateIndex++) {
           for (const [groupKey, group] of groups) {
             const rows = candidateRows[candidateIndex]?.[group.configId];
-            if (!Array.isArray(rows) || rows.length === 0) continue;
+            if (!Array.isArray(rows) || rows.length === 0) {
+              if (__profile?.counts) {
+                __profile.counts.kktMtfBatchMissingCandidateRows = (Number(__profile.counts.kktMtfBatchMissingCandidateRows) || 0) + 1;
+              }
+              continue;
+            }
             const objectRow = group.objectRows[group.objectIndex] || {};
             const position = String(objectRow?.position ?? objectRow?.object ?? '').toLowerCase();
             const isAngle = /\bangle\b/.test(position);
@@ -10600,7 +10647,12 @@ export async function runOptimizationMVP(options = {}) {
               : { x: 1, y: 0 };
             const diffraction = calculateImageSpaceDiffractionParams(rows, group.wavelength);
             const fNumber = Number(diffraction?.fNumberWorking);
-            if (!(Number.isFinite(fNumber) && fNumber > 0)) continue;
+            if (!(Number.isFinite(fNumber) && fNumber > 0)) {
+              if (__profile?.counts) {
+                __profile.counts.kktMtfBatchInvalidFNumber = (Number(__profile.counts.kktMtfBatchInvalidFNumber) || 0) + 1;
+              }
+              continue;
+            }
             jobs.push({
               opdRequest: {
                 opticalSystemRows: rows,
@@ -10627,9 +10679,34 @@ export async function runOptimizationMVP(options = {}) {
             });
           }
         }
-        if (jobs.length === 0) return null;
+        if (jobs.length === 0) {
+          if (__profile?.counts) {
+            __profile.counts.kktMtfBatchEmptyJobs = (Number(__profile.counts.kktMtfBatchEmptyJobs) || 0) + 1;
+          }
+          return null;
+        }
 
-        const response = await runMtfBatchViaWasm({ jobs });
+        const mtfBatchStartedAt = nowMs();
+        if (__profile?.counts) {
+          __profile.counts.kktMtfBatchCalls = (Number(__profile.counts.kktMtfBatchCalls) || 0) + 1;
+          __profile.counts.kktMtfBatchJobs = (Number(__profile.counts.kktMtfBatchJobs) || 0) + jobs.length;
+        }
+        let response: any;
+        try {
+          response = await runMtfBatchViaWasm({ jobs });
+        } catch (error) {
+          if (__profile?.counts) {
+            __profile.counts.kktMtfBatchFailures = (Number(__profile.counts.kktMtfBatchFailures) || 0) + 1;
+            __profile.counts.kktMtfBatchMs = (Number(__profile.counts.kktMtfBatchMs) || 0) + (nowMs() - mtfBatchStartedAt);
+          }
+          throw error;
+        }
+        if (__profile?.counts) {
+          __profile.counts.kktMtfBatchMs = (Number(__profile.counts.kktMtfBatchMs) || 0) + (nowMs() - mtfBatchStartedAt);
+          if (String(response?.backend ?? '').toLowerCase().includes('rayon')) {
+            __profile.counts.kktMtfBatchRayonCalls = (Number(__profile.counts.kktMtfBatchRayonCalls) || 0) + 1;
+          }
+        }
         const results = Array.isArray(response?.results) ? response.results : [];
         if (results.length !== jobs.length) return null;
         const seeded = candidateRows.map(() => new Map<string, number>());
@@ -10665,10 +10742,12 @@ export async function runOptimizationMVP(options = {}) {
         penaltyMu: number,
         maxViolContext: number,
       ): Promise<number[][] | null> => {
+        const hasMtfResidualItems = (Array.isArray(residualItems) ? residualItems : [])
+          .some((item: any) => ['MTFT', 'MTFS', 'MTFA'].includes(String(item?.req?.operand ?? '').trim().toUpperCase()));
         if (!kktNativeBatchFdEnabled
           || nativeBatchFdParityStatus === 'failed'
           || candidatePoints.length < 2
-          || nativeBatchRequirementRows.length === 0) {
+          || (nativeBatchRequirementRows.length === 0 && !hasMtfResidualItems)) {
           return null;
         }
         const batchStartedAt = nowMs();
@@ -10688,8 +10767,7 @@ export async function runOptimizationMVP(options = {}) {
           && !nativeBatchSessionInitialized;
         let candidates: Array<Record<string, any[]>> = [];
         let candidateDeltas: any[][] = [];
-        const needsMtfCandidateRows = (Array.isArray(residualItems) ? residualItems : [])
-          .some((item: any) => ['MTFT', 'MTFS', 'MTFA'].includes(String(item?.req?.operand ?? '').trim().toUpperCase()));
+        const needsMtfCandidateRows = hasMtfResidualItems;
         if (!useVectorCandidates || needsMtfCandidateRows) {
           candidates = candidatePoints.map(buildNativeCandidateRows).filter(Boolean) as Array<Record<string, any[]>>;
           if (candidates.length !== candidatePoints.length) return null;
@@ -10702,21 +10780,28 @@ export async function runOptimizationMVP(options = {}) {
         }
         const baseRowsByConfig = nativeBatchBaseRowsByConfig as Record<string, any[]>;
         try {
-          const response = await evaluateOptimizerCandidates({
-            candidateDeltas: useVectorCandidates ? undefined : candidateDeltas,
-            candidateVectors: useVectorCandidates ? candidatePoints : undefined,
-            variableBindings: initializeNativeSession && useVectorCandidates
-              ? nativeBatchVariableBindings as any[]
-              : undefined,
-            sessionId: nativeBatchEvaluatorSessionId,
-            resetSession: initializeNativeSession,
-            baseRowsByConfig: initializeNativeSession ? baseRowsByConfig : undefined,
-            sourceRows: initializeNativeSession ? nativeBatchSourceRows : undefined,
-            objectRows: initializeNativeSession ? nativeBatchObjectRows : undefined,
-            systemRequirementsRows: initializeNativeSession ? nativeBatchRequirementRows : undefined,
-            activeConfigId: initializeNativeSession ? String(activeConfigId ?? '') : undefined,
-          });
-          if (initializeNativeSession) {
+          const hasNativeRequirementRows = nativeBatchRequirementRows.length > 0;
+          const response = hasNativeRequirementRows
+            ? await evaluateOptimizerCandidates({
+              candidateDeltas: useVectorCandidates ? undefined : candidateDeltas,
+              candidateVectors: useVectorCandidates ? candidatePoints : undefined,
+              variableBindings: initializeNativeSession && useVectorCandidates
+                ? nativeBatchVariableBindings as any[]
+                : undefined,
+              sessionId: nativeBatchEvaluatorSessionId,
+              resetSession: initializeNativeSession,
+              baseRowsByConfig: initializeNativeSession ? baseRowsByConfig : undefined,
+              sourceRows: initializeNativeSession ? nativeBatchSourceRows : undefined,
+              objectRows: initializeNativeSession ? nativeBatchObjectRows : undefined,
+              systemRequirementsRows: initializeNativeSession ? nativeBatchRequirementRows : undefined,
+              activeConfigId: initializeNativeSession ? String(activeConfigId ?? '') : undefined,
+            })
+            : {
+              currentsPerCandidate: candidatePoints.map(() => []),
+              appliedUpdateCount: 0,
+              sessionReused: false,
+            };
+          if (initializeNativeSession && hasNativeRequirementRows) {
             nativeBatchSessionInitialized = true;
             if (__profile?.counts) {
               __profile.counts.kktNativeBatchFdSessionInitializations = 1;
@@ -10763,14 +10848,14 @@ export async function runOptimizationMVP(options = {}) {
             }
             for (let candidateIndex = 0; candidateIndex < response.currentsPerCandidate.length; candidateIndex++) {
               const currents = response.currentsPerCandidate[candidateIndex];
-              const seededValues = buildNativeOperandValueCache(currents);
-              if (!seededValues) {
-                residuals.push([]);
-                continue;
-              }
+              const seededValues = buildNativeOperandValueCache(currents) || new Map<string, number>();
               const mtfValues = mtfSeededValues?.[candidateIndex];
               if (mtfValues instanceof Map) {
                 for (const [key, value] of mtfValues) seededValues.set(key, value);
+              }
+              if (seededValues.size === 0) {
+                residuals.push([]);
+                continue;
               }
               const base = await evalSQPAtXUncached(candidatePoints[candidateIndex], seededValues);
               const residualVector = Array.isArray(base.residuals) ? base.residuals.slice() : [];
@@ -10796,6 +10881,12 @@ export async function runOptimizationMVP(options = {}) {
               return Math.abs(candidateValue - referenceValue) <= tolerance;
             });
             nativeBatchFdParityStatus = parityOk ? 'passed' : 'failed';
+            if (__profile?.counts) {
+              const parityCounter = parityOk
+                ? 'kktNativeBatchFdParityPassed'
+                : 'kktNativeBatchFdParityFailed';
+              __profile.counts[parityCounter] = (Number(__profile.counts[parityCounter]) || 0) + 1;
+            }
             if (!parityOk) {
               nativeBatchBaseRowsByConfig = null;
               nativeBatchSessionInitialized = false;
@@ -10813,12 +10904,14 @@ export async function runOptimizationMVP(options = {}) {
             __profile.counts.kktNativeBatchFdMs = (Number(__profile.counts.kktNativeBatchFdMs) || 0) + (nowMs() - batchStartedAt);
           }
           return residuals;
-        } catch (_) {
+        } catch (error) {
           nativeBatchBaseRowsByConfig = null;
           nativeBatchSessionInitialized = false;
           nativeBatchVariableBindings = undefined;
           try { await dropOptimizerSession(nativeBatchEvaluatorSessionId); } catch (_) {}
           if (__profile?.counts) {
+            __profile.nativeBatchFdError = String(error instanceof Error ? error.message : error);
+            __profile.counts.kktNativeBatchFdErrors = (Number(__profile.counts.kktNativeBatchFdErrors) || 0) + 1;
             __profile.counts.kktNativeBatchFdFallbacks = (Number(__profile.counts.kktNativeBatchFdFallbacks) || 0) + 1;
             __profile.counts.kktNativeBatchFdMs = (Number(__profile.counts.kktNativeBatchFdMs) || 0) + (nowMs() - batchStartedAt);
           }
@@ -11474,7 +11567,7 @@ export async function runOptimizationMVP(options = {}) {
         ? Math.max(1e-12, Number(opts.kktSqpInitialDamping))
         : 2e-4;
       let lmDampRejectMultiplier = 2;
-      const lmDampHessianScale = 1;
+      let lmDampHessianScale = 1;
       let lastMaxViol = Infinity;  // Track maxViol for stagnation detection
       let violStagnationIter = 0;  // Count iterations without improvement
       let kktRejectStreak = 0;  // 【追加】Auto soft-restart: detect if stuck in reject-repeat cycle
@@ -11847,6 +11940,9 @@ export async function runOptimizationMVP(options = {}) {
       const kktJacobianPoorModelStreakForRefresh = Number.isFinite(Number(opts?.kktJacobianPoorModelStreakForRefresh))
         ? Math.max(1, Math.floor(Number(opts.kktJacobianPoorModelStreakForRefresh)))
         : 3;
+      const kktSqpScoreProbeRejectStreak = Number.isFinite(Number(opts?.kktSqpScoreProbeRejectStreak))
+        ? Math.max(1, Math.floor(Number(opts.kktSqpScoreProbeRejectStreak)))
+        : 1;
       let jacobianReuseSinceRefresh = 0;
       let forceJacobianRefreshNextIter = false;
       let poorModelStreak = 0;
@@ -11994,7 +12090,7 @@ export async function runOptimizationMVP(options = {}) {
         const shouldRunFullJacobianRefresh = hasReusableJacobian && iter > 0 && (iter % kktJacobianFullRefreshInterval) === 0;
         
         let J: number[][];
-        if (canUseBroyden && prevJ && prevX && prevR) {
+        if (canUseBroyden && !shouldRunFiniteDiffRefresh && prevJ && prevX && prevR) {
           // Broydenランク1更新: J_new = J_old + (dr - J_old*dx) * dx^T / (dx^T dx)
           const dx = currentX.map((xi, i) => xi - prevX[i]);
           const dr = r0.map((ri, i) => ri - prevR[i]);
@@ -12183,6 +12279,7 @@ export async function runOptimizationMVP(options = {}) {
           const qpHessian = kktSqpUseBfgs && sqpBfgsHessian
             ? sqpBfgsHessian
             : hessian;
+          lmDampHessianScale = sqpHessianDiagonalScale(qpHessian);
           sqpModelHessian = qpHessian;
           sqpModelGradient = gradient;
           const qpDamping = Math.max(1e-12, lmDamp);
@@ -12741,6 +12838,79 @@ export async function runOptimizationMVP(options = {}) {
               break;
             }
           }
+          if (!accepted && (kktRejectStreak + 1) >= kktSqpScoreProbeRejectStreak) {
+            const scoreGradient = new Array(n).fill(0);
+            let coordinateBestScore = score0;
+            let coordinateBestX: number[] | null = null;
+            for (let col = 0; col < n; col++) {
+              const variable = { id: varIds[col], key: vars[col]?.key, value: currentX[col] };
+              const step = finiteDifferenceStepForVar(variable);
+              if (!Number.isFinite(step) || step <= 0) continue;
+              const plusX = clampToBounds(currentX.map((value, index) => index === col ? value + step : value));
+              const minusX = clampToBounds(currentX.map((value, index) => index === col ? value - step : value));
+              const plusScore = Number((await evalSQPAtX(plusX))?.requirementScore);
+              const minusScore = Number((await evalSQPAtX(minusX))?.requirementScore);
+              if (Number.isFinite(plusScore) && plusScore < coordinateBestScore) {
+                coordinateBestScore = plusScore;
+                coordinateBestX = plusX;
+              }
+              if (Number.isFinite(minusScore) && minusScore < coordinateBestScore) {
+                coordinateBestScore = minusScore;
+                coordinateBestX = minusX;
+              }
+              if (Number.isFinite(plusScore) && Number.isFinite(minusScore)) {
+                scoreGradient[col] = (plusScore - minusScore) / (2 * step);
+              }
+            }
+            const scoreProbeDirection = buildSqpModelGradientFallbackDirection(
+              scoreGradient,
+              trustScales,
+              trustRegionDeltaEff,
+            );
+            if (__profile && __profile.counts) {
+              __profile.counts.kktSqpScoreProbeRecoveries = (Number(__profile.counts.kktSqpScoreProbeRecoveries) || 0) + 1;
+              __profile.counts.kktSqpScoreProbeEvaluations = (Number(__profile.counts.kktSqpScoreProbeEvaluations) || 0) + 2 * n;
+            }
+            if (coordinateBestX) {
+              const aug1 = await evalAugmentedResiduals(coordinateBestX, lambdaVec, mu, currentMaxViol);
+              accepted = true;
+              nextX = coordinateBestX;
+              acceptedCost = evaluateSqpFilterMerit(aug1.base, mu);
+              acceptedScore = coordinateBestScore;
+              acceptedAlpha = 1;
+              acceptedDxStep = coordinateBestX.map((value, col) => value - currentX[col]);
+              acceptedRho = 0;
+              lastJ = null;
+              lastX = null;
+              lastR = null;
+              forceJacobianRefreshNextIter = true;
+              if (__profile && __profile.counts) {
+                __profile.counts.kktSqpCoordinateProbeAccepts = (Number(__profile.counts.kktSqpCoordinateProbeAccepts) || 0) + 1;
+              }
+            }
+            if (!accepted && scoreProbeDirection) {
+              for (const alpha of alphas) {
+                const dxStep = scoreProbeDirection.map(value => alpha * value);
+                const trialX = clampToBounds(currentX.map((value, col) => value + dxStep[col]));
+                const aug1 = await evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
+                const score1 = Number(aug1?.base?.requirementScore);
+                lastAlpha = alpha;
+                if (!Number.isFinite(score1) || score1 >= (score0 - 1e-12)) continue;
+                accepted = true;
+                nextX = trialX;
+                acceptedCost = evaluateSqpFilterMerit(aug1.base, mu);
+                acceptedScore = score1;
+                acceptedAlpha = alpha;
+                acceptedDxStep = dxStep.slice();
+                acceptedRho = 0;
+                lastJ = null;
+                lastX = null;
+                lastR = null;
+                forceJacobianRefreshNextIter = true;
+                break;
+              }
+            }
+          }
         }
         
         // 【修正】ステップが受け入れられたかどうかで、Nielsenの適応的ダンピングを行う
@@ -12787,26 +12957,38 @@ export async function runOptimizationMVP(options = {}) {
           broydenSkipCount = 0;
 
           if (kktRejectStreak >= kktRollbackRejectStreak && Array.isArray(bestX)) {
-            currentX = bestX.slice();
-            applyXToDesignState(currentX);
-            trustRegionDeltaEff = Math.max(0.01, trustRegionDeltaEff * 0.5);
-            const rollbackDamping = initializeAdaptiveSqpDamping(
-              2e-4,
-              lmDampHessianScale,
-              2e-4,
-            );
-            lmDamp = rollbackDamping.damping;
-            lmDampRejectMultiplier = rollbackDamping.rejectMultiplier;
+            const shouldRollback = shouldRollbackRejectedSqpState(currentX, bestX, trustScales);
+            if (shouldRollback) {
+              currentX = bestX.slice();
+              applyXToDesignState(currentX);
+              trustRegionDeltaEff = Math.max(0.01, trustRegionDeltaEff * 0.5);
+              const rollbackDamping = initializeAdaptiveSqpDamping(
+                2e-4,
+                lmDampHessianScale,
+                2e-4,
+              );
+              lmDamp = rollbackDamping.damping;
+              lmDampRejectMultiplier = rollbackDamping.rejectMultiplier;
+            } else {
+              lmDampRejectMultiplier = 2;
+            }
             lastJ = null;
             lastX = null;
             lastR = null;
             resetSqpBfgsState();
             forceJacobianRefreshNextIter = true;
             if (__profile && __profile.counts) {
-              __profile.counts.kktSqpRejectRollbacks = (Number(__profile.counts.kktSqpRejectRollbacks) || 0) + 1;
-              __profile.counts.kktSqpDampingResets = (Number(__profile.counts.kktSqpDampingResets) || 0) + 1;
+              const recoveryCounter = shouldRollback
+                ? 'kktSqpRejectRollbacks'
+                : 'kktSqpRejectAtBestRecoveries';
+              __profile.counts[recoveryCounter] = (Number(__profile.counts[recoveryCounter]) || 0) + 1;
+              if (shouldRollback) {
+                __profile.counts.kktSqpDampingResets = (Number(__profile.counts.kktSqpDampingResets) || 0) + 1;
+              }
             }
-            kktRejectStreak = 0;
+            if (shouldRollback) {
+              kktRejectStreak = 0;
+            }
             nonmonotoneAcceptStreak = 0;
           }
           
@@ -12892,14 +13074,15 @@ export async function runOptimizationMVP(options = {}) {
           }
 
           const acceptedRelCostDrop = Math.abs(cost0 - acceptedCost) / Math.max(1, Math.abs(cost0));
-          const poorModel = (!Number.isFinite(acceptedRho) || acceptedRho < kktJacobianPoorModelRho)
+          const invalidAcceptedModel = !Number.isFinite(acceptedRho) || acceptedRho <= 0;
+          const poorModel = (invalidAcceptedModel || acceptedRho < kktJacobianPoorModelRho)
             && acceptedRelCostDrop < kktJacobianPoorModelRelImprove;
           if (poorModel) {
             poorModelStreak++;
           } else {
             poorModelStreak = 0;
           }
-          if (poorModelStreak >= kktJacobianPoorModelStreakForRefresh) {
+          if (invalidAcceptedModel || poorModelStreak >= kktJacobianPoorModelStreakForRefresh) {
             forceJacobianRefreshNextIter = true;
           } else {
             forceJacobianRefreshNextIter = false;

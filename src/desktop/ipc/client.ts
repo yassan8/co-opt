@@ -3855,7 +3855,7 @@ export async function runNativePsfMap(
 export async function runMtfBatchViaWasm(
   request: any,
 ): Promise<any> {
-  if (!isTauriRuntime()) {
+  {
     const {
       preloadRustRayTracingWasm,
       ensureRustRayTracingWasmThreadPool,
@@ -3871,16 +3871,10 @@ export async function runMtfBatchViaWasm(
       );
     }
 
-    // On isolated pages, initialize Rayon automatically so the first analysis
-    // does not pay the thread-pool startup cost.
     const enableWasmThreads = typeof globalThis !== "undefined"
-      && (
-        (globalThis as any).__COOPT_MTF_ENABLE_RAYON === true
-        || (
-          (globalThis as any).crossOriginIsolated === true
-          && typeof (globalThis as any).SharedArrayBuffer === "function"
-        )
-      );
+      && (globalThis as any).__COOPT_MTF_ENABLE_RAYON === true
+      && (globalThis as any).crossOriginIsolated === true
+      && typeof (globalThis as any).SharedArrayBuffer === "function";
     const wasmThreadsActive = enableWasmThreads
       ? await ensureRustRayTracingWasmThreadPool(rust)
       : false;
@@ -3888,6 +3882,7 @@ export async function runMtfBatchViaWasm(
     const preparedRequest = request && typeof request === "object"
       ? {
         ...request,
+        parallel: enableWasmThreads && request.parallel !== false,
         shared: request.shared && typeof request.shared === "object"
           ? {
             ...request.shared,
@@ -3982,11 +3977,10 @@ export async function runMtfBatchViaWasm(
     if (!wasmOut || typeof wasmOut !== "object") {
       throw new Error("runMtfBatchViaWasm(web): Rust-WASM batch API returned invalid response");
     }
-    return wasmThreadsActive
+    return wasmThreadsActive && preparedRequest?.parallel === true
       ? { ...wasmOut, backend: "web-rust-wasm-opd-psf-mtf-rayon" }
       : wasmOut;
   }
-  return invokeCommand<any, any>("run_mtf_batch_wasm", request);
 }
 
 async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {

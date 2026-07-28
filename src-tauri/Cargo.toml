@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "co-opt-pro desktop backend"
 authors = ["co-opt-pro"]
 edition = "2021"
+default-run = "co-opt-pro"
 
 [lib]
 name = "co_opt_pro_lib"

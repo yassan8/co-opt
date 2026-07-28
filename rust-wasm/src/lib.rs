@@ -14646,12 +14646,22 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
     };
 
     #[cfg(feature = "wasm-threads")]
-    let results: Vec<Value> = jobs
-        .par_iter()
-        .enumerate()
-        .map(compute_job)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| JsValue::from_str(&error))?;
+    let use_rayon = req.get("parallel").and_then(Value::as_bool).unwrap_or(false)
+        && jobs.len() > 1;
+
+    #[cfg(feature = "wasm-threads")]
+    let results: Vec<Value> = if use_rayon {
+        jobs.par_iter()
+            .enumerate()
+            .map(compute_job)
+            .collect::<Result<Vec<_>, _>>()
+    } else {
+        jobs.iter()
+            .enumerate()
+            .map(compute_job)
+            .collect::<Result<Vec<_>, _>>()
+    }
+    .map_err(|error| JsValue::from_str(&error))?;
 
     #[cfg(not(feature = "wasm-threads"))]
     let results: Vec<Value> = jobs
@@ -14662,8 +14672,17 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
         .map_err(|error| JsValue::from_str(&error))?;
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    #[cfg(feature = "wasm-threads")]
+    let backend = if use_rayon {
+        "web-rust-wasm-opd-psf-mtf-rayon"
+    } else {
+        "web-rust-wasm-opd-psf-mtf-multi-batch"
+    };
+    #[cfg(not(feature = "wasm-threads"))]
+    let backend = "web-rust-wasm-opd-psf-mtf-multi-batch";
+
     serde_json::json!({
-        "backend": "web-rust-wasm-opd-psf-mtf-multi-batch",
+        "backend": backend,
         "results": results,
         "message": "Computed multiple OPD+PSF+MTF jobs via one WASM batch call",
     })
