@@ -41,11 +41,15 @@ import {
   solveQpSubproblemUnconstrainedWasm
 } from '../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
-import { evaluateOptimizerCandidates, runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
+import { evaluateOptimizerCandidates, runMtfBatchViaWasm, runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
 import { OPERAND_DEFINITIONS } from '../ui/editors/merit-function-inspector.ts';
 import { loadOptimizeRayGridSize, optimizeRayCountFromGridSize } from '../ui/optimization-settings-storage.ts';
 import { adaptiveSpotRayCountAtIteration, createAdaptiveSpotSamplingPlan } from './adaptive-spot-sampling.ts';
-import { buildSqpLineSearchAlphas, isBetterSqpLookaheadCandidate } from './sqp-step-lookahead.ts';
+import {
+  buildSqpLineSearchAlphas,
+  buildSqpModelGradientFallbackDirection,
+  isBetterSqpLookaheadCandidate,
+} from './sqp-step-lookahead.ts';
 import {
   initializeAdaptiveSqpDamping,
   updateAdaptiveSqpDamping,
@@ -10522,6 +10526,139 @@ export async function runOptimizationMVP(options = {}) {
         return cache.size > 0 ? cache : null;
       };
 
+      const evalMtfOperandValuesNativeBatch = async (
+        candidateRows: Array<Record<string, any[]>>,
+      ): Promise<Array<Map<string, number>> | null> => {
+        const editor = (typeof window !== 'undefined') ? (window as any).meritFunctionEditor : null;
+        if (!editor || typeof editor.getConfigTablesByConfigId !== 'function') return null;
+        const mtfItems = (Array.isArray(residualItems) ? residualItems : []).filter((item: any) => {
+          const requirement = item?.req;
+          const operand = String(requirement?.operand ?? '').trim().toUpperCase();
+          const weight = Math.max(0, toFiniteNumber(requirement?.weight, 1))
+            * Math.max(0, toFiniteNumber(item?.scenarioWeight, 1));
+          return !!(requirement?.enabled
+            && ['MTFT', 'MTFS', 'MTFA'].includes(operand)
+            && String(requirement?.param1 ?? '').trim().toUpperCase() !== 'ALL_WEIGHTED'
+            && weight > 0);
+        });
+        if (mtfItems.length === 0 || candidateRows.length === 0) return null;
+
+        const groups = new Map<string, any>();
+        for (const item of mtfItems) {
+          const requirement = item.req;
+          const configId = String(item?.configId ?? requirement?.configId ?? activeConfigId ?? '');
+          const tables = editor.getConfigTablesByConfigId(configId) || {};
+          const sourceRows = Array.isArray(tables.source) ? tables.source : nativeBatchSourceRows;
+          const objectRows = Array.isArray(tables.object) ? tables.object : nativeBatchObjectRows;
+          const wavelength = Number(editor.getSystemWavelengthFromOperandOrPrimary?.(requirement, sourceRows));
+          const objectIndex = Math.max(0, Math.floor(Number(requirement?.param2 || 1)) - 1);
+          const frequency = Math.max(0, Number(requirement?.param4) || 10);
+          const requestedSampling = Math.floor(Number(requirement?.param5) || 32);
+          const samplingOptions = new Set([16, 32, 64, 128, 256, 512, 1024, 2048, 4096]);
+          const configuredSampling = samplingOptions.has(requestedSampling) ? requestedSampling : 32;
+          const meritFast = (typeof globalThis !== 'undefined' && (globalThis as any).__cooptMeritFastMode) || null;
+          const fastSampling = Math.floor(Number(meritFast?.mtfSamplingSize));
+          const sampling = meritFast?.enabled === true && samplingOptions.has(fastSampling)
+            ? Math.max(16, fastSampling)
+            : Math.max(16, configuredSampling);
+          if (!(Number.isFinite(wavelength) && wavelength > 0) || !objectRows[objectIndex]) continue;
+          const groupKey = [configId, wavelength, objectIndex, frequency, sampling].join('|');
+          const group = groups.get(groupKey) || {
+            configId,
+            wavelength,
+            objectIndex,
+            frequency,
+            sampling,
+            sourceRows,
+            objectRows,
+            items: [],
+          };
+          group.items.push(item);
+          groups.set(groupKey, group);
+        }
+        if (groups.size === 0) return null;
+
+        const jobs: any[] = [];
+        for (let candidateIndex = 0; candidateIndex < candidateRows.length; candidateIndex++) {
+          for (const [groupKey, group] of groups) {
+            const rows = candidateRows[candidateIndex]?.[group.configId];
+            if (!Array.isArray(rows) || rows.length === 0) continue;
+            const objectRow = group.objectRows[group.objectIndex] || {};
+            const position = String(objectRow?.position ?? objectRow?.object ?? '').toLowerCase();
+            const isAngle = /\bangle\b/.test(position);
+            let fieldX = Number(isAngle
+              ? (objectRow?.xHeightAngle ?? objectRow?.x ?? 0)
+              : (objectRow?.x ?? objectRow?.xHeight ?? objectRow?.xHeightAngle ?? 0));
+            let fieldY = Number(isAngle
+              ? (objectRow?.yHeightAngle ?? objectRow?.y ?? 0)
+              : (objectRow?.y ?? objectRow?.yHeight ?? objectRow?.yHeightAngle ?? 0));
+            if (!Number.isFinite(fieldX)) fieldX = 0;
+            if (!Number.isFinite(fieldY)) fieldY = 0;
+            const fieldNorm = Math.hypot(fieldX, fieldY);
+            const tangentialDir = fieldNorm > 1e-12
+              ? { x: fieldX / fieldNorm, y: fieldY / fieldNorm }
+              : { x: 1, y: 0 };
+            const diffraction = calculateImageSpaceDiffractionParams(rows, group.wavelength);
+            const fNumber = Number(diffraction?.fNumberWorking);
+            if (!(Number.isFinite(fNumber) && fNumber > 0)) continue;
+            jobs.push({
+              opdRequest: {
+                opticalSystemRows: rows,
+                sourceRows: group.sourceRows,
+                objectRows: group.objectRows,
+                objectIndex: group.objectIndex,
+                gridSize: group.sampling,
+                wavelengthUm: group.wavelength,
+                pupilSamplingMode: isAngle && fieldNorm > 1e-12 ? 'entrance' : undefined,
+                opdDisplayMode: 'pistonTiltRemoved',
+              },
+              wavelengthUm: group.wavelength,
+              fNumber,
+              pupilRange: 1,
+              maxFrequencyLpmm: group.frequency,
+              points: 2,
+              sampleFrequenciesLpmm: [group.frequency],
+              directEvalOnly: true,
+              slimResults: true,
+              method: 'malacara-wasm-required',
+              tangentialDir,
+              sagittalDir: { x: -tangentialDir.y, y: tangentialDir.x },
+              meta: { candidateIndex, groupKey, onAxis: fieldNorm <= 1e-12 },
+            });
+          }
+        }
+        if (jobs.length === 0) return null;
+
+        const response = await runMtfBatchViaWasm({ jobs });
+        const results = Array.isArray(response?.results) ? response.results : [];
+        if (results.length !== jobs.length) return null;
+        const seeded = candidateRows.map(() => new Map<string, number>());
+        for (const result of results) {
+          const meta = result?.meta || {};
+          const candidateIndex = Number(meta.candidateIndex);
+          const group = groups.get(String(meta.groupKey ?? ''));
+          if (!Number.isInteger(candidateIndex) || !seeded[candidateIndex] || !group) continue;
+          const mtf = result?.mtf || {};
+          let tangential = Number(mtf?.sampledMtfTangential?.[0]);
+          let sagittal = Number(mtf?.sampledMtfSagittal?.[0]);
+          if (meta.onAxis === true && Number.isFinite(tangential) && Number.isFinite(sagittal)) {
+            tangential = sagittal = Math.max(0, Math.min(1, 0.5 * (tangential + sagittal)));
+          }
+          for (const item of group.items) {
+            const operand = String(item?.req?.operand ?? '').trim().toUpperCase();
+            const value = operand === 'MTFT'
+              ? tangential
+              : operand === 'MTFS'
+                ? sagittal
+                : (Number.isFinite(tangential) && Number.isFinite(sagittal)
+                  ? 0.5 * (tangential + sagittal)
+                  : Number.isFinite(tangential) ? tangential : sagittal);
+            if (Number.isFinite(value)) seeded[candidateIndex].set(optimizerOperandCacheKey(item), value);
+          }
+        }
+        return seeded;
+      };
+
       const evalAugmentedResidualsNativeBatch = async (
         candidatePoints: number[][],
         lambdaVec: number[],
@@ -10551,9 +10688,13 @@ export async function runOptimizationMVP(options = {}) {
           && !nativeBatchSessionInitialized;
         let candidates: Array<Record<string, any[]>> = [];
         let candidateDeltas: any[][] = [];
-        if (!useVectorCandidates) {
+        const needsMtfCandidateRows = (Array.isArray(residualItems) ? residualItems : [])
+          .some((item: any) => ['MTFT', 'MTFS', 'MTFA'].includes(String(item?.req?.operand ?? '').trim().toUpperCase()));
+        if (!useVectorCandidates || needsMtfCandidateRows) {
           candidates = candidatePoints.map(buildNativeCandidateRows).filter(Boolean) as Array<Record<string, any[]>>;
           if (candidates.length !== candidatePoints.length) return null;
+        }
+        if (!useVectorCandidates) {
           const baseRowsByConfig = nativeBatchBaseRowsByConfig || candidates[0];
           nativeBatchBaseRowsByConfig = baseRowsByConfig;
           candidateDeltas = candidates.map(candidate => buildNativeCandidateDeltas(baseRowsByConfig, candidate) as any[]);
@@ -10600,6 +10741,9 @@ export async function runOptimizationMVP(options = {}) {
             }
             return null;
           }
+          const mtfSeededValues = needsMtfCandidateRows
+            ? await evalMtfOperandValuesNativeBatch(candidates)
+            : null;
           let residuals: number[][];
           if (nativeBatchCoversAllResidualItems) {
             residuals = response.currentsPerCandidate.map((currents) => {
@@ -10623,6 +10767,10 @@ export async function runOptimizationMVP(options = {}) {
               if (!seededValues) {
                 residuals.push([]);
                 continue;
+              }
+              const mtfValues = mtfSeededValues?.[candidateIndex];
+              if (mtfValues instanceof Map) {
+                for (const [key, value] of mtfValues) seededValues.set(key, value);
               }
               const base = await evalSQPAtXUncached(candidatePoints[candidateIndex], seededValues);
               const residualVector = Array.isArray(base.residuals) ? base.residuals.slice() : [];
@@ -12562,57 +12710,16 @@ export async function runOptimizationMVP(options = {}) {
         }
 
         if (!accepted && useKktSqp && n > 0) {
-          const scoreGradient = new Array(n).fill(0);
-          let coordinateBestScore = score0;
-          let coordinateBestX = null;
-          for (let col = 0; col < n; col++) {
-            const variable = { id: varIds[col], key: vars[col]?.key, value: currentX[col] };
-            const h = finiteDifferenceStepForVar(variable);
-            if (!Number.isFinite(h) || h <= 0) continue;
-            const plusX = currentX.slice();
-            const minusX = currentX.slice();
-            plusX[col] += h;
-            minusX[col] -= h;
-            const plusEval = await evalSQPAtX(clampToBounds(plusX));
-            const minusEval = await evalSQPAtX(clampToBounds(minusX));
-            const plusScore = Number(plusEval?.requirementScore);
-            const minusScore = Number(minusEval?.requirementScore);
-            if (Number.isFinite(plusScore) && plusScore < coordinateBestScore) {
-              coordinateBestScore = plusScore;
-              coordinateBestX = clampToBounds(plusX);
-            }
-            if (Number.isFinite(minusScore) && minusScore < coordinateBestScore) {
-              coordinateBestScore = minusScore;
-              coordinateBestX = clampToBounds(minusX);
-            }
-            if (Number.isFinite(plusScore) && Number.isFinite(minusScore)) {
-              scoreGradient[col] = (plusScore - minusScore) / (2 * h);
-            }
+          const scoreDirection = buildSqpModelGradientFallbackDirection(
+            sqpModelGradient,
+            trustScales,
+            trustRegionDeltaEff,
+          );
+          if (__profile && __profile.counts) {
+            __profile.counts.kktSqpModelGradientFallbacks = (Number(__profile.counts.kktSqpModelGradientFallbacks) || 0) + 1;
+            __profile.counts.kktSqpCentralDifferenceProbesAvoided = (Number(__profile.counts.kktSqpCentralDifferenceProbesAvoided) || 0) + 2 * n;
           }
-
-          if (coordinateBestX) {
-            const aug1 = await evalAugmentedResiduals(coordinateBestX, lambdaVec, mu, currentMaxViol);
-            accepted = true;
-            nextX = coordinateBestX;
-            acceptedCost = evaluateSqpFilterMerit(aug1.base, mu);
-            acceptedScore = coordinateBestScore;
-            acceptedAlpha = 1;
-            acceptedDxStep = coordinateBestX.map((value, col) => value - currentX[col]);
-            acceptedRho = 0;
-            lastJ = null;
-            lastX = null;
-            lastR = null;
-            forceJacobianRefreshNextIter = true;
-          }
-
-          const scoreDirection = scoreGradient.map(value => -value);
-          let scaledNorm = 0;
-          for (let col = 0; col < n; col++) {
-            scaledNorm = Math.max(scaledNorm, Math.abs(scoreDirection[col] / (trustScales[col] || 1)));
-          }
-          if (!accepted && Number.isFinite(scaledNorm) && scaledNorm > 0) {
-            const directionScale = trustRegionDeltaEff / scaledNorm;
-            for (let col = 0; col < n; col++) scoreDirection[col] *= directionScale;
+          if (scoreDirection) {
             for (const alpha of alphas) {
               const dxStep = scoreDirection.map(value => alpha * value);
               const trialX = clampToBounds(currentX.map((value, col) => value + dxStep[col]));
@@ -12683,11 +12790,22 @@ export async function runOptimizationMVP(options = {}) {
             currentX = bestX.slice();
             applyXToDesignState(currentX);
             trustRegionDeltaEff = Math.max(0.01, trustRegionDeltaEff * 0.5);
+            const rollbackDamping = initializeAdaptiveSqpDamping(
+              2e-4,
+              lmDampHessianScale,
+              2e-4,
+            );
+            lmDamp = rollbackDamping.damping;
+            lmDampRejectMultiplier = rollbackDamping.rejectMultiplier;
             lastJ = null;
             lastX = null;
             lastR = null;
             resetSqpBfgsState();
             forceJacobianRefreshNextIter = true;
+            if (__profile && __profile.counts) {
+              __profile.counts.kktSqpRejectRollbacks = (Number(__profile.counts.kktSqpRejectRollbacks) || 0) + 1;
+              __profile.counts.kktSqpDampingResets = (Number(__profile.counts.kktSqpDampingResets) || 0) + 1;
+            }
             kktRejectStreak = 0;
             nonmonotoneAcceptStreak = 0;
           }

@@ -1425,7 +1425,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         if (useMalacaraMtfMethod) {
             // Use denser internal sampling for Malacara curves so high-frequency tail
             // is not dominated by sparse frequency bins.
-            const nativePoints = Math.max(2, Math.min(2048, Math.max(241, resolvedPlotPointCount * 2)));
+            const nativePoints = fastSampleEnabled
+                ? 2
+                : Math.max(2, Math.min(2048, Math.max(241, resolvedPlotPointCount * 2)));
             const maskAsNullableOpd = Array.from({ length: s }, (_, iy) =>
                 Array.from({ length: s }, (_, ix) => {
                     if (!maskGrid[iy]?.[ix]) return null;
@@ -1453,12 +1455,25 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                 fNumber: fNumberForDiffraction,
                 tangentialDir: tanDir,
                 sagittalDir: sagDir,
+                sampleFrequenciesLpmm: fastSampleEnabled ? [targetFreqLpmm] : undefined,
+                directEvalOnly: fastSampleEnabled,
             } as any);
 
-            const freq = Array.isArray(nativeResp?.frequencyAxis) ? nativeResp.frequencyAxis : [];
-            const nativeTan = Array.isArray(nativeResp?.mtfTangential) ? nativeResp.mtfTangential : [];
-            const nativeSag = Array.isArray(nativeResp?.mtfSagittal) ? nativeResp.mtfSagittal : [];
-            if (!(freq.length > 1 && nativeTan.length === freq.length && nativeSag.length === freq.length)) {
+            const freq = fastSampleEnabled
+                ? nativeResp?.sampledFrequenciesLpmm
+                : nativeResp?.frequencyAxis;
+            const nativeTan = fastSampleEnabled
+                ? nativeResp?.sampledMtfTangential
+                : nativeResp?.mtfTangential;
+            const nativeSag = fastSampleEnabled
+                ? nativeResp?.sampledMtfSagittal
+                : nativeResp?.mtfSagittal;
+            if (!(Array.isArray(freq)
+                && freq.length > 0
+                && Array.isArray(nativeTan)
+                && nativeTan.length === freq.length
+                && Array.isArray(nativeSag)
+                && nativeSag.length === freq.length)) {
                 throw new Error('Rust/WASM Malacara MTF returned invalid axis data');
             }
 
@@ -1470,8 +1485,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                 freq: Array.from(freq, (v: any) => Number(v)),
                 mtfVals: Array.from(nativeSag, (v: any) => Number.isFinite(Number(v)) ? Number(v) : null)
             };
-            if (tan.mtfVals.length > 0) tan.mtfVals[0] = 1.0;
-            if (sag.mtfVals.length > 0) sag.mtfVals[0] = 1.0;
+            if (tan.mtfVals.length > 0 && Number(tan.freq[0]) <= 1e-12) tan.mtfVals[0] = 1.0;
+            if (sag.mtfVals.length > 0 && Number(sag.freq[0]) <= 1e-12) sag.mtfVals[0] = 1.0;
         }
 
         if (!useMalacaraMtfMethod && !useLegacyBaselineMode && isTauriRuntime()) {
@@ -1625,7 +1640,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                 if (Number.isFinite(sNum)) return Math.max(0, Math.min(1, sNum));
                 return null;
             });
-            if (mergedVals.length > 0) mergedVals[0] = 1.0;
+            if (mergedVals.length > 0 && Number(tan.freq[0]) <= 1e-12) mergedVals[0] = 1.0;
             tan = { freq: tan.freq.slice(), mtfVals: mergedVals.slice() };
             sag = { freq: tan.freq.slice(), mtfVals: mergedVals.slice() };
         }

@@ -3,6 +3,31 @@ export interface SqpLookaheadCandidate {
   maxViolation: number;
 }
 
+export function buildSqpModelGradientFallbackDirection(
+  gradientInput: unknown,
+  trustScalesInput: unknown,
+  trustRegionRadiusInput: unknown,
+): number[] | null {
+  if (!Array.isArray(gradientInput) || gradientInput.length === 0) return null;
+  const trustScales = Array.isArray(trustScalesInput) ? trustScalesInput : [];
+  const trustRegionRadius = Number(trustRegionRadiusInput);
+  if (!Number.isFinite(trustRegionRadius) || trustRegionRadius <= 0) return null;
+
+  const direction = gradientInput.map(value => -Number(value));
+  if (direction.some(value => !Number.isFinite(value))) return null;
+
+  let scaledNorm = 0;
+  for (let index = 0; index < direction.length; index++) {
+    const scale = Number(trustScales[index]);
+    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    scaledNorm = Math.max(scaledNorm, Math.abs(direction[index] / safeScale));
+  }
+  if (!Number.isFinite(scaledNorm) || scaledNorm <= 1e-30) return null;
+
+  const directionScale = trustRegionRadius / scaledNorm;
+  return direction.map(value => value * directionScale);
+}
+
 export function buildSqpLineSearchAlphas(
   backtrackCountInput: unknown,
   lookaheadEnabled: boolean,

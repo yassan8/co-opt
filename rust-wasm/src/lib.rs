@@ -14055,11 +14055,7 @@ pub fn run_native_mtf_from_psf_wasm_json(req_json: String) -> Result<JsValue, Js
 
 /// Compute MTF with Malacara/Hopkins-style pupil autocorrelation directly from OPD grid.
 /// This is intended for strict Rust/WASM-only MTF in web runtime (no JS fallback).
-#[wasm_bindgen]
-pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_mtf_malacara_from_opd_wasm_json: JSON parse: {}", e)))?;
-
+fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue> {
     let display_opd = req
         .get("displayOpdGrid")
         .and_then(|v| v.as_array())
@@ -14305,8 +14301,7 @@ pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<Js
     let mtf_tangential = if direct_eval_only { Vec::new() } else { evaluated_tangential.clone() };
     let mtf_sagittal = if direct_eval_only { Vec::new() } else { evaluated_sagittal.clone() };
 
-    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
-    serde_json::json!({
+    Ok(serde_json::json!({
         "backend": "web-rust-wasm-mtf-malacara",
         "frequencyAxis": frequency_axis,
         "mtfTangential": mtf_tangential,
@@ -14316,7 +14311,18 @@ pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<Js
         "sampledMtfSagittal": if direct_eval_only { Value::from(evaluated_sagittal) } else { Value::Null },
         "nyquistLpmm": cutoff_lpmm,
         "message": "Computed via WASM Malacara MTF (run_native_mtf_malacara_from_opd_wasm_json)"
-    })
+    }))
+}
+
+/// Compute MTF with Malacara/Hopkins-style pupil autocorrelation directly from OPD grid.
+/// This is intended for strict Rust/WASM-only MTF in web runtime (no JS fallback).
+#[wasm_bindgen]
+pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
+    let req: Value = serde_json::from_str(&req_json)
+        .map_err(|e| JsValue::from_str(&format!("run_native_mtf_malacara_from_opd_wasm_json: JSON parse: {}", e)))?;
+    let response = run_native_mtf_malacara_from_opd_value(&req)?;
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    response
     .serialize(&serializer)
     .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
 }
@@ -14368,6 +14374,50 @@ fn run_native_opd_psf_mtf_value_with_rows(
         .or_else(|| opd_json.get("wavelengthUm").and_then(|v| v.as_f64()))
         .filter(|v| v.is_finite() && *v > 0.0)
         .unwrap_or(0.5876);
+
+    let method = req
+        .get("method")
+        .and_then(value_to_string)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if method == "malacara-wasm-required" {
+        let mtf_req = serde_json::json!({
+            "displayOpdGrid": opd_json.get("displayOpdGrid"),
+            "rawOpdGrid": opd_json.get("rawOpdGrid"),
+            "amplitudeGrid": req.get("amplitudeGrid"),
+            "wavelengthUm": wavelength_um,
+            "fNumber": req.get("fNumber"),
+            "pupilRange": req.get("pupilRange").and_then(|value| value.as_f64()).unwrap_or(1.0),
+            "maxFrequencyLpmm": req.get("maxFrequencyLpmm"),
+            "points": req.get("points"),
+            "sampleFrequenciesLpmm": req.get("sampleFrequenciesLpmm").cloned().unwrap_or(Value::Null),
+            "directEvalOnly": req.get("directEvalOnly").and_then(|value| value.as_bool()).unwrap_or(false),
+            "tangentialDir": req.get("tangentialDir"),
+            "sagittalDir": req.get("sagittalDir"),
+        });
+        let mtf_json = run_native_mtf_malacara_from_opd_value(&mtf_req)?;
+        let opd_out = if slim_results {
+            serde_json::json!({
+                "backend": opd_json.get("backend").cloned().unwrap_or(Value::Null),
+                "targetSurface": opd_json.get("targetSurface").cloned().unwrap_or(Value::Null),
+                "stopSurface": opd_json.get("stopSurface").cloned().unwrap_or(Value::Null),
+                "wavelengthUm": opd_json.get("wavelengthUm").cloned().unwrap_or(Value::Null),
+                "sampleCount": opd_json.get("sampleCount").cloned().unwrap_or(Value::Null),
+                "hitCount": opd_json.get("hitCount").cloned().unwrap_or(Value::Null),
+                "pupilSamplingMode": opd_json.get("pupilSamplingMode").cloned().unwrap_or(Value::Null),
+                "effectivePupilRadiusMm": opd_json.get("effectivePupilRadiusMm").cloned().unwrap_or(Value::Null),
+            })
+        } else {
+            opd_json
+        };
+        return Ok(serde_json::json!({
+            "backend": "web-rust-wasm-opd-mtf-malacara-batch",
+            "opd": opd_out,
+            "psf": Value::Null,
+            "mtf": mtf_json,
+            "message": "Computed via batched WASM OPD+Malacara MTF",
+        }));
+    }
 
     if opd_only {
         return Ok(serde_json::json!({
@@ -14627,6 +14677,7 @@ mod tests {
         apply_display_mode_grid,
         clear_trace_system_metadata_cache,
         register_trace_system_metadata,
+        run_native_mtf_malacara_from_opd_value,
         trace_ray_batch_hit_point_with_meta,
         trace_ray_batch_spot_metrics_cached,
         trace_spot_metric_jobs_cached,
@@ -14652,6 +14703,47 @@ mod tests {
             ],
             vec![vec![Some(true); 3]; 3],
         )
+    }
+
+    #[test]
+    fn malacara_direct_sample_matches_full_curve_endpoint() {
+        let grid = (0..17)
+            .map(|iy| {
+                (0..17)
+                    .map(|ix| {
+                        let x = (ix as f64 - 8.0) / 8.0;
+                        let y = (iy as f64 - 8.0) / 8.0;
+                        if x * x + y * y <= 1.0 {
+                            Some(0.08 * x * x + 0.03 * x * y)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<Option<f64>>>()
+            })
+            .collect::<Vec<Vec<Option<f64>>>>();
+        let common = serde_json::json!({
+            "displayOpdGrid": grid,
+            "wavelengthUm": 0.55,
+            "fNumber": 4.0,
+            "pupilRange": 1.0,
+            "maxFrequencyLpmm": 20.0,
+            "points": 11,
+            "tangentialDir": { "x": 1.0, "y": 0.0 },
+            "sagittalDir": { "x": 0.0, "y": 1.0 },
+        });
+        let full = run_native_mtf_malacara_from_opd_value(&common).expect("full Malacara curve");
+        let mut direct_request = common;
+        direct_request["sampleFrequenciesLpmm"] = serde_json::json!([20.0]);
+        direct_request["directEvalOnly"] = serde_json::json!(true);
+        let direct = run_native_mtf_malacara_from_opd_value(&direct_request).expect("direct Malacara sample");
+
+        let full_tan = full["mtfTangential"].as_array().unwrap().last().unwrap().as_f64().unwrap();
+        let full_sag = full["mtfSagittal"].as_array().unwrap().last().unwrap().as_f64().unwrap();
+        let direct_tan = direct["sampledMtfTangential"][0].as_f64().unwrap();
+        let direct_sag = direct["sampledMtfSagittal"][0].as_f64().unwrap();
+        assert!((full_tan - direct_tan).abs() <= 1e-12);
+        assert!((full_sag - direct_sag).abs() <= 1e-12);
     }
 
     #[test]
