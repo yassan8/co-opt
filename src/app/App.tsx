@@ -3,6 +3,11 @@ import Plotly from 'plotly.js-dist-min';
 import * as THREE from 'three';
 import { DistortionAnalysisPage } from './DistortionAnalysisPage';
 import { MtfAnalysisPage } from './MtfAnalysisPage';
+import {
+  getOptimizedResultApplySnapshots,
+  injectActiveOpticalRows,
+  selectCanonicalOptimizedRows,
+} from './optimized-result-sync.ts';
 import MainToolbar from "../ui/components/MainToolbar";
 import ConfigurationSection from "../ui/components/ConfigurationSection";
 import SourceObjectSection from "../ui/components/SourceObjectSection";
@@ -20,7 +25,7 @@ import {
   handleSave,
   handleShareUrl,
 } from "../../ui/toolbar-handlers";
-import { runOptimizationMVP } from "../../optimization/optimizer-mvp.ts";
+import { OPTIMIZER_POLICY_ID, runOptimizationMVP } from "../../optimization/optimizer-mvp.ts";
 import { listDesignVariablesFromBlocks } from "../../optimization/design-variables.ts";
 import { clearOptimizerStop, readDesktopSetting, runNativeChiefRayAngle, startPreventDisplaySleep, stopPreventDisplaySleep, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
@@ -40,10 +45,12 @@ import {
 } from "../../ui/optimization-settings-storage.ts";
 import { getRustRayTracingWasmSync } from "../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts";
 import {
+  calculateOptimizeConsoleImprovement,
   formatOptimizeConsoleCell,
   formatOptimizeConsoleHeader,
   formatOptimizeConsoleRow,
   formatOptimizeElapsed,
+  shouldAppendOptimizeConsoleRow,
 } from './optimize-console-format.ts';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
@@ -6993,9 +7000,7 @@ export default function App() {
             setTimeout(() => { try { localStorage.removeItem(handledKey); } catch (_) {} }, 15000);
           } catch (_) {}
         }
-        const undoSnapshots = {
-          afterRows: Array.isArray(payload?.afterRowsSnapshot) ? payload.afterRowsSnapshot : [],
-        };
+        const undoSnapshots = getOptimizedResultApplySnapshots(payload);
         logOptimizeSyncDiag('storage-optimizeRowsSync:received', {
           token,
           rows: getDiagRowsFingerprint(rows),
@@ -7040,9 +7045,7 @@ export default function App() {
                   setTimeout(() => { try { localStorage.removeItem(handledKey); } catch (_) {} }, 15000);
                 } catch (_) {}
               }
-              const undoSnapshots = {
-                afterRows: Array.isArray(ev?.payload?.afterRowsSnapshot) ? ev.payload.afterRowsSnapshot : [],
-              };
+              const undoSnapshots = getOptimizedResultApplySnapshots(ev?.payload);
               logOptimizeSyncDiag('tauri-optimizeRowsSync:received', {
                 token,
                 rows: getDiagRowsFingerprint(rows),
@@ -10365,6 +10368,7 @@ const collectLegacyCrossRays = async (
         percent: 0,
         progressEvents: [],
       }));
+      appendOptimizeConsoleLine(`[Optimizer] policy=${OPTIMIZER_POLICY_ID} runner=local-window`);
       appendOptimizeConsoleHeader();
       optimizeConsoleHeaderWrittenRef.current = true;
 
@@ -10861,21 +10865,10 @@ const collectLegacyCrossRays = async (
           }
         };
 
-        const optimizerRunner = (() => {
-          try {
-            const hostOpt = hostWindow?.OptimizationMVP;
-            if (hostWindow && hostWindow !== w && hostOpt && typeof hostOpt.run === 'function') {
-              return {
-                source: 'host-window',
-                run: hostOpt.run.bind(hostOpt),
-              };
-            }
-          } catch (_) {}
-          return {
-            source: 'local-window',
-            run: runOptimizationMVP,
-          };
-        })();
+        const optimizerRunner = {
+          source: 'local-window',
+          run: runOptimizationMVP,
+        };
 
         let tsResult: any = null;
         try {
@@ -10961,12 +10954,14 @@ const collectLegacyCrossRays = async (
               ev?.stepScale ??
               Number.NaN
             );
+            const qpDamping = Number(ev?.qpDamping ?? Number.NaN);
             const rho = Number(ev?.rho ?? Number.NaN);
             const alpha = Number(ev?.alpha ?? Number.NaN);
+            const consoleMin = Number.isFinite(progressBestScore)
+              ? progressBestScore
+              : requirementDisplayScore;
             const previousMin = optimizeConsolePrevMinRef.current;
-            const improvement = (Number.isFinite(previousMin) && previousMin !== 0 && Number.isFinite(requirementDisplayScore))
-              ? (previousMin - requirementDisplayScore) / Math.abs(previousMin)
-              : Number.NaN;
+            const improvement = calculateOptimizeConsoleImprovement(previousMin, consoleMin);
             const iterInt = Number.isFinite(iter) ? Math.max(0, Math.floor(iter)) : -1;
             const consoleIter = (progressMethod === 'kkt' || progressMethod === 'kkt-sqp') && phaseLower !== 'start'
               ? iterInt + 1
@@ -10974,8 +10969,13 @@ const collectLegacyCrossRays = async (
             const isConsoleProgressPhase = phaseLower === 'start'
               || phaseLower === 'iter'
               || phaseLower === 'kkt-iter';
+            if (phaseLower === 'restart') {
+              const reason = String(ev?.reason ?? 'optimizer-restart').trim();
+              appendOptimizeConsoleLine(`[${formatOptimizeElapsed(elapsedMs)}] ${reason}`);
+            }
             if (isConsoleProgressPhase
-              && Number.isFinite(requirementDisplayScore)
+              && shouldAppendOptimizeConsoleRow(phaseLower, ev?.accepted, previousMin, consoleMin)
+              && Number.isFinite(consoleMin)
               && consoleIter >= 0
               && consoleIter > optimizeConsoleLastIterRef.current) {
               if (!optimizeConsoleHeaderWrittenRef.current) {
@@ -10985,15 +10985,16 @@ const collectLegacyCrossRays = async (
               appendOptimizeConsoleRow({
                 iter: consoleIter,
                 elapsedMs,
-                min: requirementDisplayScore,
+                min: consoleMin,
                 damping: dampingFactor,
+                qpDamping,
                 rho,
                 alpha,
                 improv: improvement,
               });
               optimizeConsoleLastIterRef.current = consoleIter;
-              if (Number.isFinite(requirementDisplayScore)) {
-                optimizeConsolePrevMinRef.current = requirementDisplayScore;
+              if (Number.isFinite(consoleMin)) {
+                optimizeConsolePrevMinRef.current = consoleMin;
               }
             }
 
@@ -11082,9 +11083,7 @@ const collectLegacyCrossRays = async (
         };
 
         const applyHostSystemConfigSnapshot = async (snapshot: any, rowsSnapshot?: any[]) => {
-          const cloned = snapshot && typeof snapshot === 'object'
-            ? (cloneJsonLocal(snapshot) || snapshot)
-            : null;
+          const cloned = injectActiveOpticalRows(snapshot, Array.isArray(rowsSnapshot) ? rowsSnapshot : []);
           if (!cloned) return false;
           const applyToTarget = async (target: any) => {
             if (!target) return false;
@@ -11152,19 +11151,9 @@ const collectLegacyCrossRays = async (
 
         clearOptimizeRuntimeConfigOverride();
 
-        const extractRowsFromConfigSnapshot = (cfg: any): any[] => {
-          try {
-            const activeId = String(cfg?.activeConfigId ?? '').trim();
-            const active = Array.isArray(cfg?.configurations)
-              ? (cfg.configurations.find((c: any) => String(c?.id ?? '') === activeId) || cfg.configurations[0])
-              : null;
-            const rows = Array.isArray(active?.opticalSystem)
-              ? active.opticalSystem
-              : (Array.isArray(active?.opticalSystemRows) ? active.opticalSystemRows : []);
-            return Array.isArray(rows) ? (cloneJsonLocal(rows) || rows) : [];
-          } catch (_) {
-            return [];
-          }
+        const extractRowsFromConfigSnapshot = (cfg: any, directRows: any[] = []): any[] => {
+          const expander = hostWindow?.expandBlocksToOpticalSystemRows || w?.expandBlocksToOpticalSystemRows;
+          return selectCanonicalOptimizedRows(cfg, directRows, expander);
         };
 
         const resultConfigSnapshot = tsResult?.systemConfigSnapshot && typeof tsResult.systemConfigSnapshot === 'object'
@@ -11173,9 +11162,10 @@ const collectLegacyCrossRays = async (
         const resultRowsDirect = Array.isArray(tsResult?.opticalSystemRowsSnapshot)
           ? (cloneJsonLocal(tsResult.opticalSystemRowsSnapshot) || tsResult.opticalSystemRowsSnapshot)
           : [];
-        const resultRowsSnapshot = Array.isArray(resultRowsDirect) && resultRowsDirect.length > 0
-          ? resultRowsDirect
-          : extractRowsFromConfigSnapshot(resultConfigSnapshot);
+        const resultRowsFromBlocks = extractRowsFromConfigSnapshot(resultConfigSnapshot, resultRowsDirect);
+        const resultRowsSnapshot = Array.isArray(resultRowsFromBlocks) && resultRowsFromBlocks.length > 0
+          ? resultRowsFromBlocks
+          : resultRowsDirect;
 
         try {
           if ((window as any).__COOPT_AL_DIAG !== true) throw new Error('AL diag disabled');
@@ -11281,7 +11271,9 @@ const collectLegacyCrossRays = async (
         let afterHostConfigSnapshot: any = null;
         let afterHostRowsSnapshot: any[] = [];
         try {
-          afterHostConfigSnapshot = resultConfigSnapshot || loadHostConfigSnapshot();
+          afterHostConfigSnapshot = resultConfigSnapshot
+            ? injectActiveOpticalRows(resultConfigSnapshot, resultRowsSnapshot)
+            : loadHostConfigSnapshot();
           afterHostRowsSnapshot = resultRowsSnapshot.length > 0 ? resultRowsSnapshot : loadHostRowsSnapshot();
           if (!tsAborted && typeof hostWindow.__cooptRecordOptimizationUndoFromSnapshots === 'function') {
             hostWindow.__cooptRecordOptimizationUndoFromSnapshots(
@@ -11332,7 +11324,7 @@ const collectLegacyCrossRays = async (
               await performRenderSync(rowsAfter, { finalizeAutoSemidia: true, force: true });
               const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
               const applyCreatedAt = Date.now();
-              const shouldBroadcastRowsSync = isTauriRuntime() || !hostResultSnapshotApplied;
+              const shouldBroadcastRowsSync = true;
               logDoneApplyDiag('before-optimizeRowsSync-setItem', {
                 applyToken,
                 shouldBroadcastRowsSync,

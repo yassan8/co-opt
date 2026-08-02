@@ -52,6 +52,7 @@ export interface OptimizeProgressEvent {
   equalViolation?: number;
   inequalViolation?: number;
   dampingFactor?: number;
+  qpDamping?: number;
   softPenalty?: number;
   requirementCount?: number;
   residualCount?: number;

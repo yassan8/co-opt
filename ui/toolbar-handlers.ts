@@ -868,19 +868,10 @@ export function handleSave(): void {
     }
 
     const loadedFileName = getLoadedFileName();
-    let defaultName = 'optical_system_data';
-    
+    let filename = 'optical_system_data.json';
     if (loadedFileName) {
-      defaultName = loadedFileName.replace(/\.json$/i, '');
+      filename = loadedFileName;
     }
-
-    let filename = prompt(
-      "保存するファイル名を入力してください（拡張子 .json は自動で付きます）\n\n" +
-      "※ダウンロードフォルダに既存ファイルがある場合はブラウザが自動的に連番を付けます",
-      defaultName
-    );
-    
-    if (!filename) return;
     if (!filename.endsWith('.json')) filename += '.json';
 
     const blob = new Blob([serialized], { type: 'application/json' });

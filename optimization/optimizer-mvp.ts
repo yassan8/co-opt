@@ -57,6 +57,8 @@ import {
   updateAdaptiveSqpDamping,
 } from './adaptive-sqp-damping.ts';
 
+export const OPTIMIZER_POLICY_ID = 'bf3760cb-july28-recovery-runtime-batching';
+
 let __optimizerStopRequested = false;
 
 function shouldProfileNativeOptimizer(): boolean {

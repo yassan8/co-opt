@@ -2847,6 +2847,30 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         (window as any).__cooptPreferRuntimeSystemConfig = true;
     } catch (_) {}
 
+    if (persistedConfigOk) {
+        try {
+            const importedConfigurations = Array.isArray(candidateConfig?.configurations)
+                ? candidateConfig.configurations.map((config: any) => ({
+                    id: config?.id,
+                    name: config?.name,
+                    blocks: Array.isArray(config?.blocks)
+                        ? JSON.parse(JSON.stringify(config.blocks))
+                        : [],
+                }))
+                : [];
+            localStorage.setItem('coopt.importedDesignIntentBaseline', JSON.stringify({
+                version: 1,
+                filename: displayName,
+                capturedAt: Date.now(),
+                activeConfigId: candidateConfig?.activeConfigId,
+                configurations: importedConfigurations,
+            }));
+        } catch (snapshotError) {
+            try { localStorage.removeItem('coopt.importedDesignIntentBaseline'); } catch (_) {}
+            console.warn('[Load] Imported Design Intent baseline could not be preserved.', snapshotError);
+        }
+    }
+
     // Determine effective data for tables
     let effectiveSource = allData.source;
     let effectiveObject = allData.object;
@@ -3928,8 +3952,8 @@ function setupOptimizeDesignIntentButton(): void {
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         Method
         <select id="opt-method" style="padding:4px 6px;">
-            <option value="kkt-sqp" selected>KKT-SQP</option>
-            <option value="kkt">AL + Gauss-Newton</option>
+            <option value="kkt" selected>AL + Gauss-Newton (July 27)</option>
+            <option value="kkt-sqp">KKT-SQP</option>
             <option value="global">Global (Escape Function)</option>
             <option value="lm">Levenberg-Marquardt (LM)</option>
             <option value="cd">Coordinate Descent (CD)</option>
@@ -5028,7 +5052,7 @@ function setupOptimizeDesignIntentButton(): void {
                     }
 
                     const resolveOptMethod = (): string => {
-                        let method = 'kkt-sqp';
+                        let method = 'kkt';
                         try {
                             if (popup && !popup.closed) {
                                 const el = popup.document.getElementById('opt-method') as HTMLSelectElement | null;
@@ -5728,19 +5752,10 @@ function setupSaveButton(): void {
                 const { getLoadedFileName } = await import('./loaded-file-storage.ts');
                 loadedFileName = getLoadedFileName();
             } catch (_) {}
-            let defaultName = 'optical_system_data';
-            
+            let filename = 'optical_system_data.json';
             if (loadedFileName) {
-                defaultName = loadedFileName.replace(/\.json$/i, '');
+                filename = loadedFileName;
             }
-
-            let filename = prompt(
-                "保存するファイル名を入力してください（拡張子 .json は自動で付きます）\n\n" +
-                "※ダウンロードフォルダに既存ファイルがある場合はブラウザが自動的に連番を付けます",
-                defaultName
-            );
-            
-            if (!filename) return;
             if (!filename.endsWith('.json')) filename += '.json';
 
             const blob = new Blob([serialized], { type: 'application/json' });
