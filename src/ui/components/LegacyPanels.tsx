@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { loadOptimizeRayGridSize, OPTIMIZE_RAY_GRID_SIZES } from '../../../ui/optimization-settings-storage.ts';
 
 type LiteratureExtractResult = {
   patentIds: string[];
@@ -3344,6 +3345,8 @@ export default function LegacyPanels() {
     }
   };
 
+  const defaultWavefrontGridSize = String(loadOptimizeRayGridSize());
+
   return (
     <>
       <div className="merit-function-section" style={{ display: "none" }}>
@@ -3607,12 +3610,10 @@ export default function LegacyPanels() {
                 <option value="multifield">Multi-field Comparison</option>
               </select>
               <label htmlFor="wavefront-grid-size-select">sampling:</label>
-              <select id="wavefront-grid-size-select" defaultValue="32">
-                <option value="16">16x16</option>
-                <option value="32">32x32</option>
-                <option value="64">64x64</option>
-                <option value="128">128x128</option>
-                <option value="256">256x256</option>
+              <select id="wavefront-grid-size-select" defaultValue={defaultWavefrontGridSize}>
+                {OPTIMIZE_RAY_GRID_SIZES.map((size) => (
+                  <option key={`wavefront-grid-${size}`} value={String(size)}>{size}x{size}</option>
+                ))}
               </select>
               <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <input type="checkbox" id="opd-remove-ptd-checkbox" />

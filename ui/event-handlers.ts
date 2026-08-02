@@ -56,6 +56,7 @@ import { listen } from '@tauri-apps/api/event';
 import plotlyScriptUrl from 'plotly.js-dist-min/plotly.min.js?url';
 import { hideAnalysisProgressHud, showAnalysisProgressHud, updateAnalysisProgressHud } from './shared/analysis-progress-hud.ts';
 import type { RunAnalysisComputeRequest, RunAnalysisComputeResponse } from '../src/shared/contracts/analysis.ts';
+import { loadOptimizeRayGridSize, OPTIMIZE_RAY_GRID_SIZES } from './optimization-settings-storage.ts';
 
 let popupPsfCalculatorCache: PSFCalculator | null = null;
 
@@ -9949,6 +9950,11 @@ export function setupAnalysisWindows() {
                         }
                         w.__opdPopup = popup;
 
+                        const wavefrontGridDefault = loadOptimizeRayGridSize();
+                        const wavefrontGridOptionsHtml = OPTIMIZE_RAY_GRID_SIZES
+                            .map((size) => `<option value="${size}"${size === wavefrontGridDefault ? ' selected' : ''}>${size}x${size}</option>`)
+                            .join('');
+
                         try { popup.document.open(); } catch (_) {}
 
                         popup.document.write(`
@@ -10064,14 +10070,7 @@ export function setupAnalysisWindows() {
         </select>
         <label for="popup-wavefront-grid-size-select">sampling:</label>
         <select id="popup-wavefront-grid-size-select">
-            <option value="32" selected>32x32</option>
-            <option value="64">64x64</option>
-            <option value="128">128x128</option>
-            <option value="256">256x256</option>
-            <option value="512">512x512</option>
-            <option value="1024">1024x1024</option>
-            <option value="2048">2048x2048</option>
-            <option value="4096">4096x4096</option>
+            ${wavefrontGridOptionsHtml}
         </select>
         <label style="display:flex;align-items:center;gap:6px;">
             <input id="popup-zernike-fit-checkbox" type="checkbox" />
@@ -10362,7 +10361,7 @@ export function setupAnalysisWindows() {
                 return Number.isFinite(idx) && idx >= 0 ? idx : 0;
             })();
             const plotType = popupPlotType ? popupPlotType.value : 'surface';
-            const gridSize = popupGrid ? parseInt(popupGrid.value, 10) : 256;
+            const gridSize = popupGrid ? parseInt(popupGrid.value, 10) : wavefrontGridDefault;
             const opdDisplayMode = (popupRemovePtd && popupRemovePtd.checked)
                 ? 'pistonTiltDefocusRemoved'
                 : 'pistonTiltRemoved';
@@ -10514,7 +10513,7 @@ export function setupAnalysisWindows() {
                         throw new Error('showWavefrontDiagram is not available on opener');
                     }
                     try { opdStageTrace.push('Wavefront call started', 'Delegating to opener.showWavefrontDiagram'); } catch (_) {}
-                    const wavefrontResult = await window.opener.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : 256, Number.isFinite(objectIndex) ? objectIndex : 0, {
+                    const wavefrontResult = await window.opener.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : wavefrontGridDefault, Number.isFinite(objectIndex) ? objectIndex : 0, {
                         containerElement: containerEl,
                         cancelToken: popupCancelToken,
                         onProgress,
