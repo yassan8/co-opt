@@ -20,7 +20,7 @@ import {
   handleExportZemax,
   handleImportZemax,
   handleLoad,
-  handleLoadDefault,
+  handleLoadExample,
   handleNewFile,
   handleSave,
   handleShareUrl,
@@ -36,6 +36,7 @@ import { calculateChiefRayNewton } from "../../evaluation/aberrations/transverse
 import { convertImageHeightToEffectiveObject, generateRayStartPointsForObject, solveRayOriginToStopPointFast } from "../../optical/ray-renderer.ts";
 import { findStopSurface } from "../../optical/system-renderer.ts";
 import { detectConjugateType } from "../../utils/conjugate-detection.ts";
+import { listBundledExampleProjectFiles } from "../../utils/default-project-loader.ts";
 import { getLoadedFileName, getLoadedFileWarn } from "../../ui/loaded-file-storage";
 import {
   loadOptimizeRayGridSize,
@@ -82,6 +83,8 @@ const RENDER_SURFACE_COLOR_PALETTE: Array<{ name: string; hex: string }> = [
   { name: 'Light Peach', hex: '#FFDAB9' },
   { name: 'Light Gray', hex: '#D3D3D3' },
 ];
+
+const EXAMPLE_PROJECT_FILES = listBundledExampleProjectFiles();
 
 type RenderLensColorTarget = {
   label: string;
@@ -12609,6 +12612,7 @@ const collectLegacyCrossRays = async (
   const [{ text: statusFileText, color: statusFileColor }, setStatusFile] = useState(resolveStatusFile);
   const activeWorkspaceLabel = workspaceSections.find((s) => s.key === workspaceFocus)?.label || 'Config';
   const [openMenu, setOpenMenu] = useState<null | 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis'>(null);
+  const [isExamplesMenuExpanded, setIsExamplesMenuExpanded] = useState(false);
 
   useEffect(() => {
     const refresh = () => {
@@ -12646,6 +12650,12 @@ const collectLegacyCrossRays = async (
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, []);
+
+  useEffect(() => {
+    if (openMenu !== 'file' && isExamplesMenuExpanded) {
+      setIsExamplesMenuExpanded(false);
+    }
+  }, [openMenu, isExamplesMenuExpanded]);
 
   const closeWorkspaceMenus = () => {
     setOpenMenu(null);
@@ -14706,7 +14716,24 @@ const collectLegacyCrossRays = async (
           <div className="app-shell__menuPanel" role="menu">
             <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleNewFile)}>New</button>
             <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleLoad)}>Load…</button>
-            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleLoadDefault)}>Load Default</button>
+            <button
+              type="button"
+              className="app-shell__menuAction"
+              aria-expanded={isExamplesMenuExpanded}
+              onClick={() => setIsExamplesMenuExpanded((prev) => !prev)}
+            >
+              {isExamplesMenuExpanded ? 'Examples ▾' : 'Examples ▸'}
+            </button>
+            {isExamplesMenuExpanded && EXAMPLE_PROJECT_FILES.map((fileName) => (
+              <button
+                key={fileName}
+                type="button"
+                className="app-shell__menuAction"
+                onClick={runMenuAction(() => { void handleLoadExample(fileName); })}
+              >
+                {fileName}
+              </button>
+            ))}
             <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleSave)}>Save</button>
             <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleImportZemax)}>Import Zemax</button>
             <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleExportZemax)}>Export Zemax</button>

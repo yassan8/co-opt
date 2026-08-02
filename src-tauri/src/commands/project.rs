@@ -80,7 +80,7 @@ pub fn new_project_template() -> Result<NewProjectTemplateResponse, String> {
 
 #[tauri::command]
 pub fn load_default_project() -> Result<DefaultProjectResponse, String> {
-    let raw = include_str!("../../../defaults/default-load.json");
+    let raw = include_str!("../../../Examples/default-load.json");
     let project: Value = serde_json::from_str(raw)
         .map_err(|e| format!("failed to parse embedded default project json: {e}"))?;
     Ok(DefaultProjectResponse { project })

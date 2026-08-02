@@ -9,9 +9,9 @@ import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-i
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
-import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, readDesktopSetting, recommendWavefrontGrid, runAnalysisPreview, writeDesktopSetting } from '../src/desktop/ipc/client.ts';
+import { generateZmxText, getNewProjectTemplate, parseZmxText, readDesktopSetting, recommendWavefrontGrid, runAnalysisPreview, writeDesktopSetting } from '../src/desktop/ipc/client.ts';
 import { getOrCreateCooptWindowSyncSenderId } from '../core/window-facade.ts';
-import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.ts';
+import { loadBundledExampleProjectJson } from '../utils/default-project-loader.ts';
 import { buildShareUrlFromCompressedString, encodeAllDataToCompressedString } from '../utils/url-share.ts';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
 import { createOptimizationActivityGuard } from '../utils/optimization-activity-guard.ts';
@@ -893,38 +893,30 @@ export function handleSave(): void {
   }
 }
 
-export async function handleLoadDefault(): Promise<void> {
-  if (!isTauriRuntime() && !confirm('Load default optical system? Current data will be replaced.')) return;
-  
+export async function handleLoadExample(fileName: string): Promise<void> {
+  const normalizedFileName = String(fileName || '').trim() || 'default-load.json';
+  if (!isTauriRuntime() && !confirm(`Load example ${normalizedFileName}? Current data will be replaced.`)) return;
+
   try {
     clearSystemDataCache();
-    if (isTauriRuntime()) {
-      const { project } = await getDefaultProject();
-      if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
-        const ok = await (window as any).__loadAllDataObjectIntoApp(project, { filename: 'default-load.json' });
-        if (!ok) throw new Error('Default project load returned false.');
-      }
-      setLoadedFileName('default-load.json');
-      try {
-        window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
-      } catch (_) {}
-      return;
-    }
-
-    const data = await loadBrowserDefaultProjectJson();
+    const data = await loadBundledExampleProjectJson(normalizedFileName);
     
     if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
-      const ok = await (window as any).__loadAllDataObjectIntoApp(data, { filename: 'default-load.json' });
-      if (!ok) throw new Error('Default project load returned false.');
+      const ok = await (window as any).__loadAllDataObjectIntoApp(data, { filename: normalizedFileName });
+      if (!ok) throw new Error(`Example project load returned false (${normalizedFileName}).`);
     }
-    setLoadedFileName('default-load.json');
+    setLoadedFileName(normalizedFileName);
     try {
       window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
     } catch (_) {}
   } catch (err) {
-    console.error('❌ Failed to load default system:', err);
-    alert('Failed to load default optical system. Check console for details.');
+    console.error('❌ Failed to load example system:', err);
+    alert(`Failed to load example: ${normalizedFileName}. Check console for details.`);
   }
+}
+
+export async function handleLoadDefault(): Promise<void> {
+  await handleLoadExample('default-load.json');
 }
 
 export function handleLoad(): void {

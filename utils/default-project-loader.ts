@@ -1,50 +1,47 @@
-function normalizeBaseUrl(): string {
-  const fromLocation = (() => {
-    try {
-      const path = String((globalThis as any)?.location?.pathname || '/');
-      if (path.startsWith('/co-opt/')) return '/co-opt/';
-      return '/';
-    } catch {
-      return '/';
-    }
-  })();
+const EXAMPLE_PROJECT_MODULES = import.meta.glob('../Examples/*.json', {
+  eager: true,
+  import: 'default',
+}) as Record<string, unknown>;
 
-  try {
-    const raw = (import.meta as any)?.env?.BASE_URL;
-    const base = typeof raw === 'string' && raw.length > 0 ? raw : fromLocation;
-    const withLeadingSlash = base.startsWith('/') ? base : `/${base}`;
-    const normalized = withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
-    if (normalized === '/' && fromLocation !== '/') return fromLocation;
-    return normalized;
-  } catch {
-    return fromLocation;
-  }
+type ExampleProjectEntry = {
+  fileName: string;
+  project: unknown;
+};
+
+function buildExampleProjectEntries(): ExampleProjectEntry[] {
+  return Object.entries(EXAMPLE_PROJECT_MODULES)
+    .map(([modulePath, project]) => ({
+      fileName: modulePath.split('/').pop() || modulePath,
+      project,
+    }))
+    .sort((left, right) => {
+      if (left.fileName === 'default-load.json') return -1;
+      if (right.fileName === 'default-load.json') return 1;
+      return left.fileName.localeCompare(right.fileName);
+    });
 }
 
-function buildDefaultProjectCandidates(): string[] {
-  const baseUrl = normalizeBaseUrl();
-  return Array.from(new Set([
-    `${baseUrl}defaults/default-load.json`,
-    '/co-opt/defaults/default-load.json',
-    '/defaults/default-load.json',
-  ]));
+const EXAMPLE_PROJECT_ENTRIES = buildExampleProjectEntries();
+
+function cloneExampleProject<T>(project: T): T {
+  return JSON.parse(JSON.stringify(project)) as T;
 }
 
-export async function loadBrowserDefaultProjectJson(): Promise<any> {
-  let lastStatusText = 'unknown error';
+function normalizeExampleFileName(fileName: string): string {
+  const normalized = String(fileName || '').trim();
+  if (!normalized) return 'default-load.json';
+  return normalized.endsWith('.json') ? normalized : `${normalized}.json`;
+}
 
-  for (const url of buildDefaultProjectCandidates()) {
-    try {
-      const response = await fetch(url, { cache: 'no-store' });
-      if (!response.ok) {
-        lastStatusText = `${response.status} ${response.statusText}`.trim();
-        continue;
-      }
-      return await response.json();
-    } catch (error) {
-      lastStatusText = error instanceof Error ? error.message : String(error);
-    }
+export function listBundledExampleProjectFiles(): string[] {
+  return EXAMPLE_PROJECT_ENTRIES.map((entry) => entry.fileName);
+}
+
+export async function loadBundledExampleProjectJson(fileName = 'default-load.json'): Promise<any> {
+  const normalizedFileName = normalizeExampleFileName(fileName);
+  const entry = EXAMPLE_PROJECT_ENTRIES.find((candidate) => candidate.fileName === normalizedFileName);
+  if (!entry) {
+    throw new Error(`Example project not found: ${normalizedFileName}`);
   }
-
-  throw new Error(`Failed to load default system: ${lastStatusText}`);
+  return cloneExampleProject(entry.project);
 }

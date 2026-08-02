@@ -123,7 +123,7 @@ fn main() -> Result<(), String> {
     let input = args
         .first()
         .cloned()
-        .unwrap_or_else(|| "defaults/default-load.json".to_string());
+        .unwrap_or_else(|| "Examples/default-load.json".to_string());
     let ray_count = args
         .get(1)
         .and_then(|value| value.parse::<u32>().ok())

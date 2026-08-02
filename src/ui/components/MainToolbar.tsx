@@ -3,7 +3,7 @@ import {
   handleNewFile, 
   handleSave, 
   handleLoad, 
-  handleLoadDefault, 
+  handleLoadExample,
   handleClearStorage,
   handleShareUrl,
   handleImportZemax,
@@ -16,6 +16,9 @@ import {
 } from '../../../ui/toolbar-handlers';
 import { getLoadedFileName, getLoadedFileWarn } from '../../../ui/loaded-file-storage';
 import { getToolbarCollapsed, setToolbarCollapsed } from '../../../ui/toolbar-collapsed-storage';
+import { listBundledExampleProjectFiles } from '../../../utils/default-project-loader.ts';
+
+const EXAMPLE_PROJECT_FILES = listBundledExampleProjectFiles();
 
 export default function MainToolbar({ minimal = false }: { minimal?: boolean }) {
   const resolveToolbarCollapsed = () => {
@@ -158,7 +161,21 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
           <button id="new-file-btn" onClick={handleNewFile} data-react-handled="1">New File</button>
           <button id="save-all-btn" onClick={handleSave} data-react-handled="1">Save File</button>
           <button id="load-all-btn" onClick={handleLoad} data-react-handled="1">Load File</button>
-          <button id="load-default-btn" onClick={handleLoadDefault} data-react-handled="1">Load Default</button>
+          <select
+            id="load-example-select"
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              if (value) void handleLoadExample(value);
+              event.currentTarget.value = '';
+            }}
+            data-react-handled="1"
+            defaultValue=""
+          >
+            <option value="">Examples</option>
+            {EXAMPLE_PROJECT_FILES.map((fileName) => (
+              <option key={fileName} value={fileName}>{fileName}</option>
+            ))}
+          </select>
           <button id="share-url-btn" onClick={handleShareUrl} data-react-handled="1">Share URL</button>
           <button id="clear-storage-btn" onClick={handleClearStorage}>Clear Cache</button>
         </div>

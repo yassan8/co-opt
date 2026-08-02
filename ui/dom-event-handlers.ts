@@ -159,7 +159,7 @@ import {
     loadTableData as loadSystemRequirementsTableData,
     saveTableData as saveSystemRequirementsTableData
 } from '../data/table-system-requirements.ts';
-import { loadBrowserDefaultProjectJson } from '../utils/default-project-loader.ts';
+import { loadBundledExampleProjectJson } from '../utils/default-project-loader.ts';
 import { createOptimizationActivityGuard } from '../utils/optimization-activity-guard.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { saveJsonFromNativeDialog } from '../src/desktop/adapters/file.ts';
@@ -5946,7 +5946,7 @@ function setupLoadDefaultButton(): void {
         if (!confirm('Load default optical system? Current data will be replaced.')) return;
         
         try {
-            const data = await loadBrowserDefaultProjectJson();
+            const data = await loadBundledExampleProjectJson('default-load.json');
             
             await __loadAllDataObjectIntoApp(data, { filename: 'default-load.json' });
         } catch (err) {
@@ -6020,7 +6020,7 @@ async function maybeAutoRecoverDefaultLensData(): Promise<void> {
         const looksDefaultLabel = normalizedLoadedName.includes('default-load.json') || normalizedLoadedName.includes('/default-load.json');
         if (loadedFileName && !looksDefaultLabel) return;
 
-        const defaultData = await loadBrowserDefaultProjectJson();
+        const defaultData = await loadBundledExampleProjectJson('default-load.json');
         const loaded = await __loadAllDataObjectIntoApp(defaultData, { filename: 'default-load.json' });
         if (loaded) {
             try { localStorage.setItem(markerKey, 'done'); } catch (_) {}

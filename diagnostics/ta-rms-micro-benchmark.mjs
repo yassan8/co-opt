@@ -38,7 +38,7 @@ function median(values) {
   return 0.5 * (nums[mid - 1] + nums[mid]);
 }
 
-const cfg = JSON.parse(fs.readFileSync(new URL('../defaults/default-load.json', import.meta.url), 'utf8'));
+const cfg = JSON.parse(fs.readFileSync(new URL('../Examples/default-load.json', import.meta.url), 'utf8'));
 const optical = cfg.opticalSystem;
 const objects = cfg.object;
 const obj = objects.find((row) => Number(row?.id) === 2) || objects[0];

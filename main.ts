@@ -160,9 +160,7 @@ import { exposeWindowValue, installCooptWindowFacadeMarker, requestRefreshBlockI
 import { setRenderingContext } from './core/rendering-context.ts';
 import { setRayTracingWasmStrict, setPsfWasmStrict } from './core/wasm-service.ts';
 import { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } from './rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
-import { loadBrowserDefaultProjectJson } from './utils/default-project-loader.ts';
-import { isTauriRuntime } from './src/desktop/runtime.ts';
-import { getDefaultProject } from './src/desktop/ipc/client.ts';
+import { loadBundledExampleProjectJson } from './utils/default-project-loader.ts';
 
 // Editor modules (must be imported to initialize)
 import './ui/editors/system-requirements-editor.ts';
@@ -315,14 +313,7 @@ async function loadDefaultProjectForPhaseCAutorun(): Promise<void> {
         50
     );
 
-    if (isTauriRuntime()) {
-        const { project } = await getDefaultProject();
-        await loadIntoApp(project, { filename: 'default-load.json' });
-        await waitForPhaseCAutorunLoadSettled();
-        return;
-    }
-
-    const project = await loadBrowserDefaultProjectJson();
+    const project = await loadBundledExampleProjectJson('default-load.json');
     await loadIntoApp(project, { filename: 'default-load.json' });
     await waitForPhaseCAutorunLoadSettled();
 }
@@ -597,7 +588,7 @@ async function initializeApplication() {
             window['rebindEventHandlers'] = () => {
                 console.log('🔄 [Rebind] rebindEventHandlers called');
                 const mainToolbarBtns = [
-                    'new-file-btn', 'save-all-btn', 'load-all-btn', 'load-default-btn',
+                    'new-file-btn', 'save-all-btn', 'load-all-btn', 'load-example-select',
                     'import-zemax-btn', 'export-zemax-btn', 'optimize-design-intent-btn'
                 ];
                 console.log('🔄 [Rebind] Checking button existence:');

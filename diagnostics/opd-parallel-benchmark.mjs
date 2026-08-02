@@ -5,7 +5,7 @@
  */
 
 import { WavefrontAberrationAnalyzer, OpticalPathDifferenceCalculator } from '../evaluation/wavefront/wavefront.ts';
-import { loadDefaultOpticalSystem } from '../defaults/default-load.json' assert { type: 'json' };
+import { loadDefaultOpticalSystem } from '../Examples/default-load.json' assert { type: 'json' };
 
 const gridSize = 128;
 const fieldAngleDeg = 10;

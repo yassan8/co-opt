@@ -72,7 +72,7 @@ const run = async () => {
   const outAbs = path.resolve(projectRoot, outRel);
   const analysisAbs = path.resolve(projectRoot, analysisRel);
 
-  const cfgText = await fs.readFile(path.resolve(projectRoot, 'defaults/default-load.json'), 'utf8');
+  const cfgText = await fs.readFile(path.resolve(projectRoot, 'Examples/default-load.json'), 'utf8');
   const cfg = JSON.parse(cfgText);
   const optical = cfg.opticalSystem;
   const objects = cfg.object;

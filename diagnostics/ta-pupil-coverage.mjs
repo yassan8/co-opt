@@ -13,7 +13,7 @@ if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== 'func
 
 const { calculateTransverseAberration } = await import('../evaluation/aberrations/transverse-aberration.ts');
 
-const config = JSON.parse(fs.readFileSync('defaults/default-load.json', 'utf8'));
+const config = JSON.parse(fs.readFileSync('Examples/default-load.json', 'utf8'));
 const opticalRows = config.opticalSystem;
 const objectRows = config.object;
 const imageIndex = opticalRows.findIndex((row) => String(row?.['object type'] ?? row?.object ?? '') === 'Image');

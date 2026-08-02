@@ -150,7 +150,7 @@ function runOneTA(label, opticalRows, objectRow, surfaceNumber) {
 }
 
 
-const cfg = JSON.parse(fs.readFileSync('defaults/default-load.json', 'utf8'));
+const cfg = JSON.parse(fs.readFileSync('Examples/default-load.json', 'utf8'));
 const objectRows = cfg.object;
 const opticalRows0 = cfg.opticalSystem;
 

@@ -162,13 +162,13 @@ function runOne(label, opticalRows, sourceRows, objectRow, surfaceNumber) {
   }
 }
 
-const cfg = JSON.parse(fs.readFileSync('defaults/default-load.json', 'utf8'));
+const cfg = JSON.parse(fs.readFileSync('Examples/default-load.json', 'utf8'));
 const sourceRows = cfg.source;
 const objectRows = cfg.object;
 const opticalRows0 = cfg.opticalSystem;
 
 const imgIdx = opticalRows0.findIndex(r => String(r?.['object type'] ?? r?.object ?? '') === 'Image');
-if (imgIdx < 0) throw new Error('Image surface not found in defaults/default-load.json');
+if (imgIdx < 0) throw new Error('Image surface not found in Examples/default-load.json');
 const surfaceNumber = imgIdx + 1;
 
 // Pick the off-axis Angle object (id=2) if present.

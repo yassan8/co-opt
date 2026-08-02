@@ -34,7 +34,7 @@ const toNum = (v, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
-const inputPath = path.resolve(projectRoot, getArg('input', 'defaults/default-load.json'));
+const inputPath = path.resolve(projectRoot, getArg('input', 'Examples/default-load.json'));
 const engine = String(getArg('engine', 'both')).toLowerCase(); // js | rust | both
 const rayCount = Math.max(1, Math.floor(toNum(getArg('rays', '25'), 25)));
 const targetSurfaceArg = getArg('target', 'last');

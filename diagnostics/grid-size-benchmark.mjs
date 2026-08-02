@@ -12,7 +12,7 @@ import { dirname, join } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const defaultSystem = JSON.parse(readFileSync(join(__dirname, '../defaults/default-load.json'), 'utf-8'));
+const defaultSystem = JSON.parse(readFileSync(join(__dirname, '../Examples/default-load.json'), 'utf-8'));
 
 const fieldAngleDeg = 10;
 const wavelength = 0.5876;

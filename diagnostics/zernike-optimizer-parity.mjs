@@ -25,7 +25,7 @@ const toNum = (value, fallback) => {
 };
 
 const loadDefaultData = async () => {
-  const fileRel = getArg('input', 'defaults/default-load.json');
+  const fileRel = getArg('input', 'Examples/default-load.json');
   const fileAbs = path.resolve(projectRoot, fileRel);
   const data = JSON.parse(await fs.readFile(fileAbs, 'utf8'));
   return { fileRel, data };
