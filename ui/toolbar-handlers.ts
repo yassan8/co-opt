@@ -224,7 +224,7 @@ function buildLiveRenderSyncPayload(reason = 'render-open') {
   let objectRows: any[] = [];
   let systemConfig: any = null;
   let includeSystemConfig = shouldIncludeSystemConfigInRenderPayload(reason);
-  const preferLiveTableRows = !includeSystemConfig;
+  const preferLiveTableRows = true;
 
   try {
     const runtimeSystemConfig = typeof w.loadSystemConfigurations === 'function'
@@ -2076,7 +2076,7 @@ export function handleOptimize(): void {
           activeConfigId,
           systemRequirementsRows,
           method: 'kkt',
-          maxIterations: 24,
+          maxIterations: 20,
           preferNative: isTauriRuntime(),
           onProgress: (ev: any) => {
             if (!ev || typeof ev !== 'object') return;
@@ -2172,6 +2172,11 @@ export function handleOptimize(): void {
       } catch (_) {}
 
       publishRuntimeSystemConfigSnapshot(cloneCanonicalSystemConfig(), 60000);
+
+      // Push accepted optimized rows to render consumers immediately.
+      try {
+        await requestRenderWindowRefresh(undefined, 'optimize-complete');
+      } catch (_) {}
 
       console.log('✅ [Optimize][TS]', result);
       if (Array.isArray(progressEvents) && progressEvents.length > 0) {

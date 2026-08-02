@@ -227,7 +227,7 @@ async function runOptimizationMvpnative(options = {}) {
   );
   const maxIterations = Number.isFinite(Number(opts.maxIterations))
     ? Math.max(1, Math.floor(Number(opts.maxIterations)))
-    : 24;
+    : 20;
   const adaptiveSpotSamplingPlan = createAdaptiveSpotSamplingPlan(
     opts.spotRayCountFast,
     maxIterations,
@@ -2483,7 +2483,7 @@ export async function compareGlobalVsKktBenchmark(baseOptions = {}) {
       repeat,
       warmupDiscard,
       filterOutliers,
-      maxIterations: Number(source.maxIterations ?? common.maxIterations ?? 24) || 24,
+      maxIterations: Number(source.maxIterations ?? common.maxIterations ?? 20) || 20,
       escapeGlobalMaxRestarts: Number(source.escapeGlobalMaxRestarts ?? common.escapeGlobalMaxRestarts ?? 4) || 4,
       escapeGlobalLocalIterations: Number(
         source.escapeGlobalLocalIterations
@@ -2493,7 +2493,7 @@ export async function compareGlobalVsKktBenchmark(baseOptions = {}) {
             Math.min(
               40,
               Math.ceil(
-                Number(source.maxIterations ?? common.maxIterations ?? 24)
+                Number(source.maxIterations ?? common.maxIterations ?? 20)
                 / Math.max(1, Number(source.escapeGlobalMaxRestarts ?? common.escapeGlobalMaxRestarts ?? 4))
               )
             )
