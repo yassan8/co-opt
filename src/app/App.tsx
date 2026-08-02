@@ -4771,11 +4771,11 @@ export default function App() {
     }
   })();
   const [optMethod, setOptMethod] = useState<'kkt-sqp' | 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'>('kkt-sqp');
-  const [optMaxIterations, setOptMaxIterations] = useState(10);
+  const [optMaxIterations, setOptMaxIterations] = useState(20);
   const [optMaxEscapeLoops, setOptMaxEscapeLoops] = useState(4);
   const [optEscapeFunctionWidth, setOptEscapeFunctionWidth] = useState(1);
   const [optEscapeFunctionHeight, setOptEscapeFunctionHeight] = useState(0.1);
-  const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(false);
+  const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(true);
   const [optRunning, setOptRunning] = useState(false);
   const [optStopRequested, setOptStopRequested] = useState(false);
   const [, setSystemConfigVersion] = useState(0);
