@@ -744,6 +744,92 @@ async function prefetchOptimizerSpotRequirementGroups(editor, items, operandValu
   }
 }
 
+async function prefetchOptimizerAsyncRequirementGroups(editor, items, operandValueCache) {
+  if (!editor || typeof editor.calculateOperandValueAsync !== 'function') return;
+  const asyncPrefetchOperands = new Set([
+    'TA_RMS_UM',
+    'OPD_RMS_WAVES',
+    'OPD_RMS_UM',
+    'CRA_DEG',
+    'LA_RMS_UM',
+    'SA',
+    'ZERN_COEFF',
+  ]);
+  const groups = new Map<string, Array<any>>();
+  for (const item of Array.isArray(items) ? items : []) {
+    const requirement = item?.req;
+    const operand = String(requirement?.operand ?? '').trim().toUpperCase();
+    const weight = Math.max(0, toFiniteNumber(requirement?.weight, 1)) * Math.max(0, toFiniteNumber(item?.scenarioWeight, 1));
+    if (!requirement?.enabled || !asyncPrefetchOperands.has(operand) || !(weight > 0)) continue;
+    const cacheKey = optimizerOperandCacheKey(item);
+    if (operandValueCache.has(cacheKey)) continue;
+    const configId = String(item?.configId ?? requirement?.configId ?? '');
+    const scenarioId = item?.scenarioId ? String(item.scenarioId) : '';
+    const groupKey = `${configId}|${scenarioId}`;
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey)?.push({
+      cacheKey,
+      opObj: {
+        operand: requirement.operand,
+        configId,
+        param1: requirement.param1,
+        param2: requirement.param2,
+        param3: requirement.param3,
+        param4: requirement.param4,
+        param5: requirement.param5,
+        target: requirement.target,
+        weight: requirement.weight,
+      },
+    });
+  }
+  if (groups.size === 0) return;
+
+  const previousOverride = getScenarioOverrideGlobal();
+  const overrideMap = previousOverride && typeof previousOverride === 'object' ? { ...previousOverride } : {};
+  let prefetchedValues = 0;
+  let prefetchFailures = 0;
+  try {
+    for (const [groupKey, entries] of groups.entries()) {
+      if (!Array.isArray(entries) || entries.length === 0) continue;
+      const sep = groupKey.indexOf('|');
+      const configId = sep >= 0 ? groupKey.slice(0, sep) : groupKey;
+      const scenarioId = sep >= 0 ? groupKey.slice(sep + 1) : '';
+      if (scenarioId) overrideMap[configId] = scenarioId;
+      else delete overrideMap[configId];
+      setScenarioOverrideGlobal(overrideMap);
+
+      const concurrency = Math.max(1, Math.min(4, entries.length));
+      let cursor = 0;
+      const workers = new Array(concurrency).fill(null).map(async () => {
+        for (;;) {
+          const nextIndex = cursor;
+          cursor += 1;
+          if (nextIndex >= entries.length) break;
+          const entry = entries[nextIndex];
+          try {
+            const value = await editor.calculateOperandValueAsync(entry.opObj);
+            const n = Number(value);
+            if (!Number.isFinite(n)) continue;
+            operandValueCache.set(entry.cacheKey, n);
+            bumpOptimizerProfileCount('operandValueCacheHits', 1);
+            prefetchedValues += 1;
+          } catch (_) {
+            prefetchFailures += 1;
+          }
+        }
+      });
+      await Promise.all(workers);
+      bumpOptimizerProfileCount('kktAsyncPrefetchGroups', 1);
+    }
+  } finally {
+    setScenarioOverrideGlobal(previousOverride && typeof previousOverride === 'object' ? previousOverride : null);
+  }
+
+  bumpOptimizerProfileCount('kktAsyncPrefetchCalls', 1);
+  if (prefetchedValues > 0) bumpOptimizerProfileCount('kktAsyncPrefetchSeededValues', prefetchedValues);
+  if (prefetchFailures > 0) bumpOptimizerProfileCount('kktAsyncPrefetchFailures', prefetchFailures);
+}
+
 function setBlocksOverrideGlobal(value) {
   try {
     if (typeof window === 'undefined') return;
@@ -933,6 +1019,13 @@ export async function profileOptimizationRun(baseOptions = {}) {
         kktMtfBatchMs: Number(profile.counts.kktMtfBatchMs) || 0,
         kktMtfBatchRayonCalls: Number(profile.counts.kktMtfBatchRayonCalls) || 0,
         kktMtfBatchFailures: Number(profile.counts.kktMtfBatchFailures) || 0,
+        kktMtfPrefetchCalls: Number(profile.counts.kktMtfPrefetchCalls) || 0,
+        kktMtfPrefetchSeededValues: Number(profile.counts.kktMtfPrefetchSeededValues) || 0,
+        kktMtfPrefetchFailures: Number(profile.counts.kktMtfPrefetchFailures) || 0,
+        kktAsyncPrefetchCalls: Number(profile.counts.kktAsyncPrefetchCalls) || 0,
+        kktAsyncPrefetchGroups: Number(profile.counts.kktAsyncPrefetchGroups) || 0,
+        kktAsyncPrefetchSeededValues: Number(profile.counts.kktAsyncPrefetchSeededValues) || 0,
+        kktAsyncPrefetchFailures: Number(profile.counts.kktAsyncPrefetchFailures) || 0,
         kktNativeBatchFdParityPassed: Number(profile.counts.kktNativeBatchFdParityPassed) || 0,
         kktNativeBatchFdParityFailed: Number(profile.counts.kktNativeBatchFdParityFailed) || 0,
         kktAcceptedSteps: Number(profile.counts.kktAcceptedSteps) || 0,
@@ -9907,6 +10000,42 @@ export async function runOptimizationMVP(options = {}) {
           const priorityOperandKeys = (evalPolicy?.priorityOperandKeys instanceof Set)
             ? evalPolicy.priorityOperandKeys
             : null;
+          const hasMtfResidualItems = items.some((item: any) => {
+            const requirement = item?.req;
+            const operand = String(requirement?.operand ?? '').trim().toUpperCase();
+            const weight = Math.max(0, toFiniteNumber(requirement?.weight, 1))
+              * Math.max(0, toFiniteNumber(item?.scenarioWeight, 1));
+            return !!(requirement?.enabled
+              && ['MTFT', 'MTFS', 'MTFA'].includes(operand)
+              && String(requirement?.param1 ?? '').trim().toUpperCase() !== 'ALL_WEIGHTED'
+              && weight > 0);
+          });
+          if (hasMtfResidualItems && operandValueCache.size === 0) {
+            try {
+              const candidateRowsByConfig = buildNativeCandidateRows(xClamped);
+              if (candidateRowsByConfig) {
+                const mtfSeededValues = await evalMtfOperandValuesNativeBatch([candidateRowsByConfig]);
+                const mtfMap = Array.isArray(mtfSeededValues) ? mtfSeededValues[0] : null;
+                if (mtfMap instanceof Map && mtfMap.size > 0) {
+                  let seededCount = 0;
+                  for (const [key, value] of mtfMap) {
+                    if (!Number.isFinite(Number(value))) continue;
+                    operandValueCache.set(key, Number(value));
+                    seededCount++;
+                  }
+                  if (__profile?.counts) {
+                    __profile.counts.kktMtfPrefetchCalls = (Number(__profile.counts.kktMtfPrefetchCalls) || 0) + 1;
+                    __profile.counts.kktMtfPrefetchSeededValues = (Number(__profile.counts.kktMtfPrefetchSeededValues) || 0) + seededCount;
+                  }
+                }
+              }
+            } catch (_) {
+              if (__profile?.counts) {
+                __profile.counts.kktMtfPrefetchFailures = (Number(__profile.counts.kktMtfPrefetchFailures) || 0) + 1;
+              }
+            }
+          }
+          await prefetchOptimizerAsyncRequirementGroups(editor, items, operandValueCache);
           await prefetchOptimizerSpotRequirementGroups(editor, items, operandValueCache);
           let __evalItemCount = 0;
           for (const it of items) {
@@ -10782,19 +10911,22 @@ export async function runOptimizationMVP(options = {}) {
             }
             continue;
           }
-          const groupKey = [configId, scenarioId || '', wavelength, objectIndex, frequency, sampling].join('|');
+          const groupKey = [configId, scenarioId || '', wavelength, objectIndex, sampling].join('|');
           const group = groups.get(groupKey) || {
             configId,
             scenarioId,
             wavelength,
             objectIndex,
-            frequency,
             sampling,
             sourceRows,
             objectRows,
             items: [],
+            frequencies: new Set<number>(),
+            itemFrequencies: [] as Array<{ item: any; frequency: number }>,
           };
           group.items.push(item);
+          group.frequencies.add(frequency);
+          group.itemFrequencies.push({ item, frequency });
           groups.set(groupKey, group);
         }
         if (groups.size === 0) {
@@ -10837,6 +10969,24 @@ export async function runOptimizationMVP(options = {}) {
               }
               continue;
             }
+            const sampleFrequencies = Array.from(group.frequencies)
+              .map((value: number) => Number(value))
+              .filter((value: number) => Number.isFinite(value) && value >= 0)
+              .sort((lhs: number, rhs: number) => lhs - rhs);
+            if (sampleFrequencies.length === 0) {
+              if (__profile?.counts) {
+                __profile.counts.kktMtfBatchEmptySampleFrequencies = (Number(__profile.counts.kktMtfBatchEmptySampleFrequencies) || 0) + 1;
+              }
+              continue;
+            }
+            if (!Array.isArray(group.sampleFrequencyKeys) || !(group.frequencyToIndex instanceof Map)) {
+              group.sampleFrequencyKeys = sampleFrequencies.map((value: number) => value.toFixed(9));
+              group.frequencyToIndex = new Map<string, number>();
+              for (let sampleIndex = 0; sampleIndex < group.sampleFrequencyKeys.length; sampleIndex++) {
+                group.frequencyToIndex.set(group.sampleFrequencyKeys[sampleIndex], sampleIndex);
+              }
+              group.itemFrequencyKeys = group.itemFrequencies.map((entry: { frequency: number }) => Number(entry.frequency).toFixed(9));
+            }
             jobs.push({
               opdRequest: {
                 opticalSystemRows: rows,
@@ -10851,15 +11001,15 @@ export async function runOptimizationMVP(options = {}) {
               wavelengthUm: group.wavelength,
               fNumber,
               pupilRange: 1,
-              maxFrequencyLpmm: group.frequency,
-              points: 2,
-              sampleFrequenciesLpmm: [group.frequency],
+              maxFrequencyLpmm: sampleFrequencies[sampleFrequencies.length - 1],
+              points: Math.max(2, sampleFrequencies.length),
+              sampleFrequenciesLpmm: sampleFrequencies,
               directEvalOnly: true,
               slimResults: true,
               method: 'malacara-wasm-required',
               tangentialDir,
               sagittalDir: { x: -tangentialDir.y, y: tangentialDir.x },
-              meta: { candidateIndex, groupKey, onAxis: fieldNorm <= 1e-12 },
+              meta: { candidateIndex, groupKey, onAxis: fieldNorm <= 1e-12, sampleFrequencyKeys: group.sampleFrequencyKeys },
             });
           }
         }
@@ -10900,12 +11050,30 @@ export async function runOptimizationMVP(options = {}) {
           const group = groups.get(String(meta.groupKey ?? ''));
           if (!Number.isInteger(candidateIndex) || !seeded[candidateIndex] || !group) continue;
           const mtf = result?.mtf || {};
-          let tangential = Number(mtf?.sampledMtfTangential?.[0]);
-          let sagittal = Number(mtf?.sampledMtfSagittal?.[0]);
-          if (meta.onAxis === true && Number.isFinite(tangential) && Number.isFinite(sagittal)) {
-            tangential = sagittal = Math.max(0, Math.min(1, 0.5 * (tangential + sagittal)));
+          const tangentialSamples = Array.isArray(mtf?.sampledMtfTangential) ? mtf.sampledMtfTangential : [];
+          const sagittalSamples = Array.isArray(mtf?.sampledMtfSagittal) ? mtf.sampledMtfSagittal : [];
+          const sampleFrequencyKeys = Array.isArray(meta?.sampleFrequencyKeys)
+            ? meta.sampleFrequencyKeys.map((value: any) => String(value))
+            : [];
+          if (sampleFrequencyKeys.length === 0) {
+            continue;
           }
-          for (const item of group.items) {
+          const frequencyToIndex = (group.frequencyToIndex instanceof Map)
+            ? group.frequencyToIndex
+            : new Map<string, number>(sampleFrequencyKeys.map((key: string, index: number) => [key, index]));
+          for (let entryIndex = 0; entryIndex < group.itemFrequencies.length; entryIndex++) {
+            const entry = group.itemFrequencies[entryIndex];
+            const item = entry.item;
+            const frequencyKey = Array.isArray(group.itemFrequencyKeys)
+              ? String(group.itemFrequencyKeys[entryIndex])
+              : Number(entry.frequency).toFixed(9);
+            const sampleIndex = Number(frequencyToIndex.get(frequencyKey));
+            if (!Number.isInteger(sampleIndex) || sampleIndex < 0) continue;
+            let tangential = Number(tangentialSamples[sampleIndex]);
+            let sagittal = Number(sagittalSamples[sampleIndex]);
+            if (meta.onAxis === true && Number.isFinite(tangential) && Number.isFinite(sagittal)) {
+              tangential = sagittal = Math.max(0, Math.min(1, 0.5 * (tangential + sagittal)));
+            }
             const operand = String(item?.req?.operand ?? '').trim().toUpperCase();
             const value = operand === 'MTFT'
               ? tangential
