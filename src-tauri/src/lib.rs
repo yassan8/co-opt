@@ -16,6 +16,7 @@ pub fn run() {
             commands::optics::run_native_astigmatism,
             commands::optics::run_native_transverse_aberration,
             commands::optics::run_native_transverse_rms_um,
+            commands::optics::run_native_transverse_rms_batch,
             commands::optics::run_native_opd_map,
             commands::optics::run_native_opd_rms_waves,
             commands::optics::run_native_psf_map,

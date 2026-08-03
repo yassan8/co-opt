@@ -3630,6 +3630,92 @@ class MeritFunctionEditor {
         }
     }
 
+    async calculateTransverseAberrationRmsBatchViaNativeAsync(operands: any[]): Promise<Array<number | null>> {
+        const rows = Array.isArray(operands) ? operands : [];
+        if (rows.length === 0) return [];
+        try {
+            const ipcMod = await import('../../src/desktop/ipc/client.ts');
+            if (!ipcMod || typeof ipcMod.runNativeTransverseRmsBatch !== 'function') {
+                return Promise.all(rows.map((operand) => this.calculateTransverseAberrationRmsUmViaNativeAsync(operand, this.getOpticalSystemDataByConfigId(operand?.configId) || [])));
+            }
+
+            const requests = [] as any[];
+            for (const operand of rows) {
+                const opticalSystemData = this.getOpticalSystemDataByConfigId(operand?.configId);
+                if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) {
+                    requests.push(null);
+                    continue;
+                }
+                const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+                const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+                const wavelength = (param1Raw === '')
+                    ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+                    : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+                const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+                const objectIndex1 = (param2Raw === '') ? 1 : Math.max(1, Math.floor(Number(param2Raw)));
+                const objectIndex0 = objectIndex1 - 1;
+                const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+                if (!objRow || typeof objRow !== 'object') {
+                    requests.push(null);
+                    continue;
+                }
+                const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toLowerCase() : '';
+                const component = (() => {
+                    if (!param3Raw) return 'total';
+                    if (param3Raw === '1' || param3Raw === 'm' || param3Raw.includes('meri') || param3Raw.includes('tang')) return 'meridional';
+                    if (param3Raw === '2' || param3Raw === 's' || param3Raw.includes('sag')) return 'sagittal';
+                    if (param3Raw === '0' || param3Raw === 't' || param3Raw.includes('total') || param3Raw.includes('both')) return 'total';
+                    if (param3Raw === 'meridional' || param3Raw === 'sagittal' || param3Raw === 'total') return param3Raw;
+                    return 'total';
+                })();
+                const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
+                let rayCount = (param4Raw === '') ? 51 : Math.floor(Number(param4Raw));
+                if (!Number.isFinite(rayCount) || rayCount < 3) rayCount = 51;
+                if (rayCount > 5000) rayCount = 5000;
+                const imageSurfaceIndex = (() => {
+                    for (let i = opticalSystemData.length - 1; i >= 0; i--) {
+                        const row = opticalSystemData[i];
+                        const ot = String(row?.['object type'] || row?.objectType || row?.object || '').trim().toLowerCase();
+                        if (ot === 'image') return i;
+                    }
+                    return Math.max(0, opticalSystemData.length - 1);
+                })();
+                requests.push({
+                    opticalSystemRows: opticalSystemData,
+                    sourceRows: __cooptBuildPrimaryOnlySourceRows(sourceRows, wavelength),
+                    objectRows: [objRow],
+                    surfaceIndex: imageSurfaceIndex,
+                    rayCount,
+                    wavelengthMode: 'primary',
+                    wavelength,
+                    component,
+                });
+            }
+
+            const validRequests = requests.filter((request) => request && typeof request === 'object');
+            if (validRequests.length === 0) return rows.map(() => null);
+            const response = await ipcMod.runNativeTransverseRmsBatch({ items: validRequests });
+            const results = Array.isArray(response?.results) ? response.results : [];
+            if (results.length !== validRequests.length) {
+                return Promise.all(rows.map((operand) => this.calculateTransverseAberrationRmsUmViaNativeAsync(operand, this.getOpticalSystemDataByConfigId(operand?.configId) || [])));
+            }
+            const values: Array<number | null> = [];
+            let resultIndex = 0;
+            for (const request of requests) {
+                if (!request) {
+                    values.push(null);
+                    continue;
+                }
+                const entry = results[resultIndex++];
+                const rmsUm = Number(entry?.rmsUm);
+                values.push(Number.isFinite(rmsUm) ? rmsUm : null);
+            }
+            return values;
+        } catch {
+            return rows.map(() => null);
+        }
+    }
+
     async calculateSpotSizeUmAsync(operand: any, opticalSystemData: any[], options: any = {}): Promise<number> {
         try {
             if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 1e9;

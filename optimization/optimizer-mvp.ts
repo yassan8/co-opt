@@ -756,6 +756,7 @@ async function prefetchOptimizerAsyncRequirementGroups(editor, items, operandVal
     'ZERN_COEFF',
   ]);
   const groups = new Map<string, Array<any>>();
+  const taGroups = new Map<string, Array<any>>();
   for (const item of Array.isArray(items) ? items : []) {
     const requirement = item?.req;
     const operand = String(requirement?.operand ?? '').trim().toUpperCase();
@@ -781,6 +782,23 @@ async function prefetchOptimizerAsyncRequirementGroups(editor, items, operandVal
         weight: requirement.weight,
       },
     });
+    if (operand === 'TA_RMS_UM') {
+      if (!taGroups.has(groupKey)) taGroups.set(groupKey, []);
+      taGroups.get(groupKey)?.push({
+        cacheKey,
+        opObj: {
+          operand: requirement.operand,
+          configId,
+          param1: requirement.param1,
+          param2: requirement.param2,
+          param3: requirement.param3,
+          param4: requirement.param4,
+          param5: requirement.param5,
+          target: requirement.target,
+          weight: requirement.weight,
+        },
+      });
+    }
   }
   if (groups.size === 0) return;
 
@@ -798,6 +816,27 @@ async function prefetchOptimizerAsyncRequirementGroups(editor, items, operandVal
       else delete overrideMap[configId];
       setScenarioOverrideGlobal(overrideMap);
 
+      const taEntries = taGroups.get(groupKey) || [];
+      if (taEntries.length > 1 && typeof editor.calculateTransverseAberrationRmsBatchViaNativeAsync === 'function') {
+        try {
+          const taValues = await editor.calculateTransverseAberrationRmsBatchViaNativeAsync(taEntries.map((entry) => entry.opObj));
+          if (Array.isArray(taValues) && taValues.length === taEntries.length) {
+            for (let index = 0; index < taEntries.length; index++) {
+              const value = Number(taValues[index]);
+              if (!Number.isFinite(value)) continue;
+              operandValueCache.set(taEntries[index].cacheKey, value);
+              bumpOptimizerProfileCount('operandValueCacheHits', 1);
+              prefetchedValues += 1;
+            }
+            bumpOptimizerProfileCount('kktTaBatchPrefetchCalls', 1);
+            bumpOptimizerProfileCount('kktTaBatchPrefetchSeededValues', taEntries.length);
+          }
+        } catch (_) {
+          prefetchFailures += taEntries.length;
+          bumpOptimizerProfileCount('kktTaBatchPrefetchFailures', 1);
+        }
+      }
+
       const concurrency = Math.max(1, Math.min(4, entries.length));
       let cursor = 0;
       const workers = new Array(concurrency).fill(null).map(async () => {
@@ -806,6 +845,7 @@ async function prefetchOptimizerAsyncRequirementGroups(editor, items, operandVal
           cursor += 1;
           if (nextIndex >= entries.length) break;
           const entry = entries[nextIndex];
+          if (operandValueCache.has(entry.cacheKey)) continue;
           try {
             const value = await editor.calculateOperandValueAsync(entry.opObj);
             const n = Number(value);
@@ -1026,6 +1066,9 @@ export async function profileOptimizationRun(baseOptions = {}) {
         kktAsyncPrefetchGroups: Number(profile.counts.kktAsyncPrefetchGroups) || 0,
         kktAsyncPrefetchSeededValues: Number(profile.counts.kktAsyncPrefetchSeededValues) || 0,
         kktAsyncPrefetchFailures: Number(profile.counts.kktAsyncPrefetchFailures) || 0,
+        kktTaBatchPrefetchCalls: Number(profile.counts.kktTaBatchPrefetchCalls) || 0,
+        kktTaBatchPrefetchSeededValues: Number(profile.counts.kktTaBatchPrefetchSeededValues) || 0,
+        kktTaBatchPrefetchFailures: Number(profile.counts.kktTaBatchPrefetchFailures) || 0,
         kktNativeBatchFdParityPassed: Number(profile.counts.kktNativeBatchFdParityPassed) || 0,
         kktNativeBatchFdParityFailed: Number(profile.counts.kktNativeBatchFdParityFailed) || 0,
         kktAcceptedSteps: Number(profile.counts.kktAcceptedSteps) || 0,

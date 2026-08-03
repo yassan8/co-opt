@@ -16,6 +16,8 @@ import type {
   NativeTransverseAberrationResponse,
   NativeTransverseRmsRequest,
   NativeTransverseRmsResponse,
+  NativeTransverseRmsBatchRequest,
+  NativeTransverseRmsBatchResponse,
   NativeOpdMapRequest,
   NativeOpdMapResponse,
   OpdChiefRayMode,
@@ -2700,6 +2702,29 @@ export async function runNativeTransverseRmsUm(
       objectRows: normalizedObjectRows,
       component,
     },
+  );
+}
+
+export async function runNativeTransverseRmsBatch(
+  payload: NativeTransverseRmsBatchRequest,
+): Promise<NativeTransverseRmsBatchResponse> {
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  if (items.length === 0) {
+    return { backend: "native-rust-transverse-rms-batch", results: [], message: "No transverse RMS items" };
+  }
+
+  if (!isTauriRuntime()) {
+    const results = await Promise.all(items.map((item) => runNativeTransverseRmsUm(item)));
+    return {
+      backend: "web-rust-wasm-native-api",
+      results,
+      message: "Computed via Web Rust/WASM transverse RMS batch API",
+    };
+  }
+
+  return invokeCommand<NativeTransverseRmsBatchRequest, NativeTransverseRmsBatchResponse>(
+    "run_native_transverse_rms_batch",
+    { items },
   );
 }
 

@@ -543,6 +543,20 @@ pub struct NativeTransverseRmsBatchResult {
     pub stats: Vec<NativeTransverseRmsStats>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeTransverseRmsBatchRequest {
+    pub items: Vec<NativeTransverseRmsRequest>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeTransverseRmsBatchResponse {
+    pub backend: String,
+    pub results: Vec<NativeTransverseRmsResponse>,
+    pub message: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeTransverseRmsResponse {
@@ -7562,6 +7576,92 @@ pub fn run_native_transverse_rms_um(
         sagittal_count: stats.sagittal_count,
         rms_um,
         message: "Computed via Rust/WASM native transverse RMS API".to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn run_native_transverse_rms_batch(
+    req: NativeTransverseRmsBatchRequest,
+) -> Result<NativeTransverseRmsBatchResponse, String> {
+    if req.items.is_empty() {
+        return Err("run_native_transverse_rms_batch: items is empty".to_string());
+    }
+
+    let mut results: Vec<Option<NativeTransverseRmsResponse>> = vec![None; req.items.len()];
+    let mut grouped: HashMap<String, (NativeTransverseRmsRequest, Vec<(usize, String)>)> = HashMap::new();
+
+    for (index, item) in req.items.into_iter().enumerate() {
+        let component = normalize_transverse_component_native(item.component.as_deref());
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}",
+            serde_json::to_string(&item.optical_system_rows).unwrap_or_default(),
+            serde_json::to_string(&item.source_rows).unwrap_or_default(),
+            item.surface_index.map(|v| v.to_string()).unwrap_or_default(),
+            item.ray_count.map(|v| v.to_string()).unwrap_or_default(),
+            item.ring_count.map(|v| v.to_string()).unwrap_or_default(),
+            item.pattern.as_deref().unwrap_or(""),
+            item.wavelength_mode.as_deref().unwrap_or(""),
+            item.wavelength.map(|v| v.to_string()).unwrap_or_default(),
+        );
+        let entry = grouped.entry(key).or_insert_with(|| {
+            (
+                NativeTransverseRmsRequest {
+                    optical_system_rows: item.optical_system_rows.clone(),
+                    source_rows: item.source_rows.clone(),
+                    object_rows: Vec::new(),
+                    surface_index: item.surface_index,
+                    ray_count: item.ray_count,
+                    ring_count: item.ring_count,
+                    pattern: item.pattern.clone(),
+                    wavelength_mode: item.wavelength_mode.clone(),
+                    wavelength: item.wavelength,
+                    component: Some("total".to_string()),
+                },
+                Vec::new(),
+            )
+        });
+        let object_index = entry.0.object_rows.len();
+        entry.0.object_rows.extend(item.object_rows.clone());
+        entry.1.push((index, component));
+
+        if entry.0.object_rows.len() <= object_index {
+            return Err("run_native_transverse_rms_batch: failed to accumulate object rows".to_string());
+        }
+    }
+
+    for (_, (batch_req, item_refs)) in grouped.into_iter() {
+        let batch = compute_native_transverse_rms_batch(batch_req)?;
+        if batch.stats.len() < item_refs.len() {
+            return Err("run_native_transverse_rms_batch: batch stats shorter than requests".to_string());
+        }
+
+        for ((result_index, component), stats) in item_refs.into_iter().zip(batch.stats.into_iter()) {
+            let rms_um = reduce_native_transverse_rms_stats(&stats, &component)
+                .ok_or_else(|| "run_native_transverse_rms_batch: no valid points produced".to_string())?;
+            results[result_index] = Some(NativeTransverseRmsResponse {
+                backend: "native-rust-transverse-rms-batch".to_string(),
+                wavelength: stats.wavelength_um,
+                target_surface: batch.target_surface,
+                stop_surface: batch.stop_surface,
+                ray_count: batch.ray_count,
+                component,
+                meridional_count: stats.meridional_count,
+                sagittal_count: stats.sagittal_count,
+                rms_um,
+                message: "Computed via Rust/WASM native transverse RMS batch API".to_string(),
+            });
+        }
+    }
+
+    let final_results = results
+        .into_iter()
+        .map(|entry| entry.ok_or_else(|| "run_native_transverse_rms_batch: missing result".to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(NativeTransverseRmsBatchResponse {
+        backend: "native-rust-transverse-rms-batch".to_string(),
+        results: final_results,
+        message: "Native Rust transverse RMS batch completed".to_string(),
     })
 }
 

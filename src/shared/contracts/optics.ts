@@ -345,6 +345,10 @@ export interface NativeTransverseRmsRequest {
   component?: "total" | "meridional" | "sagittal";
 }
 
+export interface NativeTransverseRmsBatchRequest {
+  items: NativeTransverseRmsRequest[];
+}
+
 export interface NativeTransverseRmsResponse {
   backend: string;
   wavelength: number;
@@ -355,6 +359,12 @@ export interface NativeTransverseRmsResponse {
   meridionalCount: number;
   sagittalCount: number;
   rmsUm: number;
+  message: string;
+}
+
+export interface NativeTransverseRmsBatchResponse {
+  backend: string;
+  results: NativeTransverseRmsResponse[];
   message: string;
 }
 
