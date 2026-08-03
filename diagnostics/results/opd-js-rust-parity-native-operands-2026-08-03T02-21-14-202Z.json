@@ -1,0 +1,207 @@
+{
+  "timestamp": "2026-08-03T02:21:14.585Z",
+  "config": {
+    "gridSize": 33,
+    "wavelengthUm": 0.5876,
+    "forceFinite": true,
+    "fields": [
+      0
+    ],
+    "topK": 10
+  },
+  "aggregate": {
+    "opdUm": {
+      "count": 793,
+      "max": 0,
+      "mean": 0,
+      "rms": 0
+    },
+    "opdWaves": {
+      "count": 793,
+      "max": 0,
+      "mean": 0,
+      "rms": 0
+    }
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "maxDiffWaves": 0,
+      "rmsDiffWaves": 0,
+      "meanDiffWaves": 0
+    },
+    "checks": [
+      {
+        "metric": "maxDiffWaves",
+        "value": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "metric": "rmsDiffWaves",
+        "value": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "metric": "meanDiffWaves",
+        "value": 0,
+        "limit": 0,
+        "pass": true
+      }
+    ],
+    "failedChecks": [],
+    "passed": true
+  },
+  "perField": [
+    {
+      "fieldAngleXDeg": 0,
+      "js": {
+        "sampleCount": 793,
+        "rmsWaves": 239.77482132818756,
+        "p2pWaves": 823.0153120215974,
+        "invalidReasons": {
+          "batch-pretrace-failed": 4
+        }
+      },
+      "rustWasm": {
+        "sampleCount": 793,
+        "rmsWaves": 239.77482132818756,
+        "p2pWaves": 823.0153120215974,
+        "invalidReasons": {
+          "batch-pretrace-failed": 4
+        }
+      },
+      "comparison": {
+        "overlap": {
+          "bothFinite": 793,
+          "jsOnlyFinite": 0,
+          "rustOnlyFinite": 0,
+          "totalComparedCells": 793
+        },
+        "delta": {
+          "opdUm": {
+            "count": 793,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          },
+          "opdWaves": {
+            "count": 793,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          }
+        },
+        "aggregateRaw": {
+          "comparedCount": 793,
+          "sumAbsUm": 0,
+          "sumSqUm": 0,
+          "maxAbsUm": 0
+        },
+        "topDiffs": [
+          {
+            "key": "16:16",
+            "ix": 16,
+            "iy": 16,
+            "x": 0,
+            "y": 0,
+            "jsOpdUm": 0,
+            "rustOpdUm": 0,
+            "absDiffUm": 0
+          },
+          {
+            "key": "17:16",
+            "ix": 17,
+            "iy": 16,
+            "x": 0.0625,
+            "y": 0,
+            "jsOpdUm": 1.9530487120173348,
+            "rustOpdUm": 1.9530487120173348,
+            "absDiffUm": 0
+          },
+          {
+            "key": "15:16",
+            "ix": 15,
+            "iy": 16,
+            "x": -0.0625,
+            "y": 0,
+            "jsOpdUm": 1.9530487120173348,
+            "rustOpdUm": 1.9530487120173348,
+            "absDiffUm": 0
+          },
+          {
+            "key": "16:17",
+            "ix": 16,
+            "iy": 17,
+            "x": 0,
+            "y": 0.0625,
+            "jsOpdUm": 1.9530487120173348,
+            "rustOpdUm": 1.9530487120173348,
+            "absDiffUm": 0
+          },
+          {
+            "key": "16:15",
+            "ix": 16,
+            "iy": 15,
+            "x": 0,
+            "y": -0.0625,
+            "jsOpdUm": 1.9530487120173348,
+            "rustOpdUm": 1.9530487120173348,
+            "absDiffUm": 0
+          },
+          {
+            "key": "18:16",
+            "ix": 18,
+            "iy": 16,
+            "x": 0.125,
+            "y": 0,
+            "jsOpdUm": 7.811279678200663,
+            "rustOpdUm": 7.811279678200663,
+            "absDiffUm": 0
+          },
+          {
+            "key": "17:17",
+            "ix": 17,
+            "iy": 17,
+            "x": 0.0625,
+            "y": 0.0625,
+            "jsOpdUm": 3.9059448718871863,
+            "rustOpdUm": 3.9059448718871863,
+            "absDiffUm": 0
+          },
+          {
+            "key": "17:15",
+            "ix": 17,
+            "iy": 15,
+            "x": 0.0625,
+            "y": -0.0625,
+            "jsOpdUm": 3.9059448718871863,
+            "rustOpdUm": 3.9059448718871863,
+            "absDiffUm": 0
+          },
+          {
+            "key": "14:16",
+            "ix": 14,
+            "iy": 16,
+            "x": -0.125,
+            "y": 0,
+            "jsOpdUm": 7.811279678200663,
+            "rustOpdUm": 7.811279678200663,
+            "absDiffUm": 0
+          },
+          {
+            "key": "15:17",
+            "ix": 15,
+            "iy": 17,
+            "x": -0.0625,
+            "y": 0.0625,
+            "jsOpdUm": 3.9059448718871863,
+            "rustOpdUm": 3.9059448718871863,
+            "absDiffUm": 0
+          }
+        ]
+      }
+    }
+  ]
+}

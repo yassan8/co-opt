@@ -112,6 +112,22 @@ export interface EvaluateOptimizerCandidatesRequest {
   activeConfigId?: string | number;
 }
 
+export interface EvaluateOptimizerCandidatesScenarioBatch {
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+  systemRequirementsRows?: unknown[];
+  activeConfigId?: string | number;
+}
+
+export interface EvaluateOptimizerCandidatesMultiScenarioRequest {
+  candidates?: Array<Record<string, unknown[]>>;
+  candidateDeltas?: OptimizerCandidateCellUpdate[][];
+  candidateVectors?: number[][];
+  variableBindings?: OptimizerCandidateVariableBinding[];
+  baseRowsByConfig?: Record<string, unknown[]>;
+  scenarioBatches: EvaluateOptimizerCandidatesScenarioBatch[];
+}
+
 export interface EvaluateOptimizerCandidatesResponse {
   currentsPerCandidate: Array<Array<number | null>>;
   candidateCount: number;

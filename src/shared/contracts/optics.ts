@@ -38,6 +38,8 @@ export interface NativeSpotSeries {
   wavelengthUm?: number;
   points: NativeSpotPoint[];
   chiefPointUm?: NativeSpotPoint;
+  rmsUm?: number;
+  diameterUm?: number;
   hasFieldAngle?: boolean;
 }
 

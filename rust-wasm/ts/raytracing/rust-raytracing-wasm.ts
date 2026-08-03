@@ -266,10 +266,10 @@ const RUST_WASM_RETRY_COOLDOWN_MS = 1000;
 const RUST_WASM_THREAD_POOL_INIT_TIMEOUT_MS = 3000;
 const isNodeRuntime = (() => {
   const hasProcessNode = (typeof process !== 'undefined') && !!(process as any)?.versions?.node;
+  // Node 20+ can expose `navigator`, so prefer concrete DOM globals.
   const hasBrowserGlobals = (
     typeof window !== 'undefined'
     || typeof document !== 'undefined'
-    || typeof navigator !== 'undefined'
     || (typeof self !== 'undefined' && typeof (self as any)?.importScripts === 'function')
   );
   const isElectronRenderer = (typeof process !== 'undefined') && String((process as any)?.type || '').toLowerCase() === 'renderer';
@@ -309,6 +309,11 @@ function normalizeBaseUrl(): string {
 async function importSurfaceOriginsModule(): Promise<any> {
   try {
     if (isNodeRuntime) {
+      try {
+        if (typeof (globalThis as any).self === 'undefined') {
+          (globalThis as any).self = globalThis;
+        }
+      } catch {}
       const moduleUrl = new URL('../../pkg/surface_origins.js', import.meta.url).href;
       const mod = await import(/* @vite-ignore */ moduleUrl);
       return mod;
@@ -324,7 +329,10 @@ async function importSurfaceOriginsModule(): Promise<any> {
     const retried = await g?.__cooptSurfaceOriginsModulePromise;
     if (retried) return retried;
     if (g?.__cooptSurfaceOriginsModule) return g.__cooptSurfaceOriginsModule;
-    throw new Error(`surface_origins browser module is not available at base URL ${baseUrl}`);
+    const tried = Array.isArray(g?.__cooptSurfaceOriginsModuleUrlTried)
+      ? ` tried=${JSON.stringify(g.__cooptSurfaceOriginsModuleUrlTried)}`
+      : '';
+    throw new Error(`surface_origins browser module is not available at base URL ${baseUrl}${tried}`);
   } catch (e) {
     throw new Error(`surface_origins module import failed (${String((e as any)?.message || e || 'failed')})`);
   }

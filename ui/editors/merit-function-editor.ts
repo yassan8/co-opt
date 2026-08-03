@@ -3852,6 +3852,12 @@ class MeritFunctionEditor {
             if (series.length <= 0) return null;
             const firstSeries = series[0] as any || null;
             if (!firstSeries) return null;
+            const precomputedMetric = ctx.metric === 'diameter'
+                ? Number(firstSeries?.diameterUm)
+                : Number(firstSeries?.rmsUm);
+            if (Number.isFinite(precomputedMetric)) {
+                return precomputedMetric;
+            }
             const points = Array.isArray(firstSeries?.points) ? firstSeries.points : [];
             if (points.length <= 0) return null;
 
@@ -3988,6 +3994,11 @@ class MeritFunctionEditor {
                 const seriesIndex = seriesIndexByObject.get(objectIndices[index]);
                 if (!Number.isInteger(seriesIndex)) return null;
                 const spotSeries = series[Number(seriesIndex)];
+                const metric = String(operand?.param3 ?? '').trim().toLowerCase();
+                const precomputed = metric === 'diameter' || metric === 'dia'
+                    ? Number(spotSeries?.diameterUm)
+                    : Number(spotSeries?.rmsUm);
+                if (Number.isFinite(precomputed)) return precomputed;
                 const points = Array.isArray(spotSeries?.points) ? spotSeries.points : [];
                 if (points.length === 0) return null;
                 const exactChief = this.resolveExactChiefSpotPoint(
@@ -4013,7 +4024,6 @@ class MeritFunctionEditor {
                     count++;
                 }
                 if (count === 0) return null;
-                const metric = String(operand?.param3 ?? '').trim().toLowerCase();
                 return metric === 'diameter' || metric === 'dia'
                     ? 2 * Math.sqrt(maxRadiusSquared)
                     : Math.sqrt(sumSquared / count);

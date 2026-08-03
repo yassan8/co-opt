@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-08-03T04:03:20.280Z",
+  "input": "diagnostics\\results\\ta-rms-lightweight-vs-statsonly-native-operands-2026-08-03T04-03-14-979Z.json",
+  "output": "diagnostics\\results\\ta-rms-lightweight-vs-statsonly-analysis-native-operands-2026-08-03T04-03-14-979Z.json",
+  "metrics": {
+    "medianOfMedianSpeedup": 1.005720436103954,
+    "rayCountMedians": [
+      {
+        "rayCount": 21,
+        "medianSpeedup": 1.0374814292647456
+      },
+      {
+        "rayCount": 51,
+        "medianSpeedup": 0.9739594429431622
+      }
+    ]
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "minMedianOfMedianSpeedup": 0.95,
+      "minPerRaycountSpeedup": 0.9
+    },
+    "failedChecks": [],
+    "passed": true
+  }
+}

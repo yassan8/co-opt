@@ -1,7 +1,9 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
@@ -48,6 +50,16 @@ static OPTIMIZER_PROFILE: LazyLock<Mutex<Option<OptimizerProfileAccumulator>>> =
 static OPTIMIZER_APP_HANDLE: LazyLock<Mutex<Option<AppHandle>>> =
     LazyLock::new(|| Mutex::new(None));
 static OPTIMIZER_SYSTEM_CONFIG: LazyLock<Mutex<Option<Value>>> = LazyLock::new(|| Mutex::new(None));
+const OPTIMIZER_SPOT_REQUIREMENT_CACHE_CAP: usize = 4096;
+
+#[derive(Default)]
+struct OptimizerSpotRequirementCache {
+    map: HashMap<String, Option<f64>>,
+    order: VecDeque<String>,
+}
+
+static OPTIMIZER_SPOT_REQUIREMENT_CACHE: LazyLock<Mutex<OptimizerSpotRequirementCache>> =
+    LazyLock::new(|| Mutex::new(OptimizerSpotRequirementCache::default()));
 
 struct OptimizerAppHandleGuard;
 struct OptimizerSystemConfigGuard;
@@ -174,6 +186,33 @@ pub struct EvaluateOptimizerCandidatesRequest {
     #[serde(default)]
     pub system_requirements_rows: Vec<Value>,
     pub active_config_id: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluateOptimizerCandidatesScenarioBatchRequest {
+    #[serde(default)]
+    pub source_rows: Vec<Value>,
+    #[serde(default)]
+    pub object_rows: Vec<Value>,
+    #[serde(default)]
+    pub system_requirements_rows: Vec<Value>,
+    pub active_config_id: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluateOptimizerCandidatesMultiScenarioRequest {
+    #[serde(default)]
+    pub candidates: Vec<HashMap<String, Vec<Value>>>,
+    #[serde(default)]
+    pub candidate_deltas: Vec<Vec<CandidateCellUpdate>>,
+    #[serde(default)]
+    pub candidate_vectors: Vec<Vec<f64>>,
+    pub variable_bindings: Option<Vec<CandidateVariableBinding>>,
+    pub base_rows_by_config: Option<HashMap<String, Vec<Value>>>,
+    #[serde(default)]
+    pub scenario_batches: Vec<EvaluateOptimizerCandidatesScenarioBatchRequest>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -329,6 +368,115 @@ pub fn evaluate_optimizer_candidates(
         candidate_count: currents_per_candidate.len(),
         requirement_count: evaluator_session.requirements.len(),
         session_reused,
+        applied_update_count,
+        currents_per_candidate,
+        elapsed_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+    })
+}
+
+#[tauri::command]
+pub fn evaluate_optimizer_candidates_multi_scenario(
+    req: EvaluateOptimizerCandidatesMultiScenarioRequest,
+) -> Result<EvaluateOptimizerCandidatesResponse, String> {
+    if req.candidates.is_empty()
+        && req.candidate_deltas.is_empty()
+        && req.candidate_vectors.is_empty()
+    {
+        return Err("evaluate_optimizer_candidates_multi_scenario: candidates is empty".to_string());
+    }
+    if req.scenario_batches.is_empty() {
+        return Err(
+            "evaluate_optimizer_candidates_multi_scenario: scenarioBatches is empty".to_string(),
+        );
+    }
+
+    let applied_update_count = if !req.candidate_vectors.is_empty() {
+        req.candidate_vectors.len() * req.variable_bindings.as_ref().map_or(0, Vec::len)
+    } else {
+        req.candidate_deltas.iter().map(Vec::len).sum()
+    };
+
+    let candidates = if !req.candidate_vectors.is_empty() {
+        let base_rows_by_config = req.base_rows_by_config.clone().ok_or_else(|| {
+            "evaluate_optimizer_candidates_multi_scenario: candidateVectors needs baseRowsByConfig"
+                .to_string()
+        })?;
+        let variable_bindings = req.variable_bindings.clone().ok_or_else(|| {
+            "evaluate_optimizer_candidates_multi_scenario: candidateVectors needs variableBindings"
+                .to_string()
+        })?;
+        let vector_session = CandidateEvaluatorSession {
+            base_rows_by_config,
+            source_rows: Vec::new(),
+            object_rows: Vec::new(),
+            requirements: Vec::new(),
+            requirements_by_config: Vec::new(),
+            variable_bindings,
+        };
+        req.candidate_vectors
+            .iter()
+            .map(|values| apply_candidate_vector(&vector_session, values))
+            .collect::<Result<Vec<_>, _>>()?
+    } else if req.candidate_deltas.is_empty() {
+        req.candidates
+    } else {
+        let base_rows_by_config = req.base_rows_by_config.clone().ok_or_else(|| {
+            "evaluate_optimizer_candidates_multi_scenario: candidateDeltas needs baseRowsByConfig"
+                .to_string()
+        })?;
+        req.candidate_deltas
+            .iter()
+            .map(|updates| apply_candidate_updates(&base_rows_by_config, updates))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut scenario_sessions = Vec::with_capacity(req.scenario_batches.len());
+    let mut requirement_count = 0usize;
+    for batch in &req.scenario_batches {
+        let session = build_candidate_evaluator_session(
+            HashMap::new(),
+            batch.source_rows.clone(),
+            batch.object_rows.clone(),
+            &batch.system_requirements_rows,
+            Vec::new(),
+        )?;
+        requirement_count += session.requirements.len();
+        scenario_sessions.push(session);
+    }
+
+    let started_at = Instant::now();
+    let currents_per_candidate = candidates
+        .par_iter()
+        .map(|rows_by_config| {
+            let mut merged = Vec::with_capacity(requirement_count);
+            for evaluator_session in &scenario_sessions {
+                let mut currents = vec![None; evaluator_session.requirements.len()];
+                for (config_id, indexes, scoped_requirements) in
+                    &evaluator_session.requirements_by_config
+                {
+                    let Some(rows) = rows_by_config.get(config_id) else {
+                        continue;
+                    };
+                    let scoped_currents = evaluate_requirement_currents(
+                        rows,
+                        &evaluator_session.source_rows,
+                        &evaluator_session.object_rows,
+                        scoped_requirements,
+                    );
+                    for (position, index) in indexes.iter().enumerate() {
+                        currents[*index] = scoped_currents.get(position).copied().flatten();
+                    }
+                }
+                merged.extend(currents);
+            }
+            merged
+        })
+        .collect::<Vec<_>>();
+
+    Ok(EvaluateOptimizerCandidatesResponse {
+        candidate_count: currents_per_candidate.len(),
+        requirement_count,
+        session_reused: false,
         applied_update_count,
         currents_per_candidate,
         elapsed_ms: started_at.elapsed().as_secs_f64() * 1000.0,
@@ -939,6 +1087,21 @@ pub fn run_optimizer_step(
             emit_progress,
             &mut events,
         ),
+        "kkt-sqp" => {
+            let (_, iter, eval, state) = run_kkt(
+                &mut rows,
+                &source_rows,
+                &object_rows,
+                &mut vars,
+                &requirements,
+                next_kkt_state,
+                kkt_tuning,
+                iterations_max,
+                emit_progress,
+                &mut events,
+            );
+            ("kkt-sqp".to_string(), iter, eval, state)
+        }
         _ => run_cd(
             &mut rows,
             &source_rows,
@@ -1045,7 +1208,9 @@ pub fn run_optimizer_step(
 
 fn normalize_method(raw: Option<&str>) -> String {
     let m = raw.unwrap_or("kkt").trim().to_lowercase();
-    if m == "cd" || m == "lm" || m == "kkt" {
+    if m == "sqp" || m == "sqp-kkt" {
+        "kkt-sqp".to_string()
+    } else if m == "cd" || m == "lm" || m == "kkt" || m == "kkt-sqp" {
         m
     } else {
         "kkt".to_string()
@@ -2194,28 +2359,27 @@ fn approximate_gradient(
     vars: &[VariableSpec],
     requirements: &[RequirementSpec],
 ) -> Vec<f64> {
-    let mut grad = vec![0.0; vars.len()];
     let f0 = evaluate_state(rows, source_rows, object_rows, vars, requirements).score;
-    for i in 0..vars.len() {
-        if is_stop_requested() {
-            break;
-        }
-        let v = &vars[i];
-        let x0 = get_numeric_field(rows, v.row_index, &v.field_key).unwrap_or(v.baseline);
-        let h = (v.scale * 1e-3).max(MIN_STEP);
-
-        set_numeric_field(rows, v.row_index, &v.field_key, x0 + h);
-        let f1 = evaluate_state(rows, source_rows, object_rows, vars, requirements).score;
-        set_numeric_field(rows, v.row_index, &v.field_key, x0);
-
-        let g = if f1.is_finite() && f0.is_finite() {
-            (f1 - f0) / h
-        } else {
-            0.0
-        };
-        grad[i] = if g.is_finite() { g } else { 0.0 };
-    }
-    grad
+    let base_values = current_values(rows, vars);
+    vars.par_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            if is_stop_requested() {
+                return 0.0;
+            }
+            let x0 = base_values.get(i).copied().unwrap_or(v.baseline);
+            let h = (v.scale * 1e-3).max(MIN_STEP);
+            let mut trial_rows = rows.to_vec();
+            set_numeric_field(&mut trial_rows, v.row_index, &v.field_key, x0 + h);
+            let f1 = evaluate_state(&trial_rows, source_rows, object_rows, vars, requirements).score;
+            let g = if f1.is_finite() && f0.is_finite() {
+                (f1 - f0) / h
+            } else {
+                0.0
+            };
+            if g.is_finite() { g } else { 0.0 }
+        })
+        .collect()
 }
 
 fn approximate_augmented_gradient(
@@ -3068,6 +3232,18 @@ fn native_spot_size_um(
     let ray_count = parse_spot_ray_count(&req_spec.param4);
     let source_rows_effective = source_rows_for_wavelength_param(source_rows, &req_spec.param1);
     let object_rows_effective = select_object_rows_for_requirement(object_rows, &req_spec.param2);
+    let memo_key = build_spot_requirement_memo_key(
+        rows,
+        &source_rows_effective,
+        &object_rows_effective,
+        req_spec,
+        pattern,
+        ray_count,
+        surface_index,
+    );
+    if let Some(cached) = optimizer_spot_requirement_cache_get(&memo_key) {
+        return cached;
+    }
     let req = NativeSpotRaytraceRequest {
         optical_system_rows: rows.to_vec(),
         source_rows: source_rows_effective,
@@ -3081,7 +3257,13 @@ fn native_spot_size_um(
         ray_series: Vec::new(),
     };
 
-    let resp = run_native_spot_raytrace(req).ok()?;
+    let resp = match run_native_spot_raytrace(req) {
+        Ok(v) => v,
+        Err(_) => {
+            optimizer_spot_requirement_cache_put(memo_key, None);
+            return None;
+        }
+    };
     let mut sum_sq = 0.0_f64;
     let mut max_r2 = 0.0_f64;
     let mut count = 0usize;
@@ -3100,21 +3282,47 @@ fn native_spot_size_um(
         }
     }
     if count == 0 {
+        optimizer_spot_requirement_cache_put(memo_key, None);
         return None;
     }
-    if metric == "diameter" || metric == "dia" {
-        return Some(2.0 * max_r2.sqrt());
-    }
-    Some((sum_sq / count as f64).sqrt())
+    let value = if metric == "diameter" || metric == "dia" {
+        Some(2.0 * max_r2.sqrt())
+    } else {
+        Some((sum_sq / count as f64).sqrt())
+    };
+    optimizer_spot_requirement_cache_put(memo_key, value);
+    value
 }
 
 fn spot_metric_from_series(series: &NativeSpotSeries, metric: &str) -> Option<f64> {
+    let metric_norm = metric.trim().to_lowercase();
+    if matches!(metric_norm.as_str(), "diameter" | "dia") {
+        if let Some(v) = series.diameter_um {
+            if v.is_finite() {
+                return Some(v);
+            }
+        }
+    } else if let Some(v) = series.rms_um {
+        if v.is_finite() {
+            return Some(v);
+        }
+    }
+
+    let chief = series.chief_point_um.as_ref();
     let mut sum_sq = 0.0_f64;
     let mut max_r2 = 0.0_f64;
     let mut count = 0usize;
     for point in &series.points {
-        let x = point.x_um;
-        let y = point.y_um;
+        let x = if let Some(ch) = chief {
+            point.x_um - ch.x_um
+        } else {
+            point.x_um
+        };
+        let y = if let Some(ch) = chief {
+            point.y_um - ch.y_um
+        } else {
+            point.y_um
+        };
         if x.is_finite() && y.is_finite() {
             let radius_squared = x * x + y * y;
             sum_sq += radius_squared;
@@ -3125,11 +3333,17 @@ fn spot_metric_from_series(series: &NativeSpotSeries, metric: &str) -> Option<f6
     if count == 0 {
         return None;
     }
-    if matches!(metric.trim().to_lowercase().as_str(), "diameter" | "dia") {
+    if matches!(metric_norm.as_str(), "diameter" | "dia") {
         Some(2.0 * max_r2.sqrt())
     } else {
         Some((sum_sq / count as f64).sqrt())
     }
+}
+
+struct SpotRequirementEvalResult<'a> {
+    requirement: &'a RequirementSpec,
+    value: Option<f64>,
+    from_memo: bool,
 }
 
 fn evaluate_batched_spot_requirements<'a>(
@@ -3137,28 +3351,59 @@ fn evaluate_batched_spot_requirements<'a>(
     source_rows: &[Value],
     object_rows: &[Value],
     requirements: &[&'a RequirementSpec],
-) -> Option<Vec<(&'a RequirementSpec, Option<f64>)>> {
+) -> Option<Vec<SpotRequirementEvalResult<'a>>> {
     let first = *requirements.first()?;
-    let mut batched_object_rows = Vec::with_capacity(requirements.len());
-    for requirement in requirements {
-        let selected = select_object_rows_for_requirement(object_rows, &requirement.param2);
-        if selected.len() != 1 {
-            return None;
-        }
-        batched_object_rows.push(selected[0].clone());
-    }
-
     let pattern = if first.operand == "SPOT_SIZE_RECT" {
         "grid"
     } else {
         "annular"
     };
+    let surface_index = image_surface_index(rows);
+    let ray_count = parse_spot_ray_count(&first.param4);
+    let source_rows_effective = source_rows_for_wavelength_param(source_rows, &first.param1);
+
+    let mut output = Vec::with_capacity(requirements.len());
+    let mut missing = Vec::new();
+    let mut missing_memo_keys = Vec::new();
+    let mut missing_objects = Vec::new();
+
+    for requirement in requirements.iter().copied() {
+        let selected = select_object_rows_for_requirement(object_rows, &requirement.param2);
+        if selected.len() != 1 {
+            return None;
+        }
+        let memo_key = build_spot_requirement_memo_key(
+            rows,
+            &source_rows_effective,
+            &selected,
+            requirement,
+            pattern,
+            ray_count,
+            surface_index,
+        );
+        if let Some(cached) = optimizer_spot_requirement_cache_get(&memo_key) {
+            output.push(SpotRequirementEvalResult {
+                requirement,
+                value: cached,
+                from_memo: true,
+            });
+        } else {
+            missing.push(requirement);
+            missing_memo_keys.push(memo_key);
+            missing_objects.push(selected[0].clone());
+        }
+    }
+
+    if missing.is_empty() {
+        return Some(output);
+    }
+
     let response = run_native_spot_raytrace(NativeSpotRaytraceRequest {
         optical_system_rows: rows.to_vec(),
-        source_rows: source_rows_for_wavelength_param(source_rows, &first.param1),
-        object_rows: batched_object_rows,
-        surface_index: Some(image_surface_index(rows)),
-        ray_count: Some(parse_spot_ray_count(&first.param4)),
+        source_rows: source_rows_effective,
+        object_rows: missing_objects,
+        surface_index: Some(surface_index),
+        ray_count: Some(ray_count),
         ring_count: Some(10),
         pattern: Some(pattern.to_string()),
         wavelength_mode: Some("primary".to_string()),
@@ -3166,19 +3411,25 @@ fn evaluate_batched_spot_requirements<'a>(
         ray_series: Vec::new(),
     })
     .ok()?;
-    if response.series.len() != requirements.len() {
+    if response.series.len() != missing.len() {
         return None;
     }
 
-    Some(
-        requirements
-            .iter()
-            .zip(response.series.iter())
-            .map(|(requirement, series)| {
-                (*requirement, spot_metric_from_series(series, &requirement.param3))
-            })
-            .collect(),
-    )
+    for ((requirement, memo_key), series) in missing
+        .into_iter()
+        .zip(missing_memo_keys.into_iter())
+        .zip(response.series.iter())
+    {
+        let value = spot_metric_from_series(series, &requirement.param3);
+        optimizer_spot_requirement_cache_put(memo_key, value);
+        output.push(SpotRequirementEvalResult {
+            requirement,
+            value,
+            from_memo: false,
+        });
+    }
+
+    Some(output)
 }
 
 fn prefill_parallel_spot_cache<'a>(
@@ -3205,34 +3456,44 @@ fn prefill_parallel_spot_cache<'a>(
         } else {
             "annular"
         };
-        let group_key = format!("{}|{}|{}", pattern, requirement.param1, requirement.param4);
+        let group_key = format!(
+            "{}|{}|{}|{}",
+            pattern, requirement.param1, requirement.param4, requirement.param5
+        );
         groups.entry(group_key).or_default().push(requirement);
     }
 
     let results = groups
         .into_values()
-        .filter(|group| group.len() >= 2)
+        .filter(|group| !group.is_empty())
         .collect::<Vec<_>>()
         .into_par_iter()
         .filter_map(|group| {
             let t0 = Instant::now();
             let values = evaluate_batched_spot_requirements(rows, source_rows, object_rows, &group)?;
-            let share_nanos = t0.elapsed().as_nanos() / values.len().max(1) as u128;
+            let computed_count = values.iter().filter(|entry| !entry.from_memo).count().max(1);
+            let share_nanos = t0.elapsed().as_nanos() / computed_count as u128;
             Some((values, share_nanos))
         })
         .collect::<Vec<_>>();
 
     let mut prefetched = HashSet::new();
     for (values, share_nanos) in results {
-        for (requirement, value) in values {
+        for entry in values {
+            let requirement = entry.requirement;
+            let value = entry.value;
             let cache_key = requirement.cache_key.as_str();
             operand_cache.insert(cache_key, value);
             prefetched.insert(cache_key);
-            optimizer_profile_record_operand_eval(
-                cache_key,
-                &requirement.operand,
-                share_nanos,
-            );
+            if entry.from_memo {
+                optimizer_profile_record_cache_hit(cache_key, &requirement.operand);
+            } else {
+                optimizer_profile_record_operand_eval(
+                    cache_key,
+                    &requirement.operand,
+                    share_nanos,
+                );
+            }
         }
     }
     prefetched
@@ -4926,6 +5187,97 @@ fn select_object_rows_for_requirement(object_rows: &[Value], param2: &str) -> Ve
         return vec![object_rows[i0].clone()];
     }
     object_rows.to_vec()
+}
+
+fn hash_json_value_stable(value: &Value, hasher: &mut DefaultHasher) {
+    match value {
+        Value::Null => {
+            0u8.hash(hasher);
+        }
+        Value::Bool(v) => {
+            1u8.hash(hasher);
+            v.hash(hasher);
+        }
+        Value::Number(v) => {
+            2u8.hash(hasher);
+            v.to_string().hash(hasher);
+        }
+        Value::String(v) => {
+            3u8.hash(hasher);
+            v.hash(hasher);
+        }
+        Value::Array(values) => {
+            4u8.hash(hasher);
+            values.len().hash(hasher);
+            for item in values {
+                hash_json_value_stable(item, hasher);
+            }
+        }
+        Value::Object(map) => {
+            5u8.hash(hasher);
+            let mut keys = map.keys().collect::<Vec<_>>();
+            keys.sort();
+            keys.len().hash(hasher);
+            for key in keys {
+                key.hash(hasher);
+                if let Some(v) = map.get(key) {
+                    hash_json_value_stable(v, hasher);
+                }
+            }
+        }
+    }
+}
+
+fn hash_json_slice_stable(slice: &[Value], hasher: &mut DefaultHasher) {
+    slice.len().hash(hasher);
+    for value in slice {
+        hash_json_value_stable(value, hasher);
+    }
+}
+
+fn build_spot_requirement_memo_key(
+    rows: &[Value],
+    source_rows_effective: &[Value],
+    object_rows_effective: &[Value],
+    req_spec: &RequirementSpec,
+    pattern: &str,
+    ray_count: u32,
+    surface_index: usize,
+) -> String {
+    let mut hasher = DefaultHasher::new();
+    hash_json_slice_stable(rows, &mut hasher);
+    hash_json_slice_stable(source_rows_effective, &mut hasher);
+    hash_json_slice_stable(object_rows_effective, &mut hasher);
+    req_spec.cache_key.hash(&mut hasher);
+    pattern.hash(&mut hasher);
+    ray_count.hash(&mut hasher);
+    surface_index.hash(&mut hasher);
+    let digest = hasher.finish();
+    format!("spot|{}|{:016x}", req_spec.cache_key, digest)
+}
+
+fn optimizer_spot_requirement_cache_get(key: &str) -> Option<Option<f64>> {
+    let Ok(cache) = OPTIMIZER_SPOT_REQUIREMENT_CACHE.lock() else {
+        return None;
+    };
+    cache.map.get(key).copied()
+}
+
+fn optimizer_spot_requirement_cache_put(key: String, value: Option<f64>) {
+    let Ok(mut cache) = OPTIMIZER_SPOT_REQUIREMENT_CACHE.lock() else {
+        return;
+    };
+    if !cache.map.contains_key(&key) {
+        cache.order.push_back(key.clone());
+    }
+    cache.map.insert(key, value);
+    while cache.order.len() > OPTIMIZER_SPOT_REQUIREMENT_CACHE_CAP {
+        if let Some(evict_key) = cache.order.pop_front() {
+            cache.map.remove(&evict_key);
+        } else {
+            break;
+        }
+    }
 }
 
 fn collect_invalid_requirements(

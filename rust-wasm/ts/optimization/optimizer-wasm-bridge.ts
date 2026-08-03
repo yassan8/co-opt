@@ -334,10 +334,6 @@ async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | nu
   if (!optimizerDirectInitPromise) {
     optimizerDirectInitPromise = (async () => {
       try {
-        const isViteDev = !!((import.meta as any)?.env?.DEV);
-        if (isViteDev) {
-          throw new Error('surface_origins module import skipped in Vite dev (public module import unsupported)');
-        }
         await resolveBrowserModulePath();
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
         const mod: any = (await g?.__cooptSurfaceOriginsModulePromise) || g?.__cooptSurfaceOriginsModule;
@@ -459,15 +455,15 @@ export async function preloadOptimizerWasmBridge(): Promise<boolean> {
   }
 
   let api = getOptimizerApiSync();
-  const sharedInitError = getRustRayTracingWasmInitError();
-  const sharedImportFailed = typeof sharedInitError === 'string'
-    && sharedInitError.includes('surface_origins module import failed');
-  if (!api && !sharedImportFailed) {
+  if (!api) {
     await preloadOptimizerDirectWasmModule();
     api = getOptimizerApiSync();
   }
-  if (!api && sharedImportFailed) {
-    optimizerWasmBridgeDebugState.initError = sharedInitError;
+  if (!api) {
+    const sharedInitError = getRustRayTracingWasmInitError();
+    if (typeof sharedInitError === 'string' && sharedInitError.trim().length > 0) {
+      optimizerWasmBridgeDebugState.initError = sharedInitError;
+    }
   }
 
   optimizerWasmBridgeDebugState.hasSolveSpd = !!(api && typeof api.solve_spd_linear_system === 'function');

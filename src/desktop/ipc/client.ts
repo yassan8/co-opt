@@ -70,6 +70,7 @@ import type {
 } from "../../shared/contracts/project";
 import type {
   EvaluateOptimizerCandidatesRequest,
+  EvaluateOptimizerCandidatesMultiScenarioRequest,
   EvaluateOptimizerCandidatesResponse,
   OptimizeStepRequest,
   OptimizeStepResponse,
@@ -1826,6 +1827,37 @@ export async function runNativeSpotRaytrace(
       const palette = ["#60a5fa", "#34d399", "#f59e0b", "#f472b6", "#a78bfa", "#22d3ee"];
       return palette[index % palette.length];
     };
+    const buildSpotMetrics = (points: Array<{ xUm: number; yUm: number }>, chiefPointUm?: { xUm: number; yUm: number }) => {
+      if (!Array.isArray(points) || points.length === 0 || !chiefPointUm) {
+        return { rmsUm: undefined, diameterUm: undefined };
+      }
+      const cx = Number(chiefPointUm.xUm);
+      const cy = Number(chiefPointUm.yUm);
+      if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+        return { rmsUm: undefined, diameterUm: undefined };
+      }
+      let sumSq = 0;
+      let maxR2 = 0;
+      let count = 0;
+      for (const point of points) {
+        const x = Number(point?.xUm);
+        const y = Number(point?.yUm);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const dx = x - cx;
+        const dy = y - cy;
+        const r2 = dx * dx + dy * dy;
+        sumSq += r2;
+        if (r2 > maxR2) maxR2 = r2;
+        count += 1;
+      }
+      if (count <= 0) {
+        return { rmsUm: undefined, diameterUm: undefined };
+      }
+      return {
+        rmsUm: Math.sqrt(sumSq / count),
+        diameterUm: 2 * Math.sqrt(maxR2),
+      };
+    };
 
     if (Array.isArray(payload?.raySeries) && payload.raySeries.length > 0) {
       const { traceRayEvalBatchSummary } = await import("../../../raytracing/core/ray-tracing.ts");
@@ -1884,6 +1916,7 @@ export async function runNativeSpotRaytrace(
         const chiefPointUm = (chiefSummary && chiefSummary.hitPoint)
           ? { xUm: Number(chiefSummary.hitPoint.x) * 1000, yUm: Number(chiefSummary.hitPoint.y) * 1000 }
           : undefined;
+        const spotMetrics = buildSpotMetrics(points, chiefPointUm as any);
         const statusCounts = normalizedSummaries.reduce((acc: Record<string, number>, s: any) => {
           const status = String(s?.status || (s?.success ? "ok" : "unknown"));
           acc[status] = (acc[status] || 0) + 1;
@@ -1898,6 +1931,8 @@ export async function runNativeSpotRaytrace(
           wavelengthUm: Number(wl) > 0 ? Number(wl) : undefined,
           points,
           chiefPointUm,
+          rmsUm: Number.isFinite(Number(spotMetrics.rmsUm)) ? Number(spotMetrics.rmsUm) : undefined,
+          diameterUm: Number.isFinite(Number(spotMetrics.diameterUm)) ? Number(spotMetrics.diameterUm) : undefined,
           hasFieldAngle: entry?.hasFieldAngle === true,
           statusCounts,
         };
@@ -2060,6 +2095,7 @@ export async function runNativeSpotRaytrace(
       const chiefPointUm = chiefLocal
         ? { xUm: chiefLocal.x * 1000, yUm: chiefLocal.y * 1000 }
         : undefined;
+      const spotMetrics = buildSpotMetrics(points, chiefPointUm as any);
       const wl = Number(pointsRaw.find((p: any) => Number(p?.wavelength) > 0)?.wavelength);
 
       return {
@@ -2071,6 +2107,8 @@ export async function runNativeSpotRaytrace(
         chiefPointUm: chiefPointUm && Number.isFinite(chiefPointUm.xUm) && Number.isFinite(chiefPointUm.yUm)
           ? chiefPointUm
           : undefined,
+        rmsUm: Number.isFinite(Number(spotMetrics.rmsUm)) ? Number(spotMetrics.rmsUm) : undefined,
+        diameterUm: Number.isFinite(Number(spotMetrics.diameterUm)) ? Number(spotMetrics.diameterUm) : undefined,
         hasFieldAngle: true,
       };
     });
@@ -7566,6 +7604,15 @@ export async function evaluateOptimizerCandidates(
 ): Promise<EvaluateOptimizerCandidatesResponse> {
   return invokeCommand<EvaluateOptimizerCandidatesRequest, EvaluateOptimizerCandidatesResponse>(
     "evaluate_optimizer_candidates",
+    payload,
+  );
+}
+
+export async function evaluateOptimizerCandidatesMultiScenario(
+  payload: EvaluateOptimizerCandidatesMultiScenarioRequest,
+): Promise<EvaluateOptimizerCandidatesResponse> {
+  return invokeCommand<EvaluateOptimizerCandidatesMultiScenarioRequest, EvaluateOptimizerCandidatesResponse>(
+    "evaluate_optimizer_candidates_multi_scenario",
     payload,
   );
 }

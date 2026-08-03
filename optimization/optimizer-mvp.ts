@@ -41,10 +41,14 @@ import {
   solveQpSubproblemUnconstrainedWasm
 } from '../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
-import { evaluateOptimizerCandidates, runMtfBatchViaWasm, runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
+import { evaluateOptimizerCandidates, evaluateOptimizerCandidatesMultiScenario, runMtfBatchViaWasm, runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
 import { OPERAND_DEFINITIONS } from '../ui/editors/merit-function-inspector.ts';
 import { loadOptimizeRayGridSize, optimizeRayCountFromGridSize } from '../ui/optimization-settings-storage.ts';
-import { adaptiveSpotRayCountAtIteration, createAdaptiveSpotSamplingPlan } from './adaptive-spot-sampling.ts';
+import {
+  adaptiveSpotIterationsUntilNextTransition,
+  adaptiveSpotRayCountAtIteration,
+  createAdaptiveSpotSamplingPlan,
+} from './adaptive-spot-sampling.ts';
 import {
   buildSqpLineSearchAlphas,
   buildSqpModelGradientFallbackDirection,
@@ -201,7 +205,7 @@ async function runOptimizationMvpnative(options = {}) {
 
   const methodRaw = String(opts.method || 'kkt').trim().toLowerCase();
   const normalizedMethod = methodRaw === 'global' || methodRaw === 'escape' || methodRaw === 'escapefunction' ? 'global-al' : methodRaw;
-  const method = (normalizedMethod === 'cd' || normalizedMethod === 'lm' || normalizedMethod === 'kkt' || normalizedMethod === 'global-al' || normalizedMethod === 'global-lm') ? normalizedMethod : 'kkt';
+  const method = (normalizedMethod === 'cd' || normalizedMethod === 'lm' || normalizedMethod === 'kkt' || normalizedMethod === 'kkt-sqp' || normalizedMethod === 'global-al' || normalizedMethod === 'global-lm') ? normalizedMethod : 'kkt';
 
   const systemConfigSnapshot = (() => {
     if (opts.systemConfigSnapshot && typeof opts.systemConfigSnapshot === 'object') {
@@ -332,11 +336,11 @@ async function runOptimizationMvpnative(options = {}) {
         forceFinalSpotSampling,
       );
       const samplingStageChanged = nativeSpotRayCount !== lastNativeSpotRayCount;
-      const iterationsUntilSamplingTransition = adaptiveSpotSamplingPlan.enabled
-        && !forceFinalSpotSampling
-        && nativeSpotRayCount !== adaptiveSpotSamplingPlan.finalRayCount
-        ? adaptiveSpotSamplingPlan.transitionIteration - consumedIterations
-        : Number.MAX_SAFE_INTEGER;
+      const iterationsUntilSamplingTransition = adaptiveSpotIterationsUntilNextTransition(
+        adaptiveSpotSamplingPlan,
+        consumedIterations,
+        forceFinalSpotSampling,
+      );
       const iterBudget = Math.max(1, Math.min(
         chunkIterations,
         maxIterations - consumedIterations,
@@ -6770,6 +6774,19 @@ export async function runOptimizationMVP(options = {}) {
     opts.adaptiveSpotSampling === true,
     opts.adaptiveSpotFinalFraction,
   );
+  const kktStrictRayGridSize = Number.isFinite(Number(opts?.kktStrictRayGridSize))
+    ? Math.max(8, Math.floor(Number(opts.kktStrictRayGridSize)))
+    : loadOptimizeRayGridSize();
+  const kktStrictSpotRayCount = Number.isFinite(Number(opts?.kktStrictSpotRayCount))
+    ? Math.max(5, Math.floor(Number(opts.kktStrictSpotRayCount)))
+    : optimizeRayCountFromGridSize(kktStrictRayGridSize);
+  const kktStrictMtfSamplingSize = Number.isFinite(Number(opts?.kktStrictMtfSamplingSize))
+    ? Math.max(16, Math.floor(Number(opts.kktStrictMtfSamplingSize)))
+    : Math.max(16, kktStrictRayGridSize);
+  const kktStrictRefineAcceptedCandidates = opts?.kktStrictRefineAcceptedCandidates !== false;
+  const kktPeriodicFullSweepEvery = Number.isFinite(Number(opts?.kktPeriodicFullSweepEvery))
+    ? Math.max(1, Math.floor(Number(opts.kktPeriodicFullSweepEvery)))
+    : 4;
   let activeSpotRayCount = adaptiveSpotRayCountAtIteration(spotSamplingPlan, 0);
   const activeSpotAnnularRingCount = () => spotAnnularRingCountFast;
   const shouldStop = (context: string = '') => {
@@ -9636,6 +9653,25 @@ export async function runOptimizationMVP(options = {}) {
         ? Math.max(64, Math.floor(Number(opts.kktEvalCacheMax)))
         : 512;
       const kktEvalCache = new Map<string, any>();
+      const kktApproxEvalCacheEnabled = opts?.kktApproxEvalCache !== false;
+      const kktApproxEvalCacheMax = Number.isFinite(Number(opts?.kktApproxEvalCacheMax))
+        ? Math.max(64, Math.floor(Number(opts.kktApproxEvalCacheMax)))
+        : 1024;
+      const kktApproxEvalCache = new Map<string, any>();
+      const kktApproxEvalStepScale = Number.isFinite(Number(opts?.kktApproxEvalStepScale))
+        ? Math.max(1e-6, Math.min(1e-1, Number(opts.kktApproxEvalStepScale)))
+        : 1e-3;
+      const kktPriorityOperandTopK = Number.isFinite(Number(opts?.kktPriorityOperandTopK))
+        ? Math.max(1, Math.floor(Number(opts.kktPriorityOperandTopK)))
+        : 12;
+      const kktNeighborOperandCacheEnabled = opts?.kktNeighborOperandCache !== false;
+      const kktNeighborOperandCacheMax = Number.isFinite(Number(opts?.kktNeighborOperandCacheMax))
+        ? Math.max(64, Math.floor(Number(opts.kktNeighborOperandCacheMax)))
+        : 2048;
+      const kktNeighborOperandCache = new Map<string, number>();
+      const kktOperandPriorityScores = new Map<string, number>();
+      let kktPriorityOperandKeys = new Set<string>();
+      let kktForceFullOperandSweep = true;
       const kktCachePrecision = Number.isFinite(Number(opts?.kktEvalCachePrecision))
         ? Math.max(6, Math.min(16, Math.floor(Number(opts.kktEvalCachePrecision))))
         : ((spotFastMode || kktUseMatrixFreeCore) ? 9 : 12);
@@ -9652,6 +9688,23 @@ export async function runOptimizationMVP(options = {}) {
         for (let i = 0; i < clamped.length; i++) {
           const v = Number(clamped[i]);
           parts[i] = Number.isFinite(v) ? v.toExponential(kktCachePrecision) : String(v);
+        }
+        return parts.join('|');
+      };
+
+      const buildKktApproxXKey = (x: number[]) => {
+        const clamped = clampToBounds(x);
+        const parts = new Array(clamped.length);
+        for (let i = 0; i < clamped.length; i++) {
+          const value = Number(clamped[i]);
+          const scale = Math.max(Math.abs(Number(varScales?.[i]) || 0), 1);
+          const quantum = Math.max(1e-9, scale * kktApproxEvalStepScale);
+          if (!Number.isFinite(value) || !Number.isFinite(quantum) || quantum <= 0) {
+            parts[i] = String(value);
+            continue;
+          }
+          const bucket = Math.round(value / quantum);
+          parts[i] = String(bucket);
         }
         return parts.join('|');
       };
@@ -9737,7 +9790,54 @@ export async function runOptimizationMVP(options = {}) {
         await nextFrame();
       };
 
-      const evalSQPAtXUncached = async (x: number[], seededOperandValues: Map<string, number> | null = null) => {
+      const withTemporaryMeritSampling = async <T>(samplingOverride: Record<string, any>, callback: () => Promise<T>): Promise<T> => {
+        let previousFastMode: any = null;
+        let hadFastMode = false;
+        try {
+          if (typeof globalThis !== 'undefined') {
+            hadFastMode = Object.prototype.hasOwnProperty.call(globalThis, '__cooptMeritFastMode');
+            previousFastMode = (globalThis as any).__cooptMeritFastMode;
+            const baseMode = (previousFastMode && typeof previousFastMode === 'object') ? previousFastMode : {};
+            (globalThis as any).__cooptMeritFastMode = {
+              ...baseMode,
+              ...samplingOverride,
+            };
+          }
+        } catch (_) {}
+        try {
+          return await callback();
+        } finally {
+          try {
+            if (typeof globalThis === 'undefined') return;
+            if (hadFastMode) {
+              (globalThis as any).__cooptMeritFastMode = previousFastMode;
+            } else {
+              delete (globalThis as any).__cooptMeritFastMode;
+            }
+          } catch (_) {}
+        }
+      };
+
+      const evalSQPAtXStrict = async (x: number[]): Promise<any> => {
+        return withTemporaryMeritSampling(
+          {
+            enabled: true,
+            spotRayCount: kktStrictSpotRayCount,
+            spotAnnularRingCount: activeSpotAnnularRingCount(),
+            mtfSamplingSize: kktStrictMtfSamplingSize,
+            spotEarlyAbortEnabled: false,
+            spotEarlyAbortMaxHits: 0,
+            spotEarlyAbortStreakMaxHits: 0,
+          },
+          () => evalSQPAtXUncached(x, null, { forceFullOperandEval: true, priorityOperandKeys: null }),
+        );
+      };
+
+      const evalSQPAtXUncached = async (
+        x: number[],
+        seededOperandValues: Map<string, number> | null = null,
+        evalPolicy: { forceFullOperandEval?: boolean; priorityOperandKeys?: Set<string> | null } | null = null,
+      ) => {
         const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
         if (!editor || typeof editor.calculateOperandValue !== 'function') {
           return { objective: 1e9, requirementScore: 1e3, constraints: [], feasible: false, residuals: [] };
@@ -9803,6 +9903,10 @@ export async function runOptimizationMVP(options = {}) {
           const operandValueCache = seededOperandValues instanceof Map
             ? new Map<string, number>(seededOperandValues)
             : new Map<string, number>();
+          const forceFullOperandEval = !!evalPolicy?.forceFullOperandEval;
+          const priorityOperandKeys = (evalPolicy?.priorityOperandKeys instanceof Set)
+            ? evalPolicy.priorityOperandKeys
+            : null;
           await prefetchOptimizerSpotRequirementGroups(editor, items, operandValueCache);
           let __evalItemCount = 0;
           for (const it of items) {
@@ -9831,11 +9935,19 @@ export async function runOptimizationMVP(options = {}) {
             };
 
             const opCacheKey = optimizerOperandCacheKey(it);
-            const currentRaw = operandValueCache.has(opCacheKey)
+            const canUseNeighborCache = kktNeighborOperandCacheEnabled
+              && !forceFullOperandEval
+              && priorityOperandKeys instanceof Set
+              && !priorityOperandKeys.has(opCacheKey)
+              && kktNeighborOperandCache.has(opCacheKey)
+              && !operandValueCache.has(opCacheKey);
+            let currentRaw = operandValueCache.has(opCacheKey)
               ? operandValueCache.get(opCacheKey)
-              : hasHeavyAsyncRequirementOperands && typeof editor.calculateOperandValueAsync === 'function'
-                ? await editor.calculateOperandValueAsync(opObj)
-                : editor.calculateOperandValue(opObj);
+              : canUseNeighborCache
+                ? kktNeighborOperandCache.get(opCacheKey)
+                : hasHeavyAsyncRequirementOperands && typeof editor.calculateOperandValueAsync === 'function'
+                  ? await editor.calculateOperandValueAsync(opObj)
+                  : editor.calculateOperandValue(opObj);
             const s = sanitizeOperandCurrentForScore(currentRaw);
             const requirementKey = String(r.id ?? `${cfgId}|${r.operand}`);
             if (!s.ok || !Number.isFinite(s.current)) {
@@ -9851,10 +9963,16 @@ export async function runOptimizationMVP(options = {}) {
               if (kktRequirementsAsConstraints && (r.op === '<=' || r.op === '>=')) {
                 constraints.push(penalty);
               }
+              if (kktNeighborOperandCacheEnabled && !canUseNeighborCache && Number.isFinite(Number(currentRaw))) {
+                kktNeighborOperandCache.set(opCacheKey, Number(currentRaw));
+              }
               continue;
             }
 
             const current = s.current;
+            if (kktNeighborOperandCacheEnabled) {
+              kktNeighborOperandCache.set(opCacheKey, current);
+            }
             const target = toFiniteNumber(r.target, 0);
             const tol = Math.max(0, toFiniteNumber(r.tol, 0));
             const amount = computeViolationAmount(r.op, current, target, tol);
@@ -9863,6 +9981,10 @@ export async function runOptimizationMVP(options = {}) {
             worstContributionByRequirement.set(
               requirementKey,
               Math.max(worstContributionByRequirement.get(requirementKey) || 0, contribution)
+            );
+            kktOperandPriorityScores.set(
+              opCacheKey,
+              Math.max(Number(kktOperandPriorityScores.get(opCacheKey)) || 0, contribution)
             );
             const scale = Math.max(1, Math.abs(tol));
             const weightedResidual = Math.sqrt(w) * (violationAmount / scale);
@@ -9880,6 +10002,11 @@ export async function runOptimizationMVP(options = {}) {
 
           for (const contribution of worstContributionByRequirement.values()) {
             requirementScore += contribution;
+          }
+          while (kktNeighborOperandCache.size > kktNeighborOperandCacheMax) {
+            const first = kktNeighborOperandCache.keys().next();
+            if (!first || first.done) break;
+            kktNeighborOperandCache.delete(first.value);
           }
         } finally {
           try {
@@ -9916,11 +10043,30 @@ export async function runOptimizationMVP(options = {}) {
           return cloneKktEval(kktEvalCache.get(key));
         }
 
+        if (kktApproxEvalCacheEnabled) {
+          const approxKey = buildKktApproxXKey(x);
+          if (kktApproxEvalCache.has(approxKey)) {
+            if (__profile && __profile.counts) {
+              __profile.counts.kktEvalCacheApproxHits = (Number(__profile.counts.kktEvalCacheApproxHits) || 0) + 1;
+            }
+            const cached = cloneKktEval(kktApproxEvalCache.get(approxKey));
+            if (kktEvalCache.size >= kktEvalCacheMax) {
+              const oldest = kktEvalCache.keys().next();
+              if (oldest && !oldest.done) kktEvalCache.delete(oldest.value);
+            }
+            kktEvalCache.set(key, cached);
+            return cloneKktEval(cached);
+          }
+        }
+
         if (__profile && __profile.counts) {
           __profile.counts.kktEvalCacheMisses = (Number(__profile.counts.kktEvalCacheMisses) || 0) + 1;
         }
         const __evalT0 = (__profile) ? nowMs() : 0;
-        const value = await evalSQPAtXUncached(x);
+        const value = await evalSQPAtXUncached(x, null, {
+          forceFullOperandEval: kktForceFullOperandSweep,
+          priorityOperandKeys: kktPriorityOperandKeys,
+        });
         if (__profile) {
           const dt = Math.max(0, nowMs() - __evalT0);
           const buckets = __profile.timingBuckets || (__profile.timingBuckets = { time_objective_eval: 0, time_wasm_call: 0, time_js_overhead: 0 });
@@ -9933,6 +10079,14 @@ export async function runOptimizationMVP(options = {}) {
           if (oldest && !oldest.done) kktEvalCache.delete(oldest.value);
         }
         kktEvalCache.set(key, storable);
+        if (kktApproxEvalCacheEnabled) {
+          const approxKey = buildKktApproxXKey(x);
+          if (kktApproxEvalCache.size >= kktApproxEvalCacheMax) {
+            const oldest = kktApproxEvalCache.keys().next();
+            if (oldest && !oldest.done) kktApproxEvalCache.delete(oldest.value);
+          }
+          kktApproxEvalCache.set(approxKey, storable);
+        }
         return cloneKktEval(storable);
       };
 
@@ -9987,34 +10141,30 @@ export async function runOptimizationMVP(options = {}) {
         return Math.log(1 + Math.exp(beta * val)) / beta;
       };
 
-      const evalAugmentedResiduals = async (x: number[], lambdaVec: number[], mu: number, maxViolContext: number = 1.0) => {
-        const base = await evalSQPAtX(x);
-        const res = useKktSqp
-          ? (Array.isArray(base.residuals) ? base.residuals.slice() : [])
-          : Array.isArray(base.residuals) && base.residuals.length > 0
-          ? base.residuals.slice()
-          : (base.objective > 0 ? [Math.sqrt(base.objective)] : []);
-        const c = base.constraints || [];
+      const buildAugmentedResidualsFromBase = (baseEval: any, lambda: number[], penaltyMu: number, maxViol: number) => {
+        const residualVector = useKktSqp
+          ? (Array.isArray(baseEval?.residuals) ? baseEval.residuals.slice() : [])
+          : Array.isArray(baseEval?.residuals) && baseEval.residuals.length > 0
+          ? baseEval.residuals.slice()
+          : (baseEval?.objective > 0 ? [Math.sqrt(baseEval.objective)] : []);
+        const constraints = Array.isArray(baseEval?.constraints) ? baseEval.constraints : [];
         if (useKktSqp) {
-          return { base, residuals: res.concat(c), baseResidualCount: res.length };
+          return { base: baseEval, residuals: residualVector.concat(constraints), baseResidualCount: residualVector.length };
         }
-        const rConstr = new Array(c.length);
-        
-        // 【修正】動的なノーマライズ（residualNormFactorなど）を完全削除
-        // Jacobi Preconditioning があるため、値が巨大でも行列計算は破綻しません
-        // 有限差分のヤコビアン計算では、関数内のノーマライズは勾配を消失させます
-        const muScale = Math.sqrt(Math.max(1, mu));
-        
-        // 【追加】適応的beta：制約違反が小さい時はbetaを下げてスコア改善を優先
-        // maxViol < 0.01 の時は beta=10 に下げ、制約を少し緩めてスコアを下げる余地を作る
-        const adaptiveBeta = maxViolContext < 0.01 ? 10 : (maxViolContext < 0.1 ? 30 : 100);
-        
-        for (let i = 0; i < c.length; i++) {
-          const lambda = Math.max(0, Number(lambdaVec?.[i]) || 0);
-          const shiftedConstraint = c[i] + lambda / Math.max(1, mu);
+        const rConstr = new Array(constraints.length);
+        const muScale = Math.sqrt(Math.max(1, penaltyMu));
+        const adaptiveBeta = maxViol < 0.01 ? 10 : (maxViol < 0.1 ? 30 : 100);
+        for (let i = 0; i < constraints.length; i++) {
+          const lambdaI = Math.max(0, Number(lambda?.[i]) || 0);
+          const shiftedConstraint = constraints[i] + lambdaI / Math.max(1, penaltyMu);
           rConstr[i] = muScale * smoothMax(shiftedConstraint, adaptiveBeta);
         }
-        return { base, residuals: res.concat(rConstr) };
+        return { base: baseEval, residuals: residualVector.concat(rConstr) };
+      };
+
+      const evalAugmentedResiduals = async (x: number[], lambdaVec: number[], mu: number, maxViolContext: number = 1.0) => {
+        const base = await evalSQPAtX(x);
+        return buildAugmentedResidualsFromBase(base, lambdaVec, mu, maxViolContext);
       };
 
       const evaluateSqpFilterMerit = (evaluation: any, penalty: number) => {
@@ -10276,8 +10426,7 @@ export async function runOptimizationMVP(options = {}) {
 
       const kktNativeBatchFdEnabled = opts?.kktUseNativeBatchFd !== false
         && useKktSqp
-        && isTauriRuntime()
-        && !multiScenario;
+        && isTauriRuntime();
       const nativeBatchResidualItems = Array.isArray(residualItems)
         ? residualItems.filter((item: any) => {
             const requirement = item?.req;
@@ -10325,6 +10474,39 @@ export async function runOptimizationMVP(options = {}) {
           return [];
         }
       })();
+      const resolveScenarioTablesForConfig = (
+        configIdRaw: any,
+        scenarioIdRaw: any,
+      ): { sourceRows: any[]; objectRows: any[] } => {
+        const configId = String(configIdRaw ?? '');
+        const editor = (typeof window !== 'undefined') ? (window as any).meritFunctionEditor : null;
+        if (!editor || typeof editor.getConfigTablesByConfigId !== 'function') {
+          return {
+            sourceRows: nativeBatchSourceRows,
+            objectRows: nativeBatchObjectRows,
+          };
+        }
+
+        const prev = getScenarioOverrideGlobal();
+        const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
+        try {
+          if (scenarioIdRaw) overrideMap[configId] = String(scenarioIdRaw);
+          else delete overrideMap[configId];
+          setScenarioOverrideGlobal(overrideMap);
+          const tables = editor.getConfigTablesByConfigId(configId) || {};
+          return {
+            sourceRows: Array.isArray(tables.source) ? tables.source : nativeBatchSourceRows,
+            objectRows: Array.isArray(tables.object) ? tables.object : nativeBatchObjectRows,
+          };
+        } catch (_) {
+          return {
+            sourceRows: nativeBatchSourceRows,
+            objectRows: nativeBatchObjectRows,
+          };
+        } finally {
+          setScenarioOverrideGlobal((prev && typeof prev === 'object') ? prev : null);
+        }
+      };
       let nativeBatchFdParityStatus: 'unchecked' | 'passed' | 'failed' = 'unchecked';
       const nativeBatchEvaluatorSessionId = `kkt-candidates-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
       let nativeBatchBaseRowsByConfig: Record<string, any[]> | null = null;
@@ -10571,9 +10753,8 @@ export async function runOptimizationMVP(options = {}) {
         for (const item of mtfItems) {
           const requirement = item.req;
           const configId = String(item?.configId ?? requirement?.configId ?? activeConfigId ?? '');
-          const tables = editor.getConfigTablesByConfigId(configId) || {};
-          const sourceRows = Array.isArray(tables.source) ? tables.source : nativeBatchSourceRows;
-          const objectRows = Array.isArray(tables.object) ? tables.object : nativeBatchObjectRows;
+          const scenarioId = item?.scenarioId ? String(item.scenarioId) : null;
+          const { sourceRows, objectRows } = resolveScenarioTablesForConfig(configId, scenarioId);
           const wavelength = Number(editor.getSystemWavelengthFromOperandOrPrimary?.(requirement, sourceRows));
           const objectIndex = Math.max(0, Math.floor(Number(requirement?.param2 || 1)) - 1);
           const frequency = Math.max(0, Number(requirement?.param4) || 10);
@@ -10601,9 +10782,10 @@ export async function runOptimizationMVP(options = {}) {
             }
             continue;
           }
-          const groupKey = [configId, wavelength, objectIndex, frequency, sampling].join('|');
+          const groupKey = [configId, scenarioId || '', wavelength, objectIndex, frequency, sampling].join('|');
           const group = groups.get(groupKey) || {
             configId,
+            scenarioId,
             wavelength,
             objectIndex,
             frequency,
@@ -10743,9 +10925,77 @@ export async function runOptimizationMVP(options = {}) {
         lambdaVec: number[],
         penaltyMu: number,
         maxViolContext: number,
+        onBaseEvalBatch?: ((baseEvals: any[]) => void) | null,
       ): Promise<number[][] | null> => {
         const hasMtfResidualItems = (Array.isArray(residualItems) ? residualItems : [])
           .some((item: any) => ['MTFT', 'MTFS', 'MTFA'].includes(String(item?.req?.operand ?? '').trim().toUpperCase()));
+
+        const evalAugmentedResidualsWebBatch = async (): Promise<number[][] | null> => {
+          if (kktNativeBatchFdEnabled) return null;
+          if (candidatePoints.length < 2) return null;
+          if (!hasMtfResidualItems) return null;
+
+          const webBatchStartedAt = nowMs();
+          const candidateRows = candidatePoints.map(buildNativeCandidateRows).filter(Boolean) as Array<Record<string, any[]>>;
+          if (candidateRows.length !== candidatePoints.length) return null;
+
+          const mtfSeededValues = await evalMtfOperandValuesNativeBatch(candidateRows);
+          if (!Array.isArray(mtfSeededValues) || mtfSeededValues.length !== candidatePoints.length) return null;
+
+          const toAugmentedResiduals = (baseEval: any): number[] => {
+            const residualVector = useKktSqp
+              ? (Array.isArray(baseEval?.residuals) ? baseEval.residuals.slice() : [])
+              : Array.isArray(baseEval?.residuals) && baseEval.residuals.length > 0
+              ? baseEval.residuals.slice()
+              : (baseEval?.objective > 0 ? [Math.sqrt(baseEval.objective)] : []);
+            const constraints = Array.isArray(baseEval?.constraints) ? baseEval.constraints : [];
+            if (useKktSqp) return residualVector.concat(constraints);
+            const rConstr = new Array(constraints.length);
+            const muScale = Math.sqrt(Math.max(1, penaltyMu));
+            const adaptiveBeta = maxViolContext < 0.01 ? 10 : (maxViolContext < 0.1 ? 30 : 100);
+            for (let i = 0; i < constraints.length; i++) {
+              const lambda = Math.max(0, Number(lambdaVec?.[i]) || 0);
+              const shiftedConstraint = constraints[i] + lambda / Math.max(1, penaltyMu);
+              rConstr[i] = muScale * smoothMax(shiftedConstraint, adaptiveBeta);
+            }
+            return residualVector.concat(rConstr);
+          };
+
+          const residuals: number[][] = [];
+          const baseEvals: any[] = [];
+          for (let candidateIndex = 0; candidateIndex < candidatePoints.length; candidateIndex++) {
+            const seededValues = (mtfSeededValues[candidateIndex] instanceof Map)
+              ? mtfSeededValues[candidateIndex]
+              : null;
+            const baseEval = await evalSQPAtXUncached(
+              candidatePoints[candidateIndex],
+              seededValues && seededValues.size > 0 ? seededValues : null,
+              {
+                forceFullOperandEval: kktForceFullOperandSweep,
+                priorityOperandKeys: kktPriorityOperandKeys,
+              },
+            );
+            baseEvals.push(baseEval);
+            residuals.push(toAugmentedResiduals(baseEval));
+          }
+
+          if (typeof onBaseEvalBatch === 'function') {
+            onBaseEvalBatch(baseEvals);
+          }
+
+          if (__profile?.counts) {
+            __profile.counts.kktWebBatchFdCalls = (Number(__profile.counts.kktWebBatchFdCalls) || 0) + 1;
+            __profile.counts.kktWebBatchFdCandidates = (Number(__profile.counts.kktWebBatchFdCandidates) || 0) + candidatePoints.length;
+            __profile.counts.kktWebBatchFdMs = (Number(__profile.counts.kktWebBatchFdMs) || 0) + (nowMs() - webBatchStartedAt);
+          }
+
+          return residuals;
+        };
+
+        if (!kktNativeBatchFdEnabled) {
+          return evalAugmentedResidualsWebBatch();
+        }
+
         if (!kktNativeBatchFdEnabled
           || nativeBatchFdParityStatus === 'failed'
           || candidatePoints.length < 2
@@ -10757,6 +11007,138 @@ export async function runOptimizationMVP(options = {}) {
           __profile.counts.kktNativeBatchFdCalls = (Number(__profile.counts.kktNativeBatchFdCalls) || 0) + 1;
           __profile.counts.kktNativeBatchFdCandidates = (Number(__profile.counts.kktNativeBatchFdCandidates) || 0) + candidatePoints.length;
         }
+
+        const evaluateNativeCurrentsSingleOrScenarioBatches = async (
+          useVectorCandidates: boolean,
+          candidateDeltas: any[][],
+          baseRowsByConfig: Record<string, any[]>,
+          hasNativeRequirementRows: boolean,
+        ): Promise<any> => {
+          if (!hasNativeRequirementRows) {
+            return {
+              currentsPerCandidate: candidatePoints.map(() => []),
+              appliedUpdateCount: 0,
+              sessionReused: false,
+            };
+          }
+
+          if (!multiScenario) {
+            return evaluateOptimizerCandidates({
+              candidateDeltas: useVectorCandidates ? undefined : candidateDeltas,
+              candidateVectors: useVectorCandidates ? candidatePoints : undefined,
+              variableBindings: initializeNativeSession && useVectorCandidates
+                ? nativeBatchVariableBindings as any[]
+                : undefined,
+              sessionId: nativeBatchEvaluatorSessionId,
+              resetSession: initializeNativeSession,
+              baseRowsByConfig: initializeNativeSession ? baseRowsByConfig : undefined,
+              sourceRows: initializeNativeSession ? nativeBatchSourceRows : undefined,
+              objectRows: initializeNativeSession ? nativeBatchObjectRows : undefined,
+              systemRequirementsRows: initializeNativeSession ? nativeBatchRequirementRows : undefined,
+              activeConfigId: initializeNativeSession ? String(activeConfigId ?? '') : undefined,
+            });
+          }
+
+          const groups = new Map<string, {
+            configId: string;
+            scenarioId: string | null;
+            indexes: number[];
+            sourceRows: any[];
+            objectRows: any[];
+            requirementRows: any[];
+          }>();
+          for (let index = 0; index < nativeBatchResidualItems.length; index++) {
+            const item = nativeBatchResidualItems[index];
+            const requirement = item?.req || {};
+            const configId = String(item?.configId ?? requirement?.configId ?? activeConfigId ?? '');
+            const scenarioId = item?.scenarioId ? String(item.scenarioId) : null;
+            const groupKey = `${configId}|${scenarioId || ''}`;
+            const scenarioTables = resolveScenarioTablesForConfig(configId, scenarioId);
+            const group = groups.get(groupKey) || {
+              configId,
+              scenarioId,
+              indexes: [],
+              sourceRows: scenarioTables.sourceRows,
+              objectRows: scenarioTables.objectRows,
+              requirementRows: [],
+            };
+            group.indexes.push(index);
+            group.requirementRows.push({
+              id: requirement.id,
+              configId,
+              enabled: true,
+              operand: requirement.operand,
+              op: requirement.op,
+              target: requirement.target,
+              tol: requirement.tol,
+              weight: requirement.weight,
+              param1: requirement.param1,
+              param2: requirement.param2,
+              param3: requirement.param3,
+              param4: requirement.param4,
+              param5: requirement.param5,
+            });
+            groups.set(groupKey, group);
+          }
+
+          const groupedScenarios = Array.from(groups.values());
+          if (groupedScenarios.length === 0) {
+            return {
+              currentsPerCandidate: candidatePoints.map(() => []),
+              appliedUpdateCount: 0,
+              sessionReused: false,
+            };
+          }
+
+          if (__profile?.counts) {
+            __profile.counts.kktNativeBatchMultiScenarioIpcCalls = (Number(__profile.counts.kktNativeBatchMultiScenarioIpcCalls) || 0) + 1;
+            __profile.counts.kktNativeBatchMultiScenarioGroups = (Number(__profile.counts.kktNativeBatchMultiScenarioGroups) || 0) + groupedScenarios.length;
+          }
+
+          const multiScenarioResponse = await evaluateOptimizerCandidatesMultiScenario({
+            candidateDeltas: useVectorCandidates ? undefined : candidateDeltas,
+            candidateVectors: useVectorCandidates ? candidatePoints : undefined,
+            variableBindings: useVectorCandidates
+              ? nativeBatchVariableBindings as any[]
+              : undefined,
+            baseRowsByConfig,
+            scenarioBatches: groupedScenarios.map((group) => ({
+              sourceRows: group.sourceRows,
+              objectRows: group.objectRows,
+              systemRequirementsRows: group.requirementRows,
+              activeConfigId: group.configId,
+            })),
+          });
+
+          const mergedCurrentsRows = Array.isArray(multiScenarioResponse?.currentsPerCandidate)
+            ? multiScenarioResponse.currentsPerCandidate
+            : [];
+          if (mergedCurrentsRows.length !== candidatePoints.length) return null;
+
+          const mergedCurrents = candidatePoints.map(
+            () => new Array<number | null>(nativeBatchResidualItems.length).fill(null),
+          );
+          for (let candidateIndex = 0; candidateIndex < mergedCurrentsRows.length; candidateIndex++) {
+            const candidateCurrents = Array.isArray(mergedCurrentsRows[candidateIndex])
+              ? mergedCurrentsRows[candidateIndex]
+              : [];
+            let offset = 0;
+            for (const group of groupedScenarios) {
+              for (let localIndex = 0; localIndex < group.indexes.length; localIndex++) {
+                const globalIndex = group.indexes[localIndex];
+                mergedCurrents[candidateIndex][globalIndex] = candidateCurrents[offset + localIndex] ?? null;
+              }
+              offset += group.indexes.length;
+            }
+          }
+
+          return {
+            currentsPerCandidate: mergedCurrents,
+            appliedUpdateCount: Number(multiScenarioResponse?.appliedUpdateCount) || 0,
+            sessionReused: !!multiScenarioResponse?.sessionReused,
+          };
+        };
+
         if (nativeBatchVariableBindings === undefined) {
           const calibration = calibrateNativeVariableBindings();
           nativeBatchVariableBindings = calibration?.bindings || null;
@@ -10783,26 +11165,19 @@ export async function runOptimizationMVP(options = {}) {
         const baseRowsByConfig = nativeBatchBaseRowsByConfig as Record<string, any[]>;
         try {
           const hasNativeRequirementRows = nativeBatchRequirementRows.length > 0;
-          const response = hasNativeRequirementRows
-            ? await evaluateOptimizerCandidates({
-              candidateDeltas: useVectorCandidates ? undefined : candidateDeltas,
-              candidateVectors: useVectorCandidates ? candidatePoints : undefined,
-              variableBindings: initializeNativeSession && useVectorCandidates
-                ? nativeBatchVariableBindings as any[]
-                : undefined,
-              sessionId: nativeBatchEvaluatorSessionId,
-              resetSession: initializeNativeSession,
-              baseRowsByConfig: initializeNativeSession ? baseRowsByConfig : undefined,
-              sourceRows: initializeNativeSession ? nativeBatchSourceRows : undefined,
-              objectRows: initializeNativeSession ? nativeBatchObjectRows : undefined,
-              systemRequirementsRows: initializeNativeSession ? nativeBatchRequirementRows : undefined,
-              activeConfigId: initializeNativeSession ? String(activeConfigId ?? '') : undefined,
-            })
-            : {
-              currentsPerCandidate: candidatePoints.map(() => []),
-              appliedUpdateCount: 0,
-              sessionReused: false,
-            };
+          const response = await evaluateNativeCurrentsSingleOrScenarioBatches(
+            useVectorCandidates,
+            candidateDeltas,
+            baseRowsByConfig,
+            hasNativeRequirementRows,
+          );
+          if (!response) {
+            if (__profile?.counts) {
+              __profile.counts.kktNativeBatchFdFallbacks = (Number(__profile.counts.kktNativeBatchFdFallbacks) || 0) + 1;
+              __profile.counts.kktNativeBatchFdMs = (Number(__profile.counts.kktNativeBatchFdMs) || 0) + (nowMs() - batchStartedAt);
+            }
+            return null;
+          }
           if (initializeNativeSession && hasNativeRequirementRows) {
             nativeBatchSessionInitialized = true;
             if (__profile?.counts) {
@@ -10832,10 +11207,12 @@ export async function runOptimizationMVP(options = {}) {
             ? await evalMtfOperandValuesNativeBatch(candidates)
             : null;
           let residuals: number[][];
+          const baseEvals: any[] = [];
           if (nativeBatchCoversAllResidualItems) {
             residuals = response.currentsPerCandidate.map((currents) => {
                 if (!Array.isArray(currents) || currents.length !== nativeBatchResidualItems.length) return [];
                 const base = buildKktEvaluationFromNativeCurrents(currents);
+                baseEvals.push(base);
                 const residualVector = Array.isArray(base.residuals) ? base.residuals.slice() : [];
                 return residualVector.concat(base.constraints);
               });
@@ -10859,10 +11236,17 @@ export async function runOptimizationMVP(options = {}) {
                 residuals.push([]);
                 continue;
               }
-              const base = await evalSQPAtXUncached(candidatePoints[candidateIndex], seededValues);
+              const base = await evalSQPAtXUncached(candidatePoints[candidateIndex], seededValues, {
+                forceFullOperandEval: kktForceFullOperandSweep,
+                priorityOperandKeys: kktPriorityOperandKeys,
+              });
+              baseEvals.push(base);
               const residualVector = Array.isArray(base.residuals) ? base.residuals.slice() : [];
               residuals.push(residualVector.concat(Array.isArray(base.constraints) ? base.constraints : []));
             }
+          }
+          if (typeof onBaseEvalBatch === 'function') {
+            onBaseEvalBatch(baseEvals);
           }
           if (nativeBatchFdParityStatus === 'unchecked') {
             const reference = await evalAugmentedResiduals(
@@ -11945,6 +12329,37 @@ export async function runOptimizationMVP(options = {}) {
       const kktSqpScoreProbeRejectStreak = Number.isFinite(Number(opts?.kktSqpScoreProbeRejectStreak))
         ? Math.max(1, Math.floor(Number(opts.kktSqpScoreProbeRejectStreak)))
         : 1;
+      const kktSqpScoreProbeMaxIter = Number.isFinite(Number(opts?.kktSqpScoreProbeMaxIter))
+        ? Math.max(0, Math.floor(Number(opts.kktSqpScoreProbeMaxIter)))
+        : 10;
+      const kktSqpScoreProbeMinViolation = Number.isFinite(Number(opts?.kktSqpScoreProbeMinViolation))
+        ? Math.max(0, Number(opts.kktSqpScoreProbeMinViolation))
+        : 0.02;
+      const kktSqpScoreProbeMaxVariables = Number.isFinite(Number(opts?.kktSqpScoreProbeMaxVariables))
+        ? Math.max(1, Math.floor(Number(opts.kktSqpScoreProbeMaxVariables)))
+        : 12;
+      const kktSqpScoreProbeMinColumns = Number.isFinite(Number(opts?.kktSqpScoreProbeMinColumns))
+        ? Math.max(1, Math.floor(Number(opts.kktSqpScoreProbeMinColumns)))
+        : 2;
+      const kktSqpScoreProbeEarlyExitDxRatio = Number.isFinite(Number(opts?.kktSqpScoreProbeEarlyExitDxRatio))
+        ? Math.max(0, Math.min(1, Number(opts.kktSqpScoreProbeEarlyExitDxRatio)))
+        : 0.35;
+      const kktSqpScoreProbeEarlyAcceptRelImprove = Number.isFinite(Number(opts?.kktSqpScoreProbeEarlyAcceptRelImprove))
+        ? Math.max(0, Number(opts.kktSqpScoreProbeEarlyAcceptRelImprove))
+        : 0.002;
+      const kktSqpScoreProbeAutoCap = opts?.kktSqpScoreProbeAutoCap !== false;
+      const kktSqpLookaheadRejectStreakLimit = Number.isFinite(Number(opts?.kktSqpLookaheadRejectStreakLimit))
+        ? Math.max(0, Math.floor(Number(opts.kktSqpLookaheadRejectStreakLimit)))
+        : 0;
+      const kktStrictRefineTailStartIter = Number.isFinite(Number(opts?.kktStrictRefineTailStartIter))
+        ? Math.max(0, Math.floor(Number(opts.kktStrictRefineTailStartIter)))
+        : 8;
+      const kktStrictRefineTailMaxViolation = Number.isFinite(Number(opts?.kktStrictRefineTailMaxViolation))
+        ? Math.max(0, Number(opts.kktStrictRefineTailMaxViolation))
+        : 1.0;
+      const kktStrictRefineTailRejectStreak = Number.isFinite(Number(opts?.kktStrictRefineTailRejectStreak))
+        ? Math.max(0, Math.floor(Number(opts.kktStrictRefineTailRejectStreak)))
+        : 1;
       let jacobianReuseSinceRefresh = 0;
       let forceJacobianRefreshNextIter = false;
       let poorModelStreak = 0;
@@ -12058,6 +12473,26 @@ export async function runOptimizationMVP(options = {}) {
         const currentMaxViol = currentConstraints.length > 0 
           ? Math.max(0, ...currentConstraints) 
           : 0;
+
+        const periodicFullSweepDue = (iter % kktPeriodicFullSweepEvery) === 0;
+        kktForceFullOperandSweep = periodicFullSweepDue;
+        if (periodicFullSweepDue) {
+          kktPriorityOperandKeys = new Set<string>();
+        } else {
+          const sortedPriorityKeys = Array.from(kktOperandPriorityScores.entries())
+            .sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0))
+            .slice(0, kktPriorityOperandTopK)
+            .map(([key]) => key);
+          kktPriorityOperandKeys = new Set<string>(sortedPriorityKeys);
+        }
+        if (__profile?.counts) {
+          if (periodicFullSweepDue) {
+            __profile.counts.kktPriorityFullSweeps = (Number(__profile.counts.kktPriorityFullSweeps) || 0) + 1;
+          } else {
+            __profile.counts.kktPrioritySelectiveSweeps = (Number(__profile.counts.kktPrioritySelectiveSweeps) || 0) + 1;
+            __profile.counts.kktPriorityOperandKeys = (Number(__profile.counts.kktPriorityOperandKeys) || 0) + kktPriorityOperandKeys.size;
+          }
+        }
 
         // --- 1. Compute residuals and Jacobian ---
         const aug0 = await evalAugmentedResiduals(currentX, lambdaVec, mu, currentMaxViol);
@@ -12661,6 +13096,7 @@ export async function runOptimizationMVP(options = {}) {
           useKktSqp ? kktSqpLineSearchMaxBacktrack : lineSearchMaxBacktrack,
           kktSqpStepLookahead,
         );
+        const recoveryAlphas = useKktSqp ? [1, 0.5] : alphas;
         
         let accepted = false;
         let nextX = currentX.slice();
@@ -12671,6 +13107,7 @@ export async function runOptimizationMVP(options = {}) {
         let acceptedDxStep: number[] | null = null;
         let acceptedSqpModelStep = false;
         let acceptedMaxViolation = currentMaxViol;
+        let acceptedBaseEval: any = null;
         let allowSqpLookahead = false;
         // 【追加】LM法と同じく、二次モデルによる予測減少量(pred)を計算する関数
         const predictedReductionForStep = (dxStep: number[]) => {
@@ -12715,26 +13152,36 @@ export async function runOptimizationMVP(options = {}) {
         };
 
         let lastAlpha = 0; // Track last alpha tried for progress reporting
+        const lineSearchCurrentXKey = buildKktXKey(currentX);
+        const lineSearchTriedKeys = new Set<string>([lineSearchCurrentXKey]);
         for (const alpha of alphas) {
           const isLookaheadAlpha = useKktSqp && alpha > 1;
           if (isLookaheadAlpha && !allowSqpLookahead) continue;
+          const dxStep = dx.map(v => alpha * v);
+          const trialX = clampToBounds(currentX.map((x, i) => x + dxStep[i]));
+          const trialKey = buildKktXKey(trialX);
+          if (lineSearchTriedKeys.has(trialKey)) {
+            if (__profile?.counts) {
+              __profile.counts.kktLineSearchDedupSkips = (Number(__profile.counts.kktLineSearchDedupSkips) || 0) + 1;
+            }
+            continue;
+          }
+          lineSearchTriedKeys.add(trialKey);
           if (__profile && __profile.counts) {
             __profile.counts.kktCandidateEvalCount = (Number(__profile.counts.kktCandidateEvalCount) || 0) + 1;
             if (alpha < 1) {
               __profile.counts.kktLineSearchBacktracks = (Number(__profile.counts.kktLineSearchBacktracks) || 0) + 1;
             }
           }
-          const dxStep = dx.map(v => alpha * v);
-          const trialX = clampToBounds(currentX.map((x, i) => x + dxStep[i]));
           const actualDxStep = trialX.map((value, index) => value - currentX[index]);
-          const aug1 = await evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
-          const r1 = aug1.residuals;
-          const cost1 = useKktSqp
+          let aug1 = await evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
+          let r1 = aug1.residuals;
+          let cost1 = useKktSqp
             ? evaluateSqpFilterMerit(aug1.base, mu)
             : r1.reduce((acc, v) => acc + v * v, 0);
-          const score1 = Number.isFinite(Number(aug1?.base?.requirementScore)) ? Number(aug1.base.requirementScore) : objectiveForKKT(trialX);
-          const trialConstraints = Array.isArray(aug1?.base?.constraints) ? aug1.base.constraints : [];
-          const trialMaxViol = trialConstraints.length > 0 ? Math.max(0, ...trialConstraints) : 0;
+          let score1 = Number.isFinite(Number(aug1?.base?.requirementScore)) ? Number(aug1.base.requirementScore) : objectiveForKKT(trialX);
+          let trialConstraints = Array.isArray(aug1?.base?.constraints) ? aug1.base.constraints : [];
+          let trialMaxViol = trialConstraints.length > 0 ? Math.max(0, ...trialConstraints) : 0;
           
           lastAlpha = alpha; // Track for progress report
           
@@ -12764,6 +13211,67 @@ export async function runOptimizationMVP(options = {}) {
               : (safeFeasibilityTransition || costDominantProgress || scoreDominantProgress || violationDominantProgress));
 
           if (acceptTrial) {
+            const strictRefineForcedSweep = (iter % kktPeriodicFullSweepEvery) === 0;
+            const strictRefineTailThrottle = useKktSqp
+              && iter >= kktStrictRefineTailStartIter
+              && currentMaxViol <= kktStrictRefineTailMaxViolation
+              && kktRejectStreak >= kktStrictRefineTailRejectStreak;
+            const shouldRunStrictRefine = kktStrictRefineAcceptedCandidates
+              && (preFeasible || strictRefineForcedSweep || alpha <= 1)
+              && (!strictRefineTailThrottle || strictRefineForcedSweep);
+            if (shouldRunStrictRefine) {
+              const strictBase = await evalSQPAtXStrict(trialX);
+              const strictAug = buildAugmentedResidualsFromBase(strictBase, lambdaVec, mu, currentMaxViol);
+              const strictResiduals = Array.isArray(strictAug?.residuals) ? strictAug.residuals : [];
+              const strictCost = useKktSqp
+                ? evaluateSqpFilterMerit(strictBase, mu)
+                : strictResiduals.reduce((acc, v) => acc + v * v, 0);
+              const strictScore = Number.isFinite(Number(strictBase?.requirementScore))
+                ? Number(strictBase.requirementScore)
+                : score1;
+              const strictConstraints = Array.isArray(strictBase?.constraints) ? strictBase.constraints : [];
+              const strictMaxViol = strictConstraints.length > 0 ? Math.max(0, ...strictConstraints) : 0;
+
+              const strictImprovedCost = Number.isFinite(strictCost) && Number.isFinite(cost0) && strictCost < (cost0 - 1e-12);
+              const strictImprovedScore = Number.isFinite(strictScore) && Number.isFinite(score0) && strictScore < (score0 - 1e-12);
+              const strictImprovedViolation = Number.isFinite(strictMaxViol) && Number.isFinite(currentMaxViol) && strictMaxViol < (currentMaxViol - 1e-9);
+              const strictNonWorsenedCost = Number.isFinite(strictCost) && Number.isFinite(cost0) && strictCost <= (cost0 + 1e-12);
+              const strictNonWorsenedScore = Number.isFinite(strictScore) && Number.isFinite(score0) && strictScore <= (score0 + 1e-12);
+              const strictBecameFeasible = strictMaxViol <= 1e-6;
+              const strictBoundedNonmonotoneScore = Number.isFinite(strictScore)
+                && strictScore <= localScoreCeiling
+                && strictScore <= bestScoreCeiling;
+              const strictCostDominant = strictImprovedCost
+                && strictBoundedNonmonotoneScore
+                && kktAllowNonmonotoneScore
+                && nonmonotoneAcceptStreak < 2;
+              const strictScoreDominant = strictImprovedScore;
+              const strictViolationDominant = strictImprovedViolation && strictNonWorsenedCost && strictNonWorsenedScore;
+              const strictSafeTransition = strictBecameFeasible && (strictNonWorsenedCost || strictNonWorsenedScore);
+              const strictAccept = currentConstraints.length === 0
+                ? strictScoreDominant
+                : (preFeasible
+                  ? (strictCostDominant || strictScoreDominant)
+                  : (strictSafeTransition || strictCostDominant || strictScoreDominant || strictViolationDominant));
+
+              if (!strictAccept) {
+                if (__profile?.counts) {
+                  __profile.counts.kktStrictRefineRejectedCandidates = (Number(__profile.counts.kktStrictRefineRejectedCandidates) || 0) + 1;
+                }
+                continue;
+              }
+
+              aug1 = strictAug;
+              r1 = strictResiduals;
+              cost1 = strictCost;
+              score1 = strictScore;
+              trialConstraints = strictConstraints;
+              trialMaxViol = strictMaxViol;
+              if (__profile?.counts) {
+                __profile.counts.kktStrictRefineAcceptedCandidates = (Number(__profile.counts.kktStrictRefineAcceptedCandidates) || 0) + 1;
+              }
+            }
+
             const replaceAccepted = !accepted || !isLookaheadAlpha || isBetterSqpLookaheadCandidate(
               { score: acceptedScore, maxViolation: acceptedMaxViolation },
               { score: score1, maxViolation: trialMaxViol },
@@ -12777,6 +13285,7 @@ export async function runOptimizationMVP(options = {}) {
             acceptedAlpha = alpha;
             acceptedDxStep = actualDxStep;
             acceptedMaxViolation = trialMaxViol;
+            acceptedBaseEval = aug1?.base || null;
             
             // 【追加】予測と実際の減少量の比 (rho) を計算
             const pred = predictedReductionForStep(actualDxStep);
@@ -12791,7 +13300,8 @@ export async function runOptimizationMVP(options = {}) {
             if (useKktSqp && alpha === 1) {
               allowSqpLookahead = kktSqpStepLookahead
                 && improvedScore
-                && nonWorsenedViolation;
+                && nonWorsenedViolation
+                && kktRejectStreak <= kktSqpLookaheadRejectStreakLimit;
               if (allowSqpLookahead) {
                 if (__profile && __profile.counts) {
                   __profile.counts.kktSqpLookaheadEligible = (Number(__profile.counts.kktSqpLookaheadEligible) || 0) + 1;
@@ -12809,6 +13319,8 @@ export async function runOptimizationMVP(options = {}) {
         }
 
         if (!accepted && useKktSqp && n > 0) {
+          const currentXKey = lineSearchCurrentXKey;
+          const recoveryTriedKeys = new Set<string>(lineSearchTriedKeys);
           const scoreDirection = buildSqpModelGradientFallbackDirection(
             sqpModelGradient,
             trustScales,
@@ -12819,9 +13331,17 @@ export async function runOptimizationMVP(options = {}) {
             __profile.counts.kktSqpCentralDifferenceProbesAvoided = (Number(__profile.counts.kktSqpCentralDifferenceProbesAvoided) || 0) + 2 * n;
           }
           if (scoreDirection) {
-            for (const alpha of alphas) {
+            for (const alpha of recoveryAlphas) {
               const dxStep = scoreDirection.map(value => alpha * value);
               const trialX = clampToBounds(currentX.map((value, col) => value + dxStep[col]));
+              const trialKey = buildKktXKey(trialX);
+              if (recoveryTriedKeys.has(trialKey)) {
+                if (__profile?.counts) {
+                  __profile.counts.kktSqpRecoveryDedupSkips = (Number(__profile.counts.kktSqpRecoveryDedupSkips) || 0) + 1;
+                }
+                continue;
+              }
+              recoveryTriedKeys.add(trialKey);
               const aug1 = await evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
               const score1 = Number(aug1?.base?.requirementScore);
               lastAlpha = alpha;
@@ -12840,18 +13360,105 @@ export async function runOptimizationMVP(options = {}) {
               break;
             }
           }
-          if (!accepted && (kktRejectStreak + 1) >= kktSqpScoreProbeRejectStreak) {
+          const allowExpensiveScoreProbe = iter < kktSqpScoreProbeMaxIter
+            || currentMaxViol >= kktSqpScoreProbeMinViolation;
+          if (!accepted && (kktRejectStreak + 1) >= kktSqpScoreProbeRejectStreak && allowExpensiveScoreProbe) {
             const scoreGradient = new Array(n).fill(0);
             let coordinateBestScore = score0;
             let coordinateBestX: number[] | null = null;
-            for (let col = 0; col < n; col++) {
+            const scoreProbeRankedColumns = Array.from({ length: n }, (_, index) => ({
+              index,
+              absDx: Math.abs(Number(dx?.[index]) || 0),
+            })).sort((lhs, rhs) => rhs.absDx - lhs.absDx);
+            const maxProbeAbsDx = scoreProbeRankedColumns.length > 0
+              ? Math.abs(Number(scoreProbeRankedColumns[0]?.absDx) || 0)
+              : 0;
+            const scoreProbeVariableOrder = scoreProbeRankedColumns.map(item => item.index);
+            const autoScoreProbeCap = kktSqpScoreProbeAutoCap
+              ? Math.max(
+                kktSqpScoreProbeMinColumns,
+                Math.min(kktSqpScoreProbeMaxVariables, Math.max(4, Math.ceil(Math.sqrt(Math.max(1, n)) * 2))),
+              )
+              : kktSqpScoreProbeMaxVariables;
+            const scoreProbeColumns = scoreProbeVariableOrder.slice(
+              0,
+              Math.max(1, Math.min(n, autoScoreProbeCap)),
+            );
+            let scoreProbeEarlyExit = false;
+            let scoreProbeExecutedEvaluations = 0;
+            const scoreProbeEvalCache = new Map<string, number>();
+            for (let probeIndex = 0; probeIndex < scoreProbeColumns.length; probeIndex++) {
+              const col = scoreProbeColumns[probeIndex];
               const variable = { id: varIds[col], key: vars[col]?.key, value: currentX[col] };
               const step = finiteDifferenceStepForVar(variable);
               if (!Number.isFinite(step) || step <= 0) continue;
               const plusX = clampToBounds(currentX.map((value, index) => index === col ? value + step : value));
               const minusX = clampToBounds(currentX.map((value, index) => index === col ? value - step : value));
-              const plusScore = Number((await evalSQPAtX(plusX))?.requirementScore);
-              const minusScore = Number((await evalSQPAtX(minusX))?.requirementScore);
+              const plusKey = buildKktXKey(plusX);
+              const minusKey = buildKktXKey(minusX);
+              if (plusKey === currentXKey && minusKey === currentXKey) {
+                continue;
+              }
+
+              const unresolvedBatchPoints: number[][] = [];
+              const unresolvedBatchKeys: string[] = [];
+              if (plusKey !== currentXKey && !scoreProbeEvalCache.has(plusKey)) {
+                unresolvedBatchPoints.push(plusX);
+                unresolvedBatchKeys.push(plusKey);
+              }
+              if (minusKey !== currentXKey && minusKey !== plusKey && !scoreProbeEvalCache.has(minusKey)) {
+                unresolvedBatchPoints.push(minusX);
+                unresolvedBatchKeys.push(minusKey);
+              }
+              if (unresolvedBatchPoints.length >= 2) {
+                let batchBaseEvals: any[] | null = null;
+                const batchResiduals = await evalAugmentedResidualsNativeBatch(
+                  unresolvedBatchPoints,
+                  lambdaVec,
+                  mu,
+                  currentMaxViol,
+                  (baseEvals) => {
+                    batchBaseEvals = Array.isArray(baseEvals) ? baseEvals : null;
+                  },
+                );
+                if (Array.isArray(batchResiduals)
+                  && batchResiduals.length === unresolvedBatchPoints.length
+                  && Array.isArray(batchBaseEvals)
+                  && batchBaseEvals.length === unresolvedBatchPoints.length) {
+                  for (let batchIndex = 0; batchIndex < unresolvedBatchKeys.length; batchIndex++) {
+                    const key = unresolvedBatchKeys[batchIndex];
+                    const score = Number(batchBaseEvals[batchIndex]?.requirementScore);
+                    if (Number.isFinite(score)) {
+                      scoreProbeEvalCache.set(key, score);
+                      scoreProbeExecutedEvaluations += 1;
+                    }
+                  }
+                  if (__profile?.counts) {
+                    __profile.counts.kktSqpScoreProbeBatchPairs = (Number(__profile.counts.kktSqpScoreProbeBatchPairs) || 0) + 1;
+                  }
+                }
+              }
+
+              let plusScore = Number.NaN;
+              let minusScore = Number.NaN;
+              if (plusKey !== currentXKey) {
+                if (scoreProbeEvalCache.has(plusKey)) {
+                  plusScore = Number(scoreProbeEvalCache.get(plusKey));
+                } else {
+                  plusScore = Number((await evalSQPAtX(plusX))?.requirementScore);
+                  scoreProbeEvalCache.set(plusKey, plusScore);
+                  scoreProbeExecutedEvaluations += 1;
+                }
+              }
+              if (minusKey !== currentXKey) {
+                if (scoreProbeEvalCache.has(minusKey)) {
+                  minusScore = Number(scoreProbeEvalCache.get(minusKey));
+                } else {
+                  minusScore = Number((await evalSQPAtX(minusX))?.requirementScore);
+                  scoreProbeEvalCache.set(minusKey, minusScore);
+                  scoreProbeExecutedEvaluations += 1;
+                }
+              }
               if (Number.isFinite(plusScore) && plusScore < coordinateBestScore) {
                 coordinateBestScore = plusScore;
                 coordinateBestX = plusX;
@@ -12863,6 +13470,22 @@ export async function runOptimizationMVP(options = {}) {
               if (Number.isFinite(plusScore) && Number.isFinite(minusScore)) {
                 scoreGradient[col] = (plusScore - minusScore) / (2 * step);
               }
+              const probesCompleted = probeIndex + 1;
+              const scoreImprovement = Number.isFinite(coordinateBestScore) && Number.isFinite(score0)
+                ? Math.max(0, score0 - coordinateBestScore)
+                : 0;
+              const relImproveThreshold = Number.isFinite(score0)
+                ? Math.max(1e-12, Math.abs(score0) * kktSqpScoreProbeEarlyAcceptRelImprove)
+                : Number.POSITIVE_INFINITY;
+              const probeAbsDx = Number(scoreProbeRankedColumns[probeIndex]?.absDx) || 0;
+              const probeRelDx = maxProbeAbsDx > 0 ? (probeAbsDx / maxProbeAbsDx) : 0;
+              const canEarlyExit = probesCompleted >= kktSqpScoreProbeMinColumns && scoreImprovement > 0;
+              const lowLeverageTail = canEarlyExit && probeRelDx <= kktSqpScoreProbeEarlyExitDxRatio;
+              const confidentImprovement = canEarlyExit && scoreImprovement >= relImproveThreshold;
+              if (lowLeverageTail || confidentImprovement) {
+                scoreProbeEarlyExit = true;
+                break;
+              }
             }
             const scoreProbeDirection = buildSqpModelGradientFallbackDirection(
               scoreGradient,
@@ -12871,7 +13494,10 @@ export async function runOptimizationMVP(options = {}) {
             );
             if (__profile && __profile.counts) {
               __profile.counts.kktSqpScoreProbeRecoveries = (Number(__profile.counts.kktSqpScoreProbeRecoveries) || 0) + 1;
-              __profile.counts.kktSqpScoreProbeEvaluations = (Number(__profile.counts.kktSqpScoreProbeEvaluations) || 0) + 2 * n;
+              __profile.counts.kktSqpScoreProbeEvaluations = (Number(__profile.counts.kktSqpScoreProbeEvaluations) || 0) + scoreProbeExecutedEvaluations;
+              if (scoreProbeEarlyExit) {
+                __profile.counts.kktSqpScoreProbeEarlyExits = (Number(__profile.counts.kktSqpScoreProbeEarlyExits) || 0) + 1;
+              }
             }
             if (coordinateBestX) {
               const aug1 = await evalAugmentedResiduals(coordinateBestX, lambdaVec, mu, currentMaxViol);
@@ -12891,9 +13517,17 @@ export async function runOptimizationMVP(options = {}) {
               }
             }
             if (!accepted && scoreProbeDirection) {
-              for (const alpha of alphas) {
+              for (const alpha of recoveryAlphas) {
                 const dxStep = scoreProbeDirection.map(value => alpha * value);
                 const trialX = clampToBounds(currentX.map((value, col) => value + dxStep[col]));
+                const trialKey = buildKktXKey(trialX);
+                if (recoveryTriedKeys.has(trialKey)) {
+                  if (__profile?.counts) {
+                    __profile.counts.kktSqpRecoveryDedupSkips = (Number(__profile.counts.kktSqpRecoveryDedupSkips) || 0) + 1;
+                  }
+                  continue;
+                }
+                recoveryTriedKeys.add(trialKey);
                 const aug1 = await evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
                 const score1 = Number(aug1?.base?.requirementScore);
                 lastAlpha = alpha;
@@ -12912,6 +13546,8 @@ export async function runOptimizationMVP(options = {}) {
                 break;
               }
             }
+          } else if (!accepted && (kktRejectStreak + 1) >= kktSqpScoreProbeRejectStreak && __profile?.counts) {
+            __profile.counts.kktSqpScoreProbeSkipped = (Number(__profile.counts.kktSqpScoreProbeSkipped) || 0) + 1;
           }
         }
         
@@ -13144,7 +13780,9 @@ export async function runOptimizationMVP(options = {}) {
 
           // 【高速化】evalSQPAtX(currentX) を一度だけ計算し、ベスト更新ログ・bestMerit 計算で共有する
           // （以前は新ベスト達成時に同じ x で 2 回呼んでいた。kktEvalCache はあるが冗長を排除）
-          const acceptedConstraintEval = await evalSQPAtX(currentX);
+          const acceptedConstraintEval = (acceptedBaseEval && typeof acceptedBaseEval === 'object')
+            ? acceptedBaseEval
+            : await evalSQPAtX(currentX);
           postEvalCached = acceptedConstraintEval;
           const currentEval = kktEvaluationToComposite(acceptedConstraintEval);
           const currentScore = currentEval.score;
@@ -13788,22 +14426,60 @@ export async function runOptimizationMVP(options = {}) {
       // chief-ray solve fallbacks. Prefer the restored best eval if available.
       const finalCompositeEval = restoredBestFinalEval
         || (hasHeavyAsyncRequirementOperands ? bestFinalEval : evalCompositeFromRequirementsProfiled());
-      const finalViolationScore = Number.isFinite(finalCompositeEval?.violationScore)
-        ? finalCompositeEval.violationScore
+      let strictValidation: any = null;
+      let strictFinalCompositeEval: any = null;
+      if (kktStrictRefineAcceptedCandidates) {
+        try {
+          const strictTargetX = Array.isArray(bestScoreXSnapshot) && bestScoreXSnapshot.length === currentX.length
+            ? bestScoreXSnapshot
+            : bestX;
+          const strictBaseEval = await evalSQPAtXStrict(strictTargetX);
+          strictFinalCompositeEval = kktEvaluationToComposite(strictBaseEval);
+          strictValidation = {
+            executed: true,
+            score: Number(strictFinalCompositeEval?.score),
+            feasible: !!strictFinalCompositeEval?.feasible,
+            violationScore: Number(strictFinalCompositeEval?.violationScore),
+            spotRayCount: kktStrictSpotRayCount,
+            mtfSamplingSize: kktStrictMtfSamplingSize,
+            rayGridSize: kktStrictRayGridSize,
+          };
+          if (__profile?.counts) {
+            __profile.counts.kktStrictFinalVerificationCalls = (Number(__profile.counts.kktStrictFinalVerificationCalls) || 0) + 1;
+          }
+        } catch (error) {
+          strictValidation = {
+            executed: false,
+            error: String(error instanceof Error ? error.message : error),
+            spotRayCount: kktStrictSpotRayCount,
+            mtfSamplingSize: kktStrictMtfSamplingSize,
+            rayGridSize: kktStrictRayGridSize,
+          };
+          if (__profile?.counts) {
+            __profile.counts.kktStrictFinalVerificationErrors = (Number(__profile.counts.kktStrictFinalVerificationErrors) || 0) + 1;
+          }
+        }
+      }
+
+      const verificationEval = strictFinalCompositeEval || finalCompositeEval;
+      const finalViolationScore = Number.isFinite(verificationEval?.violationScore)
+        ? verificationEval.violationScore
         : (bestFinalEval?.violationScore ?? 0);
-      const finalSoftPenalty = Number.isFinite(finalCompositeEval?.softPenalty)
-        ? finalCompositeEval.softPenalty
+      const finalSoftPenalty = Number.isFinite(verificationEval?.softPenalty)
+        ? verificationEval.softPenalty
         : (bestFinalEval?.softPenalty ?? 0);
-      const finalFeasible = (finalCompositeEval?.feasible !== undefined)
-        ? !!finalCompositeEval.feasible
+      const finalFeasible = (verificationEval?.feasible !== undefined)
+        ? !!verificationEval.feasible
         : (bestFinalEval?.feasible ?? false);
-      const finalBestScore = Number.isFinite(bestFinalEval?.score)
+      const finalBestScore = Number.isFinite(verificationEval?.score)
+        ? Number(verificationEval.score)
+        : (Number.isFinite(bestFinalEval?.score)
         ? bestFinalEval.score
-        : bestScore;
+        : bestScore);
       const finalObjectiveScore = Number.isFinite(finalBestScore)
         ? finalBestScore
-        : (Number.isFinite(finalCompositeEval?.score)
-          ? finalCompositeEval.score
+        : (Number.isFinite(verificationEval?.score)
+          ? verificationEval.score
           : finalScore);
 
       if (onProgress) {
@@ -13839,6 +14515,7 @@ export async function runOptimizationMVP(options = {}) {
         objectiveScore: finalObjectiveScore,
         hardViolations: bestFinalEval?.hardViolations ?? [],
         softViolations: bestFinalEval?.softViolations ?? [],
+        strictValidation,
         ...doneUiSnapshot
       };
     } catch (e: any) {

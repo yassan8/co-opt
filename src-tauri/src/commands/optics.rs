@@ -335,6 +335,8 @@ pub struct NativeSpotSeries {
     pub wavelength_um: Option<f64>,
     pub points: Vec<SpotPoint>,
     pub chief_point_um: Option<SpotPoint>,
+    pub rms_um: Option<f64>,
+    pub diameter_um: Option<f64>,
     pub has_field_angle: bool,
 }
 
@@ -1461,6 +1463,32 @@ pub fn run_native_spot_raytrace(req: NativeSpotRaytraceRequest) -> Result<Native
                 })
             });
 
+        let (rms_um, diameter_um) = if let Some(chief) = &chief_point_um {
+            let mut sum_sq = 0.0_f64;
+            let mut max_r2 = 0.0_f64;
+            let mut count = 0usize;
+            for point in &points {
+                let dx = point.x_um - chief.x_um;
+                let dy = point.y_um - chief.y_um;
+                if !(dx.is_finite() && dy.is_finite()) {
+                    continue;
+                }
+                let r2 = dx * dx + dy * dy;
+                sum_sq += r2;
+                if r2 > max_r2 {
+                    max_r2 = r2;
+                }
+                count += 1;
+            }
+            if count > 0 {
+                (Some((sum_sq / count as f64).sqrt()), Some(2.0 * max_r2.sqrt()))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
         let hit_rays = points.len();
         total_hit_rays += hit_rays;
         max_hit_rays = max_hit_rays.max(hit_rays);
@@ -1481,6 +1509,8 @@ pub fn run_native_spot_raytrace(req: NativeSpotRaytraceRequest) -> Result<Native
             wavelength_um: if wl_um.is_finite() && wl_um > 0.0 { Some(wl_um) } else { None },
             points,
             chief_point_um,
+            rms_um,
+            diameter_um,
             has_field_angle,
         });
     }
