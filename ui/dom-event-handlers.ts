@@ -9947,6 +9947,36 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         return { wrapper, content };
     };
 
+    const getPreferredGlassManufacturers = (): string[] => {
+        try {
+            if (typeof localStorage === 'undefined') return [];
+            const raw = JSON.parse(localStorage.getItem('coopt.glassMap.defaultManufacturers') || '[]');
+            if (!Array.isArray(raw)) return [];
+            const allowed = new Set(['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
+            const out: string[] = [];
+            for (const value of raw) {
+                const upper = String(value ?? '').trim().toUpperCase();
+                if (!upper || !allowed.has(upper)) continue;
+                out.push(upper);
+            }
+            return Array.from(new Set(out));
+        } catch (_) {
+            return [];
+        }
+    };
+
+    const isGlassAllowedByPreferredManufacturers = (name: string, preferredManufacturers: string[]): boolean => {
+        if (!Array.isArray(preferredManufacturers) || preferredManufacturers.length === 0) return true;
+        try {
+            const glass = getGlassDataWithSellmeier(name);
+            const manufacturer = String(glass?.manufacturer ?? '').trim().toUpperCase();
+            if (!manufacturer) return false;
+            return preferredManufacturers.includes(manufacturer);
+        } catch (_) {
+            return false;
+        }
+    };
+
     const openQuickGlassPicker = (results: any[], onPick: (glass: any) => void): void => {
         if (!Array.isArray(results) || results.length === 0) {
             alert('No glasses found in database.');
@@ -10338,13 +10368,37 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 try { event.preventDefault(); } catch (_) {}
                 try { event.stopPropagation(); } catch (_) {}
                 const query = String(input.value ?? '').trim();
+
+                const parseMaterialIndexSuffix = (pathValue: string): string => {
+                    const key = String(pathValue || '').trim().split('.').pop() || '';
+                    const m = key.toLowerCase().match(/^material(\d+)$/);
+                    return m && m[1] ? m[1] : '';
+                };
+                const suffix = parseMaterialIndexSuffix(materialPath);
+                const rindexKey = suffix ? `rindex${suffix}` : 'rindex';
+                const abbeKey = suffix ? `abbe${suffix}` : 'abbe';
+                const vdKey = suffix ? `vd${suffix}` : 'vd';
+
+                const p: any = params && typeof params === 'object' ? params : null;
+                let targetNd = Number.isFinite(Number(p?.[rindexKey])) ? Number(p?.[rindexKey]) : NaN;
+                let targetVd = Number.isFinite(Number(p?.[abbeKey])) ? Number(p?.[abbeKey]) : NaN;
+                if (!Number.isFinite(targetVd) || targetVd <= 0) {
+                    targetVd = Number.isFinite(Number(p?.[vdKey])) ? Number(p?.[vdKey]) : NaN;
+                }
+
                 const numericNd = /^[-+]?((\d+\.\d*)|(\d*\.\d+)|(\d+))(e[-+]?\d+)?$/i.test(query) ? Number(query) : NaN;
+                if (!Number.isFinite(targetNd) && Number.isFinite(numericNd) && numericNd > 0 && numericNd < 4) {
+                    targetNd = numericNd;
+                }
+
                 let results: any[] = [];
-                if (Number.isFinite(numericNd) && numericNd > 0 && numericNd < 4 && Number.isFinite(Number(abbeValue)) && Number(abbeValue) > 0) {
-                    results = findSimilarGlassesByNdVd(Number(numericNd), Number(abbeValue), 12);
+                if (Number.isFinite(targetNd) && targetNd > 0 && targetNd < 4 && Number.isFinite(targetVd) && targetVd > 0) {
+                    results = findSimilarGlassesByNdVd(Number(targetNd), Number(targetVd), 12);
                 } else {
                     results = findSimilarGlassNames(query || String(materialValue ?? ''), 12);
                 }
+                const preferredManufacturers = getPreferredGlassManufacturers();
+                results = results.filter((glass: any) => isGlassAllowedByPreferredManufacturers(glass?.name, preferredManufacturers));
                 openQuickGlassPicker(results, applyGlass);
             };
             stopRowToggle(searchBtn);
@@ -12049,7 +12103,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             const p: any = params && typeof params === 'object' ? params : null;
                             if (!p) return null;
 
-                            const materialKey = String(label || '').trim();
+                            const materialKey = String(path || '').split('.').pop() || String(label || '').trim();
                             const abbeKey = resolveAbbeKeyForMaterial(materialKey);
                             const vdKey = resolveVdKeyForMaterial(materialKey);
 
@@ -12073,7 +12127,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             const p: any = params && typeof params === 'object' ? params : null;
                             if (!p) return null;
 
-                            const materialKey = String(label || '').trim();
+                            const materialKey = String(path || '').split('.').pop() || String(label || '').trim();
                             const rindexKey = resolveRindexKeyForMaterial(materialKey);
                             const rindexVal = parseFloat(String(p[rindexKey]));
                             if (Number.isFinite(rindexVal) && rindexVal > 1 && rindexVal < 4) return rindexVal;
@@ -12091,67 +12145,47 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         };
                         
                         let similarGlasses: any[] = [];
-                        let isNumericSearch = false;
-                        
-                        // Check if current material is a numeric value
-                        const numericValue = parseStrictNumericMaterialNd(currentMaterial);
-                        if (numericValue !== null) {
-                            // Search by nd plus sibling abbe/vd
-                            isNumericSearch = true;
-                            try {
-                                const targetVd = resolveTargetVdFromParameters();
-                                if (targetVd === null) {
-                                    alert('Abbe (Vd) value is required for numeric material search.');
-                                    return;
-                                }
-                                similarGlasses = findSimilarGlassesByNdVd(numericValue, targetVd, 20);
-                                console.log('✅ Found', similarGlasses.length, 'glasses with similar nd/vd to', numericValue, targetVd);
-                            } catch (err) {
-                                console.error('❌ Failed to find glasses by numeric nd/abbe:', err);
-                            }
-                        } else {
-                            // Search by nd and vd for glass names
-                            let targetNd: number | null = resolveTargetNdFromParameters();
-                            let targetVd: number | null = resolveTargetVdFromParameters();
-                            
-                            // Try to get current glass properties
-                            if (currentMaterial) {
-                                try {
-                                    const glassData = getGlassDataWithSellmeier(currentMaterial);
-                                    
-                                    if (glassData && glassData.nd !== undefined && glassData.vd !== undefined) {
-                                        if (!Number.isFinite(targetNd)) targetNd = glassData.nd;
-                                        if (!Number.isFinite(targetVd)) targetVd = glassData.vd;
-                                        console.log('✅ Found glass properties - nd:', targetNd, 'vd:', targetVd);
-                                    } else {
-                                        alert('Current material does not have valid nd/vd in the glass database.');
-                                        return;
-                                    }
-                                } catch (err) {
-                                    console.warn('❌ Failed to get glass data:', err);
-                                    alert('Failed to resolve nd/vd from current material.');
-                                    return;
-                                }
-                            } else {
-                                alert('Enter a material name or numeric nd value first.');
-                                return;
-                            }
 
-                            if (!Number.isFinite(targetNd) || !Number.isFinite(targetVd)) {
-                                alert('Valid nd/vd values are required to search similar glasses.');
-                                return;
-                            }
-                            
-                            console.log('🔍 Searching for glasses similar to nd:', targetNd, 'vd:', targetVd);
-                            
-                            // Find similar glasses using imported function
+                        // Prioritize explicit RI/Abbe inputs from sibling fields.
+                        let targetNd: number | null = resolveTargetNdFromParameters();
+                        let targetVd: number | null = resolveTargetVdFromParameters();
+
+                        // If RI field is empty, allow numeric material input as RI fallback.
+                        const numericValue = parseStrictNumericMaterialNd(currentMaterial);
+                        if (!Number.isFinite(targetNd) && numericValue !== null) {
+                            targetNd = numericValue;
+                        }
+
+                        // Only fill missing pieces from current material name if needed.
+                        if (currentMaterial && (!Number.isFinite(targetNd) || !Number.isFinite(targetVd))) {
                             try {
-                                similarGlasses = findSimilarGlassesByNdVd(targetNd as number, targetVd as number, 20);
-                                console.log('✅ Found', similarGlasses.length, 'similar glasses');
+                                const glassData = getGlassDataWithSellmeier(currentMaterial);
+                                if (glassData && Number.isFinite(Number(glassData.nd)) && !Number.isFinite(targetNd)) {
+                                    targetNd = Number(glassData.nd);
+                                }
+                                if (glassData && Number.isFinite(Number(glassData.vd)) && !Number.isFinite(targetVd)) {
+                                    targetVd = Number(glassData.vd);
+                                }
                             } catch (err) {
-                                console.error('❌ Failed to find similar glasses:', err);
+                                console.warn('⚠️ Failed to resolve fallback nd/vd from current material:', err);
                             }
                         }
+
+                        if (!Number.isFinite(targetNd) || !Number.isFinite(targetVd)) {
+                            alert('RI (nd) and Abbe (Vd) values are required to search similar glasses.');
+                            return;
+                        }
+
+                        console.log('🔍 Searching for glasses similar to nd:', targetNd, 'vd:', targetVd);
+                        try {
+                            similarGlasses = findSimilarGlassesByNdVd(targetNd as number, targetVd as number, 20);
+                            console.log('✅ Found', similarGlasses.length, 'similar glasses');
+                        } catch (err) {
+                            console.error('❌ Failed to find similar glasses:', err);
+                        }
+
+                        const preferredManufacturers = getPreferredGlassManufacturers();
+                        similarGlasses = similarGlasses.filter((glass: any) => isGlassAllowedByPreferredManufacturers(glass?.name, preferredManufacturers));
                         
                         if (similarGlasses.length === 0) {
                             alert('No glasses found in database.');

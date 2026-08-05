@@ -240,6 +240,14 @@ export function openGlassMapWindow(
       }
 
       function renderPlot(Plotly) {
+        if (!Array.isArray(points) || points.length === 0) {
+          const host = document.getElementById('plot');
+          if (host) {
+            host.innerHTML = '<div style="padding:12px">No glass points available.</div>';
+          }
+          return;
+        }
+
         const { priced, missing } = splitByPrice(points);
 
         const pricedX = priced.map(p => p.vd);
@@ -305,6 +313,9 @@ export function openGlassMapWindow(
 
         const defaultSelectedUpper = getDefaultManufacturerSelectionUpper();
         const hasDefaultSelection = defaultSelectedUpper && defaultSelectedUpper.size > 0;
+        const hasAnySelectedManufacturer = hasDefaultSelection
+          ? manufacturers.some(mfr => defaultSelectedUpper.has(String(mfr).toUpperCase()))
+          : false;
 
         for (const mfr of manufacturers) {
           const arr = byMfr.get(mfr) || [];
@@ -312,7 +323,7 @@ export function openGlassMapWindow(
           const missingLocal = arr.filter(p => !(Number.isFinite(p.price) && p.price > 0));
 
           const mfrUpper = String(mfr).toUpperCase();
-          const isSelected = !hasDefaultSelection || defaultSelectedUpper.has(mfrUpper);
+          const isSelected = !hasDefaultSelection || !hasAnySelectedManufacturer || defaultSelectedUpper.has(mfrUpper);
           const initialVisible = isSelected ? true : 'legendonly';
 
           // Legend entry: always black marker; when toggled off, Plotly greys it.

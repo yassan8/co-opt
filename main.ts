@@ -2998,13 +2998,26 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
 
         const { minZ, maxZ, centerZ, totalLength, maxY: systemMaxY } = calculateOpticalSystemZRange();
         const includeRayStartMargin = options.includeRayStartMargin !== false;
-        const rayStartMargin = includeRayStartMargin ? 25 : 0;
-        const effectiveMinZ = Math.min(minZ, -rayStartMargin);
-        const effectiveMaxZ = maxZ;
-        const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
-        const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
 
+        let effectiveMinZ = minZ;
+        let effectiveMaxZ = maxZ;
         const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
+        if (Number.isFinite(Number(sceneBounds?.min?.z))) {
+            effectiveMinZ = Math.min(effectiveMinZ, Number(sceneBounds.min.z));
+        }
+        if (Number.isFinite(Number(sceneBounds?.max?.z))) {
+            effectiveMaxZ = Math.max(effectiveMaxZ, Number(sceneBounds.max.z));
+        }
+
+        if (includeRayStartMargin) {
+            const span = Math.max(1e-6, effectiveMaxZ - effectiveMinZ);
+            const symmetricMargin = Math.min(25, Math.max(0.5, span * 0.06));
+            effectiveMinZ -= symmetricMargin;
+            effectiveMaxZ += symmetricMargin;
+        }
+
+        const effectiveTotalLength = Math.max(1e-6, effectiveMaxZ - effectiveMinZ);
+        const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
 
         // Use actual Y bounds so the system stays vertically centered.
         let minY = Number.isFinite(sceneBounds?.min?.y) && Number.isFinite(sceneBounds?.max?.y)
@@ -3133,13 +3146,26 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
 
         const { minZ, maxZ, maxY } = rangeData;
         const includeRayStartMargin = options.includeRayStartMargin !== false;
-        const rayStartMargin = includeRayStartMargin ? 25 : 0;
-        const effectiveMinZ = Math.min(minZ, -rayStartMargin);
-        const effectiveMaxZ = maxZ;
-        const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
-        const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
 
+        let effectiveMinZ = minZ;
+        let effectiveMaxZ = maxZ;
         const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
+        if (Number.isFinite(Number(sceneBounds?.min?.z))) {
+            effectiveMinZ = Math.min(effectiveMinZ, Number(sceneBounds.min.z));
+        }
+        if (Number.isFinite(Number(sceneBounds?.max?.z))) {
+            effectiveMaxZ = Math.max(effectiveMaxZ, Number(sceneBounds.max.z));
+        }
+
+        if (includeRayStartMargin) {
+            const span = Math.max(1e-6, effectiveMaxZ - effectiveMinZ);
+            const symmetricMargin = Math.min(25, Math.max(0.5, span * 0.06));
+            effectiveMinZ -= symmetricMargin;
+            effectiveMaxZ += symmetricMargin;
+        }
+
+        const effectiveTotalLength = Math.max(1e-6, effectiveMaxZ - effectiveMinZ);
+        const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
         let minX = Number.isFinite(sceneBounds?.min?.x) && Number.isFinite(sceneBounds?.max?.x)
             ? Math.min(Number(sceneBounds.min.x), -maxY)
             : -maxY;
