@@ -4629,19 +4629,6 @@ function ensurePopupMessageHandler(): void {
         
         // Handle view-xz and view-yz messages
         if (data.action === 'view-xz' || data.action === 'view-yz') {
-            // Always route cross-section view requests through draw-cross so
-            // tracing uses the latest snapshot rows/objectRows and refraction
-            // is consistent with the Render button path.
-            const routedViewAxis = data.action === 'view-xz' ? 'XZ' : 'YZ';
-            const liveObjectRows = collectLiveObjectRowsFromMainWindow();
-            window.postMessage({
-                ...data,
-                action: 'draw-cross',
-                viewAxis: routedViewAxis,
-                ...(liveObjectRows && liveObjectRows.length > 0 ? { objectRows: liveObjectRows } : {})
-            }, '*');
-            return;
-
             console.log('🎥 Handling popup view action:', data.action);
             if (!w.popup3DWindow) {
                 return;
@@ -4664,9 +4651,7 @@ function ensurePopupMessageHandler(): void {
                     ? data.target
                     : null;
 
-                const hasSavedBounds = !!(popupCamera?.userData?.__drawCrossOrthoBounds);
                 const canSwitchCameraOnly =
-                    hasSavedBounds &&
                     popupScene &&
                     popupCamera &&
                     popupControls &&
@@ -4763,127 +4748,25 @@ function ensurePopupMessageHandler(): void {
                         target: userAdjustedView && targetOverride ? targetOverride : null
                     });
 
-                    try {
-                        const clearSurfacesOnly = (scene: any) => {
-                            if (!scene) return;
-                            const objectsToRemove: any[] = [];
-                            scene.traverse((child: any) => {
-                                const ud = child.userData || {};
-                                if (ud.type === 'popupLensFill' || ud.isUltraDebugOverlay === true) {
-                                    return;
-                                }
-                                if (ud.isRayLine || ud.type === 'ray') {
-                                    return;
-                                }
-
-                                const name = (child.name || '').toString();
-                                const isRing = ud.type === 'semidiaRing' || ud.type === 'ring' || ud.surfaceType === 'ring' || name.toLowerCase().includes('ring');
-                                const isLensSurface = ud.isLensSurface || ud.surfaceType === '3DSurface' || name.toLowerCase().includes('lenssurface') || name.startsWith('surface') || name.startsWith('lens');
-                                const looksLikeTransparentSurface = !!(child.material && child.material.transparent && typeof child.material.opacity === 'number' && child.material.opacity < 1);
-                                
-                                if ((child.isMesh && (isLensSurface || looksLikeTransparentSurface)) || (child.isLine && isRing)) {
-                                    objectsToRemove.push(child);
-                                }
-                            });
-                            [...new Set(objectsToRemove)].forEach((obj: any) => {
-                                scene.remove(obj);
-                                if (obj.geometry) obj.geometry.dispose();
-                                if (obj.material) {
-                                    if (Array.isArray(obj.material)) obj.material.forEach((m: any) => m.dispose());
-                                    else obj.material.dispose();
-                                }
-                            });
-                        };
-
-                        clearSurfacesOnly(popupScene);
-
-                        const { getOpticalSystemRows, drawOpticalSystemSurfaces, drawCrossBeamRays, harmonizeSceneGeometry } = getRequiredFunctions();
-                        const clearRaysOnly = (scene: any) => {
-                            if (!scene) return;
-                            const raysToRemove: any[] = [];
-                            scene.traverse((child: any) => {
-                                const ud = child.userData || {};
-                                if (ud.isRayLine || ud.type === 'ray') {
-                                    raysToRemove.push(child);
-                                }
-                            });
-                            [...new Set(raysToRemove)].forEach((obj: any) => {
-                                scene.remove(obj);
-                                if (obj.geometry) obj.geometry.dispose();
-                                if (obj.material) {
-                                    if (Array.isArray(obj.material)) obj.material.forEach((m: any) => m.dispose());
-                                    else obj.material.dispose();
-                                }
-                            });
-                        };
-                        const opticalSystemRows = resolveRenderSnapshotRows(data, popupWindow) || getOpticalSystemRows();
-                        if (Array.isArray(opticalSystemRows) && opticalSystemRows.length > 0) {
-                            drawOpticalSystemSurfaces({
-                                opticalSystemData: opticalSystemRows,
-                                scene: popupScene,
-                                showSemidiaRing: false,
-                                showSurfaceOrigins: false,
-                                crossSectionOnly: true,
-                                crossSectionDirection: viewAxis,
-                                showDesignIntentLabels: readRenderShowDesignIntentLabelsEnabled()
-                            });
-                            harmonizeSceneGeometry(popupScene);
-                        }
-
-                        const cachedRays = (popupWindow as any).__lastCrossRays || w.__lastCrossRays;
-                        if (Array.isArray(cachedRays) && cachedRays.length > 0 && typeof drawCrossBeamRays === 'function') {
-                            clearRaysOnly(popupScene);
-                            drawCrossBeamRays(cachedRays, popupScene);
-                            harmonizeSceneGeometry(popupScene);
-                        }
-
-                        try {
-                            __coopt_applyPopupCrossSectionLensFill({
-                                popupWindow,
-                                scene: popupScene,
-                                viewAxis,
-                                opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : [],
-                                source: 'view-switch-camera-only'
-                            });
-                        } catch (e) {
-                            console.warn('⚠️ Popup lens fill postprocess failed:', e);
-                        }
-                        
-                        // Re-render to show both rays and updated surfaces
-                        if (popupRenderer && popupScene && popupCamera) {
-                            popupRenderer.render(popupScene, popupCamera);
-                        }
-                    } catch (e) {
-                        console.error('Error updating surfaces:', e);
-                    }
-
                     __coopt_setPopupStatusWithFillDebug(popupWindow, `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready`, viewAxis);
                 } else {
-                    await executeCrossSectionView({
-                        viewAxis,
-                        statusElement: popupStatus,
-                        targetScene: popupScene,
-                        targetCamera: popupCamera,
-                        targetControls: popupControls,
-                        targetRenderer: popupRenderer,
-                        showAlerts: false
-                    });
-
-                    try {
-                        const { getOpticalSystemRows } = getRequiredFunctions();
-                        const opticalSystemRows = getOpticalSystemRows();
-                        __coopt_applyPopupCrossSectionLensFill({
-                            popupWindow,
-                            scene: popupScene,
-                            viewAxis,
-                            opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : [],
-                            source: 'view-switch-execute-after'
-                        });
-                        if (popupRenderer && popupScene && popupCamera) {
-                            popupRenderer.render(popupScene, popupCamera);
-                        }
-                    } catch (e) {
-                        console.warn('⚠️ Popup lens fill postprocess failed:', e);
+                    const cameraOptions = {
+                        camera: popupCamera,
+                        controls: popupControls,
+                        scene: popupScene,
+                        renderer: popupRenderer,
+                        includeRayStartMargin: true,
+                        preserveDrawCrossBounds: true,
+                        preserveCurrentOrthoBounds: true,
+                        storeDrawCrossBounds: false
+                    };
+                    if (viewAxis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
+                        w.setCameraForXZCrossSection(cameraOptions);
+                    } else if (viewAxis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
+                        w.setCameraForYZCrossSection(cameraOptions);
+                    }
+                    if (popupRenderer && popupScene && popupCamera) {
+                        popupRenderer.render(popupScene, popupCamera);
                     }
 
                     __coopt_setPopupStatusWithFillDebug(popupWindow, `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready`, viewAxis);
@@ -4943,6 +4826,43 @@ async function executeCrossSectionView(options: {
     }
     
     try {
+        const existingScene = targetScene || w.scene;
+        let hasRenderedRays = false;
+        existingScene?.traverse?.((child: any) => {
+            const userData = child?.userData || {};
+            if (userData.isRayLine || userData.type === 'optical-ray' || userData.type === 'ray') {
+                hasRenderedRays = true;
+            }
+        });
+
+        if (hasRenderedRays) {
+            const cameraRef = targetCamera || w.camera;
+            const controlsRef = targetControls || w.controls;
+            const rendererRef = targetRenderer || w.renderer;
+            const cameraOptions = {
+                camera: cameraRef,
+                controls: controlsRef,
+                scene: existingScene,
+                renderer: rendererRef,
+                includeRayStartMargin: true,
+                preserveDrawCrossBounds: true,
+                preserveCurrentOrthoBounds: true,
+                storeDrawCrossBounds: false
+            };
+            if (viewAxis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
+                w.setCameraForXZCrossSection(cameraOptions);
+            } else if (viewAxis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
+                w.setCameraForYZCrossSection(cameraOptions);
+            }
+            if (rendererRef && existingScene && cameraRef) {
+                rendererRef.render(existingScene, cameraRef);
+            }
+            if (statusElement) {
+                statusElement.textContent = `${viewAxis} view ready`;
+            }
+            return;
+        }
+
         const isOptimizing = !!w.__cooptOptimizerIsRunning;
         const hasRowsOverride = Array.isArray(w.__cooptOpticalSystemRowsOverride) && w.__cooptOpticalSystemRowsOverride.length > 0;
         
@@ -5471,6 +5391,9 @@ export function setupViewButtons(options: {
 }
 
 export function setupSimpleViewButtons(): void {
+    const isRenderWindow = new URLSearchParams(window.location.search).get('coopt_render_window') === '1';
+    if (isRenderWindow) return;
+
     const xzBtn = document.getElementById('view-xz-btn');
     const yzBtn = document.getElementById('view-yz-btn');
     
@@ -6437,7 +6360,8 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             
             const xzBtn = document.getElementById('view-xz-btn');
             if (xzBtn) {
-                xzBtn.addEventListener('click', () => {
+                xzBtn.addEventListener('click', (event) => {
+                    event.stopImmediatePropagation();
                     setCurrentViewAxis('XZ');
                     if (window.opener) {
                         const viewState = getPopupViewState();
@@ -6446,12 +6370,13 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                         window.opener.postMessage({ action: 'view-xz', rows, objectRows, ...viewState }, '*');
                         status.textContent = 'Switching to X-Z view...';
                     }
-                });
+                }, true);
             }
             
             const yzBtn = document.getElementById('view-yz-btn');
             if (yzBtn) {
-                yzBtn.addEventListener('click', () => {
+                yzBtn.addEventListener('click', (event) => {
+                    event.stopImmediatePropagation();
                     setCurrentViewAxis('YZ');
                     if (window.opener) {
                         const viewState = getPopupViewState();
@@ -6460,7 +6385,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                         window.opener.postMessage({ action: 'view-yz', rows, objectRows, ...viewState }, '*');
                         status.textContent = 'Switching to Y-Z view...';
                     }
-                });
+                }, true);
             }
             
             const clearBtn = document.getElementById('clear-btn');

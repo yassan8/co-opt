@@ -655,8 +655,30 @@ function selectCrossRaysForAxis(rays: any[], desiredCount: number, axis: 'YZ' | 
   };
 
   takeFirst((ray) => String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase() === 'chief');
-  takeFirst(isVerticalCrossRay);
-  takeFirst(isHorizontalCrossRay);
+  const getStopCoord = (ray: any, coordAxis: 'x' | 'y') => {
+    const key = coordAxis === 'x' ? '__cooptStopXCoord' : '__cooptStopYCoord';
+    const stopCoord = Number(ray?.[key] ?? ray?.originalRay?.[key]);
+    if (Number.isFinite(stopCoord)) return stopCoord;
+    const startCoord = Number(ray?.rayStart?.startP?.[coordAxis] ?? ray?.originalRay?.origin?.[coordAxis]);
+    return Number.isFinite(startCoord) ? startCoord : Number.NaN;
+  };
+  const takeExtreme = (coordAxis: 'x' | 'y', mode: 'min' | 'max') => {
+    const finite = remaining
+      .map((ray, index) => ({ ray, index, coord: getStopCoord(ray, coordAxis) }))
+      .filter((entry) => Number.isFinite(entry.coord));
+    if (finite.length === 0) return;
+    const extreme = finite.reduce((best, entry) => (
+      mode === 'min'
+        ? (entry.coord < best.coord ? entry : best)
+        : (entry.coord > best.coord ? entry : best)
+    ), finite[0]);
+    selected.push(remaining.splice(extreme.index, 1)[0]);
+  };
+
+  takeExtreme('y', 'max');
+  takeExtreme('y', 'min');
+  takeExtreme('x', 'min');
+  takeExtreme('x', 'max');
 
   for (const ray of remaining) {
     if (selected.length >= desiredCount) break;
@@ -1610,6 +1632,10 @@ function buildExactLowCountRenderRaysForObjects(
     return normalized === 'image' || normalized.startsWith('image');
   });
   const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
+  const stopSurfaceIndex = opticalSystemRows.findIndex((row: any) => {
+    const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+    return String(raw).trim().toLowerCase().replace(/[\s_-]+/g, '') === 'stop';
+  });
   const exactPattern = 'grid';
   const crossType = axis === 'YZ' ? 'vertical' : (axis === 'XZ' ? 'horizontal' : 'both');
   const getCandidateScore = (candidate: any, expectedChiefOrigin: any) => {
@@ -1771,8 +1797,6 @@ function buildExactLowCountRenderRaysForObjects(
             description: chiefStart.description || candidate?.description,
           };
         }
-        const exactPlaneStart = buildRenderRayStartOnChiefPlane(chiefStart, candidate);
-        if (exactPlaneStart?.startP && exactPlaneStart?.dir) return exactPlaneStart;
         return candidate;
       });
       const chiefRayPath = traceExactRayForRender(chiefStart.startP, chiefStart.dir, isRenderImageHeightObjectRow(row));
@@ -1788,11 +1812,16 @@ function buildExactLowCountRenderRaysForObjects(
       const chiefStartP = chiefStart?.startP || { x: 0, y: 0, z: 0 };
 
       const pushExactRay = (rayStart: any, type: string, side: string, rayPath: any[], pinnedLowCount = false) => {
+        const stopPoint = stopSurfaceIndex >= 0
+          ? getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, stopSurfaceIndex)
+          : null;
+        const stopAxisCoord = axis === 'XZ' ? Number(stopPoint?.x) : Number(stopPoint?.y);
         rays.push({
           success: true,
           rayPath,
           objectIndex,
           objectPosition,
+          ...(Number.isFinite(stopAxisCoord) ? { __cooptStopAxisCoord: stopAxisCoord } : {}),
           ...(isImageHeight ? {
             __cooptImageHeightExactRender: true,
             __cooptImageHeightTarget: imageHeightTarget,
@@ -1819,6 +1848,7 @@ function buildExactLowCountRenderRaysForObjects(
             dir: rayStart.dir,
             wavelength: wavelengthUm,
             objectPosition,
+            ...(Number.isFinite(stopAxisCoord) ? { __cooptStopAxisCoord: stopAxisCoord } : {}),
             description: rayStart.description || (type === 'chief' ? 'Chief render ray (exact)' : 'Marginal render ray (exact)'),
           },
         });
@@ -2097,7 +2127,21 @@ function buildExactLowCountRenderRaysForObjects(
             side = deltaX >= 0 ? 'right' : 'left';
           }
 
-          candidates.push({ rayStart, type, side, rayPath });
+          const stopPoint = stopSurfaceIndex >= 0
+            ? getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, stopSurfaceIndex)
+            : null;
+          const stopXCoord = Number(stopPoint?.x);
+          const stopYCoord = Number(stopPoint?.y);
+          const stopAxisCoord = axis === 'XZ' ? stopXCoord : stopYCoord;
+          candidates.push({
+            rayStart,
+            type,
+            side,
+            rayPath,
+            ...(Number.isFinite(stopXCoord) ? { __cooptStopXCoord: stopXCoord } : {}),
+            ...(Number.isFinite(stopYCoord) ? { __cooptStopYCoord: stopYCoord } : {}),
+            ...(Number.isFinite(stopAxisCoord) ? { __cooptStopAxisCoord: stopAxisCoord } : {}),
+          });
         }
         return candidates;
       };
@@ -2110,6 +2154,9 @@ function buildExactLowCountRenderRaysForObjects(
             originalRay: {
               type: entry.type,
               side: entry.side,
+              __cooptStopXCoord: entry.__cooptStopXCoord,
+              __cooptStopYCoord: entry.__cooptStopYCoord,
+              __cooptStopAxisCoord: entry.__cooptStopAxisCoord,
             },
           })),
           Math.max(0, desiredRayCount - 1),
@@ -2322,73 +2369,6 @@ function buildExactLowCountRenderRaysForObjects(
           }
 
           selectedHasCrossCandidate = countCrossInSelected(selectedExactRays) > 0;
-        }
-      }
-
-      // YZ Raynum=5 safeguard: ensure upper/lower marginals are on opposite sides of chief.
-      if (axis === 'YZ' && desiredRayCount >= 3) {
-        const findByType = (items: any[], typeName: string) => items.find((entry: any) => String(entry?.type ?? '').trim().toLowerCase() === typeName) || null;
-        const replaceByType = (items: any[], typeName: string, nextEntry: any) => items.map((entry: any) => {
-          const t = String(entry?.type ?? '').trim().toLowerCase();
-          return t === typeName ? nextEntry : entry;
-        });
-        const chiefY = Number(chiefStartP?.y ?? 0);
-        const axisCoord = (entry: any) => Number(entry?.rayStart?.startP?.y);
-        const lowerEntry = findByType(selectedExactRays, 'lower_marginal');
-        const upperEntry = findByType(selectedExactRays, 'upper_marginal');
-        if (lowerEntry && upperEntry) {
-          const lowerY = axisCoord(lowerEntry);
-          const upperY = axisCoord(upperEntry);
-          const lowerDelta = Number.isFinite(lowerY) ? (lowerY - chiefY) : Number.NaN;
-          const upperDelta = Number.isFinite(upperY) ? (upperY - chiefY) : Number.NaN;
-          const straddles = Number.isFinite(lowerDelta) && Number.isFinite(upperDelta) && lowerDelta < -1e-9 && upperDelta > 1e-9;
-          const minSpread = Math.min(Math.abs(Number.isFinite(lowerDelta) ? lowerDelta : 0), Math.abs(Number.isFinite(upperDelta) ? upperDelta : 0));
-          const requiresWiderSpread = minSpread < 0.25;
-          const doesNotStraddle = !straddles || requiresWiderSpread;
-
-          if (doesNotStraddle && chiefStart?.startP && chiefStart?.dir) {
-            const lowerV = Number(lowerEntry?.rayStart?.planeCoords?.v);
-            const upperV = Number(upperEntry?.rayStart?.planeCoords?.v);
-            const spanMag = Math.max(
-              Math.abs(Number.isFinite(lowerDelta) ? lowerDelta : 0),
-              Math.abs(Number.isFinite(upperDelta) ? upperDelta : 0),
-              Math.abs(Number.isFinite(lowerV) ? lowerV : 0),
-              Math.abs(Number.isFinite(upperV) ? upperV : 0),
-              0.3,
-            );
-
-            const makeMarginal = (side: 'lower' | 'upper', template: any) => {
-              const sign = side === 'lower' ? -1 : 1;
-              const candidate = {
-                planeCoords: { u: Number(chiefPlaneU) || 0, v: sign * spanMag },
-                description: `Chief-plane ${side} marginal safeguard`,
-              };
-              const rebuiltStart = buildRenderRayStartOnChiefPlane(chiefStart, candidate);
-              if (!rebuiltStart?.startP || !rebuiltStart?.dir) return null;
-              const rebuiltPath = traceExactRayForRender(rebuiltStart.startP, rebuiltStart.dir, isImageHeight);
-              if (!Array.isArray(rebuiltPath) || rebuiltPath.length < 2) return null;
-              const nextType = side === 'lower' ? 'lower_marginal' : 'upper_marginal';
-              return {
-                ...template,
-                rayStart: {
-                  ...rebuiltStart,
-                  planeCoords: { u: Number(chiefPlaneU) || 0, v: sign * spanMag },
-                },
-                type: nextType,
-                side,
-                rayPath: rebuiltPath,
-              };
-            };
-
-            const rebuiltLower = makeMarginal('lower', lowerEntry);
-            const rebuiltUpper = makeMarginal('upper', upperEntry);
-            if (rebuiltLower) {
-              selectedExactRays = replaceByType(selectedExactRays, 'lower_marginal', rebuiltLower);
-            }
-            if (rebuiltUpper) {
-              selectedExactRays = replaceByType(selectedExactRays, 'upper_marginal', rebuiltUpper);
-            }
-          }
         }
       }
 
@@ -12082,15 +12062,73 @@ const collectLegacyCrossRays = async (
       }
     };
 
+    const refreshRenderCrossSectionSurfaces = (axis: 'XZ' | 'YZ') => {
+      const w = window as any;
+      const scene = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
+      const rows = typeof w.getOpticalSystemRows === 'function'
+        ? w.getOpticalSystemRows(w.tableOpticalSystem)
+        : [];
+      if (!scene || !Array.isArray(rows) || rows.length === 0) return;
+
+      if (typeof w.drawOpticalSystemSurfaces === 'function') {
+        w.drawOpticalSystemSurfaces({
+          opticalSystemData: rows,
+          scene,
+          crossSectionOnly: true,
+          showSurfaceOrigins: false,
+          showSemidiaRing: false,
+          showMirrorBackText: false,
+          showDesignIntentLabels: renderShowDesignIntentLabels,
+          showPrincipalPointLabels: renderShowPrincipalPointLabels,
+          showSurfaceNumberLabels: renderShowSurfaceNumberLabels,
+          crossSectionDirection: axis,
+          crossSectionCenterOffset: 0,
+        });
+      }
+      applyRenderWindowDirectCrossFill(scene, axis, rows);
+      scene.traverse((child: any) => {
+        const userData = child?.userData || {};
+        if (userData.type === 'surfaceProfile' && (userData.profileType === 'YZ' || userData.profileType === 'XZ')) {
+          child.visible = userData.profileType === axis;
+        }
+        if (userData.type === 'connectionLine' && (userData.direction === 'YZ' || userData.direction === 'XZ')) {
+          child.visible = userData.direction === axis;
+        }
+      });
+    };
+
+    const switchRenderSectionView = (axis: 'XZ' | 'YZ') => {
+      const w = window as any;
+      refreshRenderCrossSectionSurfaces(axis);
+      if (axis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
+        w.setCameraForXZCrossSection({
+          includeRayStartMargin: true,
+          preserveDrawCrossBounds: true,
+          storeDrawCrossBounds: true,
+        });
+      } else if (axis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
+        w.setCameraForYZCrossSection({
+          includeRayStartMargin: true,
+          preserveDrawCrossBounds: true,
+          storeDrawCrossBounds: true,
+        });
+      }
+      syncOrthoBoundsToRendererAspect();
+      const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
+      const scene = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
+      const camera = w.camera || (typeof w.getCamera === 'function' ? w.getCamera() : null);
+      if (renderer && scene && camera && typeof renderer.render === 'function') {
+        renderer.render(scene, camera);
+      }
+      setRenderWindowStatus(`Ready (${axis} view)`);
+    };
+
     const handleViewXZ = () => {
       renderViewAxisRef.current = 'XZ';
       renderViewModeRef.current = 'XZ';
       setRenderViewAxis('XZ');
       setRenderViewMode('XZ');
-      refreshRenderLensTargets();
-      scheduleRenderRedraw('XZ', 'XZ').catch(() => {
-        setRenderWindowStatus('Draw failed');
-      });
+      switchRenderSectionView('XZ');
     };
 
     const handleViewYZ = () => {
@@ -12098,10 +12136,7 @@ const collectLegacyCrossRays = async (
       renderViewModeRef.current = 'YZ';
       setRenderViewAxis('YZ');
       setRenderViewMode('YZ');
-      refreshRenderLensTargets();
-      scheduleRenderRedraw('YZ', 'YZ').catch(() => {
-        setRenderWindowStatus('Draw failed');
-      });
+      switchRenderSectionView('YZ');
     };
 
     const handleRenderCompareScopeChange = (scope: RenderCompareScope) => {
@@ -12780,7 +12815,11 @@ const collectLegacyCrossRays = async (
 
   const buildMdiModeUrl = (mode: 'render' | 'analysis' | 'settings' | 'optimize', analysis?: string) => {
     const url = new URL(window.location.href);
+    const cacheBust = url.searchParams.get('v');
     url.search = '';
+    if (cacheBust) {
+      url.searchParams.set('v', cacheBust);
+    }
     if (mode === 'render') {
       url.searchParams.set('coopt_render_window', '1');
     } else if (mode === 'optimize') {

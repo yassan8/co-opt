@@ -793,13 +793,25 @@ export function findApertureBoundaryRays(chiefOrigin, direction, opticalSystemRo
     // 主光線方向に垂直な基底ベクトルを生成
     const basis = makeBasis(direction);
     
-    // 絞り半径の2倍を検索範囲とする
-    const searchRadius = (stopInfo.radius || 10) * 2;
+    // 高画角では chief 原点から stop 端に到達するための原点オフセットが
+    // stop半径の2倍を大きく超えることがあるため、方向とZ差に応じて動的に拡大する。
+    const stopRadius = Number.isFinite(Number(stopInfo?.radius)) && Number(stopInfo.radius) > 0
+        ? Number(stopInfo.radius)
+        : 10;
+    const dzToStop = Math.abs((Number(stopInfo?.center?.z) || 0) - (Number(chiefOrigin?.z) || 0));
+    const dirK = Math.abs(Number(direction?.k) || 0);
+    const dirTan = dirK > 1e-9
+        ? Math.hypot(Number(direction?.i) || 0, Number(direction?.j) || 0) / dirK
+        : 0;
+    const obliqueFootprintMm = dirTan * dzToStop;
+    const dynamicRadius = stopRadius + obliqueFootprintMm + Math.max(2, stopRadius * 2);
+    const searchRadius = Math.max(stopRadius * 2, Math.min(250, dynamicRadius));
     
     if (debugMode) {
         console.log(`🔍 [ApertureBoundary] 絞り周辺光線検索開始`);
         console.log(`   検索範囲: ±${searchRadius.toFixed(2)}mm`);
         console.log(`   許容誤差: ${tolerance}mm`);
+            console.log(`   補正情報: stopRadius=${stopRadius.toFixed(4)}mm, dz=${dzToStop.toFixed(4)}mm, tan(theta)=${dirTan.toFixed(6)}, oblique=${obliqueFootprintMm.toFixed(4)}mm`);
     }
     
     const boundaryRays = [];
@@ -2323,17 +2335,17 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             );
             boundaryBuildMs += performance.now() - boundaryBuildStartMs;
 
-            const needsThinLensFallback = thinLensSystem && (
+            const needsBoundaryFallback = (
                 crossBeamRays.length <= 1 ||
                 !hasUsableBoundaryRaysForCrossType(apertureBoundaryRays, crossType)
             );
 
-            if (needsThinLensFallback) {
+            if (needsBoundaryFallback) {
                 effectivePupilSamplingMode = 'entrance';
                 apertureBoundaryRays = [];
                 crossBeamRays = [];
                 if (debugMode) {
-                    console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}: stop-based boundary search produced degenerate rays in thin-lens/paraxial system; falling back to entrance pupil sampling`);
+                    console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}: stop-based boundary search produced degenerate rays${thinLensSystem ? ' in thin-lens/paraxial system' : ''}; falling back to entrance pupil sampling`);
                 }
                 buildEntrancePupilCrossBeam();
             }

@@ -28,6 +28,7 @@
 import { calculateChiefRayNewton } from './transverse-aberration.ts';
 import { getObjectRows, getSourceRows } from '../../utils/data-utils.ts';
 import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, solveRayOriginsToStopPointsWithRustMeta } from '../../raytracing/core/ray-tracing.ts';
+import { findInfiniteSystemChiefRayOrigin } from '../../raytracing/generation/gen-ray-cross-infinite.ts';
 import { asphericSurfaceZ } from '../../optical/surface.ts';
 
 const RUST_RT_OPTIONS = Object.freeze({
@@ -35,6 +36,12 @@ const RUST_RT_OPTIONS = Object.freeze({
     requireRustWasm: true,
     allowNonStrict: true,
     requireForwardHit: false
+});
+
+const RENDER_RT_OPTIONS = Object.freeze({
+    ...RUST_RT_OPTIONS,
+    requireRustWasm: false,
+    returnPartialOnPhysicalBlock: true
 });
 
 function __pickPrimaryWavelengthMicrons(sourceRows, fallback = 0.5876) {
@@ -271,6 +278,25 @@ function traceRayPathWrapped(opticalSystemRows, ray0, targetSurfaceIndex, option
     } catch (error) {
         return { success: false, rayPath: null, error };
     }
+}
+
+function traceRayPathFromSurfaceHits(opticalSystemRows, ray0, targetSurfaceIndex) {
+    const rayPath = [{ ...ray0.pos }];
+    const lastSurfaceIndex = Math.min(
+        Number(targetSurfaceIndex),
+        Array.isArray(opticalSystemRows) ? opticalSystemRows.length - 1 : -1
+    );
+    for (let surfaceIndex = 0; surfaceIndex <= lastSurfaceIndex; surfaceIndex += 1) {
+        const row = opticalSystemRows[surfaceIndex];
+        if (isObjectRow(row) || isCoordTransRow(row) || isGapRow(row)) continue;
+        const hit = traceRayHitPointWrapped(opticalSystemRows, ray0, surfaceIndex, RUST_RT_OPTIONS);
+        if (!hit) continue;
+        const previous = rayPath[rayPath.length - 1];
+        if (Math.hypot(hit.x - previous.x, hit.y - previous.y, hit.z - previous.z) > 1e-9) {
+            rayPath.push({ x: hit.x, y: hit.y, z: hit.z });
+        }
+    }
+    return rayPath;
 }
 
 function solveRayDirectionToStopPointFast(origin, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength) {
@@ -2672,7 +2698,15 @@ function buildNativeLikeRayStartsForAstig(
             };
         } else if (infiniteConjugate && !isOnAxis) {
             const targetSurfaceOrigin = surfaceOrigins?.[targetSurfaceIndex]?.origin || stopOrigin;
-            emissionOrigin = searchHighFieldOriginForTargetWeb(
+            emissionOrigin = findInfiniteSystemChiefRayOrigin(
+                { i: chiefDir.x, j: chiefDir.y, k: chiefDir.z },
+                stopOrigin,
+                stopSurfaceIndex,
+                opticalSystemRows,
+                false,
+                targetSurfaceIndex,
+                wavelengthUm
+            ) || searchHighFieldOriginForTargetWeb(
                 emissionOrigin,
                 chiefDir,
                 opticalSystemRows,
@@ -2729,7 +2763,8 @@ function buildNativeLikeRayStartsForAstig(
                     startP,
                     dir: { ...chiefDir },
                     description: index === 0 ? 'chief' : 'native-like-angle',
-                    isChief: index === 0
+                    isChief: index === 0,
+                    planeCoords: { u: offsetU, v: offsetV }
                 };
             });
         };
@@ -2755,9 +2790,10 @@ function buildNativeLikeRayStartsForAstig(
                 const fastHits = countRaysHittingSurfaceWeb(fastStarts, opticalSystemRows, targetSurfaceIndex, wavelengthUm);
                 if (fastHits >= Math.ceil(probeRayCount * 0.4)) {
                     return {
-                        starts: buildCandidateRays(1.0, true, rayCount),
+                        starts: probeRayCount === rayCount ? fastStarts : buildCandidateRays(1.0, true, rayCount),
                         refinedOrigin: { ...emissionOrigin },
-                        mode: { scale: 1.0, allowOriginSolve: true }
+                        mode: { scale: 1.0, allowOriginSolve: true },
+                        targetHitCount: fastHits
                     };
                 }
                 // Record so the full search loop doesn't re-test this candidate.
@@ -2784,14 +2820,15 @@ function buildNativeLikeRayStartsForAstig(
                 const bestScore = bestHits - (bestMode ? 0 : 0);
                 if (score > bestScore || (Math.abs(score - bestScore) < 1e-9 && hits > bestHits)) {
                     bestHits = hits;
-                    best = buildCandidateRays(scale, allowOriginSolve, rayCount);
+                    best = probeRayCount === rayCount ? starts : buildCandidateRays(scale, allowOriginSolve, rayCount);
                     bestMode = { scale, allowOriginSolve };
                 }
             }
             return {
                 starts: Array.isArray(best) ? best : buildCandidateRays(1.0, true),
                 refinedOrigin: { ...emissionOrigin },
-                mode: bestMode || { scale: 1.0, allowOriginSolve: true }
+                mode: bestMode || { scale: 1.0, allowOriginSolve: true },
+                targetHitCount: Math.max(0, bestHits)
             };
         }
 
@@ -2840,6 +2877,104 @@ function buildNativeLikeRayStartsForAstig(
         refinedOrigin: null,
         mode: { scale: 1.0, allowOriginSolve: false }
     };
+}
+
+export function buildAstigmatismLikeDrawCrossRays(
+    opticalSystemRows,
+    objectRows,
+    wavelengthUm,
+    targetSurfaceIndex,
+    rayCount
+) {
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return [];
+    if (!Array.isArray(objectRows) || objectRows.length === 0) return [];
+
+    const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+    const stopSurfaceIndex = findStopSurfaceIndex(opticalSystemRows);
+    if (!Number.isInteger(stopSurfaceIndex) || stopSurfaceIndex < 0) return [];
+
+    const maxFieldMagnitude = objectRows.reduce((maxValue, row) => {
+        const x = Number(row?.xHeightAngle ?? row?.xFieldAngle ?? row?.xAngle ?? row?.x ?? 0);
+        const y = Number(row?.yHeightAngle ?? row?.yFieldAngle ?? row?.fieldAngle ?? row?.yAngle ?? row?.y ?? 0);
+        return Math.max(maxValue, Math.hypot(Number.isFinite(x) ? x : 0, Number.isFinite(y) ? y : 0));
+    }, 0);
+
+    let previousEmissionOriginHint = null;
+    let previousModeHint = null;
+    const output = [];
+
+    objectRows.forEach((objectRow, objectIndex) => {
+        const pos = getAstigObjectPositionTag(objectRow);
+        if (!pos.includes('angle')) return;
+
+        const x = Number(objectRow?.xHeightAngle ?? objectRow?.xFieldAngle ?? objectRow?.xAngle ?? objectRow?.x ?? 0);
+        const y = Number(objectRow?.yHeightAngle ?? objectRow?.yFieldAngle ?? objectRow?.fieldAngle ?? objectRow?.yAngle ?? objectRow?.y ?? 0);
+        const fieldMagnitude = Math.hypot(Number.isFinite(x) ? x : 0, Number.isFinite(y) ? y : 0);
+
+        const generation = buildNativeLikeRayStartsForAstig(
+            opticalSystemRows,
+            objectRow,
+            wavelengthUm,
+            targetSurfaceIndex,
+            rayCount,
+            'grid',
+            3,
+            surfaceOrigins,
+            stopSurfaceIndex,
+            previousEmissionOriginHint,
+            previousModeHint,
+            fieldMagnitude,
+            maxFieldMagnitude
+        );
+        const starts = Array.isArray(generation?.starts) ? generation.starts : [];
+        if (generation?.refinedOrigin) previousEmissionOriginHint = { ...generation.refinedOrigin };
+        if (generation?.mode) previousModeHint = { ...generation.mode };
+        if (fieldMagnitude < 15) return;
+
+        starts.forEach((start, rayIndex) => {
+            const ray0 = {
+                pos: { ...start.startP },
+                dir: { ...start.dir },
+                wavelength: wavelengthUm
+            };
+            const targetHit = traceRayHitPointWrapped(
+                opticalSystemRows,
+                ray0,
+                targetSurfaceIndex,
+                RUST_RT_OPTIONS
+            );
+            const traced = traceRayPathWrapped(opticalSystemRows, ray0, targetSurfaceIndex, RENDER_RT_OPTIONS);
+            let rayPath = Array.isArray(traced?.rayPath) ? traced.rayPath : [];
+            if (rayPath.length < 2) {
+                rayPath = traceRayPathFromSurfaceHits(opticalSystemRows, ray0, targetSurfaceIndex);
+            }
+            const u = Number(start?.planeCoords?.u) || 0;
+            const v = Number(start?.planeCoords?.v) || 0;
+            const type = start?.isChief
+                ? 'chief'
+                : (Math.abs(v) >= Math.abs(u) ? 'vertical_cross' : 'horizontal_cross');
+            output.push({
+                success: rayPath.length > 1,
+                rayPath,
+                type,
+                beamType: type,
+                objectIndex,
+                objectAngle: { x, y },
+                targetHit: targetHit ? { ...targetHit } : null,
+                generationTargetHitCount: Number(generation?.targetHitCount) || 0,
+                description: start?.description || `Astigmatism-like high-field ray ${rayIndex + 1}`,
+                originalRay: {
+                    pos: { ...start.startP },
+                    dir: { ...start.dir },
+                    type,
+                    objectIndex,
+                    planeCoords: { u, v }
+                }
+            });
+        });
+    });
+
+    return output;
 }
 
 function resolveNativeLikeFieldSetting(objectRow, objectIndex, infiniteConjugate) {

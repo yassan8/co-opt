@@ -190,8 +190,8 @@ type ChangeRecord = {
 
 // Default stop semiDiameter constant
 const DEFAULT_STOP_SEMI_DIAMETER = 10;
-const COOPT_AUTO_APERTURE_MARGIN_FACTOR = 1.10;
-const COOPT_AUTO_APERTURE_MARGIN_MM = 0.05;
+const COOPT_AUTO_APERTURE_MARGIN_FACTOR = 1.03;
+const COOPT_AUTO_APERTURE_MARGIN_MM = 0.01;
 
 function __cooptApplyAutoApertureMargin(radiusMm: number, factor = COOPT_AUTO_APERTURE_MARGIN_FACTOR, absoluteMm = COOPT_AUTO_APERTURE_MARGIN_MM): number {
     const radius = Number(radiusMm);
@@ -1899,7 +1899,10 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
         const prev = __zmxReadPositiveFiniteSemidiaMm(r);
         const maxRRaw = maxBySurface[i];
         const maxR = __cooptApplyAutoApertureMargin(maxRRaw, options?.apertureMarginFactor, options?.apertureMarginMm);
-        if (maxR > 0 && (forceOverwriteSemidia || wasMissing || prev === null || maxR > (prev + 1e-6) || maxR < (prev - 1e-6))) {
+        const shouldApply = forceOverwriteSemidia
+            ? (wasMissing || prev === null || Math.abs(maxR - (prev ?? 0)) > 1e-6)
+            : (wasMissing || prev === null);
+        if (maxR > 0 && shouldApply) {
             r.semidia = maxR;
             updateCount++;
             const winner = maxBySurfaceSource[i];
@@ -2125,8 +2128,42 @@ function autoSetBlockAperturesFromLargestObjectCondition(): boolean {
             try { return loadObjectTableData(); } catch (_) { return []; }
         })();
 
-        let updatedRows = autoCalculateMissingSemidia(sourceRows, objectRows, {
-            forceOverwriteSemidia: true,
+        const opticalRowsForOverwriteCheck = (() => {
+            try {
+                if (Array.isArray(activeCfg?.opticalSystem) && activeCfg.opticalSystem.length > 0) return activeCfg.opticalSystem;
+            } catch (_) {}
+            try {
+                const tbl = w.tableOpticalSystem || w.opticalSystemTabulator;
+                const tableRows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
+                if (Array.isArray(tableRows) && tableRows.length > 0) return tableRows;
+            } catch (_) {}
+            return [];
+        })();
+
+        const hasMissingPhysicalSemidia = Array.isArray(opticalRowsForOverwriteCheck)
+            && opticalRowsForOverwriteCheck.some((row: any) => __zmxIsPhysicalOpticalRow(row) && __zmxIsMissingSemidia(row));
+
+        const representativeObjectRows = (() => {
+            if (!Array.isArray(objectRows) || objectRows.length === 0) return objectRows;
+            const angleRows = objectRows
+                .map((row: any, index: number) => {
+                    const posNorm = String(row?.position ?? row?.object ?? row?.objectType ?? '').trim().toLowerCase();
+                    if (posNorm !== 'angle') return null;
+                    const x = Number(row?.xHeightAngle ?? row?.x ?? row?.fieldX ?? 0);
+                    const y = Number(row?.yHeightAngle ?? row?.y ?? row?.fieldY ?? 0);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                    return { row, index, radius: Math.hypot(x, y) };
+                })
+                .filter(Boolean) as Array<{ row: any; index: number; radius: number }>;
+
+            if (angleRows.length === 0) return objectRows;
+            angleRows.sort((a, b) => b.radius - a.radius);
+            const winner = angleRows[0];
+            return winner ? [winner.row] : objectRows;
+        })();
+
+        let updatedRows = autoCalculateMissingSemidia(sourceRows, representativeObjectRows, {
+            forceOverwriteSemidia: hasMissingPhysicalSemidia,
             apertureMarginFactor: COOPT_AUTO_APERTURE_MARGIN_FACTOR,
             apertureMarginMm: COOPT_AUTO_APERTURE_MARGIN_MM
         } as any);

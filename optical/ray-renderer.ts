@@ -4823,10 +4823,79 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         let startZ = objectZ + centerSag;
         let stopDeltaZ = stopConfig.z - startZ;
         let canAimAtStop = Number.isFinite(stopDeltaZ) && stopDeltaZ > 1e-6;
+        let usedTargetReachFallback = false;
+
+        if (isInfiniteObject && aimThroughStop && isHighField && Number.isInteger(targetSurfaceIndex)) {
+            const wavelengthForTrace = options?.wavelength ?? options?.wavelengthUm ?? 0.5876;
+            const reachesTarget = (origin) => !!origin && !!traceRayHitPointForRender(
+                    opticalSystemRows,
+                    {
+                        pos: origin,
+                        dir: { x: chiefDir.x, y: chiefDir.y, z: chiefDir.z },
+                        wavelength: wavelengthForTrace
+                    },
+                    1.0,
+                    targetSurfaceIndex,
+                    originSolveTraceBackend
+                );
+
+            if (!reachesTarget(chiefRayOrigin)) {
+                const safeDirZ = Math.abs(chiefDir.z) > 1e-12 ? chiefDir.z : 1e-12;
+                const dzToStop = stopSurfaceCenter3d.z - objectZ;
+                const geometricOrigin = {
+                    x: stopSurfaceCenter3d.x - (chiefDir.x / safeDirZ) * dzToStop,
+                    y: stopSurfaceCenter3d.y - (chiefDir.y / safeDirZ) * dzToStop,
+                    z: objectZ
+                };
+                const candidateStep = Math.max(stopRadiusLimited, 1e-6);
+                const candidates = [];
+                for (let offsetX = -4; offsetX <= 4; offsetX++) {
+                    for (let offsetY = -4; offsetY <= 4; offsetY++) {
+                        candidates.push({
+                            x: geometricOrigin.x + offsetX * candidateStep,
+                            y: geometricOrigin.y + offsetY * candidateStep,
+                            z: geometricOrigin.z,
+                            offsetDistance: Math.hypot(offsetX, offsetY)
+                        });
+                    }
+                }
+                const candidateRays = candidates.map((candidate) => ({
+                    pos: { x: candidate.x, y: candidate.y, z: candidate.z },
+                    dir: { x: chiefDir.x, y: chiefDir.y, z: chiefDir.z },
+                    wavelength: wavelengthForTrace
+                }));
+                const targetHits = traceRayHitPointBatchForRender(
+                    opticalSystemRows,
+                    candidateRays,
+                    1.0,
+                    targetSurfaceIndex,
+                    originSolveTraceBackend
+                );
+                const targetCandidate = candidates
+                    .filter((_, index) => !!targetHits?.[index])
+                    .sort((a, b) => a.offsetDistance - b.offsetDistance)[0];
+
+                if (targetCandidate) {
+                    chiefRayOrigin = {
+                        x: targetCandidate.x,
+                        y: targetCandidate.y,
+                        z: targetCandidate.z
+                    };
+                    optimizedPosition = { x: targetCandidate.x, y: targetCandidate.y };
+                    objectZ = targetCandidate.z;
+                    centerSag = computeCenterSag(optimizedPosition);
+                    startZ = objectZ + centerSag;
+                    stopDeltaZ = stopConfig.z - startZ;
+                    canAimAtStop = Number.isFinite(stopDeltaZ) && stopDeltaZ > 1e-6;
+                    usedTargetReachFallback = true;
+                }
+            }
+        }
 
         // Optional OPD-style origin refinement (disabled by default).
         if (allowStopBasedOriginSolve && options?.skipStopPointRefine !== true && aimThroughStop && !isOnAxis && stopSurfaceCenter3d && Number.isInteger(stopSurfaceIndex)
             && !hasImageHeightChiefRayOverride
+            && !usedTargetReachFallback
             && chiefRayOrigin && Number.isFinite(chiefRayOrigin.x) && Number.isFinite(chiefRayOrigin.y) && Number.isFinite(chiefRayOrigin.z)) {
             const refined = solveRayOriginToStopPointFast(
                 chiefRayOrigin,

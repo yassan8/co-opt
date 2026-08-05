@@ -119,6 +119,7 @@ import { calculateAdaptiveMarginalRay, calculateAllMarginalRays } from './raytra
 // Analysis modules
 import { derivePupilAndFocalLengthMmFromParaxial, generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './evaluation/spot-diagram.ts';
 import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWavelengthForAberration, validateAberrationData, calculateChiefRayNewton, getEstimatedEntrancePupilDiameter } from './evaluation/aberrations/transverse-aberration.ts';
+import { buildAstigmatismLikeDrawCrossRays } from './evaluation/aberrations/astigmatism.ts';
 import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './evaluation/aberrations/transverse-aberration-plot.ts';
 import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.ts';
 import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './evaluation/wavefront/wavefront.ts';
@@ -148,7 +149,7 @@ import { parseZMXTextToOpticalSystemRows, parseZMXArrayBufferToOpticalSystemRows
 import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors, convertImageHeightToEffectiveObject, clearRayRendererCaches } from './optical/ray-renderer.ts';
 
 // UI modules
-import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons, setupTransformationControls, updateTransformSurfaceSelect, setupAnalysisWindows } from './ui/event-handlers.ts';
+import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupTransformationControls, updateTransformSurfaceSelect, setupAnalysisWindows } from './ui/event-handlers.ts';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.ts';
 import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers, loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, refreshBlockInspector } from './ui/dom-event-handlers.ts';
 import { getToolbarCollapsed, setToolbarCollapsed } from './ui/toolbar-collapsed-storage.ts';
@@ -521,12 +522,6 @@ async function initializeApplication() {
             }, 100);
         } catch (error) {
             console.error('Failed to setup analysis windows:', error);
-        }
-        
-        try {
-            // View buttons setup - using simple version
-            setupSimpleViewButtons();
-        } catch (error) {
         }
         
         try {
@@ -3730,6 +3725,36 @@ const startApplicationOnce = (() => {
                             return !Number.isFinite(objectIndex) || !exactImageHeightObjectIndices.has(objectIndex);
                         });
                         allRays = allRays.concat(exactImageHeightRays);
+                    }
+
+                    if (isInfiniteSystem) {
+                        const highFieldObjectIndices = new Set(
+                            objectRows
+                                .map((row: any, index: number) => {
+                                    const pos = String(row?.position ?? '').trim().toLowerCase();
+                                    if (pos !== 'angle') return null;
+                                    const x = Number(row?.xHeightAngle ?? row?.xFieldAngle ?? row?.xAngle ?? row?.x ?? 0);
+                                    const y = Number(row?.yHeightAngle ?? row?.yFieldAngle ?? row?.fieldAngle ?? row?.yAngle ?? row?.y ?? 0);
+                                    return Math.hypot(Number.isFinite(x) ? x : 0, Number.isFinite(y) ? y : 0) >= 15 ? index : null;
+                                })
+                                .filter((index: number | null): index is number => index !== null)
+                        );
+                        if (highFieldObjectIndices.size > 0) {
+                            const highFieldRays = buildAstigmatismLikeDrawCrossRays(
+                                opticalSystemRows,
+                                objectRows,
+                                primaryWavelength,
+                                targetSurfaceIndex,
+                                rayCount
+                            );
+                            if (highFieldRays.length > 0) {
+                                allRays = allRays.filter((ray: any) => {
+                                    const objectIndex = Number(ray?.objectIndex ?? ray?.originalRay?.objectIndex ?? Number.NaN);
+                                    return !Number.isFinite(objectIndex) || !highFieldObjectIndices.has(objectIndex);
+                                });
+                                allRays = allRays.concat(highFieldRays);
+                            }
+                        }
                     }
                     
                     const scene = getScene?.();
