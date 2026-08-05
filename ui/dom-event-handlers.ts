@@ -5636,7 +5636,7 @@ function setupNewFileButton(): void {
     if (isReactManagedButton(btn as HTMLElement)) return;
 
     // Remove existing listener to prevent duplicates
-    const newHandler = () => {
+    const newHandler = async () => {
         if (!confirm('Create new file? Current data will be cleared.')) return;
         
         try {
@@ -5703,6 +5703,10 @@ function setupNewFileButton(): void {
                 optimizationRules: {}
             };
             
+            try {
+                const { setLoadedFileName } = await import('./loaded-file-storage.ts');
+                setLoadedFileName('new-project-template.json');
+            } catch (_) {}
             saveSystemConfigurations(systemConfig);
             location.reload();
         } catch (err) {

@@ -590,6 +590,7 @@ export function handleNewFile(): void {
       optimizationRules: {}
     };
     
+    setLoadedFileName('new-project-template.json');
     saveSystemConfigurations(systemConfig);
     console.log('✅ [New File] Default configuration created, reloading...');
     location.reload();
