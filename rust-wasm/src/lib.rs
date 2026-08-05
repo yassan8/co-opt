@@ -8108,6 +8108,24 @@ fn run_native_opd_map_value_with_rows(
             value.get("z").and_then(value_to_f64)?,
         ]))
         .filter(|origin| origin.iter().all(|value| value.is_finite()));
+    let requested_chief_ray_launch_origin = req_obj
+        .get("chiefRayLaunchOrigin")
+        .and_then(|value| value.as_object())
+        .and_then(|value| Some([
+            value.get("x").and_then(value_to_f64)?,
+            value.get("y").and_then(value_to_f64)?,
+            value.get("z").and_then(value_to_f64)?,
+        ]))
+        .filter(|origin| origin.iter().all(|value| value.is_finite()));
+    let requested_chief_ray_launch_direction = req_obj
+        .get("chiefRayLaunchDirection")
+        .and_then(|value| value.as_object())
+        .and_then(|value| Some(normalize3(
+            value.get("x").and_then(value_to_f64)?,
+            value.get("y").and_then(value_to_f64)?,
+            value.get("z").and_then(value_to_f64)?,
+        )))
+        .filter(|direction| direction.iter().all(|value| value.is_finite()));
     let preserve_image_height_chief_ray = req_obj
         .get("preserveImageHeightChiefRay")
         .and_then(Value::as_bool)
@@ -8846,6 +8864,7 @@ fn run_native_opd_map_value_with_rows(
     } else {
         "center-chief".to_string()
     };
+    let mut validated_requested_chief = false;
     let mut chief_target_hit = trace_single_ray_hit_point_with_meta_core(
         &chief_start_dir,
         target_surface_index,
@@ -8859,41 +8878,16 @@ fn run_native_opd_map_value_with_rows(
     );
 
     if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON && use_infinite_mode {
-        let estimated_entrance_origin = estimate_entrance_center_origin_native(
-            &rows,
-            &packed_meta.row_origins,
-            stop_center_for_sampling,
-            infinite_direction,
-        );
-        let entrance_origin = if estimated_entrance_origin[0].is_finite()
-            && estimated_entrance_origin[1].is_finite()
-            && estimated_entrance_origin[2].is_finite()
-        {
-            estimated_entrance_origin
-        } else {
-            search_entrance_origin_grid_brent_native(
-                &rows,
-                &packed_meta.row_origins,
-                stop_center_for_sampling,
-                infinite_direction,
-                stop_surface_index,
-                &packed_stop,
-                object_space_n,
-                entrance_radius,
-            )
-            .unwrap_or(estimated_entrance_origin)
-        };
-        let chief_search_radius = estimate_entrance_radius_from_rows(&rows)
-            .max(stop_radius)
-            .max(entrance_radius)
-            .max(0.01);
-        let chief_fallback_radius = estimate_effective_entrance_radius(
-            entrance_origin,
-            chief_search_radius,
-        );
-        if let Some(entrance_chief_ray) = build_marginal_ray(reference_ray_pupil_coordinate[0], reference_ray_pupil_coordinate[1], chief_fallback_radius, entrance_origin) {
-            let entrance_target_hit = trace_single_ray_hit_point_with_meta_core(
-                &entrance_chief_ray,
+        if let (Some(origin), Some(direction)) = (
+            requested_chief_ray_launch_origin,
+            requested_chief_ray_launch_direction,
+        ) {
+            let requested_chief_ray = [
+                origin[0], origin[1], origin[2],
+                direction[0], direction[1], direction[2],
+            ];
+            let requested_target_hit = trace_single_ray_hit_point_with_meta_core(
+                &requested_chief_ray,
                 target_surface_index,
                 object_space_n,
                 &packed_target.row_meta,
@@ -8903,11 +8897,127 @@ fn run_native_opd_map_value_with_rows(
                 &packed_target.row_rots,
                 packed_target.row_count,
             );
-            if (entrance_target_hit[0] - 1.0).abs() <= f64::EPSILON {
-                chief_start_dir = entrance_chief_ray;
-                chief_target_hit = entrance_target_hit;
-                effective_emission_origin = apply_symmetry_axis_lock(entrance_origin);
-                chief_reference_mode = "entrance-chief-target(estimate-first)".to_string();
+            if (requested_target_hit[0] - 1.0).abs() <= f64::EPSILON {
+                chief_start_dir = requested_chief_ray;
+                chief_target_hit = requested_target_hit;
+                effective_emission_origin = apply_symmetry_axis_lock(origin);
+                chief_reference_mode = "validated-angle-chief".to_string();
+                validated_requested_chief = true;
+            }
+        }
+    }
+
+    if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON && use_infinite_mode {
+        if let Some((exact_origin, exact_direction, _)) = trace_image_height_infinite_chief_ray_exact_native(
+            &rows,
+            &packed_stop,
+            &packed_target,
+            object_space_n,
+            wavelength_um,
+            stop_surface_index,
+            target_surface_index,
+            stop_center_for_sampling,
+            used_object_x,
+            used_object_y,
+        ) {
+            let exact_chief_ray = [
+                exact_origin[0],
+                exact_origin[1],
+                exact_origin[2],
+                exact_direction[0],
+                exact_direction[1],
+                exact_direction[2],
+            ];
+            let exact_target_hit = trace_single_ray_hit_point_with_meta_core(
+                &exact_chief_ray,
+                target_surface_index,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            if (exact_target_hit[0] - 1.0).abs() <= f64::EPSILON {
+                chief_start_dir = exact_chief_ray;
+                chief_target_hit = exact_target_hit;
+                effective_emission_origin = apply_symmetry_axis_lock(exact_origin);
+                chief_reference_mode = "exact-angle-stop-chief".to_string();
+            }
+        }
+    }
+
+    if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON && use_infinite_mode {
+        let estimated_entrance_origin = estimate_entrance_center_origin_native(
+            &rows,
+            &packed_meta.row_origins,
+            stop_center_for_sampling,
+            infinite_direction,
+        );
+        let brent_entrance_origin = search_entrance_origin_grid_brent_native(
+            &rows,
+            &packed_meta.row_origins,
+            stop_center_for_sampling,
+            infinite_direction,
+            stop_surface_index,
+            &packed_stop,
+            object_space_n,
+            entrance_radius,
+        );
+
+        let mut candidate_origins: Vec<([f64; 3], &'static str)> = Vec::new();
+        if estimated_entrance_origin[0].is_finite()
+            && estimated_entrance_origin[1].is_finite()
+            && estimated_entrance_origin[2].is_finite()
+        {
+            candidate_origins.push((estimated_entrance_origin, "estimate"));
+        }
+        if let Some(brent_origin) = brent_entrance_origin {
+            let is_duplicate = candidate_origins.iter().any(|(origin, _)| {
+                (origin[0] - brent_origin[0]).abs() <= 1.0e-9
+                    && (origin[1] - brent_origin[1]).abs() <= 1.0e-9
+                    && (origin[2] - brent_origin[2]).abs() <= 1.0e-9
+            });
+            if !is_duplicate {
+                candidate_origins.push((brent_origin, "brent"));
+            }
+        }
+
+        let chief_search_radius = estimate_entrance_radius_from_rows(&rows)
+            .max(stop_radius)
+            .max(entrance_radius)
+            .max(0.01);
+
+        for (entrance_origin, mode_tag) in candidate_origins {
+            let chief_fallback_radius = estimate_effective_entrance_radius(
+                entrance_origin,
+                chief_search_radius,
+            );
+            if let Some(entrance_chief_ray) = build_marginal_ray(
+                reference_ray_pupil_coordinate[0],
+                reference_ray_pupil_coordinate[1],
+                chief_fallback_radius,
+                entrance_origin,
+            ) {
+                let entrance_target_hit = trace_single_ray_hit_point_with_meta_core(
+                    &entrance_chief_ray,
+                    target_surface_index,
+                    object_space_n,
+                    &packed_target.row_meta,
+                    &packed_target.row_params,
+                    &packed_target.row_origins,
+                    &packed_target.row_inv_rots,
+                    &packed_target.row_rots,
+                    packed_target.row_count,
+                );
+                if (entrance_target_hit[0] - 1.0).abs() <= f64::EPSILON {
+                    chief_start_dir = entrance_chief_ray;
+                    chief_target_hit = entrance_target_hit;
+                    effective_emission_origin = apply_symmetry_axis_lock(entrance_origin);
+                    chief_reference_mode = format!("entrance-chief-target({})", mode_tag);
+                    break;
+                }
             }
         }
     }
@@ -9025,7 +9135,6 @@ fn run_native_opd_map_value_with_rows(
                     && (candidate_stop_hit[0] - 1.0).abs() <= f64::EPSILON
                 {
                     chief_start_dir = candidate_chief;
-                    chief_start_dir = candidate_chief;
                     chief_target_hit = candidate_target_hit;
                     chief_stop_hit = candidate_stop_hit;
                     chief_reference_mode = "newton-stop-chief".to_string();
@@ -9041,7 +9150,7 @@ fn run_native_opd_map_value_with_rows(
         effective_pupil_sampling_mode = "entrance";
         effective_sampling_radius = entrance_radius.max(0.01);
 
-        if use_infinite_mode && !preserve_image_height_chief_ray {
+        if use_infinite_mode && !preserve_image_height_chief_ray && !validated_requested_chief {
             let estimated_entrance_origin = estimate_entrance_center_origin_native(
                 &rows,
                 &packed_meta.row_origins,
@@ -9189,7 +9298,9 @@ fn run_native_opd_map_value_with_rows(
             }
         }
 
-        chief_reference_mode = if use_real_entrance_pupil_chief {
+        chief_reference_mode = if validated_requested_chief {
+            "validated-angle-chief".to_string()
+        } else if use_real_entrance_pupil_chief {
             format!("entrance-pupil-center-chief-requested(r={:.3})", effective_sampling_radius)
         } else if use_transmitted_pupil_chief {
             let (u, v) = transmitted_pupil_center_uv.unwrap_or((0.0, 0.0));

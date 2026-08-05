@@ -431,6 +431,8 @@ export interface NativeOpdMapRequest {
   pupilSamplingMode?: "stop" | "entrance";
   chiefRayMode?: OpdChiefRayMode;
   referenceRayPupilCoordinate?: { x: number; y: number };
+  chiefRayLaunchOrigin?: { x: number; y: number; z: number };
+  chiefRayLaunchDirection?: { x: number; y: number; z: number };
   sampleRayLaunchOrigin?: { x: number; y: number; z: number };
   preserveImageHeightChiefRay?: boolean;
   resolveImageHeightChiefRayInRuntime?: boolean;

@@ -3165,6 +3165,46 @@ export async function runNativeOpdMap(
       ? Number(payload.surfaceIndex)
       : pickImageSurfaceIndexNativeLike(opticalSystemRows);
 
+    let chiefRayLaunchOrigin = payload?.chiefRayLaunchOrigin;
+    let chiefRayLaunchDirection = payload?.chiefRayLaunchDirection;
+    if (isAngle && (Math.abs(xVal) > 1e-12 || Math.abs(yVal) > 1e-12)
+      && (!chiefRayLaunchOrigin || !chiefRayLaunchDirection)) {
+      try {
+        const { generateRayStartPointsForObject } = await import("../../../optical/ray-renderer.ts");
+        const chiefRays = generateRayStartPointsForObject(
+          selectedObject,
+          opticalSystemRows,
+          3,
+          null,
+          {
+            pattern: "annular",
+            wavelengthUm,
+            aimThroughStop: true,
+            useChiefRayAnalysis: true,
+            allowStopBasedOriginSolve: true,
+            originSolveTraceBackend: "rust",
+            strictChiefDirectionSolve: true,
+            targetSurfaceIndex: targetSurface,
+          },
+        ) as any;
+        const solvedOrigin = chiefRays?.expectedChiefOrigin ?? chiefRays?.[0]?.startP;
+        const solvedDirection = chiefRays?.expectedChiefDir ?? chiefRays?.[0]?.dir;
+        if ([solvedOrigin?.x, solvedOrigin?.y, solvedOrigin?.z, solvedDirection?.x, solvedDirection?.y, solvedDirection?.z]
+          .every((value) => Number.isFinite(Number(value)))) {
+          chiefRayLaunchOrigin = {
+            x: Number(solvedOrigin.x),
+            y: Number(solvedOrigin.y),
+            z: Number(solvedOrigin.z),
+          };
+          chiefRayLaunchDirection = {
+            x: Number(solvedDirection.x),
+            y: Number(solvedDirection.y),
+            z: Number(solvedDirection.z),
+          };
+        }
+      } catch (_) {}
+    }
+
     const rowsForWasm = enrichRowsWithResolvedRindexForWasm(opticalSystemRows, wavelengthUm);
     const referenceWavelengthMode = String(referenceSphereOptions.referenceSphereWavelengthMode || "primary-wavelength");
     const referenceWavelength = referenceWavelengthMode === "primary-wavelength"
@@ -3210,6 +3250,8 @@ export async function runNativeOpdMap(
       pupilSamplingMode: requestedPupilSamplingMode,
       chiefRayMode: requestedChiefRayMode,
       referenceRayPupilCoordinate: payload?.referenceRayPupilCoordinate,
+      chiefRayLaunchOrigin,
+      chiefRayLaunchDirection,
       sampleRayLaunchOrigin: payload?.sampleRayLaunchOrigin,
       preserveImageHeightChiefRay: payload?.preserveImageHeightChiefRay === true,
       resolveImageHeightChiefRayInRuntime: payload?.resolveImageHeightChiefRayInRuntime === true,
@@ -5627,6 +5669,43 @@ export async function runNativeFieldMtfMap(
           }
           return imageIndex >= 0 ? imageIndex : Math.max(0, opticalSystemRows.length - 1);
         })();
+        const validatedChiefRays = await Promise.all(activeSamples.map(async (sample) => {
+          if (axisMode !== "angle" || Math.abs(Number(sample.fieldValue)) <= 1e-12) return null;
+          try {
+            const { generateRayStartPointsForObject } = await import("../../../optical/ray-renderer.ts");
+            const selectedObject = sample.objectRowsForCall?.[sample.objectRowIndex]
+              || sample.objectRowsForCall?.[0]
+              || {};
+            const chiefRays = generateRayStartPointsForObject(
+              selectedObject,
+              opticalSystemRows,
+              3,
+              null,
+              {
+                pattern: "annular",
+                wavelengthUm: wl,
+                aimThroughStop: true,
+                useChiefRayAnalysis: true,
+                allowStopBasedOriginSolve: true,
+                originSolveTraceBackend: "rust",
+                strictChiefDirectionSolve: true,
+                targetSurfaceIndex: regularMtfSurfaceIndex,
+              },
+            ) as any;
+            const origin = chiefRays?.expectedChiefOrigin ?? chiefRays?.[0]?.startP;
+            const direction = chiefRays?.expectedChiefDir ?? chiefRays?.[0]?.dir;
+            if (![origin?.x, origin?.y, origin?.z, direction?.x, direction?.y, direction?.z]
+              .every((value) => Number.isFinite(Number(value)))) {
+              return null;
+            }
+            return {
+              origin: { x: Number(origin.x), y: Number(origin.y), z: Number(origin.z) },
+              direction: { x: Number(direction.x), y: Number(direction.y), z: Number(direction.z) },
+            };
+          } catch (_) {
+            return null;
+          }
+        }));
         const jobs = activeSamples.map((sample, fieldIndex) => ({
           opdRequest: {
             sourceRows,
@@ -5639,6 +5718,8 @@ export async function runNativeFieldMtfMap(
             wavelengthUm: wl,
             pupilSamplingMode: requestedPupilSamplingMode
               || (axisMode === "angle" && Math.abs(Number(sample.fieldValue)) > 1e-12 ? "entrance" : undefined),
+            chiefRayLaunchOrigin: validatedChiefRays[fieldIndex]?.origin,
+            chiefRayLaunchDirection: validatedChiefRays[fieldIndex]?.direction,
             opdDisplayMode,
           },
           wavelengthUm: wl,
