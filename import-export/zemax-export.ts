@@ -341,6 +341,11 @@ export function downloadZMX(zmxText, filename) {
   const a = document.createElement('a');
   a.href = url;
   a.download = ensured;
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 0);
 }

@@ -1708,15 +1708,7 @@ export function handleExportZemax(): void {
     const defaultFilename = loaded
       ? (/\.json$/i.test(loaded) ? loaded.replace(/\.json$/i, '.zmx') : (/\.zmx$/i.test(loaded) ? loaded : `${loaded}.zmx`))
       : 'co-opt-export.zmx';
-
-    let filename = prompt(
-      'Zemaxエクスポートのファイル名を入力してください（.zmx は自動補完）',
-      defaultFilename
-    );
-    if (!filename) return;
-    filename = filename.trim();
-    if (!filename) return;
-    if (!/\.zmx$/i.test(filename)) filename += '.zmx';
+    const filename = defaultFilename;
     
     if (isTauriRuntime()) {
       (async () => {

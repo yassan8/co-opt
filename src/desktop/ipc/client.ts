@@ -4710,7 +4710,7 @@ export async function runNativeFieldMtfMap(
   const forcedPupilSamplingMode = readForcedInfinitePupilMode();
   const requestedPupilSamplingMode = hasExplicitPupilSamplingMode
     ? payload.pupilSamplingMode
-    : (forcedPupilSamplingMode || "stop");
+    : forcedPupilSamplingMode;
   const mtfMethod = (typeof (payload as any)?.method === "string" && String((payload as any).method).trim())
     ? String((payload as any).method).trim()
     : "hopkins-tcc";
