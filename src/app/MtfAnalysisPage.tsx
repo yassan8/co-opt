@@ -1699,8 +1699,12 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       }
       const nonEmptyTraces = traces.filter(t => Array.isArray(t.y) && t.y.length > 0);
       if (!nonEmptyTraces.length) throw new Error('Field MTF did not produce plottable traces');
+      const renderedTraces = nonEmptyTraces.map((trace) => {
+        const curve = buildPchipCurve(trace.x, trace.y, Math.max(101, xAxis.length * 5));
+        return { ...trace, x: curve.x, y: curve.y };
+      });
       setProgress(90, formatAnalysisProgress('Field MTF', 'Rendering...'));
-      await (window as any).Plotly.newPlot(container, nonEmptyTraces, {
+      await (window as any).Plotly.newPlot(container, renderedTraces, {
         title: `${firstFreqText} / ${secondFreqText} / ${thirdFreqText} lp/mm`,
         xaxis: { title: axisInfo.label },
         yaxis: { title: 'MTF', range: [0, 1.05] },

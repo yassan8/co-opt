@@ -5658,6 +5658,10 @@ export async function runNativeFieldMtfMap(
             fieldVector: { x: 0, y: fieldValue },
           }));
         const batchPixelSizeUm = await resolvePixelSizeUm(wl);
+        const resolvedPupilRadiusMm = await resolveEntrancePupilRadiusMm(wl);
+        const batchPupilRadiusMm = Number.isFinite(resolvedPupilRadiusMm) && resolvedPupilRadiusMm > 0
+          ? resolvedPupilRadiusMm
+          : undefined;
         const regularMtfSurfaceIndex = (() => {
           let imageIndex = -1;
           for (let index = 0; index < opticalSystemRows.length; index += 1) {
@@ -5716,6 +5720,7 @@ export async function runNativeFieldMtfMap(
             surfaceIndex: regularMtfSurfaceIndex,
             gridSize: samplingSize,
             wavelengthUm: wl,
+            pupilRadiusMm: batchPupilRadiusMm,
             pupilSamplingMode: requestedPupilSamplingMode
               || (axisMode === "angle" && Math.abs(Number(sample.fieldValue)) > 1e-12 ? "entrance" : undefined),
             chiefRayLaunchOrigin: validatedChiefRays[fieldIndex]?.origin,
@@ -5752,6 +5757,7 @@ export async function runNativeFieldMtfMap(
               wavelengthUm: wl,
               surfaceIndex: regularMtfSurfaceIndex,
               gridSize: samplingSize,
+              pupilRadiusMm: batchPupilRadiusMm,
               pupilSamplingMode: requestedPupilSamplingMode,
               opdDisplayMode,
             },

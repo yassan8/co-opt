@@ -891,11 +891,14 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             return await withForcedInfinitePupilMode(mode, async () => {
                 if (!isTauriRuntime()) {
                     try {
+                        const objectRowsForOpd = hasOverride
+                            ? objects.map((row, index) => index === objIndex ? { ...row, ...selectedObject } : row)
+                            : objects;
                         ensureConsoleLog(`🚀 [MTF] Using native Rust/WASM OPD map for ${(wlLocal * 1000).toFixed(1)}nm`);
                         const nativeResponse = await runNativeOpdMap({
                             opticalSystemRows,
                             sourceRows,
-                            objectRows: objects,
+                            objectRows: objectRowsForOpd,
                             objectIndex: objIndex,
                             gridSize: samplingSizeForPSF,
                             wavelengthUm: wlLocal,
