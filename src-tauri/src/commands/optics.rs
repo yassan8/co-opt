@@ -4828,14 +4828,10 @@ pub fn run_native_field_mtf_map(
         let total_runs = (wavelengths.len() * steps).max(1);
         let mut completed = 0usize;
 
-        // Pre-compute reference entrance pupil radius at on-axis (angle=0) before the
-        // field sweep.  All field OPD calls are then given this fixed radius via
-        // `pupil_radius_mm` so that `run_native_opd_map` skips the per-field bisection
-        // refinement and uses a consistent sampling radius across every field point.
-        // This eliminates the periodic MTF discontinuities caused by the bisected radius
-        // changing abruptly as vignetting boundaries or other optical transitions are
-        // crossed during the sweep.
-        let fixed_entrance_pupil_radius_mm: Option<f64> = if axis_mode.eq_ignore_ascii_case("angle") {
+        // When entrance sampling is explicitly requested, anchor its radius on-axis so
+        // the sweep does not change aperture between field points. Angle/Rectangle use
+        // stop sampling by default and therefore do not need this radius override.
+        let fixed_entrance_pupil_radius_mm: Option<f64> = if requested_pupil_sampling_mode.as_deref() == Some("entrance") {
             let ref_wl = wavelengths.first().copied().unwrap_or(0.5876);
             let ref_object_rows = clone_object_rows_with_field_axis_native(
                 &req.object_rows,
@@ -5052,12 +5048,8 @@ pub fn run_native_field_mtf_map(
 
                 let primary_mode = if let Some(forced_mode) = requested_pupil_sampling_mode.as_deref() {
                     Some(forced_mode)
-                } else if axis_mode.eq_ignore_ascii_case("angle") {
-                    // Keep sampling mode consistent from on-axis to off-axis
-                    // to avoid first-step discontinuity in Object MTF.
-                    Some("entrance")
                 } else {
-                    None
+                    Some("stop")
                 };
                 let is_forced_mode = requested_pupil_sampling_mode.is_some();
 
@@ -5072,9 +5064,7 @@ pub fn run_native_field_mtf_map(
                     surface_index: Some(fixed_eval_surface_index),
                     grid_size: Some(sampling_size as u32),
                     wavelength_um: Some(wl),
-                    // Pass the pre-computed on-axis entrance radius to suppress per-field
-                    // bisection refinement in run_native_opd_map and keep sampling radius
-                    // constant across all field points.
+                    // Only explicit entrance sampling receives the anchored radius.
                     pupil_radius_mm: fixed_entrance_pupil_radius_mm,
                     pupil_sampling_mode: primary_mode.map(|m| m.to_string()),
                     opd_display_mode: Some(opd_display_mode.clone()),

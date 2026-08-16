@@ -4847,6 +4847,12 @@ export async function runNativeFieldMtfMap(
     try { return JSON.parse(JSON.stringify(r)); } catch (_) { return { ...(r || {}) }; }
   });
 
+  const isImageHeightObject = (index: number): boolean => {
+    const row = normalizedInputObjectRows[Math.max(0, Math.min(index, normalizedInputObjectRows.length - 1))] as any;
+    const position = String(row?.__cooptOriginalPosition ?? row?.position ?? row?.object ?? row?.objectType ?? "").trim().toLowerCase();
+    return position === "imageheight";
+  };
+
   const getFieldValueFromObjectRow = (row: any): number => {
     const setting = buildTransverseFieldSettingsFromObjectRows([row])?.[0] || {};
     const raw = axisMode === "angle"
@@ -5145,13 +5151,9 @@ export async function runNativeFieldMtfMap(
     const primaryObjectRows = Array.isArray(objectRowsOverride) && objectRowsOverride.length > 0
       ? objectRowsOverride
       : cloneObjectRowsForField(fieldValue, wl, axisMode, activeObjectIndex);
-    // Always use entrance-pupil mode, including on-axis (zero field).
-    // Stop-mode over-estimates the stop radius, causing ~85% ray failure and a sparse OPD grid
-    // which produces a noisy PSF and jagged high-frequency MTF at every field height.
-    // The anchored entrance pupil radius from the max field is a good estimate for on-axis too.
-    const primaryMode = requestedPupilSamplingMode || "entrance";
-    // Use the anchored entrance pupil radius for all fields (including on-axis) for consistency.
-    const primaryRadius = fixedPupilRadiusMm;
+    const primaryMode = requestedPupilSamplingMode
+      || (isImageHeightObject(activeObjectIndex) ? "entrance" : "stop");
+    const primaryRadius = primaryMode === "entrance" ? fixedPupilRadiusMm : undefined;
     const primaryResult = await tryFieldModes({
       objectRowsForCall: primaryObjectRows,
       primaryMode,
@@ -5465,17 +5467,16 @@ export async function runNativeFieldMtfMap(
           }
           return idx;
         })();
-        const shouldAnchorEntranceRadius =
-          requestedPupilSamplingMode !== "stop"
-          && anchorIndex >= 0;
+        const defaultPupilSamplingMode = requestedPupilSamplingMode
+          || (isImageHeightObject(objectIndex) ? "entrance" : "stop");
+        const shouldAnchorEntranceRadius = defaultPupilSamplingMode === "entrance" && anchorIndex >= 0;
         try {
           const anchorSample = anchorIndex >= 0 ? activeSamples[anchorIndex] : null;
           const anchorFieldValue = anchorSample ? Number(anchorSample.fieldValue) : 0;
           const anchorObjectRows = anchorSample && anchorSample.objectRowsForCall.length > 0
             ? anchorSample.objectRowsForCall
             : cloneObjectRowsForField(anchorFieldValue, wl, axisMode, anchorSample?.objectRowIndex ?? objectIndex);
-          const anchorAutoMode = "entrance";
-          const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
+          const anchorPupilSamplingMode = defaultPupilSamplingMode;
           const anchorRaw = runNativeOpdWasm(JSON.stringify({
             opticalSystemRows,
             sourceRows,
@@ -5658,10 +5659,6 @@ export async function runNativeFieldMtfMap(
             fieldVector: { x: 0, y: fieldValue },
           }));
         const batchPixelSizeUm = await resolvePixelSizeUm(wl);
-        const resolvedPupilRadiusMm = await resolveEntrancePupilRadiusMm(wl);
-        const batchPupilRadiusMm = Number.isFinite(resolvedPupilRadiusMm) && resolvedPupilRadiusMm > 0
-          ? resolvedPupilRadiusMm
-          : undefined;
         const regularMtfSurfaceIndex = (() => {
           let imageIndex = -1;
           for (let index = 0; index < opticalSystemRows.length; index += 1) {
@@ -5720,9 +5717,8 @@ export async function runNativeFieldMtfMap(
             surfaceIndex: regularMtfSurfaceIndex,
             gridSize: samplingSize,
             wavelengthUm: wl,
-            pupilRadiusMm: batchPupilRadiusMm,
             pupilSamplingMode: requestedPupilSamplingMode
-              || (axisMode === "angle" && Math.abs(Number(sample.fieldValue)) > 1e-12 ? "entrance" : undefined),
+              || (isImageHeightObject(sample.objectRowIndex) ? "entrance" : "stop"),
             chiefRayLaunchOrigin: validatedChiefRays[fieldIndex]?.origin,
             chiefRayLaunchDirection: validatedChiefRays[fieldIndex]?.direction,
             opdDisplayMode,
@@ -5757,8 +5753,8 @@ export async function runNativeFieldMtfMap(
               wavelengthUm: wl,
               surfaceIndex: regularMtfSurfaceIndex,
               gridSize: samplingSize,
-              pupilRadiusMm: batchPupilRadiusMm,
-              pupilSamplingMode: requestedPupilSamplingMode,
+              pupilSamplingMode: requestedPupilSamplingMode
+                || (isImageHeightObject(objectIndex) ? "entrance" : "stop"),
               opdDisplayMode,
             },
           },
