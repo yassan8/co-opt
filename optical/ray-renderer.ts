@@ -1206,6 +1206,38 @@ function generateCenteredGridOffsets(rayCount, halfExtent) {
     return selected.slice(0, rayCount);
 }
 
+function generateUniformCrossOffsets(rayCount, halfExtent, crossType: 'vertical' | 'horizontal' | 'both') {
+    const useVertical = crossType === 'both' || crossType === 'vertical';
+    const useHorizontal = crossType === 'both' || crossType === 'horizontal';
+    const minimumRayCount = 1 + (useVertical ? 2 : 0) + (useHorizontal ? 2 : 0);
+    const requestedRayCount = Math.max(minimumRayCount, Math.floor(Number(rayCount) || 0));
+    const symmetricRayCount = requestedRayCount % 2 === 0 ? requestedRayCount + 1 : requestedRayCount;
+    const pairCount = (symmetricRayCount - 1) / 2;
+    let verticalPairCount = useVertical ? pairCount : 0;
+    let horizontalPairCount = useHorizontal ? pairCount : 0;
+
+    if (useVertical && useHorizontal) {
+        verticalPairCount = Math.max(1, Math.floor(pairCount / 2));
+        horizontalPairCount = Math.max(1, pairCount - verticalPairCount);
+    }
+
+    const offsets: Array<{ offsetU: number; offsetV: number }> = [{ offsetU: 0, offsetV: 0 }];
+    const appendPairs = (count, axis: 'vertical' | 'horizontal') => {
+        for (let index = 1; index <= count; index++) {
+            const offset = halfExtent * index / count;
+            if (axis === 'vertical') {
+                offsets.push({ offsetU: 0, offsetV: -offset }, { offsetU: 0, offsetV: offset });
+            } else {
+                offsets.push({ offsetU: -offset, offsetV: 0 }, { offsetU: offset, offsetV: 0 });
+            }
+        }
+    };
+
+    if (useVertical) appendPairs(verticalPairCount, 'vertical');
+    if (useHorizontal) appendPairs(horizontalPairCount, 'horizontal');
+    return offsets;
+}
+
 function generateParallelStartPointsViaRust(origin, uAxis, vAxis, offsets) {
     try {
         const rust = getRustRayTracingWasmSync();
@@ -5184,70 +5216,7 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             })();
             const halfExtentForExactCross = Math.max(1e-6, stopSamplingRadius * pupilScale * insideScale);
             const offsets = useExactCrossBeamSampling
-                ? (() => {
-                    const exactHalfExtent = halfExtentForExactCross;
-                    const lineOffsets: Array<{ offsetU: number; offsetV: number }> = [{ offsetU: 0, offsetV: 0 }];
-                    const useVertical = crossType === 'both' || crossType === 'vertical';
-                    const useHorizontal = crossType === 'both' || crossType === 'horizontal';
-                    const minimumExtentRayCount = 1 + (useVertical ? 2 : 0) + (useHorizontal ? 2 : 0);
-                    const effectiveRayCount = Math.max(rayCount, minimumExtentRayCount);
-                    let remainingCount = Math.max(0, effectiveRayCount - 1);
-                    const verticalTargetCount = useVertical
-                        ? (useHorizontal ? Math.floor(remainingCount / 2) : remainingCount)
-                        : 0;
-                    const horizontalTargetCount = useHorizontal
-                        ? (useVertical ? (remainingCount - verticalTargetCount) : remainingCount)
-                        : 0;
-
-                    if (verticalTargetCount > 0) {
-                        if (verticalTargetCount === 1) {
-                            lineOffsets.push({ offsetU: 0, offsetV: exactHalfExtent });
-                        } else {
-                            const den = Math.max(1, verticalTargetCount - 1);
-                            for (let i = 0; i < verticalTargetCount; i++) {
-                                const t = i / den;
-                                const offsetV = exactHalfExtent + t * (-2 * exactHalfExtent);
-                                lineOffsets.push({ offsetU: 0, offsetV });
-                            }
-                        }
-                    }
-
-                    if (horizontalTargetCount > 0) {
-                        if (horizontalTargetCount === 1) {
-                            lineOffsets.push({ offsetU: exactHalfExtent, offsetV: 0 });
-                        } else {
-                            const den = Math.max(1, horizontalTargetCount - 1);
-                            for (let i = 0; i < horizontalTargetCount; i++) {
-                                const t = i / den;
-                                const offsetU = -exactHalfExtent + t * (2 * exactHalfExtent);
-                                lineOffsets.push({ offsetU, offsetV: 0 });
-                            }
-                        }
-                    }
-
-                    // Always include pupil cardinal points for exact cross sampling.
-                    if (useVertical) {
-                        lineOffsets.push({ offsetU: 0, offsetV: exactHalfExtent });
-                        lineOffsets.push({ offsetU: 0, offsetV: -exactHalfExtent });
-                    }
-                    if (useHorizontal) {
-                        lineOffsets.push({ offsetU: exactHalfExtent, offsetV: 0 });
-                        lineOffsets.push({ offsetU: -exactHalfExtent, offsetV: 0 });
-                    }
-
-                    const uniqueOffsets: Array<{ offsetU: number; offsetV: number }> = [];
-                    const seen = new Set<string>();
-                    lineOffsets.forEach((pt) => {
-                        const u = Number(pt.offsetU) || 0;
-                        const v = Number(pt.offsetV) || 0;
-                        const key = `${u.toFixed(9)}_${v.toFixed(9)}`;
-                        if (seen.has(key)) return;
-                        seen.add(key);
-                        uniqueOffsets.push({ offsetU: u, offsetV: v });
-                    });
-
-                    return uniqueOffsets;
-                })()
+                ? generateUniformCrossOffsets(rayCount, halfExtentForExactCross, crossType)
                 : (pattern === 'annular'
                     ? generateAnnularOffsets(rayCount, halfExtent, annularRingCount || 3)
                     : generateCenteredGridOffsets(rayCount, halfExtent));
@@ -5799,70 +5768,7 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
             })();
             const halfExtentForExactCross = Math.max(1e-6, stopSamplingRadius * pupilScale);
             const offsets = useExactCrossBeamSampling
-                ? (() => {
-                    const exactHalfExtent = halfExtentForExactCross;
-                    const lineOffsets: Array<{ offsetU: number; offsetV: number }> = [{ offsetU: 0, offsetV: 0 }];
-                    const useVertical = exactCrossType === 'both' || exactCrossType === 'vertical';
-                    const useHorizontal = exactCrossType === 'both' || exactCrossType === 'horizontal';
-                    const minimumExtentRayCount = 1 + (useVertical ? 2 : 0) + (useHorizontal ? 2 : 0);
-                    const effectiveRayCount = Math.max(rayCount, minimumExtentRayCount);
-                    const remainingCount = Math.max(0, effectiveRayCount - 1);
-                    const verticalTargetCount = useVertical
-                        ? (useHorizontal ? Math.floor(remainingCount / 2) : remainingCount)
-                        : 0;
-                    const horizontalTargetCount = useHorizontal
-                        ? (useVertical ? (remainingCount - verticalTargetCount) : remainingCount)
-                        : 0;
-
-                    if (verticalTargetCount > 0) {
-                        if (verticalTargetCount === 1) {
-                            lineOffsets.push({ offsetU: 0, offsetV: exactHalfExtent });
-                        } else {
-                            const den = Math.max(1, verticalTargetCount - 1);
-                            for (let i = 0; i < verticalTargetCount; i++) {
-                                const t = i / den;
-                                const offsetV = exactHalfExtent + t * (-2 * exactHalfExtent);
-                                lineOffsets.push({ offsetU: 0, offsetV });
-                            }
-                        }
-                    }
-
-                    if (horizontalTargetCount > 0) {
-                        if (horizontalTargetCount === 1) {
-                            lineOffsets.push({ offsetU: exactHalfExtent, offsetV: 0 });
-                        } else {
-                            const den = Math.max(1, horizontalTargetCount - 1);
-                            for (let i = 0; i < horizontalTargetCount; i++) {
-                                const t = i / den;
-                                const offsetU = -exactHalfExtent + t * (2 * exactHalfExtent);
-                                lineOffsets.push({ offsetU, offsetV: 0 });
-                            }
-                        }
-                    }
-
-                    // Always include pupil cardinal points for exact cross sampling.
-                    if (useVertical) {
-                        lineOffsets.push({ offsetU: 0, offsetV: exactHalfExtent });
-                        lineOffsets.push({ offsetU: 0, offsetV: -exactHalfExtent });
-                    }
-                    if (useHorizontal) {
-                        lineOffsets.push({ offsetU: exactHalfExtent, offsetV: 0 });
-                        lineOffsets.push({ offsetU: -exactHalfExtent, offsetV: 0 });
-                    }
-
-                    const uniqueOffsets: Array<{ offsetU: number; offsetV: number }> = [];
-                    const seen = new Set<string>();
-                    lineOffsets.forEach((pt) => {
-                        const u = Number(pt.offsetU) || 0;
-                        const v = Number(pt.offsetV) || 0;
-                        const key = `${u.toFixed(9)}_${v.toFixed(9)}`;
-                        if (seen.has(key)) return;
-                        seen.add(key);
-                        uniqueOffsets.push({ offsetU: u, offsetV: v });
-                    });
-
-                    return uniqueOffsets;
-                })()
+                ? generateUniformCrossOffsets(rayCount, halfExtentForExactCross, exactCrossType)
                 : (pattern === 'annular'
                     ? generateAnnularOffsets(rayCount, halfExtent, annularRingCount || 3)
                     : generateCenteredGridOffsets(rayCount, halfExtent));

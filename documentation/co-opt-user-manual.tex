@@ -1,0 +1,721 @@
+\documentclass[11pt]{article}
+\usepackage{iftex}
+\ifPDFTeX
+  \errmessage{This document must be built with XeLaTeX in VS Code}
+\fi
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{tcolorbox}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[table]{xcolor}
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\definecolor{OperandHeader}{gray}{0.88}
+
+\setmainfont{Latin Modern Roman}
+\setCJKmainfont{Yu Mincho}
+\setCJKsansfont{Yu Gothic}
+\setCJKmonofont{Meiryo}
+
+\title{co-opt 取扱説明書}
+\author{yassan}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\section{はじめに}
+co-opt は、光学系の設計・解析を行うためのツールです。\par
+本書では、現在の画面構成に基づいて、起動から基本操作、主要機能の使い方、トラブルシュートまでをまとめます。
+
+\section{画面構成}
+\subsection{メニューバー}
+上部のメニューバーでは、以下の機能を利用できます。
+\begin{itemize}
+  \item \textbf{File}: ファイル操作や読み込みに関するメニュー
+  \item \textbf{Edit}: 編集操作に関するメニュー
+  \item \textbf{View}: 表示内容の切り替えに関するメニュー
+  \item \textbf{Run}: 実行や再計算に関するメニュー
+  \item \textbf{Analysis}: 解析ビューを開くためのメニュー
+  \item \textbf{Settings}: 設定変更に関するメニュー
+\end{itemize}
+
+\subsection{トップツールバー}
+画面上部のツールバーは、日常的に使う操作をまとめた領域です。ファイル名表示の右側には Settings ボタンとツールバーの折りたたみボタンがあります。
+
+\paragraph{File グループ}
+\begin{itemize}
+  \item \textbf{New File}: 新しいワークスペースを開始します。
+  \item \textbf{Save File}: 現在の状態をファイルとして保存します。
+  \item \textbf{Load File}: 保存済みファイルを読み込みます。
+  \item \textbf{Examples}: 同梱されているサンプル設計を読み込みます。
+  \item \textbf{Share URL}: 現在の状態を URL 化して共有します。
+  \item \textbf{Clear Cache}: ローカル保存された一時データを消去します。
+\end{itemize}
+
+\paragraph{Data グループ}
+\begin{itemize}
+  \item \textbf{Import Zemax}: Zemax の \texttt{.zmx} を取り込みます。
+  \item \textbf{Export Zemax}: 現在の光学系を Zemax 形式へ出力します。
+\end{itemize}
+
+\paragraph{View / Tools / Analysis グループ}
+\begin{itemize}
+  \item \textbf{Open Render}: 3D レンダービューを別ウィンドウで開きます。
+  \item \textbf{Open System Data}: System Data ビューを別ウィンドウで開きます。
+  \item \textbf{Undo / Redo}: 編集履歴を戻す、またはやり直します。
+  \item \textbf{Optimize}: 可変パラメータを使って Requirements を満たす方向へ最適化を実行します。
+  \item \textbf{Select Analysis}: 解析種別を選び、対応する解析ウィンドウを開きます。
+\end{itemize}
+
+\subsection{ナビゲーター}
+左側のナビゲーターでは、作業内容に応じて表示項目を切り替えます。
+
+\paragraph{Workspace}
+Workspace では、以下の項目を管理できます。
+\begin{itemize}
+  \item \textbf{config}: 構成の追加・削除・複製・名称変更
+  \item \textbf{Sources / Fields}: 光源や視野に関する入力
+  \item \textbf{Design Intent}: 設計意図に関する設定
+  \item \textbf{Requirements}: 要件と制約
+  \item \textbf{Patent}: 特許関連情報
+  \item \textbf{System Console}: コマンド入力と状態確認
+\end{itemize}
+
+\subsection{ステータスバー}
+画面下部のステータスバーには、現在の作業状態が表示されます。
+\begin{itemize}
+  \item \textbf{Ready}: 実行待ちかどうかを示す全体状態
+  \item \textbf{現在のファイル名}: 読み込み中のプロジェクトファイル
+  \item \textbf{View}: 現在表示中のワークスペースまたは解析ビュー
+  \item \textbf{Variables}: 最適化対象として有効な変数の個数
+  \item \textbf{Optimizer}: 最適化の実行状態
+\end{itemize}
+
+\section{Workspace UI の詳細}
+\subsection{config}
+config は、同一プロジェクト内で複数の設計案を切り替えるための管理画面です。UI 上のラベルは先頭大文字ではなく \textbf{config} です。本書でも以後は UI 表記に合わせて \textbf{config} と記します。
+
+\paragraph{主な役割}
+\begin{itemize}
+  \item 設計案を複数持つ
+  \item 案ごとの差分を比較する
+  \item 最適化前後や派生案を保存する
+\end{itemize}
+
+\paragraph{config 画面の読み方}
+\begin{center}
+\small
+\begin{tabular}{p{3.2cm} p{10.4cm}}
+\toprule
+項目 & 内容 \\
+\midrule
+Add & 新しい config を追加します。初期値は現在のワークスペース状態から作られます。 \\
+Delete & 選択中の config を削除します。最後の 1 件は削除できません。 \\
+Duplicate & 現在の config を複製して比較用の派生案を作ります。 \\
+Rename & 現在の config 名を変更します。 \\
+Drag to reorder & 複数 config の表示順を並び替えます。評価順そのものではなく、管理しやすい順序に整えるための機能です。 \\
+Active & 現在アクティブな config 名です。 \\
+Total Configs & プロジェクト内の config 数です。 \\
+Last Modified & その config の最終更新時刻です。 \\
+\bottomrule
+\end{tabular}
+\normalsize
+\end{center}
+
+\paragraph{画面内の要素}
+\begin{itemize}
+  \item \textbf{Add}: 新しい構成を追加します。
+  \item \textbf{Delete}: 選択中の構成を削除します。
+  \item \textbf{Duplicate}: 現在の構成を複製し、比較用の派生案を作ります。
+  \item \textbf{Rename}: 構成名を変更します。
+  \item \textbf{Configuration order}: 複数 config がある場合の並び順を管理します。
+  \item \textbf{Active / Total Configs / Last Modified}: 現在の config 名、総数、最終更新時刻を示します。
+\end{itemize}
+
+\paragraph{運用上の注意}
+Source と Requirements は config 間で共有されます。config ごとに独立して切り替わるのは主に設計本体、Design Intent、展開後の optical system、system data の状態です。
+
+\paragraph{config 切り替え時の実務上の見方}
+\begin{itemize}
+  \item 派生案を試す前に Duplicate で複製してから編集すると比較しやすくなります。
+  \item 最適化の前後で別 config を作ると、どの変数変更が効いたか追跡しやすくなります。
+  \item source / requirements が共有である点を忘れると、ある config で変更した条件が他の config にも効いて見えるので注意してください。
+\end{itemize}
+
+\subsection{Sources / Fields}
+Sources / Fields は、光源条件、波長条件、視野条件を入力する領域です。解析の多くはここで設定した条件を前提に実行されます。
+
+\paragraph{主な役割}
+\begin{itemize}
+  \item 使用する波長群を定義する
+  \item 主波長を決める
+  \item 視野点や物体位置を設定する
+  \item 各解析で用いる入射条件を揃える
+\end{itemize}
+
+\paragraph{見るべき点}
+\begin{itemize}
+  \item 解析結果が意図と違う場合は、まず視野と波長の設定を確認します。
+  \item 色収差や MTF の結果は、波長設定に強く依存します。
+  \item 像高ベースか角度ベースかの視野定義が結果解釈に影響します。
+\end{itemize}
+
+\subsection{Design Intent}
+Design Intent は、光学系を Block 単位で表現しながら設計意図を編集する領域です。Surface の羅列ではなく、Lens、Gap、Stop などの意味を持った要素として扱えます。
+
+\paragraph{主な役割}
+\begin{itemize}
+  \item Block 単位で光学系を構成する
+  \item Block から展開された Surface を確認する
+  \item パラメータ化された設計対象を最適化へ渡す
+\end{itemize}
+
+\paragraph{ツールバー}
+\begin{itemize}
+  \item \textbf{Block type}: 追加する Block 種別を選びます。
+  \item \textbf{Add Block}: 選択した種別の Block を追加します。
+  \item \textbf{Delete Block}: 選択中の Block を削除します。
+  \item \textbf{Parameter All ON}: すべての対象パラメータを変数として有効化します。
+  \item \textbf{Parameter All OFF}: すべての変数指定を解除します。
+  \item \textbf{Auto-set apertures}: 開口関連の値を自動設定します。
+\end{itemize}
+
+\paragraph{追加できる Block の例}
+\begin{itemize}
+  \item ObjectSurface
+  \item SingleSurface
+  \item Lens
+  \item Paraxial
+  \item Doublet
+  \item Triplet
+  \item CoordTrans
+  \item Gap
+  \item Stop
+  \item Mirror
+  \item ImageSurface
+\end{itemize}
+
+\paragraph{表の見方}
+Design Intent 下部には展開後の Surface テーブルが表示されます。Surface type によって列見出しが切り替わることがあり、たとえば CoordTrans では通常の曲率や厚み列が Decenter、Tilt 系の意味に再割り当てされます。
+
+\paragraph{Import / Analyze Mode}
+取り込んだ光学系が Block で完全表現できない場合、Import / Analyze Mode のバナーが表示されます。この状態では Surface ベースの解析は可能ですが、Design Intent は部分的または限定的です。
+
+\subsection{Requirements}
+Requirements は、設計目標を評価式として定義する領域です。単なるメモではなく、評価値、目標値、許容差、重みを持った判定条件として扱います。
+
+\paragraph{主な役割}
+\begin{itemize}
+  \item 焦点距離、像高、収差などの目標値を定義する
+  \item 重み付きで複数条件を評価する
+  \item 最適化時の目的関数として利用する
+\end{itemize}
+
+\paragraph{Requirements 画面の列構成}
+\begin{center}
+\small
+\begin{longtable}{p{2.4cm} p{11.0cm}}
+\toprule
+列・要素 & 意味 \\
+\midrule
+\endfirsthead
+\toprule
+列・要素 & 意味 \\
+\midrule
+\endhead
+On & その requirement を有効にするかどうかです。オフにした行は評価と最適化対象から外れます。 \\
+Requirement & operand を選ぶ列です。何を評価するかをここで決めます。 \\
+Spec & \code{op}、\code{target}、\code{tol} を要約した表示です。 \\
+Current & 現在の光学系での評価値です。 \\
+Status & Pass / Fail の判定結果です。 \\
+Details & config、field scope、wavelength scope、param1〜param5、根拠メモなどをまとめた編集領域です。 \\
+Score & 重み付き評価値です。最適化時の比較指標として使われます。 \\
+config & どの config に対して評価するかを指定します。空欄または active config が使われる運用になっている箇所もあるため、比較用途では明示指定が安全です。 \\
+Field scope & どの視野点に適用するかを指定します。operand 既定値、全視野、特定 object 行などを選びます。 \\
+Wavelength scope & どの波長に適用するかを指定します。Primary のみ、全波長、特定 source 行などを選びます。 \\
+param1 〜 param5 & operand ごとの追加引数です。意味は operand によって変わります。面番号、波長番号、周波数、モード、サンプリング数などが入ります。 \\
+Op & 比較演算子です。通常は \code{=}、\code{<=}、\code{>=} を使います。 \\
+Tol & 許容差です。\code{=} の場合は目標値の前後許容帯、\code{<=} / \code{>=} の場合は緩衝幅として使います。 \\
+Target & 目標値です。 \\
+Weight & 重みです。大きいほど最適化で優先されます。 \\
+Memo row & メモ専用行です。評価には使われません。条件の意図や根拠の記録に使います。 \\
+\bottomrule
+\end{longtable}
+\normalsize
+\end{center}
+
+\paragraph{比較演算子の使い方}
+\begin{center}
+\small
+\begin{tabular}{p{2.2cm} p{11.2cm}}
+\toprule
+演算子 & 解釈 \\
+\midrule
+\code{=} & Target に一致させたい条件です。Tol を与えると $\text{Target} \pm \text{Tol}$ の帯域を許容します。 \\
+\code{<=} & Target 以下に抑えたい条件です。収差量や外形寸法の上限制約で使います。 \\
+\code{>=} & Target 以上を確保したい条件です。厚み、空気間隔、MTF の下限制約で使います。 \\
+\bottomrule
+\end{tabular}
+\normalsize
+\end{center}
+
+\paragraph{操作}
+\begin{itemize}
+  \item Requirement 行を追加する
+  \item メモ行を追加する
+  \item 行の削除、複製、並べ替えを行う
+  \item ドラッグ操作またはキーボードで順序を変更する
+\end{itemize}
+
+\paragraph{入力項目の考え方}
+\begin{itemize}
+  \item \textbf{Operand}: 評価対象の種類
+  \item \textbf{config}: どの config に対する評価か
+  \item \textbf{Wavelength / Field Scope}: どの波長、どの視野点に適用するか
+  \item \textbf{Op / Target / Tol / Weight}: 判定記号、目標、許容差、重み
+\end{itemize}
+
+\paragraph{operand の読み方}
+operand は「何を数値化して評価するか」を表します。ここでは \textbf{UI のドロップダウンに表示される名称}で記載します。\par
+また、param は \textbf{param1 / param2} ではなく、UI に表示される \textbf{ラベル名}（\code{\lambda idx}, \code{Axis}, \code{Metric} など）で記載します。
+
+\subsubsection{近軸・system data 系 operand（UI表示名）}
+\begingroup
+\small
+\begin{longtable}{|>{\raggedright\arraybackslash\bfseries}p{3.7cm}|p{3.7cm}|p{2.9cm}|p{3.3cm}|}
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endfirsthead
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endhead
+Focal Length (FL) & 近軸焦点距離です。 & \code{\lambda idx}, \code{Axis} & 焦点距離の基本管理 \\ \hline
+Effective Focal Length (EFL) & 全系または選択 block 群の EFL です。 & \code{\lambda idx}, \code{Blocks}, \code{Axis} & block 群の合成焦点力制約 \\ \hline
+Front Principal Point (PP1) & 前側主点位置です。 & \code{\lambda idx}, \code{S1}, \code{S2}, \code{Mode} & 前群主点位置管理 \\ \hline
+Rear Principal Point (PP2) & 後側主点位置です。 & \code{\lambda idx}, \code{S1}, \code{S2}, \code{Mode} & 後群主点位置管理 \\ \hline
+Back Focal Length (BFL) & バックフォーカス長です。 & \code{\lambda idx}, \code{Axis} & 像面後方クリアランス管理 \\ \hline
+Effective Focal Length (S1--S2) & 面範囲 S1--S2 の有効焦点距離です。 & \code{\lambda idx}, \code{S1}, \code{S2}, \code{Axis} & 部分系焦点距離の制約 \\ \hline
+Image Distance & paraxial image distance です。 & \code{\lambda idx}, \code{Axis} & 像面位置の近軸管理 \\ \hline
+Object Distance & object 面 thickness 起点の object distance です。 & \code{Reserved} & 有限共役条件の管理 \\ \hline
+Total System Length & finite thickness 合計です。 & \code{Reserved} & 全長制約 \\ \hline
+Exit Pupil Magnification & 射出瞳倍率です。 & \code{\lambda idx} & 瞳変換の監視 \\ \hline
+Exit Pupil Diameter (ExPD) & 射出瞳径です。 & \code{\lambda idx} & 像側明るさ・取り回し確認 \\ \hline
+Exit Pupil Position (from Image) & 像面基準の射出瞳位置です。 & \code{\lambda idx} & chief ray 評価の補助 \\ \hline
+Entrance Pupil Diameter (EnPD) & 入射瞳径です。 & \code{\lambda idx} & 物体側 F\# との整合管理 \\ \hline
+Entrance Pupil Position & 入射瞳位置です。 & \code{\lambda idx} & pupil 位置の前後移動抑制 \\ \hline
+Entrance Pupil Magnification & 入射瞳倍率です。 & \code{\lambda idx} & pupil imaging 変動監視 \\ \hline
+Paraxial Magnification & 近軸倍率 $\beta$ です。 & \code{\lambda idx} & 有限物体倍率の制約 \\ \hline
+Object Space F\# & 物体側 F\# です。 & \code{\lambda idx} & 入射側明るさ管理 \\ \hline
+Image Space F\# & 像側 F\# です。 & \code{\lambda idx} & センサ側明るさ管理 \\ \hline
+Paraxial Working F\# & working F\# です。 & \code{\lambda idx} & working F\# 目標化 \\ \hline
+Object Space NA & 物体側 NA です。 & \code{\lambda idx} & NA 指定設計 \\ \hline
+Image Space NA & 像側 NA です。 & \code{\lambda idx} & 像側 NA の確保・抑制 \\ \hline
+\end{longtable}
+\endgroup
+
+\subsubsection{3 次収差・色収差系 operand（UI表示名）}
+\begingroup
+\small
+\begin{longtable}{|>{\raggedright\arraybackslash\bfseries}p{3.7cm}|p{3.7cm}|p{2.9cm}|p{3.3cm}|}
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endfirsthead
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endhead
+3rd Order Spherical & 3 次球面収差係数です。 & \code{\lambda idx}, \code{Mode}, \code{Scope}, \code{Ref FL} & 球面収差の初期抑制 \\ \hline
+3rd Order Coma & 3 次コマ収差係数です。 & \code{\lambda idx}, \code{Mode}, \code{Scope}, \code{Ref FL} & オフ軸初期性能の制御 \\ \hline
+3rd Order Astigmatism & 3 次非点収差係数です。 & \code{\lambda idx}, \code{Mode}, \code{Scope}, \code{Ref FL} & 視野依存像面分離の抑制 \\ \hline
+3rd Order Field Curvature & 3 次像面湾曲係数です。 & \code{\lambda idx}, \code{Mode}, \code{Scope}, \code{Ref FL} & 像面平坦化の方向付け \\ \hline
+3rd Order Distortion & 3 次歪曲収差係数です。 & \code{\lambda idx}, \code{Mode}, \code{Scope}, \code{Ref FL} & 歪曲傾向の初期把握 \\ \hline
+Petzval Sum & Petzval 和です。 & \code{\lambda idx}, \code{Mode}, \code{Scope}, \code{Ref FL} & 像面曲率の根本制御 \\ \hline
+Longitudinal Chromatic & 縦色収差係数です。 & \code{Mode}, \code{Scope}, \code{Ref FL} & 軸上色収差抑制 \\ \hline
+Transverse Chromatic & 横色収差係数です。 & \code{Mode}, \code{Scope}, \code{Ref FL} & 倍率色収差を merit へ直接反映 \\ \hline
+\end{longtable}
+\endgroup
+
+\subsubsection{解析ベース像質 operand（UI表示名）}
+\begingroup
+\small
+\begin{longtable}{|>{\raggedright\arraybackslash\bfseries}p{3.7cm}|p{3.7cm}|p{2.9cm}|p{3.3cm}|}
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endfirsthead
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endhead
+Spot Size Annular (\textmu m) & annular サンプリングの spot size です。 & \code{\lambda idx}, \code{Object idx}, \code{Metric}, \code{Rays}, \code{Surface} & spot 性能の直接制約 \\ \hline
+Spot Size Rectangle (\textmu m) & rectangle サンプリングの spot size です。 & \code{\lambda idx}, \code{Object idx}, \code{Metric}, \code{Rays}, \code{Surface} & 格子サンプリングでの spot 管理 \\ \hline
+Spherical Aberration RMS (\textmu m) & 縦収差 RMS です。 & \code{\lambda idx} & 軸上像質の滑らかな抑制 \\ \hline
+Spherical Aberration (LSA, \textmu m) & marginal と paraxial 差の LSA です。 & \code{\lambda idx} & 実光線球面収差の直接制約 \\ \hline
+Transevers Aberration RMS (\textmu m) & 横収差 RMS です。 & \code{\lambda idx}, \code{Object idx}, \code{Component}, \code{Raynum} & 子午・サジタル横収差制御 \\ \hline
+Lateral chromatic RMS & lateral chromatic RMS です。 & \code{Samples} & 色ズレの解析ベース制約 \\ \hline
+Chief@Image (deg) & 像面での chief ray angle 絶対値です。 & \code{Object idx/id}, \code{\lambda idx} & 入射角・テレセントリシティ管理 \\ \hline
+Distortion (\%) & 最大視野歪曲率です。 & \code{\lambda idx} & 量産仕様の歪曲率管理 \\ \hline
+Wavefront RMS OPD (waves) & OPD ベース波面 RMS です。 & \code{\lambda idx}, \code{Object idx}, \code{Sampling} & 波面収差の一括抑制 \\ \hline
+Zernike Coefficient (Noll) & Zernike 係数または係数 RMS です。 & \code{\lambda idx}, \code{Object idx}, \code{Unit}, \code{Sampling}, \code{n (Noll)} & 特定 Zernike 成分制約 \\ \hline
+MTF Meridional & tangential/meridional MTF です。 & \code{\lambda idx}, \code{Field idx}, \code{Freq (lp/mm)}, \code{Sampling} & tangential MTF 下限制約 \\ \hline
+MTF Sagittal & sagittal MTF です。 & \code{\lambda idx}, \code{Field idx}, \code{Freq (lp/mm)}, \code{Sampling} & sagittal MTF 下限制約 \\ \hline
+MTF Average & tangential/sagittal 平均 MTF です。 & \code{\lambda idx}, \code{Field idx}, \code{Freq (lp/mm)}, \code{Sampling} & 方向平均 MTF 制約 \\ \hline
+\end{longtable}
+\endgroup
+
+\subsubsection{機構・形状制約 operand（UI表示名）}
+\begingroup
+\small
+\begin{longtable}{|>{\raggedright\arraybackslash\bfseries}p{3.7cm}|p{3.7cm}|p{2.9cm}|p{3.3cm}|}
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endfirsthead
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endhead
+Edge Thickness & 指定 element の edge thickness です。 & \code{Element}, \code{Height}, \code{Direction} & レンズ縁厚最小確保 \\ \hline
+All Edge Element & 全 element の edge thickness 最小/最大です。 & \code{Mode}, \code{Height}, \code{Direction} & 全レンズ縁厚の一括管理 \\ \hline
+Edge Air Gap & 指定 gap の edge air distance です。 & \code{Gap}, \code{Height}, \code{Direction} & 周辺空気隙間不足の防止 \\ \hline
+All Edge Air Gap & 全 gap の edge air distance 最小/最大です。 & \code{Mode} & 全 gap 干渉余裕の一括管理 \\ \hline
+Center Thickness & 指定 element または gap の center thickness です。 & \code{Element/Gap} & 中心厚・成形限界制約 \\ \hline
+Radius & 指定 surface の絶対曲率半径です。 & \code{Surface} & 極端高曲率の回避 \\ \hline
+All Radius & 全 surface 半径の最小/最大です。 & \code{Mode} & 系全体曲率の一括制限 \\ \hline
+Surface distance & Surface A から Surface B の軸方向距離です。 & \code{Surface A}, \code{Surface B} & 特定面間離隔の直接制約 \\ \hline
+Gap Thickness & 全 gap thickness の最小/最大です。 & \code{Mode} & gap 最小値と余裕管理 \\ \hline
+All Thickness & gap を除く finite thickness 最小/最大です。 & \code{Mode} & レンズ厚一括管理 \\ \hline
+\end{longtable}
+\endgroup
+
+\subsubsection{演算 operand（UI表示名）}
+\begingroup
+\small
+\begin{longtable}{|>{\raggedright\arraybackslash\bfseries}p{3.7cm}|p{3.7cm}|p{2.9cm}|p{3.3cm}|}
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endfirsthead
+\hline
+\rowcolor{OperandHeader}\textbf{UI表示名} & \textbf{評価項目} & \textbf{UIパラメータ表示} & \textbf{管理・制約} \\ \hline
+\endhead
+Req Arithmetic & 既存 requirement の current 値同士の四則演算結果です。 & \code{Left Req}, \code{Op}, \code{Right Req} & 比率・差分・合成指標の作成 \\ \hline
+\end{longtable}
+\endgroup
+
+\paragraph{operand 設定時の注意}
+\begin{itemize}
+  \item 波長関連の UI 表示ラベル（\code{\lambda idx} など）は source 行番号を使います。空欄は Primary wavelength を意味する operand が多いです。
+  \item \code{Scope} は全系、surface id、blockId、zoom group を受け取るものがあります。特に Effective Focal Length (EFL) と 3 次収差系で block 単位評価が可能です。
+  \item MTF 系や Wavefront RMS OPD (waves)、Zernike Coefficient (Noll) は重い計算です。多数入れると最適化や requirement 更新が遅くなります。
+  \item Req Arithmetic は上側にある行しか参照できません。自己参照や未来行参照は失敗します。
+\end{itemize}
+
+\subsection{Patent}
+Patent は、特許文献から光学系データを半自動で取り込むための専用画面です。
+
+\paragraph{主な役割}
+\begin{itemize}
+  \item 特許 URL や PDF を読み込む
+  \item OCR でテキスト化する
+  \item 候補行を抽出して補正する
+  \item Design Intent / Optical System へ適用する
+\end{itemize}
+
+\paragraph{主要 UI}
+\begin{itemize}
+  \item \textbf{Search Keywords}: 検索語を入力します。
+  \item \textbf{Document URL}: 特許 URL や PDF URL を指定します。
+  \item \textbf{Load URL Text}: ブラウザ取得可能な文書からテキストを読み込みます。
+  \item \textbf{Select PDF}: PDF ファイルを指定します。
+  \item \textbf{Select Screenshot}: 表画像やスクリーンショットを指定します。
+  \item \textbf{Run OCR}: PDF に文字層が無い場合に OCR を実行します。
+  \item \textbf{Extract Candidate Data}: 曲率、厚み、屈折率、アッベ数、非球面係数などの候補行を抽出します。
+  \item \textbf{Apply Corrected Rows}: 修正済み候補行を現構成へ反映します。
+  \item \textbf{AI Enhance}: OCR 誤りや表崩れを AI で補正します。
+  \item \textbf{Apply as New Config}: 抽出結果を新しい構成として追加します。
+\end{itemize}
+
+\paragraph{典型的な流れ}
+\begin{enumerate}
+  \item PDF または URL を読み込む
+  \item 必要なら OCR を実行する
+  \item Extract Candidate Data で候補行を作る
+  \item Correct Candidate Rows で OCR 誤りを修正する
+  \item Apply Corrected Rows または Apply as New Config を実行する
+\end{enumerate}
+
+\subsection{System Console}
+System Console は、簡易コマンドを通して状態確認や補助操作を行うための領域です。
+
+\paragraph{主な役割}
+\begin{itemize}
+  \item 利用可能コマンドの確認
+  \item ログや実行結果の確認
+  \item 補助的な内部操作
+\end{itemize}
+
+\section{Analysis UI の詳細}
+\subsection{Render}
+Render は光学系の 3D 表示です。別ウィンドウで開き、レンズ群や設計ブロックの空間配置を視覚的に確認します。
+
+\paragraph{確認できる内容}
+\begin{itemize}
+  \item レンズやギャップの並び
+  \item 設計意図 Block に対応するラベル
+  \item 物体側から像面側までの全体構成
+\end{itemize}
+
+\subsection{System Data}
+System Data は、パラキシアル量や収差係数などのテキストレポートを出力する画面です。
+
+\paragraph{主要ボタン}
+\begin{itemize}
+  \item \textbf{Calculate Paraxial}: 基本的なパラキシアル量を計算します。
+  \item \textbf{Aberration Coefficients}: Seidel 収差係数を計算します。
+  \item \textbf{Aberration Coefficients (Afocal)}: アフォーカル系として収差係数を計算します。
+  \item \textbf{Reference Focal Length}: 基準焦点距離を指定します。空欄なら自動です。
+  \item \textbf{Coord Transform}: 座標変換系の確認用出力を行います。
+\end{itemize}
+
+\paragraph{出力の使い方}
+テキスト領域には解析結果が蓄積されます。焦点距離、主平面、倍率、Seidel 係数などを確認し、設計の妥当性判断やレポート作成に使います。
+
+\subsection{Spot Diagram}
+Spot Diagram は、像面や任意面に到達した光線分布をスポットとして表示する解析です。
+
+\paragraph{設定項目}
+\begin{itemize}
+  \item \textbf{Surface number}: 評価対象面
+  \item \textbf{Ray number}: 追跡光線本数
+  \item \textbf{Ring count}: 瞳面サンプリングのリング数
+  \item \textbf{Ray pattern}: Annular または Rectangle
+\end{itemize}
+
+\paragraph{見方}
+スポットが小さく集中していれば像質が良く、色ごとの広がりや偏りから収差傾向を読み取れます。
+
+\subsection{Spherical Aberration}
+Spherical Aberration は、瞳位置ごとの焦点ずれを縦収差図として表示します。
+
+\paragraph{設定項目}
+\begin{itemize}
+  \item \textbf{Ray number}
+  \item \textbf{Reference focus}: Primary paraxial / Current paraxial / Chief ray
+\end{itemize}
+
+\paragraph{見方}
+横軸が縦収差、縦軸が正規化瞳座標です。曲線が原点近くでまとまるほど球面収差が小さいと判断できます。
+
+\subsection{Astigmatism}
+Astigmatism は、視野ごとにメリジオナル像面とサジタル像面のずれを表示します。
+
+\paragraph{設定項目}
+\begin{itemize}
+  \item \textbf{Chief Ray Definition}: Stop Center / Beam Center / Centroid
+  \item \textbf{Points}: 視野分割数
+  \item \textbf{Rays}: 光線本数
+  \item \textbf{Rings}: 瞳サンプリング数
+  \item \textbf{Focus (+/- mm)}: 評価する焦点範囲
+\end{itemize}
+
+\paragraph{見方}
+サジタルとメリジオナルの曲線間隔が大きいほど非点収差が大きいことを示します。
+
+\subsection{Distortion}
+Distortion は、理想像高に対して実像高がどれだけずれるかを表示します。
+
+\paragraph{設定項目}
+\begin{itemize}
+  \item \textbf{Enlargement Factor}: 表示拡大率
+\end{itemize}
+
+\paragraph{見方}
+正なら糸巻き型、負なら樽型の傾向を読み取れます。
+
+\subsection{Grid Distortion}
+Grid Distortion は、理想格子と実際の結像点のずれを格子として可視化します。
+
+\paragraph{設定項目}
+\begin{itemize}
+  \item \textbf{Grid Size}: 格子密度
+\end{itemize}
+
+\paragraph{見方}
+周辺で格子が大きく曲がる場合、幾何歪みが大きいと判断できます。
+
+\subsection{Lateral Chromatic Aberration}
+Lateral Chromatic Aberration は、主波長に対する各波長の横色収差を表示します。
+
+\paragraph{設定項目}
+\begin{itemize}
+  \item \textbf{Lateral displacement (+/- mm)}
+  \item \textbf{Points}
+  \item \textbf{Rays}
+  \item \textbf{Rings}
+  \item \textbf{Chief ray}
+  \item \textbf{Smooth N}
+\end{itemize}
+
+\paragraph{見方}
+波長ごとの横ずれ量が小さいほど倍率色収差は良好です。
+
+\subsection{Integrated Aberration}
+Integrated Aberration は、球面収差、非点収差、歪曲収差の主要情報を統合表示するビューです。個別解析の概要確認に向いています。
+
+\subsection{Transverse Aberration}
+Transverse Aberration は、瞳座標に対する横収差を子午方向・サジタル方向で表示します。
+
+\paragraph{主な見方}
+瞳端でのずれ量や曲線の非対称性を見て、像面上の光線偏差を評価します。
+
+\subsection{OPD Fan / OPD}
+これらは波面収差を確認するテスト系ビューです。OPD Fan は断面方向の波面偏差、OPD は格子状の波面偏差を確認する用途です。
+
+\paragraph{用途}
+\begin{itemize}
+  \item 像質低下の根本原因を波面から見る
+  \item PSF や MTF の悪化要因を事前に確認する
+\end{itemize}
+
+\subsection{PSF}
+PSF は点像分布関数を表示し、点光源が像面でどのように広がるかを確認します。
+
+\subsection{MTF}
+MTF は空間周波数に対するコントラスト伝達を表示します。Sagittal と Tangential の差が大きいと、視野依存の像質差があることを示します。
+
+\subsection{Through-Focus Spot}
+Through-Focus Spot は、焦点位置を前後に動かしながらスポット分布を比較する解析です。最良焦点位置の探索に有効です。
+
+\subsection{Through-Focus MTF}
+Through-Focus MTF は、デフォーカス量に対して MTF がどう変化するかを表示します。焦点深度や最良像面の把握に向いています。
+
+\subsection{Field MTF}
+Field MTF は、視野位置ごとの MTF を比較する解析です。中心から周辺へ向かう像質変化を確認します。
+
+\paragraph{Analysis}
+Analysis では、解析結果ビューを選択できます。
+\begin{itemize}
+  \item \textbf{Render}
+  \item \textbf{System Data}
+  \item \textbf{Spot Diagram}
+  \item \textbf{Spherical Aberration}
+  \item \textbf{Astigmatism}
+  \item \textbf{Distortion}
+  \item \textbf{Grid Distortion}
+  \item \textbf{Lateral Chromatic Aberration}
+  \item \textbf{Integrated Aberration}
+  \item \textbf{Transverse Aberration}
+  \item \textbf{OPD Fan}
+  \item \textbf{OPD}
+  \item \textbf{PSF}
+  \item \textbf{MTF}
+  \item \textbf{Through-Focus Spot}
+  \item \textbf{Through-Focus MTF}
+  \item \textbf{Field MTF}
+\end{itemize}
+
+\section{基本操作}
+\subsection{プロジェクトの読み込み}
+\begin{enumerate}
+  \item 画面左上またはメニューから対象ファイルを読み込みます。
+  \item 読み込み後、ステータス領域に現在のファイル名が表示されます。
+  \item 右上の状態表示から、現在の構成数や実行状態を確認できます。
+\end{enumerate}
+
+\subsection{構成の管理}
+config ペインでは、構成を管理します。
+\begin{enumerate}
+  \item \textbf{Add} ボタンで新しい構成を追加します。
+  \item \textbf{Delete} ボタンで選択中の構成を削除します。
+  \item \textbf{Duplicate} ボタンで現在の構成を複製します。
+  \item \textbf{Rename} ボタンで構成名を変更します。
+\end{enumerate}
+
+\paragraph{補足}
+現在の UI では、Source と Requirements は全構成で共有されます。構成ごとに独立して編集したい場合は、事前に設定内容を確認してください。
+
+\subsection{解析の実行}
+\begin{enumerate}
+  \item ナビゲーターの Analysis から目的の解析ビューを選択します。
+  \item 解析対象となる構成や入力条件を確認します。
+  \item 必要に応じて Run メニューまたは対応する実行操作を実行します。
+  \item 結果は各解析ビューに表示されます。
+\end{enumerate}
+
+\section{システムコンソールの使い方}
+システムコンソールでは、コマンド入力による操作が可能です。
+\begin{itemize}
+  \item \texttt{help} で利用可能なコマンドの案内を表示できます。
+  \item \texttt{cls} でコンソール画面を消去できます。
+\end{itemize}
+
+\paragraph{操作の流れ}
+\begin{enumerate}
+  \item コンソール入力欄にコマンドを入力します。
+  \item Enter キーで実行します。
+  \item 実行結果を確認し、必要に応じて再入力します。
+\end{enumerate}
+
+\section{よくある操作}
+\subsection{構成を増やしたい}
+\begin{enumerate}
+  \item config ビューを開きます。
+  \item \textbf{Add} ボタンをクリックします。
+  \item 新しい構成が追加されるため、必要に応じて名前を変更します。
+\end{enumerate}
+
+\subsection{解析結果を確認したい}
+\begin{enumerate}
+  \item ナビゲーターの Analysis から目的のビューを選択します。
+  \item 画面中央に表示される内容を確認します。
+  \item 解析条件や入力データに不整合がないかを見直します。
+\end{enumerate}
+
+\subsection{状態を確認したい}
+画面下部またはステータス表示で、次の情報を確認できます。
+\begin{itemize}
+  \item 現在のファイル名
+  \item 現在表示中のビュー
+  \item 変数の個数
+  \item Optimizer の状態
+\end{itemize}
+
+\section{トラブルシュート}
+\subsection{画面が表示されない}
+\begin{itemize}
+  \item ナビゲーターの項目を切り替えて、表示対象を確認してください。
+  \item 画面のサイズが小さい場合、表示領域が隠れている可能性があります。
+  \item ウィンドウのリサイズ操作を利用して、表示領域を調整してください。
+\end{itemize}
+
+\subsection{構成が追加できない}
+\begin{itemize}
+  \item config ビューが開いているか確認してください。
+  \item 選択状態が適切か確認してください。
+  \item 画面上部の操作ボタンが有効かどうか確認してください。
+\end{itemize}
+
+\subsection{解析結果が見えない}
+\begin{itemize}
+  \item Analysis メニューから対象ビューを選択してください。
+  \item 解析が実行済みか確認してください。
+  \item コンソールやステータス表示で実行状態を確認してください。
+\end{itemize}
+
+\section{注意事項}
+\begin{itemize}
+  \item 本作業は、入力データと構成設定に依存します。
+  \item 解析結果は、各構成ごとの入力内容に応じて変化します。
+  \item 共有設定の内容は、構成管理時に必ず確認してください。
+  \item 重要な操作前には、現在の構成名とファイル名を確認することを推奨します。
+\end{itemize}
+
+\section{まとめ}
+co-opt は、構成管理、解析ビューの切り替え、システムコンソール操作を組み合わせて利用するツールです。\par
+まずは config で構成を確認し、Analysis で解析結果を見ながら操作することを基本にすると、効率よく利用できます。
+
+\end{document}

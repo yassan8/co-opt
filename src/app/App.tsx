@@ -400,30 +400,7 @@ function selectCrossRaysForAxis(rays: any[], desiredCount: number, axis: 'YZ' | 
   const ordered = Array.isArray(rays) ? [...rays].sort(compareCrossRayDrawOrder) : [];
   if (desiredCount <= 0 || ordered.length === 0) return [];
   if (axis !== 'BOTH') {
-    const selected: any[] = [];
-    const remaining = [...ordered];
-    const takeFirst = (predicate: (ray: any) => boolean) => {
-      const index = remaining.findIndex(predicate);
-      if (index < 0) return;
-      selected.push(remaining.splice(index, 1)[0]);
-    };
-
     const getType = (ray: any) => String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
-    const getSide = (ray: any) => String(ray?.originalRay?.side ?? ray?.side ?? '').trim().toLowerCase();
-    const getInterpolationRatio = (ray: any) => {
-      const ratio = Number(ray?.interpolationRatio ?? ray?.originalRay?.interpolationRatio);
-      return Number.isFinite(ratio) ? ratio : Number.NaN;
-    };
-    const relabelRay = (ray: any, nextType: string, nextSide: string) => ({
-      ...ray,
-      type: nextType,
-      side: nextSide,
-      originalRay: {
-        ...(ray?.originalRay || {}),
-        type: nextType,
-        side: nextSide,
-      },
-    });
     const getAxisCoord = (ray: any) => {
       const stopAxis = Number(ray?.__cooptStopAxisCoord ?? ray?.originalRay?.__cooptStopAxisCoord);
       if (Number.isFinite(stopAxis)) return stopAxis;
@@ -452,209 +429,45 @@ function selectCrossRaysForAxis(rays: any[], desiredCount: number, axis: 'YZ' | 
       const planeV = Number(ray?.rayStart?.planeCoords?.v ?? ray?.originalRay?.planeCoords?.v ?? ray?.planeCoords?.v);
       return Number.isFinite(planeV) ? planeV : Number.NaN;
     };
-    const getAxisPupilCoord = (ray: any) => {
-      if (axis === 'XZ') {
-        const planeU = Number(ray?.rayStart?.planeCoords?.u ?? ray?.originalRay?.planeCoords?.u ?? ray?.planeCoords?.u);
-        return Number.isFinite(planeU) ? planeU : Number.NaN;
-      }
-      const planeV = Number(ray?.rayStart?.planeCoords?.v ?? ray?.originalRay?.planeCoords?.v ?? ray?.planeCoords?.v);
-      return Number.isFinite(planeV) ? planeV : Number.NaN;
-    };
-    const getChiefRelativeCoord = (ray: any, chiefAxisCoord: number, chiefPupilCoord: number) => {
-      const pupilCoord = getAxisPupilCoord(ray);
-      if (Number.isFinite(pupilCoord) && Number.isFinite(chiefPupilCoord)) return pupilCoord - chiefPupilCoord;
-      const coord = getAxisCoord(ray);
-      if (Number.isFinite(coord) && Number.isFinite(chiefAxisCoord)) return coord - chiefAxisCoord;
-      if (Number.isFinite(pupilCoord)) return pupilCoord;
-      return coord;
-    };
-    const chiefCoord = (() => {
-      const selectedChief = selected.find((ray) => getType(ray) === 'chief');
-      if (selectedChief) {
-        const coord = getAxisCoord(selectedChief);
-        if (Number.isFinite(coord)) return coord;
-      }
-      const orderedChief = ordered.find((ray) => getType(ray) === 'chief');
-      if (orderedChief) {
-        const coord = getAxisCoord(orderedChief);
-        if (Number.isFinite(coord)) return coord;
-      }
-      return 0;
-    })();
-    const chiefPupilCoord = (() => {
-      const selectedChief = selected.find((ray) => getType(ray) === 'chief');
-      if (selectedChief) {
-        const coord = getAxisPupilCoord(selectedChief);
-        if (Number.isFinite(coord)) return coord;
-      }
-      const orderedChief = ordered.find((ray) => getType(ray) === 'chief');
-      if (orderedChief) {
-        const coord = getAxisPupilCoord(orderedChief);
-        if (Number.isFinite(coord)) return coord;
-      }
-      return 0;
-    })();
-    const hasChief = remaining.some((ray) => getType(ray) === 'chief');
+    const chief = ordered.find((ray) => getType(ray) === 'chief') || null;
+    if (desiredCount === 1) return chief ? [chief] : ordered.slice(0, 1);
 
-    if (hasChief) {
-      takeFirst((ray) => getType(ray) === 'chief');
-    }
+    const finiteCandidates = ordered
+      .filter((ray) => ray !== chief)
+      .map((ray) => ({ ray, coord: getAxisCoord(ray) }))
+      .filter((entry) => Number.isFinite(entry.coord));
+    if (finiteCandidates.length === 0) return chief ? [chief] : ordered.slice(0, desiredCount);
 
-    if (desiredCount === 1) {
-      return selected.length > 0 ? selected.slice(0, 1) : remaining.slice(0, 1);
-    }
-
-    if (axis === 'XZ') {
-      const marginalCandidates = remaining
-        .map((ray, index) => ({ ray, index, coord: getAxisCoord(ray) }))
-        .filter((entry) => {
-          const type = getType(entry.ray);
-          return type !== 'chief' && Number.isFinite(entry.coord);
-        });
-      const finiteCandidates = marginalCandidates.filter((entry) => Number.isFinite(entry.coord));
-      if (finiteCandidates.length >= 2) {
-        const leftEntry = finiteCandidates.reduce((best, entry) => (entry.coord < best.coord ? entry : best), finiteCandidates[0]);
-        const rightPool = finiteCandidates.filter((entry) => entry.index !== leftEntry.index);
-        if (rightPool.length > 0) {
-          const rightEntry = rightPool.reduce((best, entry) => (entry.coord > best.coord ? entry : best), rightPool[0]);
-          const leftIndex = remaining.findIndex((ray) => ray === leftEntry.ray);
-          if (leftIndex >= 0) selected.push(relabelRay(remaining.splice(leftIndex, 1)[0], 'left_marginal', 'left'));
-          const rightIndex = remaining.findIndex((ray) => ray === rightEntry.ray);
-          if (rightIndex >= 0) selected.push(relabelRay(remaining.splice(rightIndex, 1)[0], 'right_marginal', 'right'));
-        }
-      }
-      if (!selected.some((ray) => getType(ray) === 'left_marginal')) {
-        takeFirst((ray) => getType(ray) === 'left_marginal' || getSide(ray) === 'left');
-      }
-      if (!selected.some((ray) => getType(ray) === 'right_marginal')) {
-        takeFirst((ray) => getType(ray) === 'right_marginal' || getSide(ray) === 'right');
-      }
-    } else {
-      const marginalCandidates = remaining
-        .map((ray, index) => ({ ray, index, coord: getAxisCoord(ray) }))
-        .filter((entry) => {
-          const type = getType(entry.ray);
-          return type !== 'chief' && Number.isFinite(entry.coord);
-        });
-      const finiteCandidates = marginalCandidates.filter((entry) => Number.isFinite(entry.coord));
-      if (finiteCandidates.length >= 2) {
-        const eps = 1e-9;
-        const withDelta = finiteCandidates.map((entry) => ({
-          ...entry,
-          delta: getChiefRelativeCoord(entry.ray, chiefCoord, chiefPupilCoord),
-        }));
-        const lowerSide = withDelta.filter((entry) => entry.delta < -eps);
-        const upperSide = withDelta.filter((entry) => entry.delta > eps);
-
-        const fallbackLower = withDelta.reduce((best, entry) => (entry.coord < best.coord ? entry : best), withDelta[0]);
-        const fallbackUpper = withDelta.reduce((best, entry) => (entry.coord > best.coord ? entry : best), withDelta[0]);
-
-        const lowerEntry = lowerSide.length > 0
-          ? lowerSide.reduce((best, entry) => (entry.delta < best.delta ? entry : best), lowerSide[0])
-          : fallbackLower;
-        const upperEntry = upperSide.length > 0
-          ? upperSide.reduce((best, entry) => (entry.delta > best.delta ? entry : best), upperSide[0])
-          : fallbackUpper;
-
-        if (upperEntry.index !== lowerEntry.index) {
-          const upperIndex = remaining.findIndex((ray) => ray === upperEntry.ray);
-          if (upperIndex >= 0) selected.push(relabelRay(remaining.splice(upperIndex, 1)[0], 'upper_marginal', 'upper'));
-          const lowerIndex = remaining.findIndex((ray) => ray === lowerEntry.ray);
-          if (lowerIndex >= 0) selected.push(relabelRay(remaining.splice(lowerIndex, 1)[0], 'lower_marginal', 'lower'));
-        }
-      }
-      if (!selected.some((ray) => getType(ray) === 'upper_marginal')) {
-        takeFirst((ray) => getType(ray) === 'upper_marginal' || getSide(ray) === 'upper' || getSide(ray) === 'top');
-      }
-      if (!selected.some((ray) => getType(ray) === 'lower_marginal')) {
-        takeFirst((ray) => getType(ray) === 'lower_marginal' || getSide(ray) === 'lower' || getSide(ray) === 'bottom');
-      }
-    }
-
-    // For Raynum>=5, pick one cross on each side first so two cross rays do not overlap visually.
-    if (desiredCount >= 5) {
-      const crossType = axis === 'XZ' ? 'horizontal_cross' : 'vertical_cross';
-      const negativeMarginalType = axis === 'XZ' ? 'left_marginal' : 'lower_marginal';
-      const positiveMarginalType = axis === 'XZ' ? 'right_marginal' : 'upper_marginal';
-      const marginalCoord = (type: string) => {
-        const selectedHit = selected.find((ray) => getType(ray) === type);
-        if (selectedHit) return getAxisCoord(selectedHit);
-        const remainingHit = remaining.find((ray) => getType(ray) === type);
-        return remainingHit ? getAxisCoord(remainingHit) : Number.NaN;
-      };
-      const takeCrossNearestTo = (targetCoord: number) => {
-        if (!Number.isFinite(targetCoord)) return;
-        let bestIndex = -1;
-        let bestDist = Number.POSITIVE_INFINITY;
-        for (let i = 0; i < remaining.length; i += 1) {
-          const ray = remaining[i];
-          if (getType(ray) !== crossType) continue;
-          const coord = getAxisCoord(ray);
-          if (!Number.isFinite(coord)) continue;
-          const dist = Math.abs(coord - targetCoord);
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestIndex = i;
+    const minCoord = Math.min(...finiteCandidates.map((entry) => entry.coord));
+    const maxCoord = Math.max(...finiteCandidates.map((entry) => entry.coord));
+    const chiefCoordRaw = chief ? getAxisCoord(chief) : Number.NaN;
+    const centerCoord = Number.isFinite(chiefCoordRaw) ? chiefCoordRaw : (minCoord + maxCoord) / 2;
+    const remaining = [...finiteCandidates];
+    const selected = chief ? [chief] : [];
+    const slots = Math.max(0, desiredCount - selected.length);
+    const negativeSlots = Math.floor(slots / 2);
+    const positiveSlots = slots - negativeSlots;
+    const pickUniformSide = (from: number, count: number) => {
+      for (let index = count; index >= 1; index -= 1) {
+        if (remaining.length === 0) break;
+        const target = centerCoord + (from - centerCoord) * (index / count);
+        let bestIndex = 0;
+        for (let candidateIndex = 1; candidateIndex < remaining.length; candidateIndex += 1) {
+          if (Math.abs(remaining[candidateIndex].coord - target) < Math.abs(remaining[bestIndex].coord - target)) {
+            bestIndex = candidateIndex;
           }
         }
-        if (bestIndex >= 0) {
-          selected.push(remaining.splice(bestIndex, 1)[0]);
-        }
-      };
-
-      // Prefer two cross rays that are closest to each marginal side coordinate.
-      takeCrossNearestTo(marginalCoord(negativeMarginalType));
-      takeCrossNearestTo(marginalCoord(positiveMarginalType));
-
-      const isNegativeCrossSide = (ray: any) => {
-        const side = getSide(ray);
-        if (axis === 'XZ' && side === 'left') return true;
-        if (axis === 'YZ' && (side === 'lower' || side === 'bottom')) return true;
-        const rel = getChiefRelativeCoord(ray, chiefCoord, chiefPupilCoord);
-        if (Number.isFinite(rel) && rel < -1e-9) return true;
-        const ratio = getInterpolationRatio(ray);
-        return Number.isFinite(ratio) && ratio < (0.5 - 1e-9);
-      };
-      const isPositiveCrossSide = (ray: any) => {
-        const side = getSide(ray);
-        if (axis === 'XZ' && side === 'right') return true;
-        if (axis === 'YZ' && (side === 'upper' || side === 'top')) return true;
-        const rel = getChiefRelativeCoord(ray, chiefCoord, chiefPupilCoord);
-        if (Number.isFinite(rel) && rel > 1e-9) return true;
-        const ratio = getInterpolationRatio(ray);
-        return Number.isFinite(ratio) && ratio > (0.5 + 1e-9);
-      };
-      takeFirst((ray) => {
-        if (getType(ray) !== crossType) return false;
-        return isNegativeCrossSide(ray);
-      });
-      takeFirst((ray) => {
-        if (getType(ray) !== crossType) return false;
-        return isPositiveCrossSide(ray);
-      });
-      if (selected.length < desiredCount) {
-        takeFirst((ray) => getType(ray) === crossType);
+        selected.push(remaining.splice(bestIndex, 1)[0].ray);
       }
-    }
-
-    for (const ray of remaining) {
-      if (selected.length >= desiredCount) break;
-      selected.push(ray);
-    }
-
+    };
+    pickUniformSide(minCoord, negativeSlots);
+    pickUniformSide(maxCoord, positiveSlots);
     return selected.slice(0, desiredCount);
   }
-  if (desiredCount < 3) return ordered.slice(0, desiredCount);
+  const getType = (ray: any) => String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
+  const chief = ordered.find((ray) => getType(ray) === 'chief') || null;
+  if (desiredCount === 1) return chief ? [chief] : ordered.slice(0, 1);
 
-  const selected: any[] = [];
-  const remaining = [...ordered];
-  const takeFirst = (predicate: (ray: any) => boolean) => {
-    const index = remaining.findIndex(predicate);
-    if (index < 0) return;
-    selected.push(remaining.splice(index, 1)[0]);
-  };
-
-  takeFirst((ray) => String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase() === 'chief');
   const getStopCoord = (ray: any, coordAxis: 'x' | 'y') => {
     const key = coordAxis === 'x' ? '__cooptStopXCoord' : '__cooptStopYCoord';
     const stopCoord = Number(ray?.[key] ?? ray?.originalRay?.[key]);
@@ -662,29 +475,46 @@ function selectCrossRaysForAxis(rays: any[], desiredCount: number, axis: 'YZ' | 
     const startCoord = Number(ray?.rayStart?.startP?.[coordAxis] ?? ray?.originalRay?.origin?.[coordAxis]);
     return Number.isFinite(startCoord) ? startCoord : Number.NaN;
   };
-  const takeExtreme = (coordAxis: 'x' | 'y', mode: 'min' | 'max') => {
-    const finite = remaining
-      .map((ray, index) => ({ ray, index, coord: getStopCoord(ray, coordAxis) }))
+  const selectUniformAxis = (candidates: any[], coordAxis: 'x' | 'y', count: number) => {
+    if (count <= 0) return [];
+    const center = chief ? getStopCoord(chief, coordAxis) : 0;
+    const finite = candidates
+      .map((ray) => ({ ray, coord: getStopCoord(ray, coordAxis) }))
       .filter((entry) => Number.isFinite(entry.coord));
-    if (finite.length === 0) return;
-    const extreme = finite.reduce((best, entry) => (
-      mode === 'min'
-        ? (entry.coord < best.coord ? entry : best)
-        : (entry.coord > best.coord ? entry : best)
-    ), finite[0]);
-    selected.push(remaining.splice(extreme.index, 1)[0]);
+    const negative = finite.filter((entry) => entry.coord < center - 1e-9);
+    const positive = finite.filter((entry) => entry.coord > center + 1e-9);
+    const negativeCount = Math.floor(count / 2);
+    const positiveCount = count - negativeCount;
+    const selected: any[] = [];
+    const pickSide = (entries: Array<{ ray: any; coord: number }>, sideCount: number, extremeMode: 'min' | 'max') => {
+      if (sideCount <= 0 || entries.length === 0) return;
+      const pool = [...entries];
+      const extreme = extremeMode === 'min'
+        ? Math.min(...pool.map((entry) => entry.coord))
+        : Math.max(...pool.map((entry) => entry.coord));
+      for (let index = sideCount; index >= 1; index -= 1) {
+        if (pool.length === 0) break;
+        const target = center + (extreme - center) * (index / sideCount);
+        let bestIndex = 0;
+        for (let candidateIndex = 1; candidateIndex < pool.length; candidateIndex += 1) {
+          if (Math.abs(pool[candidateIndex].coord - target) < Math.abs(pool[bestIndex].coord - target)) {
+            bestIndex = candidateIndex;
+          }
+        }
+        selected.push(pool.splice(bestIndex, 1)[0].ray);
+      }
+    };
+    pickSide(negative, negativeCount, 'min');
+    pickSide(positive, positiveCount, 'max');
+    return selected;
   };
-
-  takeExtreme('y', 'max');
-  takeExtreme('y', 'min');
-  takeExtreme('x', 'min');
-  takeExtreme('x', 'max');
-
-  for (const ray of remaining) {
-    if (selected.length >= desiredCount) break;
-    selected.push(ray);
-  }
-
+  const candidates = ordered.filter((ray) => ray !== chief);
+  const availableSlots = Math.max(0, desiredCount - (chief ? 1 : 0));
+  const horizontalCount = Math.floor(availableSlots / 2);
+  const verticalCount = availableSlots - horizontalCount;
+  const selected = chief ? [chief] : [];
+  selected.push(...selectUniformAxis(candidates.filter(isHorizontalCrossRay), 'x', horizontalCount));
+  selected.push(...selectUniformAxis(candidates.filter(isVerticalCrossRay), 'y', verticalCount));
   return selected.slice(0, desiredCount);
 }
 
@@ -776,29 +606,6 @@ function buildRenderLegacyCrossRayCacheKey(
     requestedPupilSamplingMode || '',
     hasExactImageHeightRows ? RENDER_IMAGEHEIGHT_EXACT_CROSS_CACHE_VERSION : '',
   ].join('#');
-}
-
-function filterRenderCrossRaysForAxis(rays: any[], axis: 'YZ' | 'XZ'): any[] {
-  if (!Array.isArray(rays) || rays.length === 0) return [];
-  return rays.filter((ray: any) => {
-    const type = String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
-    const side = String(ray?.originalRay?.side ?? ray?.side ?? '').trim().toLowerCase();
-    if (type === 'chief') return true;
-    if (axis === 'YZ') {
-      return type === 'upper_marginal'
-        || type === 'lower_marginal'
-        || type === 'vertical_cross'
-        || side === 'upper'
-        || side === 'top'
-        || side === 'lower'
-        || side === 'bottom';
-    }
-    return type === 'left_marginal'
-      || type === 'right_marginal'
-      || type === 'horizontal_cross'
-      || side === 'left'
-      || side === 'right';
-  });
 }
 
 function normalizeRenderObjectPositionTag(value: any): string {
@@ -1325,7 +1132,7 @@ function buildExactRenderRaysForImageHeightObjects(
           disableCrossExtent: true,
           crossType,
           exactCrossBeamSampling: true,
-          displayAxisAlignedSampling: false,
+          displayAxisAlignedSampling: axis !== 'BOTH',
           preserveChiefNormalEmissionPlane: true,
         }
       );
@@ -1348,7 +1155,7 @@ function buildExactRenderRaysForImageHeightObjects(
           disableCrossExtent: true,
           crossType,
           exactCrossBeamSampling: true,
-          displayAxisAlignedSampling: false,
+          displayAxisAlignedSampling: axis !== 'BOTH',
           preserveChiefNormalEmissionPlane: true,
         }
       );
@@ -1612,7 +1419,13 @@ function buildExactLowCountRenderRaysForObjects(
   if (!Array.isArray(objectRows) || objectRows.length === 0) return [];
   if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return [];
 
-  const desiredRayCount = Number.isFinite(Number(rayCount)) ? Math.max(1, Math.floor(Number(rayCount))) : 1;
+  const requestedRayCount = Number.isFinite(Number(rayCount)) ? Math.max(1, Math.floor(Number(rayCount))) : 1;
+  const desiredRayCount = requestedRayCount > 1 && requestedRayCount % 2 === 0
+    ? requestedRayCount + 1
+    : requestedRayCount;
+  const desiredAdditionalRayCount = axis === 'BOTH'
+    ? Math.max(0, 2 * (desiredRayCount - 1))
+    : Math.max(0, desiredRayCount - 1);
   const generationRayCount = axis === 'BOTH'
     ? (desiredRayCount === 1 ? 2 : desiredRayCount)
     : Math.max(desiredRayCount === 1 ? 2 : desiredRayCount, 6);
@@ -1674,11 +1487,10 @@ function buildExactLowCountRenderRaysForObjects(
 
   const rays: any[] = [];
   const overlappingImageHeightSolveEntries: Array<{ objectIndex: number; targetX: number; targetY: number; solvedX: number; solvedY: number }> = [];
+  let onAxisSectionStopInterval: { min: number; max: number } | null = null;
   objectRows.forEach((row: any, objectIndex: number) => {
     try {
-      const scopedRow = isRenderImageHeightObjectRow(row)
-        ? buildAxisScopedRenderImageHeightRow(row, axis)
-        : row;
+      const scopedRow = buildAxisScopedRenderObjectRow(row, axis);
       const resolvedRow = isRenderImageHeightObjectRow(row)
         ? convertImageHeightToEffectiveObject(
             scopedRow,
@@ -1692,7 +1504,7 @@ function buildExactLowCountRenderRaysForObjects(
               disableWarmStartCache: true,
             }
           )
-        : row;
+        : scopedRow;
       const separatedResolvedRow = separateOverlappingRenderImageHeightSolvedField(
         resolvedRow,
         row,
@@ -1748,7 +1560,7 @@ function buildExactLowCountRenderRaysForObjects(
           disableCrossExtent: true,
           crossType,
           exactCrossBeamSampling: true,
-          displayAxisAlignedSampling: false,
+          displayAxisAlignedSampling: axis !== 'BOTH',
           preserveChiefNormalEmissionPlane: true,
         }
       );
@@ -2146,6 +1958,178 @@ function buildExactLowCountRenderRaysForObjects(
         return candidates;
       };
 
+      const resampleInfiniteSectionCandidates = (candidates: any[]) => {
+        if (conjugateType !== 'infinite' || axis === 'BOTH' || desiredAdditionalRayCount < 2) return candidates;
+        const coordKey = axis === 'XZ' ? '__cooptStopXCoord' : '__cooptStopYCoord';
+        const sorted = candidates
+          .map((entry: any) => ({ ...entry, stopCoord: Number(entry?.[coordKey]) }))
+          .filter((entry: any) => Number.isFinite(entry.stopCoord))
+          .sort((a: any, b: any) => a.stopCoord - b.stopCoord);
+        if (sorted.length < 2 || stopSurfaceIndex < 0) return candidates;
+
+        const chiefStopPoint = getRenderTargetPointFromRayPath(chiefRayPath, opticalSystemRows, stopSurfaceIndex);
+        const chiefStopCoord = Number(axis === 'XZ' ? chiefStopPoint?.x : chiefStopPoint?.y);
+        if (!Number.isFinite(chiefStopCoord)) return candidates;
+
+        if (objectIndex === 0) {
+          onAxisSectionStopInterval = {
+            min: sorted[0].stopCoord,
+            max: sorted[sorted.length - 1].stopCoord,
+          };
+        }
+
+        const interpolateAtStopCoord = (targetCoord: number, type: string, side: string) => {
+          let lower = sorted[0];
+          let upper = sorted[sorted.length - 1];
+          for (let index = 0; index + 1 < sorted.length; index += 1) {
+            if (sorted[index].stopCoord <= targetCoord && sorted[index + 1].stopCoord >= targetCoord) {
+              lower = sorted[index];
+              upper = sorted[index + 1];
+              break;
+            }
+          }
+          let bestEntry: any = null;
+          for (let iteration = 0; iteration < 6; iteration += 1) {
+            const span = upper.stopCoord - lower.stopCoord;
+            const ratio = Math.abs(span) > 1e-12 ? (targetCoord - lower.stopCoord) / span : 0;
+            const lowerU = Number(lower?.rayStart?.planeCoords?.u) || 0;
+            const lowerV = Number(lower?.rayStart?.planeCoords?.v) || 0;
+            const upperU = Number(upper?.rayStart?.planeCoords?.u) || 0;
+            const upperV = Number(upper?.rayStart?.planeCoords?.v) || 0;
+            const rayStart = buildRenderRayStartOnChiefPlane(chiefStart, {
+              ...(lower?.rayStart || {}),
+              planeCoords: {
+                u: lowerU + (upperU - lowerU) * ratio,
+                v: lowerV + (upperV - lowerV) * ratio,
+              },
+            });
+            if (!rayStart?.startP || !rayStart?.dir) break;
+            const rayPath = traceExactRayForRender(rayStart.startP, rayStart.dir, isImageHeight);
+            if (!rayPath) break;
+            const stopPoint = getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, stopSurfaceIndex);
+            const stopXCoord = Number(stopPoint?.x);
+            const stopYCoord = Number(stopPoint?.y);
+            const actualCoord = axis === 'XZ' ? stopXCoord : stopYCoord;
+            if (!Number.isFinite(actualCoord)) break;
+            bestEntry = {
+              rayStart,
+              type,
+              side,
+              rayPath,
+              ...(Number.isFinite(stopXCoord) ? { __cooptStopXCoord: stopXCoord } : {}),
+              ...(Number.isFinite(stopYCoord) ? { __cooptStopYCoord: stopYCoord } : {}),
+              __cooptStopAxisCoord: actualCoord,
+            };
+            if (Math.abs(actualCoord - targetCoord) <= 1e-9) break;
+            const bracketEntry = { rayStart, stopCoord: actualCoord };
+            if (actualCoord < targetCoord) lower = bracketEntry;
+            else upper = bracketEntry;
+          }
+          return bestEntry;
+        };
+
+        const negativeCount = Math.floor(desiredAdditionalRayCount / 2);
+        const positiveCount = desiredAdditionalRayCount - negativeCount;
+        const resampled: any[] = [];
+        const buildBlendedSectionEntry = (boundaryEntry: any, fraction: number, type: string, side: string) => {
+          const boundaryPath = Array.isArray(boundaryEntry?.rayPath) ? boundaryEntry.rayPath : [];
+          const pointCount = Math.min(chiefRayPath.length, boundaryPath.length);
+          if (pointCount < 2) return null;
+          const rayPath = Array.from({ length: pointCount }, (_, pointIndex) => {
+            const chiefPoint = chiefRayPath[pointIndex];
+            const boundaryPoint = boundaryPath[pointIndex];
+            return {
+              ...chiefPoint,
+              ...boundaryPoint,
+              x: Number(chiefPoint.x) + (Number(boundaryPoint.x) - Number(chiefPoint.x)) * fraction,
+              y: Number(chiefPoint.y) + (Number(boundaryPoint.y) - Number(chiefPoint.y)) * fraction,
+              z: Number(chiefPoint.z) + (Number(boundaryPoint.z) - Number(chiefPoint.z)) * fraction,
+            };
+          });
+          const boundaryStart = boundaryEntry?.rayStart || {};
+          const startP = rayPath[0];
+          const planeU = (Number(boundaryStart?.planeCoords?.u) || 0) * fraction;
+          const planeV = (Number(boundaryStart?.planeCoords?.v) || 0) * fraction;
+          const stopPoint = getRenderTargetPointFromRayPath(rayPath, opticalSystemRows, stopSurfaceIndex);
+          const stopXCoord = Number(stopPoint?.x);
+          const stopYCoord = Number(stopPoint?.y);
+          return {
+            rayStart: {
+              ...boundaryStart,
+              startP,
+              dir: boundaryStart?.dir || chiefStart.dir,
+              planeCoords: { u: planeU, v: planeV },
+            },
+            type,
+            side,
+            rayPath,
+            ...(Number.isFinite(stopXCoord) ? { __cooptStopXCoord: stopXCoord } : {}),
+            ...(Number.isFinite(stopYCoord) ? { __cooptStopYCoord: stopYCoord } : {}),
+            __cooptStopAxisCoord: axis === 'XZ' ? stopXCoord : stopYCoord,
+            __cooptUniformSectionBlend: true,
+          };
+        };
+        const resolveLimitedBoundaryEntry = (candidate: any, limit: number, type: string, side: string) => {
+          if (Math.abs(candidate.stopCoord - limit) <= 1e-9) return candidate;
+          const limited = interpolateAtStopCoord(limit, type, side);
+          const limitedCoord = Number(limited?.__cooptStopAxisCoord);
+          if (limited && Number.isFinite(limitedCoord) && Math.abs(limitedCoord - limit) <= 1e-7) {
+            return { ...limited, stopCoord: limitedCoord };
+          }
+          const span = candidate.stopCoord - chiefStopCoord;
+          const fraction = Math.abs(span) > 1e-12
+            ? Math.max(0, Math.min(1, (limit - chiefStopCoord) / span))
+            : 1;
+          const blended = buildBlendedSectionEntry(candidate, fraction, type, side);
+          const blendedCoord = Number(blended?.__cooptStopAxisCoord);
+          return blended && Number.isFinite(blendedCoord)
+            ? { ...blended, stopCoord: blendedCoord }
+            : candidate;
+        };
+        const appendSide = (boundaryEntry: any, count: number, side: string, marginalType: string, crossType: string) => {
+          const boundary = boundaryEntry.stopCoord;
+          for (let index = 1; index <= count; index += 1) {
+            const fraction = index / count;
+            const target = chiefStopCoord + (boundary - chiefStopCoord) * fraction;
+            const type = index === count ? marginalType : crossType;
+            let entry = interpolateAtStopCoord(target, type, side);
+            const actualCoord = Number(entry?.__cooptStopAxisCoord);
+            if (!Number.isFinite(actualCoord) || Math.abs(actualCoord - target) > 1e-7) {
+              entry = buildBlendedSectionEntry(boundaryEntry, fraction, type, side);
+            }
+            if (entry) resampled.push(entry);
+          }
+        };
+        const negativeLimit = onAxisSectionStopInterval
+          ? Math.max(sorted[0].stopCoord, onAxisSectionStopInterval.min)
+          : sorted[0].stopCoord;
+        const positiveLimit = onAxisSectionStopInterval
+          ? Math.min(sorted[sorted.length - 1].stopCoord, onAxisSectionStopInterval.max)
+          : sorted[sorted.length - 1].stopCoord;
+        const negativeSide = axis === 'XZ' ? 'left' : 'lower';
+        const positiveSide = axis === 'XZ' ? 'right' : 'upper';
+        const negativeMarginal = axis === 'XZ' ? 'left_marginal' : 'lower_marginal';
+        const positiveMarginal = axis === 'XZ' ? 'right_marginal' : 'upper_marginal';
+        const sectionCrossType = axis === 'XZ' ? 'horizontal_cross' : 'vertical_cross';
+        const negativeBoundaryEntry = resolveLimitedBoundaryEntry(sorted[0], negativeLimit, negativeMarginal, negativeSide);
+        const positiveBoundaryEntry = resolveLimitedBoundaryEntry(sorted[sorted.length - 1], positiveLimit, positiveMarginal, positiveSide);
+        appendSide(
+          negativeBoundaryEntry,
+          negativeCount,
+          negativeSide,
+          negativeMarginal,
+          sectionCrossType,
+        );
+        appendSide(
+          positiveBoundaryEntry,
+          positiveCount,
+          positiveSide,
+          positiveMarginal,
+          sectionCrossType,
+        );
+        return resampled.length === desiredAdditionalRayCount ? resampled : candidates;
+      };
+
       const selectExactCandidates = (candidates: Array<{ rayStart: any; type: string; side: string; rayPath: any[] }>) => {
         const normalized = normalizeExactSectionCandidates(candidates, axis);
         const selected = selectCrossRaysForAxis(
@@ -2159,7 +2143,7 @@ function buildExactLowCountRenderRaysForObjects(
               __cooptStopAxisCoord: entry.__cooptStopAxisCoord,
             },
           })),
-          Math.max(0, desiredRayCount - 1),
+          desiredAdditionalRayCount,
           axis,
         );
         return { normalized, selected };
@@ -2170,9 +2154,10 @@ function buildExactLowCountRenderRaysForObjects(
         : (axis === 'YZ' ? 'vertical_cross' : '');
       const negativeMarginalType = axis === 'XZ' ? 'left_marginal' : 'lower_marginal';
       const positiveMarginalType = axis === 'XZ' ? 'right_marginal' : 'upper_marginal';
-      const requiredAdditionalCount = Math.max(0, desiredRayCount - 1);
+      const requiredAdditionalCount = desiredAdditionalRayCount;
 
       let candidateExactRays = collectAxisCandidateExactRays(tracedRayStarts, expectedChiefOrigin);
+      candidateExactRays = resampleInfiniteSectionCandidates(candidateExactRays);
       let { normalized: normalizedExactCandidates, selected: selectedExactRays } = selectExactCandidates(candidateExactRays);
       let selectedHasCrossCandidate = crossCandidateType
         ? selectedExactRays.some((entry: any) => String(entry?.type ?? '').trim().toLowerCase() === crossCandidateType)
@@ -2202,7 +2187,7 @@ function buildExactLowCountRenderRaysForObjects(
               disableCrossExtent: true,
               crossType,
               exactCrossBeamSampling: true,
-              displayAxisAlignedSampling: false,
+              displayAxisAlignedSampling: axis !== 'BOTH',
               preserveChiefNormalEmissionPlane: true,
             }
           );
@@ -2718,6 +2703,21 @@ function buildAxisScopedRenderImageHeightRow(
     ...row,
     __cooptCrossSectionAxis: axis,
     __cooptOriginalImageHeightTarget: row?.__cooptOriginalImageHeightTarget ?? fullTarget,
+  };
+}
+
+function buildAxisScopedRenderObjectRow(
+  row: any,
+  axis: 'YZ' | 'XZ' | 'BOTH',
+): any {
+  const scopedRow = buildAxisScopedRenderImageHeightRow(row, axis);
+  if (axis === 'BOTH') return scopedRow;
+  return {
+    ...scopedRow,
+    __cooptCrossSectionAxis: axis,
+    ...(axis === 'XZ'
+      ? { yHeightAngle: 0, yAngle: 0, objectAngleY: 0, y: 0, angle: 0, angleY: 0 }
+      : { xHeightAngle: 0, xAngle: 0, objectAngleX: 0, x: 0, angleX: 0 }),
   };
 }
 
@@ -7310,7 +7310,7 @@ const collectLegacyCrossRays = async (
         return [];
       }
 
-      const normalizedAllRays = allExactRays.map((ray: any) => {
+      const normalizedAllRaysRaw = allExactRays.map((ray: any) => {
         const inferredObjectIndex = Number.isFinite(Number(ray?.objectIndex))
           ? Number(ray.objectIndex)
           : (Number.isFinite(Number(ray?.originalRay?.objectIndex))
@@ -7327,14 +7327,83 @@ const collectLegacyCrossRays = async (
           },
         };
       });
+      const stopSurfaceIndex = opticalSystemRows.findIndex((row: any) => {
+        const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+        return String(raw).trim().toLowerCase().replace(/[\s_-]+/g, '') === 'stop';
+      });
+      const getStopPoint = (ray: any) => stopSurfaceIndex >= 0
+        ? getRenderTargetPointFromRayPath(ray?.rayPath, opticalSystemRows, stopSurfaceIndex)
+        : null;
+      const onAxisRays = normalizedAllRaysRaw.filter((ray: any) => Number(ray?.objectIndex) === 0);
+      const onAxisStopPoints = onAxisRays.map(getStopPoint).filter((point: any) => (
+        point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))
+      ));
+      const onAxisStopLimits = onAxisStopPoints.length > 0
+        ? {
+            minX: Math.min(...onAxisStopPoints.map((point: any) => Number(point.x))),
+            maxX: Math.max(...onAxisStopPoints.map((point: any) => Number(point.x))),
+            minY: Math.min(...onAxisStopPoints.map((point: any) => Number(point.y))),
+            maxY: Math.max(...onAxisStopPoints.map((point: any) => Number(point.y))),
+          }
+        : null;
+      const chiefByObject = new Map<number, any>();
+      normalizedAllRaysRaw.forEach((ray: any) => {
+        const type = String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
+        if (type === 'chief') chiefByObject.set(Number(ray.objectIndex), ray);
+      });
+      const normalizedAllRays = normalizedAllRaysRaw.map((ray: any) => {
+        const objectIndex = Number(ray?.objectIndex);
+        if (!onAxisStopLimits || objectIndex === 0) return ray;
+        const stopPoint = getStopPoint(ray);
+        const chief = chiefByObject.get(objectIndex);
+        const chiefStopPoint = getStopPoint(chief);
+        if (!stopPoint || !chiefStopPoint) return ray;
+        let fraction = 1;
+        (['x', 'y'] as const).forEach((coordinateAxis) => {
+          const coordinate = Number(stopPoint[coordinateAxis]);
+          const chiefCoordinate = Number(chiefStopPoint[coordinateAxis]);
+          const minLimit = coordinateAxis === 'x' ? onAxisStopLimits.minX : onAxisStopLimits.minY;
+          const maxLimit = coordinateAxis === 'x' ? onAxisStopLimits.maxX : onAxisStopLimits.maxY;
+          const limitedCoordinate = Math.max(minLimit, Math.min(maxLimit, coordinate));
+          const span = coordinate - chiefCoordinate;
+          if (Number.isFinite(coordinate) && Number.isFinite(chiefCoordinate) && Math.abs(span) > 1e-12) {
+            fraction = Math.min(fraction, Math.max(0, Math.min(1, (limitedCoordinate - chiefCoordinate) / span)));
+          }
+        });
+        if (fraction >= 1 - 1e-9) return ray;
+        const chiefPath = Array.isArray(chief?.rayPath) ? chief.rayPath : [];
+        const rayPath = Array.isArray(ray?.rayPath) ? ray.rayPath : [];
+        const pointCount = Math.min(chiefPath.length, rayPath.length);
+        if (pointCount < 2) return ray;
+        const constrainedPath = Array.from({ length: pointCount }, (_, pointIndex) => ({
+          ...rayPath[pointIndex],
+          x: Number(chiefPath[pointIndex].x) + (Number(rayPath[pointIndex].x) - Number(chiefPath[pointIndex].x)) * fraction,
+          y: Number(chiefPath[pointIndex].y) + (Number(rayPath[pointIndex].y) - Number(chiefPath[pointIndex].y)) * fraction,
+          z: Number(chiefPath[pointIndex].z) + (Number(rayPath[pointIndex].z) - Number(chiefPath[pointIndex].z)) * fraction,
+        }));
+        return {
+          ...ray,
+          rayPath: constrainedPath,
+          __cooptStopXCoord: Number(chiefStopPoint.x) + (Number(stopPoint.x) - Number(chiefStopPoint.x)) * fraction,
+          __cooptStopYCoord: Number(chiefStopPoint.y) + (Number(stopPoint.y) - Number(chiefStopPoint.y)) * fraction,
+          originalRay: {
+            ...(ray.originalRay || {}),
+            __cooptStopXCoord: Number(chiefStopPoint.x) + (Number(stopPoint.x) - Number(chiefStopPoint.x)) * fraction,
+            __cooptStopYCoord: Number(chiefStopPoint.y) + (Number(stopPoint.y) - Number(chiefStopPoint.y)) * fraction,
+          },
+        };
+      });
       recordCooptPerfSample('collectLegacyCrossRays.normalize', 0);
 
-      const desiredCount = effectiveRayCount;
+      const normalizedAxisCount = effectiveRayCount > 1 && effectiveRayCount % 2 === 0
+        ? effectiveRayCount + 1
+        : effectiveRayCount;
+      const desiredCount = axis === 'BOTH'
+        ? Math.max(1, 2 * normalizedAxisCount - 1)
+        : normalizedAxisCount;
       const exactImageHeightRaysOnly = normalizedAllRays.filter((ray: any) => ray?.__cooptImageHeightExactRender === true);
       const nonExactCandidateRays = normalizedAllRays.filter((ray: any) => ray?.__cooptImageHeightExactRender !== true);
-      const limitCandidateRays = axis === 'BOTH'
-        ? nonExactCandidateRays
-        : filterRenderCrossRaysForAxis(nonExactCandidateRays, axis);
+      const limitCandidateRays = nonExactCandidateRays;
       const grouped = new Map<number, any[]>();
       limitCandidateRays.forEach((ray: any) => {
         const objectIndex = Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : 0;
@@ -8157,9 +8226,9 @@ const collectLegacyCrossRays = async (
               rayCountOverride: effectiveRayCountOverride,
             });
             rayCollectMs += performance.now() - collectStartMs;
-            if (compareRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
+            if (compareRays.length > 0 && typeof w.drawSectionPlaneRays === 'function') {
               const drawStartMs = performance.now();
-              w.drawCrossBeamRays(compareRays, group);
+              w.drawSectionPlaneRays(compareRays, group);
               rayDrawMs += performance.now() - drawStartMs;
             }
           }
@@ -8213,41 +8282,20 @@ const collectLegacyCrossRays = async (
             rayCountOverride: effectiveRayCountOverride,
           }
         );
-        const summarizeCrossTypes = (items: any[]) => {
-          const counts = new Map<string, number>();
-          (Array.isArray(items) ? items : []).forEach((ray: any) => {
-            const type = String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase() || 'unknown';
-            counts.set(type, (counts.get(type) ?? 0) + 1);
-          });
-          return Array.from(counts.entries()).map(([k, v]) => `${k}:${v}`).join(', ') || 'none';
-        };
-        const normalizeSectionRayType = (ray: any): string => {
-          const originalType = String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
-          if (originalType === 'boundary') {
-            const side = String(ray?.originalRay?.side ?? ray?.side ?? '').trim().toLowerCase();
-            if (side === 'left') return 'left_marginal';
-            if (side === 'right') return 'right_marginal';
-            if (side === 'upper' || side === 'top') return 'upper_marginal';
-            if (side === 'lower' || side === 'bottom') return 'lower_marginal';
-          }
-          return originalType;
-        };
-        const axisAllowedTypes = new Set(
-          axis === 'XZ'
-            ? ['chief', 'left_marginal', 'right_marginal', 'horizontal_cross']
-            : ['chief', 'upper_marginal', 'lower_marginal', 'vertical_cross']
-        );
-        const groupedCrossRays = new Map<number, any[]>();
+        const groupedSectionRays = new Map<number, any[]>();
         (Array.isArray(legacyCrossRays) ? legacyCrossRays : []).forEach((ray: any) => {
-          if (!axisAllowedTypes.has(normalizeSectionRayType(ray))) return;
           const rawObjectIndex = Number(ray?.objectIndex ?? ray?.originalRay?.objectIndex ?? 0);
           const objectIndex = Number.isFinite(rawObjectIndex) ? rawObjectIndex : 0;
-          if (!groupedCrossRays.has(objectIndex)) groupedCrossRays.set(objectIndex, []);
-          groupedCrossRays.get(objectIndex)!.push(ray);
+          if (!groupedSectionRays.has(objectIndex)) groupedSectionRays.set(objectIndex, []);
+          groupedSectionRays.get(objectIndex)!.push(ray);
         });
-        const filteredCrossRays = Array.from(groupedCrossRays.entries())
+        const requestedSectionRayCount = Math.max(1, Math.floor(Number(effectiveRayCountOverride) || 1));
+        const sectionAxisRayCount = requestedSectionRayCount > 1 && requestedSectionRayCount % 2 === 0
+          ? requestedSectionRayCount + 1
+          : requestedSectionRayCount;
+        const sectionRays = Array.from(groupedSectionRays.entries())
           .sort((a, b) => a[0] - b[0])
-          .flatMap(([, group]) => selectCrossRaysForAxis(group, Math.max(1, Number(effectiveRayCountOverride) || 1), axis));
+          .flatMap(([, group]) => selectCrossRaysForAxis(group, sectionAxisRayCount, axis));
         rayCollectMs += performance.now() - collectStartMs;
         if (!isLatestRenderDrawRequest(requestId)) {
           return false;
@@ -8262,7 +8310,7 @@ const collectLegacyCrossRays = async (
             });
             const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, rows.length - 1);
             showDrawCrossCoordinateReport(
-              filteredCrossRays,
+              sectionRays,
               rowsForRender,
               Array.isArray(renderObjectRows) ? renderObjectRows : [],
               targetSurfaceIndex,
@@ -8270,9 +8318,9 @@ const collectLegacyCrossRays = async (
             );
           }
         } catch (_) {}
-        if (filteredCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
+        if (sectionRays.length > 0 && typeof w.drawSectionPlaneRays === 'function') {
           const drawStartMs = performance.now();
-          w.drawCrossBeamRays(filteredCrossRays, sceneForDraw);
+          w.drawSectionPlaneRays(sectionRays, sceneForDraw);
           rayDrawMs += performance.now() - drawStartMs;
         }
       }
@@ -12129,6 +12177,10 @@ const collectLegacyCrossRays = async (
       setRenderViewAxis('XZ');
       setRenderViewMode('XZ');
       switchRenderSectionView('XZ');
+      setRenderWindowStatus('Tracing XZ section rays...');
+      scheduleRenderRedraw('XZ', 'XZ', beginRenderDrawRequest()).catch(() => {
+        setRenderWindowStatus('Draw failed');
+      });
     };
 
     const handleViewYZ = () => {
@@ -12137,6 +12189,10 @@ const collectLegacyCrossRays = async (
       setRenderViewAxis('YZ');
       setRenderViewMode('YZ');
       switchRenderSectionView('YZ');
+      setRenderWindowStatus('Tracing YZ section rays...');
+      scheduleRenderRedraw('YZ', 'YZ', beginRenderDrawRequest()).catch(() => {
+        setRenderWindowStatus('Draw failed');
+      });
     };
 
     const handleRenderCompareScopeChange = (scope: RenderCompareScope) => {

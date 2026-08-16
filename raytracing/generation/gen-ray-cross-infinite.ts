@@ -18,6 +18,7 @@ import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
 const RENDER_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     requireWasmRayTracing: false,
+    returnPartialOnPhysicalBlock: true,
     useRustWasm: true,
     requireRustWasm: false,
     disableWasmRayTracing: false,
@@ -1268,7 +1269,7 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
                 };
             }
 
-            if (index === 1) {
+            if (index === lineRays.length - 1) {
                 return {
                     ...ray,
                     type: endType,
@@ -1307,17 +1308,10 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
     const horizontalRays = boundaryRays.filter(r => ['left', 'right'].includes(r.direction));
     const useVertical = (crossType === 'both' || crossType === 'vertical') && verticalRays.length >= 2;
     const useHorizontal = (crossType === 'both' || crossType === 'horizontal') && horizontalRays.length >= 2;
-    const minimumExtentRayCount = 1 + (useVertical ? 2 : 0) + (useHorizontal ? 2 : 0);
-    const effectiveRayCount = Math.max(rayCount, minimumExtentRayCount);
-    
-    // Render では少本数でも stop 端まで届くクロスを優先し、各有効軸の端点を最低2本確保する。
-    let remainingCount = Math.max(0, effectiveRayCount - 1);
-    const verticalTargetCount = useVertical
-        ? (useHorizontal ? Math.floor(remainingCount / 2) : remainingCount)
-        : 0;
-    const horizontalTargetCount = useHorizontal
-        ? (useVertical ? (remainingCount - verticalTargetCount) : remainingCount)
-        : 0;
+    const requestedAxisCount = Math.max(3, Math.floor(Number(rayCount) || 0));
+    const uniformAxisCount = requestedAxisCount % 2 === 0 ? requestedAxisCount + 1 : requestedAxisCount;
+    const verticalTargetCount = useVertical ? uniformAxisCount : 0;
+    const horizontalTargetCount = useHorizontal ? uniformAxisCount : 0;
 
     // 3. 垂直クロスビーム生成
     if (verticalTargetCount > 0 && useVertical) {
@@ -1430,10 +1424,11 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
     const addLineFromOffsets = (lineOffsets, centerType, roleStart, roleEnd, endpointStartType, endpointEndType, endpointStartSide, endpointEndSide) => {
         if (!Array.isArray(lineOffsets) || lineOffsets.length < 1) return;
 
-        const rustPoints = generateParallelPointsFromOffsetsViaRust(centerOrigin, planeU, planeV, lineOffsets);
-        const points = (Array.isArray(rustPoints) && rustPoints.length === lineOffsets.length)
+        const nonChiefOffsets = lineOffsets.filter(ofs => Math.abs(Number(ofs?.u) || 0) > 1e-12 || Math.abs(Number(ofs?.v) || 0) > 1e-12);
+        const rustPoints = generateParallelPointsFromOffsetsViaRust(centerOrigin, planeU, planeV, nonChiefOffsets);
+        const points = (Array.isArray(rustPoints) && rustPoints.length === nonChiefOffsets.length)
             ? rustPoints
-            : lineOffsets.map(ofs => ({
+            : nonChiefOffsets.map(ofs => ({
                 x: centerOrigin.x + planeU.x * ofs.u + planeV.x * ofs.v,
                 y: centerOrigin.y + planeU.y * ofs.u + planeV.y * ofs.v,
                 z: centerOrigin.z + planeU.z * ofs.u + planeV.z * ofs.v
@@ -1468,15 +1463,10 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
 
     const useVertical = (crossType === 'both' || crossType === 'vertical');
     const useHorizontal = (crossType === 'both' || crossType === 'horizontal');
-    const minimumExtentRayCount = 1 + (useVertical ? 2 : 0) + (useHorizontal ? 2 : 0);
-    const effectiveRayCount = Math.max(rayCount, minimumExtentRayCount);
-    let remainingCount = Math.max(0, effectiveRayCount - 1);
-    const verticalTargetCount = useVertical
-        ? (useHorizontal ? Math.floor(remainingCount / 2) : remainingCount)
-        : 0;
-    const horizontalTargetCount = useHorizontal
-        ? (useVertical ? (remainingCount - verticalTargetCount) : remainingCount)
-        : 0;
+    const requestedAxisCount = Math.max(3, Math.floor(Number(rayCount) || 0));
+    const uniformAxisCount = requestedAxisCount % 2 === 0 ? requestedAxisCount + 1 : requestedAxisCount;
+    const verticalTargetCount = useVertical ? uniformAxisCount : 0;
+    const horizontalTargetCount = useHorizontal ? uniformAxisCount : 0;
 
     // Use planeV as "vertical" and planeU as "horizontal" to match Draw Cross conventions.
     if (verticalTargetCount > 0) {
@@ -1713,30 +1703,9 @@ function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objec
         return rays;
     }
     
-    // 境界光線自体を追加
-    rays.push({
-        origin: ray1.origin,
-        direction: direction,
-        type: type,
-        role: ray1.direction,
-        objectIndex: objectIndex,
-        wavelength
-    });
-    
-    rays.push({
-        origin: ray2.origin,
-        direction: direction,
-        type: type,
-        role: ray2.direction,
-        objectIndex: objectIndex,
-        wavelength
-    });
-    
-    // 中間光線を生成
-    const intermediateCount = Math.max(0, targetCount - 2); // 境界光線2本を除く
-    for (let i = 1; i <= intermediateCount; i++) {
-        const t = i / (intermediateCount + 1); // 0から1の間で等間隔
-        
+    for (let i = 0; i < targetCount; i++) {
+        const t = i / (targetCount - 1);
+        if (Math.abs(t - 0.5) <= 1e-12) continue;
         const intermediateOrigin = {
             x: ray1.origin.x + t * (ray2.origin.x - ray1.origin.x),
             y: ray1.origin.y + t * (ray2.origin.y - ray1.origin.y),
@@ -1747,7 +1716,7 @@ function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objec
             origin: intermediateOrigin,
             direction: direction,
             type: type,
-            role: `${type}_${i}`,
+            role: i === 0 ? ray1.direction : (i === targetCount - 1 ? ray2.direction : `${type}_${i}`),
             objectIndex: objectIndex,
             wavelength
         });

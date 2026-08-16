@@ -1062,7 +1062,7 @@ function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOri
 }
 
 function __coopt_addDesignIntentLabelPolyline(scene, points, color = 0x475569) {
-    if (!scene || !Array.isArray(points) || points.length < 2) return;
+    if (!scene || !Array.isArray(points) || points.length < 2) return null;
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const material = new THREE.LineBasicMaterial({
         color,
@@ -1076,6 +1076,130 @@ function __coopt_addDesignIntentLabelPolyline(scene, points, color = 0x475569) {
     line.frustumCulled = false;
     line.userData = { type: 'design-intent-label-line', isOpticalElement: true };
     scene.add(line);
+    return line;
+}
+
+function __coopt_getLabelWorldUnitsPerPixel(sprite, camera, renderer) {
+    const viewportHeightPx = Number(renderer?.domElement?.clientHeight)
+        || Number(renderer?.domElement?.height)
+        || 1;
+
+    if (camera?.isOrthographicCamera) {
+        const visibleHeight = Math.abs(Number(camera.top) - Number(camera.bottom));
+        const zoom = Math.max(1e-12, Math.abs(Number(camera.zoom) || 1));
+        return visibleHeight / zoom / viewportHeightPx;
+    }
+
+    if (camera?.isPerspectiveCamera) {
+        const cameraSpacePosition = sprite.position.clone().applyMatrix4(camera.matrixWorldInverse);
+        const distance = Math.max(1e-12, Math.abs(Number(cameraSpacePosition.z) || 0));
+        const fovRadians = THREE.MathUtils.degToRad(Number(camera.fov) || 50);
+        return (2 * distance * Math.tan(fovRadians * 0.5)) / viewportHeightPx;
+    }
+
+    return 1;
+}
+
+function __coopt_getLabelScreenHalfExtents(sprite) {
+    const rotation = Number(sprite.material?.rotation) || 0;
+    const cos = Math.abs(Math.cos(rotation));
+    const sin = Math.abs(Math.sin(rotation));
+    const widthPx = Number(sprite.userData?.screenWidthPx) || 0;
+    const heightPx = Number(sprite.userData?.screenHeightPx) || 0;
+    return {
+        halfWidthPx: (widthPx * cos + heightPx * sin) * 0.5,
+        halfHeightPx: (widthPx * sin + heightPx * cos) * 0.5,
+    };
+}
+
+function __coopt_clampLabelToViewport(sprite, camera, renderer) {
+    const viewportWidthPx = Number(renderer?.domElement?.clientWidth)
+        || Number(renderer?.domElement?.width)
+        || 1;
+    const viewportHeightPx = Number(renderer?.domElement?.clientHeight)
+        || Number(renderer?.domElement?.height)
+        || 1;
+    const basePosition = sprite.userData?.labelBasePosition;
+    if (!basePosition || !camera) return;
+
+    sprite.position.copy(basePosition);
+    const projected = basePosition.clone().project(camera);
+    if (![projected.x, projected.y, projected.z].every(Number.isFinite)) return;
+
+    projected.x += (Number(sprite.userData?.screenOffsetXPx) || 0) * 2 / viewportWidthPx;
+    projected.y += (Number(sprite.userData?.screenOffsetYPx) || 0) * 2 / viewportHeightPx;
+    const { halfWidthPx, halfHeightPx } = __coopt_getLabelScreenHalfExtents(sprite);
+    const marginPx = 6;
+    const horizontalInsetNdc = Math.min(1, (halfWidthPx + marginPx) * 2 / viewportWidthPx);
+    const verticalInsetNdc = Math.min(1, (halfHeightPx + marginPx) * 2 / viewportHeightPx);
+
+    projected.x = THREE.MathUtils.clamp(projected.x, -1 + horizontalInsetNdc, 1 - horizontalInsetNdc);
+    projected.y = THREE.MathUtils.clamp(projected.y, -1 + verticalInsetNdc, 1 - verticalInsetNdc);
+    sprite.position.copy(projected.unproject(camera));
+}
+
+function __coopt_resolveLabelCollisions(sprite, camera, renderer) {
+    const collisionGroup = sprite.userData?.collisionGroup;
+    if (!Array.isArray(collisionGroup) || collisionGroup.length < 2 || !camera) return;
+    const currentIndex = collisionGroup.indexOf(sprite);
+    if (currentIndex <= 0) return;
+
+    const viewportWidthPx = Number(renderer?.domElement?.clientWidth)
+        || Number(renderer?.domElement?.width)
+        || 1;
+    const viewportHeightPx = Number(renderer?.domElement?.clientHeight)
+        || Number(renderer?.domElement?.height)
+        || 1;
+    const marginPx = 6;
+    const gapPx = 3;
+    const { halfWidthPx, halfHeightPx } = __coopt_getLabelScreenHalfExtents(sprite);
+    const baseProjected = sprite.position.clone().project(camera);
+    const direction = Number(sprite.userData?.collisionDirection) < 0 ? -1 : 1;
+    const laneStepPx = Math.max(1, halfHeightPx * 2 + gapPx);
+    const priorSprites = collisionGroup.slice(0, currentIndex);
+
+    const overlapsPrior = (candidate) => priorSprites.some((prior) => {
+        if (!prior?.position || prior.visible === false) return false;
+        const priorProjected = prior.position.clone().project(camera);
+        const priorExtents = __coopt_getLabelScreenHalfExtents(prior);
+        const deltaXPx = Math.abs(candidate.x - priorProjected.x) * viewportWidthPx * 0.5;
+        const deltaYPx = Math.abs(candidate.y - priorProjected.y) * viewportHeightPx * 0.5;
+        return deltaXPx < halfWidthPx + priorExtents.halfWidthPx + gapPx
+            && deltaYPx < halfHeightPx + priorExtents.halfHeightPx + gapPx;
+    });
+
+    for (let lane = 0; lane <= collisionGroup.length; lane += 1) {
+        const signedLanes = lane === 0
+            ? [0]
+            : [direction * lane, -direction * lane];
+        for (const signedLane of signedLanes) {
+            const candidate = baseProjected.clone();
+            candidate.y += signedLane * laneStepPx * 2 / viewportHeightPx;
+            candidate.x = THREE.MathUtils.clamp(
+                candidate.x,
+                -1 + (halfWidthPx + marginPx) * 2 / viewportWidthPx,
+                1 - (halfWidthPx + marginPx) * 2 / viewportWidthPx,
+            );
+            candidate.y = THREE.MathUtils.clamp(
+                candidate.y,
+                -1 + (halfHeightPx + marginPx) * 2 / viewportHeightPx,
+                1 - (halfHeightPx + marginPx) * 2 / viewportHeightPx,
+            );
+            if (!overlapsPrior(candidate)) {
+                sprite.position.copy(candidate.unproject(camera));
+                return;
+            }
+        }
+    }
+}
+
+function __coopt_updateLabelLeaderEndpoint(sprite) {
+    const leaderLine = sprite.userData?.leaderLine;
+    const positions = leaderLine?.geometry?.attributes?.position;
+    if (!positions || positions.count < 2) return;
+    positions.setXYZ(positions.count - 1, sprite.position.x, sprite.position.y, sprite.position.z);
+    positions.needsUpdate = true;
+    leaderLine.geometry.computeBoundingSphere();
 }
 
 function __coopt_addDesignIntentLabelSprite(scene, text, position, style = {}) {
@@ -1084,30 +1208,20 @@ function __coopt_addDesignIntentLabelSprite(scene, text, position, style = {}) {
     const context = canvas.getContext('2d');
     if (!context) return;
 
-    const fontPt = Number(style?.fontPt) > 0 ? Number(style.fontPt) : 25;
+    const fontPx = Number(style?.fontPx) > 0 ? Number(style.fontPx) : 12;
     const paddingX = Number(style?.paddingX) >= 0 ? Number(style.paddingX) : 10;
     const paddingY = Number(style?.paddingY) >= 0 ? Number(style.paddingY) : 5;
-    const fillStyle = String(style?.fillStyle || 'rgba(255,255,255,0.94)');
-    const strokeStyle = String(style?.strokeStyle || '#475569');
     const textStyle = String(style?.textStyle || '#111827');
     const fontWeight = String(style?.fontWeight || '600');
     const fontFamily = String(style?.fontFamily || 'Arial, sans-serif');
-    const drawFrame = style?.drawFrame !== false;
     const rotation = Number(style?.rotation || 0);
-    context.font = `${fontWeight} ${fontPt}pt ${fontFamily}`;
+    context.font = `${fontWeight} ${fontPx}px ${fontFamily}`;
     const metrics = context.measureText(String(text));
-    const textHeight = Math.ceil(fontPt * 1.55);
+    const textHeight = Math.ceil(fontPx * 1.55);
     canvas.width = Math.ceil(metrics.width + paddingX * 2);
     canvas.height = Math.ceil(textHeight + paddingY * 2);
 
-    context.font = `${fontWeight} ${fontPt}pt ${fontFamily}`;
-    if (drawFrame) {
-        context.fillStyle = fillStyle;
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        context.strokeStyle = strokeStyle;
-        context.lineWidth = 1;
-        context.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
-    }
+    context.font = `${fontWeight} ${fontPx}px ${fontFamily}`;
     context.fillStyle = textStyle;
     context.textAlign = 'center';
     context.textBaseline = 'middle';
@@ -1127,7 +1241,33 @@ function __coopt_addDesignIntentLabelSprite(scene, text, position, style = {}) {
     sprite.position.copy(position);
     sprite.renderOrder = 65010;
     sprite.frustumCulled = false;
-    sprite.userData = { type: 'design-intent-label', isOpticalElement: true, labelText: String(text) };
+    sprite.userData = {
+        type: 'design-intent-label',
+        isOpticalElement: true,
+        labelText: String(text),
+        screenWidthPx: canvas.width,
+        screenHeightPx: canvas.height,
+        labelBasePosition: position.clone(),
+        leaderLine: style?.leaderLine || null,
+        screenOffsetXPx: Number(style?.screenOffsetXPx) || 0,
+        screenOffsetYPx: Number(style?.screenOffsetYPx) || 0,
+        collisionGroup: Array.isArray(style?.collisionGroup) ? style.collisionGroup : null,
+        collisionDirection: Number(style?.collisionDirection) < 0 ? -1 : 1,
+    };
+    if (sprite.userData.collisionGroup) {
+        sprite.userData.collisionGroup.push(sprite);
+    }
+    sprite.onBeforeRender = (renderer, _scene, camera) => {
+        const worldUnitsPerPixel = __coopt_getLabelWorldUnitsPerPixel(sprite, camera, renderer);
+        sprite.scale.set(
+            sprite.userData.screenWidthPx * worldUnitsPerPixel,
+            sprite.userData.screenHeightPx * worldUnitsPerPixel,
+            1,
+        );
+        __coopt_clampLabelToViewport(sprite, camera, renderer);
+        __coopt_resolveLabelCollisions(sprite, camera, renderer);
+        __coopt_updateLabelLeaderEndpoint(sprite);
+    };
     scene.add(sprite);
 }
 
@@ -1136,14 +1276,14 @@ function __coopt_measureDesignIntentLabelWorldSize(text, style = {}) {
     const context = canvas.getContext('2d');
     if (!context) return { width: 24, height: 6 };
 
-    const fontPt = Number(style?.fontPt) > 0 ? Number(style.fontPt) : 25;
+    const fontPx = Number(style?.fontPx) > 0 ? Number(style.fontPx) : 12;
     const paddingX = Number(style?.paddingX) >= 0 ? Number(style.paddingX) : 10;
     const paddingY = Number(style?.paddingY) >= 0 ? Number(style.paddingY) : 5;
     const fontWeight = String(style?.fontWeight || '600');
     const fontFamily = String(style?.fontFamily || 'Arial, sans-serif');
-    context.font = `${fontWeight} ${fontPt}pt ${fontFamily}`;
+    context.font = `${fontWeight} ${fontPx}px ${fontFamily}`;
     const metrics = context.measureText(String(text));
-    const textHeight = Math.ceil(fontPt * 1.55);
+    const textHeight = Math.ceil(fontPx * 1.55);
     const canvasWidth = Math.ceil(metrics.width + paddingX * 2);
     const canvasHeight = Math.ceil(textHeight + paddingY * 2);
 
@@ -1200,6 +1340,7 @@ function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceO
 
     const layoutGroup = (entries, baseVertical, verticalDir = 1) => {
         const ordered = [...entries];
+        const collisionGroup = [];
         const center = (ordered.length - 1) / 2;
         for (let i = 0; i < ordered.length; i += 1) {
             const entry = ordered[i];
@@ -1208,8 +1349,13 @@ function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceO
             const labelVertical = baseVertical + verticalDir * verticalOffset;
             const labelAnchor = makeMostlyVerticalLabelPoint(entry.anchor, labelVertical, zShift);
 
-            __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()], Number(entry?.style?.lineColor ?? 0x475569));
-            __coopt_addDesignIntentLabelSprite(scene, entry.text, labelAnchor, entry?.style || {});
+            const leaderLine = __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()], Number(entry?.style?.lineColor ?? 0x475569));
+            __coopt_addDesignIntentLabelSprite(scene, entry.text, labelAnchor, {
+                ...(entry?.style || {}),
+                leaderLine,
+                collisionGroup,
+                collisionDirection: verticalDir > 0 ? -1 : 1,
+            });
         }
     };
 
@@ -1226,6 +1372,67 @@ function __coopt_shouldLabelSurfaceNumber(surface) {
     if (__coopt_isObjectSurface(surface)) return false;
     if (__coopt_isImageSurface(surface)) return false;
     return true;
+}
+
+function __coopt_getSurfaceUpperEdgePoint(surface, originEntry, axis) {
+    const origin = __coopt_vectorFromOriginEntry(originEntry);
+    const semidia = __coopt_getRenderSemidiaMm(surface);
+    const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
+    const normalizedAxis = String(axis).trim().toUpperCase() === 'XZ' ? 'XZ' : 'YZ';
+    const localX = normalizedAxis === 'XZ' ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0) : 0;
+    const localY = normalizedAxis === 'YZ' ? Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0) : 0;
+    let sagZ = 0;
+    const surfaceType = String(surface?.surfType || '').trim().toLowerCase();
+    const isToric = surfaceType === 'toric' && !__coopt_isThinLensSurface(surface);
+
+    if (isToric) {
+        const radiusX = String(surface?.radiusX).toUpperCase() === 'INF' ? Infinity : Number(surface?.radiusX);
+        const radiusYRaw = surface?.radiusY ?? surface?.radius;
+        const radiusY = String(radiusYRaw).toUpperCase() === 'INF' ? Infinity : Number(radiusYRaw);
+        if ((Number.isFinite(radiusX) || radiusX === Infinity) && (Number.isFinite(radiusY) || radiusY === Infinity)) {
+            sagZ = toricSurfaceZ(localX, localY, {
+                radiusX,
+                radiusY,
+                conic: Number(surface?.conic) || 0,
+                axis: Number(surface?.axis) || 0,
+            });
+        }
+    } else {
+        const radius = Number(surface?.radius);
+        if (Number.isFinite(radius) && Math.abs(radius) > 0.001) {
+            const params = {
+                radius,
+                conic: Number(surface?.conic) || 0,
+                coef1: Number(surface?.coef1) || 0,
+                coef2: Number(surface?.coef2) || 0,
+                coef3: Number(surface?.coef3) || 0,
+                coef4: Number(surface?.coef4) || 0,
+                coef5: Number(surface?.coef5) || 0,
+                coef6: Number(surface?.coef6) || 0,
+                coef7: Number(surface?.coef7) || 0,
+                coef8: Number(surface?.coef8) || 0,
+                coef9: Number(surface?.coef9) || 0,
+                coef10: Number(surface?.coef10) || 0,
+                qconNrad: Number(surface?.qconNrad ?? surface?.qconNRadius ?? surface?.nrad ?? surface?.NRAD),
+                qconOffset: Number(surface?.qconOffset ?? surface?.qcon_offset) || 0,
+                qconTermCount: Number(surface?.qconTermCount),
+            };
+            const mode = surfaceType.includes('qcon') ? 'qcon' : (surfaceType.includes('odd') ? 'odd' : 'even');
+            sagZ = asphericSurfaceZ(Math.hypot(localX, localY), params, mode);
+        }
+    }
+    if (!Number.isFinite(sagZ)) sagZ = 0;
+
+    let edgeOffset = new THREE.Vector3(localX, localY, sagZ);
+    const rotationMatrix = originEntry?.rotationMatrix;
+    if (Array.isArray(rotationMatrix) && rotationMatrix.length >= 3) {
+        edgeOffset = new THREE.Vector3(
+            Number(rotationMatrix[0]?.[0]) * localX + Number(rotationMatrix[0]?.[1]) * localY + Number(rotationMatrix[0]?.[2]) * sagZ,
+            Number(rotationMatrix[1]?.[0]) * localX + Number(rotationMatrix[1]?.[1]) * localY + Number(rotationMatrix[1]?.[2]) * sagZ,
+            Number(rotationMatrix[2]?.[0]) * localX + Number(rotationMatrix[2]?.[1]) * localY + Number(rotationMatrix[2]?.[2]) * sagZ,
+        );
+    }
+    return origin.add(edgeOffset);
 }
 
 function __coopt_addSurfaceNumberLabelsToScene(scene, opticalSystemData, surfaceOrigins, options = {}) {
@@ -1253,16 +1460,11 @@ function __coopt_addSurfaceNumberLabelsToScene(scene, opticalSystemData, surface
         if (!__coopt_shouldLabelSurfaceNumber(surface)) continue;
         const anchor = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
         if (!anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !Number.isFinite(anchor.z)) continue;
-        const projectedAnchor = projectPointToSectionPlane(anchor);
-        const semidia = __coopt_getRenderSemidiaMm(surface);
-        const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
-        const halfExtent = axis === 'XZ'
-            ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0)
-            : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
+        const edgePoint = __coopt_getSurfaceUpperEdgePoint(surface, surfaceOrigins[i], axis);
+        const projectedAnchor = projectPointToSectionPlane(edgePoint);
         labeledRows.push({
             index0: i,
             anchor: projectedAnchor,
-            halfExtent,
             vertical: getVerticalCoord(projectedAnchor),
             horizontal: getHorizontalCoord(projectedAnchor),
         });
@@ -1275,56 +1477,29 @@ function __coopt_addSurfaceNumberLabelsToScene(scene, opticalSystemData, surface
         return left.index0 - right.index0;
     });
 
-    const baseVertical = labeledRows.reduce((maxValue, entry) => {
-        return Math.max(maxValue, Number(entry.vertical) + Number(entry.halfExtent));
-    }, Number.NEGATIVE_INFINITY) + 10;
     const surfaceNumberLabelStyle = {
-        fontPt: 25,
+        fontPx: 12,
         paddingX: 2,
         paddingY: 1,
         fontWeight: '700',
     };
     const layoutEntries = labeledRows.map((entry, visibleIndex) => {
         const labelText = `S${visibleIndex + 1}`;
-        const worldSize = __coopt_measureDesignIntentLabelWorldSize(labelText, surfaceNumberLabelStyle);
         return {
             ...entry,
             labelText,
-            width: Math.max(5, Number(worldSize?.width || 0)),
-            desiredCenter: Number(entry.horizontal),
-            assignedCenter: Number(entry.horizontal),
         };
     });
 
-    const desiredMin = layoutEntries.reduce((minValue, entry) => Math.min(minValue, Number(entry.desiredCenter)), Number.POSITIVE_INFINITY);
-    const desiredMax = layoutEntries.reduce((maxValue, entry) => Math.max(maxValue, Number(entry.desiredCenter)), Number.NEGATIVE_INFINITY);
-    const desiredMid = Number.isFinite(desiredMin) && Number.isFinite(desiredMax)
-        ? (desiredMin + desiredMax) * 0.5
-        : 0;
-    const minLabelGap = 0;
-    const totalPackedWidth = layoutEntries.reduce((sum, entry, index) => {
-        const width = Number(entry.width) || 0;
-        return sum + width + (index > 0 ? minLabelGap : 0);
-    }, 0);
-    let cursor = desiredMid - totalPackedWidth * 0.5;
     for (let i = 0; i < layoutEntries.length; i += 1) {
         const entry = layoutEntries[i];
-        const halfWidth = entry.width * 0.5;
-        cursor += halfWidth;
-        entry.assignedCenter = cursor;
-        cursor += halfWidth + minLabelGap;
-    }
-
-    for (let i = 0; i < layoutEntries.length; i += 1) {
-        const entry = layoutEntries[i];
-        const assignedHorizontal = entry.assignedCenter;
-        const labelAnchor = makePoint(baseVertical, assignedHorizontal);
-        __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()], 0x000000);
+        const labelAnchor = makePoint(entry.vertical, entry.horizontal);
         __coopt_addDesignIntentLabelSprite(scene, entry.labelText, labelAnchor, {
             ...surfaceNumberLabelStyle,
             fillStyle: 'rgba(248,250,252,0.94)',
             strokeStyle: '#94a3b8',
             textStyle: '#0f172a',
+            screenOffsetYPx: 12,
         });
     }
 }
@@ -1608,6 +1783,71 @@ function __coopt_addPrincipalPointVerticalMarker(scene, axis, position, vertical
     scene.add(line);
 }
 
+function __coopt_addFixedScreenDot(scene, position, color, userType, diameterPx = 6) {
+    const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0)]);
+    const material = new THREE.PointsMaterial({
+        color,
+        size: diameterPx,
+        sizeAttenuation: false,
+        transparent: true,
+        opacity: 0.92,
+        depthTest: false,
+        depthWrite: false,
+    });
+    const dot = new THREE.Points(geometry, material);
+    dot.position.copy(position);
+    dot.renderOrder = 65021;
+    dot.frustumCulled = false;
+    dot.userData = { type: userType, isOpticalElement: true, screenDiameterPx: diameterPx };
+    dot.onBeforeRender = (renderer) => {
+        material.size = diameterPx * Math.max(1, Number(renderer?.getPixelRatio?.()) || 1);
+    };
+    scene.add(dot);
+}
+
+function __coopt_addFixedScreenArrow(scene, startPoint, endPoint, color, userType, lengthPx = 8, halfWidthPx = 4) {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+        endPoint.clone(),
+        endPoint.clone(),
+        endPoint.clone(),
+    ]);
+    const material = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.92,
+        depthTest: false,
+        depthWrite: false,
+    });
+    const arrow = new THREE.Line(geometry, material);
+    arrow.renderOrder = 65021;
+    arrow.frustumCulled = false;
+    arrow.userData = { type: userType, isOpticalElement: true, screenLengthPx: lengthPx, screenHalfWidthPx: halfWidthPx };
+    arrow.onBeforeRender = (renderer, _scene, camera) => {
+        const width = Number(renderer?.domElement?.clientWidth) || 1;
+        const height = Number(renderer?.domElement?.clientHeight) || 1;
+        const startNdc = startPoint.clone().project(camera);
+        const tipNdc = endPoint.clone().project(camera);
+        const deltaX = (tipNdc.x - startNdc.x) * width * 0.5;
+        const deltaY = (tipNdc.y - startNdc.y) * height * 0.5;
+        const deltaLength = Math.hypot(deltaX, deltaY) || 1;
+        const directionX = deltaX / deltaLength;
+        const directionY = deltaY / deltaLength;
+        const baseX = tipNdc.x - directionX * lengthPx * 2 / width;
+        const baseY = tipNdc.y - directionY * lengthPx * 2 / height;
+        const perpendicularX = -directionY * halfWidthPx * 2 / width;
+        const perpendicularY = directionX * halfWidthPx * 2 / height;
+        const left = new THREE.Vector3(baseX + perpendicularX, baseY + perpendicularY, tipNdc.z).unproject(camera);
+        const right = new THREE.Vector3(baseX - perpendicularX, baseY - perpendicularY, tipNdc.z).unproject(camera);
+        const positions = geometry.attributes.position;
+        positions.setXYZ(0, left.x, left.y, left.z);
+        positions.setXYZ(1, endPoint.x, endPoint.y, endPoint.z);
+        positions.setXYZ(2, right.x, right.y, right.z);
+        positions.needsUpdate = true;
+        geometry.computeBoundingSphere();
+    };
+    scene.add(arrow);
+}
+
 function __coopt_addPrincipalPointCadDimension(scene, axis, startPoint, endPoint, dimensionCoord, color, userType, labelOffset = 2.8, labelCoord = null, extensionVerticals = null, arrowAtEnd = false, dotAtStart = false) {
     if (!scene || !startPoint || !endPoint || !Number.isFinite(dimensionCoord)) return null;
 
@@ -1643,33 +1883,10 @@ function __coopt_addPrincipalPointCadDimension(scene, axis, startPoint, endPoint
     __coopt_addDesignIntentLabelPolyline(scene, [extEnd, dimEnd], color);
     __coopt_addDesignIntentLabelPolyline(scene, [dimStart, dimEnd], color);
     if (dotAtStart) {
-        const dotGeometry = new THREE.SphereGeometry(0.45, 10, 10);
-        const dotMaterial = new THREE.MeshBasicMaterial({
-            color,
-            transparent: true,
-            opacity: 0.92,
-            depthTest: false,
-            depthWrite: false,
-        });
-        const dot = new THREE.Mesh(dotGeometry, dotMaterial);
-        dot.position.copy(dimStart);
-        dot.renderOrder = 65021;
-        dot.frustumCulled = false;
-        dot.userData = { type: userType, isOpticalElement: true };
-        scene.add(dot);
+        __coopt_addFixedScreenDot(scene, dimStart, color, userType);
     }
     if (arrowAtEnd) {
-        const arrowWidth = 1.6;
-        const arrowHeight = 0.9;
-        const arrowBaseZ = endZ + (endZ >= startZ ? -arrowWidth : arrowWidth);
-        __coopt_addDesignIntentLabelPolyline(scene, [
-            makePoint(dimensionCoord + arrowHeight, endDepth, arrowBaseZ),
-            dimEnd,
-        ], color);
-        __coopt_addDesignIntentLabelPolyline(scene, [
-            makePoint(dimensionCoord - arrowHeight, endDepth, arrowBaseZ),
-            dimEnd,
-        ], color);
+        __coopt_addFixedScreenArrow(scene, dimStart, dimEnd, color, userType);
     }
 
     const resolvedLabelCoord = Number.isFinite(labelCoord)
@@ -1784,11 +2001,9 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
     const distanceColor = 0x0f766e;
     const topLabelBase = surfaceTop + 12;
     const topLabelLaneStep = 8;
-    const principalDimBase = surfaceTop + 18;
     const groupDimBase = surfaceBottom - 8;
     const groupLabelCoord = groupDimBase - 3.2;
     const groupSpanBase = groupLabelCoord - 4.4;
-    const lowerExtensionGap = 1.4;
     const descriptorBounds = descriptors.map((entry) => __coopt_getSurfaceRangeVerticalBounds(
         opticalSystemData,
         surfaceOrigins,
@@ -1808,14 +2023,13 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
             __coopt_addPrincipalPointVerticalMarker(scene, axis, entry.rearGlobal, markerBottom, markerTop, rearColor, 'principal-point-rear-marker');
         }
 
-        const principalDimCoord = principalDimBase + index * 8;
         const frontText = `${entry.zoomGroup} H ${entry.frontFromFirstSurfaceMm.toFixed(2)}`;
         const rearText = `${entry.zoomGroup} H' ${entry.rearFromLastSurfaceMm.toFixed(2)}`;
 
         if (!entry.isSingleThinLensGroup) {
             topLabelItems.push({
                 text: frontText,
-                sourcePoint: entry.frontGlobal.clone(),
+                sourcePoint: makePoint(0, getDepthCoord(entry.anchor), Number(entry.frontGlobal.z || 0)),
                 depth: getDepthCoord(entry.anchor),
                 z: Number(entry.frontGlobal.z || 0),
                 color: frontColor,
@@ -1828,7 +2042,7 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
             });
             topLabelItems.push({
                 text: rearText,
-                sourcePoint: entry.rearGlobal.clone(),
+                sourcePoint: makePoint(0, getDepthCoord(entry.anchor), Number(entry.rearGlobal.z || 0)),
                 depth: getDepthCoord(entry.anchor),
                 z: Number(entry.rearGlobal.z || 0),
                 color: rearColor,
@@ -1909,8 +2123,6 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
     for (let i = 0; i < descriptors.length - 1; i += 1) {
         const current = descriptors[i];
         const next = descriptors[i + 1];
-        const currentBounds = descriptorBounds[i];
-        const nextBounds = descriptorBounds[i + 1];
         const distanceMm = Number(next.frontGlobal.z || 0) - Number(current.rearGlobal.z || 0);
         const labelPoint = __coopt_addPrincipalPointCadDimension(
             scene,
@@ -1922,10 +2134,7 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
             'principal-point-intergroup-dimension',
             -2.8,
             groupLabelCoord,
-            {
-                start: Number.isFinite(currentBounds?.bottom) ? Number(currentBounds.bottom) - lowerExtensionGap : null,
-                end: Number.isFinite(nextBounds?.bottom) ? Number(nextBounds.bottom) - lowerExtensionGap : null,
-            },
+            null,
             true,
             true,
         );

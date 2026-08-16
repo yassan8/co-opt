@@ -2097,8 +2097,8 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                     allowStopBasedOriginSolve: true,
                     originSolveTraceBackend: 'rust',
                     skipImageHeightTsValidation: true,
-                    // Keep this consistent with analysis/spot behavior.
-                    disableCrossExtent: true,
+                    // Bound Render rays by the successfully traced Draw Cross extent.
+                    disableCrossExtent: false,
                     // Ensure peripheral rays include the pupil cardinal boundaries (up/down/left/right).
                     crossType: 'both',
                     exactCrossBeamSampling: true,
@@ -3796,6 +3796,11 @@ const startApplicationOnce = (() => {
                                 return 'unknown';
                             })(),
                             rayPath: ray.rayPath,
+                            startPoint: ray.startPoint
+                                ?? ray.originalRay?.startPoint
+                                ?? ray.originalRay?.startP
+                                ?? ray.rayPath?.[0]
+                                ?? null,
                             objectIndex: ray.objectIndex ?? ray.originalRay?.objectIndex ?? 0,
                             crossParameter: ray.originalRay?.crossParameter ?? ray.crossParameter ?? null,
                             description: ray.description || ray.originalRay?.description || '',
@@ -3993,7 +3998,9 @@ function drawCrossBeamRays(tracedRays, targetScene) {
     };
     const filteredRays = tracedRays.filter(r => {
         const t = String(r?.originalRay?.type || r?.type || '').trim().toLowerCase();
-        const hasUsableTrace = !!(r && r.success === true);
+        const path = Array.isArray(r?.rayPath) ? r.rayPath : (Array.isArray(r?.rayPathToTarget) ? r.rayPathToTarget : []);
+        const hasPhysicalBlockPath = r?.success !== true && r?.fallback !== true && path.length >= 2;
+        const hasUsableTrace = !!(r && (r.success === true || hasPhysicalBlockPath));
         if (!(hasUsableTrace && t && allowedTypes.has(t))) {
             return false;
         }
@@ -4001,8 +4008,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             return false;
         }
         // 安全にパス取得
-        const path = Array.isArray(r.rayPath) ? r.rayPath : (Array.isArray(r.rayPathToTarget) ? r.rayPathToTarget : []);
-        
         // path配列は{x, y, z}の座標配列形式（surfaceIndexプロパティなし）
         // 有効な座標を持つ要素をフィルタリング
         const validHits = path.filter(p => 
@@ -4042,6 +4047,68 @@ function drawCrossBeamRays(tracedRays, targetScene) {
     if (!scene) {
         return;
     }
+
+    const rows = getOpticalSystemRows?.() || [];
+    const stopSurfaceIndex = rows.findIndex((row: any) => {
+        const objectType = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+        const surfaceType = String(row?.surfType ?? row?.type ?? '').trim().toLowerCase();
+        return objectType === 'stop' || objectType === 'sto' || surfaceType === 'stop' || surfaceType === 'sto';
+    });
+    if (stopSurfaceIndex >= 0) {
+        const origins = calculateSurfaceOrigins(rows);
+        const stopCenter = origins?.[stopSurfaceIndex]?.origin;
+        const stopHitsByObject = new Map<number, any[]>();
+        tracedRays.forEach((rayData) => {
+                const path = Array.isArray(rayData?.rayPath) ? rayData.rayPath : rayData?.rayPathToTarget;
+                const point = __cooptGetRayPointAtSurfaceIndex(path, rows, stopSurfaceIndex);
+                if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) return;
+                const rawObjectIndex = Number(rayData?.objectIndex ?? rayData?.originalRay?.objectIndex ?? 0);
+                const objectIndex = Number.isFinite(rawObjectIndex) ? rawObjectIndex : 0;
+                if (!stopHitsByObject.has(objectIndex)) stopHitsByObject.set(objectIndex, []);
+                stopHitsByObject.get(objectIndex)!.push(point);
+            });
+        const referenceObjectIndex = stopHitsByObject.has(0)
+            ? 0
+            : Math.min(...stopHitsByObject.keys());
+        const stopHits = stopHitsByObject.get(referenceObjectIndex) || [];
+
+        if (stopCenter && stopHits.length > 0) {
+            scene.traverse((object: any) => {
+                if (object?.userData?.type !== 'apertureStopChevron' || object?.userData?.surfaceIndex !== stopSurfaceIndex + 1) return;
+                const position = object.geometry?.attributes?.position;
+                if (!position || position.count !== 3) return;
+                const tip = { x: position.getX(1), y: position.getY(1), z: position.getZ(1) };
+                const tipDelta = { x: tip.x - stopCenter.x, y: tip.y - stopCenter.y, z: tip.z - stopCenter.z };
+                const tipRadius = Math.hypot(tipDelta.x, tipDelta.y, tipDelta.z);
+                if (!(tipRadius > 1e-12)) return;
+                const axis = { x: tipDelta.x / tipRadius, y: tipDelta.y / tipRadius, z: tipDelta.z / tipRadius };
+                const projections = stopHits.map((point) =>
+                    (point.x - stopCenter.x) * axis.x + (point.y - stopCenter.y) * axis.y + (point.z - stopCenter.z) * axis.z
+                );
+                const desiredTip = Math.max(...projections.filter(value => value > 0));
+                if (!Number.isFinite(desiredTip) || desiredTip <= 0) return;
+                const scale = desiredTip / tipRadius;
+
+                for (let index = 0; index < position.count; index++) {
+                    const delta = {
+                        x: position.getX(index) - stopCenter.x,
+                        y: position.getY(index) - stopCenter.y,
+                        z: position.getZ(index) - stopCenter.z
+                    };
+                    const along = delta.x * axis.x + delta.y * axis.y + delta.z * axis.z;
+                    const scaledAlong = along * scale;
+                    position.setXYZ(
+                        index,
+                        stopCenter.x + delta.x + (scaledAlong - along) * axis.x,
+                        stopCenter.y + delta.y + (scaledAlong - along) * axis.y,
+                        stopCenter.z + delta.z + (scaledAlong - along) * axis.z
+                    );
+                }
+                position.needsUpdate = true;
+                object.geometry.computeBoundingSphere();
+            });
+        }
+    }
     
     // Clear existing crossBeam rays from scene before drawing new ones
     const toRemoveBeforeNewDraw: any[] = [];
@@ -4080,10 +4147,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             rawObjectIndices.every((value) => value >= 1);
 
         tracedRays.forEach((rayData, index) => {
-            if (!rayData.success) {
-                return;
-            }
-            
             const rayPath = Array.isArray(rayData.rayPath)
                 ? rayData.rayPath
                 : (Array.isArray(rayData.rayPathToTarget) ? rayData.rayPathToTarget : []);
@@ -4200,6 +4263,7 @@ function drawCrossBeamRays(tracedRays, targetScene) {
 
 // drawCrossBeamRays関数をグローバルに公開
 window['drawCrossBeamRays'] = drawCrossBeamRays;
+window['drawSectionPlaneRays'] = drawCrossBeamRays;
 
 // generateInfiniteSystemCrossBeam関数をグローバルに公開
 window['generateInfiniteSystemCrossBeam'] = generateInfiniteSystemCrossBeam;

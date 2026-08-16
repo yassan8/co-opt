@@ -38,6 +38,14 @@ function __coopt_isCoordTransSurfaceLike(params) {
   );
 }
 
+function __coopt_isStopSurfaceLike(params) {
+  if (!params || typeof params !== 'object') return false;
+  const surfType = String(params.surfType ?? params.type ?? params.surfaceType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  const objType = String(params['object type'] ?? params.object ?? params.objectType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  return surfType === 'stop' || surfType === 'sto' || surfType === 'aperturestop' ||
+    objType === 'stop' || objType === 'sto' || objType === 'aperturestop';
+}
+
 function __coopt_getSemidiaMm(params) {
   if (!params || typeof params !== 'object') return null;
 
@@ -1853,14 +1861,36 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
       }
       return 10; // final fallback
     })();
+    const isStopSurface = __coopt_isStopSurfaceLike(s.params ?? s) || __coopt_isStopSurfaceLike(s);
     
     if (isPlane) {
-      // 平面プロファイル - 正しいZ位置で作成
-      for (let j = 0; j <= segments; j++) {
-        const y = -effectiveSemidia + (2 * effectiveSemidia * j / segments);
-        pointsYZ.push(new THREE.Vector3(0, y, s.zOffset)); // 最初からzOffsetで配置
-        const x = -effectiveSemidia + (2 * effectiveSemidia * j / segments);
-        pointsXZ.push(new THREE.Vector3(x, 0, s.zOffset)); // 最初からzOffsetで配置
+      if (isStopSurface) {
+        const bladeLength = effectiveSemidia * 0.18;
+        const chevronDepth = effectiveSemidia * 0.08;
+        pointsYZ.push(
+          new THREE.Vector3(0, -effectiveSemidia - bladeLength, s.zOffset - chevronDepth),
+          new THREE.Vector3(0, -effectiveSemidia, s.zOffset),
+          new THREE.Vector3(0, -effectiveSemidia - bladeLength, s.zOffset + chevronDepth),
+          new THREE.Vector3(0, effectiveSemidia + bladeLength, s.zOffset - chevronDepth),
+          new THREE.Vector3(0, effectiveSemidia, s.zOffset),
+          new THREE.Vector3(0, effectiveSemidia + bladeLength, s.zOffset + chevronDepth)
+        );
+        pointsXZ.push(
+          new THREE.Vector3(-effectiveSemidia - bladeLength, 0, s.zOffset - chevronDepth),
+          new THREE.Vector3(-effectiveSemidia, 0, s.zOffset),
+          new THREE.Vector3(-effectiveSemidia - bladeLength, 0, s.zOffset + chevronDepth),
+          new THREE.Vector3(effectiveSemidia + bladeLength, 0, s.zOffset - chevronDepth),
+          new THREE.Vector3(effectiveSemidia, 0, s.zOffset),
+          new THREE.Vector3(effectiveSemidia + bladeLength, 0, s.zOffset + chevronDepth)
+        );
+      } else {
+        // 平面プロファイル - 正しいZ位置で作成
+        for (let j = 0; j <= segments; j++) {
+          const y = -effectiveSemidia + (2 * effectiveSemidia * j / segments);
+          pointsYZ.push(new THREE.Vector3(0, y, s.zOffset));
+          const x = -effectiveSemidia + (2 * effectiveSemidia * j / segments);
+          pointsXZ.push(new THREE.Vector3(x, 0, s.zOffset));
+        }
       }
     } else {
       // 通常の非平面 - 正しいZ位置で作成
@@ -1973,18 +2003,25 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
     //   continue;
     // }
     
+    const isStopProfile = __coopt_isStopSurfaceLike(surfaces[i]?.params ?? surfaces[i]) || __coopt_isStopSurfaceLike(surfaces[i]);
+    const addProfileLine = (profilePoints, color, crossSection) => {
+      const geometry = new THREE.BufferGeometry().setFromPoints(profilePoints);
+      const material = new THREE.LineBasicMaterial({ color, linewidth: 2 });
+      const line = new THREE.Line(geometry, material);
+      line.userData = { surfaceIndex: i, crossSection, type: isStopProfile ? 'apertureStopChevron' : 'surfaceProfile' };
+      group.add(line);
+    };
+
     // YZ プロファイル描画
     if (profilesYZ[i] && profilesYZ[i].length > 0) {
       // console.log(`  Surface ${i}: Creating YZ profile with ${profilesYZ[i].length} points`);
       try {
-        const geometryYZ = new THREE.BufferGeometry().setFromPoints(profilesYZ[i]);
-        const materialYZ = new THREE.LineBasicMaterial({ 
-          color: 0x000000,
-          linewidth: 2
-        });
-        const lineYZ = new THREE.Line(geometryYZ, materialYZ);
-        lineYZ.userData = { surfaceIndex: i, crossSection: 'YZ' };
-        group.add(lineYZ);
+        if (isStopProfile && profilesYZ[i].length === 6) {
+          addProfileLine(profilesYZ[i].slice(0, 3), 0x000000, 'YZ');
+          addProfileLine(profilesYZ[i].slice(3, 6), 0x000000, 'YZ');
+        } else {
+          addProfileLine(profilesYZ[i], 0x000000, 'YZ');
+        }
         drawnYZ++;
         // console.log(`  ✓ Surface ${i}: YZ profile drawn successfully`);
         
@@ -2004,14 +2041,12 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
     if (profilesXZ[i] && profilesXZ[i].length > 0) {
       // console.log(`  Surface ${i}: Creating XZ profile with ${profilesXZ[i].length} points`);
       try {
-        const geometryXZ = new THREE.BufferGeometry().setFromPoints(profilesXZ[i]);
-        const materialXZ = new THREE.LineBasicMaterial({ 
-          color: 0xff0000,
-          linewidth: 2
-        });
-        const lineXZ = new THREE.Line(geometryXZ, materialXZ);
-        lineXZ.userData = { surfaceIndex: i, crossSection: 'XZ' };
-        group.add(lineXZ);
+        if (isStopProfile && profilesXZ[i].length === 6) {
+          addProfileLine(profilesXZ[i].slice(0, 3), 0xff0000, 'XZ');
+          addProfileLine(profilesXZ[i].slice(3, 6), 0xff0000, 'XZ');
+        } else {
+          addProfileLine(profilesXZ[i], 0xff0000, 'XZ');
+        }
         drawnXZ++;
         // console.log(`  ✓ Surface ${i}: XZ profile drawn successfully`);
         
@@ -2718,6 +2753,66 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         }
 
         const { halfX: profileHalfX, halfY: profileHalfY } = __coopt_getProfileHalfExtents(surf, semidia);
+
+        if (__coopt_isStopSurface(surf)) {
+          const transformStopPoint = (localPoint) => {
+            let transformed = localPoint;
+            if (origin.rotationMatrix) {
+              const R = origin.rotationMatrix;
+              transformed = new THREE.Vector3(
+                R[0][0] * localPoint.x + R[0][1] * localPoint.y + R[0][2] * localPoint.z,
+                R[1][0] * localPoint.x + R[1][1] * localPoint.y + R[1][2] * localPoint.z,
+                R[2][0] * localPoint.x + R[2][1] * localPoint.y + R[2][2] * localPoint.z
+              );
+            }
+            return new THREE.Vector3(
+              origin.origin.x + transformed.x,
+              origin.origin.y + transformed.y,
+              origin.origin.z + transformed.z
+            );
+          };
+          const addStopChevron = (points, color, profileType) => {
+            const geometry = new THREE.BufferGeometry().setFromPoints(points.map(transformStopPoint));
+            const material = new THREE.LineBasicMaterial({
+              color,
+              linewidth: 3,
+              transparent: true,
+              opacity: 1.0,
+              depthTest: false
+            });
+            const line = new THREE.Line(geometry, material);
+            line.renderOrder = 70000;
+            line.frustumCulled = false;
+            line.userData = { type: 'apertureStopChevron', profileType, surfaceIndex: i + 1, isOpticalElement: true };
+            scene.add(line);
+          };
+          const yzBladeLength = profileHalfY * 0.18;
+          const xzBladeLength = profileHalfX * 0.18;
+          const chevronDepth = semidia * 0.08;
+          addStopChevron([
+            new THREE.Vector3(0, -profileHalfY - yzBladeLength, -chevronDepth),
+            new THREE.Vector3(0, -profileHalfY, 0),
+            new THREE.Vector3(0, -profileHalfY - yzBladeLength, chevronDepth)
+          ], 0x000000, 'YZ');
+          addStopChevron([
+            new THREE.Vector3(0, profileHalfY + yzBladeLength, -chevronDepth),
+            new THREE.Vector3(0, profileHalfY, 0),
+            new THREE.Vector3(0, profileHalfY + yzBladeLength, chevronDepth)
+          ], 0x000000, 'YZ');
+          addStopChevron([
+            new THREE.Vector3(-profileHalfX - xzBladeLength, 0, -chevronDepth),
+            new THREE.Vector3(-profileHalfX, 0, 0),
+            new THREE.Vector3(-profileHalfX - xzBladeLength, 0, chevronDepth)
+          ], 0xff0000, 'XZ');
+          addStopChevron([
+            new THREE.Vector3(profileHalfX + xzBladeLength, 0, -chevronDepth),
+            new THREE.Vector3(profileHalfX, 0, 0),
+            new THREE.Vector3(profileHalfX + xzBladeLength, 0, chevronDepth)
+          ], 0xff0000, 'XZ');
+          yzProfileCount += 2;
+          xzProfileCount += 2;
+          continue;
+        }
         
         // console.log(`🔸 Surface ${i}: 描画対象、semidia=${semidia}`);
         
