@@ -49,9 +49,12 @@ const LITERATURE_IMPORT_EXAMPLE = [
   'Fno = 2.8 4.0 5.6',
   'Half angle = 38.2 22.4 15.1',
   'TL = 118.5',
-  'G1   34.12  -28.45   4.20   N-BK7   64.17',
-  'G2  -41.55   96.30   1.80   N-SF10  28.41',
-  'Air  INF     INF    12.60',
+  'r1=34.12',
+  'd1=4.20 N1=1.5168 v1=64.17 N-BK7',
+  'r2=-28.45',
+  'd2=1.80',
+  'r3=-41.55',
+  'd3=3.10 N3=1.7283 v3=28.41 N-SF10',
 ].join('\n');
 
 const PATENT_OCR_REPLACEMENTS: Array<[RegExp, string]> = [
@@ -198,6 +201,17 @@ function normalizePatentOcrText(input: string): string {
     .replace(/[\u3000\t]+/g, ' ')
     .replace(/[−–—]/g, '-')
     .replace(/[，]/g, ',')
+    .replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xfee0))
+    .replace(/数\s*値\s*実\s*施\s*例/g, '数値実施例')
+    .replace(/実\s*施\s*例/g, '実施例')
+    .replace(/面\s*デ\s*ー\s*タ/g, '面データ')
+    .replace(/面\s*番\s*号/g, '面番号')
+    .replace(/絞\s*り/g, '絞り')
+    .replace(/焦\s*点\s*距\s*離/g, '焦点距離')
+    .replace(/Ｆ\s*ナ\s*ン\s*バ\s*ー/g, 'Fno')
+    .replace(/半\s*画\s*角/g, 'half angle')
+    .replace(/像\s*高/g, '像高')
+    .replace(/レ\s*ン\s*ズ\s*全\s*長/g, 'total length')
     .replace(new RegExp(`(${PATENT_NUMBER_SOURCE})\\s*[×xX*]\\s*10\\s*\\^?\\s*([+\\-]?\\d+)`, 'gi'), '$1e$2')
     .replace(new RegExp(`(${PATENT_NUMBER_SOURCE})\\s*[×xX*]\\s*10\\s*[”″〃]+`, 'gi'), '$1e-4')
     .replace(new RegExp(`(${PATENT_NUMBER_SOURCE})\\s*[×xX*]\\s*10\\s*['’\\x60]+`, 'gi'), '$1e-5')
@@ -280,67 +294,6 @@ function extractPatentSurfaceIndexHint(line: string): number | null {
   return null;
 }
 
-function collectPatentAiSourceExcerpts(sourceText: string): string {
-  const source = String(sourceText ?? '').trim();
-  if (!source) return '';
-  if (source.length <= 20000) return source;
-
-  const markerPattern = /非\s*球面\s*(?:データ|係数)|非\s*球面|円錐定数|コーニック定数|コニック定数|円すい定数|2次曲面パラメータ|二次曲面パラメータ|aspheric|asphere|conic|epsilon|\bK\s*[=:]|\b[A-D]\s*(?:4|6|8|10|12|14|16|18|20)\s*[=:\-]/gi;
-  const windows: Array<{ start: number; end: number }> = [{ start: 0, end: Math.min(9000, source.length) }];
-  for (const match of source.matchAll(markerPattern)) {
-    const index = Number(match.index ?? -1);
-    if (!Number.isInteger(index) || index < 0) continue;
-    windows.push({
-      start: Math.max(0, index - 3500),
-      end: Math.min(source.length, index + 6500),
-    });
-  }
-
-  const merged: Array<{ start: number; end: number }> = [];
-  for (const window of windows.sort((left, right) => left.start - right.start)) {
-    const prev = merged[merged.length - 1];
-    if (prev && window.start <= prev.end + 500) {
-      prev.end = Math.max(prev.end, window.end);
-    } else {
-      merged.push({ ...window });
-    }
-  }
-
-  const parts: string[] = [];
-  let total = 0;
-  for (const window of merged) {
-    if (total >= 26000) break;
-    const excerpt = source.slice(window.start, window.end).trim();
-    if (!excerpt) continue;
-    parts.push(`[source chars ${window.start}-${window.end}]\n${excerpt}`);
-    total += excerpt.length;
-  }
-  return parts.join('\n\n---\n\n');
-}
-
-function readBlobAsDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ''));
-    reader.onerror = () => reject(reader.error || new Error('Failed to read image'));
-    reader.readAsDataURL(blob);
-  });
-}
-
-function dataUrlToGeminiInlineData(dataUrl: string, fallbackMimeType = 'image/png'): { mimeType: string; data: string } {
-  const match = String(dataUrl || '').match(/^data:([^;,]+);base64,(.*)$/);
-  if (match) {
-    return {
-      mimeType: String(match[1] || fallbackMimeType),
-      data: String(match[2] || ''),
-    };
-  }
-  return {
-    mimeType: fallbackMimeType,
-    data: String(dataUrl || '').replace(/^data:[^,]*,/, ''),
-  };
-}
-
 function normalizePatentAsphereLine(line: string): string {
   return String(line ?? '')
     .replace(/^\s*\[[^\]]+\]\s*/g, '')
@@ -351,7 +304,7 @@ function normalizePatentAsphereLine(line: string): string {
     .replace(/\bAL\s*([0-9])/gi, 'A1$1')
     .replace(/\bA\s*([0-9]{1,2})\s*--\s*/gi, 'A$1=-')
     .replace(/\bA\s*([0-9]{1,2})\s*[-ー]\s*(?=[+\-]?\d)/gi, 'A$1=')
-    .replace(/\b[BCD]\s*(4|6|8|10|12|14|16|18|20)\s*(?=[:=\-])/gi, 'A$1')
+    .replace(/\b[BCD]\s*(4|6|8|10|12|14|16|18|20)\s*(?=[:=\-])/g, 'A$1')
     .replace(/^\s*M(?=\s*[:=]\s*[+\-]?\d)/i, 'A4')
     .replace(/\bM(?=\s*[:=]\s*[+\-]?\d+(?:\.\d+)?\s*[x×X*]\s*10)/g, 'A4')
     .replace(/^[&gq](?=\s*[:=]\s*[+\-]?\d)/i, 'epsilon')
@@ -506,12 +459,6 @@ function parsePatentAsphereTerms(line: string): PatentAsphereTerms {
   };
 }
 
-function textContainsPatentAsphereMarkers(text: string): boolean {
-  const source = String(text ?? '');
-  if (!source.trim()) return false;
-  return /非球面係数|非球面|円錐定数|コーニック定数|コニック定数|円すい定数|2次曲面パラメータ|二次曲面パラメータ|(?:^|\s)[εϵ]\s*[:=]|\bepsilon\s*[:=]|\bA\s*(?:4|6|8|10|12|14|16|18|20|22)\s*[:=]/im.test(source);
-}
-
 function textContainsPatentRadiusMarkers(text: string): boolean {
   const source = normalizePatentOcrText(String(text ?? ''));
   if (!source.trim()) return false;
@@ -522,11 +469,6 @@ function textLooksLikePatentOpticalTable(text: string): boolean {
   const source = normalizePatentOcrText(String(text ?? ''));
   if (!source.trim()) return false;
   return /曲率半径|軸上面間隔|屈折率|アッベ数|\bd\s*\d+\s*[#%*¥]?\s*=|\bN\s*\d+\s*[#%*¥]?\s*=|\bv\s*\d+\s*[#%*¥]?\s*=/i.test(source);
-}
-
-function candidateRowsContainPatentAsphereMarkers(rows: LiteratureCandidateRow[]): boolean {
-  if (!Array.isArray(rows) || rows.length === 0) return false;
-  return rows.some((row) => parsePatentAsphereTerms(row?.line ?? '').hasAny);
 }
 
 function candidateRowsContainPatentRadiusMarkers(rows: LiteratureCandidateRow[]): boolean {
@@ -680,10 +622,24 @@ function sanitizePatentCandidateLine(line: string): string {
   if (/[ぁ-んァ-ン一-龯]/.test(normalized) && /\bd\s*\d+\s*[<＜]/i.test(normalized)) return '';
   const radiusPart = normalized.match(/\br\s*\d*\s*[#%*¥]?\s*=\s*(?:\([^)]*\)|INF|INFINITY|∞|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
   const thicknessPart = normalized.match(/\bd\s*\d*\s*[#%*¥]?\s*=\s*(?:INF|INFINITY|∞|可変|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?(?:\s*[~〜]\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?)*)/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
-  const refractiveIndexPart = normalized.match(/\bN\s*\d*\s*[#%*¥]?\s*=\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
-  const abbePart = normalized.match(/\bv\s*\d*\s*[#%*¥]?\s*=\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
+  let refractiveIndexPart = normalized.match(/\bN\s*\d*\s*[#%*¥]?\s*=\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
+  let abbePart = normalized.match(/\bv\s*\d*\s*[#%*¥]?\s*=\s*[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/i)?.[0]?.replace(/[#%*¥](?=\s*=)/g, '').replace(/\s+/g, ' ');
+  const refractiveIndexValue = refractiveIndexPart ? Number(refractiveIndexPart.split('=').pop()) : NaN;
+  const abbeValue = abbePart ? Number(abbePart.split('=').pop()) : NaN;
+  if (refractiveIndexPart && abbePart && (
+    !Number.isFinite(refractiveIndexValue)
+    || refractiveIndexValue <= 1
+    || refractiveIndexValue >= 2.5
+    || !Number.isFinite(abbeValue)
+    || abbeValue < 15
+    || abbeValue > 100
+  )) {
+    refractiveIndexPart = undefined;
+    abbePart = undefined;
+  }
   const stopPart = /絞り|\(stop\)/i.test(normalized) ? 'r= (stop)' : '';
-  const parts = [radiusPart || stopPart, thicknessPart, refractiveIndexPart, abbePart].filter(Boolean);
+  const resolvedRadiusPart = radiusPart && stopPart ? `${radiusPart} (stop)` : (radiusPart || stopPart);
+  const parts = [resolvedRadiusPart, thicknessPart, refractiveIndexPart, abbePart].filter(Boolean);
   if (parts.length > 0) return parts.join(' ');
 
   return withoutContextPrefix;
@@ -694,7 +650,7 @@ function isPatentOpticalDataLine(line: string): boolean {
   if (!text) return false;
   if (isPatentNoiseLine(text)) return false;
   if (isPatentAsphereContinuationLine(text)) return true;
-  if (/第\s*\d+\s*面|曲率半径|軸上面間隔|屈折率|アッベ数|絞り|\(絞り\)|\(stop\)/i.test(text)) return true;
+  if (/第\s*\d+\s*面|曲率半径|軸上面間隔|屈折率|アッベ数/i.test(text)) return true;
   return /(?:^|\s)(?:r\s*\d+|d\s*\d+|n\s*\d+|v\s*\d+|r\s*=|d\s*=|n\s*=|v\s*=)/i.test(text);
 }
 
@@ -714,7 +670,8 @@ function parseJapanesePatentSurfaceTableLine(line: string): { line: string; numb
   const restValues = Array.from(rest.matchAll(/(?:∞|INF|INFINITY)|可変|[+\-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?/gi)).map((item) => String(item[0] ?? '').trim());
   if (restValues.length === 0) return null;
 
-  const parts = [`r${surfaceIndex}=${isInfLikePatentImport(radiusRaw) ? 'INF' : radiusRaw}`];
+  const isStopSurface = /絞り|\bstop\b/i.test(source);
+  const parts = [`r${surfaceIndex}=${isInfLikePatentImport(radiusRaw) ? 'INF' : radiusRaw}${isStopSurface ? ' (stop)' : ''}`];
   const thicknessRaw = restValues[0];
   if (thicknessRaw) parts.push(`d${surfaceIndex}=${isInfLikePatentImport(thicknessRaw) ? 'INF' : thicknessRaw}`);
 
@@ -832,6 +789,7 @@ function buildFallbackBlocksFromRows(rows: Array<Record<string, any>>, preserveS
   const isStandaloneGapLikeRow = (row: Record<string, any>): boolean => {
     if (!row || typeof row !== 'object') return false;
     if (row._patentImportKind === 'gap') return true;
+    if (row._patentImportKind === 'surface') return false;
     const material = String(row?.material ?? '').trim().toUpperCase();
     const rindex = String(row?.rindex ?? '').trim();
     const abbe = String(row?.abbe ?? '').trim();
@@ -1604,7 +1562,9 @@ function parseLiteratureText(input: string): LiteratureExtractResult {
   ]);
 
   const contextual = parseContextualCandidateRows(text);
-  const inferredZooms = buildInferredZoomOptions(focalLengths.length > 0 ? focalLengths : fNumbers);
+  const inferredZooms = contextual.embodiments.length <= 1
+    ? buildInferredZoomOptions(focalLengths.length > 0 ? focalLengths : fNumbers)
+    : [];
   const zoomPositions = contextual.zoomPositions.length > 1
     ? contextual.zoomPositions
     : [makeOption('all', 'All'), ...inferredZooms];
@@ -1773,6 +1733,37 @@ async function loadTextFromPdfBlob(blob: Blob): Promise<string> {
   return text;
 }
 
+function rebuildPdfTextLines(items: any[], pageWidth: number): string[] {
+  const lines: Array<{ y: number; items: Array<{ x: number; text: string }> }> = [];
+  const safePageWidth = Number.isFinite(pageWidth) && pageWidth > 0 ? pageWidth : 0;
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const text = String(item?.str ?? '');
+    if (!text.trim()) continue;
+    const x = Number(item?.transform?.[4]);
+    const y = Number(item?.transform?.[5]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (safePageWidth > 0 && x > safePageWidth * 0.85 && /^\d{1,3}$/.test(text.trim())) continue;
+
+    let line = lines.find((candidate) => Math.abs(candidate.y - y) <= 1);
+    if (!line) {
+      line = { y, items: [] };
+      lines.push(line);
+    }
+    line.items.push({ x, text });
+  }
+
+  return lines
+    .sort((left, right) => right.y - left.y)
+    .map((line) => line.items
+      .sort((left, right) => left.x - right.x)
+      .map((item) => item.text)
+      .join(' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim())
+    .filter(Boolean);
+}
+
 async function extractPdfTextLayer(blob: Blob): Promise<{ text: string; pdf: any; pageCount: number }> {
   const buffer = await blob.arrayBuffer();
   const pdfjs = await import('pdfjs-dist');
@@ -1793,7 +1784,8 @@ async function extractPdfTextLayer(blob: Blob): Promise<{ text: string; pdf: any
   for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
     const page = await pdf.getPage(pageIndex);
     const content = await page.getTextContent();
-    const text = (content.items ?? []).map((item: any) => String(item?.str ?? '')).join(' ');
+    const viewport = page.getViewport({ scale: 1 });
+    const text = rebuildPdfTextLines(content.items ?? [], Number(viewport?.width || 0)).join('\n');
     if (text.trim()) pages.push(text.trim());
   }
   return { text: pages.join('\n\n'), pdf, pageCount: Number(pdf?.numPages || 0) };
@@ -2348,15 +2340,6 @@ async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDat
   return { saved, blockCount };
 }
 
-const PATENT_AI_KEY_STORAGE = 'coopt.patentAi.geminiKey';
-const PATENT_AI_MODEL_STORAGE = 'coopt.patentAi.model';
-
-type PatentSourceImage = {
-  dataUrl: string;
-  mimeType: string;
-  name: string;
-};
-
 export function LiteratureImportPanel() {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [query, setQuery] = useState('zoom lens');
@@ -2364,7 +2347,7 @@ export function LiteratureImportPanel() {
   const [rawText, setRawText] = useState('');
   const [summary, setSummary] = useState('');
   const [draftPreview, setDraftPreview] = useState('');
-  const [status, setStatus] = useState('Load a patent URL or paste OCR text, then extract and build a draft.');
+  const [status, setStatus] = useState('Select a patent PDF, then extract its lens prescription.');
   const [result, setResult] = useState<LiteratureExtractResult | null>(null);
   const [selectedEmbodiment, setSelectedEmbodiment] = useState('all');
   const [selectedZoom, setSelectedZoom] = useState('all');
@@ -2374,20 +2357,6 @@ export function LiteratureImportPanel() {
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
   const [isRunningOcr, setIsRunningOcr] = useState(false);
   const [sourcePdfBlob, setSourcePdfBlob] = useState<Blob | null>(null);
-  const [sourceImage, setSourceImage] = useState<PatentSourceImage | null>(null);
-  const [aiApiKey, setAiApiKey] = useState<string>(() => {
-    try { return localStorage.getItem(PATENT_AI_KEY_STORAGE) ?? ''; } catch { return ''; }
-  });
-  const [aiModel, setAiModel] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem(PATENT_AI_MODEL_STORAGE) ?? '';
-      // Migrate deprecated models to current equivalent
-      if (!saved || saved === 'gemini-2.5-flash' || saved === 'gemini-2.0-flash' || saved === 'gemini-1.5-pro' || saved === 'gemma-3-27b-it') return 'gemini-3.1-pro-preview';
-      return saved;
-    } catch { return 'gemini-3.1-pro-preview'; }
-  });
-  const [showAiSettings, setShowAiSettings] = useState(false);
-  const [isAiProcessing, setIsAiProcessing] = useState(false);
 
   const openSearch = (target: 'google-patents' | 'jplatpat') => {
     const nextQuery = query.trim() || 'zoom lens patent';
@@ -2530,7 +2499,6 @@ export function LiteratureImportPanel() {
     if (!file) return;
     setIsLoadingPdf(true);
     setSourcePdfBlob(file);
-    setSourceImage(null);
     setStatus('Reading PDF file...');
     try {
       const text = await loadTextFromPdfBlob(file);
@@ -2555,34 +2523,6 @@ export function LiteratureImportPanel() {
     if (event?.target) event.target.value = '';
   };
 
-  const handleImageFile = async (file: File | Blob | null | undefined) => {
-    if (!file) return;
-    const mimeType = String((file as any)?.type || 'image/png');
-    if (!/^image\//i.test(mimeType)) {
-      setStatus('Select or paste an image file for screenshot AI extraction.');
-      return;
-    }
-    setIsAiProcessing(true);
-    setStatus('Reading screenshot image...');
-    try {
-      const dataUrl = await readBlobAsDataUrl(file);
-      const name = String((file as any)?.name || 'pasted screenshot');
-      setSourceImage({ dataUrl, mimeType, name });
-      setStatus(`Loaded screenshot image (${name}). Click AI Enhance to extract surface and asphere data.`);
-    } catch (error) {
-      const message = String((error as any)?.message || error || 'Unknown error');
-      setStatus(`Image load failed: ${message}`);
-    } finally {
-      setIsAiProcessing(false);
-    }
-  };
-
-  const handleImageInputChange = async (event: any) => {
-    const file = event?.target?.files?.[0] as File | undefined;
-    await handleImageFile(file);
-    if (event?.target) event.target.value = '';
-  };
-
   const extractPdfFileFromTransfer = (transfer: DataTransfer | null | undefined): File | null => {
     const items = Array.from(transfer?.items ?? []);
     const pdfItem = items.find((item: any) => item?.kind === 'file' && /pdf/i.test(String(item?.type ?? '')));
@@ -2592,25 +2532,12 @@ export function LiteratureImportPanel() {
     return files.find((file: File) => /pdf/i.test(String(file.type ?? '')) || /\.pdf$/i.test(file.name)) ?? null;
   };
 
-  const extractImageFileFromTransfer = (transfer: DataTransfer | null | undefined): File | null => {
-    const items = Array.from(transfer?.items ?? []);
-    const imageItem = items.find((item: any) => item?.kind === 'file' && /^image\//i.test(String(item?.type ?? '')));
-    if (imageItem?.getAsFile) return imageItem.getAsFile();
-
-    const files = Array.from(transfer?.files ?? []);
-    return files.find((file: File) => /^image\//i.test(String(file.type ?? '')) || /\.(?:png|jpe?g|webp)$/i.test(file.name)) ?? null;
-  };
-
   const extractPdfFileFromClipboard = (clipboardData: DataTransfer | null | undefined): File | null => {
     return extractPdfFileFromTransfer(clipboardData);
   };
 
-  const extractImageFileFromClipboard = (clipboardData: DataTransfer | null | undefined): File | null => {
-    return extractImageFileFromTransfer(clipboardData);
-  };
-
   const handlePanelDragOver = (event: any) => {
-    const file = extractPdfFileFromTransfer(event?.dataTransfer) || extractImageFileFromTransfer(event?.dataTransfer);
+    const file = extractPdfFileFromTransfer(event?.dataTransfer);
     if (!file) return;
     event.preventDefault();
     if (event.dataTransfer) {
@@ -2620,21 +2547,17 @@ export function LiteratureImportPanel() {
 
   const handlePanelDrop = async (event: any) => {
     const pdfFile = extractPdfFileFromTransfer(event?.dataTransfer);
-    const imageFile = !pdfFile ? extractImageFileFromTransfer(event?.dataTransfer) : null;
-    if (!pdfFile && !imageFile) return;
+    if (!pdfFile) return;
     event.preventDefault();
     event.stopPropagation();
-    if (pdfFile) await handlePdfFile(pdfFile);
-    else await handleImageFile(imageFile);
+    await handlePdfFile(pdfFile);
   };
 
   const handleRawTextPaste = async (event: any) => {
     const pdfFile = extractPdfFileFromClipboard(event?.clipboardData);
-    const imageFile = !pdfFile ? extractImageFileFromClipboard(event?.clipboardData) : null;
-    if (!pdfFile && !imageFile) return;
+    if (!pdfFile) return;
     event.preventDefault();
-    if (pdfFile) await handlePdfFile(pdfFile);
-    else await handleImageFile(imageFile);
+    await handlePdfFile(pdfFile);
   };
 
   useEffect(() => {
@@ -2642,12 +2565,10 @@ export function LiteratureImportPanel() {
       const panel = panelRef.current;
       if (!panel || panel.offsetParent === null) return;
       const pdfFile = extractPdfFileFromClipboard(event.clipboardData);
-      const imageFile = !pdfFile ? extractImageFileFromClipboard(event.clipboardData) : null;
-      if (!pdfFile && !imageFile) return;
+      if (!pdfFile) return;
       event.preventDefault();
       event.stopPropagation();
-      if (pdfFile) void handlePdfFile(pdfFile);
-      else void handleImageFile(imageFile);
+      void handlePdfFile(pdfFile);
     };
 
     window.addEventListener('paste', handleWindowPasteCapture, true);
@@ -2665,15 +2586,12 @@ export function LiteratureImportPanel() {
 
     let nextResult = parseLiteratureText(nextText);
     let nextSummary = buildLiteratureSummary(query, sourceUrl, nextResult);
-    const lacksAsphereContent = !textContainsPatentAsphereMarkers(nextText) && !candidateRowsContainPatentAsphereMarkers(nextResult.candidateTableRows);
     const lacksRadiusContent = !textContainsPatentRadiusMarkers(nextText) && !candidateRowsContainPatentRadiusMarkers(nextResult.candidateTableRows);
-    if ((nextResult.candidateTableRows.length === 0 || lacksAsphereContent || lacksRadiusContent) && sourcePdfBlob && !isRunningOcr) {
+    if ((nextResult.candidateTableRows.length === 0 || lacksRadiusContent) && sourcePdfBlob && !isRunningOcr) {
       setStatus(
         nextResult.candidateTableRows.length === 0
           ? 'No candidate rows found from text layer. Running OCR fallback...'
-          : lacksRadiusContent
-            ? 'No radius column detected from the current PDF text. Running full-document OCR fallback...'
-            : 'No asphere section detected from the current PDF text. Running full-document OCR fallback...'
+          : 'No radius column detected from the current PDF text. Running full-document OCR fallback...'
       );
       const ocrCombinedText = await handleRunOcr('append');
       if (ocrCombinedText && String(ocrCombinedText).trim()) {
@@ -2691,179 +2609,6 @@ export function LiteratureImportPanel() {
     setSelectedZoom(nextZoom);
     const draft = await rebuildDraft(nextResult, nextEmbodiment, nextZoom, nextSummary);
     setStatus(`Extracted ${nextResult.candidateTableRows.length} candidate row(s) and built ${countPatentDraftSurfaceRows(draft.rows)} draft surface row(s).`);
-  };
-
-  const handleApplyCorrectedCandidateRows = async () => {
-    const correctedText = candidateRowsText.trim();
-    if (!correctedText && !result) {
-      setStatus('Run Extract Candidate Data or AI Enhance first.');
-      return;
-    }
-
-    const baseResult = result || parseLiteratureText(correctedText || rawText);
-    const correctedResult = correctedText
-      ? mergeCorrectedCandidateRows(baseResult, correctedText)
-      : baseResult;
-    if (correctedResult.candidateTableRows.length === 0) {
-      setStatus('No numeric candidate rows remain after correction.');
-      return;
-    }
-
-    const nextSummary = buildLiteratureSummary(query, sourceUrl, correctedResult);
-    const nextEmbodiment = correctedResult.embodiments.find((option) => option.key === selectedEmbodiment)?.key
-      || correctedResult.embodiments.find((option) => option.key !== 'all')?.key
-      || 'all';
-    const nextZoom = correctedResult.zoomPositions.find((option) => option.key === selectedZoom)?.key
-      || correctedResult.zoomPositions.find((option) => option.key !== 'all')?.key
-      || 'all';
-    setResult(correctedResult);
-    setSummary(nextSummary);
-    setSelectedEmbodiment(nextEmbodiment);
-    setSelectedZoom(nextZoom);
-    const draft = await rebuildDraft(correctedResult, nextEmbodiment, nextZoom, nextSummary);
-    const surfaceCount = countPatentDraftSurfaceRows(draft.rows);
-    if (surfaceCount === 0) {
-      setStatus('Applied corrected candidate rows, but no surface rows were built. Check r/d rows before applying.');
-      return;
-    }
-    const applied = await applyDraftToWorkspace(draft.rows, nextSummary);
-    setStatus(
-      applied.saved
-        ? `Applied corrected rows and built Design Intent (${surfaceCount} surface row(s), ${applied.blockCount} block(s)).`
-        : 'Corrected rows were parsed, but Design Intent could not be saved. Check console for configuration storage errors.'
-    );
-  };
-
-  const handleSaveAiSettings = () => {
-    const key = aiApiKey.trim();
-    const model = aiModel.trim() || 'gemini-3.1-pro-preview';
-    try { localStorage.setItem(PATENT_AI_KEY_STORAGE, key); } catch { /* ignore */ }
-    try { localStorage.setItem(PATENT_AI_MODEL_STORAGE, model); } catch { /* ignore */ }
-    setAiModel(model);
-    setShowAiSettings(false);
-    setStatus(key ? 'AI settings saved. You can now use AI Enhance.' : 'AI settings saved (no API key set).');
-  };
-
-  const handleAiEnhance = async () => {
-    const key = aiApiKey.trim();
-    if (!key) {
-      setShowAiSettings(true);
-      setStatus('Enter your Gemini API key first (free at aistudio.google.com).');
-      return;
-    }
-    const candidateText = candidateRowsText.trim();
-    const sourceText = rawText.trim();
-    if (!candidateText && !sourceText && !sourceImage) {
-      setStatus('Paste patent text, paste/select a screenshot, or run Extract Candidate Data first.');
-      return;
-    }
-
-    setIsAiProcessing(true);
-    setStatus(sourceImage ? 'Sending screenshot to AI... (this may take 10–30 seconds)' : 'Sending to AI... (this may take 10–30 seconds)');
-    try {
-      const model = (aiModel.trim() || 'gemini-3.1-pro-preview');
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
-      const sourceExcerpts = collectPatentAiSourceExcerpts(sourceText);
-      const sourceHasAsphereMarkers = textContainsPatentAsphereMarkers(sourceText);
-      const imageInlineData = sourceImage ? dataUrlToGeminiInlineData(sourceImage.dataUrl, sourceImage.mimeType) : null;
-
-      const systemPrompt = `You are an expert optical design engineer extracting lens prescriptions from patent OCR text.
-
-    Your job has TWO independent passes:
-    1. Surface prescription pass: find every optical surface row containing curvature radius, thickness/spacing, refractive index, and Abbe number.
-    2. Asphere pass: scan the ENTIRE source text for aspheric data sections, even if they are far away from the radius table. This pass is mandatory. Look for Japanese and English markers such as 非球面データ, 非球面, 非球面係数, 第N面, 円錐定数, コーニック定数, コニック定数, 2次曲面パラメータ, epsilon, conic, K, k, cc, A4, A6, A8, A10, A12, A14, A16, A18, A20, C4, C6, C8, D4, D6, D8, 4th order, 6th order, 8th order.
-
-    Do not stop after the radius table. Many patents list aspheric coefficients in a separate later table. If the excerpts contain any asphere-like marker, your output must include the corresponding asphere lines unless no numeric coefficients are present.
-
-    Output ONLY normalized data lines. No markdown, no explanations, no table headers.
-
-    Surface row format:
-    rN={radius}  dN={thickness}  NN={refractiveIndex}  vN={abbeNumber}
-
-    Examples:
-    r1=24.380  d1=1.500  N1=1.80518  v1=25.4
-    r2=10.980  d2=0.100
-    r4=10.000
-
-    Asphere output MUST use this parser-compatible two-line format:
-    第N面の非球面係数
-    epsilon={conic} A4={value} A6={value} A8={value} A10={value} A12={value} A14={value} A16={value} A18={value} A20={value}
-
-    If the source writes coefficients as C4/C6/C8, B4/B6/B8, D4/D6/D8, coefficient 4/6/8, or 4th/6th/8th order, normalize them to A4/A6/A8. Treat tables titled 非球面データ exactly like 非球面係数 tables.
-
-    Asphere rules:
-    - Use the real surface number N from the source text, e.g. 第6面 or 6th surface.
-    - Put coefficient orders exactly as A4, A6, A8, A10, A12, A14, A16, A18, A20.
-    - Use epsilon for conic/K/cc/2次曲面パラメータ/円錐定数.
-    - If conic is absent, omit epsilon.
-    - Include only coefficients explicitly present in the source.
-    - Do not attach the surface number to coefficient names. Correct: A4=1e-5. Wrong: A64=1e-5 or A6_4=1e-5.
-
-    General rules:
-    - Use = between symbol and value.
-    - Convert scientific notation like 1×10^-5, 1 x 10 -5, 1.23E-006 to e notation.
-    - Fix obvious OCR mistakes: rl3 -> r13, l/|/I in numeric labels -> 1, N5-1.84666 -> N5=1.84666.
-    - Preserve numeric precision as much as possible.
-    - Do not invent missing values. If a value is not present, omit that field.
-    - If you see an incomplete trailing fragment such as a lone r, ignore it.
-
-    Image/screenshot rules:
-    - If an image is provided, read the image directly. Use the visible table structure, not OCR text guesses alone.
-    - For Japanese 面データ tables, columns usually mean 面番号 / r / d / nd / vd. A star after a surface number means that surface is aspheric.
-    - For Japanese 非球面データ sections, pair each 第N面 block with the following k/epsilon line and A4/A6/A8... coefficient lines.
-    - If a row has 可変 in the d column, output dN=可変.
-    - If the radius is ∞, output rN=INF.`;
-
-      const userPrompt = `Extract and correct the optical surface and aspheric data from the following patent source. If a screenshot image is attached, prioritize the visual table content and use the text only as supplementary context.
-
-    [Already extracted candidate rows, may be incomplete]
-    ${candidateText || '(none)'}
-
-    [Asphere-focused excerpts from full patent OCR/source text]
-    ${sourceExcerpts || '(none)'}
-
-    [Attached screenshot]
-    ${sourceImage ? `${sourceImage.name} (${sourceImage.mimeType})` : '(none)'}`;
-
-      const userParts: any[] = [{ text: userPrompt }];
-      if (imageInlineData?.data) {
-        userParts.push({ inline_data: { mime_type: imageInlineData.mimeType, data: imageInlineData.data } });
-      }
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: 'user', parts: userParts }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
-        }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        const msg = (err as any)?.error?.message ?? `HTTP ${response.status}`;
-        throw new Error(`Gemini API error: ${msg}`);
-      }
-
-      const data = await response.json();
-      const aiText: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      if (!aiText.trim()) throw new Error('AI returned empty response');
-
-      setCandidateRowsText(aiText.trim());
-      const aiResult = parseCandidateRowsFromEditor(aiText);
-      const aiFoundAsphere = candidateRowsContainPatentAsphereMarkers(aiResult);
-      setStatus(
-        (sourceHasAsphereMarkers || sourceImage) && !aiFoundAsphere
-          ? 'AI enhancement complete, but no asphere coefficients were detected in the AI output. The source contains asphere markers; try AI Enhance again or paste the asphere coefficient section into the text box.'
-          : 'AI enhancement complete. Review the Correct Candidate Rows, then click Apply Corrected Rows.'
-      );
-    } catch (error) {
-      const msg = String((error as any)?.message ?? error ?? 'Unknown error');
-      setStatus(`AI Enhance failed: ${msg}`);
-    } finally {
-      setIsAiProcessing(false);
-    }
   };
 
   const handleApplyDraftAsNewConfig = async () => {
@@ -2885,6 +2630,9 @@ export function LiteratureImportPanel() {
     );
   };
 
+  const surfaceCount = countPatentDraftSurfaceRows(draftRows);
+  const canImport = !!result && candidateRowsText.trim().length > 0 && surfaceCount > 0;
+
   return (
     <div
       ref={panelRef}
@@ -2892,181 +2640,142 @@ export function LiteratureImportPanel() {
       onDragOver={handlePanelDragOver}
       onDrop={(event) => void handlePanelDrop(event)}
     >
-    <div className="literature-import-panel">
-      <div className="literature-import-panel__header">
-        <div>
-          <h3>Patent Import</h3>
-
-      <SystemDataPanel />
-          <p>Independent workspace tab for semi-automatic patent import: load URL text when allowed, or paste/select a PDF file, then choose embodiment / zoom position and apply the extracted optical system directly.</p>
-        </div>
-        <div className="literature-import-panel__actions">
-          <button type="button" onClick={() => openSearch('jplatpat')}>Search J-PlatPat</button>
-          <button type="button" onClick={() => openSearch('google-patents')}>Search Google Patents</button>
-        </div>
-      </div>
-
-      <div className="literature-import-panel__grid">
-        <label>
-          <span>Search Keywords</span>
-          <input
-            type="text"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="zoom lens, JP patent number, applicant..."
-          />
-        </label>
-        <label>
-          <span>Document URL</span>
-          <input
-            type="text"
-            value={sourceUrl}
-            onChange={(event) => setSourceUrl(event.target.value)}
-            placeholder="https://patents.google.com/... or PDF URL"
-          />
-        </label>
-      </div>
-
-      <div className="literature-import-panel__actions literature-import-panel__actions--primary">
-        <button type="button" onClick={handleLoadFromUrl} disabled={isLoadingUrl}>{isLoadingUrl ? 'Loading URL...' : 'Load URL Text'}</button>
-        <label className="literature-import-panel__fileButton">
-          <input type="file" accept="application/pdf,.pdf" onChange={handlePdfInputChange} />
-          <span>{isLoadingPdf ? 'Loading PDF...' : 'Select PDF'}</span>
-        </label>
-        <label className="literature-import-panel__fileButton">
-          <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleImageInputChange} />
-          <span>Select Screenshot</span>
-        </label>
-        <button type="button" onClick={() => void handleRunOcr('append')} disabled={isRunningOcr || !sourcePdfBlob}>{isRunningOcr ? 'Running OCR...' : 'Run OCR'}</button>
-        <button type="button" onClick={() => setRawText(LITERATURE_IMPORT_EXAMPLE)}>Use Example</button>
-      </div>
-
-      {sourceImage ? (
-        <div className="literature-import-panel__imagePreview">
-          <img src={sourceImage.dataUrl} alt="Patent screenshot for AI extraction" />
+      <div className="literature-import-panel">
+        <div className="literature-import-panel__header">
           <div>
-            <strong>{sourceImage.name}</strong>
-            <span>{sourceImage.mimeType}</span>
-            <button type="button" onClick={() => setSourceImage(null)}>Clear Screenshot</button>
+            <h3>Patent Prescription Import</h3>
+            <p>Select a patent PDF, check the detected surface rows, and import them as a new editable optical configuration.</p>
+          </div>
+          <div className="literature-import-panel__actions literature-import-panel__actions--quiet">
+            <button type="button" onClick={() => openSearch('jplatpat')}>J-PlatPat</button>
+            <button type="button" onClick={() => openSearch('google-patents')}>Google Patents</button>
           </div>
         </div>
-      ) : null}
 
-      <label className="literature-import-panel__field">
-        <span>Paste PDF Text / OCR, PDF File, or Screenshot</span>
-        <textarea
-          value={rawText}
-          onChange={(event) => setRawText(event.target.value)}
-          onPaste={handleRawTextPaste}
-          rows={8}
-          placeholder="Paste patent text, table rows, OCR output, or copy a PDF/screenshot and paste it here..."
-        />
-      </label>
-      <div className="literature-import-panel__hint">Direct URL loading works only for documents the browser is allowed to fetch. For image PDFs, use Run OCR. For patent table screenshots, paste or select the image, then use AI Enhance.</div>
+        <div className="literature-import-panel__status" role="status">{status}</div>
 
-      <div className="literature-import-panel__actions literature-import-panel__actions--primary">
-        <button type="button" onClick={handleExtract}>Extract Candidate Data</button>
-        <button type="button" onClick={handleApplyCorrectedCandidateRows} disabled={!result && !candidateRowsText.trim()}>Apply Corrected Rows</button>
-        <button
-          type="button"
-          onClick={() => void handleAiEnhance()}
-          disabled={isAiProcessing}
-          title="Use Gemini AI (free) to fix OCR errors and extract surface data"
-        >
-          {isAiProcessing ? 'AI Processing...' : '✨ AI Enhance'}
-        </button>
-        <button type="button" onClick={handleApplyDraftAsNewConfig}>Apply as New Config</button>
-        <button
-          type="button"
-          onClick={() => setShowAiSettings((v) => !v)}
-          title="Configure free Gemini API key for AI Enhance"
-          style={{ marginLeft: 'auto', opacity: 0.7, fontSize: '0.85em' }}
-        >
-          ⚙ AI Key
-        </button>
-      </div>
+        <section className="literature-import-panel__step">
+          <div className="literature-import-panel__stepHeader">
+            <span className="literature-import-panel__stepNumber">1</span>
+            <div>
+              <h4>Choose the patent source</h4>
+              <p>PDF text is read locally. Scanned PDFs can be processed with OCR.</p>
+            </div>
+          </div>
 
-      {showAiSettings && (
-        <div className="literature-import-panel__ai-settings">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <label style={{ fontSize: '0.85em', whiteSpace: 'nowrap' }}>
-              Gemini API Key{' '}
-              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.9em' }}>
-                (free at aistudio.google.com)
-              </a>
+          <div className="literature-import-panel__actions literature-import-panel__actions--primary">
+            <label className="literature-import-panel__fileButton literature-import-panel__fileButton--primary">
+              <input type="file" accept="application/pdf,.pdf" onChange={handlePdfInputChange} />
+              <span>{isLoadingPdf ? 'Reading PDF…' : 'Select patent PDF'}</span>
             </label>
-            <input
-              type="password"
-              value={aiApiKey}
-              onChange={(e) => setAiApiKey(e.target.value)}
-              placeholder="AIza..."
-              style={{ flex: '1 1 200px', minWidth: 0 }}
-            />
-            <select
-              value={aiModel}
-              onChange={(e) => setAiModel(e.target.value)}
-              style={{ minWidth: '160px' }}
-              title="Gemini model to use"
-            >
-              <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (latest, high accuracy)</option>
-              <option value="gemini-2.5-flash">gemini-2.5-flash (fast, free)</option>
-              <option value="gemini-2.5-pro">gemini-2.5-pro (high accuracy)</option>
-              <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (lightweight)</option>
-              <option value="gemini-1.5-flash">gemini-1.5-flash (legacy)</option>
-            </select>
-            <button type="button" onClick={handleSaveAiSettings}>Save</button>
-            <button type="button" onClick={() => setShowAiSettings(false)} style={{ opacity: 0.6 }}>Cancel</button>
+            <button type="button" onClick={() => void handleRunOcr('append')} disabled={isRunningOcr || !sourcePdfBlob}>
+              {isRunningOcr ? 'Running OCR…' : 'Run OCR'}
+            </button>
+            <button type="button" className="is-quiet" onClick={() => setRawText(LITERATURE_IMPORT_EXAMPLE)}>Use sample</button>
           </div>
-          <div style={{ fontSize: '0.8em', color: '#666', marginTop: '4px' }}>
-            Key is stored in browser localStorage only. Free tier: 15 req/min, 1500/day. Keys are never sent to any server other than Google.
+
+          <details className="literature-import-panel__advanced">
+            <summary>Other input options</summary>
+            <div className="literature-import-panel__advancedBody">
+              <div className="literature-import-panel__grid">
+                <label>
+                  <span>Search keywords</span>
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Patent number, lens type, applicant…" />
+                </label>
+                <label>
+                  <span>Document URL</span>
+                  <div className="literature-import-panel__inlineControl">
+                    <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://…/document.pdf" />
+                    <button type="button" onClick={handleLoadFromUrl} disabled={isLoadingUrl}>{isLoadingUrl ? 'Loading…' : 'Load'}</button>
+                  </div>
+                </label>
+              </div>
+              <label className="literature-import-panel__field">
+                <span>Extracted or pasted text</span>
+                <textarea
+                  value={rawText}
+                  onChange={(event) => setRawText(event.target.value)}
+                  onPaste={handleRawTextPaste}
+                  rows={7}
+                  placeholder="Paste patent table text or OCR output here…"
+                />
+              </label>
+            </div>
+          </details>
+        </section>
+
+        <section className="literature-import-panel__step">
+          <div className="literature-import-panel__stepHeader">
+            <span className="literature-import-panel__stepNumber">2</span>
+            <div>
+              <h4>Extract and review the prescription</h4>
+              <p>Verify radius (r), thickness (d), refractive index (N), Abbe number (v), and asphere coefficients.</p>
+            </div>
           </div>
-        </div>
-      )}
 
-      <div className="literature-import-panel__status">{status}</div>
+          <div className="literature-import-panel__actions literature-import-panel__actions--primary">
+            <button type="button" className="is-primary" onClick={handleExtract} disabled={!rawText.trim() || isRunningOcr}>
+              Extract prescription
+            </button>
+          </div>
 
-      {result ? (
-        <div className="literature-import-panel__chips" aria-label="Extracted counts">
-          <span>{result.patentIds.length} patent id(s)</span>
-          <span>{result.glassNames.length} glass name(s)</span>
-          <span>{result.candidateTableRows.length} table row(s)</span>
-          <span>{countCandidateRowsWithPatentAsphereMarkers(result.candidateTableRows)} asphere row(s)</span>
-          <span>{result.focalLengths.length} focal length candidate(s)</span>
-        </div>
-      ) : null}
+          {result ? (
+            <>
+              <div className="literature-import-panel__chips" aria-label="Extraction summary">
+                <span>{surfaceCount} surfaces</span>
+                <span>{result.glassNames.length} glasses</span>
+                <span>{countCandidateRowsWithPatentAsphereMarkers(result.candidateTableRows)} asphere rows</span>
+                <span>{result.focalLengths.length} focal lengths</span>
+              </div>
 
-      {result ? (
-        <div className="literature-import-panel__grid literature-import-panel__grid--selectors">
-          <label>
-            <span>Embodiment</span>
-            <select value={selectedEmbodiment} onChange={(event) => { void handleEmbodimentChange(event.target.value); }}>
-              {result.embodiments.map((option) => (
-                <option key={option.key} value={option.key}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Zoom Position</span>
-            <select value={selectedZoom} onChange={(event) => { void handleZoomChange(event.target.value); }}>
-              {result.zoomPositions.map((option) => (
-                <option key={option.key} value={option.key}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-      ) : null}
+              <div className="literature-import-panel__grid literature-import-panel__grid--selectors">
+                <label>
+                  <span>Embodiment</span>
+                  <select value={selectedEmbodiment} onChange={(event) => { void handleEmbodimentChange(event.target.value); }}>
+                    {result.embodiments.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>Zoom position</span>
+                  <select value={selectedZoom} onChange={(event) => { void handleZoomChange(event.target.value); }}>
+                    {result.zoomPositions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+                  </select>
+                </label>
+              </div>
 
-      <label className="literature-import-panel__field">
-        <span>Correct Candidate Rows</span>
-        <textarea
-          value={candidateRowsText}
-          onChange={(event) => setCandidateRowsText(event.target.value)}
-          rows={12}
-          placeholder="Correct OCR typos here, then click Apply Corrected Rows..."
-        />
-      </label>
-      <div className="literature-import-panel__hint">Edit only the extracted candidate rows here. You can fix OCR typos like `rl3` to `r13`, `N5-1.84666` to `N5=1.84666`, or malformed decimals, then click Apply Corrected Rows.</div>
-    </div>
+              <label className="literature-import-panel__field">
+                <span>Detected surface rows</span>
+                <textarea
+                  value={candidateRowsText}
+                  onChange={(event) => setCandidateRowsText(event.target.value)}
+                  rows={12}
+                  spellCheck={false}
+                  placeholder="r1=… d1=… N1=… v1=…"
+                />
+              </label>
+              <div className="literature-import-panel__hint">Review these rows before importing. You may correct OCR mistakes directly in this box.</div>
+            </>
+          ) : (
+            <div className="literature-import-panel__empty">Select a PDF or paste text, then choose “Extract prescription”.</div>
+          )}
+        </section>
+
+        <section className="literature-import-panel__step literature-import-panel__step--final">
+          <div className="literature-import-panel__stepHeader">
+            <span className="literature-import-panel__stepNumber">3</span>
+            <div>
+              <h4>Import into Co-opt</h4>
+              <p>A new configuration is created. Your current optical system is not replaced.</p>
+            </div>
+          </div>
+          <div className="literature-import-panel__importRow">
+            <span>{canImport ? `${surfaceCount} surface rows are ready.` : 'Complete extraction and review first.'}</span>
+            <button type="button" className="is-success" onClick={handleApplyDraftAsNewConfig} disabled={!canImport}>
+              Import as new configuration
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
