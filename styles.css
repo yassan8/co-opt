@@ -1903,17 +1903,6 @@ button:active {
     flex-wrap: wrap;
 }
 
-.literature-import-panel__actions--primary {
-    margin-top: -2px;
-}
-
-.literature-import-panel__actions--quiet button,
-.literature-import-panel__actions button.is-quiet {
-    color: #64748b;
-    background: transparent;
-    box-shadow: none;
-}
-
 .literature-import-panel__actions button,
 .literature-import-panel__fileButton {
     margin: 0;
@@ -1952,28 +1941,6 @@ button:active {
     opacity: 0.48;
     transform: none;
     box-shadow: none;
-}
-
-.literature-import-panel__actions button.is-primary,
-.literature-import-panel__fileButton--primary {
-    border-color: #2563eb;
-    background: #2563eb;
-    color: #ffffff;
-    box-shadow: 0 3px 8px rgba(37, 99, 235, 0.2);
-}
-
-.literature-import-panel__actions button.is-primary:hover,
-.literature-import-panel__fileButton--primary:hover {
-    border-color: #1d4ed8;
-    background: #1d4ed8;
-    color: #ffffff;
-}
-
-.literature-import-panel__actions button.is-success {
-    border-color: #15803d;
-    background: #15803d;
-    color: #ffffff;
-    box-shadow: 0 3px 8px rgba(21, 128, 61, 0.2);
 }
 
 .literature-import-panel__fileButton {
@@ -2021,8 +1988,8 @@ button:active {
 }
 
 .literature-import-panel__step--final {
-    border-color: #bbf7d0;
-    background: #f0fdf4;
+    border-color: #dbe3ee;
+    background: #ffffff;
 }
 
 .literature-import-panel__stepHeader {
@@ -2107,7 +2074,7 @@ button:active {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    color: #166534;
+    color: #475569;
     font-size: 12px;
     font-weight: 600;
 }
@@ -2116,10 +2083,10 @@ button:active {
     margin: 0;
     min-height: 36px;
     padding: 0 14px;
-    border: 1px solid #15803d;
+    border: 1px solid #d6deea;
     border-radius: 8px;
-    background: #15803d;
-    color: #ffffff;
+    background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+    color: #334155;
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;
