@@ -43,20 +43,6 @@ type PatentAsphereTerms = {
   coefficients: Record<number, number>;
 };
 
-const LITERATURE_IMPORT_EXAMPLE = [
-  'JP2024-123456 A Zoom lens',
-  'f = 24 50 72',
-  'Fno = 2.8 4.0 5.6',
-  'Half angle = 38.2 22.4 15.1',
-  'TL = 118.5',
-  'r1=34.12',
-  'd1=4.20 N1=1.5168 v1=64.17 N-BK7',
-  'r2=-28.45',
-  'd2=1.80',
-  'r3=-41.55',
-  'd3=3.10 N3=1.7283 v3=28.41 N-SF10',
-].join('\n');
-
 const PATENT_OCR_REPLACEMENTS: Array<[RegExp, string]> = [
   [/^\s*r[Il|l][sS](?=\s*[#%*¥]?\s*=)/gim, 'r1'],
   [/\br[Il|l]{2}(?=\s*[#%*¥]?\s*=)/g, 'r11'],
@@ -1589,11 +1575,10 @@ function formatNumberList(values: number[]): string {
   return values.map((value) => Number(value).toFixed(Math.abs(value) >= 100 ? 1 : 3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')).join(', ');
 }
 
-function buildLiteratureSummary(query: string, sourceUrl: string, result: LiteratureExtractResult): string {
+function buildLiteratureSummary(sourceUrl: string, result: LiteratureExtractResult): string {
   const lines: string[] = [];
   const asphereRowCount = countCandidateRowsWithPatentAsphereMarkers(result.candidateTableRows);
   lines.push('[Patent Literature Import Draft]');
-  lines.push(`Query: ${query.trim() || 'n/a'}`);
   lines.push(`Source URL: ${sourceUrl.trim() || (result.sourceUrls[0] || 'n/a')}`);
   lines.push(`Patent IDs: ${result.patentIds.length > 0 ? result.patentIds.join(', ') : 'n/a'}`);
   lines.push('');
@@ -1605,7 +1590,7 @@ function buildLiteratureSummary(query: string, sourceUrl: string, result: Litera
   lines.push(`Total length(s): ${formatNumberList(result.totalLengths)}`);
   lines.push(`Glass names: ${result.glassNames.length > 0 ? result.glassNames.join(', ') : 'n/a'}`);
   lines.push(`Embodiments: ${result.embodiments.length > 1 ? result.embodiments.filter((option) => option.key !== 'all').map((option) => option.label).join(', ') : 'n/a'}`);
-  lines.push(`Zoom positions: ${result.zoomPositions.length > 1 ? result.zoomPositions.filter((option) => option.key !== 'all').map((option) => option.label).join(', ') : 'n/a'}`);
+  lines.push(`Prescription variants: ${result.zoomPositions.length > 1 ? result.zoomPositions.filter((option) => option.key !== 'all').map((option) => option.label).join(', ') : 'n/a'}`);
   lines.push(`Asphere rows: ${asphereRowCount > 0 ? String(asphereRowCount) : 'not detected'}`);
   lines.push('');
   lines.push('[Candidate Numeric Rows]');
@@ -1619,7 +1604,7 @@ function buildLiteratureSummary(query: string, sourceUrl: string, result: Litera
   }
   lines.push('');
   lines.push('[Next Step]');
-  lines.push('Pick one embodiment and one zoom position, then map each numeric row to surface radius / thickness / glass / Abbe before building the optical system.');
+  lines.push('Choose a detected example or prescription variant only when alternatives exist, then verify each numeric row before building the optical system.');
   return lines.join('\n');
 }
 
@@ -2186,7 +2171,7 @@ async function buildDraftRowsFromSelection(result: LiteratureExtractResult, embo
   });
 
   if (filteredCandidates.length === 0) {
-    notes.push('No candidate numeric rows matched the current embodiment / zoom selection.');
+    notes.push('No candidate numeric rows matched the current prescription selection.');
   }
 
   return {
@@ -2342,7 +2327,6 @@ async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDat
 
 export function LiteratureImportPanel() {
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const [query, setQuery] = useState('zoom lens');
   const [sourceUrl, setSourceUrl] = useState('');
   const [rawText, setRawText] = useState('');
   const [summary, setSummary] = useState('');
@@ -2357,14 +2341,6 @@ export function LiteratureImportPanel() {
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
   const [isRunningOcr, setIsRunningOcr] = useState(false);
   const [sourcePdfBlob, setSourcePdfBlob] = useState<Blob | null>(null);
-
-  const openSearch = (target: 'google-patents' | 'jplatpat') => {
-    const nextQuery = query.trim() || 'zoom lens patent';
-    const url = target === 'google-patents'
-      ? `https://patents.google.com/?q=${encodeURIComponent(nextQuery)}`
-      : `https://www.google.com/search?q=${encodeURIComponent(`site:j-platpat.inpit.go.jp ${nextQuery}`)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-  };
 
   const rebuildDraft = async (nextResult: LiteratureExtractResult, embodimentKey: string, zoomKey: string, nextSummary: string) => {
     const draft = await buildDraftRowsFromSelection(nextResult, embodimentKey, zoomKey);
@@ -2391,7 +2367,7 @@ export function LiteratureImportPanel() {
       return null;
     }
 
-    const nextSummary = buildLiteratureSummary(query, sourceUrl, correctedResult);
+    const nextSummary = buildLiteratureSummary(sourceUrl, correctedResult);
     let nextEmbodiment = correctedResult.embodiments.find((option) => option.key === selectedEmbodiment)?.key
       || correctedResult.embodiments.find((option) => option.key !== 'all')?.key
       || 'all';
@@ -2407,7 +2383,7 @@ export function LiteratureImportPanel() {
         nextZoom = 'all';
         draft = {
           rows: allDraft.rows,
-          notes: ['Selected embodiment / zoom had no surface rows; using all corrected candidate rows.', ...allDraft.notes],
+          notes: ['The selected prescription had no surface rows; using all corrected candidate rows.', ...allDraft.notes],
         };
       }
     }
@@ -2489,7 +2465,7 @@ export function LiteratureImportPanel() {
       setStatus(`Loaded ${loaded.sourceKind.toUpperCase()} text (${loaded.text.length.toLocaleString()} chars). Run Extract Candidate Data next.`);
     } catch (error) {
       const message = String((error as any)?.message || error || 'Unknown error');
-      setStatus(`URL load failed: ${message}. Many patent sites block browser fetch by CORS. Use Open Search, then paste the PDF file or choose it with Select PDF.`);
+      setStatus(`URL load failed: ${message}. Many patent sites block browser fetch by CORS. Download the PDF and choose it with Select patent PDF instead.`);
     } finally {
       setIsLoadingUrl(false);
     }
@@ -2585,7 +2561,7 @@ export function LiteratureImportPanel() {
     }
 
     let nextResult = parseLiteratureText(nextText);
-    let nextSummary = buildLiteratureSummary(query, sourceUrl, nextResult);
+    let nextSummary = buildLiteratureSummary(sourceUrl, nextResult);
     const lacksRadiusContent = !textContainsPatentRadiusMarkers(nextText) && !candidateRowsContainPatentRadiusMarkers(nextResult.candidateTableRows);
     if ((nextResult.candidateTableRows.length === 0 || lacksRadiusContent) && sourcePdfBlob && !isRunningOcr) {
       setStatus(
@@ -2597,7 +2573,7 @@ export function LiteratureImportPanel() {
       if (ocrCombinedText && String(ocrCombinedText).trim()) {
         nextText = String(ocrCombinedText).trim();
         nextResult = parseLiteratureText(nextText);
-        nextSummary = buildLiteratureSummary(query, sourceUrl, nextResult);
+        nextSummary = buildLiteratureSummary(sourceUrl, nextResult);
       }
     }
     const nextEmbodiment = nextResult.embodiments.find((option) => option.key !== 'all')?.key || 'all';
@@ -2632,6 +2608,8 @@ export function LiteratureImportPanel() {
 
   const surfaceCount = countPatentDraftSurfaceRows(draftRows);
   const canImport = !!result && candidateRowsText.trim().length > 0 && surfaceCount > 0;
+  const embodimentChoices = result?.embodiments.filter((option) => option.key !== 'all') ?? [];
+  const prescriptionVariants = result?.zoomPositions.filter((option) => option.key !== 'all') ?? [];
 
   return (
     <div
@@ -2644,11 +2622,7 @@ export function LiteratureImportPanel() {
         <div className="literature-import-panel__header">
           <div>
             <h3>Patent Prescription Import</h3>
-            <p>Select a patent PDF, check the detected surface rows, and import them as a new editable optical configuration.</p>
-          </div>
-          <div className="literature-import-panel__actions literature-import-panel__actions--quiet">
-            <button type="button" onClick={() => openSearch('jplatpat')}>J-PlatPat</button>
-            <button type="button" onClick={() => openSearch('google-patents')}>Google Patents</button>
+            <p>Read an optical prescription from a patent PDF, verify the detected surface rows, and import an editable configuration.</p>
           </div>
         </div>
 
@@ -2663,33 +2637,26 @@ export function LiteratureImportPanel() {
             </div>
           </div>
 
-          <div className="literature-import-panel__actions literature-import-panel__actions--primary">
-            <label className="literature-import-panel__fileButton literature-import-panel__fileButton--primary">
+          <div className="literature-import-panel__actions">
+            <label className="literature-import-panel__fileButton">
               <input type="file" accept="application/pdf,.pdf" onChange={handlePdfInputChange} />
               <span>{isLoadingPdf ? 'Reading PDF…' : 'Select patent PDF'}</span>
             </label>
             <button type="button" onClick={() => void handleRunOcr('append')} disabled={isRunningOcr || !sourcePdfBlob}>
               {isRunningOcr ? 'Running OCR…' : 'Run OCR'}
             </button>
-            <button type="button" className="is-quiet" onClick={() => setRawText(LITERATURE_IMPORT_EXAMPLE)}>Use sample</button>
           </div>
 
           <details className="literature-import-panel__advanced">
-            <summary>Other input options</summary>
+            <summary>Use a document URL or pasted text</summary>
             <div className="literature-import-panel__advancedBody">
-              <div className="literature-import-panel__grid">
-                <label>
-                  <span>Search keywords</span>
-                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Patent number, lens type, applicant…" />
-                </label>
-                <label>
-                  <span>Document URL</span>
-                  <div className="literature-import-panel__inlineControl">
-                    <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://…/document.pdf" />
-                    <button type="button" onClick={handleLoadFromUrl} disabled={isLoadingUrl}>{isLoadingUrl ? 'Loading…' : 'Load'}</button>
-                  </div>
-                </label>
-              </div>
+              <label className="literature-import-panel__field">
+                <span>Document URL</span>
+                <div className="literature-import-panel__inlineControl">
+                  <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://…/document.pdf" />
+                  <button type="button" onClick={handleLoadFromUrl} disabled={isLoadingUrl}>{isLoadingUrl ? 'Loading…' : 'Load'}</button>
+                </div>
+              </label>
               <label className="literature-import-panel__field">
                 <span>Extracted or pasted text</span>
                 <textarea
@@ -2713,8 +2680,8 @@ export function LiteratureImportPanel() {
             </div>
           </div>
 
-          <div className="literature-import-panel__actions literature-import-panel__actions--primary">
-            <button type="button" className="is-primary" onClick={handleExtract} disabled={!rawText.trim() || isRunningOcr}>
+          <div className="literature-import-panel__actions">
+            <button type="button" onClick={handleExtract} disabled={!rawText.trim() || isRunningOcr}>
               Extract prescription
             </button>
           </div>
@@ -2728,20 +2695,26 @@ export function LiteratureImportPanel() {
                 <span>{result.focalLengths.length} focal lengths</span>
               </div>
 
-              <div className="literature-import-panel__grid literature-import-panel__grid--selectors">
-                <label>
-                  <span>Embodiment</span>
-                  <select value={selectedEmbodiment} onChange={(event) => { void handleEmbodimentChange(event.target.value); }}>
-                    {result.embodiments.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-                  </select>
-                </label>
-                <label>
-                  <span>Zoom position</span>
-                  <select value={selectedZoom} onChange={(event) => { void handleZoomChange(event.target.value); }}>
-                    {result.zoomPositions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-                  </select>
-                </label>
-              </div>
+              {(embodimentChoices.length > 1 || prescriptionVariants.length > 1) ? (
+                <div className="literature-import-panel__grid literature-import-panel__grid--selectors">
+                  {embodimentChoices.length > 1 ? (
+                    <label>
+                      <span>Example</span>
+                      <select value={selectedEmbodiment} onChange={(event) => { void handleEmbodimentChange(event.target.value); }}>
+                        {embodimentChoices.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  ) : null}
+                  {prescriptionVariants.length > 1 ? (
+                    <label>
+                      <span>Prescription variant</span>
+                      <select value={selectedZoom} onChange={(event) => { void handleZoomChange(event.target.value); }}>
+                        {prescriptionVariants.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
 
               <label className="literature-import-panel__field">
                 <span>Detected surface rows</span>
@@ -2770,7 +2743,7 @@ export function LiteratureImportPanel() {
           </div>
           <div className="literature-import-panel__importRow">
             <span>{canImport ? `${surfaceCount} surface rows are ready.` : 'Complete extraction and review first.'}</span>
-            <button type="button" className="is-success" onClick={handleApplyDraftAsNewConfig} disabled={!canImport}>
+            <button type="button" onClick={handleApplyDraftAsNewConfig} disabled={!canImport}>
               Import as new configuration
             </button>
           </div>
