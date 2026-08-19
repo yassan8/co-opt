@@ -1013,10 +1013,9 @@ export function drawToricSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, 
   const rxIsFlat = !isFinite(radiusX) || radiusX === 0;
   const ryIsFlat = !isFinite(radiusY) || radiusY === 0;
   
-  if (rxIsFlat && ryIsFlat) {
+  const isFlatToric = rxIsFlat && ryIsFlat;
+  if (isFlatToric) {
     console.warn('⚠️ drawToricSurfaceWithOrigin: Both radiusX and radiusY are flat (INF), rendering as plane');
-    // Could still render a flat disc here if needed, but skip for now
-    return;
   }
   
   if (!isFinite(semidia) || semidia <= 0) {
@@ -1026,68 +1025,75 @@ export function drawToricSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, 
   
   const positions = [];
   const indices = [];
-  
-  // Build 50x50 grid mesh (non-rotationally symmetric)
-  const vertexInAperture = []; // Track which vertices are within aperture
-  
-  for (let iy = 0; iy <= segments; iy++) {
-    const ty = iy / segments;
-    const y = -semidia + 2 * semidia * ty; // Range: [-semidia, +semidia]
-    
-    for (let ix = 0; ix <= segments; ix++) {
-      const tx = ix / segments;
-      const x = -semidia + 2 * semidia * tx; // Range: [-semidia, +semidia]
-      
-      // Check if point is within circular aperture
-      const r = Math.sqrt(x * x + y * y);
-      const isInside = r <= semidia;
-      vertexInAperture.push(isInside);
-      
-      let z = 0;
-      if (isInside) {
-        // Calculate toric surface sag
-        z = toricSurfaceZ(x, y, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
-        if (!isFinite(z)) {
-          z = 0; // Fallback for points outside valid domain
-        }
+  const apertureShape = __coopt_getApertureShape(params);
+  const apertureDims = __coopt_getApertureDims(params);
+  const shouldUseRect = apertureShape === 'Square' || apertureShape === 'Rectangular';
+  let rectWidth = apertureDims.width;
+  let rectHeight = apertureDims.height;
+  if (apertureShape === 'Square') {
+    const side = rectWidth ?? rectHeight ?? semidia * 2;
+    rectWidth = side;
+    rectHeight = side;
+  } else if (apertureShape === 'Rectangular') {
+    rectWidth = rectWidth ?? rectHeight ?? semidia * 2;
+    rectHeight = rectHeight ?? rectWidth ?? semidia * 2;
+  }
+  const useRectMesh = shouldUseRect
+    && Number.isFinite(Number(rectWidth)) && Number(rectWidth) > 0
+    && Number.isFinite(Number(rectHeight)) && Number(rectHeight) > 0;
+  const halfWidth = useRectMesh ? Number(rectWidth) / 2 : semidia;
+  const halfHeight = useRectMesh ? Number(rectHeight) / 2 : semidia;
+
+  const addVertex = (x, y) => {
+    let z = 0;
+    if (!isFlatToric) {
+      z = toricSurfaceZ(x, y, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
+      if (!isFinite(z)) z = 0;
+    }
+
+    let vertex = new THREE_CTX.Vector3(x, y, z);
+    if (rotationMatrix) {
+      const R = rotationMatrix;
+      const newX = R[0][0] * vertex.x + R[0][1] * vertex.y + R[0][2] * vertex.z;
+      const newY = R[1][0] * vertex.x + R[1][1] * vertex.y + R[1][2] * vertex.z;
+      const newZ = R[2][0] * vertex.x + R[2][1] * vertex.y + R[2][2] * vertex.z;
+      vertex = new THREE_CTX.Vector3(newX, newY, newZ);
+    }
+    vertex.x += origin.x || 0;
+    vertex.y += origin.y || 0;
+    vertex.z += origin.z || 0;
+    positions.push(vertex.x, vertex.y, vertex.z);
+  };
+
+  if (useRectMesh) {
+    // Rectangular aperture: Cartesian grid reaches the four exact corners.
+    for (let iy = 0; iy <= segments; iy++) {
+      const y = -halfHeight + 2 * halfHeight * (iy / segments);
+      for (let ix = 0; ix <= segments; ix++) {
+        const x = -halfWidth + 2 * halfWidth * (ix / segments);
+        addVertex(x, y);
       }
-      
-      // Create vertex in local coordinates
-      let vertex = new THREE_CTX.Vector3(x, y, z);
-      
-      // Apply rotation matrix if provided
-      if (rotationMatrix) {
-        const R = rotationMatrix;
-        const newX = R[0][0] * vertex.x + R[0][1] * vertex.y + R[0][2] * vertex.z;
-        const newY = R[1][0] * vertex.x + R[1][1] * vertex.y + R[1][2] * vertex.z;
-        const newZ = R[2][0] * vertex.x + R[2][1] * vertex.y + R[2][2] * vertex.z;
-        vertex = new THREE_CTX.Vector3(newX, newY, newZ);
+    }
+  } else {
+    // Circular aperture: radial grid reaches the exact circular edge. The old
+    // clipped Cartesian grid produced a stair-step rim that hid real cutouts.
+    for (let ia = 0; ia <= segments; ia++) {
+      const theta = (ia / segments) * Math.PI * 2;
+      for (let ir = 0; ir <= segments; ir++) {
+        const r = semidia * (ir / segments);
+        addVertex(r * Math.cos(theta), r * Math.sin(theta));
       }
-      
-      // Apply origin offset
-      vertex.x += origin.x || 0;
-      vertex.y += origin.y || 0;
-      vertex.z += origin.z || 0;
-      
-      positions.push(vertex.x, vertex.y, vertex.z);
     }
   }
-  
-  // Triangulate grid - only create triangles where all vertices are within aperture
-  for (let iy = 0; iy < segments; iy++) {
-    for (let ix = 0; ix < segments; ix++) {
-      const i0 = iy * (segments + 1) + ix;
+
+  for (let row = 0; row < segments; row++) {
+    for (let column = 0; column < segments; column++) {
+      const i0 = row * (segments + 1) + column;
       const i1 = i0 + 1;
       const i2 = i0 + (segments + 1);
       const i3 = i2 + 1;
-      
-      // Only create triangles if all vertices are within aperture
-      if (vertexInAperture[i0] && vertexInAperture[i1] && vertexInAperture[i2]) {
-        indices.push(i0, i2, i1);
-      }
-      if (vertexInAperture[i1] && vertexInAperture[i2] && vertexInAperture[i3]) {
-        indices.push(i1, i2, i3);
-      }
+      indices.push(i0, i2, i1);
+      indices.push(i1, i2, i3);
     }
   }
   
