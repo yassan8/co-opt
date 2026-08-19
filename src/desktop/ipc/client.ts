@@ -6264,7 +6264,10 @@ export async function runNativeDistortion(
     // Distortion in web mode should prefer the dedicated native-like WASM path first.
     // If coverage is insufficient, we fall back to render-style spot tracing below.
     const preferRenderHighAngleRays = false;
-    const allowDirectWasmDistortion = distortionMetric === "chief-ray" && inputFieldMode !== "imageheight";
+    // The direct chief-ray API handles ImageHeight by converting each requested
+    // image height to its paraxial field angle. Keep ImageHeight on this single,
+    // continuity-aware path instead of mixing render-ray fallback branches.
+    const allowDirectWasmDistortion = distortionMetric === "chief-ray";
 
     // Prefer direct distortion WASM export when available.
     let directWasmError: string | null = null;
