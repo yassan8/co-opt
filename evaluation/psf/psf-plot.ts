@@ -89,18 +89,117 @@ export class PSFPlotter {
     }
 
     /**
-     * PSF画像を左回り90°回転する（z[row][col] の行列）
-     * - 正方行列（NxN）を主対象。
-     * - 非正方のときは寸法が入れ替わるため、呼び出し側で x/y も合わせる。
+     * Convert a wavelength to linear-light sRGB using an analytic approximation
+     * of the CIE 1931 2-degree colour matching functions. Wavelength is in um.
+     * The returned values are deliberately not normalised per wavelength: the
+     * photopic response is part of a physically meaningful spectral composite.
      */
-    static rotateZ90CCW(z) {
-        if (!Array.isArray(z) || z.length === 0 || !Array.isArray(z[0])) return z;
-        const h = z.length;
-        const w = z[0].length;
-        const out = Array(w).fill().map(() => Array(h).fill(0));
-        for (let i = 0; i < w; i++) {
-            for (let j = 0; j < h; j++) {
-                out[i][j] = z[j]?.[w - 1 - i] ?? 0;
+    static wavelengthToLinearRGB(wavelengthUm) {
+        const nm = Number(wavelengthUm) * 1000;
+        if (!Number.isFinite(nm) || nm < 360 || nm > 830) return [0, 0, 0];
+        const gaussian = (center, leftWidth, rightWidth) => {
+            const width = nm < center ? leftWidth : rightWidth;
+            const t = (nm - center) / width;
+            return Math.exp(-0.5 * t * t);
+        };
+        const x = 1.056 * gaussian(599.8, 37.9, 31.0)
+            + 0.362 * gaussian(442.0, 16.0, 26.7)
+            - 0.065 * gaussian(501.1, 20.4, 26.2);
+        const y = 0.821 * gaussian(568.8, 46.9, 40.5)
+            + 0.286 * gaussian(530.9, 16.3, 31.1);
+        const z = 1.217 * gaussian(437.0, 11.8, 36.0)
+            + 0.681 * gaussian(459.0, 26.0, 13.8);
+
+        // CIE XYZ (D65) -> linear sRGB. Out-of-gamut spectral colours are clipped.
+        return [
+            Math.max(0, 3.2406 * x - 1.5372 * y - 0.4986 * z),
+            Math.max(0, -0.9689 * x + 1.8758 * y + 0.0415 * z),
+            Math.max(0, 0.0557 * x - 0.2040 * y + 1.0570 * z),
+        ];
+    }
+
+    /**
+     * Analysis-only false colour for non-visible radiation. Visible wavelengths
+     * retain their CIE colour; UV is violet/magenta and IR grades red to white.
+     */
+    static wavelengthToFalseColorLinearRGB(wavelengthUm) {
+        const nm = Number(wavelengthUm) * 1000;
+        if (!Number.isFinite(nm) || nm <= 0) return [0, 0, 0];
+        if (nm >= 380 && nm <= 780) return PSFPlotter.wavelengthToLinearRGB(wavelengthUm);
+        if (nm < 380) {
+            // Far UV -> magenta, near UV -> violet. This is deliberately symbolic.
+            const t = Math.max(0, Math.min(1, (nm - 100) / 280));
+            return [0.9 - 0.35 * t, 0, 0.75 + 0.25 * t];
+        }
+        // Near IR starts red and progressively desaturates toward white by 2500 nm.
+        const t = Math.max(0, Math.min(1, (nm - 780) / (2500 - 780)));
+        return [1, 0.85 * t, 0.7 * t];
+    }
+
+    /** Build planar linear-RGB data for a monochromatic scalar PSF. */
+    static colorizeMonochromaticPSF(psfData, wavelengthUm, colorMode = 'true') {
+        if (!Array.isArray(psfData) || psfData.length === 0 || !Array.isArray(psfData[0])) return null;
+        const rgb = colorMode === 'false'
+            ? PSFPlotter.wavelengthToFalseColorLinearRGB(wavelengthUm)
+            : PSFPlotter.wavelengthToLinearRGB(wavelengthUm);
+        const h = psfData.length;
+        const red = new Array(h);
+        const green = new Array(h);
+        const blue = new Array(h);
+        for (let y = 0; y < h; y++) {
+            const w = Array.isArray(psfData[y]) ? psfData[y].length : 0;
+            red[y] = new Float32Array(w);
+            green[y] = new Float32Array(w);
+            blue[y] = new Float32Array(w);
+            for (let x = 0; x < w; x++) {
+                const intensity = Math.max(0, Number(psfData[y][x]) || 0);
+                red[y][x] = intensity * rgb[0];
+                green[y][x] = intensity * rgb[1];
+                blue[y][x] = intensity * rgb[2];
+            }
+        }
+        return { red, green, blue };
+    }
+
+    /** Convert planar linear-RGB PSF data to Plotly's 8-bit RGB image matrix. */
+    static prepareTrueColorImageData(trueColorData, logScale = false) {
+        const red = trueColorData?.red;
+        const green = trueColorData?.green;
+        const blue = trueColorData?.blue;
+        if (!Array.isArray(red) || !Array.isArray(green) || !Array.isArray(blue) || red.length === 0) return null;
+        const h = Math.min(red.length, green.length, blue.length);
+        const w = Math.min(red[0]?.length || 0, green[0]?.length || 0, blue[0]?.length || 0);
+        if (!(h > 0 && w > 0)) return null;
+
+        let peak = 0;
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                peak = Math.max(peak, Number(red[y]?.[x]) || 0, Number(green[y]?.[x]) || 0, Number(blue[y]?.[x]) || 0);
+            }
+        }
+        if (!(peak > 0)) peak = 1;
+        const encodeSrgb = (linear) => {
+            const v = Math.max(0, Math.min(1, linear));
+            const encoded = v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+            return Math.max(0, Math.min(255, Math.round(encoded * 255)));
+        };
+        const out = Array.from({ length: h }, () => Array(w));
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                let r = Math.max(0, Number(red[y]?.[x]) || 0) / peak;
+                let g = Math.max(0, Number(green[y]?.[x]) || 0) / peak;
+                let b = Math.max(0, Number(blue[y]?.[x]) || 0) / peak;
+                if (logScale) {
+                    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                    if (luminance > 0) {
+                        const mapped = Math.log1p(1000 * luminance) / Math.log1p(1000);
+                        const scale = mapped / luminance;
+                        r *= scale;
+                        g *= scale;
+                        b *= scale;
+                    }
+                }
+                out[y][x] = [encodeSrgb(r), encodeSrgb(g), encodeSrgb(b)];
             }
         }
         return out;
@@ -134,36 +233,20 @@ export class PSFPlotter {
                 ? rawPixelSize
                 : ((Number.isFinite(fallbackPixelSize) && fallbackPixelSize > 0) ? fallbackPixelSize : 1.0);
 
-            // データの前処理（転置前にリセンタリングしない）
-            // 重心計算用に線形スケールデータを保持
+            // psfData is row-major: psfData[y][x]. Rust/WASM FFT output is
+            // fft-shifted so increasing row/column indices map to increasing
+            // Cartesian Y/X respectively. Plotly heatmap uses the same contract.
             const linearData = this.preprocessPSFData(psfData, false); // 常に線形スケール
             const plotData = this.preprocessPSFData(psfData, logScale); // 表示用
             
             console.log(`📊 [PSF-Plot] Input data size: ${size}×${size}, logScale=${logScale}`);
             
-            // まず線形データを転置して重心を計算
-            const linearTransposed = Array(size).fill().map(() => Array(size).fill(0));
-            for (let i = 0; i < size; i++) {
-                for (let j = 0; j < size; j++) {
-                    linearTransposed[j][i] = linearData[i][j];
-                }
-            }
-            
-            // 表示用データも転置
-            const transposed = Array(size).fill().map(() => Array(size).fill(0));
-            for (let i = 0; i < size; i++) {
-                for (let j = 0; j < size; j++) {
-                    transposed[j][i] = plotData[i][j];
-                }
-            }
-            console.log(`📊 [PSF-Plot] Data transposed`);
-            
             // 線形データで最大値を検出
             let maxVal = -Infinity;
             for (let i = 0; i < size; i++) {
                 for (let j = 0; j < size; j++) {
-                    if (linearTransposed[i][j] > maxVal) {
-                        maxVal = linearTransposed[i][j];
+                    if (linearData[i][j] > maxVal) {
+                        maxVal = linearData[i][j];
                     }
                 }
             }
@@ -175,7 +258,7 @@ export class PSFPlotter {
             
             for (let i = 0; i < size; i++) {
                 for (let j = 0; j < size; j++) {
-                    const val = linearTransposed[i][j];
+                    const val = linearData[i][j];
                     if (val >= threshold) {
                         sumI += i * val;
                         sumJ += j * val;
@@ -199,15 +282,15 @@ export class PSFPlotter {
             
             console.log(`📊 [PSF-Plot] Center=${center}, shift needed: (${shiftI}, ${shiftJ})`);
             
-            let finalData = transposed;
+            let finalData = plotData;
             if (recenterToCentroid && (shiftI !== 0 || shiftJ !== 0)) {
-                console.log(`📊 [PSF-Plot] Applying centroid-based shift to transposed data (zero-fill, non-cyclic)...`);
+                console.log(`📊 [PSF-Plot] Applying centroid-based shift (zero-fill, non-cyclic)...`);
                 let fillValue = 0;
                 if (logScale) {
                     let minVal = Infinity;
                     for (let i = 0; i < size; i++) {
                         for (let j = 0; j < size; j++) {
-                            const v = Number(transposed[i][j]);
+                            const v = Number(plotData[i][j]);
                             if (Number.isFinite(v) && v < minVal) minVal = v;
                         }
                     }
@@ -220,7 +303,7 @@ export class PSFPlotter {
                         const srcI = i - shiftI;
                         const srcJ = j - shiftJ;
                         if (srcI < 0 || srcI >= size || srcJ < 0 || srcJ >= size) continue;
-                        finalData[i][j] = transposed[srcI][srcJ];
+                        finalData[i][j] = plotData[srcI][srcJ];
                     }
                 }
                 const checkVal = finalData[center][center];
@@ -244,15 +327,42 @@ export class PSFPlotter {
             console.log(`📊 [PSF-Plot] Axes generated: x[${center}]=${x[center]?.toFixed(2)}μm, y[${center}]=${y[center]?.toFixed(2)}μm`);
             console.log(`📊 [PSF-Plot] PSF centroid will be at plot coordinates: (0.00, 0.00)μm`);
 
-            // PSF画像全体を左回り90°回転（表示の向き調整）
-            const rotatedZ = PSFPlotter.rotateZ90CCW(finalData);
-            const xForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? x : y;
-            const yForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? y : [...x].reverse();
+            const orientedZ = finalData;
+            const xForPlot = x;
+            const yForPlot = y;
 
-            // Plotlyのヒートマップデータ
-            // z[row][col] where row=Y-axis, col=X-axis
-            const trace = {
-                z: rotatedZ,
+            const resolvedTrueColorData = options.trueColor
+                ? (psfResult?.trueColorData || PSFPlotter.colorizeMonochromaticPSF(
+                    psfData,
+                    psfResult?.wavelength,
+                    options.spectralColorMode,
+                ))
+                : null;
+            const trueColorImage = resolvedTrueColorData
+                ? PSFPlotter.prepareTrueColorImageData(resolvedTrueColorData, logScale)
+                : null;
+            const orientedTrueColorImage = trueColorImage
+                ? trueColorImage
+                : null;
+            const trueColorYRange = orientedTrueColorImage && yForPlot.length > 0
+                ? [
+                    yForPlot[0] - pixelSize / 2,
+                    yForPlot[yForPlot.length - 1] + pixelSize / 2,
+                ]
+                : null;
+            // Plotly image traces preserve per-pixel RGB. The heatmap remains the
+            // fallback for single wavelength and conventional pseudo-colour mode.
+            const trace = orientedTrueColorImage ? {
+                z: orientedTrueColorImage,
+                type: 'image',
+                colormodel: 'rgb',
+                x0: xForPlot[0],
+                y0: yForPlot[0],
+                dx: xForPlot.length > 1 ? xForPlot[1] - xForPlot[0] : pixelSize,
+                dy: yForPlot.length > 1 ? yForPlot[1] - yForPlot[0] : pixelSize,
+                hovertemplate: 'x=%{x:.3f} µm<br>y=%{y:.3f} µm<extra>True color PSF</extra>',
+            } : {
+                z: orientedZ,
                 x: xForPlot,
                 y: yForPlot,
                 type: 'heatmap',
@@ -283,13 +393,17 @@ export class PSFPlotter {
                 },
                 yaxis: {
                     title: 'Position (μm)',
+                    // Plotly image traces default to screen/image coordinates
+                    // (positive Y downward). PSF uses Cartesian optical coordinates,
+                    // so force the same ascending Y axis as the heatmap trace.
+                    ...(trueColorYRange ? { autorange: false, range: trueColorYRange } : {}),
                     zeroline: false,
                     showgrid: false,
                     showspikes: false
                 },
                 width: 600,
                 height: 500,
-                margin: { l: 60, r: 110, t: 80, b: 60 }
+                margin: { l: 60, r: trueColorImage ? 40 : 110, t: 80, b: 60 }
             };
 
             const container = this.resolveContainer();
@@ -389,14 +503,13 @@ export class PSFPlotter {
                 y.push((i - center) * pixelSize);
             }
 
-            // PSF画像全体を左回り90°回転（表示の向き調整）
-            const rotatedZ = PSFPlotter.rotateZ90CCW(plotData);
-            const xForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? x : y;
-            const yForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? y : [...x].reverse();
+            const orientedZ = plotData;
+            const xForPlot = x;
+            const yForPlot = y;
 
             // Plotlyの3Dサーフェスデータ
             const trace = {
-                z: rotatedZ,
+                z: orientedZ,
                 x: xForPlot,
                 y: yForPlot,
                 type: 'surface',
@@ -694,6 +807,10 @@ export class PSFPlotter {
 
         const samplingSize = Number(psfResult?.samplingSize ?? psfResult?.gridSize);
         const wavelength = Number(psfResult?.wavelength);
+        const opdDisplayMode = String(psfResult?.metadata?.opdDisplayMode || '');
+        const opdModeLabel = opdDisplayMode === 'raw'
+            ? 'Preserve P/T (Raw)'
+            : (opdDisplayMode === 'pistonTiltDefocusRemoved' ? 'Remove P/T/D' : (opdDisplayMode ? 'Remove P/T' : 'n/a'));
 
         const statsHTML = `
             <div class="psf-statistics">
@@ -701,6 +818,7 @@ export class PSFPlotter {
                 <table class="stats-table">
                     <tr><td>Sampling Size:</td><td>${Number.isFinite(samplingSize) ? `${samplingSize}×${samplingSize}` : 'n/a'}</td></tr>
                     <tr><td>Wavelength:</td><td>${Number.isFinite(wavelength) ? `${wavelength.toFixed(3)} μm` : 'n/a'}</td></tr>
+                    <tr><td>Wavefront:</td><td>${opdModeLabel}</td></tr>
                     <tr><td>Strehl Ratio:</td><td>${fmtNum(metrics?.strehlRatio, 4)}</td></tr>
                     <tr><td>FWHM (X):</td><td>${fmtNum(metrics?.fwhm?.x, 3)} μm</td></tr>
                     <tr><td>FWHM (Y):</td><td>${fmtNum(metrics?.fwhm?.y, 3)} μm</td></tr>

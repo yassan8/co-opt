@@ -11083,7 +11083,18 @@ export function setupAnalysisWindows() {
             <option value="4096">4096x4096</option>
         </select>
         <label><input type="checkbox" id="popup-psf-log-scale-checkbox"> Log scale</label>
-        <label><input type="checkbox" id="popup-psf-remove-ptd-checkbox"> Remove P/T/D</label>
+        <label for="popup-psf-color-mode-select">Color:</label>
+        <select id="popup-psf-color-mode-select" title="True color renders wavelengths outside the modeled human visual response black. False color gives UV/IR symbolic analysis colours.">
+            <option value="pseudo">Pseudo color</option>
+            <option value="true" selected>True color</option>
+            <option value="false">False color (UV/IR)</option>
+        </select>
+        <label for="popup-psf-opd-mode-select">Wavefront:</label>
+        <select id="popup-psf-opd-mode-select" title="Raw preserves wavefront tilt and wavelength-dependent image displacement.">
+            <option value="raw">Preserve P/T (Raw)</option>
+            <option value="pistonTiltRemoved" selected>Remove P/T</option>
+            <option value="pistonTiltDefocusRemoved">Remove P/T/D</option>
+        </select>
         <button id="popup-show-psf-btn" type="button">Show PSF</button>
         <button id="popup-stop-psf-btn" type="button" disabled>Stop</button>
         <span id="popup-psf-pipeline-badge"></span>
@@ -11433,7 +11444,8 @@ export function setupAnalysisWindows() {
             const popupSampling = document.getElementById('popup-psf-sampling-select');
             const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
             const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
-            const popupRemovePtd = document.getElementById('popup-psf-remove-ptd-checkbox');
+            const popupColorMode = document.getElementById('popup-psf-color-mode-select');
+            const popupOpdMode = document.getElementById('popup-psf-opd-mode-select');
             if (popupWavelength && openerWavelength && openerWavelength.value) {
                 if (Array.from(popupWavelength.options || []).some(o => String(o.value) === String(openerWavelength.value))) {
                     popupWavelength.value = openerWavelength.value;
@@ -11449,7 +11461,11 @@ export function setupAnalysisWindows() {
                 if (popupLog && openerLog) popupLog.checked = !!openerLog.checked;
             } catch (_) {}
             try {
-                if (popupRemovePtd) popupRemovePtd.checked = !!(openerRemovePtd && openerRemovePtd.checked);
+                if (popupOpdMode && popupOpdMode.value !== 'raw') {
+                    popupOpdMode.value = (openerRemovePtd && openerRemovePtd.checked)
+                        ? 'pistonTiltDefocusRemoved'
+                        : 'pistonTiltRemoved';
+                }
             } catch (_) {}
         }
 
@@ -11557,7 +11573,8 @@ export function setupAnalysisWindows() {
             const popupSampling = document.getElementById('popup-psf-sampling-select');
             const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
             const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
-            const popupRemovePtd = document.getElementById('popup-psf-remove-ptd-checkbox');
+            const popupColorMode = document.getElementById('popup-psf-color-mode-select');
+            const popupOpdMode = document.getElementById('popup-psf-opd-mode-select');
 
             let objectIndex = popupObject ? parseInt(popupObject.value, 10) : 0;
             if (!Number.isFinite(objectIndex) && popupObject && Number.isFinite(popupObject.selectedIndex)) {
@@ -11568,9 +11585,14 @@ export function setupAnalysisWindows() {
             const wavelengthRaw = popupWavelength ? String(popupWavelength.value || '').trim() : 'all';
             const wavelengthMode = (wavelengthRaw.toLowerCase() === 'all') ? 'all' : 'single';
             const logScale = !!(popupLog && popupLog.checked);
-            const opdDisplayMode = (popupRemovePtd && popupRemovePtd.checked)
-                ? 'pistonTiltDefocusRemoved'
-                : 'pistonTiltRemoved';
+            const spectralColorMode = String(popupColorMode?.value || 'true');
+            const trueColor = spectralColorMode !== 'pseudo';
+            const falseColor = spectralColorMode === 'false';
+            const requestedOpdMode = String(popupOpdMode?.value || 'pistonTiltRemoved');
+            const opdDisplayMode = (
+                requestedOpdMode === 'raw' ||
+                requestedOpdMode === 'pistonTiltDefocusRemoved'
+            ) ? requestedOpdMode : 'pistonTiltRemoved';
             const PSF_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__PSF_DEBUG);
 
             const openerObject = getOpenerEl('psf-object-select');
@@ -12686,6 +12708,7 @@ export function setupAnalysisWindows() {
                             wavelength,
                             wavelengthMode: useAllWavelengthComposite ? 'all' : 'single',
                             wavelengths: wavelengthEntries.map((entry) => Number(entry.wavelength)),
+                            opdDisplayMode,
                             pixelSize: pixelSizeUm,
                         },
                         implementationUsed: 'NativeRust',
@@ -13005,6 +13028,7 @@ export function setupAnalysisWindows() {
 
                             const firstWeight = Number(wavelengthEntries[0]?.weight);
                             let accumulator = null;
+                            let trueColorAccumulator = null;
                             let sumWeights = 0;
                             let weightedStrehl = 0;
                             let strehlWeight = 0;
@@ -13013,27 +13037,65 @@ export function setupAnalysisWindows() {
                             let fwhmWeightX = 0;
                             let fwhmWeightY = 0;
 
-                            const mergeComposite = (grid, weight) => {
+                            const targetPixelSizeUm = Number(psfResult?.options?.pixelSize);
+                            const sampleBilinear = (grid, y, x) => {
+                                const h = Array.isArray(grid) ? grid.length : 0;
+                                const w = h > 0 && grid[0] ? grid[0].length : 0;
+                                if (!(h > 0 && w > 0) || x < 0 || y < 0 || x > w - 1 || y > h - 1) return 0;
+                                const x0 = Math.floor(x), y0 = Math.floor(y);
+                                const x1 = Math.min(w - 1, x0 + 1), y1 = Math.min(h - 1, y0 + 1);
+                                const tx = x - x0, ty = y - y0;
+                                const v00 = Number(grid[y0]?.[x0]) || 0;
+                                const v10 = Number(grid[y0]?.[x1]) || 0;
+                                const v01 = Number(grid[y1]?.[x0]) || 0;
+                                const v11 = Number(grid[y1]?.[x1]) || 0;
+                                return (v00 * (1 - tx) + v10 * tx) * (1 - ty)
+                                    + (v01 * (1 - tx) + v11 * tx) * ty;
+                            };
+
+                            const mergeComposite = (grid, weight, sourcePixelSizeUm, spectralWavelength) => {
                                 if (!Array.isArray(grid) || grid.length === 0 || !(weight > 0)) return;
                                 if (!Array.isArray(accumulator) || accumulator.length === 0) {
-                                    accumulator = grid.map((row) => Array.isArray(row) ? row.map((cell) => Number(cell) || 0) : []);
-                                    for (let iy = 0; iy < accumulator.length; iy++) {
-                                        for (let ix = 0; ix < accumulator[iy].length; ix++) {
-                                            accumulator[iy][ix] *= weight;
-                                        }
+                                    accumulator = grid.map((row) => Array.isArray(row) ? new Array(row.length).fill(0) : []);
+                                    if (trueColor) {
+                                        trueColorAccumulator = {
+                                            red: accumulator.map((row) => new Float32Array(row.length)),
+                                            green: accumulator.map((row) => new Float32Array(row.length)),
+                                            blue: accumulator.map((row) => new Float32Array(row.length)),
+                                        };
                                     }
-                                    sumWeights += weight;
-                                    return;
                                 }
 
                                 const h = Math.min(accumulator.length, grid.length);
-                                const wMin = h > 0 ? Math.min(accumulator[0]?.length || 0, grid[0]?.length || 0) : 0;
+                                const wMin = h > 0 ? accumulator[0]?.length || 0 : 0;
                                 if (!(h > 0 && wMin > 0)) return;
+                                const sourcePitch = Number(sourcePixelSizeUm);
+                                const targetPitch = Number(targetPixelSizeUm);
+                                const pitchRatio = (Number.isFinite(sourcePitch) && sourcePitch > 0 && Number.isFinite(targetPitch) && targetPitch > 0)
+                                    ? targetPitch / sourcePitch
+                                    : 1;
+                                const sourceCenterY = (grid.length - 1) / 2;
+                                const sourceCenterX = ((grid[0]?.length || 1) - 1) / 2;
+                                const targetCenterY = (accumulator.length - 1) / 2;
+                                const targetCenterX = ((accumulator[0]?.length || 1) - 1) / 2;
+                                const spectralColorFn = falseColor
+                                    ? window.opener?.PSFPlotter?.wavelengthToFalseColorLinearRGB
+                                    : window.opener?.PSFPlotter?.wavelengthToLinearRGB;
+                                const spectralRgb = (trueColor && typeof spectralColorFn === 'function')
+                                    ? spectralColorFn.call(window.opener.PSFPlotter, spectralWavelength)
+                                    : [0, 0, 0];
                                 for (let iy = 0; iy < h; iy++) {
                                     for (let ix = 0; ix < wMin; ix++) {
-                                        const v = Number(grid[iy]?.[ix]);
+                                        const sourceY = sourceCenterY + (iy - targetCenterY) * pitchRatio;
+                                        const sourceX = sourceCenterX + (ix - targetCenterX) * pitchRatio;
+                                        const v = sampleBilinear(grid, sourceY, sourceX);
                                         if (!Number.isFinite(v)) continue;
                                         accumulator[iy][ix] += v * weight;
+                                        if (trueColorAccumulator) {
+                                            trueColorAccumulator.red[iy][ix] += v * weight * (Number(spectralRgb[0]) || 0);
+                                            trueColorAccumulator.green[iy][ix] += v * weight * (Number(spectralRgb[1]) || 0);
+                                            trueColorAccumulator.blue[iy][ix] += v * weight * (Number(spectralRgb[2]) || 0);
+                                        }
                                     }
                                 }
                                 sumWeights += weight;
@@ -13058,7 +13120,12 @@ export function setupAnalysisWindows() {
                                 }
                             };
 
-                            mergeComposite(psfResult?.psfData, Number.isFinite(firstWeight) && firstWeight > 0 ? firstWeight : 0);
+                            mergeComposite(
+                                psfResult?.psfData,
+                                Number.isFinite(firstWeight) && firstWeight > 0 ? firstWeight : 0,
+                                targetPixelSizeUm,
+                                Number(wavelengthEntries[0]?.wavelength),
+                            );
                             mergeMetrics(psfResult?.metrics, Number.isFinite(firstWeight) && firstWeight > 0 ? firstWeight : 0);
 
                             const totalWlCount = wavelengthEntries.length;
@@ -13070,7 +13137,7 @@ export function setupAnalysisWindows() {
                                 const start = 80 + (wi / Math.max(1, totalWlCount)) * 15;
                                 const span = 15 / Math.max(1, totalWlCount);
                                 const resp = await computeNativePsfForWavelength(wl, start, span);
-                                mergeComposite(resp?.psfData, ww);
+                                mergeComposite(resp?.psfData, ww, resp?.pixelSizeUm, wl);
                                 mergeMetrics(resp?.metrics, ww);
                             }
 
@@ -13082,6 +13149,7 @@ export function setupAnalysisWindows() {
                                 }
 
                                 psfResult.psfData = accumulator;
+                                if (trueColorAccumulator) psfResult.trueColorData = trueColorAccumulator;
                                 psfResult.wavelength = Number.isFinite(primaryWl) && primaryWl > 0
                                     ? primaryWl
                                     : Number(wavelengthEntries[0]?.wavelength);
@@ -13090,6 +13158,7 @@ export function setupAnalysisWindows() {
                                     wavelengthMode: 'all',
                                     wavelengths: wavelengthEntries.map((entry) => Number(entry.wavelength)),
                                     weights: wavelengthEntries.map((entry) => Number(entry.weight)),
+                                    opdDisplayMode,
                                 };
                                 psfResult.metrics = {
                                     ...(psfResult.metrics || {}),
@@ -13112,6 +13181,8 @@ export function setupAnalysisWindows() {
                     })();
                     await plotter.plot2DPSF(psfResult, {
                         logScale,
+                        trueColor,
+                        spectralColorMode,
                         title: '',
                         recenterToCentroid: false,
                         showMetrics: false,
