@@ -44,6 +44,7 @@ pub fn run() {
             commands::analysis::run_system_data_report,
             commands::io::read_text_file,
             commands::io::write_text_file,
+            commands::io::export_free_cad_document,
             commands::ai::ai_chat_stub,
             commands::project::new_project_template,
             commands::project::load_default_project,

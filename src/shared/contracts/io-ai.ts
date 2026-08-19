@@ -17,6 +17,17 @@ export interface WriteTextFileResponse {
   bytesWritten: number;
 }
 
+export interface ExportFreeCadDocumentRequest {
+  outputPath: string;
+  stlText: string;
+}
+
+export interface ExportFreeCadDocumentResponse {
+  path: string;
+  solidCount: number;
+  freeCadCommand: string;
+}
+
 export interface AiChatRequest {
   provider: string;
   model: string;

@@ -65,6 +65,8 @@ import type {
   ReadTextFileResponse,
   WriteTextFileRequest,
   WriteTextFileResponse,
+  ExportFreeCadDocumentRequest,
+  ExportFreeCadDocumentResponse,
 } from "../../shared/contracts/io-ai";
 import type {
   DefaultProjectResponse,
@@ -7689,6 +7691,10 @@ export async function readTextFile(payload: ReadTextFileRequest): Promise<ReadTe
 
 export async function writeTextFile(payload: WriteTextFileRequest): Promise<WriteTextFileResponse> {
   return invokeCommand<WriteTextFileRequest, WriteTextFileResponse>("write_text_file", payload);
+}
+
+export async function exportFreeCadDocument(payload: ExportFreeCadDocumentRequest): Promise<ExportFreeCadDocumentResponse> {
+  return invokeCommand<ExportFreeCadDocumentRequest, ExportFreeCadDocumentResponse>("export_free_cad_document", payload);
 }
 
 export async function aiChat(payload: AiChatRequest): Promise<AiChatResponse> {

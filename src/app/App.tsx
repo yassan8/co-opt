@@ -27,7 +27,7 @@ import {
 } from "../../ui/toolbar-handlers";
 import { OPTIMIZER_POLICY_ID, runOptimizationMVP } from "../../optimization/optimizer-mvp.ts";
 import { listDesignVariablesFromBlocks } from "../../optimization/design-variables.ts";
-import { clearOptimizerStop, readDesktopSetting, runNativeChiefRayAngle, startPreventDisplaySleep, stopPreventDisplaySleep, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
+import { clearOptimizerStop, exportFreeCadDocument, readDesktopSetting, runNativeChiefRayAngle, startPreventDisplaySleep, stopPreventDisplaySleep, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 import { getOrCreateCooptWindowSyncSenderId, requestRefreshBlockInspector } from "../../core/window-facade.ts";
 import { calculateSurfaceOrigins, transformPointToGlobal, transformPointToLocal, traceRay, traceRayHitPoint } from "../../raytracing/core/ray-tracing.ts";
@@ -38,6 +38,8 @@ import { findStopSurface } from "../../optical/system-renderer.ts";
 import { detectConjugateType } from "../../utils/conjugate-detection.ts";
 import { listBundledExampleProjectFiles } from "../../utils/default-project-loader.ts";
 import { getLoadedFileName, getLoadedFileWarn } from "../../ui/loaded-file-storage";
+import { downloadStl, generateOpticalSceneStl } from "../../import-export/stl-export.ts";
+import { downloadFreeCadDocument, generateFreeCadDocument } from "../../import-export/freecad-export.ts";
 import {
   loadOptimizeRayGridSize,
   OPTIMIZE_RAY_GRID_SIZES,
@@ -4548,6 +4550,9 @@ export default function App() {
   const [renderWindowStatus, setRenderWindowStatus] = useState("Initializing...");
   const [renderViewAxis, setRenderViewAxis] = useState<'YZ' | 'XZ'>('YZ');
   const [renderViewMode, setRenderViewMode] = useState<'3D' | 'XZ' | 'YZ'>('3D');
+  const [renderExportFormat, setRenderExportFormat] = useState<'fcstd' | 'solid-stl' | 'surface-stl'>(() => (
+    isTauriRuntime() ? 'fcstd' : 'solid-stl'
+  ));
   const [renderCompareScope, setRenderCompareScope] = useState<RenderCompareScope>('active');
   const [renderCompareOffsetDirection, setRenderCompareOffsetDirection] = useState<RenderCompareOffsetDirection>('centered');
   const [renderCompareOffsetStepMm, setRenderCompareOffsetStepMm] = useState(20);
@@ -12110,6 +12115,81 @@ const collectLegacyCrossRays = async (
       }
     };
 
+    const handleExportCad = async () => {
+      try {
+        const w = window as any;
+        const scene = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
+        if (!scene) {
+          throw new Error('Render scene is not ready. Press Render first.');
+        }
+
+        const native = isTauriRuntime();
+        setRenderWindowStatus(renderExportFormat === 'fcstd' ? 'Generating FreeCAD document...' : 'Generating STL...');
+        const opticalSystemRows = typeof w.getOpticalSystemRows === 'function'
+          ? w.getOpticalSystemRows(w.tableOpticalSystem)
+          : [];
+        const solid = renderExportFormat !== 'surface-stl';
+        const result = generateOpticalSceneStl(scene, {
+          binary: renderExportFormat !== 'fcstd' && !native,
+          opticalSystemRows,
+          solid,
+        });
+        const loaded = String(getLoadedFileName() ?? '')
+          .replace(/\s*\(surfaces only\)\s*$/i, '')
+          .replace(/\.(json|zmx)$/i, '')
+          .trim();
+        const baseName = loaded || 'co-opt-render';
+
+        if (renderExportFormat === 'fcstd') {
+          if (!native) {
+            const exported = await generateFreeCadDocument(result.solidMeshes, baseName);
+            downloadFreeCadDocument(exported.data, `${baseName}.FCStd`);
+            setRenderWindowStatus(`FreeCAD exported: ${exported.solidCount} solids, ${exported.triangleCount.toLocaleString()} triangles`);
+            return;
+          }
+          const { save } = await import('@tauri-apps/plugin-dialog');
+          const target = await save({
+            defaultPath: `${baseName}.FCStd`,
+            filters: [{ name: 'FreeCAD document', extensions: ['FCStd'] }],
+          });
+          if (!target) {
+            setRenderWindowStatus(`Ready (${renderViewModeRef.current} view)`);
+            return;
+          }
+          const exported = await exportFreeCadDocument({
+            outputPath: target,
+            stlText: String(result.data),
+          });
+          setRenderWindowStatus(`FreeCAD exported: ${exported.solidCount || result.solidCount} solids`);
+          return;
+        }
+
+        const filename = `${baseName}.stl`;
+
+        if (native) {
+          const { saveTextFromNativeDialog } = await import('../desktop/adapters/file.ts');
+          const savedPath = await saveTextFromNativeDialog(String(result.data), {
+            filters: [{ name: 'STL mesh', extensions: ['stl'] }],
+          });
+          if (!savedPath) {
+            setRenderWindowStatus(`Ready (${renderViewModeRef.current} view)`);
+            return;
+          }
+        } else {
+          downloadStl(result.data, filename);
+        }
+
+        setRenderWindowStatus(solid
+          ? `STL exported: ${result.solidCount} solids, ${result.triangleCount.toLocaleString()} triangles`
+          : `STL exported: ${result.meshCount} surfaces, ${result.triangleCount.toLocaleString()} triangles`);
+      } catch (err) {
+        console.error('[RenderWindow] CAD export failed:', err);
+        const message = (err as Error)?.message || String(err);
+        setRenderWindowStatus('Export failed');
+        alert(`Export failed: ${message}`);
+      }
+    };
+
     const refreshRenderCrossSectionSurfaces = (axis: 'XZ' | 'YZ') => {
       const w = window as any;
       const scene = w.scene || (typeof w.getScene === 'function' ? w.getScene() : null);
@@ -12277,11 +12357,30 @@ const collectLegacyCrossRays = async (
     return (
       <>
         <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', margin: 0 }}>
-          <div style={{ padding: '8px 12px', borderBottom: '1px solid #ddd', fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <button type="button" onClick={handleRenderDraw}>Render</button>
-            <button type="button" onClick={handleViewXZ}>X-Z View</button>
-            <button type="button" onClick={handleViewYZ}>Y-Z View</button>
-            <label htmlFor="render-ray-count" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Raynum</label>
+          <div style={{ minHeight: 36, padding: '4px 8px', borderBottom: '1px solid #ddd', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'nowrap', position: 'relative', zIndex: 8 }}>
+            <button type="button" onClick={handleRenderDraw} style={{ height: 27 }}>3D</button>
+            <button type="button" onClick={handleViewXZ} style={{ height: 27 }}>X-Z</button>
+            <button type="button" onClick={handleViewYZ} style={{ height: 27 }}>Y-Z</button>
+            <span style={{ width: 1, height: 22, background: '#d1d5db', margin: '0 2px' }} />
+            <select
+              aria-label="Export format"
+              value={renderExportFormat}
+              onChange={(event) => setRenderExportFormat(event.target.value as 'fcstd' | 'solid-stl' | 'surface-stl')}
+              style={{ height: 27, width: 176, fontSize: 12 }}
+            >
+              <option value="fcstd">FreeCAD Document (.FCStd)</option>
+              <option value="solid-stl">Solid STL (.stl)</option>
+              <option value="surface-stl">Surface STL (.stl)</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => void handleExportCad()}
+              title="Export the rendered optical system in the selected CAD format"
+              style={{ height: 27 }}
+            >
+              Export
+            </button>
+            <label htmlFor="render-ray-count" style={{ marginLeft: 4, fontSize: 11, fontWeight: 500 }}>Rays</label>
             <input
               id="render-ray-count"
               type="number"
@@ -12293,97 +12392,38 @@ const collectLegacyCrossRays = async (
                 if (!Number.isFinite(parsed)) return;
                 setRenderRayCount(Math.max(6, parsed));
               }}
-              style={{ width: 76, height: 28 }}
+              style={{ width: 54, height: 27, fontSize: 12 }}
             />
-            <label htmlFor="render-compare-scope" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Configs</label>
-            <select
-              id="render-compare-scope"
-              value={renderCompareScope}
-              onChange={(e) => handleRenderCompareScopeChange(e.target.value === 'all' ? 'all' : 'active')}
-              style={{ height: 28 }}
-            >
-              <option value="active">Active only</option>
-              <option value="all">All configs</option>
-            </select>
-            <label htmlFor="render-compare-direction" style={{ fontSize: 12, fontWeight: 500, opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>
-              {renderViewMode === 'YZ' ? 'Offset Y' : 'Offset X'}
-            </label>
-            <select
-              id="render-compare-direction"
-              value={renderCompareOffsetDirection}
-              onChange={(e) => setRenderCompareOffsetDirection((e.target.value as RenderCompareOffsetDirection) || 'centered')}
-              disabled={renderCompareScope !== 'all'}
-              style={{ height: 28 }}
-            >
-              <option value="centered">Centered</option>
-              <option value="positive">{renderViewMode === 'YZ' ? 'Up' : 'Right'}</option>
-              <option value="negative">{renderViewMode === 'YZ' ? 'Down' : 'Left'}</option>
-            </select>
-            <label htmlFor="render-compare-step" style={{ fontSize: 12, fontWeight: 500, opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>Step (mm)</label>
-            <input
-              id="render-compare-step"
-              type="number"
-              min={0}
-              step={1}
-              value={renderCompareOffsetStepMm}
-              onChange={(e) => {
-                const parsed = Number.parseFloat(e.target.value);
-                setRenderCompareOffsetStepMm(Number.isFinite(parsed) && parsed >= 0 ? parsed : 0);
-              }}
-              disabled={renderCompareScope !== 'all'}
-              style={{ width: 86 }}
-            />
-            <label htmlFor="render-compare-align" style={{ fontSize: 12, fontWeight: 500, opacity: renderCompareScope === 'all' && renderViewMode !== '3D' ? 1 : 0.5 }}>Align</label>
-            <select
-              id="render-compare-align"
-              value={renderCompareAlignReference}
-              onChange={(e) => setRenderCompareAlignReference(e.target.value === 'image' ? 'image' : 'object')}
-              disabled={renderCompareScope !== 'all' || renderViewMode === '3D'}
-              style={{ height: 28 }}
-            >
-              <option value="object">Object</option>
-              <option value="image">Image</option>
-            </select>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 500 }}>
-              <input
-                type="checkbox"
-                checked={renderShowDesignIntentLabels}
-                onChange={(e) => handleToggleRenderLabels(e.target.checked)}
-              />
-              Labels
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 500 }}>
-              <input
-                type="checkbox"
-                checked={renderShowPrincipalPointLabels}
-                onChange={(e) => handleToggleRenderPrincipalPoints(e.target.checked)}
-              />
-              Paraxial
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 500 }}>
-              <input
-                type="checkbox"
-                checked={renderShowSurfaceNumberLabels}
-                onChange={(e) => handleToggleRenderSurfaceNumbers(e.target.checked)}
-              />
-              Surface No.
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 500 }} title="Reflect Design Intent numeric edits in an open Render window">
-              <input
-                type="checkbox"
-                checked={renderDesignIntentLiveSync}
-                onChange={(e) => handleToggleRenderDesignIntentLiveSync(e.target.checked)}
-              />
-              Intent Sync
-            </label>
-            {renderCompareScope === 'all' && (
-              <span style={{ fontWeight: 400, fontSize: 12, color: '#666' }}>
-                {renderViewMode === '3D'
-                  ? 'Compare offset applies to X-Z / Y-Z views.'
-                  : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm, align ${compareAlignLabel}`}
-              </span>
-            )}
-            <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: 12, color: '#666' }}>{renderWindowStatus}</span>
+            <details style={{ position: 'relative' }}>
+              <summary style={{ cursor: 'pointer', padding: '5px 7px', userSelect: 'none', whiteSpace: 'nowrap' }}>Options</summary>
+              <div style={{ position: 'absolute', top: 30, left: 0, zIndex: 30, minWidth: 480, padding: 10, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', boxShadow: '0 10px 24px rgba(0,0,0,0.16)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontWeight: 500 }}>
+                <label htmlFor="render-compare-scope">Configs</label>
+                <select id="render-compare-scope" value={renderCompareScope} onChange={(e) => handleRenderCompareScopeChange(e.target.value === 'all' ? 'all' : 'active')} style={{ height: 27 }}>
+                  <option value="active">Active only</option>
+                  <option value="all">All configs</option>
+                </select>
+                <label htmlFor="render-compare-direction" style={{ opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>{renderViewMode === 'YZ' ? 'Offset Y' : 'Offset X'}</label>
+                <select id="render-compare-direction" value={renderCompareOffsetDirection} onChange={(e) => setRenderCompareOffsetDirection((e.target.value as RenderCompareOffsetDirection) || 'centered')} disabled={renderCompareScope !== 'all'} style={{ height: 27 }}>
+                  <option value="centered">Centered</option>
+                  <option value="positive">{renderViewMode === 'YZ' ? 'Up' : 'Right'}</option>
+                  <option value="negative">{renderViewMode === 'YZ' ? 'Down' : 'Left'}</option>
+                </select>
+                <label htmlFor="render-compare-step" style={{ opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>Step mm</label>
+                <input id="render-compare-step" type="number" min={0} step={1} value={renderCompareOffsetStepMm} onChange={(e) => { const parsed = Number.parseFloat(e.target.value); setRenderCompareOffsetStepMm(Number.isFinite(parsed) && parsed >= 0 ? parsed : 0); }} disabled={renderCompareScope !== 'all'} style={{ width: 68, height: 27 }} />
+                <label htmlFor="render-compare-align" style={{ opacity: renderCompareScope === 'all' && renderViewMode !== '3D' ? 1 : 0.5 }}>Align</label>
+                <select id="render-compare-align" value={renderCompareAlignReference} onChange={(e) => setRenderCompareAlignReference(e.target.value === 'image' ? 'image' : 'object')} disabled={renderCompareScope !== 'all' || renderViewMode === '3D'} style={{ height: 27 }}>
+                  <option value="object">Object</option>
+                  <option value="image">Image</option>
+                </select>
+                <span style={{ flexBasis: '100%', height: 1, background: '#e5e7eb' }} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }}><input type="checkbox" checked={renderShowDesignIntentLabels} onChange={(e) => handleToggleRenderLabels(e.target.checked)} />Labels</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }}><input type="checkbox" checked={renderShowPrincipalPointLabels} onChange={(e) => handleToggleRenderPrincipalPoints(e.target.checked)} />Paraxial</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }}><input type="checkbox" checked={renderShowSurfaceNumberLabels} onChange={(e) => handleToggleRenderSurfaceNumbers(e.target.checked)} />Surface No.</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }} title="Reflect Design Intent numeric edits in an open Render window"><input type="checkbox" checked={renderDesignIntentLiveSync} onChange={(e) => handleToggleRenderDesignIntentLiveSync(e.target.checked)} />Intent Sync</label>
+                {renderCompareScope === 'all' && <span style={{ flexBasis: '100%', color: '#666' }}>{renderViewMode === '3D' ? 'Compare offset applies to X-Z / Y-Z views.' : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm, align ${compareAlignLabel}`}</span>}
+              </div>
+            </details>
+            <span title={renderWindowStatus} style={{ marginLeft: 'auto', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 400, fontSize: 11, color: '#666' }}>{renderWindowStatus}</span>
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
             <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#fff', overflow: 'hidden' }}>
