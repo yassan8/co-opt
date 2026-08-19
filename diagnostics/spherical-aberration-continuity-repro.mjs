@@ -64,6 +64,8 @@ for (const configuration of configurations) {
         Math.abs(largest.dx) < 0.15,
         `${configuration.name} ${axis} ${series.wavelength}: discontinuous jump ${largest.dx} mm`,
       );
+      assert.equal(points.length, 51, `${configuration.name} ${axis} ${series.wavelength}: incomplete pupil sampling`);
+      assert.ok(Math.abs(points.at(-1).pupilCoordinate - 1) < 1e-12, `${configuration.name} ${axis}: pupil does not reach 1`);
     }
   }
 }

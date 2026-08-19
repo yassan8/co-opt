@@ -1109,6 +1109,8 @@ export function calculateLongitudinalAberration(
                 stopSolveNull: 0,
                 stopSolveTraceFail: 0,
                 stopSolveTraceOk: 0,
+                reachableStopMax: null,
+                apertureLimited: false,
                 firstNull: null,
                 firstTraceFail: null
             };
@@ -1351,11 +1353,7 @@ export function calculateLongitudinalAberration(
                     if (diag) {
                         diag.mode = 'infinite-stop-solve';
                     }
-                    const aimed = [];
-                    for (let idx = 0; idx < normalizedSamples.length; idx++) {
-                        const pNorm = normalizedSamples[idx];
-                        const targetStop = pNorm * stopSolveMax;
-                        if (diag) diag.stopSolveAttempt++;
+                    const traceAtTargetStop = (targetStop, pNorm = null, countDiagnostics = false) => {
                         const stopTarget = {
                             x: stopPlaneCenter3d.x + axisVec.x * targetStop,
                             y: stopPlaneCenter3d.y + axisVec.y * targetStop,
@@ -1366,17 +1364,26 @@ export function calculateLongitudinalAberration(
                             y: Number(chiefOrigin.y) + axisVec.y * targetStop,
                             z: baseZ
                         };
-                        const refined = solveRayOriginToStopPointFast(guess, direction, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength, traceOptions);
-                        if (!refined) {
-                            if (diag) {
+                        const refined = solveRayOriginToStopPointFast(
+                            guess,
+                            direction,
+                            stopTarget,
+                            stopSurfaceIndex,
+                            opticalSystemRows,
+                            wavelength,
+                            traceOptions
+                        );
+                        if (countDiagnostics && diag) {
+                            diag.stopSolveAttempt++;
+                            if (!refined) {
                                 diag.stopSolveNull++;
                                 if (!diag.firstNull) diag.firstNull = { pNorm, targetStop, guess, stopTarget };
+                            } else {
+                                diag.stopSolveSolved++;
                             }
-                        } else {
-                            if (diag) diag.stopSolveSolved++;
                         }
                         const posSolved = refined || guess;
-                        const trSolved = traceRayWrapped(
+                        const traced = traceRayWrapped(
                             opticalSystemRows,
                             { pos: posSolved, dir: direction, wavelength },
                             targetSurfaceIndex,
@@ -1389,6 +1396,33 @@ export function calculateLongitudinalAberration(
                             },
                             traceOptions
                         );
+                        return { traced, posSolved, stopTarget };
+                    };
+
+                    // The mechanical stop can be larger than the entrance pupil
+                    // admitted by preceding surfaces. Find the largest stop height
+                    // that still reaches the requested image surface, then define
+                    // that physical boundary as normalized pupil coordinate 1.
+                    let reachableStopMax = stopSolveMax;
+                    const mechanicalBoundary = traceAtTargetStop(stopSolveMax).traced;
+                    if (!mechanicalBoundary.success) {
+                        let low = 0;
+                        let high = stopSolveMax;
+                        for (let iteration = 0; iteration < 28; iteration++) {
+                            const mid = (low + high) / 2;
+                            if (traceAtTargetStop(mid).traced.success) low = mid;
+                            else high = mid;
+                        }
+                        reachableStopMax = low * (1 - 1e-6);
+                        if (diag) diag.apertureLimited = true;
+                    }
+                    if (diag) diag.reachableStopMax = reachableStopMax;
+
+                    const aimed = [];
+                    for (let idx = 0; idx < normalizedSamples.length; idx++) {
+                        const pNorm = normalizedSamples[idx];
+                        const targetStop = pNorm * reachableStopMax;
+                        const { traced: trSolved, posSolved, stopTarget } = traceAtTargetStop(targetStop, pNorm, true);
                         if (trSolved.success) {
                             if (diag) diag.stopSolveTraceOk++;
                             aimed.push(trSolved);
