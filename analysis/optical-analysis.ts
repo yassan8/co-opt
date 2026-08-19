@@ -3428,10 +3428,10 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
         let smoothingAdjacentPoints = Number.isFinite(optSmoothingAdjacentPoints)
             ? Math.round(optSmoothingAdjacentPoints)
             : Number(smoothingAdjacentPointsInput?.value);
-        if (!Number.isFinite(pointCount) || pointCount < 2) pointCount = 11;
+        if (!Number.isFinite(pointCount) || pointCount < 2) pointCount = 41;
         if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = 101;
         if (!Number.isFinite(ringCount) || ringCount < 1) ringCount = 30;
-        if (!Number.isFinite(smoothingAdjacentPoints) || smoothingAdjacentPoints < 0) smoothingAdjacentPoints = 1;
+        if (!Number.isFinite(smoothingAdjacentPoints) || smoothingAdjacentPoints < 0) smoothingAdjacentPoints = 0;
         if (smoothingAdjacentPoints > 50) smoothingAdjacentPoints = 50;
 
         const fieldValues: number[] = [];

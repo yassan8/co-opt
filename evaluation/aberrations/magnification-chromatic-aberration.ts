@@ -505,33 +505,67 @@ export async function calculateMagnificationChromaticAberrationData(
         await preloadRustRayTracingWasm();
         const {
             generateRayStartPointsForObject,
+            convertImageHeightToEffectiveObject,
+            traceChiefRayForAngleDetails,
         } = await import('../../optical/ray-renderer.ts');
-        const { traceRayEvalBatchSummary } = await import('../../raytracing/core/ray-tracing.ts');
+        const { traceRayEvalBatchSummary, calculateSurfaceOrigins } = await import('../../raytracing/core/ray-tracing.ts');
         const { calculateParaxialData } = await import('../../raytracing/core/ray-paraxial.ts');
+        const { findStopSurface } = await import('../../optical/system-renderer.ts');
 
-        // For LCA in ImageHeight mode, avoid per-point nonlinear back-solve.
-        // Convert target image heights to a stable paraxial angle sweep once.
+        const imageHeightSolveSurfaceOrigins = imageHeightMode ? calculateSurfaceOrigins(opticalSystemRows) : null;
+        const imageHeightSolveStopInfo = imageHeightMode
+            ? findStopSurface(opticalSystemRows, imageHeightSolveSurfaceOrigins)
+            : null;
+        const imageHeightSolveStopCenter = (() => {
+            const src = imageHeightSolveStopInfo?.origin?.origin
+                ?? imageHeightSolveStopInfo?.origin
+                ?? imageHeightSolveStopInfo?.center
+                ?? imageHeightSolveStopInfo?.position;
+            const x = Number(src?.x);
+            const y = Number(src?.y);
+            const z = Number(src?.z);
+            return [x, y, z].every(Number.isFinite) ? { x, y, z } : null;
+        })();
+        const imageHeightSolveScopeKey = imageHeightMode
+            ? `${JSON.stringify(opticalSystemRows)}||${referenceWavelength}||${imageHeightConjugateType || 'infinite'}||rust-only`
+            : null;
+
+        // ImageHeight is the requested reference-wavelength chief-ray image height,
+        // not merely EFL*tan(field angle). Solve that inverse mapping exactly once at
+        // the reference wavelength, then keep the solved object field fixed for every
+        // wavelength. The previous paraxial-only conversion switched chief-ray origin
+        // fallbacks in Wide near 11 mm and produced artificial straight/kinked LCA curves.
         const tracedObjectRows = (() => {
             if (!imageHeightMode) return objectRowsNativeLike;
             const paraxial = calculateParaxialData(opticalSystemRows, referenceWavelength);
-            const focalLength = Number(paraxial?.focalLength);
-            const effectiveFocalLength = (Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12)
-                ? Math.abs(focalLength)
-                : 1;
             return sortedFieldValues.map((sample, index) => {
                 const yMm = Number(sample);
-                const thetaDeg = Math.atan2(Number.isFinite(yMm) ? yMm : 0, effectiveFocalLength) * (180 / Math.PI);
-                return {
+                const rawImageHeightObject = {
                     id: `Field-${index}`,
                     name: `Field-${index}`,
-                    position: 'Angle',
+                    position: 'ImageHeight',
                     xHeightAngle: 0,
-                    yHeightAngle: thetaDeg,
+                    yHeightAngle: Number.isFinite(yMm) ? yMm : 0,
                     x: 0,
-                    y: thetaDeg,
+                    y: Number.isFinite(yMm) ? yMm : 0,
                     __cooptImageHeightTarget: { x: 0, y: Number.isFinite(yMm) ? yMm : 0 },
-                    __cooptLcaImageHeightParaxialAngleDeg: thetaDeg,
                 };
+                return convertImageHeightToEffectiveObject(
+                    rawImageHeightObject,
+                    opticalSystemRows,
+                    referenceWavelength,
+                    imageHeightConjugateType === 'finite' ? 'finite' : 'infinite',
+                    {
+                        skipTsValidation: true,
+                        validationTraceBackend: 'rust',
+                        precomputedParaxial: paraxial,
+                        precomputedSurfaceOrigins: imageHeightSolveSurfaceOrigins,
+                        precomputedImageSurfaceIndex: imageSurfaceIndex,
+                        precomputedStopInfo: imageHeightSolveStopInfo,
+                        precomputedStopCenter3d: imageHeightSolveStopCenter,
+                        precomputedSolveScopeKey: imageHeightSolveScopeKey,
+                    },
+                );
             });
         })();
 
@@ -556,6 +590,30 @@ export async function calculateMagnificationChromaticAberrationData(
         } as any;
 
         const traceChiefImageHeightMm = (obj: any, wl: number): number | null => {
+            const solvedFieldX = Number(obj?.__cooptImageHeightSolve?.solved?.x);
+            const solvedFieldY = Number(obj?.__cooptImageHeightSolve?.solved?.y);
+            if (imageHeightMode
+                && imageHeightConjugateType !== 'finite'
+                && Number.isFinite(solvedFieldX)
+                && Number.isFinite(solvedFieldY)) {
+                const details = traceChiefRayForAngleDetails(
+                    opticalSystemRows,
+                    solvedFieldX,
+                    solvedFieldY,
+                    imageSurfaceIndex,
+                    imageHeightSolveSurfaceOrigins?.[imageSurfaceIndex] || null,
+                    wl,
+                    {
+                        surfaceOrigins: imageHeightSolveSurfaceOrigins,
+                        stopInfo: imageHeightSolveStopInfo,
+                        stopCenter3d: imageHeightSolveStopCenter,
+                    },
+                    'rust',
+                );
+                const localHitY = Number(details?.localHit?.y);
+                if (Number.isFinite(localHitY)) return localHitY * mirrorSign;
+            }
+
             const starts = generateRayStartPointsForObject(
                 obj,
                 opticalSystemRows,

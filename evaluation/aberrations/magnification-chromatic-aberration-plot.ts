@@ -47,8 +47,9 @@ function smoothByAdjacentWindow(x: Array<number | null>, adjacentCount: number):
 
     const out = x.slice();
     for (let i = 1; i < n - 1; i++) {
-        let sum = 0;
-        let count = 0;
+        const center = x[i];
+        let sum = (typeof center === 'number' && Number.isFinite(center)) ? center : 0;
+        let count = (typeof center === 'number' && Number.isFinite(center)) ? 1 : 0;
         let leftCount = 0;
         let rightCount = 0;
 
@@ -74,7 +75,7 @@ function smoothByAdjacentWindow(x: Array<number | null>, adjacentCount: number):
             }
         }
 
-        if (leftCount > 0 && rightCount > 0 && count > 0) {
+        if (leftCount > 0 && rightCount > 0 && count > 1) {
             out[i] = sum / count;
         }
     }

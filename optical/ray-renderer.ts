@@ -1471,7 +1471,7 @@ function isParaxialOnlyImageHeightModel(opticalSystemRows) {
     return sawParaxialSurface;
 }
 
-function traceChiefRayForAngleDetails(opticalSystemRows, angleXDeg, angleYDeg, imageSurfaceIndex, imageSurfaceInfo, wavelengthUm, precomputedContext: any = null, traceBackend: 'ts' | 'rust' = 'rust') {
+export function traceChiefRayForAngleDetails(opticalSystemRows, angleXDeg, angleYDeg, imageSurfaceIndex, imageSurfaceInfo, wavelengthUm, precomputedContext: any = null, traceBackend: 'ts' | 'rust' = 'rust') {
     if (traceBackend === 'rust') {
         const exact = traceImageHeightInfiniteChiefRayExactWithRust(
             opticalSystemRows,
