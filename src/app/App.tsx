@@ -12753,15 +12753,35 @@ const collectLegacyCrossRays = async (
                                 <tr key={`${target.key}-${target.frontSurfaceIndex0}`}>
                                   <td style={{ padding: '5px 2px', borderBottom: '1px solid #eee' }}>{target.label}</td>
                                   <td style={{ padding: '5px 2px', borderBottom: '1px solid #eee' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                      <span
+                                        aria-hidden="true"
+                                        title={`Current color: ${selectedHex}`}
+                                        style={{
+                                          width: 16,
+                                          height: 16,
+                                          flex: '0 0 16px',
+                                          borderRadius: 3,
+                                          backgroundColor: selectedHex,
+                                          border: '1px solid rgba(15, 23, 42, 0.35)',
+                                          boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.35)',
+                                        }}
+                                      />
                                       <select
                                         value={resolveOverrideColorHex(loadSurfaceColorOverridesSafe(), target.keys) ?? ''}
                                         onChange={(e) => handleSetLensColor(target, e.target.value || null)}
-                                        style={{ flex: 1, minWidth: 0, fontSize: 11, backgroundColor: selectedHex }}
+                                        aria-label={`${target.label} color`}
+                                        style={{ flex: 1, minWidth: 0, fontSize: 11, backgroundColor: '#FFFFFF', color: '#111827' }}
                                       >
-                                        <option value="">Default</option>
+                                        <option value="" style={{ backgroundColor: '#00CCFF', color: '#111827' }}>Default</option>
                                         {RENDER_SURFACE_COLOR_PALETTE.map((entry) => (
-                                          <option key={entry.hex} value={entry.hex}>{entry.name}</option>
+                                          <option
+                                            key={entry.hex}
+                                            value={entry.hex}
+                                            style={{ backgroundColor: entry.hex, color: '#111827' }}
+                                          >
+                                            {entry.name}
+                                          </option>
                                         ))}
                                       </select>
                                     </div>
