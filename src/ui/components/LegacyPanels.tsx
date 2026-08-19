@@ -3241,7 +3241,7 @@ export default function LegacyPanels() {
               <input type="number" id="mca-xrange-input" defaultValue={0.04} min={0} step={0.01} />
               <span className="note">(mm)</span>
               <label htmlFor="mca-point-count-input" style={{ marginLeft: 10 }}>Points:</label>
-              <input type="number" id="mca-point-count-input" defaultValue={21} min={2} max={201} step={1} />
+              <input type="number" id="mca-point-count-input" defaultValue={41} min={2} max={201} step={1} />
               <label htmlFor="mca-ray-count-input" style={{ marginLeft: 10 }}>Rays:</label>
               <input type="number" id="mca-ray-count-input" defaultValue={101} min={1} max={5001} step={1} />
               <label htmlFor="mca-ring-count-input" style={{ marginLeft: 10 }}>Rings:</label>
@@ -3252,7 +3252,7 @@ export default function LegacyPanels() {
                 <option value="beam-centroid">Beam centroid</option>
               </select>
               <label htmlFor="mca-smoothing-adjacent-points-input" style={{ marginLeft: 10 }}>Smooth N:</label>
-              <input type="number" id="mca-smoothing-adjacent-points-input" defaultValue={1} min={0} max={50} step={1} />
+              <input type="number" id="mca-smoothing-adjacent-points-input" defaultValue={0} min={0} max={50} step={1} />
               <button id="show-magnification-chromatic-aberration-btn">Show lateral chromatic aberration</button>
             </div>
             <div id="mca-progress-wrapper" style={{ display: "none", margin: "8px 0" }}>

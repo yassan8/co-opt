@@ -9588,7 +9588,7 @@ export function setupAnalysisWindows() {
         <input type="number" id="popup-mca-xrange" value="0.04" min="0" step="0.01" />
         <span style="font-size:12px;color:#666;">(mm)</span>
         <label for="popup-mca-points" style="margin-left:6px;">Points:</label>
-        <input type="number" id="popup-mca-points" value="21" min="2" max="201" step="1" />
+        <input type="number" id="popup-mca-points" value="41" min="2" max="201" step="1" />
         <label for="popup-mca-rays" style="margin-left:6px;">Rays:</label>
         <input type="number" id="popup-mca-rays" value="101" min="1" max="5001" step="1" />
         <label for="popup-mca-rings" style="margin-left:6px;">Rings:</label>
@@ -9599,7 +9599,7 @@ export function setupAnalysisWindows() {
             <option value="beam-centroid">Beam centroid</option>
         </select>
         <label for="popup-mca-smooth-n" style="margin-left:6px;">Smooth N:</label>
-        <input type="number" id="popup-mca-smooth-n" value="1" min="0" max="50" step="1" />
+        <input type="number" id="popup-mca-smooth-n" value="0" min="0" max="50" step="1" />
         <button id="popup-show-mca-btn" type="button">Show lateral chromatic aberration</button>
     </div>
     <div id="popup-mca-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -9671,11 +9671,11 @@ export function setupAnalysisWindows() {
             const chiefRayEl = document.getElementById('popup-mca-chief-ray');
             const smoothNEl = document.getElementById('popup-mca-smooth-n');
             const xRange = xRangeEl ? parseFloat(xRangeEl.value) : 0.04;
-            const pointCount = pointEl ? parseInt(pointEl.value, 10) : 11;
+            const pointCount = pointEl ? parseInt(pointEl.value, 10) : 41;
             const rayCount = rayEl ? parseInt(rayEl.value, 10) : 101;
             const ringCount = ringEl ? parseInt(ringEl.value, 10) : 30;
             const chiefRayDefinition = (chiefRayEl && chiefRayEl.value) ? chiefRayEl.value : 'stop-center';
-            const smoothingAdjacentPoints = smoothNEl ? parseInt(smoothNEl.value, 10) : 1;
+            const smoothingAdjacentPoints = smoothNEl ? parseInt(smoothNEl.value, 10) : 0;
 
             try {
                 if (!window.opener || typeof window.opener.showMagnificationChromaticAberrationDiagram !== 'function') {
