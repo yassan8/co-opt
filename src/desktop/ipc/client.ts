@@ -7518,7 +7518,139 @@ export async function runNativeGridDistortion(
 
     const realX = new Array(idealX.length).fill(null) as Array<number | null>;
     const realY = new Array(idealY.length).fill(null) as Array<number | null>;
-    let directChiefRayCount = 0;
+    let radialWasmChiefRayCount = 0;
+    let exactWasmChiefRayCount = 0;
+    let spotFallbackChiefRayCount = 0;
+    let radialWasmChiefRayError = "";
+    let exactWasmChiefRayError = "";
+
+    // Grid distortion needs one deterministic stop-centred chief ray per field.
+    // The spot-diagram generator is designed for pupil sampling and can reject
+    // otherwise valid outer-field chief rays when its sampled bundle is vignetted.
+    // Use the dedicated radial distortion and exact WASM chief-ray tracers first,
+    // reserving spot tracing for uncommon points those solvers cannot reach.
+    try {
+      const { preloadRustRayTracingWasm } = await import(
+        "../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts"
+      );
+      const rust = await preloadRustRayTracingWasm();
+      const traceRadialDistortion = (rust as any)?.run_native_distortion_wasm_json;
+
+      // A conventional grid-distortion plot is radial for a centred optical
+      // system. Reuse the same robust distortion solver as the 1-D plot, then
+      // project each traced radial image height back onto its grid azimuth.
+      if (typeof traceRadialDistortion === "function") {
+        try {
+          const radialSamples = idealX.map((x, index) => {
+            const radius = Math.hypot(x, idealY[index]);
+            if (gridFieldMode === "angle") {
+              return (Math.atan(radius / focalLengthForGrid) * 180) / Math.PI;
+            }
+            if (gridFieldMode === "height" && finiteSystem && imageScaleForHeight > 1e-9) {
+              return radius / imageScaleForHeight;
+            }
+            return radius;
+          });
+          // Trace from the axis outwards. The exact chief-ray solver deliberately
+          // reuses the previous field as its next seed, so arbitrary row-major
+          // grid order (corner -> centre -> corner) can lose wide-angle fields.
+          const maxRadialSample = Math.max(0, ...radialSamples);
+          const seedSampleCount = 81;
+          const seedSamples = Array.from({ length: seedSampleCount }, (_, index) => ({
+            sample: maxRadialSample * index / Math.max(1, seedSampleCount - 1),
+            index: null as number | null,
+          }));
+          const radialOrder = radialSamples
+            .map((sample, index) => ({ sample, index: index as number | null }))
+            .concat(seedSamples)
+            .sort((a, b) => a.sample - b.sample);
+          const sortedRadialSamples = radialOrder.map((entry) => entry.sample);
+          const radialRaw = traceRadialDistortion(JSON.stringify({
+            opticalSystemRows,
+            sourceRows,
+            objectRows: inputObjectRows,
+            fieldSamples: sortedRadialSamples,
+            surfaceIndex,
+            heightMode: gridFieldMode !== "angle",
+            wavelength,
+            distortionMetric: "chief-ray",
+          }));
+          const radialResponse = typeof radialRaw === "string" ? JSON.parse(radialRaw) : radialRaw;
+          const radialRealHeights = Array.isArray((radialResponse as any)?.realHeights)
+            ? (radialResponse as any).realHeights
+            : [];
+          for (let sortedIndex = 0; sortedIndex < radialOrder.length; sortedIndex += 1) {
+            const index = radialOrder[sortedIndex].index;
+            if (index === null) continue;
+            const idealRadius = Math.hypot(idealX[index], idealY[index]);
+            const rawRealRadius = radialRealHeights[sortedIndex];
+            if (rawRealRadius === null || rawRealRadius === undefined) continue;
+            const realRadius = Number(rawRealRadius);
+            if (!Number.isFinite(realRadius)) continue;
+            if (idealRadius <= 1e-12) {
+              realX[index] = 0;
+              realY[index] = 0;
+            } else {
+              realX[index] = realRadius * idealX[index] / idealRadius;
+              realY[index] = realRadius * idealY[index] / idealRadius;
+            }
+            radialWasmChiefRayCount += 1;
+          }
+        } catch (error) {
+          radialWasmChiefRayError = String((error as any)?.message || error || "radial WASM distortion failed");
+        }
+      } else {
+        radialWasmChiefRayError = "missing run_native_distortion_wasm_json";
+      }
+
+      const traceInfinite = (rust as any)?.trace_image_height_infinite_candidate_exact_with_rows;
+      const traceFinite = (rust as any)?.trace_image_height_finite_candidate_with_rows;
+      const exactTrace = finiteSystem ? traceFinite : traceInfinite;
+      if (typeof exactTrace !== "function") {
+        throw new Error(finiteSystem
+          ? "missing trace_image_height_finite_candidate_with_rows"
+          : "missing trace_image_height_infinite_candidate_exact_with_rows");
+      }
+
+      const progressStride = Math.max(1, Math.ceil(traceObjectRows.length / 100));
+      for (let index = 0; index < traceObjectRows.length; index += 1) {
+        if (realX[index] !== null && realY[index] !== null) continue;
+        const row = traceObjectRows[index] as any;
+        const inputX = finiteSystem
+          ? Number(row?.xHeight ?? row?.x ?? 0)
+          : Number(row?.xHeightAngle ?? row?.xFieldAngle ?? row?.x ?? 0);
+        const inputY = finiteSystem
+          ? Number(row?.yHeight ?? row?.y ?? 0)
+          : Number(row?.yHeightAngle ?? row?.yFieldAngle ?? row?.y ?? 0);
+        try {
+          const traced = Array.from(exactTrace(
+            opticalSystemRows,
+            surfaceIndex,
+            wavelength,
+            Number.isFinite(inputX) ? inputX : 0,
+            Number.isFinite(inputY) ? inputY : 0,
+          ) as ArrayLike<number>);
+          const status = Number(traced[0]);
+          const xMm = Number(traced[1]);
+          const yMm = Number(traced[2]);
+          if (status === 1 && Number.isFinite(xMm) && Number.isFinite(yMm)) {
+            realX[index] = xMm;
+            realY[index] = yMm;
+            exactWasmChiefRayCount += 1;
+          }
+        } catch {
+          // Leave this point missing so the spot fallback can retry it below.
+        }
+        if ((index + 1) % progressStride === 0 || index + 1 === traceObjectRows.length) {
+          emitProgress(
+            10 + (65 * (index + 1)) / Math.max(1, traceObjectRows.length),
+            `Grid distortion exact chief rays: point ${index + 1}/${traceObjectRows.length}`,
+          );
+        }
+      }
+    } catch (error) {
+      exactWasmChiefRayError = String((error as any)?.message || error || "exact WASM chief ray failed");
+    }
 
     const assignChiefPoint = (row: any) => {
       const match = String(row?.label || "").match(/Field-(\d+)/);
@@ -7535,15 +7667,18 @@ export async function runNativeGridDistortion(
       if (Number.isFinite(xMm) && Number.isFinite(yMm)) {
         realX[index] = xMm;
         realY[index] = yMm;
-        directChiefRayCount += 1;
+        spotFallbackChiefRayCount += 1;
       }
     };
 
-    const totalTracePoints = Math.max(1, traceObjectRows.length);
+    const fallbackObjectRows = traceObjectRows.filter((_, index) => (
+      realX[index] === null || realY[index] === null
+    ));
+    const totalTracePoints = Math.max(1, fallbackObjectRows.length);
     const detailedProgress = payload?.detailProgress === true && onProgress !== null;
-    if (detailedProgress) {
-      for (let i = 0; i < traceObjectRows.length; i += 1) {
-        const row = traceObjectRows[i];
+    if (detailedProgress && fallbackObjectRows.length > 0) {
+      for (let i = 0; i < fallbackObjectRows.length; i += 1) {
+        const row = fallbackObjectRows[i];
         const spotResponse = await runNativeSpotRaytrace({
           opticalSystemRows,
           sourceRows,
@@ -7561,15 +7696,15 @@ export async function runNativeGridDistortion(
           assignChiefPoint(s);
         }
         emitProgress(
-          10 + (80 * (i + 1)) / totalTracePoints,
-          `Grid distortion tracing (Rust/WASM): point ${i + 1}/${totalTracePoints}`,
+          75 + (15 * (i + 1)) / totalTracePoints,
+          `Grid distortion spot fallback: point ${i + 1}/${totalTracePoints}`,
         );
       }
-    } else {
+    } else if (fallbackObjectRows.length > 0) {
       const spotResponse = await runNativeSpotRaytrace({
         opticalSystemRows,
         sourceRows,
-        objectRows: traceObjectRows,
+        objectRows: fallbackObjectRows,
         surfaceIndex,
         rayCount: 11,
         ringCount: 1,
@@ -7585,17 +7720,17 @@ export async function runNativeGridDistortion(
         assignChiefPoint(row);
         processed += 1;
         emitProgress(
-          10 + (80 * processed) / Math.max(1, totalTracePoints),
-          `Grid distortion tracing (Rust/WASM): point ${Math.min(processed, totalTracePoints)}/${totalTracePoints}`,
+          75 + (15 * processed) / Math.max(1, totalTracePoints),
+          `Grid distortion spot fallback: point ${Math.min(processed, totalTracePoints)}/${totalTracePoints}`,
         );
       }
     }
 
     let missingFieldFallbackCount = 0;
     for (let i = 0; i < realX.length; i++) {
-      const rx = Number(realX[i]);
-      const ry = Number(realY[i]);
-      if (!Number.isFinite(rx) || !Number.isFinite(ry)) {
+      const rx = realX[i];
+      const ry = realY[i];
+      if (rx === null || ry === null || !Number.isFinite(rx) || !Number.isFinite(ry)) {
         realX[i] = null;
         realY[i] = null;
         missingFieldFallbackCount += 1;
@@ -7623,7 +7758,12 @@ export async function runNativeGridDistortion(
         maxImageX: scaledMaxImageX,
         maxImageY: scaledMaxImageY,
         surfaceIndex,
-        directChiefRayCount,
+        directChiefRayCount: radialWasmChiefRayCount + exactWasmChiefRayCount + spotFallbackChiefRayCount,
+        radialWasmChiefRayCount,
+        exactWasmChiefRayCount,
+        spotFallbackChiefRayCount,
+        radialWasmChiefRayError,
+        exactWasmChiefRayError,
         missingFieldFallbackCount,
         detailedProgressUsed: detailedProgress,
       },
