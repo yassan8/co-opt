@@ -52,6 +52,7 @@
     "diag:distortion-imageheight": "node diagnostics/distortion-imageheight-repro.mjs",
     "diag:grid-distortion-field-modes": "node --import tsx diagnostics/grid-distortion-field-modes-repro.mjs",
     "diag:grid-distortion-null-plot": "node --import tsx diagnostics/grid-distortion-null-plot-repro.mjs",
+    "diag:grid-distortion-tele": "node --import tsx diagnostics/grid-distortion-tele-repro.mjs",
     "wasm:rebuild": "bash ./scripts/build-rust-wasm.sh",
     "wasm:rebuild:threads": "bash -c 'COOPT_WASM_THREADS=1 bash ./scripts/build-rust-wasm.sh'",
     "state:inventory": "node tools/state-inventory.mjs",
