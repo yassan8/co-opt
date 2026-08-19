@@ -1444,9 +1444,10 @@ function readGridFieldVectorNativeLike(row: any, mode: "angle" | "height" | "ima
 
   if (mode === "imageheight") {
     return {
-      // Do not mix angle columns into image-height extents.
-      x: pick(row?.__cooptImageHeightTarget?.x, row?.xHeight, row?.x, row?.["object x"]),
-      y: pick(row?.__cooptImageHeightTarget?.y, row?.yHeight, row?.y, row?.["object y"]),
+      // Object-table data keeps the selected field value in the historical
+      // xHeightAngle/yHeightAngle columns; position defines its actual unit.
+      x: pick(row?.__cooptImageHeightTarget?.x, row?.xHeight, row?.xHeightAngle, row?.x, row?.["object x"]),
+      y: pick(row?.__cooptImageHeightTarget?.y, row?.yHeight, row?.yHeightAngle, row?.y, row?.["object y"]),
     };
   }
 
@@ -7523,6 +7524,7 @@ export async function runNativeGridDistortion(
     let spotFallbackChiefRayCount = 0;
     let radialWasmChiefRayError = "";
     let exactWasmChiefRayError = "";
+    let spotFallbackChiefRayError = "";
 
     // Grid distortion needs one deterministic stop-centred chief ray per field.
     // The spot-diagram generator is designed for pupil sampling and can reject
@@ -7679,10 +7681,41 @@ export async function runNativeGridDistortion(
     if (detailedProgress && fallbackObjectRows.length > 0) {
       for (let i = 0; i < fallbackObjectRows.length; i += 1) {
         const row = fallbackObjectRows[i];
+        try {
+          const spotResponse = await runNativeSpotRaytrace({
+            opticalSystemRows,
+            sourceRows,
+            objectRows: [row],
+            surfaceIndex,
+            rayCount: 11,
+            ringCount: 1,
+            pattern: "cross",
+            wavelengthMode: "primary",
+            forceRustWasm: true,
+            strictChiefOnly: true,
+          });
+          const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
+          for (const s of series as any[]) {
+            assignChiefPoint(s);
+          }
+        } catch (error) {
+          if (!spotFallbackChiefRayError) {
+            spotFallbackChiefRayError = String(
+              (error as any)?.message || error || "spot fallback chief ray failed",
+            );
+          }
+        }
+        emitProgress(
+          75 + (15 * (i + 1)) / totalTracePoints,
+          `Grid distortion spot fallback: point ${i + 1}/${totalTracePoints}`,
+        );
+      }
+    } else if (fallbackObjectRows.length > 0) {
+      try {
         const spotResponse = await runNativeSpotRaytrace({
           opticalSystemRows,
           sourceRows,
-          objectRows: [row],
+          objectRows: fallbackObjectRows,
           surfaceIndex,
           rayCount: 11,
           ringCount: 1,
@@ -7691,37 +7724,20 @@ export async function runNativeGridDistortion(
           forceRustWasm: true,
           strictChiefOnly: true,
         });
-        const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
-        for (const s of series as any[]) {
-          assignChiefPoint(s);
-        }
-        emitProgress(
-          75 + (15 * (i + 1)) / totalTracePoints,
-          `Grid distortion spot fallback: point ${i + 1}/${totalTracePoints}`,
-        );
-      }
-    } else if (fallbackObjectRows.length > 0) {
-      const spotResponse = await runNativeSpotRaytrace({
-        opticalSystemRows,
-        sourceRows,
-        objectRows: fallbackObjectRows,
-        surfaceIndex,
-        rayCount: 11,
-        ringCount: 1,
-        pattern: "cross",
-        wavelengthMode: "primary",
-        forceRustWasm: true,
-        strictChiefOnly: true,
-      });
 
-      const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
-      let processed = 0;
-      for (const row of series as any[]) {
-        assignChiefPoint(row);
-        processed += 1;
-        emitProgress(
-          75 + (15 * processed) / Math.max(1, totalTracePoints),
-          `Grid distortion spot fallback: point ${Math.min(processed, totalTracePoints)}/${totalTracePoints}`,
+        const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
+        let processed = 0;
+        for (const row of series as any[]) {
+          assignChiefPoint(row);
+          processed += 1;
+          emitProgress(
+            75 + (15 * processed) / Math.max(1, totalTracePoints),
+            `Grid distortion spot fallback: point ${Math.min(processed, totalTracePoints)}/${totalTracePoints}`,
+          );
+        }
+      } catch (error) {
+        spotFallbackChiefRayError = String(
+          (error as any)?.message || error || "spot fallback chief ray failed",
         );
       }
     }
@@ -7764,6 +7780,7 @@ export async function runNativeGridDistortion(
         spotFallbackChiefRayCount,
         radialWasmChiefRayError,
         exactWasmChiefRayError,
+        spotFallbackChiefRayError,
         missingFieldFallbackCount,
         detailedProgressUsed: detailedProgress,
       },
