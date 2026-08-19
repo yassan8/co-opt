@@ -5606,6 +5606,7 @@ fn trace_distortion_chief_y_mm(
     rows: &[Value],
     packed: &PackedMeta,
     n_start: f64,
+    wavelength_um: f64,
     stop_surface_index: usize,
     target_surface_index: usize,
     field_value: f64,
@@ -5678,6 +5679,25 @@ fn trace_distortion_chief_y_mm(
         }
         Some(hit[3])
     };
+
+    // Use the same continuity-aware chief-ray origin solver as the image-height
+    // path before trying the legacy independent candidates below. Wide-angle
+    // retrofocus systems have a strongly displaced entrance pupil; the legacy
+    // seeds can lose the physical stop-center branch and then force the caller
+    // to mix in render-ray fallbacks, which appears as a kink in distortion.
+    if let Some(exact_origin) = find_infinite_system_chief_ray_origin_exact_native(
+        rows,
+        packed,
+        n_start,
+        wavelength_um,
+        stop_surface_index,
+        stop_center,
+        dir,
+    ) {
+        if let Some(y) = trace_target_y(exact_origin) {
+            return Some(y);
+        }
+    }
 
     let mut candidate_origins: Vec<[f64; 3]> = Vec::new();
 
@@ -11494,6 +11514,7 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
             &rows,
             &packed,
             object_space_n,
+            wavelength,
             stop_surface_index,
             surface_index,
             trace_field_value,
