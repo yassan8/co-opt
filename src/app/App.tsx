@@ -38,7 +38,7 @@ import { findStopSurface } from "../../optical/system-renderer.ts";
 import { detectConjugateType } from "../../utils/conjugate-detection.ts";
 import { listBundledExampleProjectFiles } from "../../utils/default-project-loader.ts";
 import { getLoadedFileName, getLoadedFileWarn } from "../../ui/loaded-file-storage";
-import { downloadStl, generateOpticalSceneStl } from "../../import-export/stl-export.ts";
+import { createOpticalSceneSolidGroup, downloadStl, generateOpticalSceneStl } from "../../import-export/stl-export.ts";
 import { downloadFreeCadDocument, generateFreeCadDocument } from "../../import-export/freecad-export.ts";
 import {
   loadOptimizeRayGridSize,
@@ -60,6 +60,9 @@ const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
 const RENDER_SHOW_PRINCIPAL_POINTS_KEY = 'coopt.render.showPrincipalPointLabels';
 const RENDER_SHOW_SURFACE_NUMBERS_KEY = 'coopt.render.showSurfaceNumberLabels';
+const RENDER_SHOW_SOLIDS_KEY = 'coopt.render.showSolids';
+const RENDER_SHOW_SECTION_CUT_KEY = 'coopt.render.showSectionCut';
+const RENDER_SECTION_ANGLE_KEY = 'coopt.render.sectionAngleDegrees';
 const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
 const OPTIMIZE_PROGRESS_SYNC_KEY = 'coopt.optimizeProgress';
 const SYSTEM_TEXT_WINDOW_ID = 'system-text-window';
@@ -4553,6 +4556,29 @@ export default function App() {
   const [renderExportFormat, setRenderExportFormat] = useState<'fcstd' | 'solid-stl' | 'surface-stl'>(() => (
     isTauriRuntime() ? 'fcstd' : 'solid-stl'
   ));
+  const [renderShowSolids, setRenderShowSolids] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(RENDER_SHOW_SOLIDS_KEY) === 'true'
+        || localStorage.getItem(RENDER_SHOW_SECTION_CUT_KEY) === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
+  const [renderShowSectionCut, setRenderShowSectionCut] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(RENDER_SHOW_SECTION_CUT_KEY) === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
+  const [renderSectionAngle, setRenderSectionAngle] = useState<number>(() => {
+    try {
+      const stored = Number(localStorage.getItem(RENDER_SECTION_ANGLE_KEY));
+      return Number.isFinite(stored) ? ((stored % 360) + 360) % 360 : 90;
+    } catch (_) {
+      return 90;
+    }
+  });
   const [renderCompareScope, setRenderCompareScope] = useState<RenderCompareScope>('active');
   const [renderCompareOffsetDirection, setRenderCompareOffsetDirection] = useState<RenderCompareOffsetDirection>('centered');
   const [renderCompareOffsetStepMm, setRenderCompareOffsetStepMm] = useState(20);
@@ -5554,6 +5580,8 @@ export default function App() {
       type === 'connectionLine' ||
       type === 'renderWindowDirectFill' ||
       type === 'popupLensFill' ||
+      type === 'renderSolidGroup' ||
+      type === 'renderSolid' ||
       type === 'optical-ray' ||
       type === 'ray' ||
       type === 'crossSection' ||
@@ -8577,6 +8605,57 @@ const collectLegacyCrossRays = async (
         if (Array.isArray(startupStages)) updateRenderStartupBreakdown(timingStages);
       }
 
+      if (renderShowSolids) {
+        const solidsStartMs = performance.now();
+        setRenderWindowStatus('Building solid lenses...');
+        const solidScene = createOpticalSceneSolidGroup(sceneForDraw, rowsForRender, {
+          sectionAngleDegrees: renderShowSectionCut ? renderSectionAngle : null,
+        });
+        if (solidScene.solidCount > 0) {
+          // Retain the source surfaces at low opacity so exports can still find
+          // them while the closed display meshes provide the visible volume.
+          sceneForDraw.traverse((child: any) => {
+            const artifactType = String(child?.userData?.type || '');
+            const isSourceSurface = child?.userData?.isLensSurface === true;
+            const isSourceOutline = artifactType === 'semidiaRing'
+              || artifactType === 'apertureRect'
+              || artifactType === 'connectionCornerRing';
+            if (!isSourceSurface && !(renderShowSectionCut && isSourceOutline)) return;
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            materials.forEach((material: any) => {
+              if (!material) return;
+              material.transparent = true;
+              material.opacity = renderShowSectionCut
+                ? 0
+                : Math.min(0.1, Number(material.opacity) || 0.1);
+              material.depthWrite = false;
+              material.needsUpdate = true;
+            });
+          });
+
+          solidScene.group.traverse((child: any) => {
+            if (!child?.isMesh) return;
+            try { child.material?.dispose?.(); } catch (_) {}
+            child.material = new THREE.MeshPhongMaterial({
+              color: Number(child.userData?.displayColor) || 0x67c7ff,
+              transparent: true,
+              opacity: renderShowSectionCut ? 0.82 : 0.62,
+              side: THREE.DoubleSide,
+              depthWrite: true,
+              shininess: 90,
+              specular: 0xffffff,
+            });
+            child.renderOrder = 1;
+          });
+          solidScene.group.add(new THREE.HemisphereLight(0xffffff, 0x31506b, 1.35));
+          const solidKeyLight = new THREE.DirectionalLight(0xffffff, 1.1);
+          solidKeyLight.position.set(-1, 1.5, 2);
+          solidScene.group.add(solidKeyLight);
+          sceneForDraw.add(solidScene.group);
+        }
+        timingStages.push({ label: 'solids', ms: performance.now() - solidsStartMs });
+      }
+
       if (!shouldSkipRayGeneration) {
         const rayCollectStartMs = performance.now();
         setRenderWindowStatus('Tracing rays / calculating image height...');
@@ -8672,7 +8751,10 @@ const collectLegacyCrossRays = async (
         return false;
       }
       markRenderViewportReady();
-      publishRenderTiming('Ready (3D)', '3d', timingStages, blockPerfBefore);
+      const ready3DLabel = renderShowSectionCut
+        ? `Ready (3D section ${Math.round(renderSectionAngle)}°)`
+        : 'Ready (3D)';
+      publishRenderTiming(ready3DLabel, '3d', timingStages, blockPerfBefore);
       if (redrawOptions?.scheduleFullRayPass === true && (shouldSkipRayGeneration || Number(fullRayCount || 0) > Number(effectiveRayCountOverride || 0))) {
         scheduleDeferredFullRenderPass(requestId);
       }
@@ -8948,6 +9030,18 @@ const collectLegacyCrossRays = async (
       setRenderWindowStatus('Draw failed');
     });
   }, [renderShowSurfaceNumberLabels]);
+
+  useEffect(() => {
+    if (!isRenderWindowMode) return;
+    try {
+      localStorage.setItem(RENDER_SHOW_SOLIDS_KEY, renderShowSolids ? 'true' : 'false');
+      localStorage.setItem(RENDER_SHOW_SECTION_CUT_KEY, renderShowSectionCut ? 'true' : 'false');
+      localStorage.setItem(RENDER_SECTION_ANGLE_KEY, String(renderSectionAngle));
+    } catch (_) {}
+    scheduleRenderRedraw().catch(() => {
+      setRenderWindowStatus('Draw failed');
+    });
+  }, [renderShowSolids, renderShowSectionCut, renderSectionAngle]);
 
   useEffect(() => {
     if (!isRenderWindowMode) return;
@@ -12361,6 +12455,59 @@ const collectLegacyCrossRays = async (
             <button type="button" onClick={handleRenderDraw} style={{ height: 27 }}>3D</button>
             <button type="button" onClick={handleViewXZ} style={{ height: 27 }}>X-Z</button>
             <button type="button" onClick={handleViewYZ} style={{ height: 27 }}>Y-Z</button>
+            <label
+              title="Display closed lens volumes in the 3D view"
+              style={{ display: 'flex', alignItems: 'center', gap: 3, height: 27, padding: '0 3px', fontSize: 11, fontWeight: 500, opacity: renderViewMode === '3D' ? 1 : 0.5, whiteSpace: 'nowrap' }}
+            >
+              <input
+                type="checkbox"
+                checked={renderShowSolids}
+                disabled={renderViewMode !== '3D'}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setRenderShowSolids(checked);
+                  if (!checked) setRenderShowSectionCut(false);
+                }}
+              />
+              Solid
+            </label>
+            <label
+              title="Cut away the half facing the selected angle around +Z"
+              style={{ display: 'flex', alignItems: 'center', gap: 3, height: 27, padding: '0 2px', fontSize: 11, fontWeight: 500, opacity: renderViewMode === '3D' ? 1 : 0.5, whiteSpace: 'nowrap' }}
+            >
+              <input
+                type="checkbox"
+                checked={renderShowSectionCut}
+                disabled={renderViewMode !== '3D'}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setRenderShowSectionCut(checked);
+                  if (checked) setRenderShowSolids(true);
+                }}
+              />
+              Section
+            </label>
+            <label
+              title="Section opening direction: 0°=+X, 90°=+Y, 180°=-X, 270°=-Y"
+              style={{ display: 'flex', alignItems: 'center', gap: 2, height: 27, fontSize: 11, fontWeight: 500, opacity: renderViewMode === '3D' && renderShowSectionCut ? 1 : 0.5, whiteSpace: 'nowrap' }}
+            >
+              <input
+                aria-label="3D section angle"
+                type="number"
+                min={0}
+                max={359}
+                step={1}
+                value={renderSectionAngle}
+                disabled={renderViewMode !== '3D' || !renderShowSectionCut}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (!Number.isFinite(value)) return;
+                  setRenderSectionAngle(((value % 360) + 360) % 360);
+                }}
+                style={{ width: 55, height: 27, fontSize: 12 }}
+              />
+              °
+            </label>
             <span style={{ width: 1, height: 22, background: '#d1d5db', margin: '0 2px' }} />
             <select
               aria-label="Export format"
