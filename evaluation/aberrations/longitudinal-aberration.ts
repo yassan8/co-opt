@@ -321,17 +321,16 @@ function resamplePointsToRequestedPupilCoordinates(points, requestedSamples) {
     const leftPair = findDistinctNeighborPair(sorted, true);
     const rightPair = findDistinctNeighborPair(sorted, false);
 
-    // 外挿限界: データ範囲の20%まで、またはデータカバレッジが50%未満の場合は外挿しない
+    // Trace failures mark the physical/traceable pupil boundary. Never invent
+    // samples beyond the measured range; doing so connects unrelated branches.
     const dataMin = sorted[0].pupilCoordinate;
     const dataMax = sorted[sorted.length - 1].pupilCoordinate;
-    const dataRange = dataMax - dataMin;
     const coverageRatio = dataMax; // 0〜1の範囲でのカバレッジ
-    const extrapolationMargin = coverageRatio < 0.5 ? 0 : dataRange * 0.2;
-    const extrapolationMax = dataMax + extrapolationMargin;
-    const extrapolationMin = Math.max(0, dataMin - extrapolationMargin);
+    const extrapolationMax = dataMax;
+    const extrapolationMin = dataMin;
     
     if (coverageRatio < 0.8) {
-        console.warn(`⚠️ [SA resample] データカバレッジ不足: ${(coverageRatio * 100).toFixed(1)}% (最大瞳座標=${dataMax.toFixed(4)}, ${sorted.length}点). 外挿限界=${extrapolationMax.toFixed(4)}`);
+        console.warn(`⚠️ [SA resample] データカバレッジ不足: ${(coverageRatio * 100).toFixed(1)}% (最大瞳座標=${dataMax.toFixed(4)}, ${sorted.length}点). 未到達領域は描画しません`);
     }
 
     const out = [];
@@ -1557,12 +1556,13 @@ export function calculateLongitudinalAberration(
             sagittal: aimedSagittalRays ? aimedSagittalRays.length : null
         });
 
-        // メリジオナル光線の縦収差を計算（垂直クロス光線）
-        // Aimed rays と cross-beam rays を統合してフルアパーチャのカバレッジを確保する。
-        // stop-solve が高瞳座標で失敗した場合でも、cross-beam rays がデータを補完する。
+        // メリジオナル光線の縦収差を計算（垂直クロス光線）。
+        // Aimed rays and cross-beam rays use different pupil parameterizations;
+        // mixing them can splice different focus branches at the same coordinate.
+        // Use cross-beam rays only when aiming produced no usable series at all.
         const crossBeamMeridional = successfulRays.filter(r => r.originalRay && r.originalRay.type === 'vertical_cross');
         const meridionalRays = (aimedMeridionalRays && aimedMeridionalRays.length > 0)
-            ? [...aimedMeridionalRays, ...crossBeamMeridional]
+            ? aimedMeridionalRays
             : crossBeamMeridional;
         const meridionalUsingFallback = !(aimedMeridionalRays && aimedMeridionalRays.length > 0);
         stageCount.meridional.fallbackRayCount = meridionalUsingFallback ? meridionalRays.length : 0;
@@ -1731,11 +1731,10 @@ export function calculateLongitudinalAberration(
                 : null
         });
         
-        // サジタル光線の縦収差を計算
-        // Aimed rays と cross-beam rays を統合してフルアパーチャのカバレッジを確保する。
+        // サジタル光線も同じ規則で、異なる瞳パラメータの混在を避ける。
         const crossBeamSagittal = successfulRays.filter(r => r.originalRay && r.originalRay.type === 'horizontal_cross');
         const sagittalRays = (aimedSagittalRays && aimedSagittalRays.length > 0)
-            ? [...aimedSagittalRays, ...crossBeamSagittal]
+            ? aimedSagittalRays
             : crossBeamSagittal;
         const sagittalUsingFallback = !(aimedSagittalRays && aimedSagittalRays.length > 0);
         stageCount.sagittal.fallbackRayCount = sagittalUsingFallback ? sagittalRays.length : 0;
