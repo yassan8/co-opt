@@ -3661,6 +3661,7 @@ fn trace_single_ray_hit_point_with_meta_core(
 
     let mut n_cur = if n_start.is_finite() && n_start > 0.0 { n_start } else { 1.0 };
     let mut opl = 0.0_f64;
+    let mut preceding_surface_thickness: Option<f64> = None;
 
     for i in 0..=target_surface_index {
         let m = i * 4;
@@ -3793,6 +3794,16 @@ fn trace_single_ray_hit_point_with_meta_core(
 
         if !t.is_finite() {
             out[0] = 3.0; // no intersection
+            out[1] = opl;
+            return out;
+        }
+        // A positive sequential thickness cannot lead to an intersection behind
+        // the preceding surface hit. This occurs when neighbouring curved
+        // surfaces overlap near their clear-aperture edge; accepting it creates
+        // a non-physical backwards ray branch (and a discontinuous OPD fan).
+        // Preserve explicitly negative-thickness/virtual propagation models.
+        if t < -1.0e-7 && preceding_surface_thickness.is_some_and(|value| value >= 0.0) {
+            out[0] = 3.0;
             out[1] = opl;
             return out;
         }
@@ -3932,6 +3943,7 @@ fn trace_single_ray_hit_point_with_meta_core(
         dy = gnorm[1];
         dz = gnorm[2];
         n_cur = n_next;
+        preceding_surface_thickness = Some(thickness);
 
         // Native parity: do not advance by thickness here.
         // Surface origins already include previous thickness/coord transforms.
@@ -3986,6 +3998,7 @@ fn trace_single_ray_hit_state_with_meta_core(
 
     let mut n_cur = if n_start.is_finite() && n_start > 0.0 { n_start } else { 1.0 };
     let mut opl = 0.0_f64;
+    let mut preceding_surface_thickness: Option<f64> = None;
 
     for i in 0..=target_surface_index {
         let m = i * 4;
@@ -4008,6 +4021,7 @@ fn trace_single_ray_hit_state_with_meta_core(
         let radius_x = row_params[p + 13];
         let radius_y = row_params[p + 14];
         let toric_axis = row_params[p + 15];
+        let thickness = row_params[p + 16];
         let aperture_limit = row_params[p + 17];
         let rect_half_w = row_params[p + 18];
         let rect_half_h = row_params[p + 19];
@@ -4089,6 +4103,11 @@ fn trace_single_ray_hit_state_with_meta_core(
         };
 
         if !t.is_finite() {
+            out[0] = 3.0;
+            out[1] = opl;
+            return out;
+        }
+        if t < -1.0e-7 && preceding_surface_thickness.is_some_and(|value| value >= 0.0) {
             out[0] = 3.0;
             out[1] = opl;
             return out;
@@ -4225,6 +4244,7 @@ fn trace_single_ray_hit_state_with_meta_core(
         dy = gnorm[1];
         dz = gnorm[2];
         n_cur = n_next;
+        preceding_surface_thickness = Some(thickness);
     }
 
     out[0] = 6.0;
