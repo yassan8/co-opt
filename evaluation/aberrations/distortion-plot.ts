@@ -407,14 +407,20 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
   const horizontalOffset = estimateGridHorizontalOffset(idealGrid, realGrid);
   const offsetRealGrid = {
     x: realGrid.x.map((value) => {
+      if (value === null || value === undefined) return null;
       const x = Number(value);
       if (!Number.isFinite(x)) return null;
       return Number.isFinite(Number(horizontalOffset)) ? x + Number(horizontalOffset) : x;
     }),
-    y: realGrid.y,
+    y: realGrid.y.map((value) => {
+      if (value === null || value === undefined) return null;
+      const y = Number(value);
+      return Number.isFinite(y) ? y : null;
+    }),
   };
   const scaledRealGrid = {
     x: offsetRealGrid.x.map((value, index) => {
+      if (value === null || value === undefined) return null;
       const realX = Number(value);
       const idealX = Number(idealGrid.x[index]);
       if (!Number.isFinite(realX) || !Number.isFinite(idealX)) return null;
@@ -422,6 +428,7 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
       return idealX - distortionX;
     }),
     y: offsetRealGrid.y.map((value, index) => {
+      if (value === null || value === undefined) return null;
       const realY = Number(value);
       const idealY = Number(idealGrid.y[index]);
       if (!Number.isFinite(realY) || !Number.isFinite(idealY)) return null;
