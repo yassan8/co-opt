@@ -5126,6 +5126,11 @@ export default function App() {
     return Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem : [];
   };
 
+  const filterEnabledObjectRowsForRender = (rows: any[]): any[] => {
+    if (!Array.isArray(rows)) return [];
+    return rows.filter((row: any) => row && row.enabled !== false);
+  };
+
   const getConfigObjectRowsForRender = (targetWindow: any, cfg: any, systemConfig?: any): any[] => {
     if (!cfg || typeof cfg !== 'object') return [];
     try {
@@ -5133,13 +5138,13 @@ export default function App() {
       const isActive = activeId !== undefined && activeId !== null && String(cfg.id) === String(activeId);
       if (isActive && typeof targetWindow?.getObjectRows === 'function') {
         const tableRows = targetWindow.getObjectRows(targetWindow.tableObject);
-        if (Array.isArray(tableRows) && tableRows.length > 0) {
-          return tableRows;
+        if (Array.isArray(tableRows)) {
+          return filterEnabledObjectRowsForRender(tableRows);
         }
       }
     } catch (_) {}
 
-    return Array.isArray(cfg.object) ? cfg.object : [];
+    return filterEnabledObjectRowsForRender(Array.isArray(cfg.object) ? cfg.object : []);
   };
 
   const getRenderCompareEntries = (targetWindow: any): RenderCompareEntry[] => {
@@ -5295,67 +5300,81 @@ export default function App() {
     const hostWindow = targetWindow || getRenderHostWindow();
     const preferConfigRows = Array.isArray(opticalSystemRowsOverride) && opticalSystemRowsOverride.length > 0;
     let objectRows: any[] = [];
+    let objectRowsResolved = false;
 
     const finalizeObjectRows = (rows: any[]): any[] => {
       if (!Array.isArray(rows)) return [];
+      const enabledRows = filterEnabledObjectRowsForRender(rows);
       if (preferConfigRows) {
-        return normalizeRenderObjectRows(hostWindow, rows, opticalSystemRowsOverride);
+        return normalizeRenderObjectRows(hostWindow, enabledRows, opticalSystemRowsOverride);
       }
-      return rows;
+      return enabledRows;
     };
 
     if (preferConfigRows) {
       try {
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-        const overrideRows = g && Array.isArray(g.__cooptRenderObjectRowsOverride) && g.__cooptRenderObjectRowsOverride.length > 0
+        const overrideRows = g && Array.isArray(g.__cooptRenderObjectRowsOverride)
           ? g.__cooptRenderObjectRowsOverride
           : null;
         if (overrideRows) {
           objectRows = overrideRows;
+          objectRowsResolved = true;
         }
       } catch (_) {}
 
       try {
-        if (objectRows.length === 0) {
+        if (!objectRowsResolved) {
           const systemConfig = getSystemConfigFromWindow(hostWindow);
           const activeCfg = getActiveConfigFromSystemConfig(systemConfig);
-          if (Array.isArray(activeCfg?.object) && activeCfg.object.length > 0) {
+          if (Array.isArray(activeCfg?.object)) {
             objectRows = activeCfg.object;
+            objectRowsResolved = true;
           }
         }
       } catch (_) {}
     }
 
     try {
-      if (objectRows.length === 0) {
+      if (!objectRowsResolved) {
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-        const overrideRows = g && Array.isArray(g.__cooptRenderObjectRowsOverride) && g.__cooptRenderObjectRowsOverride.length > 0
+        const overrideRows = g && Array.isArray(g.__cooptRenderObjectRowsOverride)
           ? g.__cooptRenderObjectRowsOverride
           : null;
         if (overrideRows) {
           objectRows = overrideRows;
+          objectRowsResolved = true;
         }
       }
     } catch (_) {}
 
     try {
-      if (objectRows.length === 0 && typeof hostWindow?.getObjectRows === 'function') {
+      if (!objectRowsResolved && hostWindow?.tableObject && typeof hostWindow?.getObjectRows === 'function') {
         const rows = hostWindow.getObjectRows(hostWindow.tableObject);
-        if (Array.isArray(rows) && rows.length > 0) objectRows = rows;
+        if (Array.isArray(rows)) {
+          objectRows = rows;
+          objectRowsResolved = true;
+        }
       }
     } catch (_) {}
 
     try {
-      if (objectRows.length === 0) {
+      if (!objectRowsResolved) {
         const systemConfig = getSystemConfigFromWindow(hostWindow);
         const activeCfg = getActiveConfigFromSystemConfig(systemConfig);
-        if (Array.isArray(activeCfg?.object) && activeCfg.object.length > 0) objectRows = activeCfg.object;
+        if (Array.isArray(activeCfg?.object)) {
+          objectRows = activeCfg.object;
+          objectRowsResolved = true;
+        }
       }
     } catch (_) {}
     try {
-      if (objectRows.length === 0 && typeof window?.getObjectRows === 'function') {
+      if (!objectRowsResolved && (window as any).tableObject && typeof window?.getObjectRows === 'function') {
         const rows = window.getObjectRows((window as any).tableObject);
-        if (Array.isArray(rows) && rows.length > 0) objectRows = rows;
+        if (Array.isArray(rows)) {
+          objectRows = rows;
+          objectRowsResolved = true;
+        }
       }
     } catch (_) {}
     return finalizeObjectRows(objectRows);
@@ -8312,7 +8331,7 @@ const collectLegacyCrossRays = async (
         const legacyCrossRays = await collectLegacyCrossRays(
           rowsForRender,
           axis,
-          Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined,
+          Array.isArray(renderObjectRows) ? renderObjectRows : [],
           {
             rayCountOverride: effectiveRayCountOverride,
           }
@@ -8673,7 +8692,7 @@ const collectLegacyCrossRays = async (
         const legacyCrossRays = await collectLegacyCrossRays(
           rowsForRender,
           'BOTH',
-          Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined,
+          Array.isArray(renderObjectRows) ? renderObjectRows : [],
           {
             rayCountOverride: effectiveRayCountOverride,
           }

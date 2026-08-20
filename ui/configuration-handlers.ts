@@ -530,16 +530,17 @@ function renderConfigurationOrderList(): void {
 
   const configList = getConfigurationList();
   container.innerHTML = '';
+  const canReorder = configList.length > 1;
 
   const title = document.createElement('div');
   title.className = 'config-order-list-title';
-  title.textContent = 'Drag to reorder';
+  title.textContent = canReorder ? 'Drag to reorder' : 'Active configuration';
   container.appendChild(title);
 
-  if (configList.length <= 1) {
+  if (configList.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'config-order-empty';
-    empty.textContent = 'Add another configuration to change the order.';
+    empty.textContent = 'No configuration found.';
     container.appendChild(empty);
     return;
   }
@@ -547,16 +548,17 @@ function renderConfigurationOrderList(): void {
   configList.forEach((config: any) => {
     const row = document.createElement('div');
     row.className = 'config-order-row';
-    row.draggable = true;
+    row.draggable = canReorder;
     row.dataset.configId = String(config.id);
     row.setAttribute('role', 'button');
     row.tabIndex = 0;
     if (config.active) row.classList.add('active');
+    if (!canReorder) row.classList.add('config-order-row--single');
 
     const handle = document.createElement('span');
     handle.className = 'config-order-handle';
-    handle.textContent = '⠿';
-    handle.title = 'Drag to reorder';
+    handle.textContent = canReorder ? '⠿' : '●';
+    handle.title = canReorder ? 'Drag to reorder' : 'Active configuration';
 
     const name = document.createElement('span');
     name.className = 'config-order-name';
@@ -565,46 +567,48 @@ function renderConfigurationOrderList(): void {
     row.appendChild(handle);
     row.appendChild(name);
 
-    row.addEventListener('dragstart', (event: DragEvent) => {
-      draggedConfigId = String(config.id);
-      row.classList.add('dragging');
-      if (event.dataTransfer) {
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', String(config.id));
-      }
-    });
+    if (canReorder) {
+      row.addEventListener('dragstart', (event: DragEvent) => {
+        draggedConfigId = String(config.id);
+        row.classList.add('dragging');
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', String(config.id));
+        }
+      });
 
-    row.addEventListener('dragend', () => {
-      draggedConfigId = null;
-      row.classList.remove('dragging');
-      clearConfigDropIndicator(row);
-    });
+      row.addEventListener('dragend', () => {
+        draggedConfigId = null;
+        row.classList.remove('dragging');
+        clearConfigDropIndicator(row);
+      });
 
-    row.addEventListener('dragover', (event: DragEvent) => {
-      if (!draggedConfigId || draggedConfigId === String(config.id)) return;
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-      const rect = row.getBoundingClientRect();
-      const isBefore = event.clientY < rect.top + rect.height / 2;
-      row.classList.toggle('drag-over-before', isBefore);
-      row.classList.toggle('drag-over-after', !isBefore);
-    });
+      row.addEventListener('dragover', (event: DragEvent) => {
+        if (!draggedConfigId || draggedConfigId === String(config.id)) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+        const rect = row.getBoundingClientRect();
+        const isBefore = event.clientY < rect.top + rect.height / 2;
+        row.classList.toggle('drag-over-before', isBefore);
+        row.classList.toggle('drag-over-after', !isBefore);
+      });
 
-    row.addEventListener('dragleave', (event: DragEvent) => {
-      const related = event.relatedTarget as Node | null;
-      if (related && row.contains(related)) return;
-      clearConfigDropIndicator(row);
-    });
+      row.addEventListener('dragleave', (event: DragEvent) => {
+        const related = event.relatedTarget as Node | null;
+        if (related && row.contains(related)) return;
+        clearConfigDropIndicator(row);
+      });
 
-    row.addEventListener('drop', (event: DragEvent) => {
-      if (!draggedConfigId || draggedConfigId === String(config.id)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const rect = row.getBoundingClientRect();
-      const position: 'before' | 'after' = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
-      clearConfigDropIndicator(row);
-      handleConfigurationReorder(String(config.id), position);
-    });
+      row.addEventListener('drop', (event: DragEvent) => {
+        if (!draggedConfigId || draggedConfigId === String(config.id)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = row.getBoundingClientRect();
+        const position: 'before' | 'after' = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+        clearConfigDropIndicator(row);
+        handleConfigurationReorder(String(config.id), position);
+      });
+    }
 
     row.addEventListener('click', () => {
       void activateConfiguration(String(config.id));
