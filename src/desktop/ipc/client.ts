@@ -31,6 +31,8 @@ import type {
   NativePsfMapResponse,
   NativeMtfMapRequest,
   NativeMtfMapResponse,
+  NativeOptimizerMtfBatchRequest,
+  NativeOptimizerMtfBatchResponse,
   NativeFieldMtfMapRequest,
   NativeFieldMtfMapResponse,
   NativeThroughFocusMtfMapRequest,
@@ -1444,9 +1446,10 @@ function readGridFieldVectorNativeLike(row: any, mode: "angle" | "height" | "ima
 
   if (mode === "imageheight") {
     return {
-      // Do not mix angle columns into image-height extents.
-      x: pick(row?.__cooptImageHeightTarget?.x, row?.xHeight, row?.x, row?.["object x"]),
-      y: pick(row?.__cooptImageHeightTarget?.y, row?.yHeight, row?.y, row?.["object y"]),
+      // Object-table data keeps the selected field value in the historical
+      // xHeightAngle/yHeightAngle columns; position defines its actual unit.
+      x: pick(row?.__cooptImageHeightTarget?.x, row?.xHeight, row?.xHeightAngle, row?.x, row?.["object x"]),
+      y: pick(row?.__cooptImageHeightTarget?.y, row?.yHeight, row?.yHeightAngle, row?.y, row?.["object y"]),
     };
   }
 
@@ -4008,18 +4011,31 @@ export async function runMtfBatchViaWasm(
           : request.jobs,
       }
       : request;
-    const enrichedRowsCache = new Map<string, any[]>();
+    // A batch can contain finite-difference candidates with different optical
+    // rows at the same wavelength.  Caching by wavelength alone aliases those
+    // candidates to whichever system happened to be prepared first, which
+    // makes their MTF residuals identical and corrupts the Jacobian.  Preserve
+    // the inexpensive identity cache, but scope it to the actual row array as
+    // well as its wavelength.
+    const enrichedRowsCache = new WeakMap<object, Map<string, any[]>>();
     let enrichedRowsCacheHits = 0;
     const getCachedEnrichedRows = (rows: any[], wavelengthUm: number): any[] => {
       const numericWavelength = Number.isFinite(wavelengthUm) && wavelengthUm > 0 ? wavelengthUm : 0.5876;
       const cacheKey = numericWavelength.toFixed(9);
-      const cached = enrichedRowsCache.get(cacheKey);
+      const cacheOwner = (rows && typeof rows === "object") ? rows as unknown as object : null;
+      const cacheByWavelength = cacheOwner
+        ? (enrichedRowsCache.get(cacheOwner) || new Map<string, any[]>())
+        : null;
+      if (cacheOwner && cacheByWavelength && !enrichedRowsCache.has(cacheOwner)) {
+        enrichedRowsCache.set(cacheOwner, cacheByWavelength);
+      }
+      const cached = cacheByWavelength?.get(cacheKey);
       if (cached) {
         enrichedRowsCacheHits += 1;
         return cached;
       }
       const enriched = enrichRowsWithResolvedRindexForWasm(rows, numericWavelength);
-      enrichedRowsCache.set(cacheKey, enriched);
+      cacheByWavelength?.set(cacheKey, enriched);
       return enriched;
     };
     const sharedOpdRequest = preparedRequest?.shared?.opdRequest;
@@ -4077,7 +4093,7 @@ export async function runMtfBatchViaWasm(
     }
 
     const requestJson = JSON.stringify(preparedRequest);
-    console.info(`[TFMTF BatchPrep] jobs=${Array.isArray(preparedRequest?.jobs) ? preparedRequest.jobs.length : 0}, wavelengthRowCacheHits=${enrichedRowsCacheHits}, cachedWavelengths=${enrichedRowsCache.size}, sharedSourceRowsRemoved=${sharedSourceRowsRemoved}, requestChars=${requestJson.length}`);
+    console.info(`[TFMTF BatchPrep] jobs=${Array.isArray(preparedRequest?.jobs) ? preparedRequest.jobs.length : 0}, wavelengthRowCacheHits=${enrichedRowsCacheHits}, cacheKey=rowIdentity+wavelength, sharedSourceRowsRemoved=${sharedSourceRowsRemoved}, requestChars=${requestJson.length}`);
 
     const wasmOutRaw = batchFn(requestJson);
     const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
@@ -4090,7 +4106,182 @@ export async function runMtfBatchViaWasm(
   }
 }
 
-async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
+/**
+ * Desktop-only compact MTF evaluator for optimizer finite-difference batches.
+ * The Rust command owns the candidate jobs and runs them on Rayon workers; it
+ * returns the same `{ results: [{ jobIndex, meta, mtf }] }` shape consumed by
+ * the optimizer's existing WASM batch parser.
+ */
+export async function runNativeOptimizerMtfBatch(
+  request: NativeOptimizerMtfBatchRequest,
+): Promise<NativeOptimizerMtfBatchResponse> {
+  if (!isTauriRuntime()) {
+    throw new Error("runNativeOptimizerMtfBatch is available only in the desktop runtime");
+  }
+  return invokeCommand<NativeOptimizerMtfBatchRequest, NativeOptimizerMtfBatchResponse>(
+    "run_native_optimizer_mtf_batch",
+    request,
+  );
+}
+
+type MtfWasmWorkerPool = {
+  workerCount: number;
+  workers: Worker[];
+};
+
+// Optimizer finite-difference batches arrive once per iteration.  Creating a
+// fresh WASM worker for every batch loses more time to startup/compilation than
+// it saves in tracing.  Keep this pool process-local and serialize batches so
+// each worker has at most one in-flight request.
+let mtfWasmWorkerPool: MtfWasmWorkerPool | null = null;
+let mtfWasmWorkerPoolQueue: Promise<void> = Promise.resolve();
+let mtfWasmWorkerRequestSequence = 0;
+
+function disposeMtfWasmWorkerPool(): void {
+  const pool = mtfWasmWorkerPool;
+  mtfWasmWorkerPool = null;
+  if (!pool) return;
+  for (const worker of pool.workers) {
+    try { worker.terminate(); } catch (_) {}
+  }
+}
+
+function getMtfWasmWorkerPool(workerCount: number): MtfWasmWorkerPool {
+  if (mtfWasmWorkerPool && mtfWasmWorkerPool.workerCount === workerCount) {
+    return mtfWasmWorkerPool;
+  }
+  disposeMtfWasmWorkerPool();
+  mtfWasmWorkerPool = {
+    workerCount,
+    workers: Array.from({ length: workerCount }, () => new Worker(
+      new URL("./tfmtf-wasm-worker.ts", import.meta.url),
+      { type: "module" },
+    )),
+  };
+  return mtfWasmWorkerPool;
+}
+
+function splitMtfJobsAcrossWorkers(jobs: unknown[], workerCount: number): { chunks: unknown[][]; strategy: string } {
+  const chunks: unknown[][] = Array.from({ length: workerCount }, () => []);
+  const candidateGroups = new Map<number, unknown[]>();
+  let hasCandidateIndexForEveryJob = jobs.length > 0;
+
+  for (const job of jobs) {
+    const candidateIndex = Number((job as any)?.meta?.candidateIndex);
+    if (!Number.isInteger(candidateIndex) || candidateIndex < 0) {
+      hasCandidateIndexForEveryJob = false;
+      break;
+    }
+    const group = candidateGroups.get(candidateIndex) || [];
+    group.push(job);
+    candidateGroups.set(candidateIndex, group);
+  }
+
+  if (hasCandidateIndexForEveryJob && candidateGroups.size > 0) {
+    // A candidate's jobs share its optical system.  Keeping the complete
+    // candidate on one worker lets the WASM batch reuse packed surface metadata
+    // across its fields and wavelengths, while still evaluating candidates in
+    // parallel for finite differences.
+    const workerLoads = new Array(workerCount).fill(0);
+    const groups = Array.from(candidateGroups.entries())
+      .sort((lhs, rhs) => rhs[1].length - lhs[1].length || lhs[0] - rhs[0]);
+    for (const [, group] of groups) {
+      let target = 0;
+      for (let index = 1; index < workerLoads.length; index += 1) {
+        if (workerLoads[index] < workerLoads[target]) target = index;
+      }
+      chunks[target].push(...group);
+      workerLoads[target] += group.length;
+    }
+    return { chunks, strategy: 'candidate-affinity' };
+  }
+
+  jobs.forEach((job, index) => {
+    chunks[index % workerCount].push(job);
+  });
+  return { chunks, strategy: 'round-robin' };
+}
+
+type SharedMtfWorkerBatch = {
+  shared: Record<string, unknown>;
+  jobs: unknown[];
+  jobIndexes: number[];
+};
+
+/**
+ * Finite-difference candidates use one lens for every field.  Group a
+ * candidate/wavelength into the established Rust `shared` batch format so the
+ * browser neither structured-clones nor JSON-stringifies those lens rows once
+ * per field.  Wavelengths must stay separate: refractive indices and packed
+ * surface metadata are wavelength-dependent.
+ */
+function buildSharedMtfWorkerRequest(request: any, jobs: unknown[]): any {
+  const groups = new Map<string, {
+    opticalRows: any[];
+    sourceRows: any[];
+    objectRows: any[];
+    wavelength: number;
+    jobs: Array<{ job: any; index: number }>;
+  }>();
+
+  for (let index = 0; index < jobs.length; index += 1) {
+    const job = jobs[index] as any;
+    const opd = job?.opdRequest;
+    const candidateIndex = Number(job?.meta?.candidateIndex);
+    const wavelength = Number(opd?.wavelengthUm ?? job?.wavelengthUm);
+    const opticalRows = Array.isArray(opd?.opticalSystemRows) ? opd.opticalSystemRows : null;
+    const sourceRows = Array.isArray(opd?.sourceRows) ? opd.sourceRows : null;
+    const objectRows = Array.isArray(opd?.objectRows) ? opd.objectRows : null;
+    if (!Number.isInteger(candidateIndex) || candidateIndex < 0
+      || !Number.isFinite(wavelength) || wavelength <= 0
+      || !opticalRows || opticalRows.length === 0 || !sourceRows || !objectRows) {
+      return { ...request, jobs };
+    }
+    const key = `${candidateIndex}|${wavelength.toFixed(9)}`;
+    const group = groups.get(key);
+    // Do not compact unusual callers that place distinct system/table arrays
+    // under the same nominal candidate and wavelength.
+    if (group && (group.opticalRows !== opticalRows || group.sourceRows !== sourceRows || group.objectRows !== objectRows)) {
+      return { ...request, jobs };
+    }
+    if (group) {
+      group.jobs.push({ job, index });
+    } else {
+      groups.set(key, { opticalRows, sourceRows, objectRows, wavelength, jobs: [{ job, index }] });
+    }
+  }
+
+  if (groups.size === 0) return { ...request, jobs };
+  const optimizerSharedMtfBatches: SharedMtfWorkerBatch[] = [];
+  for (const group of groups.values()) {
+    const firstOpd = group.jobs[0]?.job?.opdRequest || {};
+    const shared = {
+      opdRequest: {
+        ...firstOpd,
+        opticalSystemRows: group.opticalRows,
+        sourceRows: group.sourceRows,
+        objectRows: group.objectRows,
+        wavelengthUm: group.wavelength,
+      },
+    };
+    const compactJobs = group.jobs.map(({ job }) => {
+      const opd = { ...(job?.opdRequest || {}) };
+      delete opd.opticalSystemRows;
+      delete opd.sourceRows;
+      delete opd.objectRows;
+      return { ...job, opdRequest: opd };
+    });
+    optimizerSharedMtfBatches.push({
+      shared,
+      jobs: compactJobs,
+      jobIndexes: group.jobs.map(({ index }) => index),
+    });
+  }
+
+  return { ...request, jobs: undefined, optimizerSharedMtfBatches };
+}
+
+export async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
   const jobs = Array.isArray(request?.jobs) ? request.jobs : [];
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   const logElapsed = () => {
@@ -4117,21 +4308,27 @@ async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
   const hardwareConcurrency = typeof navigator !== "undefined"
     ? Number(navigator.hardwareConcurrency)
     : 4;
-  const workerCount = Math.max(1, Math.min(8, jobs.length, Number.isFinite(hardwareConcurrency) ? hardwareConcurrency : 4));
+  const candidateIndexes = new Set<number>();
+  let allJobsHaveCandidateIndex = jobs.length > 0;
+  for (const job of jobs) {
+    const candidateIndex = Number((job as any)?.meta?.candidateIndex);
+    if (!Number.isInteger(candidateIndex) || candidateIndex < 0) {
+      allJobsHaveCandidateIndex = false;
+      break;
+    }
+    candidateIndexes.add(candidateIndex);
+  }
+  const parallelGroupLimit = allJobsHaveCandidateIndex && candidateIndexes.size > 0
+    ? candidateIndexes.size
+    : jobs.length;
+  const workerCount = Math.max(1, Math.min(6, jobs.length, parallelGroupLimit, Number.isFinite(hardwareConcurrency) ? hardwareConcurrency : 4));
   console.info(`[TFMTF WorkerPool] starting: jobs=${jobs.length}, workers=${workerCount}, hardwareConcurrency=${hardwareConcurrency}`);
-  const chunks: unknown[][] = Array.from({ length: workerCount }, () => []);
-  jobs.forEach((job: unknown, index: number) => {
-    chunks[index % workerCount].push(job);
-  });
-
-  const workers = chunks.map(() => new Worker(
-    new URL("./tfmtf-wasm-worker.ts", import.meta.url),
-    { type: "module" },
-  ));
-  try {
+  const runPoolBatch = async (): Promise<any> => {
+    const { chunks, strategy } = splitMtfJobsAcrossWorkers(jobs, workerCount);
+    const pool = getMtfWasmWorkerPool(workerCount);
     const responses = await Promise.all(chunks.map((chunk, index) => new Promise<any>((resolve, reject) => {
-      const requestId = `tfmtf-${Date.now()}-${index}`;
-      const worker = workers[index];
+      const requestId = `tfmtf-${Date.now()}-${++mtfWasmWorkerRequestSequence}-${index}`;
+      const worker = pool.workers[index];
       worker.onmessage = (event: MessageEvent<any>) => {
         const message = event.data;
         if (message?.requestId !== requestId) return;
@@ -4144,24 +4341,35 @@ async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
       worker.onerror = (event) => reject(new Error(String(event.message || "TF-MTF WASM worker error")));
       worker.postMessage({
         requestId,
-        request: { ...request, jobs: chunk },
+        request: buildSharedMtfWorkerRequest(request, chunk),
       });
     })));
-
     const results = responses.flatMap((response) => Array.isArray(response?.results) ? response.results : []);
+    const sharedBatchCount = responses.reduce((total, response) => (
+      total + Math.max(0, Math.floor(Number(response?.sharedBatchCount) || 0))
+    ), 0);
     if (results.length !== jobs.length) {
       throw new Error(`TF-MTF WASM worker pool returned ${results.length}/${jobs.length} results`);
     }
     return {
       backend: "web-rust-wasm-opd-psf-mtf-worker-pool",
       results,
-      message: `Computed ${jobs.length} TF-MTF jobs across ${workerCount} WASM workers`,
+      workerCount,
+      workerStrategy: strategy,
+      sharedBatchCount,
+      message: `Computed ${jobs.length} TF-MTF jobs across ${workerCount} persistent WASM workers (${strategy})`,
     };
+  };
+
+  const scheduled = mtfWasmWorkerPoolQueue.then(runPoolBatch, runPoolBatch);
+  mtfWasmWorkerPoolQueue = scheduled.then(() => undefined, () => undefined);
+  try {
+    return await scheduled;
   } catch (error) {
+    disposeMtfWasmWorkerPool();
     console.warn(`[TFMTF WorkerPool] failed after ${logElapsed()}ms; retrying on the main WASM instance`, error);
     return runMtfBatchViaWasm(request);
   } finally {
-    workers.forEach((worker) => worker.terminate());
     console.info(`[TFMTF WorkerPool] finished: jobs=${jobs.length}, workers=${workerCount}, elapsed=${logElapsed()}ms`);
   }
 }
@@ -6264,7 +6472,10 @@ export async function runNativeDistortion(
     // Distortion in web mode should prefer the dedicated native-like WASM path first.
     // If coverage is insufficient, we fall back to render-style spot tracing below.
     const preferRenderHighAngleRays = false;
-    const allowDirectWasmDistortion = distortionMetric === "chief-ray" && inputFieldMode !== "imageheight";
+    // The direct chief-ray API handles ImageHeight by converting each requested
+    // image height to its paraxial field angle. Keep ImageHeight on this single,
+    // continuity-aware path instead of mixing render-ray fallback branches.
+    const allowDirectWasmDistortion = distortionMetric === "chief-ray";
 
     // Prefer direct distortion WASM export when available.
     let directWasmError: string | null = null;
@@ -7515,7 +7726,140 @@ export async function runNativeGridDistortion(
 
     const realX = new Array(idealX.length).fill(null) as Array<number | null>;
     const realY = new Array(idealY.length).fill(null) as Array<number | null>;
-    let directChiefRayCount = 0;
+    let radialWasmChiefRayCount = 0;
+    let exactWasmChiefRayCount = 0;
+    let spotFallbackChiefRayCount = 0;
+    let radialWasmChiefRayError = "";
+    let exactWasmChiefRayError = "";
+    let spotFallbackChiefRayError = "";
+
+    // Grid distortion needs one deterministic stop-centred chief ray per field.
+    // The spot-diagram generator is designed for pupil sampling and can reject
+    // otherwise valid outer-field chief rays when its sampled bundle is vignetted.
+    // Use the dedicated radial distortion and exact WASM chief-ray tracers first,
+    // reserving spot tracing for uncommon points those solvers cannot reach.
+    try {
+      const { preloadRustRayTracingWasm } = await import(
+        "../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts"
+      );
+      const rust = await preloadRustRayTracingWasm();
+      const traceRadialDistortion = (rust as any)?.run_native_distortion_wasm_json;
+
+      // A conventional grid-distortion plot is radial for a centred optical
+      // system. Reuse the same robust distortion solver as the 1-D plot, then
+      // project each traced radial image height back onto its grid azimuth.
+      if (typeof traceRadialDistortion === "function") {
+        try {
+          const radialSamples = idealX.map((x, index) => {
+            const radius = Math.hypot(x, idealY[index]);
+            if (gridFieldMode === "angle") {
+              return (Math.atan(radius / focalLengthForGrid) * 180) / Math.PI;
+            }
+            if (gridFieldMode === "height" && finiteSystem && imageScaleForHeight > 1e-9) {
+              return radius / imageScaleForHeight;
+            }
+            return radius;
+          });
+          // Trace from the axis outwards. The exact chief-ray solver deliberately
+          // reuses the previous field as its next seed, so arbitrary row-major
+          // grid order (corner -> centre -> corner) can lose wide-angle fields.
+          const maxRadialSample = Math.max(0, ...radialSamples);
+          const seedSampleCount = 81;
+          const seedSamples = Array.from({ length: seedSampleCount }, (_, index) => ({
+            sample: maxRadialSample * index / Math.max(1, seedSampleCount - 1),
+            index: null as number | null,
+          }));
+          const radialOrder = radialSamples
+            .map((sample, index) => ({ sample, index: index as number | null }))
+            .concat(seedSamples)
+            .sort((a, b) => a.sample - b.sample);
+          const sortedRadialSamples = radialOrder.map((entry) => entry.sample);
+          const radialRaw = traceRadialDistortion(JSON.stringify({
+            opticalSystemRows,
+            sourceRows,
+            objectRows: inputObjectRows,
+            fieldSamples: sortedRadialSamples,
+            surfaceIndex,
+            heightMode: gridFieldMode !== "angle",
+            wavelength,
+            distortionMetric: "chief-ray",
+          }));
+          const radialResponse = typeof radialRaw === "string" ? JSON.parse(radialRaw) : radialRaw;
+          const radialRealHeights = Array.isArray((radialResponse as any)?.realHeights)
+            ? (radialResponse as any).realHeights
+            : [];
+          for (let sortedIndex = 0; sortedIndex < radialOrder.length; sortedIndex += 1) {
+            const index = radialOrder[sortedIndex].index;
+            if (index === null) continue;
+            const idealRadius = Math.hypot(idealX[index], idealY[index]);
+            const rawRealRadius = radialRealHeights[sortedIndex];
+            if (rawRealRadius === null || rawRealRadius === undefined) continue;
+            const realRadius = Number(rawRealRadius);
+            if (!Number.isFinite(realRadius)) continue;
+            if (idealRadius <= 1e-12) {
+              realX[index] = 0;
+              realY[index] = 0;
+            } else {
+              realX[index] = realRadius * idealX[index] / idealRadius;
+              realY[index] = realRadius * idealY[index] / idealRadius;
+            }
+            radialWasmChiefRayCount += 1;
+          }
+        } catch (error) {
+          radialWasmChiefRayError = String((error as any)?.message || error || "radial WASM distortion failed");
+        }
+      } else {
+        radialWasmChiefRayError = "missing run_native_distortion_wasm_json";
+      }
+
+      const traceInfinite = (rust as any)?.trace_image_height_infinite_candidate_exact_with_rows;
+      const traceFinite = (rust as any)?.trace_image_height_finite_candidate_with_rows;
+      const exactTrace = finiteSystem ? traceFinite : traceInfinite;
+      if (typeof exactTrace !== "function") {
+        throw new Error(finiteSystem
+          ? "missing trace_image_height_finite_candidate_with_rows"
+          : "missing trace_image_height_infinite_candidate_exact_with_rows");
+      }
+
+      const progressStride = Math.max(1, Math.ceil(traceObjectRows.length / 100));
+      for (let index = 0; index < traceObjectRows.length; index += 1) {
+        if (realX[index] !== null && realY[index] !== null) continue;
+        const row = traceObjectRows[index] as any;
+        const inputX = finiteSystem
+          ? Number(row?.xHeight ?? row?.x ?? 0)
+          : Number(row?.xHeightAngle ?? row?.xFieldAngle ?? row?.x ?? 0);
+        const inputY = finiteSystem
+          ? Number(row?.yHeight ?? row?.y ?? 0)
+          : Number(row?.yHeightAngle ?? row?.yFieldAngle ?? row?.y ?? 0);
+        try {
+          const traced = Array.from(exactTrace(
+            opticalSystemRows,
+            surfaceIndex,
+            wavelength,
+            Number.isFinite(inputX) ? inputX : 0,
+            Number.isFinite(inputY) ? inputY : 0,
+          ) as ArrayLike<number>);
+          const status = Number(traced[0]);
+          const xMm = Number(traced[1]);
+          const yMm = Number(traced[2]);
+          if (status === 1 && Number.isFinite(xMm) && Number.isFinite(yMm)) {
+            realX[index] = xMm;
+            realY[index] = yMm;
+            exactWasmChiefRayCount += 1;
+          }
+        } catch {
+          // Leave this point missing so the spot fallback can retry it below.
+        }
+        if ((index + 1) % progressStride === 0 || index + 1 === traceObjectRows.length) {
+          emitProgress(
+            10 + (65 * (index + 1)) / Math.max(1, traceObjectRows.length),
+            `Grid distortion exact chief rays: point ${index + 1}/${traceObjectRows.length}`,
+          );
+        }
+      }
+    } catch (error) {
+      exactWasmChiefRayError = String((error as any)?.message || error || "exact WASM chief ray failed");
+    }
 
     const assignChiefPoint = (row: any) => {
       const match = String(row?.label || "").match(/Field-(\d+)/);
@@ -7532,19 +7876,53 @@ export async function runNativeGridDistortion(
       if (Number.isFinite(xMm) && Number.isFinite(yMm)) {
         realX[index] = xMm;
         realY[index] = yMm;
-        directChiefRayCount += 1;
+        spotFallbackChiefRayCount += 1;
       }
     };
 
-    const totalTracePoints = Math.max(1, traceObjectRows.length);
+    const fallbackObjectRows = traceObjectRows.filter((_, index) => (
+      realX[index] === null || realY[index] === null
+    ));
+    const totalTracePoints = Math.max(1, fallbackObjectRows.length);
     const detailedProgress = payload?.detailProgress === true && onProgress !== null;
-    if (detailedProgress) {
-      for (let i = 0; i < traceObjectRows.length; i += 1) {
-        const row = traceObjectRows[i];
+    if (detailedProgress && fallbackObjectRows.length > 0) {
+      for (let i = 0; i < fallbackObjectRows.length; i += 1) {
+        const row = fallbackObjectRows[i];
+        try {
+          const spotResponse = await runNativeSpotRaytrace({
+            opticalSystemRows,
+            sourceRows,
+            objectRows: [row],
+            surfaceIndex,
+            rayCount: 11,
+            ringCount: 1,
+            pattern: "cross",
+            wavelengthMode: "primary",
+            forceRustWasm: true,
+            strictChiefOnly: true,
+          });
+          const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
+          for (const s of series as any[]) {
+            assignChiefPoint(s);
+          }
+        } catch (error) {
+          if (!spotFallbackChiefRayError) {
+            spotFallbackChiefRayError = String(
+              (error as any)?.message || error || "spot fallback chief ray failed",
+            );
+          }
+        }
+        emitProgress(
+          75 + (15 * (i + 1)) / totalTracePoints,
+          `Grid distortion spot fallback: point ${i + 1}/${totalTracePoints}`,
+        );
+      }
+    } else if (fallbackObjectRows.length > 0) {
+      try {
         const spotResponse = await runNativeSpotRaytrace({
           opticalSystemRows,
           sourceRows,
-          objectRows: [row],
+          objectRows: fallbackObjectRows,
           surfaceIndex,
           rayCount: 11,
           ringCount: 1,
@@ -7553,46 +7931,29 @@ export async function runNativeGridDistortion(
           forceRustWasm: true,
           strictChiefOnly: true,
         });
-        const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
-        for (const s of series as any[]) {
-          assignChiefPoint(s);
-        }
-        emitProgress(
-          10 + (80 * (i + 1)) / totalTracePoints,
-          `Grid distortion tracing (Rust/WASM): point ${i + 1}/${totalTracePoints}`,
-        );
-      }
-    } else {
-      const spotResponse = await runNativeSpotRaytrace({
-        opticalSystemRows,
-        sourceRows,
-        objectRows: traceObjectRows,
-        surfaceIndex,
-        rayCount: 11,
-        ringCount: 1,
-        pattern: "cross",
-        wavelengthMode: "primary",
-        forceRustWasm: true,
-        strictChiefOnly: true,
-      });
 
-      const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
-      let processed = 0;
-      for (const row of series as any[]) {
-        assignChiefPoint(row);
-        processed += 1;
-        emitProgress(
-          10 + (80 * processed) / Math.max(1, totalTracePoints),
-          `Grid distortion tracing (Rust/WASM): point ${Math.min(processed, totalTracePoints)}/${totalTracePoints}`,
+        const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
+        let processed = 0;
+        for (const row of series as any[]) {
+          assignChiefPoint(row);
+          processed += 1;
+          emitProgress(
+            75 + (15 * processed) / Math.max(1, totalTracePoints),
+            `Grid distortion spot fallback: point ${Math.min(processed, totalTracePoints)}/${totalTracePoints}`,
+          );
+        }
+      } catch (error) {
+        spotFallbackChiefRayError = String(
+          (error as any)?.message || error || "spot fallback chief ray failed",
         );
       }
     }
 
     let missingFieldFallbackCount = 0;
     for (let i = 0; i < realX.length; i++) {
-      const rx = Number(realX[i]);
-      const ry = Number(realY[i]);
-      if (!Number.isFinite(rx) || !Number.isFinite(ry)) {
+      const rx = realX[i];
+      const ry = realY[i];
+      if (rx === null || ry === null || !Number.isFinite(rx) || !Number.isFinite(ry)) {
         realX[i] = null;
         realY[i] = null;
         missingFieldFallbackCount += 1;
@@ -7620,7 +7981,13 @@ export async function runNativeGridDistortion(
         maxImageX: scaledMaxImageX,
         maxImageY: scaledMaxImageY,
         surfaceIndex,
-        directChiefRayCount,
+        directChiefRayCount: radialWasmChiefRayCount + exactWasmChiefRayCount + spotFallbackChiefRayCount,
+        radialWasmChiefRayCount,
+        exactWasmChiefRayCount,
+        spotFallbackChiefRayCount,
+        radialWasmChiefRayError,
+        exactWasmChiefRayError,
+        spotFallbackChiefRayError,
         missingFieldFallbackCount,
         detailedProgressUsed: detailedProgress,
       },

@@ -11016,6 +11016,11 @@ const collectLegacyCrossRays = async (
             escapeFunctionHeight: optEscapeFunctionHeight,
             preferNative: isTauriRuntime(),
             kktUseWasmPilotOptimizer: true,
+            // Collect low-overhead timing counters for every local run.  The
+            // detailed table stays out of the browser developer console; the
+            // concise, non-overlapping-in-total cost summary is printed below.
+            profile: true,
+            profileConsole: false,
             shouldStop: () => !!(window as any).__cooptOptimizeStopRequested,
             onProgress: (ev: any) => {
             const phase = String(ev?.phase ?? 'running');
@@ -11198,6 +11203,39 @@ const collectLegacyCrossRays = async (
         if ((!Number.isFinite(tsIterations) || tsIterations <= 0) && !tsAborted) {
           throw new Error(`TS/WASM optimizer produced no iterations (iterations=${String(tsResult?.iterations)})`);
         }
+
+        // Timers are intentionally reported as individual (and potentially
+        // nested) measurements.  They identify which work dominates a run,
+        // without falsely implying that the values can be added together.
+        try {
+          const profile = (w as any)?.OptimizationMVP?.getLastProfile?.();
+          const profileStartedAt = Number(profile?.startedAt);
+          const runStartedAt = Number(optimizeConsoleStartedAtRef.current);
+          if (profile && (!Number.isFinite(profileStartedAt) || profileStartedAt >= runStartedAt - 1000)) {
+            const counts = profile?.counts || {};
+            const asInt = (value: any) => Math.max(0, Math.floor(Number(value) || 0));
+            const asSeconds = (value: any) => `${(Math.max(0, Number(value) || 0) / 1000).toFixed(1)}s`;
+            const totalMs = Number(profile?.totalMs);
+            const fdMs = Number(counts?.kktFiniteDiffJacobianMs);
+            const mtfMs = Number(counts?.kktMtfBatchMs);
+            const fdCalls = asInt(counts?.kktFiniteDiffJacobianCalls);
+            const fdColumns = asInt(counts?.kktFiniteDiffColumnsEffective || counts?.kktFiniteDiffColumns);
+            const candidateEvals = asInt(counts?.kktCandidateEvalCount);
+            const mtfCalls = asInt(counts?.kktMtfBatchCalls);
+            const mtfJobs = asInt(counts?.kktMtfBatchJobs);
+            const workerPoolCalls = asInt(counts?.kktMtfWorkerPoolCalls);
+            const workers = asInt(counts?.kktMtfWorkerPoolWorkers);
+            const sharedBatches = asInt(counts?.kktMtfWorkerSharedBatches);
+            const accepted = asInt(counts?.kktAcceptedSteps);
+            const rejected = asInt(counts?.kktRejectedSteps);
+            const backtracks = asInt(counts?.kktLineSearchBacktracks);
+            appendOptimizeConsoleLine(
+              `[Cost] total ${asSeconds(totalMs)} | FD Jacobian ${asSeconds(fdMs)} (${fdCalls}x, ${fdColumns} cols) `
+              + `| MTF ${asSeconds(mtfMs)} (${mtfCalls} batches, ${mtfJobs} jobs, pool ${workerPoolCalls}x/${workers}, shared ${sharedBatches}) `
+              + `| trial ${candidateEvals}, accept/reject ${accepted}/${rejected}, backtrack ${backtracks}`
+            );
+          }
+        } catch (_) {}
 
         optimizeFinalized = true;
 

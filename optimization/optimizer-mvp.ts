@@ -41,7 +41,7 @@ import {
   solveQpSubproblemUnconstrainedWasm
 } from '../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
-import { evaluateOptimizerCandidates, evaluateOptimizerCandidatesMultiScenario, runMtfBatchViaWasm, runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
+import { evaluateOptimizerCandidates, evaluateOptimizerCandidatesMultiScenario, runMtfBatchViaWasm, runMtfBatchViaWasmWorkerPool, runNativeOptimizerMtfBatch, runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
 import { OPERAND_DEFINITIONS } from '../ui/editors/merit-function-inspector.ts';
 import { loadOptimizeRayGridSize, optimizeRayCountFromGridSize } from '../ui/optimization-settings-storage.ts';
 import {
@@ -6186,14 +6186,16 @@ export async function runOptimizationMVP(options = {}) {
   const effectiveMethod = requestedMethod;
   const effectiveOpts = optsWithSpeedPreset;
   const canAttemptNativeRoute = effectiveMethod !== 'kkt-sqp' && isTauriRuntime() && effectiveOpts.forceTs !== true;
-  const shouldPreferNativeRoute = canAttemptNativeRoute && (
-    effectiveOpts.forceNative === true
-    || (
-      unsupportedNativeOperands.length === 0
-      && categoricalMaterialVarsForRoute.length === 0
-      && effectiveOpts.preferNative === true
-    )
-  );
+  // Never route a requirement set containing an unsupported operand to the
+  // native optimizer.  `forceNative` used to bypass this guard; unsupported
+  // operands then became a constant invalid-operand penalty, so KKT could
+  // report apparent progress without ever optimizing (for example) MTFT/MTFS.
+  // Keep the native fast path for fully supported sets, and use the Web/WASM
+  // optimizer whenever the complete merit function cannot be evaluated here.
+  const shouldPreferNativeRoute = canAttemptNativeRoute
+    && unsupportedNativeOperands.length === 0
+    && categoricalMaterialVarsForRoute.length === 0
+    && (effectiveOpts.forceNative === true || effectiveOpts.preferNative === true);
 
   if (isTauriRuntime() && effectiveOpts.forceTs !== true && unsupportedNativeOperands.length > 0) {
     try {
@@ -6228,7 +6230,12 @@ export async function runOptimizationMVP(options = {}) {
 
   // Lightweight profiler to quickly identify bottlenecks.
   // Disabled by default; enable via { profile:true }.
+  // The app enables it for normal interactive runs, but suppresses the verbose
+  // developer-console table and instead prints one compact System Console line.
+  // Keeping the timing collection separate from its presentation makes cost data
+  // available without flooding the user-facing console.
   const __profileEnabled = (effectiveOpts.profile === undefined) ? false : !!effectiveOpts.profile;
+  const __profileConsole = effectiveOpts.profileConsole !== false;
   const __profile = __profileEnabled ? {
     t0: nowMs(),
     startedAt: Date.now(),
@@ -6434,6 +6441,10 @@ export async function runOptimizationMVP(options = {}) {
     try {
       setLastOptimizeProfile(__profile);
     } catch (_) {}
+
+    // The caller can consume the structured profile through getLastProfile().
+    // Avoid logging the full nested table on every normal interactive run.
+    if (!__profileConsole) return;
 
     try {
       const totalMs = Number(__profile.totalMs) || 0;
@@ -10050,7 +10061,6 @@ export async function runOptimizationMVP(options = {}) {
               * Math.max(0, toFiniteNumber(item?.scenarioWeight, 1));
             return !!(requirement?.enabled
               && ['MTFT', 'MTFS', 'MTFA'].includes(operand)
-              && String(requirement?.param1 ?? '').trim().toUpperCase() !== 'ALL_WEIGHTED'
               && weight > 0);
           });
           if (hasMtfResidualItems && operandValueCache.size === 0) {
@@ -10680,6 +10690,12 @@ export async function runOptimizationMVP(options = {}) {
         }
       };
       let nativeBatchFdParityStatus: 'unchecked' | 'passed' | 'failed' = 'unchecked';
+      // The Rust/Rayon MTF route is deliberately experimental.  On the current
+      // desktop workload it has measured slower than the established WASM path,
+      // so it must never be selected merely because Tauri is available.  It can
+      // be enabled for a controlled benchmark with the global flag below; the
+      // first compact batch is still compared with the WASM result.
+      let nativeMtfBatchParityStatus: 'unchecked' | 'passed' | 'failed' = 'unchecked';
       const nativeBatchEvaluatorSessionId = `kkt-candidates-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
       let nativeBatchBaseRowsByConfig: Record<string, any[]> | null = null;
       let nativeBatchSessionInitialized = false;
@@ -10911,7 +10927,6 @@ export async function runOptimizationMVP(options = {}) {
             * Math.max(0, toFiniteNumber(item?.scenarioWeight, 1));
           return !!(requirement?.enabled
             && ['MTFT', 'MTFS', 'MTFA'].includes(operand)
-            && String(requirement?.param1 ?? '').trim().toUpperCase() !== 'ALL_WEIGHTED'
             && weight > 0);
         });
         if (mtfItems.length === 0 || candidateRows.length === 0) {
@@ -10922,12 +10937,12 @@ export async function runOptimizationMVP(options = {}) {
         }
 
         const groups = new Map<string, any>();
+        const weightedItemsWithoutUsableSource = new Set<any>();
         for (const item of mtfItems) {
           const requirement = item.req;
           const configId = String(item?.configId ?? requirement?.configId ?? activeConfigId ?? '');
           const scenarioId = item?.scenarioId ? String(item.scenarioId) : null;
           const { sourceRows, objectRows } = resolveScenarioTablesForConfig(configId, scenarioId);
-          const wavelength = Number(editor.getSystemWavelengthFromOperandOrPrimary?.(requirement, sourceRows));
           const objectIndex = Math.max(0, Math.floor(Number(requirement?.param2 || 1)) - 1);
           const frequency = Math.max(0, Number(requirement?.param4) || 10);
           const requestedSampling = Math.floor(Number(requirement?.param5) || 32);
@@ -10938,7 +10953,18 @@ export async function runOptimizationMVP(options = {}) {
           const sampling = meritFast?.enabled === true && samplingOptions.has(fastSampling)
             ? Math.max(16, fastSampling)
             : Math.max(16, configuredSampling);
-          if (!(Number.isFinite(wavelength) && wavelength > 0) || !objectRows[objectIndex]) {
+          const isAllWeighted = String(requirement?.param1 ?? '').trim().toUpperCase() === 'ALL_WEIGHTED';
+          const wavelengthEntries = isAllWeighted
+            ? sourceRows.map((sourceRow: any) => ({
+              wavelength: Number(sourceRow?.wavelength ?? sourceRow?.Wavelength),
+              weight: Number(sourceRow?.weight ?? sourceRow?.Weight),
+            })).filter((entry: any) => Number.isFinite(entry.wavelength) && entry.wavelength > 0
+              && Number.isFinite(entry.weight) && entry.weight > 0)
+            : [{
+              wavelength: Number(editor.getSystemWavelengthFromOperandOrPrimary?.(requirement, sourceRows)),
+              weight: null,
+            }];
+          if (wavelengthEntries.length === 0 || !objectRows[objectIndex]) {
             if (__profile?.counts) {
               __profile.counts.kktMtfBatchInvalidGroupInputs = (Number(__profile.counts.kktMtfBatchInvalidGroupInputs) || 0) + 1;
               if (!Array.isArray(__profile.mtfBatchInvalidGroupInputs)) __profile.mtfBatchInvalidGroupInputs = [];
@@ -10946,31 +10972,40 @@ export async function runOptimizationMVP(options = {}) {
                 configId,
                 param1: requirement?.param1,
                 param2: requirement?.param2,
-                wavelength,
+                wavelength: Number(editor.getSystemWavelengthFromOperandOrPrimary?.(requirement, sourceRows)),
                 sourceCount: sourceRows.length,
                 objectIndex,
                 objectCount: objectRows.length,
               });
             }
+            if (isAllWeighted) weightedItemsWithoutUsableSource.add(item);
             continue;
           }
-          const groupKey = [configId, scenarioId || '', wavelength, objectIndex, sampling].join('|');
-          const group = groups.get(groupKey) || {
-            configId,
-            scenarioId,
-            wavelength,
-            objectIndex,
-            sampling,
-            sourceRows,
-            objectRows,
-            items: [],
-            frequencies: new Set<number>(),
-            itemFrequencies: [] as Array<{ item: any; frequency: number }>,
-          };
-          group.items.push(item);
-          group.frequencies.add(frequency);
-          group.itemFrequencies.push({ item, frequency });
-          groups.set(groupKey, group);
+          for (const wavelengthEntry of wavelengthEntries) {
+            const wavelength = Number(wavelengthEntry.wavelength);
+            if (!(Number.isFinite(wavelength) && wavelength > 0)) continue;
+            const groupKey = [configId, scenarioId || '', wavelength, objectIndex, sampling].join('|');
+            const group = groups.get(groupKey) || {
+              configId,
+              scenarioId,
+              wavelength,
+              objectIndex,
+              sampling,
+              sourceRows,
+              objectRows,
+              items: [],
+              frequencies: new Set<number>(),
+              itemFrequencies: [] as Array<{ item: any; frequency: number; wavelengthWeight: number | null }>,
+            };
+            group.items.push(item);
+            group.frequencies.add(frequency);
+            group.itemFrequencies.push({
+              item,
+              frequency,
+              wavelengthWeight: isAllWeighted ? Number(wavelengthEntry.weight) : null,
+            });
+            groups.set(groupKey, group);
+          }
         }
         if (groups.size === 0) {
           if (__profile?.counts) {
@@ -11070,7 +11105,104 @@ export async function runOptimizationMVP(options = {}) {
         }
         let response: any;
         try {
-          response = await runMtfBatchViaWasm({ jobs });
+          // A finite-difference step evaluates independent candidate systems.
+          // As few as two candidates justify the persistent pool; only the
+          // one-candidate/base evaluation stays on the already-warm main WASM
+          // instance, where worker dispatch would be pure overhead.
+          const useMtfWorkerPool = jobs.length >= 2;
+          const runCompatibleWasmMtfBatch = () => useMtfWorkerPool
+            ? runMtfBatchViaWasmWorkerPool({ jobs })
+            : runMtfBatchViaWasm({ jobs });
+          const nativeMtfBatchExplicitlyEnabled = isTauriRuntime()
+            && (globalThis as any).__COOPT_ENABLE_NATIVE_OPTIMIZER_MTF_BATCH === true;
+          const nativeJobs = nativeMtfBatchExplicitlyEnabled
+            ? jobs.map((job: any) => ({
+              opticalSystemRows: job?.opdRequest?.opticalSystemRows,
+              sourceRows: job?.opdRequest?.sourceRows,
+              objectRows: job?.opdRequest?.objectRows,
+              objectIndex: job?.opdRequest?.objectIndex,
+              gridSize: job?.opdRequest?.gridSize,
+              wavelengthUm: job?.wavelengthUm,
+              fNumber: job?.fNumber,
+              pupilRange: job?.pupilRange,
+              sampleFrequenciesLpmm: job?.sampleFrequenciesLpmm,
+              directEvalOnly: job?.directEvalOnly === true,
+              pupilSamplingMode: job?.opdRequest?.pupilSamplingMode,
+              tangentialDir: job?.tangentialDir,
+              sagittalDir: job?.sagittalDir,
+              meta: job?.meta || {},
+            }))
+            : [];
+          const nativeEligible = nativeMtfBatchExplicitlyEnabled
+            && nativeMtfBatchParityStatus !== 'failed'
+            && nativeJobs.length === jobs.length;
+          if (!nativeEligible) {
+            response = await runCompatibleWasmMtfBatch();
+          } else {
+            try {
+              const nativeResponse = await runNativeOptimizerMtfBatch({ jobs: nativeJobs });
+              if (nativeMtfBatchParityStatus === 'unchecked') {
+                // Validate just one job against the established Web/WASM route.
+                // This costs one extra MTF once per optimization run, but avoids
+                // replacing a known-good local/web result with a merely faster one.
+                const wasmProbe = await runMtfBatchViaWasm({ jobs: [jobs[0]] });
+                const nativeProbe = Array.isArray(nativeResponse?.results)
+                  ? nativeResponse.results.find((entry: any) => Number(entry?.jobIndex) === 0)
+                  : null;
+                const wasmResult = Array.isArray(wasmProbe?.results) ? wasmProbe.results[0] : null;
+                const nativeMtf = nativeProbe?.mtf || {};
+                const wasmMtf = wasmResult?.mtf || {};
+                const pairs = [
+                  [nativeMtf?.sampledMtfTangential, wasmMtf?.sampledMtfTangential],
+                  [nativeMtf?.sampledMtfSagittal, wasmMtf?.sampledMtfSagittal],
+                ];
+                const parityOk = pairs.every(([actual, expected]) => Array.isArray(actual)
+                  && Array.isArray(expected)
+                  && actual.length === expected.length
+                  && actual.every((value: any, index: number) => {
+                    const a = Number(value);
+                    const b = Number(expected[index]);
+                    return Number.isFinite(a)
+                      && Number.isFinite(b)
+                      && Math.abs(a - b) <= 1e-8 * Math.max(1, Math.abs(b));
+                  }));
+                nativeMtfBatchParityStatus = parityOk ? 'passed' : 'failed';
+                if (__profile?.counts) {
+                  const counter = parityOk
+                    ? 'kktNativeMtfBatchParityPassed'
+                    : 'kktNativeMtfBatchParityFailed';
+                  __profile.counts[counter] = (Number(__profile.counts[counter]) || 0) + 1;
+                }
+                response = parityOk ? nativeResponse : await runCompatibleWasmMtfBatch();
+              } else {
+                response = nativeResponse;
+              }
+              if (__profile?.counts && nativeMtfBatchParityStatus === 'passed') {
+                __profile.counts.kktNativeMtfBatchCalls = (Number(__profile.counts.kktNativeMtfBatchCalls) || 0) + 1;
+                __profile.counts.kktNativeMtfBatchWorkers = Math.max(
+                  Number(__profile.counts.kktNativeMtfBatchWorkers) || 0,
+                  Number(nativeResponse?.workerCount) || 0,
+                );
+              }
+            } catch (nativeError) {
+              nativeMtfBatchParityStatus = 'failed';
+              if (__profile?.counts) {
+                __profile.counts.kktNativeMtfBatchFailures = (Number(__profile.counts.kktNativeMtfBatchFailures) || 0) + 1;
+                __profile.nativeMtfBatchError = String(nativeError instanceof Error ? nativeError.message : nativeError);
+              }
+              response = await runCompatibleWasmMtfBatch();
+            }
+          }
+          if (__profile?.counts && String(response?.backend || '').includes('worker-pool')) {
+            __profile.counts.kktMtfWorkerPoolCalls = (Number(__profile.counts.kktMtfWorkerPoolCalls) || 0) + 1;
+            __profile.counts.kktMtfWorkerPoolJobs = (Number(__profile.counts.kktMtfWorkerPoolJobs) || 0) + jobs.length;
+            __profile.counts.kktMtfWorkerSharedBatches = (Number(__profile.counts.kktMtfWorkerSharedBatches) || 0)
+              + Math.max(0, Math.floor(Number(response?.sharedBatchCount) || 0));
+            __profile.counts.kktMtfWorkerPoolWorkers = Math.max(
+              Number(__profile.counts.kktMtfWorkerPoolWorkers) || 0,
+              Number(response?.workerCount) || 0,
+            );
+          }
         } catch (error) {
           if (__profile?.counts) {
             __profile.counts.kktMtfBatchFailures = (Number(__profile.counts.kktMtfBatchFailures) || 0) + 1;
@@ -11087,6 +11219,7 @@ export async function runOptimizationMVP(options = {}) {
         const results = Array.isArray(response?.results) ? response.results : [];
         if (results.length !== jobs.length) return null;
         const seeded = candidateRows.map(() => new Map<string, number>());
+        const weightedTotals = candidateRows.map(() => new Map<string, { sum: number; weight: number }>());
         for (const result of results) {
           const meta = result?.meta || {};
           const candidateIndex = Number(meta.candidateIndex);
@@ -11125,7 +11258,25 @@ export async function runOptimizationMVP(options = {}) {
                 : (Number.isFinite(tangential) && Number.isFinite(sagittal)
                   ? 0.5 * (tangential + sagittal)
                   : Number.isFinite(tangential) ? tangential : sagittal);
-            if (Number.isFinite(value)) seeded[candidateIndex].set(optimizerOperandCacheKey(item), value);
+            if (!Number.isFinite(value)) continue;
+            const cacheKey = optimizerOperandCacheKey(item);
+            const wavelengthWeight = Number((entry as any)?.wavelengthWeight);
+            if (Number.isFinite(wavelengthWeight) && wavelengthWeight > 0) {
+              const total = weightedTotals[candidateIndex].get(cacheKey) || { sum: 0, weight: 0 };
+              total.sum += wavelengthWeight * value;
+              total.weight += wavelengthWeight;
+              weightedTotals[candidateIndex].set(cacheKey, total);
+            } else {
+              seeded[candidateIndex].set(cacheKey, value);
+            }
+          }
+        }
+        for (let candidateIndex = 0; candidateIndex < seeded.length; candidateIndex++) {
+          for (const [cacheKey, total] of weightedTotals[candidateIndex]) {
+            seeded[candidateIndex].set(cacheKey, total.weight > 0 ? total.sum / total.weight : 0);
+          }
+          for (const item of weightedItemsWithoutUsableSource) {
+            seeded[candidateIndex].set(optimizerOperandCacheKey(item), 0);
           }
         }
         return seeded;
@@ -15273,6 +15424,7 @@ if (typeof window !== 'undefined') {
     exportGlobalVsKktJson: exportGlobalVsKktBenchmarkJson,
     exportEscapeSnapshotsArchive,
     listEscapeSnapshots,
+    getLastProfile: getLastOptimizeProfile,
     pickAnalyticCandidates: pickAnalyticDerivativeCandidates,
     stop: () => {
       __optimizerStopRequested = true;

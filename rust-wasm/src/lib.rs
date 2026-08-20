@@ -5606,6 +5606,7 @@ fn trace_distortion_chief_y_mm(
     rows: &[Value],
     packed: &PackedMeta,
     n_start: f64,
+    wavelength_um: f64,
     stop_surface_index: usize,
     target_surface_index: usize,
     field_value: f64,
@@ -5678,6 +5679,25 @@ fn trace_distortion_chief_y_mm(
         }
         Some(hit[3])
     };
+
+    // Use the same continuity-aware chief-ray origin solver as the image-height
+    // path before trying the legacy independent candidates below. Wide-angle
+    // retrofocus systems have a strongly displaced entrance pupil; the legacy
+    // seeds can lose the physical stop-center branch and then force the caller
+    // to mix in render-ray fallbacks, which appears as a kink in distortion.
+    if let Some(exact_origin) = find_infinite_system_chief_ray_origin_exact_native(
+        rows,
+        packed,
+        n_start,
+        wavelength_um,
+        stop_surface_index,
+        stop_center,
+        dir,
+    ) {
+        if let Some(y) = trace_target_y(exact_origin) {
+            return Some(y);
+        }
+    }
 
     let mut candidate_origins: Vec<[f64; 3]> = Vec::new();
 
@@ -11494,6 +11514,7 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
             &rows,
             &packed,
             object_space_n,
+            wavelength,
             stop_surface_index,
             surface_index,
             trace_field_value,
@@ -14775,12 +14796,85 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
     .map_err(|error| JsValue::from_str(&error))?;
 
     #[cfg(not(feature = "wasm-threads"))]
-    let results: Vec<Value> = jobs
-        .iter()
-        .enumerate()
-        .map(compute_job)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| JsValue::from_str(&error))?;
+    let (results, packed_meta_cache_entries, packed_meta_cache_hits): (Vec<Value>, usize, usize) = {
+        // The optimizer submits one OPD/MTF job for each field and wavelength.
+        // For a finite-difference candidate the packed optical system is the
+        // same across all fields at the same wavelength, yet the old batch path
+        // rebuilt its surface metadata for every job.  Keep it local to this
+        // request so changed candidates can never leak into a later evaluation.
+        let mut packed_meta_cache: Vec<(Vec<Value>, f64, usize, PackedMeta)> = Vec::new();
+        let mut cache_hits = 0usize;
+        let mut results = Vec::with_capacity(jobs.len());
+
+        for (job_index, job) in jobs.iter().enumerate() {
+            // Shared batches already own their normalized rows and metadata in
+            // `compute_job`.  Optimizer batches carry their own rows so that
+            // each finite-difference candidate remains independent.
+            let job_rows = if shared.is_none() {
+                job.get("opdRequest")
+                    .and_then(|opd| opd.get("opticalSystemRows"))
+                    .and_then(Value::as_array)
+            } else {
+                None
+            };
+
+            let Some(job_rows) = job_rows else {
+                results.push(compute_job((job_index, job)).map_err(|error| JsValue::from_str(&error))?);
+                continue;
+            };
+
+            let normalized_rows = job_rows
+                .iter()
+                .map(normalize_coord_trans_row)
+                .collect::<Vec<Value>>();
+            let wavelength_um = job
+                .get("opdRequest")
+                .and_then(|opd| opd.get("wavelengthUm"))
+                .and_then(value_to_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or(0.5876);
+            let target_surface_index = job
+                .get("opdRequest")
+                .and_then(|opd| opd.get("surfaceIndex"))
+                .and_then(value_to_f64)
+                .map(|value| value.max(0.0) as usize)
+                .unwrap_or_else(|| find_eval_surface_index(&normalized_rows))
+                .min(normalized_rows.len().saturating_sub(1));
+
+            let cache_index = if let Some(index) = packed_meta_cache.iter().position(|(rows, wavelength, target, _)| {
+                *target == target_surface_index
+                    && (*wavelength - wavelength_um).abs() <= 1.0e-12
+                    && *rows == normalized_rows
+            }) {
+                cache_hits += 1;
+                index
+            } else {
+                let packed = build_packed_meta_for_opd(&normalized_rows, wavelength_um, target_surface_index);
+                packed_meta_cache.push((normalized_rows, wavelength_um, target_surface_index, packed));
+                packed_meta_cache.len().saturating_sub(1)
+            };
+            let cached = &packed_meta_cache[cache_index];
+            let mut job_result = run_native_opd_psf_mtf_value_with_rows(
+                job,
+                Some(cached.0.as_slice()),
+                Some(&cached.3),
+            )?;
+            if let Some(obj) = job_result.as_object_mut() {
+                obj.insert("jobIndex".to_string(), Value::from(job_index as u64));
+                if let Some(meta) = job.get("meta") {
+                    obj.insert("meta".to_string(), meta.clone());
+                }
+            }
+            results.push(job_result);
+        }
+
+        (results, packed_meta_cache.len(), cache_hits)
+    };
+
+    #[cfg(feature = "wasm-threads")]
+    let packed_meta_cache_entries = 0usize;
+    #[cfg(feature = "wasm-threads")]
+    let packed_meta_cache_hits = 0usize;
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     #[cfg(feature = "wasm-threads")]
@@ -14795,6 +14889,8 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
     serde_json::json!({
         "backend": backend,
         "results": results,
+        "packedMetaCacheEntries": packed_meta_cache_entries,
+        "packedMetaCacheHits": packed_meta_cache_hits,
         "message": "Computed multiple OPD+PSF+MTF jobs via one WASM batch call",
     })
     .serialize(&serializer)

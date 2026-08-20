@@ -2436,7 +2436,7 @@ fn collect_optimizable_variables(rows: &[Value]) -> Vec<VariableSpec> {
             }
 
             let target = optimize_key_to_target_field(key_norm);
-            let baseline = match get_numeric_field(rows, row_index, &target) {
+            let baseline = match optimizer_variable_baseline(rows, row_index, &target) {
                 Some(x) if x.is_finite() => x,
                 _ => continue,
             };
@@ -2463,6 +2463,55 @@ fn collect_optimizable_variables(rows: &[Value]) -> Vec<VariableSpec> {
     }
 
     out
+}
+
+/// Match the blocks-based optimizer's treatment of blank QCON coefficients.
+///
+/// A blank coefficient represents the optical default (zero) in the ray tracer.
+/// It is common for a newly enabled QCON coefficient to be saved as an empty
+/// string together with an `optimizeCoefN: "V"` flag.  Treating that empty
+/// string as non-numeric here silently removes the variable from the native
+/// optimizer, although the same design is accepted by the web optimizer.
+fn optimizer_variable_baseline(
+    rows: &[Value],
+    row_index: usize,
+    field_key: &str,
+) -> Option<f64> {
+    if let Some(value) = get_numeric_field(rows, row_index, field_key) {
+        return Some(value);
+    }
+
+    let row = rows.get(row_index)?.as_object()?;
+    let is_qcon = row
+        .get("surfType")
+        .or_else(|| row.get("type"))
+        .map(|value| value_to_string(Some(value)))
+        .map(|value| {
+            matches!(
+                value
+                    .trim()
+                    .to_ascii_lowercase()
+                    .replace([' ', '_', '-'], "")
+                    .as_str(),
+                "qcon" | "qconic" | "qtype"
+            )
+        })
+        .unwrap_or(false);
+    let is_coefficient = field_key
+        .strip_prefix("coef")
+        .is_some_and(|suffix| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()));
+
+    if is_qcon && is_coefficient {
+        let is_blank = row
+            .get(field_key)
+            .map(|value| value_to_string(Some(value)).trim().is_empty())
+            .unwrap_or(true);
+        if is_blank {
+            return Some(0.0);
+        }
+    }
+
+    None
 }
 
 fn collect_requirements(rows: &[Value], active_config_id: &str) -> Vec<RequirementSpec> {
@@ -5565,8 +5614,8 @@ mod tests {
         .expect("batched Spot evaluation should succeed");
 
         assert_eq!(batched.len(), individual.len());
-        for (index, (_, value)) in batched.iter().enumerate() {
-            let actual = value.expect("batched Spot metric should be finite");
+        for (index, entry) in batched.iter().enumerate() {
+            let actual = entry.value.expect("batched Spot metric should be finite");
             let expected = individual[index];
             let tolerance = 1e-10 * expected.abs().max(1.0);
             assert!((actual - expected).abs() <= tolerance);
@@ -5965,6 +6014,34 @@ mod tests {
         let range = resolve_subsystem_surface_range(&rows, &req, false);
 
         assert_eq!(range, Some((4, 5)));
+    }
+
+    #[test]
+    fn includes_blank_qcon_coefficients_marked_for_optimization() {
+        let rows = vec![
+            serde_json::json!({
+                "id": 12,
+                "surfType": "Qcon",
+                "coef1": "",
+                "optimizeCoef1": "V",
+                "coef2": "0.25",
+                "optimizeCoef2": "V",
+            }),
+            serde_json::json!({
+                "id": 13,
+                "surfType": "Spherical",
+                "coef1": "",
+                "optimizeCoef1": "V",
+            }),
+        ];
+
+        let vars = collect_optimizable_variables(&rows);
+
+        assert_eq!(vars.len(), 2);
+        assert_eq!(vars[0].id, "12:coef1");
+        assert_eq!(vars[0].baseline, 0.0);
+        assert_eq!(vars[1].id, "12:coef2");
+        assert_eq!(vars[1].baseline, 0.25);
     }
 }
 

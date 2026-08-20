@@ -1,6 +1,21 @@
 pub mod commands;
 
+fn configure_native_rayon_pool() {
+    // Optimizer MTF batches are CPU-bound and do not share the WebView's WASM
+    // worker gate.  Establish the native pool before any analysis command can
+    // lazily create Rayon’s default pool, using the OS-visible CPU count.
+    let threads = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .max(1);
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .thread_name(|index| format!("coopt-rayon-{}", index))
+        .build_global();
+}
+
 pub fn run() {
+    configure_native_rayon_pool();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -21,6 +36,7 @@ pub fn run() {
             commands::optics::run_native_opd_rms_waves,
             commands::optics::run_native_psf_map,
             commands::optics::run_native_mtf_map,
+            commands::optics::run_native_optimizer_mtf_batch,
             commands::optics::run_native_through_focus_mtf_map,
             commands::optics::run_native_field_mtf_map,
             commands::optics::log_native_astigmatism_debug,
