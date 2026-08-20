@@ -6955,6 +6955,19 @@ export async function runOptimizationMVP(options = {}) {
   const kktStrictMtfSamplingSize = Number.isFinite(Number(opts?.kktStrictMtfSamplingSize))
     ? Math.max(16, Math.floor(Number(opts.kktStrictMtfSamplingSize)))
     : Math.max(16, kktStrictRayGridSize);
+  // Finite-difference MTF values are used only to estimate a search direction.
+  // Do not pay the full OPD/PSF grid cost once for every perturbed variable.
+  // Candidate acceptance and the final report still use kktStrictMtfSamplingSize.
+  // 8x8 is FD-only.  Production/strict MTF sampling remains at least 16x16.
+  const kktMtfSamplingLevels = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
+  const kktFdMtfSamplingRequested = Number.isFinite(Number(opts?.kktFdMtfSamplingSize))
+    ? Math.max(8, Math.floor(Number(opts.kktFdMtfSamplingSize)))
+    : kktStrictMtfSamplingSize;
+  const kktFdMtfSamplingSize = kktMtfSamplingLevels.reduce((selected, level) => (
+    level <= kktFdMtfSamplingRequested ? level : selected
+  ), 16);
+  const kktUseCoarseMtfFiniteDifferences = opts?.kktUseCoarseMtfFiniteDifferences !== false
+    && kktFdMtfSamplingSize < kktStrictMtfSamplingSize;
   const kktStrictRefineAcceptedCandidates = opts?.kktStrictRefineAcceptedCandidates !== false;
   const kktPeriodicFullSweepEvery = Number.isFinite(Number(opts?.kktPeriodicFullSweepEvery))
     ? Math.max(1, Math.floor(Number(opts.kktPeriodicFullSweepEvery)))
@@ -9844,6 +9857,44 @@ export async function runOptimizationMVP(options = {}) {
       const kktOperandPriorityScores = new Map<string, number>();
       let kktPriorityOperandKeys = new Set<string>();
       let kktForceFullOperandSweep = true;
+      const kktFdMtfOperandTopK = Number.isFinite(Number(opts?.kktFdMtfOperandTopK))
+        ? Math.max(1, Math.floor(Number(opts.kktFdMtfOperandTopK)))
+        : 4;
+      const kktMtfResidualItems = (Array.isArray(residualItems) ? residualItems : []).filter((item: any) => (
+        ['MTFT', 'MTFS', 'MTFA'].includes(String(item?.req?.operand ?? '').trim().toUpperCase())
+      ));
+      const kktUseSelectiveMtfFiniteDifferences = opts?.kktUseSelectiveMtfFiniteDifferences !== false
+        && kktMtfResidualItems.length > kktFdMtfOperandTopK;
+      const getFiniteDifferenceMtfOperandKeys = (): Set<string> | null => {
+        if (!kktUseSelectiveMtfFiniteDifferences) return null;
+        return new Set(
+          kktMtfResidualItems
+            .map((item: any, index: number) => ({
+              key: optimizerOperandCacheKey(item),
+              // The initial full evaluation seeds this score map.  Retain a
+              // stable declaration-order tie break for the first iteration.
+              score: Number(kktOperandPriorityScores.get(optimizerOperandCacheKey(item))) || 0,
+              index,
+            }))
+            .sort((left, right) => (right.score - left.score) || (left.index - right.index))
+            .slice(0, kktFdMtfOperandTopK)
+            .map(entry => entry.key),
+        );
+      };
+      const getFiniteDifferencePriorityOperandKeys = (mtfOperandKeys: Set<string> | null): Set<string> | null => {
+        if (!(mtfOperandKeys instanceof Set)) return kktPriorityOperandKeys;
+        const keys = new Set<string>();
+        for (const item of (Array.isArray(residualItems) ? residualItems : [])) {
+          const operand = String(item?.req?.operand ?? '').trim().toUpperCase();
+          const key = optimizerOperandCacheKey(item);
+          // Re-evaluate every non-MTF operand.  Only non-priority MTF values
+          // are reused from the current full-resolution evaluation.
+          if (!['MTFT', 'MTFS', 'MTFA'].includes(operand) || mtfOperandKeys.has(key)) {
+            keys.add(key);
+          }
+        }
+        return keys;
+      };
       const kktCachePrecision = Number.isFinite(Number(opts?.kktEvalCachePrecision))
         ? Math.max(6, Math.min(16, Math.floor(Number(opts.kktEvalCachePrecision))))
         : ((spotFastMode || kktUseMatrixFreeCore) ? 9 : 12);
@@ -10035,7 +10086,11 @@ export async function runOptimizationMVP(options = {}) {
       const evalSQPAtXUncached = async (
         x: number[],
         seededOperandValues: Map<string, number> | null = null,
-        evalPolicy: { forceFullOperandEval?: boolean; priorityOperandKeys?: Set<string> | null } | null = null,
+        evalPolicy: {
+          forceFullOperandEval?: boolean;
+          priorityOperandKeys?: Set<string> | null;
+          mtfOperandKeys?: Set<string> | null;
+        } | null = null,
       ) => {
         const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
         if (!editor || typeof editor.calculateOperandValue !== 'function') {
@@ -10106,6 +10161,9 @@ export async function runOptimizationMVP(options = {}) {
           const priorityOperandKeys = (evalPolicy?.priorityOperandKeys instanceof Set)
             ? evalPolicy.priorityOperandKeys
             : null;
+          const mtfOperandKeys = (evalPolicy?.mtfOperandKeys instanceof Set)
+            ? evalPolicy.mtfOperandKeys
+            : null;
           const hasMtfResidualItems = items.some((item: any) => {
             const requirement = item?.req;
             const operand = String(requirement?.operand ?? '').trim().toUpperCase();
@@ -10120,7 +10178,10 @@ export async function runOptimizationMVP(options = {}) {
             try {
               const candidateRowsByConfig = buildNativeCandidateRows(xClamped);
               if (candidateRowsByConfig) {
-                const mtfSeededValues = await evalMtfOperandValuesNativeBatch([candidateRowsByConfig]);
+                const mtfSeededValues = await evalMtfOperandValuesNativeBatch(
+                  [candidateRowsByConfig],
+                  mtfOperandKeys,
+                );
                 const mtfMap = Array.isArray(mtfSeededValues) ? mtfSeededValues[0] : null;
                 if (mtfMap instanceof Map && mtfMap.size > 0) {
                   let seededCount = 0;
@@ -10382,6 +10443,59 @@ export async function runOptimizationMVP(options = {}) {
         const base = await evalSQPAtX(x);
         return buildAugmentedResidualsFromBase(base, lambdaVec, mu, maxViolContext);
       };
+
+      // A finite-difference Jacobian needs a self-consistent pair of values,
+      // not the production-resolution MTF at every perturbation.  Keep this
+      // separate from evalSQPAtX: its cache contains production evaluations
+      // and must never be reused as the coarse finite-difference reference.
+      const withKktFiniteDifferenceMtfSampling = async <T>(callback: () => Promise<T>): Promise<T> => {
+        if (!kktUseCoarseMtfFiniteDifferences) return callback();
+        return withTemporaryMeritSampling(
+          {
+            enabled: true,
+            mtfSamplingSize: kktFdMtfSamplingSize,
+          },
+          callback,
+        );
+      };
+
+      const evalAugmentedResidualsForFiniteDifference = async (
+        x: number[],
+        lambdaVec: number[],
+        mu: number,
+        maxViolContext: number = 1.0,
+      ) => withKktFiniteDifferenceMtfSampling(async () => {
+        const mtfOperandKeys = getFiniteDifferenceMtfOperandKeys();
+        const priorityOperandKeys = getFiniteDifferencePriorityOperandKeys(mtfOperandKeys);
+        let seededOperandValues: Map<string, number> | null = null;
+        if (mtfOperandKeys instanceof Set && mtfOperandKeys.size > 0) {
+          const candidateRows = buildNativeCandidateRows(x);
+          const mtfValues = candidateRows
+            ? await evalMtfOperandValuesNativeBatch([candidateRows], mtfOperandKeys)
+            : null;
+          seededOperandValues = (Array.isArray(mtfValues) && mtfValues[0] instanceof Map)
+            ? mtfValues[0]
+            : null;
+        }
+        const base = await evalSQPAtXUncached(x, seededOperandValues, {
+          // Unselected MTF operands use the current full-resolution cache;
+          // all non-MTF operands and selected MTF operands are recalculated.
+          forceFullOperandEval: mtfOperandKeys instanceof Set ? false : kktForceFullOperandSweep,
+          priorityOperandKeys,
+          mtfOperandKeys,
+        });
+        if (__profile?.counts) {
+          if (kktUseCoarseMtfFiniteDifferences) {
+            __profile.counts.kktCoarseMtfFdEvaluations = (Number(__profile.counts.kktCoarseMtfFdEvaluations) || 0) + 1;
+            __profile.counts.kktCoarseMtfFdSamplingSize = kktFdMtfSamplingSize;
+          }
+          if (mtfOperandKeys instanceof Set) {
+            __profile.counts.kktSelectiveMtfFdEvaluations = (Number(__profile.counts.kktSelectiveMtfFdEvaluations) || 0) + 1;
+            __profile.counts.kktSelectiveMtfFdOperands = mtfOperandKeys.size;
+          }
+        }
+        return buildAugmentedResidualsFromBase(base, lambdaVec, mu, maxViolContext);
+      });
 
       const evaluateSqpFilterMerit = (evaluation: any, penalty: number) => {
         const objectiveResiduals = Array.isArray(evaluation?.residuals) ? evaluation.residuals : [];
@@ -10930,6 +11044,7 @@ export async function runOptimizationMVP(options = {}) {
 
       const evalMtfOperandValuesNativeBatch = async (
         candidateRows: Array<Record<string, any[]>>,
+        allowedOperandKeys: Set<string> | null = null,
       ): Promise<Array<Map<string, number>> | null> => {
         const editor = (typeof window !== 'undefined') ? (window as any).meritFunctionEditor : null;
         if (!editor || typeof editor.getConfigTablesByConfigId !== 'function') {
@@ -10945,6 +11060,7 @@ export async function runOptimizationMVP(options = {}) {
             * Math.max(0, toFiniteNumber(item?.scenarioWeight, 1));
           return !!(requirement?.enabled
             && ['MTFT', 'MTFS', 'MTFA'].includes(operand)
+            && (!(allowedOperandKeys instanceof Set) || allowedOperandKeys.has(optimizerOperandCacheKey(item)))
             && weight > 0);
         });
         if (mtfItems.length === 0 || candidateRows.length === 0) {
@@ -10964,12 +11080,12 @@ export async function runOptimizationMVP(options = {}) {
           const objectIndex = Math.max(0, Math.floor(Number(requirement?.param2 || 1)) - 1);
           const frequency = Math.max(0, Number(requirement?.param4) || 10);
           const requestedSampling = Math.floor(Number(requirement?.param5) || 32);
-          const samplingOptions = new Set([16, 32, 64, 128, 256, 512, 1024, 2048, 4096]);
+          const samplingOptions = new Set([8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]);
           const configuredSampling = samplingOptions.has(requestedSampling) ? requestedSampling : 32;
           const meritFast = (typeof globalThis !== 'undefined' && (globalThis as any).__cooptMeritFastMode) || null;
           const fastSampling = Math.floor(Number(meritFast?.mtfSamplingSize));
           const sampling = meritFast?.enabled === true && samplingOptions.has(fastSampling)
-            ? Math.max(16, fastSampling)
+            ? Math.max(8, fastSampling)
             : Math.max(16, configuredSampling);
           const isAllWeighted = String(requirement?.param1 ?? '').trim().toUpperCase() === 'ALL_WEIGHTED';
           const wavelengthEntries = isAllWeighted
@@ -11346,7 +11462,9 @@ export async function runOptimizationMVP(options = {}) {
           const candidateRows = candidatePoints.map(buildNativeCandidateRows).filter(Boolean) as Array<Record<string, any[]>>;
           if (candidateRows.length !== candidatePoints.length) return null;
 
-          const mtfSeededValues = await evalMtfOperandValuesNativeBatch(candidateRows);
+          const mtfOperandKeys = getFiniteDifferenceMtfOperandKeys();
+          const priorityOperandKeys = getFiniteDifferencePriorityOperandKeys(mtfOperandKeys);
+          const mtfSeededValues = await evalMtfOperandValuesNativeBatch(candidateRows, mtfOperandKeys);
           if (!Array.isArray(mtfSeededValues) || mtfSeededValues.length !== candidatePoints.length) return null;
 
           const toAugmentedResiduals = (baseEval: any): number[] => {
@@ -11378,8 +11496,9 @@ export async function runOptimizationMVP(options = {}) {
               candidatePoints[candidateIndex],
               seededValues && seededValues.size > 0 ? seededValues : null,
               {
-                forceFullOperandEval: kktForceFullOperandSweep,
-                priorityOperandKeys: kktPriorityOperandKeys,
+                forceFullOperandEval: mtfOperandKeys instanceof Set ? false : kktForceFullOperandSweep,
+                priorityOperandKeys,
+                mtfOperandKeys,
               },
             );
             baseEvals.push(baseEval);
@@ -11394,12 +11513,21 @@ export async function runOptimizationMVP(options = {}) {
             __profile.counts.kktWebBatchFdCalls = (Number(__profile.counts.kktWebBatchFdCalls) || 0) + 1;
             __profile.counts.kktWebBatchFdCandidates = (Number(__profile.counts.kktWebBatchFdCandidates) || 0) + candidatePoints.length;
             __profile.counts.kktWebBatchFdMs = (Number(__profile.counts.kktWebBatchFdMs) || 0) + (nowMs() - webBatchStartedAt);
+            if (mtfOperandKeys instanceof Set) {
+              __profile.counts.kktSelectiveMtfFdBatches = (Number(__profile.counts.kktSelectiveMtfFdBatches) || 0) + 1;
+              __profile.counts.kktSelectiveMtfFdCandidates = (Number(__profile.counts.kktSelectiveMtfFdCandidates) || 0) + candidatePoints.length;
+              __profile.counts.kktSelectiveMtfFdOperands = mtfOperandKeys.size;
+            }
           }
 
           return residuals;
         };
 
-        if (!kktNativeBatchFdEnabled) {
+        // Native candidate evaluation currently evaluates every MTF operand.
+        // Keep selective FD on the Web/WASM path until the native batch accepts
+        // an operand subset; otherwise an explicit native flag would silently
+        // reintroduce the full MTF sweep we are avoiding here.
+        if (!kktNativeBatchFdEnabled || kktUseSelectiveMtfFiniteDifferences) {
           return evalAugmentedResidualsWebBatch();
         }
 
@@ -11656,7 +11784,7 @@ export async function runOptimizationMVP(options = {}) {
             onBaseEvalBatch(baseEvals);
           }
           if (nativeBatchFdParityStatus === 'unchecked') {
-            const reference = await evalAugmentedResiduals(
+            const reference = await evalAugmentedResidualsForFiniteDifference(
               candidatePoints[0],
               lambdaVec,
               penaltyMu,
@@ -11712,10 +11840,36 @@ export async function runOptimizationMVP(options = {}) {
         }
       };
 
+      const evalAugmentedResidualsNativeBatchForFiniteDifference = async (
+        candidatePoints: number[][],
+        lambdaVec: number[],
+        penaltyMu: number,
+        maxViolContext: number,
+      ): Promise<number[][] | null> => withKktFiniteDifferenceMtfSampling(async () => {
+        const residuals = await evalAugmentedResidualsNativeBatch(
+          candidatePoints,
+          lambdaVec,
+          penaltyMu,
+          maxViolContext,
+        );
+        if (__profile?.counts && kktUseCoarseMtfFiniteDifferences && Array.isArray(residuals)) {
+          __profile.counts.kktCoarseMtfFdBatches = (Number(__profile.counts.kktCoarseMtfFdBatches) || 0) + 1;
+          __profile.counts.kktCoarseMtfFdCandidates = (Number(__profile.counts.kktCoarseMtfFdCandidates) || 0) + candidatePoints.length;
+        }
+        return residuals;
+      });
+
       const finiteDiffJacobian = async (x: number[], r0: number[], lambdaVec: number[], mu: number, maxViol: number = 1.0, baseResidualCount: number = 0) => {
         const __fdT0 = nowMs();
         const n = x.length;
         const m = r0.length;
+        const coarseBase = kktUseCoarseMtfFiniteDifferences
+          ? await evalAugmentedResidualsForFiniteDifference(x, lambdaVec, mu, maxViol)
+          : null;
+        const r0ForFiniteDifference = Array.isArray(coarseBase?.residuals)
+          && coarseBase.residuals.length === m
+          ? coarseBase.residuals
+          : r0;
         const J = Array.from({ length: m }, () => Array(n).fill(0));
         const analyticEqCols = collectAnalyticEqualityVariableIndexes(n);
         const useWasmBatchFd = opts?.kktUseWasmBatchFd !== false;
@@ -11749,7 +11903,7 @@ export async function runOptimizationMVP(options = {}) {
           for (const col of group) xp[col] = x[col] + fdSteps[col];
           return xp;
         });
-        const nativeBatchResiduals = await evalAugmentedResidualsNativeBatch(nativeCandidatePoints, lambdaVec, mu, maxViol);
+        const nativeBatchResiduals = await evalAugmentedResidualsNativeBatchForFiniteDifference(nativeCandidatePoints, lambdaVec, mu, maxViol);
         const nativeBatchComplete = Array.isArray(nativeBatchResiduals)
           && nativeBatchResiduals.length === nativeGroups.length
           && nativeBatchResiduals.every((residuals) => Array.isArray(residuals) && residuals.length === m);
@@ -11766,7 +11920,7 @@ export async function runOptimizationMVP(options = {}) {
               const rowsToUpdate = supportRows.length > 0 ? supportRows : Array.from({ length: m }, (_, row) => row);
               for (const row of rowsToUpdate) {
                 if (!(row >= 0 && row < m)) continue;
-                const deriv = (r1[row] - r0[row]) / eps;
+                const deriv = (r1[row] - r0ForFiniteDifference[row]) / eps;
                 J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
               }
             }
@@ -11783,7 +11937,7 @@ export async function runOptimizationMVP(options = {}) {
               if (!(col >= 0 && col < n)) continue;
               xp[col] = x[col] + fdSteps[col];
             }
-            const e1 = await evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const e1 = await evalAugmentedResidualsForFiniteDifference(xp, lambdaVec, mu, maxViol);
             const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
             await maybeYieldKktCpu();
             effectiveEvals += 1;
@@ -11794,13 +11948,13 @@ export async function runOptimizationMVP(options = {}) {
               const supportRows = Array.isArray(jacobianColumnSupports?.[col]) ? jacobianColumnSupports[col] : [];
               if (supportRows.length === 0) {
                 for (let row = 0; row < Math.min(m, r1.length); row++) {
-                  const deriv = (r1[row] - r0[row]) / eps;
+                  const deriv = (r1[row] - r0ForFiniteDifference[row]) / eps;
                   J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
                 }
               } else {
                 for (const row of supportRows) {
                   if (!(row >= 0 && row < m) || row >= r1.length) continue;
-                  const deriv = (r1[row] - r0[row]) / eps;
+                  const deriv = (r1[row] - r0ForFiniteDifference[row]) / eps;
                   J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
                 }
               }
@@ -11821,14 +11975,14 @@ export async function runOptimizationMVP(options = {}) {
               xp[i] = x[i] + fdSteps[i];
             }
 
-            const e1 = await evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const e1 = await evalAugmentedResidualsForFiniteDifference(xp, lambdaVec, mu, maxViol);
             const r1 = e1.residuals;
             await maybeYieldKktCpu();
             perturbedResidualsActive.push(Array.isArray(r1) ? r1.slice(0, m) : []);
           }
 
           const Jw = useWasmBatchFd
-            ? __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianGroupedWasm(r0, perturbedResidualsActive, fdSteps, activeCols))
+            ? __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianGroupedWasm(r0ForFiniteDifference, perturbedResidualsActive, fdSteps, activeCols))
             : null;
 
           if (Array.isArray(Jw) && Jw.length === m) {
@@ -11848,7 +12002,7 @@ export async function runOptimizationMVP(options = {}) {
               const eps = fdSteps[i];
               if (!Array.isArray(r1) || !Number.isFinite(eps) || eps === 0) continue;
               for (let k = 0; k < Math.min(m, r1.length); k++) {
-                const deriv = (r1[k] - r0[k]) / eps;
+                const deriv = (r1[k] - r0ForFiniteDifference[k]) / eps;
                 J[k][i] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
               }
             }
@@ -11914,6 +12068,13 @@ export async function runOptimizationMVP(options = {}) {
         const __fdT0 = nowMs();
         const n = x.length;
         const m = r0.length;
+        const coarseBase = kktUseCoarseMtfFiniteDifferences
+          ? await evalAugmentedResidualsForFiniteDifference(x, lambdaVec, mu, maxViol)
+          : null;
+        const r0ForFiniteDifference = Array.isArray(coarseBase?.residuals)
+          && coarseBase.residuals.length === m
+          ? coarseBase.residuals
+          : r0;
         const J = Array.from({ length: m }, () => Array(n).fill(0));
         const useWasmBatchFd = opts?.kktUseWasmBatchFd !== false;
         if (Array.isArray(baseJ) && baseJ.length > 0) {
@@ -11956,7 +12117,7 @@ export async function runOptimizationMVP(options = {}) {
           for (const col of group) xp[col] = x[col] + stepByCol[col];
           return xp;
         });
-        const nativeBatchResiduals = await evalAugmentedResidualsNativeBatch(nativeCandidatePoints, lambdaVec, mu, maxViol);
+        const nativeBatchResiduals = await evalAugmentedResidualsNativeBatchForFiniteDifference(nativeCandidatePoints, lambdaVec, mu, maxViol);
         const nativeBatchComplete = Array.isArray(nativeBatchResiduals)
           && nativeBatchResiduals.length === groups.length
           && nativeBatchResiduals.every((residuals) => Array.isArray(residuals) && residuals.length === m);
@@ -11972,7 +12133,7 @@ export async function runOptimizationMVP(options = {}) {
               const rowsToUpdate = supportRows.length > 0 ? supportRows : Array.from({ length: m }, (_, row) => row);
               for (const row of rowsToUpdate) {
                 if (!(row >= 0 && row < m)) continue;
-                const deriv = (r1[row] - r0[row]) / eps;
+                const deriv = (r1[row] - r0ForFiniteDifference[row]) / eps;
                 J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
               }
             }
@@ -11994,13 +12155,13 @@ export async function runOptimizationMVP(options = {}) {
             if (xp[col] === x[col]) {
               xp[col] = x[col] + stepByCol[col];
             }
-            const e1 = await evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const e1 = await evalAugmentedResidualsForFiniteDifference(xp, lambdaVec, mu, maxViol);
             const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
             await maybeYieldKktCpu();
-            perturbedResidualsActive.push(Array.isArray(r1) ? r1.slice(0, m) : r0.slice());
+            perturbedResidualsActive.push(Array.isArray(r1) ? r1.slice(0, m) : r0ForFiniteDifference.slice());
           }
 
-          const Jw = __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianGroupedWasm(r0, perturbedResidualsActive, partialSteps, validCols));
+          const Jw = __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianGroupedWasm(r0ForFiniteDifference, perturbedResidualsActive, partialSteps, validCols));
           if (Array.isArray(Jw) && Jw.length === m) {
             for (const col of validCols) {
               for (let rowIndex = 0; rowIndex < m; rowIndex++) {
@@ -12017,7 +12178,7 @@ export async function runOptimizationMVP(options = {}) {
               const eps = stepByCol[col];
               if (!Array.isArray(r1) || !Number.isFinite(eps) || eps === 0) continue;
               for (let rowIndex = 0; rowIndex < Math.min(m, r1.length); rowIndex++) {
-                const deriv = (r1[rowIndex] - r0[rowIndex]) / eps;
+                const deriv = (r1[rowIndex] - r0ForFiniteDifference[rowIndex]) / eps;
                 J[rowIndex][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
               }
             }
@@ -12032,7 +12193,7 @@ export async function runOptimizationMVP(options = {}) {
             for (const col of group) {
               xp[col] = x[col] + stepByCol[col];
             }
-            const e1 = await evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const e1 = await evalAugmentedResidualsForFiniteDifference(xp, lambdaVec, mu, maxViol);
             const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
             await maybeYieldKktCpu();
             effectiveEvals += 1;
@@ -12043,13 +12204,13 @@ export async function runOptimizationMVP(options = {}) {
               const supportRows = Array.isArray(jacobianColumnSupports?.[col]) ? jacobianColumnSupports[col] : [];
               if (supportRows.length === 0) {
                 for (let k = 0; k < Math.min(m, r1.length); k++) {
-                  const deriv = (r1[k] - r0[k]) / eps;
+                  const deriv = (r1[k] - r0ForFiniteDifference[k]) / eps;
                   J[k][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
                 }
               } else {
                 for (const row of supportRows) {
                   if (!(row >= 0 && row < m) || row >= r1.length) continue;
-                  const deriv = (r1[row] - r0[row]) / eps;
+                  const deriv = (r1[row] - r0ForFiniteDifference[row]) / eps;
                   J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
                 }
               }
