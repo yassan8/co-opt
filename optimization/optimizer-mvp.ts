@@ -10640,9 +10640,17 @@ export async function runOptimizationMVP(options = {}) {
         return out;
       };
 
-      const kktNativeBatchFdEnabled = opts?.kktUseNativeBatchFd !== false
-        && useKktSqp
-        && isTauriRuntime();
+      const kktHasMtfResidualItems = (Array.isArray(residualItems) ? residualItems : [])
+        .some((item: any) => ['MTFT', 'MTFS', 'MTFA'].includes(String(item?.req?.operand ?? '').trim().toUpperCase()));
+      // The native candidate evaluator is still valuable for non-MTF operands.
+      // For MTF workloads it has to call back into the Web/WASM evaluator anyway;
+      // if the native subset then fails the strict parity check, that first batch
+      // is pure overhead.  Use the already-parity-validated Web batch by default
+      // and retain the native route only as an explicit diagnostic opt-in.
+      const kktNativeBatchFdEnabled = useKktSqp
+        && isTauriRuntime()
+        && (opts?.kktUseNativeBatchFd === true
+          || (opts?.kktUseNativeBatchFd !== false && !kktHasMtfResidualItems));
       const nativeBatchResidualItems = Array.isArray(residualItems)
         ? residualItems.filter((item: any) => {
             const requirement = item?.req;
@@ -11327,8 +11335,7 @@ export async function runOptimizationMVP(options = {}) {
         maxViolContext: number,
         onBaseEvalBatch?: ((baseEvals: any[]) => void) | null,
       ): Promise<number[][] | null> => {
-        const hasMtfResidualItems = (Array.isArray(residualItems) ? residualItems : [])
-          .some((item: any) => ['MTFT', 'MTFS', 'MTFA'].includes(String(item?.req?.operand ?? '').trim().toUpperCase()));
+        const hasMtfResidualItems = kktHasMtfResidualItems;
 
         const evalAugmentedResidualsWebBatch = async (): Promise<number[][] | null> => {
           if (kktNativeBatchFdEnabled) return null;

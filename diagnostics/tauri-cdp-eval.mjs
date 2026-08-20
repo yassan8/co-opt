@@ -1,10 +1,19 @@
+import { readFile } from 'node:fs/promises';
+
 const port = Number(process.env.COOPT_CDP_PORT || 9223);
 const targetUrlFragment = String(process.env.COOPT_CDP_URL || '').trim();
-const expression = process.argv[2];
+const [modeOrExpression, jsonPath] = process.argv.slice(2);
 
-if (!expression) {
-  throw new Error('Usage: node diagnostics/tauri-cdp-eval.mjs <expression>');
+if (!modeOrExpression) {
+  throw new Error('Usage: node diagnostics/tauri-cdp-eval.mjs <expression> | --load-json <project.json>');
 }
+if (modeOrExpression === '--load-json' && !jsonPath) {
+  throw new Error('Usage: node diagnostics/tauri-cdp-eval.mjs --load-json <project.json>');
+}
+
+const expression = modeOrExpression === '--load-json'
+  ? `Promise.resolve(window.__loadAllDataObjectIntoApp(${await readFile(jsonPath, 'utf8')})).then(() => ({ ok: true }))`
+  : modeOrExpression;
 
 const targets = await fetch(`http://127.0.0.1:${port}/json`).then((response) => response.json());
 const target = (targetUrlFragment

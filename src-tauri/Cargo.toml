@@ -30,3 +30,9 @@ metal = "0.29"
 objc = "0.2"
 cocoa = "0.26"
 core-graphics = "0.24"
+
+# `tauri dev` uses Cargo's development profile.  Optical tracing is the hot
+# path of the local optimizer, so leave dependencies debuggable while compiling
+# this crate's numerical kernels with the same optimization level as release.
+[profile.dev.package."co-opt-pro"]
+opt-level = 3
