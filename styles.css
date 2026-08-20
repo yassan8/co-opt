@@ -7660,6 +7660,13 @@ body.dark-mode #design-intent-container .block-inspector {
     transform: none;
 }
 
+.analysis-window-primary-action:disabled {
+    border-color: #93c5fd;
+    background: #93c5fd;
+    cursor: wait;
+    opacity: 1;
+}
+
 .analysis-window-options {
     position: relative;
     margin-left: auto;
@@ -7683,6 +7690,8 @@ body.dark-mode #design-intent-container .block-inspector {
     top: calc(100% + 7px);
     right: 0;
     width: min(360px, calc(100vw - 20px));
+    max-height: calc(100vh - 80px);
+    overflow: auto;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
@@ -7692,6 +7701,24 @@ body.dark-mode #design-intent-container .block-inspector {
     border-radius: 10px;
     background: #ffffff;
     box-shadow: 0 16px 38px rgba(15, 23, 42, 0.18);
+}
+
+.analysis-window-options__panel .analysis-window-field {
+    min-width: 0;
+}
+
+.analysis-window-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.analysis-window-toggle input {
+    margin: 0;
 }
 
 .analysis-window-status {
@@ -7723,6 +7750,11 @@ body.dark-mode #design-intent-container .block-inspector {
     font-size: 11px;
 }
 
+.analysis-window-progress__label > span:first-child {
+    min-width: 38px;
+    font-variant-numeric: tabular-nums;
+}
+
 .analysis-window-progress__track {
     width: 100%;
     height: 3px;
@@ -7739,6 +7771,33 @@ body.dark-mode #design-intent-container .block-inspector {
     flex: 1 1 auto;
     min-height: 0;
     background: #ffffff;
+}
+
+.analysis-window-result {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.analysis-window-chart {
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.analysis-window-error {
+    flex: 0 0 auto;
+    padding: 8px 10px;
+    border-bottom: 1px solid #fecaca;
+    background: #fff7f7;
+    color: #b42318;
+    font-size: 11px;
+    line-height: 1.45;
 }
 
 /* Literature import keeps hierarchy without adding decorative color. */
@@ -7820,10 +7879,21 @@ body.dark-mode .analysis-window-page {
 
 body.dark-mode .settings-page__content,
 body.dark-mode .analysis-window-canvas,
+body.dark-mode .analysis-window-result,
 body.dark-mode .analysis-window-progress,
 body.dark-mode .system-section.system-section-window-fit #system-data {
     background: #111827;
     color: #e2e8f0;
+}
+
+body.dark-mode .analysis-window-toggle {
+    color: #cbd5e1;
+}
+
+body.dark-mode .analysis-window-error {
+    border-color: #7f1d1d;
+    background: #2a1518;
+    color: #fca5a5;
 }
 
 body.dark-mode .settings-section-title,

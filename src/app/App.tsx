@@ -9928,7 +9928,7 @@ const collectLegacyCrossRays = async (
       'mtf': 'Modulation Transfer Function',
       'through-focus-spot': 'Through-Focus Spot',
       'through-focus-mtf': 'Through-Focus MTF',
-      'field-mtf': 'Field MTF (Test)',
+      'field-mtf': 'Field MTF',
     };
     const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid']);
 
@@ -12051,8 +12051,8 @@ const collectLegacyCrossRays = async (
 
     return (
       <>
-        <div style={{ height: '100vh', width: '100vw', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#f4f4f4' }}>
-          <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex' }}>
+        <div className="analysis-window-page analysis-window-page--system-data">
+          <div className="analysis-window-result">
             <SystemDataPanel visible />
           </div>
         </div>

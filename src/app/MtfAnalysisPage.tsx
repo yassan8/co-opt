@@ -435,128 +435,6 @@ function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []): boolean {
   return hasIdealParaxial;
 }
 
-// ─── Shared style constants ───────────────────────────────────────────────────
-
-const CSS = `
-.mtf-page {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: #f5f6f8;
-  color: #1f2937;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  margin: 0;
-}
-.mtf-controls {
-  min-height: 52px;
-  padding: 8px 10px;
-  box-sizing: border-box;
-  background: rgba(255, 255, 255, 0.96);
-  border-bottom: 1px solid #dce2ea;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: end;
-  flex-shrink: 0;
-  position: relative;
-  z-index: 5;
-}
-.analysis-field { display: grid; gap: 3px; min-width: 88px; }
-.analysis-field > span { font-size: 10px; font-weight: 650; color: #64748b; letter-spacing: .025em; white-space: nowrap; }
-.mtf-controls select, .mtf-controls input[type="number"] {
-  height: 32px;
-  padding: 0 9px;
-  box-sizing: border-box;
-  font-size: 12px;
-  border: 1px solid #cbd5e1;
-  border-radius: 7px;
-  background: white;
-  color: #1f2937;
-}
-.mtf-controls input[type="number"] { width: 88px; }
-.mtf-controls input[type="checkbox"] { width: auto; }
-.analysis-primary-action,
-.analysis-options > summary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 32px;
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0 12px;
-  border: 1px solid #cbd5e1;
-  border-radius: 7px;
-  background: #fff;
-  color: #334155;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 650;
-}
-.analysis-primary-action { border-color: #2563eb; background: #2563eb; color: #fff; }
-.analysis-primary-action:hover { background: #1d4ed8; }
-.analysis-options { position: relative; margin-left: auto; }
-.analysis-options > summary { list-style: none; }
-.analysis-options > summary::-webkit-details-marker { display: none; }
-.analysis-options[open] > summary { border-color: #94a3b8; background: #f1f5f9; }
-.analysis-options__panel {
-  position: absolute;
-  top: calc(100% + 7px);
-  right: 0;
-  width: min(420px, calc(100vw - 20px));
-  max-height: calc(100vh - 80px);
-  overflow: auto;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  padding: 12px;
-  box-sizing: border-box;
-  border: 1px solid #d7dee8;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 16px 38px rgba(15, 23, 42, .18);
-}
-.analysis-options__panel .analysis-field select,
-.analysis-options__panel .analysis-field input[type="number"] { width: 100%; }
-.analysis-toggle { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 12px; color: #334155; }
-.mtf-progress {
-  padding: 8px 12px;
-  font-size: 12px;
-  color: #475569;
-  border-bottom: 1px solid #e2e8f0;
-  background: #fff;
-  flex-shrink: 0;
-}
-.mtf-progress progress {
-  display: block;
-  width: 100%;
-  margin-top: 6px;
-}
-.mtf-content {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-  background: white;
-  display: flex;
-  flex-direction: column;
-}
-.mtf-chart { flex: 1 1 auto; min-height: 0; width: 100%; height: 100%; }
-.mtf-error { padding: 12px; color: #b91c1c; font-size: 12px; background: #fff7f7; }
-.mtf-debug {
-  padding: 8px 12px;
-  border-top: 1px solid #eee;
-  background: #fafafa;
-  color: #444;
-  font-size: 11px;
-  white-space: pre-wrap;
-  flex-shrink: 0;
- }
-@media (max-width: 640px) {
-  .analysis-options { margin-left: 0; }
-  .analysis-primary-action { margin-left: auto; }
-  .analysis-options__panel { position: fixed; top: 58px; right: 10px; }
-}
-`;
-
 const SAMPLING_OPTIONS = ['16', '32', '64', '128', '256', '512', '1024', '2048', '4096'];
 
 function buildPchipCurve(xValues: number[], yValues: number[], pointCount = 101): { x: number[]; y: number[] } {
@@ -1787,67 +1665,66 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   const wlSelect = (
-    <label className="analysis-field"><span>Wavelength</span>
+    <label className="analysis-window-field"><span>Wavelength</span>
       <select value={wavelength} onChange={e => setWavelength(e.target.value)}>
         {wlOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select></label>
   );
   const samplingSelect = (
-    <label className="analysis-field"><span>Sampling</span>
+    <label className="analysis-window-field"><span>Sampling</span>
       <select value={sampling} onChange={e => setSampling(e.target.value)}>
         {SAMPLING_OPTIONS.map(v => <option key={v} value={v}>{v}×{v}</option>)}
       </select></label>
   );
   const removePtdChk = (
-    <label className="analysis-toggle">
+    <label className="analysis-window-toggle">
       <input type="checkbox" checked={removePtd} onChange={e => setRemovePtd(e.target.checked)} />
       Remove P/T/D
     </label>
   );
 
   return (
-    <div className="mtf-page">
-      <style>{CSS}</style>
-      <div className="mtf-controls">
+    <div className="analysis-window-page" data-analysis-kind={type}>
+      <div className="analysis-window-commandbar">
         {wlSelect}
         {type !== 'field-mtf' && (
-          <label className="analysis-field"><span>Object</span>
+          <label className="analysis-window-field"><span>Object</span>
             <select value={objectIdx} onChange={e => setObjectIdx(e.target.value)}>
               {objOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select></label>
         )}
-        {type === 'mtf' && (<label className="analysis-field"><span>Max frequency · lp/mm</span>
+        {type === 'mtf' && (<label className="analysis-window-field"><span>Max frequency · lp/mm</span>
           <input type="number" min="0" step="1" value={maxFreq} onChange={e => setMaxFreq(e.target.value)} />
         </label>)}
-        {type === 'through-focus-mtf' && (<label className="analysis-field"><span>Frequency · lp/mm</span>
+        {type === 'through-focus-mtf' && (<label className="analysis-window-field"><span>Frequency · lp/mm</span>
           <input type="number" min="0" step="1" value={targetFreq} onChange={e => setTargetFreq(e.target.value)} />
         </label>)}
         {type === 'field-mtf' && (<>
-          <label className="analysis-field"><span>Frequency 1 · lp/mm</span>
+          <label className="analysis-window-field"><span>Frequency 1 · lp/mm</span>
           <input type="number" min="0" step="1" value={freq1} onChange={e => setFreq1(e.target.value)} />
           </label>
-          <label className="analysis-field"><span>Frequency 2 · lp/mm</span>
+          <label className="analysis-window-field"><span>Frequency 2 · lp/mm</span>
           <input type="number" min="0" step="1" value={freq2} onChange={e => setFreq2(e.target.value)} />
           </label>
-          <label className="analysis-field"><span>Frequency 3 · lp/mm</span>
+          <label className="analysis-window-field"><span>Frequency 3 · lp/mm</span>
           <input type="number" min="0" step="1" value={freq3} onChange={e => setFreq3(e.target.value)} />
           </label>
         </>)}
-        <details className="analysis-options">
+        <details className="analysis-window-options">
           <summary>Options</summary>
-          <div className="analysis-options__panel">
+          <div className="analysis-window-options__panel">
             {type === 'through-focus-mtf' && (<>
-              <label className="analysis-field"><span>Defocus min · mm</span><input type="number" step="0.001" value={defocusMin} onChange={e => setDefocusMin(e.target.value)} /></label>
-              <label className="analysis-field"><span>Defocus max · mm</span><input type="number" step="0.001" value={defocusMax} onChange={e => setDefocusMax(e.target.value)} /></label>
-              <label className="analysis-field"><span>Steps</span><input type="number" min="3" max="201" step="1" value={tfSteps} onChange={e => setTfSteps(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Defocus min · mm</span><input type="number" step="0.001" value={defocusMin} onChange={e => setDefocusMin(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Defocus max · mm</span><input type="number" step="0.001" value={defocusMax} onChange={e => setDefocusMax(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Steps</span><input type="number" min="3" max="201" step="1" value={tfSteps} onChange={e => setTfSteps(e.target.value)} /></label>
             </>)}
             {type === 'field-mtf' && (<>
-              <label className="analysis-field"><span>Object min</span><input type="number" step="0.001" value={fieldMin} onChange={e => setFieldMin(e.target.value)} /></label>
-              <label className="analysis-field"><span>Object max</span><input type="number" step="0.001" value={fieldMax} onChange={e => setFieldMax(e.target.value)} /></label>
-              <label className="analysis-field"><span>Steps</span><input type="number" min="3" max="201" step="1" value={fieldSteps} onChange={e => setFieldSteps(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Object min</span><input type="number" step="0.001" value={fieldMin} onChange={e => setFieldMin(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Object max</span><input type="number" step="0.001" value={fieldMax} onChange={e => setFieldMax(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Steps</span><input type="number" min="3" max="201" step="1" value={fieldSteps} onChange={e => setFieldSteps(e.target.value)} /></label>
             </>)}
             {samplingSelect}
-            <label className="analysis-field"><span>Method</span>
+            <label className="analysis-window-field"><span>Method</span>
               <select value={mtfMethod} onChange={e => setMtfMethod(e.target.value as MtfMethodOption)}>
                 <option value="hopkins-tcc">Hopkins-TCC</option>
                 <option value="legacy-otf-axis">Legacy OTF Axis</option>
@@ -1855,21 +1732,23 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
             </label>
             {removePtdChk}
             {type === 'mtf' && (
-              <label className="analysis-toggle"><input type="checkbox" checked={showDiffLimit} onChange={e => setShowDiffLimit(e.target.checked)} />Diffraction limit</label>
+              <label className="analysis-window-toggle"><input type="checkbox" checked={showDiffLimit} onChange={e => setShowDiffLimit(e.target.checked)} />Diffraction limit</label>
             )}
           </div>
         </details>
-        <button className="analysis-primary-action" type="button" onClick={handleCompute}>Show {type === 'mtf' ? 'MTF' : 'plot'}</button>
+        <button className="analysis-window-primary-action" type="button" onClick={handleCompute} disabled={progressVisible}>
+          {progressVisible ? 'Calculating…' : 'Show'}
+        </button>
       </div>
       {progressVisible && (
-        <div className="mtf-progress">
-          <div>{progressText}</div>
-          <progress max={100} value={progressValue} />
+        <div className="analysis-window-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progressValue)}>
+          <div className="analysis-window-progress__label"><span>{Math.round(progressValue)}%</span><span>{progressText}</span></div>
+          <div className="analysis-window-progress__track"><div className="analysis-window-progress__value" style={{ width: `${progressValue}%` }} /></div>
         </div>
       )}
-      <div className="mtf-content">
-        {errorMsg ? <div className="mtf-error">{errorMsg}</div> : null}
-        <div className="mtf-chart" ref={chartRef} />
+      <div className="analysis-window-result">
+        {errorMsg ? <div className="analysis-window-error">{errorMsg}</div> : null}
+        <div className="analysis-window-chart" ref={chartRef} />
       </div>
     </div>
   );

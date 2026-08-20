@@ -2445,6 +2445,7 @@ type AnalysisWindowKey =
   | 'magnification-chromatic-aberration'
   | 'integrated-aberration'
   | 'transverse-aberration'
+  | 'opd-fan'
   | 'opd'
   | 'psf'
   | 'mtf'
@@ -2462,6 +2463,7 @@ const ANALYSIS_WINDOW_SIZE_MAP: Record<AnalysisWindowKey, { width: number; heigh
   'magnification-chromatic-aberration': { width: 980, height: 760, title: 'Lateral Chromatic Aberration' },
   'integrated-aberration': { width: 980, height: 760, title: 'Integrated Aberration' },
   'transverse-aberration': { width: 980, height: 760, title: 'Transverse Aberration' },
+  'opd-fan': { width: 980, height: 760, title: 'OPD Fan' },
   'opd': { width: 980, height: 760, title: 'Optical Path Difference' },
   'psf': { width: 980, height: 760, title: 'Point Spread Function' },
   'mtf': { width: 980, height: 760, title: 'Modulation Transfer Function' },
@@ -2721,6 +2723,7 @@ export function handleAnalysisSelect(selectedValue: string): void {
     'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
     'integrated-aberration': 'open-integrated-aberration-window-btn',
     'transverse-aberration': 'open-transverse-aberration-window-btn',
+    'opd-fan': 'open-opd-fan-window-btn',
     'opd': 'open-opd-window-btn',
     'psf': 'open-psf-window-btn',
     'mtf': 'open-mtf-window-btn',
