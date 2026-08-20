@@ -1079,6 +1079,23 @@ export function trace_image_height_infinite_chief_ray_exact_with_rows(optical_sy
  * @param {number} ray_count
  * @param {number} target_surface_index
  * @param {number} n_start
+ * @param {number} metadata_handle
+ * @returns {Float64Array}
+ */
+export function trace_ray_batch_hit_point_cached(rays, ray_count, target_surface_index, n_start, metadata_handle) {
+    const ptr0 = passArrayF64ToWasm0(rays, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.trace_ray_batch_hit_point_cached(ptr0, len0, ray_count, target_surface_index, n_start, metadata_handle);
+    var v2 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v2;
+}
+
+/**
+ * @param {Float64Array} rays
+ * @param {number} ray_count
+ * @param {number} target_surface_index
+ * @param {number} n_start
  * @param {Int32Array} row_meta
  * @param {Float64Array} row_params
  * @param {Float64Array} row_origins
@@ -1104,6 +1121,29 @@ export function trace_ray_batch_hit_point_with_meta(rays, ray_count, target_surf
     var v7 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v7;
+}
+
+/**
+ * @param {string} optical_rows_json
+ * @param {Float64Array} rays
+ * @param {number} ray_count
+ * @param {number} target_surface_index
+ * @param {number} wavelength_um
+ * @param {number} n_start
+ * @returns {Float64Array}
+ */
+export function trace_ray_batch_hit_point_with_rows_json(optical_rows_json, rays, ray_count, target_surface_index, wavelength_um, n_start) {
+    const ptr0 = passStringToWasm0(optical_rows_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(rays, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.trace_ray_batch_hit_point_with_rows_json(ptr0, len0, ptr1, len1, ray_count, target_surface_index, wavelength_um, n_start);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
 }
 
 /**

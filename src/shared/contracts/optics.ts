@@ -799,6 +799,45 @@ export interface NativeMtfMapResponse {
   message: string;
 }
 
+/** Compact native MTF jobs used only while optimizing desktop candidates. */
+export interface NativeOptimizerMtfJob {
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+  objectIndex: number;
+  gridSize: number;
+  wavelengthUm: number;
+  fNumber: number;
+  pupilRange?: number;
+  sampleFrequenciesLpmm: number[];
+  directEvalOnly?: boolean;
+  pupilSamplingMode?: "stop" | "entrance";
+  tangentialDir?: { x: number; y: number };
+  sagittalDir?: { x: number; y: number };
+  meta?: Record<string, unknown>;
+}
+
+export interface NativeOptimizerMtfBatchRequest {
+  jobs: NativeOptimizerMtfJob[];
+}
+
+export interface NativeOptimizerMtfBatchResult {
+  jobIndex: number;
+  meta: Record<string, unknown>;
+  mtf: {
+    sampledMtfTangential: number[];
+    sampledMtfSagittal: number[];
+  };
+}
+
+export interface NativeOptimizerMtfBatchResponse {
+  backend: string;
+  results: NativeOptimizerMtfBatchResult[];
+  workerCount: number;
+  elapsedMs: number;
+  message: string;
+}
+
 export interface NativeThroughFocusMtfSeries {
   wavelengthUm: number;
   label: string;

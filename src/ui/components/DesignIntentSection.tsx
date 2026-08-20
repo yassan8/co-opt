@@ -1,25 +1,51 @@
 export default function DesignIntentSection({ hideTable }: { hideTable?: boolean } = {}) {
   return (
-    <section className="optical-system-section ide-section-card" id="design-intent-container" aria-label="Design Intent">
+    <section
+      className="optical-system-section ide-section-card"
+      id="design-intent-container"
+      aria-label="Design Intent"
+    >
       <div id="design-intent-toolbar" className="optical-system-buttons-container ide-toolbar" role="toolbar" aria-label="Design Intent controls">
-        <select id="design-intent-add-block-type" aria-label="Block type">
-          <option value="ObjectPlane">ObjectSurface</option>
-          <option value="SingleSurface">SingleSurface</option>
-          <option value="Lens">Lens</option>
-          <option value="Paraxial">Paraxial</option>
-          <option value="Doublet">Doublet</option>
-          <option value="Triplet">Triplet</option>
-          <option value="CoordTrans">CoordTrans</option>
-          <option value="Gap">Gap</option>
-          <option value="Stop">Stop</option>
-          <option value="Mirror">Mirror</option>
-          <option value="ImagePlane">ImageSurface</option>
-        </select>
-        <button id="design-intent-add-block-btn" type="button">Add Block</button>
-        <button id="design-intent-delete-block-btn" type="button">Delete Block</button>
-        <button id="design-intent-param-all-on-btn" type="button">Parameter All ON</button>
-        <button id="design-intent-param-all-off-btn" type="button">Parameter All OFF</button>
-        <button id="design-intent-auto-set-apertures-btn" type="button">Auto-set apertures</button>
+        <div className="di-add-control">
+          <label htmlFor="design-intent-add-block-type">Add block</label>
+          <select id="design-intent-add-block-type" aria-label="Block type">
+            <optgroup label="Planes">
+              <option value="ObjectPlane">Object Surface</option>
+              <option value="ImagePlane">Image Surface</option>
+            </optgroup>
+            <optgroup label="Optical elements">
+              <option value="SingleSurface">Single Surface</option>
+              <option value="Lens">Lens</option>
+              <option value="Paraxial">Paraxial</option>
+              <option value="Doublet">Doublet</option>
+              <option value="Triplet">Triplet</option>
+              <option value="Mirror">Mirror</option>
+            </optgroup>
+            <optgroup label="Spacing and coordinates">
+              <option value="Gap">Gap</option>
+              <option value="Stop">Stop</option>
+              <option value="CoordTrans">Coordinate Transform</option>
+            </optgroup>
+          </select>
+          <button id="design-intent-add-block-btn" className="di-primary-button" type="button">Add</button>
+        </div>
+
+        <button id="design-intent-delete-block-btn" className="di-delete-button" type="button" title="Delete the selected block">
+          Delete
+        </button>
+
+        <button id="design-intent-auto-set-apertures-btn" type="button" title="Calculate apertures for the current field conditions">
+          Auto apertures
+        </button>
+
+        <details className="di-more-actions">
+          <summary>More</summary>
+          <div className="di-more-actions__menu" role="group" aria-label="Bulk parameter actions">
+            <div className="di-more-actions__title">Bulk parameter mode</div>
+            <button id="design-intent-param-all-on-btn" type="button">Enable all</button>
+            <button id="design-intent-param-all-off-btn" type="button">Disable all</button>
+          </div>
+        </details>
       </div>
 
       <div
@@ -48,9 +74,13 @@ export default function DesignIntentSection({ hideTable }: { hideTable?: boolean
         （Surface の解析・編集は可能ですが、設計意図は完全には利用できません）
       </div>
 
-      {!hideTable && <div id="block-inspector" className="block-inspector" role="listbox" aria-label="Design blocks"></div>}
+      {!hideTable && (
+        <div className="block-inspector-panel">
+          <div id="block-inspector" className="block-inspector" role="listbox" aria-label="Design blocks"></div>
+        </div>
+      )}
 
-      {!hideTable && <div id="table-optical-system" className="ide-table-container"></div>}
+      {!hideTable && <div id="table-optical-system" className="di-derived-surface-host" aria-hidden="true"></div>}
     </section>
   );
 }

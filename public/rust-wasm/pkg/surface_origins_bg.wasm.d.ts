@@ -60,7 +60,9 @@ export const trace_image_height_finite_candidate_with_rows: (a: any, b: number, 
 export const trace_image_height_infinite_candidate_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
 export const trace_image_height_infinite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
 export const trace_image_height_infinite_chief_ray_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
+export const trace_ray_batch_hit_point_cached: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
 export const trace_ray_batch_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number];
+export const trace_ray_batch_hit_point_with_rows_json: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const trace_ray_batch_spot_metrics_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
 export const trace_ray_batch_spot_metrics_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
 export const trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];

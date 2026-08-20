@@ -116,7 +116,8 @@ let __wasmTraceBatchCachedOrigins = null;
 let __wasmTraceBatchCachedRotations = null;
 let __wasmTraceBatchCachedInvRotations = null;
 let __wasmTraceBatchCachedRowCount = 0;
-let __rustTraceMetadataCache = null;
+const __RUST_TRACE_METADATA_CACHE_LIMIT = 16;
+let __rustTraceMetadataCache = new Map();
 
 function __getQconTraceRuntimeConfig() {
   try {
@@ -158,7 +159,7 @@ export function clearRayTracingTransientCaches(): void {
   __wasmTraceBatchCachedRotations = null;
   __wasmTraceBatchCachedInvRotations = null;
   __wasmTraceBatchCachedRowCount = 0;
-  __rustTraceMetadataCache = null;
+  __rustTraceMetadataCache.clear();
   try {
     getRustRayTracingWasmSync()?.clear_trace_system_metadata_cache?.();
   } catch (_) {}
@@ -5715,12 +5716,14 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
 
     const wavelengthRef = Number(list[0]?.wavelength) || 0.55;
     const systemHash = __computeWasmTraceBatchSystemHash(effectiveSystemRows, surfaceData, wavelengthRef);
+    const metadataCacheKey = `${rowCount}:${systemHash}`;
+    const cachedMetadataCandidate = __rustTraceMetadataCache.get(metadataCacheKey) || null;
     const cachedMetadata = (
-      __rustTraceMetadataCache
-      && __rustTraceMetadataCache.rust === rust
-      && __rustTraceMetadataCache.systemHash === systemHash
-      && __rustTraceMetadataCache.rowCount === rowCount
-    ) ? __rustTraceMetadataCache : null;
+      cachedMetadataCandidate
+      && cachedMetadataCandidate.rust === rust
+      && cachedMetadataCandidate.systemHash === systemHash
+      && cachedMetadataCandidate.rowCount === rowCount
+    ) ? cachedMetadataCandidate : null;
     const rowMeta = cachedMetadata?.rowMeta || new Int32Array(rowCount * 4);
     const rowParams = cachedMetadata?.rowParams || new Float64Array(rowCount * 24);
     const rowOrigins = cachedMetadata?.rowOrigins || new Float64Array(rowCount * 3);
@@ -5892,7 +5895,7 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
         rowCount
       )) || 0;
       if (metadataHandle > 0) {
-        __rustTraceMetadataCache = {
+        __rustTraceMetadataCache.set(metadataCacheKey, {
           rust,
           systemHash,
           rowCount,
@@ -5902,7 +5905,12 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
           rowOrigins,
           rowInvRots,
           rowRots
-        };
+        });
+        while (__rustTraceMetadataCache.size > __RUST_TRACE_METADATA_CACHE_LIMIT) {
+          const oldestKey = __rustTraceMetadataCache.keys().next().value;
+          if (oldestKey === undefined) break;
+          __rustTraceMetadataCache.delete(oldestKey);
+        }
       }
     }
 
@@ -5965,18 +5973,24 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
         backend: metadataHandle > 0 ? 'rust-wasm-cached-metadata' : 'rust-wasm-packed'
       };
     }
-    const raw = fn(
-      raysFlat,
-      rayCount,
-      targetSurfaceIndex,
-      nStart,
-      rowMeta,
-      rowParams,
-      rowOrigins,
-      rowInvRots,
-      rowRots,
-      rowCount
-    );
+    const cachedHitPointFn = rust?.trace_ray_batch_hit_point_cached;
+    let raw = metadataHandle > 0 && typeof cachedHitPointFn === 'function'
+      ? cachedHitPointFn(raysFlat, rayCount, targetSurfaceIndex, nStart, metadataHandle)
+      : null;
+    if (!raw || typeof (raw as any).length !== 'number' || (raw as any).length < rayCount * 6) {
+      raw = fn(
+        raysFlat,
+        rayCount,
+        targetSurfaceIndex,
+        nStart,
+        rowMeta,
+        rowParams,
+        rowOrigins,
+        rowInvRots,
+        rowRots,
+        rowCount
+      );
+    }
 
     if (!raw || typeof (raw as any).length !== 'number' || (raw as any).length < rayCount * 6) return null;
 

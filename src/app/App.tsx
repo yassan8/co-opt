@@ -10,7 +10,7 @@ import {
 } from './optimized-result-sync.ts';
 import MainToolbar from "../ui/components/MainToolbar";
 import ConfigurationSection from "../ui/components/ConfigurationSection";
-import SourceObjectSection from "../ui/components/SourceObjectSection";
+import SourceObjectSection, { FieldSection, SourceSection } from "../ui/components/SourceObjectSection";
 import DesignIntentSection from "../ui/components/DesignIntentSection";
 import RequirementsSection from "../ui/components/RequirementsSection";
 import LegacyPanels from "../ui/components/LegacyPanels";
@@ -65,6 +65,7 @@ const RENDER_SHOW_SECTION_CUT_KEY = 'coopt.render.showSectionCut';
 const RENDER_SECTION_ANGLE_KEY = 'coopt.render.sectionAngleDegrees';
 const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
 const OPTIMIZE_PROGRESS_SYNC_KEY = 'coopt.optimizeProgress';
+const NAVIGATOR_COLLAPSED_KEY = 'coopt.workspace.navigatorCollapsed';
 const SYSTEM_TEXT_WINDOW_ID = 'system-text-window';
 const SYSTEM_TEXT_WINDOW_TITLE = 'System Console';
 const RENDER_SCALE_BAR_MIN_WIDTH_PX = 72;
@@ -119,7 +120,7 @@ type RenderZoomUiState = {
   configName: string;
 };
 
-const WORKSPACE_KEYS = ['configuration', 'source', 'intent', 'literature', 'requirements'] as const;
+const WORKSPACE_KEYS = ['configuration', 'source', 'field', 'intent', 'literature', 'requirements'] as const;
 type WorkspaceFocus = typeof WORKSPACE_KEYS[number];
 
 type MdiAuxWindowState = {
@@ -4584,6 +4585,7 @@ export default function App() {
   const [renderCompareOffsetStepMm, setRenderCompareOffsetStepMm] = useState(20);
   const [renderCompareAlignReference, setRenderCompareAlignReference] = useState<RenderCompareAlignReference>('object');
   const [renderRayCount, setRenderRayCount] = useState(6);
+  const [renderOptionsOpen, setRenderOptionsOpen] = useState(false);
   const [renderSurfaceColorsCollapsed, setRenderSurfaceColorsCollapsed] = useState(true);
   const [renderLensColorTargets, setRenderLensColorTargets] = useState<RenderLensColorTarget[]>([]);
   const [renderColorUiRevision, setRenderColorUiRevision] = useState(0);
@@ -4630,7 +4632,8 @@ export default function App() {
   }>>({
     configuration: { open: true,  minimized: false, maximized: false, restoreBounds: null, x: 12,  y: 12,  width: 940, height: 620, zIndex: 6 },
     source:        { open: false, minimized: false, maximized: false, restoreBounds: null, x: 36,  y: 36,  width: 920, height: 580, zIndex: 5 },
-    intent:        { open: false, minimized: false, maximized: false, restoreBounds: null, x: 60,  y: 60,  width: 980, height: 640, zIndex: 4 },
+    field:         { open: false, minimized: false, maximized: false, restoreBounds: null, x: 48,  y: 48,  width: 920, height: 580, zIndex: 4 },
+    intent:        { open: false, minimized: false, maximized: false, restoreBounds: null, x: 60,  y: 60,  width: 980, height: 640, zIndex: 3 },
     requirements:  { open: false, minimized: false, maximized: false, restoreBounds: null, x: 84,  y: 84,  width: 860, height: 560, zIndex: 2 },
     literature:    { open: false, minimized: false, maximized: false, restoreBounds: null, x: 108, y: 108, width: 840, height: 540, zIndex: 1 },
   });
@@ -4660,6 +4663,14 @@ export default function App() {
   const optimizeConsoleLastIterRef = useRef<number>(-1);
   const optimizeConsoleStartedAtRef = useRef<number>(0);
   const [treeOpenGroups, setTreeOpenGroups] = useState<Set<string>>(new Set(['panels', 'analysis']));
+  const [navigatorCollapsed, setNavigatorCollapsed] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem(NAVIGATOR_COLLAPSED_KEY);
+      return stored === null ? true : stored === 'true';
+    } catch (_) {
+      return true;
+    }
+  });
   const renderScaleRafRef = useRef<number | null>(null);
   const optimizeDisplaySleepBlockTokenRef = useRef<string | null>(null);
   const optimizeWakeLockRef = useRef<any>(null);
@@ -5124,6 +5135,11 @@ export default function App() {
     return Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem : [];
   };
 
+  const filterEnabledObjectRowsForRender = (rows: any[]): any[] => {
+    if (!Array.isArray(rows)) return [];
+    return rows.filter((row: any) => row && row.enabled !== false);
+  };
+
   const getConfigObjectRowsForRender = (targetWindow: any, cfg: any, systemConfig?: any): any[] => {
     if (!cfg || typeof cfg !== 'object') return [];
     try {
@@ -5131,13 +5147,13 @@ export default function App() {
       const isActive = activeId !== undefined && activeId !== null && String(cfg.id) === String(activeId);
       if (isActive && typeof targetWindow?.getObjectRows === 'function') {
         const tableRows = targetWindow.getObjectRows(targetWindow.tableObject);
-        if (Array.isArray(tableRows) && tableRows.length > 0) {
-          return tableRows;
+        if (Array.isArray(tableRows)) {
+          return filterEnabledObjectRowsForRender(tableRows);
         }
       }
     } catch (_) {}
 
-    return Array.isArray(cfg.object) ? cfg.object : [];
+    return filterEnabledObjectRowsForRender(Array.isArray(cfg.object) ? cfg.object : []);
   };
 
   const getRenderCompareEntries = (targetWindow: any): RenderCompareEntry[] => {
@@ -5293,67 +5309,81 @@ export default function App() {
     const hostWindow = targetWindow || getRenderHostWindow();
     const preferConfigRows = Array.isArray(opticalSystemRowsOverride) && opticalSystemRowsOverride.length > 0;
     let objectRows: any[] = [];
+    let objectRowsResolved = false;
 
     const finalizeObjectRows = (rows: any[]): any[] => {
       if (!Array.isArray(rows)) return [];
+      const enabledRows = filterEnabledObjectRowsForRender(rows);
       if (preferConfigRows) {
-        return normalizeRenderObjectRows(hostWindow, rows, opticalSystemRowsOverride);
+        return normalizeRenderObjectRows(hostWindow, enabledRows, opticalSystemRowsOverride);
       }
-      return rows;
+      return enabledRows;
     };
 
     if (preferConfigRows) {
       try {
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-        const overrideRows = g && Array.isArray(g.__cooptRenderObjectRowsOverride) && g.__cooptRenderObjectRowsOverride.length > 0
+        const overrideRows = g && Array.isArray(g.__cooptRenderObjectRowsOverride)
           ? g.__cooptRenderObjectRowsOverride
           : null;
         if (overrideRows) {
           objectRows = overrideRows;
+          objectRowsResolved = true;
         }
       } catch (_) {}
 
       try {
-        if (objectRows.length === 0) {
+        if (!objectRowsResolved) {
           const systemConfig = getSystemConfigFromWindow(hostWindow);
           const activeCfg = getActiveConfigFromSystemConfig(systemConfig);
-          if (Array.isArray(activeCfg?.object) && activeCfg.object.length > 0) {
+          if (Array.isArray(activeCfg?.object)) {
             objectRows = activeCfg.object;
+            objectRowsResolved = true;
           }
         }
       } catch (_) {}
     }
 
     try {
-      if (objectRows.length === 0) {
+      if (!objectRowsResolved) {
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-        const overrideRows = g && Array.isArray(g.__cooptRenderObjectRowsOverride) && g.__cooptRenderObjectRowsOverride.length > 0
+        const overrideRows = g && Array.isArray(g.__cooptRenderObjectRowsOverride)
           ? g.__cooptRenderObjectRowsOverride
           : null;
         if (overrideRows) {
           objectRows = overrideRows;
+          objectRowsResolved = true;
         }
       }
     } catch (_) {}
 
     try {
-      if (objectRows.length === 0 && typeof hostWindow?.getObjectRows === 'function') {
+      if (!objectRowsResolved && hostWindow?.tableObject && typeof hostWindow?.getObjectRows === 'function') {
         const rows = hostWindow.getObjectRows(hostWindow.tableObject);
-        if (Array.isArray(rows) && rows.length > 0) objectRows = rows;
+        if (Array.isArray(rows)) {
+          objectRows = rows;
+          objectRowsResolved = true;
+        }
       }
     } catch (_) {}
 
     try {
-      if (objectRows.length === 0) {
+      if (!objectRowsResolved) {
         const systemConfig = getSystemConfigFromWindow(hostWindow);
         const activeCfg = getActiveConfigFromSystemConfig(systemConfig);
-        if (Array.isArray(activeCfg?.object) && activeCfg.object.length > 0) objectRows = activeCfg.object;
+        if (Array.isArray(activeCfg?.object)) {
+          objectRows = activeCfg.object;
+          objectRowsResolved = true;
+        }
       }
     } catch (_) {}
     try {
-      if (objectRows.length === 0 && typeof window?.getObjectRows === 'function') {
+      if (!objectRowsResolved && (window as any).tableObject && typeof window?.getObjectRows === 'function') {
         const rows = window.getObjectRows((window as any).tableObject);
-        if (Array.isArray(rows) && rows.length > 0) objectRows = rows;
+        if (Array.isArray(rows)) {
+          objectRows = rows;
+          objectRowsResolved = true;
+        }
       }
     } catch (_) {}
     return finalizeObjectRows(objectRows);
@@ -8310,7 +8340,7 @@ const collectLegacyCrossRays = async (
         const legacyCrossRays = await collectLegacyCrossRays(
           rowsForRender,
           axis,
-          Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined,
+          Array.isArray(renderObjectRows) ? renderObjectRows : [],
           {
             rayCountOverride: effectiveRayCountOverride,
           }
@@ -8671,7 +8701,7 @@ const collectLegacyCrossRays = async (
         const legacyCrossRays = await collectLegacyCrossRays(
           rowsForRender,
           'BOTH',
-          Array.isArray(renderObjectRows) && renderObjectRows.length > 0 ? renderObjectRows : undefined,
+          Array.isArray(renderObjectRows) ? renderObjectRows : [],
           {
             rayCountOverride: effectiveRayCountOverride,
           }
@@ -11016,6 +11046,11 @@ const collectLegacyCrossRays = async (
             escapeFunctionHeight: optEscapeFunctionHeight,
             preferNative: isTauriRuntime(),
             kktUseWasmPilotOptimizer: true,
+            // Collect low-overhead timing counters for every local run.  The
+            // detailed table stays out of the browser developer console; the
+            // concise, non-overlapping-in-total cost summary is printed below.
+            profile: true,
+            profileConsole: false,
             shouldStop: () => !!(window as any).__cooptOptimizeStopRequested,
             onProgress: (ev: any) => {
             const phase = String(ev?.phase ?? 'running');
@@ -11198,6 +11233,39 @@ const collectLegacyCrossRays = async (
         if ((!Number.isFinite(tsIterations) || tsIterations <= 0) && !tsAborted) {
           throw new Error(`TS/WASM optimizer produced no iterations (iterations=${String(tsResult?.iterations)})`);
         }
+
+        // Timers are intentionally reported as individual (and potentially
+        // nested) measurements.  They identify which work dominates a run,
+        // without falsely implying that the values can be added together.
+        try {
+          const profile = (w as any)?.OptimizationMVP?.getLastProfile?.();
+          const profileStartedAt = Number(profile?.startedAt);
+          const runStartedAt = Number(optimizeConsoleStartedAtRef.current);
+          if (profile && (!Number.isFinite(profileStartedAt) || profileStartedAt >= runStartedAt - 1000)) {
+            const counts = profile?.counts || {};
+            const asInt = (value: any) => Math.max(0, Math.floor(Number(value) || 0));
+            const asSeconds = (value: any) => `${(Math.max(0, Number(value) || 0) / 1000).toFixed(1)}s`;
+            const totalMs = Number(profile?.totalMs);
+            const fdMs = Number(counts?.kktFiniteDiffJacobianMs);
+            const mtfMs = Number(counts?.kktMtfBatchMs);
+            const fdCalls = asInt(counts?.kktFiniteDiffJacobianCalls);
+            const fdColumns = asInt(counts?.kktFiniteDiffColumnsEffective || counts?.kktFiniteDiffColumns);
+            const candidateEvals = asInt(counts?.kktCandidateEvalCount);
+            const mtfCalls = asInt(counts?.kktMtfBatchCalls);
+            const mtfJobs = asInt(counts?.kktMtfBatchJobs);
+            const workerPoolCalls = asInt(counts?.kktMtfWorkerPoolCalls);
+            const workers = asInt(counts?.kktMtfWorkerPoolWorkers);
+            const sharedBatches = asInt(counts?.kktMtfWorkerSharedBatches);
+            const accepted = asInt(counts?.kktAcceptedSteps);
+            const rejected = asInt(counts?.kktRejectedSteps);
+            const backtracks = asInt(counts?.kktLineSearchBacktracks);
+            appendOptimizeConsoleLine(
+              `[Cost] total ${asSeconds(totalMs)} | FD Jacobian ${asSeconds(fdMs)} (${fdCalls}x, ${fdColumns} cols) `
+              + `| MTF ${asSeconds(mtfMs)} (${mtfCalls} batches, ${mtfJobs} jobs, pool ${workerPoolCalls}x/${workers}, shared ${sharedBatches}) `
+              + `| trial ${candidateEvals}, accept/reject ${accepted}/${rejected}, backtrack ${backtracks}`
+            );
+          }
+        } catch (_) {}
 
         optimizeFinalized = true;
 
@@ -12453,8 +12521,8 @@ const collectLegacyCrossRays = async (
         <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', margin: 0 }}>
           <div style={{ minHeight: 36, padding: '4px 8px', borderBottom: '1px solid #ddd', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'nowrap', position: 'relative', zIndex: 8 }}>
             <button type="button" onClick={handleRenderDraw} style={{ height: 27 }}>3D</button>
-            <button type="button" onClick={handleViewXZ} style={{ height: 27 }}>X-Z</button>
-            <button type="button" onClick={handleViewYZ} style={{ height: 27 }}>Y-Z</button>
+            <button type="button" onClick={handleViewXZ} style={{ height: 27, minWidth: 46, whiteSpace: 'nowrap', flex: '0 0 auto' }}>X-Z</button>
+            <button type="button" onClick={handleViewYZ} style={{ height: 27, minWidth: 46, whiteSpace: 'nowrap', flex: '0 0 auto' }}>Y-Z</button>
             <label
               title="Display closed lens volumes in the 3D view"
               style={{ display: 'flex', alignItems: 'center', gap: 3, height: 27, padding: '0 3px', fontSize: 11, fontWeight: 500, opacity: renderViewMode === '3D' ? 1 : 0.5, whiteSpace: 'nowrap' }}
@@ -12541,9 +12609,19 @@ const collectLegacyCrossRays = async (
               }}
               style={{ width: 54, height: 27, fontSize: 12 }}
             />
-            <details style={{ position: 'relative' }}>
-              <summary style={{ cursor: 'pointer', padding: '5px 7px', userSelect: 'none', whiteSpace: 'nowrap' }}>Options</summary>
-              <div style={{ position: 'absolute', top: 30, left: 0, zIndex: 30, minWidth: 480, padding: 10, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', boxShadow: '0 10px 24px rgba(0,0,0,0.16)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontWeight: 500 }}>
+            <button
+              type="button"
+              className="render-toolbar-popover-button"
+              aria-expanded={renderOptionsOpen}
+              onClick={() => {
+                setRenderOptionsOpen((open) => !open);
+                setRenderSurfaceColorsCollapsed(true);
+              }}
+            >
+              Options
+            </button>
+            {renderOptionsOpen && (
+              <div className="render-options-panel">
                 <label htmlFor="render-compare-scope">Configs</label>
                 <select id="render-compare-scope" value={renderCompareScope} onChange={(e) => handleRenderCompareScopeChange(e.target.value === 'all' ? 'all' : 'active')} style={{ height: 27 }}>
                   <option value="active">Active only</option>
@@ -12569,7 +12647,22 @@ const collectLegacyCrossRays = async (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 3 }} title="Reflect Design Intent numeric edits in an open Render window"><input type="checkbox" checked={renderDesignIntentLiveSync} onChange={(e) => handleToggleRenderDesignIntentLiveSync(e.target.checked)} />Intent Sync</label>
                 {renderCompareScope === 'all' && <span style={{ flexBasis: '100%', color: '#666' }}>{renderViewMode === '3D' ? 'Compare offset applies to X-Z / Y-Z views.' : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm, align ${compareAlignLabel}`}</span>}
               </div>
-            </details>
+            )}
+            <button
+              type="button"
+              className="render-toolbar-popover-button"
+              aria-expanded={!renderSurfaceColorsCollapsed}
+              onClick={() => {
+                setRenderOptionsOpen(false);
+                setRenderSurfaceColorsCollapsed((collapsed) => {
+                  const next = !collapsed;
+                  if (!next) refreshRenderLensTargets();
+                  return next;
+                });
+              }}
+            >
+              Colors
+            </button>
             <span title={renderWindowStatus} style={{ marginLeft: 'auto', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 400, fontSize: 11, color: '#666' }}>{renderWindowStatus}</span>
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -12685,51 +12778,12 @@ const collectLegacyCrossRays = async (
                 </div>
                 <span style={{ width: `${renderScaleBarWidthPx}px`, fontSize: 11, lineHeight: 1, color: '#111827', fontWeight: 600, textShadow: '0 0 2px rgba(255,255,255,0.95)', textAlign: 'right' }}>{renderScaleLabel}</span>
               </div>
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  right: 0,
-                  bottom: 0,
-                  width: renderSurfaceColorsCollapsed ? 34 : 274,
-                  borderLeft: '1px solid #ddd',
-                  background: '#fafafa',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  transition: 'width 120ms ease',
-                  overflow: 'hidden',
-                  zIndex: 2,
-                  boxShadow: renderSurfaceColorsCollapsed ? 'none' : '-4px 0 12px rgba(0,0,0,0.08)',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRenderSurfaceColorsCollapsed((prev) => {
-                      const next = !prev;
-                      if (!next) refreshRenderLensTargets();
-                      return next;
-                    });
-                  }}
-                  title={renderSurfaceColorsCollapsed ? 'Open surface colors' : 'Collapse surface colors'}
-                  style={{
-                    width: '100%',
-                    border: 0,
-                    borderBottom: '1px solid #e3e3e3',
-                    background: '#f0f0f0',
-                    textAlign: 'left',
-                    padding: renderSurfaceColorsCollapsed ? '10px 8px' : '10px 10px',
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {renderSurfaceColorsCollapsed ? '▶' : '▼ Surface Colors'}
-                </button>
-
-                {!renderSurfaceColorsCollapsed && (
-                  <>
+              {!renderSurfaceColorsCollapsed && (
+                <div className="render-surface-colors-panel">
+                    <div className="render-surface-colors-header">
+                      <strong>Surface Colors</strong>
+                      <button type="button" onClick={() => setRenderSurfaceColorsCollapsed(true)} aria-label="Close surface colors">×</button>
+                    </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid #ececec' }}>
                       <button type="button" onClick={() => { refreshRenderLensTargets(); }} style={{ fontSize: 11, padding: '4px 8px' }}>Refresh</button>
                       <button type="button" onClick={handleResetAllLensColors} style={{ fontSize: 11, padding: '4px 8px' }}>Reset All</button>
@@ -12793,9 +12847,8 @@ const collectLegacyCrossRays = async (
                         </table>
                       )}
                     </div>
-                  </>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -12828,6 +12881,9 @@ const collectLegacyCrossRays = async (
           const w = window as any;
           if (focus === 'source') {
             w.tableSource?.redraw?.(true);
+            return;
+          }
+          if (focus === 'field') {
             w.tableObject?.redraw?.(true);
             return;
           }
@@ -12864,7 +12920,8 @@ const collectLegacyCrossRays = async (
     icon: string;
   }> = [
     { key: 'configuration', label: 'Config', icon: '🧭' },
-    { key: 'source', label: 'Sources / Fields', icon: '🔎' },
+    { key: 'source', label: 'Source', icon: 'λ' },
+    { key: 'field', label: 'Field', icon: '◎' },
     { key: 'intent', label: 'Design Intent', icon: '🧩' },
     { key: 'requirements', label: 'Requirements', icon: '📏' },
     { key: 'literature', label: 'Patent', icon: '📚' },
@@ -13000,7 +13057,10 @@ const collectLegacyCrossRays = async (
           <ConfigurationSection />
         </div>
         <div className={`app-shell__tabBody${workspaceFocus === 'source' ? '' : ' is-hidden'}`}>
-          <SourceObjectSection />
+          <SourceSection />
+        </div>
+        <div className={`app-shell__tabBody${workspaceFocus === 'field' ? '' : ' is-hidden'}`}>
+          <FieldSection />
         </div>
         <div className={`app-shell__tabBody${workspaceFocus === 'intent' ? '' : ' is-hidden'}`}>
           <DesignIntentSection />
@@ -14964,6 +15024,16 @@ const collectLegacyCrossRays = async (
     });
   };
 
+  const toggleNavigatorCollapsed = () => {
+    setNavigatorCollapsed((collapsed) => {
+      const next = !collapsed;
+      try {
+        localStorage.setItem(NAVIGATOR_COLLAPSED_KEY, String(next));
+      } catch (_) {}
+      return next;
+    });
+  };
+
   const syncWindowGeometry = (key: WorkspaceFocus, el: HTMLElement | null) => {
     if (!el) return;
     setMdiWindowStates(prev => {
@@ -15082,11 +15152,37 @@ const collectLegacyCrossRays = async (
       </div>
 
       {/* ── Main body: left navigator tree + MDI desktop ── */}
-      <div className="win-mdi-body">
+      <div className={`win-mdi-body${navigatorCollapsed ? ' is-navigator-collapsed' : ''}`}>
 
         {/* Left navigator tree */}
-        <div className="win-tree-panel">
-          <div className="win-tree-section-header">Navigator</div>
+        <aside className={`win-tree-panel${navigatorCollapsed ? ' is-collapsed' : ''}`} aria-label="Workspace navigator">
+          <div className="win-tree-panel-header">
+            {!navigatorCollapsed && <div className="win-tree-section-header">Navigator</div>}
+            <button
+              type="button"
+              className="win-tree-collapse-button"
+              onClick={toggleNavigatorCollapsed}
+              aria-expanded={!navigatorCollapsed}
+              aria-label={navigatorCollapsed ? 'Open navigator' : 'Collapse navigator'}
+              title={navigatorCollapsed ? 'Open Navigator' : 'Collapse Navigator'}
+            >
+              <span aria-hidden="true">{navigatorCollapsed ? '›' : '‹'}</span>
+            </button>
+          </div>
+
+          {navigatorCollapsed && (
+            <button
+              type="button"
+              className="win-tree-rail-label"
+              onClick={toggleNavigatorCollapsed}
+              aria-label="Open navigator"
+              title="Open Navigator"
+            >
+              Navigator
+            </button>
+          )}
+
+          {!navigatorCollapsed && <div className="win-tree-content">
 
           <div className="win-tree-group">
             <div
@@ -15151,7 +15247,8 @@ const collectLegacyCrossRays = async (
               </div>
             )}
           </div>
-        </div>
+          </div>}
+        </aside>
 
         {/* MDI desktop */}
         <div className="win-mdi-desktop" ref={mdiDesktopRef}>
@@ -15203,7 +15300,8 @@ const collectLegacyCrossRays = async (
                 {!ws.minimized && (
                   <div className="win-mdi-content">
                     {s.key === 'configuration' && <ConfigurationSection />}
-                    {s.key === 'source'        && <SourceObjectSection />}
+                    {s.key === 'source'        && <SourceSection />}
+                    {s.key === 'field'         && <FieldSection />}
                     {s.key === 'intent'        && <DesignIntentSection />}
                     {s.key === 'literature'    && <LiteratureImportPanel />}
                     {s.key === 'requirements'  && <RequirementsSection />}

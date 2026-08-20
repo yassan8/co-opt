@@ -31,6 +31,8 @@ import type {
   NativePsfMapResponse,
   NativeMtfMapRequest,
   NativeMtfMapResponse,
+  NativeOptimizerMtfBatchRequest,
+  NativeOptimizerMtfBatchResponse,
   NativeFieldMtfMapRequest,
   NativeFieldMtfMapResponse,
   NativeThroughFocusMtfMapRequest,
@@ -1799,6 +1801,70 @@ export async function runRaytracePreview(
   return invokeCommand<RaytracePreviewRequest, RaytracePreviewResponse>("run_raytrace_preview", payload);
 }
 
+type SpotWasmWorkerPool = { workers: Worker[] };
+let spotWasmWorkerPool: SpotWasmWorkerPool | null = null;
+let spotWasmWorkerPoolQueue: Promise<void> = Promise.resolve();
+let spotWasmWorkerRequestSequence = 0;
+
+function getSpotWasmWorkerPool(workerCount: number): SpotWasmWorkerPool {
+  const count = Math.max(1, Math.floor(workerCount));
+  if (spotWasmWorkerPool?.workers.length === count) return spotWasmWorkerPool;
+  if (spotWasmWorkerPool) {
+    for (const worker of spotWasmWorkerPool.workers) {
+      try { worker.terminate(); } catch (_) {}
+    }
+  }
+  spotWasmWorkerPool = {
+    workers: Array.from({ length: count }, () => new Worker(
+      new URL("../../../evaluation/spot-wasm-worker.ts", import.meta.url),
+      { type: "module" },
+    )),
+  };
+  return spotWasmWorkerPool;
+}
+
+async function runSpotWasmWorkerJobs(jobs: any[]): Promise<any[][]> {
+  if (!Array.isArray(jobs) || jobs.length === 0 || typeof Worker === "undefined") return [];
+  const hardwareConcurrency = typeof navigator !== "undefined" ? Number(navigator.hardwareConcurrency) : jobs.length;
+  const workerCount = Math.max(1, Math.min(
+    jobs.length,
+    4,
+    Number.isFinite(hardwareConcurrency) ? Math.max(1, Math.floor(hardwareConcurrency)) : jobs.length,
+  ));
+  const execute = async () => {
+    const pool = getSpotWasmWorkerPool(workerCount);
+    const output: any[][] = new Array(jobs.length);
+    let nextJob = 0;
+    await Promise.all(pool.workers.map(async (worker) => {
+      while (nextJob < jobs.length) {
+        const jobIndex = nextJob++;
+        const requestId = `spot-${Date.now()}-${++spotWasmWorkerRequestSequence}-${jobIndex}`;
+        output[jobIndex] = await new Promise<any[]>((resolve, reject) => {
+          const onMessage = (event: MessageEvent<any>) => {
+            if (event.data?.requestId !== requestId) return;
+            worker.removeEventListener("message", onMessage);
+            worker.removeEventListener("error", onError);
+            if (event.data?.ok !== true) reject(new Error(String(event.data?.error || "Spot WASM worker failed")));
+            else resolve(Array.isArray(event.data?.summaries) ? event.data.summaries : []);
+          };
+          const onError = (event: ErrorEvent) => {
+            worker.removeEventListener("message", onMessage);
+            worker.removeEventListener("error", onError);
+            reject(new Error(String(event.message || "Spot WASM worker error")));
+          };
+          worker.addEventListener("message", onMessage);
+          worker.addEventListener("error", onError);
+          worker.postMessage({ requestId, ...jobs[jobIndex] });
+        });
+      }
+    }));
+    return output;
+  };
+  const scheduled = spotWasmWorkerPoolQueue.then(execute, execute);
+  spotWasmWorkerPoolQueue = scheduled.then(() => undefined, () => undefined);
+  return scheduled;
+}
+
 export async function runNativeSpotRaytrace(
   payload: NativeSpotRaytraceRequest,
 ): Promise<NativeSpotRaytraceResponse> {
@@ -1878,7 +1944,14 @@ export async function runNativeSpotRaytrace(
         allowNonStrict: allowNonStrictRaytrace,
       } as any;
 
-      const series = requestSeries.map((entry: any, idx: number) => {
+      type SpotSeriesDescriptor = {
+        entry: any;
+        index: number;
+        rays: any[];
+        wavelengthUm: number;
+        batch: any[];
+      };
+      const descriptors: SpotSeriesDescriptor[] = requestSeries.map((entry: any, idx: number) => {
         const rays = Array.isArray(entry?.rays) ? entry.rays : [];
         const batch = rays.map((ray: any) => ({
           wavelength: Number(ray?.wavelengthUm) > 0 ? Number(ray.wavelengthUm) : 0.5876,
@@ -1894,8 +1967,68 @@ export async function runNativeSpotRaytrace(
           },
         }));
 
-        const summaries = traceRayEvalBatchSummary(opticalSystemRows, batch, 1.0, targetSurface, traceOptions);
-        const normalizedSummaries = Array.isArray(summaries) ? summaries : [];
+        const wavelengthUm = Number(rays.find((ray: any) => Number(ray?.wavelengthUm) > 0)?.wavelengthUm) || 0.5876;
+        return { entry, index: idx, rays, wavelengthUm, batch };
+      });
+
+      // Rust/WASM prepares refractive-index metadata from the first ray's wavelength.
+      // Keep wavelength groups separate, while flattening every field/series in a group
+      // into one boundary crossing. Ray order and sampling are unchanged.
+      const wavelengthGroups = new Map<string, SpotSeriesDescriptor[]>();
+      for (const descriptor of descriptors) {
+        const key = descriptor.wavelengthUm.toFixed(9);
+        const group = wavelengthGroups.get(key);
+        if (group) group.push(descriptor);
+        else wavelengthGroups.set(key, [descriptor]);
+      }
+      const summariesBySeries: any[][] = descriptors.map(() => []);
+      const preparedGroups = Array.from(wavelengthGroups.values()).map((group) => {
+        const flatBatch: any[] = [];
+        const offsets: Array<{ descriptor: SpotSeriesDescriptor; start: number; end: number }> = [];
+        for (const descriptor of group) {
+          const start = flatBatch.length;
+          flatBatch.push(...descriptor.batch);
+          offsets.push({ descriptor, start, end: flatBatch.length });
+        }
+        return { flatBatch, offsets, wavelengthUm: group[0]?.wavelengthUm || 0.5876 };
+      });
+      const totalRayCount = preparedGroups.reduce((sum, group) => sum + group.flatBatch.length, 0);
+      let workerGroupSummaries: any[][] | null = null;
+      const canUseWorkerPool = useRustTrace
+        && preparedGroups.length > 1
+        && totalRayCount >= 3000
+        && typeof Worker !== "undefined"
+        && (typeof globalThis === "undefined" || (globalThis as any).__COOPT_SPOT_WORKERS !== false);
+      if (canUseWorkerPool) {
+        try {
+          workerGroupSummaries = await runSpotWasmWorkerJobs(preparedGroups.map((group) => ({
+            opticalSystemRows: enrichRowsWithResolvedRindexForWasm(opticalSystemRows, group.wavelengthUm),
+            rays: group.flatBatch,
+            nStart: 1,
+            targetSurfaceIndex: targetSurface,
+            wavelengthUm: group.wavelengthUm,
+            traceOptions,
+          })));
+        } catch (error) {
+          console.warn("[Spot WorkerPool] failed; retrying on the main WASM instance", error);
+          workerGroupSummaries = null;
+        }
+      }
+      preparedGroups.forEach(({ flatBatch, offsets }, groupIndex) => {
+        const groupSummaries = workerGroupSummaries
+          ? workerGroupSummaries[groupIndex]
+          : (flatBatch.length > 0
+            ? traceRayEvalBatchSummary(opticalSystemRows, flatBatch, 1.0, targetSurface, traceOptions)
+            : []);
+        const normalizedGroupSummaries = Array.isArray(groupSummaries) ? groupSummaries : [];
+        for (const { descriptor, start, end } of offsets) {
+          summariesBySeries[descriptor.index] = normalizedGroupSummaries.slice(start, end);
+        }
+      });
+
+      const series = descriptors.map(({ entry, index: idx, rays, wavelengthUm }) => {
+        const normalizedSummaries = summariesBySeries[idx] || [];
+
         const chiefIdx = rays.findIndex((r: any) => r?.isChief === true);
         const points = normalizedSummaries
           .map((s: any, rayIndex: number) => {
@@ -1927,13 +2060,11 @@ export async function runNativeSpotRaytrace(
           acc[status] = (acc[status] || 0) + 1;
           return acc;
         }, {} as Record<string, number>);
-        const wl = rays.find((r: any) => Number(r?.wavelengthUm) > 0)?.wavelengthUm;
-
         return {
           label: String(entry?.label || `Series ${idx + 1}`),
           color: String(entry?.color || toSeriesColor(idx)),
           objectIndex: idx,
-          wavelengthUm: Number(wl) > 0 ? Number(wl) : undefined,
+          wavelengthUm,
           points,
           chiefPointUm,
           rmsUm: Number.isFinite(Number(spotMetrics.rmsUm)) ? Number(spotMetrics.rmsUm) : undefined,
@@ -1978,13 +2109,14 @@ export async function runNativeSpotRaytrace(
       const traceMs = Math.max(0, nowMs() - traceStartMs);
 
       return {
-        backend: "web-rust-wasm",
+        backend: workerGroupSummaries ? "web-rust-wasm-wavelength-worker-batch" : "web-rust-wasm-wavelength-batch",
         surfaceIndex: targetSurface,
         tracedRays: totalHitRays,
         requestedRays: totalAttemptedRays,
         generatedRays: totalAttemptedRays,
         wavelengthCount: new Set(series.map((s: any) => Number(s.wavelengthUm)).filter((v: number) => Number.isFinite(v) && v > 0)).size,
         seriesCount: seriesStats.length,
+        traceBatchCount: wavelengthGroups.size,
         objectCount,
         raysPerSeries,
         totalAttemptedRays,
@@ -3980,7 +4112,7 @@ export async function runMtfBatchViaWasm(
     }
 
     const enableWasmThreads = typeof globalThis !== "undefined"
-      && (globalThis as any).__COOPT_MTF_ENABLE_RAYON === true
+      && (globalThis as any).__COOPT_MTF_ENABLE_RAYON !== false
       && (globalThis as any).crossOriginIsolated === true
       && typeof (globalThis as any).SharedArrayBuffer === "function";
     const wasmThreadsActive = enableWasmThreads
@@ -4009,18 +4141,31 @@ export async function runMtfBatchViaWasm(
           : request.jobs,
       }
       : request;
-    const enrichedRowsCache = new Map<string, any[]>();
+    // A batch can contain finite-difference candidates with different optical
+    // rows at the same wavelength.  Caching by wavelength alone aliases those
+    // candidates to whichever system happened to be prepared first, which
+    // makes their MTF residuals identical and corrupts the Jacobian.  Preserve
+    // the inexpensive identity cache, but scope it to the actual row array as
+    // well as its wavelength.
+    const enrichedRowsCache = new WeakMap<object, Map<string, any[]>>();
     let enrichedRowsCacheHits = 0;
     const getCachedEnrichedRows = (rows: any[], wavelengthUm: number): any[] => {
       const numericWavelength = Number.isFinite(wavelengthUm) && wavelengthUm > 0 ? wavelengthUm : 0.5876;
       const cacheKey = numericWavelength.toFixed(9);
-      const cached = enrichedRowsCache.get(cacheKey);
+      const cacheOwner = (rows && typeof rows === "object") ? rows as unknown as object : null;
+      const cacheByWavelength = cacheOwner
+        ? (enrichedRowsCache.get(cacheOwner) || new Map<string, any[]>())
+        : null;
+      if (cacheOwner && cacheByWavelength && !enrichedRowsCache.has(cacheOwner)) {
+        enrichedRowsCache.set(cacheOwner, cacheByWavelength);
+      }
+      const cached = cacheByWavelength?.get(cacheKey);
       if (cached) {
         enrichedRowsCacheHits += 1;
         return cached;
       }
       const enriched = enrichRowsWithResolvedRindexForWasm(rows, numericWavelength);
-      enrichedRowsCache.set(cacheKey, enriched);
+      cacheByWavelength?.set(cacheKey, enriched);
       return enriched;
     };
     const sharedOpdRequest = preparedRequest?.shared?.opdRequest;
@@ -4078,7 +4223,7 @@ export async function runMtfBatchViaWasm(
     }
 
     const requestJson = JSON.stringify(preparedRequest);
-    console.info(`[TFMTF BatchPrep] jobs=${Array.isArray(preparedRequest?.jobs) ? preparedRequest.jobs.length : 0}, wavelengthRowCacheHits=${enrichedRowsCacheHits}, cachedWavelengths=${enrichedRowsCache.size}, sharedSourceRowsRemoved=${sharedSourceRowsRemoved}, requestChars=${requestJson.length}`);
+    console.info(`[TFMTF BatchPrep] jobs=${Array.isArray(preparedRequest?.jobs) ? preparedRequest.jobs.length : 0}, wavelengthRowCacheHits=${enrichedRowsCacheHits}, cacheKey=rowIdentity+wavelength, sharedSourceRowsRemoved=${sharedSourceRowsRemoved}, requestChars=${requestJson.length}`);
 
     const wasmOutRaw = batchFn(requestJson);
     const wasmOut = (typeof wasmOutRaw === "string") ? JSON.parse(wasmOutRaw) : wasmOutRaw;
@@ -4091,7 +4236,199 @@ export async function runMtfBatchViaWasm(
   }
 }
 
-async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
+/**
+ * Desktop-only compact MTF evaluator for optimizer finite-difference batches.
+ * The Rust command owns the candidate jobs and runs them on Rayon workers; it
+ * returns the same `{ results: [{ jobIndex, meta, mtf }] }` shape consumed by
+ * the optimizer's existing WASM batch parser.
+ */
+export async function runNativeOptimizerMtfBatch(
+  request: NativeOptimizerMtfBatchRequest,
+): Promise<NativeOptimizerMtfBatchResponse> {
+  if (!isTauriRuntime()) {
+    throw new Error("runNativeOptimizerMtfBatch is available only in the desktop runtime");
+  }
+  return invokeCommand<NativeOptimizerMtfBatchRequest, NativeOptimizerMtfBatchResponse>(
+    "run_native_optimizer_mtf_batch",
+    request,
+  );
+}
+
+type MtfWasmWorkerPool = {
+  workerCount: number;
+  workers: Worker[];
+};
+
+// Optimizer finite-difference batches arrive once per iteration.  Creating a
+// fresh WASM worker for every batch loses more time to startup/compilation than
+// it saves in tracing.  Keep this pool process-local and serialize batches so
+// each worker has at most one in-flight request.
+let mtfWasmWorkerPool: MtfWasmWorkerPool | null = null;
+let mtfWasmWorkerPoolQueue: Promise<void> = Promise.resolve();
+let mtfWasmWorkerRequestSequence = 0;
+
+function disposeMtfWasmWorkerPool(): void {
+  const pool = mtfWasmWorkerPool;
+  mtfWasmWorkerPool = null;
+  if (!pool) return;
+  for (const worker of pool.workers) {
+    try { worker.terminate(); } catch (_) {}
+  }
+}
+
+function getMtfWasmWorkerPool(workerCount: number): MtfWasmWorkerPool {
+  if (mtfWasmWorkerPool && mtfWasmWorkerPool.workerCount === workerCount) {
+    return mtfWasmWorkerPool;
+  }
+  disposeMtfWasmWorkerPool();
+  mtfWasmWorkerPool = {
+    workerCount,
+    workers: Array.from({ length: workerCount }, () => new Worker(
+      new URL("./tfmtf-wasm-worker.ts", import.meta.url),
+      { type: "module" },
+    )),
+  };
+  return mtfWasmWorkerPool;
+}
+
+function splitMtfJobsAcrossWorkers(jobs: unknown[], workerCount: number): { chunks: unknown[][]; strategy: string } {
+  const chunks: unknown[][] = Array.from({ length: workerCount }, () => []);
+  const candidateGroups = new Map<number, unknown[]>();
+  let hasCandidateIndexForEveryJob = jobs.length > 0;
+
+  for (const job of jobs) {
+    const candidateIndex = Number((job as any)?.meta?.candidateIndex);
+    if (!Number.isInteger(candidateIndex) || candidateIndex < 0) {
+      hasCandidateIndexForEveryJob = false;
+      break;
+    }
+    const group = candidateGroups.get(candidateIndex) || [];
+    group.push(job);
+    candidateGroups.set(candidateIndex, group);
+  }
+
+  if (hasCandidateIndexForEveryJob && candidateGroups.size > 0) {
+    // A candidate's jobs share its optical system.  Keeping the complete
+    // candidate on one worker lets the WASM batch reuse packed surface metadata
+    // across its fields and wavelengths, while still evaluating candidates in
+    // parallel for finite differences.
+    const workerLoads = new Array(workerCount).fill(0);
+    const groups = Array.from(candidateGroups.entries())
+      .sort((lhs, rhs) => rhs[1].length - lhs[1].length || lhs[0] - rhs[0]);
+    for (const [, group] of groups) {
+      let target = 0;
+      for (let index = 1; index < workerLoads.length; index += 1) {
+        if (workerLoads[index] < workerLoads[target]) target = index;
+      }
+      chunks[target].push(...group);
+      workerLoads[target] += group.length;
+    }
+    return { chunks, strategy: 'candidate-affinity' };
+  }
+
+  jobs.forEach((job, index) => {
+    chunks[index % workerCount].push(job);
+  });
+  return { chunks, strategy: 'round-robin' };
+}
+
+type SharedMtfWorkerBatch = {
+  shared: Record<string, unknown>;
+  jobs: unknown[];
+  jobIndexes: number[];
+};
+
+function haveEquivalentMtfTableRows(left: any[], right: any[]): boolean {
+  if (left === right) return true;
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  // Table accessors may return independent clones for two requirements that
+  // address the same candidate/wavelength/field. The Worker shared format is
+  // valid for those clones too, and avoids repeating Image Height conversion
+  // and packed-surface construction. Rows are plain table data, so a stable
+  // JSON comparison is a conservative structural-equivalence check.
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Finite-difference candidates use one lens for every field.  Group a
+ * candidate/wavelength into the established Rust `shared` batch format so the
+ * browser neither structured-clones nor JSON-stringifies those lens rows once
+ * per field.  Wavelengths must stay separate: refractive indices and packed
+ * surface metadata are wavelength-dependent.
+ */
+function buildSharedMtfWorkerRequest(request: any, jobs: unknown[]): any {
+  const groups = new Map<string, {
+    opticalRows: any[];
+    sourceRows: any[];
+    objectRows: any[];
+    wavelength: number;
+    jobs: Array<{ job: any; index: number }>;
+  }>();
+
+  for (let index = 0; index < jobs.length; index += 1) {
+    const job = jobs[index] as any;
+    const opd = job?.opdRequest;
+    const candidateIndex = Number(job?.meta?.candidateIndex);
+    const wavelength = Number(opd?.wavelengthUm ?? job?.wavelengthUm);
+    const opticalRows = Array.isArray(opd?.opticalSystemRows) ? opd.opticalSystemRows : null;
+    const sourceRows = Array.isArray(opd?.sourceRows) ? opd.sourceRows : null;
+    const objectRows = Array.isArray(opd?.objectRows) ? opd.objectRows : null;
+    if (!Number.isInteger(candidateIndex) || candidateIndex < 0
+      || !Number.isFinite(wavelength) || wavelength <= 0
+      || !opticalRows || opticalRows.length === 0 || !sourceRows || !objectRows) {
+      return { ...request, jobs };
+    }
+    const key = `${candidateIndex}|${wavelength.toFixed(9)}`;
+    const group = groups.get(key);
+    // Do not compact unusual callers that place distinct system/table arrays
+    // under the same nominal candidate and wavelength.
+    if (group && (!haveEquivalentMtfTableRows(group.opticalRows, opticalRows)
+      || !haveEquivalentMtfTableRows(group.sourceRows, sourceRows)
+      || !haveEquivalentMtfTableRows(group.objectRows, objectRows))) {
+      return { ...request, jobs };
+    }
+    if (group) {
+      group.jobs.push({ job, index });
+    } else {
+      groups.set(key, { opticalRows, sourceRows, objectRows, wavelength, jobs: [{ job, index }] });
+    }
+  }
+
+  if (groups.size === 0) return { ...request, jobs };
+  const optimizerSharedMtfBatches: SharedMtfWorkerBatch[] = [];
+  for (const group of groups.values()) {
+    const firstOpd = group.jobs[0]?.job?.opdRequest || {};
+    const shared = {
+      opdRequest: {
+        ...firstOpd,
+        opticalSystemRows: group.opticalRows,
+        sourceRows: group.sourceRows,
+        objectRows: group.objectRows,
+        wavelengthUm: group.wavelength,
+      },
+    };
+    const compactJobs = group.jobs.map(({ job }) => {
+      const opd = { ...(job?.opdRequest || {}) };
+      delete opd.opticalSystemRows;
+      delete opd.sourceRows;
+      delete opd.objectRows;
+      return { ...job, opdRequest: opd };
+    });
+    optimizerSharedMtfBatches.push({
+      shared,
+      jobs: compactJobs,
+      jobIndexes: group.jobs.map(({ index }) => index),
+    });
+  }
+
+  return { ...request, jobs: undefined, optimizerSharedMtfBatches };
+}
+
+export async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
   const jobs = Array.isArray(request?.jobs) ? request.jobs : [];
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   const logElapsed = () => {
@@ -4118,21 +4455,27 @@ async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
   const hardwareConcurrency = typeof navigator !== "undefined"
     ? Number(navigator.hardwareConcurrency)
     : 4;
-  const workerCount = Math.max(1, Math.min(8, jobs.length, Number.isFinite(hardwareConcurrency) ? hardwareConcurrency : 4));
+  const candidateIndexes = new Set<number>();
+  let allJobsHaveCandidateIndex = jobs.length > 0;
+  for (const job of jobs) {
+    const candidateIndex = Number((job as any)?.meta?.candidateIndex);
+    if (!Number.isInteger(candidateIndex) || candidateIndex < 0) {
+      allJobsHaveCandidateIndex = false;
+      break;
+    }
+    candidateIndexes.add(candidateIndex);
+  }
+  const parallelGroupLimit = allJobsHaveCandidateIndex && candidateIndexes.size > 0
+    ? candidateIndexes.size
+    : jobs.length;
+  const workerCount = Math.max(1, Math.min(6, jobs.length, parallelGroupLimit, Number.isFinite(hardwareConcurrency) ? hardwareConcurrency : 4));
   console.info(`[TFMTF WorkerPool] starting: jobs=${jobs.length}, workers=${workerCount}, hardwareConcurrency=${hardwareConcurrency}`);
-  const chunks: unknown[][] = Array.from({ length: workerCount }, () => []);
-  jobs.forEach((job: unknown, index: number) => {
-    chunks[index % workerCount].push(job);
-  });
-
-  const workers = chunks.map(() => new Worker(
-    new URL("./tfmtf-wasm-worker.ts", import.meta.url),
-    { type: "module" },
-  ));
-  try {
+  const runPoolBatch = async (): Promise<any> => {
+    const { chunks, strategy } = splitMtfJobsAcrossWorkers(jobs, workerCount);
+    const pool = getMtfWasmWorkerPool(workerCount);
     const responses = await Promise.all(chunks.map((chunk, index) => new Promise<any>((resolve, reject) => {
-      const requestId = `tfmtf-${Date.now()}-${index}`;
-      const worker = workers[index];
+      const requestId = `tfmtf-${Date.now()}-${++mtfWasmWorkerRequestSequence}-${index}`;
+      const worker = pool.workers[index];
       worker.onmessage = (event: MessageEvent<any>) => {
         const message = event.data;
         if (message?.requestId !== requestId) return;
@@ -4145,24 +4488,35 @@ async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
       worker.onerror = (event) => reject(new Error(String(event.message || "TF-MTF WASM worker error")));
       worker.postMessage({
         requestId,
-        request: { ...request, jobs: chunk },
+        request: buildSharedMtfWorkerRequest(request, chunk),
       });
     })));
-
     const results = responses.flatMap((response) => Array.isArray(response?.results) ? response.results : []);
+    const sharedBatchCount = responses.reduce((total, response) => (
+      total + Math.max(0, Math.floor(Number(response?.sharedBatchCount) || 0))
+    ), 0);
     if (results.length !== jobs.length) {
       throw new Error(`TF-MTF WASM worker pool returned ${results.length}/${jobs.length} results`);
     }
     return {
       backend: "web-rust-wasm-opd-psf-mtf-worker-pool",
       results,
-      message: `Computed ${jobs.length} TF-MTF jobs across ${workerCount} WASM workers`,
+      workerCount,
+      workerStrategy: strategy,
+      sharedBatchCount,
+      message: `Computed ${jobs.length} TF-MTF jobs across ${workerCount} persistent WASM workers (${strategy})`,
     };
+  };
+
+  const scheduled = mtfWasmWorkerPoolQueue.then(runPoolBatch, runPoolBatch);
+  mtfWasmWorkerPoolQueue = scheduled.then(() => undefined, () => undefined);
+  try {
+    return await scheduled;
   } catch (error) {
+    disposeMtfWasmWorkerPool();
     console.warn(`[TFMTF WorkerPool] failed after ${logElapsed()}ms; retrying on the main WASM instance`, error);
     return runMtfBatchViaWasm(request);
   } finally {
-    workers.forEach((worker) => worker.terminate());
     console.info(`[TFMTF WorkerPool] finished: jobs=${jobs.length}, workers=${workerCount}, elapsed=${logElapsed()}ms`);
   }
 }

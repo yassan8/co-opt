@@ -21,6 +21,7 @@ const OPT_STATUS_JACOBIAN_FAILURE: u32 = 3;
 const OPT_STATUS_NORMAL_EQ_FAILURE: u32 = 4;
 const OPT_STATUS_LINEAR_SOLVE_FAILURE: u32 = 5;
 const OPT_STATUS_INTERNAL_ERROR: u32 = 6;
+const TRACE_SYSTEM_METADATA_CACHE_CAPACITY: usize = 16;
 
 #[derive(Clone)]
 struct ChiefRayOriginSeedEntryNative {
@@ -3617,6 +3618,41 @@ pub fn trace_single_ray_hit_point_with_meta(
     .to_vec()
 }
 
+struct OpdTraceCheckpoints {
+    first_index: Option<usize>,
+    stop_index: Option<usize>,
+    previous_index: Option<usize>,
+    first_state: Option<[f64; 8]>,
+    stop_state: Option<[f64; 8]>,
+    previous_state: Option<[f64; 8]>,
+}
+
+impl OpdTraceCheckpoints {
+    fn new(first_index: Option<usize>, stop_index: Option<usize>, previous_index: Option<usize>) -> Self {
+        Self {
+            first_index,
+            stop_index,
+            previous_index,
+            first_state: None,
+            stop_state: None,
+            previous_state: None,
+        }
+    }
+
+    #[inline]
+    fn capture(&mut self, surface_index: usize, state: [f64; 8]) {
+        if self.first_index == Some(surface_index) {
+            self.first_state = Some(state);
+        }
+        if self.stop_index == Some(surface_index) {
+            self.stop_state = Some(state);
+        }
+        if self.previous_index == Some(surface_index) {
+            self.previous_state = Some(state);
+        }
+    }
+}
+
 fn trace_single_ray_hit_point_with_meta_core(
     ray: &[f64],
     target_surface_index: usize,
@@ -3627,6 +3663,32 @@ fn trace_single_ray_hit_point_with_meta_core(
     row_inv_rots: &[f64],
     row_rots: &[f64],
     row_count: usize,
+) -> [f64; 5] {
+    trace_single_ray_hit_point_with_meta_core_impl(
+        ray,
+        target_surface_index,
+        n_start,
+        row_meta,
+        row_params,
+        row_origins,
+        row_inv_rots,
+        row_rots,
+        row_count,
+        None,
+    )
+}
+
+fn trace_single_ray_hit_point_with_meta_core_impl(
+    ray: &[f64],
+    target_surface_index: usize,
+    n_start: f64,
+    row_meta: &[i32],
+    row_params: &[f64],
+    row_origins: &[f64],
+    row_inv_rots: &[f64],
+    row_rots: &[f64],
+    row_count: usize,
+    mut checkpoints: Option<&mut OpdTraceCheckpoints>,
 ) -> [f64; 5] {
     let mut out = [0.0_f64; 5]; // [status, opl, x, y, z]
     if ray.len() < 6 || row_count == 0 || target_surface_index >= row_count {
@@ -3694,6 +3756,9 @@ fn trace_single_ray_hit_point_with_meta_core(
 
         // Object row: skip entirely (kind == 1)
         if kind == 1 {
+            if let Some(checkpoint_set) = checkpoints.as_deref_mut() {
+                checkpoint_set.capture(i, [1.0, opl, px, py, pz, dx, dy, dz]);
+            }
             if i == target_surface_index {
                 out[0] = 1.0;
                 out[1] = opl;
@@ -3707,6 +3772,9 @@ fn trace_single_ray_hit_point_with_meta_core(
 
         // Gap row: medium update only, no OPL addition from thickness (kind == 2)
         if kind == 2 {
+            if let Some(checkpoint_set) = checkpoints.as_deref_mut() {
+                checkpoint_set.capture(i, [1.0, opl, px, py, pz, dx, dy, dz]);
+            }
             if i == target_surface_index {
                 out[0] = 1.0;
                 out[1] = opl;
@@ -3723,6 +3791,9 @@ fn trace_single_ray_hit_point_with_meta_core(
 
         // CoordTrans row: medium update only (kind == 3)
         if kind == 3 {
+            if let Some(checkpoint_set) = checkpoints.as_deref_mut() {
+                checkpoint_set.capture(i, [1.0, opl, px, py, pz, dx, dy, dz]);
+            }
             if i == target_surface_index {
                 out[0] = 1.0;
                 out[1] = opl;
@@ -3770,7 +3841,7 @@ fn trace_single_ray_hit_point_with_meta_core(
         } else if is_plane {
             if ldz.abs() < EPS_R { f64::NAN } else { -lpz / ldz }
         } else if is_qcon {
-            let mut ip = vec![0.0_f64; 15];
+            let mut ip = [0.0_f64; 15];
             ip[0] = semidia;
             ip[1] = radius;
             ip[2] = conic;
@@ -3781,7 +3852,7 @@ fn trace_single_ray_hit_point_with_meta_core(
             }
             intersect_qcon_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], &ip, false, 20, 1e-7)
         } else {
-            let mut ip = vec![0.0_f64; 13];
+            let mut ip = [0.0_f64; 13];
             ip[0] = semidia;
             ip[1] = radius;
             ip[2] = conic;
@@ -3864,15 +3935,14 @@ fn trace_single_ray_hit_point_with_meta_core(
                 (nvec[0], nvec[1], nvec[2])
             }
         } else {
-            let mut np = vec![0.0_f64; 13];
-            np[0] = semidia;
-            np[1] = radius;
-            np[2] = conic;
-            for k in 0..10 {
-                np[3 + k] = coefs[k];
+            let r = (hx * hx + hy * hy).sqrt();
+            if r < EPS_R {
+                (0.0, 0.0, 1.0)
+            } else {
+                let dzdr = aspheric_sag_derivative(r, radius, conic, &coefs, is_odd_asphere);
+                let nvec = normalize3(-dzdr * (hx / r), -dzdr * (hy / r), 1.0);
+                (nvec[0], nvec[1], nvec[2])
             }
-            let nvec = surface_normal_aspheric_rt10(&[hx, hy, hz], &np, 0);
-            if nvec.len() >= 3 { (nvec[0], nvec[1], nvec[2]) } else { (0.0, 0.0, 1.0) }
         };
 
         let d_dot_n = ldx * nx + ldy * ny + ldz * nz;
@@ -3924,6 +3994,10 @@ fn trace_single_ray_hit_point_with_meta_core(
         let gdy = rm10 * ndx + rm11 * ndy + rm12 * ndz;
         let gdz = rm20 * ndx + rm21 * ndy + rm22 * ndz;
         let gnorm = normalize3(gdx, gdy, gdz);
+
+        if let Some(checkpoint_set) = checkpoints.as_deref_mut() {
+            checkpoint_set.capture(i, [1.0, opl, ghx, ghy, ghz, gnorm[0], gnorm[1], gnorm[2]]);
+        }
 
         px = ghx;
         py = ghy;
@@ -4067,7 +4141,7 @@ fn trace_single_ray_hit_state_with_meta_core(
         } else if is_plane {
             if ldz.abs() < EPS_R { f64::NAN } else { -lpz / ldz }
         } else if is_qcon {
-            let mut ip = vec![0.0_f64; 15];
+            let mut ip = [0.0_f64; 15];
             ip[0] = semidia;
             ip[1] = radius;
             ip[2] = conic;
@@ -4078,7 +4152,7 @@ fn trace_single_ray_hit_state_with_meta_core(
             }
             intersect_qcon_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], &ip, false, 20, 1e-7)
         } else {
-            let mut ip = vec![0.0_f64; 13];
+            let mut ip = [0.0_f64; 13];
             ip[0] = semidia;
             ip[1] = radius;
             ip[2] = conic;
@@ -4146,15 +4220,14 @@ fn trace_single_ray_hit_state_with_meta_core(
                 (nvec[0], nvec[1], nvec[2])
             }
         } else {
-            let mut np = vec![0.0_f64; 13];
-            np[0] = semidia;
-            np[1] = radius;
-            np[2] = conic;
-            for k in 0..10 {
-                np[3 + k] = coefs[k];
+            let r = (hx * hx + hy * hy).sqrt();
+            if r < EPS_R {
+                (0.0, 0.0, 1.0)
+            } else {
+                let dzdr = aspheric_sag_derivative(r, radius, conic, &coefs, is_odd_asphere);
+                let nvec = normalize3(-dzdr * (hx / r), -dzdr * (hy / r), 1.0);
+                (nvec[0], nvec[1], nvec[2])
             }
-            let nvec = surface_normal_aspheric_rt10(&[hx, hy, hz], &np, 0);
-            if nvec.len() >= 3 { (nvec[0], nvec[1], nvec[2]) } else { (0.0, 0.0, 1.0) }
         };
 
         let d_dot_n = ldx * nx + ldy * ny + ldz * nz;
@@ -4293,6 +4366,36 @@ pub fn trace_ray_batch_hit_point_with_meta(
 }
 
 #[wasm_bindgen]
+pub fn trace_ray_batch_hit_point_with_rows_json(
+    optical_rows_json: String,
+    rays: &[f64],
+    ray_count: usize,
+    target_surface_index: usize,
+    wavelength_um: f64,
+    n_start: f64,
+) -> Result<Vec<f64>, JsValue> {
+    let raw_rows: Vec<Value> = serde_json::from_str(&optical_rows_json)
+        .map_err(|error| JsValue::from_str(&format!("trace_ray_batch_hit_point_with_rows_json: rows JSON: {error}")))?;
+    if raw_rows.is_empty() || target_surface_index >= raw_rows.len() {
+        return Err(JsValue::from_str("trace_ray_batch_hit_point_with_rows_json: invalid rows/target"));
+    }
+    let rows = raw_rows.iter().map(normalize_coord_trans_row).collect::<Vec<Value>>();
+    let packed = build_packed_meta_for_opd(&rows, wavelength_um, target_surface_index);
+    Ok(trace_ray_batch_hit_point_with_meta(
+        rays,
+        ray_count,
+        target_surface_index,
+        n_start,
+        &packed.row_meta,
+        &packed.row_params,
+        &packed.row_origins,
+        &packed.row_inv_rots,
+        &packed.row_rots,
+        packed.row_count,
+    ))
+}
+
+#[wasm_bindgen]
 pub fn trace_ray_batch_spot_metrics_with_meta(
     rays: &[f64],
     ray_count: usize,
@@ -4415,7 +4518,7 @@ pub fn register_trace_system_metadata(
     TRACE_SYSTEM_METADATA_CACHE.with(|cache| {
         let mut entries = cache.borrow_mut();
         entries.push(entry);
-        if entries.len() > 8 {
+        if entries.len() > TRACE_SYSTEM_METADATA_CACHE_CAPACITY {
             entries.remove(0);
         }
     });
@@ -4425,6 +4528,38 @@ pub fn register_trace_system_metadata(
 #[wasm_bindgen]
 pub fn clear_trace_system_metadata_cache() {
     TRACE_SYSTEM_METADATA_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+#[wasm_bindgen]
+pub fn trace_ray_batch_hit_point_cached(
+    rays: &[f64],
+    ray_count: usize,
+    target_surface_index: usize,
+    n_start: f64,
+    metadata_handle: u32,
+) -> Vec<f64> {
+    let cached = TRACE_SYSTEM_METADATA_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|entry| entry.handle == metadata_handle)
+            .cloned()
+    });
+    let Some(entry) = cached else {
+        return Vec::new();
+    };
+    trace_ray_batch_hit_point_with_meta(
+        rays,
+        ray_count,
+        target_surface_index,
+        n_start,
+        &entry.row_meta,
+        &entry.row_params,
+        &entry.row_origins,
+        &entry.row_inv_rots,
+        &entry.row_rots,
+        entry.row_count,
+    )
 }
 
 #[wasm_bindgen]
@@ -10253,8 +10388,8 @@ fn run_native_opd_map_value_with_rows(
     let mut first_surface_opd_sample_count = 0usize;
     let mut first_surface_excluded_opd_sum_sq_um = 0.0_f64;
     let mut first_surface_excluded_opd_sample_count = 0usize;
-    let mut first_surface_trace_status_3_count = 0usize;
-    let mut first_surface_trace_status_4_count = 0usize;
+    let first_surface_trace_status_3_count = 0usize;
+    let first_surface_trace_status_4_count = 0usize;
     let mut first_surface_trace_status_other_count = 0usize;
     let mut raw_grid = vec![vec![None::<f64>; grid_size]; grid_size];
     let mut unreferenced_grid = vec![vec![None::<f64>; grid_size]; grid_size];
@@ -10399,7 +10534,12 @@ fn run_native_opd_map_value_with_rows(
                     }
                 }
             }
-            let target_hit = trace_single_ray_hit_point_with_meta_core(
+            let mut trace_checkpoints = OpdTraceCheckpoints::new(
+                first_optical_surface_index,
+                Some(stop_surface_index),
+                target_surface_index.checked_sub(1),
+            );
+            let target_hit = trace_single_ray_hit_point_with_meta_core_impl(
                 &ray,
                 target_surface_index,
                 object_space_n,
@@ -10409,6 +10549,7 @@ fn run_native_opd_map_value_with_rows(
                 &packed_target.row_inv_rots,
                 &packed_target.row_rots,
                 packed_target.row_count,
+                Some(&mut trace_checkpoints),
             );
             if (target_hit[0] - 1.0).abs() > f64::EPSILON {
                 continue;
@@ -10418,21 +10559,9 @@ fn run_native_opd_map_value_with_rows(
             if !ray_opl.is_finite() {
                 continue;
             }
-            if let (Some(first_surface_index), Some(chief_first_opl)) =
-                (first_optical_surface_index, chief_first_surface_opl)
-            {
-                let marginal_first_state = trace_single_ray_hit_point_with_meta_core(
-                    &ray,
-                    first_surface_index,
-                    object_space_n,
-                    &packed_target.row_meta,
-                    &packed_target.row_params,
-                    &packed_target.row_origins,
-                    &packed_target.row_inv_rots,
-                    &packed_target.row_rots,
-                    packed_target.row_count,
-                );
-                if (marginal_first_state[0] - 1.0).abs() <= f64::EPSILON {
+            if let Some(chief_first_opl) = chief_first_surface_opl {
+                let marginal_first_state = trace_checkpoints.first_state;
+                if let Some(marginal_first_state) = marginal_first_state {
                     let first_surface_opd_um = chief_first_opl - marginal_first_state[1];
                     if first_surface_opd_um.is_finite() {
                         first_surface_opd_sum_sq_um += first_surface_opd_um * first_surface_opd_um;
@@ -10445,31 +10574,12 @@ fn run_native_opd_map_value_with_rows(
                             first_surface_excluded_opd_sample_count += 1;
                         }
                     }
-                } else if (marginal_first_state[0] - 3.0).abs() <= f64::EPSILON {
-                    first_surface_trace_status_3_count += 1;
-                } else if (marginal_first_state[0] - 4.0).abs() <= f64::EPSILON {
-                    first_surface_trace_status_4_count += 1;
                 } else {
                     first_surface_trace_status_other_count += 1;
                 }
             }
             pupil_mask_grid[y][x] = Some(true);
-            let marginal_prev_state = if target_surface_index > 0 {
-                let state = trace_single_ray_hit_state_with_meta_core(
-                    &ray,
-                    target_surface_index - 1,
-                    object_space_n,
-                    &packed_target.row_meta,
-                    &packed_target.row_params,
-                    &packed_target.row_origins,
-                    &packed_target.row_inv_rots,
-                    &packed_target.row_rots,
-                    packed_target.row_count,
-                );
-                ((state[0] - 1.0).abs() <= f64::EPSILON).then_some(state)
-            } else {
-                None
-            };
+            let marginal_prev_state = trace_checkpoints.previous_state;
             let marginal_target_state = marginal_prev_state.as_ref().and_then(|previous_state| {
                 ((target_hit[0] - 1.0).abs() <= f64::EPSILON).then_some([
                     1.0,
@@ -10487,40 +10597,29 @@ fn run_native_opd_map_value_with_rows(
             } else {
                 marginal_prev_state.as_ref()
             };
-            let marginal_stop_state = trace_single_ray_hit_state_with_meta_core(
-                &ray,
-                stop_surface_index,
-                object_space_n,
-                &packed_target.row_meta,
-                &packed_target.row_params,
-                &packed_target.row_origins,
-                &packed_target.row_inv_rots,
-                &packed_target.row_rots,
-                packed_target.row_count,
-            );
+            let marginal_stop_state = trace_checkpoints.stop_state.unwrap_or_else(|| {
+                trace_single_ray_hit_state_with_meta_core(
+                    &ray,
+                    stop_surface_index,
+                    object_space_n,
+                    &packed_target.row_meta,
+                    &packed_target.row_params,
+                    &packed_target.row_origins,
+                    &packed_target.row_inv_rots,
+                    &packed_target.row_rots,
+                    packed_target.row_count,
+                )
+            });
             if (marginal_stop_state[0] - 1.0).abs() <= f64::EPSILON {
-                if let (Some(chief_stop), Some(first_surface_index), Some(chief_first_opl)) =
-                    (chief_stop_state, first_optical_surface_index, chief_first_surface_opl)
+                if let (Some(chief_stop), Some(chief_first_opl), Some(marginal_first_state)) =
+                    (chief_stop_state, chief_first_surface_opl, trace_checkpoints.first_state)
                 {
-                    let marginal_first_state = trace_single_ray_hit_point_with_meta_core(
-                        &ray,
-                        first_surface_index,
-                        object_space_n,
-                        &packed_target.row_meta,
-                        &packed_target.row_params,
-                        &packed_target.row_origins,
-                        &packed_target.row_inv_rots,
-                        &packed_target.row_rots,
-                        packed_target.row_count,
-                    );
-                    if (marginal_first_state[0] - 1.0).abs() <= f64::EPSILON {
-                        let chief_stop_segment_um = chief_stop[1] - chief_first_opl;
-                        let marginal_stop_segment_um = marginal_stop_state[1] - marginal_first_state[1];
-                        let stop_reference_opd_um = chief_stop_segment_um - marginal_stop_segment_um;
-                        if stop_reference_opd_um.is_finite() {
-                            stop_reference_opd_sum_sq_um += stop_reference_opd_um * stop_reference_opd_um;
-                            stop_reference_sample_count += 1;
-                        }
+                    let chief_stop_segment_um = chief_stop[1] - chief_first_opl;
+                    let marginal_stop_segment_um = marginal_stop_state[1] - marginal_first_state[1];
+                    let stop_reference_opd_um = chief_stop_segment_um - marginal_stop_segment_um;
+                    if stop_reference_opd_um.is_finite() {
+                        stop_reference_opd_sum_sq_um += stop_reference_opd_um * stop_reference_opd_um;
+                        stop_reference_sample_count += 1;
                     }
                 }
             }
@@ -14185,6 +14284,92 @@ pub fn run_native_mtf_from_psf_wasm_json(req_json: String) -> Result<JsValue, Js
     .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
 }
 
+fn pupil_autocorrelation_fft(
+    real: &[Vec<f64>],
+    imag: &[Vec<f64>],
+) -> Result<(Vec<num_complex::Complex<f64>>, usize), String> {
+    use num_complex::Complex;
+    use rustfft::FftPlanner;
+
+    let n = real.len();
+    if n < 2 || imag.len() != n || real.iter().any(|row| row.len() != n) || imag.iter().any(|row| row.len() != n) {
+        return Err("pupil_autocorrelation_fft: expected matching square grids".to_string());
+    }
+    let fft_size = (n.saturating_mul(2).saturating_sub(1)).next_power_of_two();
+    let mut data = vec![Complex::new(0.0, 0.0); fft_size * fft_size];
+    for y in 0..n {
+        for x in 0..n {
+            data[y * fft_size + x] = Complex::new(real[y][x], imag[y][x]);
+        }
+    }
+
+    let mut planner = FftPlanner::new();
+    let forward = planner.plan_fft_forward(fft_size);
+    for y in 0..fft_size {
+        forward.process(&mut data[y * fft_size..(y + 1) * fft_size]);
+    }
+    let mut column = vec![Complex::new(0.0, 0.0); fft_size];
+    for x in 0..fft_size {
+        for y in 0..fft_size {
+            column[y] = data[y * fft_size + x];
+        }
+        forward.process(&mut column);
+        for y in 0..fft_size {
+            data[y * fft_size + x] = column[y];
+        }
+    }
+    for value in data.iter_mut() {
+        *value = Complex::new(value.norm_sqr(), 0.0);
+    }
+
+    let inverse = planner.plan_fft_inverse(fft_size);
+    for y in 0..fft_size {
+        inverse.process(&mut data[y * fft_size..(y + 1) * fft_size]);
+    }
+    for x in 0..fft_size {
+        for y in 0..fft_size {
+            column[y] = data[y * fft_size + x];
+        }
+        inverse.process(&mut column);
+        for y in 0..fft_size {
+            data[y * fft_size + x] = column[y];
+        }
+    }
+    let scale = 1.0 / (fft_size * fft_size) as f64;
+    for value in data.iter_mut() {
+        *value *= scale;
+    }
+    Ok((data, fft_size))
+}
+
+fn sample_pupil_autocorrelation(
+    correlation: &[num_complex::Complex<f64>],
+    fft_size: usize,
+    shift_x: f64,
+    shift_y: f64,
+) -> num_complex::Complex<f64> {
+    use num_complex::Complex;
+    if fft_size == 0 || correlation.len() < fft_size * fft_size || !shift_x.is_finite() || !shift_y.is_finite() {
+        return Complex::new(0.0, 0.0);
+    }
+    let x0_signed = shift_x.floor() as isize;
+    let y0_signed = shift_y.floor() as isize;
+    let tx = (shift_x - x0_signed as f64).clamp(0.0, 1.0);
+    let ty = (shift_y - y0_signed as f64).clamp(0.0, 1.0);
+    let wrap = |value: isize| value.rem_euclid(fft_size as isize) as usize;
+    let x0 = wrap(x0_signed);
+    let x1 = wrap(x0_signed + 1);
+    let y0 = wrap(y0_signed);
+    let y1 = wrap(y0_signed + 1);
+    let c00 = correlation[y0 * fft_size + x0];
+    let c10 = correlation[y0 * fft_size + x1];
+    let c01 = correlation[y1 * fft_size + x0];
+    let c11 = correlation[y1 * fft_size + x1];
+    let c0 = c00 + (c10 - c00) * tx;
+    let c1 = c01 + (c11 - c01) * tx;
+    c0 + (c1 - c0) * ty
+}
+
 /// Compute MTF with Malacara/Hopkins-style pupil autocorrelation directly from OPD grid.
 /// This is intended for strict Rust/WASM-only MTF in web runtime (no JS fallback).
 fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue> {
@@ -14357,17 +14542,44 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
     let pixel_step_x = (x_max - x_min) / (n.saturating_sub(1) as f64).max(1.0);
     let pixel_step_y = (y_max - y_min) / (n.saturating_sub(1) as f64).max(1.0);
 
+    let evaluation_frequencies = if direct_eval_only {
+        sampled_frequencies_lpmm
+            .iter()
+            .map(|frequency| frequency.min(cutoff_lpmm))
+            .collect::<Vec<f64>>()
+    } else {
+        (0..out_points)
+            .map(|i| {
+                let t = i as f64 / (out_points.saturating_sub(1) as f64).max(1.0);
+                axis_max_lpmm * t
+            })
+            .collect::<Vec<f64>>()
+    };
+    // Direct summation is faster for one or two requested frequencies. Full
+    // curves use a zero-padded linear autocorrelation: O(N² log N) instead of
+    // O(points × N²), with the same bilinear sub-pixel sampling semantics.
+    let correlation_mode = req
+        .get("malacaraCorrelationMode")
+        .and_then(value_to_string)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let use_fft_correlation = correlation_mode != "direct"
+        && n >= 8
+        && (correlation_mode == "fft" || evaluation_frequencies.len() >= 32);
+    let fft_correlation = if use_fft_correlation {
+        pupil_autocorrelation_fft(&re_grid, &im_grid).ok()
+    } else {
+        None
+    };
+
     let compute_curve = |dxn: f64, dyn_: f64, frequencies: &[f64]| -> Vec<f64> {
-        let mut out = Vec::with_capacity(frequencies.len());
-        for f in frequencies.iter().copied() {
+        let compute_frequency = |f: f64| -> f64 {
             if f <= 1e-12 {
-                out.push(1.0);
-                continue;
+                return 1.0;
             }
             let nu = f / cutoff_lpmm;
             if !nu.is_finite() || nu >= 1.0 {
-                out.push(0.0);
-                continue;
+                return 0.0;
             }
             let shift = 2.0 * nu.max(0.0) * pupil_range;
             let sx = dxn * shift;
@@ -14377,6 +14589,29 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
             let tail_blend = ((nu - 0.7) / 0.3).clamp(0.0, 1.0);
             let jitter_x = 0.25 * pixel_step_x;
             let jitter_y = 0.25 * pixel_step_y;
+
+            if let Some((correlation, fft_size)) = fft_correlation.as_ref() {
+                // rustfft's positive-lag convention is the conjugate of the
+                // P(x)·conj(P(x+s)) convention used by the direct evaluator.
+                let shift_pixels_x = -sx * inv_dx;
+                let shift_pixels_y = -sy * inv_dy;
+                let mut value = sample_pupil_autocorrelation(
+                    correlation,
+                    *fft_size,
+                    shift_pixels_x,
+                    shift_pixels_y,
+                );
+                if tail_blend > 0.0 {
+                    let c1 = sample_pupil_autocorrelation(correlation, *fft_size, shift_pixels_x + 0.25, shift_pixels_y + 0.25);
+                    let c2 = sample_pupil_autocorrelation(correlation, *fft_size, shift_pixels_x + 0.25, shift_pixels_y - 0.25);
+                    let c3 = sample_pupil_autocorrelation(correlation, *fft_size, shift_pixels_x - 0.25, shift_pixels_y + 0.25);
+                    let c4 = sample_pupil_autocorrelation(correlation, *fft_size, shift_pixels_x - 0.25, shift_pixels_y - 0.25);
+                    let low_pass = (c1 + c2 + c3 + c4) * 0.25;
+                    value = value * (1.0 - tail_blend) + low_pass * tail_blend;
+                }
+                let mtf = (value.norm() / denom).clamp(0.0, 1.0);
+                return if mtf.is_finite() { mtf } else { 0.0 };
+            }
 
             let mut sum_re = 0.0_f64;
             let mut sum_im = 0.0_f64;
@@ -14406,26 +14641,17 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
                 }
             }
             let mtf = (sum_re.hypot(sum_im) / denom).clamp(0.0, 1.0);
-            out.push(if mtf.is_finite() { mtf } else { 0.0 });
-        }
+            if mtf.is_finite() { mtf } else { 0.0 }
+        };
+
+        #[cfg(feature = "wasm-threads")]
+        let mut out = frequencies.par_iter().map(|frequency| compute_frequency(*frequency)).collect::<Vec<f64>>();
+        #[cfg(not(feature = "wasm-threads"))]
+        let mut out = frequencies.iter().map(|frequency| compute_frequency(*frequency)).collect::<Vec<f64>>();
         if frequencies.first().is_some_and(|frequency| *frequency <= 1e-12) {
             out[0] = 1.0;
         }
         out
-    };
-
-    let evaluation_frequencies = if direct_eval_only {
-        sampled_frequencies_lpmm
-            .iter()
-            .map(|frequency| frequency.min(cutoff_lpmm))
-            .collect::<Vec<f64>>()
-    } else {
-        (0..out_points)
-            .map(|i| {
-                let t = i as f64 / (out_points.saturating_sub(1) as f64).max(1.0);
-                axis_max_lpmm * t
-            })
-            .collect::<Vec<f64>>()
     };
     let evaluated_tangential = compute_curve(tan_x, tan_y, &evaluation_frequencies);
     let evaluated_sagittal = compute_curve(sag_x, sag_y, &evaluation_frequencies);
@@ -14434,7 +14660,7 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
     let mtf_sagittal = if direct_eval_only { Vec::new() } else { evaluated_sagittal.clone() };
 
     Ok(serde_json::json!({
-        "backend": "web-rust-wasm-mtf-malacara",
+        "backend": if fft_correlation.is_some() { "web-rust-wasm-mtf-malacara-fft" } else { "web-rust-wasm-mtf-malacara-direct" },
         "frequencyAxis": frequency_axis,
         "mtfTangential": mtf_tangential,
         "mtfSagittal": mtf_sagittal,
@@ -14442,7 +14668,7 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
         "sampledMtfTangential": if direct_eval_only { Value::from(evaluated_tangential) } else { Value::Null },
         "sampledMtfSagittal": if direct_eval_only { Value::from(evaluated_sagittal) } else { Value::Null },
         "nyquistLpmm": cutoff_lpmm,
-        "message": "Computed via WASM Malacara MTF (run_native_mtf_malacara_from_opd_wasm_json)"
+        "message": if fft_correlation.is_some() { "Computed via WASM Malacara FFT autocorrelation" } else { "Computed via WASM Malacara direct autocorrelation" }
     }))
 }
 
@@ -14796,12 +15022,85 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
     .map_err(|error| JsValue::from_str(&error))?;
 
     #[cfg(not(feature = "wasm-threads"))]
-    let results: Vec<Value> = jobs
-        .iter()
-        .enumerate()
-        .map(compute_job)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| JsValue::from_str(&error))?;
+    let (results, packed_meta_cache_entries, packed_meta_cache_hits): (Vec<Value>, usize, usize) = {
+        // The optimizer submits one OPD/MTF job for each field and wavelength.
+        // For a finite-difference candidate the packed optical system is the
+        // same across all fields at the same wavelength, yet the old batch path
+        // rebuilt its surface metadata for every job.  Keep it local to this
+        // request so changed candidates can never leak into a later evaluation.
+        let mut packed_meta_cache: Vec<(Vec<Value>, f64, usize, PackedMeta)> = Vec::new();
+        let mut cache_hits = 0usize;
+        let mut results = Vec::with_capacity(jobs.len());
+
+        for (job_index, job) in jobs.iter().enumerate() {
+            // Shared batches already own their normalized rows and metadata in
+            // `compute_job`.  Optimizer batches carry their own rows so that
+            // each finite-difference candidate remains independent.
+            let job_rows = if shared.is_none() {
+                job.get("opdRequest")
+                    .and_then(|opd| opd.get("opticalSystemRows"))
+                    .and_then(Value::as_array)
+            } else {
+                None
+            };
+
+            let Some(job_rows) = job_rows else {
+                results.push(compute_job((job_index, job)).map_err(|error| JsValue::from_str(&error))?);
+                continue;
+            };
+
+            let normalized_rows = job_rows
+                .iter()
+                .map(normalize_coord_trans_row)
+                .collect::<Vec<Value>>();
+            let wavelength_um = job
+                .get("opdRequest")
+                .and_then(|opd| opd.get("wavelengthUm"))
+                .and_then(value_to_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or(0.5876);
+            let target_surface_index = job
+                .get("opdRequest")
+                .and_then(|opd| opd.get("surfaceIndex"))
+                .and_then(value_to_f64)
+                .map(|value| value.max(0.0) as usize)
+                .unwrap_or_else(|| find_eval_surface_index(&normalized_rows))
+                .min(normalized_rows.len().saturating_sub(1));
+
+            let cache_index = if let Some(index) = packed_meta_cache.iter().position(|(rows, wavelength, target, _)| {
+                *target == target_surface_index
+                    && (*wavelength - wavelength_um).abs() <= 1.0e-12
+                    && *rows == normalized_rows
+            }) {
+                cache_hits += 1;
+                index
+            } else {
+                let packed = build_packed_meta_for_opd(&normalized_rows, wavelength_um, target_surface_index);
+                packed_meta_cache.push((normalized_rows, wavelength_um, target_surface_index, packed));
+                packed_meta_cache.len().saturating_sub(1)
+            };
+            let cached = &packed_meta_cache[cache_index];
+            let mut job_result = run_native_opd_psf_mtf_value_with_rows(
+                job,
+                Some(cached.0.as_slice()),
+                Some(&cached.3),
+            )?;
+            if let Some(obj) = job_result.as_object_mut() {
+                obj.insert("jobIndex".to_string(), Value::from(job_index as u64));
+                if let Some(meta) = job.get("meta") {
+                    obj.insert("meta".to_string(), meta.clone());
+                }
+            }
+            results.push(job_result);
+        }
+
+        (results, packed_meta_cache.len(), cache_hits)
+    };
+
+    #[cfg(feature = "wasm-threads")]
+    let packed_meta_cache_entries = 0usize;
+    #[cfg(feature = "wasm-threads")]
+    let packed_meta_cache_hits = 0usize;
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     #[cfg(feature = "wasm-threads")]
@@ -14816,6 +15115,8 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
     serde_json::json!({
         "backend": backend,
         "results": results,
+        "packedMetaCacheEntries": packed_meta_cache_entries,
+        "packedMetaCacheHits": packed_meta_cache_hits,
         "message": "Computed multiple OPD+PSF+MTF jobs via one WASM batch call",
     })
     .serialize(&serializer)
@@ -14829,10 +15130,14 @@ mod tests {
         clear_trace_system_metadata_cache,
         register_trace_system_metadata,
         run_native_mtf_malacara_from_opd_value,
+        trace_ray_batch_hit_point_cached,
         trace_ray_batch_hit_point_with_meta,
         trace_ray_batch_spot_metrics_cached,
         trace_spot_metric_jobs_cached,
         trace_ray_batch_spot_metrics_with_meta,
+        trace_single_ray_hit_point_with_meta_core_impl,
+        trace_single_ray_hit_state_with_meta_core,
+        OpdTraceCheckpoints,
     };
 
     fn test_grid() -> (Vec<Vec<Option<f64>>>, Vec<Vec<Option<f64>>>, Vec<Vec<Option<f64>>>, Vec<Vec<Option<bool>>>) {
@@ -14895,6 +15200,53 @@ mod tests {
         let direct_sag = direct["sampledMtfSagittal"][0].as_f64().unwrap();
         assert!((full_tan - direct_tan).abs() <= 1e-12);
         assert!((full_sag - direct_sag).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn malacara_fft_curve_matches_direct_autocorrelation() {
+        let grid = (0..17)
+            .map(|iy| {
+                (0..17)
+                    .map(|ix| {
+                        let x = (ix as f64 - 8.0) / 8.0;
+                        let y = (iy as f64 - 8.0) / 8.0;
+                        if x * x + y * y <= 1.0 {
+                            Some(0.11 * x * x + 0.04 * x * y - 0.02 * y * y)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<Option<f64>>>()
+            })
+            .collect::<Vec<Vec<Option<f64>>>>();
+        let mut direct_request = serde_json::json!({
+            "displayOpdGrid": grid,
+            "wavelengthUm": 0.55,
+            "fNumber": 4.0,
+            "pupilRange": 1.0,
+            "maxFrequencyLpmm": 80.0,
+            "points": 65,
+            "tangentialDir": { "x": 0.8, "y": 0.6 },
+            "sagittalDir": { "x": -0.6, "y": 0.8 },
+            "malacaraCorrelationMode": "direct",
+        });
+        let direct = run_native_mtf_malacara_from_opd_value(&direct_request).expect("direct curve");
+        direct_request["malacaraCorrelationMode"] = serde_json::json!("fft");
+        let fft = run_native_mtf_malacara_from_opd_value(&direct_request).expect("FFT curve");
+        for key in ["mtfTangential", "mtfSagittal"] {
+            let direct_values = direct[key].as_array().unwrap();
+            let fft_values = fft[key].as_array().unwrap();
+            assert_eq!(direct_values.len(), fft_values.len());
+            let mut max_delta = 0.0_f64;
+            for (index, (direct_value, fft_value)) in direct_values.iter().zip(fft_values).enumerate() {
+                let direct_numeric = direct_value.as_f64().unwrap();
+                let fft_numeric = fft_value.as_f64().unwrap();
+                let delta = (direct_numeric - fft_numeric).abs();
+                max_delta = max_delta.max(delta);
+                assert!(delta <= 0.03, "{key}[{index}] direct={direct_numeric} fft={fft_numeric} delta={delta}");
+            }
+            assert!(max_delta > 0.0);
+        }
     }
 
     #[test]
@@ -14993,6 +15345,76 @@ mod tests {
 
         clear_trace_system_metadata_cache();
         assert_eq!(trace_ray_batch_spot_metrics_cached(&rays, 2, 0, 1.0, 0.0, 0.0, handle)[0], 0.0);
+    }
+
+    #[test]
+    fn cached_hit_points_match_direct_metadata_path() {
+        clear_trace_system_metadata_cache();
+        let rays = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let row_meta = vec![0, 2, 0, 0];
+        let mut row_params = vec![0.0; 24];
+        row_params[0] = f64::INFINITY;
+        row_params[12] = f64::INFINITY;
+        row_params[17] = f64::INFINITY;
+        row_params[20] = 1.0;
+        let row_origins = vec![0.0, 0.0, 10.0];
+        let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let direct = trace_ray_batch_hit_point_with_meta(
+            &rays, 2, 0, 1.0, &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+        );
+        let handle = register_trace_system_metadata(
+            &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+        );
+        assert!(handle > 0);
+        let cached = trace_ray_batch_hit_point_cached(&rays, 2, 0, 1.0, handle);
+        assert_eq!(cached, direct);
+
+        clear_trace_system_metadata_cache();
+        assert!(trace_ray_batch_hit_point_cached(&rays, 2, 0, 1.0, handle).is_empty());
+    }
+
+    #[test]
+    fn opd_checkpoint_trace_matches_individual_surface_traces() {
+        let ray = vec![0.2, -0.1, 0.0, 0.01, -0.02, 1.0];
+        let row_count = 3;
+        let row_meta = vec![
+            0, 2, 0, 0,
+            0, 2, 0, 0,
+            0, 2, 0, 0,
+        ];
+        let mut row_params = vec![0.0; row_count * 24];
+        for index in 0..row_count {
+            let base = index * 24;
+            row_params[base] = f64::INFINITY;
+            row_params[base + 12] = f64::INFINITY;
+            row_params[base + 17] = f64::INFINITY;
+            row_params[base + 20] = 1.0;
+        }
+        let row_origins = vec![0.0, 0.0, 10.0, 0.0, 0.0, 20.0, 0.0, 0.0, 30.0];
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let mut row_rots = Vec::new();
+        for _ in 0..row_count {
+            row_rots.extend_from_slice(&identity);
+        }
+
+        let first_direct = trace_single_ray_hit_state_with_meta_core(
+            &ray, 0, 1.0, &row_meta, &row_params, &row_origins, &row_rots, &row_rots, row_count,
+        );
+        let previous_direct = trace_single_ray_hit_state_with_meta_core(
+            &ray, 1, 1.0, &row_meta, &row_params, &row_origins, &row_rots, &row_rots, row_count,
+        );
+        let mut checkpoints = OpdTraceCheckpoints::new(Some(0), Some(1), Some(1));
+        let target = trace_single_ray_hit_point_with_meta_core_impl(
+            &ray, 2, 1.0, &row_meta, &row_params, &row_origins, &row_rots, &row_rots, row_count,
+            Some(&mut checkpoints),
+        );
+        assert_eq!(target[0], 1.0);
+        assert_eq!(checkpoints.first_state, Some(first_direct));
+        assert_eq!(checkpoints.stop_state, Some(previous_direct));
+        assert_eq!(checkpoints.previous_state, Some(previous_direct));
     }
 
     #[test]

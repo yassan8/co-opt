@@ -198,7 +198,11 @@ export function trace_image_height_infinite_candidate_with_rows(optical_system_r
 
 export function trace_image_height_infinite_chief_ray_exact_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, angle_x_deg: number, angle_y_deg: number): Float64Array;
 
+export function trace_ray_batch_hit_point_cached(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, metadata_handle: number): Float64Array;
+
 export function trace_ray_batch_hit_point_with_meta(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): Float64Array;
+
+export function trace_ray_batch_hit_point_with_rows_json(optical_rows_json: string, rays: Float64Array, ray_count: number, target_surface_index: number, wavelength_um: number, n_start: number): Float64Array;
 
 export function trace_ray_batch_spot_metrics_cached(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, reference_x: number, reference_y: number, metadata_handle: number): Float64Array;
 
@@ -308,7 +312,9 @@ export interface InitOutput {
     readonly trace_image_height_infinite_candidate_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
     readonly trace_image_height_infinite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
     readonly trace_image_height_infinite_chief_ray_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
+    readonly trace_ray_batch_hit_point_cached: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly trace_ray_batch_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number];
+    readonly trace_ray_batch_hit_point_with_rows_json: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly trace_ray_batch_spot_metrics_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly trace_ray_batch_spot_metrics_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
     readonly trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];

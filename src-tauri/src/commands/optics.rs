@@ -202,7 +202,8 @@ fn should_emit_native_analysis_events(job_id: &str) -> bool {
     let is_nested_field_mtf_job = job_id.starts_with("native-field-mtf-")
         && ((job_id.contains("-w") && job_id.contains("-s"))
             || job_id.ends_with("-ref-radius"));
-    !(is_nested_through_focus_job || is_nested_field_mtf_job)
+    let is_optimizer_mtf_job = job_id.starts_with("optimizer-mtf-");
+    !(is_nested_through_focus_job || is_nested_field_mtf_job || is_optimizer_mtf_job)
 }
 
 fn build_native_job_id(prefix: &str) -> String {
@@ -557,7 +558,7 @@ pub struct NativeTransverseRmsBatchResponse {
     pub message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeTransverseRmsResponse {
     pub backend: String,
@@ -934,6 +935,77 @@ pub struct NativeMtfMapResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampled_mtf_sagittal: Option<Vec<f64>>,
     pub nyquist_lpmm: f64,
+    pub message: String,
+}
+
+/// One direct-MTF job produced by the optimizer.  This intentionally mirrors the
+/// compact MTF batch request used by the browser/WASM path, but keeps the
+/// optical rows in the native process so all candidate jobs can be scheduled by
+/// Rayon rather than one WebView thread.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOptimizerMtfJob {
+    pub optical_system_rows: Vec<Value>,
+    #[serde(default)]
+    pub source_rows: Vec<Value>,
+    #[serde(default)]
+    pub object_rows: Vec<Value>,
+    pub object_index: usize,
+    pub grid_size: u32,
+    pub wavelength_um: f64,
+    pub f_number: f64,
+    #[serde(default = "default_optimizer_mtf_pupil_range")]
+    pub pupil_range: f64,
+    #[serde(default)]
+    pub sample_frequencies_lpmm: Vec<f64>,
+    #[serde(default)]
+    pub direct_eval_only: bool,
+    pub pupil_sampling_mode: Option<String>,
+    pub tangential_dir: Option<NativeOptimizerMtfDirection>,
+    pub sagittal_dir: Option<NativeOptimizerMtfDirection>,
+    #[serde(default)]
+    pub meta: Value,
+}
+
+fn default_optimizer_mtf_pupil_range() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOptimizerMtfDirection {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOptimizerMtfBatchRequest {
+    pub jobs: Vec<NativeOptimizerMtfJob>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOptimizerMtfSamples {
+    pub sampled_mtf_tangential: Vec<f64>,
+    pub sampled_mtf_sagittal: Vec<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOptimizerMtfBatchResult {
+    pub job_index: usize,
+    pub meta: Value,
+    pub mtf: NativeOptimizerMtfSamples,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOptimizerMtfBatchResponse {
+    pub backend: String,
+    pub results: Vec<NativeOptimizerMtfBatchResult>,
+    pub worker_count: usize,
+    pub elapsed_ms: f64,
     pub message: String,
 }
 
@@ -2886,7 +2958,7 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
     }
 
     let row_results: Vec<(usize, usize, Vec<Option<f64>>, Vec<Option<f64>>)> = (0..grid_size)
-        .into_iter()
+        .into_par_iter()
         .map(|y| {
             let mut attempted_samples = 0usize;
             let mut hit_count = 0usize;
@@ -3517,6 +3589,34 @@ mod czt_tests {
     }
 }
 
+#[cfg(test)]
+mod optimizer_mtf_tests {
+    use super::compute_optimizer_malacara_samples;
+
+    #[test]
+    fn optimizer_mtf_preserves_dc_for_a_flat_pupil() {
+        let grid = vec![
+            vec![Some(0.0), Some(0.0), Some(0.0)],
+            vec![Some(0.0), Some(0.0), Some(0.0)],
+            vec![Some(0.0), Some(0.0), Some(0.0)],
+        ];
+        let samples = compute_optimizer_malacara_samples(
+            &grid,
+            0.55,
+            4.0,
+            1.0,
+            &[0.0, 10.0],
+            None,
+            None,
+        )
+        .expect("flat pupil MTF must be evaluable");
+        assert_eq!(samples.sampled_mtf_tangential[0], 1.0);
+        assert_eq!(samples.sampled_mtf_sagittal[0], 1.0);
+        assert_eq!(samples.sampled_mtf_tangential.len(), 2);
+        assert_eq!(samples.sampled_mtf_sagittal.len(), 2);
+    }
+}
+
 fn fft_shift_2d(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let h = data.len();
     if h == 0 {
@@ -4092,6 +4192,226 @@ pub fn run_native_mtf_map(req: NativeMtfMapRequest, app: AppHandle) -> Result<Na
             Err(err)
         }
     }
+}
+
+/// Evaluate the Malacara pupil-autocorrelation MTF used by the optimizer's
+/// compact WASM route.  Keeping the arithmetic here aligned with that route is
+/// deliberate: the optimizer is allowed to use this faster desktop path only
+/// after the caller's one-time cross-backend parity check succeeds.
+fn compute_optimizer_malacara_samples(
+    display_opd_grid: &[Vec<Option<f64>>],
+    wavelength_um: f64,
+    f_number: f64,
+    pupil_range: f64,
+    sample_frequencies_lpmm: &[f64],
+    tangential_dir: Option<&NativeOptimizerMtfDirection>,
+    sagittal_dir: Option<&NativeOptimizerMtfDirection>,
+) -> Result<NativeOptimizerMtfSamples, String> {
+    let n = display_opd_grid.len();
+    if n < 2 || display_opd_grid.iter().any(|row| row.len() != n) {
+        return Err("native optimizer MTF: OPD grid must be square and at least 2x2".to_string());
+    }
+    if !wavelength_um.is_finite() || wavelength_um <= 0.0 {
+        return Err("native optimizer MTF: wavelengthUm must be positive".to_string());
+    }
+    if !f_number.is_finite() || f_number <= 0.0 {
+        return Err("native optimizer MTF: fNumber must be positive".to_string());
+    }
+    if !pupil_range.is_finite() || pupil_range <= 0.0 {
+        return Err("native optimizer MTF: pupilRange must be positive".to_string());
+    }
+
+    let normalize_direction = |direction: Option<&NativeOptimizerMtfDirection>, fallback: (f64, f64)| {
+        let (x, y) = direction
+            .map(|value| (value.x, value.y))
+            .filter(|(x, y)| x.is_finite() && y.is_finite())
+            .unwrap_or(fallback);
+        let norm = x.hypot(y);
+        if norm > 1e-12 { (x / norm, y / norm) } else { fallback }
+    };
+    let (tan_x, tan_y) = normalize_direction(tangential_dir, (1.0, 0.0));
+    let (sag_x, sag_y) = normalize_direction(sagittal_dir, (-tan_y, tan_x));
+
+    let mut re_grid = vec![vec![0.0_f64; n]; n];
+    let mut im_grid = vec![vec![0.0_f64; n]; n];
+    let mut denominator = 0.0_f64;
+    for iy in 0..n {
+        for ix in 0..n {
+            let Some(opd_value) = display_opd_grid[iy][ix] else {
+                continue;
+            };
+            if !opd_value.is_finite() {
+                continue;
+            }
+            // `displayOpdGrid` intentionally remains in the same unit used by
+            // run_native_mtf_malacara_from_opd_wasm_json.  Do not convert it
+            // here; otherwise desktop and web optimizer merit values diverge.
+            let phase = (2.0 * PI * opd_value) / wavelength_um;
+            let re = phase.cos();
+            let im = phase.sin();
+            re_grid[iy][ix] = re;
+            im_grid[iy][ix] = im;
+            denominator += re * re + im * im;
+        }
+    }
+    if !denominator.is_finite() || denominator <= 0.0 {
+        return Err("native optimizer MTF: no valid pupil samples".to_string());
+    }
+
+    let cutoff_lpmm = 1000.0 / (wavelength_um * f_number);
+    if !cutoff_lpmm.is_finite() || cutoff_lpmm <= 0.0 {
+        return Err("native optimizer MTF: invalid diffraction cutoff".to_string());
+    }
+    let x_min = -pupil_range;
+    let x_max = pupil_range;
+    let y_min = -pupil_range;
+    let y_max = pupil_range;
+    let inv_dx = (n - 1) as f64 / (x_max - x_min).max(1e-12);
+    let inv_dy = (n - 1) as f64 / (y_max - y_min).max(1e-12);
+    let pixel_step_x = (x_max - x_min) / (n.saturating_sub(1) as f64).max(1.0);
+    let pixel_step_y = (y_max - y_min) / (n.saturating_sub(1) as f64).max(1.0);
+
+    let sample_complex_bilinear = |x: f64, y: f64| -> (f64, f64) {
+        if x < x_min || x > x_max || y < y_min || y > y_max {
+            return (0.0, 0.0);
+        }
+        let u = (x - x_min) * inv_dx;
+        let v = (y - y_min) * inv_dy;
+        let x0 = u.floor().clamp(0.0, (n - 1) as f64) as usize;
+        let y0 = v.floor().clamp(0.0, (n - 1) as f64) as usize;
+        let x1 = (x0 + 1).min(n - 1);
+        let y1 = (y0 + 1).min(n - 1);
+        let tx = (u - x0 as f64).clamp(0.0, 1.0);
+        let ty = (v - y0 as f64).clamp(0.0, 1.0);
+        let re0 = re_grid[y0][x0] + (re_grid[y0][x1] - re_grid[y0][x0]) * tx;
+        let re1 = re_grid[y1][x0] + (re_grid[y1][x1] - re_grid[y1][x0]) * tx;
+        let im0 = im_grid[y0][x0] + (im_grid[y0][x1] - im_grid[y0][x0]) * tx;
+        let im1 = im_grid[y1][x0] + (im_grid[y1][x1] - im_grid[y1][x0]) * tx;
+        (re0 + (re1 - re0) * ty, im0 + (im1 - im0) * ty)
+    };
+
+    let compute_curve = |dir_x: f64, dir_y: f64| -> Vec<f64> {
+        let mut output = Vec::with_capacity(sample_frequencies_lpmm.len());
+        for frequency in sample_frequencies_lpmm.iter().copied() {
+            if frequency <= 1e-12 {
+                output.push(1.0);
+                continue;
+            }
+            let normalized_frequency = frequency / cutoff_lpmm;
+            if !normalized_frequency.is_finite() || normalized_frequency >= 1.0 {
+                output.push(0.0);
+                continue;
+            }
+            let shift = 2.0 * normalized_frequency.max(0.0) * pupil_range;
+            let shift_x = dir_x * shift;
+            let shift_y = dir_y * shift;
+            let tail_blend = ((normalized_frequency - 0.7) / 0.3).clamp(0.0, 1.0);
+            let jitter_x = 0.25 * pixel_step_x;
+            let jitter_y = 0.25 * pixel_step_y;
+            let mut sum_re = 0.0_f64;
+            let mut sum_im = 0.0_f64;
+            for iy in 0..n {
+                let py = y_min + (iy as f64 / (n.saturating_sub(1) as f64).max(1.0)) * (y_max - y_min);
+                for ix in 0..n {
+                    let a = re_grid[iy][ix];
+                    let b = im_grid[iy][ix];
+                    if a == 0.0 && b == 0.0 {
+                        continue;
+                    }
+                    let px = x_min + (ix as f64 / (n.saturating_sub(1) as f64).max(1.0)) * (x_max - x_min);
+                    let (mut c, mut d) = sample_complex_bilinear(px + shift_x, py + shift_y);
+                    if tail_blend > 0.0 {
+                        let (c1, d1) = sample_complex_bilinear(px + shift_x + jitter_x, py + shift_y + jitter_y);
+                        let (c2, d2) = sample_complex_bilinear(px + shift_x + jitter_x, py + shift_y - jitter_y);
+                        let (c3, d3) = sample_complex_bilinear(px + shift_x - jitter_x, py + shift_y + jitter_y);
+                        let (c4, d4) = sample_complex_bilinear(px + shift_x - jitter_x, py + shift_y - jitter_y);
+                        let c_low_pass = 0.25 * (c1 + c2 + c3 + c4);
+                        let d_low_pass = 0.25 * (d1 + d2 + d3 + d4);
+                        c = c * (1.0 - tail_blend) + c_low_pass * tail_blend;
+                        d = d * (1.0 - tail_blend) + d_low_pass * tail_blend;
+                    }
+                    sum_re += a * c + b * d;
+                    sum_im += b * c - a * d;
+                }
+            }
+            let mtf = (sum_re.hypot(sum_im) / denominator).clamp(0.0, 1.0);
+            output.push(if mtf.is_finite() { mtf } else { 0.0 });
+        }
+        if sample_frequencies_lpmm.first().is_some_and(|frequency| *frequency <= 1e-12) {
+            output[0] = 1.0;
+        }
+        output
+    };
+
+    Ok(NativeOptimizerMtfSamples {
+        sampled_mtf_tangential: compute_curve(tan_x, tan_y),
+        sampled_mtf_sagittal: compute_curve(sag_x, sag_y),
+    })
+}
+
+#[tauri::command]
+pub fn run_native_optimizer_mtf_batch(
+    req: NativeOptimizerMtfBatchRequest,
+    app: AppHandle,
+) -> Result<NativeOptimizerMtfBatchResponse, String> {
+    if req.jobs.is_empty() {
+        return Err("run_native_optimizer_mtf_batch: jobs is empty".to_string());
+    }
+
+    let started_at = Instant::now();
+    let results = req
+        .jobs
+        .par_iter()
+        .enumerate()
+        .map(|(job_index, job)| {
+            if job.optical_system_rows.is_empty() {
+                return Err(format!("native optimizer MTF job {}: opticalSystemRows is empty", job_index));
+            }
+            if job.sample_frequencies_lpmm.is_empty() {
+                return Err(format!("native optimizer MTF job {}: sampleFrequenciesLpmm is empty", job_index));
+            }
+            let opd = run_native_opd_map(
+                NativeOpdMapRequest {
+                    // Suppress the internal OPD/PSF/MTF analysis-event stream for
+                    // the many finite-difference jobs; the optimizer owns progress.
+                    job_id: Some(format!("optimizer-mtf-{}", job_index)),
+                    optical_system_rows: job.optical_system_rows.clone(),
+                    source_rows: job.source_rows.clone(),
+                    object_rows: job.object_rows.clone(),
+                    object_index: Some(job.object_index),
+                    surface_index: None,
+                    grid_size: Some(job.grid_size.max(17)),
+                    wavelength_um: Some(job.wavelength_um),
+                    pupil_radius_mm: None,
+                    pupil_sampling_mode: job.pupil_sampling_mode.clone(),
+                    opd_display_mode: Some("pistonTiltRemoved".to_string()),
+                },
+                app.clone(),
+            )?;
+            let mtf = compute_optimizer_malacara_samples(
+                &opd.display_opd_grid,
+                job.wavelength_um,
+                job.f_number,
+                job.pupil_range,
+                &job.sample_frequencies_lpmm,
+                job.tangential_dir.as_ref(),
+                job.sagittal_dir.as_ref(),
+            )?;
+            Ok(NativeOptimizerMtfBatchResult {
+                job_index,
+                meta: job.meta.clone(),
+                mtf,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(NativeOptimizerMtfBatchResponse {
+        backend: "native-rust-optimizer-mtf-rayon".to_string(),
+        results,
+        worker_count: rayon::current_num_threads(),
+        elapsed_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+        message: "Native Rust optimizer MTF batch completed with Rayon".to_string(),
+    })
 }
 
 fn interpolate_axis_value(axis: &[f64], values: &[f64], target_x: f64) -> f64 {
