@@ -12697,46 +12697,6 @@ const collectLegacyCrossRays = async (
             <button
               type="button"
               className="render-toolbar-popover-button"
-              hidden
-              aria-expanded={renderOptionsOpen}
-              onClick={() => {
-                setRenderOptionsOpen((open) => !open);
-                setRenderSurfaceColorsCollapsed(true);
-              }}
-            >
-              Options
-            </button>
-            {false && (
-              <div className="render-options-panel">
-                <label htmlFor="render-compare-scope">Configs</label>
-                <select id="render-compare-scope" value={renderCompareScope} onChange={(e) => handleRenderCompareScopeChange(e.target.value === 'all' ? 'all' : 'active')} style={{ height: 27 }}>
-                  <option value="active">Active only</option>
-                  <option value="all">All configs</option>
-                </select>
-                <label htmlFor="render-compare-direction" style={{ opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>{renderViewMode === 'YZ' ? 'Offset Y' : 'Offset X'}</label>
-                <select id="render-compare-direction" value={renderCompareOffsetDirection} onChange={(e) => setRenderCompareOffsetDirection((e.target.value as RenderCompareOffsetDirection) || 'centered')} disabled={renderCompareScope !== 'all'} style={{ height: 27 }}>
-                  <option value="centered">Centered</option>
-                  <option value="positive">{renderViewMode === 'YZ' ? 'Up' : 'Right'}</option>
-                  <option value="negative">{renderViewMode === 'YZ' ? 'Down' : 'Left'}</option>
-                </select>
-                <label htmlFor="render-compare-step" style={{ opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>Step mm</label>
-                <input id="render-compare-step" type="number" min={0} step={1} value={renderCompareOffsetStepMm} onChange={(e) => { const parsed = Number.parseFloat(e.target.value); setRenderCompareOffsetStepMm(Number.isFinite(parsed) && parsed >= 0 ? parsed : 0); }} disabled={renderCompareScope !== 'all'} style={{ width: 68, height: 27 }} />
-                <label htmlFor="render-compare-align" style={{ opacity: renderCompareScope === 'all' && renderViewMode !== '3D' ? 1 : 0.5 }}>Align</label>
-                <select id="render-compare-align" value={renderCompareAlignReference} onChange={(e) => setRenderCompareAlignReference(e.target.value === 'image' ? 'image' : 'object')} disabled={renderCompareScope !== 'all' || renderViewMode === '3D'} style={{ height: 27 }}>
-                  <option value="object">Object</option>
-                  <option value="image">Image</option>
-                </select>
-                <span style={{ flexBasis: '100%', height: 1, background: '#e5e7eb' }} />
-                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }}><input type="checkbox" checked={renderShowDesignIntentLabels} onChange={(e) => handleToggleRenderLabels(e.target.checked)} />Labels</label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }}><input type="checkbox" checked={renderShowPrincipalPointLabels} onChange={(e) => handleToggleRenderPrincipalPoints(e.target.checked)} />Paraxial</label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }}><input type="checkbox" checked={renderShowSurfaceNumberLabels} onChange={(e) => handleToggleRenderSurfaceNumbers(e.target.checked)} />Surface No.</label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }} title="Reflect Design Intent numeric edits in an open Render window"><input type="checkbox" checked={renderDesignIntentLiveSync} onChange={(e) => handleToggleRenderDesignIntentLiveSync(e.target.checked)} />Intent Sync</label>
-                {renderCompareScope === 'all' && <span style={{ flexBasis: '100%', color: '#666' }}>{renderViewMode === '3D' ? 'Compare offset applies to X-Z / Y-Z views.' : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm, align ${compareAlignLabel}`}</span>}
-              </div>
-            )}
-            <button
-              type="button"
-              className="render-toolbar-popover-button"
               aria-expanded={!renderSurfaceColorsCollapsed}
               onClick={() => {
                 setRenderOptionsOpen(false);
