@@ -1,7 +1,21 @@
 // Keep Worker results numerically identical to the main-thread batch route.
 // In particular this preserves the wavelength-index enrichment and Image
 // Height object normalization performed before Rust/WASM receives a batch.
-import { runMtfBatchViaWasm } from "./client.ts";
+// `client.ts` also imports legacy ray-tracing helpers which register debug
+// callbacks on `window`.  A module Worker has `self` but no `window`; install
+// the standard alias before lazily importing that shared evaluator.
+const workerGlobal = globalThis as any;
+if (typeof workerGlobal.window === "undefined") workerGlobal.window = workerGlobal;
+
+let runMtfBatchViaWasmPromise: Promise<(request: any) => Promise<any>> | null = null;
+async function runMtfBatchViaWasmInWorker(request: any): Promise<any> {
+  if (!runMtfBatchViaWasmPromise) {
+    runMtfBatchViaWasmPromise = import("./client.ts")
+      .then(({ runMtfBatchViaWasm }) => runMtfBatchViaWasm);
+  }
+  const runMtfBatchViaWasm = await runMtfBatchViaWasmPromise;
+  return runMtfBatchViaWasm(request);
+}
 
 type WorkerRequest = {
   requestId: string;
@@ -36,7 +50,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       // per-wavelength refractive indices while removing repeated lens rows
       // from both the worker message and the JS→WASM JSON payload.
       for (const sharedBatch of sharedBatches) {
-        const batchResponse = await runMtfBatchViaWasm({
+        const batchResponse = await runMtfBatchViaWasmInWorker({
           shared: sharedBatch?.shared,
           jobs: Array.isArray(sharedBatch?.jobs) ? sharedBatch.jobs : [],
         });
@@ -56,7 +70,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         sharedBatchCount: sharedBatches.length,
       };
     } else {
-      response = await runMtfBatchViaWasm(request);
+      response = await runMtfBatchViaWasmInWorker(request);
     }
     const message: WorkerResponse = { requestId, ok: true, response };
     self.postMessage(message);

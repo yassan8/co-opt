@@ -4208,6 +4208,21 @@ type SharedMtfWorkerBatch = {
   jobIndexes: number[];
 };
 
+function haveEquivalentMtfTableRows(left: any[], right: any[]): boolean {
+  if (left === right) return true;
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  // Table accessors may return independent clones for two requirements that
+  // address the same candidate/wavelength/field. The Worker shared format is
+  // valid for those clones too, and avoids repeating Image Height conversion
+  // and packed-surface construction. Rows are plain table data, so a stable
+  // JSON comparison is a conservative structural-equivalence check.
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch (_) {
+    return false;
+  }
+}
+
 /**
  * Finite-difference candidates use one lens for every field.  Group a
  * candidate/wavelength into the established Rust `shared` batch format so the
@@ -4241,7 +4256,9 @@ function buildSharedMtfWorkerRequest(request: any, jobs: unknown[]): any {
     const group = groups.get(key);
     // Do not compact unusual callers that place distinct system/table arrays
     // under the same nominal candidate and wavelength.
-    if (group && (group.opticalRows !== opticalRows || group.sourceRows !== sourceRows || group.objectRows !== objectRows)) {
+    if (group && (!haveEquivalentMtfTableRows(group.opticalRows, opticalRows)
+      || !haveEquivalentMtfTableRows(group.sourceRows, sourceRows)
+      || !haveEquivalentMtfTableRows(group.objectRows, objectRows))) {
       return { ...request, jobs };
     }
     if (group) {
