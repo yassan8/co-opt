@@ -4972,6 +4972,497 @@ h4 {
     background: #fff;
 }
 
+/* Keep MDI scrollbars unobtrusive until the pointer enters the window. */
+.win-mdi-window {
+    --mdi-scrollbar-thumb: transparent;
+    --mdi-scrollbar-thumb-hover: rgba(71, 85, 105, 0.78);
+}
+
+.win-mdi-window:hover {
+    --mdi-scrollbar-thumb: rgba(100, 116, 139, 0.52);
+}
+
+.win-mdi-window .win-mdi-content,
+.win-mdi-window .win-mdi-content * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--mdi-scrollbar-thumb) transparent;
+}
+
+.win-mdi-window .win-mdi-content::-webkit-scrollbar,
+.win-mdi-window .win-mdi-content *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.win-mdi-window .win-mdi-content::-webkit-scrollbar-track,
+.win-mdi-window .win-mdi-content *::-webkit-scrollbar-track,
+.win-mdi-window .win-mdi-content::-webkit-scrollbar-corner,
+.win-mdi-window .win-mdi-content *::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+.win-mdi-window .win-mdi-content::-webkit-scrollbar-thumb,
+.win-mdi-window .win-mdi-content *::-webkit-scrollbar-thumb {
+    min-height: 32px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--mdi-scrollbar-thumb);
+    background-clip: padding-box;
+}
+
+.win-mdi-window .win-mdi-content::-webkit-scrollbar-thumb:hover,
+.win-mdi-window .win-mdi-content *::-webkit-scrollbar-thumb:hover {
+    background: var(--mdi-scrollbar-thumb-hover);
+    background-clip: padding-box;
+}
+
+body.dark-mode .win-mdi-window {
+    --mdi-scrollbar-thumb-hover: rgba(203, 213, 225, 0.76);
+}
+
+body.dark-mode .win-mdi-window:hover {
+    --mdi-scrollbar-thumb: rgba(148, 163, 184, 0.58);
+}
+
+/* Optimize Progress runs inside an iframe, so it owns its scrollbar and controls. */
+.optimize-progress-page {
+    --optimize-scrollbar-thumb: transparent;
+    --optimize-scrollbar-thumb-hover: rgba(71, 85, 105, 0.78);
+    width: 100vw;
+    height: 100vh;
+    padding: 14px;
+    box-sizing: border-box;
+    overflow: auto;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: var(--optimize-scrollbar-thumb) transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: #f5f6f8;
+    color: #1f2937;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.optimize-progress-page:hover {
+    --optimize-scrollbar-thumb: rgba(100, 116, 139, 0.52);
+}
+
+.optimize-progress-page::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.optimize-progress-page::-webkit-scrollbar-track,
+.optimize-progress-page::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+.optimize-progress-page::-webkit-scrollbar-thumb {
+    min-height: 32px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--optimize-scrollbar-thumb);
+    background-clip: padding-box;
+}
+
+.optimize-progress-page::-webkit-scrollbar-thumb:hover {
+    background: var(--optimize-scrollbar-thumb-hover);
+    background-clip: padding-box;
+}
+
+.optimize-progress-header,
+.optimize-progress-card,
+.optimize-progress-metric {
+    border: 1px solid #d8dee8;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.optimize-progress-header {
+    padding: 13px 14px;
+}
+
+.optimize-progress-heading,
+.optimize-progress-track-row,
+.optimize-progress-actions,
+.optimize-progress-action-group,
+.optimize-progress-card-header {
+    display: flex;
+    align-items: center;
+}
+
+.optimize-progress-heading {
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.optimize-progress-eyebrow {
+    margin-bottom: 2px;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.optimize-progress-heading h1,
+.optimize-progress-card-header h2 {
+    margin: 0;
+    color: #111827;
+    line-height: 1.2;
+}
+
+.optimize-progress-heading h1 {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.optimize-progress-status {
+    flex: 0 0 auto;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: #eef2f7;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.optimize-progress-status.is-running {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.optimize-progress-status.is-complete {
+    background: #dcfce7;
+    color: #15803d;
+}
+
+.optimize-progress-status.is-error {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.optimize-progress-track-row {
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.optimize-progress-track {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 7px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #e7ebf0;
+}
+
+.optimize-progress-track-value {
+    height: 100%;
+    border-radius: inherit;
+    background: #2563eb;
+    transition: width 120ms linear;
+}
+
+.optimize-progress-percent {
+    flex: 0 0 38px;
+    color: #475569;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.optimize-progress-actions {
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.optimize-progress-action-group {
+    gap: 8px;
+}
+
+.optimize-progress-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 34px;
+    padding: 0 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #334155;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.optimize-progress-button:hover:not(:disabled) {
+    border-color: #94a3b8;
+    background: #f8fafc;
+}
+
+.optimize-progress-button.is-primary {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: #ffffff;
+}
+
+.optimize-progress-button.is-primary:hover:not(:disabled) {
+    border-color: #1d4ed8;
+    background: #1d4ed8;
+}
+
+.optimize-progress-button.is-danger {
+    border-color: #fecaca;
+    background: #ffffff;
+    color: #b91c1c;
+}
+
+.optimize-progress-button.is-danger:hover:not(:disabled) {
+    border-color: #fca5a5;
+    background: #fef2f2;
+}
+
+.optimize-progress-button:focus-visible,
+.optimize-progress-field input:focus-visible,
+.optimize-progress-field select:focus-visible,
+.optimize-progress-toggle input:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+.optimize-progress-button:disabled,
+.optimize-progress-field input:disabled,
+.optimize-progress-field select:disabled,
+.optimize-progress-toggle input:disabled {
+    cursor: default;
+    opacity: 0.52;
+}
+
+.optimize-progress-card {
+    padding: 13px 14px;
+}
+
+.optimize-progress-card-header {
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.optimize-progress-card-header h2 {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.optimize-progress-card-header > span {
+    color: #64748b;
+    font-size: 10px;
+}
+
+.optimize-progress-settings-grid,
+.optimize-progress-details {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 11px 12px;
+}
+
+.optimize-progress-field {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.optimize-progress-field.is-wide,
+.optimize-progress-toggle.is-wide,
+.optimize-progress-details .is-wide {
+    grid-column: 1 / -1;
+}
+
+.optimize-progress-field input,
+.optimize-progress-field select {
+    width: 100%;
+    height: 34px;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 0 9px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #111827;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.optimize-progress-toggle {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding-top: 2px;
+    color: #334155;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.optimize-progress-toggle input {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    margin: 1px 0 0;
+}
+
+.optimize-progress-toggle span {
+    display: grid;
+    gap: 2px;
+}
+
+.optimize-progress-toggle strong {
+    font-size: 11px;
+}
+
+.optimize-progress-toggle small {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 400;
+}
+
+.optimize-progress-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.optimize-progress-metric {
+    min-width: 0;
+    padding: 10px 11px;
+    display: grid;
+    gap: 4px;
+}
+
+.optimize-progress-metric span,
+.optimize-progress-details dt {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.optimize-progress-metric strong {
+    min-width: 0;
+    overflow: hidden;
+    color: #111827;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.optimize-progress-details {
+    margin: 0;
+}
+
+.optimize-progress-details > div {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 8px;
+}
+
+.optimize-progress-details dt,
+.optimize-progress-details dd {
+    margin: 0;
+}
+
+.optimize-progress-details dd {
+    min-width: 0;
+    color: #1f2937;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+body.dark-mode .optimize-progress-page {
+    --optimize-scrollbar-thumb-hover: rgba(203, 213, 225, 0.76);
+    background: #0f172a;
+    color: #e5e7eb;
+}
+
+body.dark-mode .optimize-progress-page:hover {
+    --optimize-scrollbar-thumb: rgba(148, 163, 184, 0.58);
+}
+
+body.dark-mode .optimize-progress-header,
+body.dark-mode .optimize-progress-card,
+body.dark-mode .optimize-progress-metric {
+    border-color: #334155;
+    background: #111827;
+}
+
+body.dark-mode .optimize-progress-heading h1,
+body.dark-mode .optimize-progress-card-header h2,
+body.dark-mode .optimize-progress-metric strong,
+body.dark-mode .optimize-progress-details dd {
+    color: #f8fafc;
+}
+
+body.dark-mode .optimize-progress-field input,
+body.dark-mode .optimize-progress-field select,
+body.dark-mode .optimize-progress-button {
+    border-color: #475569;
+    background: #1e293b;
+    color: #e5e7eb;
+}
+
+body.dark-mode .optimize-progress-button.is-primary {
+    border-color: #3b82f6;
+    background: #2563eb;
+    color: #ffffff;
+}
+
+body.dark-mode .optimize-progress-button.is-danger {
+    border-color: #7f1d1d;
+    background: #1f2937;
+    color: #fca5a5;
+}
+
+@media (max-width: 520px) {
+    .optimize-progress-page {
+        padding: 10px;
+    }
+
+    .optimize-progress-settings-grid,
+    .optimize-progress-details {
+        grid-template-columns: 1fr;
+    }
+
+    .optimize-progress-field.is-wide,
+    .optimize-progress-toggle.is-wide,
+    .optimize-progress-details .is-wide {
+        grid-column: auto;
+    }
+
+    .optimize-progress-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .optimize-progress-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .optimize-progress-action-group,
+    .optimize-progress-button {
+        width: 100%;
+    }
+
+    .optimize-progress-button {
+        justify-content: center;
+    }
+}
+
 .system-text-window {
     display: flex;
     flex-direction: column;
@@ -5753,6 +6244,21 @@ body.dark-mode ::-webkit-scrollbar-thumb {
 
 body.dark-mode ::-webkit-scrollbar-thumb:hover {
     background: #4a4a4a;
+}
+
+body.dark-mode .optimize-progress-page::-webkit-scrollbar-track,
+body.dark-mode .optimize-progress-page::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+body.dark-mode .optimize-progress-page::-webkit-scrollbar-thumb {
+    background: var(--optimize-scrollbar-thumb);
+    background-clip: padding-box;
+}
+
+body.dark-mode .optimize-progress-page::-webkit-scrollbar-thumb:hover {
+    background: var(--optimize-scrollbar-thumb-hover);
+    background-clip: padding-box;
 }
 
 /* Code blocks */

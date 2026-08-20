@@ -55,6 +55,7 @@ import {
   formatOptimizeElapsed,
   shouldAppendOptimizeConsoleRow,
 } from './optimize-console-format.ts';
+import { calculateMdiTileLayout, type MdiTileRect } from './mdi-layout.ts';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
@@ -11119,7 +11120,6 @@ const collectLegacyCrossRays = async (
               ev?.stepScale ??
               Number.NaN
             );
-            const qpDamping = Number(ev?.qpDamping ?? Number.NaN);
             const rho = Number(ev?.rho ?? Number.NaN);
             const alpha = Number(ev?.alpha ?? Number.NaN);
             const consoleMin = Number.isFinite(progressBestScore)
@@ -11152,7 +11152,6 @@ const collectLegacyCrossRays = async (
                 elapsedMs,
                 min: consoleMin,
                 damping: dampingFactor,
-                qpDamping,
                 rho,
                 alpha,
                 improv: improvement,
@@ -11856,6 +11855,23 @@ const collectLegacyCrossRays = async (
       }
     };
 
+    const requestOptimizeStop = () => {
+      (window as any).__cooptOptimizeStopRequested = true;
+      try { (globalThis as any).__stopOptimization = true; } catch (_) {}
+      setOptStopRequested(true);
+      try {
+        const wAny = window as any;
+        if (wAny.OptimizationMVP && typeof wAny.OptimizationMVP.stop === 'function') {
+          wAny.OptimizationMVP.stop();
+        }
+        const op = wAny.opener;
+        if (op && !op.closed && op.OptimizationMVP && typeof op.OptimizationMVP.stop === 'function') {
+          op.OptimizationMVP.stop();
+        }
+      } catch (_) {}
+      setOptimizeState((prev: any) => ({ ...prev, phase: 'stopping', issue: 'Stop requested...' }));
+    };
+
     const optimizeDisplayScore = Number.isFinite(Number(optimizeState?.requirementScoreTable))
       ? Number(optimizeState.requirementScoreTable)
       : (Number.isFinite(Number(optimizeState?.requirementScoreAfter))
@@ -11871,125 +11887,153 @@ const collectLegacyCrossRays = async (
       }
       return '-';
     })();
+    const optimizePhase = String(optimizeState?.phase || '-');
+    const optimizeDecision = optimizeState?.phase === 'accept'
+      ? 'ACCEPT'
+      : (optimizeState?.phase === 'reject' ? 'REJECT' : '-');
+    const optimizeStatusLabel = optStopRequested && optRunning
+      ? 'Stopping'
+      : (optRunning ? 'Running' : String(optimizeState?.status || 'Idle'));
+    const optimizeStatusClass = optRunning
+      ? ' is-running'
+      : (/error|fail/i.test(optimizeStatusLabel) ? ' is-error' : (/done|finish|complete/i.test(optimizeStatusLabel) ? ' is-complete' : ''));
 
     return (
-      <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#f4f4f4', color: '#222', padding: 12, boxSizing: 'border-box', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
-          <div style={{ fontSize: 14, fontWeight: 600, flex: '0 0 auto' }}>Optimize Progress</div>
-          <div style={{ height: 6, background: '#eceef2', borderRadius: 999, overflow: 'hidden', flex: '1 1 auto', minWidth: 120 }}>
-            <div style={{ width: `${percent}%`, height: '100%', background: '#4f8cff', transition: 'width 120ms linear' }} />
+      <div className="optimize-progress-page">
+        <header className="optimize-progress-header">
+          <div className="optimize-progress-heading">
+            <div>
+              <div className="optimize-progress-eyebrow">Optimizer</div>
+              <h1>Optimize Progress</h1>
+            </div>
+            <span className={`optimize-progress-status${optimizeStatusClass}`}>{optimizeStatusLabel}</span>
           </div>
-          <div style={{ fontSize: 12, color: '#666', flex: '0 0 auto' }}>{optRunning ? 'Running' : String(optimizeState?.status || 'Idle')}</div>
+          <div className="optimize-progress-track-row">
+            <div
+              className="optimize-progress-track"
+              role="progressbar"
+              aria-label="Optimization progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(percent)}
+            >
+              <div className="optimize-progress-track-value" style={{ width: `${percent}%` }} />
+            </div>
+            <span className="optimize-progress-percent">{Math.round(percent)}%</span>
+          </div>
+        </header>
+
+        <div className="optimize-progress-actions">
+          <div className="optimize-progress-action-group">
+            <button type="button" className="optimize-progress-button is-primary" disabled={optRunning} onClick={() => { void runOptimize(); }}>Run</button>
+            <button type="button" className="optimize-progress-button is-danger" disabled={!optRunning} onClick={requestOptimizeStop}>Stop</button>
+          </div>
+          <button type="button" className="optimize-progress-button" disabled={optRunning} onClick={() => { void exportEscapeSnapshots(); }}>Export Snapshots</button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button type="button" disabled={optRunning} onClick={() => { void runOptimize(); }} style={{ padding: '6px 10px' }}>Run</button>
-          <button type="button" disabled={!optRunning} onClick={() => {
-            (window as any).__cooptOptimizeStopRequested = true;
-            try { (globalThis as any).__stopOptimization = true; } catch (_) {}
-            setOptStopRequested(true);
-            try {
-              const wAny = window as any;
-              if (wAny.OptimizationMVP && typeof wAny.OptimizationMVP.stop === 'function') {
-                wAny.OptimizationMVP.stop();
-              }
-              const op = wAny.opener;
-              if (op && !op.closed && op.OptimizationMVP && typeof op.OptimizationMVP.stop === 'function') {
-                op.OptimizationMVP.stop();
-              }
-            } catch (_) {}
-            setOptimizeState((prev: any) => ({ ...prev, phase: 'stopping', issue: 'Stop requested...' }));
-          }} style={{ padding: '6px 10px' }}>Stop</button>
-          <button type="button" disabled={optRunning} onClick={() => { void exportEscapeSnapshots(); }} style={{ padding: '6px 10px' }}>Export Snapshots</button>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            Method
-            <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt-sqp' | 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'))} style={{ padding: '4px 6px' }}>
-              <option value="kkt-sqp">KKT-SQP</option>
-              <option value="kkt">AL + Gauss-Newton</option>
-              <option value="global-al">Global AL + Gauss-Newton (Escape Function)</option>
-              <option value="global-lm">Global LM (LM + Escape Function)</option>
-              <option value="lm">Levenberg-Marquardt (LM)</option>
-              <option value="cd">Coordinate Descent (CD)</option>
-            </select>
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            Max Iterations
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={optMaxIterations}
-              disabled={optRunning}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                setOptMaxIterations(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
-              }}
-              style={{ width: 100, padding: '4px 6px' }}
-            />
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            Max Escape
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={optMaxEscapeLoops}
-              disabled={optRunning}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                setOptMaxEscapeLoops(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
-              }}
-              style={{ width: 100, padding: '4px 6px' }}
-            />
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            W
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={optEscapeFunctionWidth}
-              disabled={optRunning}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                setOptEscapeFunctionWidth(Number.isFinite(n) ? n : 1);
-              }}
-              style={{ width: 100, padding: '4px 6px' }}
-            />
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            H
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={optEscapeFunctionHeight}
-              disabled={optRunning}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                setOptEscapeFunctionHeight(Number.isFinite(n) ? n : 0.1);
-              }}
-              style={{ width: 100, padding: '4px 6px' }}
-            />
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={optAutoRenderOnAccept} disabled={optRunning} onChange={(e) => setOptAutoRenderOnAccept(!!e.target.checked)} style={{ width: 16, height: 16 }} />
-            Auto-render
-          </label>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Phase</span><span>{String(optimizeState?.phase || '-')}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Decision</span><span>{String(optimizeState?.phase === 'accept' ? 'ACCEPT' : optimizeState?.phase === 'reject' ? 'REJECT' : '-')}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Accept/Reject</span><span>{`${Number(optimizeState?.acceptCount || 0)} / ${Number(optimizeState?.rejectCount || 0)}`}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Escape</span><span>{optimizeEscapeLoopLabel}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Iter</span><span>{String(optimizeState?.iterations ?? 0)}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Vars</span><span>{String(optimizeState?.variableCount ?? 0)}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Req</span><span>{String(optimizeState?.requirementCount ?? '-')}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Score</span><span>{Number.isFinite(optimizeDisplayScore) ? optimizeDisplayScore.toFixed(6) : '-'}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Best</span><span>{Number.isFinite(optimizeDisplayBest) ? optimizeDisplayBest.toFixed(6) : '-'}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Issue</span><span>{String(optimizeState?.issue || '-')}</span></div>
-        </div>
+
+        <section className="optimize-progress-card" aria-labelledby="optimize-run-settings-title">
+          <div className="optimize-progress-card-header">
+            <h2 id="optimize-run-settings-title">Run settings</h2>
+            <span>Locked while optimization is running</span>
+          </div>
+          <div className="optimize-progress-settings-grid">
+            <label className="optimize-progress-field is-wide">
+              <span>Method</span>
+              <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt-sqp' | 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'))}>
+                <option value="kkt-sqp">KKT-SQP</option>
+                <option value="kkt">AL + Gauss-Newton</option>
+                <option value="global-al">Global AL + Gauss-Newton (Escape Function)</option>
+                <option value="global-lm">Global LM (LM + Escape Function)</option>
+                <option value="lm">Levenberg-Marquardt (LM)</option>
+                <option value="cd">Coordinate Descent (CD)</option>
+              </select>
+            </label>
+            <label className="optimize-progress-field">
+              <span>Max iterations</span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={optMaxIterations}
+                disabled={optRunning}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setOptMaxIterations(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
+                }}
+              />
+            </label>
+            <label className="optimize-progress-field">
+              <span>Max escape loops</span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={optMaxEscapeLoops}
+                disabled={optRunning}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setOptMaxEscapeLoops(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
+                }}
+              />
+            </label>
+            <label className="optimize-progress-field">
+              <span>Escape width (W)</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={optEscapeFunctionWidth}
+                disabled={optRunning}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setOptEscapeFunctionWidth(Number.isFinite(n) ? n : 1);
+                }}
+              />
+            </label>
+            <label className="optimize-progress-field">
+              <span>Escape height (H)</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={optEscapeFunctionHeight}
+                disabled={optRunning}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setOptEscapeFunctionHeight(Number.isFinite(n) ? n : 0.1);
+                }}
+              />
+            </label>
+            <label className="optimize-progress-toggle is-wide">
+              <input type="checkbox" checked={optAutoRenderOnAccept} disabled={optRunning} onChange={(e) => setOptAutoRenderOnAccept(!!e.target.checked)} />
+              <span>
+                <strong>Auto-render accepted steps</strong>
+                <small>Refresh the optical view after each accepted update.</small>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section className="optimize-progress-metrics" aria-label="Optimization summary">
+          <div className="optimize-progress-metric"><span>Iteration</span><strong>{String(optimizeState?.iterations ?? 0)}</strong></div>
+          <div className="optimize-progress-metric"><span>Score</span><strong>{Number.isFinite(optimizeDisplayScore) ? optimizeDisplayScore.toFixed(6) : '-'}</strong></div>
+          <div className="optimize-progress-metric"><span>Best</span><strong>{Number.isFinite(optimizeDisplayBest) ? optimizeDisplayBest.toFixed(6) : '-'}</strong></div>
+          <div className="optimize-progress-metric"><span>Accept / Reject</span><strong>{`${Number(optimizeState?.acceptCount || 0)} / ${Number(optimizeState?.rejectCount || 0)}`}</strong></div>
+        </section>
+
+        <section className="optimize-progress-card" aria-labelledby="optimize-run-details-title">
+          <div className="optimize-progress-card-header">
+            <h2 id="optimize-run-details-title">Run details</h2>
+          </div>
+          <dl className="optimize-progress-details">
+            <div><dt>Phase</dt><dd>{optimizePhase}</dd></div>
+            <div><dt>Decision</dt><dd>{optimizeDecision}</dd></div>
+            <div><dt>Escape loop</dt><dd>{optimizeEscapeLoopLabel}</dd></div>
+            <div><dt>Variables</dt><dd>{String(optimizeState?.variableCount ?? 0)}</dd></div>
+            <div><dt>Requirements</dt><dd>{String(optimizeState?.requirementCount ?? '-')}</dd></div>
+            <div className="is-wide"><dt>Issue</dt><dd>{String(optimizeState?.issue || '-')}</dd></div>
+          </dl>
+        </section>
       </div>
     );
   }
@@ -12966,7 +13010,8 @@ const collectLegacyCrossRays = async (
   };
   const [{ text: statusFileText, color: statusFileColor }, setStatusFile] = useState(resolveStatusFile);
   const activeWorkspaceLabel = workspaceSections.find((s) => s.key === workspaceFocus)?.label || 'Config';
-  const [openMenu, setOpenMenu] = useState<null | 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis'>(null);
+  type WorkspaceMenu = 'file' | 'data' | 'edit' | 'view' | 'window' | 'run' | 'analysis';
+  const [openMenu, setOpenMenu] = useState<WorkspaceMenu | null>(null);
   const [isExamplesMenuExpanded, setIsExamplesMenuExpanded] = useState(false);
 
   useEffect(() => {
@@ -13016,11 +13061,11 @@ const collectLegacyCrossRays = async (
     setOpenMenu(null);
   };
 
-  const toggleWorkspaceMenu = (menu: 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis') => () => {
+  const toggleWorkspaceMenu = (menu: WorkspaceMenu) => () => {
     setOpenMenu((current) => (current === menu ? null : menu));
   };
 
-  const handleMenuMouseEnter = (menu: 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis') => {
+  const handleMenuMouseEnter = (menu: WorkspaceMenu) => {
     setOpenMenu(menu);
   };
 
@@ -15024,6 +15069,62 @@ const collectLegacyCrossRays = async (
     });
   };
 
+  const autoArrangeMdiWindows = () => {
+    const openWindows = [
+      ...WORKSPACE_KEYS
+        .filter((key) => mdiWindowStates[key].open)
+        .map((key) => ({ kind: 'workspace' as const, id: key, zIndex: mdiWindowStates[key].zIndex })),
+      ...Object.values(mdiAuxWindows)
+        .filter((windowState) => windowState.open)
+        .map((windowState) => ({ kind: 'aux' as const, id: windowState.id, zIndex: windowState.zIndex })),
+    ].sort((a, b) => a.zIndex - b.zIndex);
+    if (openWindows.length === 0) return;
+
+    const desktop = getMdiDesktopBounds();
+    const layout = calculateMdiTileLayout(openWindows.length, desktop.width, desktop.height);
+    const nextZ = getNextMdiZIndex();
+    const workspaceRects = new Map<WorkspaceFocus, { rect: MdiTileRect; zIndex: number }>();
+    const auxRects = new Map<string, { rect: MdiTileRect; zIndex: number }>();
+
+    openWindows.forEach((windowEntry, index) => {
+      const placement = { rect: layout[index], zIndex: nextZ + index };
+      if (windowEntry.kind === 'workspace') workspaceRects.set(windowEntry.id, placement);
+      else auxRects.set(windowEntry.id, placement);
+    });
+
+    setMdiWindowStates((prev) => {
+      const next = { ...prev };
+      workspaceRects.forEach(({ rect, zIndex }, key) => {
+        next[key] = {
+          ...next[key],
+          ...rect,
+          minimized: false,
+          maximized: false,
+          restoreBounds: null,
+          zIndex,
+        };
+      });
+      return next;
+    });
+    setMdiAuxWindows((prev) => {
+      const next = { ...prev };
+      auxRects.forEach(({ rect, zIndex }, id) => {
+        if (!next[id]) return;
+        next[id] = {
+          ...next[id],
+          ...rect,
+          minimized: false,
+          maximized: false,
+          restoreBounds: null,
+          zIndex,
+        };
+      });
+      return next;
+    });
+
+    window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  };
+
   const toggleNavigatorCollapsed = () => {
     setNavigatorCollapsed((collapsed) => {
       const next = !collapsed;
@@ -15125,6 +15226,12 @@ const collectLegacyCrossRays = async (
           <div className="app-shell__menuPanel" role="menu">
             <button type="button" className="app-shell__menuAction" onClick={runMenuAction(openRenderMdiWindow)}>Render</button>
             <button type="button" className="app-shell__menuAction" onClick={runMenuAction(openSystemDataMdiWindow)}>System Data</button>
+          </div>
+        </div>
+        <div className={`app-shell__menu${openMenu === 'window' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('window')}>
+          <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'window'} onClick={toggleWorkspaceMenu('window')}>Window</button>
+          <div className="app-shell__menuPanel" role="menu">
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(autoArrangeMdiWindows)}>Auto Arrange</button>
           </div>
         </div>
         <div className={`app-shell__menu${openMenu === 'run' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('run')}>

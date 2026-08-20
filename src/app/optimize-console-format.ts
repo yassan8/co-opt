@@ -3,7 +3,6 @@ export interface OptimizeConsoleRow {
   elapsedMs: number;
   min: number;
   damping: number;
-  qpDamping: number;
   rho: number;
   alpha: number;
   improv: number;
@@ -14,7 +13,6 @@ const OPTIMIZE_CONSOLE_COLUMNS = [
   { label: 'Elapsed', width: 11 },
   { label: 'Min.', width: 14 },
   { label: 'DFseed', width: 14 },
-  { label: 'QPgain', width: 14 },
   { label: 'rho', width: 10 },
   { label: 'alpha', width: 10 },
   { label: 'Improv.', width: 12 },
@@ -62,12 +60,6 @@ export function shouldAppendOptimizeConsoleRow(
   return currentMin < previousMin - tolerance;
 }
 
-export function qpDampingToGain(qpDampingInput: unknown): number {
-  const qpDamping = Number(qpDampingInput);
-  if (!Number.isFinite(qpDamping) || qpDamping < 0) return Number.NaN;
-  return 1 / (1 + qpDamping);
-}
-
 export function calculateOptimizeConsoleImprovement(
   previousMinInput: unknown,
   currentMinInput: unknown,
@@ -84,10 +76,9 @@ export function formatOptimizeConsoleRow(row: OptimizeConsoleRow): string {
     formatOptimizeElapsed(row.elapsedMs).padStart(OPTIMIZE_CONSOLE_COLUMNS[1].width, ' '),
     formatOptimizeConsoleCell(row.min, OPTIMIZE_CONSOLE_COLUMNS[2].width, 4),
     formatOptimizeConsoleCell(row.damping, OPTIMIZE_CONSOLE_COLUMNS[3].width, 6),
-    formatOptimizeConsoleCell(qpDampingToGain(row.qpDamping), OPTIMIZE_CONSOLE_COLUMNS[4].width, 6),
-    formatCompactConsoleCell(row.rho, OPTIMIZE_CONSOLE_COLUMNS[5].width, 3),
-    formatCompactConsoleCell(row.alpha, OPTIMIZE_CONSOLE_COLUMNS[6].width, 3),
-    formatOptimizeConsoleCell(row.improv, OPTIMIZE_CONSOLE_COLUMNS[7].width, 5),
+    formatCompactConsoleCell(row.rho, OPTIMIZE_CONSOLE_COLUMNS[4].width, 3),
+    formatCompactConsoleCell(row.alpha, OPTIMIZE_CONSOLE_COLUMNS[5].width, 3),
+    formatOptimizeConsoleCell(row.improv, OPTIMIZE_CONSOLE_COLUMNS[6].width, 5),
   ].join('');
 }
 
