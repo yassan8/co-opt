@@ -33,15 +33,20 @@ function safeCall<T>(fn: () => T, fallback: T): T {
 }
 
 function getWindowCandidates(): any[] {
-  const candidates: any[] = [window as any];
+  const candidates: any[] = [];
   try {
     const explicitHost = (window as any).__analysisHostWindow;
     if (explicitHost && !explicitHost.closed) candidates.push(explicitHost);
   } catch (_) {}
   try {
+    const parent = (window as any).parent;
+    if (parent && parent !== window) candidates.push(parent);
+  } catch (_) {}
+  try {
     const opener = (window as any).opener;
     if (opener && !opener.closed) candidates.push(opener);
   } catch (_) {}
+  candidates.push(window as any);
   return candidates.filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
 }
 
@@ -853,6 +858,17 @@ export function BasicAnalysisPage({ type }: { type: BasicAnalysisType }) {
 
   const showCommandbar = type !== 'integrated-aberration';
   const actionLabel = busy ? 'Calculating…' : 'Show';
+  const actionTitle = type === 'spot-diagram'
+    ? 'Show spot diagram'
+    : type === 'magnification-chromatic-aberration'
+      ? 'Show lateral chromatic aberration'
+      : type === 'transverse-aberration'
+        ? 'Show transverse aberration diagram'
+        : type === 'opd-fan'
+          ? 'Show OPD Fan'
+          : type === 'through-focus-spot'
+            ? 'Show Through-Focus Spot'
+            : undefined;
   const selectedSurface = useMemo(
     () => surfaceOptions.find((option) => String(option.surfaceId) === surfaceId),
     [surfaceId, surfaceOptions],
@@ -883,7 +899,7 @@ export function BasicAnalysisPage({ type }: { type: BasicAnalysisType }) {
               <label className="analysis-window-field"><span>Ray number</span><input type="number" min={1} max={1001} step={1} value={sphericalRayCount} onChange={(event) => setSphericalRayCount(Number(event.target.value))} /></label>
               <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
                 <label className="analysis-window-field"><span>Reference focus</span><select value={referenceFocusMode} onChange={(event) => setReferenceFocusMode(event.target.value as any)}><option value="primary-paraxial">Primary paraxial</option><option value="current-paraxial">Current paraxial</option><option value="chief-ray">Chief ray</option></select></label>
-                <span className="analysis-window-status">Always normalized by stop diameter</span>
+                <span className="analysis-window-status">(Always normalized by stop diameter)</span>
               </div></details>
             </>
           ) : null}
@@ -904,7 +920,7 @@ export function BasicAnalysisPage({ type }: { type: BasicAnalysisType }) {
           {type === 'transverse-aberration' ? (
             <>
               <label className="analysis-window-field"><span>Ray number</span><input type="number" min={9} max={10001} step={1} value={transverseRayCount} onChange={(event) => setTransverseRayCount(Number(event.target.value))} /></label>
-              <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel"><span className="analysis-window-status">Always normalized by stop diameter</span></div></details>
+              <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel"><span className="analysis-window-status">(Always normalized by stop diameter)</span></div></details>
             </>
           ) : null}
 
@@ -932,7 +948,7 @@ export function BasicAnalysisPage({ type }: { type: BasicAnalysisType }) {
             </>
           ) : null}
 
-          <button className="analysis-window-primary-action" type="button" onClick={() => void runAnalysis()} disabled={busy || (type === 'spot-diagram' && !selectedSurface)}>{actionLabel}</button>
+          <button className="analysis-window-primary-action" type="button" title={actionTitle} onClick={() => void runAnalysis()} disabled={busy || (type === 'spot-diagram' && !selectedSurface)}>{actionLabel}</button>
         </div>
       ) : null}
 

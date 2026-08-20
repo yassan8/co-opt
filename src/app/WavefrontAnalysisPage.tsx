@@ -19,15 +19,20 @@ function safeCall<T>(fn: () => T, fallback: T): T {
 }
 
 function getWindowCandidates(): any[] {
-  const out: any[] = [window as any];
+  const out: any[] = [];
   try {
     const explicitHost = (window as any).__analysisHostWindow;
     if (explicitHost && !explicitHost.closed) out.push(explicitHost);
   } catch (_) {}
   try {
+    const parent = (window as any).parent;
+    if (parent && parent !== window) out.push(parent);
+  } catch (_) {}
+  try {
     const opener = (window as any).opener;
     if (opener && !opener.closed) out.push(opener);
   } catch (_) {}
+  out.push(window as any);
   return out.filter((value, index, all) => value && all.indexOf(value) === index);
 }
 
@@ -349,11 +354,11 @@ export function WavefrontAnalysisPage() {
         <label className="analysis-window-field"><span>Object</span><select value={objectIndex} onChange={(event) => setObjectIndex(event.target.value)}>{objects.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label className="analysis-window-field"><span>Plot type</span><select value={plotType} onChange={(event) => setPlotType(event.target.value as any)}><option value="surface">3D Surface</option><option value="heatmap">Heatmap</option><option value="multifield">Multi-field Comparison</option></select></label>
         <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
-          <label className="analysis-window-field"><span>Sampling</span><select value={gridSize} onChange={(event) => setGridSize(Number(event.target.value) as any)}>{OPTIMIZE_RAY_GRID_SIZES.map((size) => <option key={size} value={size}>{size}x{size}</option>)}</select></label>
+          <label className="analysis-window-field"><span>sampling</span><select value={gridSize} onChange={(event) => setGridSize(Number(event.target.value) as any)}>{OPTIMIZE_RAY_GRID_SIZES.map((size) => <option key={size} value={size}>{size}x{size}</option>)}</select></label>
           <label className="analysis-window-toggle"><input type="checkbox" checked={zernikeFit} onChange={(event) => setZernikeFit(event.target.checked)} />Zernike (calc)</label>
           <label className="analysis-window-toggle"><input type="checkbox" checked={removePtd} onChange={(event) => setRemovePtd(event.target.checked)} />Remove P/T/D</label>
         </div></details>
-        <button className="analysis-window-primary-action" type="button" onClick={() => void run()} disabled={busy}>{busy ? 'Calculating…' : 'Show'}</button>
+        <button className="analysis-window-primary-action" type="button" title="Show wavefront diagram" onClick={() => void run()} disabled={busy}>{busy ? 'Calculating…' : 'Show'}</button>
         <button className="analysis-window-secondary-action" type="button" onClick={stop} disabled={!busy || stopping}>{stopping ? 'Stopping...' : 'Stop'}</button>
       </div>
       {(busy || !!progressText) ? <ProgressBar value={progress} text={progressText || 'Working...'} /> : null}

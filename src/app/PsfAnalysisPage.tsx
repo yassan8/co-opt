@@ -18,15 +18,20 @@ function safeCall<T>(fn: () => T, fallback: T): T {
 }
 
 function getWindowCandidates(): any[] {
-  const out: any[] = [window as any];
+  const out: any[] = [];
   try {
     const explicitHost = (window as any).__analysisHostWindow;
     if (explicitHost && !explicitHost.closed) out.push(explicitHost);
   } catch (_) {}
   try {
+    const parent = (window as any).parent;
+    if (parent && parent !== window) out.push(parent);
+  } catch (_) {}
+  try {
     const opener = (window as any).opener;
     if (opener && !opener.closed) out.push(opener);
   } catch (_) {}
+  out.push(window as any);
   return out.filter((value, index, all) => value && all.indexOf(value) === index);
 }
 
@@ -597,7 +602,7 @@ export function PsfAnalysisPage() {
           <label className="analysis-window-field"><span>Wavefront</span><select value={opdMode} onChange={(event) => setOpdMode(event.target.value as any)} title="Raw preserves wavefront tilt and wavelength-dependent image displacement."><option value="raw">Preserve P/T (Raw)</option><option value="pistonTiltRemoved">Remove P/T</option><option value="pistonTiltDefocusRemoved">Remove P/T/D</option></select></label>
           {pipelineBadge ? <span className={`analysis-window-status${pipelineBadge === 'Error' ? ' is-error' : ''}`}>{pipelineBadge}</span> : null}
         </div></details>
-        <button className="analysis-window-primary-action" type="button" onClick={() => void run()} disabled={busy}>{busy ? 'Calculating…' : 'Show'}</button>
+        <button className="analysis-window-primary-action" type="button" title="Show PSF" onClick={() => void run()} disabled={busy}>{busy ? 'Calculating…' : 'Show'}</button>
         <button className="analysis-window-secondary-action" type="button" onClick={stop} disabled={!busy || stopping}>{stopping ? 'Stopping...' : 'Stop'}</button>
       </div>
       {(busy || !!progressText) ? <ProgressBar value={progress} text={progressText || 'Working...'} /> : null}

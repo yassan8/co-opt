@@ -7816,6 +7816,23 @@ body.dark-mode #design-intent-container .block-inspector {
     font-size: 12px;
 }
 
+.analysis-window-opd-stats .wavefront-statistics h4 {
+    margin: 0 0 10px;
+    font-size: 13px;
+}
+
+.analysis-window-opd-stats .stats-note {
+    margin-bottom: 6px;
+    line-height: 1.35;
+}
+
+.analysis-window-opd-stats .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+    margin-top: 10px;
+}
+
 .analysis-window-opd-chart {
     min-width: 0;
 }
@@ -8049,6 +8066,9 @@ body.dark-mode .analysis-window-field select {
         right: 10px;
     }
 
+}
+
+@media (max-width: 960px) {
     .analysis-window-opd-content {
         flex-direction: column;
     }
@@ -8056,12 +8076,12 @@ body.dark-mode .analysis-window-field select {
     .analysis-window-opd-stats {
         flex: 0 0 auto;
         width: auto;
-        max-height: 35vh;
         border-right: 0;
-        border-bottom: 1px solid #e2e8f0;
+        border-top: 1px solid #e2e8f0;
     }
+}
 
-
+@media (max-width: 700px) {
     .analysis-window-psf-content {
         grid-template-columns: minmax(0, 1fr);
         grid-template-rows: minmax(0, 1fr) auto;
