@@ -1801,6 +1801,70 @@ export async function runRaytracePreview(
   return invokeCommand<RaytracePreviewRequest, RaytracePreviewResponse>("run_raytrace_preview", payload);
 }
 
+type SpotWasmWorkerPool = { workers: Worker[] };
+let spotWasmWorkerPool: SpotWasmWorkerPool | null = null;
+let spotWasmWorkerPoolQueue: Promise<void> = Promise.resolve();
+let spotWasmWorkerRequestSequence = 0;
+
+function getSpotWasmWorkerPool(workerCount: number): SpotWasmWorkerPool {
+  const count = Math.max(1, Math.floor(workerCount));
+  if (spotWasmWorkerPool?.workers.length === count) return spotWasmWorkerPool;
+  if (spotWasmWorkerPool) {
+    for (const worker of spotWasmWorkerPool.workers) {
+      try { worker.terminate(); } catch (_) {}
+    }
+  }
+  spotWasmWorkerPool = {
+    workers: Array.from({ length: count }, () => new Worker(
+      new URL("../../../evaluation/spot-wasm-worker.ts", import.meta.url),
+      { type: "module" },
+    )),
+  };
+  return spotWasmWorkerPool;
+}
+
+async function runSpotWasmWorkerJobs(jobs: any[]): Promise<any[][]> {
+  if (!Array.isArray(jobs) || jobs.length === 0 || typeof Worker === "undefined") return [];
+  const hardwareConcurrency = typeof navigator !== "undefined" ? Number(navigator.hardwareConcurrency) : jobs.length;
+  const workerCount = Math.max(1, Math.min(
+    jobs.length,
+    4,
+    Number.isFinite(hardwareConcurrency) ? Math.max(1, Math.floor(hardwareConcurrency)) : jobs.length,
+  ));
+  const execute = async () => {
+    const pool = getSpotWasmWorkerPool(workerCount);
+    const output: any[][] = new Array(jobs.length);
+    let nextJob = 0;
+    await Promise.all(pool.workers.map(async (worker) => {
+      while (nextJob < jobs.length) {
+        const jobIndex = nextJob++;
+        const requestId = `spot-${Date.now()}-${++spotWasmWorkerRequestSequence}-${jobIndex}`;
+        output[jobIndex] = await new Promise<any[]>((resolve, reject) => {
+          const onMessage = (event: MessageEvent<any>) => {
+            if (event.data?.requestId !== requestId) return;
+            worker.removeEventListener("message", onMessage);
+            worker.removeEventListener("error", onError);
+            if (event.data?.ok !== true) reject(new Error(String(event.data?.error || "Spot WASM worker failed")));
+            else resolve(Array.isArray(event.data?.summaries) ? event.data.summaries : []);
+          };
+          const onError = (event: ErrorEvent) => {
+            worker.removeEventListener("message", onMessage);
+            worker.removeEventListener("error", onError);
+            reject(new Error(String(event.message || "Spot WASM worker error")));
+          };
+          worker.addEventListener("message", onMessage);
+          worker.addEventListener("error", onError);
+          worker.postMessage({ requestId, ...jobs[jobIndex] });
+        });
+      }
+    }));
+    return output;
+  };
+  const scheduled = spotWasmWorkerPoolQueue.then(execute, execute);
+  spotWasmWorkerPoolQueue = scheduled.then(() => undefined, () => undefined);
+  return scheduled;
+}
+
 export async function runNativeSpotRaytrace(
   payload: NativeSpotRaytraceRequest,
 ): Promise<NativeSpotRaytraceResponse> {
@@ -1880,7 +1944,14 @@ export async function runNativeSpotRaytrace(
         allowNonStrict: allowNonStrictRaytrace,
       } as any;
 
-      const series = requestSeries.map((entry: any, idx: number) => {
+      type SpotSeriesDescriptor = {
+        entry: any;
+        index: number;
+        rays: any[];
+        wavelengthUm: number;
+        batch: any[];
+      };
+      const descriptors: SpotSeriesDescriptor[] = requestSeries.map((entry: any, idx: number) => {
         const rays = Array.isArray(entry?.rays) ? entry.rays : [];
         const batch = rays.map((ray: any) => ({
           wavelength: Number(ray?.wavelengthUm) > 0 ? Number(ray.wavelengthUm) : 0.5876,
@@ -1896,8 +1967,68 @@ export async function runNativeSpotRaytrace(
           },
         }));
 
-        const summaries = traceRayEvalBatchSummary(opticalSystemRows, batch, 1.0, targetSurface, traceOptions);
-        const normalizedSummaries = Array.isArray(summaries) ? summaries : [];
+        const wavelengthUm = Number(rays.find((ray: any) => Number(ray?.wavelengthUm) > 0)?.wavelengthUm) || 0.5876;
+        return { entry, index: idx, rays, wavelengthUm, batch };
+      });
+
+      // Rust/WASM prepares refractive-index metadata from the first ray's wavelength.
+      // Keep wavelength groups separate, while flattening every field/series in a group
+      // into one boundary crossing. Ray order and sampling are unchanged.
+      const wavelengthGroups = new Map<string, SpotSeriesDescriptor[]>();
+      for (const descriptor of descriptors) {
+        const key = descriptor.wavelengthUm.toFixed(9);
+        const group = wavelengthGroups.get(key);
+        if (group) group.push(descriptor);
+        else wavelengthGroups.set(key, [descriptor]);
+      }
+      const summariesBySeries: any[][] = descriptors.map(() => []);
+      const preparedGroups = Array.from(wavelengthGroups.values()).map((group) => {
+        const flatBatch: any[] = [];
+        const offsets: Array<{ descriptor: SpotSeriesDescriptor; start: number; end: number }> = [];
+        for (const descriptor of group) {
+          const start = flatBatch.length;
+          flatBatch.push(...descriptor.batch);
+          offsets.push({ descriptor, start, end: flatBatch.length });
+        }
+        return { flatBatch, offsets, wavelengthUm: group[0]?.wavelengthUm || 0.5876 };
+      });
+      const totalRayCount = preparedGroups.reduce((sum, group) => sum + group.flatBatch.length, 0);
+      let workerGroupSummaries: any[][] | null = null;
+      const canUseWorkerPool = useRustTrace
+        && preparedGroups.length > 1
+        && totalRayCount >= 3000
+        && typeof Worker !== "undefined"
+        && (typeof globalThis === "undefined" || (globalThis as any).__COOPT_SPOT_WORKERS !== false);
+      if (canUseWorkerPool) {
+        try {
+          workerGroupSummaries = await runSpotWasmWorkerJobs(preparedGroups.map((group) => ({
+            opticalSystemRows: enrichRowsWithResolvedRindexForWasm(opticalSystemRows, group.wavelengthUm),
+            rays: group.flatBatch,
+            nStart: 1,
+            targetSurfaceIndex: targetSurface,
+            wavelengthUm: group.wavelengthUm,
+            traceOptions,
+          })));
+        } catch (error) {
+          console.warn("[Spot WorkerPool] failed; retrying on the main WASM instance", error);
+          workerGroupSummaries = null;
+        }
+      }
+      preparedGroups.forEach(({ flatBatch, offsets }, groupIndex) => {
+        const groupSummaries = workerGroupSummaries
+          ? workerGroupSummaries[groupIndex]
+          : (flatBatch.length > 0
+            ? traceRayEvalBatchSummary(opticalSystemRows, flatBatch, 1.0, targetSurface, traceOptions)
+            : []);
+        const normalizedGroupSummaries = Array.isArray(groupSummaries) ? groupSummaries : [];
+        for (const { descriptor, start, end } of offsets) {
+          summariesBySeries[descriptor.index] = normalizedGroupSummaries.slice(start, end);
+        }
+      });
+
+      const series = descriptors.map(({ entry, index: idx, rays, wavelengthUm }) => {
+        const normalizedSummaries = summariesBySeries[idx] || [];
+
         const chiefIdx = rays.findIndex((r: any) => r?.isChief === true);
         const points = normalizedSummaries
           .map((s: any, rayIndex: number) => {
@@ -1929,13 +2060,11 @@ export async function runNativeSpotRaytrace(
           acc[status] = (acc[status] || 0) + 1;
           return acc;
         }, {} as Record<string, number>);
-        const wl = rays.find((r: any) => Number(r?.wavelengthUm) > 0)?.wavelengthUm;
-
         return {
           label: String(entry?.label || `Series ${idx + 1}`),
           color: String(entry?.color || toSeriesColor(idx)),
           objectIndex: idx,
-          wavelengthUm: Number(wl) > 0 ? Number(wl) : undefined,
+          wavelengthUm,
           points,
           chiefPointUm,
           rmsUm: Number.isFinite(Number(spotMetrics.rmsUm)) ? Number(spotMetrics.rmsUm) : undefined,
@@ -1980,13 +2109,14 @@ export async function runNativeSpotRaytrace(
       const traceMs = Math.max(0, nowMs() - traceStartMs);
 
       return {
-        backend: "web-rust-wasm",
+        backend: workerGroupSummaries ? "web-rust-wasm-wavelength-worker-batch" : "web-rust-wasm-wavelength-batch",
         surfaceIndex: targetSurface,
         tracedRays: totalHitRays,
         requestedRays: totalAttemptedRays,
         generatedRays: totalAttemptedRays,
         wavelengthCount: new Set(series.map((s: any) => Number(s.wavelengthUm)).filter((v: number) => Number.isFinite(v) && v > 0)).size,
         seriesCount: seriesStats.length,
+        traceBatchCount: wavelengthGroups.size,
         objectCount,
         raysPerSeries,
         totalAttemptedRays,
@@ -3982,7 +4112,7 @@ export async function runMtfBatchViaWasm(
     }
 
     const enableWasmThreads = typeof globalThis !== "undefined"
-      && (globalThis as any).__COOPT_MTF_ENABLE_RAYON === true
+      && (globalThis as any).__COOPT_MTF_ENABLE_RAYON !== false
       && (globalThis as any).crossOriginIsolated === true
       && typeof (globalThis as any).SharedArrayBuffer === "function";
     const wasmThreadsActive = enableWasmThreads

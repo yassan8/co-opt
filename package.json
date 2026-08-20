@@ -40,6 +40,7 @@
     "diag:asphere-fallback": "node --import tsx diagnostics/asphere-js-fallback-parity.mjs",
     "diag:perf-quick-auto": "node --import tsx diagnostics/perf-quick-auto.mjs",
     "diag:perf-quick-auto:strict": "node --import tsx diagnostics/perf-quick-auto.mjs --require true --min-opd-speedup 1.05 --max-ray-status-mismatch 0 --max-ray-success-mismatch 0 --max-ray-max-opl-um 0",
+    "diag:spot-mtf-perf": "node diagnostics/spot-mtf-performance-benchmark.mjs",
     "diag:toric-lockstep": "node --experimental-strip-types diagnostics/toric-lockstep-benchmark.mjs",
     "diag:ta-mode-analyze": "node --import tsx diagnostics/ta-rms-lightweight-mode-analyze.mjs",
     "diag:ta-mode-auto": "node --import tsx diagnostics/ta-rms-lightweight-mode-auto.mjs",

@@ -71,8 +71,6 @@ export function generate_fd_perturbation_points(x: Float64Array, steps: Float64A
 
 export function generate_parallel_start_points_flat(origin: Float64Array, u_axis: Float64Array, v_axis: Float64Array, offsets: Float64Array, count: number): Float64Array;
 
-export function initThreadPool(num_threads: number): Promise<any>;
-
 export function intersect_aspheric_rt10(ray: Float64Array, params: Float64Array, mode_odd: number, max_iter: number, tol: number): number;
 
 export function intersect_aspheric_rt10_batch(rays: Float64Array, ray_count: number, params: Float64Array, mode_odd: number, max_iter: number, tol: number): Float64Array;
@@ -200,7 +198,11 @@ export function trace_image_height_infinite_candidate_with_rows(optical_system_r
 
 export function trace_image_height_infinite_chief_ray_exact_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, angle_x_deg: number, angle_y_deg: number): Float64Array;
 
+export function trace_ray_batch_hit_point_cached(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, metadata_handle: number): Float64Array;
+
 export function trace_ray_batch_hit_point_with_meta(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): Float64Array;
+
+export function trace_ray_batch_hit_point_with_rows_json(optical_rows_json: string, rays: Float64Array, ray_count: number, target_surface_index: number, wavelength_um: number, n_start: number): Float64Array;
 
 export function trace_ray_batch_spot_metrics_cached(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, reference_x: number, reference_y: number, metadata_handle: number): Float64Array;
 
@@ -247,100 +249,83 @@ export function vector_dot(x: Float64Array, y: Float64Array): number;
  */
 export function vector_norm(x: Float64Array): number;
 
-export class wbg_rayon_PoolBuilder {
-    private constructor();
-    free(): void;
-    [Symbol.dispose](): void;
-    build(): void;
-    mainJS(): string;
-    numThreads(): number;
-    receiver(): number;
-}
-
-export function wbg_rayon_start_worker(receiver: number): void;
-
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
-    readonly intersect_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
-    readonly intersect_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
-    readonly surface_normal_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly surface_normal_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
-    readonly intersect_qcon_surface: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
-    readonly intersect_qcon_surface_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
-    readonly surface_normal_qcon_surface: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly surface_normal_qcon_surface_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
-    readonly batch_mat3_mul_vec3: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly transform_ray_to_local_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
-    readonly transform_point_to_global_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
-    readonly refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
-    readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly memory: WebAssembly.Memory;
     readonly advance_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
-    readonly calculate_surface_origins: (a: number, b: number) => [number, number, number];
-    readonly trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
-    readonly trace_single_ray_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];
-    readonly trace_ray_batch_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number];
-    readonly trace_ray_batch_spot_metrics_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
-    readonly register_trace_system_metadata: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
-    readonly clear_trace_system_metadata_cache: () => void;
-    readonly trace_ray_batch_spot_metrics_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
-    readonly trace_spot_metric_jobs_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number];
-    readonly solve_image_height_component_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
-    readonly solve_image_height_pair_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
-    readonly solve_image_height_pair_exact_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
-    readonly trace_image_height_infinite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
-    readonly trace_image_height_infinite_candidate_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
-    readonly trace_image_height_infinite_chief_ray_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
-    readonly trace_image_height_finite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
-    readonly run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_opd_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_chief_ray_angle_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_paraxial_metrics_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_seidel_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly compute_native_opd_grid_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly solve_ray_origins_to_stop_points_with_meta_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number) => [number, number];
-    readonly fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
-    readonly fft_2d_inverse: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
-    readonly solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly solve_spd_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly build_normal_equations: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
-    readonly normal_eq_matvec: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
-    readonly generate_fd_perturbation_points: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly assemble_fd_jacobian: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly assemble_fd_jacobian_grouped: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
-    readonly optimize_system_in_wasm: (a: number, b: number) => [number, number, number, number];
-    readonly optimize_one_iter_from_buffers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
-    readonly malloc: (a: number) => number;
-    readonly free: (a: number, b: number) => void;
-    readonly solve_qp_subproblem_unconstrained: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
-    readonly solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
     readonly backtracking_line_search_armijo: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: any) => number;
-    readonly update_trust_region_radius: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
+    readonly batch_mat3_mul_vec3: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly bfgs_update: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number) => number;
+    readonly build_normal_equations: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly calculate_surface_origins: (a: number, b: number) => [number, number, number];
+    readonly cholesky_factorization: (a: number, b: number, c: number) => [number, number];
+    readonly clear_trace_system_metadata_cache: () => void;
+    readonly compute_lca_series_from_image_heights: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
+    readonly compute_native_opd_grid_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly fft_2d_inverse: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly free: (a: number, b: number) => void;
     readonly generate_annular_offsets_flat: (a: number, b: number, c: number) => [number, number];
     readonly generate_centered_grid_offsets_flat: (a: number, b: number) => [number, number];
+    readonly generate_fd_perturbation_points: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly generate_parallel_start_points_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly intersect_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly intersect_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly intersect_qcon_surface: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly intersect_qcon_surface_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly malloc: (a: number) => number;
+    readonly matrix_vector_multiply: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly normal_eq_matvec: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly optimize_one_iter_from_buffers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+    readonly optimize_system_in_wasm: (a: number, b: number) => [number, number, number, number];
+    readonly qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly register_trace_system_metadata: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
+    readonly run_native_chief_ray_angle_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_mtf_malacara_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_opd_psf_mtf_batch_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_opd_psf_mtf_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_opd_rms_waves_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_paraxial_metrics_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_seidel_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly solve_image_height_component_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
+    readonly solve_image_height_pair_exact_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly solve_image_height_pair_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
+    readonly solve_qp_subproblem_unconstrained: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly solve_ray_origins_to_stop_points_with_meta_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number) => [number, number];
+    readonly solve_spd_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly surface_normal_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly surface_normal_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly surface_normal_qcon_surface: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly surface_normal_qcon_surface_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly trace_image_height_finite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
+    readonly trace_image_height_infinite_candidate_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
+    readonly trace_image_height_infinite_candidate_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
+    readonly trace_image_height_infinite_chief_ray_exact_with_rows: (a: any, b: number, c: number, d: number, e: number) => [number, number];
+    readonly trace_ray_batch_hit_point_cached: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly trace_ray_batch_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number];
+    readonly trace_ray_batch_hit_point_with_rows_json: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly trace_ray_batch_spot_metrics_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly trace_ray_batch_spot_metrics_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
+    readonly trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+    readonly trace_single_ray_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];
+    readonly trace_spot_metric_jobs_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number];
+    readonly transform_point_to_global_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly transform_ray_to_local_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly update_trust_region_radius: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly vector_add_scaled: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly vector_dot: (a: number, b: number, c: number, d: number) => number;
     readonly vector_norm: (a: number, b: number) => number;
-    readonly matrix_vector_multiply: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
-    readonly cholesky_factorization: (a: number, b: number, c: number) => [number, number];
-    readonly bfgs_update: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number) => number;
-    readonly qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
-    readonly compute_lca_series_from_image_heights: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
-    readonly run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_mtf_malacara_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_opd_psf_mtf_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_opd_psf_mtf_batch_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly __wbg_wbg_rayon_poolbuilder_free: (a: number, b: number) => void;
-    readonly wbg_rayon_poolbuilder_mainJS: (a: number) => any;
-    readonly wbg_rayon_poolbuilder_numThreads: (a: number) => number;
-    readonly wbg_rayon_poolbuilder_receiver: (a: number) => number;
-    readonly wbg_rayon_poolbuilder_build: (a: number) => void;
-    readonly initThreadPool: (a: number) => any;
-    readonly wbg_rayon_start_worker: (a: number) => void;
-    readonly memory: WebAssembly.Memory;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
@@ -348,8 +333,7 @@ export interface InitOutput {
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_thread_destroy: (a?: number, b?: number, c?: number) => void;
-    readonly __wbindgen_start: (a: number) => void;
+    readonly __wbindgen_start: () => void;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;
@@ -358,20 +342,18 @@ export type SyncInitInput = BufferSource | WebAssembly.Module;
  * Instantiates the given `module`, which can either be bytes or
  * a precompiled `WebAssembly.Module`.
  *
- * @param {{ module: SyncInitInput, memory?: WebAssembly.Memory, thread_stack_size?: number }} module - Passing `SyncInitInput` directly is deprecated.
- * @param {WebAssembly.Memory} memory - Deprecated.
+ * @param {{ module: SyncInitInput }} module - Passing `SyncInitInput` directly is deprecated.
  *
  * @returns {InitOutput}
  */
-export function initSync(module: { module: SyncInitInput, memory?: WebAssembly.Memory, thread_stack_size?: number } | SyncInitInput, memory?: WebAssembly.Memory): InitOutput;
+export function initSync(module: { module: SyncInitInput } | SyncInitInput): InitOutput;
 
 /**
  * If `module_or_path` is {RequestInfo} or {URL}, makes a request and
  * for everything else, calls `WebAssembly.instantiate` directly.
  *
- * @param {{ module_or_path: InitInput | Promise<InitInput>, memory?: WebAssembly.Memory, thread_stack_size?: number }} module_or_path - Passing `InitInput` directly is deprecated.
- * @param {WebAssembly.Memory} memory - Deprecated.
+ * @param {{ module_or_path: InitInput | Promise<InitInput> }} module_or_path - Passing `InitInput` directly is deprecated.
  *
  * @returns {Promise<InitOutput>}
  */
-export default function __wbg_init (module_or_path?: { module_or_path: InitInput | Promise<InitInput>, memory?: WebAssembly.Memory, thread_stack_size?: number } | InitInput | Promise<InitInput>, memory?: WebAssembly.Memory): Promise<InitOutput>;
+export default function __wbg_init (module_or_path?: { module_or_path: InitInput | Promise<InitInput> } | InitInput | Promise<InitInput>): Promise<InitOutput>;

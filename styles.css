@@ -4764,6 +4764,11 @@ h4 {
     display: grid;
     grid-template-columns: 260px minmax(0, 1fr);
     overflow: hidden;
+    transition: grid-template-columns 160ms ease;
+}
+
+.win-mdi-body.is-navigator-collapsed {
+    grid-template-columns: 42px minmax(0, 1fr);
 }
 
 .win-tree-panel {
@@ -4774,11 +4779,94 @@ h4 {
     padding: 8px 10px;
 }
 
+.win-tree-panel.is-collapsed {
+    overflow: hidden;
+    padding: 8px 5px;
+}
+
+.win-tree-panel-header {
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.win-tree-panel.is-collapsed .win-tree-panel-header {
+    justify-content: center;
+}
+
 .win-tree-section-header {
     font-size: 13px;
     font-weight: 700;
     color: #1f2937;
-    margin-bottom: 8px;
+}
+
+.win-tree-collapse-button {
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: #475569;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.win-tree-collapse-button:hover {
+    border-color: #cbd5e1;
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+.win-tree-collapse-button:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+.win-tree-content {
+    min-width: 232px;
+    margin-top: 4px;
+}
+
+.win-tree-rail-label {
+    width: 28px;
+    min-height: 92px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 8px auto 0;
+    padding: 8px 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: #64748b;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    cursor: pointer;
+    user-select: none;
+}
+
+.win-tree-rail-label:hover {
+    border-color: #cbd5e1;
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+.win-tree-rail-label:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
 }
 
 .win-tree-group-label {
@@ -4945,10 +5033,27 @@ h4 {
         grid-template-rows: auto 1fr;
     }
 
+    .win-mdi-body.is-navigator-collapsed {
+        grid-template-columns: 1fr;
+        grid-template-rows: 42px 1fr;
+    }
+
     .win-tree-panel {
         max-height: 220px;
         border-right: 0;
         border-bottom: 1px solid #dbe1ea;
+    }
+
+    .win-tree-panel.is-collapsed {
+        max-height: 42px;
+    }
+
+    .win-tree-panel.is-collapsed .win-tree-panel-header {
+        justify-content: flex-end;
+    }
+
+    .win-tree-rail-label {
+        display: none;
     }
 }
 

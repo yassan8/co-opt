@@ -21,7 +21,7 @@ cd "$RUST_WASM_DIR"
 if [[ "${COOPT_WASM_THREADS:-0}" == "1" ]]; then
   echo "🧵 [Rust-WASM] building SharedArrayBuffer/threaded package"
   export RUSTUP_TOOLCHAIN="nightly-2024-08-02"
-  export RUSTFLAGS="-C target-feature=+atomics,+bulk-memory -C link-arg=--import-memory -C link-arg=--shared-memory -C link-arg=--max-memory=2147483648 -C link-arg=--export=__heap_base -C link-arg=--export=__data_end"
+  export RUSTFLAGS="-C target-feature=+simd128,+atomics,+bulk-memory -C link-arg=--import-memory -C link-arg=--shared-memory -C link-arg=--max-memory=2147483648 -C link-arg=--export=__heap_base -C link-arg=--export=__data_end"
   cargo build \
     --target wasm32-unknown-unknown \
     --release \
@@ -38,6 +38,10 @@ if [[ "${COOPT_WASM_THREADS:-0}" == "1" ]]; then
     cp "$PUBLIC_PKG_DIR/package.json" pkg/package.json
   fi
 else
+  # Keep SIMD enabled in the production Web package. The packed/SoA-friendly
+  # ray loops and FFT kernels can then be vectorized by LLVM without changing
+  # ray sampling or numerical precision.
+  export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+simd128"
   wasm-pack build \
     --target web \
     --release \

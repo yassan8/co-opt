@@ -36,3 +36,9 @@ core-graphics = "0.24"
 # this crate's numerical kernels with the same optimization level as release.
 [profile.dev.package."co-opt-pro"]
 opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"

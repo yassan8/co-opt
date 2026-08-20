@@ -65,6 +65,7 @@ const RENDER_SHOW_SECTION_CUT_KEY = 'coopt.render.showSectionCut';
 const RENDER_SECTION_ANGLE_KEY = 'coopt.render.sectionAngleDegrees';
 const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
 const OPTIMIZE_PROGRESS_SYNC_KEY = 'coopt.optimizeProgress';
+const NAVIGATOR_COLLAPSED_KEY = 'coopt.workspace.navigatorCollapsed';
 const SYSTEM_TEXT_WINDOW_ID = 'system-text-window';
 const SYSTEM_TEXT_WINDOW_TITLE = 'System Console';
 const RENDER_SCALE_BAR_MIN_WIDTH_PX = 72;
@@ -4662,6 +4663,14 @@ export default function App() {
   const optimizeConsoleLastIterRef = useRef<number>(-1);
   const optimizeConsoleStartedAtRef = useRef<number>(0);
   const [treeOpenGroups, setTreeOpenGroups] = useState<Set<string>>(new Set(['panels', 'analysis']));
+  const [navigatorCollapsed, setNavigatorCollapsed] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem(NAVIGATOR_COLLAPSED_KEY);
+      return stored === null ? true : stored === 'true';
+    } catch (_) {
+      return true;
+    }
+  });
   const renderScaleRafRef = useRef<number | null>(null);
   const optimizeDisplaySleepBlockTokenRef = useRef<string | null>(null);
   const optimizeWakeLockRef = useRef<any>(null);
@@ -15015,6 +15024,16 @@ const collectLegacyCrossRays = async (
     });
   };
 
+  const toggleNavigatorCollapsed = () => {
+    setNavigatorCollapsed((collapsed) => {
+      const next = !collapsed;
+      try {
+        localStorage.setItem(NAVIGATOR_COLLAPSED_KEY, String(next));
+      } catch (_) {}
+      return next;
+    });
+  };
+
   const syncWindowGeometry = (key: WorkspaceFocus, el: HTMLElement | null) => {
     if (!el) return;
     setMdiWindowStates(prev => {
@@ -15133,11 +15152,37 @@ const collectLegacyCrossRays = async (
       </div>
 
       {/* ── Main body: left navigator tree + MDI desktop ── */}
-      <div className="win-mdi-body">
+      <div className={`win-mdi-body${navigatorCollapsed ? ' is-navigator-collapsed' : ''}`}>
 
         {/* Left navigator tree */}
-        <div className="win-tree-panel">
-          <div className="win-tree-section-header">Navigator</div>
+        <aside className={`win-tree-panel${navigatorCollapsed ? ' is-collapsed' : ''}`} aria-label="Workspace navigator">
+          <div className="win-tree-panel-header">
+            {!navigatorCollapsed && <div className="win-tree-section-header">Navigator</div>}
+            <button
+              type="button"
+              className="win-tree-collapse-button"
+              onClick={toggleNavigatorCollapsed}
+              aria-expanded={!navigatorCollapsed}
+              aria-label={navigatorCollapsed ? 'Open navigator' : 'Collapse navigator'}
+              title={navigatorCollapsed ? 'Open Navigator' : 'Collapse Navigator'}
+            >
+              <span aria-hidden="true">{navigatorCollapsed ? '›' : '‹'}</span>
+            </button>
+          </div>
+
+          {navigatorCollapsed && (
+            <button
+              type="button"
+              className="win-tree-rail-label"
+              onClick={toggleNavigatorCollapsed}
+              aria-label="Open navigator"
+              title="Open Navigator"
+            >
+              Navigator
+            </button>
+          )}
+
+          {!navigatorCollapsed && <div className="win-tree-content">
 
           <div className="win-tree-group">
             <div
@@ -15202,7 +15247,8 @@ const collectLegacyCrossRays = async (
               </div>
             )}
           </div>
-        </div>
+          </div>}
+        </aside>
 
         {/* MDI desktop */}
         <div className="win-mdi-desktop" ref={mdiDesktopRef}>

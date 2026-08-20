@@ -2958,7 +2958,7 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
     }
 
     let row_results: Vec<(usize, usize, Vec<Option<f64>>, Vec<Option<f64>>)> = (0..grid_size)
-        .into_iter()
+        .into_par_iter()
         .map(|y| {
             let mut attempted_samples = 0usize;
             let mut hit_count = 0usize;

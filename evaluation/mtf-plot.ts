@@ -3,7 +3,7 @@ import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/dat
 import { calculateImageSpaceDiffractionParams } from '../raytracing/core/ray-paraxial.ts';
 import { ensureMtfWasmReady, setRayTracingWasmStrict, isRayTracingWasmStrict } from '../core/wasm-service.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
-import { runNativeMtfMap, runNativeOpdMap, runMtfBatchViaWasm } from '../src/desktop/ipc/client.ts';
+import { runNativeMtfMap, runNativeOpdMap, runMtfBatchViaWasm, runMtfBatchViaWasmWorkerPool } from '../src/desktop/ipc/client.ts';
 import { convertImageHeightToEffectiveObject } from '../optical/ray-renderer.ts';
 import { TFMTFWorkerPool, getGlobalTFMTFWorkerPool } from './tfmtf-worker-pool.ts';
 import { extractPSFGridFromCalculatorResult, validatePSFGrid, extractPSFMetadata } from './psf-serialization.ts';
@@ -540,7 +540,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         : { x: 1, y: 0 };
     const sagDir = { x: -tanDir.y, y: tanDir.x };
 
-    const psfCalculator = await getPSFCalculatorSingleton();
+    // The Web Malacara fast path does not need a PSF. Initialize the heavier
+    // PSF calculator lazily only when the compatibility/legacy path needs it.
+    let psfCalculator: any = null;
 
     const getAllWavelengths = () => {
         try {
@@ -838,6 +840,166 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         return Number.isFinite(val) ? Math.max(0, Math.min(1, val)) : null;
     };
 
+    let webFusedMalacaraPromise: Promise<Map<number, any>> | null = null;
+    const getWebFusedMalacaraResults = async (): Promise<Map<number, any>> => {
+        if (isTauriRuntime() || !useMalacaraMtfMethod) return new Map();
+        if (webFusedMalacaraPromise) return webFusedMalacaraPromise;
+
+        webFusedMalacaraPromise = (async () => {
+            const output = new Map<number, any>();
+            const requested = resolveRequestedPupilSamplingMode({
+                objectIndex: objIndex,
+                type: objectTypeRaw,
+                fieldAngle,
+                xHeight,
+                yHeight,
+            });
+            const objectRowsForOpd = hasOverride
+                ? objects.map((row, index) => index === objIndex ? { ...row, ...selectedObject } : row)
+                : objects;
+            const jobs = uniqueWavelengths.map((wavelengthUm, wavelengthIndex) => {
+                const diffraction = calculateImageSpaceDiffractionParams(opticalSystemRows, wavelengthUm);
+                const fNumber = Number(diffraction?.fNumberWorking);
+                const fallbackAxisMax = Number.isFinite(fNumber) && fNumber > 0
+                    ? 500.0 / (wavelengthUm * fNumber)
+                    : Math.max(1, maxLpmm);
+                const axisMaxLpmm = maxLpmm > 0 ? maxLpmm : fallbackAxisMax;
+                const nativePoints = fastSampleEnabled
+                    ? 2
+                    : Math.max(2, Math.min(2048, Math.max(241, resolvedPlotPointCount * 2)));
+                return {
+                    opdRequest: {
+                        opticalSystemRows,
+                        sourceRows,
+                        objectRows: objectRowsForOpd,
+                        objectIndex: objIndex,
+                        gridSize,
+                        wavelengthUm,
+                        pupilSamplingMode: requested.mode || undefined,
+                        opdDisplayMode: effectiveOpdDisplayMode,
+                    },
+                    wavelengthUm,
+                    fNumber,
+                    pupilRange: 1,
+                    maxFrequencyLpmm: axisMaxLpmm,
+                    targetFrequencyLpmm: fastSampleEnabled ? targetFreqLpmm : undefined,
+                    sampleFrequenciesLpmm: fastSampleEnabled ? [targetFreqLpmm] : undefined,
+                    points: nativePoints,
+                    directEvalOnly: fastSampleEnabled,
+                    slimResults: true,
+                    method: 'malacara-wasm-required',
+                    tangentialDir: tanDir,
+                    sagittalDir: sagDir,
+                    meta: { wavelengthIndex, wavelengthUm, fNumber, axisMaxLpmm },
+                };
+            });
+
+            const startedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? performance.now()
+                : Date.now();
+            const response = await runMtfBatchViaWasmWorkerPool({ jobs });
+            const elapsedMs = Math.max(0, ((typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? performance.now()
+                : Date.now()) - startedAt);
+            for (const result of Array.isArray(response?.results) ? response.results : []) {
+                const wavelengthIndex = Number(result?.meta?.wavelengthIndex);
+                if (Number.isInteger(wavelengthIndex) && wavelengthIndex >= 0) {
+                    output.set(wavelengthIndex, result);
+                }
+            }
+            ensureConsoleLog(`⚡ [MTF] Web fused OPD→MTF batch: wavelengths=${jobs.length}, backend=${String(response?.backend || 'unknown')}, elapsed=${elapsedMs.toFixed(1)}ms`);
+            return output;
+        })().catch((error) => {
+            ensureConsoleError('⚠️ [MTF] Web fused OPD→MTF batch failed; using compatibility pipeline.', error);
+            return new Map<number, any>();
+        });
+
+        return webFusedMalacaraPromise;
+    };
+
+    const appendWebFusedMalacaraTraces = async (wlLocal: number, idx: number): Promise<boolean> => {
+        const fusedResults = await getWebFusedMalacaraResults();
+        const result = fusedResults.get(idx);
+        const mtf = result?.mtf;
+        const meta = result?.meta || {};
+        const frequencyAxis = fastSampleEnabled ? mtf?.sampledFrequenciesLpmm : mtf?.frequencyAxis;
+        const nativeTan = fastSampleEnabled ? mtf?.sampledMtfTangential : mtf?.mtfTangential;
+        const nativeSag = fastSampleEnabled ? mtf?.sampledMtfSagittal : mtf?.mtfSagittal;
+        if (!(Array.isArray(frequencyAxis)
+            && frequencyAxis.length > 0
+            && Array.isArray(nativeTan)
+            && nativeTan.length === frequencyAxis.length
+            && Array.isArray(nativeSag)
+            && nativeSag.length === frequencyAxis.length)) {
+            return false;
+        }
+
+        const fNumber = Number(meta?.fNumber);
+        const axisMaxLpmm = Number(meta?.axisMaxLpmm);
+        const titleNmLocal = (wlLocal * 1000).toFixed(1);
+        let tan = {
+            freq: Array.from(frequencyAxis, (value: any) => Number(value)),
+            mtfVals: Array.from(nativeTan, (value: any) => Number.isFinite(Number(value)) ? Number(value) : null),
+        };
+        let sag = {
+            freq: Array.from(frequencyAxis, (value: any) => Number(value)),
+            mtfVals: Array.from(nativeSag, (value: any) => Number.isFinite(Number(value)) ? Number(value) : null),
+        };
+        if (tan.mtfVals.length > 0 && Number(tan.freq[0]) <= 1e-12) tan.mtfVals[0] = 1;
+        if (sag.mtfVals.length > 0 && Number(sag.freq[0]) <= 1e-12) sag.mtfVals[0] = 1;
+
+        const color = getColorForWavelength(wlLocal);
+        if (fastSampleEnabled) {
+            const tanAtTarget = sampleCurveAtFrequency(tan, targetFreqLpmm);
+            const sagAtTarget = sampleCurveAtFrequency(sag, targetFreqLpmm);
+            maxPlotLpmmGlobal = Math.max(maxPlotLpmmGlobal, targetFreqLpmm);
+            traces.push({
+                x: [targetFreqLpmm], y: [Number.isFinite(tanAtTarget) ? tanAtTarget : null],
+                type: 'scatter', mode: 'lines+markers', name: `Tangential (${titleNmLocal}nm)`,
+                showlegend: true, line: { color, width: 2, dash: 'solid' },
+            });
+            traces.push({
+                x: [targetFreqLpmm], y: [Number.isFinite(sagAtTarget) ? sagAtTarget : null],
+                type: 'scatter', mode: 'lines+markers', name: `Sagittal (${titleNmLocal}nm)`,
+                showlegend: true, line: { color, width: 2, dash: 'dot' },
+            });
+            return true;
+        }
+
+        const requestedPlotLpmm = Number.isFinite(axisMaxLpmm) && axisMaxLpmm > 0 ? axisMaxLpmm : maxLpmm;
+        maxPlotLpmmGlobal = Math.max(maxPlotLpmmGlobal, requestedPlotLpmm);
+        tan = resampleCurveToRange(tan, requestedPlotLpmm, resolvedPlotPointCount);
+        sag = resampleCurveToRange(sag, requestedPlotLpmm, resolvedPlotPointCount);
+        const diffractionEnvelope = tan.freq.map((frequency) =>
+            computeCircularApertureDiffractionMtf(frequency, wlLocal, fNumber));
+        if (forceSymmetricIdealMtf) {
+            tan = { ...tan, mtfVals: diffractionEnvelope.slice() };
+            sag = { ...sag, mtfVals: diffractionEnvelope.slice() };
+        } else {
+            tan = clampCurveToPhysicalEnvelope(tan, diffractionEnvelope);
+            sag = clampCurveToPhysicalEnvelope(sag, diffractionEnvelope);
+        }
+        traces.push({
+            x: tan.freq, y: tan.mtfVals, type: 'scatter', mode: 'lines',
+            name: `Tangential (${titleNmLocal}nm)`, showlegend: true,
+            line: { color, width: 2, dash: 'solid' },
+        });
+        traces.push({
+            x: sag.freq, y: sag.mtfVals, type: 'scatter', mode: 'lines',
+            name: `Sagittal (${titleNmLocal}nm)`, showlegend: true,
+            line: { color, width: 2, dash: 'dot' },
+        });
+        if (showDiffractionLimitEnabled) {
+            traces.push({
+                x: tan.freq, y: diffractionEnvelope, type: 'scatter', mode: 'lines',
+                name: `Diffraction Limit (${titleNmLocal}nm)`, showlegend: true,
+                meta: { overlayType: 'diffractionLimit' },
+                line: { color, width: 1.75, dash: 'dash' },
+            });
+        }
+        return true;
+    };
+
     const computeForWavelength = async (wlLocal, idx, total) => {
         const wlProgressBase = 10;
         const wlProgressSpan = 85;
@@ -871,6 +1033,14 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         const titleNmLocal = (wlLocal * 1000).toFixed(1);
         reportProgress(localBase, `λ=${titleNmLocal} nm: Generating wavefront...`);
 
+        if (!isTauriRuntime() && useMalacaraMtfMethod) {
+            reportProgress(localBase, `λ=${titleNmLocal} nm: Computing fused Web OPD→MTF...`);
+            if (await appendWebFusedMalacaraTraces(wlLocal, idx)) {
+                reportProgress(localBase + localSpan, `λ=${titleNmLocal} nm: Complete (fused Web Rust/WASM)`);
+                return;
+            }
+        }
+
         const onWavefrontProgress = (evt) => {
             try {
                 const p = Number(evt?.percent);
@@ -889,12 +1059,12 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         const generateWavefrontMapForMode = async (mode, customFieldSetting = fieldSetting) => {
             const allowWavefrontCache = (!objectOverride) && Math.abs(Number(defocusShiftMm || 0)) < 1e-12;
             return await withForcedInfinitePupilMode(mode, async () => {
-                if (!isTauriRuntime()) {
+                {
                     try {
                         const objectRowsForOpd = hasOverride
                             ? objects.map((row, index) => index === objIndex ? { ...row, ...selectedObject } : row)
                             : objects;
-                        ensureConsoleLog(`🚀 [MTF] Using native Rust/WASM OPD map for ${(wlLocal * 1000).toFixed(1)}nm`);
+                        ensureConsoleLog(`🚀 [MTF] Using native ${isTauriRuntime() ? 'Tauri/Rayon' : 'Rust/WASM'} OPD map for ${(wlLocal * 1000).toFixed(1)}nm`);
                         const nativeResponse = await runNativeOpdMap({
                             opticalSystemRows,
                             sourceRows,
@@ -934,12 +1104,12 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                                 display: { opds },
                                 opdGrid: grid,
                             };
-                            ensureConsoleLog(`✅ [MTF] Native Rust/WASM OPD map: ${nativeGridSize}x${nativeGridSize}, valid=${pupilCoordinates.length}`);
+                        ensureConsoleLog(`✅ [MTF] Native OPD map: ${nativeGridSize}x${nativeGridSize}, valid=${pupilCoordinates.length}`);
                             return result;
                         }
-                        throw new Error('Native Rust/WASM OPD map returned no finite samples');
+                        throw new Error('Native OPD map returned no finite samples');
                     } catch (error) {
-                        ensureConsoleError('⚠️ [MTF] Native Rust/WASM OPD map failed; falling back to Wavefront analyzer', error);
+                        ensureConsoleError('⚠️ [MTF] Native OPD map failed; falling back to Wavefront analyzer', error);
                     }
                 }
                 ensureConsoleLog(`🔍 [Wavefront] Calling generateWavefrontMap with customFieldSetting:`, customFieldSetting);
@@ -1245,6 +1415,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         const minRequiredN = Math.max(minRequiredNForBins, minRequiredNForResolution);
         void minRequiredN;
 
+        psfCalculator ||= await getPSFCalculatorSingleton();
         reportProgress(localBase + localSpan * 0.75, `λ=${titleNmLocal} nm: Calculating PSF...`);
         const psfResult = await psfCalculator.calculatePSF(opdData, {
             samplingSize: s,
