@@ -1424,6 +1424,37 @@ body.dark-mode #design-intent-add-block-type option {
     background: #f8fafc;
 }
 
+.render-surface-colors-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px;
+    border-bottom: 1px solid #e2e8f0;
+    color: #64748b;
+    font-size: 10px;
+}
+
+.render-surface-colors-actions button {
+    height: 28px;
+    min-height: 28px;
+    margin: 0;
+    padding: 0 8px;
+    border-color: transparent;
+    background: transparent;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 650;
+    box-shadow: none;
+}
+
+.render-surface-colors-actions button:hover {
+    border-color: #cbd5e1;
+    background: #f1f5f9;
+    transform: none;
+    box-shadow: none;
+}
+
 .render-surface-colors-header button {
     min-width: 26px;
     min-height: 26px;
@@ -6842,10 +6873,10 @@ body.dark-mode .block-inspector-icon-btn:hover {
 
 #table-system-requirements .requirements-react-moveCell {
     display: grid;
-    grid-template-columns: 18px minmax(18px, auto) 18px;
+    grid-template-columns: 18px minmax(18px, auto);
     align-items: center;
     gap: 3px;
-    min-width: 70px;
+    min-width: 50px;
     padding-right: 4px !important;
 }
 
@@ -7130,5 +7161,884 @@ body.dark-mode #design-intent-container .block-inspector {
 
     #design-intent-container .block-inspector-panel {
         padding: 10px;
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Quiet window UI
+   Shared by every workspace/analysis window except Design Intents.
+   -------------------------------------------------------------------------- */
+
+.window-commandbar {
+    position: relative;
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 50px;
+    margin: 0 !important;
+    padding: 8px 10px !important;
+    box-sizing: border-box;
+    border-bottom: 1px solid #dce2ea;
+    background: rgba(248, 250, 252, 0.94);
+}
+
+.window-commandbar button,
+.window-action-menu > summary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 32px;
+    height: 32px;
+    margin: 0;
+    padding: 0 11px;
+    box-sizing: border-box;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #334155;
+    font: 650 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    white-space: nowrap;
+    box-shadow: none;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.window-commandbar button:hover:not(:disabled),
+.window-action-menu > summary:hover {
+    border-color: #94a3b8;
+    background: #f1f5f9;
+    color: #1e293b;
+    box-shadow: none;
+    transform: none;
+}
+
+.window-commandbar .window-primary-action {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: #ffffff;
+}
+
+.window-commandbar .window-primary-action:hover:not(:disabled) {
+    border-color: #1d4ed8;
+    background: #1d4ed8;
+    color: #ffffff;
+}
+
+.window-commandbar .window-quiet-action {
+    border-color: transparent;
+    background: transparent;
+    color: #475569;
+}
+
+.window-commandbar button:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+}
+
+.window-action-menu {
+    position: relative;
+    margin-left: auto;
+}
+
+.window-action-menu > summary {
+    list-style: none;
+}
+
+.window-action-menu > summary::-webkit-details-marker {
+    display: none;
+}
+
+.window-action-menu[open] > summary {
+    border-color: #94a3b8;
+    background: #f1f5f9;
+}
+
+.window-action-menu__panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 40;
+    display: grid;
+    gap: 2px;
+    min-width: 184px;
+    padding: 6px;
+    box-sizing: border-box;
+    border: 1px solid #d7dee8;
+    border-radius: 9px;
+    background: #ffffff;
+    box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18);
+}
+
+.window-action-menu__panel--wide {
+    min-width: 224px;
+}
+
+.window-action-menu__panel button {
+    width: 100%;
+    justify-content: flex-start;
+    border-color: transparent;
+    background: transparent;
+    font-weight: 550;
+}
+
+.window-action-menu__panel button.is-danger {
+    color: #b42318;
+}
+
+.window-action-menu__divider {
+    height: 1px;
+    margin: 4px 5px;
+    background: #e2e8f0;
+}
+
+.window-segmented-control {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    border: 1px solid #d7dee8;
+    border-radius: 9px;
+    background: #eef2f7;
+}
+
+.window-commandbar .window-segmented-control button {
+    min-height: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #64748b;
+    font-weight: 600;
+}
+
+.window-commandbar .window-segmented-control button:hover,
+.window-commandbar .window-segmented-control button.is-active,
+.window-commandbar .window-segmented-control button[aria-pressed="true"] {
+    background: #ffffff;
+    color: #1e293b;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.window-inline-field {
+    display: grid;
+    gap: 3px;
+    min-width: 130px;
+}
+
+.window-inline-field > span {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.025em;
+}
+
+.window-inline-field input,
+.window-inline-field select {
+    height: 32px;
+    min-width: 0;
+    margin: 0;
+    padding: 0 9px;
+    box-sizing: border-box;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #1f2937;
+    font-size: 12px;
+}
+
+.window-legacy-actions {
+    display: none !important;
+}
+
+.win-mdi-window--configuration .configuration-section {
+    min-height: 100%;
+    padding: 0 12px 12px;
+    box-sizing: border-box;
+    background: #ffffff;
+}
+
+.win-mdi-window--configuration .configuration-controls {
+    margin: 0 -12px !important;
+}
+
+.win-mdi-window--configuration .config-order-list {
+    margin-top: 12px;
+    border-color: #dce2ea;
+    background: #ffffff;
+}
+
+.win-mdi-window--configuration .config-order-row {
+    border-color: transparent;
+    border-bottom-color: #e8edf3;
+    border-radius: 6px;
+    box-shadow: none;
+}
+
+.win-mdi-window--configuration .config-order-row.active {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+}
+
+.win-mdi-window--requirements .merit-function-buttons-container {
+    flex: 0 0 auto;
+}
+
+.win-mdi-window--requirements .requirements-layout {
+    margin-top: 0;
+}
+
+.win-mdi-window--requirements #table-system-requirements {
+    border: 0;
+    border-radius: 0;
+}
+
+.system-section.system-section-window-fit {
+    padding: 0;
+    background: #ffffff;
+}
+
+.system-section.system-section-window-fit .system-controls {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+.system-section.system-section-window-fit #transform-error-bar,
+.system-section.system-section-window-fit #transform-progress-wrapper {
+    margin: 8px 10px !important;
+    border-radius: 8px;
+}
+
+.system-section.system-section-window-fit #system-data {
+    border: 0;
+    border-radius: 0;
+    padding: 12px;
+    box-sizing: border-box;
+    background: #fbfcfe;
+    color: #1f2937;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* Settings: compact sections and radio choices that read as choices, not actions. */
+.settings-page {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #f5f6f8;
+    color: #1f2937;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.settings-page__content {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 16px 18px 22px;
+    box-sizing: border-box;
+    background: #ffffff;
+    scrollbar-gutter: stable;
+}
+
+.settings-section-title {
+    margin: 18px 0 5px;
+    padding-top: 17px;
+    border-top: 1px solid #e5eaf0;
+    color: #1e293b;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.settings-section-title.is-first {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+}
+
+.settings-subtitle {
+    margin: 15px 0 4px;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.settings-section-help,
+.settings-note,
+.settings-loading,
+.settings-advanced > p {
+    margin: 0 0 9px;
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.settings-note {
+    margin-top: 6px;
+}
+
+.settings-choice-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 6px;
+    margin: 8px 0 2px;
+}
+
+.settings-choice-grid label,
+.settings-toggle-row,
+.settings-choice-list label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 32px;
+    padding: 5px 9px;
+    box-sizing: border-box;
+    border: 1px solid #e2e8f0;
+    border-radius: 7px;
+    background: #f8fafc;
+    color: #334155;
+    font-size: 12px;
+}
+
+.settings-toggle-row {
+    width: fit-content;
+    margin: 5px 0 1px;
+}
+
+.settings-choice-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 6px 0 2px;
+}
+
+.settings-choice-list label:has(input:checked),
+.settings-choice-grid label:has(input:checked),
+.settings-toggle-row:has(input:checked) {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+    color: #1e3a8a;
+}
+
+.settings-field-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 1fr) minmax(130px, 180px);
+    align-items: center;
+    gap: 12px;
+    margin: 7px 0 2px;
+    color: #334155;
+    font-size: 12px;
+}
+
+.settings-field-row select,
+.settings-advanced select {
+    width: 100%;
+    height: 32px;
+    padding: 0 9px;
+    box-sizing: border-box;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #1f2937;
+    font-size: 12px;
+}
+
+.settings-advanced {
+    margin-top: 18px;
+    border: 1px solid #dce2ea;
+    border-radius: 9px;
+    background: #f8fafc;
+}
+
+.settings-advanced > summary {
+    padding: 11px 12px;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.settings-advanced > p {
+    padding: 0 12px;
+}
+
+.settings-advanced__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+    gap: 12px;
+    padding: 4px 12px 14px;
+    font-size: 12px;
+}
+
+.settings-advanced__grid > label,
+.settings-advanced__grid > div {
+    display: grid;
+    gap: 6px;
+    align-content: start;
+    color: #475569;
+}
+
+/* First-class analysis pages. */
+.analysis-window-page {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #f5f6f8;
+    color: #1f2937;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.analysis-window-commandbar {
+    position: relative;
+    z-index: 6;
+    display: flex;
+    align-items: end;
+    gap: 8px;
+    min-height: 52px;
+    padding: 8px 10px;
+    box-sizing: border-box;
+    border-bottom: 1px solid #dce2ea;
+    background: rgba(255, 255, 255, 0.96);
+}
+
+.analysis-window-field {
+    display: grid;
+    gap: 3px;
+    min-width: 96px;
+}
+
+.analysis-window-field > span {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.025em;
+}
+
+.analysis-window-field input,
+.analysis-window-field select {
+    width: 100%;
+    height: 32px;
+    margin: 0;
+    padding: 0 9px;
+    box-sizing: border-box;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #1f2937;
+    font-size: 12px;
+}
+
+.analysis-window-primary-action,
+.analysis-window-options > summary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 32px;
+    height: 32px;
+    margin: 0;
+    padding: 0 12px;
+    box-sizing: border-box;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #334155;
+    font: 650 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    cursor: pointer;
+    box-shadow: none;
+}
+
+.analysis-window-primary-action {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: #ffffff;
+}
+
+.analysis-window-primary-action:hover:not(:disabled) {
+    border-color: #1d4ed8;
+    background: #1d4ed8;
+    transform: none;
+}
+
+.analysis-window-options {
+    position: relative;
+    margin-left: auto;
+}
+
+.analysis-window-options > summary {
+    list-style: none;
+}
+
+.analysis-window-options > summary::-webkit-details-marker {
+    display: none;
+}
+
+.analysis-window-options[open] > summary {
+    border-color: #94a3b8;
+    background: #f1f5f9;
+}
+
+.analysis-window-options__panel {
+    position: absolute;
+    top: calc(100% + 7px);
+    right: 0;
+    width: min(360px, calc(100vw - 20px));
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    padding: 12px;
+    box-sizing: border-box;
+    border: 1px solid #d7dee8;
+    border-radius: 10px;
+    background: #ffffff;
+    box-shadow: 0 16px 38px rgba(15, 23, 42, 0.18);
+}
+
+.analysis-window-status {
+    max-width: 300px;
+    margin-left: 2px;
+    overflow: hidden;
+    color: #64748b;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.analysis-window-status.is-error {
+    color: #b42318;
+}
+
+.analysis-window-progress {
+    flex: 0 0 auto;
+    border-bottom: 1px solid #e2e8f0;
+    background: #ffffff;
+}
+
+.analysis-window-progress__label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    color: #475569;
+    font-size: 11px;
+}
+
+.analysis-window-progress__track {
+    width: 100%;
+    height: 3px;
+    background: #e2e8f0;
+}
+
+.analysis-window-progress__value {
+    height: 100%;
+    background: #2563eb;
+    transition: width 120ms linear;
+}
+
+.analysis-window-canvas {
+    flex: 1 1 auto;
+    min-height: 0;
+    background: #ffffff;
+}
+
+/* Literature import keeps hierarchy without adding decorative color. */
+.literature-import-section {
+    padding: 12px;
+}
+
+.literature-import-panel {
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: #ffffff;
+}
+
+.literature-import-panel__status {
+    border-color: #dce2ea;
+    background: #f8fafc;
+    color: #475569;
+}
+
+.literature-import-panel__step {
+    padding: 14px;
+    border-color: #dce2ea;
+    box-shadow: none;
+}
+
+.literature-import-panel__stepNumber {
+    background: #e2e8f0;
+    color: #475569;
+}
+
+.literature-import-panel__chips span {
+    background: #eef2f7;
+    color: #475569;
+}
+
+/* Dark mode counterparts for the shared, non-Design-Intent UI. */
+body.dark-mode .window-commandbar,
+body.dark-mode .analysis-window-commandbar {
+    border-color: #334155;
+    background: #172033;
+}
+
+body.dark-mode .window-commandbar button,
+body.dark-mode .window-action-menu > summary,
+body.dark-mode .window-action-menu__panel,
+body.dark-mode .analysis-window-options > summary,
+body.dark-mode .analysis-window-options__panel {
+    border-color: #475569;
+    background: #111827;
+    color: #e2e8f0;
+}
+
+body.dark-mode .window-commandbar .window-primary-action,
+body.dark-mode .analysis-window-primary-action {
+    border-color: #3b82f6;
+    background: #2563eb;
+    color: #ffffff;
+}
+
+body.dark-mode .window-segmented-control {
+    border-color: #475569;
+    background: #0f172a;
+}
+
+body.dark-mode .window-commandbar .window-segmented-control button:hover,
+body.dark-mode .window-commandbar .window-segmented-control button.is-active,
+body.dark-mode .window-commandbar .window-segmented-control button[aria-pressed="true"] {
+    background: #334155;
+    color: #f8fafc;
+}
+
+body.dark-mode .settings-page,
+body.dark-mode .analysis-window-page {
+    background: #0f172a;
+    color: #e2e8f0;
+}
+
+body.dark-mode .settings-page__content,
+body.dark-mode .analysis-window-canvas,
+body.dark-mode .analysis-window-progress,
+body.dark-mode .system-section.system-section-window-fit #system-data {
+    background: #111827;
+    color: #e2e8f0;
+}
+
+body.dark-mode .settings-section-title,
+body.dark-mode .settings-subtitle {
+    border-color: #334155;
+    color: #f1f5f9;
+}
+
+body.dark-mode .settings-choice-grid label,
+body.dark-mode .settings-toggle-row,
+body.dark-mode .settings-choice-list label,
+body.dark-mode .settings-advanced {
+    border-color: #334155;
+    background: #172033;
+    color: #cbd5e1;
+}
+
+body.dark-mode .settings-choice-list label:has(input:checked),
+body.dark-mode .settings-choice-grid label:has(input:checked),
+body.dark-mode .settings-toggle-row:has(input:checked) {
+    border-color: #3b82f6;
+    background: #1e3a5f;
+    color: #dbeafe;
+}
+
+body.dark-mode .settings-field-row select,
+body.dark-mode .settings-advanced select,
+body.dark-mode .window-inline-field input,
+body.dark-mode .window-inline-field select,
+body.dark-mode .analysis-window-field input,
+body.dark-mode .analysis-window-field select {
+    border-color: #475569;
+    background: #0f172a;
+    color: #e2e8f0;
+}
+
+@media (max-width: 680px) {
+    .window-commandbar,
+    .analysis-window-commandbar {
+        flex-wrap: wrap;
+    }
+
+    .window-action-menu,
+    .analysis-window-options {
+        margin-left: 0;
+    }
+
+    .window-segmented-control {
+        max-width: 100%;
+        overflow-x: auto;
+    }
+
+    .settings-advanced__grid {
+        grid-template-columns: 1fr;
+    }
+
+    .analysis-window-status {
+        flex-basis: 100%;
+        max-width: none;
+    }
+
+    .analysis-window-options__panel {
+        position: fixed;
+        top: 58px;
+        right: 10px;
+    }
+}
+
+/* Render keeps the view switch visible and moves technical controls into one panel. */
+.render-window-page {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    overflow: hidden;
+    background: #ffffff;
+    color: #1f2937;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.render-window-commandbar {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+}
+
+.render-window-commandbar .window-segmented-control button {
+    min-width: 48px;
+}
+
+.render-window-status {
+    min-width: 0;
+    max-width: 300px;
+    margin-left: auto;
+    overflow: hidden;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 450;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.render-options-panel,
+.render-surface-colors-panel {
+    top: 58px;
+    border-color: #d7dee8;
+    border-radius: 10px;
+    box-shadow: 0 16px 38px rgba(15, 23, 42, 0.18);
+}
+
+.render-options-panel--unified {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr);
+    align-items: center;
+    gap: 9px 12px;
+    width: 520px;
+    padding: 12px;
+    font-size: 11px;
+    font-weight: 550;
+}
+
+.render-options-panel--unified > label {
+    color: #475569;
+    font-size: 11px;
+}
+
+.render-options-panel--unified > input:not([type="checkbox"]),
+.render-options-panel--unified > select {
+    width: 100% !important;
+    height: 32px !important;
+    min-width: 0;
+    margin: 0;
+    padding: 0 9px;
+    box-sizing: border-box;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #1f2937;
+    font-size: 12px !important;
+}
+
+.render-options-divider {
+    grid-column: 1 / -1;
+    width: 100% !important;
+    height: 1px !important;
+    margin: 2px 0 !important;
+    background: #e2e8f0 !important;
+}
+
+.render-option-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 30px;
+    padding: 4px 8px;
+    box-sizing: border-box;
+    border: 1px solid #e2e8f0;
+    border-radius: 7px;
+    background: #f8fafc;
+}
+
+.render-options-note {
+    grid-column: 1 / -1;
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.render-surface-colors-header {
+    min-height: 40px;
+    border-color: #e2e8f0;
+    background: #f8fafc;
+}
+
+body.dark-mode .render-window-page {
+    background: #111827;
+    color: #e2e8f0;
+}
+
+body.dark-mode .render-options-panel--unified > label,
+body.dark-mode .render-window-status,
+body.dark-mode .render-options-note {
+    color: #94a3b8;
+}
+
+body.dark-mode .render-options-panel--unified > input:not([type="checkbox"]),
+body.dark-mode .render-options-panel--unified > select {
+    border-color: #475569;
+    background: #0f172a;
+    color: #e2e8f0;
+}
+
+body.dark-mode .render-option-toggle {
+    border-color: #334155;
+    background: #172033;
+}
+
+@media (max-width: 620px) {
+    .render-window-commandbar {
+        flex-wrap: wrap;
+    }
+
+    .render-window-status {
+        flex-basis: 100%;
+        max-width: none;
+        margin-left: 0;
+    }
+
+    .render-options-panel--unified {
+        grid-template-columns: 1fr;
+        width: calc(100vw - 16px);
+    }
+
+    .render-options-divider,
+    .render-options-note {
+        grid-column: auto;
     }
 }

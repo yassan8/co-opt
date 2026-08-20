@@ -6495,17 +6495,185 @@ export function setupAnalysisWindows() {
 
         w.__analysisWindowsBound = true;
 
+        const applyAnalysisPopupUi = (popup: Window | null) => {
+            try {
+                if (!popup || popup.closed) return;
+                const doc = popup.document;
+                if (!doc?.head || !doc.body) return;
+
+                doc.body.classList.add('coopt-analysis-window');
+                let style = doc.getElementById('coopt-analysis-window-style') as HTMLStyleElement | null;
+                if (!style) {
+                    style = doc.createElement('style');
+                    style.id = 'coopt-analysis-window-style';
+                    doc.head.appendChild(style);
+                }
+                style.textContent = `
+                    html, body { height: 100%; }
+                    body.coopt-analysis-window {
+                        margin: 0 !important;
+                        background: #f5f6f8 !important;
+                        color: #1f2937 !important;
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+                    }
+                    .coopt-analysis-window .header:empty { display: none !important; }
+                    .coopt-analysis-window .header {
+                        min-height: 38px !important;
+                        padding: 10px 12px !important;
+                        box-sizing: border-box !important;
+                        border-bottom: 1px solid #dce2ea !important;
+                        background: #fff !important;
+                        color: #334155 !important;
+                        font-size: 13px !important;
+                        font-weight: 700 !important;
+                    }
+                    .coopt-analysis-window .controls {
+                        min-height: 52px !important;
+                        padding: 8px 10px !important;
+                        box-sizing: border-box !important;
+                        border-bottom: 1px solid #dce2ea !important;
+                        background: rgba(255,255,255,.96) !important;
+                        gap: 8px !important;
+                    }
+                    .coopt-analysis-window .controls label {
+                        color: #64748b !important;
+                        font-size: 11px !important;
+                        font-weight: 650 !important;
+                    }
+                    .coopt-analysis-window .controls input:not([type="checkbox"]):not([type="radio"]),
+                    .coopt-analysis-window .controls select,
+                    .coopt-analysis-window .content input:not([type="checkbox"]):not([type="radio"]),
+                    .coopt-analysis-window .content select {
+                        height: 32px !important;
+                        min-width: 72px !important;
+                        margin: 0 !important;
+                        padding: 0 9px !important;
+                        box-sizing: border-box !important;
+                        border: 1px solid #cbd5e1 !important;
+                        border-radius: 7px !important;
+                        background: #fff !important;
+                        color: #1f2937 !important;
+                        font-size: 12px !important;
+                    }
+                    .coopt-analysis-window .controls button,
+                    .coopt-analysis-window .footer button {
+                        min-height: 32px !important;
+                        height: 32px !important;
+                        margin: 0 !important;
+                        padding: 0 11px !important;
+                        box-sizing: border-box !important;
+                        border: 1px solid #cbd5e1 !important;
+                        border-radius: 7px !important;
+                        background: #fff !important;
+                        color: #334155 !important;
+                        font: 650 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+                        box-shadow: none !important;
+                        transform: none !important;
+                    }
+                    .coopt-analysis-window .controls button:hover,
+                    .coopt-analysis-window .footer button:hover {
+                        border-color: #94a3b8 !important;
+                        background: #f1f5f9 !important;
+                    }
+                    .coopt-analysis-window .controls button.coopt-analysis-primary {
+                        border-color: #2563eb !important;
+                        background: #2563eb !important;
+                        color: #fff !important;
+                    }
+                    .coopt-analysis-window .controls button.coopt-analysis-primary:hover {
+                        border-color: #1d4ed8 !important;
+                        background: #1d4ed8 !important;
+                    }
+                    .coopt-analysis-window .note,
+                    .coopt-analysis-window .help {
+                        border-color: #e2e8f0 !important;
+                        background: #fff !important;
+                        color: #64748b !important;
+                        font-size: 11px !important;
+                    }
+                    .coopt-analysis-window .content {
+                        background: #fff !important;
+                    }
+                    .coopt-analysis-window textarea {
+                        border: 1px solid #d7dee8 !important;
+                        border-radius: 8px !important;
+                        background: #fbfcfe !important;
+                        color: #1f2937 !important;
+                    }
+                    .coopt-analysis-window progress {
+                        accent-color: #2563eb;
+                    }
+                    .coopt-analysis-window .section-title {
+                        color: #1e293b !important;
+                        font-size: 13px !important;
+                        font-weight: 700 !important;
+                    }
+                    .coopt-analysis-window .radio-group,
+                    .coopt-analysis-window .checkbox-group {
+                        display: flex !important;
+                        flex-direction: row !important;
+                        flex-wrap: wrap !important;
+                        gap: 6px !important;
+                    }
+                    .coopt-analysis-window .radio-group label,
+                    .coopt-analysis-window .checkbox-group label {
+                        min-height: 30px !important;
+                        padding: 5px 8px !important;
+                        box-sizing: border-box !important;
+                        border: 1px solid #e2e8f0 !important;
+                        border-radius: 7px !important;
+                        background: #f8fafc !important;
+                        color: #334155 !important;
+                        font-size: 12px !important;
+                    }
+                `;
+
+                const controls = Array.from(doc.querySelectorAll<HTMLElement>('.controls'));
+                controls.forEach((control) => {
+                    const buttons = Array.from(control.querySelectorAll<HTMLButtonElement>('button'));
+                    const preferred = buttons.filter((button) => /(?:show|render|calculate|run|apply|import)/i.test(button.id || button.textContent || ''));
+                    (preferred.length === 1 ? preferred : (buttons.length === 1 ? buttons : [])).forEach((button) => {
+                        button.classList.add('coopt-analysis-primary');
+                    });
+                });
+
+                const paraxial = doc.getElementById('popup-calculate-paraxial') as HTMLButtonElement | null;
+                const seidel = doc.getElementById('popup-calculate-seidel') as HTMLButtonElement | null;
+                const afocal = doc.getElementById('popup-calculate-seidel-afocal') as HTMLButtonElement | null;
+                const systemControls = paraxial?.closest('.controls') as HTMLElement | null;
+                if (paraxial && seidel && afocal && systemControls && !doc.getElementById('coopt-system-data-calculation')) {
+                    const select = doc.createElement('select');
+                    select.id = 'coopt-system-data-calculation';
+                    select.setAttribute('aria-label', 'Calculation');
+                    select.innerHTML = '<option value="paraxial">Paraxial data</option><option value="seidel">Aberration coefficients</option><option value="afocal">Aberration coefficients · Afocal</option>';
+                    const run = doc.createElement('button');
+                    run.type = 'button';
+                    run.textContent = 'Calculate';
+                    run.className = 'coopt-analysis-primary';
+                    run.addEventListener('click', () => {
+                        (select.value === 'seidel' ? seidel : select.value === 'afocal' ? afocal : paraxial).click();
+                    });
+                    [paraxial, seidel, afocal].forEach((button) => { button.style.display = 'none'; });
+                    systemControls.insertBefore(select, paraxial);
+                    systemControls.insertBefore(run, paraxial);
+                }
+            } catch (_) {}
+        };
+
         const consumePreopenedAnalysisPopup = (title: string, features: string) => {
+            let popup: Window | null = null;
             try {
                 const store = w.__preopenedAnalysisPopupMap;
                 const pre = store && store[title];
                 if (pre && !pre.closed) {
                     try { delete store[title]; } catch (_) {}
                     try { pre.focus(); } catch (_) {}
-                    return pre;
+                    popup = pre;
                 }
             } catch (_) {}
-            return window.open('', title, features);
+            if (!popup) popup = window.open('', title, features);
+            if (popup) window.setTimeout(() => applyAnalysisPopupUi(popup), 0);
+            return popup;
         };
 
         // System Data popup window button

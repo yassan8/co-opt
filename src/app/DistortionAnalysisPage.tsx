@@ -389,41 +389,80 @@ const CSS = `
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #f4f4f4;
-  font-family: Arial, sans-serif;
+  background: #f5f6f8;
+  color: #1f2937;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   margin: 0;
 }
 .dist-controls {
-  padding: 10px 12px;
-  background: #f8f8f8;
-  border-bottom: 1px solid #ddd;
+  min-height: 52px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, .96);
+  border-bottom: 1px solid #dce2ea;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 10px;
-  align-items: center;
+  gap: 8px;
+  align-items: end;
   flex-shrink: 0;
+  position: relative;
+  z-index: 5;
 }
-.dist-controls label { font-size: 12px; color: #333; white-space: nowrap; }
-.dist-controls select {
-  padding: 5px 8px;
+.dist-analysis-field { display: grid; gap: 3px; min-width: 88px; }
+.dist-analysis-field > span { font-size: 10px; font-weight: 650; color: #64748b; letter-spacing: .025em; white-space: nowrap; }
+.dist-controls select, .dist-controls input {
+  height: 32px;
+  padding: 0 9px;
+  box-sizing: border-box;
   font-size: 12px;
-  border: 1px solid #bbb;
-  border-radius: 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
   background: white;
+  color: #1f2937;
 }
-.dist-controls button {
-  padding: 6px 10px;
-  border: 1px solid #bbb;
-  background: #f8f8f8;
+.dist-primary-action,
+.dist-options > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff;
+  color: #334155;
   cursor: pointer;
-  border-radius: 4px;
   font-size: 12px;
-  color: #333;
+  font-weight: 650;
 }
-.dist-controls button:hover { background: #e9e9e9; }
+.dist-primary-action { border-color: #2563eb; background: #2563eb; color: #fff; }
+.dist-primary-action:hover { background: #1d4ed8; }
+.dist-options { position: relative; margin-left: auto; }
+.dist-options > summary { list-style: none; }
+.dist-options > summary::-webkit-details-marker { display: none; }
+.dist-options[open] > summary { border-color: #94a3b8; background: #f1f5f9; }
+.dist-options__panel {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  width: min(340px, calc(100vw - 20px));
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 1px solid #d7dee8;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 16px 38px rgba(15, 23, 42, .18);
+}
+.dist-options__panel .dist-analysis-field input,
+.dist-options__panel .dist-analysis-field select { width: 100% !important; }
 .dist-backend {
   font-size: 12px;
-  color: #444;
+  color: #64748b;
   margin-left: 8px;
 }
 .dist-progress {
@@ -445,7 +484,12 @@ const CSS = `
   background: white;
 }
 .dist-chart { width: 100%; height: 100%; }
-.dist-error { padding: 20px; color: red; font-size: 13px; }
+.dist-error { padding: 12px; color: #b91c1c; background: #fff7f7; font-size: 12px; }
+@media (max-width: 560px) {
+  .dist-options { margin-left: 0; }
+  .dist-primary-action { margin-left: auto; }
+  .dist-options__panel { position: fixed; top: 58px; right: 10px; }
+}
 `;
 
 export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType }) {
@@ -711,28 +755,16 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       <style>{CSS}</style>
       <div className="dist-controls">
         {type === 'distortion-grid' ? (
-          <>
-            <label>Grid Size:</label>
+          <label className="dist-analysis-field"><span>Grid size</span>
             <select value={gridSize} onChange={(e) => setGridSize(e.target.value)}>
               {['10', '15', '20', '25', '30', '35', '40', '45', '50'].map((v) => (
                 <option key={v} value={v}>{v}×{v}</option>
               ))}
             </select>
-            <label>Enlargement Factor:</label>
-            <input
-              id="grid-enlargement-factor-input"
-              type="text"
-              value={enlargementFactorInput}
-              onChange={(e) => setEnlargementFactorInput(e.target.value)}
-              inputMode="decimal"
-              placeholder="1"
-              style={{ width: 72 }}
-            />
-          </>
+          </label>
         ) : null}
         {type === 'distortion' ? (
-          <>
-            <label>Sampling Points:</label>
+          <label className="dist-analysis-field"><span>Sampling points</span>
             <input
               type="text"
               value={samplingPointsInput}
@@ -741,27 +773,29 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
               placeholder="21"
               style={{ width: 72 }}
             />
-            <label>Enlargement Factor:</label>
-            <input
-              type="text"
-              value={enlargementFactorInput}
-              onChange={(e) => setEnlargementFactorInput(e.target.value)}
-              inputMode="decimal"
-              placeholder="1"
-              style={{ width: 72 }}
-            />
-            <label>Dist Range ±(%):</label>
-            <input
-              type="text"
-              value={distRangeAbsInput}
-              onChange={(e) => setDistRangeAbsInput(e.target.value)}
-              inputMode="decimal"
-              placeholder="auto"
-              style={{ width: 72 }}
-            />
-          </>
+          </label>
         ) : null}
-        <button type="button" onClick={type === 'distortion' ? handleRenderDistortion : handleRenderGrid}>
+        <details className="dist-options">
+          <summary>Options</summary>
+          <div className="dist-options__panel">
+            <label className="dist-analysis-field"><span>Enlargement factor</span>
+              <input
+                id={type === 'distortion-grid' ? 'grid-enlargement-factor-input' : undefined}
+                type="text"
+                value={enlargementFactorInput}
+                onChange={(e) => setEnlargementFactorInput(e.target.value)}
+                inputMode="decimal"
+                placeholder="1"
+              />
+            </label>
+            {type === 'distortion' && (
+              <label className="dist-analysis-field"><span>Distortion range ±%</span>
+                <input type="text" value={distRangeAbsInput} onChange={(e) => setDistRangeAbsInput(e.target.value)} inputMode="decimal" placeholder="auto" />
+              </label>
+            )}
+          </div>
+        </details>
+        <button className="dist-primary-action" type="button" onClick={type === 'distortion' ? handleRenderDistortion : handleRenderGrid}>
           {type === 'distortion' ? 'Show distortion diagram' : 'Show distortion grid'}
         </button>
         {backendInfo ? <span className="dist-backend">{backendInfo}</span> : null}

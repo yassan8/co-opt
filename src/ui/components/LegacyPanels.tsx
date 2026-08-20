@@ -2754,6 +2754,17 @@ export function LiteratureImportPanel() {
 }
 
 export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
+  const [calculationKind, setCalculationKind] = useState<'paraxial' | 'seidel' | 'seidel-afocal'>('paraxial');
+
+  const runSelectedCalculation = () => {
+    const targetId = calculationKind === 'seidel'
+      ? 'calculate-seidel-btn'
+      : calculationKind === 'seidel-afocal'
+        ? 'calculate-seidel-afocal-btn'
+        : 'calculate-paraxial-btn';
+    (document.getElementById(targetId) as HTMLButtonElement | null)?.click();
+  };
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -2972,13 +2983,32 @@ export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
         <progress id="transform-progressbar" max={100} value={0} style={{ width: '100%', marginTop: 4 }}></progress>
       </div>
 
-      <div className="system-controls">
-        <button id="calculate-paraxial-btn">Calculate Paraxial</button>
-        <button id="calculate-seidel-btn">Aberration Coefficients</button>
-        <button id="calculate-seidel-afocal-btn">Aberration Coefficients (Afocal)</button>
-        <label htmlFor="reference-focal-length">Reference Focal Length:</label>
-        <input type="text" id="reference-focal-length" placeholder="Auto" style={{ width: '80px' }} />
-        <button id="coord-transform-btn">Coord Transform</button>
+      <div className="system-controls window-commandbar">
+        <label className="window-inline-field" htmlFor="system-data-calculation-kind">
+          <span>Calculation</span>
+          <select
+            id="system-data-calculation-kind"
+            value={calculationKind}
+            onChange={(event) => setCalculationKind(event.target.value as 'paraxial' | 'seidel' | 'seidel-afocal')}
+          >
+            <option value="paraxial">Paraxial data</option>
+            <option value="seidel">Aberration coefficients</option>
+            <option value="seidel-afocal">Aberration coefficients · Afocal</option>
+          </select>
+        </label>
+        {calculationKind !== 'paraxial' && (
+          <label className="window-inline-field" htmlFor="reference-focal-length">
+            <span>Reference focal length</span>
+            <input type="text" id="reference-focal-length" placeholder="Auto" />
+          </label>
+        )}
+        <button className="window-primary-action" type="button" onClick={runSelectedCalculation}>Calculate</button>
+        <button id="coord-transform-btn" className="window-quiet-action" type="button">Coordinate transform</button>
+        <div className="window-legacy-actions" aria-hidden="true">
+          <button id="calculate-paraxial-btn" type="button" tabIndex={-1}>Calculate Paraxial</button>
+          <button id="calculate-seidel-btn" type="button" tabIndex={-1}>Aberration Coefficients</button>
+          <button id="calculate-seidel-afocal-btn" type="button" tabIndex={-1}>Aberration Coefficients (Afocal)</button>
+        </div>
       </div>
       <textarea id="system-data" rows={15} cols={100}></textarea>
     </div>

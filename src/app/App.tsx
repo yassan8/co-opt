@@ -4324,14 +4324,14 @@ function DesktopSettingsPage() {
   const mfrSet = new Set(mfrs.map(s => String(s).toUpperCase()));
 
   return (
-    <div style={{ height: '100vh', width: '100vw', fontFamily: 'Arial, sans-serif', background: '#f4f4f4', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: 12, background: '#fff', flex: '1 1 auto', overflow: 'auto' }}>
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Glass Map: Default Manufacturers</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+    <div className="settings-page">
+      <div className="settings-page__content">
+        <div className="settings-section-title is-first">Glass Map: Default Manufacturers</div>
+        <div className="settings-section-help">
           Choose which manufacturers are enabled by default when opening Glass Map.<br />
           If nothing is selected, Glass Map will show all manufacturers.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 14px 0' }}>
+        <div className="settings-choice-grid">
           {ALLOWED_MFR.map(mfr => (
             <label key={mfr}>
               <input type="checkbox" checked={mfrSet.has(mfr.toUpperCase())} onChange={e => handleMfrChange(mfr, e.target.checked)} />{' '}{mfr}
@@ -4339,18 +4339,18 @@ function DesktopSettingsPage() {
           ))}
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Dark Mode</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>Enable VS Code-style dark mode for the entire UI.</div>
-        <label style={{ margin: '8px 0 14px 0', display: 'block' }}>
+        <div className="settings-section-title">Appearance</div>
+        <div className="settings-section-help">Use a dark workspace palette throughout Co-opt.</div>
+        <label className="settings-toggle-row">
           <input type="checkbox" checked={darkMode} onChange={e => handleDarkModeChange(e.target.checked)} />{' '}Enable Dark Mode
         </label>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>Optimize Ray Grid Size</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-section-title">Optimization</div>
+        <div className="settings-section-help">
           Select the pupil sampling density used by Spot operands during optimization.
         </div>
-        <label style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) minmax(140px, 1fr)', alignItems: 'center', gap: 8, margin: '8px 0 14px 0' }}>
-          Ray grid
+        <label className="settings-field-row">
+          <span>Ray grid</span>
           <select
             aria-label="Optimize Ray Grid Size"
             value={optimizeRayGridSize}
@@ -4362,13 +4362,13 @@ function DesktopSettingsPage() {
           </select>
         </label>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Infinite Field: Pupil Sampling Mode</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-section-title">Analysis Defaults</div>
+        <div className="settings-section-help">
           Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.<br />
           This sets <code>__COOPT_FORCE_INFINITE_PUPIL_MODE</code> to <code>stop</code> or <code>entrance</code>.
         </div>
-        {!loaded && <div style={{ fontSize: 12, color: '#888' }}>Loading…</div>}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        {!loaded && <div className="settings-loading">Loading…</div>}
+        <div className="settings-choice-list" role="group" aria-label="Infinite field pupil sampling mode">
           {(['', 'stop', 'entrance'] as const).map(val => (
             <label key={val}>
               <input type="radio" name="force-mode" value={val} checked={forceMode === val} onChange={() => handleForceModeChange(val)} />
@@ -4376,13 +4376,13 @@ function DesktopSettingsPage() {
             </label>
           ))}
         </div>
-        <div style={{ fontSize: 12, color: '#666' }}>Note: Changes take effect on the next calculation.</div>
+        <div className="settings-note">Changes take effect on the next calculation.</div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>OPD Reference</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-subtitle">OPD Reference</div>
+        <div className="settings-section-help">
           Select the reference used for OPD, wavefront, PSF, and MTF calculations.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        <div className="settings-choice-list" role="group" aria-label="OPD reference">
           <label>
             <input type="radio" name="opd-reference-mode" value="exit-pupil" checked={opdReferenceMode === 'exit-pupil'} onChange={() => handleOpdReferenceModeChange('exit-pupil')} />{' '}
             Exit Pupil
@@ -4392,13 +4392,13 @@ function DesktopSettingsPage() {
             Image Plane
           </label>
         </div>
-        <div style={{ fontSize: 12, color: '#666' }}>Changes take effect on the next calculation.</div>
+        <div className="settings-note">Changes take effect on the next calculation.</div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>OPD Chief Ray</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-subtitle">OPD Chief Ray</div>
+        <div className="settings-section-help">
           Select the center used by the chief ray for OPD reference calculations.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        <div className="settings-choice-list" role="group" aria-label="OPD chief ray">
           <label>
             <input type="radio" name="opd-chief-ray-mode" value="stop-center" checked={opdChiefRayMode === 'stop-center'} onChange={() => handleOpdChiefRayModeChange('stop-center')} />{' '}
             Stop Center
@@ -4413,11 +4413,11 @@ function DesktopSettingsPage() {
           </label>
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>OPD Pupil Normalization</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-subtitle">OPD Pupil Normalization</div>
+        <div className="settings-section-help">
           Select whether the OPD Fan coordinate uses the fixed paraxial entrance pupil or the transmitted pupil envelope.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        <div className="settings-choice-list" role="group" aria-label="OPD pupil normalization">
           <label>
             <input type="radio" name="opd-pupil-normalization-mode" value="fixed-entrance-pupil" checked={opdPupilNormalizationMode === 'fixed-entrance-pupil'} onChange={() => handleOpdPupilNormalizationModeChange('fixed-entrance-pupil')} />{' '}
             Fixed Entrance Pupil
@@ -4428,11 +4428,11 @@ function DesktopSettingsPage() {
           </label>
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>Exit Pupil Reference Point</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-subtitle">Exit Pupil Reference Point</div>
+        <div className="settings-section-help">
           Select the point on the exit pupil used to define the reference sphere.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        <div className="settings-choice-list" role="group" aria-label="Exit pupil reference point">
           <label>
             <input type="radio" name="opd-exit-pupil-reference-point-mode" value="chief-ray-intersection" checked={opdExitPupilReferencePointMode === 'chief-ray-intersection'} onChange={() => handleOpdExitPupilReferencePointModeChange('chief-ray-intersection')} />{' '}
             Chief Ray / Exit Pupil Intersection
@@ -4443,11 +4443,10 @@ function DesktopSettingsPage() {
           </label>
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>Reference Sphere Conventions</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
-          Configure the geometric and sign conventions used by the OPD reference sphere.
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 1fr) minmax(180px, 1fr)', gap: 8, margin: '8px 0 12px 0' }}>
+        <details className="settings-advanced">
+          <summary>Reference Sphere Conventions</summary>
+          <p>Configure the geometric and sign conventions used by the OPD reference sphere.</p>
+          <div className="settings-advanced__grid">
           <label>Reference sphere wavelength
             <select value={opdReferenceSphereOptions.referenceSphereWavelengthMode} onChange={e => handleOpdReferenceSphereOptionChange('referenceSphereWavelengthMode', e.target.value)}>
               <option value="primary-wavelength">Primary wavelength</option><option value="per-wavelength">Per wavelength</option>
@@ -4544,7 +4543,8 @@ function DesktopSettingsPage() {
               <option value="image-to-exit-pupil">Image to exit pupil</option><option value="exit-pupil-to-image">Exit pupil to image</option>
             </select>
           </label>
-        </div>
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -12117,63 +12117,65 @@ const collectLegacyCrossRays = async (
     };
 
     return (
-      <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#f4f4f4' }}>
-        <div style={{ padding: '10px 12px', background: '#f8f8f8', borderBottom: '1px solid #ddd', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <label htmlFor="analysis-astig-chief-ray" style={{ fontSize: 12, color: '#333' }}>Chief ray:</label>
+      <div className="analysis-window-page">
+        <div className="analysis-window-commandbar">
+          <label className="analysis-window-field" htmlFor="analysis-astig-chief-ray"><span>Chief ray</span>
           <select
             id="analysis-astig-chief-ray"
             value={astigChiefRayDefinition}
             onChange={(e) => setAstigChiefRayDefinition(e.target.value)}
-            style={{ padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
           >
             <option value="stop-center">Stop center</option>
             <option value="beam-midpoint">Beam midpoint</option>
             <option value="beam-centroid">Beam centroid</option>
           </select>
-          <label htmlFor="analysis-astig-beam-pattern" style={{ fontSize: 12, color: '#333' }}>Beam:</label>
+          </label>
+          <label className="analysis-window-field" htmlFor="analysis-astig-beam-pattern"><span>Beam</span>
           <select
             id="analysis-astig-beam-pattern"
             value={astigBeamPattern}
             onChange={(e) => setAstigBeamPattern(e.target.value as 'cross' | 'grid' | 'annular')}
-            style={{ padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
           >
             <option value="cross">Cross</option>
             <option value="grid">Grid</option>
             <option value="annular">Annular</option>
           </select>
-          <label htmlFor="analysis-astig-point-count" style={{ fontSize: 12, color: '#333' }}>Points:</label>
-          <input
-            id="analysis-astig-point-count"
-            type="number"
-            min={2}
-            max={201}
-            step={1}
-            value={astigPointCount}
-            onChange={(e) => {
-              const parsed = Number(e.target.value);
-              if (!Number.isFinite(parsed)) return;
-              setAstigPointCount(Math.max(2, Math.min(201, Math.round(parsed))));
-            }}
-            style={{ width: 78, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
-          />
-          <label htmlFor="analysis-astig-ray-count" style={{ fontSize: 12, color: '#333' }}>Rays:</label>
-          <input
-            id="analysis-astig-ray-count"
-            type="number"
-            min={9}
-            max={2001}
-            step={1}
-            value={astigRayCount}
-            onChange={(e) => {
-              const parsed = Number(e.target.value);
-              if (!Number.isFinite(parsed)) return;
-              setAstigRayCount(Math.max(9, Math.min(2001, Math.round(parsed))));
-            }}
-            style={{ width: 88, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
-          />
-          {astigBeamPattern === 'annular' && (
-            <>
-              <label htmlFor="analysis-astig-ring-count" style={{ fontSize: 12, color: '#333' }}>Rings:</label>
+          </label>
+          <details className="analysis-window-options">
+            <summary>Options</summary>
+            <div className="analysis-window-options__panel">
+              <label className="analysis-window-field" htmlFor="analysis-astig-point-count"><span>Field points</span>
+                <input
+                  id="analysis-astig-point-count"
+                  type="number"
+                  min={2}
+                  max={201}
+                  step={1}
+                  value={astigPointCount}
+                  onChange={(e) => {
+                    const parsed = Number(e.target.value);
+                    if (!Number.isFinite(parsed)) return;
+                    setAstigPointCount(Math.max(2, Math.min(201, Math.round(parsed))));
+                  }}
+                />
+              </label>
+              <label className="analysis-window-field" htmlFor="analysis-astig-ray-count"><span>Rays</span>
+                <input
+                  id="analysis-astig-ray-count"
+                  type="number"
+                  min={9}
+                  max={2001}
+                  step={1}
+                  value={astigRayCount}
+                  onChange={(e) => {
+                    const parsed = Number(e.target.value);
+                    if (!Number.isFinite(parsed)) return;
+                    setAstigRayCount(Math.max(9, Math.min(2001, Math.round(parsed))));
+                  }}
+                />
+              </label>
+              {astigBeamPattern === 'annular' && (
+              <label className="analysis-window-field" htmlFor="analysis-astig-ring-count"><span>Rings</span>
               <input
                 id="analysis-astig-ring-count"
                 type="number"
@@ -12186,55 +12188,52 @@ const collectLegacyCrossRays = async (
                   if (!Number.isFinite(parsed)) return;
                   setAstigRingCount(Math.max(1, Math.min(1024, Math.round(parsed))));
                 }}
-                style={{ width: 78, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
               />
-            </>
-          )}
-          <label htmlFor="analysis-astig-focus-range" style={{ fontSize: 12, color: '#333' }}>Focus (+/- mm):</label>
-          <input
-            id="analysis-astig-focus-range"
-            type="number"
-            min={0}
-            step={0.01}
-            value={astigFocusRange}
-            onChange={(e) => {
-              const parsed = Number(e.target.value);
-              if (!Number.isFinite(parsed)) return;
-              setAstigFocusRange(Math.max(0, parsed));
-            }}
-            style={{ width: 88, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
-          />
+              </label>
+              )}
+              <label className="analysis-window-field" htmlFor="analysis-astig-focus-range"><span>Focus range ± mm</span>
+                <input
+                  id="analysis-astig-focus-range"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={astigFocusRange}
+                  onChange={(e) => {
+                    const parsed = Number(e.target.value);
+                    if (!Number.isFinite(parsed)) return;
+                    setAstigFocusRange(Math.max(0, parsed));
+                  }}
+                />
+              </label>
+            </div>
+          </details>
           <button
             type="button"
+            className="analysis-window-primary-action"
             onClick={rerenderAstigmatism}
             disabled={astigBusy}
-            style={{ padding: '6px 10px', border: '1px solid #bbb', borderRadius: 4, background: '#f8f8f8', cursor: astigBusy ? 'default' : 'pointer', fontSize: 12 }}
           >
             {astigBusy ? 'Rendering...' : 'Show'}
           </button>
-          <span style={{ marginLeft: 'auto', fontSize: 12, color: astigStatus.startsWith('Astigmatism error:') ? '#b00020' : '#666' }}>
+          <span className={`analysis-window-status${astigStatus.startsWith('Astigmatism error:') ? ' is-error' : ''}`}>
             {astigStatus || ''}
           </span>
         </div>
         {(astigBusy || !!astigProgressText) && (
-          <>
-            <div style={{ padding: '6px 12px', fontSize: 12, color: '#333', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="analysis-window-progress">
+            <div className="analysis-window-progress__label">
               <span style={{ fontVariantNumeric: 'tabular-nums', minWidth: 40 }}>{Math.round(astigProgress)}%</span>
               <span>{astigProgressText || 'Calculating...'}</span>
             </div>
-            <div style={{ height: 4, background: '#e6e6e6', width: '100%' }}>
+            <div className="analysis-window-progress__track">
               <div
-                style={{
-                  height: '100%',
-                  width: `${astigProgress}%`,
-                  background: '#1677ff',
-                  transition: 'width 120ms linear'
-                }}
+                className="analysis-window-progress__value"
+                style={{ width: `${astigProgress}%` }}
               />
             </div>
-          </>
+          </div>
         )}
-        <div id="analysis-astig-container" style={{ flex: 1, minHeight: 0, background: 'white' }} />
+        <div id="analysis-astig-container" className="analysis-window-canvas" />
       </div>
     );
   }
@@ -12562,11 +12561,26 @@ const collectLegacyCrossRays = async (
     const compareAlignLabel = renderCompareAlignReference === 'image' ? 'Image' : 'Object';
     return (
       <>
-        <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', margin: 0 }}>
-          <div style={{ minHeight: 36, padding: '4px 8px', borderBottom: '1px solid #ddd', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'nowrap', position: 'relative', zIndex: 8 }}>
-            <button type="button" onClick={handleRenderDraw} style={{ height: 27 }}>3D</button>
-            <button type="button" onClick={handleViewXZ} style={{ height: 27, minWidth: 46, whiteSpace: 'nowrap', flex: '0 0 auto' }}>X-Z</button>
-            <button type="button" onClick={handleViewYZ} style={{ height: 27, minWidth: 46, whiteSpace: 'nowrap', flex: '0 0 auto' }}>Y-Z</button>
+        <div className="render-window-page">
+          <div className="render-window-commandbar window-commandbar">
+            <div className="window-segmented-control" role="group" aria-label="Render view">
+              <button type="button" aria-pressed={renderViewMode === '3D'} onClick={handleRenderDraw}>3D</button>
+              <button type="button" aria-pressed={renderViewMode === 'XZ'} onClick={handleViewXZ}>X-Z</button>
+              <button type="button" aria-pressed={renderViewMode === 'YZ'} onClick={handleViewYZ}>Y-Z</button>
+            </div>
+            <button
+              type="button"
+              className="render-toolbar-popover-button"
+              aria-expanded={renderOptionsOpen}
+              onClick={() => {
+                setRenderOptionsOpen((open) => !open);
+                setRenderSurfaceColorsCollapsed(true);
+              }}
+            >
+              Options
+            </button>
+            {renderOptionsOpen && (
+              <div className="render-options-panel render-options-panel--unified">
             <label
               title="Display closed lens volumes in the 3D view"
               style={{ display: 'flex', alignItems: 'center', gap: 3, height: 27, padding: '0 3px', fontSize: 11, fontWeight: 500, opacity: renderViewMode === '3D' ? 1 : 0.5, whiteSpace: 'nowrap' }}
@@ -12620,7 +12634,7 @@ const collectLegacyCrossRays = async (
               />
               °
             </label>
-            <span style={{ width: 1, height: 22, background: '#d1d5db', margin: '0 2px' }} />
+            <span className="render-options-divider" />
             <select
               aria-label="Export format"
               value={renderExportFormat}
@@ -12653,9 +12667,37 @@ const collectLegacyCrossRays = async (
               }}
               style={{ width: 54, height: 27, fontSize: 12 }}
             />
+                <span className="render-options-divider" />
+                <label htmlFor="render-compare-scope">Configs</label>
+                <select id="render-compare-scope" value={renderCompareScope} onChange={(e) => handleRenderCompareScopeChange(e.target.value === 'all' ? 'all' : 'active')}>
+                  <option value="active">Active only</option>
+                  <option value="all">All configs</option>
+                </select>
+                <label htmlFor="render-compare-direction" style={{ opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>{renderViewMode === 'YZ' ? 'Offset Y' : 'Offset X'}</label>
+                <select id="render-compare-direction" value={renderCompareOffsetDirection} onChange={(e) => setRenderCompareOffsetDirection((e.target.value as RenderCompareOffsetDirection) || 'centered')} disabled={renderCompareScope !== 'all'}>
+                  <option value="centered">Centered</option>
+                  <option value="positive">{renderViewMode === 'YZ' ? 'Up' : 'Right'}</option>
+                  <option value="negative">{renderViewMode === 'YZ' ? 'Down' : 'Left'}</option>
+                </select>
+                <label htmlFor="render-compare-step" style={{ opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>Step mm</label>
+                <input id="render-compare-step" type="number" min={0} step={1} value={renderCompareOffsetStepMm} onChange={(e) => { const parsed = Number.parseFloat(e.target.value); setRenderCompareOffsetStepMm(Number.isFinite(parsed) && parsed >= 0 ? parsed : 0); }} disabled={renderCompareScope !== 'all'} />
+                <label htmlFor="render-compare-align" style={{ opacity: renderCompareScope === 'all' && renderViewMode !== '3D' ? 1 : 0.5 }}>Align</label>
+                <select id="render-compare-align" value={renderCompareAlignReference} onChange={(e) => setRenderCompareAlignReference(e.target.value === 'image' ? 'image' : 'object')} disabled={renderCompareScope !== 'all' || renderViewMode === '3D'}>
+                  <option value="object">Object</option>
+                  <option value="image">Image</option>
+                </select>
+                <span className="render-options-divider" />
+                <label className="render-option-toggle"><input type="checkbox" checked={renderShowDesignIntentLabels} onChange={(e) => handleToggleRenderLabels(e.target.checked)} />Labels</label>
+                <label className="render-option-toggle"><input type="checkbox" checked={renderShowPrincipalPointLabels} onChange={(e) => handleToggleRenderPrincipalPoints(e.target.checked)} />Paraxial</label>
+                <label className="render-option-toggle"><input type="checkbox" checked={renderShowSurfaceNumberLabels} onChange={(e) => handleToggleRenderSurfaceNumbers(e.target.checked)} />Surface No.</label>
+                <label className="render-option-toggle" title="Reflect Design Intent numeric edits in an open Render window"><input type="checkbox" checked={renderDesignIntentLiveSync} onChange={(e) => handleToggleRenderDesignIntentLiveSync(e.target.checked)} />Intent Sync</label>
+                {renderCompareScope === 'all' && <span className="render-options-note">{renderViewMode === '3D' ? 'Compare offset applies to X-Z / Y-Z views.' : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm, align ${compareAlignLabel}`}</span>}
+              </div>
+            )}
             <button
               type="button"
               className="render-toolbar-popover-button"
+              hidden
               aria-expanded={renderOptionsOpen}
               onClick={() => {
                 setRenderOptionsOpen((open) => !open);
@@ -12664,7 +12706,7 @@ const collectLegacyCrossRays = async (
             >
               Options
             </button>
-            {renderOptionsOpen && (
+            {false && (
               <div className="render-options-panel">
                 <label htmlFor="render-compare-scope">Configs</label>
                 <select id="render-compare-scope" value={renderCompareScope} onChange={(e) => handleRenderCompareScopeChange(e.target.value === 'all' ? 'all' : 'active')} style={{ height: 27 }}>
@@ -12707,7 +12749,7 @@ const collectLegacyCrossRays = async (
             >
               Colors
             </button>
-            <span title={renderWindowStatus} style={{ marginLeft: 'auto', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 400, fontSize: 11, color: '#666' }}>{renderWindowStatus}</span>
+            <span className="render-window-status" title={renderWindowStatus}>{renderWindowStatus}</span>
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
             <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#fff', overflow: 'hidden' }}>
@@ -12828,9 +12870,9 @@ const collectLegacyCrossRays = async (
                       <strong>Surface Colors</strong>
                       <button type="button" onClick={() => setRenderSurfaceColorsCollapsed(true)} aria-label="Close surface colors">×</button>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid #ececec' }}>
-                      <button type="button" onClick={() => { refreshRenderLensTargets(); }} style={{ fontSize: 11, padding: '4px 8px' }}>Refresh</button>
-                      <button type="button" onClick={handleResetAllLensColors} style={{ fontSize: 11, padding: '4px 8px' }}>Reset All</button>
+                    <div className="render-surface-colors-actions">
+                      <span>Changes apply immediately</span>
+                      <button type="button" onClick={handleResetAllLensColors}>Reset colors</button>
                     </div>
                     <div style={{ padding: 8, overflow: 'auto', flex: 1, minHeight: 0 }}>
                       {renderLensColorTargets.length === 0 ? (
