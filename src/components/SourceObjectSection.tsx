@@ -1,1 +1,1 @@
-export { default } from "../ui/components/SourceObjectSection";
+export { default, FieldSection, SourceSection } from "../ui/components/SourceObjectSection";
