@@ -725,10 +725,18 @@ async function prefetchOptimizerSpotRequirementGroups(editor, items, operandValu
       if (firstItem?.scenarioId) overrideMap[configId] = String(firstItem.scenarioId);
       else delete overrideMap[configId];
       setScenarioOverrideGlobal(overrideMap);
-      const values = await editor.calculateSpotSizeBatchViaNativeAsync(group.map(entry => ({
-        ...entry.item.req,
-        configId,
-      })));
+      const spotBatchStartedAt = nowMs();
+      let values: Array<number | null> | null = null;
+      try {
+        values = await editor.calculateSpotSizeBatchViaNativeAsync(group.map(entry => ({
+          ...entry.item.req,
+          configId,
+        })));
+      } finally {
+        const elapsedMs = Math.max(0, nowMs() - spotBatchStartedAt);
+        addOptimizerProfileSectionMs('spotRequirementBatch', elapsedMs);
+        bumpOptimizerProfileCount('spotRequirementBatchMs', elapsedMs);
+      }
       if (!Array.isArray(values) || values.length !== group.length) continue;
       for (let index = 0; index < group.length; index++) {
         const value = Number(values[index]);
@@ -2710,6 +2718,23 @@ function bumpOptimizerProfileCount(name, delta = 1) {
     const d = Number(delta);
     const add = Number.isFinite(d) ? d : 1;
     counts[key] = (Number(counts[key]) || 0) + add;
+  } catch (_) {
+    // ignore
+  }
+}
+
+function addOptimizerProfileSectionMs(name, elapsedMs) {
+  try {
+    const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+    const p = g ? g.__cooptOptimizerProfileContext : null;
+    if (!p || typeof p !== 'object') return;
+    const key = String(name || '').trim();
+    const elapsed = Number(elapsedMs);
+    if (!key || !Number.isFinite(elapsed) || elapsed < 0) return;
+    const sections = p.sectionsMs && typeof p.sectionsMs === 'object'
+      ? p.sectionsMs
+      : (p.sectionsMs = {});
+    sections[key] = (Number(sections[key]) || 0) + elapsed;
   } catch (_) {
     // ignore
   }
@@ -9965,6 +9990,33 @@ export async function runOptimizationMVP(options = {}) {
         }
       };
 
+      // This is also used by the first KKT base evaluation below.  Keep its
+      // initialization before that evaluation: a later lexical declaration
+      // leaves the initial MTF prefetch in the temporal dead zone.
+      const buildNativeCandidateRows = (candidateX: number[]): Record<string, any[]> | null => {
+        try {
+          const candidateBlocksByConfigId = snapshotBlocksByConfigId(blocksByConfigId);
+          const candidateState = {
+            blocksByConfigId: candidateBlocksByConfigId,
+            targetConfigIds,
+            activeConfigId,
+          };
+          for (let index = 0; index < varIds.length && index < candidateX.length; index++) {
+            setJointDesignVariableValue(candidateState, varIds[index], candidateX[index]);
+          }
+          const rowsByConfig: Record<string, any[]> = {};
+          for (const configId of targetConfigIds) {
+            const configBlocks = candidateBlocksByConfigId[String(configId)];
+            const expanded = expandBlocksForOptimization(configBlocks);
+            if (!Array.isArray(expanded?.rows)) return null;
+            rowsByConfig[String(configId)] = expanded.rows;
+          }
+          return rowsByConfig;
+        } catch (_) {
+          return null;
+        }
+      };
+
       const evalSQPAtXStrict = async (x: number[]): Promise<any> => {
         return withTemporaryMeritSampling(
           {
@@ -10064,6 +10116,7 @@ export async function runOptimizationMVP(options = {}) {
               && weight > 0);
           });
           if (hasMtfResidualItems && operandValueCache.size === 0) {
+            const mtfPrefetchStartedAt = nowMs();
             try {
               const candidateRowsByConfig = buildNativeCandidateRows(xClamped);
               if (candidateRowsByConfig) {
@@ -10082,10 +10135,15 @@ export async function runOptimizationMVP(options = {}) {
                   }
                 }
               }
-            } catch (_) {
+            } catch (error) {
               if (__profile?.counts) {
                 __profile.counts.kktMtfPrefetchFailures = (Number(__profile.counts.kktMtfPrefetchFailures) || 0) + 1;
+                __profile.kktMtfPrefetchError = String(error instanceof Error ? error.message : error);
               }
+            } finally {
+              const elapsedMs = Math.max(0, nowMs() - mtfPrefetchStartedAt);
+              addOptimizerProfileSectionMs('kktMtfPrefetch', elapsedMs);
+              bumpOptimizerProfileCount('kktMtfPrefetchMs', elapsedMs);
             }
           }
           await prefetchOptimizerAsyncRequirementGroups(editor, items, operandValueCache);
@@ -10291,30 +10349,6 @@ export async function runOptimizationMVP(options = {}) {
           requirementSnapshots: []
         };
       };
-
-      if (hasHeavyAsyncRequirementOperands) {
-        initialStateEval = kktEvaluationToComposite(await evalSQPAtX(initialX));
-        initialScore = initialStateEval.score;
-        recordEval(initialStateEval);
-        if (onProgress) {
-          try {
-            onProgress({
-              phase: 'start',
-              iter: 0,
-              current: initialScore,
-              best: initialScore,
-              method: constrainedMethod,
-              multiScenario,
-              requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
-              feasible: initialStateEval.feasible,
-              violationScore: initialStateEval.violationScore,
-              softPenalty: initialStateEval.softPenalty,
-              requirementScore: initialScore
-            });
-          } catch (_) {}
-          await nextFrame();
-        }
-      }
 
       // Smoothmax function: smooth approximation of Math.max(0, x) for differentiability
       const smoothMax = (val: number, beta: number = 100) => {
@@ -10708,30 +10742,6 @@ export async function runOptimizationMVP(options = {}) {
         outputBaseline: number;
         slope: number;
       }> | null | undefined;
-
-      const buildNativeCandidateRows = (candidateX: number[]): Record<string, any[]> | null => {
-        try {
-          const candidateBlocksByConfigId = snapshotBlocksByConfigId(blocksByConfigId);
-          const candidateState = {
-            blocksByConfigId: candidateBlocksByConfigId,
-            targetConfigIds,
-            activeConfigId,
-          };
-          for (let index = 0; index < varIds.length && index < candidateX.length; index++) {
-            setJointDesignVariableValue(candidateState, varIds[index], candidateX[index]);
-          }
-          const rowsByConfig: Record<string, any[]> = {};
-          for (const configId of targetConfigIds) {
-            const configBlocks = candidateBlocksByConfigId[String(configId)];
-            const expanded = expandBlocksForOptimization(configBlocks);
-            if (!Array.isArray(expanded?.rows)) return null;
-            rowsByConfig[String(configId)] = expanded.rows;
-          }
-          return rowsByConfig;
-        } catch (_) {
-          return null;
-        }
-      };
 
       const buildNativeCandidateDeltas = (
         baseRowsByConfig: Record<string, any[]>,
@@ -11281,6 +11291,34 @@ export async function runOptimizationMVP(options = {}) {
         }
         return seeded;
       };
+
+      // The initial KKT state needs the same batched MTF evaluator as all
+      // later residual evaluations.  Initialize it only after the evaluator
+      // and its native-batch dependencies above exist; doing this earlier
+      // silently fell back from the first MTF batch through a TDZ error.
+      if (hasHeavyAsyncRequirementOperands) {
+        initialStateEval = kktEvaluationToComposite(await evalSQPAtX(initialX));
+        initialScore = initialStateEval.score;
+        recordEval(initialStateEval);
+        if (onProgress) {
+          try {
+            onProgress({
+              phase: 'start',
+              iter: 0,
+              current: initialScore,
+              best: initialScore,
+              method: constrainedMethod,
+              multiScenario,
+              requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
+              feasible: initialStateEval.feasible,
+              violationScore: initialStateEval.violationScore,
+              softPenalty: initialStateEval.softPenalty,
+              requirementScore: initialScore
+            });
+          } catch (_) {}
+          await nextFrame();
+        }
+      }
 
       const evalAugmentedResidualsNativeBatch = async (
         candidatePoints: number[][],

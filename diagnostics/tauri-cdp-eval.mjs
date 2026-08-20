@@ -1,4 +1,5 @@
 const port = Number(process.env.COOPT_CDP_PORT || 9223);
+const targetUrlFragment = String(process.env.COOPT_CDP_URL || '').trim();
 const expression = process.argv[2];
 
 if (!expression) {
@@ -6,9 +7,12 @@ if (!expression) {
 }
 
 const targets = await fetch(`http://127.0.0.1:${port}/json`).then((response) => response.json());
-const target = targets.find((entry) => entry.type === 'page');
+const target = (targetUrlFragment
+  ? targets.find((entry) => entry.type === 'page' && String(entry.url || '').includes(targetUrlFragment))
+  : null)
+  || targets.find((entry) => entry.type === 'page');
 if (!target?.webSocketDebuggerUrl) {
-  throw new Error(`No page target found on CDP port ${port}`);
+  throw new Error(`No page target found on CDP port ${port}${targetUrlFragment ? ` for ${targetUrlFragment}` : ''}`);
 }
 
 const socket = new WebSocket(target.webSocketDebuggerUrl);
