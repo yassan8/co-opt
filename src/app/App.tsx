@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import Plotly from 'plotly.js-dist-min';
 import * as THREE from 'three';
+import { BasicAnalysisPage, type BasicAnalysisType } from './BasicAnalysisPage';
 import { DistortionAnalysisPage } from './DistortionAnalysisPage';
 import { MtfAnalysisPage } from './MtfAnalysisPage';
+import { PsfAnalysisPage } from './PsfAnalysisPage';
+import { WavefrontAnalysisPage } from './WavefrontAnalysisPage';
 import {
   getOptimizedResultApplySnapshots,
   injectActiveOpticalRows,
@@ -9839,7 +9842,7 @@ const collectLegacyCrossRays = async (
   useEffect(() => {
     if (!analysisWindowMode.enabled) return;
     if (analysisWindowMode.analysis === 'astigmatism') return;
-    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid') return;
+    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid' || analysisWindowMode.analysis === 'spot-diagram' || analysisWindowMode.analysis === 'spherical-aberration' || analysisWindowMode.analysis === 'magnification-chromatic-aberration' || analysisWindowMode.analysis === 'integrated-aberration' || analysisWindowMode.analysis === 'transverse-aberration' || analysisWindowMode.analysis === 'opd-fan' || analysisWindowMode.analysis === 'through-focus-spot' || analysisWindowMode.analysis === 'opd' || analysisWindowMode.analysis === 'psf') return;
 
     let restoreOpener: (() => void) | null = null;
     let tauriCloseUnlisten: (() => void) | null = null;
@@ -9930,7 +9933,7 @@ const collectLegacyCrossRays = async (
       'through-focus-mtf': 'Through-Focus MTF',
       'field-mtf': 'Field MTF',
     };
-    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid']);
+    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf']);
 
     const targetButtonId = analysisButtonMap[analysisWindowMode.analysis];
     const targetPopupTitle = analysisPopupTitleMap[analysisWindowMode.analysis];
@@ -10029,6 +10032,18 @@ const collectLegacyCrossRays = async (
 
   if (analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid') {
     return <DistortionAnalysisPage type={analysisWindowMode.analysis as any} />;
+  }
+
+  if (['spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot'].includes(analysisWindowMode.analysis)) {
+    return <BasicAnalysisPage type={analysisWindowMode.analysis as BasicAnalysisType} />;
+  }
+
+  if (analysisWindowMode.analysis === 'opd') {
+    return <WavefrontAnalysisPage />;
+  }
+
+  if (analysisWindowMode.analysis === 'psf') {
+    return <PsfAnalysisPage />;
   }
 
   if (isOptimizeWindowMode) {
