@@ -34,7 +34,7 @@ import {
 } from "../../ui/toolbar-handlers";
 import { OPTIMIZER_POLICY_ID, runOptimizationMVP } from "../../optimization/optimizer-mvp.ts";
 import { listDesignVariablesFromBlocks } from "../../optimization/design-variables.ts";
-import { clearOptimizerStop, exportFreeCadDocument, readDesktopSetting, runNativeChiefRayAngle, startPreventDisplaySleep, stopPreventDisplaySleep, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
+import { clearOptimizerStop, exportFreeCadDocument, readDesktopSetting, releaseWebOptimizerWorkerResources, runNativeChiefRayAngle, startPreventDisplaySleep, stopPreventDisplaySleep, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 import { getOrCreateCooptWindowSyncSenderId, requestRefreshBlockInspector } from "../../core/window-facade.ts";
 import { calculateSurfaceOrigins, transformPointToGlobal, transformPointToLocal, traceRay, traceRayHitPoint } from "../../raytracing/core/ray-tracing.ts";
@@ -6947,8 +6947,19 @@ export default function App() {
       try {
         const w = window as any;
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-        const prevRunning = g ? !!g.__cooptOptimizerIsRunning : false;
-        const prevObjectOverride = g ? g.__cooptRenderObjectRowsOverride : null;
+        const activeRenderSyncLease = g?.__cooptRenderSyncLease;
+        const hasActiveRenderSyncLease = !!activeRenderSyncLease && typeof activeRenderSyncLease === 'object';
+        const prevRunning = hasActiveRenderSyncLease
+          ? !!activeRenderSyncLease.prevRunning
+          : (g ? !!g.__cooptOptimizerIsRunning : false);
+        const prevRowsOverride = hasActiveRenderSyncLease
+          ? activeRenderSyncLease.prevRowsOverride
+          : (g ? g.__cooptOpticalSystemRowsOverride : null);
+        const prevObjectOverride = hasActiveRenderSyncLease
+          ? activeRenderSyncLease.prevObjectOverride
+          : (g ? g.__cooptRenderObjectRowsOverride : null);
+        const restoreScheduledAt = Date.now();
+        const renderSyncLease = { prevRunning, prevRowsOverride, prevObjectOverride };
         const clonedSystemConfig = systemConfig && typeof systemConfig === 'object'
           ? (cloneJson(systemConfig) || systemConfig)
           : null;
@@ -6962,7 +6973,10 @@ export default function App() {
           try { w.__cooptPendingRenderSystemConfig = clonedSystemConfig; } catch (_) {}
         }
         // Set optimizer flag so draw-cross handler skips loadActiveConfigurationToTables
-        if (g) g.__cooptOptimizerIsRunning = true;
+        if (g) {
+          g.__cooptRenderSyncLease = renderSyncLease;
+          g.__cooptOptimizerIsRunning = true;
+        }
         try {
           if (typeof w.__cooptRenderWindowRedraw === 'function') {
             void Promise.resolve(w.__cooptRenderWindowRedraw(rows, syncStamp || undefined, objectRows));
@@ -6996,9 +7010,12 @@ export default function App() {
         // Restore flags after popup message roundtrip (~400 ms)
         setTimeout(() => {
           try {
-            if (g) g.__cooptOptimizerIsRunning = prevRunning;
-            if (g) g.__cooptOpticalSystemRowsOverride = null;
-            if (g) g.__cooptRenderObjectRowsOverride = prevObjectOverride;
+            if (!g || g.__cooptRenderSyncLease !== renderSyncLease) return;
+            const optimizationEndedAt = Number(g.__cooptLastOptimizationSyncAt) || 0;
+            g.__cooptOptimizerIsRunning = optimizationEndedAt >= restoreScheduledAt ? false : prevRunning;
+            g.__cooptOpticalSystemRowsOverride = optimizationEndedAt >= restoreScheduledAt ? null : prevRowsOverride;
+            g.__cooptRenderObjectRowsOverride = prevObjectOverride;
+            delete g.__cooptRenderSyncLease;
           } catch (_) {}
         }, 400);
       } catch (_) {}
@@ -10634,6 +10651,7 @@ const collectLegacyCrossRays = async (
         const RENDER_SYNC_MIN_INTERVAL_MS = 400;
         const renderSyncQueue: Array<{ rows: any[]; finalizeAutoSemidia?: boolean }> = [];
         let renderSyncInFlight = false;
+        let renderSyncDrainPromise: Promise<void> | null = null;
         let lastQueuedRenderSyncSignature = '';
         let lastCompletedRenderSyncSignature = '';
         let optimizeFinalized = false;
@@ -10951,7 +10969,15 @@ const collectLegacyCrossRays = async (
           }
           renderSyncQueue.push({ rows: rowsForRender, finalizeAutoSemidia: options?.finalizeAutoSemidia === true });
           lastQueuedRenderSyncSignature = signature;
-          void drainRenderSyncQueue();
+          if (!renderSyncDrainPromise) {
+            const pendingDrain = drainRenderSyncQueue().catch((error) => {
+              console.warn('[Optimize] Render sync queue failed', error);
+            });
+            renderSyncDrainPromise = pendingDrain;
+            void pendingDrain.finally(() => {
+              if (renderSyncDrainPromise === pendingDrain) renderSyncDrainPromise = null;
+            });
+          }
         };
 
         const loadHostConfigSnapshot = () => {
@@ -11576,6 +11602,9 @@ const collectLegacyCrossRays = async (
               ? (cloneJsonLocal(committedRowsSnapshot) || committedRowsSnapshot)
               : [];
             if (Array.isArray(rowsAfter) && rowsAfter.length > 0) {
+              renderSyncQueue.length = 0;
+              const pendingRenderSync = renderSyncDrainPromise;
+              if (pendingRenderSync) await pendingRenderSync;
               await performRenderSync(rowsAfter, { finalizeAutoSemidia: true, force: true });
               const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
               const applyCreatedAt = Date.now();
@@ -11857,6 +11886,9 @@ const collectLegacyCrossRays = async (
         }
         try { await releaseOptimizeWakeLock(); } catch (_) {}
         try { await clearOptimizerStop(); } catch (_) {}
+        if (!isTauriRuntime()) {
+          try { await releaseWebOptimizerWorkerResources(); } catch (_) {}
+        }
         try {
           const g = window as any;
           if (g.__cooptStopPulseTimer) {
@@ -11869,9 +11901,21 @@ const collectLegacyCrossRays = async (
         (window as any).__cooptOptimizeStopRequested = false;
         try { (globalThis as any).__stopOptimization = false; } catch (_) {}
         try {
-          (window as any).__cooptOptimizerIsRunning = false;
-          if (hostWindow && hostWindow !== w) {
-            hostWindow.__cooptOptimizerIsRunning = false;
+          const optimizationEndedAt = Date.now();
+          const cleanupTargets = new Set<any>([w, window, hostWindow]);
+          try { cleanupTargets.add(hostWindow?.popup3DWindow); } catch (_) {}
+          try {
+            cleanupTargets.add(hostWindow?.document?.querySelector?.('iframe[title="Render"]')?.contentWindow);
+          } catch (_) {}
+          for (const target of cleanupTargets) {
+            if (!target || target.closed) continue;
+            target.__cooptLastOptimizationSyncAt = optimizationEndedAt;
+            target.__cooptOptimizerIsRunning = false;
+            target.__cooptOptimizeStopRequested = false;
+            target.__cooptOpticalSystemRowsOverride = null;
+            target.__cooptDrawCrossLastData = null;
+            target.__cooptDrawCrossInFlight = false;
+            try { delete target.__cooptRenderSyncLease; } catch (_) {}
           }
         } catch (_) {}
       }
