@@ -10397,7 +10397,6 @@ export function setupAnalysisWindows() {
             Remove P/T/D
         </label>
         <button id="popup-show-wavefront-btn" type="button">Show wavefront diagram</button>
-        <button id="popup-stop-opd-btn" type="button" disabled>Stop</button>
     </div>
     <div id="popup-opd-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-opd-progress-text" style="margin-bottom: 6px;">Calculating OPD...</div>
@@ -10738,14 +10737,6 @@ export function setupAnalysisWindows() {
                 
                 const popupCancelToken = createCancelToken();
                 window['__popupOpdCancelToken'] = popupCancelToken;
-                
-                const stopBtn = document.getElementById('popup-stop-opd-btn');
-                
-                
-                if (stopBtn) {
-                    stopBtn.disabled = false;
-                    stopBtn.textContent = 'Stop';
-                }
 
                 setProgress(0, 'Starting...');
 
@@ -11174,10 +11165,6 @@ export function setupAnalysisWindows() {
                     setTimeout(() => {
                         try { hideProgress(); } catch (_) {}
                     }, 250);
-                    if (stopBtn) {
-                        stopBtn.disabled = true;
-                        stopBtn.textContent = 'Stop';
-                    }
                     window['__popupOpdCancelToken'] = null;
                 }
             } catch (err) {
@@ -11195,19 +11182,6 @@ export function setupAnalysisWindows() {
         };
 
         document.getElementById('popup-show-wavefront-btn').addEventListener('click', () => window.renderOPD());
-        document.getElementById('popup-stop-opd-btn').addEventListener('click', () => {
-            console.log('🛑 Popup OPD Stop button clicked');
-            const token = window.__popupOpdCancelToken;
-            if (token && typeof token.abort === 'function') {
-                token.abort('Stopped by user');
-                const stopBtn = document.getElementById('popup-stop-opd-btn');
-                if (stopBtn) {
-                    stopBtn.disabled = true;
-                    stopBtn.textContent = 'Stopping...';
-                }
-            }
-        });
-
         function syncAll() {
             syncObjectOptionsFromOpener();
             syncInputsFromOpener();
@@ -11487,7 +11461,6 @@ export function setupAnalysisWindows() {
             <option value="pistonTiltDefocusRemoved">Remove P/T/D</option>
         </select>
         <button id="popup-show-psf-btn" type="button">Show PSF</button>
-        <button id="popup-stop-psf-btn" type="button" disabled>Stop</button>
         <span id="popup-psf-pipeline-badge"></span>
     </div>
     <div id="popup-psf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -11951,11 +11924,6 @@ export function setupAnalysisWindows() {
                     if (progressWrapper) progressWrapper.style.display = 'none';
                 } catch (_) {}
             };
-
-            const stopBtn = document.getElementById('popup-stop-psf-btn');
-            if (stopBtn) {
-                stopBtn.disabled = false;
-            }
 
             activeCancelToken = createCancelToken();
 
@@ -13612,26 +13580,10 @@ export function setupAnalysisWindows() {
                             '<pre style="white-space:pre-wrap;word-break:break-word;">' + details + '</pre>' +
                         '</div>';
                 }
-            } finally {
-                try {
-                    if (stopBtn) stopBtn.disabled = true;
-                } catch (_) {}
             }
         };
 
         document.getElementById('popup-show-psf-btn').addEventListener('click', () => window.renderPSF());
-
-        document.getElementById('popup-stop-psf-btn').addEventListener('click', () => {
-            try {
-                const el = document.getElementById('popup-psf-pipeline-badge');
-                if (el) el.textContent = '';
-            } catch (_) {}
-            try {
-                if (activeCancelToken && typeof activeCancelToken.abort === 'function') {
-                    activeCancelToken.abort('Stopped by user');
-                }
-            } catch (_) {}
-        });
 
         function syncAll() {
             syncWavelengthOptionsFromOpener();
@@ -13792,28 +13744,6 @@ export function setupAnalysisWindows() {
                     });
                 }
 
-                const mainStopPsfBtn = document.getElementById('stop-psf-btn');
-                if (mainStopPsfBtn && !(mainStopPsfBtn as any).__cooptUnifiedPsfPipelineBound) {
-                    (mainStopPsfBtn as any).__cooptUnifiedPsfPipelineBound = true;
-                    mainStopPsfBtn.addEventListener('click', () => {
-                        try {
-                            const el = document.getElementById('psf-pipeline-badge');
-                            if (el) el.textContent = '';
-                        } catch (_) {}
-                        try {
-                            const popup = w.__psfPopup;
-                            if (!popup || popup.closed) return;
-                            const stopBtn = popup.document && popup.document.getElementById('popup-stop-psf-btn');
-                            if (stopBtn && typeof (stopBtn as HTMLButtonElement).click === 'function') {
-                                (stopBtn as HTMLButtonElement).click();
-                                return;
-                            }
-                            if (typeof popup.activeCancelToken?.abort === 'function') {
-                                popup.activeCancelToken.abort('Stopped by user');
-                            }
-                        } catch (_) {}
-                    });
-                }
         }
 
         // Modulation Transfer Function (MTF) popup window button

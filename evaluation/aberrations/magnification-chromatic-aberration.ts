@@ -746,7 +746,7 @@ export async function calculateMagnificationChromaticAberrationData(
                 const yLocal = stopCenterExactOnly
                     ? (traceChiefImageHeightMm(obj, wl) ?? traceSeriesImageHeightMm(obj, wl))
                     : traceSeriesImageHeightMm(obj, wl);
-                imageHeights[fi] = Number.isFinite(Number(yLocal)) ? Number(yLocal) : null;
+                imageHeights[fi] = (typeof yLocal === 'number' && Number.isFinite(yLocal)) ? yLocal : null;
             }
             perWavelengthHeights.set(wl, imageHeights);
             perWavelengthTraceStats.set(wl, {
@@ -773,7 +773,9 @@ export async function calculateMagnificationChromaticAberrationData(
             const imageHeights = perWavelengthHeights.get(wl) || new Array<number | null>(sortedFieldValues.length).fill(null);
             const displacements = imageHeights.map((h, i) => {
                 const ref = referenceHeights?.[i];
-                return (Number.isFinite(Number(h)) && Number.isFinite(Number(ref))) ? (Number(h) - Number(ref)) : null;
+                return (typeof h === 'number' && Number.isFinite(h) && typeof ref === 'number' && Number.isFinite(ref))
+                    ? (h - ref)
+                    : null;
             });
             return {
                 wavelength: wl,

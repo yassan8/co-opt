@@ -6,6 +6,7 @@ import { DistortionAnalysisPage } from './DistortionAnalysisPage';
 import { MtfAnalysisPage } from './MtfAnalysisPage';
 import { PsfAnalysisPage } from './PsfAnalysisPage';
 import { WavefrontAnalysisPage } from './WavefrontAnalysisPage';
+import { AnalysisRayCountField } from './AnalysisRayCountField';
 import {
   getOptimizedResultApplySnapshots,
   injectActiveOpticalRows,
@@ -4729,6 +4730,16 @@ export default function App() {
       return false;
     }
   });
+  const renderLabelVisibilityRef = useRef({
+    designIntent: renderShowDesignIntentLabels,
+    principalPoints: renderShowPrincipalPointLabels,
+    surfaceNumbers: renderShowSurfaceNumberLabels,
+  });
+  renderLabelVisibilityRef.current = {
+    designIntent: renderShowDesignIntentLabels,
+    principalPoints: renderShowPrincipalPointLabels,
+    surfaceNumbers: renderShowSurfaceNumberLabels,
+  };
   const [renderDesignIntentLiveSync, setRenderDesignIntentLiveSync] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem(RENDER_DESIGN_INTENT_SYNC_KEY);
@@ -8275,9 +8286,9 @@ const collectLegacyCrossRays = async (
               showSurfaceOrigins: false,
               showSemidiaRing: false,
               showMirrorBackText: false,
-              showDesignIntentLabels: renderShowDesignIntentLabels,
-              showPrincipalPointLabels: renderShowPrincipalPointLabels,
-              showSurfaceNumberLabels: renderShowSurfaceNumberLabels,
+              showDesignIntentLabels: renderLabelVisibilityRef.current.designIntent,
+              showPrincipalPointLabels: renderLabelVisibilityRef.current.principalPoints,
+              showSurfaceNumberLabels: renderLabelVisibilityRef.current.surfaceNumbers,
               crossSectionDirection: axis,
               crossSectionCenterOffset: 0
             });
@@ -8307,9 +8318,9 @@ const collectLegacyCrossRays = async (
             showSurfaceOrigins: false,
             showSemidiaRing: false,
             showMirrorBackText: false,
-            showDesignIntentLabels: renderShowDesignIntentLabels,
-            showPrincipalPointLabels: renderShowPrincipalPointLabels,
-            showSurfaceNumberLabels: renderShowSurfaceNumberLabels,
+            showDesignIntentLabels: renderLabelVisibilityRef.current.designIntent,
+            showPrincipalPointLabels: renderLabelVisibilityRef.current.principalPoints,
+            showSurfaceNumberLabels: renderLabelVisibilityRef.current.surfaceNumbers,
             crossSectionDirection: axis,
             crossSectionCenterOffset: 0
           });
@@ -8396,9 +8407,19 @@ const collectLegacyCrossRays = async (
 
       const cameraStartMs = performance.now();
       if (axis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
-        w.setCameraForXZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
+        w.setCameraForXZCrossSection({
+          includeRayStartMargin: true,
+          storeDrawCrossBounds: true,
+          centerVerticalOnOpticalAxis: true,
+          fitOpticalSystemOnly: true,
+        });
       } else if (axis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
-        w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
+        w.setCameraForYZCrossSection({
+          includeRayStartMargin: true,
+          storeDrawCrossBounds: true,
+          centerVerticalOnOpticalAxis: true,
+          fitOpticalSystemOnly: true,
+        });
       }
       timingStages.push({ label: 'camera', ms: performance.now() - cameraStartMs });
 
@@ -8571,7 +8592,7 @@ const collectLegacyCrossRays = async (
             rows,
             prevOrigins || [],
             nextSurfaceOrigins,
-            renderShowDesignIntentLabels || renderShowPrincipalPointLabels || renderShowSurfaceNumberLabels,
+            renderLabelVisibilityRef.current.designIntent || renderLabelVisibilityRef.current.principalPoints || renderLabelVisibilityRef.current.surfaceNumbers,
           )
         ) {
           const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
@@ -8627,9 +8648,9 @@ const collectLegacyCrossRays = async (
           showSurfaceOrigins: false,
           showSemidiaRing: true,
           showMirrorBackText: false,
-          showDesignIntentLabels: renderShowDesignIntentLabels,
-          showPrincipalPointLabels: renderShowPrincipalPointLabels,
-          showSurfaceNumberLabels: renderShowSurfaceNumberLabels,
+          showDesignIntentLabels: renderLabelVisibilityRef.current.designIntent,
+          showPrincipalPointLabels: renderLabelVisibilityRef.current.principalPoints,
+          showSurfaceNumberLabels: renderLabelVisibilityRef.current.surfaceNumbers,
           surfaceMeshSegments: RENDER_3D_SURFACE_MESH_SEGMENTS,
           toricMeshSegments: RENDER_3D_TORIC_MESH_SEGMENTS,
           crossSectionDirection: 'YZ',
@@ -8726,32 +8747,13 @@ const collectLegacyCrossRays = async (
       try {
         setRenderWindowStatus('Finalizing camera and render...');
         const cameraStartMs = performance.now();
-        // Calculate actual bounds of drawn rays before adjusting camera
-        const rayBoundsForCamera = { minY: Infinity, maxY: -Infinity };
-        if (sceneForDraw) {
-          sceneForDraw.traverse((child: any) => {
-            if (child?.userData?.rayType === 'crossBeam' && child.geometry) {
-              const positions = child.geometry.attributes?.position;
-              const posArray = positions?.array as ArrayLike<number> | undefined;
-              if (posArray && typeof posArray.length === 'number' && posArray.length >= 2) {
-                for (let i = 1; i < posArray.length; i += 3) {
-                  const y = posArray[i];
-                  if (Number.isFinite(y)) {
-                    rayBoundsForCamera.minY = Math.min(rayBoundsForCamera.minY, y);
-                    rayBoundsForCamera.maxY = Math.max(rayBoundsForCamera.maxY, y);
-                  }
-                }
-              }
-            }
-          });
-        }
-        
-        const cameraBoundsOverride = (Number.isFinite(rayBoundsForCamera.minY) && Number.isFinite(rayBoundsForCamera.maxY))
-          ? { minY: rayBoundsForCamera.minY, maxY: rayBoundsForCamera.maxY }
-          : null;
-        
         if (typeof w.setCameraForYZCrossSection === 'function') {
-          w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true, cameraBoundsOverride });
+          w.setCameraForYZCrossSection({
+            includeRayStartMargin: true,
+            storeDrawCrossBounds: true,
+            centerVerticalOnOpticalAxis: true,
+            fitOpticalSystemOnly: true,
+          });
         } else if (typeof w.fitCameraToScene === 'function') {
           w.fitCameraToScene();
         } else if (typeof w.adjustCameraView === 'function') {
@@ -9264,13 +9266,15 @@ const collectLegacyCrossRays = async (
                 await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
               } catch (_) {}
             }
-            const quickInitialRayCount = Math.min(3, Math.max(1, Number(getLiveRenderRayCount(renderRayCountRef.current) || 1)));
-            const redrawOk: any = await redrawCurrentRenderView(undefined, undefined, redrawRequestId, {
-              quickInitialRayCount,
-              scheduleFullRayPass: true,
-              useLiveRayCount: true,
-              skipRayGeneration: true,
-            });
+            const redrawOptions: RenderRedrawOptions = renderViewModeRef.current === '3D'
+              ? { useLiveRayCount: true }
+              : {
+                  quickInitialRayCount: Math.min(3, Math.max(1, Number(getLiveRenderRayCount(renderRayCountRef.current) || 1))),
+                  scheduleFullRayPass: true,
+                  useLiveRayCount: true,
+                  skipRayGeneration: true,
+                };
+            const redrawOk: any = await redrawCurrentRenderView(undefined, undefined, redrawRequestId, redrawOptions);
             if (queuedSyncStamp && redrawOk !== false) {
               try { w.__cooptLastRenderSyncStamp = queuedSyncStamp; } catch (_) {}
               if (String(renderPendingSyncStampRef.current ?? '').trim() === queuedSyncStamp) {
@@ -9575,7 +9579,7 @@ const collectLegacyCrossRays = async (
             const requestId = beginRenderDrawRequest();
             const quickInitialRayCount = Math.min(3, Math.max(1, Number(getLiveRenderRayCount(renderRayCountRef.current) || 1)));
             const ok = currentMode === '3D'
-              ? await drawRender3DView(startupStages, requestId, { quickInitialRayCount, scheduleFullRayPass: true, useLiveRayCount: true, skipRayGeneration: true })
+              ? await drawRender3DView(startupStages, requestId, { useLiveRayCount: true })
               : await drawCrossSectionView(currentMode === 'XZ' ? 'XZ' : currentAxis === 'XZ' ? 'XZ' : 'YZ', requestId, { quickInitialRayCount, scheduleFullRayPass: true, useLiveRayCount: true, skipRayGeneration: true });
             if (!ok) {
               setRenderWindowStatus('Draw failed');
@@ -12145,7 +12149,7 @@ const collectLegacyCrossRays = async (
             <option value="beam-centroid">Beam centroid</option>
           </select>
           </label>
-          <label className="analysis-window-field" htmlFor="analysis-astig-beam-pattern"><span>Beam</span>
+          <label className="analysis-window-field" htmlFor="analysis-astig-beam-pattern"><span>Pupil pattern</span>
           <select
             id="analysis-astig-beam-pattern"
             value={astigBeamPattern}
@@ -12159,7 +12163,18 @@ const collectLegacyCrossRays = async (
           <details className="analysis-window-options">
             <summary>Options</summary>
             <div className="analysis-window-options__panel">
-              <label className="analysis-window-field" htmlFor="analysis-astig-point-count"><span>Field points</span>
+              <AnalysisRayCountField
+                id="analysis-astig-ray-count"
+                value={astigRayCount}
+                min={9}
+                max={2001}
+                onValueChange={(value) => {
+                  const parsed = Number(value);
+                  if (!Number.isFinite(parsed)) return;
+                  setAstigRayCount(Math.max(9, Math.min(2001, Math.round(parsed))));
+                }}
+              />
+              <label className="analysis-window-field" htmlFor="analysis-astig-point-count"><span>Field samples</span>
                 <input
                   id="analysis-astig-point-count"
                   type="number"
@@ -12171,21 +12186,6 @@ const collectLegacyCrossRays = async (
                     const parsed = Number(e.target.value);
                     if (!Number.isFinite(parsed)) return;
                     setAstigPointCount(Math.max(2, Math.min(201, Math.round(parsed))));
-                  }}
-                />
-              </label>
-              <label className="analysis-window-field" htmlFor="analysis-astig-ray-count"><span>Rays</span>
-                <input
-                  id="analysis-astig-ray-count"
-                  type="number"
-                  min={9}
-                  max={2001}
-                  step={1}
-                  value={astigRayCount}
-                  onChange={(e) => {
-                    const parsed = Number(e.target.value);
-                    if (!Number.isFinite(parsed)) return;
-                    setAstigRayCount(Math.max(9, Math.min(2001, Math.round(parsed))));
                   }}
                 />
               </label>
@@ -12426,9 +12426,9 @@ const collectLegacyCrossRays = async (
           showSurfaceOrigins: false,
           showSemidiaRing: false,
           showMirrorBackText: false,
-          showDesignIntentLabels: renderShowDesignIntentLabels,
-          showPrincipalPointLabels: renderShowPrincipalPointLabels,
-          showSurfaceNumberLabels: renderShowSurfaceNumberLabels,
+          showDesignIntentLabels: renderLabelVisibilityRef.current.designIntent,
+          showPrincipalPointLabels: renderLabelVisibilityRef.current.principalPoints,
+          showSurfaceNumberLabels: renderLabelVisibilityRef.current.surfaceNumbers,
           crossSectionDirection: axis,
           crossSectionCenterOffset: 0,
         });

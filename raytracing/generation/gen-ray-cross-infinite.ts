@@ -2909,6 +2909,189 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             return result;
         }
 
+        // At strongly vignetted fields the physical ray bundle can miss the exact
+        // stop center even though a useful portion of the pupil still reaches the
+        // image. A coarse grid spanning the old ±50 mm search easily skips that
+        // narrow bundle. Sample the first finite aperture instead, keep only rays
+        // that reach both the stop and target, and use the center of that surviving
+        // pupil region as the reference ray for transverse aberration.
+        const findTraceablePupilReferenceOrigin = () => {
+            try {
+                const detailedOrigins = calculateSurfaceOrigins(opticalSystemRows);
+                if (!Array.isArray(detailedOrigins) || detailedOrigins.length !== opticalSystemRows.length) {
+                    return null;
+                }
+
+                const readApertureRadius = (row) => {
+                    const semidia = Number.parseFloat(String(
+                        row?.semidia ?? row?.semiDiameter ?? row?.['semi-diameter'] ?? row?.semiDia ?? ''
+                    ));
+                    if (Number.isFinite(semidia) && semidia > 0) return semidia;
+                    const aperture = Number.parseFloat(String(row?.aperture ?? row?.Aperture ?? ''));
+                    if (Number.isFinite(aperture) && aperture > 0) return aperture / 2;
+                    return null;
+                };
+
+                let entranceSurfaceIndex = -1;
+                let entranceRadius = 0;
+                const lastEntranceCandidate = Math.min(
+                    Math.max(1, Number(stopSurfaceIndex) || 1),
+                    opticalSystemRows.length - 1
+                );
+                for (let index = 1; index <= lastEntranceCandidate; index += 1) {
+                    const row = opticalSystemRows[index];
+                    if (!row || isObjectRow(row) || isCoordTransRow(row) || isGapRow(row) || isThinLensBackRow(row)) {
+                        continue;
+                    }
+                    const radius = readApertureRadius(row);
+                    if (Number.isFinite(radius) && radius > 0) {
+                        entranceSurfaceIndex = index;
+                        entranceRadius = radius;
+                        break;
+                    }
+                }
+                if (entranceSurfaceIndex < 0 || !(entranceRadius > 0)) return null;
+
+                const surfaceEntry = detailedOrigins[entranceSurfaceIndex];
+                const surfaceCenter = surfaceEntry?.origin;
+                if (!surfaceCenter || !Number.isFinite(surfaceCenter.x) || !Number.isFinite(surfaceCenter.y) || !Number.isFinite(surfaceCenter.z)) {
+                    return null;
+                }
+
+                const rotation = surfaceEntry?.rotationMatrix;
+                const axisU = {
+                    x: Number(rotation?.[0]?.[0] ?? 1),
+                    y: Number(rotation?.[1]?.[0] ?? 0),
+                    z: Number(rotation?.[2]?.[0] ?? 0)
+                };
+                const axisV = {
+                    x: Number(rotation?.[0]?.[1] ?? 0),
+                    y: Number(rotation?.[1]?.[1] ?? 1),
+                    z: Number(rotation?.[2]?.[1] ?? 0)
+                };
+
+                const originForEntranceCoordinates = (u, v) => {
+                    const point = {
+                        x: surfaceCenter.x + axisU.x * u + axisV.x * v,
+                        y: surfaceCenter.y + axisU.y * u + axisV.y * v,
+                        z: surfaceCenter.z + axisU.z * u + axisV.z * v
+                    };
+                    const travel = (point.z - initialZ) / safeK;
+                    return {
+                        x: point.x - direction.i * travel,
+                        y: point.y - direction.j * travel,
+                        z: initialZ
+                    };
+                };
+
+                const candidates = [];
+                const gridIntervals = 20;
+                for (let iy = -gridIntervals / 2; iy <= gridIntervals / 2; iy += 1) {
+                    const v = (2 * entranceRadius * iy) / gridIntervals;
+                    for (let ix = -gridIntervals / 2; ix <= gridIntervals / 2; ix += 1) {
+                        const u = (2 * entranceRadius * ix) / gridIntervals;
+                        if (u * u + v * v > entranceRadius * entranceRadius * 0.999 * 0.999) continue;
+                        candidates.push({ u, v, origin: originForEntranceCoordinates(u, v) });
+                    }
+                }
+                if (!candidates.length) return null;
+
+                const rays = candidates.map((candidate) => ({
+                    pos: candidate.origin,
+                    dir: { x: direction.i, y: direction.j, z: direction.k },
+                    wavelength
+                }));
+                const stopHits = traceRayHitPointBatchForChiefSearch(opticalSystemRows, rays, 1.0, stopSurfaceIndex);
+                const effectiveTargetSurfaceIndex = Number.isInteger(targetSurfaceIndex)
+                    ? Math.max(0, Math.min(Number(targetSurfaceIndex), opticalSystemRows.length - 1))
+                    : opticalSystemRows.length - 1;
+                const targetHits = effectiveTargetSurfaceIndex === stopSurfaceIndex
+                    ? stopHits
+                    : traceRayHitPointBatchForChiefSearch(opticalSystemRows, rays, 1.0, effectiveTargetSurfaceIndex);
+
+                const validCandidates = [];
+                for (let index = 0; index < candidates.length; index += 1) {
+                    const stopHit = Array.isArray(stopHits) ? stopHits[index] : null;
+                    const targetHit = Array.isArray(targetHits) ? targetHits[index] : null;
+                    if (!stopHit || !targetHit) continue;
+                    validCandidates.push({
+                        ...candidates[index],
+                        stopError: Math.hypot(Number(stopHit.x) - stopX, Number(stopHit.y) - stopY)
+                    });
+                }
+                if (!validCandidates.length) return null;
+
+                const centroidU = validCandidates.reduce((sum, candidate) => sum + candidate.u, 0) / validCandidates.length;
+                const centroidV = validCandidates.reduce((sum, candidate) => sum + candidate.v, 0) / validCandidates.length;
+                validCandidates.sort((a, b) => {
+                    const da = Math.hypot(a.u - centroidU, a.v - centroidV);
+                    const db = Math.hypot(b.u - centroidU, b.v - centroidV);
+                    return da - db || a.stopError - b.stopError;
+                });
+                const centered = validCandidates[0];
+                const nearestStop = validCandidates.reduce((best, candidate) => (
+                    !best || candidate.stopError < best.stopError ? candidate : best
+                ), null);
+
+                return {
+                    origin: { ...centered.origin },
+                    stopError: centered.stopError,
+                    nearestStopOrigin: nearestStop ? { ...nearestStop.origin } : { ...centered.origin },
+                    validSampleCount: validCandidates.length,
+                    totalSampleCount: candidates.length,
+                    entranceSurfaceIndex
+                };
+            } catch (_) {
+                return null;
+            }
+        };
+
+        const traceablePupilReference = findTraceablePupilReferenceOrigin();
+        if (traceablePupilReference) {
+            // If the stop center is reachable but the initial guesses were outside
+            // the entrance aperture, a valid pupil sample gives Newton one last,
+            // well-conditioned seed before accepting the vignetted reference ray.
+            const recoveredNewton = solveChiefOriginByNewton2D(
+                traceablePupilReference.nearestStopOrigin.x,
+                traceablePupilReference.nearestStopOrigin.y
+            );
+            const result = recoveredNewton
+                ? { x: recoveredNewton.x, y: recoveredNewton.y, z: initialZ }
+                : { ...traceablePupilReference.origin };
+            const resultError = recoveredNewton?.error ?? traceablePupilReference.stopError;
+            const resultMethod = recoveredNewton
+                ? 'newton-2d-stop-center'
+                : 'traceable-vignetted-pupil';
+
+            if (typeof window !== 'undefined') {
+                setLastChiefRayResult({
+                    direction,
+                    optimalX: result.x,
+                    optimalY: result.y,
+                    error: resultError,
+                    method: resultMethod
+                });
+            }
+
+            if (cacheKey) {
+                chiefRayOriginSearchCache.set(cacheKey, { ...result });
+                if (chiefRayOriginSearchCache.size > 256) {
+                    const firstKey = chiefRayOriginSearchCache.keys().next().value;
+                    if (firstKey !== undefined) chiefRayOriginSearchCache.delete(firstKey);
+                }
+            }
+            storeChiefRayOriginSeed(familyKey, direction, result);
+
+            if (debugMode) {
+                console.log(
+                    `✅ [InfiniteSystem] Traceable pupil reference: surface=${traceablePupilReference.entranceSurfaceIndex}, ` +
+                    `samples=${traceablePupilReference.validSampleCount}/${traceablePupilReference.totalSampleCount}, ` +
+                    `stop error=${resultError.toFixed(6)}mm`
+                );
+            }
+            return result;
+        }
+
         // 同時最適化のための目的関数（XとYを同時に最適化）
         const objectiveFunction2D = (x, y) => {
             const result = evaluateRayToStop(x, y);

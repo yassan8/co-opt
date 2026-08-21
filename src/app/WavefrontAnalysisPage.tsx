@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import {
-  loadOptimizeRayGridSize,
-  OPTIMIZE_RAY_GRID_SIZES,
-  saveOptimizeRayGridSize,
-} from '../../ui/optimization-settings-storage.ts';
+  ANALYSIS_PUPIL_SAMPLING_OPTIONS,
+  AnalysisGridSamplingField,
+} from './AnalysisGridSamplingField';
 
 type ObjectOption = { value: string; label: string };
 type CancelToken = {
@@ -150,11 +149,10 @@ export function WavefrontAnalysisPage() {
   const [objects, setObjects] = useState<ObjectOption[]>([{ value: '0', label: '1' }]);
   const [objectIndex, setObjectIndex] = useState('0');
   const [plotType, setPlotType] = useState<'surface' | 'heatmap' | 'multifield'>('surface');
-  const [gridSize, setGridSize] = useState(() => loadOptimizeRayGridSize());
+  const [gridSize, setGridSize] = useState<number>(32);
   const [zernikeFit, setZernikeFit] = useState(false);
   const [removePtd, setRemovePtd] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [stopping, setStopping] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState('');
   const [error, setError] = useState('');
@@ -186,6 +184,11 @@ export function WavefrontAnalysisPage() {
     });
     observer.observe(chart);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => () => {
+    const token = cancelTokenRef.current;
+    if (token && !token.aborted) token.abort('Analysis window closed');
   }, []);
 
   const updateProgress = useCallback((event: any) => {
@@ -293,7 +296,6 @@ export function WavefrontAnalysisPage() {
   const run = useCallback(async () => {
     if (busy || !chartRef.current) return;
     setBusy(true);
-    setStopping(false);
     setError('');
     setProgress(0);
     setProgressText('Starting...');
@@ -306,7 +308,9 @@ export function WavefrontAnalysisPage() {
     try {
       const renderer = await waitForFunction('showWavefrontDiagram');
       const selectedObjectIndex = Number.isFinite(Number(objectIndex)) ? Math.max(0, Math.floor(Number(objectIndex))) : 0;
-      const selectedGridSize = saveOptimizeRayGridSize(gridSize);
+      const selectedGridSize = ANALYSIS_PUPIL_SAMPLING_OPTIONS.includes(gridSize as (typeof ANALYSIS_PUPIL_SAMPLING_OPTIONS)[number])
+        ? gridSize
+        : 32;
       const opdDisplayMode = removePtd ? 'pistonTiltDefocusRemoved' : 'pistonTiltRemoved';
       const result = await Promise.resolve(renderer.fn(plotType, 'opd', selectedGridSize, selectedObjectIndex, {
         containerElement: chartRef.current,
@@ -335,18 +339,9 @@ export function WavefrontAnalysisPage() {
     } finally {
       cancelTokenRef.current = null;
       setBusy(false);
-      setStopping(false);
       window.setTimeout(() => setProgressText((current) => current === 'Done' ? '' : current), 350);
     }
   }, [busy, gridSize, objectIndex, plotType, removePtd, runZernikeFit, updateProgress, zernikeFit]);
-
-  const stop = useCallback(() => {
-    const token = cancelTokenRef.current;
-    if (!token || token.aborted) return;
-    setStopping(true);
-    setProgressText('Stopping...');
-    token.abort('Stopped by user');
-  }, []);
 
   return (
     <div className="analysis-window-page" data-analysis-kind="opd">
@@ -354,12 +349,11 @@ export function WavefrontAnalysisPage() {
         <label className="analysis-window-field"><span>Object</span><select value={objectIndex} onChange={(event) => setObjectIndex(event.target.value)}>{objects.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label className="analysis-window-field"><span>Plot type</span><select value={plotType} onChange={(event) => setPlotType(event.target.value as any)}><option value="surface">3D Surface</option><option value="heatmap">Heatmap</option><option value="multifield">Multi-field Comparison</option></select></label>
         <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
-          <label className="analysis-window-field"><span>sampling</span><select value={gridSize} onChange={(event) => setGridSize(Number(event.target.value) as any)}>{OPTIMIZE_RAY_GRID_SIZES.map((size) => <option key={size} value={size}>{size}x{size}</option>)}</select></label>
+          <AnalysisGridSamplingField value={gridSize} options={ANALYSIS_PUPIL_SAMPLING_OPTIONS} onValueChange={(value) => setGridSize(Number(value))} />
           <label className="analysis-window-toggle"><input type="checkbox" checked={zernikeFit} onChange={(event) => setZernikeFit(event.target.checked)} />Zernike (calc)</label>
           <label className="analysis-window-toggle"><input type="checkbox" checked={removePtd} onChange={(event) => setRemovePtd(event.target.checked)} />Remove P/T/D</label>
         </div></details>
         <button className="analysis-window-primary-action" type="button" title="Show wavefront diagram" onClick={() => void run()} disabled={busy}>{busy ? 'Calculating…' : 'Show'}</button>
-        <button className="analysis-window-secondary-action" type="button" onClick={stop} disabled={!busy || stopping}>{stopping ? 'Stopping...' : 'Stop'}</button>
       </div>
       {(busy || !!progressText) ? <ProgressBar value={progress} text={progressText || 'Working...'} /> : null}
       {error ? <div className="analysis-window-error">{error}</div> : null}

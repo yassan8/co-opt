@@ -5234,14 +5234,15 @@ body.dark-mode .win-mdi-window:hover {
 }
 
 .optimize-progress-button.is-primary {
-    border-color: #2563eb;
-    background: #2563eb;
-    color: #ffffff;
+    border-color: #cbd5e1;
+    background: #ffffff;
+    color: #334155;
 }
 
 .optimize-progress-button.is-primary:hover:not(:disabled) {
-    border-color: #1d4ed8;
-    background: #1d4ed8;
+    border-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
 }
 
 .optimize-progress-button.is-danger {
@@ -5448,9 +5449,9 @@ body.dark-mode .optimize-progress-button {
 }
 
 body.dark-mode .optimize-progress-button.is-primary {
-    border-color: #3b82f6;
-    background: #2563eb;
-    color: #ffffff;
+    border-color: #475569;
+    background: #1e293b;
+    color: #e5e7eb;
 }
 
 body.dark-mode .optimize-progress-button.is-danger {
@@ -6994,16 +6995,17 @@ body.dark-mode .block-inspector-icon-btn:hover {
     min-height: 30px;
     height: 30px;
     border: 0;
-    border-left: 1px solid #1d4ed8;
+    border-left: 1px solid #cbd5e1;
     border-radius: 0;
-    background: #2563eb;
+    background: #ffffff;
     box-shadow: none;
-    color: #ffffff;
+    color: #334155;
 }
 
-#design-intent-toolbar .di-add-control .di-primary-button:hover {
-    background: #1d4ed8;
-    color: #ffffff;
+#design-intent-toolbar .di-add-control .di-primary-button:hover:not(:disabled) {
+    border-left-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
     box-shadow: none;
     transform: none;
 }
@@ -7214,15 +7216,15 @@ body.dark-mode #design-intent-container .block-inspector {
 }
 
 .window-commandbar .window-primary-action {
-    border-color: #2563eb;
-    background: #2563eb;
-    color: #ffffff;
+    border-color: #cbd5e1;
+    background: #ffffff;
+    color: #334155;
 }
 
 .window-commandbar .window-primary-action:hover:not(:disabled) {
-    border-color: #1d4ed8;
-    background: #1d4ed8;
-    color: #ffffff;
+    border-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
 }
 
 .window-commandbar .window-quiet-action {
@@ -7313,10 +7315,11 @@ body.dark-mode #design-intent-container .block-inspector {
 
 .window-commandbar .window-segmented-control button:hover,
 .window-commandbar .window-segmented-control button.is-active,
+.window-commandbar .window-segmented-control button.active,
 .window-commandbar .window-segmented-control button[aria-pressed="true"] {
-    background: #ffffff;
-    color: #1e293b;
-    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+    background: #eaf2ff;
+    color: #1d4ed8;
+    box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.72);
 }
 
 .window-inline-field {
@@ -7579,6 +7582,8 @@ body.dark-mode #design-intent-container .block-inspector {
 
 /* First-class analysis pages. */
 .analysis-window-page {
+    --analysis-scrollbar-thumb: transparent;
+    --analysis-scrollbar-thumb-hover: rgba(71, 85, 105, 0.78);
     width: 100vw;
     height: 100vh;
     display: flex;
@@ -7587,6 +7592,10 @@ body.dark-mode #design-intent-container .block-inspector {
     background: #f5f6f8;
     color: #1f2937;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.analysis-window-page:hover {
+    --analysis-scrollbar-thumb: rgba(100, 116, 139, 0.52);
 }
 
 .analysis-window-commandbar {
@@ -7630,7 +7639,6 @@ body.dark-mode #design-intent-container .block-inspector {
 }
 
 .analysis-window-primary-action,
-.analysis-window-secondary-action,
 .analysis-window-options > summary {
     display: inline-flex;
     align-items: center;
@@ -7650,27 +7658,24 @@ body.dark-mode #design-intent-container .block-inspector {
 }
 
 .analysis-window-primary-action {
-    border-color: #2563eb;
-    background: #2563eb;
-    color: #ffffff;
+    border-color: #cbd5e1;
+    background: #ffffff;
+    color: #334155;
 }
 
 .analysis-window-primary-action:hover:not(:disabled) {
-    border-color: #1d4ed8;
-    background: #1d4ed8;
+    border-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
     transform: none;
 }
 
 .analysis-window-primary-action:disabled {
-    border-color: #93c5fd;
-    background: #93c5fd;
+    border-color: #cbd5e1;
+    background: #f1f5f9;
+    color: #94a3b8;
     cursor: wait;
-    opacity: 1;
-}
-
-.analysis-window-secondary-action:disabled {
-    cursor: default;
-    opacity: 0.52;
+    opacity: 0.72;
 }
 
 .analysis-window-options {
@@ -7787,6 +7792,52 @@ body.dark-mode #design-intent-container .block-inspector {
     min-height: 0;
     overflow: hidden;
     background: #ffffff;
+}
+
+/* Multi-field fan plots grow vertically so every field keeps a readable row. */
+.analysis-window-page:is(
+    [data-analysis-kind="transverse-aberration"],
+    [data-analysis-kind="opd-fan"]
+) .analysis-window-result {
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: var(--analysis-scrollbar-thumb) transparent;
+}
+
+.analysis-window-page:is(
+    [data-analysis-kind="transverse-aberration"],
+    [data-analysis-kind="opd-fan"]
+) .analysis-window-result::-webkit-scrollbar {
+    width: 10px;
+}
+
+.analysis-window-page:is(
+    [data-analysis-kind="transverse-aberration"],
+    [data-analysis-kind="opd-fan"]
+) .analysis-window-result::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.analysis-window-page:is(
+    [data-analysis-kind="transverse-aberration"],
+    [data-analysis-kind="opd-fan"]
+) .analysis-window-result::-webkit-scrollbar-thumb {
+    min-height: 32px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--analysis-scrollbar-thumb);
+    background-clip: padding-box;
+}
+
+.analysis-window-page:is(
+    [data-analysis-kind="transverse-aberration"],
+    [data-analysis-kind="opd-fan"]
+) .analysis-window-result::-webkit-scrollbar-thumb:hover {
+    background: var(--analysis-scrollbar-thumb-hover);
+    background-clip: padding-box;
 }
 
 .analysis-window-chart {
@@ -7945,9 +7996,9 @@ body.dark-mode .analysis-window-options__panel {
 
 body.dark-mode .window-commandbar .window-primary-action,
 body.dark-mode .analysis-window-primary-action {
-    border-color: #3b82f6;
-    background: #2563eb;
-    color: #ffffff;
+    border-color: #475569;
+    background: #111827;
+    color: #e2e8f0;
 }
 
 body.dark-mode .window-segmented-control {
@@ -7957,15 +8008,21 @@ body.dark-mode .window-segmented-control {
 
 body.dark-mode .window-commandbar .window-segmented-control button:hover,
 body.dark-mode .window-commandbar .window-segmented-control button.is-active,
+body.dark-mode .window-commandbar .window-segmented-control button.active,
 body.dark-mode .window-commandbar .window-segmented-control button[aria-pressed="true"] {
-    background: #334155;
-    color: #f8fafc;
+    background: #1e3a5f;
+    color: #bfdbfe;
 }
 
 body.dark-mode .settings-page,
 body.dark-mode .analysis-window-page {
+    --analysis-scrollbar-thumb-hover: rgba(203, 213, 225, 0.76);
     background: #0f172a;
     color: #e2e8f0;
+}
+
+body.dark-mode .analysis-window-page:hover {
+    --analysis-scrollbar-thumb: rgba(148, 163, 184, 0.58);
 }
 
 body.dark-mode .settings-page__content,
@@ -8250,4 +8307,89 @@ body.dark-mode .render-option-toggle {
     .render-options-note {
         grid-column: auto;
     }
+}
+
+/* Window actions stay quiet until the user points to or focuses them. */
+:is(
+    .win-mdi-content,
+    .analysis-window-page,
+    .optimize-progress-page,
+    .render-window-page,
+    .settings-page
+) button:not(.is-danger):not(.di-delete-button):not(.requirements-react-detailsButton):hover:not(:disabled) {
+    border-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
+    box-shadow: none;
+    transform: none;
+}
+
+:is(
+    .win-mdi-content,
+    .analysis-window-page,
+    .optimize-progress-page,
+    .render-window-page,
+    .settings-page
+) button:not(.is-danger):not(.di-delete-button):not(.requirements-react-detailsButton):focus-visible,
+.window-action-menu > summary:focus-visible,
+.analysis-window-options > summary:focus-visible,
+.di-more-actions > summary:focus-visible {
+    border-color: #2563eb;
+    outline: 3px solid rgba(37, 99, 235, 0.24);
+    outline-offset: 2px;
+    background: #2563eb;
+    color: #ffffff;
+    box-shadow: none;
+    transform: none;
+}
+
+:is(
+    .win-mdi-content,
+    .analysis-window-page,
+    .optimize-progress-page,
+    .render-window-page,
+    .settings-page
+) button:not(.is-danger):not(.di-delete-button):not(.requirements-react-detailsButton):active:not(:disabled),
+.window-action-menu > summary:active,
+.analysis-window-options > summary:active,
+.di-more-actions > summary:active {
+    border-color: #1d4ed8;
+    background: #1d4ed8;
+    color: #ffffff;
+    box-shadow: none;
+    transform: none;
+}
+
+body.dark-mode #design-intent-toolbar .di-add-control .di-primary-button {
+    border-left-color: #475569;
+    background: #1e293b;
+    color: #e5e7eb;
+}
+
+body.dark-mode :is(
+    .win-mdi-content,
+    .analysis-window-page,
+    .optimize-progress-page,
+    .render-window-page,
+    .settings-page
+) button:not(.is-danger):not(.di-delete-button):not(.requirements-react-detailsButton):hover:not(:disabled) {
+    border-color: #3b82f6;
+    background: #1e3a5f;
+    color: #bfdbfe;
+}
+
+body.dark-mode :is(
+    .win-mdi-content,
+    .analysis-window-page,
+    .optimize-progress-page,
+    .render-window-page,
+    .settings-page
+) button:not(.is-danger):not(.di-delete-button):not(.requirements-react-detailsButton):focus-visible,
+body.dark-mode .window-action-menu > summary:focus-visible,
+body.dark-mode .analysis-window-options > summary:focus-visible,
+body.dark-mode .di-more-actions > summary:focus-visible {
+    border-color: #60a5fa;
+    outline-color: rgba(96, 165, 250, 0.34);
+    background: #2563eb;
+    color: #ffffff;
 }

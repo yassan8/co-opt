@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import { generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
+import { AnalysisGridSamplingField } from './AnalysisGridSamplingField';
+import { AnalysisRayCountField } from './AnalysisRayCountField';
 
 export type BasicAnalysisType =
   | 'spot-diagram'
@@ -887,17 +889,17 @@ export function BasicAnalysisPage({ type }: { type: BasicAnalysisType }) {
                 </select>
               </label>
               <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
-                <label className="analysis-window-field"><span>Ray number</span><input type="number" min={1} step={1} value={spotRayCount} onChange={(event) => setSpotRayCount(Number(event.target.value))} /></label>
-                <label className="analysis-window-field"><span>Ring count</span><select value={spotRingCount} onChange={(event) => setSpotRingCount(Number(event.target.value))}>{RING_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-                <label className="analysis-window-field"><span>Ray pattern</span><select value={spotPattern} onChange={(event) => setSpotPattern(event.target.value as 'annular' | 'grid')}><option value="annular">Annular</option><option value="grid">Rectangle</option></select></label>
+                <AnalysisRayCountField value={spotRayCount} max={20001} onValueChange={(value) => setSpotRayCount(Number(value))} />
+                <label className="analysis-window-field"><span>Rings</span><select value={spotRingCount} onChange={(event) => setSpotRingCount(Number(event.target.value))}>{RING_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                <label className="analysis-window-field"><span>Pupil pattern</span><select value={spotPattern} onChange={(event) => setSpotPattern(event.target.value as 'annular' | 'grid')}><option value="annular">Annular</option><option value="grid">Rectangle</option></select></label>
               </div></details>
             </>
           ) : null}
 
           {type === 'spherical-aberration' ? (
             <>
-              <label className="analysis-window-field"><span>Ray number</span><input type="number" min={1} max={1001} step={1} value={sphericalRayCount} onChange={(event) => setSphericalRayCount(Number(event.target.value))} /></label>
               <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
+                <AnalysisRayCountField value={sphericalRayCount} max={1001} onValueChange={(value) => setSphericalRayCount(Number(value))} />
                 <label className="analysis-window-field"><span>Reference focus</span><select value={referenceFocusMode} onChange={(event) => setReferenceFocusMode(event.target.value as any)}><option value="primary-paraxial">Primary paraxial</option><option value="current-paraxial">Current paraxial</option><option value="chief-ray">Chief ray</option></select></label>
                 <span className="analysis-window-status">(Always normalized by stop diameter)</span>
               </div></details>
@@ -908,8 +910,8 @@ export function BasicAnalysisPage({ type }: { type: BasicAnalysisType }) {
             <>
               <label className="analysis-window-field"><span>Lateral displacement (+/- mm)</span><input type="number" min={0} step={0.01} value={lateralRange} onChange={(event) => setLateralRange(Number(event.target.value))} /></label>
               <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
-                <label className="analysis-window-field"><span>Points</span><input type="number" min={2} max={201} step={1} value={lateralPointCount} onChange={(event) => setLateralPointCount(Number(event.target.value))} /></label>
-                <label className="analysis-window-field"><span>Rays</span><input type="number" min={1} max={5001} step={1} value={lateralRayCount} onChange={(event) => setLateralRayCount(Number(event.target.value))} /></label>
+                <AnalysisRayCountField value={lateralRayCount} max={5001} onValueChange={(value) => setLateralRayCount(Number(value))} />
+                <label className="analysis-window-field"><span>Field samples</span><input type="number" min={2} max={201} step={1} value={lateralPointCount} onChange={(event) => setLateralPointCount(Number(event.target.value))} /></label>
                 <label className="analysis-window-field"><span>Rings</span><input type="number" min={1} max={99} step={1} value={lateralRingCount} onChange={(event) => setLateralRingCount(Number(event.target.value))} /></label>
                 <label className="analysis-window-field"><span>Chief ray</span><select value={lateralChiefRay} onChange={(event) => setLateralChiefRay(event.target.value as any)}><option value="stop-center">Stop center</option><option value="beam-centroid">Beam centroid</option></select></label>
                 <label className="analysis-window-field"><span>Smooth N</span><input type="number" min={0} max={50} step={1} value={lateralSmoothN} onChange={(event) => setLateralSmoothN(Number(event.target.value))} /></label>
@@ -919,15 +921,17 @@ export function BasicAnalysisPage({ type }: { type: BasicAnalysisType }) {
 
           {type === 'transverse-aberration' ? (
             <>
-              <label className="analysis-window-field"><span>Ray number</span><input type="number" min={9} max={10001} step={1} value={transverseRayCount} onChange={(event) => setTransverseRayCount(Number(event.target.value))} /></label>
-              <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel"><span className="analysis-window-status">(Always normalized by stop diameter)</span></div></details>
+              <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
+                <AnalysisRayCountField value={transverseRayCount} min={9} max={10001} onValueChange={(value) => setTransverseRayCount(Number(value))} />
+                <span className="analysis-window-status">(Always normalized by stop diameter)</span>
+              </div></details>
             </>
           ) : null}
 
           {type === 'opd-fan' ? (
             <>
-              <label className="analysis-window-field"><span>Pupil sampling</span><select value={opdFanGridSize} onChange={(event) => setOpdFanGridSize(Number(event.target.value))}><option value={33}>33</option><option value={65}>65</option><option value={129}>129</option></select></label>
               <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
+                <AnalysisGridSamplingField value={opdFanGridSize} options={[33, 65, 129]} onValueChange={(value) => setOpdFanGridSize(Number(value))} />
                 <label className="analysis-window-field"><span>Aberration scale (± waves)</span><input type="number" min={0.001} step={0.01} value={opdFanScale} onChange={(event) => setOpdFanScale(Number(event.target.value))} /></label>
                 <span className="analysis-window-status">Entrance pupil / image-point reference sphere / raw OPD</span>
               </div></details>
@@ -939,11 +943,11 @@ export function BasicAnalysisPage({ type }: { type: BasicAnalysisType }) {
               <label className="analysis-window-field"><span>Wavelength</span><select value={throughFocusWavelength} onChange={(event) => setThroughFocusWavelength(event.target.value as 'all' | 'primary')}><option value="all">All</option><option value="primary">Primary</option></select></label>
               <label className="analysis-window-field"><span>Defocus ±mm</span><input type="number" min={0} step={0.001} value={throughFocusDefocus} onChange={(event) => setThroughFocusDefocus(Number(event.target.value))} /></label>
               <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
+                <AnalysisRayCountField value={throughFocusRayCount} max={20001} onValueChange={(value) => setThroughFocusRayCount(Number(value))} />
+                <label className="analysis-window-field"><span>Rings</span><select value={throughFocusRingCount} onChange={(event) => setThroughFocusRingCount(Number(event.target.value))}>{RING_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                <label className="analysis-window-field"><span>Pupil pattern</span><select value={throughFocusPattern} onChange={(event) => setThroughFocusPattern(event.target.value as 'annular' | 'grid')}><option value="annular">Annular</option><option value="grid">Rectangle</option></select></label>
                 <label className="analysis-window-field"><span>Steps</span><input type="number" min={3} max={61} step={1} value={throughFocusSteps} onChange={(event) => setThroughFocusSteps(Number(event.target.value))} /></label>
                 <label className="analysis-window-field"><span>Scale (µm)</span><input type="number" min={1} step={1} value={throughFocusScale} onChange={(event) => setThroughFocusScale(Number(event.target.value))} /></label>
-                <label className="analysis-window-field"><span>Ray number</span><input type="number" min={1} max={20001} step={1} value={throughFocusRayCount} onChange={(event) => setThroughFocusRayCount(Number(event.target.value))} /></label>
-                <label className="analysis-window-field"><span>Ring count</span><select value={throughFocusRingCount} onChange={(event) => setThroughFocusRingCount(Number(event.target.value))}>{RING_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-                <label className="analysis-window-field"><span>Ray pattern</span><select value={throughFocusPattern} onChange={(event) => setThroughFocusPattern(event.target.value as 'annular' | 'grid')}><option value="annular">Annular</option><option value="grid">Rectangle</option></select></label>
               </div></details>
             </>
           ) : null}

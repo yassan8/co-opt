@@ -4,6 +4,7 @@ import { plotDistortionPercent, plotGridDistortion } from '../../evaluation/aber
 import { applyDistortionHorizontalOffset as applySharedDistortionHorizontalOffset } from '../../evaluation/aberrations/distortion-display.ts';
 import { runNativeDistortion, runNativeGridDistortion } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
+import { AnalysisGridSamplingField } from './AnalysisGridSamplingField';
 
 export type DistortionAnalysisType = 'distortion' | 'distortion-grid';
 
@@ -646,16 +647,15 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
     <div className="analysis-window-page" data-analysis-kind={type}>
       <div className="analysis-window-commandbar">
         {type === 'distortion-grid' ? (
-          <label className="analysis-window-field"><span>Grid size</span>
-            <select value={gridSize} onChange={(e) => setGridSize(e.target.value)}>
-              {['10', '15', '20', '25', '30', '35', '40', '45', '50'].map((v) => (
-                <option key={v} value={v}>{v}×{v}</option>
-              ))}
-            </select>
-          </label>
+          <AnalysisGridSamplingField
+            label="Field grid"
+            value={gridSize}
+            options={['10', '15', '20', '25', '30', '35', '40', '45', '50']}
+            onValueChange={setGridSize}
+          />
         ) : null}
         {type === 'distortion' ? (
-          <label className="analysis-window-field"><span>Sampling points</span>
+          <label className="analysis-window-field"><span>Field samples</span>
             <input
               type="text"
               value={samplingPointsInput}

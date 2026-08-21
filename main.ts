@@ -199,6 +199,8 @@ interface CameraOptions {
   storeDrawCrossBounds?: boolean;
   cameraDistance?: number;
   cameraBoundsOverride?: { minY: number; maxY: number };
+  centerVerticalOnOpticalAxis?: boolean;
+  fitOpticalSystemOnly?: boolean;
 }
 
 // Export THREE and OrbitControls to global scope for popup windows
@@ -2996,7 +2998,11 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
 
         let effectiveMinZ = minZ;
         let effectiveMaxZ = maxZ;
-        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
+        // Render view switching must not change the lens scale or position based
+        // on which rays/labels happen to exist in the current scene.
+        const sceneBounds = options.fitOpticalSystemOnly === true
+            ? null
+            : __coopt_calculateOpticalElementsBounds(scene);
         if (Number.isFinite(Number(sceneBounds?.min?.z))) {
             effectiveMinZ = Math.min(effectiveMinZ, Number(sceneBounds.min.z));
         }
@@ -3022,7 +3028,7 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
             ? Math.max(Number(sceneBounds.max.y), systemMaxY)
             : systemMaxY;
         let targetCenterY = 0;
-        if (options.cameraBoundsOverride) {
+        if (options.fitOpticalSystemOnly !== true && options.cameraBoundsOverride) {
             const cbo = options.cameraBoundsOverride as any;
             if (Number.isFinite(cbo.minY) && Number.isFinite(cbo.maxY)) {
                 minY = Math.min(minY, cbo.minY);
@@ -3041,6 +3047,12 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
             const swap = minY;
             minY = maxY;
             maxY = swap;
+        }
+        if (options.centerVerticalOnOpticalAxis === true) {
+            const verticalExtent = Math.max(Math.abs(minY), Math.abs(maxY), Math.abs(systemMaxY), 1e-6);
+            minY = -verticalExtent;
+            maxY = verticalExtent;
+            targetCenterY = 0;
         }
 
         const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
@@ -3144,7 +3156,9 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
 
         let effectiveMinZ = minZ;
         let effectiveMaxZ = maxZ;
-        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
+        const sceneBounds = options.fitOpticalSystemOnly === true
+            ? null
+            : __coopt_calculateOpticalElementsBounds(scene);
         if (Number.isFinite(Number(sceneBounds?.min?.z))) {
             effectiveMinZ = Math.min(effectiveMinZ, Number(sceneBounds.min.z));
         }
@@ -3168,7 +3182,7 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
             ? Math.max(Number(sceneBounds.max.x), maxY)
             : maxY;
         let targetCenterX = 0;
-        if (options.cameraBoundsOverride) {
+        if (options.fitOpticalSystemOnly !== true && options.cameraBoundsOverride) {
             const cbo = options.cameraBoundsOverride as any;
             if (Number.isFinite(cbo.minY) && Number.isFinite(cbo.maxY)) {
                 minX = Math.min(minX, cbo.minY);
@@ -3185,6 +3199,12 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
             const swap = minX;
             minX = maxX;
             maxX = swap;
+        }
+        if (options.centerVerticalOnOpticalAxis === true) {
+            const verticalExtent = Math.max(Math.abs(minX), Math.abs(maxX), Math.abs(maxY), 1e-6);
+            minX = -verticalExtent;
+            maxX = verticalExtent;
+            targetCenterX = 0;
         }
 
         const savedBounds = camera?.userData?.__drawCrossOrthoBounds;

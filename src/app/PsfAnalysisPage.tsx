@@ -3,6 +3,10 @@ import Plotly from 'plotly.js-dist-min';
 import { PSFPlotter } from '../../evaluation/psf/psf-plot.ts';
 import { derivePupilAndFocalLengthMmFromParaxial } from '../../evaluation/spot-diagram.ts';
 import { calculateImageSpaceDiffractionParams, findStopSurfaceIndex } from '../../raytracing/core/ray-paraxial.ts';
+import {
+  ANALYSIS_PUPIL_SAMPLING_OPTIONS,
+  AnalysisGridSamplingField,
+} from './AnalysisGridSamplingField';
 
 type SelectOption = { value: string; label: string };
 type WavelengthEntry = { wavelength: number; weight: number };
@@ -310,7 +314,6 @@ export function PsfAnalysisPage() {
   const [colorMode, setColorMode] = useState<'pseudo' | 'true' | 'false'>('true');
   const [opdMode, setOpdMode] = useState<'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved'>('pistonTiltRemoved');
   const [busy, setBusy] = useState(false);
-  const [stopping, setStopping] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState('');
   const [pipelineBadge, setPipelineBadge] = useState('');
@@ -347,12 +350,16 @@ export function PsfAnalysisPage() {
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => () => {
+    const token = cancelRef.current;
+    if (token && !token.aborted) token.abort('Analysis window closed');
+  }, []);
+
   const run = useCallback(async () => {
     if (busy || !chartRef.current) return;
     const token = createCancelToken();
     cancelRef.current = token;
     setBusy(true);
-    setStopping(false);
     setPipelineBadge('Running');
     setProgress(0);
     setProgressText('Starting...');
@@ -576,18 +583,9 @@ export function PsfAnalysisPage() {
     } finally {
       cancelRef.current = null;
       setBusy(false);
-      setStopping(false);
       window.setTimeout(() => setProgressText((current) => current === 'Done' ? '' : current), 350);
     }
   }, [busy, colorMode, logScale, objectIndex, opdMode, samplingSize, wavelength, zeroPad]);
-
-  const stop = useCallback(() => {
-    const token = cancelRef.current;
-    if (!token || token.aborted) return;
-    setStopping(true);
-    setProgressText('Stopping...');
-    token.abort('Stopped by user');
-  }, []);
 
   return (
     <div className="analysis-window-page" data-analysis-kind="psf">
@@ -595,15 +593,14 @@ export function PsfAnalysisPage() {
         <label className="analysis-window-field"><span>Wavelength</span><select value={wavelength} onChange={(event) => setWavelength(event.target.value)}>{wavelengthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label className="analysis-window-field"><span>Object</span><select value={objectIndex} onChange={(event) => setObjectIndex(event.target.value)}>{objectOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <details className="analysis-window-options"><summary>Options</summary><div className="analysis-window-options__panel">
+          <AnalysisGridSamplingField value={samplingSize} options={ANALYSIS_PUPIL_SAMPLING_OPTIONS} onValueChange={(value) => setSamplingSize(Number(value))} title="Ray-traced OPD grid size across the pupil" />
           <label className="analysis-window-field"><span>Zero pad</span><select value={zeroPad} onChange={(event) => setZeroPad(event.target.value as any)} title="Auto 4x: FFT size = OPD grid x4. None: no padding."><option value="auto">Auto 4x</option><option value="none">None</option><option value="512">512</option><option value="1024">1024</option><option value="2048">2048</option><option value="4096">4096</option></select></label>
-          <label className="analysis-window-field"><span>OPD grid sampling</span><select value={samplingSize} onChange={(event) => setSamplingSize(Number(event.target.value))}>{[32, 64, 128, 256, 512, 1024, 2048, 4096].map((size) => <option key={size} value={size}>{size}x{size}</option>)}</select></label>
           <label className="analysis-window-toggle"><input type="checkbox" checked={logScale} onChange={(event) => setLogScale(event.target.checked)} />Log scale</label>
           <label className="analysis-window-field"><span>Color</span><select value={colorMode} onChange={(event) => setColorMode(event.target.value as any)} title="True color renders wavelengths outside the modeled human visual response black. False color gives UV/IR symbolic analysis colours."><option value="pseudo">Pseudo color</option><option value="true">True color</option><option value="false">False color (UV/IR)</option></select></label>
           <label className="analysis-window-field"><span>Wavefront</span><select value={opdMode} onChange={(event) => setOpdMode(event.target.value as any)} title="Raw preserves wavefront tilt and wavelength-dependent image displacement."><option value="raw">Preserve P/T (Raw)</option><option value="pistonTiltRemoved">Remove P/T</option><option value="pistonTiltDefocusRemoved">Remove P/T/D</option></select></label>
           {pipelineBadge ? <span className={`analysis-window-status${pipelineBadge === 'Error' ? ' is-error' : ''}`}>{pipelineBadge}</span> : null}
         </div></details>
         <button className="analysis-window-primary-action" type="button" title="Show PSF" onClick={() => void run()} disabled={busy}>{busy ? 'Calculating…' : 'Show'}</button>
-        <button className="analysis-window-secondary-action" type="button" onClick={stop} disabled={!busy || stopping}>{stopping ? 'Stopping...' : 'Stop'}</button>
       </div>
       {(busy || !!progressText) ? <ProgressBar value={progress} text={progressText || 'Working...'} /> : null}
       {error ? <div className="analysis-window-error">{error}</div> : null}

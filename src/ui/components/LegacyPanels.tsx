@@ -3332,9 +3332,6 @@ export default function LegacyPanels() {
                 Remove P/T/D
               </label>
               <button id="show-wavefront-diagram-btn">Show wavefront diagram</button>
-              <button id="stop-opd-btn" type="button" disabled>
-                Stop
-              </button>
               <button id="zernike-fit-btn">Zernike Fit</button>
             </div>
             <div id="opd-progress" style={{ margin: "8px 0", fontSize: 13, color: "#666" }}></div>
@@ -3413,9 +3410,6 @@ export default function LegacyPanels() {
               </select>
               <button id="show-psf-btn" title="Calculate and display PSF from OPD data">
                 Show PSF
-              </button>
-              <button id="stop-psf-btn" title="Stop the current PSF calculation" disabled>
-                Stop
               </button>
               <span id="psf-pipeline-badge" title="PSF execution route">
                 Unified pipeline: Ready

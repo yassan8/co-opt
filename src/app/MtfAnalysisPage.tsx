@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import { runNativeFieldMtfMap } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
+import {
+  ANALYSIS_PUPIL_SAMPLING_OPTIONS,
+  AnalysisGridSamplingField,
+} from './AnalysisGridSamplingField';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -434,8 +438,6 @@ function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []): boolean {
   }
   return hasIdealParaxial;
 }
-
-const SAMPLING_OPTIONS = ['16', '32', '64', '128', '256', '512', '1024', '2048', '4096'];
 
 function buildPchipCurve(xValues: number[], yValues: number[], pointCount = 101): { x: number[]; y: number[] } {
   const points = xValues
@@ -1671,10 +1673,11 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
       </select></label>
   );
   const samplingSelect = (
-    <label className="analysis-window-field"><span>Sampling</span>
-      <select value={sampling} onChange={e => setSampling(e.target.value)}>
-        {SAMPLING_OPTIONS.map(v => <option key={v} value={v}>{v}×{v}</option>)}
-      </select></label>
+    <AnalysisGridSamplingField
+      value={sampling}
+      options={ANALYSIS_PUPIL_SAMPLING_OPTIONS}
+      onValueChange={setSampling}
+    />
   );
   const removePtdChk = (
     <label className="analysis-window-toggle">
@@ -1713,6 +1716,7 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
         <details className="analysis-window-options">
           <summary>Options</summary>
           <div className="analysis-window-options__panel">
+            {samplingSelect}
             {type === 'through-focus-mtf' && (<>
               <label className="analysis-window-field"><span>Defocus min · mm</span><input type="number" step="0.001" value={defocusMin} onChange={e => setDefocusMin(e.target.value)} /></label>
               <label className="analysis-window-field"><span>Defocus max · mm</span><input type="number" step="0.001" value={defocusMax} onChange={e => setDefocusMax(e.target.value)} /></label>
@@ -1723,7 +1727,6 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
               <label className="analysis-window-field"><span>Object max</span><input type="number" step="0.001" value={fieldMax} onChange={e => setFieldMax(e.target.value)} /></label>
               <label className="analysis-window-field"><span>Steps</span><input type="number" min="3" max="201" step="1" value={fieldSteps} onChange={e => setFieldSteps(e.target.value)} /></label>
             </>)}
-            {samplingSelect}
             <label className="analysis-window-field"><span>Method</span>
               <select value={mtfMethod} onChange={e => setMtfMethod(e.target.value as MtfMethodOption)}>
                 <option value="hopkins-tcc">Hopkins-TCC</option>
