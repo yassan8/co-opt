@@ -8,9 +8,9 @@ import {
   AnalysisGridSamplingField,
 } from './AnalysisGridSamplingField';
 
-type SelectOption = { value: string; label: string };
-type WavelengthEntry = { wavelength: number; weight: number };
-type CancelToken = {
+export type SelectOption = { value: string; label: string };
+export type WavelengthEntry = { wavelength: number; weight: number };
+export type CancelToken = {
   readonly aborted: boolean;
   readonly reason: unknown;
   abort: (reason?: unknown) => void;
@@ -48,7 +48,7 @@ function findFunction(name: string): { host: any; fn: (...args: any[]) => any } 
   return null;
 }
 
-async function waitForFunction(name: string, timeoutMs = 12000): Promise<{ host: any; fn: (...args: any[]) => any }> {
+export async function waitForFunction(name: string, timeoutMs = 12000): Promise<{ host: any; fn: (...args: any[]) => any }> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const match = findFunction(name);
@@ -58,7 +58,7 @@ async function waitForFunction(name: string, timeoutMs = 12000): Promise<{ host:
   throw new Error(`${name} is not available`);
 }
 
-function getRows(host: any, kind: 'optical' | 'object' | 'source'): any[] {
+export function getRows(host: any, kind: 'optical' | 'object' | 'source'): any[] {
   if (!host) return [];
   const functionName = kind === 'optical' ? 'getOpticalSystemRows' : kind === 'object' ? 'getObjectRows' : 'getSourceRows';
   const tableName = kind === 'optical' ? 'tableOpticalSystem' : kind === 'object' ? 'tableObject' : 'tableSource';
@@ -102,7 +102,7 @@ function getRows(host: any, kind: 'optical' | 'object' | 'source'): any[] {
     : [];
 }
 
-function getBestHost(): any {
+export function getBestHost(): any {
   let best = window as any;
   let bestScore = -1;
   for (const host of getWindowCandidates()) {
@@ -115,7 +115,7 @@ function getBestHost(): any {
   return best;
 }
 
-function createCancelToken(): CancelToken {
+export function createCancelToken(): CancelToken {
   let aborted = false;
   let reason: unknown = null;
   const listeners: Array<(reason?: unknown) => void> = [];
@@ -136,14 +136,14 @@ function createCancelToken(): CancelToken {
   };
 }
 
-function throwIfCancelled(token: CancelToken) {
+export function throwIfCancelled(token: CancelToken) {
   if (!token.aborted) return;
   const error: any = new Error(String(token.reason || 'Cancelled'));
   error.code = 'CANCELLED';
   throw error;
 }
 
-async function raceWithCancel<T>(promise: Promise<T>, token: CancelToken): Promise<T> {
+export async function raceWithCancel<T>(promise: Promise<T>, token: CancelToken): Promise<T> {
   throwIfCancelled(token);
   const cancelled = new Promise<T>((_, reject) => token.onAbort((reason) => {
     const error: any = new Error(String(reason || 'Cancelled'));
@@ -159,7 +159,7 @@ function isPrimaryRow(value: unknown): boolean {
   return normalized.includes('primary') || ['true', 'yes', '1'].includes(normalized);
 }
 
-function getPrimaryWavelength(host: any, sourceRows: any[]): number {
+export function getPrimaryWavelength(host: any, sourceRows: any[]): number {
   const direct = Number(safeCall(() => host?.getPrimaryWavelength?.(), NaN));
   if (Number.isFinite(direct) && direct > 0) return direct;
   const primary = sourceRows.find((row) => isPrimaryRow(row?.primary));
@@ -177,7 +177,7 @@ function buildObjectOptions(rows: any[]): SelectOption[] {
   });
 }
 
-function buildWavelengthOptions(host: any, sourceRows: any[]): SelectOption[] {
+export function buildWavelengthOptions(host: any, sourceRows: any[]): SelectOption[] {
   const primary = getPrimaryWavelength(host, sourceRows);
   const out: SelectOption[] = [{ value: 'all', label: 'All' }];
   const seen = new Set<string>();
@@ -201,7 +201,7 @@ function buildWavelengthOptions(host: any, sourceRows: any[]): SelectOption[] {
   return out;
 }
 
-function buildWavelengthEntries(value: string, sourceRows: any[], primary: number): WavelengthEntry[] {
+export function buildWavelengthEntries(value: string, sourceRows: any[], primary: number): WavelengthEntry[] {
   const raw: WavelengthEntry[] = [];
   if (value !== 'all') {
     const selected = Number(value);
@@ -236,7 +236,7 @@ function buildWavelengthEntries(value: string, sourceRows: any[], primary: numbe
   return merged;
 }
 
-function derivePsfScale(opticalRows: any[], wavelength: number, samplingSize: number, fftSize: number) {
+export function derivePsfScale(opticalRows: any[], wavelength: number, samplingSize: number, fftSize: number) {
   let pupilDiameterMm = Number.NaN;
   let focalLengthMm = Number.NaN;
   try {
@@ -274,7 +274,7 @@ function derivePsfScale(opticalRows: any[], wavelength: number, samplingSize: nu
   return { pupilDiameterMm, focalLengthMm, pixelSizeUm };
 }
 
-function sampleBilinear(grid: any[][], y: number, x: number): number {
+export function sampleBilinear(grid: any[][], y: number, x: number): number {
   const height = Array.isArray(grid) ? grid.length : 0;
   const width = height > 0 && grid[0] ? grid[0].length : 0;
   if (!(height > 0 && width > 0) || x < 0 || y < 0 || x > width - 1 || y > height - 1) return 0;
@@ -291,7 +291,7 @@ function sampleBilinear(grid: any[][], y: number, x: number): number {
   return (v00 * (1 - tx) + v10 * tx) * (1 - ty) + (v01 * (1 - tx) + v11 * tx) * ty;
 }
 
-function ProgressBar({ value, text }: { value: number; text: string }) {
+export function ProgressBar({ value, text }: { value: number; text: string }) {
   return (
     <div className="analysis-window-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(value)}>
       <div className="analysis-window-progress__label"><span>{Math.round(value)}%</span><span>{text}</span></div>
@@ -312,7 +312,7 @@ export function PsfAnalysisPage() {
   const [samplingSize, setSamplingSize] = useState(32);
   const [logScale, setLogScale] = useState(false);
   const [colorMode, setColorMode] = useState<'pseudo' | 'true' | 'false'>('true');
-  const [opdMode, setOpdMode] = useState<'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved'>('pistonTiltRemoved');
+  const [opdMode, setOpdMode] = useState<'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved'>('raw');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState('');

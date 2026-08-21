@@ -2448,6 +2448,7 @@ type AnalysisWindowKey =
   | 'opd-fan'
   | 'opd'
   | 'psf'
+  | 'multi-field-psf'
   | 'mtf'
   | 'through-focus-spot'
   | 'through-focus-mtf'
@@ -2466,6 +2467,7 @@ const ANALYSIS_WINDOW_SIZE_MAP: Record<AnalysisWindowKey, { width: number; heigh
   'opd-fan': { width: 980, height: 760, title: 'OPD Fan' },
   'opd': { width: 980, height: 760, title: 'Optical Path Difference' },
   'psf': { width: 980, height: 760, title: 'Point Spread Function' },
+  'multi-field-psf': { width: 1180, height: 820, title: 'Multi-Field PSF' },
   'mtf': { width: 980, height: 760, title: 'Modulation Transfer Function' },
   'through-focus-spot': { width: 1100, height: 820, title: 'Through-Focus Spot' },
   'through-focus-mtf': { width: 1100, height: 820, title: 'Through-Focus MTF' },
@@ -2726,6 +2728,7 @@ export function handleAnalysisSelect(selectedValue: string): void {
     'opd-fan': 'open-opd-fan-window-btn',
     'opd': 'open-opd-window-btn',
     'psf': 'open-psf-window-btn',
+    'multi-field-psf': 'open-multi-field-psf-window-btn',
     'mtf': 'open-mtf-window-btn',
     'through-focus-spot': 'open-through-focus-spot-window-btn',
     'through-focus-mtf': 'open-through-focus-mtf-window-btn',

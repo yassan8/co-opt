@@ -446,13 +446,19 @@ w.runDesktopAnalysisComputeForPopup = runDesktopAnalysisComputeForPopup;
 
 async function runDesktopNativeOpdMapForPopup(payload: {
     objectIndex?: number;
+    objectRowsOverride?: any[];
     gridSize?: number;
     wavelengthUm?: number;
     surfaceIndex?: number;
     opdDisplayMode?: 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved' | string;
     suppressProgressHud?: boolean;
 }) {
-    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    const popupRows = collectPopupRowsFromMainWindow();
+    const opticalSystemRows = popupRows.opticalSystemRows;
+    const sourceRows = popupRows.sourceRows;
+    const objectRows = Array.isArray(payload?.objectRowsOverride) && payload.objectRowsOverride.length > 0
+        ? payload.objectRowsOverride.map((row: any) => row && typeof row === 'object' ? { ...row } : row)
+        : popupRows.objectRows;
     const jobId = `native-opd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlistenProgress: null | (() => void) = null;
 
@@ -17658,6 +17664,7 @@ export function setupTransformationControls(): void {
                     'opd-fan': 'open-opd-fan-window-btn',
                     'opd': 'open-opd-window-btn',
                     'psf': 'open-psf-window-btn',
+                    'multi-field-psf': 'open-multi-field-psf-window-btn',
                     'mtf': 'open-mtf-window-btn',
                     'through-focus-spot': 'open-through-focus-spot-window-btn',
                     'through-focus-mtf': 'open-through-focus-mtf-window-btn',
