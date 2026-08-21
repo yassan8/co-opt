@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PSFPlotter } from '../../evaluation/psf/psf-plot.ts';
+import { detectConjugateType } from '../../utils/conjugate-detection.ts';
 import { runNativeGridDistortion } from '../desktop/ipc/client.ts';
 import {
   ANALYSIS_PUPIL_SAMPLING_OPTIONS,
@@ -27,7 +28,6 @@ import {
   buildMultiFieldPsfObjectRow,
   deriveMultiFieldPsfFieldDefinition,
   getMultiFieldPsfLocalToGlobalRotationDeg,
-  rotateMultiFieldPsfGridCartesian,
 } from './multi-field-psf-model';
 import {
   calculateImageSimulationDifferencePercent,
@@ -51,6 +51,7 @@ type ComparisonMode = 'wipe' | 'side-by-side' | 'difference';
 
 type SimulationSummary = {
   backend: string;
+  conjugateType: 'finite' | 'infinite';
   psfFields: number;
   failedFields: number;
   imagePixelPitchXUm: number;
@@ -350,6 +351,7 @@ export function ImageSimulationPage() {
       const objectRows = getRows(host, 'object');
       const sourceRows = getRows(host, 'source');
       if (!opticalRows.length) throw new Error('No optical system data.');
+      const conjugateType = detectConjugateType(opticalRows);
       if (!objectRows.length) throw new Error('No field data.');
 
       const normalizedObjectRows = normalizeDistortionObjectRows(objectRows, opticalRows, sourceRows);
@@ -449,16 +451,16 @@ export function ImageSimulationPage() {
               const key = wavelengthKey(component.wavelengthUm);
               const kernels = fieldKernelsByWavelength.get(key);
               if (!kernels || !Array.isArray(component.psfData) || !component.psfData.length) return;
-              const globalPsf = rotateMultiFieldPsfGridCartesian(component.psfData, rotation);
               kernels.push({
                 xNorm: normalizeFieldCoordinateForImage(point.x, simulationMaxX, definition.mode),
                 yNorm: normalizeFieldCoordinateForImage(point.y, simulationMaxY, definition.mode),
                 kernel: resamplePsfToImageKernel(
-                  globalPsf,
+                  component.psfData,
                   component.pixelSizeUm,
                   imagePixelPitchXUm,
                   imagePixelPitchYUm,
                   kernelSize,
+                  rotation,
                 ),
                 fieldLabel: point.key,
               });
@@ -517,6 +519,7 @@ export function ImageSimulationPage() {
       setDifferenceImage(difference);
       setSummary({
         backend: Array.from(new Set(distortionLayers.map((layer) => layer.backend))).join(' + '),
+        conjugateType,
         psfFields,
         failedFields,
         imagePixelPitchXUm,
@@ -609,6 +612,7 @@ export function ImageSimulationPage() {
 
       {summary && <footer className="image-simulation-metrics">
         <span><small>Distortion map</small>{summary.backend}</span>
+        <span><small>Conjugate</small>{summary.conjugateType === 'infinite' ? 'Infinite' : 'Finite'}</span>
         <span><small>Max displacement</small>{summary.maxDistortionPercent.toFixed(3)}% field diagonal</span>
         <span><small>Lateral chromatic</small>{summary.maxLateralChromaticUm.toFixed(3)} µm max separation</span>
         <span><small>Image pitch</small>{summary.imagePixelPitchXUm.toFixed(2)} × {summary.imagePixelPitchYUm.toFixed(2)} µm/px</span>

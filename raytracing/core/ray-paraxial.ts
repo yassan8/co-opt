@@ -5,6 +5,7 @@
 
 import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, calculateRefractiveIndexHerzberger, calculateRefractiveIndexHikari } from '../../data/glass.ts';
 import { hikariGlassDB } from '../../data/hikari_catalog.ts';
+import { detectConjugateType } from '../../utils/conjugate-detection.ts';
 
 // デバッグレベル設定（0: エラーのみ、1: 警告+エラー、2: 情報+警告+エラー、3: すべて）
 const DEBUG_LEVEL = 1;
@@ -1995,8 +1996,8 @@ export function calculateImageSpaceDiffractionParams(opticalSystemRows, waveleng
     const entrancePupilDiameterMm = Number(paraxial?.entrancePupilDiameter);
     const exitPupilDiameterMm = Number(paraxial?.exitPupilDetails?.diameter ?? paraxial?.exitPupilDiameter);
     const exitPupilPositionMm = Number(paraxial?.exitPupilDetails?.position);
-    const objectThicknessRaw = String((opticalSystemRows?.[0] as any)?.thickness ?? '').trim().toUpperCase();
-    const isInfiniteConjugate = (objectThicknessRaw === 'INF' || objectThicknessRaw === 'INFINITY');
+    const conjugateType = detectConjugateType(opticalSystemRows);
+    const isInfiniteConjugate = conjugateType === 'infinite';
 
     const fNumberImageSpace = (
       Number.isFinite(focalLengthMm)
@@ -2055,6 +2056,7 @@ export function calculateImageSpaceDiffractionParams(opticalSystemRows, waveleng
 
     return {
       wavelengthUm: wlUm,
+      conjugateType,
       fNumberWorking,
       naImage,
       cutoffLpmm,

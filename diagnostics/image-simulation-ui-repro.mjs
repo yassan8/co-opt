@@ -21,6 +21,14 @@ assert.match(files.page, /buildWavelengthEntries/);
 assert.match(files.page, /distortionEntries = simulationMode === 'psf'/);
 assert.match(files.page, /PSFPlotter\.wavelengthToLinearRGB/);
 assert.match(files.page, /result\.spectralComponents/);
+assert.match(files.page, /detectConjugateType\(opticalRows\)/);
+assert.match(files.page, /<small>Conjugate<\/small>/);
+assert.doesNotMatch(files.page, /rotateMultiFieldPsfGridCartesian/, 'image simulation must not bilinearly rotate before rebinning');
+assert.match(
+  files.page,
+  /resamplePsfToImageKernel\([\s\S]*?component\.psfData[\s\S]*?kernelSize,[\s\S]*?rotation,/,
+  'PSF rotation and image-pixel rebinning must happen in one conservative stage',
+);
 assert.match(files.multi, /spectralComponents: results\.map/);
 assert.match(files.page, /opdMode:\s*'pistonTiltRemoved'/);
 assert.match(files.page, /Full: Distortion \+ PSF/);
@@ -50,6 +58,8 @@ assert.match(files.model, /convolveImageSpatiallyVarying/);
 assert.match(files.model, /warpImageWithDistortion/);
 assert.match(files.model, /srgbToLinear/);
 assert.match(files.model, /resamplePsfToImageKernel/);
+assert.match(files.model, /exact overlap area/);
+assert.match(files.model, /Math\.floor\(columns \/ 2\)/);
 assert.match(files.model, /combineImageSimulationSpectralLayers/);
 assert.match(files.model, /calculateMaxLateralChromaticDisplacementUm/);
 assert.match(files.model, /viewBox="0 0 4096 4096"/);
@@ -86,6 +96,8 @@ console.log(JSON.stringify({
   realMultiFieldPsf: true,
   wavelengthSpecificDistortion: true,
   monochromaticFieldPsfs: true,
+  conjugates: ['infinite', 'finite'],
+  psfRebinning: 'single-stage conservative area overlap',
   cieLinearRgbSynthesis: true,
   centeredPsfKernel: 'Remove P/T',
   stopButton: false,

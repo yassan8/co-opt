@@ -42,7 +42,9 @@ export function detectConjugateType(
         return 'finite';
     }
 
-    const thicknessRaw = objectRow.thickness;
+    const thicknessRaw = objectRow.thickness
+        ?? objectRow.Thickness
+        ?? objectRow.distance;
     const thicknessStr = (thicknessRaw !== undefined && thicknessRaw !== null)
         ? String(thicknessRaw).trim().toUpperCase()
         : '';
@@ -51,9 +53,13 @@ export function detectConjugateType(
     // Check for infinite conjugate indicators
     const isInfinite = (
         thicknessRaw === Infinity ||
+        thicknessRaw === -Infinity ||
         thicknessStr === 'INF' ||
+        thicknessStr === '-INF' ||
         thicknessStr === 'INFINITY' ||
+        thicknessStr === '-INFINITY' ||
         thicknessStr === '∞' ||
+        thicknessStr === '-∞' ||
         (Number.isFinite(thicknessVal) && Math.abs(thicknessVal) > 1e6)
     );
 

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { detectConjugateType } from "../../../utils/conjugate-detection.ts";
 import type {
   NativeChiefRayAngleRequest,
   NativeChiefRayAngleResponse,
@@ -1096,7 +1097,7 @@ function buildTransverseFieldSettingsFromObjectRows(objectRows: any[] = []): any
   return objectRows.map((row, index) => {
     const originalPositionType = String((row as any)?.__cooptOriginalPosition ?? (row as any)?.position ?? (row as any)?.fieldType ?? (row as any)?.type ?? "").trim().toLowerCase();
     const positionType = String((row as any)?.position ?? (row as any)?.fieldType ?? (row as any)?.type ?? "").trim().toLowerCase();
-    const isAngle = positionType.includes("angle") && !positionType.includes("rect") && !positionType.includes("height");
+    const isAngle = isAngleObjectPositionTagNativeLike(positionType);
     const parseNumber = (value: unknown): number | null => {
       const parsed = Number(value);
       return Number.isFinite(parsed) ? parsed : null;
@@ -1336,15 +1337,14 @@ function pickImageSurfaceIndexNativeLike(opticalSystemRows: any[]): number {
 function isFiniteConjugateNativeLike(opticalSystemRows: any[]): boolean {
   const row0 = Array.isArray(opticalSystemRows) ? opticalSystemRows[0] : null;
   if (!row0 || typeof row0 !== "object") return false;
-  const thickness = (row0 as any)?.thickness ?? (row0 as any)?.Thickness ?? (row0 as any)?.distance;
-  return !isInfinitySpec(thickness);
+  return detectConjugateType(opticalSystemRows) === "finite";
 }
 
 function getObjectDistanceMmNativeLike(opticalSystemRows: any[]): number {
   const row0 = Array.isArray(opticalSystemRows) ? opticalSystemRows[0] : null;
   if (!row0 || typeof row0 !== "object") return 0;
+  if (detectConjugateType(opticalSystemRows) === "infinite") return 0;
   const raw = (row0 as any)?.thickness ?? (row0 as any)?.Thickness ?? (row0 as any)?.distance;
-  if (isInfinitySpec(raw)) return 0;
   const value = Number(raw);
   return Number.isFinite(value) ? value : 0;
 }
@@ -1417,6 +1417,14 @@ function getObjectPositionTagNativeLike(row: any): string {
   return String(row?.position ?? row?.object ?? row?.objectType ?? row?.type ?? "").trim().toLowerCase();
 }
 
+function isAngleObjectPositionTagNativeLike(value: unknown): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  return normalized === "angle"
+    || normalized === "point"
+    || normalized === "fieldangle"
+    || normalized === "objectangle";
+}
+
 function deriveGridFieldModeNativeLike(objectRows: any[]): "angle" | "height" | "imageheight" {
   const rows = Array.isArray(objectRows) ? objectRows : [];
   if (rows.some((row) => getObjectPositionTagNativeLike(row).includes("imageheight"))) return "imageheight";
@@ -1426,7 +1434,7 @@ function deriveGridFieldModeNativeLike(objectRows: any[]): "angle" | "height" | 
   })) {
     return "height";
   }
-  if (rows.some((row) => getObjectPositionTagNativeLike(row).includes("angle"))) return "angle";
+  if (rows.some((row) => isAngleObjectPositionTagNativeLike(getObjectPositionTagNativeLike(row)))) return "angle";
 
   const hasNumericHeight = rows.some((row) => {
     const value = Number(row?.yHeight ?? row?.height ?? row?.["object y"]);
@@ -3349,7 +3357,7 @@ export async function runNativeOpdMap(
     );
     selectedObject = objectRows[objectIndex] || objectRows[0] || {};
     const objectType = String((selectedObject as any)?.position ?? (selectedObject as any)?.object ?? '').toLowerCase();
-    const isAngle = objectType.includes("angle") || objectType === "point";
+    const isAngle = isAngleObjectPositionTagNativeLike(objectType);
     const xVal = Number((selectedObject as any)?.xHeightAngle ?? (selectedObject as any)?.xFieldAngle ?? (selectedObject as any)?.xHeight ?? (selectedObject as any)?.x ?? 0) || 0;
     const yVal = Number((selectedObject as any)?.yHeightAngle ?? (selectedObject as any)?.yFieldAngle ?? (selectedObject as any)?.fieldAngle ?? (selectedObject as any)?.yHeight ?? (selectedObject as any)?.y ?? 0) || 0;
     const gridSize = Number.isFinite(Number(payload?.gridSize)) ? Math.max(17, Math.floor(Number(payload.gridSize))) : 129;
@@ -3867,7 +3875,7 @@ export async function runNativeOpdRmsWaves(
       return 0.5876;
     })();
     const objectType = String((requestedObject as any)?.position ?? (requestedObject as any)?.object ?? '').toLowerCase();
-    const isAngle = objectType.includes("angle") || objectType === "point";
+    const isAngle = isAngleObjectPositionTagNativeLike(objectType);
     const xVal = Number((requestedObject as any)?.xHeightAngle ?? (requestedObject as any)?.xFieldAngle ?? (requestedObject as any)?.xHeight ?? (requestedObject as any)?.x ?? 0) || 0;
     const yVal = Number((requestedObject as any)?.yHeightAngle ?? (requestedObject as any)?.yFieldAngle ?? (requestedObject as any)?.fieldAngle ?? (requestedObject as any)?.yHeight ?? (requestedObject as any)?.y ?? 0) || 0;
     const gridSize = Number.isFinite(Number(payload?.gridSize)) ? Math.max(17, Math.floor(Number(payload.gridSize))) : 129;
