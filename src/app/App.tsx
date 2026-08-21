@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import Plotly from 'plotly.js-dist-min';
 import * as THREE from 'three';
+import { BasicAnalysisPage, type BasicAnalysisType } from './BasicAnalysisPage';
 import { DistortionAnalysisPage } from './DistortionAnalysisPage';
 import { MtfAnalysisPage } from './MtfAnalysisPage';
+import { PsfAnalysisPage } from './PsfAnalysisPage';
+import { WavefrontAnalysisPage } from './WavefrontAnalysisPage';
+import { AnalysisRayCountField } from './AnalysisRayCountField';
 import {
   getOptimizedResultApplySnapshots,
   injectActiveOpticalRows,
@@ -55,6 +59,7 @@ import {
   formatOptimizeElapsed,
   shouldAppendOptimizeConsoleRow,
 } from './optimize-console-format.ts';
+import { calculateMdiTileLayout, type MdiTileRect } from './mdi-layout.ts';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
@@ -4323,14 +4328,14 @@ function DesktopSettingsPage() {
   const mfrSet = new Set(mfrs.map(s => String(s).toUpperCase()));
 
   return (
-    <div style={{ height: '100vh', width: '100vw', fontFamily: 'Arial, sans-serif', background: '#f4f4f4', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: 12, background: '#fff', flex: '1 1 auto', overflow: 'auto' }}>
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Glass Map: Default Manufacturers</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+    <div className="settings-page">
+      <div className="settings-page__content">
+        <div className="settings-section-title is-first">Glass Map: Default Manufacturers</div>
+        <div className="settings-section-help">
           Choose which manufacturers are enabled by default when opening Glass Map.<br />
           If nothing is selected, Glass Map will show all manufacturers.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 14px 0' }}>
+        <div className="settings-choice-grid">
           {ALLOWED_MFR.map(mfr => (
             <label key={mfr}>
               <input type="checkbox" checked={mfrSet.has(mfr.toUpperCase())} onChange={e => handleMfrChange(mfr, e.target.checked)} />{' '}{mfr}
@@ -4338,18 +4343,18 @@ function DesktopSettingsPage() {
           ))}
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Dark Mode</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>Enable VS Code-style dark mode for the entire UI.</div>
-        <label style={{ margin: '8px 0 14px 0', display: 'block' }}>
+        <div className="settings-section-title">Appearance</div>
+        <div className="settings-section-help">Use a dark workspace palette throughout Co-opt.</div>
+        <label className="settings-toggle-row">
           <input type="checkbox" checked={darkMode} onChange={e => handleDarkModeChange(e.target.checked)} />{' '}Enable Dark Mode
         </label>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>Optimize Ray Grid Size</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-section-title">Optimization</div>
+        <div className="settings-section-help">
           Select the pupil sampling density used by Spot operands during optimization.
         </div>
-        <label style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) minmax(140px, 1fr)', alignItems: 'center', gap: 8, margin: '8px 0 14px 0' }}>
-          Ray grid
+        <label className="settings-field-row">
+          <span>Ray grid</span>
           <select
             aria-label="Optimize Ray Grid Size"
             value={optimizeRayGridSize}
@@ -4361,13 +4366,13 @@ function DesktopSettingsPage() {
           </select>
         </label>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Infinite Field: Pupil Sampling Mode</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-section-title">Analysis Defaults</div>
+        <div className="settings-section-help">
           Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.<br />
           This sets <code>__COOPT_FORCE_INFINITE_PUPIL_MODE</code> to <code>stop</code> or <code>entrance</code>.
         </div>
-        {!loaded && <div style={{ fontSize: 12, color: '#888' }}>Loading…</div>}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        {!loaded && <div className="settings-loading">Loading…</div>}
+        <div className="settings-choice-list" role="group" aria-label="Infinite field pupil sampling mode">
           {(['', 'stop', 'entrance'] as const).map(val => (
             <label key={val}>
               <input type="radio" name="force-mode" value={val} checked={forceMode === val} onChange={() => handleForceModeChange(val)} />
@@ -4375,13 +4380,13 @@ function DesktopSettingsPage() {
             </label>
           ))}
         </div>
-        <div style={{ fontSize: 12, color: '#666' }}>Note: Changes take effect on the next calculation.</div>
+        <div className="settings-note">Changes take effect on the next calculation.</div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>OPD Reference</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-subtitle">OPD Reference</div>
+        <div className="settings-section-help">
           Select the reference used for OPD, wavefront, PSF, and MTF calculations.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        <div className="settings-choice-list" role="group" aria-label="OPD reference">
           <label>
             <input type="radio" name="opd-reference-mode" value="exit-pupil" checked={opdReferenceMode === 'exit-pupil'} onChange={() => handleOpdReferenceModeChange('exit-pupil')} />{' '}
             Exit Pupil
@@ -4391,13 +4396,13 @@ function DesktopSettingsPage() {
             Image Plane
           </label>
         </div>
-        <div style={{ fontSize: 12, color: '#666' }}>Changes take effect on the next calculation.</div>
+        <div className="settings-note">Changes take effect on the next calculation.</div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>OPD Chief Ray</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-subtitle">OPD Chief Ray</div>
+        <div className="settings-section-help">
           Select the center used by the chief ray for OPD reference calculations.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        <div className="settings-choice-list" role="group" aria-label="OPD chief ray">
           <label>
             <input type="radio" name="opd-chief-ray-mode" value="stop-center" checked={opdChiefRayMode === 'stop-center'} onChange={() => handleOpdChiefRayModeChange('stop-center')} />{' '}
             Stop Center
@@ -4412,11 +4417,11 @@ function DesktopSettingsPage() {
           </label>
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>OPD Pupil Normalization</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-subtitle">OPD Pupil Normalization</div>
+        <div className="settings-section-help">
           Select whether the OPD Fan coordinate uses the fixed paraxial entrance pupil or the transmitted pupil envelope.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        <div className="settings-choice-list" role="group" aria-label="OPD pupil normalization">
           <label>
             <input type="radio" name="opd-pupil-normalization-mode" value="fixed-entrance-pupil" checked={opdPupilNormalizationMode === 'fixed-entrance-pupil'} onChange={() => handleOpdPupilNormalizationModeChange('fixed-entrance-pupil')} />{' '}
             Fixed Entrance Pupil
@@ -4427,11 +4432,11 @@ function DesktopSettingsPage() {
           </label>
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>Exit Pupil Reference Point</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+        <div className="settings-subtitle">Exit Pupil Reference Point</div>
+        <div className="settings-section-help">
           Select the point on the exit pupil used to define the reference sphere.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+        <div className="settings-choice-list" role="group" aria-label="Exit pupil reference point">
           <label>
             <input type="radio" name="opd-exit-pupil-reference-point-mode" value="chief-ray-intersection" checked={opdExitPupilReferencePointMode === 'chief-ray-intersection'} onChange={() => handleOpdExitPupilReferencePointModeChange('chief-ray-intersection')} />{' '}
             Chief Ray / Exit Pupil Intersection
@@ -4442,11 +4447,10 @@ function DesktopSettingsPage() {
           </label>
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '18px 0 8px 0' }}>Reference Sphere Conventions</div>
-        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
-          Configure the geometric and sign conventions used by the OPD reference sphere.
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 1fr) minmax(180px, 1fr)', gap: 8, margin: '8px 0 12px 0' }}>
+        <details className="settings-advanced">
+          <summary>Reference Sphere Conventions</summary>
+          <p>Configure the geometric and sign conventions used by the OPD reference sphere.</p>
+          <div className="settings-advanced__grid">
           <label>Reference sphere wavelength
             <select value={opdReferenceSphereOptions.referenceSphereWavelengthMode} onChange={e => handleOpdReferenceSphereOptionChange('referenceSphereWavelengthMode', e.target.value)}>
               <option value="primary-wavelength">Primary wavelength</option><option value="per-wavelength">Per wavelength</option>
@@ -4543,7 +4547,8 @@ function DesktopSettingsPage() {
               <option value="image-to-exit-pupil">Image to exit pupil</option><option value="exit-pupil-to-image">Exit pupil to image</option>
             </select>
           </label>
-        </div>
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -4725,6 +4730,16 @@ export default function App() {
       return false;
     }
   });
+  const renderLabelVisibilityRef = useRef({
+    designIntent: renderShowDesignIntentLabels,
+    principalPoints: renderShowPrincipalPointLabels,
+    surfaceNumbers: renderShowSurfaceNumberLabels,
+  });
+  renderLabelVisibilityRef.current = {
+    designIntent: renderShowDesignIntentLabels,
+    principalPoints: renderShowPrincipalPointLabels,
+    surfaceNumbers: renderShowSurfaceNumberLabels,
+  };
   const [renderDesignIntentLiveSync, setRenderDesignIntentLiveSync] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem(RENDER_DESIGN_INTENT_SYNC_KEY);
@@ -8271,9 +8286,9 @@ const collectLegacyCrossRays = async (
               showSurfaceOrigins: false,
               showSemidiaRing: false,
               showMirrorBackText: false,
-              showDesignIntentLabels: renderShowDesignIntentLabels,
-              showPrincipalPointLabels: renderShowPrincipalPointLabels,
-              showSurfaceNumberLabels: renderShowSurfaceNumberLabels,
+              showDesignIntentLabels: renderLabelVisibilityRef.current.designIntent,
+              showPrincipalPointLabels: renderLabelVisibilityRef.current.principalPoints,
+              showSurfaceNumberLabels: renderLabelVisibilityRef.current.surfaceNumbers,
               crossSectionDirection: axis,
               crossSectionCenterOffset: 0
             });
@@ -8303,9 +8318,9 @@ const collectLegacyCrossRays = async (
             showSurfaceOrigins: false,
             showSemidiaRing: false,
             showMirrorBackText: false,
-            showDesignIntentLabels: renderShowDesignIntentLabels,
-            showPrincipalPointLabels: renderShowPrincipalPointLabels,
-            showSurfaceNumberLabels: renderShowSurfaceNumberLabels,
+            showDesignIntentLabels: renderLabelVisibilityRef.current.designIntent,
+            showPrincipalPointLabels: renderLabelVisibilityRef.current.principalPoints,
+            showSurfaceNumberLabels: renderLabelVisibilityRef.current.surfaceNumbers,
             crossSectionDirection: axis,
             crossSectionCenterOffset: 0
           });
@@ -8392,9 +8407,19 @@ const collectLegacyCrossRays = async (
 
       const cameraStartMs = performance.now();
       if (axis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
-        w.setCameraForXZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
+        w.setCameraForXZCrossSection({
+          includeRayStartMargin: true,
+          storeDrawCrossBounds: true,
+          centerVerticalOnOpticalAxis: true,
+          fitOpticalSystemOnly: true,
+        });
       } else if (axis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
-        w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
+        w.setCameraForYZCrossSection({
+          includeRayStartMargin: true,
+          storeDrawCrossBounds: true,
+          centerVerticalOnOpticalAxis: true,
+          fitOpticalSystemOnly: true,
+        });
       }
       timingStages.push({ label: 'camera', ms: performance.now() - cameraStartMs });
 
@@ -8567,7 +8592,7 @@ const collectLegacyCrossRays = async (
             rows,
             prevOrigins || [],
             nextSurfaceOrigins,
-            renderShowDesignIntentLabels || renderShowPrincipalPointLabels || renderShowSurfaceNumberLabels,
+            renderLabelVisibilityRef.current.designIntent || renderLabelVisibilityRef.current.principalPoints || renderLabelVisibilityRef.current.surfaceNumbers,
           )
         ) {
           const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
@@ -8623,9 +8648,9 @@ const collectLegacyCrossRays = async (
           showSurfaceOrigins: false,
           showSemidiaRing: true,
           showMirrorBackText: false,
-          showDesignIntentLabels: renderShowDesignIntentLabels,
-          showPrincipalPointLabels: renderShowPrincipalPointLabels,
-          showSurfaceNumberLabels: renderShowSurfaceNumberLabels,
+          showDesignIntentLabels: renderLabelVisibilityRef.current.designIntent,
+          showPrincipalPointLabels: renderLabelVisibilityRef.current.principalPoints,
+          showSurfaceNumberLabels: renderLabelVisibilityRef.current.surfaceNumbers,
           surfaceMeshSegments: RENDER_3D_SURFACE_MESH_SEGMENTS,
           toricMeshSegments: RENDER_3D_TORIC_MESH_SEGMENTS,
           crossSectionDirection: 'YZ',
@@ -8722,32 +8747,13 @@ const collectLegacyCrossRays = async (
       try {
         setRenderWindowStatus('Finalizing camera and render...');
         const cameraStartMs = performance.now();
-        // Calculate actual bounds of drawn rays before adjusting camera
-        const rayBoundsForCamera = { minY: Infinity, maxY: -Infinity };
-        if (sceneForDraw) {
-          sceneForDraw.traverse((child: any) => {
-            if (child?.userData?.rayType === 'crossBeam' && child.geometry) {
-              const positions = child.geometry.attributes?.position;
-              const posArray = positions?.array as ArrayLike<number> | undefined;
-              if (posArray && typeof posArray.length === 'number' && posArray.length >= 2) {
-                for (let i = 1; i < posArray.length; i += 3) {
-                  const y = posArray[i];
-                  if (Number.isFinite(y)) {
-                    rayBoundsForCamera.minY = Math.min(rayBoundsForCamera.minY, y);
-                    rayBoundsForCamera.maxY = Math.max(rayBoundsForCamera.maxY, y);
-                  }
-                }
-              }
-            }
-          });
-        }
-        
-        const cameraBoundsOverride = (Number.isFinite(rayBoundsForCamera.minY) && Number.isFinite(rayBoundsForCamera.maxY))
-          ? { minY: rayBoundsForCamera.minY, maxY: rayBoundsForCamera.maxY }
-          : null;
-        
         if (typeof w.setCameraForYZCrossSection === 'function') {
-          w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true, cameraBoundsOverride });
+          w.setCameraForYZCrossSection({
+            includeRayStartMargin: true,
+            storeDrawCrossBounds: true,
+            centerVerticalOnOpticalAxis: true,
+            fitOpticalSystemOnly: true,
+          });
         } else if (typeof w.fitCameraToScene === 'function') {
           w.fitCameraToScene();
         } else if (typeof w.adjustCameraView === 'function') {
@@ -9260,13 +9266,15 @@ const collectLegacyCrossRays = async (
                 await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
               } catch (_) {}
             }
-            const quickInitialRayCount = Math.min(3, Math.max(1, Number(getLiveRenderRayCount(renderRayCountRef.current) || 1)));
-            const redrawOk: any = await redrawCurrentRenderView(undefined, undefined, redrawRequestId, {
-              quickInitialRayCount,
-              scheduleFullRayPass: true,
-              useLiveRayCount: true,
-              skipRayGeneration: true,
-            });
+            const redrawOptions: RenderRedrawOptions = renderViewModeRef.current === '3D'
+              ? { useLiveRayCount: true }
+              : {
+                  quickInitialRayCount: Math.min(3, Math.max(1, Number(getLiveRenderRayCount(renderRayCountRef.current) || 1))),
+                  scheduleFullRayPass: true,
+                  useLiveRayCount: true,
+                  skipRayGeneration: true,
+                };
+            const redrawOk: any = await redrawCurrentRenderView(undefined, undefined, redrawRequestId, redrawOptions);
             if (queuedSyncStamp && redrawOk !== false) {
               try { w.__cooptLastRenderSyncStamp = queuedSyncStamp; } catch (_) {}
               if (String(renderPendingSyncStampRef.current ?? '').trim() === queuedSyncStamp) {
@@ -9571,7 +9579,7 @@ const collectLegacyCrossRays = async (
             const requestId = beginRenderDrawRequest();
             const quickInitialRayCount = Math.min(3, Math.max(1, Number(getLiveRenderRayCount(renderRayCountRef.current) || 1)));
             const ok = currentMode === '3D'
-              ? await drawRender3DView(startupStages, requestId, { quickInitialRayCount, scheduleFullRayPass: true, useLiveRayCount: true, skipRayGeneration: true })
+              ? await drawRender3DView(startupStages, requestId, { useLiveRayCount: true })
               : await drawCrossSectionView(currentMode === 'XZ' ? 'XZ' : currentAxis === 'XZ' ? 'XZ' : 'YZ', requestId, { quickInitialRayCount, scheduleFullRayPass: true, useLiveRayCount: true, skipRayGeneration: true });
             if (!ok) {
               setRenderWindowStatus('Draw failed');
@@ -9838,7 +9846,7 @@ const collectLegacyCrossRays = async (
   useEffect(() => {
     if (!analysisWindowMode.enabled) return;
     if (analysisWindowMode.analysis === 'astigmatism') return;
-    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid') return;
+    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid' || analysisWindowMode.analysis === 'spot-diagram' || analysisWindowMode.analysis === 'spherical-aberration' || analysisWindowMode.analysis === 'magnification-chromatic-aberration' || analysisWindowMode.analysis === 'integrated-aberration' || analysisWindowMode.analysis === 'transverse-aberration' || analysisWindowMode.analysis === 'opd-fan' || analysisWindowMode.analysis === 'through-focus-spot' || analysisWindowMode.analysis === 'opd' || analysisWindowMode.analysis === 'psf') return;
 
     let restoreOpener: (() => void) | null = null;
     let tauriCloseUnlisten: (() => void) | null = null;
@@ -9927,9 +9935,9 @@ const collectLegacyCrossRays = async (
       'mtf': 'Modulation Transfer Function',
       'through-focus-spot': 'Through-Focus Spot',
       'through-focus-mtf': 'Through-Focus MTF',
-      'field-mtf': 'Field MTF (Test)',
+      'field-mtf': 'Field MTF',
     };
-    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid']);
+    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf']);
 
     const targetButtonId = analysisButtonMap[analysisWindowMode.analysis];
     const targetPopupTitle = analysisPopupTitleMap[analysisWindowMode.analysis];
@@ -10028,6 +10036,18 @@ const collectLegacyCrossRays = async (
 
   if (analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid') {
     return <DistortionAnalysisPage type={analysisWindowMode.analysis as any} />;
+  }
+
+  if (['spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot'].includes(analysisWindowMode.analysis)) {
+    return <BasicAnalysisPage type={analysisWindowMode.analysis as BasicAnalysisType} />;
+  }
+
+  if (analysisWindowMode.analysis === 'opd') {
+    return <WavefrontAnalysisPage />;
+  }
+
+  if (analysisWindowMode.analysis === 'psf') {
+    return <PsfAnalysisPage />;
   }
 
   if (isOptimizeWindowMode) {
@@ -11119,7 +11139,6 @@ const collectLegacyCrossRays = async (
               ev?.stepScale ??
               Number.NaN
             );
-            const qpDamping = Number(ev?.qpDamping ?? Number.NaN);
             const rho = Number(ev?.rho ?? Number.NaN);
             const alpha = Number(ev?.alpha ?? Number.NaN);
             const consoleMin = Number.isFinite(progressBestScore)
@@ -11152,7 +11171,6 @@ const collectLegacyCrossRays = async (
                 elapsedMs,
                 min: consoleMin,
                 damping: dampingFactor,
-                qpDamping,
                 rho,
                 alpha,
                 improv: improvement,
@@ -11856,6 +11874,23 @@ const collectLegacyCrossRays = async (
       }
     };
 
+    const requestOptimizeStop = () => {
+      (window as any).__cooptOptimizeStopRequested = true;
+      try { (globalThis as any).__stopOptimization = true; } catch (_) {}
+      setOptStopRequested(true);
+      try {
+        const wAny = window as any;
+        if (wAny.OptimizationMVP && typeof wAny.OptimizationMVP.stop === 'function') {
+          wAny.OptimizationMVP.stop();
+        }
+        const op = wAny.opener;
+        if (op && !op.closed && op.OptimizationMVP && typeof op.OptimizationMVP.stop === 'function') {
+          op.OptimizationMVP.stop();
+        }
+      } catch (_) {}
+      setOptimizeState((prev: any) => ({ ...prev, phase: 'stopping', issue: 'Stop requested...' }));
+    };
+
     const optimizeDisplayScore = Number.isFinite(Number(optimizeState?.requirementScoreTable))
       ? Number(optimizeState.requirementScoreTable)
       : (Number.isFinite(Number(optimizeState?.requirementScoreAfter))
@@ -11871,125 +11906,153 @@ const collectLegacyCrossRays = async (
       }
       return '-';
     })();
+    const optimizePhase = String(optimizeState?.phase || '-');
+    const optimizeDecision = optimizeState?.phase === 'accept'
+      ? 'ACCEPT'
+      : (optimizeState?.phase === 'reject' ? 'REJECT' : '-');
+    const optimizeStatusLabel = optStopRequested && optRunning
+      ? 'Stopping'
+      : (optRunning ? 'Running' : String(optimizeState?.status || 'Idle'));
+    const optimizeStatusClass = optRunning
+      ? ' is-running'
+      : (/error|fail/i.test(optimizeStatusLabel) ? ' is-error' : (/done|finish|complete/i.test(optimizeStatusLabel) ? ' is-complete' : ''));
 
     return (
-      <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#f4f4f4', color: '#222', padding: 12, boxSizing: 'border-box', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
-          <div style={{ fontSize: 14, fontWeight: 600, flex: '0 0 auto' }}>Optimize Progress</div>
-          <div style={{ height: 6, background: '#eceef2', borderRadius: 999, overflow: 'hidden', flex: '1 1 auto', minWidth: 120 }}>
-            <div style={{ width: `${percent}%`, height: '100%', background: '#4f8cff', transition: 'width 120ms linear' }} />
+      <div className="optimize-progress-page">
+        <header className="optimize-progress-header">
+          <div className="optimize-progress-heading">
+            <div>
+              <div className="optimize-progress-eyebrow">Optimizer</div>
+              <h1>Optimize Progress</h1>
+            </div>
+            <span className={`optimize-progress-status${optimizeStatusClass}`}>{optimizeStatusLabel}</span>
           </div>
-          <div style={{ fontSize: 12, color: '#666', flex: '0 0 auto' }}>{optRunning ? 'Running' : String(optimizeState?.status || 'Idle')}</div>
+          <div className="optimize-progress-track-row">
+            <div
+              className="optimize-progress-track"
+              role="progressbar"
+              aria-label="Optimization progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(percent)}
+            >
+              <div className="optimize-progress-track-value" style={{ width: `${percent}%` }} />
+            </div>
+            <span className="optimize-progress-percent">{Math.round(percent)}%</span>
+          </div>
+        </header>
+
+        <div className="optimize-progress-actions">
+          <div className="optimize-progress-action-group">
+            <button type="button" className="optimize-progress-button is-primary" disabled={optRunning} onClick={() => { void runOptimize(); }}>Run</button>
+            <button type="button" className="optimize-progress-button is-danger" disabled={!optRunning} onClick={requestOptimizeStop}>Stop</button>
+          </div>
+          <button type="button" className="optimize-progress-button" disabled={optRunning} onClick={() => { void exportEscapeSnapshots(); }}>Export Snapshots</button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button type="button" disabled={optRunning} onClick={() => { void runOptimize(); }} style={{ padding: '6px 10px' }}>Run</button>
-          <button type="button" disabled={!optRunning} onClick={() => {
-            (window as any).__cooptOptimizeStopRequested = true;
-            try { (globalThis as any).__stopOptimization = true; } catch (_) {}
-            setOptStopRequested(true);
-            try {
-              const wAny = window as any;
-              if (wAny.OptimizationMVP && typeof wAny.OptimizationMVP.stop === 'function') {
-                wAny.OptimizationMVP.stop();
-              }
-              const op = wAny.opener;
-              if (op && !op.closed && op.OptimizationMVP && typeof op.OptimizationMVP.stop === 'function') {
-                op.OptimizationMVP.stop();
-              }
-            } catch (_) {}
-            setOptimizeState((prev: any) => ({ ...prev, phase: 'stopping', issue: 'Stop requested...' }));
-          }} style={{ padding: '6px 10px' }}>Stop</button>
-          <button type="button" disabled={optRunning} onClick={() => { void exportEscapeSnapshots(); }} style={{ padding: '6px 10px' }}>Export Snapshots</button>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            Method
-            <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt-sqp' | 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'))} style={{ padding: '4px 6px' }}>
-              <option value="kkt-sqp">KKT-SQP</option>
-              <option value="kkt">AL + Gauss-Newton</option>
-              <option value="global-al">Global AL + Gauss-Newton (Escape Function)</option>
-              <option value="global-lm">Global LM (LM + Escape Function)</option>
-              <option value="lm">Levenberg-Marquardt (LM)</option>
-              <option value="cd">Coordinate Descent (CD)</option>
-            </select>
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            Max Iterations
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={optMaxIterations}
-              disabled={optRunning}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                setOptMaxIterations(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
-              }}
-              style={{ width: 100, padding: '4px 6px' }}
-            />
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            Max Escape
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={optMaxEscapeLoops}
-              disabled={optRunning}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                setOptMaxEscapeLoops(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
-              }}
-              style={{ width: 100, padding: '4px 6px' }}
-            />
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            W
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={optEscapeFunctionWidth}
-              disabled={optRunning}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                setOptEscapeFunctionWidth(Number.isFinite(n) ? n : 1);
-              }}
-              style={{ width: 100, padding: '4px 6px' }}
-            />
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            H
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={optEscapeFunctionHeight}
-              disabled={optRunning}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                setOptEscapeFunctionHeight(Number.isFinite(n) ? n : 0.1);
-              }}
-              style={{ width: 100, padding: '4px 6px' }}
-            />
-          </label>
-          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={optAutoRenderOnAccept} disabled={optRunning} onChange={(e) => setOptAutoRenderOnAccept(!!e.target.checked)} style={{ width: 16, height: 16 }} />
-            Auto-render
-          </label>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Phase</span><span>{String(optimizeState?.phase || '-')}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Decision</span><span>{String(optimizeState?.phase === 'accept' ? 'ACCEPT' : optimizeState?.phase === 'reject' ? 'REJECT' : '-')}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Accept/Reject</span><span>{`${Number(optimizeState?.acceptCount || 0)} / ${Number(optimizeState?.rejectCount || 0)}`}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Escape</span><span>{optimizeEscapeLoopLabel}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Iter</span><span>{String(optimizeState?.iterations ?? 0)}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Vars</span><span>{String(optimizeState?.variableCount ?? 0)}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Req</span><span>{String(optimizeState?.requirementCount ?? '-')}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Score</span><span>{Number.isFinite(optimizeDisplayScore) ? optimizeDisplayScore.toFixed(6) : '-'}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Best</span><span>{Number.isFinite(optimizeDisplayBest) ? optimizeDisplayBest.toFixed(6) : '-'}</span></div>
-          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Issue</span><span>{String(optimizeState?.issue || '-')}</span></div>
-        </div>
+
+        <section className="optimize-progress-card" aria-labelledby="optimize-run-settings-title">
+          <div className="optimize-progress-card-header">
+            <h2 id="optimize-run-settings-title">Run settings</h2>
+            <span>Locked while optimization is running</span>
+          </div>
+          <div className="optimize-progress-settings-grid">
+            <label className="optimize-progress-field is-wide">
+              <span>Method</span>
+              <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt-sqp' | 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'))}>
+                <option value="kkt-sqp">KKT-SQP</option>
+                <option value="kkt">AL + Gauss-Newton</option>
+                <option value="global-al">Global AL + Gauss-Newton (Escape Function)</option>
+                <option value="global-lm">Global LM (LM + Escape Function)</option>
+                <option value="lm">Levenberg-Marquardt (LM)</option>
+                <option value="cd">Coordinate Descent (CD)</option>
+              </select>
+            </label>
+            <label className="optimize-progress-field">
+              <span>Max iterations</span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={optMaxIterations}
+                disabled={optRunning}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setOptMaxIterations(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
+                }}
+              />
+            </label>
+            <label className="optimize-progress-field">
+              <span>Max escape loops</span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={optMaxEscapeLoops}
+                disabled={optRunning}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setOptMaxEscapeLoops(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
+                }}
+              />
+            </label>
+            <label className="optimize-progress-field">
+              <span>Escape width (W)</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={optEscapeFunctionWidth}
+                disabled={optRunning}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setOptEscapeFunctionWidth(Number.isFinite(n) ? n : 1);
+                }}
+              />
+            </label>
+            <label className="optimize-progress-field">
+              <span>Escape height (H)</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={optEscapeFunctionHeight}
+                disabled={optRunning}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setOptEscapeFunctionHeight(Number.isFinite(n) ? n : 0.1);
+                }}
+              />
+            </label>
+            <label className="optimize-progress-toggle is-wide">
+              <input type="checkbox" checked={optAutoRenderOnAccept} disabled={optRunning} onChange={(e) => setOptAutoRenderOnAccept(!!e.target.checked)} />
+              <span>
+                <strong>Auto-render accepted steps</strong>
+                <small>Refresh the optical view after each accepted update.</small>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section className="optimize-progress-metrics" aria-label="Optimization summary">
+          <div className="optimize-progress-metric"><span>Iteration</span><strong>{String(optimizeState?.iterations ?? 0)}</strong></div>
+          <div className="optimize-progress-metric"><span>Score</span><strong>{Number.isFinite(optimizeDisplayScore) ? optimizeDisplayScore.toFixed(6) : '-'}</strong></div>
+          <div className="optimize-progress-metric"><span>Best</span><strong>{Number.isFinite(optimizeDisplayBest) ? optimizeDisplayBest.toFixed(6) : '-'}</strong></div>
+          <div className="optimize-progress-metric"><span>Accept / Reject</span><strong>{`${Number(optimizeState?.acceptCount || 0)} / ${Number(optimizeState?.rejectCount || 0)}`}</strong></div>
+        </section>
+
+        <section className="optimize-progress-card" aria-labelledby="optimize-run-details-title">
+          <div className="optimize-progress-card-header">
+            <h2 id="optimize-run-details-title">Run details</h2>
+          </div>
+          <dl className="optimize-progress-details">
+            <div><dt>Phase</dt><dd>{optimizePhase}</dd></div>
+            <div><dt>Decision</dt><dd>{optimizeDecision}</dd></div>
+            <div><dt>Escape loop</dt><dd>{optimizeEscapeLoopLabel}</dd></div>
+            <div><dt>Variables</dt><dd>{String(optimizeState?.variableCount ?? 0)}</dd></div>
+            <div><dt>Requirements</dt><dd>{String(optimizeState?.requirementCount ?? '-')}</dd></div>
+            <div className="is-wide"><dt>Issue</dt><dd>{String(optimizeState?.issue || '-')}</dd></div>
+          </dl>
+        </section>
       </div>
     );
   }
@@ -12007,8 +12070,8 @@ const collectLegacyCrossRays = async (
 
     return (
       <>
-        <div style={{ height: '100vh', width: '100vw', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#f4f4f4' }}>
-          <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex' }}>
+        <div className="analysis-window-page analysis-window-page--system-data">
+          <div className="analysis-window-result">
             <SystemDataPanel visible />
           </div>
         </div>
@@ -12073,63 +12136,61 @@ const collectLegacyCrossRays = async (
     };
 
     return (
-      <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#f4f4f4' }}>
-        <div style={{ padding: '10px 12px', background: '#f8f8f8', borderBottom: '1px solid #ddd', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <label htmlFor="analysis-astig-chief-ray" style={{ fontSize: 12, color: '#333' }}>Chief ray:</label>
+      <div className="analysis-window-page">
+        <div className="analysis-window-commandbar">
+          <label className="analysis-window-field" htmlFor="analysis-astig-chief-ray"><span>Chief ray</span>
           <select
             id="analysis-astig-chief-ray"
             value={astigChiefRayDefinition}
             onChange={(e) => setAstigChiefRayDefinition(e.target.value)}
-            style={{ padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
           >
             <option value="stop-center">Stop center</option>
             <option value="beam-midpoint">Beam midpoint</option>
             <option value="beam-centroid">Beam centroid</option>
           </select>
-          <label htmlFor="analysis-astig-beam-pattern" style={{ fontSize: 12, color: '#333' }}>Beam:</label>
+          </label>
+          <label className="analysis-window-field" htmlFor="analysis-astig-beam-pattern"><span>Pupil pattern</span>
           <select
             id="analysis-astig-beam-pattern"
             value={astigBeamPattern}
             onChange={(e) => setAstigBeamPattern(e.target.value as 'cross' | 'grid' | 'annular')}
-            style={{ padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
           >
             <option value="cross">Cross</option>
             <option value="grid">Grid</option>
             <option value="annular">Annular</option>
           </select>
-          <label htmlFor="analysis-astig-point-count" style={{ fontSize: 12, color: '#333' }}>Points:</label>
-          <input
-            id="analysis-astig-point-count"
-            type="number"
-            min={2}
-            max={201}
-            step={1}
-            value={astigPointCount}
-            onChange={(e) => {
-              const parsed = Number(e.target.value);
-              if (!Number.isFinite(parsed)) return;
-              setAstigPointCount(Math.max(2, Math.min(201, Math.round(parsed))));
-            }}
-            style={{ width: 78, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
-          />
-          <label htmlFor="analysis-astig-ray-count" style={{ fontSize: 12, color: '#333' }}>Rays:</label>
-          <input
-            id="analysis-astig-ray-count"
-            type="number"
-            min={9}
-            max={2001}
-            step={1}
-            value={astigRayCount}
-            onChange={(e) => {
-              const parsed = Number(e.target.value);
-              if (!Number.isFinite(parsed)) return;
-              setAstigRayCount(Math.max(9, Math.min(2001, Math.round(parsed))));
-            }}
-            style={{ width: 88, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
-          />
-          {astigBeamPattern === 'annular' && (
-            <>
-              <label htmlFor="analysis-astig-ring-count" style={{ fontSize: 12, color: '#333' }}>Rings:</label>
+          </label>
+          <details className="analysis-window-options">
+            <summary>Options</summary>
+            <div className="analysis-window-options__panel">
+              <AnalysisRayCountField
+                id="analysis-astig-ray-count"
+                value={astigRayCount}
+                min={9}
+                max={2001}
+                onValueChange={(value) => {
+                  const parsed = Number(value);
+                  if (!Number.isFinite(parsed)) return;
+                  setAstigRayCount(Math.max(9, Math.min(2001, Math.round(parsed))));
+                }}
+              />
+              <label className="analysis-window-field" htmlFor="analysis-astig-point-count"><span>Field samples</span>
+                <input
+                  id="analysis-astig-point-count"
+                  type="number"
+                  min={2}
+                  max={201}
+                  step={1}
+                  value={astigPointCount}
+                  onChange={(e) => {
+                    const parsed = Number(e.target.value);
+                    if (!Number.isFinite(parsed)) return;
+                    setAstigPointCount(Math.max(2, Math.min(201, Math.round(parsed))));
+                  }}
+                />
+              </label>
+              {astigBeamPattern === 'annular' && (
+              <label className="analysis-window-field" htmlFor="analysis-astig-ring-count"><span>Rings</span>
               <input
                 id="analysis-astig-ring-count"
                 type="number"
@@ -12142,55 +12203,52 @@ const collectLegacyCrossRays = async (
                   if (!Number.isFinite(parsed)) return;
                   setAstigRingCount(Math.max(1, Math.min(1024, Math.round(parsed))));
                 }}
-                style={{ width: 78, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
               />
-            </>
-          )}
-          <label htmlFor="analysis-astig-focus-range" style={{ fontSize: 12, color: '#333' }}>Focus (+/- mm):</label>
-          <input
-            id="analysis-astig-focus-range"
-            type="number"
-            min={0}
-            step={0.01}
-            value={astigFocusRange}
-            onChange={(e) => {
-              const parsed = Number(e.target.value);
-              if (!Number.isFinite(parsed)) return;
-              setAstigFocusRange(Math.max(0, parsed));
-            }}
-            style={{ width: 88, padding: '5px 8px', fontSize: 12, border: '1px solid #bbb', borderRadius: 4, background: 'white' }}
-          />
+              </label>
+              )}
+              <label className="analysis-window-field" htmlFor="analysis-astig-focus-range"><span>Focus range ± mm</span>
+                <input
+                  id="analysis-astig-focus-range"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={astigFocusRange}
+                  onChange={(e) => {
+                    const parsed = Number(e.target.value);
+                    if (!Number.isFinite(parsed)) return;
+                    setAstigFocusRange(Math.max(0, parsed));
+                  }}
+                />
+              </label>
+            </div>
+          </details>
           <button
             type="button"
+            className="analysis-window-primary-action"
             onClick={rerenderAstigmatism}
             disabled={astigBusy}
-            style={{ padding: '6px 10px', border: '1px solid #bbb', borderRadius: 4, background: '#f8f8f8', cursor: astigBusy ? 'default' : 'pointer', fontSize: 12 }}
           >
             {astigBusy ? 'Rendering...' : 'Show'}
           </button>
-          <span style={{ marginLeft: 'auto', fontSize: 12, color: astigStatus.startsWith('Astigmatism error:') ? '#b00020' : '#666' }}>
+          <span className={`analysis-window-status${astigStatus.startsWith('Astigmatism error:') ? ' is-error' : ''}`}>
             {astigStatus || ''}
           </span>
         </div>
         {(astigBusy || !!astigProgressText) && (
-          <>
-            <div style={{ padding: '6px 12px', fontSize: 12, color: '#333', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="analysis-window-progress">
+            <div className="analysis-window-progress__label">
               <span style={{ fontVariantNumeric: 'tabular-nums', minWidth: 40 }}>{Math.round(astigProgress)}%</span>
               <span>{astigProgressText || 'Calculating...'}</span>
             </div>
-            <div style={{ height: 4, background: '#e6e6e6', width: '100%' }}>
+            <div className="analysis-window-progress__track">
               <div
-                style={{
-                  height: '100%',
-                  width: `${astigProgress}%`,
-                  background: '#1677ff',
-                  transition: 'width 120ms linear'
-                }}
+                className="analysis-window-progress__value"
+                style={{ width: `${astigProgress}%` }}
               />
             </div>
-          </>
+          </div>
         )}
-        <div id="analysis-astig-container" style={{ flex: 1, minHeight: 0, background: 'white' }} />
+        <div id="analysis-astig-container" className="analysis-window-canvas" />
       </div>
     );
   }
@@ -12368,9 +12426,9 @@ const collectLegacyCrossRays = async (
           showSurfaceOrigins: false,
           showSemidiaRing: false,
           showMirrorBackText: false,
-          showDesignIntentLabels: renderShowDesignIntentLabels,
-          showPrincipalPointLabels: renderShowPrincipalPointLabels,
-          showSurfaceNumberLabels: renderShowSurfaceNumberLabels,
+          showDesignIntentLabels: renderLabelVisibilityRef.current.designIntent,
+          showPrincipalPointLabels: renderLabelVisibilityRef.current.principalPoints,
+          showSurfaceNumberLabels: renderLabelVisibilityRef.current.surfaceNumbers,
           crossSectionDirection: axis,
           crossSectionCenterOffset: 0,
         });
@@ -12518,11 +12576,26 @@ const collectLegacyCrossRays = async (
     const compareAlignLabel = renderCompareAlignReference === 'image' ? 'Image' : 'Object';
     return (
       <>
-        <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', margin: 0 }}>
-          <div style={{ minHeight: 36, padding: '4px 8px', borderBottom: '1px solid #ddd', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'nowrap', position: 'relative', zIndex: 8 }}>
-            <button type="button" onClick={handleRenderDraw} style={{ height: 27 }}>3D</button>
-            <button type="button" onClick={handleViewXZ} style={{ height: 27, minWidth: 46, whiteSpace: 'nowrap', flex: '0 0 auto' }}>X-Z</button>
-            <button type="button" onClick={handleViewYZ} style={{ height: 27, minWidth: 46, whiteSpace: 'nowrap', flex: '0 0 auto' }}>Y-Z</button>
+        <div className="render-window-page">
+          <div className="render-window-commandbar window-commandbar">
+            <div className="window-segmented-control" role="group" aria-label="Render view">
+              <button type="button" aria-pressed={renderViewMode === '3D'} onClick={handleRenderDraw}>3D</button>
+              <button type="button" aria-pressed={renderViewMode === 'XZ'} onClick={handleViewXZ}>X-Z</button>
+              <button type="button" aria-pressed={renderViewMode === 'YZ'} onClick={handleViewYZ}>Y-Z</button>
+            </div>
+            <button
+              type="button"
+              className="render-toolbar-popover-button"
+              aria-expanded={renderOptionsOpen}
+              onClick={() => {
+                setRenderOptionsOpen((open) => !open);
+                setRenderSurfaceColorsCollapsed(true);
+              }}
+            >
+              Options
+            </button>
+            {renderOptionsOpen && (
+              <div className="render-options-panel render-options-panel--unified">
             <label
               title="Display closed lens volumes in the 3D view"
               style={{ display: 'flex', alignItems: 'center', gap: 3, height: 27, padding: '0 3px', fontSize: 11, fontWeight: 500, opacity: renderViewMode === '3D' ? 1 : 0.5, whiteSpace: 'nowrap' }}
@@ -12576,7 +12649,7 @@ const collectLegacyCrossRays = async (
               />
               °
             </label>
-            <span style={{ width: 1, height: 22, background: '#d1d5db', margin: '0 2px' }} />
+            <span className="render-options-divider" />
             <select
               aria-label="Export format"
               value={renderExportFormat}
@@ -12609,43 +12682,31 @@ const collectLegacyCrossRays = async (
               }}
               style={{ width: 54, height: 27, fontSize: 12 }}
             />
-            <button
-              type="button"
-              className="render-toolbar-popover-button"
-              aria-expanded={renderOptionsOpen}
-              onClick={() => {
-                setRenderOptionsOpen((open) => !open);
-                setRenderSurfaceColorsCollapsed(true);
-              }}
-            >
-              Options
-            </button>
-            {renderOptionsOpen && (
-              <div className="render-options-panel">
+                <span className="render-options-divider" />
                 <label htmlFor="render-compare-scope">Configs</label>
-                <select id="render-compare-scope" value={renderCompareScope} onChange={(e) => handleRenderCompareScopeChange(e.target.value === 'all' ? 'all' : 'active')} style={{ height: 27 }}>
+                <select id="render-compare-scope" value={renderCompareScope} onChange={(e) => handleRenderCompareScopeChange(e.target.value === 'all' ? 'all' : 'active')}>
                   <option value="active">Active only</option>
                   <option value="all">All configs</option>
                 </select>
                 <label htmlFor="render-compare-direction" style={{ opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>{renderViewMode === 'YZ' ? 'Offset Y' : 'Offset X'}</label>
-                <select id="render-compare-direction" value={renderCompareOffsetDirection} onChange={(e) => setRenderCompareOffsetDirection((e.target.value as RenderCompareOffsetDirection) || 'centered')} disabled={renderCompareScope !== 'all'} style={{ height: 27 }}>
+                <select id="render-compare-direction" value={renderCompareOffsetDirection} onChange={(e) => setRenderCompareOffsetDirection((e.target.value as RenderCompareOffsetDirection) || 'centered')} disabled={renderCompareScope !== 'all'}>
                   <option value="centered">Centered</option>
                   <option value="positive">{renderViewMode === 'YZ' ? 'Up' : 'Right'}</option>
                   <option value="negative">{renderViewMode === 'YZ' ? 'Down' : 'Left'}</option>
                 </select>
                 <label htmlFor="render-compare-step" style={{ opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>Step mm</label>
-                <input id="render-compare-step" type="number" min={0} step={1} value={renderCompareOffsetStepMm} onChange={(e) => { const parsed = Number.parseFloat(e.target.value); setRenderCompareOffsetStepMm(Number.isFinite(parsed) && parsed >= 0 ? parsed : 0); }} disabled={renderCompareScope !== 'all'} style={{ width: 68, height: 27 }} />
+                <input id="render-compare-step" type="number" min={0} step={1} value={renderCompareOffsetStepMm} onChange={(e) => { const parsed = Number.parseFloat(e.target.value); setRenderCompareOffsetStepMm(Number.isFinite(parsed) && parsed >= 0 ? parsed : 0); }} disabled={renderCompareScope !== 'all'} />
                 <label htmlFor="render-compare-align" style={{ opacity: renderCompareScope === 'all' && renderViewMode !== '3D' ? 1 : 0.5 }}>Align</label>
-                <select id="render-compare-align" value={renderCompareAlignReference} onChange={(e) => setRenderCompareAlignReference(e.target.value === 'image' ? 'image' : 'object')} disabled={renderCompareScope !== 'all' || renderViewMode === '3D'} style={{ height: 27 }}>
+                <select id="render-compare-align" value={renderCompareAlignReference} onChange={(e) => setRenderCompareAlignReference(e.target.value === 'image' ? 'image' : 'object')} disabled={renderCompareScope !== 'all' || renderViewMode === '3D'}>
                   <option value="object">Object</option>
                   <option value="image">Image</option>
                 </select>
-                <span style={{ flexBasis: '100%', height: 1, background: '#e5e7eb' }} />
-                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }}><input type="checkbox" checked={renderShowDesignIntentLabels} onChange={(e) => handleToggleRenderLabels(e.target.checked)} />Labels</label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }}><input type="checkbox" checked={renderShowPrincipalPointLabels} onChange={(e) => handleToggleRenderPrincipalPoints(e.target.checked)} />Paraxial</label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }}><input type="checkbox" checked={renderShowSurfaceNumberLabels} onChange={(e) => handleToggleRenderSurfaceNumbers(e.target.checked)} />Surface No.</label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 3 }} title="Reflect Design Intent numeric edits in an open Render window"><input type="checkbox" checked={renderDesignIntentLiveSync} onChange={(e) => handleToggleRenderDesignIntentLiveSync(e.target.checked)} />Intent Sync</label>
-                {renderCompareScope === 'all' && <span style={{ flexBasis: '100%', color: '#666' }}>{renderViewMode === '3D' ? 'Compare offset applies to X-Z / Y-Z views.' : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm, align ${compareAlignLabel}`}</span>}
+                <span className="render-options-divider" />
+                <label className="render-option-toggle"><input type="checkbox" checked={renderShowDesignIntentLabels} onChange={(e) => handleToggleRenderLabels(e.target.checked)} />Labels</label>
+                <label className="render-option-toggle"><input type="checkbox" checked={renderShowPrincipalPointLabels} onChange={(e) => handleToggleRenderPrincipalPoints(e.target.checked)} />Paraxial</label>
+                <label className="render-option-toggle"><input type="checkbox" checked={renderShowSurfaceNumberLabels} onChange={(e) => handleToggleRenderSurfaceNumbers(e.target.checked)} />Surface No.</label>
+                <label className="render-option-toggle" title="Reflect Design Intent numeric edits in an open Render window"><input type="checkbox" checked={renderDesignIntentLiveSync} onChange={(e) => handleToggleRenderDesignIntentLiveSync(e.target.checked)} />Intent Sync</label>
+                {renderCompareScope === 'all' && <span className="render-options-note">{renderViewMode === '3D' ? 'Compare offset applies to X-Z / Y-Z views.' : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm, align ${compareAlignLabel}`}</span>}
               </div>
             )}
             <button
@@ -12663,7 +12724,7 @@ const collectLegacyCrossRays = async (
             >
               Colors
             </button>
-            <span title={renderWindowStatus} style={{ marginLeft: 'auto', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 400, fontSize: 11, color: '#666' }}>{renderWindowStatus}</span>
+            <span className="render-window-status" title={renderWindowStatus}>{renderWindowStatus}</span>
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
             <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#fff', overflow: 'hidden' }}>
@@ -12784,9 +12845,9 @@ const collectLegacyCrossRays = async (
                       <strong>Surface Colors</strong>
                       <button type="button" onClick={() => setRenderSurfaceColorsCollapsed(true)} aria-label="Close surface colors">×</button>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid #ececec' }}>
-                      <button type="button" onClick={() => { refreshRenderLensTargets(); }} style={{ fontSize: 11, padding: '4px 8px' }}>Refresh</button>
-                      <button type="button" onClick={handleResetAllLensColors} style={{ fontSize: 11, padding: '4px 8px' }}>Reset All</button>
+                    <div className="render-surface-colors-actions">
+                      <span>Changes apply immediately</span>
+                      <button type="button" onClick={handleResetAllLensColors}>Reset colors</button>
                     </div>
                     <div style={{ padding: 8, overflow: 'auto', flex: 1, minHeight: 0 }}>
                       {renderLensColorTargets.length === 0 ? (
@@ -12966,7 +13027,8 @@ const collectLegacyCrossRays = async (
   };
   const [{ text: statusFileText, color: statusFileColor }, setStatusFile] = useState(resolveStatusFile);
   const activeWorkspaceLabel = workspaceSections.find((s) => s.key === workspaceFocus)?.label || 'Config';
-  const [openMenu, setOpenMenu] = useState<null | 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis'>(null);
+  type WorkspaceMenu = 'file' | 'data' | 'edit' | 'view' | 'window' | 'run' | 'analysis';
+  const [openMenu, setOpenMenu] = useState<WorkspaceMenu | null>(null);
   const [isExamplesMenuExpanded, setIsExamplesMenuExpanded] = useState(false);
 
   useEffect(() => {
@@ -13016,11 +13078,11 @@ const collectLegacyCrossRays = async (
     setOpenMenu(null);
   };
 
-  const toggleWorkspaceMenu = (menu: 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis') => () => {
+  const toggleWorkspaceMenu = (menu: WorkspaceMenu) => () => {
     setOpenMenu((current) => (current === menu ? null : menu));
   };
 
-  const handleMenuMouseEnter = (menu: 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis') => {
+  const handleMenuMouseEnter = (menu: WorkspaceMenu) => {
     setOpenMenu(menu);
   };
 
@@ -15024,6 +15086,62 @@ const collectLegacyCrossRays = async (
     });
   };
 
+  const autoArrangeMdiWindows = () => {
+    const openWindows = [
+      ...WORKSPACE_KEYS
+        .filter((key) => mdiWindowStates[key].open)
+        .map((key) => ({ kind: 'workspace' as const, id: key, zIndex: mdiWindowStates[key].zIndex })),
+      ...Object.values(mdiAuxWindows)
+        .filter((windowState) => windowState.open)
+        .map((windowState) => ({ kind: 'aux' as const, id: windowState.id, zIndex: windowState.zIndex })),
+    ].sort((a, b) => a.zIndex - b.zIndex);
+    if (openWindows.length === 0) return;
+
+    const desktop = getMdiDesktopBounds();
+    const layout = calculateMdiTileLayout(openWindows.length, desktop.width, desktop.height);
+    const nextZ = getNextMdiZIndex();
+    const workspaceRects = new Map<WorkspaceFocus, { rect: MdiTileRect; zIndex: number }>();
+    const auxRects = new Map<string, { rect: MdiTileRect; zIndex: number }>();
+
+    openWindows.forEach((windowEntry, index) => {
+      const placement = { rect: layout[index], zIndex: nextZ + index };
+      if (windowEntry.kind === 'workspace') workspaceRects.set(windowEntry.id, placement);
+      else auxRects.set(windowEntry.id, placement);
+    });
+
+    setMdiWindowStates((prev) => {
+      const next = { ...prev };
+      workspaceRects.forEach(({ rect, zIndex }, key) => {
+        next[key] = {
+          ...next[key],
+          ...rect,
+          minimized: false,
+          maximized: false,
+          restoreBounds: null,
+          zIndex,
+        };
+      });
+      return next;
+    });
+    setMdiAuxWindows((prev) => {
+      const next = { ...prev };
+      auxRects.forEach(({ rect, zIndex }, id) => {
+        if (!next[id]) return;
+        next[id] = {
+          ...next[id],
+          ...rect,
+          minimized: false,
+          maximized: false,
+          restoreBounds: null,
+          zIndex,
+        };
+      });
+      return next;
+    });
+
+    window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  };
+
   const toggleNavigatorCollapsed = () => {
     setNavigatorCollapsed((collapsed) => {
       const next = !collapsed;
@@ -15125,6 +15243,12 @@ const collectLegacyCrossRays = async (
           <div className="app-shell__menuPanel" role="menu">
             <button type="button" className="app-shell__menuAction" onClick={runMenuAction(openRenderMdiWindow)}>Render</button>
             <button type="button" className="app-shell__menuAction" onClick={runMenuAction(openSystemDataMdiWindow)}>System Data</button>
+          </div>
+        </div>
+        <div className={`app-shell__menu${openMenu === 'window' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('window')}>
+          <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'window'} onClick={toggleWorkspaceMenu('window')}>Window</button>
+          <div className="app-shell__menuPanel" role="menu">
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(autoArrangeMdiWindows)}>Auto Arrange</button>
           </div>
         </div>
         <div className={`app-shell__menu${openMenu === 'run' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('run')}>

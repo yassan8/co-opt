@@ -6495,17 +6495,408 @@ export function setupAnalysisWindows() {
 
         w.__analysisWindowsBound = true;
 
+        const applyAnalysisPopupUi = (popup: Window | null) => {
+            try {
+                if (!popup || popup.closed) return;
+                const doc = popup.document;
+                if (!doc?.head || !doc.body) return;
+
+                doc.body.classList.add('coopt-analysis-window');
+                try {
+                    const hostBody = popup.opener?.document?.body;
+                    doc.body.classList.toggle('dark-mode', !!hostBody?.classList.contains('dark-mode'));
+                } catch (_) {}
+                let style = doc.getElementById('coopt-analysis-window-style') as HTMLStyleElement | null;
+                if (!style) {
+                    style = doc.createElement('style');
+                    style.id = 'coopt-analysis-window-style';
+                    doc.head.appendChild(style);
+                }
+                style.textContent = `
+                    html, body { height: 100%; }
+                    body.coopt-analysis-window {
+                        margin: 0 !important;
+                        display: flex !important;
+                        flex-direction: column !important;
+                        overflow: hidden !important;
+                        background: #f5f6f8 !important;
+                        color: #1f2937 !important;
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+                    }
+                    .coopt-analysis-window .header {
+                        display: none !important;
+                    }
+                    .coopt-analysis-window .controls {
+                        min-height: 52px !important;
+                        padding: 8px 10px !important;
+                        box-sizing: border-box !important;
+                        border-bottom: 1px solid #dce2ea !important;
+                        background: rgba(255,255,255,.96) !important;
+                        display: flex !important;
+                        flex: 0 0 auto !important;
+                        flex-wrap: wrap !important;
+                        align-items: end !important;
+                        gap: 8px !important;
+                    }
+                    .coopt-analysis-window .coopt-analysis-field {
+                        display: grid !important;
+                        gap: 3px !important;
+                        min-width: 88px !important;
+                    }
+                    .coopt-analysis-window .coopt-analysis-field > label,
+                    .coopt-analysis-window .coopt-analysis-field > span {
+                        margin: 0 !important;
+                        color: #64748b !important;
+                        font-size: 10px !important;
+                        font-weight: 650 !important;
+                        letter-spacing: .025em !important;
+                        white-space: nowrap !important;
+                    }
+                    .coopt-analysis-window .coopt-analysis-field > input:not([type="checkbox"]):not([type="radio"]),
+                    .coopt-analysis-window .coopt-analysis-field > select {
+                        width: 100% !important;
+                    }
+                    .coopt-analysis-window .controls input:not([type="checkbox"]):not([type="radio"]),
+                    .coopt-analysis-window .controls select,
+                    .coopt-analysis-window .content input:not([type="checkbox"]):not([type="radio"]),
+                    .coopt-analysis-window .content select {
+                        height: 32px !important;
+                        min-width: 72px !important;
+                        margin: 0 !important;
+                        padding: 0 9px !important;
+                        box-sizing: border-box !important;
+                        border: 1px solid #cbd5e1 !important;
+                        border-radius: 7px !important;
+                        background: #fff !important;
+                        color: #1f2937 !important;
+                        font-size: 12px !important;
+                    }
+                    .coopt-analysis-window .controls button,
+                    .coopt-analysis-window .footer button {
+                        min-height: 32px !important;
+                        height: 32px !important;
+                        margin: 0 !important;
+                        padding: 0 11px !important;
+                        box-sizing: border-box !important;
+                        border: 1px solid #cbd5e1 !important;
+                        border-radius: 7px !important;
+                        background: #fff !important;
+                        color: #334155 !important;
+                        font: 650 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+                        box-shadow: none !important;
+                        transform: none !important;
+                    }
+                    .coopt-analysis-window .controls button:hover,
+                    .coopt-analysis-window .footer button:hover {
+                        border-color: #94a3b8 !important;
+                        background: #f1f5f9 !important;
+                    }
+                    .coopt-analysis-window .controls button.coopt-analysis-primary {
+                        border-color: #2563eb !important;
+                        background: #2563eb !important;
+                        color: #fff !important;
+                    }
+                    .coopt-analysis-window .controls button.coopt-analysis-primary:hover {
+                        border-color: #1d4ed8 !important;
+                        background: #1d4ed8 !important;
+                    }
+                    .coopt-analysis-window .controls button:disabled {
+                        cursor: not-allowed !important;
+                        opacity: .55 !important;
+                    }
+                    .coopt-analysis-window .coopt-analysis-options {
+                        position: relative !important;
+                        margin-left: auto !important;
+                    }
+                    .coopt-analysis-window .coopt-analysis-options > summary {
+                        display: inline-flex !important;
+                        align-items: center !important;
+                        justify-content: center !important;
+                        height: 32px !important;
+                        padding: 0 11px !important;
+                        box-sizing: border-box !important;
+                        border: 1px solid #cbd5e1 !important;
+                        border-radius: 7px !important;
+                        background: #fff !important;
+                        color: #334155 !important;
+                        font-size: 12px !important;
+                        font-weight: 650 !important;
+                        list-style: none !important;
+                        cursor: pointer !important;
+                    }
+                    .coopt-analysis-window .coopt-analysis-options > summary::-webkit-details-marker { display: none !important; }
+                    .coopt-analysis-window .coopt-analysis-options[open] > summary {
+                        border-color: #94a3b8 !important;
+                        background: #f1f5f9 !important;
+                    }
+                    .coopt-analysis-window .coopt-analysis-options-panel {
+                        position: absolute !important;
+                        top: calc(100% + 7px) !important;
+                        right: 0 !important;
+                        z-index: 50 !important;
+                        width: min(420px, calc(100vw - 20px)) !important;
+                        max-height: calc(100vh - 80px) !important;
+                        overflow: auto !important;
+                        display: grid !important;
+                        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+                        gap: 10px !important;
+                        padding: 12px !important;
+                        box-sizing: border-box !important;
+                        border: 1px solid #d7dee8 !important;
+                        border-radius: 10px !important;
+                        background: #fff !important;
+                        box-shadow: 0 16px 38px rgba(15,23,42,.18) !important;
+                    }
+                    .coopt-analysis-window .coopt-analysis-options-panel .coopt-analysis-field {
+                        min-width: 0 !important;
+                    }
+                    .coopt-analysis-window .coopt-analysis-toggle {
+                        display: flex !important;
+                        align-items: center !important;
+                        gap: 8px !important;
+                        min-height: 32px !important;
+                        margin: 0 !important;
+                        color: #334155 !important;
+                        font-size: 12px !important;
+                    }
+                    .coopt-analysis-window .note,
+                    .coopt-analysis-window .help {
+                        border-color: #e2e8f0 !important;
+                        background: #fff !important;
+                        color: #64748b !important;
+                        font-size: 11px !important;
+                    }
+                    .coopt-analysis-window .content {
+                        flex: 1 1 auto !important;
+                        min-height: 0 !important;
+                        overflow: auto !important;
+                        background: #fff !important;
+                    }
+                    .coopt-analysis-window textarea {
+                        border: 1px solid #d7dee8 !important;
+                        border-radius: 8px !important;
+                        background: #fbfcfe !important;
+                        color: #1f2937 !important;
+                    }
+                    .coopt-analysis-window progress {
+                        width: 100% !important;
+                        height: 3px !important;
+                        border: 0 !important;
+                        accent-color: #2563eb;
+                    }
+                    .coopt-analysis-window .section-title {
+                        color: #1e293b !important;
+                        font-size: 13px !important;
+                        font-weight: 700 !important;
+                    }
+                    .coopt-analysis-window .radio-group,
+                    .coopt-analysis-window .checkbox-group {
+                        display: flex !important;
+                        flex-direction: row !important;
+                        flex-wrap: wrap !important;
+                        gap: 6px !important;
+                    }
+                    .coopt-analysis-window .radio-group label,
+                    .coopt-analysis-window .checkbox-group label {
+                        min-height: 30px !important;
+                        padding: 5px 8px !important;
+                        box-sizing: border-box !important;
+                        border: 1px solid #e2e8f0 !important;
+                        border-radius: 7px !important;
+                        background: #f8fafc !important;
+                        color: #334155 !important;
+                        font-size: 12px !important;
+                    }
+                    body.coopt-analysis-window.dark-mode {
+                        background: #0f172a !important;
+                        color: #e2e8f0 !important;
+                    }
+                    .coopt-analysis-window.dark-mode .controls {
+                        border-color: #334155 !important;
+                        background: #172033 !important;
+                    }
+                    .coopt-analysis-window.dark-mode .content,
+                    .coopt-analysis-window.dark-mode .note,
+                    .coopt-analysis-window.dark-mode .help {
+                        border-color: #334155 !important;
+                        background: #111827 !important;
+                        color: #cbd5e1 !important;
+                    }
+                    .coopt-analysis-window.dark-mode .controls input:not([type="checkbox"]):not([type="radio"]),
+                    .coopt-analysis-window.dark-mode .controls select,
+                    .coopt-analysis-window.dark-mode .content input:not([type="checkbox"]):not([type="radio"]),
+                    .coopt-analysis-window.dark-mode .content select,
+                    .coopt-analysis-window.dark-mode .coopt-analysis-options > summary,
+                    .coopt-analysis-window.dark-mode .coopt-analysis-options-panel {
+                        border-color: #475569 !important;
+                        background: #111827 !important;
+                        color: #e2e8f0 !important;
+                    }
+                    .coopt-analysis-window.dark-mode .coopt-analysis-field > label,
+                    .coopt-analysis-window.dark-mode .coopt-analysis-field > span {
+                        color: #94a3b8 !important;
+                    }
+                    @media (max-width: 640px) {
+                        .coopt-analysis-window .coopt-analysis-options { margin-left: 0 !important; }
+                        .coopt-analysis-window .coopt-analysis-options-panel {
+                            position: fixed !important;
+                            top: 58px !important;
+                            right: 10px !important;
+                        }
+                    }
+                `;
+
+                const controls = Array.from(doc.querySelectorAll<HTMLElement>('.controls'));
+                controls.forEach((control) => {
+                    const buttons = Array.from(control.querySelectorAll<HTMLButtonElement>('button'));
+                    const preferred = buttons.filter((button) => /(?:show|render|calculate|run|apply|import)/i.test(button.id || button.textContent || ''));
+                    (preferred.length === 1 ? preferred : (buttons.length === 1 ? buttons : [])).forEach((button) => {
+                        button.classList.add('coopt-analysis-primary');
+                    });
+                });
+
+                const paraxial = doc.getElementById('popup-calculate-paraxial') as HTMLButtonElement | null;
+                const seidel = doc.getElementById('popup-calculate-seidel') as HTMLButtonElement | null;
+                const afocal = doc.getElementById('popup-calculate-seidel-afocal') as HTMLButtonElement | null;
+                const systemControls = paraxial?.closest('.controls') as HTMLElement | null;
+                if (paraxial && seidel && afocal && systemControls && !doc.getElementById('coopt-system-data-calculation')) {
+                    const select = doc.createElement('select');
+                    select.id = 'coopt-system-data-calculation';
+                    select.setAttribute('aria-label', 'Calculation');
+                    select.innerHTML = '<option value="paraxial">Paraxial data</option><option value="seidel">Aberration coefficients</option><option value="afocal">Aberration coefficients · Afocal</option>';
+                    const run = doc.createElement('button');
+                    run.id = 'coopt-system-data-run';
+                    run.type = 'button';
+                    run.textContent = 'Calculate';
+                    run.className = 'coopt-analysis-primary';
+                    run.addEventListener('click', () => {
+                        (select.value === 'seidel' ? seidel : select.value === 'afocal' ? afocal : paraxial).click();
+                    });
+                    [paraxial, seidel, afocal].forEach((button) => { button.style.display = 'none'; });
+                    systemControls.insertBefore(select, paraxial);
+                    systemControls.insertBefore(run, paraxial);
+                }
+
+                const essentialControlIdsByAction: Record<string, string[]> = {
+                    'coopt-system-data-run': ['coopt-system-data-calculation'],
+                    'popup-show-spot-diagram-btn': ['popup-surface-number-select'],
+                    'popup-show-spherical-aberration-btn': ['popup-longitudinal-ray-count-input'],
+                    'popup-show-astigmatism-btn': ['popup-astigmatism-chief-ray', 'popup-astigmatism-beam'],
+                    'popup-show-distortion-btn': ['popup-enlargement-factor-input'],
+                    'popup-show-distortion-grid-btn': ['popup-distortion-grid-size'],
+                    'popup-show-mca-btn': ['popup-mca-xrange'],
+                    'popup-show-wavefront-btn': ['popup-wavefront-object-select', 'popup-wavefront-plot-type-select'],
+                    'popup-show-psf-btn': ['popup-psf-wavelength-select', 'popup-psf-object-select'],
+                    'popup-show-mtf-btn': ['popup-mtf-wavelength-select', 'popup-mtf-object-select', 'popup-mtf-max-freq-input'],
+                    'popup-show-through-focus-spot-btn': ['popup-through-focus-spot-wavelength-mode-select', 'popup-through-focus-spot-defocus-input'],
+                    'popup-show-through-focus-mtf-btn': ['popup-through-focus-mtf-wavelength-select', 'popup-through-focus-mtf-object-select', 'popup-through-focus-mtf-target-freq-input'],
+                    'popup-show-field-mtf-btn': ['popup-field-mtf-wavelength-select', 'popup-field-mtf-meridional-freq-input', 'popup-field-mtf-sagittal-freq-input', 'popup-field-mtf-third-freq-input'],
+                    'popup-show-transverse-aberration-btn': ['popup-transverse-ray-count-input'],
+                    'popup-show-opd-fan-btn': ['popup-opd-fan-grid-size'],
+                };
+
+                controls.forEach((control) => {
+                    if (control.dataset.cooptAnalysisUnified === '1') return;
+                    const allButtons = Array.from(control.querySelectorAll<HTMLButtonElement>('button'));
+                    const visibleButtons = allButtons.filter((button) => !button.hidden && button.style.display !== 'none');
+                    const primary = visibleButtons.find((button) => button.classList.contains('coopt-analysis-primary'))
+                        || visibleButtons.find((button) => /(?:show|render|calculate|run|apply|import)/i.test(button.id || button.textContent || ''))
+                        || (visibleButtons.length === 1 ? visibleButtons[0] : null);
+                    if (!primary) return;
+
+                    primary.classList.add('coopt-analysis-primary');
+                    if (/^popup-show-/.test(primary.id)) {
+                        const originalLabel = String(primary.textContent || '').trim();
+                        if (originalLabel && originalLabel !== 'Show') primary.title = originalLabel;
+                        primary.textContent = 'Show';
+                    }
+
+                    const essentialIds = new Set(essentialControlIdsByAction[primary.id] || []);
+                    const fieldGroups: Array<{ id: string; node: HTMLElement }> = [];
+                    const fieldControls = Array.from(control.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input[id], select[id]'));
+                    fieldControls.forEach((fieldControl) => {
+                        if (fieldControl.type === 'hidden') return;
+                        const id = fieldControl.id;
+                        if (!id || fieldControl.closest('.coopt-analysis-field')) return;
+                        if (fieldControl.type === 'checkbox' || fieldControl.type === 'radio') {
+                            const wrappingLabel = fieldControl.closest('label');
+                            if (wrappingLabel && control.contains(wrappingLabel)) {
+                                wrappingLabel.classList.add('coopt-analysis-toggle');
+                                fieldGroups.push({ id, node: wrappingLabel });
+                                return;
+                            }
+                        }
+
+                        const label = Array.from(control.querySelectorAll<HTMLLabelElement>('label[for]'))
+                            .find((candidate) => candidate.htmlFor === id) || null;
+                        const group = doc.createElement('div');
+                        group.className = 'coopt-analysis-field';
+                        if (label) {
+                            group.appendChild(label);
+                        } else {
+                            const generatedLabel = doc.createElement('span');
+                            generatedLabel.textContent = fieldControl.getAttribute('aria-label') || id.replace(/^popup-/, '').replace(/-/g, ' ');
+                            group.appendChild(generatedLabel);
+                        }
+                        group.appendChild(fieldControl);
+                        fieldGroups.push({ id, node: group });
+                    });
+
+                    const fieldNodes = new Set(fieldGroups.map((entry) => entry.node));
+                    const looseElements = Array.from(control.children).filter((element) => (
+                        !allButtons.includes(element as HTMLButtonElement)
+                        && !fieldNodes.has(element as HTMLElement)
+                    )) as HTMLElement[];
+                    const essentialGroups = fieldGroups.filter((entry) => essentialIds.has(entry.id));
+                    const optionalGroups = fieldGroups.filter((entry) => !essentialIds.has(entry.id));
+                    const secondaryButtons = visibleButtons.filter((button) => button !== primary);
+                    const persistentSecondaryButtons = secondaryButtons.filter((button) => /(?:stop|cancel)/i.test(button.id || button.textContent || ''));
+                    const menuSecondaryButtons = secondaryButtons.filter((button) => !persistentSecondaryButtons.includes(button));
+                    const hiddenButtons = allButtons.filter((button) => !visibleButtons.includes(button));
+                    const optionalNodes: HTMLElement[] = [
+                        ...optionalGroups.map((entry) => entry.node),
+                        ...looseElements,
+                        ...menuSecondaryButtons,
+                    ];
+
+                    let options: HTMLDetailsElement | null = null;
+                    if (optionalNodes.length > 0) {
+                        options = doc.createElement('details');
+                        options.className = 'coopt-analysis-options';
+                        const summary = doc.createElement('summary');
+                        summary.textContent = 'Options';
+                        const panel = doc.createElement('div');
+                        panel.className = 'coopt-analysis-options-panel';
+                        optionalNodes.forEach((node) => panel.appendChild(node));
+                        options.append(summary, panel);
+                        primary.addEventListener('click', () => { if (options) options.open = false; }, { capture: true });
+                    }
+
+                    control.replaceChildren();
+                    essentialGroups.forEach((entry) => control.appendChild(entry.node));
+                    if (options) control.appendChild(options);
+                    control.appendChild(primary);
+                    persistentSecondaryButtons.forEach((button) => control.appendChild(button));
+                    hiddenButtons.forEach((button) => control.appendChild(button));
+                    control.dataset.cooptAnalysisUnified = '1';
+                });
+            } catch (_) {}
+        };
+
         const consumePreopenedAnalysisPopup = (title: string, features: string) => {
+            let popup: Window | null = null;
             try {
                 const store = w.__preopenedAnalysisPopupMap;
                 const pre = store && store[title];
                 if (pre && !pre.closed) {
                     try { delete store[title]; } catch (_) {}
                     try { pre.focus(); } catch (_) {}
-                    return pre;
+                    popup = pre;
                 }
             } catch (_) {}
-            return window.open('', title, features);
+            if (!popup) popup = window.open('', title, features);
+            if (popup) window.setTimeout(() => applyAnalysisPopupUi(popup), 0);
+            return popup;
         };
 
         // System Data popup window button
@@ -10006,7 +10397,6 @@ export function setupAnalysisWindows() {
             Remove P/T/D
         </label>
         <button id="popup-show-wavefront-btn" type="button">Show wavefront diagram</button>
-        <button id="popup-stop-opd-btn" type="button" disabled>Stop</button>
     </div>
     <div id="popup-opd-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-opd-progress-text" style="margin-bottom: 6px;">Calculating OPD...</div>
@@ -10347,14 +10737,6 @@ export function setupAnalysisWindows() {
                 
                 const popupCancelToken = createCancelToken();
                 window['__popupOpdCancelToken'] = popupCancelToken;
-                
-                const stopBtn = document.getElementById('popup-stop-opd-btn');
-                
-                
-                if (stopBtn) {
-                    stopBtn.disabled = false;
-                    stopBtn.textContent = 'Stop';
-                }
 
                 setProgress(0, 'Starting...');
 
@@ -10783,10 +11165,6 @@ export function setupAnalysisWindows() {
                     setTimeout(() => {
                         try { hideProgress(); } catch (_) {}
                     }, 250);
-                    if (stopBtn) {
-                        stopBtn.disabled = true;
-                        stopBtn.textContent = 'Stop';
-                    }
                     window['__popupOpdCancelToken'] = null;
                 }
             } catch (err) {
@@ -10804,19 +11182,6 @@ export function setupAnalysisWindows() {
         };
 
         document.getElementById('popup-show-wavefront-btn').addEventListener('click', () => window.renderOPD());
-        document.getElementById('popup-stop-opd-btn').addEventListener('click', () => {
-            console.log('🛑 Popup OPD Stop button clicked');
-            const token = window.__popupOpdCancelToken;
-            if (token && typeof token.abort === 'function') {
-                token.abort('Stopped by user');
-                const stopBtn = document.getElementById('popup-stop-opd-btn');
-                if (stopBtn) {
-                    stopBtn.disabled = true;
-                    stopBtn.textContent = 'Stopping...';
-                }
-            }
-        });
-
         function syncAll() {
             syncObjectOptionsFromOpener();
             syncInputsFromOpener();
@@ -11096,7 +11461,6 @@ export function setupAnalysisWindows() {
             <option value="pistonTiltDefocusRemoved">Remove P/T/D</option>
         </select>
         <button id="popup-show-psf-btn" type="button">Show PSF</button>
-        <button id="popup-stop-psf-btn" type="button" disabled>Stop</button>
         <span id="popup-psf-pipeline-badge"></span>
     </div>
     <div id="popup-psf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -11560,11 +11924,6 @@ export function setupAnalysisWindows() {
                     if (progressWrapper) progressWrapper.style.display = 'none';
                 } catch (_) {}
             };
-
-            const stopBtn = document.getElementById('popup-stop-psf-btn');
-            if (stopBtn) {
-                stopBtn.disabled = false;
-            }
 
             activeCancelToken = createCancelToken();
 
@@ -13221,26 +13580,10 @@ export function setupAnalysisWindows() {
                             '<pre style="white-space:pre-wrap;word-break:break-word;">' + details + '</pre>' +
                         '</div>';
                 }
-            } finally {
-                try {
-                    if (stopBtn) stopBtn.disabled = true;
-                } catch (_) {}
             }
         };
 
         document.getElementById('popup-show-psf-btn').addEventListener('click', () => window.renderPSF());
-
-        document.getElementById('popup-stop-psf-btn').addEventListener('click', () => {
-            try {
-                const el = document.getElementById('popup-psf-pipeline-badge');
-                if (el) el.textContent = '';
-            } catch (_) {}
-            try {
-                if (activeCancelToken && typeof activeCancelToken.abort === 'function') {
-                    activeCancelToken.abort('Stopped by user');
-                }
-            } catch (_) {}
-        });
 
         function syncAll() {
             syncWavelengthOptionsFromOpener();
@@ -13401,28 +13744,6 @@ export function setupAnalysisWindows() {
                     });
                 }
 
-                const mainStopPsfBtn = document.getElementById('stop-psf-btn');
-                if (mainStopPsfBtn && !(mainStopPsfBtn as any).__cooptUnifiedPsfPipelineBound) {
-                    (mainStopPsfBtn as any).__cooptUnifiedPsfPipelineBound = true;
-                    mainStopPsfBtn.addEventListener('click', () => {
-                        try {
-                            const el = document.getElementById('psf-pipeline-badge');
-                            if (el) el.textContent = '';
-                        } catch (_) {}
-                        try {
-                            const popup = w.__psfPopup;
-                            if (!popup || popup.closed) return;
-                            const stopBtn = popup.document && popup.document.getElementById('popup-stop-psf-btn');
-                            if (stopBtn && typeof (stopBtn as HTMLButtonElement).click === 'function') {
-                                (stopBtn as HTMLButtonElement).click();
-                                return;
-                            }
-                            if (typeof popup.activeCancelToken?.abort === 'function') {
-                                popup.activeCancelToken.abort('Stopped by user');
-                            }
-                        } catch (_) {}
-                    });
-                }
         }
 
         // Modulation Transfer Function (MTF) popup window button

@@ -935,11 +935,35 @@ const bindObjectControls = (): void => {
     (objectImageHeightBtn as any).dataset.cooptBound = '1';
     objectImageHeightBtn.addEventListener("click", setImageHeightTitles);
   }
+
+  try {
+    const firstRow = (typeof tableObject?.getData === 'function' ? tableObject.getData() : [])?.[0];
+    const position = String(firstRow?.position ?? '').toLowerCase();
+    updateObjectModeButtons(position.includes('imageheight') ? 'image-height' : position.includes('rect') ? 'height-rect' : 'angle');
+  } catch (_) {
+    updateObjectModeButtons('angle');
+  }
 };
 
 // タイトル変更用関数
+function updateObjectModeButtons(mode: 'angle' | 'height-rect' | 'image-height'): void {
+  const entries: Array<[string, typeof mode]> = [
+    ['object-angle-btn', 'angle'],
+    ['object-height-rect-btn', 'height-rect'],
+    ['object-image-height-btn', 'image-height'],
+  ];
+  entries.forEach(([id, value]) => {
+    const button = document.getElementById(id);
+    if (!button) return;
+    const active = value === mode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
 function setAngleTitles(): void {
   if (!tableObject) return;
+  updateObjectModeButtons('angle');
   try {
     if (typeof tableObject._setColumnTitles === 'function') {
       tableObject._setColumnTitles('X angle (deg)', 'Y angle (deg)');
@@ -952,6 +976,7 @@ function setAngleTitles(): void {
 
 function setHeightRectTitles(): void {
   if (!tableObject) return;
+  updateObjectModeButtons('height-rect');
   try {
     if (typeof tableObject._setColumnTitles === 'function') {
       tableObject._setColumnTitles('X height rect (mm)', 'Y height rect (mm)');
@@ -964,6 +989,7 @@ function setHeightRectTitles(): void {
 
 function setImageHeightTitles(): void {
   if (!tableObject) return;
+  updateObjectModeButtons('image-height');
   try {
     if (typeof tableObject._setColumnTitles === 'function') {
       tableObject._setColumnTitles('X image height (mm)', 'Y image height (mm)');

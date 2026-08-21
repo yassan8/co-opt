@@ -4924,11 +4924,28 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             }
         }
 
-        // Optional OPD-style origin refinement (disabled by default).
-        if (allowStopBasedOriginSolve && options?.skipStopPointRefine !== true && aimThroughStop && !isOnAxis && stopSurfaceCenter3d && Number.isInteger(stopSurfaceIndex)
+        // Optional OPD-style origin refinement. A chief/reference origin that already
+        // reaches the requested image surface must be preserved: the stop-center solve
+        // can have no physical solution under strong vignetting, and its best-effort
+        // geometric result may be blocked by an earlier aperture.
+        const shouldConsiderStopPointRefine = allowStopBasedOriginSolve && options?.skipStopPointRefine !== true && aimThroughStop && !isOnAxis && stopSurfaceCenter3d && Number.isInteger(stopSurfaceIndex)
             && !hasImageHeightChiefRayOverride
             && !usedTargetReachFallback
-            && chiefRayOrigin && Number.isFinite(chiefRayOrigin.x) && Number.isFinite(chiefRayOrigin.y) && Number.isFinite(chiefRayOrigin.z)) {
+            && chiefRayOrigin && Number.isFinite(chiefRayOrigin.x) && Number.isFinite(chiefRayOrigin.y) && Number.isFinite(chiefRayOrigin.z);
+        const chiefOriginReachesTargetBeforeStopRefine = shouldConsiderStopPointRefine && Number.isInteger(targetSurfaceIndex)
+            ? !!traceRayHitPointForRender(
+                opticalSystemRows,
+                {
+                    pos: chiefRayOrigin,
+                    dir: { x: chiefDir.x, y: chiefDir.y, z: chiefDir.z },
+                    wavelength: options?.wavelength ?? options?.wavelengthUm ?? 0.5876
+                },
+                1.0,
+                targetSurfaceIndex,
+                originSolveTraceBackend
+            )
+            : false;
+        if (shouldConsiderStopPointRefine && !chiefOriginReachesTargetBeforeStopRefine) {
             const refined = solveRayOriginToStopPointFast(
                 chiefRayOrigin,
                 chiefDir,
@@ -4938,7 +4955,20 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 options?.wavelength ?? options?.wavelengthUm ?? 0.5876,
                 originSolveTraceBackend
             );
-            if (refined && Number.isFinite(refined.x) && Number.isFinite(refined.y) && Number.isFinite(refined.z)) {
+            const refinedReachesTarget = refined && Number.isInteger(targetSurfaceIndex)
+                ? !!traceRayHitPointForRender(
+                    opticalSystemRows,
+                    {
+                        pos: refined,
+                        dir: { x: chiefDir.x, y: chiefDir.y, z: chiefDir.z },
+                        wavelength: options?.wavelength ?? options?.wavelengthUm ?? 0.5876
+                    },
+                    1.0,
+                    targetSurfaceIndex,
+                    originSolveTraceBackend
+                )
+                : true;
+            if (refined && refinedReachesTarget && Number.isFinite(refined.x) && Number.isFinite(refined.y) && Number.isFinite(refined.z)) {
                 chiefRayOrigin = refined;
                 optimizedPosition = { x: refined.x, y: refined.y };
                 objectZ = refined.z;
@@ -4949,7 +4979,8 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             } else {
                 logHighFieldChiefRayFailure('origin-refine-failed', {
                     stopSurfaceIndex,
-                    stopDeltaZ
+                    stopDeltaZ,
+                    refinedReachesTarget
                 });
             }
         }

@@ -351,10 +351,6 @@ export default function RequirementsSection() {
       onDragEnd={() => { setDraggedId(null); setDropTarget(null); }}
     >⋮⋮</span>
     <span className="requirements-react-rowNumber">{index + 1}</span>
-    <span className="requirements-react-moveButtons">
-      <button type="button" title="Move up" aria-label={`Move requirement ${index + 1} up`} disabled={index === 0} onClick={(event) => { event.stopPropagation(); moveRow(id, -1); }}>↑</button>
-      <button type="button" title="Move down" aria-label={`Move requirement ${index + 1} down`} disabled={index === rows.length - 1} onClick={(event) => { event.stopPropagation(); moveRow(id, 1); }}>↓</button>
-    </span>
   </td>;
 
   const configurationOptions = (): SelectOption[] => {
@@ -377,15 +373,22 @@ export default function RequirementsSection() {
 
   return (
     <section className="merit-function-section requirements-section ide-section-card" id="requirements-container" aria-label="Requirements">
-      <div className="merit-function-buttons-container ide-toolbar" role="toolbar" aria-label="Requirements controls">
-        <button type="button" onClick={addRequirement}>Add Requirement</button>
-        <button type="button" onClick={addMemo}>Add Memo</button>
-        <button type="button" onClick={deleteSelected} disabled={!selectedId}>Delete Requirement</button>
-        <button id="update-requirement-btn" type="button" onClick={async () => { await getEditor()?.updateAllConfigsAndEvaluate?.(); refresh(); }}>Update Requirement</button>
-        <button type="button" onClick={() => updateAllEnabled(true)}>All On</button>
-        <button type="button" onClick={() => updateAllEnabled(false)}>All Off</button>
-        <button type="button" onClick={updateAllWeights}>All Weight=1</button>
-        <button type="button" onClick={async () => { await getEditor()?.normalizeWeightsForUnitScore?.(); refresh(); }}>Normalize Score=1</button>
+      <div className="merit-function-buttons-container ide-toolbar window-commandbar" role="toolbar" aria-label="Requirements controls">
+        <button className="window-primary-action" type="button" onClick={addRequirement}>Add requirement</button>
+        <details className="window-action-menu">
+          <summary aria-label="More requirement actions">More</summary>
+          <div className="window-action-menu__panel window-action-menu__panel--wide" role="group" aria-label="Requirement actions" onClick={(event) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; }}>
+            <button type="button" onClick={addMemo}>Add memo</button>
+            <button id="update-requirement-btn" type="button" onClick={async () => { await getEditor()?.updateAllConfigsAndEvaluate?.(); refresh(); }}>Recalculate all</button>
+            <div className="window-action-menu__divider" />
+            <button type="button" onClick={() => updateAllEnabled(true)}>Enable all</button>
+            <button type="button" onClick={() => updateAllEnabled(false)}>Disable all</button>
+            <button type="button" onClick={updateAllWeights}>Reset weights to 1</button>
+            <button type="button" onClick={async () => { await getEditor()?.normalizeWeightsForUnitScore?.(); refresh(); }}>Normalize score to 1</button>
+            <div className="window-action-menu__divider" />
+            <button className="is-danger" type="button" onClick={deleteSelected} disabled={!selectedId}>Delete selected</button>
+          </div>
+        </details>
       </div>
 
       <div className="requirements-layout">

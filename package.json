@@ -56,6 +56,7 @@
     "diag:grid-distortion-tele": "node --import tsx diagnostics/grid-distortion-tele-repro.mjs",
     "diag:spherical-aberration-continuity": "node --import tsx diagnostics/spherical-aberration-continuity-repro.mjs",
     "diag:lateral-chromatic-wide": "node --import tsx diagnostics/lateral-chromatic-wide-repro.mjs",
+    "diag:lateral-chromatic-retrofocus": "node --import tsx diagnostics/lateral-chromatic-retrofocus-repro.mjs",
     "diag:optimizer-mtf-shared": "node --import tsx diagnostics/optimizer-mtf-shared-batch-repro.mjs",
     "wasm:rebuild": "bash ./scripts/build-rust-wasm.sh",
     "wasm:rebuild:threads": "bash -c 'COOPT_WASM_THREADS=1 bash ./scripts/build-rust-wasm.sh'",

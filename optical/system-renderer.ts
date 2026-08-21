@@ -1917,7 +1917,22 @@ function __coopt_formatZoomGroupDistanceLabel(current, next, distanceMm) {
     return `${currentLabel}${connector}${nextLabel} ${Number(distanceMm || 0).toFixed(2)}`;
 }
 
-function __coopt_addZoomGroupSpanBrace(scene, axis, verticalCoord, depthCoord, startZ, endZ, color) {
+function __coopt_getZoomGroupBraceMetrics(startZ, endZ, layoutSpan) {
+    const normalizedLayoutSpan = Math.max(1e-6, Math.abs(Number(layoutSpan) || 0));
+    const span = Math.max(normalizedLayoutSpan * 0.12, Math.abs(Number(endZ) - Number(startZ)) || 0);
+    return {
+        endPostHeight: Math.min(
+            normalizedLayoutSpan * 0.048,
+            Math.max(normalizedLayoutSpan * 0.024, span * 0.05),
+        ),
+        stemHeight: Math.min(
+            normalizedLayoutSpan * 0.084,
+            Math.max(normalizedLayoutSpan * 0.048, span * 0.1),
+        ),
+    };
+}
+
+function __coopt_addZoomGroupSpanBrace(scene, axis, verticalCoord, depthCoord, startZ, endZ, color, layoutSpan) {
     if (!scene || !Number.isFinite(verticalCoord) || !Number.isFinite(depthCoord) || !Number.isFinite(startZ) || !Number.isFinite(endZ)) return;
 
     const normalizedAxis = (String(axis).trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
@@ -1928,9 +1943,7 @@ function __coopt_addZoomGroupSpanBrace(scene, axis, verticalCoord, depthCoord, s
     const minZ = Math.min(startZ, endZ);
     const maxZ = Math.max(startZ, endZ);
     const midZ = (minZ + maxZ) / 2;
-    const span = Math.max(6, maxZ - minZ);
-    const endPostHeight = Math.min(2.4, Math.max(1.2, span * 0.05));
-    const stemHeight = Math.min(4.2, Math.max(2.4, span * 0.1));
+    const { endPostHeight, stemHeight } = __coopt_getZoomGroupBraceMetrics(minZ, maxZ, layoutSpan);
     __coopt_addDesignIntentLabelPolyline(scene, [
         makePoint(verticalCoord, depthCoord, minZ),
         makePoint(verticalCoord + endPostHeight, depthCoord, minZ),
@@ -1982,6 +1995,8 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
 
     let surfaceTop = Number.NEGATIVE_INFINITY;
     let surfaceBottom = Number.POSITIVE_INFINITY;
+    let surfaceMinZ = Number.POSITIVE_INFINITY;
+    let surfaceMaxZ = Number.NEGATIVE_INFINITY;
     for (let i = 0; i < opticalSystemData.length; i += 1) {
         const surface = opticalSystemData[i];
         if (!surface || __coopt_isGapSurface(surface)) continue;
@@ -1993,17 +2008,27 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
             : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
         surfaceTop = Math.max(surfaceTop, getVerticalCoord(originVec) + halfExtent);
         surfaceBottom = Math.min(surfaceBottom, getVerticalCoord(originVec) - halfExtent);
+        surfaceMinZ = Math.min(surfaceMinZ, Number(originVec.z) || 0);
+        surfaceMaxZ = Math.max(surfaceMaxZ, Number(originVec.z) || 0);
     }
     if (!Number.isFinite(surfaceTop) || !Number.isFinite(surfaceBottom)) return;
 
     const frontColor = 0xf97316;
     const rearColor = 0x14b8a6;
     const distanceColor = 0x0f766e;
-    const topLabelBase = surfaceTop + 12;
-    const topLabelLaneStep = 8;
-    const groupDimBase = surfaceBottom - 8;
-    const groupLabelCoord = groupDimBase - 3.2;
-    const groupSpanBase = groupLabelCoord - 4.4;
+    const surfaceVerticalSpan = Math.max(0, surfaceTop - surfaceBottom);
+    const surfaceAxialSpan = Number.isFinite(surfaceMinZ) && Number.isFinite(surfaceMaxZ)
+        ? Math.max(0, surfaceMaxZ - surfaceMinZ)
+        : 0;
+    // Keep the proportions of the former 50 mm reference layout while scaling
+    // the annotation clearances to the current optical envelope and track length.
+    const layoutSpan = Math.max(1e-6, surfaceVerticalSpan, surfaceAxialSpan * 0.2);
+    const labelWorldScale = layoutSpan / 50;
+    const topLabelBase = surfaceTop + layoutSpan * 0.24;
+    const topLabelLaneStep = layoutSpan * 0.16;
+    const groupDimBase = surfaceBottom - layoutSpan * 0.16;
+    const groupLabelCoord = groupDimBase - layoutSpan * 0.064;
+    const groupSpanBase = groupLabelCoord - layoutSpan * 0.088;
     const descriptorBounds = descriptors.map((entry) => __coopt_getSurfaceRangeVerticalBounds(
         opticalSystemData,
         surfaceOrigins,
@@ -2058,13 +2083,13 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
     });
 
     const laneLastMaxByIndex = [];
-    const laneGap = 6;
+    const laneGap = layoutSpan * 0.12;
     topLabelItems
         .map((item) => {
             const size = __coopt_measureDesignIntentLabelWorldSize(item.text);
             return {
                 ...item,
-                widthWorld: Math.max(18, Number(size.width) || 0),
+                widthWorld: Math.max(layoutSpan * 0.36, (Number(size.width) || 0) * labelWorldScale),
             };
         })
         .sort((a, b) => a.z - b.z)
@@ -2093,12 +2118,11 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
         const minZ = Math.min(startZ, endZ);
         const maxZ = Math.max(startZ, endZ);
         const midZ = (minZ + maxZ) / 2;
-        const span = Math.max(6, maxZ - minZ);
-        const stemHeight = Math.min(4.2, Math.max(2.4, span * 0.1));
-        const groupLabelPoint = makePoint(groupSpanBase - stemHeight - 3.2, getDepthCoord(entry.anchor), midZ);
-        const groupFocalPoint = makePoint(groupSpanBase - stemHeight - 6.0, getDepthCoord(entry.anchor), midZ);
+        const { stemHeight } = __coopt_getZoomGroupBraceMetrics(minZ, maxZ, layoutSpan);
+        const groupLabelPoint = makePoint(groupSpanBase - stemHeight - layoutSpan * 0.064, getDepthCoord(entry.anchor), midZ);
+        const groupFocalPoint = makePoint(groupSpanBase - stemHeight - layoutSpan * 0.12, getDepthCoord(entry.anchor), midZ);
 
-        __coopt_addZoomGroupSpanBrace(scene, axis, groupSpanBase, getDepthCoord(entry.anchor), minZ, maxZ, distanceColor);
+        __coopt_addZoomGroupSpanBrace(scene, axis, groupSpanBase, getDepthCoord(entry.anchor), minZ, maxZ, distanceColor, layoutSpan);
         __coopt_addDesignIntentLabelSprite(scene, __coopt_formatZoomGroupSpanLabel(entry), groupLabelPoint, {
             drawFrame: false,
             fillStyle: 'rgba(0,0,0,0)',
@@ -2132,7 +2156,7 @@ function __coopt_addZoomGroupPrincipalPointLabelsToScene(scene, opticalSystemDat
             groupDimBase,
             distanceColor,
             'principal-point-intergroup-dimension',
-            -2.8,
+            -layoutSpan * 0.056,
             groupLabelCoord,
             null,
             true,

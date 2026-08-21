@@ -18,8 +18,9 @@ const row = formatOptimizeConsoleRow({
 assert.equal(header.includes('Equal.'), false);
 assert.equal(header.includes('Inequal.'), false);
 assert.equal(header.includes('Elapsed'), true);
+assert.equal(header.includes('QPgain'), false);
 assert.equal(header.length, row.length);
-assert.match(header, /^Iter\s+Elapsed\s+Min\.\s+DampingF\.\s+rho\s+alpha\s+Improv\.$/);
+assert.match(header, /^Iter\s+Elapsed\s+Min\.\s+DFseed\s+rho\s+alpha\s+Improv\.$/);
 assert.match(row, /^\s*0\s+00:00:03\.7\s+699\.7351\s+6\.667e-5\s+2\.006\s+2\.0\s+0\.20915$/);
 
 console.log(header);

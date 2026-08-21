@@ -3723,6 +3723,7 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
 
     let mut n_cur = if n_start.is_finite() && n_start > 0.0 { n_start } else { 1.0 };
     let mut opl = 0.0_f64;
+    let mut preceding_surface_thickness: Option<f64> = None;
 
     for i in 0..=target_surface_index {
         let m = i * 4;
@@ -3867,6 +3868,16 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
             out[1] = opl;
             return out;
         }
+        // A non-negative sequential thickness must not accept an intersection
+        // behind the preceding surface hit. Overlapping curved surfaces can
+        // otherwise select a non-physical backwards branch and create an OPD
+        // fan discontinuity. Explicit negative-thickness virtual propagation
+        // remains supported.
+        if t < -1.0e-7 && preceding_surface_thickness.is_some_and(|value| value >= 0.0) {
+            out[0] = 3.0;
+            out[1] = opl;
+            return out;
+        }
 
         let hx = lpx + ldx * t;
         let hy = lpy + ldy * t;
@@ -4006,6 +4017,7 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
         dy = gnorm[1];
         dz = gnorm[2];
         n_cur = n_next;
+        preceding_surface_thickness = Some(thickness);
 
         // Native parity: do not advance by thickness here.
         // Surface origins already include previous thickness/coord transforms.
@@ -4060,6 +4072,7 @@ fn trace_single_ray_hit_state_with_meta_core(
 
     let mut n_cur = if n_start.is_finite() && n_start > 0.0 { n_start } else { 1.0 };
     let mut opl = 0.0_f64;
+    let mut preceding_surface_thickness: Option<f64> = None;
 
     for i in 0..=target_surface_index {
         let m = i * 4;
@@ -4082,6 +4095,7 @@ fn trace_single_ray_hit_state_with_meta_core(
         let radius_x = row_params[p + 13];
         let radius_y = row_params[p + 14];
         let toric_axis = row_params[p + 15];
+        let thickness = row_params[p + 16];
         let aperture_limit = row_params[p + 17];
         let rect_half_w = row_params[p + 18];
         let rect_half_h = row_params[p + 19];
@@ -4163,6 +4177,11 @@ fn trace_single_ray_hit_state_with_meta_core(
         };
 
         if !t.is_finite() {
+            out[0] = 3.0;
+            out[1] = opl;
+            return out;
+        }
+        if t < -1.0e-7 && preceding_surface_thickness.is_some_and(|value| value >= 0.0) {
             out[0] = 3.0;
             out[1] = opl;
             return out;
@@ -4298,6 +4317,7 @@ fn trace_single_ray_hit_state_with_meta_core(
         dy = gnorm[1];
         dz = gnorm[2];
         n_cur = n_next;
+        preceding_surface_thickness = Some(thickness);
     }
 
     out[0] = 6.0;
@@ -15415,6 +15435,67 @@ mod tests {
         assert_eq!(checkpoints.first_state, Some(first_direct));
         assert_eq!(checkpoints.stop_state, Some(previous_direct));
         assert_eq!(checkpoints.previous_state, Some(previous_direct));
+    }
+
+    fn trace_two_plane_backwards_hit(preceding_thickness: f64) -> ([f64; 5], [f64; 8]) {
+        let ray = vec![0.0, 0.0, -1.0, 0.0, 0.0, 1.0];
+        let row_count = 2;
+        let row_meta = vec![0, 2, 0, 0, 0, 2, 0, 0];
+        let mut row_params = vec![0.0; row_count * 24];
+        for index in 0..row_count {
+            let base = index * 24;
+            row_params[base] = f64::INFINITY;
+            row_params[base + 12] = f64::INFINITY;
+            row_params[base + 17] = f64::INFINITY;
+            row_params[base + 20] = 1.0;
+        }
+        row_params[16] = preceding_thickness;
+
+        let row_origins = vec![0.0, 0.0, 0.0, 0.0, 0.0, -0.5];
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let row_rots = identity.repeat(row_count);
+
+        let point = trace_single_ray_hit_point_with_meta_core_impl(
+            &ray,
+            1,
+            1.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &row_rots,
+            &row_rots,
+            row_count,
+            None,
+        );
+        let state = trace_single_ray_hit_state_with_meta_core(
+            &ray,
+            1,
+            1.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &row_rots,
+            &row_rots,
+            row_count,
+        );
+
+        (point, state)
+    }
+
+    #[test]
+    fn sequential_trace_rejects_backwards_hit_after_non_negative_thickness() {
+        let (point, state) = trace_two_plane_backwards_hit(1.0);
+        assert_eq!(point[0], 3.0);
+        assert_eq!(state[0], 3.0);
+    }
+
+    #[test]
+    fn sequential_trace_preserves_backwards_hit_after_negative_thickness() {
+        let (point, state) = trace_two_plane_backwards_hit(-1.0);
+        assert_eq!(point[0], 1.0);
+        assert_eq!(state[0], 1.0);
+        assert!((point[4] + 0.5).abs() < 1.0e-12);
+        assert!((state[4] + 0.5).abs() < 1.0e-12);
     }
 
     #[test]

@@ -4,6 +4,7 @@ import { plotDistortionPercent, plotGridDistortion } from '../../evaluation/aber
 import { applyDistortionHorizontalOffset as applySharedDistortionHorizontalOffset } from '../../evaluation/aberrations/distortion-display.ts';
 import { runNativeDistortion, runNativeGridDistortion } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
+import { AnalysisGridSamplingField } from './AnalysisGridSamplingField';
 
 export type DistortionAnalysisType = 'distortion' | 'distortion-grid';
 
@@ -384,70 +385,6 @@ function countFiniteGridPoints(data: any): number {
   return count;
 }
 
-const CSS = `
-.dist-analysis-page {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: #f4f4f4;
-  font-family: Arial, sans-serif;
-  margin: 0;
-}
-.dist-controls {
-  padding: 10px 12px;
-  background: #f8f8f8;
-  border-bottom: 1px solid #ddd;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 10px;
-  align-items: center;
-  flex-shrink: 0;
-}
-.dist-controls label { font-size: 12px; color: #333; white-space: nowrap; }
-.dist-controls select {
-  padding: 5px 8px;
-  font-size: 12px;
-  border: 1px solid #bbb;
-  border-radius: 4px;
-  background: white;
-}
-.dist-controls button {
-  padding: 6px 10px;
-  border: 1px solid #bbb;
-  background: #f8f8f8;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 12px;
-  color: #333;
-}
-.dist-controls button:hover { background: #e9e9e9; }
-.dist-backend {
-  font-size: 12px;
-  color: #444;
-  margin-left: 8px;
-}
-.dist-progress {
-  padding: 8px 12px;
-  font-size: 12px;
-  color: #333;
-  border-bottom: 1px solid #eee;
-  background: #fff;
-}
-.dist-progress progress {
-  display: block;
-  width: 100%;
-  margin-top: 6px;
-}
-.dist-content {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-  background: white;
-}
-.dist-chart { width: 100%; height: 100%; }
-.dist-error { padding: 20px; color: red; font-size: 13px; }
-`;
-
 export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType }) {
   const chartRef = useRef<HTMLDivElement>(null);
   const [plotlyReady, setPlotlyReady] = useState(!!(window as any).Plotly);
@@ -707,32 +644,18 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
   }, [type, hideProgress]);
 
   return (
-    <div className="dist-analysis-page">
-      <style>{CSS}</style>
-      <div className="dist-controls">
+    <div className="analysis-window-page" data-analysis-kind={type}>
+      <div className="analysis-window-commandbar">
         {type === 'distortion-grid' ? (
-          <>
-            <label>Grid Size:</label>
-            <select value={gridSize} onChange={(e) => setGridSize(e.target.value)}>
-              {['10', '15', '20', '25', '30', '35', '40', '45', '50'].map((v) => (
-                <option key={v} value={v}>{v}×{v}</option>
-              ))}
-            </select>
-            <label>Enlargement Factor:</label>
-            <input
-              id="grid-enlargement-factor-input"
-              type="text"
-              value={enlargementFactorInput}
-              onChange={(e) => setEnlargementFactorInput(e.target.value)}
-              inputMode="decimal"
-              placeholder="1"
-              style={{ width: 72 }}
-            />
-          </>
+          <AnalysisGridSamplingField
+            label="Field grid"
+            value={gridSize}
+            options={['10', '15', '20', '25', '30', '35', '40', '45', '50']}
+            onValueChange={setGridSize}
+          />
         ) : null}
         {type === 'distortion' ? (
-          <>
-            <label>Sampling Points:</label>
+          <label className="analysis-window-field"><span>Field samples</span>
             <input
               type="text"
               value={samplingPointsInput}
@@ -741,40 +664,42 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
               placeholder="21"
               style={{ width: 72 }}
             />
-            <label>Enlargement Factor:</label>
-            <input
-              type="text"
-              value={enlargementFactorInput}
-              onChange={(e) => setEnlargementFactorInput(e.target.value)}
-              inputMode="decimal"
-              placeholder="1"
-              style={{ width: 72 }}
-            />
-            <label>Dist Range ±(%):</label>
-            <input
-              type="text"
-              value={distRangeAbsInput}
-              onChange={(e) => setDistRangeAbsInput(e.target.value)}
-              inputMode="decimal"
-              placeholder="auto"
-              style={{ width: 72 }}
-            />
-          </>
+          </label>
         ) : null}
-        <button type="button" onClick={type === 'distortion' ? handleRenderDistortion : handleRenderGrid}>
-          {type === 'distortion' ? 'Show distortion diagram' : 'Show distortion grid'}
+        <details className="analysis-window-options">
+          <summary>Options</summary>
+          <div className="analysis-window-options__panel">
+            <label className="analysis-window-field"><span>Enlargement factor</span>
+              <input
+                id={type === 'distortion-grid' ? 'grid-enlargement-factor-input' : undefined}
+                type="text"
+                value={enlargementFactorInput}
+                onChange={(e) => setEnlargementFactorInput(e.target.value)}
+                inputMode="decimal"
+                placeholder="1"
+              />
+            </label>
+            {type === 'distortion' && (
+              <label className="analysis-window-field"><span>Distortion range ±%</span>
+                <input type="text" value={distRangeAbsInput} onChange={(e) => setDistRangeAbsInput(e.target.value)} inputMode="decimal" placeholder="auto" />
+              </label>
+            )}
+          </div>
+        </details>
+        <button className="analysis-window-primary-action" type="button" onClick={type === 'distortion' ? handleRenderDistortion : handleRenderGrid} disabled={progressVisible}>
+          {progressVisible ? 'Calculating…' : 'Show'}
         </button>
-        {backendInfo ? <span className="dist-backend">{backendInfo}</span> : null}
+        {backendInfo ? <span className="analysis-window-status">{backendInfo}</span> : null}
       </div>
       {progressVisible ? (
-        <div className="dist-progress">
-          <div>{progressText}</div>
-          <progress max={100} value={progressValue} />
+        <div className="analysis-window-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progressValue)}>
+          <div className="analysis-window-progress__label"><span>{Math.round(progressValue)}%</span><span>{progressText}</span></div>
+          <div className="analysis-window-progress__track"><div className="analysis-window-progress__value" style={{ width: `${progressValue}%` }} /></div>
         </div>
       ) : null}
-      <div className="dist-content">
-        {errorMsg ? <div className="dist-error">{errorMsg}</div> : null}
-        <div className="dist-chart" ref={chartRef} />
+      <div className="analysis-window-result">
+        {errorMsg ? <div className="analysis-window-error">{errorMsg}</div> : null}
+        <div className="analysis-window-chart" ref={chartRef} />
       </div>
     </div>
   );

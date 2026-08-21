@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import { runNativeFieldMtfMap } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
+import {
+  ANALYSIS_PUPIL_SAMPLING_OPTIONS,
+  AnalysisGridSamplingField,
+} from './AnalysisGridSamplingField';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -434,83 +438,6 @@ function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []): boolean {
   }
   return hasIdealParaxial;
 }
-
-// ─── Shared style constants ───────────────────────────────────────────────────
-
-const CSS = `
-.mtf-page {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: #f4f4f4;
-  font-family: Arial, sans-serif;
-  margin: 0;
-}
-.mtf-controls {
-  padding: 10px 12px;
-  background: #f8f8f8;
-  border-bottom: 1px solid #ddd;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 10px;
-  align-items: center;
-  flex-shrink: 0;
-}
-.mtf-controls label { font-size: 12px; color: #333; white-space: nowrap; }
-.mtf-controls select, .mtf-controls input[type="number"] {
-  padding: 5px 8px;
-  font-size: 12px;
-  border: 1px solid #bbb;
-  border-radius: 4px;
-  background: white;
-}
-.mtf-controls input[type="number"] { width: 100px; }
-.mtf-controls input[type="checkbox"] { width: auto; }
-.mtf-controls button {
-  padding: 6px 10px;
-  border: 1px solid #bbb;
-  background: #f8f8f8;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 12px;
-  color: #333;
-}
-.mtf-controls button:hover { background: #e9e9e9; }
-.mtf-progress {
-  padding: 8px 12px;
-  font-size: 12px;
-  color: #333;
-  border-bottom: 1px solid #eee;
-  background: #fff;
-  flex-shrink: 0;
-}
-.mtf-progress progress {
-  display: block;
-  width: 100%;
-  margin-top: 6px;
-}
-.mtf-content {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-  background: white;
-  display: flex;
-  flex-direction: column;
-}
-.mtf-chart { flex: 1 1 auto; min-height: 0; width: 100%; height: 100%; }
-.mtf-error { padding: 20px; color: red; font-size: 13px; }
-.mtf-debug {
-  padding: 8px 12px;
-  border-top: 1px solid #eee;
-  background: #fafafa;
-  color: #444;
-  font-size: 11px;
-  white-space: pre-wrap;
-  flex-shrink: 0;
- }
-`;
-
-const SAMPLING_OPTIONS = ['16', '32', '64', '128', '256', '512', '1024', '2048', '4096'];
 
 function buildPchipCurve(xValues: number[], yValues: number[], pointCount = 101): { x: number[]; y: number[] } {
   const points = xValues
@@ -1740,88 +1667,91 @@ export function MtfAnalysisPage({ type }: { type: MtfAnalysisType }) {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   const wlSelect = (
-    <><label>Wavelength:</label>
+    <label className="analysis-window-field"><span>Wavelength</span>
       <select value={wavelength} onChange={e => setWavelength(e.target.value)}>
         {wlOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select></>
+      </select></label>
   );
   const samplingSelect = (
-    <><label>Sampling:</label>
-      <select value={sampling} onChange={e => setSampling(e.target.value)}>
-        {SAMPLING_OPTIONS.map(v => <option key={v} value={v}>{v}×{v}</option>)}
-      </select></>
+    <AnalysisGridSamplingField
+      value={sampling}
+      options={ANALYSIS_PUPIL_SAMPLING_OPTIONS}
+      onValueChange={setSampling}
+    />
   );
   const removePtdChk = (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <label className="analysis-window-toggle">
       <input type="checkbox" checked={removePtd} onChange={e => setRemovePtd(e.target.checked)} />
       Remove P/T/D
     </label>
   );
 
   return (
-    <div className="mtf-page">
-      <style>{CSS}</style>
-      <div className="mtf-controls">
+    <div className="analysis-window-page" data-analysis-kind={type}>
+      <div className="analysis-window-commandbar">
         {wlSelect}
         {type !== 'field-mtf' && (
-          <><label>Object:</label>
+          <label className="analysis-window-field"><span>Object</span>
             <select value={objectIdx} onChange={e => setObjectIdx(e.target.value)}>
               {objOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select></>
+            </select></label>
         )}
-        {type === 'mtf' && (<>
+        {type === 'mtf' && (<label className="analysis-window-field"><span>Max frequency · lp/mm</span>
           <input type="number" min="0" step="1" value={maxFreq} onChange={e => setMaxFreq(e.target.value)} />
-        </>)}
-        {type === 'through-focus-mtf' && (<>
-          <label>Freq (lp/mm):</label>
+        </label>)}
+        {type === 'through-focus-mtf' && (<label className="analysis-window-field"><span>Frequency · lp/mm</span>
           <input type="number" min="0" step="1" value={targetFreq} onChange={e => setTargetFreq(e.target.value)} />
-          <label>Defocus min (mm):</label>
-          <input type="number" step="0.001" value={defocusMin} onChange={e => setDefocusMin(e.target.value)} />
-          <label>Defocus max (mm):</label>
-          <input type="number" step="0.001" value={defocusMax} onChange={e => setDefocusMax(e.target.value)} />
-          <label>Steps:</label>
-          <input type="number" min="3" max="201" step="1" value={tfSteps} onChange={e => setTfSteps(e.target.value)} />
-        </>)}
+        </label>)}
         {type === 'field-mtf' && (<>
-          <label>1st Freq (lp/mm):</label>
+          <label className="analysis-window-field"><span>Frequency 1 · lp/mm</span>
           <input type="number" min="0" step="1" value={freq1} onChange={e => setFreq1(e.target.value)} />
-          <label>2nd Freq (lp/mm):</label>
+          </label>
+          <label className="analysis-window-field"><span>Frequency 2 · lp/mm</span>
           <input type="number" min="0" step="1" value={freq2} onChange={e => setFreq2(e.target.value)} />
-          <label>3rd Freq (lp/mm):</label>
+          </label>
+          <label className="analysis-window-field"><span>Frequency 3 · lp/mm</span>
           <input type="number" min="0" step="1" value={freq3} onChange={e => setFreq3(e.target.value)} />
-          <label>Object min:</label>
-          <input type="number" step="0.001" value={fieldMin} onChange={e => setFieldMin(e.target.value)} />
-          <label>Object max:</label>
-          <input type="number" step="0.001" value={fieldMax} onChange={e => setFieldMax(e.target.value)} />
-          <label>Steps:</label>
-          <input type="number" min="3" max="201" step="1" value={fieldSteps} onChange={e => setFieldSteps(e.target.value)} />
-        </>)}
-        {samplingSelect}
-        {removePtdChk}
-        <>
-          <label>Method:</label>
-          <select value={mtfMethod} onChange={e => setMtfMethod(e.target.value as MtfMethodOption)}>
-            <option value="hopkins-tcc">Hopkins-TCC</option>
-            <option value="legacy-otf-axis">Legacy OTF Axis</option>
-          </select>
-        </>
-        {type === 'mtf' && (<>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={showDiffLimit} onChange={e => setShowDiffLimit(e.target.checked)} />
-            Diffraction Limit
           </label>
         </>)}
-        <button type="button" onClick={handleCompute}>Show {type === 'mtf' ? 'MTF' : 'Plot'}</button>
+        <details className="analysis-window-options">
+          <summary>Options</summary>
+          <div className="analysis-window-options__panel">
+            {samplingSelect}
+            {type === 'through-focus-mtf' && (<>
+              <label className="analysis-window-field"><span>Defocus min · mm</span><input type="number" step="0.001" value={defocusMin} onChange={e => setDefocusMin(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Defocus max · mm</span><input type="number" step="0.001" value={defocusMax} onChange={e => setDefocusMax(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Steps</span><input type="number" min="3" max="201" step="1" value={tfSteps} onChange={e => setTfSteps(e.target.value)} /></label>
+            </>)}
+            {type === 'field-mtf' && (<>
+              <label className="analysis-window-field"><span>Object min</span><input type="number" step="0.001" value={fieldMin} onChange={e => setFieldMin(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Object max</span><input type="number" step="0.001" value={fieldMax} onChange={e => setFieldMax(e.target.value)} /></label>
+              <label className="analysis-window-field"><span>Steps</span><input type="number" min="3" max="201" step="1" value={fieldSteps} onChange={e => setFieldSteps(e.target.value)} /></label>
+            </>)}
+            <label className="analysis-window-field"><span>Method</span>
+              <select value={mtfMethod} onChange={e => setMtfMethod(e.target.value as MtfMethodOption)}>
+                <option value="hopkins-tcc">Hopkins-TCC</option>
+                <option value="legacy-otf-axis">Legacy OTF Axis</option>
+              </select>
+            </label>
+            {removePtdChk}
+            {type === 'mtf' && (
+              <label className="analysis-window-toggle"><input type="checkbox" checked={showDiffLimit} onChange={e => setShowDiffLimit(e.target.checked)} />Diffraction limit</label>
+            )}
+          </div>
+        </details>
+        <button className="analysis-window-primary-action" type="button" onClick={handleCompute} disabled={progressVisible}>
+          {progressVisible ? 'Calculating…' : 'Show'}
+        </button>
       </div>
       {progressVisible && (
-        <div className="mtf-progress">
-          <div>{progressText}</div>
-          <progress max={100} value={progressValue} />
+        <div className="analysis-window-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progressValue)}>
+          <div className="analysis-window-progress__label"><span>{Math.round(progressValue)}%</span><span>{progressText}</span></div>
+          <div className="analysis-window-progress__track"><div className="analysis-window-progress__value" style={{ width: `${progressValue}%` }} /></div>
         </div>
       )}
-      <div className="mtf-content">
-        {errorMsg ? <div className="mtf-error">{errorMsg}</div> : null}
-        <div className="mtf-chart" ref={chartRef} />
+      <div className="analysis-window-result">
+        {errorMsg ? <div className="analysis-window-error">{errorMsg}</div> : null}
+        <div className="analysis-window-chart" ref={chartRef} />
       </div>
     </div>
   );
