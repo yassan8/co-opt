@@ -4339,8 +4339,34 @@ function disposeMtfWasmWorkerPool(): void {
   mtfWasmWorkerPool = null;
   if (!pool) return;
   for (const worker of pool.workers) {
-    try { worker.terminate(); } catch (_) {}
+    try {
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.terminate();
+    } catch (_) {}
   }
+}
+
+/**
+ * Release browser-only optimizer workers after a run completes.
+ *
+ * The pools intentionally stay warm while finite-difference batches are being
+ * evaluated, but keeping the final WASM workers alive after the optimizer is
+ * idle retains their module heaps and event handlers. Wait for the serialized
+ * queues before terminating so a final batch cannot be interrupted.
+ */
+export async function releaseWebOptimizerWorkerResources(): Promise<{
+  spotWorkers: number;
+  mtfWorkers: number;
+}> {
+  await Promise.allSettled([spotWasmWorkerPoolQueue, mtfWasmWorkerPoolQueue]);
+  const spotWorkers = spotWasmWorkerPool?.workers.length ?? 0;
+  const mtfWorkers = mtfWasmWorkerPool?.workers.length ?? 0;
+  resetSpotWasmWorkerPool();
+  disposeMtfWasmWorkerPool();
+  spotWasmWorkerPoolQueue = Promise.resolve();
+  mtfWasmWorkerPoolQueue = Promise.resolve();
+  return { spotWorkers, mtfWorkers };
 }
 
 function getMtfWasmWorkerPool(workerCount: number): MtfWasmWorkerPool {

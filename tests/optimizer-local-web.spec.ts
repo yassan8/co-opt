@@ -8,9 +8,10 @@ const fixture = JSON.parse(
 const requestedIterations = Math.max(1, Math.floor(Number(process.env.COOPT_E2E_MAX_ITERATIONS) || 2));
 const requestedSpotWorkers = String(process.env.COOPT_E2E_SPOT_WORKERS || '').trim().toLowerCase();
 const requestedAutoRender = String(process.env.COOPT_E2E_AUTO_RENDER || '').trim().toLowerCase() === 'on';
+const requestedRepeatRun = String(process.env.COOPT_E2E_REPEAT_RUN || '').trim().toLowerCase() === 'on';
 
 test('Qcon optimization completes in local Edge without losing its run inputs', async ({ page }, testInfo) => {
-  test.setTimeout(Math.max(90_000, requestedIterations * 45_000));
+  test.setTimeout(Math.max(90_000, requestedIterations * 45_000 + (requestedRepeatRun ? 60_000 : 0)));
   const pageErrors: string[] = [];
   const browserConsoleMessages: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -37,6 +38,26 @@ test('Qcon optimization completes in local Edge without losing its run inputs', 
 
   await optimizer.locator('button').first().waitFor({ state: 'visible' });
   await optimizer.evaluate((spotWorkers) => {
+    const optimizerWindow = window as any;
+    if (!optimizerWindow.__optimizerWorkerTracker && typeof optimizerWindow.Worker === 'function') {
+      const NativeWorker = optimizerWindow.Worker;
+      const tracker = { created: 0, terminated: 0, live: new Set<Worker>(), urls: [] as string[] };
+      const TrackingWorker = function (...args: any[]) {
+        const worker = new NativeWorker(...args);
+        tracker.created += 1;
+        tracker.live.add(worker);
+        tracker.urls.push(String(args[0] || ''));
+        const nativeTerminate = worker.terminate.bind(worker);
+        worker.terminate = () => {
+          if (tracker.live.delete(worker)) tracker.terminated += 1;
+          nativeTerminate();
+        };
+        return worker;
+      };
+      TrackingWorker.prototype = NativeWorker.prototype;
+      optimizerWindow.Worker = TrackingWorker;
+      optimizerWindow.__optimizerWorkerTracker = tracker;
+    }
     (window as any).__COOPT_SPOT_PROFILE = true;
     (window as any).__cooptSpotRequirementDiag = null;
     (window as any).__cooptImageHeightWarmStartDiag = null;
@@ -86,6 +107,21 @@ test('Qcon optimization completes in local Edge without losing its run inputs', 
   expect(progressSamples.filter((sample) => sample.percent >= 100 && !/^(done|finished|complete)$/i.test(sample.status))).toEqual([]);
   await expect(optimizer.locator('.optimize-progress-status')).toHaveText(/done/i);
   await expect(optimizer.locator('.optimize-progress-percent')).toHaveText('100%');
+  await optimizer.waitForTimeout(750);
+  const postRunRuntime = await page.evaluate(() => ({
+    optimizerIsRunning: (window as any).__cooptOptimizerIsRunning === true,
+    opticalRowsOverrideCount: Array.isArray((window as any).__cooptOpticalSystemRowsOverride)
+      ? (window as any).__cooptOpticalSystemRowsOverride.length
+      : 0,
+    drawCrossInFlight: (window as any).__cooptDrawCrossInFlight === true,
+    drawCrossPending: !!(window as any).__cooptDrawCrossLastData,
+  }));
+  const postRunWorkers = await optimizer.evaluate(() => {
+    const tracker = (window as any).__optimizerWorkerTracker;
+    return tracker
+      ? { created: tracker.created, terminated: tracker.terminated, live: tracker.live.size, urls: tracker.urls }
+      : { created: 0, terminated: 0, live: 0, urls: [] };
+  });
 
   const measurement = await optimizer.evaluate(() => {
     const profile = (window as any).OptimizationMVP?.getLastProfile?.() || null;
@@ -107,14 +143,22 @@ test('Qcon optimization completes in local Edge without losing its run inputs', 
     .split('\n')
     .find((line) => line.includes('[Cost]')) || '');
   const wallMs = Date.now() - startedAt;
-  console.log('[optimizer-e2e] workers=' + (requestedSpotWorkers || 'auto') + ' wall=' + wallMs + 'ms internal=' + Math.round(measurement.profile?.totalMs || 0) + 'ms prep=' + Math.round(measurement.spot?.preparedGenerationMs || 0) + 'ms score=' + measurement.score + ' ' + costLine + ' workerMessages=' + JSON.stringify(browserConsoleMessages));
+  console.log('[optimizer-e2e] workers=' + (requestedSpotWorkers || 'auto') + ' wall=' + wallMs + 'ms internal=' + Math.round(measurement.profile?.totalMs || 0) + 'ms prep=' + Math.round(measurement.spot?.preparedGenerationMs || 0) + 'ms score=' + measurement.score + ' ' + costLine + ' postRun=' + JSON.stringify(postRunRuntime) + ' workersAfter=' + JSON.stringify(postRunWorkers) + ' workerMessages=' + JSON.stringify(browserConsoleMessages));
 
   await testInfo.attach('optimizer-profile.json', {
-    body: JSON.stringify({ wallMs, pageErrors, browserConsoleMessages, consoleScores, costLine, ...measurement }, null, 2),
+    body: JSON.stringify({ wallMs, pageErrors, browserConsoleMessages, consoleScores, costLine, postRunRuntime, postRunWorkers, ...measurement }, null, 2),
     contentType: 'application/json',
   });
 
   expect(pageErrors).toEqual([]);
+  expect(postRunRuntime).toEqual({
+    optimizerIsRunning: false,
+    opticalRowsOverrideCount: 0,
+    drawCrossInFlight: false,
+    drawCrossPending: false,
+  });
+  expect(postRunWorkers.live).toBe(0);
+  expect(postRunWorkers.terminated).toBe(postRunWorkers.created);
   expect(measurement.profile?.result?.ok).toBe(true);
   expect(measurement.profile?.result?.aborted).toBe(false);
   expect(measurement.profile?.counts?.kktIterCount).toBeGreaterThan(0);
@@ -131,4 +175,37 @@ test('Qcon optimization completes in local Edge without losing its run inputs', 
   expect(measurement.spot?.preparedGenerationMs).toBeLessThan(1_000);
   expect(measurement.profile?.totalMs).toBeLessThan(requestedIterations * 16_000);
   expect(wallMs).toBeLessThan(requestedIterations * 18_000 + 15_000);
+
+  if (requestedRepeatRun) {
+    await numericInputs.nth(0).fill('1');
+    const repeatStartedAt = Date.now();
+    await runButton.click();
+    await expect(runButton).toBeDisabled({ timeout: 5_000 });
+    await expect(runButton).toBeEnabled({ timeout: 90_000 });
+    await expect(optimizer.locator('.optimize-progress-status')).toHaveText(/done/i);
+    await optimizer.waitForTimeout(750);
+    const repeatRuntime = await page.evaluate(() => ({
+      optimizerIsRunning: (window as any).__cooptOptimizerIsRunning === true,
+      opticalRowsOverrideCount: Array.isArray((window as any).__cooptOpticalSystemRowsOverride)
+        ? (window as any).__cooptOpticalSystemRowsOverride.length
+        : 0,
+      drawCrossInFlight: (window as any).__cooptDrawCrossInFlight === true,
+      drawCrossPending: !!(window as any).__cooptDrawCrossLastData,
+    }));
+    const repeatWorkers = await optimizer.evaluate(() => {
+      const tracker = (window as any).__optimizerWorkerTracker;
+      return tracker
+        ? { created: tracker.created, terminated: tracker.terminated, live: tracker.live.size }
+        : { created: 0, terminated: 0, live: 0 };
+    });
+    console.log('[optimizer-e2e-repeat] wall=' + (Date.now() - repeatStartedAt) + 'ms postRun=' + JSON.stringify(repeatRuntime) + ' workersAfter=' + JSON.stringify(repeatWorkers));
+    expect(repeatRuntime).toEqual({
+      optimizerIsRunning: false,
+      opticalRowsOverrideCount: 0,
+      drawCrossInFlight: false,
+      drawCrossPending: false,
+    });
+    expect(repeatWorkers.live).toBe(0);
+    expect(repeatWorkers.terminated).toBe(repeatWorkers.created);
+  }
 });
