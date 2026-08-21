@@ -258,6 +258,7 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
             <option value="opd-fan">OPD Fan</option>
             <option value="opd">OPD</option>
             <option value="psf">PSF</option>
+            <option value="multi-field-psf">Multi-Field PSF</option>
             <option value="mtf">MTF</option>
             <option value="through-focus-spot">Through-Focus Spot</option>
             <option value="through-focus-mtf">Through-Focus MTF</option>
@@ -351,6 +352,12 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
           title="Open Point Spread Function view"
         >
           Point Spread Function
+        </button>
+        <button
+          id="open-multi-field-psf-window-btn"
+          title="Open Multi-Field PSF view"
+        >
+          Multi-Field PSF
         </button>
         <button
           id="open-mtf-window-btn"

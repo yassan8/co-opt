@@ -5,6 +5,7 @@ import { BasicAnalysisPage, type BasicAnalysisType } from './BasicAnalysisPage';
 import { DistortionAnalysisPage } from './DistortionAnalysisPage';
 import { MtfAnalysisPage } from './MtfAnalysisPage';
 import { PsfAnalysisPage } from './PsfAnalysisPage';
+import { MultiFieldPsfPage } from './MultiFieldPsfPage';
 import { WavefrontAnalysisPage } from './WavefrontAnalysisPage';
 import { AnalysisRayCountField } from './AnalysisRayCountField';
 import {
@@ -9846,7 +9847,7 @@ const collectLegacyCrossRays = async (
   useEffect(() => {
     if (!analysisWindowMode.enabled) return;
     if (analysisWindowMode.analysis === 'astigmatism') return;
-    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid' || analysisWindowMode.analysis === 'spot-diagram' || analysisWindowMode.analysis === 'spherical-aberration' || analysisWindowMode.analysis === 'magnification-chromatic-aberration' || analysisWindowMode.analysis === 'integrated-aberration' || analysisWindowMode.analysis === 'transverse-aberration' || analysisWindowMode.analysis === 'opd-fan' || analysisWindowMode.analysis === 'through-focus-spot' || analysisWindowMode.analysis === 'opd' || analysisWindowMode.analysis === 'psf') return;
+    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid' || analysisWindowMode.analysis === 'spot-diagram' || analysisWindowMode.analysis === 'spherical-aberration' || analysisWindowMode.analysis === 'magnification-chromatic-aberration' || analysisWindowMode.analysis === 'integrated-aberration' || analysisWindowMode.analysis === 'transverse-aberration' || analysisWindowMode.analysis === 'opd-fan' || analysisWindowMode.analysis === 'through-focus-spot' || analysisWindowMode.analysis === 'opd' || analysisWindowMode.analysis === 'psf' || analysisWindowMode.analysis === 'multi-field-psf') return;
 
     let restoreOpener: (() => void) | null = null;
     let tauriCloseUnlisten: (() => void) | null = null;
@@ -9914,6 +9915,7 @@ const collectLegacyCrossRays = async (
       'opd-fan': 'open-opd-fan-window-btn',
       'opd': 'open-opd-window-btn',
       'psf': 'open-psf-window-btn',
+      'multi-field-psf': 'open-multi-field-psf-window-btn',
       'mtf': 'open-mtf-window-btn',
       'through-focus-spot': 'open-through-focus-spot-window-btn',
       'through-focus-mtf': 'open-through-focus-mtf-window-btn',
@@ -9932,12 +9934,13 @@ const collectLegacyCrossRays = async (
       'opd-fan': 'Optical Path Difference Fan',
       'opd': 'Optical Path Difference',
       'psf': 'Point Spread Function',
+      'multi-field-psf': 'Multi-Field PSF',
       'mtf': 'Modulation Transfer Function',
       'through-focus-spot': 'Through-Focus Spot',
       'through-focus-mtf': 'Through-Focus MTF',
       'field-mtf': 'Field MTF',
     };
-    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf']);
+    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf', 'multi-field-psf']);
 
     const targetButtonId = analysisButtonMap[analysisWindowMode.analysis];
     const targetPopupTitle = analysisPopupTitleMap[analysisWindowMode.analysis];
@@ -10048,6 +10051,10 @@ const collectLegacyCrossRays = async (
 
   if (analysisWindowMode.analysis === 'psf') {
     return <PsfAnalysisPage />;
+  }
+
+  if (analysisWindowMode.analysis === 'multi-field-psf') {
+    return <MultiFieldPsfPage />;
   }
 
   if (isOptimizeWindowMode) {
@@ -13149,6 +13156,7 @@ const collectLegacyCrossRays = async (
     { value: 'opd-fan',                           label: 'OPD Fan (Test)' },
     { value: 'opd',                               label: 'OPD (Test)' },
     { value: 'psf',                               label: 'PSF (Test)' },
+    { value: 'multi-field-psf',                   label: 'Multi-Field PSF' },
     { value: 'mtf',                               label: 'MTF (Test)' },
     { value: 'through-focus-spot',                label: 'Through-Focus Spot' },
     { value: 'through-focus-mtf',                 label: 'Through-Focus MTF (Test)' },

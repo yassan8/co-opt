@@ -8393,3 +8393,389 @@ body.dark-mode .di-more-actions > summary:focus-visible {
     background: #2563eb;
     color: #ffffff;
 }
+
+/* Multi-Field PSF: progressive, scrollable field mosaic. */
+.multi-field-psf-page {
+    position: relative;
+    overflow: hidden;
+}
+
+.multi-field-psf-commandbar {
+    flex: 0 0 auto;
+}
+
+.multi-field-psf-options .analysis-window-options__panel {
+    width: min(620px, calc(100vw - 32px));
+    max-height: min(560px, calc(100vh - 92px));
+    grid-template-columns: repeat(2, minmax(190px, 1fr));
+    overflow: auto;
+}
+
+.multi-field-psf-summary {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 5px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow-x: auto;
+}
+
+.multi-field-psf-summary span {
+    padding: 3px 7px;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    background: #ffffff;
+}
+
+.multi-field-psf-summary strong {
+    color: #0f172a;
+    font-weight: 650;
+}
+
+.multi-field-psf-scroll {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable both-edges;
+    scrollbar-width: thin;
+    scrollbar-color: var(--analysis-scrollbar-thumb) transparent;
+    background:
+        linear-gradient(90deg, rgba(226, 232, 240, 0.28) 1px, transparent 1px),
+        linear-gradient(rgba(226, 232, 240, 0.28) 1px, transparent 1px),
+        #f8fafc;
+    background-size: 24px 24px;
+}
+
+.multi-field-psf-scroll.is-fit {
+    overflow: hidden;
+}
+
+.multi-field-psf-scroll.is-mosaic {
+    overflow: hidden;
+    padding: 10px;
+    box-sizing: border-box;
+    background: #020617;
+}
+
+.multi-field-psf-mosaic {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    background: #020617;
+    cursor: crosshair;
+}
+
+.multi-field-psf-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.multi-field-psf-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.multi-field-psf-scroll::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--analysis-scrollbar-thumb);
+    background-clip: padding-box;
+}
+
+.multi-field-psf-grid {
+    display: grid;
+    align-items: stretch;
+    gap: 10px;
+    width: max-content;
+    min-width: 100%;
+    padding: 14px;
+}
+
+.multi-field-psf-grid.is-fit {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    padding: 8px;
+    gap: clamp(3px, 0.55vw, 8px);
+}
+
+.multi-field-psf-grid.is-fit .multi-field-psf-tile,
+.multi-field-psf-grid.is-fit .multi-field-psf-tile.is-outside {
+    height: 100%;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-width: 0;
+    min-height: 0;
+}
+
+.multi-field-psf-grid.is-fit .multi-field-psf-tile__image {
+    min-height: 0;
+    aspect-ratio: auto;
+}
+
+.multi-field-psf-grid.is-fit.is-dense {
+    gap: 2px;
+    padding: 4px;
+}
+
+.multi-field-psf-grid.is-fit.is-dense .multi-field-psf-tile {
+    grid-template-rows: minmax(0, 1fr);
+    border-radius: 3px;
+}
+
+.multi-field-psf-grid.is-fit.is-dense .multi-field-psf-tile__field,
+.multi-field-psf-grid.is-fit.is-dense .multi-field-psf-tile__metrics {
+    display: none;
+}
+
+.multi-field-psf-tile {
+    display: grid;
+    grid-template-rows: auto minmax(84px, 1fr) auto;
+    height: auto;
+    min-width: 0;
+    min-height: 132px;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #334155;
+    text-align: left;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    opacity: 1;
+}
+
+.multi-field-psf-tile:hover:not(:disabled),
+.multi-field-psf-tile:focus-visible {
+    border-color: #60a5fa;
+    background: #ffffff;
+    color: #1e3a8a;
+    box-shadow: 0 6px 18px rgba(37, 99, 235, 0.13);
+    transform: translateY(-1px);
+}
+
+.multi-field-psf-tile:disabled {
+    cursor: default;
+    opacity: 1;
+}
+
+.multi-field-psf-tile.is-outside {
+    min-height: 132px;
+    border: 1px dashed rgba(148, 163, 184, 0.42);
+    border-radius: 8px;
+    background: rgba(226, 232, 240, 0.2);
+}
+
+.multi-field-psf-tile__field,
+.multi-field-psf-tile__metrics {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 5px 7px;
+    color: #64748b;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.multi-field-psf-tile__field {
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+}
+
+.multi-field-psf-tile__metrics {
+    border-top: 1px solid #e2e8f0;
+}
+
+.multi-field-psf-tile__image {
+    display: grid;
+    place-items: center;
+    min-height: 84px;
+    aspect-ratio: 1;
+    overflow: hidden;
+    background: #020617;
+    color: #94a3b8;
+    font-size: 11px;
+}
+
+.multi-field-psf-tile__image canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: 50% 50%;
+}
+
+.multi-field-psf-tile.is-computing .multi-field-psf-tile__image {
+    background: linear-gradient(110deg, #020617 25%, #172554 45%, #020617 65%);
+    background-size: 220% 100%;
+    animation: multi-field-psf-pulse 1.15s linear infinite;
+}
+
+.multi-field-psf-tile.is-error .multi-field-psf-tile__image {
+    background: #fff1f2;
+    color: #be123c;
+}
+
+@keyframes multi-field-psf-pulse {
+    to { background-position-x: -220%; }
+}
+
+.multi-field-psf-empty {
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 8px;
+    min-height: 100%;
+    padding: 32px;
+    color: #64748b;
+    text-align: center;
+}
+
+.multi-field-psf-empty strong {
+    color: #334155;
+    font-size: 18px;
+    font-weight: 650;
+}
+
+.multi-field-psf-dialog-backdrop {
+    position: absolute;
+    z-index: 40;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(15, 23, 42, 0.62);
+    backdrop-filter: blur(3px);
+}
+
+.multi-field-psf-dialog {
+    display: grid;
+    grid-template-rows: auto minmax(280px, 1fr) auto;
+    width: min(680px, calc(100vw - 48px));
+    max-height: calc(100vh - 48px);
+    overflow: hidden;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.34);
+}
+
+.multi-field-psf-dialog > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.multi-field-psf-dialog > header > div {
+    display: grid;
+    gap: 2px;
+}
+
+.multi-field-psf-dialog > header span {
+    color: #64748b;
+    font-size: 11px;
+}
+
+.multi-field-psf-dialog__canvas {
+    display: block;
+    width: 100%;
+    min-height: 280px;
+    max-height: 62vh;
+    object-fit: contain;
+    background: #020617;
+}
+
+.multi-field-psf-dialog__metrics {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 1px;
+    border-top: 1px solid #e2e8f0;
+    background: #e2e8f0;
+}
+
+.multi-field-psf-dialog__metrics > span {
+    display: grid;
+    gap: 3px;
+    padding: 9px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.multi-field-psf-dialog__metrics small {
+    color: #64748b;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+body.dark-mode .multi-field-psf-summary,
+body.dark-mode .multi-field-psf-tile__field {
+    border-color: #334155;
+    background: #111827;
+    color: #94a3b8;
+}
+
+body.dark-mode .multi-field-psf-summary span,
+body.dark-mode .multi-field-psf-tile,
+body.dark-mode .multi-field-psf-dialog,
+body.dark-mode .multi-field-psf-dialog__metrics > span {
+    border-color: #334155;
+    background: #0f172a;
+    color: #e2e8f0;
+}
+
+body.dark-mode .multi-field-psf-summary strong,
+body.dark-mode .multi-field-psf-empty strong,
+body.dark-mode .multi-field-psf-dialog__metrics > span {
+    color: #e2e8f0;
+}
+
+body.dark-mode .multi-field-psf-scroll {
+    background-color: #020617;
+    background-image:
+        linear-gradient(90deg, rgba(51, 65, 85, 0.24) 1px, transparent 1px),
+        linear-gradient(rgba(51, 65, 85, 0.24) 1px, transparent 1px);
+}
+
+body.dark-mode .multi-field-psf-tile:hover:not(:disabled),
+body.dark-mode .multi-field-psf-tile:focus-visible {
+    border-color: #60a5fa;
+    background: #0f172a;
+    color: #bfdbfe;
+}
+
+body.dark-mode .multi-field-psf-tile__field,
+body.dark-mode .multi-field-psf-tile__metrics,
+body.dark-mode .multi-field-psf-dialog > header,
+body.dark-mode .multi-field-psf-dialog__metrics {
+    border-color: #334155;
+}
+
+@media (max-width: 720px) {
+    .multi-field-psf-options .analysis-window-options__panel {
+        grid-template-columns: 1fr;
+    }
+
+    .multi-field-psf-dialog__metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
