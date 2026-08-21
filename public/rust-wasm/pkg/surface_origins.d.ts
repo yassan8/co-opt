@@ -107,6 +107,8 @@ export function refract_ray_batch(dirs: Float64Array, normals: Float64Array, n1:
 
 export function register_trace_system_metadata(row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): number;
 
+export function register_trace_system_metadata_with_rows_json(optical_rows_json: string, wavelength_um: number, target_surface_index: number): number;
+
 export function run_native_chief_ray_angle_wasm_json(req_json: string): any;
 
 export function run_native_distortion_wasm_json(req_json: string): any;
@@ -285,6 +287,7 @@ export interface InitOutput {
     readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly register_trace_system_metadata: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
+    readonly register_trace_system_metadata_with_rows_json: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly run_native_chief_ray_angle_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];

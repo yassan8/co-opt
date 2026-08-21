@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test:optimizer-field": "node --experimental-strip-types diagnostics/optimize-field-preservation-repro.mjs",
+    "test:optimizer-web": "playwright test tests/optimizer-local-web.spec.ts --reporter=line",
+    "test:optimizer-web:headed": "playwright test tests/optimizer-local-web.spec.ts --headed --reporter=line",
     "tauri": "tauri",
     "dev:desktop": "tauri dev",
     "build": "vite build",
@@ -59,6 +62,8 @@
     "diag:lateral-chromatic-retrofocus": "node --import tsx diagnostics/lateral-chromatic-retrofocus-repro.mjs",
     "diag:multi-field-psf": "node --experimental-strip-types diagnostics/multi-field-psf-model-repro.mjs",
     "diag:multi-field-psf-ui": "node diagnostics/multi-field-psf-ui-repro.mjs",
+    "diag:image-simulation-model": "node --experimental-strip-types diagnostics/image-simulation-model-repro.mjs",
+    "diag:image-simulation-ui": "node diagnostics/image-simulation-ui-repro.mjs",
     "diag:optimizer-mtf-shared": "node --import tsx diagnostics/optimizer-mtf-shared-batch-repro.mjs",
     "wasm:rebuild": "bash ./scripts/build-rust-wasm.sh",
     "wasm:rebuild:threads": "bash -c 'COOPT_WASM_THREADS=1 bash ./scripts/build-rust-wasm.sh'",
@@ -77,6 +82,7 @@
     "three": "^0.182.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tauri-apps/cli": "^2.3.1",
     "@types/node": "^25.2.3",
     "@types/react": "^18.3.11",

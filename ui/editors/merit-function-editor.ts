@@ -32,6 +32,7 @@ import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../../evaluati
 import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.ts';
 import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern, convertImageHeightToEffectiveObject } from '../../optical/ray-renderer.ts';
 import { detectConjugateType } from '../../utils/conjugate-detection.ts';
+import { isTauriRuntime } from '../../src/desktop/runtime.ts';
 import { asphericSurfaceZ, toricSurfaceZ } from '../../optical/surface-math.ts';
 import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.ts';
 import { calculateTransverseAberration } from '../../evaluation/aberrations/transverse-aberration.ts';
@@ -4057,13 +4058,105 @@ class MeritFunctionEditor {
                 return rows.map(() => null);
             }
 
+            const primarySourceRows = __cooptBuildPrimaryOnlySourceRows(sourceRows, wavelength);
+            const spotDiagEnabled = typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_SPOT_PROFILE === true;
+            const spotDiagNow = () => (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? performance.now() : Date.now();
+            const preparedGenerationStartedAt = spotDiagNow();
+            let preparedRaySeries: any[] | null = null;
+            // Keep the published compatibility ray-generation path as the default.
+            // The prepared Web path is faster, but it must remain opt-in until its
+            // high-field ImageHeight/chief-ray semantics match generateSpotDiagramAsync.
+            if (!isTauriRuntime() && (globalThis as any).__COOPT_PREPARED_SPOT_OPTIMIZER === true) {
+                try {
+                    const conjugateType = detectConjugateType(opticalSystemData) === 'finite' ? 'finite' : 'infinite';
+                    const generated = selectedObjects.map((objectRow, seriesIndex) => {
+                        const clonedObject = (() => {
+                            try { return JSON.parse(JSON.stringify(objectRow)); } catch (_) { return { ...objectRow }; }
+                        })();
+                        // Match generateSpotDiagramAsync's nominal first attempt.
+                        // Sampling is unchanged; only the Web transport becomes one
+                        // prepared multi-field Rust/WASM request.
+                        const starts = generateRayStartPointsForObject(
+                            clonedObject,
+                            opticalSystemData,
+                            rayCount,
+                            null,
+                            {
+                                conjugateType,
+                                annularRingCount: ringCount,
+                                targetSurfaceIndex,
+                                useChiefRayAnalysis: false,
+                                forceHighFieldChiefRayAnalysis: false,
+                                chiefRaySolveMode: 'legacy',
+                                aimThroughStop: false,
+                                allowStopBasedOriginSolve: false,
+                                wavelengthUm: wavelength,
+                                pupilScale: 1,
+                                pattern,
+                                disableCrossExtent: true,
+                                originSolveTraceBackend: 'rust',
+                            },
+                        );
+                        if (!Array.isArray(starts) || starts.length === 0) {
+                            throw new Error(`No optimizer spot rays generated for field ${seriesIndex + 1}`);
+                        }
+                        const rays = starts.slice(0, rayCount).map((start: any, rayIndex: number) => {
+                            const pupilU = Number(start?.planeCoords?.u);
+                            const pupilV = Number(start?.planeCoords?.v);
+                            const centerByPlaneCoords = Number.isFinite(pupilU)
+                                && Number.isFinite(pupilV)
+                                && Math.abs(pupilU) <= 1e-12
+                                && Math.abs(pupilV) <= 1e-12;
+                            return {
+                                startP: {
+                                    x: Number(start?.startP?.x) || 0,
+                                    y: Number(start?.startP?.y) || 0,
+                                    z: Number(start?.startP?.z) || 0,
+                                },
+                                dir: {
+                                    x: Number(start?.dir?.x) || 0,
+                                    y: Number(start?.dir?.y) || 0,
+                                    z: Number(start?.dir?.z) || 1,
+                                },
+                                wavelengthUm: wavelength,
+                                pupilU: Number.isFinite(pupilU) ? pupilU : undefined,
+                                pupilV: Number.isFinite(pupilV) ? pupilV : undefined,
+                                isChief: start?.isChief === true
+                                    || centerByPlaneCoords
+                                    || (start?.isChief === undefined && rayIndex === 0),
+                            };
+                        });
+                        return {
+                            label: `Optimizer Field ${uniqueObjectIndices[seriesIndex] + 1}`,
+                            hasFieldAngle: String(objectRow?.position ?? '').trim().toLowerCase().includes('angle'),
+                            rays,
+                        };
+                    });
+                    if (generated.length === selectedObjects.length && generated.every((entry) => entry.rays.length > 0)) {
+                        preparedRaySeries = generated;
+                    }
+                } catch (error) {
+                    console.warn('[Optimizer Spot] prepared batch generation failed; using compatibility route', error);
+                    preparedRaySeries = null;
+                }
+            }
+            const preparedGenerationMs = spotDiagNow() - preparedGenerationStartedAt;
+
             const ipcMod = await import('../../src/desktop/ipc/client.ts');
             if (!ipcMod || typeof ipcMod.runNativeSpotRaytrace !== 'function') {
                 return rows.map(() => null);
             }
-            const response = await ipcMod.runNativeSpotRaytrace({
+            const nativeRequestStartedAt = spotDiagNow();
+            const response = await ipcMod.runNativeSpotRaytrace(preparedRaySeries ? {
                 opticalSystemRows: opticalSystemData,
-                sourceRows: __cooptBuildPrimaryOnlySourceRows(sourceRows, wavelength),
+                sourceRows: primarySourceRows,
+                surfaceIndex: targetSurfaceIndex,
+                wavelengthMode: 'primary',
+                raySeries: preparedRaySeries,
+            } : {
+                opticalSystemRows: opticalSystemData,
+                sourceRows: primarySourceRows,
                 objectRows: selectedObjects,
                 surfaceIndex: targetSurfaceIndex,
                 rayCount,
@@ -4072,6 +4165,19 @@ class MeritFunctionEditor {
                 wavelengthMode: 'primary',
                 independentObjectOrigins: true,
             });
+            if (spotDiagEnabled) {
+                const diag = (globalThis as any).__cooptSpotRequirementDiag || {
+                    calls: 0,
+                    preparedGenerationMs: 0,
+                    nativeRequestMs: 0,
+                    nativeTraceMs: 0,
+                };
+                diag.calls += 1;
+                diag.preparedGenerationMs += preparedGenerationMs;
+                diag.nativeRequestMs += spotDiagNow() - nativeRequestStartedAt;
+                diag.nativeTraceMs += Math.max(0, Number(response?.traceMs) || 0);
+                (globalThis as any).__cooptSpotRequirementDiag = diag;
+            }
             const series = Array.isArray(response?.series) ? response.series : [];
             if (series.length !== selectedObjects.length) return rows.map(() => null);
             const seriesIndexByObject = new Map(uniqueObjectIndices.map((objectIndex, seriesIndex) => [objectIndex, seriesIndex]));

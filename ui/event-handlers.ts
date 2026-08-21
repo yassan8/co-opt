@@ -17665,6 +17665,7 @@ export function setupTransformationControls(): void {
                     'opd': 'open-opd-window-btn',
                     'psf': 'open-psf-window-btn',
                     'multi-field-psf': 'open-multi-field-psf-window-btn',
+                    'image-simulation': 'open-image-simulation-window-btn',
                     'mtf': 'open-mtf-window-btn',
                     'through-focus-spot': 'open-through-focus-spot-window-btn',
                     'through-focus-mtf': 'open-through-focus-mtf-window-btn',

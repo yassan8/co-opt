@@ -95,6 +95,11 @@ export type RustRayTracingWasm = {
     rowRots: Float64Array,
     rowCount: number
   ) => number;
+  register_trace_system_metadata_with_rows_json?: (
+    opticalRowsJson: string,
+    wavelengthUm: number,
+    targetSurfaceIndex: number
+  ) => number;
   clear_trace_system_metadata_cache?: () => void;
   trace_ray_batch_spot_metrics_cached?: (
     rays: Float64Array,
@@ -488,6 +493,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           generate_centered_grid_offsets_flat: mod.generate_centered_grid_offsets_flat,
           generate_parallel_start_points_flat: mod.generate_parallel_start_points_flat,
           register_trace_system_metadata: mod.register_trace_system_metadata,
+          register_trace_system_metadata_with_rows_json: mod.register_trace_system_metadata_with_rows_json,
           clear_trace_system_metadata_cache: mod.clear_trace_system_metadata_cache,
           trace_ray_batch_spot_metrics_cached: mod.trace_ray_batch_spot_metrics_cached,
           trace_spot_metric_jobs_cached: mod.trace_spot_metric_jobs_cached,

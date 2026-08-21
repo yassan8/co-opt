@@ -586,6 +586,22 @@ export function register_trace_system_metadata(row_meta, row_params, row_origins
 }
 
 /**
+ * @param {string} optical_rows_json
+ * @param {number} wavelength_um
+ * @param {number} target_surface_index
+ * @returns {number}
+ */
+export function register_trace_system_metadata_with_rows_json(optical_rows_json, wavelength_um, target_surface_index) {
+    const ptr0 = passStringToWasm0(optical_rows_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.register_trace_system_metadata_with_rows_json(ptr0, len0, wavelength_um, target_surface_index);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] >>> 0;
+}
+
+/**
  * @param {string} req_json
  * @returns {any}
  */

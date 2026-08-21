@@ -40,7 +40,7 @@ function getPrimaryWavelength(): number {
   return 0.5876;
 }
 
-function normalizeDistortionObjectRows(objectRows: any[], opticalSystemRows: any[], sourceRows: any[]): any[] {
+export function normalizeDistortionObjectRows(objectRows: any[], opticalSystemRows: any[], sourceRows: any[]): any[] {
   const rows = Array.isArray(objectRows) ? objectRows : [];
   const wavelength = (() => {
     const source = Array.isArray(sourceRows) ? sourceRows : [];

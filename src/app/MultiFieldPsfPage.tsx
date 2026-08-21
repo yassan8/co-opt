@@ -39,9 +39,9 @@ import {
   type MultiFieldPsfShape,
 } from './multi-field-psf-model';
 
-type ColorMode = 'pseudo' | 'true' | 'false';
-type OpdMode = 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved';
-type ZeroPadMode = 'none' | 'auto' | '128' | '256' | '512' | '1024';
+export type ColorMode = 'pseudo' | 'true' | 'false';
+export type OpdMode = 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved';
+export type ZeroPadMode = 'none' | 'auto' | '128' | '256' | '512' | '1024';
 
 type MultiFieldPsfTile = MultiFieldPsfGridPoint & {
   status: 'outside' | 'pending' | 'computing' | 'done' | 'error';
@@ -53,7 +53,7 @@ type MultiFieldPsfTile = MultiFieldPsfGridPoint & {
   error?: string;
 };
 
-type FieldPsfComputeOptions = {
+export type FieldPsfComputeOptions = {
   host: any;
   opticalRows: any[];
   sourceRows: any[];
@@ -66,6 +66,22 @@ type FieldPsfComputeOptions = {
   logScale: boolean;
   token: CancelToken;
   onProgress: (percent: number, message: string) => void;
+};
+
+export type FieldPsfComputeResult = {
+  image: MultiFieldPsfImage;
+  metrics: any;
+  backend: string;
+  psfData: number[][];
+  trueColorData: null | { red: Float32Array[]; green: Float32Array[]; blue: Float32Array[] };
+  pixelSizeUm: number;
+  wavelengthCount: number;
+  spectralComponents: Array<{
+    wavelengthUm: number;
+    weight: number;
+    psfData: number[][];
+    pixelSizeUm: number;
+  }>;
 };
 
 function formatMetric(value: unknown, digits = 3): string {
@@ -233,11 +249,7 @@ function PsfMosaicCanvas({
   );
 }
 
-async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<{
-  image: MultiFieldPsfImage;
-  metrics: any;
-  backend: string;
-}> {
+export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<FieldPsfComputeResult> {
   const {
     host,
     opticalRows,
@@ -419,7 +431,21 @@ async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<{
   const image = prepareMultiFieldPsfImage(accumulator, trueColorAccumulator, colorMode, logScale);
   if (!image) throw new Error('PSF image conversion failed.');
   onProgress(100, 'Done');
-  return { image, metrics, backend: first.backend };
+  return {
+    image,
+    metrics,
+    backend: first.backend,
+    psfData: accumulator,
+    trueColorData: trueColorAccumulator,
+    pixelSizeUm: Number.isFinite(targetPitch) && targetPitch > 0 ? targetPitch : 1,
+    wavelengthCount: results.length,
+    spectralComponents: results.map((result) => ({
+      wavelengthUm: Number(result.wavelength),
+      weight: Number(result.weight),
+      psfData: result.psfData,
+      pixelSizeUm: Number(result.scale?.pixelSizeUm),
+    })),
+  };
 }
 
 export function MultiFieldPsfPage() {

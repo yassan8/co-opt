@@ -12,6 +12,10 @@ rust-wasm/target/
 # Node
 node_modules/
 
+# Local browser test output
+diagnostics/playwright-results/
+.codex-web-benchmark-profile/
+
 # Python
 .venv/
 

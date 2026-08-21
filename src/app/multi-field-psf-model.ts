@@ -83,6 +83,64 @@ export function getMultiFieldPsfLocalToGlobalRotationDeg(
   return ((rotation + 180) % 360 + 360) % 360 - 180;
 }
 
+export function rotateMultiFieldPsfGridCartesian(
+  grid: number[][],
+  rotationDeg: number,
+): number[][] {
+  const height = Array.isArray(grid) ? grid.length : 0;
+  const width = height > 0 && Array.isArray(grid[0]) ? grid[0].length : 0;
+  if (!(width > 0 && height > 0)) return grid;
+  const normalizedRotation = ((Number(rotationDeg) % 360) + 360) % 360;
+  if (normalizedRotation <= 1e-10 || Math.abs(normalizedRotation - 360) <= 1e-10) {
+    return grid.map((row) => row.map((value) => Number(value) || 0));
+  }
+
+  const radians = normalizedRotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const centerX = (width - 1) / 2;
+  const centerY = (height - 1) / 2;
+  const out = Array.from({ length: height }, () => new Array(width).fill(0));
+  let sourceEnergy = 0;
+  let outputEnergy = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) sourceEnergy += Math.max(0, Number(grid[y]?.[x]) || 0);
+  }
+
+  for (let rasterY = 0; rasterY < height; rasterY += 1) {
+    for (let rasterX = 0; rasterX < width; rasterX += 1) {
+      const globalX = rasterX - centerX;
+      const globalY = centerY - rasterY;
+      const localX = cos * globalX + sin * globalY;
+      const localY = -sin * globalX + cos * globalY;
+      const sourceX = centerX + localX;
+      const sourceY = centerY - localY;
+      if (sourceX < 0 || sourceY < 0 || sourceX > width - 1 || sourceY > height - 1) continue;
+      const x0 = Math.floor(sourceX);
+      const y0 = Math.floor(sourceY);
+      const x1 = Math.min(width - 1, x0 + 1);
+      const y1 = Math.min(height - 1, y0 + 1);
+      const tx = sourceX - x0;
+      const ty = sourceY - y0;
+      const v00 = Math.max(0, Number(grid[y0]?.[x0]) || 0);
+      const v10 = Math.max(0, Number(grid[y0]?.[x1]) || 0);
+      const v01 = Math.max(0, Number(grid[y1]?.[x0]) || 0);
+      const v11 = Math.max(0, Number(grid[y1]?.[x1]) || 0);
+      const top = v00 * (1 - tx) + v10 * tx;
+      const bottom = v01 * (1 - tx) + v11 * tx;
+      const value = top * (1 - ty) + bottom * ty;
+      out[rasterY][rasterX] = value;
+      outputEnergy += value;
+    }
+  }
+
+  if (sourceEnergy > 0 && outputEnergy > 0) {
+    const scale = sourceEnergy / outputEnergy;
+    out.forEach((row) => row.forEach((value, index) => { row[index] = value * scale; }));
+  }
+  return out;
+}
+
 export function rotateMultiFieldPsfImageCartesian(
   image: MultiFieldPsfImage,
   rotationDeg: number,
