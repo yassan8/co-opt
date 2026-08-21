@@ -110,6 +110,27 @@ function isPlainObjectRecord(value: any): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function normalizeFixedStopBlocksForConfiguration(config: any): void {
+  const blocks = Array.isArray(config?.blocks) ? config.blocks : [];
+  for (const block of blocks) {
+    if (String(block?.blockType ?? '').trim() !== 'Stop') continue;
+
+    if (!isPlainObjectRecord(block.parameters)) block.parameters = {};
+    const legacySemiDiameter = isPlainObjectRecord(block.variables?.semiDiameter)
+      ? block.variables.semiDiameter.value
+      : undefined;
+    if (
+      !Object.prototype.hasOwnProperty.call(block.parameters, 'semiDiameter')
+      && legacySemiDiameter !== undefined
+    ) {
+      block.parameters.semiDiameter = legacySemiDiameter;
+    }
+
+    // The stop defines the fixed aperture reference. It is never a design variable.
+    block.variables = {};
+  }
+}
+
 function mergeVariableEntriesFromBaseline(currentVars: any, baselineVars: any, currentParams?: any): Record<string, any> {
   const current = isPlainObjectRecord(currentVars) ? currentVars : {};
   const baseline = isPlainObjectRecord(baselineVars) ? baselineVars : {};
@@ -152,6 +173,10 @@ function mergeBlockVariablesFromBaselineConfig(targetConfig: any, baselineConfig
     const blockId = String(block?.blockId ?? '').trim();
     if (!blockId) continue;
     const baselineBlock = baselineBlocksById.get(blockId);
+    if (String(block?.blockType ?? '').trim() === 'Stop') {
+      normalizeFixedStopBlocksForConfiguration(targetConfig);
+      continue;
+    }
     if (!baselineBlock || !isPlainObjectRecord(baselineBlock.variables)) continue;
     block.variables = mergeVariableEntriesFromBaseline(block.variables, baselineBlock.variables, block.parameters);
   }
@@ -206,6 +231,7 @@ function normalizeLoadedSystemConfiguration(systemConfig: SystemConfiguration | 
       cfg.name = `Config ${String(cfg.id ?? '') || ''}`.trim() || 'Config';
     }
     normalizeImageSurfaceBlocksForConfiguration(cfg);
+    normalizeFixedStopBlocksForConfiguration(cfg);
     backfillMissingGlassPropertiesForConfiguration(cfg);
     interpolateExplicitApertureSemidiaForConfiguration(cfg);
   }
@@ -549,6 +575,7 @@ export function saveSystemConfigurations(systemConfig: SystemConfiguration): voi
     try {
       for (const cfg of configToSave.configurations) {
         normalizeImageSurfaceBlocksForConfiguration(cfg);
+        normalizeFixedStopBlocksForConfiguration(cfg);
         interpolateExplicitApertureSemidiaForConfiguration(cfg);
       }
     } catch (_) {}

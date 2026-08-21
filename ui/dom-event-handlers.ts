@@ -7229,7 +7229,7 @@ function __blocks_getVisibleParameterKeys(block: any): string[] {
         if (!keys.includes('abbe3')) keys.push('abbe3');
     }
     if (blockType === 'Stop' && !keys.includes('semiDiameter')) keys.push('semiDiameter');
-    if (blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'ImageSurface' && blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane') {
+    if (blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'ImageSurface' && blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane') {
         if (!keys.includes('zoomGroup')) keys.push('zoomGroup');
     }
     if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'SingleSurface' || blockType === 'Mirror') {
@@ -7321,6 +7321,11 @@ function __blocks_setVarScope(blockId: string, key: string, scope: string): void
 
         const b = activeCfg.blocks.find((x: any) => x && String(x.blockId ?? '') === String(blockId));
         if (!b) return;
+        if (String(b?.blockType ?? '').trim() === 'Stop') {
+            b.variables = {};
+            saveSystemConfigurations(systemConfig);
+            return;
+        }
 
         const initialValue = ((String(key ?? '').trim().toLowerCase() === 'bending')
             && !!cooptGetBendingConfigForBlock(b))
@@ -7426,6 +7431,10 @@ function __blocks_setVarMode(blockId: string, key: string, enabled: boolean, sco
             const b = cfg.blocks.find((x: any) => x && String(x.blockId ?? '') === String(blockId));
             if (!b) {
                 missing.push({ configId: String(cfg?.id ?? '(none)'), configName: cfg?.name });
+                continue;
+            }
+            if (String(b?.blockType ?? '').trim() === 'Stop') {
+                b.variables = {};
                 continue;
             }
 
@@ -7544,6 +7553,11 @@ function __blocks_setParameterAndApertureModeBulk(enabled: boolean): { ok: boole
 
             const params = (block.parameters && typeof block.parameters === 'object') ? block.parameters : null;
             const blockType = String(block?.blockType || block?.type || 'unknown');
+            if (blockType === 'Stop') {
+                if (Object.keys(block.variables).length > 0) changedCount++;
+                block.variables = {};
+                continue;
+            }
             const paramKeys = __blocks_getVisibleParameterKeys(block);
             for (const key of paramKeys) {
                 const currentVarEntry = __blocks_getVarEntryForKey(block.variables, key);
@@ -10254,6 +10268,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         };
 
         const attachQuickScopeToggle = (wrapper: HTMLElement, path: string) => {
+            if (blockType === 'Stop') return;
             const key = String(path ?? '').trim().split('.').pop() || '';
             if (!key) return;
             wrapper.insertBefore(createQuickScopeToggle(key), wrapper.firstChild);
@@ -11164,7 +11179,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     return a.localeCompare(b);
                 });
             };
-            const varKeys = sortVariableKeys(Object.keys(vars || {}).filter((k) => !shouldHideExpandedField(k)));
+            const varKeys = blockType === 'Stop'
+                ? []
+                : sortVariableKeys(Object.keys(vars || {}).filter((k) => !shouldHideExpandedField(k)));
 
             const normalizeSurfTypeLabel = (value: any) => {
                 return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '');
@@ -12521,6 +12538,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
                 const renderExpandedParamRow = (key: string, mode: 'default' | 'compact' = 'default') => {
                     const value = resolveExpandedParamValue(key);
+                    const canOptimize = blockType !== 'Stop';
                     const varEntry = __cooptGetEffectiveBlockVariableEntry(activeConfigIdForInspector, blockId, vars, key);
                     const isAbbeRow = key === 'abbe' || key === 'vd' || /^abbe\d+$/.test(key) || /^vd\d+$/.test(key);
                     const isGroupedSurfTypeRow =
@@ -12530,7 +12548,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
                     const paramRow = document.createElement('div');
                     paramRow.style.display = 'grid';
-                    paramRow.style.gridTemplateColumns = isCompact ? '18px minmax(0,1fr)' : '32px minmax(0,1fr)';
+                    paramRow.style.gridTemplateColumns = canOptimize
+                        ? (isCompact ? '18px minmax(0,1fr)' : '32px minmax(0,1fr)')
+                        : 'minmax(0,1fr)';
                     paramRow.style.alignItems = 'center';
                     paramRow.style.gap = '6px';
                     paramRow.style.minHeight = isCompact ? '28px' : '34px';
@@ -12540,19 +12560,21 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         paramRow.style.maxWidth = '100%';
                     }
 
-                    const optimizeControl = createOptimizeScopeIconControl(
-                        __blocks_shouldMarkVar(varEntry),
-                        __blocks_getVarScope(varEntry),
-                        (nextState) => {
-                            if (nextState === 'off') {
-                                __blocks_setVarMode(blockId, key, false, 'perConfig');
-                                return;
+                    const optimizeControl = canOptimize
+                        ? createOptimizeScopeIconControl(
+                            __blocks_shouldMarkVar(varEntry),
+                            __blocks_getVarScope(varEntry),
+                            (nextState) => {
+                                if (nextState === 'off') {
+                                    __blocks_setVarMode(blockId, key, false, 'perConfig');
+                                    return;
+                                }
+                                const scope = nextState === 'global' ? 'global' : 'perConfig';
+                                __blocks_setVarScope(blockId, key, scope);
+                                __blocks_setVarMode(blockId, key, true, scope);
                             }
-                            const scope = nextState === 'global' ? 'global' : 'perConfig';
-                            __blocks_setVarScope(blockId, key, scope);
-                            __blocks_setVarMode(blockId, key, true, scope);
-                        }
-                    );
+                        )
+                        : null;
 
                     const innerRow = createRow(key, value, `parameters.${key}`, undefined, isCompact ? '__groupedSurface' : undefined);
                     innerRow.style.flex = '1';
@@ -12561,7 +12583,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         innerRow.style.minWidth = '0';
                     }
 
-                    paramRow.appendChild(optimizeControl.button);
+                    if (optimizeControl) paramRow.appendChild(optimizeControl.button);
                     paramRow.appendChild(innerRow);
                     panel.appendChild(paramRow);
                 };
