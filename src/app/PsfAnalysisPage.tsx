@@ -3,6 +3,7 @@ import Plotly from 'plotly.js-dist-min';
 import { PSFPlotter } from '../../evaluation/psf/psf-plot.ts';
 import { derivePupilAndFocalLengthMmFromParaxial } from '../../evaluation/spot-diagram.ts';
 import { calculateImageSpaceDiffractionParams, findStopSurfaceIndex } from '../../raytracing/core/ray-paraxial.ts';
+import { calculatePsfImagePixelSizeUm } from './psf-scale-model';
 import {
   ANALYSIS_PUPIL_SAMPLING_OPTIONS,
   AnalysisGridSamplingField,
@@ -239,10 +240,16 @@ export function buildWavelengthEntries(value: string, sourceRows: any[], primary
 export function derivePsfScale(opticalRows: any[], wavelength: number, samplingSize: number, fftSize: number) {
   let pupilDiameterMm = Number.NaN;
   let focalLengthMm = Number.NaN;
+  let fNumberWorking = Number.NaN;
+  let conjugateType: 'finite' | 'infinite' | 'unknown' = 'unknown';
   try {
     const diffraction = calculateImageSpaceDiffractionParams(opticalRows, wavelength) as any;
     const fNumber = Number(diffraction?.fNumberWorking);
     const focalLength = Number(diffraction?.focalLengthMm);
+    if (Number.isFinite(fNumber) && fNumber > 0) fNumberWorking = fNumber;
+    if (diffraction?.conjugateType === 'finite' || diffraction?.conjugateType === 'infinite') {
+      conjugateType = diffraction.conjugateType;
+    }
     if (Number.isFinite(fNumber) && fNumber > 0 && Number.isFinite(focalLength) && focalLength > 0) {
       focalLengthMm = Math.abs(focalLength);
       pupilDiameterMm = focalLengthMm / fNumber;
@@ -269,9 +276,11 @@ export function derivePsfScale(opticalRows: any[], wavelength: number, samplingS
   }
   if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) pupilDiameterMm = 10;
   if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) focalLengthMm = 100;
-  const basePixelPitchUm = (wavelength * Math.abs(focalLengthMm)) / Math.max(1e-12, Math.abs(pupilDiameterMm));
-  const pixelSizeUm = basePixelPitchUm * (samplingSize / fftSize);
-  return { pupilDiameterMm, focalLengthMm, pixelSizeUm };
+  if (!(Number.isFinite(fNumberWorking) && fNumberWorking > 0)) {
+    fNumberWorking = Math.abs(focalLengthMm) / Math.max(1e-12, Math.abs(pupilDiameterMm));
+  }
+  const pixelSizeUm = calculatePsfImagePixelSizeUm(wavelength, fNumberWorking, samplingSize, fftSize);
+  return { pupilDiameterMm, focalLengthMm, fNumberWorking, conjugateType, pixelSizeUm };
 }
 
 export function sampleBilinear(grid: any[][], y: number, x: number): number {

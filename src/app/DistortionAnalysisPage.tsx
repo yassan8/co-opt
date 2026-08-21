@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist-min';
+import { detectConjugateType } from '../../utils/conjugate-detection.ts';
 import { plotDistortionPercent, plotGridDistortion } from '../../evaluation/aberrations/distortion-plot.ts';
 import { applyDistortionHorizontalOffset as applySharedDistortionHorizontalOffset } from '../../evaluation/aberrations/distortion-display.ts';
 import { runNativeDistortion, runNativeGridDistortion } from '../../src/desktop/ipc/client.ts';
@@ -59,8 +60,7 @@ export function normalizeDistortionObjectRows(objectRows: any[], opticalSystemRo
     }
     return fallback;
   })();
-  const thickness = Number(opticalSystemRows?.[0]?.thickness);
-  const conjugateType = Number.isFinite(thickness) && thickness < 1e9 ? 'finite' : 'infinite';
+  const conjugateType = detectConjugateType(opticalSystemRows);
 
   return rows.map((row) => {
     if (!row || typeof row !== 'object') return row;

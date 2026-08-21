@@ -466,12 +466,72 @@ export function createIdentityImageSimulationKernel(size = 21): ImageSimulationK
   return { size: normalizedSize, data, sparse: buildSparseKernel(normalizedSize, data) };
 }
 
+type ImageSimulationPoint = { x: number; y: number };
+
+function clipImageSimulationPolygon(
+  polygon: ImageSimulationPoint[],
+  axis: 'x' | 'y',
+  boundary: number,
+  keepGreater: boolean,
+): ImageSimulationPoint[] {
+  if (!polygon.length) return [];
+  const out: ImageSimulationPoint[] = [];
+  const isInside = (point: ImageSimulationPoint) => (
+    keepGreater ? point[axis] >= boundary - 1e-12 : point[axis] <= boundary + 1e-12
+  );
+  let previous = polygon[polygon.length - 1];
+  let previousInside = isInside(previous);
+  for (const current of polygon) {
+    const currentInside = isInside(current);
+    if (currentInside !== previousInside) {
+      const denominator = current[axis] - previous[axis];
+      if (Math.abs(denominator) > 1e-15) {
+        const t = (boundary - previous[axis]) / denominator;
+        out.push({
+          x: previous.x + (current.x - previous.x) * t,
+          y: previous.y + (current.y - previous.y) * t,
+        });
+      }
+    }
+    if (currentInside) out.push(current);
+    previous = current;
+    previousInside = currentInside;
+  }
+  return out;
+}
+
+function imageSimulationPolygonArea(polygon: ImageSimulationPoint[]): number {
+  if (polygon.length < 3) return 0;
+  let twiceArea = 0;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const current = polygon[index];
+    const next = polygon[(index + 1) % polygon.length];
+    twiceArea += current.x * next.y - next.x * current.y;
+  }
+  return Math.abs(twiceArea) / 2;
+}
+
+function imageSimulationPolygonRectangleOverlapArea(
+  polygon: ImageSimulationPoint[],
+  left: number,
+  right: number,
+  top: number,
+  bottom: number,
+): number {
+  let clipped = clipImageSimulationPolygon(polygon, 'x', left, true);
+  clipped = clipImageSimulationPolygon(clipped, 'x', right, false);
+  clipped = clipImageSimulationPolygon(clipped, 'y', top, true);
+  clipped = clipImageSimulationPolygon(clipped, 'y', bottom, false);
+  return imageSimulationPolygonArea(clipped);
+}
+
 export function resamplePsfToImageKernel(
   psfData: number[][],
   psfPixelSizeUm: number,
   imagePixelPitchXUm: number,
   imagePixelPitchYUm: number,
   requestedSize = 21,
+  rotationDeg = 0,
 ): ImageSimulationKernel {
   const size = Math.max(3, Math.min(41, Math.floor(requestedSize) | 1));
   const data = new Float32Array(size * size);
@@ -483,26 +543,54 @@ export function resamplePsfToImageKernel(
   if (!(rows > 0 && columns > 0 && sourcePitch > 0 && targetPitchX > 0 && targetPitchY > 0)) {
     return createIdentityImageSimulationKernel(size);
   }
-  const sourceCenterX = (columns - 1) / 2;
-  const sourceCenterY = (rows - 1) / 2;
+  // fftshift places the zero-frequency PSF sample at floor(N / 2), including
+  // even FFT grids. Treat every sample as an energy-carrying cell and rebin by
+  // exact overlap area. Point splatting would add a tent filter and turn the
+  // centered sample of an even grid into an artificial 2x2 blur.
+  const sourceCenterX = Math.floor(columns / 2);
+  const sourceCenterY = Math.floor(rows / 2);
   const targetCenter = (size - 1) / 2;
+  const radians = (Number(rotationDeg) || 0) * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const sourceHalfPitch = sourcePitch / 2;
+  const sourceCellArea = sourcePitch * sourcePitch;
   for (let sourceY = 0; sourceY < rows; sourceY += 1) {
     for (let sourceX = 0; sourceX < columns; sourceX += 1) {
       const value = Math.max(0, Number(psfData[sourceY]?.[sourceX]) || 0);
       if (!(value > 0)) continue;
-      const targetX = targetCenter + (sourceX - sourceCenterX) * sourcePitch / targetPitchX;
-      const targetY = targetCenter + (sourceY - sourceCenterY) * sourcePitch / targetPitchY;
-      if (targetX < 0 || targetY < 0 || targetX > size - 1 || targetY > size - 1) continue;
-      const x0 = Math.floor(targetX);
-      const y0 = Math.floor(targetY);
-      const x1 = Math.min(size - 1, x0 + 1);
-      const y1 = Math.min(size - 1, y0 + 1);
-      const tx = targetX - x0;
-      const ty = targetY - y0;
-      data[y0 * size + x0] += value * (1 - tx) * (1 - ty);
-      data[y0 * size + x1] += value * tx * (1 - ty);
-      data[y1 * size + x0] += value * (1 - tx) * ty;
-      data[y1 * size + x1] += value * tx * ty;
+      const centerX = (sourceX - sourceCenterX) * sourcePitch;
+      const centerY = (sourceY - sourceCenterY) * sourcePitch;
+      const sourceCorners = [
+        { x: centerX - sourceHalfPitch, y: centerY - sourceHalfPitch },
+        { x: centerX + sourceHalfPitch, y: centerY - sourceHalfPitch },
+        { x: centerX + sourceHalfPitch, y: centerY + sourceHalfPitch },
+        { x: centerX - sourceHalfPitch, y: centerY + sourceHalfPitch },
+      ];
+      // rotationDeg follows the existing Cartesian convention (+Y is raster
+      // up), expressed here in raster coordinates where +Y points down.
+      const polygon = sourceCorners.map((point) => ({
+        x: cos * point.x + sin * point.y,
+        y: -sin * point.x + cos * point.y,
+      }));
+      const minX = Math.min(...polygon.map((point) => point.x));
+      const maxX = Math.max(...polygon.map((point) => point.x));
+      const minY = Math.min(...polygon.map((point) => point.y));
+      const maxY = Math.max(...polygon.map((point) => point.y));
+      const firstTargetX = Math.max(0, Math.ceil(minX / targetPitchX + targetCenter - 0.5 - 1e-12));
+      const lastTargetX = Math.min(size - 1, Math.floor(maxX / targetPitchX + targetCenter + 0.5 + 1e-12));
+      const firstTargetY = Math.max(0, Math.ceil(minY / targetPitchY + targetCenter - 0.5 - 1e-12));
+      const lastTargetY = Math.min(size - 1, Math.floor(maxY / targetPitchY + targetCenter + 0.5 + 1e-12));
+      for (let targetY = firstTargetY; targetY <= lastTargetY; targetY += 1) {
+        const top = (targetY - targetCenter - 0.5) * targetPitchY;
+        const bottom = top + targetPitchY;
+        for (let targetX = firstTargetX; targetX <= lastTargetX; targetX += 1) {
+          const left = (targetX - targetCenter - 0.5) * targetPitchX;
+          const right = left + targetPitchX;
+          const overlapArea = imageSimulationPolygonRectangleOverlapArea(polygon, left, right, top, bottom);
+          if (overlapArea > 1e-15) data[targetY * size + targetX] += value * overlapArea / sourceCellArea;
+        }
+      }
     }
   }
   let sum = 0;

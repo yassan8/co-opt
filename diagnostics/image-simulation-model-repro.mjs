@@ -10,6 +10,8 @@ import {
   resamplePsfToImageKernel,
   warpImageWithDistortion,
 } from '../src/app/image-simulation-model.ts';
+import { calculatePsfImagePixelSizeUm } from '../src/app/psf-scale-model.ts';
+import { detectConjugateType } from '../utils/conjugate-detection.ts';
 const vectorTargets = ['field-chart', 'usaf-array', 'grid-points'].map((kind) => ({
   kind,
   svg: generateImageSimulationTargetSvg(kind),
@@ -100,6 +102,48 @@ deltaPsf[3][3] = 1;
 const identityKernel = resamplePsfToImageKernel(deltaPsf, 1, 1, 1, 15);
 assert.equal(identityKernel.sparse.length, 1, 'delta PSF must remain a one-tap kernel');
 assert.ok(Math.abs(identityKernel.sparse[0].weight - 1) < 1e-12);
+assert.deepEqual(
+  { dx: identityKernel.sparse[0].dx, dy: identityKernel.sparse[0].dy },
+  { dx: 0, dy: 0 },
+  'odd-grid PSF origin must stay on the image pixel origin',
+);
+
+for (const fftSize of [32, 64]) {
+  const evenDeltaPsf = Array.from({ length: fftSize }, () => new Array(fftSize).fill(0));
+  evenDeltaPsf[fftSize / 2][fftSize / 2] = 1;
+  const evenIdentityKernel = resamplePsfToImageKernel(evenDeltaPsf, 1, 1, 1, 15);
+  assert.equal(evenIdentityKernel.sparse.length, 1, fftSize + '-point centered PSF must not become a 2x2 blur');
+  assert.deepEqual(
+    { dx: evenIdentityKernel.sparse[0].dx, dy: evenIdentityKernel.sparse[0].dy },
+    { dx: 0, dy: 0 },
+    fftSize + '-point fftshift origin must remain centered',
+  );
+}
+
+const oversampledDeltaPsf = Array.from({ length: 32 }, () => new Array(32).fill(0));
+oversampledDeltaPsf[16][16] = 1;
+const oversampledIdentityKernel = resamplePsfToImageKernel(oversampledDeltaPsf, 0.25, 1, 1, 15);
+assert.equal(oversampledIdentityKernel.sparse.length, 1, 'a PSF cell contained by one image pixel must not leak to neighbors');
+
+const directionalPsf = Array.from({ length: 32 }, () => new Array(32).fill(0));
+directionalPsf[16][18] = 1;
+const rotatedDirectionalKernel = resamplePsfToImageKernel(directionalPsf, 1, 1, 1, 15, 90);
+assert.equal(rotatedDirectionalKernel.sparse.length, 1, '90-degree PSF rotation must not add interpolation blur');
+assert.deepEqual(
+  { dx: rotatedDirectionalKernel.sparse[0].dx, dy: rotatedDirectionalKernel.sparse[0].dy },
+  { dx: 0, dy: -2 },
+  'positive local X must rotate toward Cartesian positive Y',
+);
+
+assert.equal(detectConjugateType([{ thickness: 'INF' }]), 'infinite');
+assert.equal(detectConjugateType([{ thickness: -Infinity }]), 'infinite');
+assert.equal(detectConjugateType([{ Thickness: '∞' }]), 'infinite');
+assert.equal(detectConjugateType([{ distance: 1e7 }]), 'infinite');
+assert.equal(detectConjugateType([{ thickness: 200 }]), 'finite');
+assert.ok(
+  Math.abs(calculatePsfImagePixelSizeUm(0.55, 4, 32, 64) - 1.1) < 1e-12,
+  'PSF image pitch must be wavelength times working F-number times FFT sampling ratio',
+);
 
 const gaussianPsf = Array.from({ length: 9 }, (_, y) => Array.from({ length: 9 }, (_, x) => {
   const dx = x - 4;

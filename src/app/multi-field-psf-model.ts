@@ -98,8 +98,10 @@ export function rotateMultiFieldPsfGridCartesian(
   const radians = normalizedRotation * Math.PI / 180;
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
-  const centerX = (width - 1) / 2;
-  const centerY = (height - 1) / 2;
+  // fftshift places the PSF origin at floor(N / 2), not between the two
+  // central samples of an even grid.
+  const centerX = Math.floor(width / 2);
+  const centerY = Math.floor(height / 2);
   const out = Array.from({ length: height }, () => new Array(width).fill(0));
   let sourceEnergy = 0;
   let outputEnergy = 0;
@@ -218,7 +220,11 @@ export function detectMultiFieldPsfPositionMode(objectRows: any[]): MultiFieldPs
   }
   if (rows.some((row) => {
     const position = String(row?.position ?? row?.object ?? row?.type ?? '').toLowerCase();
-    return position.includes('angle') || position === 'point';
+    const normalized = position.trim().replace(/[\s_-]+/g, '');
+    return normalized === 'angle'
+      || normalized === 'point'
+      || normalized === 'fieldangle'
+      || normalized === 'objectangle';
   })) return 'angle';
   return 'height';
 }

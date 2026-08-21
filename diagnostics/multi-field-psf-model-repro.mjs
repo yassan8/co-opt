@@ -10,6 +10,7 @@ import {
   getMultiFieldPsfLocalToGlobalRotationDeg,
   getMultiFieldPsfCenteringOffset,
   prepareMultiFieldPsfImage,
+  rotateMultiFieldPsfGridCartesian,
   rotateMultiFieldPsfImageCartesian,
 } from '../src/app/multi-field-psf-model.ts';
 
@@ -71,6 +72,13 @@ const diagonalAzimuthDeg = getMultiFieldPsfFieldAzimuthDeg(diagonalField, 'angle
 const diagonalRotationDeg = getMultiFieldPsfLocalToGlobalRotationDeg(diagonalField, 'angle');
 assert.ok(Math.abs(diagonalAzimuthDeg - 45) < 1e-10, 'Field (23°, 23°) did not resolve to 45° azimuth');
 assert.ok(Math.abs(diagonalRotationDeg - 135) < 1e-10, 'Local PSF basis did not resolve to the required 135° image rotation');
+const evenGridOrigin = Array.from({ length: 32 }, () => new Array(32).fill(0));
+evenGridOrigin[16][16] = 1;
+const rotatedEvenGridOrigin = rotateMultiFieldPsfGridCartesian(evenGridOrigin, 90);
+assert.ok(
+  rotatedEvenGridOrigin[16][16] > 1 - 1e-12,
+  'even-grid fftshift origin must remain fixed during PSF visualization rotation',
+);
 const localRadialLobe = new Uint8ClampedArray(9 * 9 * 4);
 for (let index = 0; index < 9 * 9; index += 1) localRadialLobe[index * 4 + 3] = 255;
 localRadialLobe[((4 + 2) * 9 + 4) * 4] = 255;

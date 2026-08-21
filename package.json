@@ -63,6 +63,7 @@
     "diag:multi-field-psf": "node --experimental-strip-types diagnostics/multi-field-psf-model-repro.mjs",
     "diag:multi-field-psf-ui": "node diagnostics/multi-field-psf-ui-repro.mjs",
     "diag:image-simulation-model": "node --experimental-strip-types diagnostics/image-simulation-model-repro.mjs",
+    "diag:image-simulation-conjugates": "node --experimental-strip-types diagnostics/image-simulation-conjugate-repro.mjs",
     "diag:image-simulation-ui": "node diagnostics/image-simulation-ui-repro.mjs",
     "diag:optimizer-mtf-shared": "node --import tsx diagnostics/optimizer-mtf-shared-batch-repro.mjs",
     "wasm:rebuild": "bash ./scripts/build-rust-wasm.sh",
