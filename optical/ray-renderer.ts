@@ -167,6 +167,7 @@ type RayGenerationOptions = {
     forceInfiniteObject?: boolean;
     forceFiniteObject?: boolean;
     useChiefRayAnalysis?: boolean;
+    forceHighFieldChiefRayAnalysis?: boolean;
     aimThroughStop?: boolean;
     chiefRaySolveMode?: string;
     disableAngleObjectPositionOptimization?: boolean;
@@ -323,6 +324,7 @@ function buildRayStartGenerationCacheKey(obj, opticalSystemRows, rayCount, apert
         skipImageHeightTsValidation: options?.skipImageHeightTsValidation,
         imageHeightValidationTraceBackend: options?.imageHeightValidationTraceBackend,
         preserveChiefNormalEmissionPlane: options?.preserveChiefNormalEmissionPlane,
+        forceHighFieldChiefRayAnalysis: options?.forceHighFieldChiefRayAnalysis,
     };
 
     return [
@@ -340,6 +342,28 @@ function buildRayStartGenerationCacheKey(obj, opticalSystemRows, rayCount, apert
 function buildImageHeightSolveScopeKey(opticalSystemRows, wavelengthUm, conjugateType, validationMode) {
     return [
         buildOpticalRowsSignature(opticalSystemRows),
+        Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : 0.5876,
+        String(conjugateType || ''),
+        String(validationMode || ''),
+    ].join('||');
+}
+
+function buildImageHeightWarmStartScopeKey(opticalSystemRows, wavelengthUm, conjugateType, validationMode) {
+    const retainedKeys = new Set(['id', 'objecttype', 'surftype', 'radius', 'thickness', 'semidia', 'material', 'rindex', 'abbe', 'conic', 'qconnrad', 'objectrenderdistance']);
+    const continuationRows = Array.isArray(opticalSystemRows)
+        ? opticalSystemRows.map((row) => {
+            if (!row || typeof row !== 'object') return row ?? null;
+            const retained = {};
+            for (const key of Object.keys(row).sort()) {
+                const normalized = key.toLowerCase().replace(/[\s_-]+/g, '');
+                const isCoordinateField = /(tilt|decenter|rotation|coordinate|aperture|stop)/.test(normalized);
+                if (retainedKeys.has(normalized) || isCoordinateField) retained[key] = row[key];
+            }
+            return retained;
+        })
+        : [];
+    return [
+        stableSerializeForCache(continuationRows),
         Number.isFinite(Number(wavelengthUm)) ? Number(wavelengthUm) : 0.5876,
         String(conjugateType || ''),
         String(validationMode || ''),
@@ -898,6 +922,25 @@ function solveRayOriginsToStopPointsFastBatch(
                     }
                     return { ...origins[i] };
                 });
+                for (let i = 0; i < count; i++) {
+                    const status = Number((solvedByRust[i] as any)?.__status);
+                    const candidate = mapped[i];
+                    if (!candidate || ![candidate.x, candidate.y, candidate.z].every(Number.isFinite)) continue;
+                    origins[i] = { ...candidate };
+                    bestOrigins[i] = { ...candidate };
+                    if (status === 1) {
+                        bestErrs[i] = 0;
+                        solved[i] = true;
+                    }
+                }
+                if (typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_SPOT_PROFILE === true) {
+                    const diag = (globalThis as any).__cooptStopOriginSolveDiag || { calls: 0, rays: 0, rustConverged: 0, rustUnresolved: 0 };
+                    diag.calls += 1;
+                    diag.rays += count;
+                    diag.rustConverged += converged;
+                    diag.rustUnresolved += count - converged;
+                    (globalThis as any).__cooptStopOriginSolveDiag = diag;
+                }
                 if (converged === count) {
                     return mapped;
                 }
@@ -2241,19 +2284,35 @@ function refineImageHeightPairWithTs(
 
         const stepX = Math.max(baseFiniteDiffStep, Math.abs(x) * 1e-3);
         const stepY = Math.max(baseFiniteDiffStep, Math.abs(y) * 1e-3);
-        const sampleDx = sample(x + stepX, y);
-        const sampleDy = sample(x, y + stepY);
-        if (!sampleDx || !sampleDy) break;
-
-        const j11 = (sampleDx.hitX - center.hitX) / stepX;
-        const j21 = (sampleDx.hitY - center.hitY) / stepX;
-        const j12 = (sampleDy.hitX - center.hitX) / stepY;
-        const j22 = (sampleDy.hitY - center.hitY) / stepY;
-        const det = j11 * j22 - j12 * j21;
-        if (!Number.isFinite(det) || Math.abs(det) < 1e-14) break;
-
-        let deltaX = (-j22 * center.errX + j12 * center.errY) / det;
-        let deltaY = (j21 * center.errX - j11 * center.errY) / det;
+        const solveX = Math.abs(center.errX) > tolerance;
+        const solveY = Math.abs(center.errY) > tolerance;
+        let deltaX = 0;
+        let deltaY = 0;
+        if (solveX && !solveY) {
+            const sampleDx = sample(x + stepX, y);
+            if (!sampleDx) break;
+            const j11 = (sampleDx.hitX - center.hitX) / stepX;
+            if (!Number.isFinite(j11) || Math.abs(j11) < 1e-14) break;
+            deltaX = -center.errX / j11;
+        } else if (!solveX && solveY) {
+            const sampleDy = sample(x, y + stepY);
+            if (!sampleDy) break;
+            const j22 = (sampleDy.hitY - center.hitY) / stepY;
+            if (!Number.isFinite(j22) || Math.abs(j22) < 1e-14) break;
+            deltaY = -center.errY / j22;
+        } else {
+            const sampleDx = sample(x + stepX, y);
+            const sampleDy = sample(x, y + stepY);
+            if (!sampleDx || !sampleDy) break;
+            const j11 = (sampleDx.hitX - center.hitX) / stepX;
+            const j21 = (sampleDx.hitY - center.hitY) / stepX;
+            const j12 = (sampleDy.hitX - center.hitX) / stepY;
+            const j22 = (sampleDy.hitY - center.hitY) / stepY;
+            const det = j11 * j22 - j12 * j21;
+            if (!Number.isFinite(det) || Math.abs(det) < 1e-14) break;
+            deltaX = (-j22 * center.errX + j12 * center.errY) / det;
+            deltaY = (j21 * center.errX - j11 * center.errY) / det;
+        }
         if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) break;
 
         const deltaNorm = Math.hypot(deltaX, deltaY);
@@ -2934,6 +2993,14 @@ export function convertImageHeightToEffectiveObject(
     const disableWarmStartCache = options?.disableWarmStartCache === true;
     const validationMode = skipTsValidation ? 'rust-only' : `rust-${validationTraceBackend}-validated`;
     const solveScopeKey = String(options?.precomputedSolveScopeKey || buildImageHeightSolveScopeKey(opticalSystemRows, wavelengthUm, conjugateType, validationMode));
+    const warmStartScopeKey = buildImageHeightWarmStartScopeKey(opticalSystemRows, wavelengthUm, conjugateType, validationMode);
+    const recordImageHeightWarmStart = (source) => {
+        if (typeof globalThis === 'undefined' || (globalThis as any).__COOPT_SPOT_PROFILE !== true) return;
+        const diag = (globalThis as any).__cooptImageHeightWarmStartDiag || {};
+        const key = String(source || 'unknown');
+        diag[key] = (Number(diag[key]) || 0) + 1;
+        (globalThis as any).__cooptImageHeightWarmStartDiag = diag;
+    };
     const cacheKey = disableSolveCache ? null : [
         buildOpticalRowsSignature(opticalSystemRows),
         stableSerializeForCache(obj),
@@ -2987,13 +3054,14 @@ export function convertImageHeightToEffectiveObject(
                     source: 'paraxial',
                 }
                 : getImageHeightWarmStart(
-                    solveScopeKey,
+                    warmStartScopeKey,
                     targetX,
                     targetY,
                     paraxialAngleXDeg,
                     paraxialAngleYDeg,
                     obj?.__cooptImageHeightSolve?.solved,
                 );
+            recordImageHeightWarmStart(warmStart.source);
             let solvedAngleXDeg = warmStart.x;
             let solvedAngleYDeg = warmStart.y;
 
@@ -3037,42 +3105,66 @@ export function convertImageHeightToEffectiveObject(
                 });
             }
 
-            const rustPairResult = solveImageHeightPairExactWithRust(
-                opticalSystemRows,
-                imageSurfaceIndex,
-                wavelengthUm,
-                conjugateType,
-                targetX,
-                targetY,
-                solvedAngleXDeg,
-                solvedAngleYDeg,
-            ) || solveImageHeightPairWithRust(
-                opticalSystemRows,
-                imageSurfaceIndex,
-                wavelengthUm,
-                conjugateType,
-                targetX,
-                targetY,
-                solvedAngleXDeg,
-                solvedAngleYDeg,
-            );
-            let acceptedRustPair = skipTsValidation
-                ? acceptRustImageHeightPair(rustPairResult, targetX, targetY)
-                : acceptRustImageHeightPairWithValidation(
-                    rustPairResult,
+            const validatePairResult = (pairResult) => {
+                const accepted = skipTsValidation
+                    ? acceptRustImageHeightPair(pairResult, targetX, targetY)
+                    : acceptRustImageHeightPairWithValidation(
+                        pairResult,
+                        targetX,
+                        targetY,
+                        (candidateX, candidateY) => traceChiefRayImagePointForAngle(
+                            opticalSystemRows,
+                            candidateX,
+                            candidateY,
+                            imageSurfaceIndex,
+                            imageSurfaceInfo,
+                            wavelengthUm,
+                            imageHeightSolveContext,
+                            validationTraceBackend,
+                        )
+                    );
+                if (!accepted) return null;
+                return isImageHeightPairNearParaxialBranch(
+                    Number(accepted.x),
+                    Number(accepted.y),
+                    paraxialAngleXDeg,
+                    paraxialAngleYDeg,
                     targetX,
                     targetY,
-                    (candidateX, candidateY) => traceChiefRayImagePointForAngle(
-                        opticalSystemRows,
-                        candidateX,
-                        candidateY,
-                        imageSurfaceIndex,
-                        imageSurfaceInfo,
-                        wavelengthUm,
-                        imageHeightSolveContext,
-                        validationTraceBackend,
-                    )
-                );
+                    'angle'
+                ) ? accepted : null;
+            };
+            const warmStartPairResult = warmStart.source === 'continuation-cache'
+                ? (() => {
+                    const refined = refineImageHeightPairWithTs(
+                        solvedAngleXDeg,
+                        solvedAngleYDeg,
+                        targetX,
+                        targetY,
+                        (candidateX, candidateY) => traceChiefRayImagePointForAngle(
+                            opticalSystemRows,
+                            candidateX,
+                            candidateY,
+                            imageSurfaceIndex,
+                            imageSurfaceInfo,
+                            wavelengthUm,
+                            imageHeightSolveContext,
+                            validationTraceBackend,
+                        ),
+                        {
+                            tolerance: 1e-6,
+                            maxIterations: 4,
+                            finiteDiffStep: 5e-5,
+                            maxStep: 0.1,
+                        },
+                    );
+                    return { x: refined.x, y: refined.y, hit: refined.hit };
+                })()
+                : null;
+            let acceptedPairSolver = 'continuation-validation';
+            let acceptedRustPair = warmStartPairResult
+                ? acceptRustImageHeightPair(warmStartPairResult, targetX, targetY)
+                : null;
             if (acceptedRustPair && !isImageHeightPairNearParaxialBranch(
                 Number(acceptedRustPair.x),
                 Number(acceptedRustPair.y),
@@ -3081,8 +3173,29 @@ export function convertImageHeightToEffectiveObject(
                 targetX,
                 targetY,
                 'angle'
-            )) {
-                acceptedRustPair = null;
+            )) acceptedRustPair = null;
+            if (!acceptedRustPair) {
+                acceptedPairSolver = 'rust-pair';
+                const rustPairResult = solveImageHeightPairExactWithRust(
+                    opticalSystemRows,
+                    imageSurfaceIndex,
+                    wavelengthUm,
+                    conjugateType,
+                    targetX,
+                    targetY,
+                    solvedAngleXDeg,
+                    solvedAngleYDeg,
+                ) || solveImageHeightPairWithRust(
+                    opticalSystemRows,
+                    imageSurfaceIndex,
+                    wavelengthUm,
+                    conjugateType,
+                    targetX,
+                    targetY,
+                    solvedAngleXDeg,
+                    solvedAngleYDeg,
+                );
+                acceptedRustPair = validatePairResult(rustPairResult);
             }
             if (acceptedRustPair) {
                 solvedAngleXDeg = acceptedRustPair.x;
@@ -3095,7 +3208,7 @@ export function convertImageHeightToEffectiveObject(
                     imageSurfaceInfo,
                     wavelengthUm,
                     imageHeightSolveContext,
-                    'rust',
+                    acceptedPairSolver === 'continuation-validation' ? validationTraceBackend : 'rust',
                 );
                 const resolvedHit = solvedChief?.localHit ?? acceptedRustPair.hit;
                 logImageHeightDiagnostics('solve-infinite', {
@@ -3112,12 +3225,12 @@ export function convertImageHeightToEffectiveObject(
                         y: Number(resolvedHit.y) - targetY
                     } : null,
                     imageSurfaceIndex,
-                    solver: 'rust-pair'
+                    solver: acceptedPairSolver
                 });
 
                 if (!disableSolveCache) {
                     setCachedImageHeightPairSolve(solveScopeKey, targetX, targetY, {
-                        solver: 'rust-pair',
+                        solver: acceptedPairSolver,
                         solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
                         hit: resolvedHit ? { x: Number(resolvedHit.x), y: Number(resolvedHit.y), z: Number(resolvedHit.z) || 0 } : null,
                         chiefRay: solvedChief?.origin && solvedChief?.dir ? {
@@ -3135,7 +3248,7 @@ export function convertImageHeightToEffectiveObject(
                     });
                 }
                 if (!disableWarmStartCache) {
-                    storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
+                    storeImageHeightWarmStart(warmStartScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
                 }
 
                 return storeResult({
@@ -3149,7 +3262,7 @@ export function convertImageHeightToEffectiveObject(
                         conjugateType,
                         mode: paraxialOnlyModel ? 'infinite-angle-paraxial' : 'infinite-angle',
                         validation: validationMode,
-                        solver: 'rust-pair',
+                        solver: acceptedPairSolver,
                         warmStart: warmStart.source,
                         paraxial: { x: paraxialAngleXDeg, y: paraxialAngleYDeg },
                         solved: { x: solvedAngleXDeg, y: solvedAngleYDeg },
@@ -3351,7 +3464,7 @@ export function convertImageHeightToEffectiveObject(
                 });
             }
             if (!disableWarmStartCache) {
-                storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
+                storeImageHeightWarmStart(warmStartScopeKey, targetX, targetY, solvedAngleXDeg, solvedAngleYDeg, resolvedHit);
             }
 
             return storeResult({
@@ -3407,13 +3520,14 @@ export function convertImageHeightToEffectiveObject(
                     source: 'paraxial',
                 }
                 : getImageHeightWarmStart(
-                    solveScopeKey,
+                    warmStartScopeKey,
                     targetX,
                     targetY,
                     paraxialObjectX,
                     paraxialObjectY,
                     obj?.__cooptImageHeightSolve?.solved,
                 );
+            recordImageHeightWarmStart(warmStart.source);
             let solvedObjectX = warmStart.x;
             let solvedObjectY = warmStart.y;
 
@@ -3555,7 +3669,7 @@ export function convertImageHeightToEffectiveObject(
                     });
                 }
                 if (!disableWarmStartCache) {
-                    storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
+                    storeImageHeightWarmStart(warmStartScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
                 }
 
                 return storeResult({
@@ -3770,7 +3884,7 @@ export function convertImageHeightToEffectiveObject(
                 });
             }
             if (!disableWarmStartCache) {
-                storeImageHeightWarmStart(solveScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
+                storeImageHeightWarmStart(warmStartScopeKey, targetX, targetY, solvedObjectX, solvedObjectY, resolvedHit);
             }
 
             return storeResult({
@@ -4627,7 +4741,10 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         
         // 軸上オブジェクトかどうかを判定
         const isOnAxis = (Math.abs(angleX) < 1e-10 && Math.abs(angleY) < 1e-10);
-        const forceChiefAnalysisForHighField = isHighField && isInfiniteObject && !isOnAxis;
+        const forceChiefAnalysisForHighField = options?.forceHighFieldChiefRayAnalysis !== false
+            && isHighField
+            && isInfiniteObject
+            && !isOnAxis;
         if (forceChiefAnalysisForHighField) {
             useChiefRayAnalysis = true;
             allowStopBasedOriginSolve = true;

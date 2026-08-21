@@ -6,6 +6,8 @@ import { DistortionAnalysisPage } from './DistortionAnalysisPage';
 import { MtfAnalysisPage } from './MtfAnalysisPage';
 import { PsfAnalysisPage } from './PsfAnalysisPage';
 import { MultiFieldPsfPage } from './MultiFieldPsfPage';
+import { ImageSimulationPage } from './ImageSimulationPage';
+import { cloneOptimizeConfigWithLiveObjectRows } from './optimize-run-config';
 import { WavefrontAnalysisPage } from './WavefrontAnalysisPage';
 import { AnalysisRayCountField } from './AnalysisRayCountField';
 import {
@@ -4810,7 +4812,7 @@ export default function App() {
   })();
   const [optMethod, setOptMethod] = useState<'kkt-sqp' | 'kkt' | 'lm' | 'cd' | 'global-al' | 'global-lm'>('kkt-sqp');
   const [optMaxIterations, setOptMaxIterations] = useState(20);
-  const [optMaxEscapeLoops, setOptMaxEscapeLoops] = useState(4);
+  const [optMaxEscapeLoops, setOptMaxEscapeLoops] = useState(1);
   const [optEscapeFunctionWidth, setOptEscapeFunctionWidth] = useState(1);
   const [optEscapeFunctionHeight, setOptEscapeFunctionHeight] = useState(0.1);
   const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(true);
@@ -9847,7 +9849,7 @@ const collectLegacyCrossRays = async (
   useEffect(() => {
     if (!analysisWindowMode.enabled) return;
     if (analysisWindowMode.analysis === 'astigmatism') return;
-    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid' || analysisWindowMode.analysis === 'spot-diagram' || analysisWindowMode.analysis === 'spherical-aberration' || analysisWindowMode.analysis === 'magnification-chromatic-aberration' || analysisWindowMode.analysis === 'integrated-aberration' || analysisWindowMode.analysis === 'transverse-aberration' || analysisWindowMode.analysis === 'opd-fan' || analysisWindowMode.analysis === 'through-focus-spot' || analysisWindowMode.analysis === 'opd' || analysisWindowMode.analysis === 'psf' || analysisWindowMode.analysis === 'multi-field-psf') return;
+    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid' || analysisWindowMode.analysis === 'spot-diagram' || analysisWindowMode.analysis === 'spherical-aberration' || analysisWindowMode.analysis === 'magnification-chromatic-aberration' || analysisWindowMode.analysis === 'integrated-aberration' || analysisWindowMode.analysis === 'transverse-aberration' || analysisWindowMode.analysis === 'opd-fan' || analysisWindowMode.analysis === 'through-focus-spot' || analysisWindowMode.analysis === 'opd' || analysisWindowMode.analysis === 'psf' || analysisWindowMode.analysis === 'multi-field-psf' || analysisWindowMode.analysis === 'image-simulation') return;
 
     let restoreOpener: (() => void) | null = null;
     let tauriCloseUnlisten: (() => void) | null = null;
@@ -9916,6 +9918,7 @@ const collectLegacyCrossRays = async (
       'opd': 'open-opd-window-btn',
       'psf': 'open-psf-window-btn',
       'multi-field-psf': 'open-multi-field-psf-window-btn',
+      'image-simulation': 'open-image-simulation-window-btn',
       'mtf': 'open-mtf-window-btn',
       'through-focus-spot': 'open-through-focus-spot-window-btn',
       'through-focus-mtf': 'open-through-focus-mtf-window-btn',
@@ -9935,12 +9938,13 @@ const collectLegacyCrossRays = async (
       'opd': 'Optical Path Difference',
       'psf': 'Point Spread Function',
       'multi-field-psf': 'Multi-Field PSF',
+      'image-simulation': 'Image Simulation',
       'mtf': 'Modulation Transfer Function',
       'through-focus-spot': 'Through-Focus Spot',
       'through-focus-mtf': 'Through-Focus MTF',
       'field-mtf': 'Field MTF',
     };
-    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf', 'multi-field-psf']);
+    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf', 'multi-field-psf', 'image-simulation']);
 
     const targetButtonId = analysisButtonMap[analysisWindowMode.analysis];
     const targetPopupTitle = analysisPopupTitleMap[analysisWindowMode.analysis];
@@ -10057,8 +10061,18 @@ const collectLegacyCrossRays = async (
     return <MultiFieldPsfPage />;
   }
 
+  if (analysisWindowMode.analysis === 'image-simulation') {
+    return <ImageSimulationPage />;
+  }
+
   if (isOptimizeWindowMode) {
-    const percent = Number.isFinite(Number(optimizeState?.percent)) ? Math.max(0, Math.min(100, Number(optimizeState.percent))) : 0;
+    const optimizeStateStatus = String(optimizeState?.status || 'Idle');
+    const optimizeHasDoneStatus = /^(done|finished|complete)$/i.test(optimizeStateStatus);
+    const optimizeHasTerminalStatus = optimizeHasDoneStatus || /^(stopped|error)$/i.test(optimizeStateStatus);
+    const rawOptimizePercent = Number.isFinite(Number(optimizeState?.percent))
+      ? Math.max(0, Math.min(100, Number(optimizeState.percent)))
+      : 0;
+    const percent = optimizeHasDoneStatus ? rawOptimizePercent : Math.min(99, rawOptimizePercent);
 
     const getSystemConfigFromTargetWindow = (targetWindow: any) => {
       return getSystemConfigFromWindow(targetWindow);
@@ -10244,24 +10258,46 @@ const collectLegacyCrossRays = async (
       if (optRunning) return;
       const w = window as any;
       const hostWindow = getOptimizeHostWindow();
+      const cloneJsonLocal = (v: any) => {
+        try { return JSON.parse(JSON.stringify(v)); } catch (_) { return null; }
+      };
       const loadHostSystemConfigSnapshot = () => {
         return getSystemConfigFromWindow(hostWindow) || getSystemConfigFromWindow(w) || null;
       };
 
-      try {
-        if (hostWindow) {
-          delete hostWindow.__cooptPreferRuntimeSystemConfig;
-          delete hostWindow.__cooptSystemConfig;
+      // The Object table is the user's latest Field definition. Capture and
+      // persist it before touching runtime overrides; otherwise a stale saved
+      // configuration can be reloaded here and collapse the table back to its
+      // original min/max rows when Optimize starts.
+      const liveObjectRowsAtRunClick = (() => {
+        try {
+          const table = hostWindow?.tableObject || w.tableObject;
+          const rows = table && typeof table.getData === 'function' ? table.getData() : [];
+          return Array.isArray(rows) ? (cloneJsonLocal(rows) || rows.map((row: any) => ({ ...row }))) : [];
+        } catch (_) {
+          return [];
         }
-      } catch (_) {}
-      try {
-        delete w.__cooptPreferRuntimeSystemConfig;
-        delete w.__cooptSystemConfig;
-      } catch (_) {}
-
-      const cloneJsonLocal = (v: any) => {
-        try { return JSON.parse(JSON.stringify(v)); } catch (_) { return null; }
-      };
+      })();
+      const synchronizedHostConfigAtRunClick = cloneOptimizeConfigWithLiveObjectRows(
+        loadHostSystemConfigSnapshot(),
+        liveObjectRowsAtRunClick,
+      );
+      if (synchronizedHostConfigAtRunClick) {
+        try {
+          if (typeof hostWindow?.saveSystemConfigurationsFromTableConfig === 'function') {
+            hostWindow.saveSystemConfigurationsFromTableConfig(cloneJsonLocal(synchronizedHostConfigAtRunClick) || synchronizedHostConfigAtRunClick);
+          } else if (typeof hostWindow?.saveSystemConfigurations === 'function') {
+            hostWindow.saveSystemConfigurations(cloneJsonLocal(synchronizedHostConfigAtRunClick) || synchronizedHostConfigAtRunClick);
+          }
+        } catch (_) {}
+        for (const target of [hostWindow, w].filter((target, index, values) => target && values.indexOf(target) === index)) {
+          try {
+            target.__cooptSystemConfig = cloneJsonLocal(synchronizedHostConfigAtRunClick) || synchronizedHostConfigAtRunClick;
+            target.__cooptPreferRuntimeSystemConfig = true;
+            target.__cooptDeferDerivedUiUntil = Date.now() + 60000;
+          } catch (_) {}
+        }
+      }
 
       const publishRuntimeSystemConfigForOptimizeSync = (nextConfig: any, deferMs = 1500) => {
         const clonedConfig = nextConfig && typeof nextConfig === 'object'
@@ -10287,7 +10323,7 @@ const collectLegacyCrossRays = async (
 
       let frozenHostConfigForRun: any = null;
       try {
-        const hostConfigBeforeSync = loadHostSystemConfigSnapshot();
+        const hostConfigBeforeSync = synchronizedHostConfigAtRunClick || loadHostSystemConfigSnapshot();
         frozenHostConfigForRun = cloneJsonLocal(hostConfigBeforeSync) || hostConfigBeforeSync || null;
         if (frozenHostConfigForRun) {
           try {
@@ -10301,12 +10337,7 @@ const collectLegacyCrossRays = async (
       await syncHostDesignIntentAndRequirements(hostWindow, 'optimize-run-click', 'before');
 
       try {
-        if (hostWindow === w) {
-          try { delete w.__cooptPreferRuntimeSystemConfig; } catch (_) {}
-          try { delete w.__cooptSystemConfig; } catch (_) {}
-        }
-
-        const hostConfig = loadHostSystemConfigSnapshot();
+        const hostConfig = synchronizedHostConfigAtRunClick || loadHostSystemConfigSnapshot();
         if (hostConfig && typeof hostConfig === 'object') {
           const clonedHostConfig = cloneJsonLocal(hostConfig) || hostConfig;
           w.__cooptSystemConfig = clonedHostConfig;
@@ -11216,6 +11247,9 @@ const collectLegacyCrossRays = async (
               lastRenderSyncAt = Date.now();
             }
 
+            const runningPercent = phaseLower === 'initializing'
+              ? Math.round((Math.max(0, Number(ev?.candidate) || 0) / Math.max(1, Number(ev?.candidates) || 1)) * 100)
+              : (maxIterations > 0 ? Math.round((Math.max(0, iter) / maxIterations) * 100) : 0);
             setOptimizeState((prev: any) => ({
               ...prev,
               status: 'running',
@@ -11232,9 +11266,7 @@ const collectLegacyCrossRays = async (
               acceptCount: tsAcceptCount,
               rejectCount: tsRejectCount,
               issue: '-',
-              percent: phaseLower === 'initializing'
-                ? Math.round((Math.max(0, Number(ev?.candidate) || 0) / Math.max(1, Number(ev?.candidates) || 1)) * 100)
-                : (maxIterations > 0 ? Math.round((Math.max(0, iter) / maxIterations) * 100) : 0),
+              percent: Math.min(99, Math.max(0, runningPercent)),
               best: Number.isFinite(tsBestRequirementScore)
                 ? tsBestRequirementScore
                 : prev.best,
@@ -11792,7 +11824,9 @@ const collectLegacyCrossRays = async (
               : (Number.isFinite(finalTableScore)
                 ? finalTableScore
                 : (Number.isFinite(finalScore) ? finalScore : prev.bestRequirementScore))),
-          percent: 100,
+          percent: aborted
+            ? Math.min(99, Math.max(0, Number(prev.percent) || 0))
+            : 100,
         }));
 
       } catch (tsErr) {
@@ -11801,7 +11835,7 @@ const collectLegacyCrossRays = async (
           status: 'error',
           phase: 'error',
           issue: (tsErr as any)?.message || String(tsErr),
-          percent: 100,
+          percent: Math.min(99, Math.max(0, Number(prev.percent) || 0)),
         }));
       } finally {
         try {
@@ -11917,12 +11951,13 @@ const collectLegacyCrossRays = async (
     const optimizeDecision = optimizeState?.phase === 'accept'
       ? 'ACCEPT'
       : (optimizeState?.phase === 'reject' ? 'REJECT' : '-');
-    const optimizeStatusLabel = optStopRequested && optRunning
-      ? 'Stopping'
-      : (optRunning ? 'Running' : String(optimizeState?.status || 'Idle'));
-    const optimizeStatusClass = optRunning
-      ? ' is-running'
-      : (/error|fail/i.test(optimizeStatusLabel) ? ' is-error' : (/done|finish|complete/i.test(optimizeStatusLabel) ? ' is-complete' : ''));
+    const optimizeStatusLabel = optimizeHasTerminalStatus
+      ? optimizeStateStatus
+      : (optStopRequested && optRunning ? 'Stopping' : (optRunning ? 'Running' : optimizeStateStatus));
+    const optimizeStatusClass = optimizeHasTerminalStatus
+      ? (/error|fail/i.test(optimizeStatusLabel) ? ' is-error' : (optimizeHasDoneStatus ? ' is-complete' : ''))
+      : (optRunning ? ' is-running' : '');
+    const usesEscapeLoops = optMethod === 'global-al' || optMethod === 'global-lm';
 
     return (
       <div className="optimize-progress-page">
@@ -11989,13 +12024,13 @@ const collectLegacyCrossRays = async (
               />
             </label>
             <label className="optimize-progress-field">
-              <span>Max escape loops</span>
+              <span>Max escape loops (Global only)</span>
               <input
                 type="number"
                 min={1}
                 step={1}
                 value={optMaxEscapeLoops}
-                disabled={optRunning}
+                disabled={optRunning || !usesEscapeLoops}
                 onChange={(e) => {
                   const n = Number(e.target.value);
                   setOptMaxEscapeLoops(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
@@ -13157,6 +13192,7 @@ const collectLegacyCrossRays = async (
     { value: 'opd',                               label: 'OPD (Test)' },
     { value: 'psf',                               label: 'PSF (Test)' },
     { value: 'multi-field-psf',                   label: 'Multi-Field PSF' },
+    { value: 'image-simulation',                  label: 'Image Simulation' },
     { value: 'mtf',                               label: 'MTF (Test)' },
     { value: 'through-focus-spot',                label: 'Through-Focus Spot' },
     { value: 'through-focus-mtf',                 label: 'Through-Focus MTF (Test)' },

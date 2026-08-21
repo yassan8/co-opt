@@ -33,6 +33,7 @@ export const qr_factorization: (a: number, b: number, c: number, d: number) => [
 export const reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
 export const register_trace_system_metadata: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
+export const register_trace_system_metadata_with_rows_json: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const run_native_chief_ray_angle_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];

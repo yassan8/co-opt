@@ -2632,7 +2632,7 @@ export async function compareGlobalVsKktBenchmark(baseOptions = {}) {
       warmupDiscard,
       filterOutliers,
       maxIterations: Number(source.maxIterations ?? common.maxIterations ?? 20) || 20,
-      escapeGlobalMaxRestarts: Number(source.escapeGlobalMaxRestarts ?? common.escapeGlobalMaxRestarts ?? 4) || 4,
+      escapeGlobalMaxRestarts: Number(source.escapeGlobalMaxRestarts ?? common.escapeGlobalMaxRestarts ?? 1) || 1,
       escapeGlobalLocalIterations: Number(
         source.escapeGlobalLocalIterations
           ?? common.escapeGlobalLocalIterations
@@ -2642,7 +2642,7 @@ export async function compareGlobalVsKktBenchmark(baseOptions = {}) {
               40,
               Math.ceil(
                 Number(source.maxIterations ?? common.maxIterations ?? 20)
-                / Math.max(1, Number(source.escapeGlobalMaxRestarts ?? common.escapeGlobalMaxRestarts ?? 4))
+                / Math.max(1, Number(source.escapeGlobalMaxRestarts ?? common.escapeGlobalMaxRestarts ?? 1))
               )
             )
           )
@@ -5725,7 +5725,7 @@ async function runEscapeFunctionGlobalOptimization(options = {}) {
     : 24;
   const configuredOuterLoops = Number.isFinite(Number(outerOpts.escapeGlobalMaxRestarts))
     ? Math.max(1, Math.floor(Number(outerOpts.escapeGlobalMaxRestarts)))
-    : 4;
+    : 1;
   const activeCfgForEscape = getActiveConfigRef(loadSystemConfigurationsRaw());
   const escapeVariableCount = Math.max(0, captureEscapeVariableState(activeCfgForEscape).length);
   const autoInnerIterationsByBudget = Math.max(1, Math.ceil(targetIterations / Math.max(1, configuredOuterLoops)));

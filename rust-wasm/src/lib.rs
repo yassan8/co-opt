@@ -1,11 +1,11 @@
 #![recursion_limit = "256"]
 
+use js_sys::{Float64Array, Function};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use wasm_bindgen::prelude::*;
-use js_sys::{Float64Array, Function};
 use std::cell::RefCell;
 use std::f64::consts::PI;
+use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "wasm-threads")]
 use rayon::prelude::*;
@@ -96,11 +96,7 @@ fn get_nearby_chief_ray_origin_seed_native(
     })
 }
 
-fn store_chief_ray_origin_seed_native(
-    family_key: &str,
-    direction: [f64; 3],
-    origin: [f64; 3],
-) {
+fn store_chief_ray_origin_seed_native(family_key: &str, direction: [f64; 3], origin: [f64; 3]) {
     CHIEF_RAY_ORIGIN_SEED_CACHE_NATIVE.with(|cache| {
         let mut families = cache.borrow_mut();
         let family_index = families.iter().position(|entry| entry.key == family_key);
@@ -244,7 +240,13 @@ struct WasmParaxialMetrics {
 fn value_to_lower_json(v: &Value) -> String {
     match v {
         Value::String(s) => s.trim().to_lowercase(),
-        Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Value::Bool(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
         Value::Number(n) => n.to_string().to_lowercase(),
         _ => String::new(),
     }
@@ -299,7 +301,12 @@ fn detect_stop_surface_index_json(rows: &[Value]) -> Option<usize> {
     }
 
     let mut valid = Vec::<usize>::new();
-    for (i, row) in rows.iter().enumerate().skip(1).take(rows.len().saturating_sub(2)) {
+    for (i, row) in rows
+        .iter()
+        .enumerate()
+        .skip(1)
+        .take(rows.len().saturating_sub(2))
+    {
         if is_image_surface_json(row) || is_coord_trans_surface_json(row) {
             continue;
         }
@@ -434,14 +441,21 @@ fn calculate_marginal_alpha_at_stop_json(rows: &[Value], stop_index: usize) -> f
     };
     let stop_thickness = get_safe_thickness_json(stop_row);
     let stop_n = get_refractive_index_json(stop_row);
-    let effective_thickness = if stop_thickness.abs() <= 1e-15 { 1e-18 } else { stop_thickness };
+    let effective_thickness = if stop_thickness.abs() <= 1e-15 {
+        1e-18
+    } else {
+        stop_thickness
+    };
     if !stop_n.is_finite() || stop_n.abs() <= 1e-12 {
         return 0.0;
     }
     1.0 / (-effective_thickness * stop_n)
 }
 
-fn trace_paraxial_ray_from_stop_json(rows: &[Value], stop_index: usize) -> Option<WasmStopRayTraceResult> {
+fn trace_paraxial_ray_from_stop_json(
+    rows: &[Value],
+    stop_index: usize,
+) -> Option<WasmStopRayTraceResult> {
     if rows.is_empty() || stop_index >= rows.len() {
         return None;
     }
@@ -471,14 +485,22 @@ fn trace_paraxial_ray_from_stop_json(rows: &[Value], stop_index: usize) -> Optio
         }
 
         if i < rows.len().saturating_sub(2) {
-            let effective_thickness = if thickness.abs() <= 1e-15 { 1e-18 } else { thickness };
+            let effective_thickness = if thickness.abs() <= 1e-15 {
+                1e-18
+            } else {
+                thickness
+            };
             if effective_thickness > 0.0 && next_n.abs() > 1e-12 {
                 h -= effective_thickness * alpha / next_n;
             }
         }
     }
 
-    let image_distance_mm = if alpha.abs() > 1e-10 { h / alpha } else { f64::INFINITY };
+    let image_distance_mm = if alpha.abs() > 1e-10 {
+        h / alpha
+    } else {
+        f64::INFINITY
+    };
 
     Some(WasmStopRayTraceResult {
         image_distance_mm,
@@ -515,7 +537,10 @@ fn build_reversed_system_for_entrance_json(rows: &[Value], stop_index: usize) ->
                     map.insert("material".to_string(), v.clone());
                 }
                 let prev_row = Value::Object(prev.clone());
-                map.insert("rindex".to_string(), Value::from(get_refractive_index_json(&prev_row)));
+                map.insert(
+                    "rindex".to_string(),
+                    Value::from(get_refractive_index_json(&prev_row)),
+                );
             }
         } else {
             map.insert("thickness".to_string(), Value::from(0.0));
@@ -529,7 +554,11 @@ fn build_reversed_system_for_entrance_json(rows: &[Value], stop_index: usize) ->
     reversed
 }
 
-fn estimate_entrance_pupil_json(rows: &[Value], stop_index: usize, stop_diameter: f64) -> Option<WasmPupilEstimate> {
+fn estimate_entrance_pupil_json(
+    rows: &[Value],
+    stop_index: usize,
+    stop_diameter: f64,
+) -> Option<WasmPupilEstimate> {
     if stop_diameter <= 0.0 {
         return None;
     }
@@ -605,7 +634,11 @@ fn calculate_paraxial_trace_core_json(rows: &[Value], initial_alpha: f64) -> Opt
         };
         alpha += phi * h;
 
-        if j < rows.len().saturating_sub(2) && thickness.is_finite() && thickness > 0.0 && next_n.abs() > 1e-12 {
+        if j < rows.len().saturating_sub(2)
+            && thickness.is_finite()
+            && thickness > 0.0
+            && next_n.abs() > 1e-12
+        {
             h -= thickness * alpha / next_n;
         }
 
@@ -675,14 +708,37 @@ fn calculate_full_system_paraxial_trace_json(rows: &[Value]) -> Option<WasmParax
 }
 
 fn safe0_json(v: f64) -> f64 {
-    if v.is_finite() { v } else { 0.0 }
+    if v.is_finite() {
+        v
+    } else {
+        0.0
+    }
 }
 
-fn compute_native_paraxial_metrics_wasm(rows: &[Value], source_rows: &[Value], object_rows: &[Value]) -> WasmParaxialMetrics {
+fn compute_native_paraxial_metrics_wasm(
+    rows: &[Value],
+    source_rows: &[Value],
+    object_rows: &[Value],
+) -> WasmParaxialMetrics {
     let zero = WasmParaxialMetrics {
-        fl: 0.0, efl: 0.0, bfl: 0.0, imd: 0.0, objd: 0.0, tsl: 0.0,
-        bexp: 0.0, expd: 0.0, expp: 0.0, enpd: 0.0, enpp: 0.0, enpm: 0.0,
-        pmag: 0.0, fno_obj: 0.0, fno_img: 0.0, fno_wrk: 0.0, na_obj: 0.0, na_img: 0.0,
+        fl: 0.0,
+        efl: 0.0,
+        bfl: 0.0,
+        imd: 0.0,
+        objd: 0.0,
+        tsl: 0.0,
+        bexp: 0.0,
+        expd: 0.0,
+        expp: 0.0,
+        enpd: 0.0,
+        enpp: 0.0,
+        enpm: 0.0,
+        pmag: 0.0,
+        fno_obj: 0.0,
+        fno_img: 0.0,
+        fno_wrk: 0.0,
+        na_obj: 0.0,
+        na_img: 0.0,
     };
     if rows.is_empty() {
         return zero;
@@ -739,12 +795,21 @@ fn compute_native_paraxial_metrics_wasm(rows: &[Value], source_rows: &[Value], o
         .filter(|v| v.is_finite() && *v > 1e-12)
         .unwrap_or(stop_diameter);
 
-    let enpd = safe0_json(entrance.as_ref().map(|v| v.diameter_mm).unwrap_or(stop_diameter));
+    let enpd = safe0_json(
+        entrance
+            .as_ref()
+            .map(|v| v.diameter_mm)
+            .unwrap_or(stop_diameter),
+    );
     let enpp = safe0_json(entrance.as_ref().map(|v| v.position_mm).unwrap_or(0.0));
     let enpm = safe0_json(entrance.as_ref().map(|v| v.magnification).unwrap_or(1.0));
 
     let beta = if let Some(d0) = t.object_distance_mm {
-        if t.final_alpha.abs() > 1e-10 { (-1.0 / d0) / t.final_alpha } else { 0.0 }
+        if t.final_alpha.abs() > 1e-10 {
+            (-1.0 / d0) / t.final_alpha
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
@@ -784,9 +849,24 @@ fn compute_native_paraxial_metrics_wasm(rows: &[Value], source_rows: &[Value], o
     let _ = object_rows;
 
     WasmParaxialMetrics {
-        fl, efl, bfl, imd, objd, tsl,
-        bexp, expd, expp, enpd, enpp, enpm, pmag,
-        fno_obj, fno_img, fno_wrk, na_obj, na_img,
+        fl,
+        efl,
+        bfl,
+        imd,
+        objd,
+        tsl,
+        bexp,
+        expd,
+        expp,
+        enpd,
+        enpp,
+        enpm,
+        pmag,
+        fno_obj,
+        fno_img,
+        fno_wrk,
+        na_obj,
+        na_img,
     }
 }
 
@@ -874,7 +954,11 @@ fn initial_alpha_for_chief_json(rows: &[Value], stop_index: usize) -> f64 {
     (stop_radius / object_distance).clamp(0.0001, 0.2)
 }
 
-fn trace_ray_surface_states_with_wavelength_json(rows: &[Value], mut alpha: f64, wavelength_um: f64) -> Vec<WasmRaySurfaceState> {
+fn trace_ray_surface_states_with_wavelength_json(
+    rows: &[Value],
+    mut alpha: f64,
+    wavelength_um: f64,
+) -> Vec<WasmRaySurfaceState> {
     let mut states = Vec::new();
     if rows.is_empty() {
         return states;
@@ -921,7 +1005,11 @@ fn trace_ray_surface_states_with_wavelength_json(rows: &[Value], mut alpha: f64,
             n_after: next_n,
         });
 
-        if j < rows.len().saturating_sub(1) && thickness.is_finite() && thickness > 0.0 && next_n.abs() > 1e-12 {
+        if j < rows.len().saturating_sub(1)
+            && thickness.is_finite()
+            && thickness > 0.0
+            && next_n.abs() > 1e-12
+        {
             h -= thickness * alpha / next_n;
         }
 
@@ -965,7 +1053,10 @@ fn estimate_refractive_index_from_nd_vd_json(nd: f64, vd: f64, wavelength_um: f6
     }
 }
 
-fn calculate_refractive_index_sellmeier_json(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+fn calculate_refractive_index_sellmeier_json(
+    coeffs: &Map<String, Value>,
+    wavelength_um: f64,
+) -> Option<f64> {
     if wavelength_um <= 0.0 {
         return None;
     }
@@ -989,7 +1080,10 @@ fn calculate_refractive_index_sellmeier_json(coeffs: &Map<String, Value>, wavele
     }
 }
 
-fn calculate_refractive_index_schott_json(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+fn calculate_refractive_index_schott_json(
+    coeffs: &Map<String, Value>,
+    wavelength_um: f64,
+) -> Option<f64> {
     if wavelength_um <= 0.0 {
         return None;
     }
@@ -1044,7 +1138,11 @@ fn get_refractive_index_for_wavelength_json(row: &Value, wavelength_um: f64) -> 
                 let vd = parse_finite_numeric_json(obj.get("__cooptGapAbbe"));
                 if let Some(vd_val) = vd {
                     if vd_val > 0.0 {
-                        return estimate_refractive_index_from_nd_vd_json(num, vd_val, wavelength_um);
+                        return estimate_refractive_index_from_nd_vd_json(
+                            num,
+                            vd_val,
+                            wavelength_um,
+                        );
                     }
                 }
                 return num;
@@ -1058,7 +1156,11 @@ fn get_refractive_index_for_wavelength_json(row: &Value, wavelength_um: f64) -> 
             let gap_vd = parse_finite_numeric_json(obj.get("__cooptGapAbbe"));
             if let Some(vd_val) = gap_vd {
                 if vd_val > 0.0 {
-                    return estimate_refractive_index_from_nd_vd_json(nd_val, vd_val, wavelength_um);
+                    return estimate_refractive_index_from_nd_vd_json(
+                        nd_val,
+                        vd_val,
+                        wavelength_um,
+                    );
                 }
             }
             return nd_val;
@@ -1273,11 +1375,27 @@ fn compute_seidel_surface_coefficients_json(
     reference_wavelength_um: f64,
     wavelength_range: Option<(f64, f64)>,
 ) -> (Vec<WasmSeidelSurfaceCoeff>, WasmSeidelTotals) {
-    let marginal = trace_ray_surface_states_with_wavelength_json(rows, initial_alpha_for_marginal_json(rows), reference_wavelength_um);
-    let chief = trace_ray_surface_states_with_wavelength_json(rows, initial_alpha_for_chief_json(rows, stop_index), reference_wavelength_um);
+    let marginal = trace_ray_surface_states_with_wavelength_json(
+        rows,
+        initial_alpha_for_marginal_json(rows),
+        reference_wavelength_um,
+    );
+    let chief = trace_ray_surface_states_with_wavelength_json(
+        rows,
+        initial_alpha_for_chief_json(rows, stop_index),
+        reference_wavelength_um,
+    );
     let (short_wl, long_wl) = wavelength_range.unwrap_or((0.486_132_7, 0.656_272_5));
-    let marginal_short = trace_ray_surface_states_with_wavelength_json(rows, initial_alpha_for_marginal_json(rows), short_wl);
-    let marginal_long = trace_ray_surface_states_with_wavelength_json(rows, initial_alpha_for_marginal_json(rows), long_wl);
+    let marginal_short = trace_ray_surface_states_with_wavelength_json(
+        rows,
+        initial_alpha_for_marginal_json(rows),
+        short_wl,
+    );
+    let marginal_long = trace_ray_surface_states_with_wavelength_json(
+        rows,
+        initial_alpha_for_marginal_json(rows),
+        long_wl,
+    );
 
     let mut totals = WasmSeidelTotals {
         i: 0.0,
@@ -1307,7 +1425,10 @@ fn compute_seidel_surface_coefficients_json(
             .map(value_to_lower_json)
             .map(|s| s == "gap")
             .unwrap_or(false);
-        let is_mirror = rows.get(m.surface_index).map(is_mirror_surface_json).unwrap_or(false);
+        let is_mirror = rows
+            .get(m.surface_index)
+            .map(is_mirror_surface_json)
+            .unwrap_or(false);
         if is_gap && !is_mirror {
             continue;
         }
@@ -1370,8 +1491,12 @@ fn compute_seidel_surface_coefficients_json(
             scale * j * iv
         };
 
-        let short_state = marginal_short.iter().find(|x| x.surface_index == m.surface_index);
-        let long_state = marginal_long.iter().find(|x| x.surface_index == m.surface_index);
+        let short_state = marginal_short
+            .iter()
+            .find(|x| x.surface_index == m.surface_index);
+        let long_state = marginal_long
+            .iter()
+            .find(|x| x.surface_index == m.surface_index);
         let (lca, tca) = compute_chromatic_lca_tca_for_surface_json(
             rows,
             m.surface_index,
@@ -1390,16 +1515,15 @@ fn compute_seidel_surface_coefficients_json(
         } else if is_mirror {
             "MIRROR".to_string()
         } else {
-            row
-                .and_then(|o| {
-                    o.get("object type")
-                        .or_else(|| o.get("object"))
-                        .or_else(|| o.get("surf type"))
-                })
-                .and_then(Value::as_str)
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_default()
+            row.and_then(|o| {
+                o.get("object type")
+                    .or_else(|| o.get("object"))
+                    .or_else(|| o.get("surf type"))
+            })
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default()
         };
 
         totals.i += i;
@@ -1487,13 +1611,19 @@ fn compute_finite_opd_grid_rms_waves(grid: &[Vec<Option<f64>>]) -> Option<f64> {
     let mut sum_sq = 0.0_f64;
     for row in grid.iter() {
         for value in row.iter() {
-            let Some(v) = *value else { continue; };
-            if !v.is_finite() { continue; }
+            let Some(v) = *value else {
+                continue;
+            };
+            if !v.is_finite() {
+                continue;
+            }
             count += 1;
             sum_sq += v * v;
         }
     }
-    if count == 0 { return None; }
+    if count == 0 {
+        return None;
+    }
     Some((sum_sq / count as f64).sqrt())
 }
 
@@ -1545,9 +1675,7 @@ fn optical_path_to_reference_sphere(
         ray_state[3] - sphere_center[1],
         ray_state[4] - sphere_center[2],
     ];
-    let projection = offset[0] * direction[0]
-        + offset[1] * direction[1]
-        + offset[2] * direction[2];
+    let projection = offset[0] * direction[0] + offset[1] * direction[1] + offset[2] * direction[2];
     let discriminant = projection * projection
         - (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]
             - sphere_radius * sphere_radius);
@@ -1699,10 +1827,19 @@ fn has_explicit_coord_params(row: &Value) -> bool {
 
 fn is_coord_trans_row(row: &Value) -> bool {
     let keys = [
-        "surfType", "type", "surfaceType", "surface_type", "surfTypeName",
-        "object type", "object", "Object",
-        "comment", "Comment",
-        "blockType", "block_type", "blockTypeName",
+        "surfType",
+        "type",
+        "surfaceType",
+        "surface_type",
+        "surfTypeName",
+        "object type",
+        "object",
+        "Object",
+        "comment",
+        "Comment",
+        "blockType",
+        "block_type",
+        "blockTypeName",
     ];
     for key in keys.iter() {
         if let Some(v) = get_field(row, key) {
@@ -1711,7 +1848,12 @@ fn is_coord_trans_row(row: &Value) -> bool {
                 if s.is_empty() {
                     continue;
                 }
-                if s == "ct" || s == "coordtrans" || s == "coordinatebreak" || s == "coord trans" || s == "coordinate break" {
+                if s == "ct"
+                    || s == "coordtrans"
+                    || s == "coordinatebreak"
+                    || s == "coord trans"
+                    || s == "coordinate break"
+                {
                     return true;
                 }
                 if s.contains("coord trans") || s.contains("coordinate break") {
@@ -1790,12 +1932,19 @@ fn get_safe_thickness(row: &Value) -> f64 {
         }
         return 0.0;
     }
-    thickness.and_then(value_to_f64).filter(|v| v.is_finite()).unwrap_or(0.0)
+    thickness
+        .and_then(value_to_f64)
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
 }
 
 fn infer_refractive_index_from_material(material_raw: &str) -> Option<f64> {
     let n = parse_refractive_index_from_material(material_raw);
-    if n > 0.0 { Some(n) } else { None }
+    if n > 0.0 {
+        Some(n)
+    } else {
+        None
+    }
 }
 
 fn parse_refractive_index_from_material(s: &str) -> f64 {
@@ -1849,7 +1998,10 @@ fn estimate_refractive_index_from_nd_vd(nd: f64, vd: f64, wavelength_um: f64) ->
     }
 }
 
-fn calculate_refractive_index_sellmeier(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+fn calculate_refractive_index_sellmeier(
+    coeffs: &Map<String, Value>,
+    wavelength_um: f64,
+) -> Option<f64> {
     if wavelength_um <= 0.0 {
         return None;
     }
@@ -1873,7 +2025,10 @@ fn calculate_refractive_index_sellmeier(coeffs: &Map<String, Value>, wavelength_
     }
 }
 
-fn calculate_refractive_index_schott(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+fn calculate_refractive_index_schott(
+    coeffs: &Map<String, Value>,
+    wavelength_um: f64,
+) -> Option<f64> {
     if wavelength_um <= 0.0 {
         return None;
     }
@@ -1982,16 +2137,35 @@ fn parse_coord_trans_params(row: &Value) -> (f64, f64, f64, f64, f64, f64, i32) 
         return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1);
     }
 
-    let decenter_x = get_field_from_params(row, "decenterX").and_then(value_to_f64).unwrap_or(0.0);
-    let decenter_y = get_field_from_params(row, "decenterY").and_then(value_to_f64).unwrap_or(0.0);
-    let decenter_z = get_field_from_params(row, "decenterZ").and_then(value_to_f64).unwrap_or(0.0);
-    let tilt_x = get_field_from_params(row, "tiltX").and_then(value_to_f64).unwrap_or(0.0);
-    let tilt_y = get_field_from_params(row, "tiltY").and_then(value_to_f64).unwrap_or(0.0);
-    let tilt_z = get_field_from_params(row, "tiltZ").and_then(value_to_f64).unwrap_or(0.0);
+    let decenter_x = get_field_from_params(row, "decenterX")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
+    let decenter_y = get_field_from_params(row, "decenterY")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
+    let decenter_z = get_field_from_params(row, "decenterZ")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
+    let tilt_x = get_field_from_params(row, "tiltX")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
+    let tilt_y = get_field_from_params(row, "tiltY")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
+    let tilt_z = get_field_from_params(row, "tiltZ")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
 
     let order_candidate = get_field(row, "order").or_else(|| get_field(row, "coef1"));
-    let order_raw = order_candidate.and_then(value_to_string).and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(1);
-    let transform_order = if order_raw == 0 || order_raw == 1 { order_raw } else { 1 };
+    let order_raw = order_candidate
+        .and_then(value_to_string)
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .unwrap_or(1);
+    let transform_order = if order_raw == 0 || order_raw == 1 {
+        order_raw
+    } else {
+        1
+    };
 
     (
         decenter_x,
@@ -2014,15 +2188,30 @@ fn normalize_coord_trans_row(row: &Value) -> Value {
     }
 
     let mut out = row.clone();
-    let decenter_x = get_field(row, "semidia").and_then(value_to_f64).unwrap_or(0.0);
-    let decenter_y = get_field(row, "material").and_then(value_to_f64).unwrap_or(0.0);
+    let decenter_x = get_field(row, "semidia")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
+    let decenter_y = get_field(row, "material")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
     let decenter_z = 0.0;
-    let tilt_x = get_field(row, "rindex").and_then(value_to_f64).unwrap_or(0.0);
+    let tilt_x = get_field(row, "rindex")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
     let tilt_y = get_field(row, "abbe").and_then(value_to_f64).unwrap_or(0.0);
-    let tilt_z = get_field(row, "conic").and_then(value_to_f64).unwrap_or(0.0);
+    let tilt_z = get_field(row, "conic")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
     let order_candidate = get_field(row, "order").or_else(|| get_field(row, "coef1"));
-    let order_raw = order_candidate.and_then(value_to_string).and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(1);
-    let order = if order_raw == 0 || order_raw == 1 { order_raw } else { 1 };
+    let order_raw = order_candidate
+        .and_then(value_to_string)
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .unwrap_or(1);
+    let order = if order_raw == 0 || order_raw == 1 {
+        order_raw
+    } else {
+        1
+    };
 
     if let Value::Object(map) = &mut out {
         map.insert("decenterX".to_string(), Value::from(decenter_x));
@@ -2140,7 +2329,13 @@ fn aspheric_sag(r: f64, radius: f64, conic: f64, coefs: &[f64; 10], mode_odd: bo
     base + asphere
 }
 
-fn aspheric_sag_derivative(r: f64, radius: f64, conic: f64, coefs: &[f64; 10], mode_odd: bool) -> f64 {
+fn aspheric_sag_derivative(
+    r: f64,
+    radius: f64,
+    conic: f64,
+    coefs: &[f64; 10],
+    mode_odd: bool,
+) -> f64 {
     if !radius.is_finite() || radius == 0.0 || r < EPS_R {
         return 0.0;
     }
@@ -2190,7 +2385,14 @@ fn toric_rotate_to_local_xy(x: f64, y: f64, axis_deg: f64) -> (f64, f64, f64, f6
     (x_rot, y_rot, cos_a, sin_a)
 }
 
-fn toric_surface_sag(x: f64, y: f64, radius_x: f64, radius_y: f64, conic: f64, axis_deg: f64) -> f64 {
+fn toric_surface_sag(
+    x: f64,
+    y: f64,
+    radius_x: f64,
+    radius_y: f64,
+    conic: f64,
+    axis_deg: f64,
+) -> f64 {
     if !x.is_finite() || !y.is_finite() {
         return f64::NAN;
     }
@@ -2208,7 +2410,11 @@ fn toric_surface_sag(x: f64, y: f64, radius_x: f64, radius_y: f64, conic: f64, a
             return f64::NAN;
         }
         let sag_x_abs = x2 / (abs_rx * (1.0 + sqrt_term_x.sqrt()));
-        sag_x = if radius_x > 0.0 { sag_x_abs } else { -sag_x_abs };
+        sag_x = if radius_x > 0.0 {
+            sag_x_abs
+        } else {
+            -sag_x_abs
+        };
     }
 
     let mut sag_y = 0.0_f64;
@@ -2219,14 +2425,29 @@ fn toric_surface_sag(x: f64, y: f64, radius_x: f64, radius_y: f64, conic: f64, a
             return f64::NAN;
         }
         let sag_y_abs = y2 / (abs_ry * (1.0 + sqrt_term_y.sqrt()));
-        sag_y = if radius_y > 0.0 { sag_y_abs } else { -sag_y_abs };
+        sag_y = if radius_y > 0.0 {
+            sag_y_abs
+        } else {
+            -sag_y_abs
+        };
     }
 
     let out = sag_x + sag_y;
-    if out.is_finite() { out } else { f64::NAN }
+    if out.is_finite() {
+        out
+    } else {
+        f64::NAN
+    }
 }
 
-fn toric_sag_derivatives(x: f64, y: f64, radius_x: f64, radius_y: f64, conic: f64, axis_deg: f64) -> (f64, f64) {
+fn toric_sag_derivatives(
+    x: f64,
+    y: f64,
+    radius_x: f64,
+    radius_y: f64,
+    conic: f64,
+    axis_deg: f64,
+) -> (f64, f64) {
     if !x.is_finite() || !y.is_finite() {
         return (f64::NAN, f64::NAN);
     }
@@ -2287,7 +2508,13 @@ fn intersect_toric_internal(
     let dx = ray[3];
     let dy = ray[4];
     let dz = ray[5];
-    if !ox.is_finite() || !oy.is_finite() || !oz.is_finite() || !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+    if !ox.is_finite()
+        || !oy.is_finite()
+        || !oz.is_finite()
+        || !dx.is_finite()
+        || !dy.is_finite()
+        || !dz.is_finite()
+    {
         return f64::NAN;
     }
 
@@ -2315,7 +2542,11 @@ fn intersect_toric_internal(
     guesses.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
 
     let max_iter = if max_iter <= 0 { 20 } else { max_iter } as usize;
-    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 1e-7 };
+    let tol = if tol.is_finite() && tol > 0.0 {
+        tol
+    } else {
+        1e-7
+    };
 
     for guess in guesses.iter() {
         let mut t = *guess;
@@ -2417,12 +2648,22 @@ fn intersect_aspheric_internal(
     let dy = ray[4];
     let dz = ray[5];
 
-    if !ox.is_finite() || !oy.is_finite() || !oz.is_finite() || !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+    if !ox.is_finite()
+        || !oy.is_finite()
+        || !oz.is_finite()
+        || !dx.is_finite()
+        || !dy.is_finite()
+        || !dz.is_finite()
+    {
         return f64::NAN;
     }
 
     let (semidia_raw, radius, conic, coefs) = parse_params(params);
-    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 { semidia_raw } else { f64::INFINITY };
+    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 {
+        semidia_raw
+    } else {
+        f64::INFINITY
+    };
     let mut guesses: Vec<f64> = Vec::new();
     if radius.is_finite() && radius != 0.0 {
         let cz = radius;
@@ -2462,7 +2703,11 @@ fn intersect_aspheric_internal(
     guesses.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
 
     let max_iter = if max_iter <= 0 { 20 } else { max_iter } as usize;
-    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 1e-7 };
+    let tol = if tol.is_finite() && tol > 0.0 {
+        tol
+    } else {
+        1e-7
+    };
 
     for guess in guesses.iter() {
         let mut t = *guess;
@@ -2552,7 +2797,13 @@ pub fn intersect_aspheric_rt10_batch(
 
     for i in 0..ray_count {
         let offset = i * 6;
-        let t = intersect_aspheric_internal(&rays[offset..offset + 6], params, mode_odd != 0, max_iter, tol);
+        let t = intersect_aspheric_internal(
+            &rays[offset..offset + 6],
+            params,
+            mode_odd != 0,
+            max_iter,
+            tol,
+        );
         out[i] = t;
     }
 
@@ -2560,11 +2811,7 @@ pub fn intersect_aspheric_rt10_batch(
 }
 
 #[wasm_bindgen]
-pub fn surface_normal_aspheric_rt10(
-    pt: &[f64],
-    params: &[f64],
-    mode_odd: i32,
-) -> Vec<f64> {
+pub fn surface_normal_aspheric_rt10(pt: &[f64], params: &[f64], mode_odd: i32) -> Vec<f64> {
     if pt.len() < 3 {
         return vec![0.0, 0.0, 1.0];
     }
@@ -2742,7 +2989,13 @@ fn qcon_sag_deviation(r: f64, semidia: f64, radius: f64, qcon_nrad: f64, coefs: 
     sag
 }
 
-fn qcon_sag_derivative(r: f64, semidia: f64, radius: f64, qcon_nrad: f64, coefs: &[f64; 10]) -> f64 {
+fn qcon_sag_derivative(
+    r: f64,
+    semidia: f64,
+    radius: f64,
+    qcon_nrad: f64,
+    coefs: &[f64; 10],
+) -> f64 {
     if !r.is_finite() {
         return f64::NAN;
     }
@@ -2773,13 +3026,28 @@ fn qcon_sag_derivative(r: f64, semidia: f64, radius: f64, qcon_nrad: f64, coefs:
     derivative
 }
 
-fn qcon_total_sag(r: f64, semidia: f64, radius: f64, conic: f64, qcon_nrad: f64, qcon_offset: f64, coefs: &[f64; 10]) -> f64 {
+fn qcon_total_sag(
+    r: f64,
+    semidia: f64,
+    radius: f64,
+    conic: f64,
+    qcon_nrad: f64,
+    qcon_offset: f64,
+    coefs: &[f64; 10],
+) -> f64 {
     let base = aspheric_sag(r, radius, conic, &[0.0_f64; 10], false);
     let deviation = qcon_sag_deviation(r, semidia, radius, qcon_nrad, coefs);
     base + deviation + qcon_offset
 }
 
-fn qcon_total_sag_derivative(r: f64, semidia: f64, radius: f64, conic: f64, qcon_nrad: f64, coefs: &[f64; 10]) -> f64 {
+fn qcon_total_sag_derivative(
+    r: f64,
+    semidia: f64,
+    radius: f64,
+    conic: f64,
+    qcon_nrad: f64,
+    coefs: &[f64; 10],
+) -> f64 {
     let base = aspheric_sag_derivative(r, radius, conic, &[0.0_f64; 10], false);
     let deviation = qcon_sag_derivative(r, semidia, radius, qcon_nrad, coefs);
     base + deviation
@@ -2803,12 +3071,22 @@ fn intersect_qcon_internal(
     let dy = ray[4];
     let dz = ray[5];
 
-    if !ox.is_finite() || !oy.is_finite() || !oz.is_finite() || !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+    if !ox.is_finite()
+        || !oy.is_finite()
+        || !oz.is_finite()
+        || !dx.is_finite()
+        || !dy.is_finite()
+        || !dz.is_finite()
+    {
         return f64::NAN;
     }
 
     let (semidia_raw, radius, conic, qcon_nrad, qcon_offset, coefs) = parse_qcon_params(params);
-    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 { semidia_raw } else { f64::INFINITY };
+    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 {
+        semidia_raw
+    } else {
+        f64::INFINITY
+    };
     let mut guesses: Vec<f64> = Vec::new();
 
     // Keep the initial guess strategy aligned with intersect_aspheric_internal.
@@ -2850,7 +3128,11 @@ fn intersect_qcon_internal(
     guesses.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
 
     let max_iter = if max_iter <= 0 { 20 } else { max_iter } as usize;
-    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 1e-7 };
+    let tol = if tol.is_finite() && tol > 0.0 {
+        tol
+    } else {
+        1e-7
+    };
 
     for guess in guesses.iter() {
         let mut t = *guess;
@@ -2948,11 +3230,7 @@ pub fn intersect_qcon_surface_batch(
 }
 
 #[wasm_bindgen]
-pub fn surface_normal_qcon_surface(
-    pt: &[f64],
-    params: &[f64],
-    _mode_odd: i32,
-) -> Vec<f64> {
+pub fn surface_normal_qcon_surface(pt: &[f64], params: &[f64], _mode_odd: i32) -> Vec<f64> {
     if pt.len() < 3 {
         return vec![0.0, 0.0, 1.0];
     }
@@ -2965,7 +3243,11 @@ pub fn surface_normal_qcon_surface(
     }
 
     let (semidia_raw, radius, conic, qcon_nrad, _qcon_offset, coefs) = parse_qcon_params(params);
-    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 { semidia_raw } else { f64::INFINITY };
+    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 {
+        semidia_raw
+    } else {
+        f64::INFINITY
+    };
     let dzdr = qcon_total_sag_derivative(r, semidia, radius, conic, qcon_nrad, &coefs);
     let dzdx = dzdr * (x / r);
     let dzdy = dzdr * (y / r);
@@ -2986,7 +3268,11 @@ pub fn surface_normal_qcon_surface_batch(
     }
 
     let (semidia_raw, radius, conic, qcon_nrad, _qcon_offset, coefs) = parse_qcon_params(params);
-    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 { semidia_raw } else { f64::INFINITY };
+    let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 {
+        semidia_raw
+    } else {
+        f64::INFINITY
+    };
     for i in 0..count {
         let base = i * 3;
         let x = points[base];
@@ -3012,11 +3298,7 @@ pub fn surface_normal_qcon_surface_batch(
 }
 
 #[wasm_bindgen]
-pub fn batch_mat3_mul_vec3(
-    mat: &[f64],
-    vecs: &[f64],
-    count: usize,
-) -> Vec<f64> {
+pub fn batch_mat3_mul_vec3(mat: &[f64], vecs: &[f64], count: usize) -> Vec<f64> {
     let mut out = vec![0.0_f64; count * 3];
     if mat.len() < 9 || vecs.len() < count * 3 {
         return out;
@@ -3155,9 +3437,16 @@ pub fn refract_ray_batch(
         let mut nz = normals[j + 2];
         let n1v = n1[i];
         let n2v = n2[i];
-        if !dx.is_finite() || !dy.is_finite() || !dz.is_finite() ||
-           !nx.is_finite() || !ny.is_finite() || !nz.is_finite() ||
-           !n1v.is_finite() || !n2v.is_finite() || n2v == 0.0 {
+        if !dx.is_finite()
+            || !dy.is_finite()
+            || !dz.is_finite()
+            || !nx.is_finite()
+            || !ny.is_finite()
+            || !nz.is_finite()
+            || !n1v.is_finite()
+            || !n2v.is_finite()
+            || n2v == 0.0
+        {
             continue;
         }
 
@@ -3169,8 +3458,12 @@ pub fn refract_ray_batch(
         }
 
         let mut cos_i = -(nx * dx + ny * dy + nz * dz);
-        if cos_i < 0.0 { cos_i = 0.0; }
-        if cos_i > 1.0 { cos_i = 1.0; }
+        if cos_i < 0.0 {
+            cos_i = 0.0;
+        }
+        if cos_i > 1.0 {
+            cos_i = 1.0;
+        }
         let eta = n1v / n2v;
         let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
         if k < 0.0 && k > -1.0e-10 {
@@ -3193,11 +3486,7 @@ pub fn refract_ray_batch(
 }
 
 #[wasm_bindgen]
-pub fn reflect_ray_batch(
-    dirs: &[f64],
-    normals: &[f64],
-    count: usize,
-) -> Vec<f64> {
+pub fn reflect_ray_batch(dirs: &[f64], normals: &[f64], count: usize) -> Vec<f64> {
     let mut out = vec![f64::NAN; count * 3];
     if dirs.len() < count * 3 || normals.len() < count * 3 {
         return out;
@@ -3211,8 +3500,13 @@ pub fn reflect_ray_batch(
         let nx = normals[j];
         let ny = normals[j + 1];
         let nz = normals[j + 2];
-        if !dx.is_finite() || !dy.is_finite() || !dz.is_finite() ||
-           !nx.is_finite() || !ny.is_finite() || !nz.is_finite() {
+        if !dx.is_finite()
+            || !dy.is_finite()
+            || !dz.is_finite()
+            || !nx.is_finite()
+            || !ny.is_finite()
+            || !nz.is_finite()
+        {
             continue;
         }
 
@@ -3230,12 +3524,7 @@ pub fn reflect_ray_batch(
 }
 
 #[wasm_bindgen]
-pub fn advance_ray_batch(
-    pos: &[f64],
-    dirs: &[f64],
-    thickness: f64,
-    count: usize,
-) -> Vec<f64> {
+pub fn advance_ray_batch(pos: &[f64], dirs: &[f64], thickness: f64, count: usize) -> Vec<f64> {
     let mut out = vec![0.0_f64; count * 3];
     if pos.len() < count * 3 || dirs.len() < count * 3 {
         return out;
@@ -3256,9 +3545,7 @@ pub fn advance_ray_batch(
 }
 
 #[wasm_bindgen]
-pub fn calculate_surface_origins(
-    optical_system_rows: Vec<JsValue>,
-) -> Result<JsValue, JsValue> {
+pub fn calculate_surface_origins(optical_system_rows: Vec<JsValue>) -> Result<JsValue, JsValue> {
     let mut rows: Vec<Value> = Vec::new();
     for row in optical_system_rows {
         match serde_wasm_bindgen::from_value::<Value>(row) {
@@ -3279,12 +3566,17 @@ pub fn calculate_surface_origins(
 
     for s in 0..normalized.len() {
         let surface = &normalized[s];
-        let previous = if s > 0 { Some(&normalized[s - 1]) } else { None };
+        let previous = if s > 0 {
+            Some(&normalized[s - 1])
+        } else {
+            None
+        };
         let mut surface_origin;
         let mut surface_rot;
 
         if is_coord_trans_row(surface) {
-            let (decenter_x, decenter_y, decenter_z, tilt_x, tilt_y, tilt_z, transform_order) = parse_coord_trans_params(surface);
+            let (decenter_x, decenter_y, decenter_z, tilt_x, tilt_y, tilt_z, transform_order) =
+                parse_coord_trans_params(surface);
             let mut thickness = previous.map(get_safe_thickness).unwrap_or(0.0);
             if !thickness.is_finite() {
                 thickness = 0.0;
@@ -3300,13 +3592,25 @@ pub fn calculate_surface_origins(
                 let dx_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ex), decenter_x);
                 let dy_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ey), decenter_y);
                 let dz_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ez), decenter_z);
-                surface_origin = vec3_add(vec3_add(vec3_add(vec3_add(current_origin, tz_term), dx_term), dy_term), dz_term);
+                surface_origin = vec3_add(
+                    vec3_add(
+                        vec3_add(vec3_add(current_origin, tz_term), dx_term),
+                        dy_term,
+                    ),
+                    dz_term,
+                );
             } else {
                 let tz_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ez), thickness);
                 let dx_term = vec3_scale(apply_matrix_to_vec3(new_rot, ex), decenter_x);
                 let dy_term = vec3_scale(apply_matrix_to_vec3(new_rot, ey), decenter_y);
                 let dz_term = vec3_scale(apply_matrix_to_vec3(new_rot, ez), decenter_z);
-                surface_origin = vec3_add(vec3_add(vec3_add(vec3_add(current_origin, tz_term), dx_term), dy_term), dz_term);
+                surface_origin = vec3_add(
+                    vec3_add(
+                        vec3_add(vec3_add(current_origin, tz_term), dx_term),
+                        dy_term,
+                    ),
+                    dz_term,
+                );
             }
         } else {
             let mut thickness = previous.map(get_safe_thickness).unwrap_or(0.0);
@@ -3318,8 +3622,14 @@ pub fn calculate_surface_origins(
             surface_rot = current_rot;
         }
 
-        if !surface_origin[0].is_finite() || !surface_origin[1].is_finite() || !surface_origin[2].is_finite() {
-            if !(current_origin[0].is_finite() && current_origin[1].is_finite() && current_origin[2].is_finite()) {
+        if !surface_origin[0].is_finite()
+            || !surface_origin[1].is_finite()
+            || !surface_origin[2].is_finite()
+        {
+            if !(current_origin[0].is_finite()
+                && current_origin[1].is_finite()
+                && current_origin[2].is_finite())
+            {
                 surface_origin = [0.0, 0.0, 0.0];
             }
         }
@@ -3331,7 +3641,9 @@ pub fn calculate_surface_origins(
             [0.0, 0.0, 0.0, 1.0],
         ];
 
-        let surface_type = get_field(surface, "surfType").and_then(value_to_string).unwrap_or_default();
+        let surface_type = get_field(surface, "surfType")
+            .and_then(value_to_string)
+            .unwrap_or_default();
         let mut debug = serde_json::json!({
             "surfaceIndex": s + 1,
             "surfaceType": surface_type,
@@ -3342,23 +3654,33 @@ pub fn calculate_surface_origins(
         });
 
         if is_coord_trans_row(surface) {
-            let (decenter_x, decenter_y, decenter_z, tilt_x, tilt_y, tilt_z, transform_order) = parse_coord_trans_params(surface);
+            let (decenter_x, decenter_y, decenter_z, tilt_x, tilt_y, tilt_z, transform_order) =
+                parse_coord_trans_params(surface);
             if let Value::Object(map) = &mut debug {
-                map.insert("cbParams".to_string(), serde_json::json!({
-                    "decenterX": decenter_x,
-                    "decenterY": decenter_y,
-                    "decenterZ": decenter_z,
-                    "tiltX": tilt_x,
-                    "tiltY": tilt_y,
-                    "tiltZ": tilt_z,
-                    "transformOrder": transform_order
-                }));
-                map.insert("previousOrigin".to_string(), serde_json::json!({
-                    "x": current_origin[0],
-                    "y": current_origin[1],
-                    "z": current_origin[2]
-                }));
-                map.insert("thickness".to_string(), serde_json::json!(previous.map(get_safe_thickness).unwrap_or(0.0)));
+                map.insert(
+                    "cbParams".to_string(),
+                    serde_json::json!({
+                        "decenterX": decenter_x,
+                        "decenterY": decenter_y,
+                        "decenterZ": decenter_z,
+                        "tiltX": tilt_x,
+                        "tiltY": tilt_y,
+                        "tiltZ": tilt_z,
+                        "transformOrder": transform_order
+                    }),
+                );
+                map.insert(
+                    "previousOrigin".to_string(),
+                    serde_json::json!({
+                        "x": current_origin[0],
+                        "y": current_origin[1],
+                        "z": current_origin[2]
+                    }),
+                );
+                map.insert(
+                    "thickness".to_string(),
+                    serde_json::json!(previous.map(get_safe_thickness).unwrap_or(0.0)),
+                );
             }
         }
 
@@ -3393,13 +3715,13 @@ pub fn trace_ray_batch_with_system_json(
     // Parse system metadata JSON
     let system_meta: Value = match serde_json::from_str(&system_meta_json) {
         Ok(v) => v,
-        Err(e) => return Err(JsValue::from_str(&format!("Invalid JSON: {}", e)))
+        Err(e) => return Err(JsValue::from_str(&format!("Invalid JSON: {}", e))),
     };
 
     // Extract ray count from metadata
     let ray_count = match system_meta.get("rayCount") {
         Some(Value::Number(n)) => n.as_u64().unwrap_or(0) as usize,
-        _ => return Err(JsValue::from_str("Missing rayCount in metadata"))
+        _ => return Err(JsValue::from_str("Missing rayCount in metadata")),
     };
 
     if ray_count == 0 {
@@ -3413,11 +3735,15 @@ pub fn trace_ray_batch_with_system_json(
     // Get rows from system metadata
     let rows = match system_meta.get("rows") {
         Some(Value::Array(r)) => r.clone(),
-        _ => return Err(JsValue::from_str("Missing rows array in metadata"))
+        _ => return Err(JsValue::from_str("Missing rows array in metadata")),
     };
 
     if rows.len() < row_count {
-        return Err(JsValue::from_str(&format!("Expected {} rows, got {}", row_count, rows.len())));
+        return Err(JsValue::from_str(&format!(
+            "Expected {} rows, got {}",
+            row_count,
+            rows.len()
+        )));
     }
 
     // Current refractive index for all rays
@@ -3431,9 +3757,7 @@ pub fn trace_ray_batch_with_system_json(
 
         // Extract surface parameters from row metadata
         let params_vec = match row.get("params") {
-            Some(Value::Array(p)) => {
-                p.iter().filter_map(|v| value_to_f64(v)).collect::<Vec<_>>()
-            },
+            Some(Value::Array(p)) => p.iter().filter_map(|v| value_to_f64(v)).collect::<Vec<_>>(),
             _ => vec![0.0; 13],
         };
         let mut params = [0.0_f64; 13];
@@ -3461,7 +3785,6 @@ pub fn trace_ray_batch_with_system_json(
 
         // Trace all rays through this surface
         for ray_idx in 0..ray_count {
-
             // Read ray from WASM memory safely
             let (ox, oy, oz, dx, dy, dz): (f64, f64, f64, f64, f64, f64) = unsafe {
                 let ray_ptr = ray_array_ptr as *const f64;
@@ -3476,16 +3799,26 @@ pub fn trace_ray_batch_with_system_json(
             };
 
             // Skip invalid rays
-            if !ox.is_finite() || !oy.is_finite() || !oz.is_finite() ||
-               !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+            if !ox.is_finite()
+                || !oy.is_finite()
+                || !oz.is_finite()
+                || !dx.is_finite()
+                || !dy.is_finite()
+                || !dz.is_finite()
+            {
                 continue;
             }
 
             // Perform intersection with surface
             let ray_data = vec![ox, oy, oz, dx, dy, dz];
-            let t_intersect = if surf_type.to_lowercase().contains("coord") || surf_type.is_empty() {
+            let t_intersect = if surf_type.to_lowercase().contains("coord") || surf_type.is_empty()
+            {
                 // Coordinate break: propagate at dz distance
-                if dz.abs() > EPS_R { -oz / dz } else { 0.0 }
+                if dz.abs() > EPS_R {
+                    -oz / dz
+                } else {
+                    0.0
+                }
             } else {
                 // Aspheric/spheric surface intersection
                 intersect_aspheric_internal(&ray_data, &params, false, 20, 1e-7)
@@ -3519,41 +3852,46 @@ pub fn trace_ray_batch_with_system_json(
             }
 
             // Refract or reflect based on surface properties
-            let (new_dx, new_dy, new_dz) = if next_n.is_finite() && next_n > 0.0 && (current_n - next_n).abs() > EPS_R {
-                // Refraction
-                let mut cos_i = -(nx * dx + ny * dy + nz * dz);
-                if cos_i < 0.0 { cos_i = 0.0; }
-                if cos_i > 1.0 { cos_i = 1.0; }
-                let eta = current_n / next_n;
-                let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
-                if k < 0.0 && k > -1.0e-10 {
-                    k = 0.0;
-                }
-                if k >= 0.0 {
-                    let sqrt_k = k.sqrt();
-                    let rx = eta * dx + (eta * cos_i - sqrt_k) * nx;
-                    let ry = eta * dy + (eta * cos_i - sqrt_k) * ny;
-                    let rz = eta * dz + (eta * cos_i - sqrt_k) * nz;
-                    let n = normalize3(rx, ry, rz);
-                    (n[0], n[1], n[2])
+            let (new_dx, new_dy, new_dz) =
+                if next_n.is_finite() && next_n > 0.0 && (current_n - next_n).abs() > EPS_R {
+                    // Refraction
+                    let mut cos_i = -(nx * dx + ny * dy + nz * dz);
+                    if cos_i < 0.0 {
+                        cos_i = 0.0;
+                    }
+                    if cos_i > 1.0 {
+                        cos_i = 1.0;
+                    }
+                    let eta = current_n / next_n;
+                    let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+                    if k < 0.0 && k > -1.0e-10 {
+                        k = 0.0;
+                    }
+                    if k >= 0.0 {
+                        let sqrt_k = k.sqrt();
+                        let rx = eta * dx + (eta * cos_i - sqrt_k) * nx;
+                        let ry = eta * dy + (eta * cos_i - sqrt_k) * ny;
+                        let rz = eta * dz + (eta * cos_i - sqrt_k) * nz;
+                        let n = normalize3(rx, ry, rz);
+                        (n[0], n[1], n[2])
+                    } else {
+                        // Total internal reflection
+                        let dot = dx * nx + dy * ny + dz * nz;
+                        let rx = dx - 2.0 * dot * nx;
+                        let ry = dy - 2.0 * dot * ny;
+                        let rz = dz - 2.0 * dot * nz;
+                        let n = normalize3(rx, ry, rz);
+                        (n[0], n[1], n[2])
+                    }
                 } else {
-                    // Total internal reflection
+                    // Reflection (mirror or no refraction data)
                     let dot = dx * nx + dy * ny + dz * nz;
                     let rx = dx - 2.0 * dot * nx;
                     let ry = dy - 2.0 * dot * ny;
                     let rz = dz - 2.0 * dot * nz;
                     let n = normalize3(rx, ry, rz);
                     (n[0], n[1], n[2])
-                }
-            } else {
-                // Reflection (mirror or no refraction data)
-                let dot = dx * nx + dy * ny + dz * nz;
-                let rx = dx - 2.0 * dot * nx;
-                let ry = dy - 2.0 * dot * ny;
-                let rz = dz - 2.0 * dot * nz;
-                let n = normalize3(rx, ry, rz);
-                (n[0], n[1], n[2])
-            };
+                };
 
             // Propagate to next surface (advance by thickness)
             let final_x = int_x + new_dx * thickness;
@@ -3574,7 +3912,11 @@ pub fn trace_ray_batch_with_system_json(
         }
 
         // Update refractive index for next surface
-        current_n = if next_n.is_finite() && next_n > 0.0 { next_n } else { current_n };
+        current_n = if next_n.is_finite() && next_n > 0.0 {
+            next_n
+        } else {
+            current_n
+        };
         rows_traced += 1;
     }
 
@@ -3628,7 +3970,11 @@ struct OpdTraceCheckpoints {
 }
 
 impl OpdTraceCheckpoints {
-    fn new(first_index: Option<usize>, stop_index: Option<usize>, previous_index: Option<usize>) -> Self {
+    fn new(
+        first_index: Option<usize>,
+        stop_index: Option<usize>,
+        previous_index: Option<usize>,
+    ) -> Self {
         Self {
             first_index,
             stop_index,
@@ -3711,7 +4057,13 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
     let mut dx = ray[3];
     let mut dy = ray[4];
     let mut dz = ray[5];
-    if !px.is_finite() || !py.is_finite() || !pz.is_finite() || !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+    if !px.is_finite()
+        || !py.is_finite()
+        || !pz.is_finite()
+        || !dx.is_finite()
+        || !dy.is_finite()
+        || !dz.is_finite()
+    {
         out[0] = 2.0;
         return out;
     }
@@ -3721,7 +4073,11 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
     dy = dn[1];
     dz = dn[2];
 
-    let mut n_cur = if n_start.is_finite() && n_start > 0.0 { n_start } else { 1.0 };
+    let mut n_cur = if n_start.is_finite() && n_start > 0.0 {
+        n_start
+    } else {
+        1.0
+    };
     let mut opl = 0.0_f64;
     let mut preceding_surface_thickness: Option<f64> = None;
 
@@ -3739,8 +4095,16 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
         let radius = row_params[p + 0];
         let conic = row_params[p + 1];
         let coefs = [
-            row_params[p + 2], row_params[p + 3], row_params[p + 4], row_params[p + 5], row_params[p + 6],
-            row_params[p + 7], row_params[p + 8], row_params[p + 9], row_params[p + 10], row_params[p + 11],
+            row_params[p + 2],
+            row_params[p + 3],
+            row_params[p + 4],
+            row_params[p + 5],
+            row_params[p + 6],
+            row_params[p + 7],
+            row_params[p + 8],
+            row_params[p + 9],
+            row_params[p + 10],
+            row_params[p + 11],
         ];
         let semidia = row_params[p + 12];
         let radius_x = row_params[p + 13];
@@ -3838,9 +4202,21 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
         let ldz = im20 * dx + im21 * dy + im22 * dz;
 
         let t = if is_toric {
-            intersect_toric_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], radius_x, radius_y, conic, toric_axis, 20, 1e-7)
+            intersect_toric_internal(
+                &[lpx, lpy, lpz, ldx, ldy, ldz],
+                radius_x,
+                radius_y,
+                conic,
+                toric_axis,
+                20,
+                1e-7,
+            )
         } else if is_plane {
-            if ldz.abs() < EPS_R { f64::NAN } else { -lpz / ldz }
+            if ldz.abs() < EPS_R {
+                f64::NAN
+            } else {
+                -lpz / ldz
+            }
         } else if is_qcon {
             let mut ip = [0.0_f64; 15];
             ip[0] = semidia;
@@ -3860,7 +4236,13 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
             for k in 0..10 {
                 ip[3 + k] = coefs[k];
             }
-            intersect_aspheric_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], &ip, is_odd_asphere, 20, 1e-7)
+            intersect_aspheric_internal(
+                &[lpx, lpy, lpz, ldx, ldy, ldz],
+                &ip,
+                is_odd_asphere,
+                20,
+                1e-7,
+            )
         };
 
         if !t.is_finite() {
@@ -3930,9 +4312,14 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
 
         // Compute local normal
         let (mut nx, mut ny, mut nz) = if is_plane {
-            if ldz > 0.0 { (0.0, 0.0, -1.0) } else { (0.0, 0.0, 1.0) }
+            if ldz > 0.0 {
+                (0.0, 0.0, -1.0)
+            } else {
+                (0.0, 0.0, 1.0)
+            }
         } else if is_toric {
-            let (dz_dx, dz_dy) = toric_sag_derivatives(hx, hy, radius_x, radius_y, conic, toric_axis);
+            let (dz_dx, dz_dy) =
+                toric_sag_derivatives(hx, hy, radius_x, radius_y, conic, toric_axis);
             let nvec = normalize3(-dz_dx, -dz_dy, 1.0);
             (nvec[0], nvec[1], nvec[2])
         } else if is_qcon {
@@ -3940,8 +4327,13 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
             if r < EPS_R {
                 (0.0, 0.0, 1.0)
             } else {
-                let semidia_eff = if semidia.is_finite() && semidia > 0.0 { semidia } else { f64::INFINITY };
-                let dzdr = qcon_total_sag_derivative(r, semidia_eff, radius, conic, qcon_nrad, &coefs);
+                let semidia_eff = if semidia.is_finite() && semidia > 0.0 {
+                    semidia
+                } else {
+                    f64::INFINITY
+                };
+                let dzdr =
+                    qcon_total_sag_derivative(r, semidia_eff, radius, conic, qcon_nrad, &coefs);
                 let nvec = normalize3(-dzdr * (hx / r), -dzdr * (hy / r), 1.0);
                 (nvec[0], nvec[1], nvec[2])
             }
@@ -3972,8 +4364,12 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
             (nn[0], nn[1], nn[2], n_cur)
         } else if n2.is_finite() && n2 > 0.0 && (n_cur - n2).abs() > EPS_R {
             let mut cos_i = -(nx * ldx + ny * ldy + nz * ldz);
-            if cos_i < 0.0 { cos_i = 0.0; }
-            if cos_i > 1.0 { cos_i = 1.0; }
+            if cos_i < 0.0 {
+                cos_i = 0.0;
+            }
+            if cos_i > 1.0 {
+                cos_i = 1.0;
+            }
             let eta = n_cur / n2;
             let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
             if k < 0.0 {
@@ -4060,7 +4456,13 @@ fn trace_single_ray_hit_state_with_meta_core(
     let mut dx = ray[3];
     let mut dy = ray[4];
     let mut dz = ray[5];
-    if !px.is_finite() || !py.is_finite() || !pz.is_finite() || !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+    if !px.is_finite()
+        || !py.is_finite()
+        || !pz.is_finite()
+        || !dx.is_finite()
+        || !dy.is_finite()
+        || !dz.is_finite()
+    {
         out[0] = 2.0;
         return out;
     }
@@ -4070,7 +4472,11 @@ fn trace_single_ray_hit_state_with_meta_core(
     dy = dn[1];
     dz = dn[2];
 
-    let mut n_cur = if n_start.is_finite() && n_start > 0.0 { n_start } else { 1.0 };
+    let mut n_cur = if n_start.is_finite() && n_start > 0.0 {
+        n_start
+    } else {
+        1.0
+    };
     let mut opl = 0.0_f64;
     let mut preceding_surface_thickness: Option<f64> = None;
 
@@ -4088,8 +4494,16 @@ fn trace_single_ray_hit_state_with_meta_core(
         let radius = row_params[p + 0];
         let conic = row_params[p + 1];
         let coefs = [
-            row_params[p + 2], row_params[p + 3], row_params[p + 4], row_params[p + 5], row_params[p + 6],
-            row_params[p + 7], row_params[p + 8], row_params[p + 9], row_params[p + 10], row_params[p + 11],
+            row_params[p + 2],
+            row_params[p + 3],
+            row_params[p + 4],
+            row_params[p + 5],
+            row_params[p + 6],
+            row_params[p + 7],
+            row_params[p + 8],
+            row_params[p + 9],
+            row_params[p + 10],
+            row_params[p + 11],
         ];
         let semidia = row_params[p + 12];
         let radius_x = row_params[p + 13];
@@ -4151,9 +4565,21 @@ fn trace_single_ray_hit_state_with_meta_core(
         let ldz = im20 * dx + im21 * dy + im22 * dz;
 
         let t = if is_toric {
-            intersect_toric_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], radius_x, radius_y, conic, toric_axis, 20, 1e-7)
+            intersect_toric_internal(
+                &[lpx, lpy, lpz, ldx, ldy, ldz],
+                radius_x,
+                radius_y,
+                conic,
+                toric_axis,
+                20,
+                1e-7,
+            )
         } else if is_plane {
-            if ldz.abs() < EPS_R { f64::NAN } else { -lpz / ldz }
+            if ldz.abs() < EPS_R {
+                f64::NAN
+            } else {
+                -lpz / ldz
+            }
         } else if is_qcon {
             let mut ip = [0.0_f64; 15];
             ip[0] = semidia;
@@ -4173,7 +4599,13 @@ fn trace_single_ray_hit_state_with_meta_core(
             for k in 0..10 {
                 ip[3 + k] = coefs[k];
             }
-            intersect_aspheric_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], &ip, is_odd_asphere, 20, 1e-7)
+            intersect_aspheric_internal(
+                &[lpx, lpy, lpz, ldx, ldy, ldz],
+                &ip,
+                is_odd_asphere,
+                20,
+                1e-7,
+            )
         };
 
         if !t.is_finite() {
@@ -4223,9 +4655,14 @@ fn trace_single_ray_hit_state_with_meta_core(
         let ghz = rm20 * hx + rm21 * hy + rm22 * hz + oz;
 
         let (mut nx, mut ny, mut nz) = if is_plane {
-            if ldz > 0.0 { (0.0, 0.0, -1.0) } else { (0.0, 0.0, 1.0) }
+            if ldz > 0.0 {
+                (0.0, 0.0, -1.0)
+            } else {
+                (0.0, 0.0, 1.0)
+            }
         } else if is_toric {
-            let (dz_dx, dz_dy) = toric_sag_derivatives(hx, hy, radius_x, radius_y, conic, toric_axis);
+            let (dz_dx, dz_dy) =
+                toric_sag_derivatives(hx, hy, radius_x, radius_y, conic, toric_axis);
             let nvec = normalize3(-dz_dx, -dz_dy, 1.0);
             (nvec[0], nvec[1], nvec[2])
         } else if is_qcon {
@@ -4233,8 +4670,13 @@ fn trace_single_ray_hit_state_with_meta_core(
             if r < EPS_R {
                 (0.0, 0.0, 1.0)
             } else {
-                let semidia_eff = if semidia.is_finite() && semidia > 0.0 { semidia } else { f64::INFINITY };
-                let dzdr = qcon_total_sag_derivative(r, semidia_eff, radius, conic, qcon_nrad, &coefs);
+                let semidia_eff = if semidia.is_finite() && semidia > 0.0 {
+                    semidia
+                } else {
+                    f64::INFINITY
+                };
+                let dzdr =
+                    qcon_total_sag_derivative(r, semidia_eff, radius, conic, qcon_nrad, &coefs);
                 let nvec = normalize3(-dzdr * (hx / r), -dzdr * (hy / r), 1.0);
                 (nvec[0], nvec[1], nvec[2])
             }
@@ -4265,8 +4707,12 @@ fn trace_single_ray_hit_state_with_meta_core(
             (nn[0], nn[1], nn[2], n_cur)
         } else if n2.is_finite() && n2 > 0.0 && (n_cur - n2).abs() > EPS_R {
             let mut cos_i = -(nx * ldx + ny * ldy + nz * ldz);
-            if cos_i < 0.0 { cos_i = 0.0; }
-            if cos_i > 1.0 { cos_i = 1.0; }
+            if cos_i < 0.0 {
+                cos_i = 0.0;
+            }
+            if cos_i > 1.0 {
+                cos_i = 1.0;
+            }
             let eta = n_cur / n2;
             let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
             if k < 0.0 {
@@ -4394,12 +4840,20 @@ pub fn trace_ray_batch_hit_point_with_rows_json(
     wavelength_um: f64,
     n_start: f64,
 ) -> Result<Vec<f64>, JsValue> {
-    let raw_rows: Vec<Value> = serde_json::from_str(&optical_rows_json)
-        .map_err(|error| JsValue::from_str(&format!("trace_ray_batch_hit_point_with_rows_json: rows JSON: {error}")))?;
+    let raw_rows: Vec<Value> = serde_json::from_str(&optical_rows_json).map_err(|error| {
+        JsValue::from_str(&format!(
+            "trace_ray_batch_hit_point_with_rows_json: rows JSON: {error}"
+        ))
+    })?;
     if raw_rows.is_empty() || target_surface_index >= raw_rows.len() {
-        return Err(JsValue::from_str("trace_ray_batch_hit_point_with_rows_json: invalid rows/target"));
+        return Err(JsValue::from_str(
+            "trace_ray_batch_hit_point_with_rows_json: invalid rows/target",
+        ));
     }
-    let rows = raw_rows.iter().map(normalize_coord_trans_row).collect::<Vec<Value>>();
+    let rows = raw_rows
+        .iter()
+        .map(normalize_coord_trans_row)
+        .collect::<Vec<Value>>();
     let packed = build_packed_meta_for_opd(&rows, wavelength_um, target_surface_index);
     Ok(trace_ray_batch_hit_point_with_meta(
         rays,
@@ -4413,6 +4867,43 @@ pub fn trace_ray_batch_hit_point_with_rows_json(
         &packed.row_rots,
         packed.row_count,
     ))
+}
+
+#[wasm_bindgen]
+pub fn register_trace_system_metadata_with_rows_json(
+    optical_rows_json: String,
+    wavelength_um: f64,
+    target_surface_index: usize,
+) -> Result<u32, JsValue> {
+    let raw_rows: Vec<Value> = serde_json::from_str(&optical_rows_json).map_err(|error| {
+        JsValue::from_str(&format!(
+            "register_trace_system_metadata_with_rows_json: rows JSON: {error}"
+        ))
+    })?;
+    if raw_rows.is_empty() || target_surface_index >= raw_rows.len() {
+        return Err(JsValue::from_str(
+            "register_trace_system_metadata_with_rows_json: invalid rows/target",
+        ));
+    }
+    let rows = raw_rows
+        .iter()
+        .map(normalize_coord_trans_row)
+        .collect::<Vec<Value>>();
+    let packed = build_packed_meta_for_opd(&rows, wavelength_um, target_surface_index);
+    let handle = register_trace_system_metadata(
+        &packed.row_meta,
+        &packed.row_params,
+        &packed.row_origins,
+        &packed.row_inv_rots,
+        &packed.row_rots,
+        packed.row_count,
+    );
+    if handle == 0 {
+        return Err(JsValue::from_str(
+            "register_trace_system_metadata_with_rows_json: metadata registration failed",
+        ));
+    }
+    Ok(handle)
 }
 
 #[wasm_bindgen]
@@ -4650,7 +5141,10 @@ pub fn trace_spot_metric_jobs_cached(
             Some(value) => value,
             None => continue,
         };
-        let ray_end = match ray_count.checked_mul(6).and_then(|len| ray_start.checked_add(len)) {
+        let ray_end = match ray_count
+            .checked_mul(6)
+            .and_then(|len| ray_start.checked_add(len))
+        {
             Some(value) if value <= rays.len() => value,
             _ => continue,
         };
@@ -4674,7 +5168,11 @@ fn parse_matrix3(value: &Value) -> [[f64; 3]; 3] {
         for r in 0..3 {
             if let Some(Value::Array(cols)) = rows.get(r) {
                 for c in 0..3 {
-                    out[r][c] = cols.get(c).and_then(value_to_f64).unwrap_or(if r == c { 1.0 } else { 0.0 });
+                    out[r][c] = cols.get(c).and_then(value_to_f64).unwrap_or(if r == c {
+                        1.0
+                    } else {
+                        0.0
+                    });
                 }
             } else {
                 out[r][r] = 1.0;
@@ -4806,8 +5304,10 @@ fn compute_native_chief_ray_angle_deg_wasm(
     let target_surface_index = find_eval_surface_index(&rows).min(rows.len().saturating_sub(1));
     let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
     let wavelength = get_primary_wavelength_um_native(&source_rows_effective, 0.5876);
-    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
-    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+    let (packed_stop, n_start) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
 
     let stop_base = stop_surface_index.saturating_mul(3);
     if stop_base + 2 >= packed_stop.row_origins.len() {
@@ -4827,7 +5327,13 @@ fn compute_native_chief_ray_angle_deg_wasm(
         .or_else(|| object_map.get("objectType"))
         .or_else(|| object_map.get("type"))
         .and_then(value_to_string)
-        .unwrap_or_else(|| if is_infinite_conjugate_native(&rows) { "Angle".to_string() } else { "Rectangle".to_string() })
+        .unwrap_or_else(|| {
+            if is_infinite_conjugate_native(&rows) {
+                "Angle".to_string()
+            } else {
+                "Rectangle".to_string()
+            }
+        })
         .trim()
         .to_ascii_lowercase();
 
@@ -4842,20 +5348,29 @@ fn compute_native_chief_ray_angle_deg_wasm(
         fallback
     };
 
-    let ray_state = if is_infinite_conjugate_native(&rows) || object_position.contains("angle") || object_position == "point" {
-        let angle_x = pick_first_finite(&[
-            object_map.get("xHeightAngle").and_then(value_to_f64),
-            object_map.get("xFieldAngle").and_then(value_to_f64),
-            object_map.get("x").and_then(value_to_f64),
-            object_map.get("xHeight").and_then(value_to_f64),
-        ], 0.0);
-        let angle_y = pick_first_finite(&[
-            object_map.get("yHeightAngle").and_then(value_to_f64),
-            object_map.get("yFieldAngle").and_then(value_to_f64),
-            object_map.get("fieldAngle").and_then(value_to_f64),
-            object_map.get("y").and_then(value_to_f64),
-            object_map.get("yHeight").and_then(value_to_f64),
-        ], 0.0);
+    let ray_state = if is_infinite_conjugate_native(&rows)
+        || object_position.contains("angle")
+        || object_position == "point"
+    {
+        let angle_x = pick_first_finite(
+            &[
+                object_map.get("xHeightAngle").and_then(value_to_f64),
+                object_map.get("xFieldAngle").and_then(value_to_f64),
+                object_map.get("x").and_then(value_to_f64),
+                object_map.get("xHeight").and_then(value_to_f64),
+            ],
+            0.0,
+        );
+        let angle_y = pick_first_finite(
+            &[
+                object_map.get("yHeightAngle").and_then(value_to_f64),
+                object_map.get("yFieldAngle").and_then(value_to_f64),
+                object_map.get("fieldAngle").and_then(value_to_f64),
+                object_map.get("y").and_then(value_to_f64),
+                object_map.get("yHeight").and_then(value_to_f64),
+            ],
+            0.0,
+        );
         let (origin, direction, _) = trace_image_height_infinite_chief_ray_exact_native(
             &rows,
             &packed_stop,
@@ -4869,7 +5384,14 @@ fn compute_native_chief_ray_angle_deg_wasm(
             angle_y,
         )?;
         trace_single_ray_hit_state_with_meta_core(
-            &[origin[0], origin[1], origin[2], direction[0], direction[1], direction[2]],
+            &[
+                origin[0],
+                origin[1],
+                origin[2],
+                direction[0],
+                direction[1],
+                direction[2],
+            ],
             target_surface_index,
             n_start,
             &packed_target.row_meta,
@@ -4880,15 +5402,21 @@ fn compute_native_chief_ray_angle_deg_wasm(
             packed_target.row_count,
         )
     } else {
-        let object_x = pick_first_finite(&[
-            object_map.get("xHeight").and_then(value_to_f64),
-            object_map.get("x").and_then(value_to_f64),
-        ], 0.0);
-        let object_y = pick_first_finite(&[
-            object_map.get("yHeight").and_then(value_to_f64),
-            object_map.get("y").and_then(value_to_f64),
-            object_map.get("height").and_then(value_to_f64),
-        ], 0.0);
+        let object_x = pick_first_finite(
+            &[
+                object_map.get("xHeight").and_then(value_to_f64),
+                object_map.get("x").and_then(value_to_f64),
+            ],
+            0.0,
+        );
+        let object_y = pick_first_finite(
+            &[
+                object_map.get("yHeight").and_then(value_to_f64),
+                object_map.get("y").and_then(value_to_f64),
+                object_map.get("height").and_then(value_to_f64),
+            ],
+            0.0,
+        );
         let first_surface_z = packed_target.row_origins.get(2).copied().unwrap_or(0.0);
         let object_sag = compute_object_surface_sag_native(&rows, object_x, object_y);
         let object_point = [object_x, object_y, first_surface_z + object_sag];
@@ -4906,7 +5434,14 @@ fn compute_native_chief_ray_angle_deg_wasm(
             initial_direction,
         )?;
         trace_single_ray_hit_state_with_meta_core(
-            &[object_point[0], object_point[1], object_point[2], direction[0], direction[1], direction[2]],
+            &[
+                object_point[0],
+                object_point[1],
+                object_point[2],
+                direction[0],
+                direction[1],
+                direction[2],
+            ],
             target_surface_index,
             n_start,
             &packed_target.row_meta,
@@ -5007,22 +5542,43 @@ fn apply_display_mode_grid(
     }
 
     let sample_coordinates = |iy: usize, ix: usize| {
-        let physical_x = entrance_x.get(iy).and_then(|row| row.get(ix)).and_then(|value| *value);
-        let physical_y = entrance_y.get(iy).and_then(|row| row.get(ix)).and_then(|value| *value);
+        let physical_x = entrance_x
+            .get(iy)
+            .and_then(|row| row.get(ix))
+            .and_then(|value| *value);
+        let physical_y = entrance_y
+            .get(iy)
+            .and_then(|row| row.get(ix))
+            .and_then(|value| *value);
         match (physical_x, physical_y) {
             (Some(x), Some(y)) if x.is_finite() && y.is_finite() => (x, y, true),
             _ => {
-                let x = if n > 1 { (2.0 * ix as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
-                let y = if n > 1 { (2.0 * iy as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
+                let x = if n > 1 {
+                    (2.0 * ix as f64) / ((n - 1) as f64) - 1.0
+                } else {
+                    0.0
+                };
+                let y = if n > 1 {
+                    (2.0 * iy as f64) / ((n - 1) as f64) - 1.0
+                } else {
+                    0.0
+                };
                 (x, y, false)
-            },
+            }
         }
     };
     let mut samples = Vec::<(usize, usize, f64, f64, f64, bool)>::new();
     for iy in 0..n {
         for ix in 0..n {
-            let Some(z) = raw[iy][ix] else { continue; };
-            if pupil_mask.get(iy).and_then(|row| row.get(ix)).and_then(|value| *value) == Some(false) {
+            let Some(z) = raw[iy][ix] else {
+                continue;
+            };
+            if pupil_mask
+                .get(iy)
+                .and_then(|row| row.get(ix))
+                .and_then(|value| *value)
+                == Some(false)
+            {
                 continue;
             }
             let (x, y, physical) = sample_coordinates(iy, ix);
@@ -5030,33 +5586,45 @@ fn apply_display_mode_grid(
         }
     }
     let defocus_mean_radius_squared = if remove_defocus && !samples.is_empty() {
-        samples.iter().map(|sample| sample.3 * sample.3 + sample.4 * sample.4).sum::<f64>() / samples.len() as f64
+        samples
+            .iter()
+            .map(|sample| sample.3 * sample.3 + sample.4 * sample.4)
+            .sum::<f64>()
+            / samples.len() as f64
     } else {
         0.0
     };
     let physical_coordinate_sample_count = samples.iter().filter(|sample| sample.5).count();
-    let k = if remove_tilt && remove_defocus { 4 } else if remove_tilt { 3 } else if remove_defocus { 2 } else { 1 };
+    let k = if remove_tilt && remove_defocus {
+        4
+    } else if remove_tilt {
+        3
+    } else if remove_defocus {
+        2
+    } else {
+        1
+    };
     let mut normal = vec![vec![0.0_f64; k]; k];
     let mut rhs = vec![0.0_f64; k];
     let count = samples.len();
 
     for (_, _, z, x, y, _) in samples.iter().copied() {
-            let orthogonal_defocus = x * x + y * y - defocus_mean_radius_squared;
-            let basis = if remove_tilt && remove_defocus {
-                [1.0, x, y, orthogonal_defocus]
-            } else if remove_tilt {
-                [1.0, x, y, 0.0]
-            } else if remove_defocus {
-                [1.0, orthogonal_defocus, 0.0, 0.0]
-            } else {
-                [1.0, 0.0, 0.0, 0.0]
-            };
-            for r in 0..k {
-                rhs[r] += basis[r] * z;
-                for c in 0..k {
-                    normal[r][c] += basis[r] * basis[c];
-                }
+        let orthogonal_defocus = x * x + y * y - defocus_mean_radius_squared;
+        let basis = if remove_tilt && remove_defocus {
+            [1.0, x, y, orthogonal_defocus]
+        } else if remove_tilt {
+            [1.0, x, y, 0.0]
+        } else if remove_defocus {
+            [1.0, orthogonal_defocus, 0.0, 0.0]
+        } else {
+            [1.0, 0.0, 0.0, 0.0]
+        };
+        for r in 0..k {
+            rhs[r] += basis[r] * z;
+            for c in 0..k {
+                normal[r][c] += basis[r] * basis[c];
             }
+        }
     }
 
     if count <= k {
@@ -5081,17 +5649,17 @@ fn apply_display_mode_grid(
 
     let mut out = vec![vec![None; n]; n];
     for (iy, ix, z, x, y, _) in samples {
-            let orthogonal_defocus = x * x + y * y - defocus_mean_radius_squared;
-            let fit = if remove_tilt && remove_defocus {
-                coeff[0] + coeff[1] * x + coeff[2] * y + defocus_scale * coeff[3] * orthogonal_defocus
-            } else if remove_tilt {
-                coeff[0] + coeff[1] * x + coeff[2] * y
-            } else if remove_defocus {
-                coeff[0] + defocus_scale * coeff[1] * orthogonal_defocus
-            } else {
-                coeff[0]
-            };
-            out[iy][ix] = Some(z - fit);
+        let orthogonal_defocus = x * x + y * y - defocus_mean_radius_squared;
+        let fit = if remove_tilt && remove_defocus {
+            coeff[0] + coeff[1] * x + coeff[2] * y + defocus_scale * coeff[3] * orthogonal_defocus
+        } else if remove_tilt {
+            coeff[0] + coeff[1] * x + coeff[2] * y
+        } else if remove_defocus {
+            coeff[0] + defocus_scale * coeff[1] * orthogonal_defocus
+        } else {
+            coeff[0]
+        };
+        out[iy][ix] = Some(z - fit);
     }
     (out, fit_diagnostic)
 }
@@ -5125,7 +5693,9 @@ fn compute_packed_surface_origins_for_opd(
         let (surface_origin, surface_rot) = if is_coord_trans_row(surface) {
             let (dx, dy, dz, tx, ty, tz, order) = parse_coord_trans_params(surface);
             let mut thickness = previous.map(get_safe_thickness).unwrap_or(0.0);
-            if !thickness.is_finite() { thickness = 0.0; }
+            if !thickness.is_finite() {
+                thickness = 0.0;
+            }
             let prev_rot = current_rot;
             let single_rot = create_rotation_matrix(tx, ty, tz, order);
             let new_rot = multiply_matrices(single_rot, current_rot);
@@ -5134,18 +5704,32 @@ fn compute_packed_surface_origins_for_opd(
                 let dx_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ex), dx);
                 let dy_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ey), dy);
                 let dz_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ez), dz);
-                vec3_add(vec3_add(vec3_add(vec3_add(current_origin, tz_term), dx_term), dy_term), dz_term)
+                vec3_add(
+                    vec3_add(
+                        vec3_add(vec3_add(current_origin, tz_term), dx_term),
+                        dy_term,
+                    ),
+                    dz_term,
+                )
             } else {
                 let tz_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ez), thickness);
                 let dx_term = vec3_scale(apply_matrix_to_vec3(new_rot, ex), dx);
                 let dy_term = vec3_scale(apply_matrix_to_vec3(new_rot, ey), dy);
                 let dz_term = vec3_scale(apply_matrix_to_vec3(new_rot, ez), dz);
-                vec3_add(vec3_add(vec3_add(vec3_add(current_origin, tz_term), dx_term), dy_term), dz_term)
+                vec3_add(
+                    vec3_add(
+                        vec3_add(vec3_add(current_origin, tz_term), dx_term),
+                        dy_term,
+                    ),
+                    dz_term,
+                )
             };
             (o, new_rot)
         } else {
             let mut thickness = previous.map(get_safe_thickness).unwrap_or(0.0);
-            if !thickness.is_finite() { thickness = 0.0; }
+            if !thickness.is_finite() {
+                thickness = 0.0;
+            }
             let tz_term = vec3_scale(apply_matrix_to_vec3(current_rot, ez), thickness);
             (vec3_add(current_origin, tz_term), current_rot)
         };
@@ -5168,13 +5752,22 @@ fn compute_packed_surface_origins_for_opd(
     }
 }
 
-fn build_packed_meta_for_opd(rows: &[Value], wavelength_um: f64, target_surface_index: usize) -> PackedMeta {
+fn build_packed_meta_for_opd(
+    rows: &[Value],
+    wavelength_um: f64,
+    target_surface_index: usize,
+) -> PackedMeta {
     let mut row_meta = vec![0_i32; rows.len() * 4];
     let mut row_params = vec![0.0_f64; rows.len() * 24];
     let mut row_origins = vec![0.0_f64; rows.len() * 3];
     let mut row_inv_rots = vec![0.0_f64; rows.len() * 9];
     let mut row_rots = vec![0.0_f64; rows.len() * 9];
-    compute_packed_surface_origins_for_opd(rows, &mut row_origins, &mut row_rots, &mut row_inv_rots);
+    compute_packed_surface_origins_for_opd(
+        rows,
+        &mut row_origins,
+        &mut row_rots,
+        &mut row_inv_rots,
+    );
     for i in 0..rows.len() {
         let row = &rows[i];
         let m = i * 4;
@@ -5211,7 +5804,10 @@ fn build_packed_meta_for_opd(rows: &[Value], wavelength_um: f64, target_surface_
             .unwrap_or_default();
         let shape_key = compact(&aperture_shape);
         let is_square_shape = shape_key == "square" || shape_key == "sq";
-        let is_rect_shape = is_square_shape || shape_key == "rect" || shape_key == "rectangle" || shape_key == "rectangular";
+        let is_rect_shape = is_square_shape
+            || shape_key == "rect"
+            || shape_key == "rectangle"
+            || shape_key == "rectangular";
 
         let mut rect_half_w = f64::NAN;
         let mut rect_half_h = f64::NAN;
@@ -5247,35 +5843,64 @@ fn build_packed_meta_for_opd(rows: &[Value], wavelength_um: f64, target_surface_
 
         let is_toric = surf_type.contains("toric");
         let is_odd = surf_type.contains("odd");
-        let radius = get_field(row, "radius").and_then(value_to_f64).unwrap_or(f64::NAN);
+        let radius = get_field(row, "radius")
+            .and_then(value_to_f64)
+            .unwrap_or(f64::NAN);
         let is_plane = !radius.is_finite() || radius.abs() < 1e-12 || surf_type.contains("plane");
 
         let mut flags = 0_i32;
-        if is_mirror { flags |= 1; }
-        if is_plane { flags |= 2; }
-        if is_toric { flags |= 4; }
-        if is_image_surface { flags |= 8; }
-        if rect_half_w.is_finite() && rect_half_h.is_finite() { flags |= 16; }
-        if is_odd { flags |= 32; }
+        if is_mirror {
+            flags |= 1;
+        }
+        if is_plane {
+            flags |= 2;
+        }
+        if is_toric {
+            flags |= 4;
+        }
+        if is_image_surface {
+            flags |= 8;
+        }
+        if rect_half_w.is_finite() && rect_half_h.is_finite() {
+            flags |= 16;
+        }
+        if is_odd {
+            flags |= 32;
+        }
         row_meta[m + 1] = flags;
 
         row_params[p] = radius;
-        row_params[p + 1] = get_field(row, "conic").and_then(value_to_f64).unwrap_or(0.0);
+        row_params[p + 1] = get_field(row, "conic")
+            .and_then(value_to_f64)
+            .unwrap_or(0.0);
         for k in 0..10 {
             let key = format!("coef{}", k + 1);
             row_params[p + 2 + k] = get_field(row, &key).and_then(value_to_f64).unwrap_or(0.0);
         }
-        let semidia = match get_field(row, "__cooptActualSemidia").or_else(|| get_field(row, "semidia")) {
-            Some(Value::String(s)) if s.trim().eq_ignore_ascii_case("auto") || s.trim().is_empty() => f64::INFINITY,
-            Some(v) => {
-                let n = value_to_f64(v).unwrap_or(f64::NAN);
-                if n.is_finite() && n > 0.0 { n } else { f64::INFINITY }
-            }
-            None => f64::INFINITY,
-        };
+        let semidia =
+            match get_field(row, "__cooptActualSemidia").or_else(|| get_field(row, "semidia")) {
+                Some(Value::String(s))
+                    if s.trim().eq_ignore_ascii_case("auto") || s.trim().is_empty() =>
+                {
+                    f64::INFINITY
+                }
+                Some(v) => {
+                    let n = value_to_f64(v).unwrap_or(f64::NAN);
+                    if n.is_finite() && n > 0.0 {
+                        n
+                    } else {
+                        f64::INFINITY
+                    }
+                }
+                None => f64::INFINITY,
+            };
         row_params[p + 12] = semidia;
-        row_params[p + 13] = get_field(row, "radiusX").and_then(value_to_f64).unwrap_or(f64::NAN);
-        row_params[p + 14] = get_field(row, "radiusY").and_then(value_to_f64).unwrap_or(f64::NAN);
+        row_params[p + 13] = get_field(row, "radiusX")
+            .and_then(value_to_f64)
+            .unwrap_or(f64::NAN);
+        row_params[p + 14] = get_field(row, "radiusY")
+            .and_then(value_to_f64)
+            .unwrap_or(f64::NAN);
         row_params[p + 15] = get_field(row, "axis").and_then(value_to_f64).unwrap_or(0.0);
         row_params[p + 16] = get_safe_thickness(row);
         let mut ap_lim = get_field(row, "aperture")
@@ -5286,7 +5911,11 @@ fn build_packed_meta_for_opd(rows: &[Value], wavelength_um: f64, target_surface_
         if semidia.is_finite() {
             ap_lim = ap_lim.min(semidia);
         }
-        row_params[p + 17] = if i == target_surface_index || is_image_surface { f64::INFINITY } else { ap_lim };
+        row_params[p + 17] = if i == target_surface_index || is_image_surface {
+            f64::INFINITY
+        } else {
+            ap_lim
+        };
         row_params[p + 18] = rect_half_w;
         row_params[p + 19] = rect_half_h;
 
@@ -5295,16 +5924,32 @@ fn build_packed_meta_for_opd(rows: &[Value], wavelength_um: f64, target_surface_
                 0.0
             } else {
                 let n = get_correct_refractive_index(row, wavelength_um);
-                if n.is_finite() && n > 0.0 { n } else { 0.0 }
+                if n.is_finite() && n > 0.0 {
+                    n
+                } else {
+                    0.0
+                }
             }
         } else if kind == 2 {
-            let material = get_field(row, "material").and_then(value_to_string).unwrap_or_default();
+            let material = get_field(row, "material")
+                .and_then(value_to_string)
+                .unwrap_or_default();
             let n = parse_refractive_index_from_material(&material);
-            if n > 0.0 { n } else { 0.0 }
+            if n > 0.0 {
+                n
+            } else {
+                0.0
+            }
         } else if kind == 3 {
-            let material = get_field(row, "__cooptGapMaterial").and_then(value_to_string).unwrap_or_default();
+            let material = get_field(row, "__cooptGapMaterial")
+                .and_then(value_to_string)
+                .unwrap_or_default();
             let n = parse_refractive_index_from_material(&material);
-            if n > 0.0 { n } else { 0.0 }
+            if n > 0.0 {
+                n
+            } else {
+                0.0
+            }
         } else {
             0.0
         };
@@ -5329,7 +5974,14 @@ fn build_packed_meta_for_opd(rows: &[Value], wavelength_um: f64, target_surface_
             .unwrap_or(0.0);
     }
 
-    PackedMeta { row_meta, row_params, row_origins, row_inv_rots, row_rots, row_count: rows.len() }
+    PackedMeta {
+        row_meta,
+        row_params,
+        row_origins,
+        row_inv_rots,
+        row_rots,
+        row_count: rows.len(),
+    }
 }
 
 fn parse_angle_like_input(s: &str) -> Option<f64> {
@@ -5340,7 +5992,8 @@ fn parse_angle_like_input(s: &str) -> Option<f64> {
     let mut started = false;
     let mut token = String::new();
     for ch in t.chars() {
-        let valid = ch.is_ascii_digit() || ch == '+' || ch == '-' || ch == '.' || ch == 'e' || ch == 'E';
+        let valid =
+            ch.is_ascii_digit() || ch == '+' || ch == '-' || ch == '.' || ch == 'e' || ch == 'E';
         if valid {
             started = true;
             token.push(ch);
@@ -5410,8 +6063,15 @@ fn distortion_is_mirror_row(row: &Value) -> bool {
 }
 
 fn distortion_mirror_sign(rows: &[Value]) -> f64 {
-    let mirror_count = rows.iter().filter(|row| distortion_is_mirror_row(row)).count();
-    if mirror_count % 2 == 1 { -1.0 } else { 1.0 }
+    let mirror_count = rows
+        .iter()
+        .filter(|row| distortion_is_mirror_row(row))
+        .count();
+    if mirror_count % 2 == 1 {
+        -1.0
+    } else {
+        1.0
+    }
 }
 
 fn get_primary_wavelength_um_native(source_rows: &[Value], default_wavelength: f64) -> f64 {
@@ -5459,7 +6119,10 @@ fn get_primary_wavelength_um_native(source_rows: &[Value], default_wavelength: f
         .unwrap_or(default_wavelength)
 }
 
-fn distortion_source_rows_for_wavelength_native(source_rows: &[Value], wavelength: f64) -> Vec<Value> {
+fn distortion_source_rows_for_wavelength_native(
+    source_rows: &[Value],
+    wavelength: f64,
+) -> Vec<Value> {
     let wl = if wavelength.is_finite() && wavelength > 0.0 {
         wavelength
     } else {
@@ -5531,13 +6194,25 @@ fn compute_packed_surface_origins_native(
                 let dx_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ex), dx);
                 let dy_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ey), dy);
                 let dz_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ez), dz);
-                vec3_add(vec3_add(vec3_add(vec3_add(current_origin, tz_term), dx_term), dy_term), dz_term)
+                vec3_add(
+                    vec3_add(
+                        vec3_add(vec3_add(current_origin, tz_term), dx_term),
+                        dy_term,
+                    ),
+                    dz_term,
+                )
             } else {
                 let tz_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ez), thickness);
                 let dx_term = vec3_scale(apply_matrix_to_vec3(new_rot, ex), dx);
                 let dy_term = vec3_scale(apply_matrix_to_vec3(new_rot, ey), dy);
                 let dz_term = vec3_scale(apply_matrix_to_vec3(new_rot, ez), dz);
-                vec3_add(vec3_add(vec3_add(vec3_add(current_origin, tz_term), dx_term), dy_term), dz_term)
+                vec3_add(
+                    vec3_add(
+                        vec3_add(vec3_add(current_origin, tz_term), dx_term),
+                        dy_term,
+                    ),
+                    dz_term,
+                )
             };
             (o, new_rot)
         } else {
@@ -5616,7 +6291,10 @@ fn build_trace_packed_meta_for_wavelength(
             .unwrap_or_default();
         let shape_key = compact(&aperture_shape);
         let is_square_shape = shape_key == "square" || shape_key == "sq";
-        let is_rect_shape = is_square_shape || shape_key == "rect" || shape_key == "rectangle" || shape_key == "rectangular";
+        let is_rect_shape = is_square_shape
+            || shape_key == "rect"
+            || shape_key == "rectangle"
+            || shape_key == "rectangular";
 
         let mut rect_half_w = f64::NAN;
         let mut rect_half_h = f64::NAN;
@@ -5652,35 +6330,64 @@ fn build_trace_packed_meta_for_wavelength(
 
         let is_toric = surf_type.contains("toric");
         let is_odd = surf_type.contains("odd");
-        let radius = get_field(row, "radius").and_then(value_to_f64).unwrap_or(f64::NAN);
+        let radius = get_field(row, "radius")
+            .and_then(value_to_f64)
+            .unwrap_or(f64::NAN);
         let is_plane = !radius.is_finite() || radius.abs() < 1e-12 || surf_type.contains("plane");
 
         let mut flags = 0_i32;
-        if is_mirror { flags |= 1; }
-        if is_plane { flags |= 2; }
-        if is_toric { flags |= 4; }
-        if is_image_surface { flags |= 8; }
-        if rect_half_w.is_finite() && rect_half_h.is_finite() { flags |= 16; }
-        if is_odd { flags |= 32; }
+        if is_mirror {
+            flags |= 1;
+        }
+        if is_plane {
+            flags |= 2;
+        }
+        if is_toric {
+            flags |= 4;
+        }
+        if is_image_surface {
+            flags |= 8;
+        }
+        if rect_half_w.is_finite() && rect_half_h.is_finite() {
+            flags |= 16;
+        }
+        if is_odd {
+            flags |= 32;
+        }
         row_meta[m + 1] = flags;
 
         row_params[p] = radius;
-        row_params[p + 1] = get_field(row, "conic").and_then(value_to_f64).unwrap_or(0.0);
+        row_params[p + 1] = get_field(row, "conic")
+            .and_then(value_to_f64)
+            .unwrap_or(0.0);
         for k in 0..10 {
             let key = format!("coef{}", k + 1);
             row_params[p + 2 + k] = get_field(row, &key).and_then(value_to_f64).unwrap_or(0.0);
         }
-        let semidia = match get_field(row, "__cooptActualSemidia").or_else(|| get_field(row, "semidia")) {
-            Some(Value::String(s)) if s.trim().eq_ignore_ascii_case("auto") || s.trim().is_empty() => f64::INFINITY,
-            Some(v) => {
-                let n = value_to_f64(v).unwrap_or(f64::NAN);
-                if n.is_finite() && n > 0.0 { n } else { f64::INFINITY }
-            }
-            None => f64::INFINITY,
-        };
+        let semidia =
+            match get_field(row, "__cooptActualSemidia").or_else(|| get_field(row, "semidia")) {
+                Some(Value::String(s))
+                    if s.trim().eq_ignore_ascii_case("auto") || s.trim().is_empty() =>
+                {
+                    f64::INFINITY
+                }
+                Some(v) => {
+                    let n = value_to_f64(v).unwrap_or(f64::NAN);
+                    if n.is_finite() && n > 0.0 {
+                        n
+                    } else {
+                        f64::INFINITY
+                    }
+                }
+                None => f64::INFINITY,
+            };
         row_params[p + 12] = semidia;
-        row_params[p + 13] = get_field(row, "radiusX").and_then(value_to_f64).unwrap_or(f64::NAN);
-        row_params[p + 14] = get_field(row, "radiusY").and_then(value_to_f64).unwrap_or(f64::NAN);
+        row_params[p + 13] = get_field(row, "radiusX")
+            .and_then(value_to_f64)
+            .unwrap_or(f64::NAN);
+        row_params[p + 14] = get_field(row, "radiusY")
+            .and_then(value_to_f64)
+            .unwrap_or(f64::NAN);
         row_params[p + 15] = get_field(row, "axis").and_then(value_to_f64).unwrap_or(0.0);
         row_params[p + 16] = get_safe_thickness(row);
         let mut ap_lim = get_field(row, "aperture")
@@ -5704,16 +6411,32 @@ fn build_trace_packed_meta_for_wavelength(
                 0.0
             } else {
                 let n = get_correct_refractive_index(row, wavelength_um);
-                if n.is_finite() && n > 0.0 { n } else { 0.0 }
+                if n.is_finite() && n > 0.0 {
+                    n
+                } else {
+                    0.0
+                }
             }
         } else if kind == 2 {
-            let material = get_field(row, "material").and_then(value_to_string).unwrap_or_default();
+            let material = get_field(row, "material")
+                .and_then(value_to_string)
+                .unwrap_or_default();
             let n = parse_refractive_index_from_material(&material);
-            if n > 0.0 { n } else { 0.0 }
+            if n > 0.0 {
+                n
+            } else {
+                0.0
+            }
         } else if kind == 3 {
-            let material = get_field(row, "__cooptGapMaterial").and_then(value_to_string).unwrap_or_default();
+            let material = get_field(row, "__cooptGapMaterial")
+                .and_then(value_to_string)
+                .unwrap_or_default();
             let n = parse_refractive_index_from_material(&material);
-            if n > 0.0 { n } else { 0.0 }
+            if n > 0.0 {
+                n
+            } else {
+                0.0
+            }
         } else {
             0.0
         };
@@ -5814,7 +6537,8 @@ fn trace_distortion_chief_y_mm(
     let object_plane_z = packed.row_origins.get(2).copied().unwrap_or(0.0);
     let dir = build_direction_from_field_angles_native(0.0, field_value);
     let dummy_obj = Map::<String, Value>::new();
-    let object_z = resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
+    let object_z =
+        resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
 
     let trace_target_y = |origin: [f64; 3]| -> Option<f64> {
         let ray = [origin[0], origin[1], origin[2], dir[0], dir[1], dir[2]];
@@ -5867,8 +6591,12 @@ fn trace_distortion_chief_y_mm(
     candidate_origins.push([opt_xy[0], opt_xy[1], object_z + opt_sag]);
 
     // Candidate C: entrance-center estimate.
-    let entrance_origin = estimate_entrance_center_origin_native(rows, &packed.row_origins, stop_center, dir);
-    if entrance_origin[0].is_finite() && entrance_origin[1].is_finite() && entrance_origin[2].is_finite() {
+    let entrance_origin =
+        estimate_entrance_center_origin_native(rows, &packed.row_origins, stop_center, dir);
+    if entrance_origin[0].is_finite()
+        && entrance_origin[1].is_finite()
+        && entrance_origin[2].is_finite()
+    {
         candidate_origins.push(entrance_origin);
     }
 
@@ -5880,7 +6608,8 @@ fn trace_distortion_chief_y_mm(
             stop_surface_index,
             packed,
             n_start,
-        ).unwrap_or(initial_origin);
+        )
+        .unwrap_or(initial_origin);
 
         if let Some(y) = trace_target_y(refined_origin) {
             return Some(y);
@@ -5909,7 +6638,8 @@ fn trace_distortion_chief_y_mm(
             stop_surface_index,
             packed,
             n_start,
-        ).unwrap_or(grid_origin);
+        )
+        .unwrap_or(grid_origin);
         if let Some(y) = trace_target_y(refined_origin) {
             return Some(y);
         }
@@ -5968,7 +6698,12 @@ fn build_perpendicular_basis_native(dir: [f64; 3]) -> ([f64; 3], [f64; 3]) {
     (u, v)
 }
 
-fn resolve_infinite_object_z_native(rows: &[Value], obj: &Map<String, Value>, object_plane_z: f64, stop_center_z: f64) -> f64 {
+fn resolve_infinite_object_z_native(
+    rows: &[Value],
+    obj: &Map<String, Value>,
+    object_plane_z: f64,
+    stop_center_z: f64,
+) -> f64 {
     let render_dist_from_rows = rows
         .first()
         .and_then(|row| get_field(row, "objectRenderDistance"))
@@ -5978,8 +6713,11 @@ fn resolve_infinite_object_z_native(rows: &[Value], obj: &Map<String, Value>, ob
     let render_dist = if render_dist_from_rows.is_finite() && render_dist_from_rows.abs() > 1e-12 {
         render_dist_from_rows
     } else {
-        get_object_numeric(obj, &["objectRenderDistance", "renderDistance", "distance", "z"])
-            .unwrap_or(0.0)
+        get_object_numeric(
+            obj,
+            &["objectRenderDistance", "renderDistance", "distance", "z"],
+        )
+        .unwrap_or(0.0)
     };
 
     if render_dist.is_finite() && render_dist.abs() > 1e-12 {
@@ -5993,7 +6731,11 @@ fn resolve_infinite_object_z_native(rows: &[Value], obj: &Map<String, Value>, ob
             }
         }
 
-        let stop_z = if stop_center_z.is_finite() { stop_center_z.abs() } else { object_plane_z.abs() };
+        let stop_z = if stop_center_z.is_finite() {
+            stop_center_z.abs()
+        } else {
+            object_plane_z.abs()
+        };
 
         -100.0_f64.max(system_length * 2.0).max(stop_z + 100.0)
     }
@@ -6025,7 +6767,9 @@ fn compute_object_surface_sag_native(rows: &[Value], x: f64, y: f64) -> f64 {
         return 0.0;
     };
 
-    let conic = get_field(first, "conic").and_then(value_to_f64).unwrap_or(0.0);
+    let conic = get_field(first, "conic")
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
     let mut coefs = [0.0_f64; 10];
     for i in 0..10 {
         let key = format!("coef{}", i + 1);
@@ -6041,7 +6785,11 @@ fn compute_object_surface_sag_native(rows: &[Value], x: f64, y: f64) -> f64 {
 
     let r = (x * x + y * y).sqrt();
     let sag = aspheric_sag(r, radius, conic, &coefs, mode_odd);
-    if sag.is_finite() { sag } else { 0.0 }
+    if sag.is_finite() {
+        sag
+    } else {
+        0.0
+    }
 }
 
 fn optimize_angle_object_position_native(
@@ -6198,7 +6946,11 @@ where
             d = golden_ratio * e;
         }
 
-        let u = if d.abs() >= tol1 { x + d } else { x + if d > 0.0 { tol1 } else { -tol1 } };
+        let u = if d.abs() >= tol1 {
+            x + d
+        } else {
+            x + if d > 0.0 { tol1 } else { -tol1 }
+        };
         let fu = f(u);
 
         if fu <= fx {
@@ -6276,7 +7028,11 @@ fn search_entrance_origin_grid_brent_native(
         first_surface_z - 2000.0,
     ];
     plane_candidates.retain(|z| z.is_finite());
-    plane_candidates.sort_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    plane_candidates.sort_by(|a, b| {
+        a.abs()
+            .partial_cmp(&b.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     plane_candidates.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
 
     let safe_dir_z = if dir[2].abs() > 1e-12 {
@@ -6293,7 +7049,11 @@ fn search_entrance_origin_grid_brent_native(
         let ex = hit[0] - stop_center[0];
         let ey = hit[1] - stop_center[1];
         let err = (ex * ex + ey * ey).sqrt();
-        if err.is_finite() { Some(err) } else { None }
+        if err.is_finite() {
+            Some(err)
+        } else {
+            None
+        }
     };
 
     for plane_z in plane_candidates {
@@ -6389,7 +7149,14 @@ fn solve_ray_origin_to_stop_point_fast_native(
 
     for _ in 0..max_iter {
         let hit = trace_hit_xy_with_packed(
-            [origin[0], origin[1], origin[2], base_dir[0], base_dir[1], base_dir[2]],
+            [
+                origin[0],
+                origin[1],
+                origin[2],
+                base_dir[0],
+                base_dir[1],
+                base_dir[2],
+            ],
             stop_surface_index,
             n_start,
             packed,
@@ -6419,13 +7186,27 @@ fn solve_ray_origin_to_stop_point_fast_native(
         }
 
         let hit_x = trace_hit_xy_with_packed(
-            [origin[0] + eps, origin[1], origin[2], base_dir[0], base_dir[1], base_dir[2]],
+            [
+                origin[0] + eps,
+                origin[1],
+                origin[2],
+                base_dir[0],
+                base_dir[1],
+                base_dir[2],
+            ],
             stop_surface_index,
             n_start,
             packed,
         );
         let hit_y = trace_hit_xy_with_packed(
-            [origin[0], origin[1] + eps, origin[2], base_dir[0], base_dir[1], base_dir[2]],
+            [
+                origin[0],
+                origin[1] + eps,
+                origin[2],
+                base_dir[0],
+                base_dir[1],
+                base_dir[2],
+            ],
             stop_surface_index,
             n_start,
             packed,
@@ -6506,7 +7287,12 @@ fn solve_chief_ray_origin_by_newton2d_native(
     let tol = 1.0e-6;
 
     for _ in 0..40 {
-        let Some(hit0) = trace_hit_xy_with_packed([x, y, z, dir[0], dir[1], dir[2]], stop_surface_index, n_start, packed) else {
+        let Some(hit0) = trace_hit_xy_with_packed(
+            [x, y, z, dir[0], dir[1], dir[2]],
+            stop_surface_index,
+            n_start,
+            packed,
+        ) else {
             return None;
         };
 
@@ -6522,11 +7308,29 @@ fn solve_chief_ray_origin_by_newton2d_native(
         }
 
         let eps = (1.0e-3 * (1.0 + center_error)).max(1.0e-4);
-        let Some(hit_x) = trace_hit_xy_with_packed([x + eps, y, z, dir[0], dir[1], dir[2]], stop_surface_index, n_start, packed) else {
-            return if best_error < 1.0e-3 { Some(best) } else { None };
+        let Some(hit_x) = trace_hit_xy_with_packed(
+            [x + eps, y, z, dir[0], dir[1], dir[2]],
+            stop_surface_index,
+            n_start,
+            packed,
+        ) else {
+            return if best_error < 1.0e-3 {
+                Some(best)
+            } else {
+                None
+            };
         };
-        let Some(hit_y) = trace_hit_xy_with_packed([x, y + eps, z, dir[0], dir[1], dir[2]], stop_surface_index, n_start, packed) else {
-            return if best_error < 1.0e-3 { Some(best) } else { None };
+        let Some(hit_y) = trace_hit_xy_with_packed(
+            [x, y + eps, z, dir[0], dir[1], dir[2]],
+            stop_surface_index,
+            n_start,
+            packed,
+        ) else {
+            return if best_error < 1.0e-3 {
+                Some(best)
+            } else {
+                None
+            };
         };
 
         let j11 = (hit_x[0] - hit0[0]) / eps;
@@ -6542,7 +7346,11 @@ fn solve_chief_ray_origin_by_newton2d_native(
         };
 
         if !dx.is_finite() || !dy.is_finite() {
-            return if best_error < 1.0e-3 { Some(best) } else { None };
+            return if best_error < 1.0e-3 {
+                Some(best)
+            } else {
+                None
+            };
         }
 
         let max_step = 0.5_f64.max(dynamic_half_range * 0.05);
@@ -6558,7 +7366,12 @@ fn solve_chief_ray_origin_by_newton2d_native(
         for _ in 0..10 {
             let nx = x + alpha * dx;
             let ny = y + alpha * dy;
-            if let Some(next_hit) = trace_hit_xy_with_packed([nx, ny, z, dir[0], dir[1], dir[2]], stop_surface_index, n_start, packed) {
+            if let Some(next_hit) = trace_hit_xy_with_packed(
+                [nx, ny, z, dir[0], dir[1], dir[2]],
+                stop_surface_index,
+                n_start,
+                packed,
+            ) {
                 let ex = next_hit[0] - stop_target[0];
                 let ey = next_hit[1] - stop_target[1];
                 let next_error = (ex * ex + ey * ey).sqrt();
@@ -6573,7 +7386,11 @@ fn solve_chief_ray_origin_by_newton2d_native(
         }
 
         if !accepted {
-            return if best_error < 1.0e-3 { Some(best) } else { None };
+            return if best_error < 1.0e-3 {
+                Some(best)
+            } else {
+                None
+            };
         }
     }
 
@@ -6651,9 +7468,21 @@ fn solve_ray_direction_to_stop_point_fast_native(
     let z_sign = if dz0 >= 0.0 { 1.0 } else { -1.0 };
     let build_dir_from_slopes = |u: f64, v: f64| normalize3(u, v, z_sign);
 
-    let initial = normalize3(initial_direction[0], initial_direction[1], initial_direction[2]);
-    let mut u = if initial[2].abs() > 1e-9 { initial[0] / initial[2] } else { 0.0 };
-    let mut v = if initial[2].abs() > 1e-9 { initial[1] / initial[2] } else { 0.0 };
+    let initial = normalize3(
+        initial_direction[0],
+        initial_direction[1],
+        initial_direction[2],
+    );
+    let mut u = if initial[2].abs() > 1e-9 {
+        initial[0] / initial[2]
+    } else {
+        0.0
+    };
+    let mut v = if initial[2].abs() > 1e-9 {
+        initial[1] / initial[2]
+    } else {
+        0.0
+    };
     let slope_guess = (dx0 / dz0).abs().max((dy0 / dz0).abs()).max(0.0);
     let max_slope = 3.0_f64.max((slope_guess * 4.0 + 1.5).min(10.0));
     let tol_mm = 1e-3;
@@ -6668,7 +7497,14 @@ fn solve_ray_direction_to_stop_point_fast_native(
 
         let dir = build_dir_from_slopes(u, v);
         let hit = trace_hit_xy_with_packed(
-            [center_point[0], center_point[1], center_point[2], dir[0], dir[1], dir[2]],
+            [
+                center_point[0],
+                center_point[1],
+                center_point[2],
+                dir[0],
+                dir[1],
+                dir[2],
+            ],
             stop_surface_index,
             n_start,
             packed,
@@ -6696,13 +7532,27 @@ fn solve_ray_direction_to_stop_point_fast_native(
         let dir_u = build_dir_from_slopes(u + eps, v);
         let dir_v = build_dir_from_slopes(u, v + eps);
         let hit_u = trace_hit_xy_with_packed(
-            [center_point[0], center_point[1], center_point[2], dir_u[0], dir_u[1], dir_u[2]],
+            [
+                center_point[0],
+                center_point[1],
+                center_point[2],
+                dir_u[0],
+                dir_u[1],
+                dir_u[2],
+            ],
             stop_surface_index,
             n_start,
             packed,
         );
         let hit_v = trace_hit_xy_with_packed(
-            [center_point[0], center_point[1], center_point[2], dir_v[0], dir_v[1], dir_v[2]],
+            [
+                center_point[0],
+                center_point[1],
+                center_point[2],
+                dir_v[0],
+                dir_v[1],
+                dir_v[2],
+            ],
             stop_surface_index,
             n_start,
             packed,
@@ -6769,7 +7619,8 @@ fn find_infinite_system_chief_ray_origin_exact_native(
     );
     let object_plane_z = packed_stop.row_origins.get(2).copied().unwrap_or(0.0);
     let dummy_obj = Map::<String, Value>::new();
-    let object_z = resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
+    let object_z =
+        resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
     let safe_k = if direction[2].abs() > 1e-12 {
         direction[2]
     } else if direction[2].is_sign_negative() {
@@ -6785,13 +7636,21 @@ fn find_infinite_system_chief_ray_origin_exact_native(
         guess_y,
         object_z + compute_object_surface_sag_native(rows, guess_x, guess_y),
     ];
-    let angle_x_deg = direction[0].atan2(direction[2].abs().max(1e-12)) * 180.0 / std::f64::consts::PI;
-    let angle_y_deg = direction[1].atan2(direction[2].abs().max(1e-12)) * 180.0 / std::f64::consts::PI;
+    let angle_x_deg =
+        direction[0].atan2(direction[2].abs().max(1e-12)) * 180.0 / std::f64::consts::PI;
+    let angle_y_deg =
+        direction[1].atan2(direction[2].abs().max(1e-12)) * 180.0 / std::f64::consts::PI;
     let stop_radius_guess = estimate_stop_radius_from_row(&rows[stop_surface_index]).max(10.0);
     let guess_abs = guess_x.abs().max(guess_y.abs());
     let dynamic_half_range = 50.0_f64.max(guess_abs + 2.0 * stop_radius_guess + 10.0);
-    let optimized_xy = optimize_angle_object_position_native(angle_x_deg, angle_y_deg, stop_center, object_z);
-    let entrance_origin = estimate_entrance_center_origin_native(rows, &packed_stop.row_origins, stop_center, direction);
+    let optimized_xy =
+        optimize_angle_object_position_native(angle_x_deg, angle_y_deg, stop_center, object_z);
+    let entrance_origin = estimate_entrance_center_origin_native(
+        rows,
+        &packed_stop.row_origins,
+        stop_center,
+        direction,
+    );
     let nearby_seed = get_nearby_chief_ray_origin_seed_native(&family_key, direction);
     let mut candidate_origins = Vec::with_capacity(4);
     if let Some(seed) = nearby_seed {
@@ -6814,7 +7673,10 @@ fn find_infinite_system_chief_ray_origin_exact_native(
     let mut batch_count = 0usize;
 
     for &candidate_origin in &candidate_origins {
-        if !candidate_origin[0].is_finite() || !candidate_origin[1].is_finite() || !candidate_origin[2].is_finite() {
+        if !candidate_origin[0].is_finite()
+            || !candidate_origin[1].is_finite()
+            || !candidate_origin[2].is_finite()
+        {
             continue;
         }
         batch_initial_origins.extend_from_slice(&candidate_origin);
@@ -6852,8 +7714,12 @@ fn find_infinite_system_chief_ray_origin_exact_native(
             let solved_origin = [solved_batch[b], solved_batch[b + 1], solved_batch[b + 2]];
             let Some(hit_xy) = trace_hit_xy_with_packed(
                 [
-                    solved_origin[0], solved_origin[1], solved_origin[2],
-                    direction[0], direction[1], direction[2],
+                    solved_origin[0],
+                    solved_origin[1],
+                    solved_origin[2],
+                    direction[0],
+                    direction[1],
+                    direction[2],
                 ],
                 stop_surface_index,
                 n_start,
@@ -6861,7 +7727,9 @@ fn find_infinite_system_chief_ray_origin_exact_native(
             ) else {
                 continue;
             };
-            let error = ((hit_xy[0] - stop_center[0]).powi(2) + (hit_xy[1] - stop_center[1]).powi(2)).sqrt();
+            let error = ((hit_xy[0] - stop_center[0]).powi(2)
+                + (hit_xy[1] - stop_center[1]).powi(2))
+            .sqrt();
             if error < best_error {
                 best_error = error;
                 best_origin = Some(solved_origin);
@@ -6917,14 +7785,19 @@ fn find_infinite_system_chief_ray_origin_exact_native(
             packed_stop,
             n_start,
             dynamic_half_range,
-        ).or(Some(grid_origin)) {
+        )
+        .or(Some(grid_origin))
+        {
             store_chief_ray_origin_seed_native(&family_key, direction, refined_grid_origin);
             return Some(refined_grid_origin);
         }
     }
 
     for &candidate_origin in &candidate_origins {
-        if !candidate_origin[0].is_finite() || !candidate_origin[1].is_finite() || !candidate_origin[2].is_finite() {
+        if !candidate_origin[0].is_finite()
+            || !candidate_origin[1].is_finite()
+            || !candidate_origin[2].is_finite()
+        {
             continue;
         }
         let Some(refined_origin) = solve_ray_origin_to_stop_point_fast_native(
@@ -6940,8 +7813,12 @@ fn find_infinite_system_chief_ray_origin_exact_native(
 
         let Some(hit_xy) = trace_hit_xy_with_packed(
             [
-                refined_origin[0], refined_origin[1], refined_origin[2],
-                direction[0], direction[1], direction[2],
+                refined_origin[0],
+                refined_origin[1],
+                refined_origin[2],
+                direction[0],
+                direction[1],
+                direction[2],
             ],
             stop_surface_index,
             n_start,
@@ -6950,7 +7827,8 @@ fn find_infinite_system_chief_ray_origin_exact_native(
             continue;
         };
 
-        let error = ((hit_xy[0] - stop_center[0]).powi(2) + (hit_xy[1] - stop_center[1]).powi(2)).sqrt();
+        let error =
+            ((hit_xy[0] - stop_center[0]).powi(2) + (hit_xy[1] - stop_center[1]).powi(2)).sqrt();
         if error < best_error {
             best_error = error;
             best_origin = Some(refined_origin);
@@ -7001,7 +7879,8 @@ fn trace_image_height_infinite_candidate_local_exact_native(
         packed_stop,
         n_start,
         nominal_direction,
-    ).unwrap_or(nominal_direction);
+    )
+    .unwrap_or(nominal_direction);
 
     let mut trace_origin = find_infinite_system_chief_ray_origin_exact_native(
         rows,
@@ -7011,7 +7890,8 @@ fn trace_image_height_infinite_candidate_local_exact_native(
         stop_surface_index,
         stop_center,
         refined_direction,
-    ).unwrap_or(origin);
+    )
+    .unwrap_or(origin);
 
     if let Some(polished_origin) = solve_ray_origin_to_stop_point_fast_native(
         trace_origin,
@@ -7026,8 +7906,12 @@ fn trace_image_height_infinite_candidate_local_exact_native(
 
     trace_surface_local_with_packed(
         [
-            trace_origin[0], trace_origin[1], trace_origin[2],
-            refined_direction[0], refined_direction[1], refined_direction[2],
+            trace_origin[0],
+            trace_origin[1],
+            trace_origin[2],
+            refined_direction[0],
+            refined_direction[1],
+            refined_direction[2],
         ],
         target_surface_index,
         n_start,
@@ -7065,7 +7949,8 @@ fn trace_image_height_infinite_chief_ray_exact_native(
         packed_stop,
         n_start,
         nominal_direction,
-    ).unwrap_or(nominal_direction);
+    )
+    .unwrap_or(nominal_direction);
 
     let mut trace_origin = find_infinite_system_chief_ray_origin_exact_native(
         rows,
@@ -7075,7 +7960,8 @@ fn trace_image_height_infinite_chief_ray_exact_native(
         stop_surface_index,
         stop_center,
         refined_direction,
-    ).unwrap_or(origin);
+    )
+    .unwrap_or(origin);
 
     if let Some(polished_origin) = solve_ray_origin_to_stop_point_fast_native(
         trace_origin,
@@ -7090,8 +7976,12 @@ fn trace_image_height_infinite_chief_ray_exact_native(
 
     let local_hit = trace_surface_local_with_packed(
         [
-            trace_origin[0], trace_origin[1], trace_origin[2],
-            refined_direction[0], refined_direction[1], refined_direction[2],
+            trace_origin[0],
+            trace_origin[1],
+            trace_origin[2],
+            refined_direction[0],
+            refined_direction[1],
+            refined_direction[2],
         ],
         target_surface_index,
         n_start,
@@ -7114,21 +8004,31 @@ fn trace_image_height_infinite_candidate_local_native(
 ) -> Option<[f64; 3]> {
     let object_plane_z = packed_target.row_origins.get(2).copied().unwrap_or(0.0);
     let dummy_obj = Map::<String, Value>::new();
-    let object_z = resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
+    let object_z =
+        resolve_infinite_object_z_native(rows, &dummy_obj, object_plane_z, stop_center[2]);
     let direction = build_direction_from_field_angles_native(angle_x_deg, angle_y_deg);
 
     let nominal_x = angle_x_deg.to_radians().tan();
     let nominal_y = angle_y_deg.to_radians().tan();
     let nominal_sag = compute_object_surface_sag_native(rows, nominal_x, nominal_y);
-    let optimized_xy = optimize_angle_object_position_native(angle_x_deg, angle_y_deg, stop_center, object_z);
+    let optimized_xy =
+        optimize_angle_object_position_native(angle_x_deg, angle_y_deg, stop_center, object_z);
     let optimized_sag = compute_object_surface_sag_native(rows, optimized_xy[0], optimized_xy[1]);
-    let entrance_origin = estimate_entrance_center_origin_native(rows, &packed_target.row_origins, stop_center, direction);
+    let entrance_origin = estimate_entrance_center_origin_native(
+        rows,
+        &packed_target.row_origins,
+        stop_center,
+        direction,
+    );
 
     let mut candidate_origins = vec![
         [nominal_x, nominal_y, object_z + nominal_sag],
         [optimized_xy[0], optimized_xy[1], object_z + optimized_sag],
     ];
-    if entrance_origin[0].is_finite() && entrance_origin[1].is_finite() && entrance_origin[2].is_finite() {
+    if entrance_origin[0].is_finite()
+        && entrance_origin[1].is_finite()
+        && entrance_origin[2].is_finite()
+    {
         candidate_origins.push(entrance_origin);
     }
 
@@ -7156,8 +8056,12 @@ fn trace_image_height_infinite_candidate_local_native(
 
         if let Some(local_hit) = trace_surface_local_with_packed(
             [
-                refined_origin[0], refined_origin[1], refined_origin[2],
-                refined_direction[0], refined_direction[1], refined_direction[2],
+                refined_origin[0],
+                refined_origin[1],
+                refined_origin[2],
+                refined_direction[0],
+                refined_direction[1],
+                refined_direction[2],
             ],
             target_surface_index,
             n_start,
@@ -7165,7 +8069,6 @@ fn trace_image_height_infinite_candidate_local_native(
         ) {
             return Some(local_hit);
         }
-
     }
 
     let entrance_radius = estimate_entrance_radius_from_rows(rows).clamp(0.01, 500.0);
@@ -7202,8 +8105,12 @@ fn trace_image_height_infinite_candidate_local_native(
 
         if let Some(local_hit) = trace_surface_local_with_packed(
             [
-                refined_origin[0], refined_origin[1], refined_origin[2],
-                refined_direction[0], refined_direction[1], refined_direction[2],
+                refined_origin[0],
+                refined_origin[1],
+                refined_origin[2],
+                refined_direction[0],
+                refined_direction[1],
+                refined_direction[2],
             ],
             target_surface_index,
             n_start,
@@ -7246,8 +8153,12 @@ fn trace_image_height_finite_candidate_local_native(
 
     trace_surface_local_with_packed(
         [
-            object_point[0], object_point[1], object_point[2],
-            direction[0], direction[1], direction[2],
+            object_point[0],
+            object_point[1],
+            object_point[2],
+            direction[0],
+            direction[1],
+            direction[2],
         ],
         target_surface_index,
         n_start,
@@ -7266,13 +8177,21 @@ fn solve_image_height_component_native<F>(
 where
     F: FnMut(f64) -> Option<[f64; 3]>,
 {
-    let target = if target_value.is_finite() { target_value } else { 0.0 };
+    let target = if target_value.is_finite() {
+        target_value
+    } else {
+        0.0
+    };
     if target.abs() < 1e-12 {
         let hit = evaluate_candidate(0.0)?;
         return Some((0.0, hit));
     }
 
-    let finite_initial = if initial_guess.is_finite() { initial_guess } else { 0.0 };
+    let finite_initial = if initial_guess.is_finite() {
+        initial_guess
+    } else {
+        0.0
+    };
     let mut best_candidate = finite_initial;
     let mut best_hit: Option<[f64; 3]> = None;
     let mut best_error = f64::INFINITY;
@@ -7303,12 +8222,17 @@ where
     let base_step = if initial_step.is_finite() && initial_step > 0.0 {
         initial_step
     } else {
-        (finite_initial.abs() * 0.05).max(target.abs() * 0.02).max(0.1)
+        (finite_initial.abs() * 0.05)
+            .max(target.abs() * 0.02)
+            .max(0.1)
     };
     let max_step_value = if max_step.is_finite() && max_step > base_step {
         max_step
     } else {
-        (base_step * 32.0).max(finite_initial.abs() * 2.0).max(target.abs() * 0.5).max(1.0)
+        (base_step * 32.0)
+            .max(finite_initial.abs() * 2.0)
+            .max(target.abs() * 0.5)
+            .max(1.0)
     };
 
     let mut bracket_low: Option<(f64, f64, [f64; 3])> = None;
@@ -7453,12 +8377,32 @@ where
         error: f64,
     }
 
-    let mut x = if initial_x.is_finite() { initial_x } else { 0.0 };
-    let mut y = if initial_y.is_finite() { initial_y } else { 0.0 };
-    let tol = if tolerance.is_finite() { tolerance.max(1e-8) } else { 1e-6 };
+    let mut x = if initial_x.is_finite() {
+        initial_x
+    } else {
+        0.0
+    };
+    let mut y = if initial_y.is_finite() {
+        initial_y
+    } else {
+        0.0
+    };
+    let tol = if tolerance.is_finite() {
+        tolerance.max(1e-8)
+    } else {
+        1e-6
+    };
     let max_iters = max_iterations.max(1);
-    let base_finite_diff_step = if finite_diff_step.is_finite() { finite_diff_step.max(1e-8) } else { 1e-4 };
-    let max_step_norm = if max_step.is_finite() { max_step.max(1e-6) } else { 0.25 };
+    let base_finite_diff_step = if finite_diff_step.is_finite() {
+        finite_diff_step.max(1e-8)
+    } else {
+        1e-4
+    };
+    let max_step_norm = if max_step.is_finite() {
+        max_step.max(1e-6)
+    } else {
+        0.25
+    };
     let target_x_value = if target_x.is_finite() { target_x } else { 0.0 };
     let target_y_value = if target_y.is_finite() { target_y } else { 0.0 };
     let mut best: Option<PairSample> = None;
@@ -7481,7 +8425,10 @@ where
             err_y,
             error,
         };
-        if best.map(|current| sample.error < current.error).unwrap_or(true) {
+        if best
+            .map(|current| sample.error < current.error)
+            .unwrap_or(true)
+        {
             best = Some(sample);
         }
         Some(sample)
@@ -7569,28 +8516,52 @@ where
     F: FnMut(f64, f64) -> Option<[f64; 3]>,
 {
     let is_infinite = conjugate_mode == 0;
-    let mut solved_x = if initial_x.is_finite() { initial_x } else { 0.0 };
-    let mut solved_y = if initial_y.is_finite() { initial_y } else { 0.0 };
+    let mut solved_x = if initial_x.is_finite() {
+        initial_x
+    } else {
+        0.0
+    };
+    let mut solved_y = if initial_y.is_finite() {
+        initial_y
+    } else {
+        0.0
+    };
 
     let initial_step_x = if is_infinite {
-        0.05_f64.max(initial_x.abs() * 0.05).max(target_x.abs() * 0.005)
+        0.05_f64
+            .max(initial_x.abs() * 0.05)
+            .max(target_x.abs() * 0.005)
     } else {
-        0.01_f64.max(initial_x.abs() * 0.05).max(target_x.abs() * 0.01)
+        0.01_f64
+            .max(initial_x.abs() * 0.05)
+            .max(target_x.abs() * 0.01)
     };
     let max_step_x = if is_infinite {
-        2.0_f64.max(initial_x.abs() * 0.5).max(target_x.abs() * 0.05)
+        2.0_f64
+            .max(initial_x.abs() * 0.5)
+            .max(target_x.abs() * 0.05)
     } else {
-        1.0_f64.max(initial_x.abs() * 0.5).max(target_x.abs() * 0.25)
+        1.0_f64
+            .max(initial_x.abs() * 0.5)
+            .max(target_x.abs() * 0.25)
     };
     let initial_step_y = if is_infinite {
-        0.05_f64.max(initial_y.abs() * 0.05).max(target_y.abs() * 0.005)
+        0.05_f64
+            .max(initial_y.abs() * 0.05)
+            .max(target_y.abs() * 0.005)
     } else {
-        0.01_f64.max(initial_y.abs() * 0.05).max(target_y.abs() * 0.01)
+        0.01_f64
+            .max(initial_y.abs() * 0.05)
+            .max(target_y.abs() * 0.01)
     };
     let max_step_y = if is_infinite {
-        2.0_f64.max(initial_y.abs() * 0.5).max(target_y.abs() * 0.05)
+        2.0_f64
+            .max(initial_y.abs() * 0.5)
+            .max(target_y.abs() * 0.05)
     } else {
-        1.0_f64.max(initial_y.abs() * 0.5).max(target_y.abs() * 0.25)
+        1.0_f64
+            .max(initial_y.abs() * 0.5)
+            .max(target_y.abs() * 0.25)
     };
 
     for iter in 0..4 {
@@ -7635,7 +8606,8 @@ where
         1e-4,
         0.1,
         evaluate_pair,
-    ).or_else(|| evaluate_pair(solved_x, solved_y).map(|hit| (solved_x, solved_y, hit)))
+    )
+    .or_else(|| evaluate_pair(solved_x, solved_y).map(|hit| (solved_x, solved_y, hit)))
 }
 
 #[wasm_bindgen]
@@ -7664,9 +8636,15 @@ pub fn solve_image_height_component_with_rows(
     let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
     let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
     let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
-    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
-    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
-    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 {
+        wavelength_um
+    } else {
+        0.5876
+    };
+    let (packed_stop, n_start) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
 
     let stop_base = stop_surface_index.saturating_mul(3);
     if stop_base + 2 >= packed_stop.row_origins.len() {
@@ -7693,8 +8671,16 @@ pub fn solve_image_height_component_with_rows(
         max_step,
         |candidate| {
             if use_infinite_mode {
-                let angle_x = if component == 0 { candidate } else { fixed_value };
-                let angle_y = if component == 1 { candidate } else { fixed_value };
+                let angle_x = if component == 0 {
+                    candidate
+                } else {
+                    fixed_value
+                };
+                let angle_y = if component == 1 {
+                    candidate
+                } else {
+                    fixed_value
+                };
                 trace_image_height_infinite_candidate_local_native(
                     &rows,
                     &packed_stop,
@@ -7707,8 +8693,16 @@ pub fn solve_image_height_component_with_rows(
                     angle_y,
                 )
             } else {
-                let object_x = if component == 0 { candidate } else { fixed_value };
-                let object_y = if component == 1 { candidate } else { fixed_value };
+                let object_x = if component == 0 {
+                    candidate
+                } else {
+                    fixed_value
+                };
+                let object_y = if component == 1 {
+                    candidate
+                } else {
+                    fixed_value
+                };
                 trace_image_height_finite_candidate_local_native(
                     &rows,
                     &packed_stop,
@@ -7760,9 +8754,15 @@ pub fn solve_image_height_pair_with_rows(
     let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
     let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
     let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
-    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
-    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
-    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 {
+        wavelength_um
+    } else {
+        0.5876
+    };
+    let (packed_stop, n_start) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
 
     let stop_base = stop_surface_index.saturating_mul(3);
     if stop_base + 2 >= packed_stop.row_origins.len() {
@@ -7853,9 +8853,15 @@ pub fn solve_image_height_pair_exact_with_rows(
     let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
     let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
     let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
-    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
-    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
-    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 {
+        wavelength_um
+    } else {
+        0.5876
+    };
+    let (packed_stop, n_start) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
 
     let stop_base = stop_surface_index.saturating_mul(3);
     if stop_base + 2 >= packed_stop.row_origins.len() {
@@ -7941,9 +8947,15 @@ pub fn trace_image_height_infinite_candidate_with_rows(
     let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
     let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
     let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
-    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
-    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
-    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 {
+        wavelength_um
+    } else {
+        0.5876
+    };
+    let (packed_stop, n_start) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
 
     let stop_base = stop_surface_index.saturating_mul(3);
     if stop_base + 2 >= packed_stop.row_origins.len() {
@@ -7998,9 +9010,15 @@ pub fn trace_image_height_infinite_candidate_exact_with_rows(
     let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
     let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
     let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
-    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
-    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
-    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 {
+        wavelength_um
+    } else {
+        0.5876
+    };
+    let (packed_stop, n_start) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
 
     let stop_base = stop_surface_index.saturating_mul(3);
     if stop_base + 2 >= packed_stop.row_origins.len() {
@@ -8056,9 +9074,15 @@ pub fn trace_image_height_infinite_chief_ray_exact_with_rows(
     let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
     let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
     let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
-    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
-    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
-    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 {
+        wavelength_um
+    } else {
+        0.5876
+    };
+    let (packed_stop, n_start) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
 
     let stop_base = stop_surface_index.saturating_mul(3);
     if stop_base + 2 >= packed_stop.row_origins.len() {
@@ -8118,9 +9142,15 @@ pub fn trace_image_height_finite_candidate_with_rows(
     let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
     let target_surface_index = image_surface_index.min(rows.len().saturating_sub(1));
     let stop_surface_index = find_stop_surface_index(&rows).min(rows.len().saturating_sub(1));
-    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 { wavelength_um } else { 0.5876 };
-    let (packed_stop, n_start) = build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
-    let (packed_target, _) = build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
+    let wavelength = if wavelength_um.is_finite() && wavelength_um > 0.0 {
+        wavelength_um
+    } else {
+        0.5876
+    };
+    let (packed_stop, n_start) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, stop_surface_index);
+    let (packed_target, _) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, target_surface_index);
 
     let stop_base = stop_surface_index.saturating_mul(3);
     if stop_base + 2 >= packed_stop.row_origins.len() {
@@ -8159,7 +9189,9 @@ fn run_native_opd_map_value_with_rows(
     normalized_optical_rows: Option<&[Value]>,
     shared_packed_meta: Option<&PackedMeta>,
 ) -> Result<Value, JsValue> {
-    let req_obj = req.as_object().ok_or_else(|| JsValue::from_str("request must be an object"))?;
+    let req_obj = req
+        .as_object()
+        .ok_or_else(|| JsValue::from_str("request must be an object"))?;
 
     let rows_owned;
     let rows: &[Value] = if let Some(rows) = normalized_optical_rows {
@@ -8176,7 +9208,10 @@ fn run_native_opd_map_value_with_rows(
         if rows_raw.is_empty() {
             return Err(JsValue::from_str("opticalSystemRows is empty"));
         }
-        rows_owned = rows_raw.iter().map(normalize_coord_trans_row).collect::<Vec<Value>>();
+        rows_owned = rows_raw
+            .iter()
+            .map(normalize_coord_trans_row)
+            .collect::<Vec<Value>>();
         &rows_owned
     };
 
@@ -8235,8 +9270,10 @@ fn run_native_opd_map_value_with_rows(
     };
     let exit_pupil_position_sign = reference_option("exitPupilPositionSign", "as-is");
     let exit_pupil_plane_definition = reference_option("exitPupilPlaneDefinition", "global-z");
-    let reference_sphere_wavelength_mode = reference_option("referenceSphereWavelengthMode", "primary-wavelength");
-    let primary_reference_wavelength = get_primary_wavelength_um_native(&source_rows_for_metrics, wavelength_um);
+    let reference_sphere_wavelength_mode =
+        reference_option("referenceSphereWavelengthMode", "primary-wavelength");
+    let primary_reference_wavelength =
+        get_primary_wavelength_um_native(&source_rows_for_metrics, wavelength_um);
     let reference_sphere_wavelength_used = if reference_sphere_wavelength_mode == "per-wavelength" {
         wavelength_um
     } else {
@@ -8268,38 +9305,46 @@ fn run_native_opd_map_value_with_rows(
     let reference_ray_pupil_coordinate = req_obj
         .get("referenceRayPupilCoordinate")
         .and_then(|value| value.as_object())
-        .and_then(|value| Some([
-            value.get("x").and_then(value_to_f64)?,
-            value.get("y").and_then(value_to_f64)?,
-        ]))
+        .and_then(|value| {
+            Some([
+                value.get("x").and_then(value_to_f64)?,
+                value.get("y").and_then(value_to_f64)?,
+            ])
+        })
         .filter(|coordinate| coordinate.iter().all(|value| value.is_finite()))
         .unwrap_or([0.0, 0.0]);
     let sample_ray_launch_origin = req_obj
         .get("sampleRayLaunchOrigin")
         .and_then(|value| value.as_object())
-        .and_then(|value| Some([
-            value.get("x").and_then(value_to_f64)?,
-            value.get("y").and_then(value_to_f64)?,
-            value.get("z").and_then(value_to_f64)?,
-        ]))
+        .and_then(|value| {
+            Some([
+                value.get("x").and_then(value_to_f64)?,
+                value.get("y").and_then(value_to_f64)?,
+                value.get("z").and_then(value_to_f64)?,
+            ])
+        })
         .filter(|origin| origin.iter().all(|value| value.is_finite()));
     let requested_chief_ray_launch_origin = req_obj
         .get("chiefRayLaunchOrigin")
         .and_then(|value| value.as_object())
-        .and_then(|value| Some([
-            value.get("x").and_then(value_to_f64)?,
-            value.get("y").and_then(value_to_f64)?,
-            value.get("z").and_then(value_to_f64)?,
-        ]))
+        .and_then(|value| {
+            Some([
+                value.get("x").and_then(value_to_f64)?,
+                value.get("y").and_then(value_to_f64)?,
+                value.get("z").and_then(value_to_f64)?,
+            ])
+        })
         .filter(|origin| origin.iter().all(|value| value.is_finite()));
     let requested_chief_ray_launch_direction = req_obj
         .get("chiefRayLaunchDirection")
         .and_then(|value| value.as_object())
-        .and_then(|value| Some(normalize3(
-            value.get("x").and_then(value_to_f64)?,
-            value.get("y").and_then(value_to_f64)?,
-            value.get("z").and_then(value_to_f64)?,
-        )))
+        .and_then(|value| {
+            Some(normalize3(
+                value.get("x").and_then(value_to_f64)?,
+                value.get("y").and_then(value_to_f64)?,
+                value.get("z").and_then(value_to_f64)?,
+            ))
+        })
         .filter(|direction| direction.iter().all(|value| value.is_finite()));
     let preserve_image_height_chief_ray = req_obj
         .get("preserveImageHeightChiefRay")
@@ -8397,17 +9442,15 @@ fn run_native_opd_map_value_with_rows(
     let packed_aim = if aim_pupil_samples_at_reference_wavelength
         && (primary_reference_wavelength - wavelength_um).abs() > 1.0e-12
     {
-        packed_reference_aim_owned = build_packed_meta_for_opd(
-            aim_rows,
-            primary_reference_wavelength,
-            stop_surface_index,
-        );
+        packed_reference_aim_owned =
+            build_packed_meta_for_opd(aim_rows, primary_reference_wavelength, stop_surface_index);
         &packed_reference_aim_owned
     } else {
         packed_stop
     };
     let aim_object_space_n = if aim_pupil_samples_at_reference_wavelength {
-        aim_rows.first()
+        aim_rows
+            .first()
             .map(|row| get_correct_refractive_index(row, primary_reference_wavelength))
             .filter(|index| index.is_finite() && *index > 0.0)
             .unwrap_or(object_space_n)
@@ -8462,13 +9505,36 @@ fn run_native_opd_map_value_with_rows(
         pos_lower.contains("angle") || pos_lower == "point"
     };
 
-    let angle_object_x = get_object_numeric(selected_object_map, &["xHeightAngle", "xFieldAngle", "xAngle", "x", "X", "xHeight"]).unwrap_or(0.0);
-    let angle_object_y = get_object_numeric(selected_object_map, &["yHeightAngle", "yFieldAngle", "fieldAngle", "yAngle", "angle", "y", "Y", "yHeight"]).unwrap_or(0.0);
-    let height_object_x = get_object_numeric(selected_object_map, &["xHeight", "x", "X"]).unwrap_or(0.0);
-    let height_object_y = get_object_numeric(selected_object_map, &["yHeight", "y", "Y", "height"]).unwrap_or(0.0);
+    let angle_object_x = get_object_numeric(
+        selected_object_map,
+        &["xHeightAngle", "xFieldAngle", "xAngle", "x", "X", "xHeight"],
+    )
+    .unwrap_or(0.0);
+    let angle_object_y = get_object_numeric(
+        selected_object_map,
+        &[
+            "yHeightAngle",
+            "yFieldAngle",
+            "fieldAngle",
+            "yAngle",
+            "angle",
+            "y",
+            "Y",
+            "yHeight",
+        ],
+    )
+    .unwrap_or(0.0);
+    let height_object_x =
+        get_object_numeric(selected_object_map, &["xHeight", "x", "X"]).unwrap_or(0.0);
+    let height_object_y =
+        get_object_numeric(selected_object_map, &["yHeight", "y", "Y", "height"]).unwrap_or(0.0);
 
     let (used_object_x, used_object_y) = if use_infinite_mode {
-        if is_angle_object { (angle_object_x, angle_object_y) } else { (0.0, 0.0) }
+        if is_angle_object {
+            (angle_object_x, angle_object_y)
+        } else {
+            (0.0, 0.0)
+        }
     } else {
         (height_object_x, height_object_y)
     };
@@ -8500,7 +9566,11 @@ fn run_native_opd_map_value_with_rows(
     let sampling_radius = stop_radius.min(entrance_radius).max(0.01);
 
     let finite_object_distance = {
-        let t0 = rows.first().map(get_safe_thickness).unwrap_or(f64::NAN).abs();
+        let t0 = rows
+            .first()
+            .map(get_safe_thickness)
+            .unwrap_or(f64::NAN)
+            .abs();
         if t0.is_finite() && t0 > 1e-9 {
             t0
         } else {
@@ -8509,7 +9579,11 @@ fn run_native_opd_map_value_with_rows(
                 z0.max(1.0)
             } else {
                 let stop_z = stop_center[2].abs();
-                if stop_z.is_finite() { (stop_z + 25.0).max(25.0) } else { 100.0 }
+                if stop_z.is_finite() {
+                    (stop_z + 25.0).max(25.0)
+                } else {
+                    100.0
+                }
             }
         }
     };
@@ -8519,9 +9593,13 @@ fn run_native_opd_map_value_with_rows(
         .and_then(value_to_string)
         .map(|s| s.trim().to_ascii_lowercase())
         .filter(|s| s == "stop" || s == "entrance");
-    let prefer_entrance_sampling = use_infinite_mode
-        && matches!(requested_pupil_sampling_mode.as_deref(), Some("entrance"));
-    let mut effective_pupil_sampling_mode = if prefer_entrance_sampling { "entrance" } else { "stop" };
+    let prefer_entrance_sampling =
+        use_infinite_mode && matches!(requested_pupil_sampling_mode.as_deref(), Some("entrance"));
+    let mut effective_pupil_sampling_mode = if prefer_entrance_sampling {
+        "entrance"
+    } else {
+        "stop"
+    };
 
     let image_height_chief_ray = selected_object_map
         .get("__cooptImageHeightSolve")
@@ -8562,7 +9640,14 @@ fn run_native_opd_map_value_with_rows(
             let x = hit.get("x").and_then(value_to_f64)?;
             let y = hit.get("y").and_then(value_to_f64)?;
             if x.is_finite() && y.is_finite() {
-                Some([x, y, hit.get("z").and_then(value_to_f64).filter(|z| z.is_finite()).unwrap_or(0.0)])
+                Some([
+                    x,
+                    y,
+                    hit.get("z")
+                        .and_then(value_to_f64)
+                        .filter(|z| z.is_finite())
+                        .unwrap_or(0.0),
+                ])
             } else {
                 None
             }
@@ -8591,11 +9676,17 @@ fn run_native_opd_map_value_with_rows(
             req_obj
                 .get("referenceOpticalSystemRows")
                 .and_then(Value::as_array)
-                .map(|reference_rows| reference_rows.iter().map(normalize_coord_trans_row).collect::<Vec<Value>>())
+                .map(|reference_rows| {
+                    reference_rows
+                        .iter()
+                        .map(normalize_coord_trans_row)
+                        .collect::<Vec<Value>>()
+                })
                 .filter(|reference_rows| !reference_rows.is_empty())
         };
         let solve_rows = solve_rows_owned.as_deref().unwrap_or(rows);
-        let solve_packed = build_packed_meta_for_opd(solve_rows, solve_wavelength_um, target_surface_index);
+        let solve_packed =
+            build_packed_meta_for_opd(solve_rows, solve_wavelength_um, target_surface_index);
         let solve_stop_center = [
             solve_packed.row_origins[stop_surface_index * 3],
             solve_packed.row_origins[stop_surface_index * 3 + 1],
@@ -8625,31 +9716,35 @@ fn run_native_opd_map_value_with_rows(
                 initial_x,
                 initial_y,
                 0,
-                &mut |candidate_x, candidate_y| trace_image_height_infinite_candidate_local_exact_native(
-                    solve_rows,
-                    &solve_packed,
-                    &solve_packed,
-                    solve_object_space_n,
-                    solve_wavelength_um,
-                    stop_surface_index,
-                    target_surface_index,
-                    solve_stop_center,
-                    candidate_x,
-                    candidate_y,
-                ),
+                &mut |candidate_x, candidate_y| {
+                    trace_image_height_infinite_candidate_local_exact_native(
+                        solve_rows,
+                        &solve_packed,
+                        &solve_packed,
+                        solve_object_space_n,
+                        solve_wavelength_um,
+                        stop_surface_index,
+                        target_surface_index,
+                        solve_stop_center,
+                        candidate_x,
+                        candidate_y,
+                    )
+                },
             ) {
-                if let Some((origin, direction, _)) = trace_image_height_infinite_chief_ray_exact_native(
-                    solve_rows,
-                    &solve_packed,
-                    &solve_packed,
-                    solve_object_space_n,
-                    solve_wavelength_um,
-                    stop_surface_index,
-                    target_surface_index,
-                    solve_stop_center,
-                    solved_x,
-                    solved_y,
-                ) {
+                if let Some((origin, direction, _)) =
+                    trace_image_height_infinite_chief_ray_exact_native(
+                        solve_rows,
+                        &solve_packed,
+                        &solve_packed,
+                        solve_object_space_n,
+                        solve_wavelength_um,
+                        stop_surface_index,
+                        target_surface_index,
+                        solve_stop_center,
+                        solved_x,
+                        solved_y,
+                    )
+                {
                     image_height_chief_origin = Some(origin);
                     image_height_chief_dir = Some(direction);
                     image_height_runtime_solved_angle = Some([solved_x, solved_y, 0.0]);
@@ -8663,14 +9758,20 @@ fn run_native_opd_map_value_with_rows(
         && has_image_height_chief_override;
 
     let object_plane_z = packed_meta.row_origins.get(2).copied().unwrap_or(0.0);
-    let mut infinite_direction = build_direction_from_field_angles_native(used_object_x, used_object_y);
+    let mut infinite_direction =
+        build_direction_from_field_angles_native(used_object_x, used_object_y);
     if let Some(dir) = image_height_chief_dir {
         if has_image_height_chief_override {
             infinite_direction = dir;
         }
     }
     let (infinite_u_axis, infinite_v_axis) = build_perpendicular_basis_native(infinite_direction);
-    let mut infinite_object_z = resolve_infinite_object_z_native(&rows, selected_object_map, object_plane_z, stop_center[2]);
+    let mut infinite_object_z = resolve_infinite_object_z_native(
+        &rows,
+        selected_object_map,
+        object_plane_z,
+        stop_center[2],
+    );
     if let Some(origin) = image_height_chief_origin {
         if has_image_height_chief_override {
             infinite_object_z = origin[2];
@@ -8682,12 +9783,23 @@ fn run_native_opd_map_value_with_rows(
         if has_image_height_chief_override {
             [origin[0], origin[1]]
         } else {
-            optimize_angle_object_position_native(used_object_x, used_object_y, stop_center, infinite_object_z)
+            optimize_angle_object_position_native(
+                used_object_x,
+                used_object_y,
+                stop_center,
+                infinite_object_z,
+            )
         }
     } else {
-        optimize_angle_object_position_native(used_object_x, used_object_y, stop_center, infinite_object_z)
+        optimize_angle_object_position_native(
+            used_object_x,
+            used_object_y,
+            stop_center,
+            infinite_object_z,
+        )
     };
-    let infinite_origin_sag = compute_object_surface_sag_native(&rows, infinite_origin_xy[0], infinite_origin_xy[1]);
+    let infinite_origin_sag =
+        compute_object_surface_sag_native(&rows, infinite_origin_xy[0], infinite_origin_xy[1]);
     let mut infinite_emission_origin = if let Some(origin) = image_height_chief_origin {
         if has_image_height_chief_override {
             origin
@@ -8775,165 +9887,183 @@ fn run_native_opd_map_value_with_rows(
         packed_meta.row_inv_rots[stop_rot_base + 8],
     ];
 
-    let build_marginal_ray = |u: f64, v: f64, sample_radius: f64, launch_origin: [f64; 3]| -> Option<[f64; 6]> {
-        if !u.is_finite() || !v.is_finite() {
-            return None;
-        }
-        let target_radius = if aim_pupil_samples_to_stop {
-            stop_clear_radius.unwrap_or(sample_radius)
-        } else {
-            sample_radius
-        };
-        let desired_local_x = u * target_radius;
-        let desired_local_y = v * target_radius;
-        let stop_local_x = if aim_pupil_samples_to_stop {
-            desired_local_x * (
-                infinite_u_axis[0] * stop_plane_u[0]
-                    + infinite_u_axis[1] * stop_plane_u[1]
-                    + infinite_u_axis[2] * stop_plane_u[2]
-            ).signum()
-        } else {
-            desired_local_x
-        };
-        let stop_local_y = if aim_pupil_samples_to_stop {
-            desired_local_y * (
-                infinite_v_axis[0] * stop_plane_v[0]
-                    + infinite_v_axis[1] * stop_plane_v[1]
-                    + infinite_v_axis[2] * stop_plane_v[2]
-            ).signum()
-        } else {
-            desired_local_y
-        };
-        let stop_target = [
-            stop_center_for_sampling[0] + stop_plane_u[0] * stop_local_x + stop_plane_v[0] * stop_local_y,
-            stop_center_for_sampling[1] + stop_plane_u[1] * stop_local_x + stop_plane_v[1] * stop_local_y,
-            stop_center_for_sampling[2] + stop_plane_u[2] * stop_local_x + stop_plane_v[2] * stop_local_y,
-        ];
-
-        if use_infinite_mode {
-            let start = [
-                launch_origin[0] + infinite_u_axis[0] * desired_local_x + infinite_v_axis[0] * desired_local_y,
-                launch_origin[1] + infinite_u_axis[1] * desired_local_x + infinite_v_axis[1] * desired_local_y,
-                launch_origin[2] + infinite_u_axis[2] * desired_local_x + infinite_v_axis[2] * desired_local_y,
+    let build_marginal_ray =
+        |u: f64, v: f64, sample_radius: f64, launch_origin: [f64; 3]| -> Option<[f64; 6]> {
+            if !u.is_finite() || !v.is_finite() {
+                return None;
+            }
+            let target_radius = if aim_pupil_samples_to_stop {
+                stop_clear_radius.unwrap_or(sample_radius)
+            } else {
+                sample_radius
+            };
+            let desired_local_x = u * target_radius;
+            let desired_local_y = v * target_radius;
+            let stop_local_x = if aim_pupil_samples_to_stop {
+                desired_local_x
+                    * (infinite_u_axis[0] * stop_plane_u[0]
+                        + infinite_u_axis[1] * stop_plane_u[1]
+                        + infinite_u_axis[2] * stop_plane_u[2])
+                        .signum()
+            } else {
+                desired_local_x
+            };
+            let stop_local_y = if aim_pupil_samples_to_stop {
+                desired_local_y
+                    * (infinite_v_axis[0] * stop_plane_v[0]
+                        + infinite_v_axis[1] * stop_plane_v[1]
+                        + infinite_v_axis[2] * stop_plane_v[2])
+                        .signum()
+            } else {
+                desired_local_y
+            };
+            let stop_target = [
+                stop_center_for_sampling[0]
+                    + stop_plane_u[0] * stop_local_x
+                    + stop_plane_v[0] * stop_local_y,
+                stop_center_for_sampling[1]
+                    + stop_plane_u[1] * stop_local_x
+                    + stop_plane_v[1] * stop_local_y,
+                stop_center_for_sampling[2]
+                    + stop_plane_u[2] * stop_local_x
+                    + stop_plane_v[2] * stop_local_y,
             ];
-            let start = if aim_pupil_samples_to_stop {
-                let solved = solve_ray_origin_to_stop_point_fast_native(
-                    start,
-                    infinite_direction,
-                    stop_target,
-                    stop_surface_index,
-                    packed_aim,
-                    aim_object_space_n,
-                )?;
-                let plane_offset =
-                    (solved[0] - launch_origin[0]) * infinite_direction[0]
+
+            if use_infinite_mode {
+                let start = [
+                    launch_origin[0]
+                        + infinite_u_axis[0] * desired_local_x
+                        + infinite_v_axis[0] * desired_local_y,
+                    launch_origin[1]
+                        + infinite_u_axis[1] * desired_local_x
+                        + infinite_v_axis[1] * desired_local_y,
+                    launch_origin[2]
+                        + infinite_u_axis[2] * desired_local_x
+                        + infinite_v_axis[2] * desired_local_y,
+                ];
+                let start = if aim_pupil_samples_to_stop {
+                    let solved = solve_ray_origin_to_stop_point_fast_native(
+                        start,
+                        infinite_direction,
+                        stop_target,
+                        stop_surface_index,
+                        packed_aim,
+                        aim_object_space_n,
+                    )?;
+                    let plane_offset = (solved[0] - launch_origin[0]) * infinite_direction[0]
                         + (solved[1] - launch_origin[1]) * infinite_direction[1]
                         + (solved[2] - launch_origin[2]) * infinite_direction[2];
-                [
-                    solved[0] - plane_offset * infinite_direction[0],
-                    solved[1] - plane_offset * infinite_direction[1],
-                    solved[2] - plane_offset * infinite_direction[2],
-                ]
-            } else {
-                start
-            };
-            return Some([
-                start[0],
-                start[1],
-                start[2],
-                infinite_direction[0],
-                infinite_direction[1],
-                infinite_direction[2],
-            ]);
-        }
+                    [
+                        solved[0] - plane_offset * infinite_direction[0],
+                        solved[1] - plane_offset * infinite_direction[1],
+                        solved[2] - plane_offset * infinite_direction[2],
+                    ]
+                } else {
+                    start
+                };
+                return Some([
+                    start[0],
+                    start[1],
+                    start[2],
+                    infinite_direction[0],
+                    infinite_direction[1],
+                    infinite_direction[2],
+                ]);
+            }
 
-        let object_pos = [used_object_x, used_object_y, -finite_object_distance];
-        let mut aimed_stop = stop_target;
-        let mut ray_dir = normalize3(
-            aimed_stop[0] - object_pos[0],
-            aimed_stop[1] - object_pos[1],
-            aimed_stop[2] - object_pos[2],
-        );
-        if !ray_dir[0].is_finite() || !ray_dir[1].is_finite() || !ray_dir[2].is_finite() {
-            return None;
-        }
+            let object_pos = [used_object_x, used_object_y, -finite_object_distance];
+            let mut aimed_stop = stop_target;
+            let mut ray_dir = normalize3(
+                aimed_stop[0] - object_pos[0],
+                aimed_stop[1] - object_pos[1],
+                aimed_stop[2] - object_pos[2],
+            );
+            if !ray_dir[0].is_finite() || !ray_dir[1].is_finite() || !ray_dir[2].is_finite() {
+                return None;
+            }
 
-        let stop_tol = 0.03;
-        let max_stop_iters = 8;
-        let gain = 0.7;
-        let max_step = (sample_radius * 0.12).max(0.5);
+            let stop_tol = 0.03;
+            let max_stop_iters = 8;
+            let gain = 0.7;
+            let max_step = (sample_radius * 0.12).max(0.5);
 
-        for _ in 0..max_stop_iters {
-            let trial_ray = [
+            for _ in 0..max_stop_iters {
+                let trial_ray = [
+                    object_pos[0],
+                    object_pos[1],
+                    object_pos[2],
+                    ray_dir[0],
+                    ray_dir[1],
+                    ray_dir[2],
+                ];
+                let stop_hit = trace_single_ray_hit_point_with_meta_core(
+                    &trial_ray,
+                    stop_surface_index,
+                    object_space_n,
+                    &packed_stop.row_meta,
+                    &packed_stop.row_params,
+                    &packed_stop.row_origins,
+                    &packed_stop.row_inv_rots,
+                    &packed_stop.row_rots,
+                    packed_stop.row_count,
+                );
+                if (stop_hit[0] - 1.0).abs() > f64::EPSILON {
+                    break;
+                }
+
+                let rel = [
+                    stop_hit[2] - stop_center[0],
+                    stop_hit[3] - stop_center[1],
+                    stop_hit[4] - stop_center[2],
+                ];
+                let local = mul_mat3_vec3(&stop_inv, rel);
+                let err_lx = local[0] - desired_local_x;
+                let err_ly = local[1] - desired_local_y;
+                let err_mag = (err_lx * err_lx + err_ly * err_ly).sqrt();
+                if !err_mag.is_finite() || err_mag <= stop_tol {
+                    break;
+                }
+
+                let err_vec = [
+                    stop_plane_u[0] * err_lx + stop_plane_v[0] * err_ly,
+                    stop_plane_u[1] * err_lx + stop_plane_v[1] * err_ly,
+                    stop_plane_u[2] * err_lx + stop_plane_v[2] * err_ly,
+                ];
+                let step_mag =
+                    (err_vec[0] * err_vec[0] + err_vec[1] * err_vec[1] + err_vec[2] * err_vec[2])
+                        .sqrt();
+                let step_scale = if step_mag.is_finite() && step_mag > max_step {
+                    max_step / step_mag
+                } else {
+                    1.0
+                };
+                let step = [
+                    err_vec[0] * gain * step_scale,
+                    err_vec[1] * gain * step_scale,
+                    err_vec[2] * gain * step_scale,
+                ];
+
+                aimed_stop = [
+                    aimed_stop[0] - step[0],
+                    aimed_stop[1] - step[1],
+                    aimed_stop[2] - step[2],
+                ];
+                ray_dir = normalize3(
+                    aimed_stop[0] - object_pos[0],
+                    aimed_stop[1] - object_pos[1],
+                    aimed_stop[2] - object_pos[2],
+                );
+            }
+
+            Some([
                 object_pos[0],
                 object_pos[1],
                 object_pos[2],
                 ray_dir[0],
                 ray_dir[1],
                 ray_dir[2],
-            ];
-            let stop_hit = trace_single_ray_hit_point_with_meta_core(
-                &trial_ray,
-                stop_surface_index,
-                object_space_n,
-                &packed_stop.row_meta,
-                &packed_stop.row_params,
-                &packed_stop.row_origins,
-                &packed_stop.row_inv_rots,
-                &packed_stop.row_rots,
-                packed_stop.row_count,
-            );
-            if (stop_hit[0] - 1.0).abs() > f64::EPSILON {
-                break;
-            }
-
-            let rel = [
-                stop_hit[2] - stop_center[0],
-                stop_hit[3] - stop_center[1],
-                stop_hit[4] - stop_center[2],
-            ];
-            let local = mul_mat3_vec3(&stop_inv, rel);
-            let err_lx = local[0] - desired_local_x;
-            let err_ly = local[1] - desired_local_y;
-            let err_mag = (err_lx * err_lx + err_ly * err_ly).sqrt();
-            if !err_mag.is_finite() || err_mag <= stop_tol {
-                break;
-            }
-
-            let err_vec = [
-                stop_plane_u[0] * err_lx + stop_plane_v[0] * err_ly,
-                stop_plane_u[1] * err_lx + stop_plane_v[1] * err_ly,
-                stop_plane_u[2] * err_lx + stop_plane_v[2] * err_ly,
-            ];
-            let step_mag = (err_vec[0] * err_vec[0] + err_vec[1] * err_vec[1] + err_vec[2] * err_vec[2]).sqrt();
-            let step_scale = if step_mag.is_finite() && step_mag > max_step { max_step / step_mag } else { 1.0 };
-            let step = [
-                err_vec[0] * gain * step_scale,
-                err_vec[1] * gain * step_scale,
-                err_vec[2] * gain * step_scale,
-            ];
-
-            aimed_stop = [
-                aimed_stop[0] - step[0],
-                aimed_stop[1] - step[1],
-                aimed_stop[2] - step[2],
-            ];
-            ray_dir = normalize3(
-                aimed_stop[0] - object_pos[0],
-                aimed_stop[1] - object_pos[1],
-                aimed_stop[2] - object_pos[2],
-            );
-        }
-
-        Some([
-            object_pos[0],
-            object_pos[1],
-            object_pos[2],
-            ray_dir[0],
-            ray_dir[1],
-            ray_dir[2],
-        ])
-    };
+            ])
+        };
 
     let estimate_effective_entrance_radius = |center_origin: [f64; 3], max_radius: f64| -> f64 {
         if !use_infinite_mode || !max_radius.is_finite() || max_radius <= 1.0e-9 {
@@ -8996,9 +10126,17 @@ fn run_native_opd_map_value_with_rows(
         }
 
         let r_pos_u = find_max_along(infinite_u_axis);
-        let r_neg_u = find_max_along([-infinite_u_axis[0], -infinite_u_axis[1], -infinite_u_axis[2]]);
+        let r_neg_u = find_max_along([
+            -infinite_u_axis[0],
+            -infinite_u_axis[1],
+            -infinite_u_axis[2],
+        ]);
         let r_pos_v = find_max_along(infinite_v_axis);
-        let r_neg_v = find_max_along([-infinite_v_axis[0], -infinite_v_axis[1], -infinite_v_axis[2]]);
+        let r_neg_v = find_max_along([
+            -infinite_v_axis[0],
+            -infinite_v_axis[1],
+            -infinite_v_axis[2],
+        ]);
         let r_min = r_pos_u.min(r_neg_u).min(r_pos_v).min(r_neg_v);
         let r_max = r_pos_u.max(r_neg_u).max(r_pos_v).max(r_neg_v);
         let eps = 1.0e-9;
@@ -9014,8 +10152,8 @@ fn run_native_opd_map_value_with_rows(
     let use_real_entrance_pupil_chief = use_infinite_mode
         && requested_chief_ray_mode == "entrance-pupil-center"
         && requested_entrance_pupil_position.is_some();
-    let use_transmitted_pupil_chief = use_infinite_mode
-        && requested_chief_ray_mode == "transmitted-pupil-center";
+    let use_transmitted_pupil_chief =
+        use_infinite_mode && requested_chief_ray_mode == "transmitted-pupil-center";
     if use_real_entrance_pupil_chief {
         // The real entrance-pupil center is the back-projection of the chief ray
         // through the stop center, not the geometric center of the entrance plane.
@@ -9032,8 +10170,13 @@ fn run_native_opd_map_value_with_rows(
         }
     }
 
-    let mut chief_start_dir = build_marginal_ray(reference_ray_pupil_coordinate[0], reference_ray_pupil_coordinate[1], sampling_radius, effective_emission_origin)
-        .ok_or_else(|| JsValue::from_str("run_native_opd_map_wasm_json: chief ray not found"))?;
+    let mut chief_start_dir = build_marginal_ray(
+        reference_ray_pupil_coordinate[0],
+        reference_ray_pupil_coordinate[1],
+        sampling_radius,
+        effective_emission_origin,
+    )
+    .ok_or_else(|| JsValue::from_str("run_native_opd_map_wasm_json: chief ray not found"))?;
     let mut chief_reference_mode = if use_real_entrance_pupil_chief {
         "entrance-pupil-center-chief".to_string()
     } else {
@@ -9058,8 +10201,12 @@ fn run_native_opd_map_value_with_rows(
             requested_chief_ray_launch_direction,
         ) {
             let requested_chief_ray = [
-                origin[0], origin[1], origin[2],
-                direction[0], direction[1], direction[2],
+                origin[0],
+                origin[1],
+                origin[2],
+                direction[0],
+                direction[1],
+                direction[2],
             ];
             let requested_target_hit = trace_single_ray_hit_point_with_meta_core(
                 &requested_chief_ray,
@@ -9083,18 +10230,20 @@ fn run_native_opd_map_value_with_rows(
     }
 
     if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON && use_infinite_mode {
-        if let Some((exact_origin, exact_direction, _)) = trace_image_height_infinite_chief_ray_exact_native(
-            &rows,
-            &packed_stop,
-            &packed_target,
-            object_space_n,
-            wavelength_um,
-            stop_surface_index,
-            target_surface_index,
-            stop_center_for_sampling,
-            used_object_x,
-            used_object_y,
-        ) {
+        if let Some((exact_origin, exact_direction, _)) =
+            trace_image_height_infinite_chief_ray_exact_native(
+                &rows,
+                &packed_stop,
+                &packed_target,
+                object_space_n,
+                wavelength_um,
+                stop_surface_index,
+                target_surface_index,
+                stop_center_for_sampling,
+                used_object_x,
+                used_object_y,
+            )
+        {
             let exact_chief_ray = [
                 exact_origin[0],
                 exact_origin[1],
@@ -9165,10 +10314,8 @@ fn run_native_opd_map_value_with_rows(
             .max(0.01);
 
         for (entrance_origin, mode_tag) in candidate_origins {
-            let chief_fallback_radius = estimate_effective_entrance_radius(
-                entrance_origin,
-                chief_search_radius,
-            );
+            let chief_fallback_radius =
+                estimate_effective_entrance_radius(entrance_origin, chief_search_radius);
             if let Some(entrance_chief_ray) = build_marginal_ray(
                 reference_ray_pupil_coordinate[0],
                 reference_ray_pupil_coordinate[1],
@@ -9198,7 +10345,9 @@ fn run_native_opd_map_value_with_rows(
     }
 
     if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON {
-        return Err(JsValue::from_str("run_native_opd_map_wasm_json: chief ray did not reach target surface"));
+        return Err(JsValue::from_str(
+            "run_native_opd_map_wasm_json: chief ray did not reach target surface",
+        ));
     }
 
     let mut chief_stop_hit = trace_single_ray_hit_point_with_meta_core(
@@ -9216,7 +10365,10 @@ fn run_native_opd_map_value_with_rows(
     let mut effective_sampling_radius = sampling_radius;
     let mut transmitted_pupil_center_uv: Option<(f64, f64)> = None;
 
-    if (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON && !prefer_entrance_sampling && use_infinite_mode {
+    if (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON
+        && !prefer_entrance_sampling
+        && use_infinite_mode
+    {
         if let Some(grid_brent_origin) = search_entrance_origin_grid_brent_native(
             &rows,
             &packed_meta.row_origins,
@@ -9369,8 +10521,8 @@ fn run_native_opd_map_value_with_rows(
                     &packed_stop,
                     object_space_n,
                 );
-                effective_emission_origin = apply_symmetry_axis_lock(
-                    if let Some(origin) = newton_entrance_origin {
+                effective_emission_origin =
+                    apply_symmetry_axis_lock(if let Some(origin) = newton_entrance_origin {
                         origin
                     } else if estimated_entrance_origin[0].is_finite()
                         && estimated_entrance_origin[1].is_finite()
@@ -9389,8 +10541,7 @@ fn run_native_opd_map_value_with_rows(
                             entrance_radius,
                         )
                         .unwrap_or(estimated_entrance_origin)
-                    }
-                );
+                    });
             }
             effective_sampling_radius = if requested_pupil_radius.is_some() {
                 entrance_radius.max(0.01)
@@ -9440,21 +10591,17 @@ fn run_native_opd_map_value_with_rows(
                     }
                 }
                 if valid_count > 0 {
-                    transmitted_pupil_center_uv = Some((
-                        sum_u / valid_count as f64,
-                        sum_v / valid_count as f64,
-                    ));
+                    transmitted_pupil_center_uv =
+                        Some((sum_u / valid_count as f64, sum_v / valid_count as f64));
                 }
             }
 
-            if let Some(entrance_chief_ray) =
-                build_marginal_ray(
-                    transmitted_pupil_center_uv.map(|(u, _)| u).unwrap_or(0.0),
-                    transmitted_pupil_center_uv.map(|(_, v)| v).unwrap_or(0.0),
-                    effective_sampling_radius,
-                    effective_emission_origin,
-                )
-            {
+            if let Some(entrance_chief_ray) = build_marginal_ray(
+                transmitted_pupil_center_uv.map(|(u, _)| u).unwrap_or(0.0),
+                transmitted_pupil_center_uv.map(|(_, v)| v).unwrap_or(0.0),
+                effective_sampling_radius,
+                effective_emission_origin,
+            ) {
                 let entrance_target_hit = trace_single_ray_hit_point_with_meta_core(
                     &entrance_chief_ray,
                     target_surface_index,
@@ -9476,14 +10623,26 @@ fn run_native_opd_map_value_with_rows(
         chief_reference_mode = if validated_requested_chief {
             "validated-angle-chief".to_string()
         } else if use_real_entrance_pupil_chief {
-            format!("entrance-pupil-center-chief-requested(r={:.3})", effective_sampling_radius)
+            format!(
+                "entrance-pupil-center-chief-requested(r={:.3})",
+                effective_sampling_radius
+            )
         } else if use_transmitted_pupil_chief {
             let (u, v) = transmitted_pupil_center_uv.unwrap_or((0.0, 0.0));
-            format!("transmitted-pupil-center-chief-requested(u={:.4},v={:.4},r={:.3})", u, v, effective_sampling_radius)
+            format!(
+                "transmitted-pupil-center-chief-requested(u={:.4},v={:.4},r={:.3})",
+                u, v, effective_sampling_radius
+            )
         } else if prefer_entrance_sampling {
-            format!("entrance-chief-requested(estimate-first,r={:.3})", effective_sampling_radius)
+            format!(
+                "entrance-chief-requested(estimate-first,r={:.3})",
+                effective_sampling_radius
+            )
         } else {
-            format!("entrance-chief-fallback(estimate-first,r={:.3})", effective_sampling_radius)
+            format!(
+                "entrance-chief-fallback(estimate-first,r={:.3})",
+                effective_sampling_radius
+            )
         };
     }
 
@@ -9506,40 +10665,64 @@ fn run_native_opd_map_value_with_rows(
     );
     let chief_stop_state = ((chief_stop_state[0] - 1.0).abs() <= f64::EPSILON
         && chief_stop_state[2..8].iter().all(|value| value.is_finite()))
-        .then_some(chief_stop_state);
-    let mut chief_surface_trace: Vec<Value> = (0..packed_target.row_count).filter_map(|surface_index| {
-        let state = trace_single_ray_hit_state_with_meta_core(
-            &chief_start_dir, surface_index, object_space_n,
-            &packed_target.row_meta, &packed_target.row_params, &packed_target.row_origins,
-            &packed_target.row_inv_rots, &packed_target.row_rots, packed_target.row_count,
-        );
-        if (state[0] - 1.0).abs() > f64::EPSILON || !state[2..8].iter().all(|value| value.is_finite()) {
-            return None;
-        }
-        let point_base = surface_index * 3;
-        let rotation_base = surface_index * 9;
-        if point_base + 2 >= packed_target.row_origins.len() || rotation_base + 8 >= packed_target.row_inv_rots.len() {
-            return None;
-        }
-        let inv = &packed_target.row_inv_rots[rotation_base..rotation_base + 9];
-        let local_point = mul_mat3_vec3(&[inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7], inv[8]], [
-            state[2] - packed_target.row_origins[point_base],
-            state[3] - packed_target.row_origins[point_base + 1],
-            state[4] - packed_target.row_origins[point_base + 2],
-        ]);
-        let local_direction = mul_mat3_vec3(&[inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7], inv[8]], [state[5], state[6], state[7]]);
-        Some(serde_json::json!({
-            "surfaceIndex": surface_index,
-            "oplUm": state[1],
-            "globalPoint": [state[2], state[3], state[4]],
-            "point": local_point,
-            "direction": local_direction,
-        }))
-    }).collect();
+    .then_some(chief_stop_state);
+    let mut chief_surface_trace: Vec<Value> = (0..packed_target.row_count)
+        .filter_map(|surface_index| {
+            let state = trace_single_ray_hit_state_with_meta_core(
+                &chief_start_dir,
+                surface_index,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            if (state[0] - 1.0).abs() > f64::EPSILON
+                || !state[2..8].iter().all(|value| value.is_finite())
+            {
+                return None;
+            }
+            let point_base = surface_index * 3;
+            let rotation_base = surface_index * 9;
+            if point_base + 2 >= packed_target.row_origins.len()
+                || rotation_base + 8 >= packed_target.row_inv_rots.len()
+            {
+                return None;
+            }
+            let inv = &packed_target.row_inv_rots[rotation_base..rotation_base + 9];
+            let local_point = mul_mat3_vec3(
+                &[
+                    inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7], inv[8],
+                ],
+                [
+                    state[2] - packed_target.row_origins[point_base],
+                    state[3] - packed_target.row_origins[point_base + 1],
+                    state[4] - packed_target.row_origins[point_base + 2],
+                ],
+            );
+            let local_direction = mul_mat3_vec3(
+                &[
+                    inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7], inv[8],
+                ],
+                [state[5], state[6], state[7]],
+            );
+            Some(serde_json::json!({
+                "surfaceIndex": surface_index,
+                "oplUm": state[1],
+                "globalPoint": [state[2], state[3], state[4]],
+                "point": local_point,
+                "direction": local_direction,
+            }))
+        })
+        .collect();
 
     let chief_opl = chief_target_hit[1];
     if !chief_opl.is_finite() {
-        return Err(JsValue::from_str("run_native_opd_map_wasm_json: chief OPL is invalid"));
+        return Err(JsValue::from_str(
+            "run_native_opd_map_wasm_json: chief OPL is invalid",
+        ));
     }
     let first_optical_surface_index = rows.iter().enumerate().find_map(|(surface_index, row)| {
         if is_object_row(row) || is_gap_row(row) || is_coord_trans_row(row) {
@@ -9556,9 +10739,7 @@ fn run_native_opd_map_value_with_rows(
             &packed_target.row_rots,
             packed_target.row_count,
         );
-        ((state[0] - 1.0).abs() <= f64::EPSILON
-            && state[1].is_finite()
-            && state[1].abs() > 1.0e-9)
+        ((state[0] - 1.0).abs() <= f64::EPSILON && state[1].is_finite() && state[1].abs() > 1.0e-9)
             .then_some(surface_index)
     });
     let chief_first_surface_opl = first_optical_surface_index.and_then(|surface_index| {
@@ -9572,10 +10753,16 @@ fn run_native_opd_map_value_with_rows(
             &packed_target.row_inv_rots,
             &packed_target.row_rots,
             packed_target.row_count,
-        ).get(1).copied()
+        )
+        .get(1)
+        .copied()
     });
 
-    let chief_image_point = [chief_target_hit[2], chief_target_hit[3], chief_target_hit[4]];
+    let chief_image_point = [
+        chief_target_hit[2],
+        chief_target_hit[3],
+        chief_target_hit[4],
+    ];
     let chief_image_local_point = trace_surface_local_with_packed(
         chief_start_dir,
         target_surface_index,
@@ -9583,9 +10770,21 @@ fn run_native_opd_map_value_with_rows(
         &packed_target,
     );
     let target_surface_origin = [
-        packed_target.row_origins.get(target_surface_index * 3).copied().unwrap_or(chief_image_point[0]),
-        packed_target.row_origins.get(target_surface_index * 3 + 1).copied().unwrap_or(chief_image_point[1]),
-        packed_target.row_origins.get(target_surface_index * 3 + 2).copied().unwrap_or(chief_image_point[2]),
+        packed_target
+            .row_origins
+            .get(target_surface_index * 3)
+            .copied()
+            .unwrap_or(chief_image_point[0]),
+        packed_target
+            .row_origins
+            .get(target_surface_index * 3 + 1)
+            .copied()
+            .unwrap_or(chief_image_point[1]),
+        packed_target
+            .row_origins
+            .get(target_surface_index * 3 + 2)
+            .copied()
+            .unwrap_or(chief_image_point[2]),
     ];
     // The paraxial point is the chief-ray transverse image height projected onto
     // the nominal image surface plane. The sagittal best-focus point is obtained
@@ -9638,8 +10837,14 @@ fn run_native_opd_map_value_with_rows(
         }
         let mut focus_states: Vec<[f64; 8]> = Vec::new();
         for pupil_u in [-0.7_f64, 0.7_f64] {
-            let (u, v) = if axis == 0 { (pupil_u, 0.0) } else { (0.0, pupil_u) };
-            let Some(ray) = build_marginal_ray(u, v, effective_sampling_radius, effective_emission_origin) else {
+            let (u, v) = if axis == 0 {
+                (pupil_u, 0.0)
+            } else {
+                (0.0, pupil_u)
+            };
+            let Some(ray) =
+                build_marginal_ray(u, v, effective_sampling_radius, effective_emission_origin)
+            else {
                 continue;
             };
             let state = trace_single_ray_hit_state_with_meta_core(
@@ -9674,7 +10879,8 @@ fn run_native_opd_map_value_with_rows(
         if denominator.abs() <= 1.0e-12 {
             return None;
         }
-        let focus_z = (second[2] - first[2] + first_slope * first[4] - second_slope * second[4]) / denominator;
+        let focus_z = (second[2] - first[2] + first_slope * first[4] - second_slope * second[4])
+            / denominator;
         if !focus_z.is_finite() {
             return None;
         }
@@ -9715,26 +10921,30 @@ fn run_native_opd_map_value_with_rows(
                 sagittal_best_focus_point,
                 tangential_best_focus_point,
                 tan_sag_mid_focus_point,
-            ].into_iter().flatten() {
+            ]
+            .into_iter()
+            .flatten()
+            {
                 if candidate[2].is_finite() {
                     focus_candidate_zs.push(candidate[2]);
                 }
             }
-            let (mut search_min_z, mut search_max_z, mut search_range_mode) = if focus_candidate_zs.is_empty() {
-                (base_z - 10.0, base_z + 10.0, "fallback")
-            } else {
-                let candidate_min_z = focus_candidate_zs.iter().copied().fold(base_z, f64::min);
-                let candidate_max_z = focus_candidate_zs.iter().copied().fold(base_z, f64::max);
-                let candidate_span = (candidate_max_z - candidate_min_z)
-                    .max((base_z - candidate_min_z).abs())
-                    .max((candidate_max_z - base_z).abs());
-                let expansion = candidate_span.max(f64::EPSILON);
-                (
-                    candidate_min_z.min(base_z) - expansion,
-                    candidate_max_z.max(base_z) + expansion,
-                    "derived",
-                )
-            };
+            let (mut search_min_z, mut search_max_z, mut search_range_mode) =
+                if focus_candidate_zs.is_empty() {
+                    (base_z - 10.0, base_z + 10.0, "fallback")
+                } else {
+                    let candidate_min_z = focus_candidate_zs.iter().copied().fold(base_z, f64::min);
+                    let candidate_max_z = focus_candidate_zs.iter().copied().fold(base_z, f64::max);
+                    let candidate_span = (candidate_max_z - candidate_min_z)
+                        .max((base_z - candidate_min_z).abs())
+                        .max((candidate_max_z - base_z).abs());
+                    let expansion = candidate_span.max(f64::EPSILON);
+                    (
+                        candidate_min_z.min(base_z) - expansion,
+                        candidate_max_z.max(base_z) + expansion,
+                        "derived",
+                    )
+                };
             let mut rays: Vec<[f64; 6]> = Vec::new();
             for grid_y in 0..=12 {
                 for grid_x in 0..=12 {
@@ -9789,18 +10999,26 @@ fn run_native_opd_map_value_with_rows(
                     let relative_slope_y = ray_slope_y - chief_slope_y;
                     if relative_slope_x.abs() > 1.0e-12 {
                         let z = ray[2] - (ray[0] - chief_x_at_ray_z) / relative_slope_x;
-                        if z.is_finite() { ray_focus_zs.push(z); }
+                        if z.is_finite() {
+                            ray_focus_zs.push(z);
+                        }
                     }
                     if relative_slope_y.abs() > 1.0e-12 {
                         let z = ray[2] - (ray[1] - chief_y_at_ray_z) / relative_slope_y;
-                        if z.is_finite() { ray_focus_zs.push(z); }
+                        if z.is_finite() {
+                            ray_focus_zs.push(z);
+                        }
                     }
                 }
                 if ray_focus_zs.len() >= 3 {
                     ray_focus_zs.sort_by(|first, second| first.total_cmp(second));
                     let low = ray_focus_zs[ray_focus_zs.len() / 10];
-                    let high = ray_focus_zs[(ray_focus_zs.len() * 9 / 10).min(ray_focus_zs.len() - 1)];
-                    let span = (high - low).abs().max((base_z - low).abs()).max((high - base_z).abs());
+                    let high =
+                        ray_focus_zs[(ray_focus_zs.len() * 9 / 10).min(ray_focus_zs.len() - 1)];
+                    let span = (high - low)
+                        .abs()
+                        .max((base_z - low).abs())
+                        .max((high - base_z).abs());
                     let expansion = span.max(f64::EPSILON);
                     search_min_z = low.min(base_z) - expansion;
                     search_max_z = high.max(base_z) + expansion;
@@ -9831,9 +11049,12 @@ fn run_native_opd_map_value_with_rows(
                     }
                     let mean_x = sum_x / points.len() as f64;
                     let mean_y = sum_y / points.len() as f64;
-                    (points.iter().map(|point| {
-                        (point[0] - mean_x).powi(2) + (point[1] - mean_y).powi(2)
-                    }).sum::<f64>() / points.len() as f64).sqrt()
+                    (points
+                        .iter()
+                        .map(|point| (point[0] - mean_x).powi(2) + (point[1] - mean_y).powi(2))
+                        .sum::<f64>()
+                        / points.len() as f64)
+                        .sqrt()
                 };
                 let mut best_z = base_z;
                 let mut best_rms = f64::INFINITY;
@@ -9886,31 +11107,36 @@ fn run_native_opd_map_value_with_rows(
             }
         }
     };
-    let weighted_tan_sag_focus_point = match (tangential_best_focus_point, sagittal_best_focus_point) {
-        (Some(tangential), Some(sagittal)) => {
-            let field_magnitude = used_object_x.abs() + used_object_y.abs();
-            let tangential_weight = if field_magnitude <= 1.0e-12 {
-                0.5
-            } else {
-                used_object_y.abs() / field_magnitude
-            };
-            let sagittal_weight = 1.0 - tangential_weight;
-            let focus_z = tangential_weight * tangential[2] + sagittal_weight * sagittal[2];
-            chief_prev_state.as_ref().map(|state| {
-                let chief_slope_x = state[5] / state[7];
-                let chief_slope_y = state[6] / state[7];
-                [
-                    state[2] + chief_slope_x * (focus_z - state[4]),
-                    state[3] + chief_slope_y * (focus_z - state[4]),
-                    focus_z,
-                ]
-            })
-        }
-        _ => None,
-    };
+    let weighted_tan_sag_focus_point =
+        match (tangential_best_focus_point, sagittal_best_focus_point) {
+            (Some(tangential), Some(sagittal)) => {
+                let field_magnitude = used_object_x.abs() + used_object_y.abs();
+                let tangential_weight = if field_magnitude <= 1.0e-12 {
+                    0.5
+                } else {
+                    used_object_y.abs() / field_magnitude
+                };
+                let sagittal_weight = 1.0 - tangential_weight;
+                let focus_z = tangential_weight * tangential[2] + sagittal_weight * sagittal[2];
+                chief_prev_state.as_ref().map(|state| {
+                    let chief_slope_x = state[5] / state[7];
+                    let chief_slope_y = state[6] / state[7];
+                    [
+                        state[2] + chief_slope_x * (focus_z - state[4]),
+                        state[3] + chief_slope_y * (focus_z - state[4]),
+                        focus_z,
+                    ]
+                })
+            }
+            _ => None,
+        };
     let image_space_n = if target_surface_index > 0 {
         let n = get_correct_refractive_index(&rows[target_surface_index - 1], wavelength_um);
-        if n.is_finite() && n > 0.0 { n } else { 1.0 }
+        if n.is_finite() && n > 0.0 {
+            n
+        } else {
+            1.0
+        }
     } else {
         1.0
     };
@@ -9920,166 +11146,228 @@ fn run_native_opd_map_value_with_rows(
         .and_then(value_to_f64)
         .filter(|position| position.is_finite());
     let derived_exit_pupil_position = configured_exit_pupil_position.or_else(|| {
-        let metrics = compute_native_paraxial_metrics_wasm(&rows, &source_rows_for_metrics, &object_rows);
-        if metrics.expp.is_finite() { Some(metrics.expp) } else { None }
+        let metrics =
+            compute_native_paraxial_metrics_wasm(&rows, &source_rows_for_metrics, &object_rows);
+        if metrics.expp.is_finite() {
+            Some(metrics.expp)
+        } else {
+            None
+        }
     });
-    let exit_pupil_reference = derived_exit_pupil_position
-        .and_then(|position| {
-            if target_surface_index == 0 {
-                return None;
-            }
-            let last_surface_base = (target_surface_index - 1) * 3;
-            let last_surface_rot_base = (target_surface_index - 1) * 9;
-            let last_surface_z = packed_target.row_origins.get(last_surface_base + 2).copied()?;
-            let signed_position = if exit_pupil_position_sign == "negated" { -position } else { position };
-            let exit_pupil_z = last_surface_z + signed_position;
-            let chief_state = chief_prev_state.as_ref()?;
-            let chief_direction = normalize3(chief_state[5], chief_state[6], chief_state[7]);
-            if !chief_direction.iter().all(|value| value.is_finite()) || chief_direction[2].abs() <= 1.0e-12 {
-                return None;
-            }
-            let distance_to_exit_pupil = (exit_pupil_z - chief_state[4]) / chief_direction[2];
-            let mut chief_ray_exit_pupil_point = [
-                chief_state[2] + chief_direction[0] * distance_to_exit_pupil,
-                chief_state[3] + chief_direction[1] * distance_to_exit_pupil,
-                exit_pupil_z,
+    let exit_pupil_reference = derived_exit_pupil_position.and_then(|position| {
+        if target_surface_index == 0 {
+            return None;
+        }
+        let last_surface_base = (target_surface_index - 1) * 3;
+        let last_surface_rot_base = (target_surface_index - 1) * 9;
+        let last_surface_z = packed_target
+            .row_origins
+            .get(last_surface_base + 2)
+            .copied()?;
+        let signed_position = if exit_pupil_position_sign == "negated" {
+            -position
+        } else {
+            position
+        };
+        let exit_pupil_z = last_surface_z + signed_position;
+        let chief_state = chief_prev_state.as_ref()?;
+        let chief_direction = normalize3(chief_state[5], chief_state[6], chief_state[7]);
+        if !chief_direction.iter().all(|value| value.is_finite())
+            || chief_direction[2].abs() <= 1.0e-12
+        {
+            return None;
+        }
+        let distance_to_exit_pupil = (exit_pupil_z - chief_state[4]) / chief_direction[2];
+        let mut chief_ray_exit_pupil_point = [
+            chief_state[2] + chief_direction[0] * distance_to_exit_pupil,
+            chief_state[3] + chief_direction[1] * distance_to_exit_pupil,
+            exit_pupil_z,
+        ];
+        let surface_axis_exit_pupil = if last_surface_base + 2 < packed_target.row_origins.len()
+            && last_surface_rot_base + 8 < packed_target.row_rots.len()
+        {
+            let origin = [
+                packed_target.row_origins[last_surface_base],
+                packed_target.row_origins[last_surface_base + 1],
+                packed_target.row_origins[last_surface_base + 2],
             ];
-            let surface_axis_exit_pupil = if last_surface_base + 2 < packed_target.row_origins.len()
-                && last_surface_rot_base + 8 < packed_target.row_rots.len()
-            {
-                let origin = [
+            let axis_w = normalize3(
+                packed_target.row_rots[last_surface_rot_base + 2],
+                packed_target.row_rots[last_surface_rot_base + 5],
+                packed_target.row_rots[last_surface_rot_base + 8],
+            );
+            let point = [
+                origin[0] + axis_w[0] * signed_position,
+                origin[1] + axis_w[1] * signed_position,
+                origin[2] + axis_w[2] * signed_position,
+            ];
+            Some((point, axis_w))
+        } else {
+            None
+        };
+        if exit_pupil_plane_definition == "surface-local-axis" {
+            if let Some((plane_point, plane_normal)) = surface_axis_exit_pupil {
+                let denominator = chief_direction[0] * plane_normal[0]
+                    + chief_direction[1] * plane_normal[1]
+                    + chief_direction[2] * plane_normal[2];
+                if denominator.abs() > 1.0e-12 {
+                    let plane_distance = (plane_point[0] - chief_state[2]) * plane_normal[0]
+                        + (plane_point[1] - chief_state[3]) * plane_normal[1]
+                        + (plane_point[2] - chief_state[4]) * plane_normal[2];
+                    let distance = plane_distance / denominator;
+                    chief_ray_exit_pupil_point = [
+                        chief_state[2] + chief_direction[0] * distance,
+                        chief_state[3] + chief_direction[1] * distance,
+                        chief_state[4] + chief_direction[2] * distance,
+                    ];
+                }
+            }
+        }
+        let exit_pupil_point = if exit_pupil_reference_point_mode == "exit-pupil-center" {
+            if exit_pupil_plane_definition == "surface-local-axis" {
+                surface_axis_exit_pupil
+                    .map(|(point, _)| point)
+                    .unwrap_or(chief_ray_exit_pupil_point)
+            } else {
+                [
                     packed_target.row_origins[last_surface_base],
                     packed_target.row_origins[last_surface_base + 1],
-                    packed_target.row_origins[last_surface_base + 2],
-                ];
-                let axis_w = normalize3(
-                    packed_target.row_rots[last_surface_rot_base + 2],
-                    packed_target.row_rots[last_surface_rot_base + 5],
-                    packed_target.row_rots[last_surface_rot_base + 8],
-                );
-                let point = [
-                    origin[0] + axis_w[0] * signed_position,
-                    origin[1] + axis_w[1] * signed_position,
-                    origin[2] + axis_w[2] * signed_position,
-                ];
-                Some((point, axis_w))
-            } else {
-                None
-            };
-            if exit_pupil_plane_definition == "surface-local-axis" {
-                if let Some((plane_point, plane_normal)) = surface_axis_exit_pupil {
-                    let denominator = chief_direction[0] * plane_normal[0]
-                        + chief_direction[1] * plane_normal[1]
-                        + chief_direction[2] * plane_normal[2];
-                    if denominator.abs() > 1.0e-12 {
-                        let plane_distance = (plane_point[0] - chief_state[2]) * plane_normal[0]
-                            + (plane_point[1] - chief_state[3]) * plane_normal[1]
-                            + (plane_point[2] - chief_state[4]) * plane_normal[2];
-                        let distance = plane_distance / denominator;
-                        chief_ray_exit_pupil_point = [
-                            chief_state[2] + chief_direction[0] * distance,
-                            chief_state[3] + chief_direction[1] * distance,
-                            chief_state[4] + chief_direction[2] * distance,
-                        ];
-                    }
-                }
+                    exit_pupil_z,
+                ]
             }
-            let exit_pupil_point = if exit_pupil_reference_point_mode == "exit-pupil-center" {
-                if exit_pupil_plane_definition == "surface-local-axis" {
-                    surface_axis_exit_pupil.map(|(point, _)| point).unwrap_or(chief_ray_exit_pupil_point)
-                } else {
-                    [
-                        packed_target.row_origins[last_surface_base],
-                        packed_target.row_origins[last_surface_base + 1],
-                        exit_pupil_z,
-                    ]
-                }
-            } else {
-                chief_ray_exit_pupil_point
-            };
-            let reference_center = match chief_image_point_mode.as_str() {
-                "paraxial-image-point" => paraxial_image_point,
-                "sagittal-best-focus-point" => sagittal_best_focus_point.unwrap_or(paraxial_image_point),
-                "tangential-best-focus-point" => tangential_best_focus_point.unwrap_or(paraxial_image_point),
-                "tan-sag-mid-focus-point" => tan_sag_mid_focus_point.unwrap_or(paraxial_image_point),
-                "rms-wavefront-best-focus-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
-                "circle-of-least-confusion-point" => tan_sag_mid_focus_point.unwrap_or(paraxial_image_point),
-                "defocus-zero-reference-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
-                "weighted-tan-sag-focus-point" => weighted_tan_sag_focus_point.unwrap_or(paraxial_image_point),
-                "per-wavelength-best-focus-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
-                "target-surface-center" => target_surface_origin,
-                _ => chief_image_point,
-            };
-            let radius = distance3(reference_center, exit_pupil_point);
-            if !radius.is_finite() || radius <= 1.0e-9 {
-                return None;
+        } else {
+            chief_ray_exit_pupil_point
+        };
+        let reference_center = match chief_image_point_mode.as_str() {
+            "paraxial-image-point" => paraxial_image_point,
+            "sagittal-best-focus-point" => {
+                sagittal_best_focus_point.unwrap_or(paraxial_image_point)
             }
-            let mut exit_pupil_direction = [
-                exit_pupil_point[0] - reference_center[0],
-                exit_pupil_point[1] - reference_center[1],
-                exit_pupil_point[2] - reference_center[2],
+            "tangential-best-focus-point" => {
+                tangential_best_focus_point.unwrap_or(paraxial_image_point)
+            }
+            "tan-sag-mid-focus-point" => tan_sag_mid_focus_point.unwrap_or(paraxial_image_point),
+            "rms-wavefront-best-focus-point" => {
+                rms_best_focus_point.unwrap_or(paraxial_image_point)
+            }
+            "circle-of-least-confusion-point" => {
+                tan_sag_mid_focus_point.unwrap_or(paraxial_image_point)
+            }
+            "defocus-zero-reference-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
+            "weighted-tan-sag-focus-point" => {
+                weighted_tan_sag_focus_point.unwrap_or(paraxial_image_point)
+            }
+            "per-wavelength-best-focus-point" => {
+                rms_best_focus_point.unwrap_or(paraxial_image_point)
+            }
+            "target-surface-center" => target_surface_origin,
+            _ => chief_image_point,
+        };
+        let radius = distance3(reference_center, exit_pupil_point);
+        if !radius.is_finite() || radius <= 1.0e-9 {
+            return None;
+        }
+        let mut exit_pupil_direction = [
+            exit_pupil_point[0] - reference_center[0],
+            exit_pupil_point[1] - reference_center[1],
+            exit_pupil_point[2] - reference_center[2],
+        ];
+        if exit_pupil_direction_mode == "exit-pupil-to-image" {
+            exit_pupil_direction = [
+                -exit_pupil_direction[0],
+                -exit_pupil_direction[1],
+                -exit_pupil_direction[2],
             ];
-            if exit_pupil_direction_mode == "exit-pupil-to-image" {
-                exit_pupil_direction = [
-                    -exit_pupil_direction[0],
-                    -exit_pupil_direction[1],
-                    -exit_pupil_direction[2],
-                ];
-            }
-            let exit_pupil_direction = normalize3(
-                exit_pupil_direction[0],
-                exit_pupil_direction[1],
-                exit_pupil_direction[2],
-            );
-            Some((reference_center, radius, exit_pupil_direction, exit_pupil_point))
-        });
-    let reference_sphere_geometry = exit_pupil_reference
-        .as_ref()
-        .and_then(|(center, _, _, exit_pupil_point)| reference_sphere_geometry_from_chief(*center, *exit_pupil_point));
+        }
+        let exit_pupil_direction = normalize3(
+            exit_pupil_direction[0],
+            exit_pupil_direction[1],
+            exit_pupil_direction[2],
+        );
+        Some((
+            reference_center,
+            radius,
+            exit_pupil_direction,
+            exit_pupil_point,
+        ))
+    });
+    let reference_sphere_geometry =
+        exit_pupil_reference
+            .as_ref()
+            .and_then(|(center, _, _, exit_pupil_point)| {
+                reference_sphere_geometry_from_chief(*center, *exit_pupil_point)
+            });
     let primary_reference_geometry = if (reference_sphere_wavelength_mode == "primary-wavelength"
         || reference_sphere_wavelength_mode == "fixed-primary"
         || reference_sphere_wavelength_mode == "fixed-midpoint")
-        && req_obj.get("__cooptReferenceGeometryOnly").and_then(|value| value.as_bool()) != Some(true)
+        && req_obj
+            .get("__cooptReferenceGeometryOnly")
+            .and_then(|value| value.as_bool())
+            != Some(true)
         && req_obj.get("referenceSphereGeometry").is_none()
     {
         let primary_wavelength = primary_reference_wavelength;
-        if primary_wavelength.is_finite() && primary_wavelength > 0.0
+        if primary_wavelength.is_finite()
+            && primary_wavelength > 0.0
             && ((primary_wavelength - wavelength_um).abs() > 1.0e-12
                 || reference_sphere_wavelength_mode == "fixed-midpoint")
         {
             let mut reference_request = req.clone();
             if let Some(reference_object) = reference_request.as_object_mut() {
-                reference_object.insert("wavelengthUm".to_string(), Value::from(primary_wavelength));
+                reference_object
+                    .insert("wavelengthUm".to_string(), Value::from(primary_wavelength));
                 reference_object.insert("gridSize".to_string(), Value::from(17_u64));
-                reference_object.insert("__cooptReferenceGeometryOnly".to_string(), Value::Bool(true));
+                reference_object.insert(
+                    "__cooptReferenceGeometryOnly".to_string(),
+                    Value::Bool(true),
+                );
                 if let Some(reference_rows) = req_obj.get("referenceOpticalSystemRows") {
-                    reference_object.insert("opticalSystemRows".to_string(), reference_rows.clone());
+                    reference_object
+                        .insert("opticalSystemRows".to_string(), reference_rows.clone());
                 }
             }
-            let primary_geometry = run_native_opd_map_value(&reference_request).ok().and_then(|value| {
-                let center = value.get("referenceSphereCenter").and_then(|value| value.as_array()).and_then(|values| Some([
-                    values.get(0).and_then(value_to_f64)?,
-                    values.get(1).and_then(value_to_f64)?,
-                    values.get(2).and_then(value_to_f64)?,
-                ]));
-                let direction = value.get("referenceSphereDirection").and_then(|value| value.as_array()).and_then(|values| Some([
-                    values.get(0).and_then(value_to_f64)?,
-                    values.get(1).and_then(value_to_f64)?,
-                    values.get(2).and_then(value_to_f64)?,
-                ]));
-                let radius = value.get("referenceSphereRadiusMm").and_then(value_to_f64);
-                match (center, radius, direction) {
-                    (Some(center), Some(radius), Some(direction))
-                        if center.iter().all(|value| value.is_finite())
-                            && direction.iter().all(|value| value.is_finite())
-                            && radius.is_finite()
-                            && radius > 0.0 => {
+            let primary_geometry =
+                run_native_opd_map_value(&reference_request)
+                    .ok()
+                    .and_then(|value| {
+                        let center = value
+                            .get("referenceSphereCenter")
+                            .and_then(|value| value.as_array())
+                            .and_then(|values| {
+                                Some([
+                                    values.get(0).and_then(value_to_f64)?,
+                                    values.get(1).and_then(value_to_f64)?,
+                                    values.get(2).and_then(value_to_f64)?,
+                                ])
+                            });
+                        let direction = value
+                            .get("referenceSphereDirection")
+                            .and_then(|value| value.as_array())
+                            .and_then(|values| {
+                                Some([
+                                    values.get(0).and_then(value_to_f64)?,
+                                    values.get(1).and_then(value_to_f64)?,
+                                    values.get(2).and_then(value_to_f64)?,
+                                ])
+                            });
+                        let radius = value.get("referenceSphereRadiusMm").and_then(value_to_f64);
+                        match (center, radius, direction) {
+                            (Some(center), Some(radius), Some(direction))
+                                if center.iter().all(|value| value.is_finite())
+                                    && direction.iter().all(|value| value.is_finite())
+                                    && radius.is_finite()
+                                    && radius > 0.0 =>
+                            {
                                 primary_reference_geometry_applied = true;
-                                Some((center, radius, normalize3(direction[0], direction[1], direction[2])))
-                            },
-                    _ => None,
-                }
-            });
+                                Some((
+                                    center,
+                                    radius,
+                                    normalize3(direction[0], direction[1], direction[2]),
+                                ))
+                            }
+                            _ => None,
+                        }
+                    });
             if reference_sphere_wavelength_mode != "fixed-midpoint" {
                 primary_geometry
             } else {
@@ -10094,26 +11382,51 @@ fn run_native_opd_map_value_with_rows(
                 let short = run_native_opd_map_value(&short_request).ok();
                 let long = run_native_opd_map_value(&long_request).ok();
                 let geometry = |value: &Value| {
-                    let center = value.get("referenceSphereCenter").and_then(|value| value.as_array()).and_then(|values| Some([
-                        values.get(0).and_then(value_to_f64)?,
-                        values.get(1).and_then(value_to_f64)?,
-                        values.get(2).and_then(value_to_f64)?,
-                    ]));
-                    let direction = value.get("referenceSphereDirection").and_then(|value| value.as_array()).and_then(|values| Some([
-                        values.get(0).and_then(value_to_f64)?,
-                        values.get(1).and_then(value_to_f64)?,
-                        values.get(2).and_then(value_to_f64)?,
-                    ]));
+                    let center = value
+                        .get("referenceSphereCenter")
+                        .and_then(|value| value.as_array())
+                        .and_then(|values| {
+                            Some([
+                                values.get(0).and_then(value_to_f64)?,
+                                values.get(1).and_then(value_to_f64)?,
+                                values.get(2).and_then(value_to_f64)?,
+                            ])
+                        });
+                    let direction = value
+                        .get("referenceSphereDirection")
+                        .and_then(|value| value.as_array())
+                        .and_then(|values| {
+                            Some([
+                                values.get(0).and_then(value_to_f64)?,
+                                values.get(1).and_then(value_to_f64)?,
+                                values.get(2).and_then(value_to_f64)?,
+                            ])
+                        });
                     let radius = value.get("referenceSphereRadiusMm").and_then(value_to_f64);
                     match (center, radius, direction) {
-                        (Some(center), Some(radius), Some(direction)) if center.iter().all(|value| value.is_finite())
-                            && direction.iter().all(|value| value.is_finite()) && radius.is_finite() && radius > 0.0 =>
-                            Some((center, radius, normalize3(direction[0], direction[1], direction[2]))),
+                        (Some(center), Some(radius), Some(direction))
+                            if center.iter().all(|value| value.is_finite())
+                                && direction.iter().all(|value| value.is_finite())
+                                && radius.is_finite()
+                                && radius > 0.0 =>
+                        {
+                            Some((
+                                center,
+                                radius,
+                                normalize3(direction[0], direction[1], direction[2]),
+                            ))
+                        }
                         _ => None,
                     }
                 };
-                match (short.as_ref().and_then(geometry), long.as_ref().and_then(geometry)) {
-                    (Some((short_center, short_radius, short_direction)), Some((long_center, long_radius, long_direction))) => {
+                match (
+                    short.as_ref().and_then(geometry),
+                    long.as_ref().and_then(geometry),
+                ) {
+                    (
+                        Some((short_center, short_radius, short_direction)),
+                        Some((long_center, long_radius, long_direction)),
+                    ) => {
                         let center = [
                             0.5 * (short_center[0] + long_center[0]),
                             0.5 * (short_center[1] + long_center[1]),
@@ -10125,7 +11438,7 @@ fn run_native_opd_map_value_with_rows(
                             short_direction[2] + long_direction[2],
                         );
                         Some((center, 0.5 * (short_radius + long_radius), direction))
-                    },
+                    }
                     _ => primary_geometry,
                 }
             }
@@ -10136,57 +11449,103 @@ fn run_native_opd_map_value_with_rows(
         None
     };
     let axis_reference_geometry = if req_obj.get("referenceSphereGeometry").is_none()
-        && req_obj.get("__cooptReferenceGeometryOnly").and_then(|value| value.as_bool()) != Some(true)
+        && req_obj
+            .get("__cooptReferenceGeometryOnly")
+            .and_then(|value| value.as_bool())
+            != Some(true)
         && primary_reference_wavelength.is_finite()
         && primary_reference_wavelength > 0.0
     {
         let mut reference_request = req.clone();
         if let Some(reference_object) = reference_request.as_object_mut() {
-            reference_object.insert("wavelengthUm".to_string(), Value::from(primary_reference_wavelength));
+            reference_object.insert(
+                "wavelengthUm".to_string(),
+                Value::from(primary_reference_wavelength),
+            );
             reference_object.insert("gridSize".to_string(), Value::from(17_u64));
-            reference_object.insert("__cooptReferenceGeometryOnly".to_string(), Value::Bool(true));
-            reference_object.insert("exitPupilReferencePointMode".to_string(), Value::from("exit-pupil-center"));
+            reference_object.insert(
+                "__cooptReferenceGeometryOnly".to_string(),
+                Value::Bool(true),
+            );
+            reference_object.insert(
+                "exitPupilReferencePointMode".to_string(),
+                Value::from("exit-pupil-center"),
+            );
             if let Some(reference_rows) = req_obj.get("referenceOpticalSystemRows") {
                 reference_object.insert("opticalSystemRows".to_string(), reference_rows.clone());
             }
         }
-        run_native_opd_map_value(&reference_request).ok().and_then(|value| {
-            let center = value.get("referenceSphereCenter").and_then(|value| value.as_array()).and_then(|values| Some([
-                values.get(0).and_then(value_to_f64)?,
-                values.get(1).and_then(value_to_f64)?,
-                values.get(2).and_then(value_to_f64)?,
-            ]));
-            let direction = value.get("referenceSphereDirection").and_then(|value| value.as_array()).and_then(|values| Some([
-                values.get(0).and_then(value_to_f64)?,
-                values.get(1).and_then(value_to_f64)?,
-                values.get(2).and_then(value_to_f64)?,
-            ]));
-            let radius = value.get("referenceSphereRadiusMm").and_then(value_to_f64);
-            match (center, radius, direction) {
-                (Some(center), Some(radius), Some(direction))
-                    if center.iter().all(|value| value.is_finite())
-                        && direction.iter().all(|value| value.is_finite())
-                        && radius.is_finite()
-                        && radius > 0.0 =>
-                    Some((center, radius, normalize3(direction[0], direction[1], direction[2]))),
-                _ => None,
-            }
-        })
+        run_native_opd_map_value(&reference_request)
+            .ok()
+            .and_then(|value| {
+                let center = value
+                    .get("referenceSphereCenter")
+                    .and_then(|value| value.as_array())
+                    .and_then(|values| {
+                        Some([
+                            values.get(0).and_then(value_to_f64)?,
+                            values.get(1).and_then(value_to_f64)?,
+                            values.get(2).and_then(value_to_f64)?,
+                        ])
+                    });
+                let direction = value
+                    .get("referenceSphereDirection")
+                    .and_then(|value| value.as_array())
+                    .and_then(|values| {
+                        Some([
+                            values.get(0).and_then(value_to_f64)?,
+                            values.get(1).and_then(value_to_f64)?,
+                            values.get(2).and_then(value_to_f64)?,
+                        ])
+                    });
+                let radius = value.get("referenceSphereRadiusMm").and_then(value_to_f64);
+                match (center, radius, direction) {
+                    (Some(center), Some(radius), Some(direction))
+                        if center.iter().all(|value| value.is_finite())
+                            && direction.iter().all(|value| value.is_finite())
+                            && radius.is_finite()
+                            && radius > 0.0 =>
+                    {
+                        Some((
+                            center,
+                            radius,
+                            normalize3(direction[0], direction[1], direction[2]),
+                        ))
+                    }
+                    _ => None,
+                }
+            })
     } else {
         None
     };
     let axis_image_reference_geometry = if reference_mode == "image-sphere" {
         let image = match chief_image_point_mode.as_str() {
             "paraxial-image-point" => paraxial_image_point,
-            "sagittal-best-focus-point" => sagittal_best_focus_point.unwrap_or(paraxial_image_point),
-            "tangential-best-focus-point" => tangential_best_focus_point.unwrap_or(paraxial_image_point),
+            "sagittal-best-focus-point" => {
+                sagittal_best_focus_point.unwrap_or(paraxial_image_point)
+            }
+            "tangential-best-focus-point" => {
+                tangential_best_focus_point.unwrap_or(paraxial_image_point)
+            }
             "tan-sag-mid-focus-point" => tan_sag_mid_focus_point.unwrap_or(paraxial_image_point),
-            "rms-wavefront-best-focus-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
-            "circle-of-least-confusion-point" => tan_sag_mid_focus_point.unwrap_or(paraxial_image_point),
+            "rms-wavefront-best-focus-point" => {
+                rms_best_focus_point.unwrap_or(paraxial_image_point)
+            }
+            "circle-of-least-confusion-point" => {
+                tan_sag_mid_focus_point.unwrap_or(paraxial_image_point)
+            }
             "defocus-zero-reference-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
-            "weighted-tan-sag-focus-point" => weighted_tan_sag_focus_point.unwrap_or(paraxial_image_point),
-            "per-wavelength-best-focus-point" => rms_best_focus_point.unwrap_or(paraxial_image_point),
-            _ => [chief_target_hit[2], chief_target_hit[3], chief_target_hit[4]],
+            "weighted-tan-sag-focus-point" => {
+                weighted_tan_sag_focus_point.unwrap_or(paraxial_image_point)
+            }
+            "per-wavelength-best-focus-point" => {
+                rms_best_focus_point.unwrap_or(paraxial_image_point)
+            }
+            _ => [
+                chief_target_hit[2],
+                chief_target_hit[3],
+                chief_target_hit[4],
+            ],
         };
         chief_prev_state.as_ref().and_then(|state| {
             let direction = normalize3(state[5], state[6], state[7]);
@@ -10200,7 +11559,11 @@ fn run_native_opd_map_value_with_rows(
             (radius.is_finite() && radius > 1.0e-9).then_some((
                 center,
                 radius,
-                [image[0] - center[0], image[1] - center[1], image[2] - center[2]],
+                [
+                    image[0] - center[0],
+                    image[1] - center[1],
+                    image[2] - center[2],
+                ],
             ))
         })
     } else {
@@ -10213,7 +11576,9 @@ fn run_native_opd_map_value_with_rows(
     } else if reference_mode == "reference-sphere" {
         reference_sphere_geometry
     } else if reference_mode == "exit-pupil" {
-        exit_pupil_reference.as_ref().map(|(center, radius, direction, _)| (*center, *radius, *direction))
+        exit_pupil_reference
+            .as_ref()
+            .map(|(center, radius, direction, _)| (*center, *radius, *direction))
     } else {
         None
     };
@@ -10221,8 +11586,11 @@ fn run_native_opd_map_value_with_rows(
         *radius *= reference_sphere_radius_scale;
     }
     let current_reference_geometry = selected_reference_geometry;
-    let current_reference_sphere_radius_mm = selected_reference_geometry.as_ref().map(|(_, radius, _)| *radius);
-    let mut primary_reference_sphere_radius_mm = if reference_sphere_wavelength_mode == "primary-wavelength"
+    let current_reference_sphere_radius_mm = selected_reference_geometry
+        .as_ref()
+        .map(|(_, radius, _)| *radius);
+    let mut primary_reference_sphere_radius_mm = if reference_sphere_wavelength_mode
+        == "primary-wavelength"
         && (primary_reference_wavelength - wavelength_um).abs() <= 1.0e-12
     {
         current_reference_sphere_radius_mm
@@ -10232,7 +11600,8 @@ fn run_native_opd_map_value_with_rows(
     if let Some(geometry) = primary_reference_geometry {
         primary_reference_sphere_radius_mm = Some(geometry.1);
         selected_reference_geometry = if reference_sphere_wavelength_mode == "fixed-primary"
-            || reference_sphere_wavelength_mode == "fixed-midpoint" {
+            || reference_sphere_wavelength_mode == "fixed-midpoint"
+        {
             Some(geometry)
         } else {
             // Keep the image point selected for the traced wavelength. The primary
@@ -10243,21 +11612,32 @@ fn run_native_opd_map_value_with_rows(
                 .or(Some(geometry))
         };
     }
-    if let Some(geometry) = req_obj.get("referenceSphereGeometry").and_then(|value| value.as_object()) {
+    if let Some(geometry) = req_obj
+        .get("referenceSphereGeometry")
+        .and_then(|value| value.as_object())
+    {
         let center = geometry.get("center").and_then(|value| value.as_object());
-        let direction = geometry.get("direction").and_then(|value| value.as_object());
+        let direction = geometry
+            .get("direction")
+            .and_then(|value| value.as_object());
         let radius = geometry.get("radiusMm").and_then(value_to_f64);
-        let center_values = center.and_then(|value| Some([
-            value.get("x").and_then(value_to_f64)?,
-            value.get("y").and_then(value_to_f64)?,
-            value.get("z").and_then(value_to_f64)?,
-        ]));
-        let direction_values = direction.and_then(|value| Some([
-            value.get("x").and_then(value_to_f64)?,
-            value.get("y").and_then(value_to_f64)?,
-            value.get("z").and_then(value_to_f64)?,
-        ]));
-        if let (Some(center), Some(direction), Some(radius)) = (center_values, direction_values, radius) {
+        let center_values = center.and_then(|value| {
+            Some([
+                value.get("x").and_then(value_to_f64)?,
+                value.get("y").and_then(value_to_f64)?,
+                value.get("z").and_then(value_to_f64)?,
+            ])
+        });
+        let direction_values = direction.and_then(|value| {
+            Some([
+                value.get("x").and_then(value_to_f64)?,
+                value.get("y").and_then(value_to_f64)?,
+                value.get("z").and_then(value_to_f64)?,
+            ])
+        });
+        if let (Some(center), Some(direction), Some(radius)) =
+            (center_values, direction_values, radius)
+        {
             let direction = normalize3(direction[0], direction[1], direction[2]);
             if center.iter().all(|value| value.is_finite())
                 && direction.iter().all(|value| value.is_finite())
@@ -10273,104 +11653,128 @@ fn run_native_opd_map_value_with_rows(
     } else {
         chief_prev_state.as_ref()
     };
-    let chief_reference_sphere_opl = match (chief_reference_state, selected_reference_geometry.as_ref()) {
-        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
-            state,
-            *center,
-            *radius,
-            *image_side_direction,
-            reference_image_space_n,
-            &sphere_intersection,
-            &optical_path_sign,
-        ),
-        _ => None,
-    };
+    let chief_reference_sphere_opl =
+        match (chief_reference_state, selected_reference_geometry.as_ref()) {
+            (Some(state), Some((center, radius, image_side_direction))) => {
+                optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    reference_image_space_n,
+                    &sphere_intersection,
+                    &optical_path_sign,
+                )
+            }
+            _ => None,
+        };
     let alternate_sphere_intersection = if sphere_intersection == "opposite-side" {
         "exit-pupil-side"
     } else {
         "opposite-side"
     };
-    let chief_alternate_reference_sphere_opl = match (chief_reference_state, selected_reference_geometry.as_ref()) {
-        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
-            state,
-            *center,
-            *radius,
-            *image_side_direction,
-            reference_image_space_n,
-            alternate_sphere_intersection,
-            &optical_path_sign,
-        ),
-        _ => None,
-    };
-    let chief_current_reference_opl = match (chief_reference_state, current_reference_geometry.as_ref()) {
-        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
-            state,
-            *center,
-            *radius,
-            *image_side_direction,
-            image_space_n,
-            &sphere_intersection,
-            &optical_path_sign,
-        ),
-        _ => None,
-    };
-    let chief_air_reference_sphere_opl = match (chief_reference_state, selected_reference_geometry.as_ref()) {
-        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
-            state,
-            *center,
-            *radius,
-            *image_side_direction,
-            1.0,
-            &sphere_intersection,
-            &optical_path_sign,
-        ),
-        _ => None,
-    };
+    let chief_alternate_reference_sphere_opl =
+        match (chief_reference_state, selected_reference_geometry.as_ref()) {
+            (Some(state), Some((center, radius, image_side_direction))) => {
+                optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    reference_image_space_n,
+                    alternate_sphere_intersection,
+                    &optical_path_sign,
+                )
+            }
+            _ => None,
+        };
+    let chief_current_reference_opl =
+        match (chief_reference_state, current_reference_geometry.as_ref()) {
+            (Some(state), Some((center, radius, image_side_direction))) => {
+                optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    image_space_n,
+                    &sphere_intersection,
+                    &optical_path_sign,
+                )
+            }
+            _ => None,
+        };
+    let chief_air_reference_sphere_opl =
+        match (chief_reference_state, selected_reference_geometry.as_ref()) {
+            (Some(state), Some((center, radius, image_side_direction))) => {
+                optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    1.0,
+                    &sphere_intersection,
+                    &optical_path_sign,
+                )
+            }
+            _ => None,
+        };
     let alternate_optical_path_sign = if optical_path_sign == "negative" {
         "positive"
     } else {
         "negative"
     };
-    let chief_alternate_sign_reference_sphere_opl = match (chief_reference_state, selected_reference_geometry.as_ref()) {
-        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
-            state,
-            *center,
-            *radius,
-            *image_side_direction,
-            reference_image_space_n,
-            &sphere_intersection,
-            alternate_optical_path_sign,
-        ),
-        _ => None,
-    };
-    let chief_axis_reference_sphere_opl = match (chief_reference_state, axis_reference_geometry.as_ref()) {
-        (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
-            state,
-            *center,
-            *radius,
-            *image_side_direction,
-            reference_image_space_n,
-            &sphere_intersection,
-            &optical_path_sign,
-        ),
-        _ => None,
-    };
-    let radius_probe_scales = [0.50_f64, 0.65, 0.80, 0.90, 1.0, 1.10, 1.25, 1.50, 2.0];
-    let chief_radius_probe_opls: Vec<Option<f64>> = radius_probe_scales.iter().map(|scale| {
+    let chief_alternate_sign_reference_sphere_opl =
         match (chief_reference_state, selected_reference_geometry.as_ref()) {
-            (Some(state), Some((center, radius, image_side_direction))) => optical_path_to_reference_sphere(
-                state,
-                *center,
-                *radius * *scale,
-                *image_side_direction,
-                reference_image_space_n,
-                &sphere_intersection,
-                &optical_path_sign,
-            ),
+            (Some(state), Some((center, radius, image_side_direction))) => {
+                optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    reference_image_space_n,
+                    &sphere_intersection,
+                    alternate_optical_path_sign,
+                )
+            }
             _ => None,
-        }
-    }).collect();
-    let chief_reference_sphere_opd_um = chief_reference_sphere_opl.map(|reference_opl| chief_opl - reference_opl);
+        };
+    let chief_axis_reference_sphere_opl =
+        match (chief_reference_state, axis_reference_geometry.as_ref()) {
+            (Some(state), Some((center, radius, image_side_direction))) => {
+                optical_path_to_reference_sphere(
+                    state,
+                    *center,
+                    *radius,
+                    *image_side_direction,
+                    reference_image_space_n,
+                    &sphere_intersection,
+                    &optical_path_sign,
+                )
+            }
+            _ => None,
+        };
+    let radius_probe_scales = [0.50_f64, 0.65, 0.80, 0.90, 1.0, 1.10, 1.25, 1.50, 2.0];
+    let chief_radius_probe_opls: Vec<Option<f64>> = radius_probe_scales
+        .iter()
+        .map(
+            |scale| match (chief_reference_state, selected_reference_geometry.as_ref()) {
+                (Some(state), Some((center, radius, image_side_direction))) => {
+                    optical_path_to_reference_sphere(
+                        state,
+                        *center,
+                        *radius * *scale,
+                        *image_side_direction,
+                        reference_image_space_n,
+                        &sphere_intersection,
+                        &optical_path_sign,
+                    )
+                }
+                _ => None,
+            },
+        )
+        .collect();
+    let chief_reference_sphere_opd_um =
+        chief_reference_sphere_opl.map(|reference_opl| chief_opl - reference_opl);
     let mut sample_count = 0usize;
     let mut hit_count = 0usize;
     let mut reference_corrected_sample_count = 0usize;
@@ -10435,7 +11839,9 @@ fn run_native_opd_map_value_with_rows(
             let pupil_v = step as f64 / 10.0;
             if !opd_term_sample_targets
                 .iter()
-                .any(|(_, pupil_u, existing_v)| (*pupil_u).abs() <= 1.0e-12 && (*existing_v - pupil_v).abs() <= 1.0e-12)
+                .any(|(_, pupil_u, existing_v)| {
+                    (*pupil_u).abs() <= 1.0e-12 && (*existing_v - pupil_v).abs() <= 1.0e-12
+                })
             {
                 opd_term_sample_targets.push((format!("meridional-{step}"), 0.0, pupil_v));
             }
@@ -10443,9 +11849,9 @@ fn run_native_opd_map_value_with_rows(
     }
     let mut opd_term_samples = Vec::new();
     let entrance_pupil_geometry = requested_entrance_pupil_position.and_then(|position| {
-        let first_surface_index = rows.iter().position(|row| {
-            !is_coord_trans_row(row) && !is_object_row(row) && !is_gap_row(row)
-        })?;
+        let first_surface_index = rows
+            .iter()
+            .position(|row| !is_coord_trans_row(row) && !is_object_row(row) && !is_gap_row(row))?;
         let origin_base = first_surface_index * 3;
         let rotation_base = first_surface_index * 9;
         if origin_base + 2 >= packed_meta.row_origins.len()
@@ -10537,16 +11943,13 @@ fn run_native_opd_map_value_with_rows(
                     } else {
                         effective_sampling_radius
                     };
-                    let effective_relative_x = relative[0] * axis_u[0]
-                        + relative[1] * axis_u[1]
-                        + relative[2] * axis_u[2]
-                        - center_u * effective_sampling_radius;
-                    let effective_relative_y = relative[0] * axis_v[0]
-                        + relative[1] * axis_v[1]
-                        + relative[2] * axis_v[2]
-                        - center_v * effective_sampling_radius;
-                    let coordinate_x = effective_relative_x
-                        / normalization_radius;
+                    let effective_relative_x =
+                        relative[0] * axis_u[0] + relative[1] * axis_u[1] + relative[2] * axis_u[2]
+                            - center_u * effective_sampling_radius;
+                    let effective_relative_y =
+                        relative[0] * axis_v[0] + relative[1] * axis_v[1] + relative[2] * axis_v[2]
+                            - center_v * effective_sampling_radius;
+                    let coordinate_x = effective_relative_x / normalization_radius;
                     let coordinate_y = effective_relative_y / normalization_radius;
                     if coordinate_x.is_finite() && coordinate_y.is_finite() {
                         entrance_coordinate_x_grid[y][x] = Some(coordinate_x);
@@ -10586,8 +11989,8 @@ fn run_native_opd_map_value_with_rows(
                     if first_surface_opd_um.is_finite() {
                         first_surface_opd_sum_sq_um += first_surface_opd_um * first_surface_opd_um;
                         first_surface_opd_sample_count += 1;
-                        let first_surface_excluded_opd_um = (chief_opl - chief_first_opl)
-                            - (ray_opl - marginal_first_state[1]);
+                        let first_surface_excluded_opd_um =
+                            (chief_opl - chief_first_opl) - (ray_opl - marginal_first_state[1]);
                         if first_surface_excluded_opd_um.is_finite() {
                             first_surface_excluded_opd_sum_sq_um +=
                                 first_surface_excluded_opd_um * first_surface_excluded_opd_um;
@@ -10631,14 +12034,17 @@ fn run_native_opd_map_value_with_rows(
                 )
             });
             if (marginal_stop_state[0] - 1.0).abs() <= f64::EPSILON {
-                if let (Some(chief_stop), Some(chief_first_opl), Some(marginal_first_state)) =
-                    (chief_stop_state, chief_first_surface_opl, trace_checkpoints.first_state)
-                {
+                if let (Some(chief_stop), Some(chief_first_opl), Some(marginal_first_state)) = (
+                    chief_stop_state,
+                    chief_first_surface_opl,
+                    trace_checkpoints.first_state,
+                ) {
                     let chief_stop_segment_um = chief_stop[1] - chief_first_opl;
                     let marginal_stop_segment_um = marginal_stop_state[1] - marginal_first_state[1];
                     let stop_reference_opd_um = chief_stop_segment_um - marginal_stop_segment_um;
                     if stop_reference_opd_um.is_finite() {
-                        stop_reference_opd_sum_sq_um += stop_reference_opd_um * stop_reference_opd_um;
+                        stop_reference_opd_sum_sq_um +=
+                            stop_reference_opd_um * stop_reference_opd_um;
                         stop_reference_sample_count += 1;
                     }
                 }
@@ -10648,14 +12054,19 @@ fn run_native_opd_map_value_with_rows(
                     let chief_stop_image_path_um = distance3(
                         [chief_stop[2], chief_stop[3], chief_stop[4]],
                         chief_image_point,
-                    ) * image_space_n * 1000.0;
+                    ) * image_space_n
+                        * 1000.0;
                     let marginal_stop_image_path_um = distance3(
-                        [marginal_stop_state[2], marginal_stop_state[3], marginal_stop_state[4]],
+                        [
+                            marginal_stop_state[2],
+                            marginal_stop_state[3],
+                            marginal_stop_state[4],
+                        ],
                         chief_image_point,
-                    ) * image_space_n * 1000.0;
-                    let stop_image_reference_opd_um =
-                        (chief_stop[1] + chief_stop_image_path_um)
-                            - (marginal_stop_state[1] + marginal_stop_image_path_um);
+                    ) * image_space_n
+                        * 1000.0;
+                    let stop_image_reference_opd_um = (chief_stop[1] + chief_stop_image_path_um)
+                        - (marginal_stop_state[1] + marginal_stop_image_path_um);
                     if stop_image_reference_opd_um.is_finite() {
                         stop_image_reference_opd_sum_sq_um +=
                             stop_image_reference_opd_um * stop_image_reference_opd_um;
@@ -10663,17 +12074,21 @@ fn run_native_opd_map_value_with_rows(
                     }
                 }
             }
-            if let (Some(chief_state), Some(marginal_state)) = (chief_prev_state.as_ref(), marginal_prev_state.as_ref()) {
+            if let (Some(chief_state), Some(marginal_state)) =
+                (chief_prev_state.as_ref(), marginal_prev_state.as_ref())
+            {
                 let chief_image_path_um = distance3(
                     [chief_state[2], chief_state[3], chief_state[4]],
                     chief_image_point,
-                ) * image_space_n * 1000.0;
+                ) * image_space_n
+                    * 1000.0;
                 let marginal_image_path_um = distance3(
                     [marginal_state[2], marginal_state[3], marginal_state[4]],
                     chief_image_point,
-                ) * image_space_n * 1000.0;
-                let image_plane_reference_opd_um =
-                    (chief_state[1] + chief_image_path_um) - (marginal_state[1] + marginal_image_path_um);
+                ) * image_space_n
+                    * 1000.0;
+                let image_plane_reference_opd_um = (chief_state[1] + chief_image_path_um)
+                    - (marginal_state[1] + marginal_image_path_um);
                 if image_plane_reference_opd_um.is_finite() {
                     image_plane_reference_opd_sum_sq_um +=
                         image_plane_reference_opd_um * image_plane_reference_opd_um;
@@ -10685,7 +12100,11 @@ fn run_native_opd_map_value_with_rows(
                 selected_reference_geometry.as_ref(),
                 chief_reference_sphere_opl,
             ) {
-                (Some(state), Some((center, radius, image_side_direction)), Some(chief_reference_opl)) => optical_path_to_reference_sphere(
+                (
+                    Some(state),
+                    Some((center, radius, image_side_direction)),
+                    Some(chief_reference_opl),
+                ) => optical_path_to_reference_sphere(
                     state,
                     *center,
                     *radius,
@@ -10693,16 +12112,16 @@ fn run_native_opd_map_value_with_rows(
                     reference_image_space_n,
                     &sphere_intersection,
                     &optical_path_sign,
-                ).map(|marginal_reference_opl| (chief_reference_opl, marginal_reference_opl)),
+                )
+                .map(|marginal_reference_opl| (chief_reference_opl, marginal_reference_opl)),
                 _ => None,
             };
             let has_reference_sphere_opd = corrected_opl_pair.is_some();
             if has_reference_sphere_opd {
                 reference_corrected_sample_count += 1;
             }
-            let (opd_first, opd_second) = corrected_opl_pair.unwrap_or_else(|| {
-                (chief_opl, ray_opl)
-            });
+            let (opd_first, opd_second) =
+                corrected_opl_pair.unwrap_or_else(|| (chief_opl, ray_opl));
             let opd_wave_denominator = if opd_wave_normalization == "trace" {
                 wavelength_um
             } else {
@@ -10717,11 +12136,14 @@ fn run_native_opd_map_value_with_rows(
                 tracked_opd_sum_sq_um += tracked_opd_um * tracked_opd_um;
                 tracked_opd_sample_count += 1;
             }
-            if let (Some(chief_state), Some(marginal_state)) = (chief_prev_state.as_ref(), marginal_prev_state.as_ref()) {
+            if let (Some(chief_state), Some(marginal_state)) =
+                (chief_prev_state.as_ref(), marginal_prev_state.as_ref())
+            {
                 let before_target_tracked_opd_um = chief_state[1] - marginal_state[1];
                 let target_segment_opd_um = tracked_opd_um - before_target_tracked_opd_um;
                 if before_target_tracked_opd_um.is_finite() {
-                    before_target_tracked_opd_sum_sq_um += before_target_tracked_opd_um * before_target_tracked_opd_um;
+                    before_target_tracked_opd_sum_sq_um +=
+                        before_target_tracked_opd_um * before_target_tracked_opd_um;
                     before_target_tracked_opd_sample_count += 1;
                 }
                 if target_segment_opd_um.is_finite() {
@@ -10751,50 +12173,91 @@ fn run_native_opd_map_value_with_rows(
                     }
                 }
             }
-            if let Some((label, _, _)) = opd_term_sample_targets.iter().find(|(_, sample_u, sample_v)| {
-                x == grid_index_for_pupil_coordinate(*sample_u)
-                    && y == grid_index_for_pupil_coordinate(*sample_v)
-            }) {
-                let surface_trace: Vec<Value> = (0..packed_target.row_count).filter_map(|surface_index| {
-                    let state = trace_single_ray_hit_state_with_meta_core(
-                        &ray, surface_index, object_space_n,
-                        &packed_target.row_meta, &packed_target.row_params, &packed_target.row_origins,
-                        &packed_target.row_inv_rots, &packed_target.row_rots, packed_target.row_count,
-                    );
-                    if (state[0] - 1.0).abs() > f64::EPSILON || !state[1..8].iter().all(|value| value.is_finite()) {
-                        return None;
-                    }
-                    let point_base = surface_index * 3;
-                    let rotation_base = surface_index * 9;
-                    let inv = &packed_target.row_inv_rots[rotation_base..rotation_base + 9];
-                    let local_point = mul_mat3_vec3(&[inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7], inv[8]], [
-                        state[2] - packed_target.row_origins[point_base],
-                        state[3] - packed_target.row_origins[point_base + 1],
-                        state[4] - packed_target.row_origins[point_base + 2],
-                    ]);
-                    let local_direction = mul_mat3_vec3(&[inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7], inv[8]], [state[5], state[6], state[7]]);
-                    Some(serde_json::json!({
-                        "surfaceIndex": surface_index,
-                        "oplUm": state[1],
-                        "globalPoint": [state[2], state[3], state[4]],
-                        "point": local_point,
-                        "direction": local_direction,
-                    }))
-                }).collect();
+            if let Some((label, _, _)) =
+                opd_term_sample_targets
+                    .iter()
+                    .find(|(_, sample_u, sample_v)| {
+                        x == grid_index_for_pupil_coordinate(*sample_u)
+                            && y == grid_index_for_pupil_coordinate(*sample_v)
+                    })
+            {
+                let surface_trace: Vec<Value> = (0..packed_target.row_count)
+                    .filter_map(|surface_index| {
+                        let state = trace_single_ray_hit_state_with_meta_core(
+                            &ray,
+                            surface_index,
+                            object_space_n,
+                            &packed_target.row_meta,
+                            &packed_target.row_params,
+                            &packed_target.row_origins,
+                            &packed_target.row_inv_rots,
+                            &packed_target.row_rots,
+                            packed_target.row_count,
+                        );
+                        if (state[0] - 1.0).abs() > f64::EPSILON
+                            || !state[1..8].iter().all(|value| value.is_finite())
+                        {
+                            return None;
+                        }
+                        let point_base = surface_index * 3;
+                        let rotation_base = surface_index * 9;
+                        let inv = &packed_target.row_inv_rots[rotation_base..rotation_base + 9];
+                        let local_point = mul_mat3_vec3(
+                            &[
+                                inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7],
+                                inv[8],
+                            ],
+                            [
+                                state[2] - packed_target.row_origins[point_base],
+                                state[3] - packed_target.row_origins[point_base + 1],
+                                state[4] - packed_target.row_origins[point_base + 2],
+                            ],
+                        );
+                        let local_direction = mul_mat3_vec3(
+                            &[
+                                inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7],
+                                inv[8],
+                            ],
+                            [state[5], state[6], state[7]],
+                        );
+                        Some(serde_json::json!({
+                            "surfaceIndex": surface_index,
+                            "oplUm": state[1],
+                            "globalPoint": [state[2], state[3], state[4]],
+                            "point": local_point,
+                            "direction": local_direction,
+                        }))
+                    })
+                    .collect();
                 let chief_pre_target_opl_um = chief_prev_state.as_ref().map(|state| state[1]);
                 let marginal_pre_target_opl_um = marginal_prev_state.as_ref().map(|state| state[1]);
-                let chief_pre_target_point = chief_prev_state.as_ref().map(|state| [state[2], state[3], state[4]]);
-                let marginal_pre_target_point = marginal_prev_state.as_ref().map(|state| [state[2], state[3], state[4]]);
-                let chief_pre_target_direction = chief_prev_state.as_ref().map(|state| [state[5], state[6], state[7]]);
-                let marginal_pre_target_direction = marginal_prev_state.as_ref().map(|state| [state[5], state[6], state[7]]);
-                let marginal_target_point = marginal_target_state.as_ref().map(|state| [state[2], state[3], state[4]]);
-                let marginal_target_direction = marginal_target_state.as_ref().map(|state| [state[5], state[6], state[7]]);
-                let before_target_opd_um = chief_pre_target_opl_um.zip(marginal_pre_target_opl_um)
+                let chief_pre_target_point = chief_prev_state
+                    .as_ref()
+                    .map(|state| [state[2], state[3], state[4]]);
+                let marginal_pre_target_point = marginal_prev_state
+                    .as_ref()
+                    .map(|state| [state[2], state[3], state[4]]);
+                let chief_pre_target_direction = chief_prev_state
+                    .as_ref()
+                    .map(|state| [state[5], state[6], state[7]]);
+                let marginal_pre_target_direction = marginal_prev_state
+                    .as_ref()
+                    .map(|state| [state[5], state[6], state[7]]);
+                let marginal_target_point = marginal_target_state
+                    .as_ref()
+                    .map(|state| [state[2], state[3], state[4]]);
+                let marginal_target_direction = marginal_target_state
+                    .as_ref()
+                    .map(|state| [state[5], state[6], state[7]]);
+                let before_target_opd_um = chief_pre_target_opl_um
+                    .zip(marginal_pre_target_opl_um)
                     .map(|(chief, marginal)| chief - marginal);
-                let target_segment_opd_um = before_target_opd_um.map(|before| tracked_opd_um - before);
+                let target_segment_opd_um =
+                    before_target_opd_um.map(|before| tracked_opd_um - before);
                 let chief_sphere_opl_um = corrected_opl_pair.map(|(chief, _)| chief);
                 let marginal_sphere_opl_um = corrected_opl_pair.map(|(_, marginal)| marginal);
-                let reference_opd_um = chief_sphere_opl_um.zip(marginal_sphere_opl_um)
+                let reference_opd_um = chief_sphere_opl_um
+                    .zip(marginal_sphere_opl_um)
                     .map(|(chief, marginal)| chief - marginal);
                 opd_term_samples.push(serde_json::json!({
                     "label": label,
@@ -10819,7 +12282,11 @@ fn run_native_opd_map_value_with_rows(
                     "surfaceTrace": surface_trace,
                 }));
             }
-            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_alternate_opl)) = (
+            if let (
+                Some(state),
+                Some((center, radius, image_side_direction)),
+                Some(chief_alternate_opl),
+            ) = (
                 marginal_prev_state.as_ref(),
                 selected_reference_geometry.as_ref(),
                 chief_alternate_reference_sphere_opl,
@@ -10836,11 +12303,16 @@ fn run_native_opd_map_value_with_rows(
                     let alternate_reference_opd_um = chief_alternate_opl - alternate_marginal_opl;
                     if alternate_reference_opd_um.is_finite() {
                         alternate_reference_sample_count += 1;
-                        alternate_reference_opd_sum_sq_um += alternate_reference_opd_um * alternate_reference_opd_um;
+                        alternate_reference_opd_sum_sq_um +=
+                            alternate_reference_opd_um * alternate_reference_opd_um;
                     }
                 }
             }
-            if let (Some(chief_state), Some(marginal_state), Some((center, radius, image_side_direction))) = (
+            if let (
+                Some(chief_state),
+                Some(marginal_state),
+                Some((center, radius, image_side_direction)),
+            ) = (
                 chief_target_state.as_ref(),
                 marginal_target_state.as_ref(),
                 selected_reference_geometry.as_ref(),
@@ -10866,14 +12338,20 @@ fn run_native_opd_map_value_with_rows(
                 if let (Some(chief_reference_opl), Some(marginal_reference_opl)) =
                     (chief_target_reference_opl, marginal_target_reference_opl)
                 {
-                    let target_origin_reference_opd_um = chief_reference_opl - marginal_reference_opl;
+                    let target_origin_reference_opd_um =
+                        chief_reference_opl - marginal_reference_opl;
                     if target_origin_reference_opd_um.is_finite() {
                         target_origin_reference_sample_count += 1;
-                        target_origin_reference_opd_sum_sq_um += target_origin_reference_opd_um * target_origin_reference_opd_um;
+                        target_origin_reference_opd_sum_sq_um +=
+                            target_origin_reference_opd_um * target_origin_reference_opd_um;
                     }
                 }
             }
-            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_air_opl)) = (
+            if let (
+                Some(state),
+                Some((center, radius, image_side_direction)),
+                Some(chief_air_opl),
+            ) = (
                 marginal_prev_state.as_ref(),
                 selected_reference_geometry.as_ref(),
                 chief_air_reference_sphere_opl,
@@ -10894,7 +12372,11 @@ fn run_native_opd_map_value_with_rows(
                     }
                 }
             }
-            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_alternate_sign_opl)) = (
+            if let (
+                Some(state),
+                Some((center, radius, image_side_direction)),
+                Some(chief_alternate_sign_opl),
+            ) = (
                 marginal_prev_state.as_ref(),
                 selected_reference_geometry.as_ref(),
                 chief_alternate_sign_reference_sphere_opl,
@@ -10908,14 +12390,20 @@ fn run_native_opd_map_value_with_rows(
                     &sphere_intersection,
                     alternate_optical_path_sign,
                 ) {
-                    let alternate_sign_reference_opd_um = chief_alternate_sign_opl - alternate_sign_marginal_opl;
+                    let alternate_sign_reference_opd_um =
+                        chief_alternate_sign_opl - alternate_sign_marginal_opl;
                     if alternate_sign_reference_opd_um.is_finite() {
                         alternate_sign_reference_sample_count += 1;
-                        alternate_sign_reference_opd_sum_sq_um += alternate_sign_reference_opd_um * alternate_sign_reference_opd_um;
+                        alternate_sign_reference_opd_sum_sq_um +=
+                            alternate_sign_reference_opd_um * alternate_sign_reference_opd_um;
                     }
                 }
             }
-            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_axis_opl)) = (
+            if let (
+                Some(state),
+                Some((center, radius, image_side_direction)),
+                Some(chief_axis_opl),
+            ) = (
                 marginal_prev_state.as_ref(),
                 axis_reference_geometry.as_ref(),
                 chief_axis_reference_sphere_opl,
@@ -10932,7 +12420,8 @@ fn run_native_opd_map_value_with_rows(
                     let axis_reference_opd_um = chief_axis_opl - axis_marginal_reference_opl;
                     if axis_reference_opd_um.is_finite() {
                         axis_reference_sample_count += 1;
-                        axis_reference_opd_sum_sq_um += axis_reference_opd_um * axis_reference_opd_um;
+                        axis_reference_opd_sum_sq_um +=
+                            axis_reference_opd_um * axis_reference_opd_um;
                     }
                 }
             }
@@ -10941,7 +12430,9 @@ fn run_native_opd_map_value_with_rows(
                 selected_reference_geometry.as_ref(),
             ) {
                 for (index, scale) in radius_probe_scales.iter().enumerate() {
-                    let Some(chief_probe_opl) = chief_radius_probe_opls.get(index).and_then(|value| *value) else {
+                    let Some(chief_probe_opl) =
+                        chief_radius_probe_opls.get(index).and_then(|value| *value)
+                    else {
                         continue;
                     };
                     let Some(marginal_probe_opl) = optical_path_to_reference_sphere(
@@ -10962,7 +12453,11 @@ fn run_native_opd_map_value_with_rows(
                     }
                 }
             }
-            if let (Some(state), Some((center, radius, image_side_direction)), Some(chief_current_opl)) = (
+            if let (
+                Some(state),
+                Some((center, radius, image_side_direction)),
+                Some(chief_current_opl),
+            ) = (
                 marginal_prev_state.as_ref(),
                 current_reference_geometry.as_ref(),
                 chief_current_reference_opl,
@@ -10979,7 +12474,8 @@ fn run_native_opd_map_value_with_rows(
                     let current_reference_opd_um = chief_current_opl - current_marginal_opl;
                     if current_reference_opd_um.is_finite() {
                         current_reference_sample_count += 1;
-                        current_reference_opd_sum_sq_um += current_reference_opd_um * current_reference_opd_um;
+                        current_reference_opd_sum_sq_um +=
+                            current_reference_opd_um * current_reference_opd_um;
                     }
                 }
             }
@@ -10998,16 +12494,12 @@ fn run_native_opd_map_value_with_rows(
         if hit_count == 0 {
             return Err(JsValue::from_str(&format!(
                 "No valid OPD samples for entrance mode (hit-rate={:.3}, hits={}, samples={})",
-                hit_rate,
-                hit_count,
-                sample_count
+                hit_rate, hit_count, sample_count
             )));
         }
         sparse_entrance_warning = Some(format!(
             "sparse entrance OPD samples (hit-rate={:.3}, hits={}, samples={})",
-            hit_rate,
-            hit_count,
-            sample_count
+            hit_rate, hit_count, sample_count
         ));
     }
 
@@ -11021,28 +12513,34 @@ fn run_native_opd_map_value_with_rows(
     let wavefront_fit = display_fit.clone();
     let to_json_grid = |src: &[Vec<Option<f64>>]| -> Value {
         Value::Array(
-            src.iter().map(|row| {
-                Value::Array(
-                    row.iter().map(|v| {
-                        match v {
-                            Some(x) if x.is_finite() => Value::from(*x),
-                            _ => Value::Null,
-                        }
-                    }).collect()
-                )
-            }).collect()
+            src.iter()
+                .map(|row| {
+                    Value::Array(
+                        row.iter()
+                            .map(|v| match v {
+                                Some(x) if x.is_finite() => Value::from(*x),
+                                _ => Value::Null,
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
         )
     };
     let to_json_bool_grid = |src: &[Vec<Option<bool>>]| -> Value {
         Value::Array(
-            src.iter().map(|row| {
-                Value::Array(
-                    row.iter().map(|v| match v {
-                        Some(value) => Value::from(*value),
-                        None => Value::Null,
-                    }).collect()
-                )
-            }).collect()
+            src.iter()
+                .map(|row| {
+                    Value::Array(
+                        row.iter()
+                            .map(|v| match v {
+                                Some(value) => Value::from(*value),
+                                None => Value::Null,
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
         )
     };
 
@@ -11233,9 +12731,11 @@ fn run_native_opd_map_value_with_rows(
         response_object.insert(
             "firstSurfaceExcludedOpdRmsUm".to_string(),
             serde_json::json!(if first_surface_excluded_opd_sample_count > 0 {
-                Some((first_surface_excluded_opd_sum_sq_um
-                    / first_surface_excluded_opd_sample_count as f64)
-                    .sqrt())
+                Some(
+                    (first_surface_excluded_opd_sum_sq_um
+                        / first_surface_excluded_opd_sample_count as f64)
+                        .sqrt(),
+                )
             } else {
                 None::<f64>
             }),
@@ -11243,9 +12743,11 @@ fn run_native_opd_map_value_with_rows(
         response_object.insert(
             "imagePlaneReferenceOpdRmsUm".to_string(),
             serde_json::json!(if image_plane_reference_sample_count > 0 {
-                Some((image_plane_reference_opd_sum_sq_um
-                    / image_plane_reference_sample_count as f64)
-                    .sqrt())
+                Some(
+                    (image_plane_reference_opd_sum_sq_um
+                        / image_plane_reference_sample_count as f64)
+                        .sqrt(),
+                )
             } else {
                 None::<f64>
             }),
@@ -11253,9 +12755,7 @@ fn run_native_opd_map_value_with_rows(
         response_object.insert(
             "stopReferenceOpdRmsUm".to_string(),
             serde_json::json!(if stop_reference_sample_count > 0 {
-                Some((stop_reference_opd_sum_sq_um
-                    / stop_reference_sample_count as f64)
-                    .sqrt())
+                Some((stop_reference_opd_sum_sq_um / stop_reference_sample_count as f64).sqrt())
             } else {
                 None::<f64>
             }),
@@ -11263,9 +12763,10 @@ fn run_native_opd_map_value_with_rows(
         response_object.insert(
             "stopImageReferenceOpdRmsUm".to_string(),
             serde_json::json!(if stop_image_reference_sample_count > 0 {
-                Some((stop_image_reference_opd_sum_sq_um
-                    / stop_image_reference_sample_count as f64)
-                    .sqrt())
+                Some(
+                    (stop_image_reference_opd_sum_sq_um / stop_image_reference_sample_count as f64)
+                        .sqrt(),
+                )
             } else {
                 None::<f64>
             }),
@@ -11293,9 +12794,16 @@ pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue
 pub fn run_native_opd_rms_waves_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
     let map_value = run_native_opd_map_wasm_json(req_json)?;
     let map_response: NativeOpdMapWasmResponseForScalar = serde_wasm_bindgen::from_value(map_value)
-        .map_err(|e| JsValue::from_str(&format!("run_native_opd_rms_waves_wasm_json: decode error: {}", e)))?;
-    let rms_waves = compute_finite_opd_grid_rms_waves(&map_response.display_opd_grid)
-        .ok_or_else(|| JsValue::from_str("run_native_opd_rms_waves_wasm_json: no finite OPD samples"))?;
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "run_native_opd_rms_waves_wasm_json: decode error: {}",
+                e
+            ))
+        })?;
+    let rms_waves =
+        compute_finite_opd_grid_rms_waves(&map_response.display_opd_grid).ok_or_else(|| {
+            JsValue::from_str("run_native_opd_rms_waves_wasm_json: no finite OPD samples")
+        })?;
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     serde_json::json!({
@@ -11339,23 +12847,38 @@ pub fn run_native_opd_rms_waves_wasm_json(req_json: String) -> Result<JsValue, J
         "rmsWaves": rms_waves,
         "message": format!("{} [native scalar RMS]", map_response.message),
     })
-        .serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("run_native_opd_rms_waves_wasm_json: serialize error: {}", e)))
+    .serialize(&serializer)
+    .map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_opd_rms_waves_wasm_json: serialize error: {}",
+            e
+        ))
+    })
 }
 
 #[wasm_bindgen]
 pub fn run_native_chief_ray_angle_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_chief_ray_angle_wasm_json: invalid request json: {}", e)))?;
-    let req_obj = req.as_object().ok_or_else(|| JsValue::from_str("run_native_chief_ray_angle_wasm_json: request must be an object"))?;
+    let req: Value = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_chief_ray_angle_wasm_json: invalid request json: {}",
+            e
+        ))
+    })?;
+    let req_obj = req.as_object().ok_or_else(|| {
+        JsValue::from_str("run_native_chief_ray_angle_wasm_json: request must be an object")
+    })?;
 
     let optical_system_rows = req_obj
         .get("opticalSystemRows")
         .and_then(|v| v.as_array())
         .cloned()
-        .ok_or_else(|| JsValue::from_str("run_native_chief_ray_angle_wasm_json: opticalSystemRows is required"))?;
+        .ok_or_else(|| {
+            JsValue::from_str("run_native_chief_ray_angle_wasm_json: opticalSystemRows is required")
+        })?;
     if optical_system_rows.is_empty() {
-        return Err(JsValue::from_str("run_native_chief_ray_angle_wasm_json: opticalSystemRows is empty"));
+        return Err(JsValue::from_str(
+            "run_native_chief_ray_angle_wasm_json: opticalSystemRows is empty",
+        ));
     }
 
     let source_rows_raw = req_obj
@@ -11369,11 +12892,21 @@ pub fn run_native_chief_ray_angle_wasm_json(req_json: String) -> Result<JsValue,
         .cloned()
         .unwrap_or_default();
     if object_rows.is_empty() {
-        return Err(JsValue::from_str("run_native_chief_ray_angle_wasm_json: objectRows is empty"));
+        return Err(JsValue::from_str(
+            "run_native_chief_ray_angle_wasm_json: objectRows is empty",
+        ));
     }
 
-    let angle_deg = compute_native_chief_ray_angle_deg_wasm(&optical_system_rows, &source_rows_raw, &object_rows)
-        .ok_or_else(|| JsValue::from_str("run_native_chief_ray_angle_wasm_json: chief ray angle calculation failed"))?;
+    let angle_deg = compute_native_chief_ray_angle_deg_wasm(
+        &optical_system_rows,
+        &source_rows_raw,
+        &object_rows,
+    )
+    .ok_or_else(|| {
+        JsValue::from_str(
+            "run_native_chief_ray_angle_wasm_json: chief ray angle calculation failed",
+        )
+    })?;
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     serde_json::json!({
@@ -11381,23 +12914,40 @@ pub fn run_native_chief_ray_angle_wasm_json(req_json: String) -> Result<JsValue,
         "chiefRayAngleDeg": angle_deg,
         "message": "Computed via Web Rust/WASM chief ray angle API",
     })
-        .serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("run_native_chief_ray_angle_wasm_json: serialize error: {}", e)))
+    .serialize(&serializer)
+    .map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_chief_ray_angle_wasm_json: serialize error: {}",
+            e
+        ))
+    })
 }
 
 #[wasm_bindgen]
 pub fn run_native_paraxial_metrics_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_paraxial_metrics_wasm_json: invalid request json: {}", e)))?;
-    let req_obj = req.as_object().ok_or_else(|| JsValue::from_str("run_native_paraxial_metrics_wasm_json: request must be an object"))?;
+    let req: Value = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_paraxial_metrics_wasm_json: invalid request json: {}",
+            e
+        ))
+    })?;
+    let req_obj = req.as_object().ok_or_else(|| {
+        JsValue::from_str("run_native_paraxial_metrics_wasm_json: request must be an object")
+    })?;
 
     let optical_system_rows = req_obj
         .get("opticalSystemRows")
         .and_then(|v| v.as_array())
         .cloned()
-        .ok_or_else(|| JsValue::from_str("run_native_paraxial_metrics_wasm_json: opticalSystemRows is required"))?;
+        .ok_or_else(|| {
+            JsValue::from_str(
+                "run_native_paraxial_metrics_wasm_json: opticalSystemRows is required",
+            )
+        })?;
     if optical_system_rows.is_empty() {
-        return Err(JsValue::from_str("run_native_paraxial_metrics_wasm_json: opticalSystemRows is empty"));
+        return Err(JsValue::from_str(
+            "run_native_paraxial_metrics_wasm_json: opticalSystemRows is empty",
+        ));
     }
 
     let source_rows = req_obj
@@ -11411,7 +12961,8 @@ pub fn run_native_paraxial_metrics_wasm_json(req_json: String) -> Result<JsValue
         .cloned()
         .unwrap_or_default();
 
-    let metrics = compute_native_paraxial_metrics_wasm(&optical_system_rows, &source_rows, &object_rows);
+    let metrics =
+        compute_native_paraxial_metrics_wasm(&optical_system_rows, &source_rows, &object_rows);
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     serde_json::json!({
@@ -11419,23 +12970,38 @@ pub fn run_native_paraxial_metrics_wasm_json(req_json: String) -> Result<JsValue
         "metrics": metrics,
         "message": "Computed via Web Rust/WASM paraxial metrics API",
     })
-        .serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("run_native_paraxial_metrics_wasm_json: serialize error: {}", e)))
+    .serialize(&serializer)
+    .map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_paraxial_metrics_wasm_json: serialize error: {}",
+            e
+        ))
+    })
 }
 
 #[wasm_bindgen]
 pub fn run_native_seidel_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_seidel_wasm_json: invalid request json: {}", e)))?;
-    let req_obj = req.as_object().ok_or_else(|| JsValue::from_str("run_native_seidel_wasm_json: request must be an object"))?;
+    let req: Value = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_seidel_wasm_json: invalid request json: {}",
+            e
+        ))
+    })?;
+    let req_obj = req.as_object().ok_or_else(|| {
+        JsValue::from_str("run_native_seidel_wasm_json: request must be an object")
+    })?;
 
     let optical_system_rows = req_obj
         .get("opticalSystemRows")
         .and_then(|v| v.as_array())
         .cloned()
-        .ok_or_else(|| JsValue::from_str("run_native_seidel_wasm_json: opticalSystemRows is required"))?;
+        .ok_or_else(|| {
+            JsValue::from_str("run_native_seidel_wasm_json: opticalSystemRows is required")
+        })?;
     if optical_system_rows.is_empty() {
-        return Err(JsValue::from_str("run_native_seidel_wasm_json: opticalSystemRows is empty"));
+        return Err(JsValue::from_str(
+            "run_native_seidel_wasm_json: opticalSystemRows is empty",
+        ));
     }
 
     let source_rows = req_obj
@@ -11491,51 +13057,81 @@ pub fn run_native_seidel_wasm_json(req_json: String) -> Result<JsValue, JsValue>
         "wavelengthUm": wavelength_um,
         "message": "Computed via Web Rust/WASM Seidel API",
     })
-        .serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("run_native_seidel_wasm_json: serialize error: {}", e)))
+    .serialize(&serializer)
+    .map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_seidel_wasm_json: serialize error: {}",
+            e
+        ))
+    })
 }
 
 #[wasm_bindgen]
 pub fn compute_native_opd_grid_rms_waves_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: NativeOpdGridScalarRmsRequest = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("compute_native_opd_grid_rms_waves_wasm_json: JSON parse: {}", e)))?;
-    let rms_waves = compute_finite_opd_grid_rms_waves(&req.display_opd_grid)
-        .ok_or_else(|| JsValue::from_str("compute_native_opd_grid_rms_waves_wasm_json: no finite OPD samples"))?;
+    let req: NativeOpdGridScalarRmsRequest = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "compute_native_opd_grid_rms_waves_wasm_json: JSON parse: {}",
+            e
+        ))
+    })?;
+    let rms_waves = compute_finite_opd_grid_rms_waves(&req.display_opd_grid).ok_or_else(|| {
+        JsValue::from_str("compute_native_opd_grid_rms_waves_wasm_json: no finite OPD samples")
+    })?;
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     serde_json::json!({
         "backend": "rust-wasm-grid-scalar-rms",
         "rmsWaves": rms_waves,
     })
-        .serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("compute_native_opd_grid_rms_waves_wasm_json: serialize error: {}", e)))
+    .serialize(&serializer)
+    .map_err(|e| {
+        JsValue::from_str(&format!(
+            "compute_native_opd_grid_rms_waves_wasm_json: serialize error: {}",
+            e
+        ))
+    })
 }
 
 #[wasm_bindgen]
 pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_distortion_wasm_json: JSON parse: {}", e)))?;
-    let req_obj = req
-        .as_object()
-        .ok_or_else(|| JsValue::from_str("run_native_distortion_wasm_json: request must be an object"))?;
+    let req: Value = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_distortion_wasm_json: JSON parse: {}",
+            e
+        ))
+    })?;
+    let req_obj = req.as_object().ok_or_else(|| {
+        JsValue::from_str("run_native_distortion_wasm_json: request must be an object")
+    })?;
 
     let rows_raw = req_obj
         .get("opticalSystemRows")
         .and_then(|v| v.as_array())
         .cloned()
-        .ok_or_else(|| JsValue::from_str("run_native_distortion_wasm_json: opticalSystemRows is required"))?;
+        .ok_or_else(|| {
+            JsValue::from_str("run_native_distortion_wasm_json: opticalSystemRows is required")
+        })?;
     if rows_raw.is_empty() {
-        return Err(JsValue::from_str("run_native_distortion_wasm_json: opticalSystemRows is empty"));
+        return Err(JsValue::from_str(
+            "run_native_distortion_wasm_json: opticalSystemRows is empty",
+        ));
     }
     let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
 
     let field_samples: Vec<f64> = req_obj
         .get("fieldSamples")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(value_to_f64).filter(|v| v.is_finite()).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(value_to_f64)
+                .filter(|v| v.is_finite())
+                .collect()
+        })
         .unwrap_or_default();
     if field_samples.is_empty() {
-        return Err(JsValue::from_str("run_native_distortion_wasm_json: fieldSamples is empty"));
+        return Err(JsValue::from_str(
+            "run_native_distortion_wasm_json: fieldSamples is empty",
+        ));
     }
 
     let source_rows = req_obj
@@ -11605,15 +13201,19 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
         .max(1e-6);
 
     let mirror_sign = distortion_mirror_sign(&rows);
-    let (packed, object_space_n) = build_trace_packed_meta_for_wavelength(&rows, wavelength, surface_index);
+    let (packed, object_space_n) =
+        build_trace_packed_meta_for_wavelength(&rows, wavelength, surface_index);
 
     let paraxial_trace = calculate_full_system_paraxial_trace_json(&rows);
     let paraxial_focal_length = paraxial_trace
         .as_ref()
         .map(|t| t.focal_length_mm)
         .filter(|v| v.is_finite() && v.abs() > 1e-12);
-    let focal_length = paraxial_focal_length
-        .ok_or_else(|| JsValue::from_str("run_native_distortion_wasm_json: failed to resolve paraxial focal length"))?;
+    let focal_length = paraxial_focal_length.ok_or_else(|| {
+        JsValue::from_str(
+            "run_native_distortion_wasm_json: failed to resolve paraxial focal length",
+        )
+    })?;
 
     let magnification = -1.0_f64;
 
@@ -11699,9 +13299,12 @@ pub fn run_native_distortion_wasm_json(req_json: String) -> Result<JsValue, JsVa
     });
 
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
-    response
-        .serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("run_native_distortion_wasm_json: serialize error: {}", e)))
+    response.serialize(&serializer).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_distortion_wasm_json: serialize error: {}",
+            e
+        ))
+    })
 }
 
 #[wasm_bindgen]
@@ -11753,6 +13356,7 @@ pub fn solve_ray_origins_to_stop_points_with_meta_batch(
     let mut best_origins = vec![0.0_f64; ray_count * 3];
     let mut best_errs = vec![f64::INFINITY; ray_count];
     let mut solved = vec![false; ray_count];
+    let mut inactive = vec![false; ray_count];
 
     for i in 0..ray_count {
         let b = i * 3;
@@ -11775,17 +13379,33 @@ pub fn solve_ray_origins_to_stop_points_with_meta_batch(
     }
 
     let iter_max = max_iter.clamp(1, 64);
-    let eps_local = if eps.is_finite() && eps > 0.0 { eps } else { 1e-3 };
-    let tol_local = if tol_mm.is_finite() && tol_mm > 0.0 { tol_mm } else { 1e-3 };
-    let max_step_local = if max_step.is_finite() && max_step > 0.0 { max_step } else { 10.0 };
+    let eps_local = if eps.is_finite() && eps > 0.0 {
+        eps
+    } else {
+        1e-3
+    };
+    let tol_local = if tol_mm.is_finite() && tol_mm > 0.0 {
+        tol_mm
+    } else {
+        1e-3
+    };
+    let max_step_local = if max_step.is_finite() && max_step > 0.0 {
+        max_step
+    } else {
+        10.0
+    };
 
     for _iter in 0..iter_max {
-        if solved.iter().all(|v| *v) {
+        if solved
+            .iter()
+            .zip(inactive.iter())
+            .all(|(is_solved, is_inactive)| *is_solved || *is_inactive)
+        {
             break;
         }
 
         for i in 0..ray_count {
-            if solved[i] {
+            if solved[i] || inactive[i] {
                 continue;
             }
             let b = i * 3;
@@ -11855,7 +13475,13 @@ pub fn solve_ray_origins_to_stop_points_with_meta_batch(
                     row_count,
                 );
 
-                if rx[0] == 1.0 && ry[0] == 1.0 && rx[2].is_finite() && rx[3].is_finite() && ry[2].is_finite() && ry[3].is_finite() {
+                if rx[0] == 1.0
+                    && ry[0] == 1.0
+                    && rx[2].is_finite()
+                    && rx[3].is_finite()
+                    && ry[2].is_finite()
+                    && ry[3].is_finite()
+                {
                     let j11 = (rx[2] - r0[2]) / eps_local;
                     let j21 = (rx[3] - r0[3]) / eps_local;
                     let j12 = (ry[2] - r0[2]) / eps_local;
@@ -11893,9 +13519,15 @@ pub fn solve_ray_origins_to_stop_points_with_meta_batch(
                     origins[b + 2] = oz;
                 }
             } else {
-                origins[b] = 0.5 * (ox + best_origins[b]);
-                origins[b + 1] = 0.5 * (oy + best_origins[b + 1]);
-                origins[b + 2] = oz;
+                if best_errs[i].is_finite() {
+                    origins[b] = 0.5 * (ox + best_origins[b]);
+                    origins[b + 1] = 0.5 * (oy + best_origins[b + 1]);
+                    origins[b + 2] = oz;
+                } else {
+                    // No valid hit has ever been found and the existing fallback
+                    // would retry the identical origin for every remaining loop.
+                    inactive[i] = true;
+                }
             }
         }
     }
@@ -11937,13 +13569,13 @@ pub fn fft_2d_forward(
     use num_complex::Complex;
     use rustfft::num_traits::Zero;
     use rustfft::FftPlanner;
-    
+
     let rows = rows as usize;
     let cols = cols as usize;
     let size = rows * cols;
-    
+
     let start_ms = js_sys::Date::now();
-    
+
     // Read input from WASM memory
     let real_data: Vec<f64> = (0..size)
         .map(|i| unsafe {
@@ -11951,30 +13583,30 @@ pub fn fft_2d_forward(
             std::ptr::read(ptr)
         })
         .collect();
-    
+
     let imag_data: Vec<f64> = (0..size)
         .map(|i| unsafe {
             let ptr = (imag_ptr as *const f64).add(i);
             std::ptr::read(ptr)
         })
         .collect();
-    
+
     let mut data: Vec<Complex<f64>> = real_data
         .iter()
         .zip(imag_data.iter())
         .map(|(r, i)| Complex::new(*r, *i))
         .collect();
-    
+
     // Create FFT planner
     let mut planner = FftPlanner::new();
-    
+
     // Perform row-wise FFT
     let row_fft = planner.plan_fft_forward(cols);
     for row in 0..rows {
         let start_idx = row * cols;
         row_fft.process(&mut data[start_idx..start_idx + cols]);
     }
-    
+
     // Transpose
     let mut transposed = vec![Complex::zero(); size];
     for i in 0..rows {
@@ -11983,14 +13615,14 @@ pub fn fft_2d_forward(
         }
     }
     data = transposed;
-    
+
     // Perform column-wise FFT (now rows since we transposed)
     let col_fft = planner.plan_fft_forward(rows);
     for col in 0..cols {
         let start_idx = col * rows;
         col_fft.process(&mut data[start_idx..start_idx + rows]);
     }
-    
+
     // Transpose back
     transposed = vec![Complex::zero(); size];
     for i in 0..cols {
@@ -11999,9 +13631,9 @@ pub fn fft_2d_forward(
         }
     }
     data = transposed;
-    
+
     let elapsed_ms = (js_sys::Date::now() - start_ms).max(0.0);
-    
+
     // Write output to WASM memory
     unsafe {
         let mut out_real = real_out_ptr as *mut f64;
@@ -12013,7 +13645,7 @@ pub fn fft_2d_forward(
             out_imag = out_imag.add(1);
         }
     }
-    
+
     serde_wasm_bindgen::to_value(&serde_json::json!({
         "status": "fft_complete",
         "rows": rows,
@@ -12039,14 +13671,14 @@ pub fn fft_2d_inverse(
     use num_complex::Complex;
     use rustfft::num_traits::Zero;
     use rustfft::FftPlanner;
-    
+
     let rows = rows as usize;
     let cols = cols as usize;
     let size = rows * cols;
     let norm = 1.0 / (size as f64);
-    
+
     let start_ms = js_sys::Date::now();
-    
+
     // Read input from WASM memory
     let real_data: Vec<f64> = (0..size)
         .map(|i| unsafe {
@@ -12054,30 +13686,30 @@ pub fn fft_2d_inverse(
             std::ptr::read(ptr)
         })
         .collect();
-    
+
     let imag_data: Vec<f64> = (0..size)
         .map(|i| unsafe {
             let ptr = (imag_ptr as *const f64).add(i);
             std::ptr::read(ptr)
         })
         .collect();
-    
+
     let mut data: Vec<Complex<f64>> = real_data
         .iter()
         .zip(imag_data.iter())
-        .map(|(r, i)| Complex::new(*r, -i))  // Conjugate
+        .map(|(r, i)| Complex::new(*r, -i)) // Conjugate
         .collect();
-    
+
     // Create FFT planner
     let mut planner = FftPlanner::new();
-    
+
     // Perform row-wise FFT
     let row_fft = planner.plan_fft_forward(cols);
     for row in 0..rows {
         let start_idx = row * cols;
         row_fft.process(&mut data[start_idx..start_idx + cols]);
     }
-    
+
     // Transpose
     let mut transposed = vec![Complex::zero(); size];
     for i in 0..rows {
@@ -12086,14 +13718,14 @@ pub fn fft_2d_inverse(
         }
     }
     data = transposed;
-    
+
     // Perform column-wise FFT
     let col_fft = planner.plan_fft_forward(rows);
     for col in 0..cols {
         let start_idx = col * rows;
         col_fft.process(&mut data[start_idx..start_idx + rows]);
     }
-    
+
     // Transpose back
     transposed = vec![Complex::zero(); size];
     for i in 0..cols {
@@ -12102,21 +13734,21 @@ pub fn fft_2d_inverse(
         }
     }
     data = transposed;
-    
+
     let elapsed_ms = (js_sys::Date::now() - start_ms).max(0.0);
-    
+
     // Write output to WASM memory (conjugate back)
     unsafe {
         let mut out_real = real_out_ptr as *mut f64;
         let mut out_imag = imag_out_ptr as *mut f64;
         for value in data {
             std::ptr::write(out_real, value.re);
-            std::ptr::write(out_imag, -value.im);  // Conjugate back
+            std::ptr::write(out_imag, -value.im); // Conjugate back
             out_real = out_real.add(1);
             out_imag = out_imag.add(1);
         }
     }
-    
+
     serde_wasm_bindgen::to_value(&serde_json::json!({
         "status": "ifft_complete",
         "rows": rows,
@@ -12522,8 +14154,16 @@ fn optimize_one_iteration_core(
         return Err("non-finite-input");
     }
 
-    let damping = if damping_in.is_finite() && damping_in >= 0.0 { damping_in } else { 1e-6 };
-    let trust_radius = if trust_radius_in.is_finite() && trust_radius_in > 0.0 { trust_radius_in } else { 1.0 };
+    let damping = if damping_in.is_finite() && damping_in >= 0.0 {
+        damping_in
+    } else {
+        1e-6
+    };
+    let trust_radius = if trust_radius_in.is_finite() && trust_radius_in > 0.0 {
+        trust_radius_in
+    } else {
+        1.0
+    };
 
     let mut var_scales = vec![1.0_f64; n];
     if let Some(scales) = var_scales_in {
@@ -12595,7 +14235,11 @@ fn optimize_one_iteration_core(
     Ok((
         dx_limited,
         x_next,
-        if predicted_reduction.is_finite() { predicted_reduction } else { 0.0 },
+        if predicted_reduction.is_finite() {
+            predicted_reduction
+        } else {
+            0.0
+        },
         damping,
         trust_radius,
         m,
@@ -12619,7 +14263,8 @@ pub fn optimize_system_in_wasm(payload_json: String) -> Result<String, JsValue> 
 
     let mut x = vec![0.0_f64; n];
     for i in 0..n {
-        let v = value_to_f64(&x_vals[i]).ok_or_else(|| JsValue::from_str("payload.x contains non-finite values"))?;
+        let v = value_to_f64(&x_vals[i])
+            .ok_or_else(|| JsValue::from_str("payload.x contains non-finite values"))?;
         if !v.is_finite() {
             return Err(JsValue::from_str("payload.x contains non-finite values"));
         }
@@ -12631,13 +14276,18 @@ pub fn optimize_system_in_wasm(payload_json: String) -> Result<String, JsValue> 
         .and_then(|v| v.as_array())
         .ok_or_else(|| JsValue::from_str("payload.steps must be an array"))?;
     if steps_vals.len() != n {
-        return Err(JsValue::from_str("payload.steps length must match payload.x length"));
+        return Err(JsValue::from_str(
+            "payload.steps length must match payload.x length",
+        ));
     }
     let mut steps = vec![0.0_f64; n];
     for i in 0..n {
-        let h = value_to_f64(&steps_vals[i]).ok_or_else(|| JsValue::from_str("payload.steps contains invalid values"))?;
+        let h = value_to_f64(&steps_vals[i])
+            .ok_or_else(|| JsValue::from_str("payload.steps contains invalid values"))?;
         if !h.is_finite() || h == 0.0 {
-            return Err(JsValue::from_str("payload.steps contains zero/non-finite values"));
+            return Err(JsValue::from_str(
+                "payload.steps contains zero/non-finite values",
+            ));
         }
         steps[i] = h;
     }
@@ -12653,9 +14303,12 @@ pub fn optimize_system_in_wasm(payload_json: String) -> Result<String, JsValue> 
 
     let mut r0 = vec![0.0_f64; m];
     for i in 0..m {
-        let v = value_to_f64(&r0_vals[i]).ok_or_else(|| JsValue::from_str("payload.residual0 contains invalid values"))?;
+        let v = value_to_f64(&r0_vals[i])
+            .ok_or_else(|| JsValue::from_str("payload.residual0 contains invalid values"))?;
         if !v.is_finite() {
-            return Err(JsValue::from_str("payload.residual0 contains non-finite values"));
+            return Err(JsValue::from_str(
+                "payload.residual0 contains non-finite values",
+            ));
         }
         r0[i] = v;
     }
@@ -12663,24 +14316,34 @@ pub fn optimize_system_in_wasm(payload_json: String) -> Result<String, JsValue> 
     let r1_cols = payload
         .get("residualsPerturbed")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| JsValue::from_str("payload.residualsPerturbed must be an array of arrays"))?;
+        .ok_or_else(|| {
+            JsValue::from_str("payload.residualsPerturbed must be an array of arrays")
+        })?;
     if r1_cols.len() != n {
-        return Err(JsValue::from_str("payload.residualsPerturbed column count must match variable count"));
+        return Err(JsValue::from_str(
+            "payload.residualsPerturbed column count must match variable count",
+        ));
     }
 
     let mut r_batches = vec![0.0_f64; m * n];
     for col in 0..n {
-        let col_arr = r1_cols[col]
-            .as_array()
-            .ok_or_else(|| JsValue::from_str("payload.residualsPerturbed contains a non-array column"))?;
+        let col_arr = r1_cols[col].as_array().ok_or_else(|| {
+            JsValue::from_str("payload.residualsPerturbed contains a non-array column")
+        })?;
         if col_arr.len() < m {
-            return Err(JsValue::from_str("payload.residualsPerturbed column length is smaller than residual0 length"));
+            return Err(JsValue::from_str(
+                "payload.residualsPerturbed column length is smaller than residual0 length",
+            ));
         }
         let base = col * m;
         for row in 0..m {
-            let v = value_to_f64(&col_arr[row]).ok_or_else(|| JsValue::from_str("payload.residualsPerturbed contains invalid values"))?;
+            let v = value_to_f64(&col_arr[row]).ok_or_else(|| {
+                JsValue::from_str("payload.residualsPerturbed contains invalid values")
+            })?;
             if !v.is_finite() {
-                return Err(JsValue::from_str("payload.residualsPerturbed contains non-finite values"));
+                return Err(JsValue::from_str(
+                    "payload.residualsPerturbed contains non-finite values",
+                ));
             }
             r_batches[base + row] = v;
         }
@@ -12708,8 +14371,16 @@ pub fn optimize_system_in_wasm(payload_json: String) -> Result<String, JsValue> 
         }
     }
     let (dx_limited, x_next, predicted_reduction, _, _, m_shape, n_shape) =
-        optimize_one_iteration_core(&x, &steps, &r0, &r_batches, damping, trust_radius, Some(&var_scales))
-            .map_err(|err| JsValue::from_str(err))?;
+        optimize_one_iteration_core(
+            &x,
+            &steps,
+            &r0,
+            &r_batches,
+            damping,
+            trust_radius,
+            Some(&var_scales),
+        )
+        .map_err(|err| JsValue::from_str(err))?;
 
     Ok(serde_json::to_string(&serde_json::json!({
         "ok": true,
@@ -12761,39 +14432,48 @@ pub fn optimize_one_iter_from_buffers(
         return OPT_STATUS_INVALID_INPUT;
     }
 
-    let result = std::panic::catch_unwind(|| {
-        unsafe {
-            let x = std::slice::from_raw_parts(x_ptr as *const f64, n_usize);
-            let steps = std::slice::from_raw_parts(steps_ptr as *const f64, n_usize);
-            let r0 = std::slice::from_raw_parts(r0_ptr as *const f64, m_usize);
-            let r_batches = std::slice::from_raw_parts(r_batches_ptr as *const f64, batch_len);
-            let scales_opt = if var_scales_ptr == 0 {
-                None
-            } else {
-                Some(std::slice::from_raw_parts(var_scales_ptr as *const f64, n_usize))
-            };
+    let result = std::panic::catch_unwind(|| unsafe {
+        let x = std::slice::from_raw_parts(x_ptr as *const f64, n_usize);
+        let steps = std::slice::from_raw_parts(steps_ptr as *const f64, n_usize);
+        let r0 = std::slice::from_raw_parts(r0_ptr as *const f64, m_usize);
+        let r_batches = std::slice::from_raw_parts(r_batches_ptr as *const f64, batch_len);
+        let scales_opt = if var_scales_ptr == 0 {
+            None
+        } else {
+            Some(std::slice::from_raw_parts(
+                var_scales_ptr as *const f64,
+                n_usize,
+            ))
+        };
 
-            let (dx, x_next, predicted_reduction, used_damping, used_trust_radius, jac_m, jac_n) =
-                optimize_one_iteration_core(x, steps, r0, r_batches, damping, trust_radius, scales_opt)?;
+        let (dx, x_next, predicted_reduction, used_damping, used_trust_radius, jac_m, jac_n) =
+            optimize_one_iteration_core(
+                x,
+                steps,
+                r0,
+                r_batches,
+                damping,
+                trust_radius,
+                scales_opt,
+            )?;
 
-            let out_dx = std::slice::from_raw_parts_mut(out_dx_ptr as *mut f64, n_usize);
-            let out_x_next = std::slice::from_raw_parts_mut(out_x_next_ptr as *mut f64, n_usize);
-            let out_meta = std::slice::from_raw_parts_mut(out_meta_ptr as *mut f64, 8);
+        let out_dx = std::slice::from_raw_parts_mut(out_dx_ptr as *mut f64, n_usize);
+        let out_x_next = std::slice::from_raw_parts_mut(out_x_next_ptr as *mut f64, n_usize);
+        let out_meta = std::slice::from_raw_parts_mut(out_meta_ptr as *mut f64, 8);
 
-            out_dx.copy_from_slice(&dx);
-            out_x_next.copy_from_slice(&x_next);
+        out_dx.copy_from_slice(&dx);
+        out_x_next.copy_from_slice(&x_next);
 
-            out_meta[0] = predicted_reduction;
-            out_meta[1] = used_damping;
-            out_meta[2] = used_trust_radius;
-            out_meta[3] = jac_m as f64;
-            out_meta[4] = jac_n as f64;
-            out_meta[5] = 0.0;
-            out_meta[6] = 0.0;
-            out_meta[7] = 0.0;
+        out_meta[0] = predicted_reduction;
+        out_meta[1] = used_damping;
+        out_meta[2] = used_trust_radius;
+        out_meta[3] = jac_m as f64;
+        out_meta[4] = jac_n as f64;
+        out_meta[5] = 0.0;
+        out_meta[6] = 0.0;
+        out_meta[7] = 0.0;
 
-            Ok::<(), &'static str>(())
-        }
+        Ok::<(), &'static str>(())
     });
 
     match result {
@@ -12854,7 +14534,11 @@ pub fn solve_qp_subproblem_unconstrained(
         rhs[i] = -gi;
     }
 
-    let base_damping = if damping.is_finite() && damping > 0.0 { damping } else { 1e-10 };
+    let base_damping = if damping.is_finite() && damping > 0.0 {
+        damping
+    } else {
+        1e-10
+    };
 
     // Try regularized solves with increasing diagonal damping.
     let mut sol: Option<Vec<f64>> = None;
@@ -12896,7 +14580,11 @@ pub fn solve_qp_subproblem_unconstrained(
 
     let mut out = Vec::with_capacity(n + 1);
     out.extend(dx);
-    out.push(if predicted_reduction.is_finite() { predicted_reduction } else { f64::NAN });
+    out.push(if predicted_reduction.is_finite() {
+        predicted_reduction
+    } else {
+        f64::NAN
+    });
     out
 }
 
@@ -12945,7 +14633,11 @@ pub fn solve_qp_subproblem_kkt_equality(
         rhs[n + i] = -ci;
     }
 
-    let base_damping = if damping.is_finite() && damping > 0.0 { damping } else { 1e-10 };
+    let base_damping = if damping.is_finite() && damping > 0.0 {
+        damping
+    } else {
+        1e-10
+    };
     let mut sol: Option<Vec<f64>> = None;
 
     for k in 0..6 {
@@ -13006,7 +14698,11 @@ pub fn solve_qp_subproblem_kkt_equality(
 
     let mut out = Vec::with_capacity(n + 1);
     out.extend_from_slice(dx);
-    out.push(if predicted_reduction.is_finite() { predicted_reduction } else { f64::NAN });
+    out.push(if predicted_reduction.is_finite() {
+        predicted_reduction
+    } else {
+        f64::NAN
+    });
     out
 }
 
@@ -13036,9 +14732,21 @@ pub fn backtracking_line_search_armijo(
         return 0.0;
     }
 
-    let mut alpha = if alpha_init.is_finite() && alpha_init > 0.0 { alpha_init } else { 1.0 };
-    let rho_eff = if rho.is_finite() && rho > 0.0 && rho < 1.0 { rho } else { 0.5 };
-    let c1_eff = if c1.is_finite() && c1 > 0.0 && c1 < 1.0 { c1 } else { 1e-4 };
+    let mut alpha = if alpha_init.is_finite() && alpha_init > 0.0 {
+        alpha_init
+    } else {
+        1.0
+    };
+    let rho_eff = if rho.is_finite() && rho > 0.0 && rho < 1.0 {
+        rho
+    } else {
+        0.5
+    };
+    let c1_eff = if c1.is_finite() && c1 > 0.0 && c1 < 1.0 {
+        c1
+    } else {
+        1e-4
+    };
     let iter_cap = if max_iter == 0 { 20 } else { max_iter.min(128) };
 
     let mut directional_derivative = 0.0_f64;
@@ -13095,16 +14803,39 @@ pub fn update_trust_region_radius(
     min_radius: f64,
     max_radius: f64,
 ) -> f64 {
-    let cur = if current_radius.is_finite() && current_radius > 0.0 { current_radius } else { 1.0 };
-    let min_r = if min_radius.is_finite() && min_radius > 0.0 { min_radius } else { 1e-8 };
-    let max_r = if max_radius.is_finite() && max_radius >= min_r { max_radius } else { 1e8 };
+    let cur = if current_radius.is_finite() && current_radius > 0.0 {
+        current_radius
+    } else {
+        1.0
+    };
+    let min_r = if min_radius.is_finite() && min_radius > 0.0 {
+        min_radius
+    } else {
+        1e-8
+    };
+    let max_r = if max_radius.is_finite() && max_radius >= min_r {
+        max_radius
+    } else {
+        1e8
+    };
     let e1 = if eta1.is_finite() { eta1 } else { 0.25 };
     let e2 = if eta2.is_finite() { eta2 } else { 0.75 };
-    let g_dec = if gamma_dec.is_finite() && gamma_dec > 0.0 && gamma_dec < 1.0 { gamma_dec } else { 0.5 };
-    let g_inc = if gamma_inc.is_finite() && gamma_inc > 1.0 { gamma_inc } else { 2.0 };
+    let g_dec = if gamma_dec.is_finite() && gamma_dec > 0.0 && gamma_dec < 1.0 {
+        gamma_dec
+    } else {
+        0.5
+    };
+    let g_inc = if gamma_inc.is_finite() && gamma_inc > 1.0 {
+        gamma_inc
+    } else {
+        2.0
+    };
 
     let mut next = cur;
-    if predicted_reduction.is_finite() && predicted_reduction.abs() > 1e-18 && actual_reduction.is_finite() {
+    if predicted_reduction.is_finite()
+        && predicted_reduction.abs() > 1e-18
+        && actual_reduction.is_finite()
+    {
         let ratio = actual_reduction / predicted_reduction;
         if ratio < e1 {
             next = cur * g_dec;
@@ -13120,7 +14851,11 @@ pub fn update_trust_region_radius(
 }
 
 #[wasm_bindgen]
-pub fn generate_annular_offsets_flat(ray_count: usize, max_radius: f64, ring_count: usize) -> Vec<f64> {
+pub fn generate_annular_offsets_flat(
+    ray_count: usize,
+    max_radius: f64,
+    ring_count: usize,
+) -> Vec<f64> {
     let mut out = Vec::<f64>::new();
     if ray_count == 0 {
         return out;
@@ -13156,7 +14891,11 @@ pub fn generate_annular_offsets_flat(ray_count: usize, max_radius: f64, ring_cou
         let rays_for_this_ring = ((remaining_rays / rings_remaining).max(4)) as usize;
         let angles = rays_for_this_ring;
         let angle_step = (2.0 * std::f64::consts::PI) / (angles as f64);
-        let start_angle = if (idx % 2) == 0 { 0.0 } else { angle_step * 0.5 };
+        let start_angle = if (idx % 2) == 0 {
+            0.0
+        } else {
+            angle_step * 0.5
+        };
 
         for i in 0..angles {
             if remaining_rays == 0 {
@@ -13209,8 +14948,16 @@ pub fn generate_centered_grid_offsets_flat(ray_count: usize, half_extent: f64) -
                 if li.max(lj) != layer {
                     continue;
                 }
-                let u = if grid_size > 1 { ((i as f64) - center) * spacing } else { 0.0 };
-                let v = if grid_size > 1 { ((j as f64) - center) * spacing } else { 0.0 };
+                let u = if grid_size > 1 {
+                    ((i as f64) - center) * spacing
+                } else {
+                    0.0
+                };
+                let v = if grid_size > 1 {
+                    ((j as f64) - center) * spacing
+                } else {
+                    0.0
+                };
                 layer_points.push((u, v));
             }
         }
@@ -13320,7 +15067,7 @@ pub fn matrix_vector_multiply(a_flat: &[f64], x: &[f64], rows: usize, cols: usiz
     if a_flat.len() != rows * cols || x.len() != cols {
         return vec![f64::NAN; rows];
     }
-    
+
     let mut result = vec![0.0; rows];
     for i in 0..rows {
         let row_base = i * cols;
@@ -13351,16 +15098,16 @@ pub fn cholesky_factorization(a_flat: &[f64], n: usize) -> Vec<f64> {
     if a_flat.len() != n * n {
         return Vec::new();
     }
-    
+
     let mut l = vec![0.0_f64; n * n];
-    
+
     for i in 0..n {
         for j in 0..=i {
             let mut sum = a_flat[i * n + j];
             for k in 0..j {
                 sum -= l[i * n + k] * l[j * n + k];
             }
-            
+
             if i == j {
                 if !sum.is_finite() || sum <= 1e-20 {
                     return Vec::new(); // Not positive definite
@@ -13375,7 +15122,7 @@ pub fn cholesky_factorization(a_flat: &[f64], n: usize) -> Vec<f64> {
             }
         }
     }
-    
+
     l
 }
 
@@ -13388,18 +15135,18 @@ pub fn bfgs_update(h_flat: &mut [f64], s: &[f64], y: &[f64], n: usize) -> bool {
     if h_flat.len() != n * n || s.len() != n || y.len() != n {
         return false;
     }
-    
+
     // Compute y^T * s
     let mut y_dot_s = 0.0;
     for i in 0..n {
         y_dot_s += y[i] * s[i];
     }
-    
+
     // Check curvature condition
     if y_dot_s <= 1e-12 {
         return false; // Skip update if curvature condition not satisfied
     }
-    
+
     // Compute H * s
     let mut hs = vec![0.0; n];
     for i in 0..n {
@@ -13409,28 +15156,28 @@ pub fn bfgs_update(h_flat: &mut [f64], s: &[f64], y: &[f64], n: usize) -> bool {
         }
         hs[i] = sum;
     }
-    
+
     // Compute s^T * H * s
     let mut s_dot_hs = 0.0;
     for i in 0..n {
         s_dot_hs += s[i] * hs[i];
     }
-    
+
     if s_dot_hs <= 1e-20 {
         return false;
     }
-    
+
     // Update H: H = H + (y*y^T)/(y^T*s) - (H*s*(H*s)^T)/(s^T*H*s)
     let rho = 1.0 / y_dot_s;
     let gamma = 1.0 / s_dot_hs;
-    
+
     for i in 0..n {
         for j in 0..n {
             let idx = i * n + j;
             h_flat[idx] = h_flat[idx] + rho * y[i] * y[j] - gamma * hs[i] * hs[j];
         }
     }
-    
+
     true
 }
 
@@ -13443,28 +15190,28 @@ pub fn qr_factorization(a_flat: &[f64], rows: usize, cols: usize) -> Vec<f64> {
     if a_flat.len() != rows * cols || rows < cols {
         return Vec::new();
     }
-    
+
     let mut r = a_flat.to_vec();
     let mut q = vec![0.0; rows * rows];
-    
+
     // Initialize Q as identity
     for i in 0..rows {
         q[i * rows + i] = 1.0;
     }
-    
+
     for k in 0..cols.min(rows - 1) {
         // Extract column k from row k onwards
         let mut x = vec![0.0; rows - k];
         for i in k..rows {
             x[i - k] = r[i * cols + k];
         }
-        
+
         // Compute norm
         let norm_x: f64 = x.iter().map(|v| v * v).sum::<f64>().sqrt();
         if norm_x < 1e-14 {
             continue; // Column is already zero
         }
-        
+
         // Compute Householder vector
         let s = if x[0] < 0.0 { 1.0 } else { -1.0 };
         let u1 = x[0] - s * norm_x;
@@ -13473,9 +15220,9 @@ pub fn qr_factorization(a_flat: &[f64], rows: usize, cols: usize) -> Vec<f64> {
         for i in 1..rows - k {
             w[i] = x[i] / u1;
         }
-        
+
         let tau = -s * u1 / norm_x;
-        
+
         // Apply Householder reflection to R
         for j in k..cols {
             let mut sum = 0.0;
@@ -13486,7 +15233,7 @@ pub fn qr_factorization(a_flat: &[f64], rows: usize, cols: usize) -> Vec<f64> {
                 r[(k + i) * cols + j] -= tau * w[i] * sum;
             }
         }
-        
+
         // Apply Householder reflection to Q
         for j in 0..rows {
             let mut sum = 0.0;
@@ -13498,7 +15245,7 @@ pub fn qr_factorization(a_flat: &[f64], rows: usize, cols: usize) -> Vec<f64> {
             }
         }
     }
-    
+
     // Concatenate Q and R into single output vector
     // Format: [n_rows, n_cols, Q_data..., R_data...]
     let mut result = Vec::with_capacity(2 + rows * rows + rows * cols);
@@ -13506,7 +15253,7 @@ pub fn qr_factorization(a_flat: &[f64], rows: usize, cols: usize) -> Vec<f64> {
     result.push(cols as f64);
     result.extend(q);
     result.extend(r);
-    
+
     result
 }
 
@@ -13577,16 +15324,24 @@ pub fn compute_lca_series_from_image_heights(
     let field_len = field_values.len();
     let wl_len = wavelengths.len();
     if field_len == 0 || wl_len == 0 {
-        return Err(JsValue::from_str("compute_lca_series_from_image_heights: empty fields or wavelengths"));
+        return Err(JsValue::from_str(
+            "compute_lca_series_from_image_heights: empty fields or wavelengths",
+        ));
     }
     if image_heights_flat.len() != field_len * wl_len {
-        return Err(JsValue::from_str("compute_lca_series_from_image_heights: image_heights_flat length mismatch"));
+        return Err(JsValue::from_str(
+            "compute_lca_series_from_image_heights: image_heights_flat length mismatch",
+        ));
     }
 
     let reference_index = wavelengths
         .iter()
         .position(|w| (*w - reference_wavelength).abs() < 1e-9)
-        .ok_or_else(|| JsValue::from_str("compute_lca_series_from_image_heights: reference wavelength not found"))?;
+        .ok_or_else(|| {
+            JsValue::from_str(
+                "compute_lca_series_from_image_heights: reference wavelength not found",
+            )
+        })?;
 
     let mut reference_heights = vec![None; field_len];
     for fi in 0..field_len {
@@ -13806,7 +15561,13 @@ fn dft_magnitude_at_integer_index_internal(samples: &[f64], k: usize) -> f64 {
     re.hypot(im)
 }
 
-fn sample_lsf_mtf_like_fft_bins_internal(lsf: &[f64], freq_lpmm: f64, df_lpmm: f64, nyquist_lpmm: f64, dc: f64) -> f64 {
+fn sample_lsf_mtf_like_fft_bins_internal(
+    lsf: &[f64],
+    freq_lpmm: f64,
+    df_lpmm: f64,
+    nyquist_lpmm: f64,
+    dc: f64,
+) -> f64 {
     if lsf.is_empty() || !(dc.is_finite() && dc > 0.0) {
         return 0.0;
     }
@@ -13849,7 +15610,9 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
     let raw_opd_arr = req
         .get("rawOpdGrid")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| JsValue::from_str("run_native_psf_from_opd_wasm_json: rawOpdGrid missing"))?;
+        .ok_or_else(|| {
+            JsValue::from_str("run_native_psf_from_opd_wasm_json: rawOpdGrid missing")
+        })?;
 
     let display_opd_arr = req
         .get("displayOpdGrid")
@@ -13860,7 +15623,9 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
         .get("wavelengthUm")
         .and_then(|v| v.as_f64())
         .filter(|v| v.is_finite() && *v > 0.0)
-        .ok_or_else(|| JsValue::from_str("run_native_psf_from_opd_wasm_json: wavelengthUm must be > 0"))?;
+        .ok_or_else(|| {
+            JsValue::from_str("run_native_psf_from_opd_wasm_json: wavelengthUm must be > 0")
+        })?;
 
     let pixel_size_um = req
         .get("pixelSizeUm")
@@ -13868,10 +15633,7 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
         .filter(|v| v.is_finite() && *v > 0.0)
         .unwrap_or(1.0);
 
-    let zero_pad_to = req
-        .get("zeroPadTo")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize;
+    let zero_pad_to = req.get("zeroPadTo").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     let _remove_tilt = req
         .get("removeTilt")
@@ -13895,7 +15657,9 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
 
     for iy in 0..grid_n {
         let row_raw = raw_opd_arr.get(iy).and_then(|r| r.as_array());
-        let row_display = display_opd_arr.and_then(|d| d.get(iy)).and_then(|r| r.as_array());
+        let row_display = display_opd_arr
+            .and_then(|d| d.get(iy))
+            .and_then(|r| r.as_array());
         let row_len = row_raw.map(|r| r.len()).unwrap_or(0);
 
         for ix in 0..row_len.min(grid_n) {
@@ -14007,8 +15771,20 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
         right.saturating_sub(left) as f64
     };
 
-    let x_profile: &[f64] = if psf_peak_y < fft_size { &psf[psf_peak_y] } else { &[] };
-    let y_profile: Vec<f64> = (0..fft_size).map(|yy| if yy < psf.len() && psf_peak_x < psf[yy].len() { psf[yy][psf_peak_x] } else { 0.0 }).collect();
+    let x_profile: &[f64] = if psf_peak_y < fft_size {
+        &psf[psf_peak_y]
+    } else {
+        &[]
+    };
+    let y_profile: Vec<f64> = (0..fft_size)
+        .map(|yy| {
+            if yy < psf.len() && psf_peak_x < psf[yy].len() {
+                psf[yy][psf_peak_x]
+            } else {
+                0.0
+            }
+        })
+        .collect();
     let fwhm_x = fwhm_pixels(x_profile, psf_peak_x) * pixel_size_um;
     let fwhm_y = fwhm_pixels(&y_profile, psf_peak_y) * pixel_size_um;
     let fwhm_avg = (fwhm_x + fwhm_y) * 0.5;
@@ -14036,13 +15812,17 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
 
 #[wasm_bindgen]
 pub fn run_native_psf_from_opd_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_psf_from_opd_wasm_json: JSON parse: {}", e)))?;
+    let req: Value = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_psf_from_opd_wasm_json: JSON parse: {}",
+            e
+        ))
+    })?;
     let response = run_native_psf_from_opd_value(&req)?;
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     response
-    .serialize(&serializer)
-    .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
 }
 
 /// Compute sagittal & tangential MTF from a (fft-shifted) PSF grid.
@@ -14076,7 +15856,9 @@ fn run_native_mtf_from_psf_value(req: &Value) -> Result<Value, JsValue> {
         .get("pixelSizeUm")
         .and_then(|v| v.as_f64())
         .filter(|v| v.is_finite() && *v > 0.0)
-        .ok_or_else(|| JsValue::from_str("run_native_mtf_from_psf_wasm_json: pixelSizeUm must be > 0"))?;
+        .ok_or_else(|| {
+            JsValue::from_str("run_native_mtf_from_psf_wasm_json: pixelSizeUm must be > 0")
+        })?;
 
     let n = psf_data.len();
     if n == 0 {
@@ -14155,8 +15937,12 @@ fn run_native_mtf_from_psf_value(req: &Value) -> Result<Value, JsValue> {
             .collect::<Vec<f64>>();
         for (idx, f) in sample_frequencies_lpmm.iter().enumerate() {
             if *f <= 1e-12 {
-                if let Some(v) = sampled_tan.get_mut(idx) { *v = 1.0; }
-                if let Some(v) = sampled_sag.get_mut(idx) { *v = 1.0; }
+                if let Some(v) = sampled_tan.get_mut(idx) {
+                    *v = 1.0;
+                }
+                if let Some(v) = sampled_sag.get_mut(idx) {
+                    *v = 1.0;
+                }
             }
         }
 
@@ -14262,8 +16048,12 @@ fn run_native_mtf_from_psf_value(req: &Value) -> Result<Value, JsValue> {
     };
     for (idx, f) in sample_frequencies_lpmm.iter().enumerate() {
         if *f <= 1e-12 {
-            if let Some(v) = sampled_tan.get_mut(idx) { *v = 1.0; }
-            if let Some(v) = sampled_sag.get_mut(idx) { *v = 1.0; }
+            if let Some(v) = sampled_tan.get_mut(idx) {
+                *v = 1.0;
+            }
+            if let Some(v) = sampled_sag.get_mut(idx) {
+                *v = 1.0;
+            }
         }
     }
 
@@ -14295,13 +16085,17 @@ fn run_native_mtf_from_psf_value(req: &Value) -> Result<Value, JsValue> {
 
 #[wasm_bindgen]
 pub fn run_native_mtf_from_psf_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_mtf_from_psf_wasm_json: JSON parse: {}", e)))?;
+    let req: Value = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_mtf_from_psf_wasm_json: JSON parse: {}",
+            e
+        ))
+    })?;
     let response = run_native_mtf_from_psf_value(&req)?;
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     response
-    .serialize(&serializer)
-    .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
 }
 
 fn pupil_autocorrelation_fft(
@@ -14312,7 +16106,11 @@ fn pupil_autocorrelation_fft(
     use rustfft::FftPlanner;
 
     let n = real.len();
-    if n < 2 || imag.len() != n || real.iter().any(|row| row.len() != n) || imag.iter().any(|row| row.len() != n) {
+    if n < 2
+        || imag.len() != n
+        || real.iter().any(|row| row.len() != n)
+        || imag.iter().any(|row| row.len() != n)
+    {
         return Err("pupil_autocorrelation_fft: expected matching square grids".to_string());
     }
     let fft_size = (n.saturating_mul(2).saturating_sub(1)).next_power_of_two();
@@ -14369,7 +16167,11 @@ fn sample_pupil_autocorrelation(
     shift_y: f64,
 ) -> num_complex::Complex<f64> {
     use num_complex::Complex;
-    if fft_size == 0 || correlation.len() < fft_size * fft_size || !shift_x.is_finite() || !shift_y.is_finite() {
+    if fft_size == 0
+        || correlation.len() < fft_size * fft_size
+        || !shift_x.is_finite()
+        || !shift_y.is_finite()
+    {
         return Complex::new(0.0, 0.0);
     }
     let x0_signed = shift_x.floor() as isize;
@@ -14397,7 +16199,11 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
         .get("displayOpdGrid")
         .and_then(|v| v.as_array())
         .or_else(|| req.get("rawOpdGrid").and_then(|v| v.as_array()))
-        .ok_or_else(|| JsValue::from_str("run_native_mtf_malacara_from_opd_wasm_json: displayOpdGrid/rawOpdGrid missing"))?;
+        .ok_or_else(|| {
+            JsValue::from_str(
+                "run_native_mtf_malacara_from_opd_wasm_json: displayOpdGrid/rawOpdGrid missing",
+            )
+        })?;
 
     let n = display_opd.len();
     if n < 2 {
@@ -14410,13 +16216,19 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
         .get("wavelengthUm")
         .and_then(|v| v.as_f64())
         .filter(|v| v.is_finite() && *v > 0.0)
-        .ok_or_else(|| JsValue::from_str("run_native_mtf_malacara_from_opd_wasm_json: wavelengthUm must be > 0"))?;
+        .ok_or_else(|| {
+            JsValue::from_str(
+                "run_native_mtf_malacara_from_opd_wasm_json: wavelengthUm must be > 0",
+            )
+        })?;
 
     let f_number = req
         .get("fNumber")
         .and_then(|v| v.as_f64())
         .filter(|v| v.is_finite() && *v > 0.0)
-        .ok_or_else(|| JsValue::from_str("run_native_mtf_malacara_from_opd_wasm_json: fNumber must be > 0"))?;
+        .ok_or_else(|| {
+            JsValue::from_str("run_native_mtf_malacara_from_opd_wasm_json: fNumber must be > 0")
+        })?;
 
     let pupil_range = req
         .get("pupilRange")
@@ -14475,11 +16287,11 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
 
     for iy in 0..n {
         let opd_row = display_opd.get(iy).and_then(|r| r.as_array());
-        let amp_row = amp_opt.and_then(|rows| rows.get(iy)).and_then(|r| r.as_array());
+        let amp_row = amp_opt
+            .and_then(|rows| rows.get(iy))
+            .and_then(|r| r.as_array());
         for ix in 0..n {
-            let opd_val = opd_row
-                .and_then(|r| r.get(ix))
-                .and_then(|v| v.as_f64());
+            let opd_val = opd_row.and_then(|r| r.get(ix)).and_then(|v| v.as_f64());
             let Some(opd_um) = opd_val else {
                 continue;
             };
@@ -14529,35 +16341,36 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
     let inv_dx = (n - 1) as f64 / (x_max - x_min).max(1e-12);
     let inv_dy = (n - 1) as f64 / (y_max - y_min).max(1e-12);
 
-    let sample_complex_bilinear = |x: f64, y: f64, re_src: &Vec<Vec<f64>>, im_src: &Vec<Vec<f64>>| -> (f64, f64) {
-        if x < x_min || x > x_max || y < y_min || y > y_max {
-            return (0.0, 0.0);
-        }
-        let u = (x - x_min) * inv_dx;
-        let v = (y - y_min) * inv_dy;
-        let x0 = u.floor().clamp(0.0, (n - 1) as f64) as usize;
-        let y0 = v.floor().clamp(0.0, (n - 1) as f64) as usize;
-        let x1 = (x0 + 1).min(n - 1);
-        let y1 = (y0 + 1).min(n - 1);
-        let tx = (u - x0 as f64).clamp(0.0, 1.0);
-        let ty = (v - y0 as f64).clamp(0.0, 1.0);
+    let sample_complex_bilinear =
+        |x: f64, y: f64, re_src: &Vec<Vec<f64>>, im_src: &Vec<Vec<f64>>| -> (f64, f64) {
+            if x < x_min || x > x_max || y < y_min || y > y_max {
+                return (0.0, 0.0);
+            }
+            let u = (x - x_min) * inv_dx;
+            let v = (y - y_min) * inv_dy;
+            let x0 = u.floor().clamp(0.0, (n - 1) as f64) as usize;
+            let y0 = v.floor().clamp(0.0, (n - 1) as f64) as usize;
+            let x1 = (x0 + 1).min(n - 1);
+            let y1 = (y0 + 1).min(n - 1);
+            let tx = (u - x0 as f64).clamp(0.0, 1.0);
+            let ty = (v - y0 as f64).clamp(0.0, 1.0);
 
-        let re00 = re_src[y0][x0];
-        let re10 = re_src[y0][x1];
-        let re01 = re_src[y1][x0];
-        let re11 = re_src[y1][x1];
-        let im00 = im_src[y0][x0];
-        let im10 = im_src[y0][x1];
-        let im01 = im_src[y1][x0];
-        let im11 = im_src[y1][x1];
+            let re00 = re_src[y0][x0];
+            let re10 = re_src[y0][x1];
+            let re01 = re_src[y1][x0];
+            let re11 = re_src[y1][x1];
+            let im00 = im_src[y0][x0];
+            let im10 = im_src[y0][x1];
+            let im01 = im_src[y1][x0];
+            let im11 = im_src[y1][x1];
 
-        let re0 = re00 + (re10 - re00) * tx;
-        let re1 = re01 + (re11 - re01) * tx;
-        let im0 = im00 + (im10 - im00) * tx;
-        let im1 = im01 + (im11 - im01) * tx;
+            let re0 = re00 + (re10 - re00) * tx;
+            let re1 = re01 + (re11 - re01) * tx;
+            let im0 = im00 + (im10 - im00) * tx;
+            let im1 = im01 + (im11 - im01) * tx;
 
-        (re0 + (re1 - re0) * ty, im0 + (im1 - im0) * ty)
-    };
+            (re0 + (re1 - re0) * ty, im0 + (im1 - im0) * ty)
+        };
 
     let pixel_step_x = (x_max - x_min) / (n.saturating_sub(1) as f64).max(1.0);
     let pixel_step_y = (y_max - y_min) / (n.saturating_sub(1) as f64).max(1.0);
@@ -14622,10 +16435,30 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
                     shift_pixels_y,
                 );
                 if tail_blend > 0.0 {
-                    let c1 = sample_pupil_autocorrelation(correlation, *fft_size, shift_pixels_x + 0.25, shift_pixels_y + 0.25);
-                    let c2 = sample_pupil_autocorrelation(correlation, *fft_size, shift_pixels_x + 0.25, shift_pixels_y - 0.25);
-                    let c3 = sample_pupil_autocorrelation(correlation, *fft_size, shift_pixels_x - 0.25, shift_pixels_y + 0.25);
-                    let c4 = sample_pupil_autocorrelation(correlation, *fft_size, shift_pixels_x - 0.25, shift_pixels_y - 0.25);
+                    let c1 = sample_pupil_autocorrelation(
+                        correlation,
+                        *fft_size,
+                        shift_pixels_x + 0.25,
+                        shift_pixels_y + 0.25,
+                    );
+                    let c2 = sample_pupil_autocorrelation(
+                        correlation,
+                        *fft_size,
+                        shift_pixels_x + 0.25,
+                        shift_pixels_y - 0.25,
+                    );
+                    let c3 = sample_pupil_autocorrelation(
+                        correlation,
+                        *fft_size,
+                        shift_pixels_x - 0.25,
+                        shift_pixels_y + 0.25,
+                    );
+                    let c4 = sample_pupil_autocorrelation(
+                        correlation,
+                        *fft_size,
+                        shift_pixels_x - 0.25,
+                        shift_pixels_y - 0.25,
+                    );
                     let low_pass = (c1 + c2 + c3 + c4) * 0.25;
                     value = value * (1.0 - tail_blend) + low_pass * tail_blend;
                 }
@@ -14636,20 +16469,43 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
             let mut sum_re = 0.0_f64;
             let mut sum_im = 0.0_f64;
             for iy in 0..n {
-                let py = y_min + (iy as f64 / (n.saturating_sub(1) as f64).max(1.0)) * (y_max - y_min);
+                let py =
+                    y_min + (iy as f64 / (n.saturating_sub(1) as f64).max(1.0)) * (y_max - y_min);
                 for ix in 0..n {
                     let a = re_grid[iy][ix];
                     let b = im_grid[iy][ix];
                     if a == 0.0 && b == 0.0 {
                         continue;
                     }
-                    let px = x_min + (ix as f64 / (n.saturating_sub(1) as f64).max(1.0)) * (x_max - x_min);
-                    let (mut c, mut d) = sample_complex_bilinear(px + sx, py + sy, &re_grid, &im_grid);
+                    let px = x_min
+                        + (ix as f64 / (n.saturating_sub(1) as f64).max(1.0)) * (x_max - x_min);
+                    let (mut c, mut d) =
+                        sample_complex_bilinear(px + sx, py + sy, &re_grid, &im_grid);
                     if tail_blend > 0.0 {
-                        let (c1, d1) = sample_complex_bilinear(px + sx + jitter_x, py + sy + jitter_y, &re_grid, &im_grid);
-                        let (c2, d2) = sample_complex_bilinear(px + sx + jitter_x, py + sy - jitter_y, &re_grid, &im_grid);
-                        let (c3, d3) = sample_complex_bilinear(px + sx - jitter_x, py + sy + jitter_y, &re_grid, &im_grid);
-                        let (c4, d4) = sample_complex_bilinear(px + sx - jitter_x, py + sy - jitter_y, &re_grid, &im_grid);
+                        let (c1, d1) = sample_complex_bilinear(
+                            px + sx + jitter_x,
+                            py + sy + jitter_y,
+                            &re_grid,
+                            &im_grid,
+                        );
+                        let (c2, d2) = sample_complex_bilinear(
+                            px + sx + jitter_x,
+                            py + sy - jitter_y,
+                            &re_grid,
+                            &im_grid,
+                        );
+                        let (c3, d3) = sample_complex_bilinear(
+                            px + sx - jitter_x,
+                            py + sy + jitter_y,
+                            &re_grid,
+                            &im_grid,
+                        );
+                        let (c4, d4) = sample_complex_bilinear(
+                            px + sx - jitter_x,
+                            py + sy - jitter_y,
+                            &re_grid,
+                            &im_grid,
+                        );
                         let c_lp = 0.25 * (c1 + c2 + c3 + c4);
                         let d_lp = 0.25 * (d1 + d2 + d3 + d4);
                         c = c * (1.0 - tail_blend) + c_lp * tail_blend;
@@ -14661,23 +16517,48 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
                 }
             }
             let mtf = (sum_re.hypot(sum_im) / denom).clamp(0.0, 1.0);
-            if mtf.is_finite() { mtf } else { 0.0 }
+            if mtf.is_finite() {
+                mtf
+            } else {
+                0.0
+            }
         };
 
         #[cfg(feature = "wasm-threads")]
-        let mut out = frequencies.par_iter().map(|frequency| compute_frequency(*frequency)).collect::<Vec<f64>>();
+        let mut out = frequencies
+            .par_iter()
+            .map(|frequency| compute_frequency(*frequency))
+            .collect::<Vec<f64>>();
         #[cfg(not(feature = "wasm-threads"))]
-        let mut out = frequencies.iter().map(|frequency| compute_frequency(*frequency)).collect::<Vec<f64>>();
-        if frequencies.first().is_some_and(|frequency| *frequency <= 1e-12) {
+        let mut out = frequencies
+            .iter()
+            .map(|frequency| compute_frequency(*frequency))
+            .collect::<Vec<f64>>();
+        if frequencies
+            .first()
+            .is_some_and(|frequency| *frequency <= 1e-12)
+        {
             out[0] = 1.0;
         }
         out
     };
     let evaluated_tangential = compute_curve(tan_x, tan_y, &evaluation_frequencies);
     let evaluated_sagittal = compute_curve(sag_x, sag_y, &evaluation_frequencies);
-    let frequency_axis = if direct_eval_only { Vec::new() } else { evaluation_frequencies.clone() };
-    let mtf_tangential = if direct_eval_only { Vec::new() } else { evaluated_tangential.clone() };
-    let mtf_sagittal = if direct_eval_only { Vec::new() } else { evaluated_sagittal.clone() };
+    let frequency_axis = if direct_eval_only {
+        Vec::new()
+    } else {
+        evaluation_frequencies.clone()
+    };
+    let mtf_tangential = if direct_eval_only {
+        Vec::new()
+    } else {
+        evaluated_tangential.clone()
+    };
+    let mtf_sagittal = if direct_eval_only {
+        Vec::new()
+    } else {
+        evaluated_sagittal.clone()
+    };
 
     Ok(serde_json::json!({
         "backend": if fft_correlation.is_some() { "web-rust-wasm-mtf-malacara-fft" } else { "web-rust-wasm-mtf-malacara-direct" },
@@ -14696,13 +16577,17 @@ fn run_native_mtf_malacara_from_opd_value(req: &Value) -> Result<Value, JsValue>
 /// This is intended for strict Rust/WASM-only MTF in web runtime (no JS fallback).
 #[wasm_bindgen]
 pub fn run_native_mtf_malacara_from_opd_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_mtf_malacara_from_opd_wasm_json: JSON parse: {}", e)))?;
+    let req: Value = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_mtf_malacara_from_opd_wasm_json: JSON parse: {}",
+            e
+        ))
+    })?;
     let response = run_native_mtf_malacara_from_opd_value(&req)?;
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     response
-    .serialize(&serializer)
-    .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
 }
 
 /// Batched one-shot pipeline: OPD -> PSF -> MTF in a single WASM call.
@@ -14744,7 +16629,8 @@ fn run_native_opd_psf_mtf_value_with_rows(
         opd_req = &owned_opd_req;
     }
 
-    let opd_json = run_native_opd_map_value_with_rows(opd_req, normalized_optical_rows, shared_packed_meta)?;
+    let opd_json =
+        run_native_opd_map_value_with_rows(opd_req, normalized_optical_rows, shared_packed_meta)?;
 
     let wavelength_um = req
         .get("wavelengthUm")
@@ -14899,13 +16785,20 @@ fn clone_optical_rows_with_defocus(rows: &[Value], defocus_mm: f64) -> Vec<Value
 
 #[wasm_bindgen]
 pub fn run_native_opd_psf_mtf_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_opd_psf_mtf_wasm_json: JSON parse: {}", e)))?;
+    let req: Value = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_opd_psf_mtf_wasm_json: JSON parse: {}",
+            e
+        ))
+    })?;
     let response = run_native_opd_psf_mtf_value(&req)?;
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
-    response
-    .serialize(&serializer)
-    .map_err(|e| JsValue::from_str(&format!("run_native_opd_psf_mtf_wasm_json: serialize error: {}", e)))
+    response.serialize(&serializer).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_opd_psf_mtf_wasm_json: serialize error: {}",
+            e
+        ))
+    })
 }
 
 /// Batch multiple OPD+PSF+MTF jobs in a single JS→WASM call.
@@ -14918,8 +16811,12 @@ pub fn run_native_opd_psf_mtf_wasm_json(req_json: String) -> Result<JsValue, JsV
 /// ```
 #[wasm_bindgen]
 pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
-    let req: Value = serde_json::from_str(&req_json)
-        .map_err(|e| JsValue::from_str(&format!("run_native_opd_psf_mtf_batch_wasm_json: JSON parse: {}", e)))?;
+    let req: Value = serde_json::from_str(&req_json).map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_opd_psf_mtf_batch_wasm_json: JSON parse: {}",
+            e
+        ))
+    })?;
 
     let jobs = req
         .get("jobs")
@@ -14931,24 +16828,33 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
         .and_then(|obj| obj.get("opdRequest"))
         .and_then(|opd| opd.get("opticalSystemRows"))
         .and_then(|rows| rows.as_array())
-        .map(|rows| rows.iter().map(normalize_coord_trans_row).collect::<Vec<Value>>());
-    let shared_packed_meta = if let (Some(shared_obj), Some(rows)) = (shared, shared_normalized_rows.as_deref()) {
-        let shared_opd = shared_obj.get("opdRequest").and_then(|v| v.as_object());
-        let wavelength_um = shared_opd
-            .and_then(|opd| opd.get("wavelengthUm"))
-            .and_then(value_to_f64)
-            .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(0.5876);
-        let target_surface_index = shared_opd
-            .and_then(|opd| opd.get("surfaceIndex"))
-            .and_then(value_to_f64)
-            .map(|v| v.max(0.0) as usize)
-            .unwrap_or_else(|| find_eval_surface_index(rows))
-            .min(rows.len().saturating_sub(1));
-        Some(build_packed_meta_for_opd(rows, wavelength_um, target_surface_index))
-    } else {
-        None
-    };
+        .map(|rows| {
+            rows.iter()
+                .map(normalize_coord_trans_row)
+                .collect::<Vec<Value>>()
+        });
+    let shared_packed_meta =
+        if let (Some(shared_obj), Some(rows)) = (shared, shared_normalized_rows.as_deref()) {
+            let shared_opd = shared_obj.get("opdRequest").and_then(|v| v.as_object());
+            let wavelength_um = shared_opd
+                .and_then(|opd| opd.get("wavelengthUm"))
+                .and_then(value_to_f64)
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or(0.5876);
+            let target_surface_index = shared_opd
+                .and_then(|opd| opd.get("surfaceIndex"))
+                .and_then(value_to_f64)
+                .map(|v| v.max(0.0) as usize)
+                .unwrap_or_else(|| find_eval_surface_index(rows))
+                .min(rows.len().saturating_sub(1));
+            Some(build_packed_meta_for_opd(
+                rows,
+                wavelength_um,
+                target_surface_index,
+            ))
+        } else {
+            None
+        };
 
     let compute_job = |(job_index, job): (usize, &Value)| -> Result<Value, String> {
         let job_overrides_optical_rows = job
@@ -14956,9 +16862,8 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
             .and_then(|opd| opd.get("opticalSystemRows"))
             .is_some();
         let defocus_mm = job.get("defocusMm").and_then(value_to_f64);
-        let can_use_shared_rows = shared_normalized_rows.is_some()
-            && !job_overrides_optical_rows
-            && defocus_mm.is_none();
+        let can_use_shared_rows =
+            shared_normalized_rows.is_some() && !job_overrides_optical_rows && defocus_mm.is_none();
         let merged_job;
         let merged_effective_job = if let Some(shared_obj) = shared {
             let mut merged = Map::<String, Value>::new();
@@ -15011,9 +16916,18 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
         let effective_job = defocus_job.as_ref().unwrap_or(merged_effective_job);
         let mut job_result = run_native_opd_psf_mtf_value_with_rows(
             effective_job,
-            if can_use_shared_rows { shared_normalized_rows.as_deref() } else { None },
-            if can_use_shared_rows { shared_packed_meta.as_ref() } else { None },
-        ).map_err(|error| format!("{error:?}"))?;
+            if can_use_shared_rows {
+                shared_normalized_rows.as_deref()
+            } else {
+                None
+            },
+            if can_use_shared_rows {
+                shared_packed_meta.as_ref()
+            } else {
+                None
+            },
+        )
+        .map_err(|error| format!("{error:?}"))?;
         if let Some(obj) = job_result.as_object_mut() {
             obj.insert("jobIndex".to_string(), Value::from(job_index as u64));
             if let Some(meta) = job.get("meta") {
@@ -15024,7 +16938,10 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
     };
 
     #[cfg(feature = "wasm-threads")]
-    let use_rayon = req.get("parallel").and_then(Value::as_bool).unwrap_or(false)
+    let use_rayon = req
+        .get("parallel")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
         && jobs.len() > 1;
 
     #[cfg(feature = "wasm-threads")]
@@ -15042,7 +16959,11 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
     .map_err(|error| JsValue::from_str(&error))?;
 
     #[cfg(not(feature = "wasm-threads"))]
-    let (results, packed_meta_cache_entries, packed_meta_cache_hits): (Vec<Value>, usize, usize) = {
+    let (results, packed_meta_cache_entries, packed_meta_cache_hits): (
+        Vec<Value>,
+        usize,
+        usize,
+    ) = {
         // The optimizer submits one OPD/MTF job for each field and wavelength.
         // For a finite-difference candidate the packed optical system is the
         // same across all fields at the same wavelength, yet the old batch path
@@ -15065,7 +16986,9 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
             };
 
             let Some(job_rows) = job_rows else {
-                results.push(compute_job((job_index, job)).map_err(|error| JsValue::from_str(&error))?);
+                results.push(
+                    compute_job((job_index, job)).map_err(|error| JsValue::from_str(&error))?,
+                );
                 continue;
             };
 
@@ -15087,16 +17010,28 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
                 .unwrap_or_else(|| find_eval_surface_index(&normalized_rows))
                 .min(normalized_rows.len().saturating_sub(1));
 
-            let cache_index = if let Some(index) = packed_meta_cache.iter().position(|(rows, wavelength, target, _)| {
-                *target == target_surface_index
-                    && (*wavelength - wavelength_um).abs() <= 1.0e-12
-                    && *rows == normalized_rows
-            }) {
+            let cache_index = if let Some(index) =
+                packed_meta_cache
+                    .iter()
+                    .position(|(rows, wavelength, target, _)| {
+                        *target == target_surface_index
+                            && (*wavelength - wavelength_um).abs() <= 1.0e-12
+                            && *rows == normalized_rows
+                    }) {
                 cache_hits += 1;
                 index
             } else {
-                let packed = build_packed_meta_for_opd(&normalized_rows, wavelength_um, target_surface_index);
-                packed_meta_cache.push((normalized_rows, wavelength_um, target_surface_index, packed));
+                let packed = build_packed_meta_for_opd(
+                    &normalized_rows,
+                    wavelength_um,
+                    target_surface_index,
+                );
+                packed_meta_cache.push((
+                    normalized_rows,
+                    wavelength_um,
+                    target_surface_index,
+                    packed,
+                ));
                 packed_meta_cache.len().saturating_sub(1)
             };
             let cached = &packed_meta_cache[cache_index];
@@ -15140,27 +17075,31 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
         "message": "Computed multiple OPD+PSF+MTF jobs via one WASM batch call",
     })
     .serialize(&serializer)
-    .map_err(|e| JsValue::from_str(&format!("run_native_opd_psf_mtf_batch_wasm_json: serialize error: {}", e)))
+    .map_err(|e| {
+        JsValue::from_str(&format!(
+            "run_native_opd_psf_mtf_batch_wasm_json: serialize error: {}",
+            e
+        ))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_display_mode_grid,
-        clear_trace_system_metadata_cache,
-        register_trace_system_metadata,
-        run_native_mtf_malacara_from_opd_value,
-        trace_ray_batch_hit_point_cached,
-        trace_ray_batch_hit_point_with_meta,
-        trace_ray_batch_spot_metrics_cached,
-        trace_spot_metric_jobs_cached,
-        trace_ray_batch_spot_metrics_with_meta,
-        trace_single_ray_hit_point_with_meta_core_impl,
-        trace_single_ray_hit_state_with_meta_core,
+        apply_display_mode_grid, clear_trace_system_metadata_cache, register_trace_system_metadata,
+        run_native_mtf_malacara_from_opd_value, trace_ray_batch_hit_point_cached,
+        trace_ray_batch_hit_point_with_meta, trace_ray_batch_spot_metrics_cached,
+        trace_ray_batch_spot_metrics_with_meta, trace_single_ray_hit_point_with_meta_core_impl,
+        trace_single_ray_hit_state_with_meta_core, trace_spot_metric_jobs_cached,
         OpdTraceCheckpoints,
     };
 
-    fn test_grid() -> (Vec<Vec<Option<f64>>>, Vec<Vec<Option<f64>>>, Vec<Vec<Option<f64>>>, Vec<Vec<Option<bool>>>) {
+    fn test_grid() -> (
+        Vec<Vec<Option<f64>>>,
+        Vec<Vec<Option<f64>>>,
+        Vec<Vec<Option<f64>>>,
+        Vec<Vec<Option<bool>>>,
+    ) {
         (
             vec![
                 vec![Some(1.0), Some(2.0), Some(3.0)],
@@ -15212,10 +17151,23 @@ mod tests {
         let mut direct_request = common;
         direct_request["sampleFrequenciesLpmm"] = serde_json::json!([20.0]);
         direct_request["directEvalOnly"] = serde_json::json!(true);
-        let direct = run_native_mtf_malacara_from_opd_value(&direct_request).expect("direct Malacara sample");
+        let direct = run_native_mtf_malacara_from_opd_value(&direct_request)
+            .expect("direct Malacara sample");
 
-        let full_tan = full["mtfTangential"].as_array().unwrap().last().unwrap().as_f64().unwrap();
-        let full_sag = full["mtfSagittal"].as_array().unwrap().last().unwrap().as_f64().unwrap();
+        let full_tan = full["mtfTangential"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_f64()
+            .unwrap();
+        let full_sag = full["mtfSagittal"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_f64()
+            .unwrap();
         let direct_tan = direct["sampledMtfTangential"][0].as_f64().unwrap();
         let direct_sag = direct["sampledMtfSagittal"][0].as_f64().unwrap();
         assert!((full_tan - direct_tan).abs() <= 1e-12);
@@ -15258,12 +17210,17 @@ mod tests {
             let fft_values = fft[key].as_array().unwrap();
             assert_eq!(direct_values.len(), fft_values.len());
             let mut max_delta = 0.0_f64;
-            for (index, (direct_value, fft_value)) in direct_values.iter().zip(fft_values).enumerate() {
+            for (index, (direct_value, fft_value)) in
+                direct_values.iter().zip(fft_values).enumerate()
+            {
                 let direct_numeric = direct_value.as_f64().unwrap();
                 let fft_numeric = fft_value.as_f64().unwrap();
                 let delta = (direct_numeric - fft_numeric).abs();
                 max_delta = max_delta.max(delta);
-                assert!(delta <= 0.03, "{key}[{index}] direct={direct_numeric} fft={fft_numeric} delta={delta}");
+                assert!(
+                    delta <= 0.03,
+                    "{key}[{index}] direct={direct_numeric} fft={fft_numeric} delta={delta}"
+                );
             }
             assert!(max_delta > 0.0);
         }
@@ -15272,13 +17229,8 @@ mod tests {
     #[test]
     fn display_fit_reports_requested_piston_mode() {
         let (raw, entrance_x, entrance_y, pupil_mask) = test_grid();
-        let (_, piston_fit) = apply_display_mode_grid(
-            &raw,
-            &entrance_x,
-            &entrance_y,
-            &pupil_mask,
-            "pistonRemoved",
-        );
+        let (_, piston_fit) =
+            apply_display_mode_grid(&raw, &entrance_x, &entrance_y, &pupil_mask, "pistonRemoved");
         let (_, defocus_fit) = apply_display_mode_grid(
             &raw,
             &entrance_x,
@@ -15294,9 +17246,8 @@ mod tests {
     #[test]
     fn spot_metrics_match_batch_hits() {
         let rays = vec![
-            0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-            0.0, 2.0, 0.0, 0.0, 0.0, 1.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0,
+            1.0,
         ];
         let row_meta = vec![0, 2, 0, 0];
         let mut row_params = vec![0.0; 24];
@@ -15308,10 +17259,30 @@ mod tests {
         let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
 
         let hits = trace_ray_batch_hit_point_with_meta(
-            &rays, 3, 0, 1.0, &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+            &rays,
+            3,
+            0,
+            1.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &identity,
+            &identity,
+            1,
         );
         let metrics = trace_ray_batch_spot_metrics_with_meta(
-            &rays, 3, 0, 1.0, 0.0, 0.0, &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+            &rays,
+            3,
+            0,
+            1.0,
+            0.0,
+            0.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &identity,
+            &identity,
+            1,
         );
 
         let valid_hits: Vec<(f64, f64)> = hits
@@ -15325,7 +17296,8 @@ mod tests {
         let mean_r2 = valid_hits
             .iter()
             .map(|point| point.0 * point.0 + point.1 * point.1)
-            .sum::<f64>() / count;
+            .sum::<f64>()
+            / count;
         let max_r2 = valid_hits
             .iter()
             .map(|point| point.0 * point.0 + point.1 * point.1)
@@ -15341,10 +17313,7 @@ mod tests {
     #[test]
     fn cached_spot_metrics_match_direct_metadata_path() {
         clear_trace_system_metadata_cache();
-        let rays = vec![
-            0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ];
+        let rays = vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
         let row_meta = vec![0, 2, 0, 0];
         let mut row_params = vec![0.0; 24];
         row_params[0] = f64::INFINITY;
@@ -15354,26 +17323,42 @@ mod tests {
         let row_origins = vec![0.0, 0.0, 10.0];
         let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let direct = trace_ray_batch_spot_metrics_with_meta(
-            &rays, 2, 0, 1.0, 0.0, 0.0, &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+            &rays,
+            2,
+            0,
+            1.0,
+            0.0,
+            0.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &identity,
+            &identity,
+            1,
         );
         let handle = register_trace_system_metadata(
-            &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &identity,
+            &identity,
+            1,
         );
         assert!(handle > 0);
         let cached = trace_ray_batch_spot_metrics_cached(&rays, 2, 0, 1.0, 0.0, 0.0, handle);
         assert_eq!(cached, direct);
 
         clear_trace_system_metadata_cache();
-        assert_eq!(trace_ray_batch_spot_metrics_cached(&rays, 2, 0, 1.0, 0.0, 0.0, handle)[0], 0.0);
+        assert_eq!(
+            trace_ray_batch_spot_metrics_cached(&rays, 2, 0, 1.0, 0.0, 0.0, handle)[0],
+            0.0
+        );
     }
 
     #[test]
     fn cached_hit_points_match_direct_metadata_path() {
         clear_trace_system_metadata_cache();
-        let rays = vec![
-            0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ];
+        let rays = vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
         let row_meta = vec![0, 2, 0, 0];
         let mut row_params = vec![0.0; 24];
         row_params[0] = f64::INFINITY;
@@ -15383,10 +17368,24 @@ mod tests {
         let row_origins = vec![0.0, 0.0, 10.0];
         let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let direct = trace_ray_batch_hit_point_with_meta(
-            &rays, 2, 0, 1.0, &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+            &rays,
+            2,
+            0,
+            1.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &identity,
+            &identity,
+            1,
         );
         let handle = register_trace_system_metadata(
-            &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &identity,
+            &identity,
+            1,
         );
         assert!(handle > 0);
         let cached = trace_ray_batch_hit_point_cached(&rays, 2, 0, 1.0, handle);
@@ -15400,11 +17399,7 @@ mod tests {
     fn opd_checkpoint_trace_matches_individual_surface_traces() {
         let ray = vec![0.2, -0.1, 0.0, 0.01, -0.02, 1.0];
         let row_count = 3;
-        let row_meta = vec![
-            0, 2, 0, 0,
-            0, 2, 0, 0,
-            0, 2, 0, 0,
-        ];
+        let row_meta = vec![0, 2, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0];
         let mut row_params = vec![0.0; row_count * 24];
         for index in 0..row_count {
             let base = index * 24;
@@ -15421,14 +17416,38 @@ mod tests {
         }
 
         let first_direct = trace_single_ray_hit_state_with_meta_core(
-            &ray, 0, 1.0, &row_meta, &row_params, &row_origins, &row_rots, &row_rots, row_count,
+            &ray,
+            0,
+            1.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &row_rots,
+            &row_rots,
+            row_count,
         );
         let previous_direct = trace_single_ray_hit_state_with_meta_core(
-            &ray, 1, 1.0, &row_meta, &row_params, &row_origins, &row_rots, &row_rots, row_count,
+            &ray,
+            1,
+            1.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &row_rots,
+            &row_rots,
+            row_count,
         );
         let mut checkpoints = OpdTraceCheckpoints::new(Some(0), Some(1), Some(1));
         let target = trace_single_ray_hit_point_with_meta_core_impl(
-            &ray, 2, 1.0, &row_meta, &row_params, &row_origins, &row_rots, &row_rots, row_count,
+            &ray,
+            2,
+            1.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &row_rots,
+            &row_rots,
+            row_count,
             Some(&mut checkpoints),
         );
         assert_eq!(target[0], 1.0);
@@ -15510,12 +17529,15 @@ mod tests {
         let row_origins = vec![0.0, 0.0, 10.0];
         let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let handle = register_trace_system_metadata(
-            &row_meta, &row_params, &row_origins, &identity, &identity, 1,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &identity,
+            &identity,
+            1,
         );
         let rays = vec![
-            0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-            1.0, 0.0, 0.0, 0.0, 1.0,
-            0.0, 2.0, 0.0, 0.0, 0.0, 1.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0,
         ];
         let first = trace_ray_batch_spot_metrics_cached(&rays[..12], 2, 0, 1.0, 0.0, 0.0, handle);
         let second = trace_ray_batch_spot_metrics_cached(&rays[12..], 1, 0, 1.0, 0.0, 0.0, handle);

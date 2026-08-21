@@ -259,6 +259,7 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
             <option value="opd">OPD</option>
             <option value="psf">PSF</option>
             <option value="multi-field-psf">Multi-Field PSF</option>
+            <option value="image-simulation">Image Simulation</option>
             <option value="mtf">MTF</option>
             <option value="through-focus-spot">Through-Focus Spot</option>
             <option value="through-focus-mtf">Through-Focus MTF</option>
@@ -358,6 +359,12 @@ export default function MainToolbar({ minimal = false }: { minimal?: boolean }) 
           title="Open Multi-Field PSF view"
         >
           Multi-Field PSF
+        </button>
+        <button
+          id="open-image-simulation-window-btn"
+          title="Open Image Simulation view"
+        >
+          Image Simulation
         </button>
         <button
           id="open-mtf-window-btn"
