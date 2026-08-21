@@ -288,6 +288,7 @@ export function listDesignVariablesFromBlocks(blocksOrConfig) {
     const blockId = String(b.blockId ?? '').trim();
     if (!blockId) continue;
     const blockType = String(b.blockType ?? '').trim();
+    if (blockType === 'Stop') continue;
 
     const vars = isPlainObject(b.variables) ? b.variables : null;
     if (!vars) continue;
@@ -334,6 +335,7 @@ export function setDesignVariableValue(config, variableId, newValue) {
 
   const block = config.blocks.find(b => isPlainObject(b) && String(b.blockId) === blockId);
   if (!block) return false;
+  if (String(block.blockType ?? '').trim() === 'Stop') return false;
 
   const params = ensureBlockParameters(block);
   if (!params) return false;

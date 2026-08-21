@@ -6546,6 +6546,10 @@ export default function App() {
         for (const block of active.blocks) {
           const blockId = String(block?.blockId ?? '').trim();
           if (!blockId) continue;
+          if (String(block?.blockType ?? '').trim() === 'Stop') {
+            block.variables = {};
+            continue;
+          }
           mergeBlockVariablesFromSnapshot(block, blockVariableSnapshots.get(blockId));
         }
 

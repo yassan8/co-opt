@@ -10,6 +10,75 @@ const requestedSpotWorkers = String(process.env.COOPT_E2E_SPOT_WORKERS || '').tr
 const requestedAutoRender = String(process.env.COOPT_E2E_AUTO_RENDER || '').trim().toLowerCase() === 'on';
 const requestedRepeatRun = String(process.env.COOPT_E2E_REPEAT_RUN || '').trim().toLowerCase() === 'on';
 
+type StopVariableState = {
+  rows: Array<Record<string, unknown>>;
+  blocks: Array<{ blockId: string; variables: Record<string, unknown> }>;
+};
+
+async function readStopVariableState(page: import('@playwright/test').Page): Promise<StopVariableState> {
+  return page.evaluate(() => {
+    const host = window as any;
+    const rows = typeof host.getOpticalSystemRows === 'function'
+      ? host.getOpticalSystemRows(host.tableOpticalSystem)
+      : [];
+    const configSet = typeof host.loadSystemConfigurationsFromTableConfig === 'function'
+      ? host.loadSystemConfigurationsFromTableConfig()
+      : host.loadSystemConfigurations?.();
+    const active = configSet?.configurations?.find((config: any) => String(config?.id) === String(configSet?.activeConfigId));
+    return {
+      rows: (Array.isArray(rows) ? rows : [])
+        .filter((row: any) => row?.['object type'] === 'Stop' || row?.object === 'Stop')
+        .map((row: any) => Object.fromEntries(
+          Object.entries(row).filter(([key]) => key.startsWith('optimize')),
+        )),
+      blocks: (Array.isArray(active?.blocks) ? active.blocks : [])
+        .filter((block: any) => block?.blockType === 'Stop')
+        .map((block: any) => ({
+          blockId: String(block?.blockId ?? ''),
+          variables: block?.variables && typeof block.variables === 'object' ? block.variables : {},
+        })),
+    };
+  });
+}
+
+function expectStopHasNoVariables(state: StopVariableState): void {
+  expect(state.rows.length).toBeGreaterThan(0);
+  for (const row of state.rows) {
+    expect(Object.values(row).some((value) => String(value ?? '').trim().toUpperCase() === 'V')).toBe(false);
+  }
+  expect(state.blocks.length).toBeGreaterThan(0);
+  for (const block of state.blocks) expect(block.variables).toEqual({});
+}
+test('Parameter All ON never marks the Stop block as a design variable', async ({ page }) => {
+  await page.goto('?stop-variable-e2e=1', { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => typeof (window as any).__loadAllDataObjectIntoApp === 'function');
+  await page.evaluate(async (data) => {
+    const contaminated = JSON.parse(JSON.stringify(data));
+    for (const config of contaminated?.configurations?.configurations || []) {
+      for (const block of config?.blocks || []) {
+        if (block?.blockType !== 'Stop') continue;
+        block.variables = {
+          semiDiameter: { value: block?.parameters?.semiDiameter, optimize: { mode: 'V', scope: 'perConfig' } },
+          zoomGroup: { value: '', optimize: { mode: 'V', scope: 'perConfig' } },
+        };
+      }
+    }
+    await (window as any).__loadAllDataObjectIntoApp(contaminated, {
+      filename: '20260802_optimize_qcon_surf.json',
+    });
+  }, fixture);
+  expectStopHasNoVariables(await readStopVariableState(page));
+
+  await page.getByRole('button', { name: 'Open navigator' }).first().click();
+  await page.locator('.win-tree-leaf', { hasText: 'Design Intent' }).click();
+  await page.locator('#design-intent-param-all-on-btn').evaluate((element) => (element as HTMLButtonElement).click());
+  await page.waitForTimeout(150);
+  await page.evaluate(async () => {
+    await (window as any).loadActiveConfigurationToTables?.({ applyToUI: true });
+  });
+  expectStopHasNoVariables(await readStopVariableState(page));
+});
+
 test('Qcon optimization completes in local Edge without losing its run inputs', async ({ page }, testInfo) => {
   test.setTimeout(Math.max(90_000, requestedIterations * 45_000 + (requestedRepeatRun ? 60_000 : 0)));
   const pageErrors: string[] = [];
@@ -28,6 +97,7 @@ test('Qcon optimization completes in local Edge without losing its run inputs', 
       filename: '20260802_optimize_qcon_surf.json',
     });
   }, fixture);
+  expectStopHasNoVariables(await readStopVariableState(page));
 
   await page.locator('button.app-shell__menuSummary', { hasText: 'Run' }).evaluate((element) => (element as HTMLButtonElement).click());
   await page.locator('button.app-shell__menuAction', { hasText: 'Optimize' }).evaluate((element) => (element as HTMLButtonElement).click());
@@ -122,6 +192,8 @@ test('Qcon optimization completes in local Edge without losing its run inputs', 
       ? { created: tracker.created, terminated: tracker.terminated, live: tracker.live.size, urls: tracker.urls }
       : { created: 0, terminated: 0, live: 0, urls: [] };
   });
+
+  expectStopHasNoVariables(await readStopVariableState(page));
 
   const measurement = await optimizer.evaluate(() => {
     const profile = (window as any).OptimizationMVP?.getLastProfile?.() || null;

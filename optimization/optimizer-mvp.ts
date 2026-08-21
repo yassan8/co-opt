@@ -5026,7 +5026,7 @@ function formatNoVariableReason(activeCfg) {
   try {
     const allMarked = listDesignVariablesFromBlocks(activeCfg);
     if (!Array.isArray(allMarked) || allMarked.length === 0) {
-      return 'No design variables are marked as variable (V). Open a Block in “Design Intent” and check “Optimize” for numeric parameters (e.g. frontRadius/backRadius/centerThickness, Gap.thickness, Stop.semiDiameter).';
+      return 'No design variables are marked as variable (V). Open a Block in “Design Intent” and check “Optimize” for numeric parameters (e.g. frontRadius/backRadius/centerThickness or Gap.thickness).';
     }
 
     const nonNumeric = allMarked.filter(v => !(v && typeof v.value === 'number' && Number.isFinite(v.value)));
