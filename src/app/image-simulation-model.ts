@@ -6,6 +6,7 @@ export type ImageSimulationImage = {
 
 export type ImageSimulationTargetKind = 'field-chart' | 'usaf-array' | 'grid-points';
 
+export type ImageSimulationScaleMode = 'field-fit' | 'sensor-width' | 'pixel-pitch';
 export type ImageSimulationDistortionMap = {
   gridSize: number;
   idealX: number[];
@@ -83,6 +84,21 @@ export function getUsaf1951ElementGeometry(group: number, element: number): Usaf
     spaceWidthMm: barWidthMm,
     barLengthMm: barWidthMm * 5,
   };
+}
+
+export function getImageSimulationTargetNominalMaxFrequencyLpmm(
+  kind: ImageSimulationTargetKind | 'upload',
+  imageWidthMm: number,
+): number | null {
+  if (kind !== 'field-chart' && kind !== 'usaf-array') return null;
+  const widthMm = Math.abs(Number(imageWidthMm));
+  if (!(Number.isFinite(widthMm) && widthMm > 1e-12)) return null;
+  const reference = getUsaf1951ElementGeometry(0, 1);
+  const finest = getUsaf1951ElementGeometry(0, 3);
+  const normalizedBarWidth = 14 * finest.barWidthMm / reference.barWidthMm;
+  const minimumClusterScale = kind === 'usaf-array' ? 0.88 : 1;
+  const barWidthMm = widthMm * normalizedBarWidth * minimumClusterScale / IMAGE_SIMULATION_SVG_VIEWBOX;
+  return barWidthMm > 0 ? 1 / (2 * barWidthMm) : null;
 }
 
 function createSvgTriBars(barWidth: number): string {
@@ -416,11 +432,12 @@ function sampleDisplacement(
 export function warpImageWithDistortion(
   image: ImageSimulationImage,
   map: ImageSimulationDistortionMap,
+  rasterExtent?: ImageSimulationPhysicalExtent,
 ): ImageSimulationImage {
   const prepared = prepareDisplacement(map);
   if (prepared.validCount <= 0) return { ...image, rgba: new Uint8ClampedArray(image.rgba) };
   const out = new Uint8ClampedArray(image.width * image.height * 4);
-  const { extent } = prepared;
+  const extent = rasterExtent || prepared.extent;
   for (let rasterY = 0; rasterY < image.height; rasterY += 1) {
     const realY = extent.maxYmm - (rasterY / Math.max(1, image.height - 1)) * extent.heightMm;
     for (let rasterX = 0; rasterX < image.width; rasterX += 1) {
@@ -830,4 +847,43 @@ export function calculateImageSimulationDifferencePercent(
     }
   }
   return count > 0 ? sum / count / 255 * 100 : 0;
+}
+
+export function resolveImageSimulationRasterExtent(
+  fieldExtent: ImageSimulationPhysicalExtent,
+  mode: ImageSimulationScaleMode,
+  imageWidth: number,
+  imageHeight: number,
+  sensorWidthMm: number,
+  pixelPitchUm: number,
+): ImageSimulationPhysicalExtent {
+  if (mode === 'field-fit') return { ...fieldExtent };
+  const widthPixels = Math.max(1, Math.floor(Number(imageWidth) || 1));
+  const heightPixels = Math.max(1, Math.floor(Number(imageHeight) || 1));
+  let widthMm: number;
+  let heightMm: number;
+  if (mode === 'sensor-width') {
+    widthMm = Math.abs(Number(sensorWidthMm));
+    if (!(Number.isFinite(widthMm) && widthMm > 1e-9)) {
+      throw new Error('Sensor width must be greater than zero.');
+    }
+    heightMm = widthMm * heightPixels / widthPixels;
+  } else {
+    const pitchUm = Math.abs(Number(pixelPitchUm));
+    if (!(Number.isFinite(pitchUm) && pitchUm > 1e-9)) {
+      throw new Error('Pixel pitch must be greater than zero.');
+    }
+    widthMm = pitchUm * widthPixels / 1000;
+    heightMm = pitchUm * heightPixels / 1000;
+  }
+  const centerXmm = (fieldExtent.minXmm + fieldExtent.maxXmm) / 2;
+  const centerYmm = (fieldExtent.minYmm + fieldExtent.maxYmm) / 2;
+  return {
+    minXmm: centerXmm - widthMm / 2,
+    maxXmm: centerXmm + widthMm / 2,
+    minYmm: centerYmm - heightMm / 2,
+    maxYmm: centerYmm + heightMm / 2,
+    widthMm,
+    heightMm,
+  };
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PSFPlotter } from '../../evaluation/psf/psf-plot.ts';
+import { calculateImageSpaceDiffractionParams } from '../../raytracing/core/ray-paraxial.ts';
 import { detectConjugateType } from '../../utils/conjugate-detection.ts';
 import { runNativeGridDistortion } from '../desktop/ipc/client.ts';
 import {
@@ -33,10 +34,12 @@ import {
   calculateImageSimulationDifferencePercent,
   calculateMaxLateralChromaticDisplacementUm,
   combineImageSimulationSpectralLayers,
+  getImageSimulationTargetNominalMaxFrequencyLpmm,
   convolveImageSpatiallyVarying,
   createImageSimulationDifference,
   generateImageSimulationTargetSvg,
   rasterizeImageSimulationTargetSvg,
+  resolveImageSimulationRasterExtent,
   getImageSimulationPhysicalExtent,
   resamplePsfToImageKernel,
   warpImageWithDistortion,
@@ -44,6 +47,7 @@ import {
   type ImageSimulationFieldKernel,
   type ImageSimulationImage,
   type ImageSimulationTargetKind,
+  type ImageSimulationScaleMode,
 } from './image-simulation-model';
 
 type SimulationMode = 'full' | 'distortion' | 'psf';
@@ -62,6 +66,19 @@ type SimulationSummary = {
   spectralLayers: number;
   distortionMaps: number;
   maxLateralChromaticUm: number;
+  scaleMode: ImageSimulationScaleMode;
+  rasterWidthMm: number;
+  rasterHeightMm: number;
+  primaryWavelengthUm: number;
+  focalLengthMm: number;
+  workingFNumber: number;
+  airyDiameterUm: number;
+  airyDiameterPixels: number;
+  nyquistLpmm: number;
+  cutoffLpmm: number;
+  diffractionMtfAtNyquist: number;
+  chartFrequencyLpmm: number | null;
+  diffractionMtfAtChart: number;
 };
 
 function CanvasImage({
@@ -199,6 +216,14 @@ function normalizeFieldCoordinateForImage(value: number, maximum: number, mode: 
   return Number(value) / maximum;
 }
 
+function calculateCircularDiffractionMtf(normalizedFrequency: number): number {
+  const rawFrequency = Number(normalizedFrequency);
+  const frequency = Number.isFinite(rawFrequency) ? Math.max(0, rawFrequency) : Number.NaN;
+  if (frequency >= 1) return 0;
+  if (frequency <= 0) return 1;
+  return 2 / Math.PI * (Math.acos(frequency) - frequency * Math.sqrt(1 - frequency * frequency));
+}
+
 export function ImageSimulationPage() {
   const cancelRef = useRef<CancelToken | null>(null);
   const [sourceKind, setSourceKind] = useState<ImageSimulationTargetKind | 'upload'>('field-chart');
@@ -209,6 +234,9 @@ export function ImageSimulationPage() {
   const [samplingSize, setSamplingSize] = useState(32);
   const [zeroPad, setZeroPad] = useState<ZeroPadMode>('none');
   const [kernelSize, setKernelSize] = useState(21);
+  const [scaleMode, setScaleMode] = useState<ImageSimulationScaleMode>('field-fit');
+  const [sensorWidthMm, setSensorWidthMm] = useState('1.5');
+  const [pixelPitchUm, setPixelPitchUm] = useState('2.0');
   const [wavelengthOptions, setWavelengthOptions] = useState<SelectOption[]>([{ value: 'all', label: 'All wavelengths' }]);
   const [wavelength, setWavelength] = useState('all');
   const [sourceImage, setSourceImage] = useState<ImageSimulationImage | null>(null);
@@ -404,9 +432,34 @@ export function ImageSimulationPage() {
       const referenceDistortion = distortionLayers.find((layer) => Math.abs(layer.wavelengthUm - primaryWavelength) < 1e-9)
         || distortionLayers[0];
       if (!referenceDistortion) throw new Error('No wavelength-specific distortion map was available.');
-      const extent = getImageSimulationPhysicalExtent(referenceDistortion.map);
-      const imagePixelPitchXUm = extent.widthMm * 1000 / Math.max(1, sourceImage.width);
-      const imagePixelPitchYUm = extent.heightMm * 1000 / Math.max(1, sourceImage.height);
+      const fieldExtent = getImageSimulationPhysicalExtent(referenceDistortion.map);
+      const rasterExtent = resolveImageSimulationRasterExtent(
+        fieldExtent,
+        scaleMode,
+        sourceImage.width,
+        sourceImage.height,
+        Number(sensorWidthMm),
+        Number(pixelPitchUm),
+      );
+      const fieldToRasterX = fieldExtent.widthMm / Math.max(1e-12, rasterExtent.widthMm);
+      const fieldToRasterY = fieldExtent.heightMm / Math.max(1e-12, rasterExtent.heightMm);
+      const imagePixelPitchXUm = rasterExtent.widthMm * 1000 / Math.max(1, sourceImage.width);
+      const imagePixelPitchYUm = rasterExtent.heightMm * 1000 / Math.max(1, sourceImage.height);
+      const diffraction = calculateImageSpaceDiffractionParams(opticalRows, primaryWavelength);
+      const focalLengthMm = Math.abs(Number(diffraction?.focalLengthMm));
+      const workingFNumber = Number(diffraction?.fNumberWorking);
+      const airyDiameterUm = Number.isFinite(workingFNumber) && workingFNumber > 0
+        ? 2.44 * primaryWavelength * workingFNumber
+        : Number.NaN;
+      const averagePixelPitchUm = Math.sqrt(imagePixelPitchXUm * imagePixelPitchYUm);
+      const airyDiameterPixels = airyDiameterUm / Math.max(1e-12, averagePixelPitchUm);
+      const nyquistLpmm = Math.min(500 / imagePixelPitchXUm, 500 / imagePixelPitchYUm);
+      const cutoffLpmm = Number(diffraction?.cutoffLpmm);
+      const diffractionMtfAtNyquist = calculateCircularDiffractionMtf(nyquistLpmm / cutoffLpmm);
+      const chartFrequencyLpmm = getImageSimulationTargetNominalMaxFrequencyLpmm(sourceKind, rasterExtent.widthMm);
+      const diffractionMtfAtChart = chartFrequencyLpmm !== null
+        ? calculateCircularDiffractionMtf(chartFrequencyLpmm / cutoffLpmm)
+        : Number.NaN;
       const fieldKernelsByWavelength = new Map<string, ImageSimulationFieldKernel[]>();
       wavelengthEntries.forEach((entry) => fieldKernelsByWavelength.set(wavelengthKey(entry.wavelength), []));
 
@@ -452,8 +505,8 @@ export function ImageSimulationPage() {
               const kernels = fieldKernelsByWavelength.get(key);
               if (!kernels || !Array.isArray(component.psfData) || !component.psfData.length) return;
               kernels.push({
-                xNorm: normalizeFieldCoordinateForImage(point.x, simulationMaxX, definition.mode),
-                yNorm: normalizeFieldCoordinateForImage(point.y, simulationMaxY, definition.mode),
+                xNorm: normalizeFieldCoordinateForImage(point.x, simulationMaxX, definition.mode) * fieldToRasterX,
+                yNorm: normalizeFieldCoordinateForImage(point.y, simulationMaxY, definition.mode) * fieldToRasterY,
                 kernel: resamplePsfToImageKernel(
                   component.psfData,
                   component.pixelSizeUm,
@@ -487,7 +540,7 @@ export function ImageSimulationPage() {
           const distortionLayer = distortionLayers.find((candidate) => wavelengthKey(candidate.wavelengthUm) === wavelengthKey(entry.wavelength));
           if (!distortionLayer) throw new Error('Missing distortion map at ' + (entry.wavelength * 1000).toFixed(1) + ' nm.');
           setProgressText('Warping ' + (entry.wavelength * 1000).toFixed(1) + ' nm image coordinates...');
-          layerImage = warpImageWithDistortion(layerImage, distortionLayer.map);
+          layerImage = warpImageWithDistortion(layerImage, distortionLayer.map, rasterExtent);
           await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
         }
         if (simulationMode !== 'distortion') {
@@ -532,6 +585,19 @@ export function ImageSimulationPage() {
         spectralLayers: spectralImages.length,
         distortionMaps: appliedDistortionMaps.length,
         maxLateralChromaticUm: calculateMaxLateralChromaticDisplacementUm(appliedDistortionMaps),
+        scaleMode,
+        rasterWidthMm: rasterExtent.widthMm,
+        rasterHeightMm: rasterExtent.heightMm,
+        primaryWavelengthUm: primaryWavelength,
+        focalLengthMm,
+        workingFNumber,
+        airyDiameterUm,
+        airyDiameterPixels,
+        nyquistLpmm,
+        cutoffLpmm,
+        diffractionMtfAtNyquist,
+        chartFrequencyLpmm,
+        diffractionMtfAtChart,
       });
       setProgress(100);
       setProgressText(failedFields > 0 ? 'Done · ' + failedFields + ' field PSF sets unavailable' : 'Done');
@@ -547,7 +613,7 @@ export function ImageSimulationPage() {
       if (cancelRef.current === token) cancelRef.current = null;
       setBusy(false);
     }
-  }, [busy, fieldGridSize, kernelSize, samplingSize, simulationMode, sourceImage, wavelength, zeroPad]);
+  }, [busy, fieldGridSize, kernelSize, pixelPitchUm, samplingSize, scaleMode, sensorWidthMm, simulationMode, sourceImage, sourceKind, wavelength, zeroPad]);
 
   return (
     <div className="analysis-window-page image-simulation-page" data-analysis-kind="image-simulation">
@@ -578,12 +644,19 @@ export function ImageSimulationPage() {
         </label>
         <details className="analysis-window-options image-simulation-options"><summary>Options</summary><div className="analysis-window-options__panel">
           <label className="analysis-window-field"><span>Raster output</span><select value={outputSize} onChange={(event) => setOutputSize(Number(event.target.value))}><option value={1024}>1024×1024</option><option value={1536}>1536×1536</option><option value={2048}>2048×2048</option><option value={3072}>3072×3072 · slow</option><option value={4096}>4096×4096 · very slow</option></select></label>
+          <label className="analysis-window-field"><span>Image scale</span><select value={scaleMode} onChange={(event) => setScaleMode(event.target.value as ImageSimulationScaleMode)}>
+            <option value="field-fit">Field fit</option>
+            <option value="sensor-width">Sensor width</option>
+            <option value="pixel-pitch">Pixel pitch</option>
+          </select></label>
+          {scaleMode === 'sensor-width' && <label className="analysis-window-field"><span>Sensor width (mm)</span><input type="number" min="0.001" step="0.1" value={sensorWidthMm} onChange={(event) => setSensorWidthMm(event.target.value)} /></label>}
+          {scaleMode === 'pixel-pitch' && <label className="analysis-window-field"><span>Pixel pitch (µm)</span><input type="number" min="0.001" step="0.1" value={pixelPitchUm} onChange={(event) => setPixelPitchUm(event.target.value)} /></label>}
           <label className="analysis-window-field"><span>Field PSFs</span><select value={fieldGridSize} onChange={(event) => setFieldGridSize(Number(event.target.value))}><option value={3}>3×3</option><option value={5}>5×5</option><option value={7}>7×7</option><option value={9}>9×9</option></select></label>
           <AnalysisGridSamplingField value={samplingSize} options={ANALYSIS_PUPIL_SAMPLING_OPTIONS} onValueChange={(value) => setSamplingSize(Number(value))} title="Pupil sampling used for every field PSF" />
           <label className="analysis-window-field"><span>Wavelength</span><select value={wavelength} onChange={(event) => setWavelength(event.target.value)}>{wavelengthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
           <label className="analysis-window-field"><span>Zero pad</span><select value={zeroPad} onChange={(event) => setZeroPad(event.target.value as ZeroPadMode)}><option value="none">None</option><option value="auto">Auto 2×</option><option value="128">128</option><option value="256">256</option><option value="512">512</option></select></label>
           <label className="analysis-window-field"><span>Kernel support</span><select value={kernelSize} onChange={(event) => setKernelSize(Number(event.target.value))}><option value={15}>15×15</option><option value={21}>21×21</option><option value={31}>31×31</option><option value={41}>41×41</option></select></label>
-          <p className="image-simulation-options__note">Built-in targets are native SVG vectors and are rasterized only at the selected output size. USAF bars follow the MIL-STD-150A element proportions; their scale is normalized because this simulation source has no fixed object-plane millimetre size. Large outputs preserve fine patterns but increase PSF convolution time. Every Source wavelength uses its own distortion map and monochromatic Remove P/T PSF.</p>
+          <p className="image-simulation-options__note">Field fit maps the source across the full traced field. Sensor width and Pixel pitch define a centered physical sensor crop, and the same scale is used for distortion coordinates, field-PSF placement, and convolution. Built-in targets remain native SVG vectors. USAF bars follow the MIL-STD-150A element proportions; their dimensions are normalized to the selected image-plane width. Every Source wavelength uses its own distortion map and monochromatic Remove P/T PSF.</p>
         </div></details>
         <button className="analysis-window-primary-action" type="button" disabled={busy || !sourceImage} onClick={() => void run()}>{busy ? 'Simulating…' : 'Simulate'}</button>
         <button className="analysis-window-primary-action" type="button" title="Save the latest simulated image as PNG" disabled={busy || !simulatedImage} onClick={() => void downloadSimulatedPng()}>Save PNG</button>
@@ -616,6 +689,10 @@ export function ImageSimulationPage() {
         <span><small>Max displacement</small>{summary.maxDistortionPercent.toFixed(3)}% field diagonal</span>
         <span><small>Lateral chromatic</small>{summary.maxLateralChromaticUm.toFixed(3)} µm max separation</span>
         <span><small>Image pitch</small>{summary.imagePixelPitchXUm.toFixed(2)} × {summary.imagePixelPitchYUm.toFixed(2)} µm/px</span>
+        <span><small>Image scale</small>{summary.scaleMode === 'field-fit' ? 'Field fit' : summary.scaleMode === 'sensor-width' ? 'Sensor width' : 'Pixel pitch'} · {summary.rasterWidthMm.toFixed(3)} × {summary.rasterHeightMm.toFixed(3)} mm</span>
+        <span><small>EFL · F/# · Airy diameter</small>{Number.isFinite(summary.focalLengthMm) && Number.isFinite(summary.workingFNumber) && Number.isFinite(summary.airyDiameterUm) ? summary.focalLengthMm.toFixed(3) + ' mm · F/' + summary.workingFNumber.toFixed(2) + ' · ' + summary.airyDiameterUm.toFixed(2) + ' µm · ' + summary.airyDiameterPixels.toFixed(2) + ' px' : 'Unavailable'}</span>
+        <span><small>Nyquist · cutoff</small>{summary.nyquistLpmm.toFixed(1)} lp/mm · {Number.isFinite(summary.cutoffLpmm) ? summary.cutoffLpmm.toFixed(1) + ' lp/mm · MTF ' + summary.diffractionMtfAtNyquist.toFixed(3) : 'cutoff unavailable'}</span>
+        <span><small>Chart frequency</small>{summary.chartFrequencyLpmm !== null ? summary.chartFrequencyLpmm.toFixed(1) + ' lp/mm · diffraction MTF ' + (Number.isFinite(summary.diffractionMtfAtChart) ? summary.diffractionMtfAtChart.toFixed(3) : '—') + ' · USAF E3 nominal' : 'Broadband ≤ ' + summary.nyquistLpmm.toFixed(1) + ' lp/mm'}</span>
         <span><small>PSF fields</small>{summary.psfFields}{summary.failedFields > 0 ? ' · ' + summary.failedFields + ' unavailable' : ''}</span>
         <span><small>Elapsed</small>{(summary.elapsedMs / 1000).toFixed(2)} s</span>
       </footer>}
