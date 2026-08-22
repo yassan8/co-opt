@@ -380,7 +380,10 @@ function countFiniteGridPoints(data: any): number {
   const n = Math.min(rx.length, ry.length);
   let count = 0;
   for (let i = 0; i < n; i++) {
-    if (Number.isFinite(Number(rx[i])) && Number.isFinite(Number(ry[i]))) count += 1;
+    const x = rx[i];
+    const y = ry[i];
+    if (typeof x === 'number' && typeof y === 'number'
+      && Number.isFinite(x) && Number.isFinite(y)) count += 1;
   }
   return count;
 }
@@ -395,6 +398,8 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
   const [gridSize, setGridSize] = useState('10');
   const [samplingPointsInput, setSamplingPointsInput] = useState('21');
   const [enlargementFactorInput, setEnlargementFactorInput] = useState('1');
+  const [sensorWidthInput, setSensorWidthInput] = useState('');
+  const [sensorHeightInput, setSensorHeightInput] = useState('');
   const [distRangeAbsInput, setDistRangeAbsInput] = useState('5');
   const [backendInfo, setBackendInfo] = useState('');
 
@@ -517,7 +522,21 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
         return Math.max(2, parsed);
       })();
       const traceGridSize = requestedGridSize + 1;
-      setBackendInfo(formatRuntimeInfo(runtimeLabel, preBackendLabel));
+      const parseSensorDimension = (raw: string, label: string): number | undefined => {
+        if (!raw.trim()) return undefined;
+        const value = Number(raw);
+        if (!(Number.isFinite(value) && value > 0)) {
+          throw new Error(label + ' must be greater than zero.');
+        }
+        return value;
+      };
+      const sensorWidthMm = parseSensorDimension(sensorWidthInput, 'Sensor width');
+      const sensorHeightMm = parseSensorDimension(sensorHeightInput, 'Sensor height');
+      if ((sensorWidthMm === undefined) !== (sensorHeightMm === undefined)) {
+        throw new Error('Sensor width and height must be specified together.');
+      }
+      const sensorLabel = sensorWidthMm !== undefined && sensorHeightMm !== undefined ? `, sensor=${sensorWidthMm}×${sensorHeightMm} mm` : '';
+      setBackendInfo(formatRuntimeInfo(runtimeLabel, preBackendLabel) + sensorLabel);
       setProgress(5, 'Grid distortion (Rust/WASM): preparing');
 
       let pulseTimer: number | null = null;
@@ -565,6 +584,8 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
           objectRows: normalizedObjectRows,
           gridSize: traceGridSize,
           wavelength,
+          sensorWidthMm,
+          sensorHeightMm,
           // Per-point re-tracing is very expensive on web (N separate calls).
           // Prefer fast full-grid tracing; UI still receives stage updates.
           detailProgress: false,
@@ -611,8 +632,11 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
         meta: { ...(resp?.meta || {}), wavelength, requestedGridSize },
       };
       const backendLabel = String(resp?.backend || 'unknown');
-      setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
       const valid = countFiniteGridPoints(data);
+      const total = Math.min(data.realGrid.x.length, data.realGrid.y.length);
+      const unreached = Math.max(0, total - valid);
+      const reachabilityLabel = unreached > 0 ? `, unreached=${unreached}/${total}` : ', all fields reached';
+      setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel) + sensorLabel + reachabilityLabel);
       if (valid <= 0) {
         throw new Error('Grid distortion returned no valid points');
       }
@@ -632,7 +656,7 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       setProgress(100, 'Failed');
       setErrorMsg(String(err?.message ?? err ?? 'Unknown error'));
     }
-  }, [gridSize, plotlyReady, setProgress, hideProgress, enlargementFactorInput]);
+  }, [gridSize, plotlyReady, setProgress, hideProgress, enlargementFactorInput, sensorWidthInput, sensorHeightInput]);
 
   useEffect(() => {
     hideProgress();
@@ -679,6 +703,10 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
                 placeholder="1"
               />
             </label>
+            {type === 'distortion-grid' ? <>
+              <label className="analysis-window-field"><span>Sensor width (mm)</span><input id="grid-sensor-width-input" type="number" min="0.001" step="0.1" value={sensorWidthInput} onChange={(event) => setSensorWidthInput(event.target.value)} placeholder="Auto" /></label>
+              <label className="analysis-window-field"><span>Sensor height (mm)</span><input id="grid-sensor-height-input" type="number" min="0.001" step="0.1" value={sensorHeightInput} onChange={(event) => setSensorHeightInput(event.target.value)} placeholder="Auto" /></label>
+            </> : null}
             {type === 'distortion' && (
               <label className="analysis-window-field"><span>Distortion range ±%</span>
                 <input type="text" value={distRangeAbsInput} onChange={(e) => setDistRangeAbsInput(e.target.value)} inputMode="decimal" placeholder="auto" />

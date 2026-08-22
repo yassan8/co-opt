@@ -91,6 +91,15 @@ const identityMap = {
 };
 const identityWarp = warpImageWithDistortion(source, identityMap);
 assert.deepEqual([...identityWarp.rgba], [...source.rgba], 'identity distortion must preserve every pixel');
+const missingCornerIndices = new Set([0, 2, 6, 8]);
+const missingCornerMap = {
+  ...identityMap,
+  realX: identityMap.realX.map((value, index) => (missingCornerIndices.has(index) ? null : value)),
+  realY: identityMap.realY.map((value, index) => (missingCornerIndices.has(index) ? null : value)),
+};
+const missingCornerWarp = warpImageWithDistortion(source, missingCornerMap);
+assert.deepEqual([...missingCornerWarp.rgba], [...source.rgba],
+  'null corner rays must be interpolated instead of being treated as image-center hits');
 
 const barrelMap = {
   ...identityMap,
@@ -99,6 +108,10 @@ const barrelMap = {
 };
 const barrelWarp = warpImageWithDistortion(source, barrelMap);
 assert.ok(calculateImageSimulationDifferencePercent(source, barrelWarp) > 1, 'barrel map must visibly change the image');
+const uniformSource = { ...source, rgba: new Uint8ClampedArray(source.rgba.length).fill(255) };
+const uniformBarrelWarp = warpImageWithDistortion(uniformSource, barrelMap);
+assert.ok([...uniformBarrelWarp.rgba].every((value) => value === 255),
+  'distortion outside a finite source chart must extend edge pixels instead of adding dark corners');
 
 const deltaPsf = Array.from({ length: 7 }, () => new Array(7).fill(0));
 deltaPsf[3][3] = 1;
@@ -243,14 +256,14 @@ assert.equal(difference.height, source.height);
 assert.ok(difference.rgba.some((value, index) => index % 4 !== 3 && value > 0), 'difference view must contain changed pixels');
 
 const fieldExtent = getImageSimulationPhysicalExtent(identityMap);
-const fieldFitExtent = resolveImageSimulationRasterExtent(fieldExtent, 'field-fit', source.width, source.height, 1, 1);
+const fieldFitExtent = resolveImageSimulationRasterExtent(fieldExtent, 'field-fit', source.width, source.height, 1, 1, 1);
 assert.deepEqual(fieldFitExtent, fieldExtent, 'Field fit must preserve the traced image extent');
-const sensorExtent = resolveImageSimulationRasterExtent(fieldExtent, 'sensor-width', source.width, source.height, 0.5, 1);
+const sensorExtent = resolveImageSimulationRasterExtent(fieldExtent, 'sensor-width', source.width, source.height, 0.5, 0.25, 1);
 assert.ok(Math.abs(sensorExtent.widthMm - 0.5) < 1e-12, 'sensor-width mode must use the requested width');
-assert.ok(Math.abs(sensorExtent.heightMm - 0.5 * source.height / source.width) < 1e-12, 'sensor-width mode must preserve image aspect ratio');
+assert.ok(Math.abs(sensorExtent.heightMm - 0.25) < 1e-12, 'sensor-width mode must use the requested height independently');
 assert.ok(Math.abs(sensorExtent.minXmm + sensorExtent.maxXmm) < 1e-12, 'sensor crop must remain centered in X');
 assert.ok(Math.abs(sensorExtent.minYmm + sensorExtent.maxYmm) < 1e-12, 'sensor crop must remain centered in Y');
-const pitchExtent = resolveImageSimulationRasterExtent(fieldExtent, 'pixel-pitch', source.width, source.height, 1, 2);
+const pitchExtent = resolveImageSimulationRasterExtent(fieldExtent, 'pixel-pitch', source.width, source.height, 1, 1, 2);
 assert.ok(Math.abs(pitchExtent.widthMm - source.width * 2 / 1000) < 1e-12, 'pixel-pitch mode must derive sensor width from raster pixels');
 assert.ok(Math.abs(pitchExtent.heightMm - source.height * 2 / 1000) < 1e-12, 'pixel-pitch mode must derive sensor height from raster pixels');
 const sensorIdentityWarp = warpImageWithDistortion(source, identityMap, sensorExtent);

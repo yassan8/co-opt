@@ -571,6 +571,19 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
   }
 
   console.log(`📊 Grid distortion: ${validPointCount} valid points (${scaledRealGrid.x.length - validPointCount} failed)`);
+  if (blockedX.length > 0) {
+    traces.push({
+      x: blockedX,
+      y: blockedY,
+      mode: 'markers',
+      marker: { color: '#dc2626', size: 12, symbol: 'x', line: { color: '#ffffff', width: 1 } },
+      name: `Unreached field (${blockedX.length})`,
+      text: blockedX.map((x, index) => `Ideal position: (${Number(x).toFixed(3)}, ${Number(blockedY[index]).toFixed(3)}) mm`),
+      hovertemplate: '<b>Unreached ray</b><br>%{text}<extra></extra>',
+      showlegend: true,
+      type: 'scatter',
+    });
+  }
   const displayGridSize = Number.isFinite(Number(meta?.requestedGridSize)) && Number(meta?.requestedGridSize) > 0
     ? Number(meta.requestedGridSize)
     : Math.max(1, gridSize - 1);

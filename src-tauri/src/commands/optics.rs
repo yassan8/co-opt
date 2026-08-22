@@ -1187,6 +1187,8 @@ pub struct NativeGridDistortionRequest {
     pub surface_index: Option<usize>,
     pub grid_size: Option<u32>,
     pub wavelength: Option<f64>,
+    pub sensor_width_mm: Option<f64>,
+    pub sensor_height_mm: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -8750,7 +8752,19 @@ where
         .unwrap_or_else(|| get_primary_wavelength_um_native(&req.source_rows, 0.5876));
     let grid_field_mode = distortion_grid_field_mode(&req.object_rows);
     let (grid_extent_x, grid_extent_y) = distortion_grid_axis_extents(&req.object_rows, grid_field_mode);
-    let max_field_angle = if grid_field_mode == "angle" {
+    let requested_sensor_width_mm = req.sensor_width_mm.map(f64::abs);
+    let requested_sensor_height_mm = req.sensor_height_mm.map(f64::abs);
+    let sensor_override_used = req.sensor_width_mm.is_some() || req.sensor_height_mm.is_some();
+    let valid_sensor_width = requested_sensor_width_mm
+        .map(|value| value.is_finite() && value > 1.0e-9)
+        .unwrap_or(false);
+    let valid_sensor_height = requested_sensor_height_mm
+        .map(|value| value.is_finite() && value > 1.0e-9)
+        .unwrap_or(false);
+    if sensor_override_used && !(valid_sensor_width && valid_sensor_height) {
+        return Err("run_native_grid_distortion: sensorWidthMm and sensorHeightMm must be positive and specified together".to_string());
+    }
+    let mut max_field_angle = if grid_field_mode == "angle" {
         grid_extent_x.max(grid_extent_y)
     } else {
         f64::NAN
@@ -8828,10 +8842,29 @@ where
     };
 
     let grid_range_scale = std::f64::consts::SQRT_2 / 2.0;
-    let scaled_max_image_x = max_image_x * grid_range_scale;
-    let scaled_max_image_y = max_image_y * grid_range_scale;
+    let sensor_width_mm = requested_sensor_width_mm.unwrap_or(f64::NAN);
+    let sensor_height_mm = requested_sensor_height_mm.unwrap_or(f64::NAN);
+    let scaled_max_image_x = if sensor_override_used { sensor_width_mm / 2.0 } else { max_image_x * grid_range_scale };
+    let scaled_max_image_y = if sensor_override_used { sensor_height_mm / 2.0 } else { max_image_y * grid_range_scale };
     let step_x = (2.0 * scaled_max_image_x) / (grid_size as f64 - 1.0);
     let step_y = (2.0 * scaled_max_image_y) / (grid_size as f64 - 1.0);
+    let field_max_x = if grid_field_mode == "angle" {
+        (scaled_max_image_x / focal_length_abs).atan() * 180.0 / PI
+    } else if grid_field_mode == "height" && finite && image_scale_for_height > 1.0e-9 {
+        scaled_max_image_x / image_scale_for_height
+    } else {
+        scaled_max_image_x
+    };
+    let field_max_y = if grid_field_mode == "angle" {
+        (scaled_max_image_y / focal_length_abs).atan() * 180.0 / PI
+    } else if grid_field_mode == "height" && finite && image_scale_for_height > 1.0e-9 {
+        scaled_max_image_y / image_scale_for_height
+    } else {
+        scaled_max_image_y
+    };
+    if grid_field_mode == "angle" {
+        max_field_angle = field_max_x.max(field_max_y);
+    }
 
     let mut ideal_x = Vec::<f64>::with_capacity(grid_size * grid_size);
     let mut ideal_y = Vec::<f64>::with_capacity(grid_size * grid_size);
@@ -8979,10 +9012,17 @@ where
     meta.insert("focalLength".to_string(), Value::from(focal_length));
     meta.insert("finiteSystem".to_string(), Value::from(finite));
     meta.insert("gridFieldMode".to_string(), Value::from(grid_field_mode));
+    meta.insert("sensorOverrideUsed".to_string(), Value::from(sensor_override_used));
+    if sensor_override_used {
+        meta.insert("sensorWidthMm".to_string(), Value::from(sensor_width_mm));
+        meta.insert("sensorHeightMm".to_string(), Value::from(sensor_height_mm));
+    }
+    meta.insert("fieldMaxX".to_string(), Value::from(field_max_x));
+    meta.insert("fieldMaxY".to_string(), Value::from(field_max_y));
     meta.insert(
         "objectMaxHeight".to_string(),
         Value::from(if grid_field_mode == "height" || grid_field_mode == "imageheight" {
-            grid_extent_y
+            if sensor_override_used { scaled_max_image_x.hypot(scaled_max_image_y) } else { grid_extent_y }
         } else {
             f64::NAN
         }),
