@@ -50,6 +50,7 @@ export type ImageSimulationSpectralLayer = {
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 const IMAGE_SIMULATION_SVG_VIEWBOX = 4096;
+const IMAGE_SIMULATION_SVG_EDGE_GUARD = 16;
 
 const svgNumber = (value: number) => Number(value.toFixed(3)).toString();
 const escapeSvgText = (value: string) => value
@@ -189,6 +190,7 @@ export function generateImageSimulationTargetSvg(
 ): string {
   const size = IMAGE_SIMULATION_SVG_VIEWBOX;
   const margin = size * 0.055;
+  const patternSpan = size - IMAGE_SIMULATION_SVG_EDGE_GUARD * 2;
   const elements: string[] = [];
   const title = kind === 'field-chart'
     ? 'CO-OPT VECTOR FIELD IMAGE TARGET'
@@ -268,8 +270,10 @@ export function generateImageSimulationTargetSvg(
     + '<pattern id="major-grid" width="512" height="512" patternUnits="userSpaceOnUse"><path d="M512 0H0V512" fill="none" stroke="#64748b" stroke-width="5"/></pattern>'
     + '</defs>'
     + '<rect width="4096" height="4096" fill="#f8fafc"/>'
-    + '<rect width="4096" height="4096" fill="url(#minor-grid)"/>'
-    + '<rect width="4096" height="4096" fill="url(#major-grid)"/>'
+    + '<rect x="' + svgNumber(IMAGE_SIMULATION_SVG_EDGE_GUARD) + '" y="' + svgNumber(IMAGE_SIMULATION_SVG_EDGE_GUARD)
+    + '" width="' + svgNumber(patternSpan) + '" height="' + svgNumber(patternSpan) + '" fill="url(#minor-grid)"/>'
+    + '<rect x="' + svgNumber(IMAGE_SIMULATION_SVG_EDGE_GUARD) + '" y="' + svgNumber(IMAGE_SIMULATION_SVG_EDGE_GUARD)
+    + '" width="' + svgNumber(patternSpan) + '" height="' + svgNumber(patternSpan) + '" fill="url(#major-grid)"/>'
     + '<rect x="' + svgNumber(margin) + '" y="' + svgNumber(margin) + '" width="' + svgNumber(size - margin * 2)
     + '" height="' + svgNumber(size - margin * 2) + '" fill="none" stroke="#0f172a" stroke-width="8"/>'
     + '<path d="M2048 ' + svgNumber(margin) + 'V' + svgNumber(size - margin)

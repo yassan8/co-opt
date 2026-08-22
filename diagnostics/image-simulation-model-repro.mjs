@@ -25,6 +25,10 @@ for (const { kind, svg } of vectorTargets) {
   assert.match(svg, /<path\b/, kind + ' target must contain native vector paths');
   assert.match(svg, /<rect\b/, kind + ' target must contain native vector rectangles');
   assert.doesNotMatch(svg, /<image\b/i, kind + ' target must not embed raster images');
+  assert.match(svg, /<rect x="16" y="16" width="4064" height="4064" fill="url\(#minor-grid\)"\/>/,
+    kind + ' target must keep the sampling edge clear of the minor grid');
+  assert.match(svg, /<rect x="16" y="16" width="4064" height="4064" fill="url\(#major-grid\)"\/>/,
+    kind + ' target must keep the sampling edge clear of the major grid');
 }
 assert.ok(vectorTargets.some(({ svg }) => /<circle\b/.test(svg)), 'vector target set must include native vector circles');
 assert.equal(new Set(vectorTargets.map(({ svg }) => svg)).size, 3, 'each target kind must produce a distinct SVG');
