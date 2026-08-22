@@ -52,6 +52,8 @@ for (const testCase of cases) {
   result.realY.forEach((value, index) => assert.ok(Number.isFinite(value), `${testCase.file}: invalid Y at ${index}`));
 
   let maxSymmetryErrorMm = 0;
+  let maxQuarterTurnSymmetryErrorMm = 0;
+  let maxAxisExchangeErrorMm = 0;
   for (let index = 0; index < pointCount; index += 1) {
     const opposite = pointCount - 1 - index;
     maxSymmetryErrorMm = Math.max(
@@ -59,8 +61,24 @@ for (const testCase of cases) {
       Math.abs(result.realX[index] + result.realX[opposite]),
       Math.abs(result.realY[index] + result.realY[opposite]),
     );
+    const row = Math.floor(index / gridSize);
+    const column = index % gridSize;
+    const quarterTurn = column * gridSize + (gridSize - 1 - row);
+    const transposed = column * gridSize + row;
+    maxQuarterTurnSymmetryErrorMm = Math.max(
+      maxQuarterTurnSymmetryErrorMm,
+      Math.abs(result.realX[quarterTurn] + result.realY[index]),
+      Math.abs(result.realY[quarterTurn] - result.realX[index]),
+    );
+    maxAxisExchangeErrorMm = Math.max(
+      maxAxisExchangeErrorMm,
+      Math.abs(result.realX[transposed] - result.realY[index]),
+      Math.abs(result.realY[transposed] - result.realX[index]),
+    );
   }
   assert.ok(maxSymmetryErrorMm < 1e-8, `${testCase.file}: broken central symmetry`);
+  assert.ok(maxQuarterTurnSymmetryErrorMm < 1e-8, `${testCase.file}: broken quarter-turn symmetry`);
+  assert.ok(maxAxisExchangeErrorMm < 1e-8, `${testCase.file}: broken X/Y symmetry`);
 
   for (let y = 0; y < gridSize; y += 1) {
     for (let x = 1; x < gridSize; x += 1) {
@@ -82,6 +100,8 @@ for (const testCase of cases) {
     mode: result.meta.gridFieldMode,
     points: pointCount,
     maxSymmetryErrorMm,
+    maxQuarterTurnSymmetryErrorMm,
+    maxAxisExchangeErrorMm,
     radialChiefRays: result.meta.radialWasmChiefRayCount,
     exactFallbackChiefRays: result.meta.exactWasmChiefRayCount,
     spotFallbackChiefRays: result.meta.spotFallbackChiefRayCount,
