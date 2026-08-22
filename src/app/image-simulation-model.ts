@@ -1,10 +1,20 @@
+import {
+  CALIBRATED_CAMERA_TARGET_SPEC,
+  generateCalibratedCameraResolutionTargetSvg,
+  getCalibratedCameraTargetNominalMaxFrequencyLpmm,
+} from './calibrated-camera-resolution-target.ts';
+import {
+  generateOpticalShowcaseTargetSvg,
+  OPTICAL_SHOWCASE_TARGET_SPEC,
+} from './optical-showcase-target.ts';
+
 export type ImageSimulationImage = {
   width: number;
   height: number;
   rgba: Uint8ClampedArray;
 };
 
-export type ImageSimulationTargetKind = 'field-chart' | 'usaf-array' | 'grid-points';
+export type ImageSimulationTargetKind = 'optical-showcase' | 'field-chart' | 'usaf-array' | 'grid-points';
 
 export type ImageSimulationScaleMode = 'field-fit' | 'sensor-width' | 'pixel-pitch';
 export type ImageSimulationDistortionMap = {
@@ -90,14 +100,32 @@ export function getUsaf1951ElementGeometry(group: number, element: number): Usaf
 export function getImageSimulationTargetNominalMaxFrequencyLpmm(
   kind: ImageSimulationTargetKind | 'upload',
   imageWidthMm: number,
+  imageHeightMm = imageWidthMm,
 ): number | null {
-  if (kind !== 'field-chart' && kind !== 'usaf-array') return null;
+  if (kind !== 'optical-showcase' && kind !== 'field-chart' && kind !== 'usaf-array') return null;
   const widthMm = Math.abs(Number(imageWidthMm));
   if (!(Number.isFinite(widthMm) && widthMm > 1e-12)) return null;
+  if (kind === 'optical-showcase') {
+    const heightMm = Math.abs(Number(imageHeightMm));
+    if (!(Number.isFinite(heightMm) && heightMm > 1e-12)) return null;
+    const finestGroup = Math.max(...OPTICAL_SHOWCASE_TARGET_SPEC.fieldGroups);
+    const nominalFrequency = Math.pow(2, finestGroup + 5 / 6);
+    const scaleX = OPTICAL_SHOWCASE_TARGET_SPEC.widthMm / widthMm;
+    const scaleY = OPTICAL_SHOWCASE_TARGET_SPEC.heightMm / heightMm;
+    return nominalFrequency * Math.max(scaleX, scaleY);
+  }
+  if (kind === 'field-chart') {
+    const heightMm = Math.abs(Number(imageHeightMm));
+    if (!(Number.isFinite(heightMm) && heightMm > 1e-12)) return null;
+    const nominalFrequency = getCalibratedCameraTargetNominalMaxFrequencyLpmm();
+    const scaleX = CALIBRATED_CAMERA_TARGET_SPEC.widthMm / widthMm;
+    const scaleY = CALIBRATED_CAMERA_TARGET_SPEC.heightMm / heightMm;
+    return nominalFrequency * Math.max(scaleX, scaleY);
+  }
   const reference = getUsaf1951ElementGeometry(0, 1);
   const finest = getUsaf1951ElementGeometry(0, 3);
   const normalizedBarWidth = 14 * finest.barWidthMm / reference.barWidthMm;
-  const minimumClusterScale = kind === 'usaf-array' ? 0.88 : 1;
+  const minimumClusterScale = 0.88;
   const barWidthMm = widthMm * normalizedBarWidth * minimumClusterScale / IMAGE_SIMULATION_SVG_VIEWBOX;
   return barWidthMm > 0 ? 1 / (2 * barWidthMm) : null;
 }
@@ -188,6 +216,8 @@ function createSvgPointConstellation(x: number, y: number, scale: number): strin
 export function generateImageSimulationTargetSvg(
   kind: ImageSimulationTargetKind = 'field-chart',
 ): string {
+  if (kind === 'optical-showcase') return generateOpticalShowcaseTargetSvg();
+  if (kind === 'field-chart') return generateCalibratedCameraResolutionTargetSvg();
   const size = IMAGE_SIMULATION_SVG_VIEWBOX;
   const margin = size * 0.055;
   const patternSpan = size - IMAGE_SIMULATION_SVG_EDGE_GUARD * 2;

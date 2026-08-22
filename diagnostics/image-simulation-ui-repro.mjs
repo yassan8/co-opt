@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 const files = {
   page: await readFile(new URL('../src/app/ImageSimulationPage.tsx', import.meta.url), 'utf8'),
   model: await readFile(new URL('../src/app/image-simulation-model.ts', import.meta.url), 'utf8'),
+  calibratedTarget: await readFile(new URL('../src/app/calibrated-camera-resolution-target.ts', import.meta.url), 'utf8'),
+  opticalShowcase: await readFile(new URL('../src/app/optical-showcase-target.ts', import.meta.url), 'utf8'),
   distortionPage: await readFile(new URL('../src/app/DistortionAnalysisPage.tsx', import.meta.url), 'utf8'),
   multi: await readFile(new URL('../src/app/MultiFieldPsfPage.tsx', import.meta.url), 'utf8'),
   app: await readFile(new URL('../src/app/App.tsx', import.meta.url), 'utf8'),
@@ -38,9 +40,11 @@ assert.match(files.page, /PSF only/);
 assert.match(files.page, /Wipe slider/);
 assert.match(files.page, /Side by side/);
 assert.match(files.page, /Difference/);
-assert.match(files.page, /Co-opt Field Chart/);
+assert.match(files.page, /<option value="optical-showcase">USAF 1951 Radial Grid<\/option>/);
+assert.match(files.page, /useState<ImageSimulationTargetKind \| 'upload'>\('optical-showcase'\)/);
+assert.match(files.page, /Calibrated Camera Resolution Chart/);
 assert.match(files.page, /USAF 1951 Field Array/);
-assert.match(files.page, /MIL-STD-150A element proportions/);
+assert.match(files.page, /central Group −2\/−1 pair is surrounded by eight radial and sixteen orthogonal Group 0\/1 pairs/);
 assert.match(files.page, /Grid & Point Sources/);
 assert.match(files.page, /Upload image/);
 assert.match(files.page, /generateImageSimulationTargetSvg/);
@@ -53,7 +57,13 @@ assert.match(files.page, /'image\/png'/);
 assert.match(files.page, /co-opt-simulated-/);
 assert.match(files.page, /disabled=\{busy \|\| !simulatedImage\}/);
 assert.match(files.page, /value=\{4096\}/);
-assert.match(files.page, /SVG vector/);
+assert.match(files.page, /Frequencies follow 2\^\(group \+ \(element−1\)\/6\)/);
+assert.match(files.page, /every tri-bar occupies a 5w × 5w square, with equal bar and space widths/);
+assert.match(files.page, /Each pair follows the classic imaginary-square layout/);
+assert.match(files.page, /Four binary radial charts sample the field corners/);
+assert.match(files.page, /an sRGB color bar and an eleven-step grayscale bar span the upper and lower edges/);
+assert.match(files.page, /both group headings are 3\.75× the coarser Element 1 bar width/);
+assert.match(files.page, /calibrated chart remains available for eSFR/);
 assert.doesNotMatch(files.page, />Stop</);
 assert.match(files.model, /convolveImageSpatiallyVarying/);
 assert.match(files.model, /warpImageWithDistortion/);
@@ -67,6 +77,32 @@ assert.match(files.model, /viewBox="0 0 4096 4096"/);
 assert.match(files.model, /native SVG vectors/);
 assert.match(files.model, /getUsaf1951ElementGeometry/);
 assert.match(files.model, /data-usaf-scale="normalized"/);
+assert.match(files.model, /generateCalibratedCameraResolutionTargetSvg/);
+assert.match(files.calibratedTarget, /widthMm:\s*240/);
+assert.match(files.calibratedTarget, /heightMm:\s*240/);
+assert.match(files.calibratedTarget, /edgeAnglesDeg:\s*Object\.freeze\(\[-7, -5, 5, 7\]\)/);
+assert.match(files.calibratedTarget, /Math\.pow\(2, group \+ \(element - 1\) \/ 6\)/);
+assert.match(files.calibratedTarget, /1 \/ \(2 \* frequency\)/);
+assert.match(files.calibratedTarget, /data-coordinate-unit="mm"/);
+assert.match(files.calibratedTarget, /data-cycles-per-revolution/);
+assert.match(files.model, /generateOpticalShowcaseTargetSvg/);
+assert.match(files.opticalShowcase, /data-scene="optical-showcase"/);
+assert.match(files.opticalShowcase, /getUsafElementGeometry/);
+assert.match(files.opticalShowcase, /createUsafElement/);
+assert.match(files.opticalShowcase, /createUsafPairPlate/);
+assert.match(files.opticalShowcase, /data-layout="classic-spiral-pair"/);
+assert.match(files.opticalShowcase, /data-imaginary-square-left-mm/);
+assert.match(files.opticalShowcase, /data-imaginary-square-right-mm/);
+assert.match(files.opticalShowcase, /createCornerRadialCharts/);
+assert.match(files.opticalShowcase, /createColorAndGrayscaleBars/);
+assert.match(files.opticalShowcase, /data-diagnostic="opaque-reference-square"/);
+assert.match(files.opticalShowcase, /data-diagnostic="field-grid"/);
+assert.match(files.opticalShowcase, /data-diagnostic="radial-grid"/);
+assert.match(files.opticalShowcase, /data-usaf-frequency-formula/);
+assert.match(files.opticalShowcase, /groupNumberToPairReferenceBarRatio:\s*3\.75/);
+assert.match(files.opticalShowcase, /primaryElementNumberToPairReferenceBarRatio:\s*2\.7/);
+assert.match(files.opticalShowcase, /secondaryElementNumberToPairReferenceBarRatio:\s*1\.65/);
+assert.match(files.page, /co-opt-usaf-1951-radial-grid\.svg/);
 assert.match(files.app, /<ImageSimulationPage/);
 assert.match(files.toolbar, /value="image-simulation"/);
 assert.match(files.handlers, /'image-simulation': \{ width: 1280, height: 900, title: 'Image Simulation' \}/);
@@ -128,7 +164,7 @@ console.log(JSON.stringify({
   ok: true,
   modes: ['full', 'distortion-only', 'psf-only'],
   comparisons: ['wipe', 'side-by-side', 'difference'],
-  sources: ['generated-field-chart', 'usaf-array', 'grid-points', 'upload'],
+  sources: ['optical-showcase', 'calibrated-camera-chart', 'usaf-array', 'grid-points', 'upload'],
   realGridDistortion: true,
   realMultiFieldPsf: true,
   wavelengthSpecificDistortion: true,
