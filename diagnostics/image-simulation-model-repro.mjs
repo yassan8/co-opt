@@ -6,8 +6,11 @@ import {
   convolveImageSpatiallyVarying,
   createImageSimulationDifference,
   generateImageSimulationTargetSvg,
+  getImageSimulationPhysicalExtent,
+  getImageSimulationTargetNominalMaxFrequencyLpmm,
   getUsaf1951ElementGeometry,
   resamplePsfToImageKernel,
+  resolveImageSimulationRasterExtent,
   warpImageWithDistortion,
 } from '../src/app/image-simulation-model.ts';
 import { calculatePsfImagePixelSizeUm } from '../src/app/psf-scale-model.ts';
@@ -239,6 +242,27 @@ assert.equal(difference.width, source.width);
 assert.equal(difference.height, source.height);
 assert.ok(difference.rgba.some((value, index) => index % 4 !== 3 && value > 0), 'difference view must contain changed pixels');
 
+const fieldExtent = getImageSimulationPhysicalExtent(identityMap);
+const fieldFitExtent = resolveImageSimulationRasterExtent(fieldExtent, 'field-fit', source.width, source.height, 1, 1);
+assert.deepEqual(fieldFitExtent, fieldExtent, 'Field fit must preserve the traced image extent');
+const sensorExtent = resolveImageSimulationRasterExtent(fieldExtent, 'sensor-width', source.width, source.height, 0.5, 1);
+assert.ok(Math.abs(sensorExtent.widthMm - 0.5) < 1e-12, 'sensor-width mode must use the requested width');
+assert.ok(Math.abs(sensorExtent.heightMm - 0.5 * source.height / source.width) < 1e-12, 'sensor-width mode must preserve image aspect ratio');
+assert.ok(Math.abs(sensorExtent.minXmm + sensorExtent.maxXmm) < 1e-12, 'sensor crop must remain centered in X');
+assert.ok(Math.abs(sensorExtent.minYmm + sensorExtent.maxYmm) < 1e-12, 'sensor crop must remain centered in Y');
+const pitchExtent = resolveImageSimulationRasterExtent(fieldExtent, 'pixel-pitch', source.width, source.height, 1, 2);
+assert.ok(Math.abs(pitchExtent.widthMm - source.width * 2 / 1000) < 1e-12, 'pixel-pitch mode must derive sensor width from raster pixels');
+assert.ok(Math.abs(pitchExtent.heightMm - source.height * 2 / 1000) < 1e-12, 'pixel-pitch mode must derive sensor height from raster pixels');
+const sensorIdentityWarp = warpImageWithDistortion(source, identityMap, sensorExtent);
+assert.deepEqual([...sensorIdentityWarp.rgba], [...source.rgba], 'identity distortion must preserve a centered sensor crop');
+const fieldChartFrequency = getImageSimulationTargetNominalMaxFrequencyLpmm('field-chart', fieldExtent.widthMm);
+const usafArrayFrequency = getImageSimulationTargetNominalMaxFrequencyLpmm('usaf-array', fieldExtent.widthMm);
+assert.ok(Number.isFinite(fieldChartFrequency) && fieldChartFrequency > 0, 'field chart must report its nominal USAF E3 frequency');
+assert.ok(Number.isFinite(usafArrayFrequency) && usafArrayFrequency > fieldChartFrequency, 'scaled outer USAF clusters must report the finer nominal frequency');
+assert.ok(Math.abs(usafArrayFrequency / fieldChartFrequency - 1 / 0.88) < 1e-12, 'USAF array frequency must include its 0.88 outer-cluster scale');
+assert.equal(getImageSimulationTargetNominalMaxFrequencyLpmm('grid-points', fieldExtent.widthMm), null);
+assert.equal(getImageSimulationTargetNominalMaxFrequencyLpmm('upload', fieldExtent.widthMm), null);
+
 console.log(JSON.stringify({
   ok: true,
   identityWarp: true,
@@ -261,4 +285,5 @@ console.log(JSON.stringify({
     normalizedScale: true,
     minimumRowGapSvgUnits: Math.min(...usafRowGaps),
   },
+  imageScaleModes: ['field-fit', 'sensor-width', 'pixel-pitch'],
 }, null, 2));

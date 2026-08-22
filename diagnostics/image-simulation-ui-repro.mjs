@@ -87,6 +87,24 @@ assert.doesNotMatch(files.page, /<ProgressBar value=\{progress\}/, 'progress mus
 assert.doesNotMatch(files.styles, /\.image-simulation-summary/);
 assert.doesNotMatch(files.styles, /\.image-simulation-wipe__label/);
 
+assert.match(files.page, /calculateImageSpaceDiffractionParams/);
+assert.match(files.page, /value="field-fit"/);
+assert.match(files.page, /value="sensor-width"/);
+assert.match(files.page, /value="pixel-pitch"/);
+assert.match(files.page, /Sensor width \(mm\)/);
+assert.match(files.page, /Pixel pitch \(µm\)/);
+assert.match(files.page, /resolveImageSimulationRasterExtent/);
+assert.match(files.page, /warpImageWithDistortion\(layerImage, distortionLayer\.map, rasterExtent\)/);
+assert.match(files.page, /fieldToRasterX/);
+assert.match(files.page, /fieldToRasterY/);
+assert.match(files.page, /<small>Image scale<\/small>/);
+assert.match(files.page, /<small>EFL · F\/# · Airy diameter<\/small>/);
+assert.match(files.page, /<small>Nyquist · cutoff<\/small>/);
+assert.match(files.page, /<small>Chart frequency<\/small>/);
+assert.match(files.page, /diffractionMtfAtChart/);
+assert.match(files.model, /getImageSimulationTargetNominalMaxFrequencyLpmm/);
+assert.match(files.model, /resolveImageSimulationRasterExtent/);
+
 console.log(JSON.stringify({
   ok: true,
   modes: ['full', 'distortion-only', 'psf-only'],
@@ -111,4 +129,5 @@ console.log(JSON.stringify({
   wipeLabels: false,
   sourceSummaryChips: false,
   completionStatus: 'inline Done without 100%',
+  imageScaleModes: ['field-fit', 'sensor-width', 'pixel-pitch'],
 }, null, 2));

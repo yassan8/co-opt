@@ -4384,19 +4384,25 @@ function getMtfWasmWorkerPool(workerCount: number): MtfWasmWorkerPool {
   return mtfWasmWorkerPool;
 }
 
-function splitMtfJobsAcrossWorkers(jobs: unknown[], workerCount: number): { chunks: unknown[][]; strategy: string } {
+export function splitMtfJobsAcrossWorkers(jobs: unknown[], workerCount: number): {
+  chunks: unknown[][];
+  chunkJobIndexes: number[][];
+  strategy: string;
+} {
   const chunks: unknown[][] = Array.from({ length: workerCount }, () => []);
-  const candidateGroups = new Map<number, unknown[]>();
+  const chunkJobIndexes: number[][] = Array.from({ length: workerCount }, () => []);
+  const candidateGroups = new Map<number, Array<{ job: unknown; originalIndex: number }>>();
   let hasCandidateIndexForEveryJob = jobs.length > 0;
 
-  for (const job of jobs) {
+  for (let originalIndex = 0; originalIndex < jobs.length; originalIndex += 1) {
+    const job = jobs[originalIndex];
     const candidateIndex = Number((job as any)?.meta?.candidateIndex);
     if (!Number.isInteger(candidateIndex) || candidateIndex < 0) {
       hasCandidateIndexForEveryJob = false;
       break;
     }
     const group = candidateGroups.get(candidateIndex) || [];
-    group.push(job);
+    group.push({ job, originalIndex });
     candidateGroups.set(candidateIndex, group);
   }
 
@@ -4413,16 +4419,49 @@ function splitMtfJobsAcrossWorkers(jobs: unknown[], workerCount: number): { chun
       for (let index = 1; index < workerLoads.length; index += 1) {
         if (workerLoads[index] < workerLoads[target]) target = index;
       }
-      chunks[target].push(...group);
+      chunks[target].push(...group.map((entry) => entry.job));
+      chunkJobIndexes[target].push(...group.map((entry) => entry.originalIndex));
       workerLoads[target] += group.length;
     }
-    return { chunks, strategy: 'candidate-affinity' };
+    return { chunks, chunkJobIndexes, strategy: 'candidate-affinity' };
   }
 
   jobs.forEach((job, index) => {
-    chunks[index % workerCount].push(job);
+    const target = index % workerCount;
+    chunks[target].push(job);
+    chunkJobIndexes[target].push(index);
   });
-  return { chunks, strategy: 'round-robin' };
+  return { chunks, chunkJobIndexes, strategy: 'round-robin' };
+}
+
+export function remapMtfWorkerChunkResults(
+  response: any,
+  originalJobIndexes: number[],
+  allJobs: unknown[],
+): any[] {
+  const workerResults = Array.isArray(response?.results) ? response.results : [];
+  return workerResults.map((result: any, responseIndex: number) => {
+    const reportedLocalIndex = Number(result?.jobIndex);
+    const localIndex = Number.isInteger(reportedLocalIndex)
+      && reportedLocalIndex >= 0
+      && reportedLocalIndex < originalJobIndexes.length
+      ? reportedLocalIndex
+      : responseIndex;
+    const globalIndex = originalJobIndexes[localIndex];
+    if (!Number.isInteger(globalIndex) || globalIndex < 0 || globalIndex >= allJobs.length) {
+      throw new Error(`TF-MTF WASM worker returned an unmappable local result index ${String(result?.jobIndex)}`);
+    }
+    const originalMeta = (allJobs[globalIndex] as any)?.meta;
+    return {
+      ...result,
+      jobIndex: globalIndex,
+      meta: {
+        ...(originalMeta && typeof originalMeta === 'object' ? originalMeta : {}),
+        ...(result?.meta && typeof result.meta === 'object' ? result.meta : {}),
+        jobIndex: globalIndex,
+      },
+    };
+  });
 }
 
 type SharedMtfWorkerBatch = {
@@ -4564,7 +4603,7 @@ export async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
   const workerCount = Math.max(1, Math.min(6, jobs.length, parallelGroupLimit, Number.isFinite(hardwareConcurrency) ? hardwareConcurrency : 4));
   console.info(`[TFMTF WorkerPool] starting: jobs=${jobs.length}, workers=${workerCount}, hardwareConcurrency=${hardwareConcurrency}`);
   const runPoolBatch = async (): Promise<any> => {
-    const { chunks, strategy } = splitMtfJobsAcrossWorkers(jobs, workerCount);
+    const { chunks, chunkJobIndexes, strategy } = splitMtfJobsAcrossWorkers(jobs, workerCount);
     const pool = getMtfWasmWorkerPool(workerCount);
     const responses = await Promise.all(chunks.map((chunk, index) => new Promise<any>((resolve, reject) => {
       const requestId = `tfmtf-${Date.now()}-${++mtfWasmWorkerRequestSequence}-${index}`;
@@ -4584,12 +4623,22 @@ export async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
         request: buildSharedMtfWorkerRequest(request, chunk),
       });
     })));
-    const results = responses.flatMap((response) => Array.isArray(response?.results) ? response.results : []);
+    const results = responses
+      .flatMap((response, workerIndex) => remapMtfWorkerChunkResults(
+        response,
+        chunkJobIndexes[workerIndex],
+        jobs,
+      ))
+      .sort((left, right) => Number(left?.jobIndex) - Number(right?.jobIndex));
     const sharedBatchCount = responses.reduce((total, response) => (
       total + Math.max(0, Math.floor(Number(response?.sharedBatchCount) || 0))
     ), 0);
     if (results.length !== jobs.length) {
       throw new Error(`TF-MTF WASM worker pool returned ${results.length}/${jobs.length} results`);
+    }
+    const uniqueJobIndexes = new Set(results.map((result) => Number(result?.jobIndex)));
+    if (uniqueJobIndexes.size !== jobs.length) {
+      throw new Error(`TF-MTF WASM worker pool returned ${uniqueJobIndexes.size}/${jobs.length} unique job indexes`);
     }
     return {
       backend: "web-rust-wasm-opd-psf-mtf-worker-pool",

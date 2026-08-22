@@ -8967,7 +8967,7 @@ body.dark-mode .multi-field-psf-dialog__metrics {
 .image-simulation-metrics {
     display: grid;
     flex: 0 0 auto;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     border-top: 1px solid #dbe3ef;
     background: #fff;
 }
