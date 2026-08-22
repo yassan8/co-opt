@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 const files = {
   page: await readFile(new URL('../src/app/ImageSimulationPage.tsx', import.meta.url), 'utf8'),
   model: await readFile(new URL('../src/app/image-simulation-model.ts', import.meta.url), 'utf8'),
+  distortionPage: await readFile(new URL('../src/app/DistortionAnalysisPage.tsx', import.meta.url), 'utf8'),
   multi: await readFile(new URL('../src/app/MultiFieldPsfPage.tsx', import.meta.url), 'utf8'),
   app: await readFile(new URL('../src/app/App.tsx', import.meta.url), 'utf8'),
   toolbar: await readFile(new URL('../src/ui/components/MainToolbar.tsx', import.meta.url), 'utf8'),
@@ -92,6 +93,14 @@ assert.match(files.page, /value="field-fit"/);
 assert.match(files.page, /value="sensor-width"/);
 assert.match(files.page, /value="pixel-pitch"/);
 assert.match(files.page, /Sensor width \(mm\)/);
+assert.match(files.page, /Sensor height \(mm\)/);
+assert.match(files.page, /<option value="sensor-width">Sensor size<\/option>/);
+assert.match(files.page, /sensorWidthMm: requestedSensorWidthMm/);
+assert.match(files.page, /sensorHeightMm: requestedSensorHeightMm/);
+assert.match(files.distortionPage, /id="grid-sensor-width-input"/);
+assert.match(files.distortionPage, /id="grid-sensor-height-input"/);
+assert.match(files.distortionPage, /sensorWidthMm,/);
+assert.match(files.distortionPage, /sensorHeightMm,/);
 assert.match(files.page, /Pixel pitch \(µm\)/);
 assert.match(files.page, /resolveImageSimulationRasterExtent/);
 assert.match(files.page, /warpImageWithDistortion\(layerImage, distortionLayer\.map, rasterExtent\)/);
@@ -104,6 +113,16 @@ assert.match(files.page, /<small>Chart frequency<\/small>/);
 assert.match(files.page, /diffractionMtfAtChart/);
 assert.match(files.model, /getImageSimulationTargetNominalMaxFrequencyLpmm/);
 assert.match(files.model, /resolveImageSimulationRasterExtent/);
+assert.match(files.page, /<strong>Scale guide<\/strong>/);
+assert.match(files.page, /Full-band Nyquist: ≤/);
+assert.match(files.page, /requiredHorizontalSamples/);
+assert.match(files.page, /Use the real detector pitch only when Raster output matches the sensor\/crop pixel count/);
+assert.match(files.styles, /\.image-simulation-scale-guide/);
+assert.match(files.page, /unreachedDistortionPoints/);
+assert.match(files.page, /Distortion extrapolated/);
+assert.match(files.page, /distortion nodes extrapolated/);
+assert.match(files.page, /Distortion fields/);
+assert.match(files.styles, /\.image-simulation-reachability-warning/);
 
 console.log(JSON.stringify({
   ok: true,
@@ -130,4 +149,7 @@ console.log(JSON.stringify({
   sourceSummaryChips: false,
   completionStatus: 'inline Done without 100%',
   imageScaleModes: ['field-fit', 'sensor-width', 'pixel-pitch'],
+  dynamicScaleGuide: true,
+  independentSensorSize: 'width × height',
+  unreachedVisibility: 'marker + warning + count',
 }, null, 2));

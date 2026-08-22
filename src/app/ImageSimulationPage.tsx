@@ -58,6 +58,9 @@ type SimulationSummary = {
   conjugateType: 'finite' | 'infinite';
   psfFields: number;
   failedFields: number;
+  distortionPoints: number;
+  unreachedDistortionPoints: number;
+  distortionMapsWithUnreached: number;
   imagePixelPitchXUm: number;
   imagePixelPitchYUm: number;
   maxDistortionPercent: number;
@@ -67,6 +70,8 @@ type SimulationSummary = {
   distortionMaps: number;
   maxLateralChromaticUm: number;
   scaleMode: ImageSimulationScaleMode;
+  fieldWidthMm: number;
+  fieldHeightMm: number;
   rasterWidthMm: number;
   rasterHeightMm: number;
   primaryWavelengthUm: number;
@@ -188,12 +193,35 @@ function calculateMaxDistortionPercent(map: ImageSimulationDistortionMap): numbe
   for (let index = 0; index < count; index += 1) {
     const idealX = Number(map.idealX[index]);
     const idealY = Number(map.idealY[index]);
-    const realX = Number(map.realX[index]);
-    const realY = Number(map.realY[index]);
+    const realXValue = map.realX[index];
+    const realYValue = map.realY[index];
+    const realX = typeof realXValue === 'number' ? realXValue : Number.NaN;
+    const realY = typeof realYValue === 'number' ? realYValue : Number.NaN;
     if (![idealX, idealY, realX, realY].every(Number.isFinite)) continue;
     maxDisplacement = Math.max(maxDisplacement, Math.hypot(realX - idealX, realY - idealY));
   }
   return maxDisplacement / halfDiagonal * 100;
+}
+function summarizeDistortionReachability(maps: ImageSimulationDistortionMap[]) {
+  let total = 0;
+  let unreached = 0;
+  let mapsWithUnreached = 0;
+  for (const map of maps) {
+    const count = Math.min(map.idealX.length, map.idealY.length, map.realX.length, map.realY.length);
+    let mapUnreached = 0;
+    for (let index = 0; index < count; index += 1) {
+      const realX = map.realX[index];
+      const realY = map.realY[index];
+      if (
+        typeof realX !== 'number' || !Number.isFinite(realX)
+        || typeof realY !== 'number' || !Number.isFinite(realY)
+      ) mapUnreached += 1;
+    }
+    total += count;
+    unreached += mapUnreached;
+    if (mapUnreached > 0) mapsWithUnreached += 1;
+  }
+  return { total, unreached, mapsWithUnreached };
 }
 
 function scaleFieldExtentForDistortionGrid(value: number, mode: string): number {
@@ -235,7 +263,8 @@ export function ImageSimulationPage() {
   const [zeroPad, setZeroPad] = useState<ZeroPadMode>('none');
   const [kernelSize, setKernelSize] = useState(21);
   const [scaleMode, setScaleMode] = useState<ImageSimulationScaleMode>('field-fit');
-  const [sensorWidthMm, setSensorWidthMm] = useState('1.5');
+  const [sensorWidthMm, setSensorWidthMm] = useState('36');
+  const [sensorHeightMm, setSensorHeightMm] = useState('24');
   const [pixelPitchUm, setPixelPitchUm] = useState('2.0');
   const [wavelengthOptions, setWavelengthOptions] = useState<SelectOption[]>([{ value: 'all', label: 'All wavelengths' }]);
   const [wavelength, setWavelength] = useState('all');
@@ -383,6 +412,15 @@ export function ImageSimulationPage() {
       if (!objectRows.length) throw new Error('No field data.');
 
       const normalizedObjectRows = normalizeDistortionObjectRows(objectRows, opticalRows, sourceRows);
+      const requestedSensorWidthMm: number | undefined = scaleMode === 'sensor-width'
+        ? Math.abs(Number(sensorWidthMm))
+        : scaleMode === 'pixel-pitch' ? Math.abs(Number(pixelPitchUm)) * sourceImage.width / 1000 : undefined;
+      const requestedSensorHeightMm: number | undefined = scaleMode === 'sensor-width'
+        ? Math.abs(Number(sensorHeightMm))
+        : scaleMode === 'pixel-pitch' ? Math.abs(Number(pixelPitchUm)) * sourceImage.height / 1000 : undefined;
+      if (scaleMode !== 'field-fit' && (!(Number.isFinite(requestedSensorWidthMm) && requestedSensorWidthMm! > 1e-9) || !(Number.isFinite(requestedSensorHeightMm) && requestedSensorHeightMm! > 1e-9))) {
+        throw new Error(scaleMode === 'sensor-width' ? 'Sensor width and height must be greater than zero.' : 'Pixel pitch must be greater than zero.');
+      }
       const primaryWavelength = getPrimaryWavelength(host, sourceRows);
       const wavelengthEntries = buildWavelengthEntries(wavelength, sourceRows, primaryWavelength);
       const wavelengthKey = (value: number) => Number(value).toFixed(9);
@@ -394,6 +432,7 @@ export function ImageSimulationPage() {
         weight: number;
         map: ImageSimulationDistortionMap;
         backend: string;
+        meta: Record<string, unknown>;
       }> = [];
 
       for (let index = 0; index < distortionEntries.length; index += 1) {
@@ -407,6 +446,8 @@ export function ImageSimulationPage() {
           gridSize: Math.max(5, fieldGridSize + 2),
           wavelength: entry.wavelength,
           detailProgress: false,
+          sensorWidthMm: requestedSensorWidthMm,
+          sensorHeightMm: requestedSensorHeightMm,
           onProgress: (event) => {
             const nativePercent = Number(event?.percent);
             const fraction = Number.isFinite(nativePercent) ? nativePercent / 100 : 0.45;
@@ -418,6 +459,7 @@ export function ImageSimulationPage() {
           wavelengthUm: entry.wavelength,
           weight: entry.weight,
           backend: String(response?.backend || 'unknown'),
+          meta: { ...(response?.meta || {}) },
           map: {
             gridSize: Math.max(2, Math.floor(Number(response?.gridSize) || fieldGridSize + 2)),
             idealX: Array.isArray(response?.idealX) ? response.idealX : [],
@@ -439,6 +481,7 @@ export function ImageSimulationPage() {
         sourceImage.width,
         sourceImage.height,
         Number(sensorWidthMm),
+        Number(sensorHeightMm),
         Number(pixelPitchUm),
       );
       const fieldToRasterX = fieldExtent.widthMm / Math.max(1e-12, rasterExtent.widthMm);
@@ -467,8 +510,12 @@ export function ImageSimulationPage() {
       let failedFields = 0;
       if (simulationMode !== 'distortion') {
         const definition = deriveMultiFieldPsfFieldDefinition(objectRows);
-        const simulationMaxX = scaleFieldExtentForDistortionGrid(definition.maxX, definition.mode);
-        const simulationMaxY = scaleFieldExtentForDistortionGrid(definition.maxY, definition.mode);
+        const responseFieldMaxX = Math.abs(Number(referenceDistortion.meta?.fieldMaxX));
+        const responseFieldMaxY = Math.abs(Number(referenceDistortion.meta?.fieldMaxY));
+        const useResponseFieldBounds = requestedSensorWidthMm !== undefined && requestedSensorHeightMm !== undefined
+          && Number.isFinite(responseFieldMaxX) && responseFieldMaxX > 0 && Number.isFinite(responseFieldMaxY) && responseFieldMaxY > 0;
+        const simulationMaxX = useResponseFieldBounds ? responseFieldMaxX : scaleFieldExtentForDistortionGrid(definition.maxX, definition.mode);
+        const simulationMaxY = useResponseFieldBounds ? responseFieldMaxY : scaleFieldExtentForDistortionGrid(definition.maxY, definition.mode);
         const gridPoints = buildMultiFieldPsfGrid({
           rows: fieldGridSize,
           columns: fieldGridSize,
@@ -569,6 +616,7 @@ export function ImageSimulationPage() {
       const differencePercent = calculateImageSimulationDifferencePercent(sourceImage, workingImage);
       const appliedDistortionMaps = simulationMode === 'psf' ? [] : distortionLayers.map((layer) => layer.map);
       setSimulatedImage(workingImage);
+      const distortionReachability = summarizeDistortionReachability(appliedDistortionMaps);
       setDifferenceImage(difference);
       setSummary({
         backend: Array.from(new Set(distortionLayers.map((layer) => layer.backend))).join(' + '),
@@ -576,6 +624,9 @@ export function ImageSimulationPage() {
         psfFields,
         failedFields,
         imagePixelPitchXUm,
+        distortionPoints: distortionReachability.total,
+        unreachedDistortionPoints: distortionReachability.unreached,
+        distortionMapsWithUnreached: distortionReachability.mapsWithUnreached,
         imagePixelPitchYUm,
         maxDistortionPercent: appliedDistortionMaps.length
           ? Math.max(...appliedDistortionMaps.map((map) => calculateMaxDistortionPercent(map)))
@@ -586,6 +637,8 @@ export function ImageSimulationPage() {
         distortionMaps: appliedDistortionMaps.length,
         maxLateralChromaticUm: calculateMaxLateralChromaticDisplacementUm(appliedDistortionMaps),
         scaleMode,
+        fieldWidthMm: fieldExtent.widthMm,
+        fieldHeightMm: fieldExtent.heightMm,
         rasterWidthMm: rasterExtent.widthMm,
         rasterHeightMm: rasterExtent.heightMm,
         primaryWavelengthUm: primaryWavelength,
@@ -600,7 +653,10 @@ export function ImageSimulationPage() {
         diffractionMtfAtChart,
       });
       setProgress(100);
-      setProgressText(failedFields > 0 ? 'Done · ' + failedFields + ' field PSF sets unavailable' : 'Done');
+      const completionNotices: string[] = [];
+      if (distortionReachability.unreached > 0) completionNotices.push(distortionReachability.unreached + '/' + distortionReachability.total + ' distortion nodes extrapolated');
+      if (failedFields > 0) completionNotices.push(failedFields + ' field PSF sets unavailable');
+      setProgressText(completionNotices.length ? 'Done · ' + completionNotices.join(' · ') : 'Done');
     } catch (caught: any) {
       const message = String(caught?.message || caught || 'Image simulation failed');
       if (token.aborted || caught?.code === 'CANCELLED' || message.toLowerCase().includes('cancel')) {
@@ -613,7 +669,61 @@ export function ImageSimulationPage() {
       if (cancelRef.current === token) cancelRef.current = null;
       setBusy(false);
     }
-  }, [busy, fieldGridSize, kernelSize, pixelPitchUm, samplingSize, scaleMode, sensorWidthMm, simulationMode, sourceImage, sourceKind, wavelength, zeroPad]);
+  }, [busy, fieldGridSize, kernelSize, pixelPitchUm, samplingSize, scaleMode, sensorHeightMm, sensorWidthMm, simulationMode, sourceImage, sourceKind, wavelength, zeroPad]);
+
+  const guidePixelsX = Math.max(1, sourceImage?.width || outputSize);
+  const guidePixelsY = Math.max(1, sourceImage?.height || outputSize);
+  const guideSensorWidthMm = Math.abs(Number(sensorWidthMm));
+  const guideSensorHeightMm = Math.abs(Number(sensorHeightMm));
+  const guideDetectorPitchUm = Math.abs(Number(pixelPitchUm));
+  const guideWidthMm = scaleMode === 'field-fit'
+    ? Number(summary?.fieldWidthMm)
+    : scaleMode === 'sensor-width'
+      ? guideSensorWidthMm
+      : guideDetectorPitchUm * guidePixelsX / 1000;
+  const guideHeightMm = scaleMode === 'field-fit'
+    ? Number(summary?.fieldHeightMm)
+    : scaleMode === 'sensor-width'
+      ? guideSensorHeightMm
+      : guideDetectorPitchUm * guidePixelsY / 1000;
+  const guidePitchXUm = guideWidthMm * 1000 / guidePixelsX;
+  const guidePitchYUm = guideHeightMm * 1000 / guidePixelsY;
+  const guidePitchUm = Math.max(guidePitchXUm, guidePitchYUm);
+  const guideCoverageWidthPercent = summary && Number.isFinite(guideWidthMm)
+    ? guideWidthMm / Math.max(1e-12, summary.fieldWidthMm) * 100
+    : Number.NaN;
+  const guideCoverageHeightPercent = summary && Number.isFinite(guideHeightMm)
+    ? guideHeightMm / Math.max(1e-12, summary.fieldHeightMm) * 100
+    : Number.NaN;
+  const diffractionPitchLimitUm = summary && Number.isFinite(summary.cutoffLpmm) && summary.cutoffLpmm > 0
+    ? 500 / summary.cutoffLpmm
+    : Number.NaN;
+  const requiredHorizontalSamples = Number.isFinite(guideWidthMm) && Number.isFinite(diffractionPitchLimitUm)
+    ? Math.ceil(guideWidthMm * 1000 / diffractionPitchLimitUm)
+    : Number.NaN;
+  const rasterChoices = [1024, 1536, 2048, 3072, 4096];
+  const requiredVerticalSamples = Number.isFinite(guideHeightMm) && Number.isFinite(diffractionPitchLimitUm)
+    ? Math.ceil(guideHeightMm * 1000 / diffractionPitchLimitUm)
+    : Number.NaN;
+  const recommendedRaster = rasterChoices.find((candidate) => candidate >= Math.max(requiredHorizontalSamples, requiredVerticalSamples));
+
+  const scaleGuidePrimary = scaleMode === 'field-fit'
+    ? (summary
+      ? 'Whole traced field: ' + summary.fieldWidthMm.toFixed(3) + ' × ' + summary.fieldHeightMm.toFixed(3) + ' mm.'
+      : 'Whole traced field. Run once to calculate its physical size.')
+    : Number.isFinite(guideWidthMm) && guideWidthMm > 0 && Number.isFinite(guideHeightMm) && guideHeightMm > 0
+      ? (scaleMode === 'sensor-width' ? 'Actual sensor/crop' : 'Derived image area') + ': '
+        + guideWidthMm.toFixed(3) + ' × ' + guideHeightMm.toFixed(3) + ' mm · '
+        + guidePitchXUm.toFixed(3) + ' × ' + guidePitchYUm.toFixed(3) + ' µm per output pixel'
+        + (Number.isFinite(guideCoverageWidthPercent) && Number.isFinite(guideCoverageHeightPercent) ? ' · ' + guideCoverageWidthPercent.toFixed(0) + '% × ' + guideCoverageHeightPercent.toFixed(0) + '% of traced field.' : '.')
+      : 'Enter a value greater than zero.';
+  const scaleGuideSampling = !Number.isFinite(diffractionPitchLimitUm) || !Number.isFinite(guidePitchUm)
+    ? 'Run once to calculate the diffraction sampling recommendation.'
+    : 'Full-band Nyquist: ≤ ' + diffractionPitchLimitUm.toFixed(3) + ' µm/px · '
+      + (guidePitchUm <= diffractionPitchLimitUm * 1.05
+        ? 'current sampling covers the optical cutoff.'
+        : 'current sampling is a preview; use at least '
+          + (recommendedRaster ? recommendedRaster + ' samples on the limiting axis.' : Math.ceil(Math.max(requiredHorizontalSamples, requiredVerticalSamples)) + ' samples on the limiting axis.'));
 
   return (
     <div className="analysis-window-page image-simulation-page" data-analysis-kind="image-simulation">
@@ -646,17 +756,26 @@ export function ImageSimulationPage() {
           <label className="analysis-window-field"><span>Raster output</span><select value={outputSize} onChange={(event) => setOutputSize(Number(event.target.value))}><option value={1024}>1024×1024</option><option value={1536}>1536×1536</option><option value={2048}>2048×2048</option><option value={3072}>3072×3072 · slow</option><option value={4096}>4096×4096 · very slow</option></select></label>
           <label className="analysis-window-field"><span>Image scale</span><select value={scaleMode} onChange={(event) => setScaleMode(event.target.value as ImageSimulationScaleMode)}>
             <option value="field-fit">Field fit</option>
-            <option value="sensor-width">Sensor width</option>
+            <option value="sensor-width">Sensor size</option>
             <option value="pixel-pitch">Pixel pitch</option>
           </select></label>
-          {scaleMode === 'sensor-width' && <label className="analysis-window-field"><span>Sensor width (mm)</span><input type="number" min="0.001" step="0.1" value={sensorWidthMm} onChange={(event) => setSensorWidthMm(event.target.value)} /></label>}
+          {scaleMode === 'sensor-width' ? <>
+            <label className="analysis-window-field"><span>Sensor width (mm)</span><input id="image-simulation-sensor-width-input" type="number" min="0.001" step="0.1" value={sensorWidthMm} onChange={(event) => setSensorWidthMm(event.target.value)} /></label>
+            <label className="analysis-window-field"><span>Sensor height (mm)</span><input id="image-simulation-sensor-height-input" type="number" min="0.001" step="0.1" value={sensorHeightMm} onChange={(event) => setSensorHeightMm(event.target.value)} /></label>
+          </> : null}
           {scaleMode === 'pixel-pitch' && <label className="analysis-window-field"><span>Pixel pitch (µm)</span><input type="number" min="0.001" step="0.1" value={pixelPitchUm} onChange={(event) => setPixelPitchUm(event.target.value)} /></label>}
+          <div className="image-simulation-scale-guide" role="note" aria-live="polite">
+            <strong>Scale guide</strong>
+            <span>{scaleGuidePrimary}</span>
+            <span>{scaleGuideSampling}</span>
+            <small>{scaleMode === 'pixel-pitch' ? 'Use the real detector pitch only when Raster output matches the sensor/crop pixel count. Otherwise use Sensor size.' : 'Use the real active sensor/crop width and height for camera simulation. Raster output changes numerical sampling, not the physical Airy diameter.'}</small>
+          </div>
           <label className="analysis-window-field"><span>Field PSFs</span><select value={fieldGridSize} onChange={(event) => setFieldGridSize(Number(event.target.value))}><option value={3}>3×3</option><option value={5}>5×5</option><option value={7}>7×7</option><option value={9}>9×9</option></select></label>
           <AnalysisGridSamplingField value={samplingSize} options={ANALYSIS_PUPIL_SAMPLING_OPTIONS} onValueChange={(value) => setSamplingSize(Number(value))} title="Pupil sampling used for every field PSF" />
           <label className="analysis-window-field"><span>Wavelength</span><select value={wavelength} onChange={(event) => setWavelength(event.target.value)}>{wavelengthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
           <label className="analysis-window-field"><span>Zero pad</span><select value={zeroPad} onChange={(event) => setZeroPad(event.target.value as ZeroPadMode)}><option value="none">None</option><option value="auto">Auto 2×</option><option value="128">128</option><option value="256">256</option><option value="512">512</option></select></label>
           <label className="analysis-window-field"><span>Kernel support</span><select value={kernelSize} onChange={(event) => setKernelSize(Number(event.target.value))}><option value={15}>15×15</option><option value={21}>21×21</option><option value={31}>31×31</option><option value={41}>41×41</option></select></label>
-          <p className="image-simulation-options__note">Field fit maps the source across the full traced field. Sensor width and Pixel pitch define a centered physical sensor crop, and the same scale is used for distortion coordinates, field-PSF placement, and convolution. Built-in targets remain native SVG vectors. USAF bars follow the MIL-STD-150A element proportions; their dimensions are normalized to the selected image-plane width. Every Source wavelength uses its own distortion map and monochromatic Remove P/T PSF.</p>
+          <p className="image-simulation-options__note">Field fit maps the source across the full traced field. Sensor size and Pixel pitch define a centered physical sensor area, and the same width and height are used for distortion coordinates, field-PSF placement, and convolution. Built-in targets remain native SVG vectors. USAF bars follow the MIL-STD-150A element proportions; their dimensions are normalized to the selected image-plane width. Every Source wavelength uses its own distortion map and monochromatic Remove P/T PSF.</p>
         </div></details>
         <button className="analysis-window-primary-action" type="button" disabled={busy || !sourceImage} onClick={() => void run()}>{busy ? 'Simulating…' : 'Simulate'}</button>
         <button className="analysis-window-primary-action" type="button" title="Save the latest simulated image as PNG" disabled={busy || !simulatedImage} onClick={() => void downloadSimulatedPng()}>Save PNG</button>
@@ -684,12 +803,18 @@ export function ImageSimulationPage() {
       </main>
 
       {summary && <footer className="image-simulation-metrics">
+        {summary.unreachedDistortionPoints > 0 && <div className="image-simulation-reachability-warning" role="status">
+          <strong>Distortion extrapolated</strong>
+          <span>{summary.unreachedDistortionPoints} of {summary.distortionPoints} distortion grid nodes were unreached across {summary.distortionMapsWithUnreached} wavelength {summary.distortionMapsWithUnreached === 1 ? 'map' : 'maps'}.
+            Neighboring reached nodes were used for the simulated image.</span>
+        </div>}
         <span><small>Distortion map</small>{summary.backend}</span>
         <span><small>Conjugate</small>{summary.conjugateType === 'infinite' ? 'Infinite' : 'Finite'}</span>
         <span><small>Max displacement</small>{summary.maxDistortionPercent.toFixed(3)}% field diagonal</span>
         <span><small>Lateral chromatic</small>{summary.maxLateralChromaticUm.toFixed(3)} µm max separation</span>
         <span><small>Image pitch</small>{summary.imagePixelPitchXUm.toFixed(2)} × {summary.imagePixelPitchYUm.toFixed(2)} µm/px</span>
-        <span><small>Image scale</small>{summary.scaleMode === 'field-fit' ? 'Field fit' : summary.scaleMode === 'sensor-width' ? 'Sensor width' : 'Pixel pitch'} · {summary.rasterWidthMm.toFixed(3)} × {summary.rasterHeightMm.toFixed(3)} mm</span>
+        <span><small>Distortion fields</small>{summary.distortionPoints - summary.unreachedDistortionPoints}/{summary.distortionPoints} reached{summary.unreachedDistortionPoints > 0 ? ' · ' + summary.unreachedDistortionPoints + ' extrapolated' : ''}</span>
+        <span><small>Image scale</small>{summary.scaleMode === 'field-fit' ? 'Field fit' : summary.scaleMode === 'sensor-width' ? 'Sensor size' : 'Pixel pitch'} · {summary.rasterWidthMm.toFixed(3)} × {summary.rasterHeightMm.toFixed(3)} mm</span>
         <span><small>EFL · F/# · Airy diameter</small>{Number.isFinite(summary.focalLengthMm) && Number.isFinite(summary.workingFNumber) && Number.isFinite(summary.airyDiameterUm) ? summary.focalLengthMm.toFixed(3) + ' mm · F/' + summary.workingFNumber.toFixed(2) + ' · ' + summary.airyDiameterUm.toFixed(2) + ' µm · ' + summary.airyDiameterPixels.toFixed(2) + ' px' : 'Unavailable'}</span>
         <span><small>Nyquist · cutoff</small>{summary.nyquistLpmm.toFixed(1)} lp/mm · {Number.isFinite(summary.cutoffLpmm) ? summary.cutoffLpmm.toFixed(1) + ' lp/mm · MTF ' + summary.diffractionMtfAtNyquist.toFixed(3) : 'cutoff unavailable'}</span>
         <span><small>Chart frequency</small>{summary.chartFrequencyLpmm !== null ? summary.chartFrequencyLpmm.toFixed(1) + ' lp/mm · diffraction MTF ' + (Number.isFinite(summary.diffractionMtfAtChart) ? summary.diffractionMtfAtChart.toFixed(3) : '—') + ' · USAF E3 nominal' : 'Broadband ≤ ' + summary.nyquistLpmm.toFixed(1) + ' lp/mm'}</span>

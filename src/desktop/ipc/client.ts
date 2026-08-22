@@ -7872,6 +7872,16 @@ export async function runNativeGridDistortion(
     const inputObjectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
     const gridFieldMode = deriveGridFieldModeNativeLike(inputObjectRows);
     const gridFieldExtents = deriveGridAxisExtentsNativeLike(inputObjectRows, gridFieldMode);
+    const requestedSensorWidthMm = Number(payload?.sensorWidthMm);
+    const requestedSensorHeightMm = Number(payload?.sensorHeightMm);
+    const hasSensorWidth = Number.isFinite(requestedSensorWidthMm) && requestedSensorWidthMm > 1e-9;
+    const hasSensorHeight = Number.isFinite(requestedSensorHeightMm) && requestedSensorHeightMm > 1e-9;
+    if (hasSensorWidth !== hasSensorHeight) {
+      throw new Error("runNativeGridDistortion(web): sensorWidthMm and sensorHeightMm must be specified together");
+    }
+    const sensorOverrideUsed = hasSensorWidth && hasSensorHeight;
+    const sensorWidthMm = sensorOverrideUsed ? Math.abs(requestedSensorWidthMm) : Number.NaN;
+    const sensorHeightMm = sensorOverrideUsed ? Math.abs(requestedSensorHeightMm) : Number.NaN;
     const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
     emitProgress(4, "Grid distortion: estimating paraxial model...");
     const focalLengthCandidates = [
@@ -7924,10 +7934,20 @@ export async function runNativeGridDistortion(
       ? Math.abs(objectDistance / imageDistance)
       : 1.0;
     const gridRangeScale = Math.SQRT2 / 2;
-    const scaledMaxImageX = maxImageX * gridRangeScale;
-    const scaledMaxImageY = maxImageY * gridRangeScale;
+    const scaledMaxImageX = sensorOverrideUsed ? sensorWidthMm / 2 : maxImageX * gridRangeScale;
+    const scaledMaxImageY = sensorOverrideUsed ? sensorHeightMm / 2 : maxImageY * gridRangeScale;
     const stepX = (2 * scaledMaxImageX) / Math.max(1, gridSize - 1);
     const stepY = (2 * scaledMaxImageY) / Math.max(1, gridSize - 1);
+    const fieldMaxX = gridFieldMode === "angle"
+      ? (Math.atan(scaledMaxImageX / focalLengthForGrid) * 180) / Math.PI
+      : gridFieldMode === "height" && finiteSystem && imageScaleForHeight > 1e-9
+        ? scaledMaxImageX / imageScaleForHeight
+        : scaledMaxImageX;
+    const fieldMaxY = gridFieldMode === "angle"
+      ? (Math.atan(scaledMaxImageY / focalLengthForGrid) * 180) / Math.PI
+      : gridFieldMode === "height" && finiteSystem && imageScaleForHeight > 1e-9
+        ? scaledMaxImageY / imageScaleForHeight
+        : scaledMaxImageY;
 
     const idealX: number[] = [];
     const idealY: number[] = [];
@@ -8256,7 +8276,7 @@ export async function runNativeGridDistortion(
       realX,
       realY,
       gridSize,
-      maxFieldAngle: gridFieldMode === "angle" ? Math.max(gridFieldExtents.x, gridFieldExtents.y) : NaN,
+      maxFieldAngle: gridFieldMode === "angle" ? Math.max(fieldMaxX, fieldMaxY) : NaN,
       meta: {
         wavelength,
         focalLength: hasFiniteFocalLength ? focalLength : NaN,
@@ -8264,8 +8284,12 @@ export async function runNativeGridDistortion(
         focalLengthForGrid,
         finiteSystem,
         gridFieldMode,
+        sensorOverrideUsed,
+        ...(sensorOverrideUsed ? { sensorWidthMm, sensorHeightMm } : {}),
+        fieldMaxX,
+        fieldMaxY,
         objectMaxHeight: (gridFieldMode === "height" || gridFieldMode === "imageheight")
-          ? Number(gridFieldExtents.y)
+          ? (sensorOverrideUsed ? Math.hypot(scaledMaxImageX, scaledMaxImageY) : Number(gridFieldExtents.y))
           : NaN,
         maxImageX: scaledMaxImageX,
         maxImageY: scaledMaxImageY,

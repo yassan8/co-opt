@@ -971,6 +971,8 @@ export interface NativeGridDistortionRequest {
   surfaceIndex?: number;
   gridSize?: number;
   wavelength?: number;
+  sensorWidthMm?: number;
+  sensorHeightMm?: number;
   detailProgress?: boolean;
   onProgress?: (evt: { percent?: number; message?: string }) => void;
 }

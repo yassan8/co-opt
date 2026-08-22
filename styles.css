@@ -8802,6 +8802,29 @@ body.dark-mode .multi-field-psf-dialog__metrics {
     width: min(620px, calc(100vw - 32px));
     grid-template-columns: repeat(3, minmax(150px, 1fr));
 }
+.image-simulation-scale-guide {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 4px;
+    margin: 2px 0 0;
+    padding: 10px 11px;
+    border: 1px solid #dbe3ef;
+    border-radius: 9px;
+    background: #f8fafc;
+    color: #334155;
+}
+.image-simulation-scale-guide strong {
+    font-size: 12px;
+}
+.image-simulation-scale-guide span {
+    font-size: 12px;
+    line-height: 1.4;
+}
+.image-simulation-scale-guide small {
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.4;
+}
 .image-simulation-options__note {
     grid-column: 1 / -1;
     margin: 2px 0 0;
@@ -8839,6 +8862,31 @@ body.dark-mode .multi-field-psf-dialog__metrics {
     font-size: 12px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+}
+.image-simulation-reachability-warning {
+    grid-column: 1 / -1;
+    display: flex;
+    flex: 0 0 auto;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 16px;
+    border-top: 1px solid #fcd34d;
+    border-bottom: 1px solid #fcd34d;
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 12px;
+}
+.image-simulation-reachability-warning strong {
+    flex: 0 0 auto;
+    color: #b45309;
+}
+.image-simulation-reachability-warning span {
+    line-height: 1.45;
+}
+body.dark-mode .image-simulation-reachability-warning {
+    border-color: #92400e;
+    background: #2b1d0e;
+    color: #fcd34d;
 }
 .image-simulation-content {
     display: flex;
@@ -8999,6 +9047,8 @@ body.dark-mode .image-simulation-empty strong { color: #e2e8f0; }
 body.dark-mode .image-simulation-progress__track { background: #334155; }
 body.dark-mode .image-simulation-progress__status { color: #cbd5e1; }
 body.dark-mode .image-simulation-options__note { background: #172033; color: #aebed4; }
+body.dark-mode .image-simulation-scale-guide { border-color: #334155; background: #111827; color: #d6e0ed; }
+body.dark-mode .image-simulation-scale-guide small { color: #94a3b8; }
 body.dark-mode .image-simulation-content {
     background-color: #020617;
     background-image: linear-gradient(90deg, rgba(51,65,85,.3) 1px, transparent 1px), linear-gradient(rgba(51,65,85,.3) 1px, transparent 1px);

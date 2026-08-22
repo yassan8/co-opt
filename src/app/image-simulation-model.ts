@@ -323,19 +323,14 @@ export async function generateImageSimulationTarget(
 
 function sampleImageBilinear(image: ImageSimulationImage, x: number, y: number, out: Uint8ClampedArray, offset: number) {
   const { width, height, rgba } = image;
-  if (x < 0 || y < 0 || x > width - 1 || y > height - 1) {
-    out[offset] = 3;
-    out[offset + 1] = 7;
-    out[offset + 2] = 18;
-    out[offset + 3] = 255;
-    return;
-  }
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
+  const boundedX = clamp(Number.isFinite(x) ? x : 0, 0, width - 1);
+  const boundedY = clamp(Number.isFinite(y) ? y : 0, 0, height - 1);
+  const x0 = Math.floor(boundedX);
+  const y0 = Math.floor(boundedY);
   const x1 = Math.min(width - 1, x0 + 1);
   const y1 = Math.min(height - 1, y0 + 1);
-  const tx = x - x0;
-  const ty = y - y0;
+  const tx = boundedX - x0;
+  const ty = boundedY - y0;
   for (let channel = 0; channel < 4; channel += 1) {
     const v00 = rgba[(y0 * width + x0) * 4 + channel] || 0;
     const v10 = rgba[(y0 * width + x1) * 4 + channel] || 0;
@@ -372,8 +367,10 @@ function prepareDisplacement(map: ImageSimulationDistortionMap) {
   for (let index = 0; index < count; index += 1) {
     const idealX = Number(map?.idealX?.[index]);
     const idealY = Number(map?.idealY?.[index]);
-    const realX = Number(map?.realX?.[index]);
-    const realY = Number(map?.realY?.[index]);
+    const realXValue = map?.realX?.[index];
+    const realYValue = map?.realY?.[index];
+    const realX = typeof realXValue === 'number' ? realXValue : Number.NaN;
+    const realY = typeof realYValue === 'number' ? realYValue : Number.NaN;
     if (Number.isFinite(idealX) && Number.isFinite(idealY) && Number.isFinite(realX) && Number.isFinite(realY)) {
       dx[index] = realX - idealX;
       dy[index] = realY - idealY;
@@ -855,6 +852,7 @@ export function resolveImageSimulationRasterExtent(
   imageWidth: number,
   imageHeight: number,
   sensorWidthMm: number,
+  sensorHeightMm: number,
   pixelPitchUm: number,
 ): ImageSimulationPhysicalExtent {
   if (mode === 'field-fit') return { ...fieldExtent };
@@ -867,7 +865,10 @@ export function resolveImageSimulationRasterExtent(
     if (!(Number.isFinite(widthMm) && widthMm > 1e-9)) {
       throw new Error('Sensor width must be greater than zero.');
     }
-    heightMm = widthMm * heightPixels / widthPixels;
+    heightMm = Math.abs(Number(sensorHeightMm));
+    if (!(Number.isFinite(heightMm) && heightMm > 1e-9)) {
+      throw new Error('Sensor height must be greater than zero.');
+    }
   } else {
     const pitchUm = Math.abs(Number(pixelPitchUm));
     if (!(Number.isFinite(pitchUm) && pitchUm > 1e-9)) {
