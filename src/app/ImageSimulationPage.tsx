@@ -254,7 +254,7 @@ function calculateCircularDiffractionMtf(normalizedFrequency: number): number {
 
 export function ImageSimulationPage() {
   const cancelRef = useRef<CancelToken | null>(null);
-  const [sourceKind, setSourceKind] = useState<ImageSimulationTargetKind | 'upload'>('field-chart');
+  const [sourceKind, setSourceKind] = useState<ImageSimulationTargetKind | 'upload'>('optical-showcase');
   const [simulationMode, setSimulationMode] = useState<SimulationMode>('full');
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('wipe');
   const [outputSize, setOutputSize] = useState(1536);
@@ -341,8 +341,10 @@ export function ImageSimulationPage() {
 
   const downloadSourceSvg = useCallback(() => {
     if (!sourceSvg || sourceKind === 'upload') return;
-    const fileName = sourceKind === 'field-chart'
-      ? 'co-opt-vector-field-target.svg'
+    const fileName = sourceKind === 'optical-showcase'
+      ? 'co-opt-usaf-1951-radial-grid.svg'
+      : sourceKind === 'field-chart'
+        ? 'co-opt-calibrated-camera-resolution-target.svg'
       : sourceKind === 'usaf-array'
         ? 'co-opt-usaf-field-array.svg'
         : 'co-opt-grid-point-field.svg';
@@ -499,7 +501,11 @@ export function ImageSimulationPage() {
       const nyquistLpmm = Math.min(500 / imagePixelPitchXUm, 500 / imagePixelPitchYUm);
       const cutoffLpmm = Number(diffraction?.cutoffLpmm);
       const diffractionMtfAtNyquist = calculateCircularDiffractionMtf(nyquistLpmm / cutoffLpmm);
-      const chartFrequencyLpmm = getImageSimulationTargetNominalMaxFrequencyLpmm(sourceKind, rasterExtent.widthMm);
+      const chartFrequencyLpmm = getImageSimulationTargetNominalMaxFrequencyLpmm(
+        sourceKind,
+        rasterExtent.widthMm,
+        rasterExtent.heightMm,
+      );
       const diffractionMtfAtChart = chartFrequencyLpmm !== null
         ? calculateCircularDiffractionMtf(chartFrequencyLpmm / cutoffLpmm)
         : Number.NaN;
@@ -730,7 +736,8 @@ export function ImageSimulationPage() {
       <div className="analysis-window-commandbar image-simulation-commandbar">
         <label className="analysis-window-field"><span>Source</span>
           <select value={sourceKind} onChange={(event) => setSourceKind(event.target.value as ImageSimulationTargetKind | 'upload')}>
-            <option value="field-chart">Co-opt Field Chart</option>
+            <option value="optical-showcase">USAF 1951 Radial Grid</option>
+            <option value="field-chart">Calibrated Camera Resolution Chart</option>
             <option value="usaf-array">USAF 1951 Field Array</option>
             <option value="grid-points">Grid & Point Sources</option>
             <option value="upload">Upload image…</option>
@@ -775,7 +782,7 @@ export function ImageSimulationPage() {
           <label className="analysis-window-field"><span>Wavelength</span><select value={wavelength} onChange={(event) => setWavelength(event.target.value)}>{wavelengthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
           <label className="analysis-window-field"><span>Zero pad</span><select value={zeroPad} onChange={(event) => setZeroPad(event.target.value as ZeroPadMode)}><option value="none">None</option><option value="auto">Auto 2×</option><option value="128">128</option><option value="256">256</option><option value="512">512</option></select></label>
           <label className="analysis-window-field"><span>Kernel support</span><select value={kernelSize} onChange={(event) => setKernelSize(Number(event.target.value))}><option value={15}>15×15</option><option value={21}>21×21</option><option value={31}>31×31</option><option value={41}>41×41</option></select></label>
-          <p className="image-simulation-options__note">Field fit maps the source across the full traced field. Sensor size and Pixel pitch define a centered physical sensor area, and the same width and height are used for distortion coordinates, field-PSF placement, and convolution. Built-in targets remain native SVG vectors. USAF bars follow the MIL-STD-150A element proportions; their dimensions are normalized to the selected image-plane width. Every Source wavelength uses its own distortion map and monochromatic Remove P/T PSF.</p>
+          <p className="image-simulation-options__note">Field fit maps the source across the full traced field. Sensor size and Pixel pitch define a centered physical sensor area, and the same width and height are used for distortion coordinates, field-PSF placement, and convolution. USAF 1951 Radial Grid is a 240 × 240 mm native SVG: a central Group −2/−1 pair is surrounded by eight radial and sixteen orthogonal Group 0/1 pairs. Each pair follows the classic imaginary-square layout: the horizontal bars of primary Elements 2–6 share its left edge, the secondary elements share its right edge, and primary Element 1 closes the lower-right corner with its bottom aligned to Element 6. Four binary radial charts sample the field corners; an sRGB color bar and an eleven-step grayscale bar span the upper and lower edges. Frequencies follow 2^(group + (element−1)/6); every tri-bar occupies a 5w × 5w square, with equal bar and space widths. Within each pair, both group headings are 3.75× the coarser Element 1 bar width; primary and secondary element numbers are 2.70× and 1.65×. The calibrated chart remains available for eSFR, USAF and Siemens-star evaluation. Every Source wavelength uses its own distortion map and monochromatic Remove P/T PSF.</p>
         </div></details>
         <button className="analysis-window-primary-action" type="button" disabled={busy || !sourceImage} onClick={() => void run()}>{busy ? 'Simulating…' : 'Simulate'}</button>
         <button className="analysis-window-primary-action" type="button" title="Save the latest simulated image as PNG" disabled={busy || !simulatedImage} onClick={() => void downloadSimulatedPng()}>Save PNG</button>
@@ -817,7 +824,7 @@ export function ImageSimulationPage() {
         <span><small>Image scale</small>{summary.scaleMode === 'field-fit' ? 'Field fit' : summary.scaleMode === 'sensor-width' ? 'Sensor size' : 'Pixel pitch'} · {summary.rasterWidthMm.toFixed(3)} × {summary.rasterHeightMm.toFixed(3)} mm</span>
         <span><small>EFL · F/# · Airy diameter</small>{Number.isFinite(summary.focalLengthMm) && Number.isFinite(summary.workingFNumber) && Number.isFinite(summary.airyDiameterUm) ? summary.focalLengthMm.toFixed(3) + ' mm · F/' + summary.workingFNumber.toFixed(2) + ' · ' + summary.airyDiameterUm.toFixed(2) + ' µm · ' + summary.airyDiameterPixels.toFixed(2) + ' px' : 'Unavailable'}</span>
         <span><small>Nyquist · cutoff</small>{summary.nyquistLpmm.toFixed(1)} lp/mm · {Number.isFinite(summary.cutoffLpmm) ? summary.cutoffLpmm.toFixed(1) + ' lp/mm · MTF ' + summary.diffractionMtfAtNyquist.toFixed(3) : 'cutoff unavailable'}</span>
-        <span><small>Chart frequency</small>{summary.chartFrequencyLpmm !== null ? summary.chartFrequencyLpmm.toFixed(1) + ' lp/mm · diffraction MTF ' + (Number.isFinite(summary.diffractionMtfAtChart) ? summary.diffractionMtfAtChart.toFixed(3) : '—') + ' · USAF E3 nominal' : 'Broadband ≤ ' + summary.nyquistLpmm.toFixed(1) + ' lp/mm'}</span>
+        <span><small>Chart frequency</small>{summary.chartFrequencyLpmm !== null ? summary.chartFrequencyLpmm.toFixed(1) + ' lp/mm · diffraction MTF ' + (Number.isFinite(summary.diffractionMtfAtChart) ? summary.diffractionMtfAtChart.toFixed(3) : '—') + (sourceKind === 'field-chart' ? ' · calibrated target maximum' : sourceKind === 'optical-showcase' ? ' · USAF G1 E6 maximum' : ' · USAF E3 nominal') : 'Broadband ≤ ' + summary.nyquistLpmm.toFixed(1) + ' lp/mm'}</span>
         <span><small>PSF fields</small>{summary.psfFields}{summary.failedFields > 0 ? ' · ' + summary.failedFields + ' unavailable' : ''}</span>
         <span><small>Elapsed</small>{(summary.elapsedMs / 1000).toFixed(2)} s</span>
       </footer>}
