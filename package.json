@@ -57,6 +57,8 @@
     "diag:grid-distortion-field-modes": "node --import tsx diagnostics/grid-distortion-field-modes-repro.mjs",
     "diag:grid-distortion-null-plot": "node --import tsx diagnostics/grid-distortion-null-plot-repro.mjs",
     "diag:grid-distortion-tele": "node --import tsx diagnostics/grid-distortion-tele-repro.mjs",
+    "diag:distortion-normalization": "node --import tsx diagnostics/distortion-normalization-repro.mjs",
+    "diag:ideal-thin-lens-distortion": "node --import tsx diagnostics/ideal-thin-lens-distortion-verification.mjs",
     "diag:spherical-aberration-continuity": "node --import tsx diagnostics/spherical-aberration-continuity-repro.mjs",
     "diag:lateral-chromatic-wide": "node --import tsx diagnostics/lateral-chromatic-wide-repro.mjs",
     "diag:lateral-chromatic-retrofocus": "node --import tsx diagnostics/lateral-chromatic-retrofocus-repro.mjs",

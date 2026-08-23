@@ -7,6 +7,7 @@ const files = {
   calibratedTarget: await readFile(new URL('../src/app/calibrated-camera-resolution-target.ts', import.meta.url), 'utf8'),
   opticalShowcase: await readFile(new URL('../src/app/optical-showcase-target.ts', import.meta.url), 'utf8'),
   distortionPage: await readFile(new URL('../src/app/DistortionAnalysisPage.tsx', import.meta.url), 'utf8'),
+  distortionNormalization: await readFile(new URL('../evaluation/aberrations/distortion-normalization.ts', import.meta.url), 'utf8'),
   multi: await readFile(new URL('../src/app/MultiFieldPsfPage.tsx', import.meta.url), 'utf8'),
   app: await readFile(new URL('../src/app/App.tsx', import.meta.url), 'utf8'),
   toolbar: await readFile(new URL('../src/ui/components/MainToolbar.tsx', import.meta.url), 'utf8'),
@@ -22,6 +23,8 @@ assert.match(files.page, /Math\.tan/);
 assert.match(files.page, /colorMode:\s*'true'/);
 assert.match(files.page, /buildWavelengthEntries/);
 assert.match(files.page, /distortionEntries = simulationMode === 'psf'/);
+assert.match(files.page, /normalizeDistortionMapsToReference/);
+assert.match(files.page, /local affine reference/);
 assert.match(files.page, /PSFPlotter\.wavelengthToLinearRGB/);
 assert.match(files.page, /result\.spectralComponents/);
 assert.match(files.page, /detectConjugateType\(opticalRows\)/);
@@ -70,6 +73,12 @@ assert.match(files.page, /calibrated chart remains available for eSFR/);
 assert.doesNotMatch(files.page, />Stop</);
 assert.match(files.model, /convolveImageSpatiallyVarying/);
 assert.match(files.model, /warpImageWithDistortion/);
+assert.match(files.model, /jacobian00/);
+assert.match(files.model, /determinant/);
+assert.match(files.distortionNormalization, /fitDistortionAffineReference/);
+assert.match(files.distortionNormalization, /normalizeDistortionMapToReference/);
+assert.match(files.distortionNormalization, /normalizeDistortionSeriesLinearReference/);
+assert.match(files.distortionPage, /hasAnamorphicIdealThinLens/);
 assert.match(files.model, /srgbToLinear/);
 assert.match(files.model, /resamplePsfToImageKernel/);
 assert.match(files.model, /exact overlap area/);

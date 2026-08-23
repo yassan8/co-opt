@@ -15,13 +15,14 @@ globalThis.window = globalThis;
 globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 globalThis.document = { getElementById: () => null, querySelector: () => null };
 
-const [native, simulation, multiField, paraxial, scaleModel, psfPlot] = await Promise.all([
+const [native, simulation, multiField, paraxial, scaleModel, psfPlot, distortionNormalization] = await Promise.all([
   import('../src/desktop/ipc/client.ts'),
   import('../src/app/image-simulation-model.ts'),
   import('../src/app/multi-field-psf-model.ts'),
   import('../raytracing/core/ray-paraxial.ts'),
   import('../src/app/psf-scale-model.ts'),
   import('../evaluation/psf/psf-plot.ts'),
+  import('../evaluation/aberrations/distortion-normalization.ts'),
 ]);
 
 const input = JSON.parse(fs.readFileSync(
@@ -101,6 +102,15 @@ try {
     (layer) => Math.abs(layer.wavelengthUm - primaryWavelengthUm) < 1e-9,
   );
   assert.ok(referenceLayer, 'primary distortion layer is missing');
+  const referenceLayerIndex = distortionLayers.indexOf(referenceLayer);
+  const normalizedDistortion = distortionNormalization.normalizeDistortionMapsToReference(
+    distortionLayers.map((layer) => layer.map),
+    referenceLayerIndex,
+  );
+  assert.equal(normalizedDistortion.reference.valid, true, 'primary distortion affine reference must be invertible');
+  distortionLayers.forEach((layer, index) => {
+    layer.map = normalizedDistortion.maps[index];
+  });
   const rasterExtent = simulation.getImageSimulationPhysicalExtent(referenceLayer.map);
   const imagePixelPitchXUm = rasterExtent.widthMm * 1000 / imageSize;
   const imagePixelPitchYUm = rasterExtent.heightMm * 1000 / imageSize;
@@ -249,6 +259,7 @@ try {
     transparentPixels,
     nonFinitePixels,
     differencePercent,
+    distortionReference: normalizedDistortion.reference,
   }, null, 2));
 } finally {
   console.log = originalLog;

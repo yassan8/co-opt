@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PSFPlotter } from '../../evaluation/psf/psf-plot.ts';
+import { normalizeDistortionMapsToReference } from '../../evaluation/aberrations/distortion-normalization.ts';
 import { calculateImageSpaceDiffractionParams } from '../../raytracing/core/ray-paraxial.ts';
 import { detectConjugateType } from '../../utils/conjugate-detection.ts';
 import { runNativeGridDistortion } from '../desktop/ipc/client.ts';
@@ -475,8 +476,22 @@ export function ImageSimulationPage() {
       }
       throwIfCancelled(token);
 
-      const referenceDistortion = distortionLayers.find((layer) => Math.abs(layer.wavelengthUm - primaryWavelength) < 1e-9)
-        || distortionLayers[0];
+      const referenceLayerIndex = Math.max(0, distortionLayers.findIndex(
+        (layer) => Math.abs(layer.wavelengthUm - primaryWavelength) < 1e-9,
+      ));
+      const normalizedDistortion = normalizeDistortionMapsToReference(
+        distortionLayers.map((layer) => layer.map),
+        referenceLayerIndex,
+      );
+      distortionLayers.forEach((layer, index) => {
+        layer.map = normalizedDistortion.maps[index] || layer.map;
+        layer.meta = {
+          ...layer.meta,
+          distortionReferenceMode: normalizedDistortion.reference.valid ? 'local-affine-chief-ray' : 'raw',
+          distortionReferenceAffine: normalizedDistortion.reference,
+        };
+      });
+      const referenceDistortion = distortionLayers[referenceLayerIndex] || distortionLayers[0];
       if (!referenceDistortion) throw new Error('No wavelength-specific distortion map was available.');
       const fieldExtent = getImageSimulationPhysicalExtent(referenceDistortion.map);
       const rasterExtent = resolveImageSimulationRasterExtent(
@@ -831,7 +846,7 @@ export function ImageSimulationPage() {
           <span>{summary.unreachedDistortionPoints} of {summary.distortionPoints} distortion grid nodes were unreached across {summary.distortionMapsWithUnreached} wavelength {summary.distortionMapsWithUnreached === 1 ? 'map' : 'maps'}.
             Neighboring reached nodes were used for the simulated image.</span>
         </div>}
-        <span><small>Distortion map</small>{summary.backend}</span>
+        <span><small>Distortion map</small>{summary.distortionMaps > 0 ? summary.backend + ' · local affine reference' : 'Not applied'}</span>
         <span><small>Conjugate</small>{summary.conjugateType === 'infinite' ? 'Infinite' : 'Finite'}</span>
         <span><small>Max displacement</small>{summary.maxDistortionPercent.toFixed(3)}% field diagonal</span>
         <span><small>Lateral chromatic</small>{summary.maxLateralChromaticUm.toFixed(3)} µm max separation</span>
