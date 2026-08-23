@@ -7,9 +7,54 @@
 import { getAllGlassDatabases, getGlassDataWithSellmeier } from './glass.ts';
 import { calculateFullSystemParaxialTrace, calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 
-export const BLOCK_SCHEMA_VERSION = '0.1';
+export const BLOCK_SCHEMA_VERSION = '0.2';
 export const DEFAULT_SEMIDIA = '10';
 export const DEFAULT_STOP_SEMI_DIAMETER = 5.0;
+
+/**
+ * Assembly blocks share the canonical blocks[] array with the conventional
+ * sequential design. They do not expand into sequential surface rows; the
+ * hybrid assembly tracer consumes them at ports between exact surface runs.
+ */
+export const PHYSICAL_BLOCK_TYPES = [
+  'BroadbandSource',
+  'FrequencyCombSource',
+  'BeamSplitter',
+  'FoldMirror',
+  'NDFilter',
+  'ReflectionGrating',
+  'Target',
+  'AreaDetector',
+  'TimeDetector',
+  'STLObject',
+] as const;
+
+export type PhysicalBlockType = typeof PHYSICAL_BLOCK_TYPES[number];
+const PHYSICAL_BLOCK_TYPE_SET = new Set<string>(PHYSICAL_BLOCK_TYPES);
+
+export function isPhysicalBlockType(value: unknown): value is PhysicalBlockType {
+  return PHYSICAL_BLOCK_TYPE_SET.has(String(value ?? '').trim());
+}
+
+export interface DesignConnectionEndpoint {
+  blockId: string;
+  portId: string;
+}
+
+export interface DesignConnection {
+  id: string;
+  from: DesignConnectionEndpoint;
+  to: DesignConnectionEndpoint;
+  distanceMm: number;
+  azimuthDeg?: number;
+  elevationDeg?: number;
+  autoPlace: boolean;
+  pathLabel?: string;
+  manualOffset?: {
+    positionMm: { x: number; y: number; z: number };
+    rotationDeg: { x: number; y: number; z: number };
+  };
+}
 
 type LoadIssueSeverity = 'fatal' | 'warning' | 'info';
 type LoadIssuePhase = 'parse' | 'validate' | 'expand';
@@ -2179,6 +2224,38 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
 
     const blockType = block.blockType === 'ThinLens' ? 'Paraxial' : block.blockType;
     if (block.blockType === 'ThinLens') block.blockType = 'Paraxial';
+
+    if (isPhysicalBlockType(blockType)) {
+      const parameters = isPlainObject(block.parameters) ? block.parameters : {};
+      const positiveKeysByType: Partial<Record<PhysicalBlockType, string[]>> = {
+        BroadbandSource: ['centerWavelengthNm', 'totalPowerW', 'beamDiameterMm'],
+        FrequencyCombSource: ['centerWavelengthNm', 'repetitionRateHz', 'totalPowerW', 'beamDiameterMm'],
+        BeamSplitter: ['widthMm', 'heightMm', 'depthMm'],
+        FoldMirror: ['widthMm', 'heightMm', 'depthMm'],
+        NDFilter: ['widthMm', 'heightMm', 'depthMm'],
+        ReflectionGrating: ['grooveDensityLinesPerMm', 'widthMm', 'heightMm', 'depthMm'],
+        Target: ['widthMm', 'heightMm', 'depthMm'],
+        AreaDetector: ['pixelCountX', 'pixelCountY', 'pixelPitchUm'],
+        TimeDetector: ['samplingRateHz', 'sampleCount'],
+        STLObject: [],
+      };
+      for (const key of positiveKeysByType[blockType] ?? []) {
+        const value = Number(parameters[key]);
+        if (!Number.isFinite(value) || value <= 0) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: `${blockType}.${key} must be a positive number.`, blockId: block.blockId });
+        }
+      }
+      const poseKeys = ['positionXmm', 'positionYmm', 'positionZmm', 'rotationXdeg', 'rotationYdeg', 'rotationZdeg'];
+      for (const key of poseKeys) {
+        const raw = parameters[key];
+        if (raw === undefined || raw === null || String(raw).trim() === '') continue;
+        if (!Number.isFinite(Number(raw))) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: `${blockType}.${key} must be numeric.`, blockId: block.blockId });
+        }
+      }
+      continue;
+    }
+
     if (blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Paraxial' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'SingleSurface' && blockType !== 'ImageSurface') {
       issues.push({
         severity: 'fatal',
@@ -3091,6 +3168,11 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[], options?: { dis
       // ObjectSurface/ObjectPlane was already processed before the loop to ensure it's at surface 0
       continue;
     }
+
+    // Physical assembly blocks are canonical Design Intent items, but they are
+    // not sequential optical rows. Keep processing later sequential blocks so a
+    // Detector placed after ImageSurface does not produce an "ignored" warning.
+    if (isPhysicalBlockType(type)) continue;
 
     if (sawImageSurface) {
       issues.push({

@@ -7,6 +7,8 @@ import { MtfAnalysisPage } from './MtfAnalysisPage';
 import { PsfAnalysisPage } from './PsfAnalysisPage';
 import { MultiFieldPsfPage } from './MultiFieldPsfPage';
 import { ImageSimulationPage } from './ImageSimulationPage';
+import { installNonSequentialRenderOverlay } from './nonsequential-render-overlay';
+import { CoherentInterferometerPage } from './CoherentInterferometerEntry';
 import { cloneOptimizeConfigWithLiveObjectRows } from './optimize-run-config';
 import { WavefrontAnalysisPage } from './WavefrontAnalysisPage';
 import { AnalysisRayCountField } from './AnalysisRayCountField';
@@ -409,7 +411,6 @@ function isVerticalCrossRay(ray: any): boolean {
     || side === 'top'
     || side === 'bottom';
 }
-
 function selectCrossRaysForAxis(rays: any[], desiredCount: number, axis: 'YZ' | 'XZ' | 'BOTH'): any[] {
   const ordered = Array.isArray(rays) ? [...rays].sort(compareCrossRayDrawOrder) : [];
   if (desiredCount <= 0 || ordered.length === 0) return [];
@@ -530,6 +531,137 @@ function selectCrossRaysForAxis(rays: any[], desiredCount: number, axis: 'YZ' | 
   selected.push(...selectUniformAxis(candidates.filter(isHorizontalCrossRay), 'x', horizontalCount));
   selected.push(...selectUniformAxis(candidates.filter(isVerticalCrossRay), 'y', verticalCount));
   return selected.slice(0, desiredCount);
+}
+
+function appendDirectStopCardinalRenderRays(
+  sourceRays: any[],
+  opticalSystemRows: any[],
+  wavelengthUm: number,
+  requestedRayCount: number,
+): any[] {
+  const rays = Array.isArray(sourceRays) ? [...sourceRays] : [];
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length < 2) return rays;
+
+  const stopSurfaceIndex = opticalSystemRows.findIndex((row: any) => {
+    const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+    return String(raw).trim().toLowerCase().replace(/[\s_-]+/g, '') === 'stop';
+  });
+  // This direct construction is exact when Stop is the first physical plane.
+  // More complex pre-stop optics continue to use the normal pupil solver.
+  if (stopSurfaceIndex !== 1) return rays;
+
+  let stopSurfaceInfo: any = null;
+  try {
+    const surfaceInfos = withRustRenderSurfaceOrigins(() => calculateSurfaceOrigins(opticalSystemRows));
+    stopSurfaceInfo = Array.isArray(surfaceInfos) ? surfaceInfos[stopSurfaceIndex] : null;
+  } catch (_) {}
+  if (!stopSurfaceInfo) return rays;
+
+  const stopRow = opticalSystemRows[stopSurfaceIndex] || {};
+  const circularRadius = Number(stopRow?.semidia ?? stopRow?.semiDiameter);
+  const halfWidth = Number(stopRow?.apertureWidth) / 2;
+  const halfHeight = Number(stopRow?.apertureHeight) / 2;
+  const radiusX = Number.isFinite(halfWidth) && halfWidth > 0
+    ? halfWidth
+    : (Number.isFinite(circularRadius) && circularRadius > 0 ? circularRadius : 0);
+  const radiusY = Number.isFinite(halfHeight) && halfHeight > 0
+    ? halfHeight
+    : (Number.isFinite(circularRadius) && circularRadius > 0 ? circularRadius : 0);
+  if (!(radiusX > 0) || !(radiusY > 0)) return rays;
+
+  const targetSurfaceIndex = (() => {
+    const imageIndex = opticalSystemRows.findIndex((row: any) => {
+      const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+      return String(raw).trim().toLowerCase().replace(/[\s_-]+/g, '').startsWith('image');
+    });
+    return imageIndex >= 0 ? imageIndex : opticalSystemRows.length - 1;
+  })();
+  const axisCountRaw = Math.max(3, Math.floor(Number(requestedRayCount) || 3));
+  const axisCount = axisCountRaw % 2 === 0 ? axisCountRaw + 1 : axisCountRaw;
+  const sideSamples = Math.max(1, Math.floor((axisCount - 1) / 2));
+  const objectsWithNonChief = new Set<number>();
+  const chiefByObject = new Map<number, any>();
+  rays.forEach((ray: any) => {
+    const objectIndexRaw = Number(ray?.objectIndex ?? ray?.originalRay?.objectIndex ?? 0);
+    const objectIndex = Number.isFinite(objectIndexRaw) ? objectIndexRaw : 0;
+    const type = String(ray?.originalRay?.type ?? ray?.type ?? '').trim().toLowerCase();
+    if (type === 'chief') chiefByObject.set(objectIndex, ray);
+    else objectsWithNonChief.add(objectIndex);
+  });
+
+  const rustReady = !!getRustRayTracingWasmSync();
+  const traceOptions = {
+    allowNonStrict: true,
+    useRustWasm: rustReady,
+    requireRustWasm: false,
+    disableWasmRayTracing: false,
+    __renderDirectStopFallback: true,
+  };
+  chiefByObject.forEach((chief: any, objectIndex: number) => {
+    if (objectsWithNonChief.has(objectIndex)) return;
+    const chiefPath = Array.isArray(chief?.rayPath) ? chief.rayPath : [];
+    const startPoint = chief?.originalRay?.origin
+      ?? chief?.originalRay?.position
+      ?? chief?.originalRay?.pos
+      ?? chiefPath[0];
+    if (!isFiniteRenderPoint(startPoint)) return;
+
+    const targets: Array<{ x: number; y: number; type: string; side: string; stopX: number; stopY: number }> = [];
+    for (let sample = 1; sample <= sideSamples; sample += 1) {
+      const fraction = sample / sideSamples;
+      const x = radiusX * fraction;
+      const y = radiusY * fraction;
+      targets.push(
+        { x: -x, y: 0, type: sample === sideSamples ? 'left_marginal' : 'horizontal_cross', side: 'left', stopX: -x, stopY: 0 },
+        { x, y: 0, type: sample === sideSamples ? 'right_marginal' : 'horizontal_cross', side: 'right', stopX: x, stopY: 0 },
+        { x: 0, y: -y, type: sample === sideSamples ? 'lower_marginal' : 'vertical_cross', side: 'lower', stopX: 0, stopY: -y },
+        { x: 0, y, type: sample === sideSamples ? 'upper_marginal' : 'vertical_cross', side: 'upper', stopX: 0, stopY: y },
+      );
+    }
+
+    targets.forEach((target) => {
+      const stopTarget = buildRenderGlobalPointFromLocal({ x: target.x, y: target.y, z: 0 }, stopSurfaceInfo);
+      if (!isFiniteRenderPoint(stopTarget)) return;
+      const dx = Number(stopTarget.x) - Number(startPoint.x);
+      const dy = Number(stopTarget.y) - Number(startPoint.y);
+      const dz = Number(stopTarget.z) - Number(startPoint.z);
+      const length = Math.hypot(dx, dy, dz);
+      if (!(length > 1e-12)) return;
+      const direction = { x: dx / length, y: dy / length, z: dz / length };
+      const rayPath = traceRay(
+        opticalSystemRows,
+        { pos: startPoint, dir: direction, wavelength: wavelengthUm },
+        1.0,
+        null,
+        targetSurfaceIndex,
+        traceOptions,
+      );
+      if (!Array.isArray(rayPath) || rayPath.length <= 1) return;
+      rays.push({
+        ...chief,
+        rayPath,
+        type: target.type,
+        side: target.side,
+        __cooptDirectStopFallback: true,
+        __cooptStopXCoord: target.stopX,
+        __cooptStopYCoord: target.stopY,
+        originalRay: {
+          ...(chief?.originalRay || {}),
+          type: target.type,
+          side: target.side,
+          origin: startPoint,
+          position: startPoint,
+          pos: startPoint,
+          direction,
+          dir: direction,
+          __cooptDirectStopFallback: true,
+          __cooptStopXCoord: target.stopX,
+          __cooptStopYCoord: target.stopY,
+        },
+      });
+    });
+  });
+  return rays;
 }
 
 function normalizeExactSectionCandidates(
@@ -4559,6 +4691,10 @@ function DesktopSettingsPage() {
 
 export default function App() {
   const optimizeRowsSyncKey = 'coopt.optimizeRowsSync';
+  useEffect(() => {
+    return installNonSequentialRenderOverlay();
+  }, []);
+
   const [renderWindowStatus, setRenderWindowStatus] = useState("Initializing...");
   const [renderViewAxis, setRenderViewAxis] = useState<'YZ' | 'XZ'>('YZ');
   const [renderViewMode, setRenderViewMode] = useState<'3D' | 'XZ' | 'YZ'>('3D');
@@ -8735,6 +8871,8 @@ const collectLegacyCrossRays = async (
         timingStages.push({ label: 'solids', ms: performance.now() - solidsStartMs });
       }
 
+      let rendered3DRayCount = 0;
+      let render3DTransverseRadiusMm = 0;
       if (!shouldSkipRayGeneration) {
         const rayCollectStartMs = performance.now();
         setRenderWindowStatus('Tracing rays / calculating image height...');
@@ -8742,12 +8880,22 @@ const collectLegacyCrossRays = async (
         // largely-synchronous ray trace runs, so the UI does not appear frozen
         // on a stale status while tracing.
         await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(fallbackTimer);
+            resolve();
+          };
+          // A detached/occluded MDI iframe may suspend requestAnimationFrame.
+          // Never let that visual yield prevent the actual ray trace.
+          const fallbackTimer = window.setTimeout(finish, 80);
+          requestAnimationFrame(() => requestAnimationFrame(finish));
         });
         if (!isLatestRenderDrawRequest(requestId)) {
           return false;
         }
-        const legacyCrossRays = await collectLegacyCrossRays(
+        const collectedCrossRays = await collectLegacyCrossRays(
           rowsForRender,
           'BOTH',
           Array.isArray(renderObjectRows) ? renderObjectRows : [],
@@ -8755,7 +8903,48 @@ const collectLegacyCrossRays = async (
             rayCountOverride: effectiveRayCountOverride,
           }
         );
+        const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
+          ? (Number(w.getPrimaryWavelength()) || 0.5876)
+          : 0.5876;
+        // A finite system whose Stop is the first physical plane needs no
+        // iterative pupil solve for cardinal rays. If the combined sampler
+        // returned only chiefs, aim directly at uniformly sampled Stop points
+        // and trace those rays through the same exact surface sequence.
+        const legacyCrossRays = appendDirectStopCardinalRenderRays(
+          collectedCrossRays,
+          rowsForRender,
+          primaryWavelength,
+          Number(effectiveRayCountOverride ?? renderRayCountRef.current ?? 1),
+        );
         timingStages.push({ label: 'rayCollect', ms: performance.now() - rayCollectStartMs });
+        rendered3DRayCount = legacyCrossRays.length;
+        for (const ray of legacyCrossRays) {
+          const rayPath = Array.isArray(ray?.rayPath)
+            ? ray.rayPath
+            : (Array.isArray(ray?.rayPathToTarget) ? ray.rayPathToTarget : []);
+          for (const point of rayPath) {
+            const x = Number(point?.x);
+            const y = Number(point?.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            render3DTransverseRadiusMm = Math.max(render3DTransverseRadiusMm, Math.hypot(x, y));
+          }
+        }
+        try {
+          (window as any).__COOPT_LAST_RENDER_3D_RAY_SUMMARY = {
+            at: new Date().toISOString(),
+            requestedPerObject: Number(effectiveRayCountOverride ?? renderRayCountRef.current ?? 0),
+            objectCount: Array.isArray(renderObjectRows) ? renderObjectRows.length : 0,
+            collectedRayCount: rendered3DRayCount,
+            initialCollectedRayCount: collectedCrossRays.length,
+            directStopFallbackRayCount: legacyCrossRays.filter((ray: any) => ray?.__cooptDirectStopFallback === true).length,
+            transverseRadiusMm: render3DTransverseRadiusMm,
+            types: legacyCrossRays.reduce((counts: Record<string, number>, ray: any) => {
+              const type = String(ray?.originalRay?.type ?? ray?.type ?? 'unknown');
+              counts[type] = (counts[type] || 0) + 1;
+              return counts;
+            }, {}),
+          };
+        } catch (_) {}
         if (Array.isArray(startupStages)) updateRenderStartupBreakdown(timingStages);
         if (!isLatestRenderDrawRequest(requestId)) {
           return false;
@@ -8763,6 +8952,14 @@ const collectLegacyCrossRays = async (
         if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
           const rayDrawStartMs = performance.now();
           w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
+          try {
+            let sceneRayObjectCount = 0;
+            sceneForDraw.traverse((child: any) => {
+              if (child?.userData?.rayType === 'crossBeam') sceneRayObjectCount += 1;
+            });
+            const summary = (window as any).__COOPT_LAST_RENDER_3D_RAY_SUMMARY;
+            if (summary && typeof summary === 'object') summary.sceneRayObjectCount = sceneRayObjectCount;
+          } catch (_) {}
           timingStages.push({ label: 'rayDraw', ms: performance.now() - rayDrawStartMs });
           if (Array.isArray(startupStages)) updateRenderStartupBreakdown(timingStages);
         }
@@ -8776,7 +8973,13 @@ const collectLegacyCrossRays = async (
             includeRayStartMargin: true,
             storeDrawCrossBounds: true,
             centerVerticalOnOpticalAxis: true,
-            fitOpticalSystemOnly: true,
+            fitOpticalSystemOnly: false,
+            ...(render3DTransverseRadiusMm > 0 ? {
+              cameraBoundsOverride: {
+                minY: -render3DTransverseRadiusMm,
+                maxY: render3DTransverseRadiusMm,
+              },
+            } : {}),
           });
         } else if (typeof w.fitCameraToScene === 'function') {
           w.fitCameraToScene();
@@ -8786,6 +8989,8 @@ const collectLegacyCrossRays = async (
           const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
           w.adjustCameraView(sceneForDraw, camera, controls, renderer);
         }
+        // Keep the optical Z axis horizontal in the default 3D view. Users can
+        // still orbit manually when they want to inspect the X-pupil bundle.
         timingStages.push({ label: 'camera', ms: performance.now() - cameraStartMs });
         if (Array.isArray(startupStages)) updateRenderStartupBreakdown(timingStages);
       } catch (_) {}
@@ -8813,7 +9018,7 @@ const collectLegacyCrossRays = async (
       markRenderViewportReady();
       const ready3DLabel = renderShowSectionCut
         ? `Ready (3D section ${Math.round(renderSectionAngle)}°)`
-        : 'Ready (3D)';
+        : `Ready (3D · ${rendered3DRayCount} rays)`;
       publishRenderTiming(ready3DLabel, '3d', timingStages, blockPerfBefore);
       if (redrawOptions?.scheduleFullRayPass === true && (shouldSkipRayGeneration || Number(fullRayCount || 0) > Number(effectiveRayCountOverride || 0))) {
         scheduleDeferredFullRenderPass(requestId);
@@ -8979,6 +9184,7 @@ const collectLegacyCrossRays = async (
     if (!isRenderWindowMode) return;
     setRenderStartupBreakdown('');
     setRenderViewportVisible(true);
+    window.dispatchEvent(new CustomEvent('coopt:render-redraw-complete'));
   };
 
   const updateRenderStartupBreakdown = (stages: RenderTimingStage[]): void => {
@@ -9960,12 +10166,13 @@ const collectLegacyCrossRays = async (
       'psf': 'Point Spread Function',
       'multi-field-psf': 'Multi-Field PSF',
       'image-simulation': 'Image Simulation',
+      'coherent-interferometer': 'Coherent Signal',
       'mtf': 'Modulation Transfer Function',
       'through-focus-spot': 'Through-Focus Spot',
       'through-focus-mtf': 'Through-Focus MTF',
       'field-mtf': 'Field MTF',
     };
-    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf', 'multi-field-psf', 'image-simulation']);
+    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf', 'multi-field-psf', 'image-simulation', 'coherent-interferometer']);
 
     const targetButtonId = analysisButtonMap[analysisWindowMode.analysis];
     const targetPopupTitle = analysisPopupTitleMap[analysisWindowMode.analysis];
@@ -10080,6 +10287,10 @@ const collectLegacyCrossRays = async (
 
   if (analysisWindowMode.analysis === 'multi-field-psf') {
     return <MultiFieldPsfPage />;
+  }
+
+  if (analysisWindowMode.analysis === 'coherent-interferometer') {
+    return <CoherentInterferometerPage />;
   }
 
   if (analysisWindowMode.analysis === 'image-simulation') {
@@ -13241,6 +13452,7 @@ const collectLegacyCrossRays = async (
     { value: 'psf',                               label: 'PSF (Test)' },
     { value: 'multi-field-psf',                   label: 'Multi-Field PSF' },
     { value: 'image-simulation',                  label: 'Image Simulation' },
+    { value: 'coherent-interferometer',           label: 'Coherent Signal' },
     { value: 'mtf',                               label: 'MTF (Test)' },
     { value: 'through-focus-spot',                label: 'Through-Focus Spot' },
     { value: 'through-focus-mtf',                 label: 'Through-Focus MTF (Test)' },

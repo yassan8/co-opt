@@ -145,6 +145,8 @@ export function run_native_psf_from_opd_wasm_json(req_json: string): any;
 
 export function run_native_seidel_wasm_json(req_json: string): any;
 
+export function run_nonsequential_trace_wasm_json(request_json: string): any;
+
 export function solve_image_height_component_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, conjugate_mode: number, component_index: number, target_value: number, initial_guess: number, fixed_value: number, initial_step: number, max_step: number): Float64Array;
 
 export function solve_image_height_pair_exact_with_rows(optical_system_rows: any, image_surface_index: number, wavelength_um: number, conjugate_mode: number, target_x: number, target_y: number, initial_x: number, initial_y: number): Float64Array;
@@ -299,6 +301,7 @@ export interface InitOutput {
     readonly run_native_paraxial_metrics_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_seidel_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_nonsequential_trace_wasm_json: (a: number, b: number) => [number, number, number];
     readonly solve_image_height_component_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
     readonly solve_image_height_pair_exact_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly solve_image_height_pair_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];

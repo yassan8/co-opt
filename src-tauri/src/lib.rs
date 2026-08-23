@@ -44,6 +44,7 @@ pub fn run() {
             commands::optics::run_native_grid_distortion,
             commands::optics::run_native_magnification_chromatic_aberration,
             commands::optimizer::run_optimizer_step,
+            commands::optics::run_nonsequential_trace,
             commands::optimizer::evaluate_optimizer_candidates,
             commands::optimizer::evaluate_optimizer_candidates_multi_scenario,
             commands::optimizer::optimizer_request_stop,

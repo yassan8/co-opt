@@ -7,6 +7,9 @@ use std::cell::RefCell;
 use std::f64::consts::PI;
 use wasm_bindgen::prelude::*;
 
+#[path = "../../rust-shared/nonsequential.rs"]
+mod nonsequential;
+
 #[cfg(feature = "wasm-threads")]
 use rayon::prelude::*;
 
@@ -22,6 +25,24 @@ const OPT_STATUS_NORMAL_EQ_FAILURE: u32 = 4;
 const OPT_STATUS_LINEAR_SOLVE_FAILURE: u32 = 5;
 const OPT_STATUS_INTERNAL_ERROR: u32 = 6;
 const TRACE_SYSTEM_METADATA_CACHE_CAPACITY: usize = 16;
+
+#[wasm_bindgen]
+pub fn run_nonsequential_trace_wasm_json(request_json: String) -> Result<JsValue, JsValue> {
+    let request: nonsequential::TraceRequest =
+        serde_json::from_str(&request_json).map_err(|error| {
+            JsValue::from_str(&format!(
+                "run_nonsequential_trace_wasm_json: invalid request: {error}"
+            ))
+        })?;
+    let result = nonsequential::trace_nonsequential(&request).map_err(|error| {
+        JsValue::from_str(&format!("run_nonsequential_trace_wasm_json: {error}"))
+    })?;
+    serde_wasm_bindgen::to_value(&result).map_err(|error| {
+        JsValue::from_str(&format!(
+            "run_nonsequential_trace_wasm_json: serialize error: {error}"
+        ))
+    })
+}
 
 #[derive(Clone)]
 struct ChiefRayOriginSeedEntryNative {

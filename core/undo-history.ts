@@ -269,11 +269,14 @@ export class SetLensBendingCommand extends Command {
       const block = this.findBlock(cfg);
       this.setNestedValue(block, 'parameters.frontRadius', frontRadius);
       this.setNestedValue(block, 'parameters.backRadius', backRadius);
-      if (block?.variables?.frontRadius && typeof block.variables.frontRadius === 'object' && Object.prototype.hasOwnProperty.call(block.variables.frontRadius, 'value')) {
-        block.variables.frontRadius.value = frontRadius;
+      const variables: Record<string, any> | undefined = block && 'variables' in block
+        ? (block.variables as Record<string, any>)
+        : undefined;
+      if (variables?.frontRadius && typeof variables.frontRadius === 'object' && Object.prototype.hasOwnProperty.call(variables.frontRadius, 'value')) {
+        variables.frontRadius.value = frontRadius;
       }
-      if (block?.variables?.backRadius && typeof block.variables.backRadius === 'object' && Object.prototype.hasOwnProperty.call(block.variables.backRadius, 'value')) {
-        block.variables.backRadius.value = backRadius;
+      if (variables?.backRadius && typeof variables.backRadius === 'object' && Object.prototype.hasOwnProperty.call(variables.backRadius, 'value')) {
+        variables.backRadius.value = backRadius;
       }
       this.refreshSystem(sysConfig, cfg);
     } finally {

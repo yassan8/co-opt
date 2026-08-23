@@ -10,6 +10,18 @@ use tauri::{AppHandle, Emitter};
 use crate::commands::analysis::{SpotPoint, paraxial_effective_focal_length_mm};
 use crate::commands::gpu_fft;
 
+#[path = "../../../rust-shared/nonsequential.rs"]
+mod nonsequential;
+
+#[tauri::command]
+pub fn run_nonsequential_trace(request: Value) -> Result<Value, String> {
+    let request: nonsequential::TraceRequest = serde_json::from_value(request)
+        .map_err(|error| format!("invalid non-sequential trace request: {error}"))?;
+    let result = nonsequential::trace_nonsequential(&request)?;
+    serde_json::to_value(result)
+        .map_err(|error| format!("failed to serialize non-sequential trace result: {error}"))
+}
+
 const EPS_R: f64 = 1e-10;
 const MAX_NATIVE_PSF_FFT_SIZE: usize = 4096;
 
