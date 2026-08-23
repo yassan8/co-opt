@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import { runNativeFieldMtfMap } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
+import { isRotationallySymmetricIdealThinLensOnlySystem } from '../../utils/ideal-thin-lens.ts';
 import {
   ANALYSIS_PUPIL_SAMPLING_OPTIONS,
   AnalysisGridSamplingField,
@@ -401,42 +402,7 @@ function getCompositeWeightForWavelength(
 }
 
 function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []): boolean {
-  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
-  let hasIdealParaxial = false;
-  for (const row of opticalSystemRows) {
-    if (!row || typeof row !== 'object') continue;
-    const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
-    const surfType = String(row?.surfType ?? row?.type ?? row?.surfaceType ?? '').trim().toLowerCase();
-    const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
-    const isIdealParaxial = (
-      blockType === 'paraxial'
-      || blockType === 'thinlens'
-      || surfType === 'thinlens'
-      || Number.isFinite(Number(row?._thinLensFocalLengthX))
-      || Number.isFinite(Number(row?._thinLensFocalLengthY))
-    );
-    if (isIdealParaxial) {
-      hasIdealParaxial = true;
-      continue;
-    }
-    const isPassiveRow = (
-      objectType === ''
-      || objectType === 'object'
-      || objectType === 'image'
-      || objectType === 'stop'
-      || surfType === 'gap'
-      || surfType === 'air gap'
-      || blockType === 'gap'
-      || blockType === 'air gap'
-      || surfType === 'coordinate break'
-      || surfType === 'coordbrk'
-      || blockType === 'coordinate break'
-      || blockType === 'coordbrk'
-    );
-    if (isPassiveRow) continue;
-    return false;
-  }
-  return hasIdealParaxial;
+  return isRotationallySymmetricIdealThinLensOnlySystem(opticalSystemRows);
 }
 
 function buildPchipCurve(xValues: number[], yValues: number[], pointCount = 101): { x: number[]; y: number[] } {

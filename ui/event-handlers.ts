@@ -563,6 +563,13 @@ async function runDesktopNativePsfMapForPopup(payload: {
     removeTilt?: boolean;
     zeroPadTo?: number;
     recenterIfWrapped?: boolean;
+    propagationMode?: 'auto' | 'coherent-fft' | 'hybrid-geometric';
+    targetHitXGridMm?: Array<Array<number | null>>;
+    targetHitYGridMm?: Array<Array<number | null>>;
+    rayHitsUm?: Array<{ xUm: number; yUm: number; weight?: number }>;
+    hybridOutputSize?: number;
+    diffractionFwhmXUm?: number;
+    diffractionFwhmYUm?: number;
     suppressProgressHud?: boolean;
     referenceModeHint?: string;
     chiefReferenceModeHint?: string;
@@ -610,6 +617,13 @@ async function runDesktopNativePsfMapForPopup(payload: {
             removeTilt: !!payload?.removeTilt,
             zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Number(payload?.zeroPadTo) : undefined,
             recenterIfWrapped: !!payload?.recenterIfWrapped,
+            propagationMode: payload?.propagationMode,
+            targetHitXGridMm: payload?.targetHitXGridMm,
+            targetHitYGridMm: payload?.targetHitYGridMm,
+            rayHitsUm: payload?.rayHitsUm,
+            hybridOutputSize: Number.isFinite(Number(payload?.hybridOutputSize)) ? Number(payload.hybridOutputSize) : undefined,
+            diffractionFwhmXUm: Number.isFinite(Number(payload?.diffractionFwhmXUm)) ? Number(payload.diffractionFwhmXUm) : undefined,
+            diffractionFwhmYUm: Number.isFinite(Number(payload?.diffractionFwhmYUm)) ? Number(payload.diffractionFwhmYUm) : undefined,
         });
 
         logNativeReferenceModeForPopup('PSF', result, {
@@ -2693,6 +2707,7 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
     ringCount?: number;
     pattern?: string;
     wavelengthMode?: string;
+    wavelengthUm?: number;
     objectRows?: any[];
     defocusMm?: number;
     onProgress?: (evt: { percent?: number; message?: string }) => void;
@@ -2715,9 +2730,18 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
         const pos = String(obj?.position ?? obj?.object ?? '').trim();
         return pos ? (`Object ${index + 1} (${pos})`) : (`Object ${index + 1}`);
     };
-    const collectSpotWavelengths = (rows: any[], modeRaw: string | undefined): Array<{ wavelengthUm: number; label: string; color: string; isPrimary: boolean }> => {
+    const collectSpotWavelengths = (rows: any[], modeRaw: string | undefined, explicitWavelengthUm?: number): Array<{ wavelengthUm: number; label: string; color: string; isPrimary: boolean }> => {
         const mode = String(modeRaw || 'all').trim().toLowerCase() === 'primary' ? 'primary' : 'all';
         const palette = ['#2563eb', '#dc2626', '#16a34a', '#7c3aed', '#ea580c', '#0891b2', '#4f46e5', '#0f766e'];
+        if (Number.isFinite(Number(explicitWavelengthUm)) && Number(explicitWavelengthUm) > 0) {
+            const wavelengthUm = Number(explicitWavelengthUm);
+            return [{
+                wavelengthUm,
+                label: `${(wavelengthUm * 1000).toFixed(1)}nm`,
+                color: palette[0],
+                isPrimary: true,
+            }];
+        }
         const picked = (Array.isArray(rows) ? rows : [])
             .map((row, idx) => {
                 const wl = normalizeSpotWavelengthUm(row?.wavelength ?? row?.Wavelength);
@@ -2802,7 +2826,11 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
             : 'annular';
         const rayCount = Number.isInteger(payload?.rayCount) ? Math.max(1, Number(payload?.rayCount)) : 501;
         const ringCount = Number.isInteger(payload?.ringCount) ? Math.max(1, Number(payload?.ringCount)) : 10;
-        const wavelengths = collectSpotWavelengths(sourceRows, payload?.wavelengthMode ? String(payload.wavelengthMode) : undefined);
+        const wavelengths = collectSpotWavelengths(
+            sourceRows,
+            payload?.wavelengthMode ? String(payload.wavelengthMode) : undefined,
+            payload?.wavelengthUm,
+        );
         const precomputedSurfaceOrigins = calculateSurfaceOrigins(effectiveOpticalRows);
         const raySeries: any[] = [];
         const totalSeriesWork = Math.max(1, (Array.isArray(effectiveObjectRows) ? effectiveObjectRows.length : 0) * Math.max(1, wavelengths.length));

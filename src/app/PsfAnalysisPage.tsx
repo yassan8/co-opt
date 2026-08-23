@@ -326,6 +326,7 @@ export function PsfAnalysisPage() {
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState('');
   const [pipelineBadge, setPipelineBadge] = useState('');
+  const [analysisNote, setAnalysisNote] = useState('');
   const [error, setError] = useState('');
 
   const refreshOptions = useCallback(() => {
@@ -372,6 +373,7 @@ export function PsfAnalysisPage() {
     setPipelineBadge('Running');
     setProgress(0);
     setProgressText('Starting...');
+    setAnalysisNote('');
     setError('');
     chartRef.current.innerHTML = '';
     if (statsRef.current) statsRef.current.innerHTML = '';
@@ -397,6 +399,7 @@ export function PsfAnalysisPage() {
       const fftSize = !requestedZeroPad ? autoFftSize : Math.max(selectedSamplingSize, requestedZeroPad);
       const opdRunner = await waitForFunction('runDesktopNativeOpdMapForPopup');
       const psfRunner = await waitForFunction('runDesktopNativePsfMapForPopup');
+      const spotRunner = await waitForFunction('runDesktopNativeSpotRaytraceForPopup');
 
       const computeOne = async (entry: WavelengthEntry, index: number) => {
         throwIfCancelled(token);
@@ -411,6 +414,20 @@ export function PsfAnalysisPage() {
           opdDisplayMode: opdMode,
           suppressProgressHud: true,
         })), token);
+        setProgress(base + span * 0.48);
+        setProgressText(`Detector rays λ=${(entry.wavelength * 1000).toFixed(1)}nm...`);
+        const spot = await raceWithCancel(Promise.resolve(spotRunner.fn({
+          objectRows: [objectRows[selectedObjectIndex]],
+          rayCount: Math.max(257, Math.min(4096, selectedSamplingSize * selectedSamplingSize)),
+          ringCount: Math.max(8, Math.round(Math.sqrt(selectedSamplingSize))),
+          pattern: 'grid',
+          wavelengthMode: 'primary',
+          wavelengthUm: entry.wavelength,
+        })), token);
+        const rayHitsUm = (Array.isArray((spot as any)?.series) ? (spot as any).series : [])
+          .flatMap((series: any) => Array.isArray(series?.points) ? series.points : [])
+          .map((point: any) => ({ xUm: Number(point?.xUm), yUm: Number(point?.yUm), weight: 1 }))
+          .filter((point: any) => Number.isFinite(point.xUm) && Number.isFinite(point.yUm));
 
         const gridOpd = Array.from({ length: selectedSamplingSize }, () => new Array(selectedSamplingSize).fill(0));
         const gridAmplitude = Array.from({ length: selectedSamplingSize }, () => new Array(selectedSamplingSize).fill(0));
@@ -446,6 +463,13 @@ export function PsfAnalysisPage() {
           removeTilt: false,
           zeroPadTo: fftSize,
           recenterIfWrapped: false,
+          propagationMode: 'auto',
+          targetHitXGridMm: (opd as any)?.targetHitXGridMm,
+          targetHitYGridMm: (opd as any)?.targetHitYGridMm,
+          rayHitsUm,
+          hybridOutputSize: 512,
+          diffractionFwhmXUm: 1.028 * entry.wavelength * scale.fNumberWorking,
+          diffractionFwhmYUm: 1.028 * entry.wavelength * scale.fNumberWorking,
           suppressProgressHud: true,
           referenceModeHint: (opd as any)?.referenceMode,
           chiefReferenceModeHint: (opd as any)?.chiefReferenceMode,
@@ -460,7 +484,18 @@ export function PsfAnalysisPage() {
           metrics: (psf as any)?.metrics || null,
           backend: (psf as any)?.backend,
           fftSize: (psf as any)?.fftSize,
-          scale,
+          scale: {
+            ...scale,
+            pixelSizeUm: Number.isFinite(Number((psf as any)?.pixelSizeUm))
+              ? Number((psf as any).pixelSizeUm)
+              : scale.pixelSizeUm,
+          },
+          method: (psf as any)?.method || 'coherent-fft',
+          fieldOfViewUm: (psf as any)?.fieldOfViewUm,
+          geometricSpanUm: (psf as any)?.geometricSpanUm,
+          geometricSampling: (psf as any)?.geometricSampling,
+          phaseSampling: (psf as any)?.phaseSampling,
+          diagnostic: (psf as any)?.diagnostic,
           gridData: { opd: gridOpd, amplitude: gridAmplitude, pupilMask },
         };
       };
@@ -473,6 +508,7 @@ export function PsfAnalysisPage() {
       if (!results.length || !Array.isArray(results[0]?.psfData) || !results[0].psfData.length) throw new Error('PSF returned no image data.');
 
       const first = results[0];
+      const hybridResult = results.find((result) => result?.method === 'hybrid-geometric');
       const trueColor = colorMode !== 'pseudo';
       const falseColor = colorMode === 'false';
       const targetPitch = Number(first.scale?.pixelSizeUm);
@@ -549,7 +585,7 @@ export function PsfAnalysisPage() {
           pixelSize: targetPitch,
         },
         metadata: {
-          method: 'native-rust-psf-map',
+          method: hybridResult ? 'hybrid-geometric-diffraction' : 'coherent-fft',
           backend: first.backend,
           samplingSize: selectedSamplingSize,
           fftSize: first.fftSize || fftSize,
@@ -574,6 +610,28 @@ export function PsfAnalysisPage() {
         showMetrics: false,
       });
       if (statsRef.current) plotter.displayStatistics(psfResult, statsRef.current);
+      if (hybridResult) {
+        const spanX = Number(hybridResult?.geometricSpanUm?.x);
+        const spanY = Number(hybridResult?.geometricSpanUm?.y);
+        const required = Number(hybridResult?.phaseSampling?.requiredPupilSampling);
+        const spanText = Number.isFinite(spanX) && Number.isFinite(spanY)
+          ? `Geometric span ${(spanX / 1000).toFixed(3)} × ${(spanY / 1000).toFixed(3)} mm.`
+          : '';
+        const samplingText = Number.isFinite(required)
+          ? ` A coherent FFT would require about ${Math.ceil(required).toLocaleString()} pupil samples.`
+          : '';
+        const detectorRays = Number(hybridResult?.geometricSampling?.rayCount);
+        const detectorSpacing = Number(hybridResult?.geometricSampling?.effectiveSpacingUm);
+        const detectorText = Number.isFinite(detectorRays) && Number.isFinite(detectorSpacing)
+          ? ` Detector density reconstructed from ${Math.round(detectorRays).toLocaleString()} rays at ${detectorSpacing.toFixed(2)} µm measured spacing.`
+          : '';
+        setAnalysisNote(`Hybrid geometric + diffraction PSF. ${spanText}${detectorText}${samplingText}`.trim());
+      } else {
+        const required = Number(first?.phaseSampling?.requiredPupilSampling);
+        setAnalysisNote(Number.isFinite(required)
+          ? `Coherent FFT PSF · phase sampling verified (required ≈ ${Math.ceil(required).toLocaleString()}).`
+          : 'Coherent FFT PSF.');
+      }
       setProgress(100);
       setProgressText('Done');
       setPipelineBadge('');
@@ -613,6 +671,7 @@ export function PsfAnalysisPage() {
       </div>
       {(busy || !!progressText) ? <ProgressBar value={progress} text={progressText || 'Working...'} /> : null}
       {error ? <div className="analysis-window-error">{error}</div> : null}
+      {analysisNote ? <div className="analysis-window-psf-diagnostic">{analysisNote}</div> : null}
       <div className="analysis-window-psf-content">
         <div id="analysis-psf-chart-stats" className="analysis-window-psf-stats" ref={statsRef} />
         <div id="analysis-psf-chart" className="analysis-window-chart analysis-window-psf-chart" ref={chartRef} />

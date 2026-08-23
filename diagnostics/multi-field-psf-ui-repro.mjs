@@ -35,10 +35,10 @@ const stubPlugin = {
         resolveDir: root,
         contents: `
           import React from 'react';
-          export const buildWavelengthEntries = () => [];
+          export const buildWavelengthEntries = () => [{ wavelength: 0.5876, weight: 1 }];
           export const buildWavelengthOptions = () => [{ value: 'all', label: 'All' }];
           export const createCancelToken = () => ({ aborted: false, abort() { this.aborted = true; } });
-          export const derivePsfScale = () => ({ pixelSizeUm: 1 });
+          export const derivePsfScale = () => ({ pixelSizeUm: 1, fNumberWorking: 4 });
           export const getBestHost = () => ({});
           export const getPrimaryWavelength = () => 0.58756;
           export const getRows = () => [];
@@ -46,7 +46,7 @@ const stubPlugin = {
           export const raceWithCancel = (promise) => promise;
           export const sampleBilinear = () => 0;
           export const throwIfCancelled = () => {};
-          export const waitForFunction = async () => ({ fn: () => ({}) });
+          export const waitForFunction = async (name) => ({ fn: (payload) => globalThis.__multiFieldPsfRunner(name, payload) });
         `,
       };
     });
@@ -55,7 +55,7 @@ const stubPlugin = {
 
 const entry = `
   import { renderToStaticMarkup } from 'react-dom/server';
-  import { MultiFieldPsfPage } from './src/app/MultiFieldPsfPage.tsx';
+  import { MultiFieldPsfPage, computeFieldPsf } from './src/app/MultiFieldPsfPage.tsx';
 
   const html = renderToStaticMarkup(<MultiFieldPsfPage />);
   const expect = (condition, message) => { if (!condition) throw new Error(message); };
@@ -79,6 +79,56 @@ const entry = `
   expect(html.includes('Choose a Field Grid and press Show.'), 'Empty-state guidance is missing');
   expect(html.includes('>Show</button>'), 'Show action is missing');
   expect(!html.includes('>Stop</button>'), 'Unexpected Stop action is present');
+  const calls = [];
+  const pupil = Array.from({ length: 32 }, () => Array(32).fill(0));
+  const targetX = Array.from({ length: 32 }, () => Array(32).fill(0));
+  const targetY = Array.from({ length: 32 }, (_, y) => Array(32).fill((y - 15.5) / 2));
+  globalThis.__multiFieldPsfRunner = (name, payload) => {
+    calls.push({ name, payload });
+    if (name === 'runDesktopNativeOpdMapForPopup') {
+      return { rawOpdGrid: pupil, displayOpdGrid: pupil, targetHitXGridMm: targetX, targetHitYGridMm: targetY };
+    }
+    if (name === 'runDesktopNativeSpotRaytraceForPopup') {
+      return { series: [{ points: Array.from({ length: 65 }, (_, index) => ({ xUm: 0, yUm: (index - 32) * 312.5 })) }] };
+    }
+    if (name === 'runDesktopNativePsfMapForPopup') {
+      return {
+        psfData: [[0, 1, 0], [0, 2, 0], [0, 1, 0]],
+        pixelSizeUm: 2.5,
+        method: 'hybrid-geometric',
+        metrics: { strehlRatio: 0.5, fwhm: { x: 1, y: 2 } },
+        geometricSampling: { mode: 'line', rayCount: 65, effectiveSpacingUm: 312.5, axis: { x: 0, y: 1 } },
+      };
+    }
+    throw new Error('Unexpected runner: ' + name);
+  };
+  globalThis.__multiFieldHybridTestPromise = computeFieldPsf({
+    host: {},
+    opticalRows: [{ type: 'Surface' }],
+    sourceRows: [{ wavelength: 0.5876, primary: true }],
+    fieldObjectRow: { id: 1, position: 'Angle', angle: { x: 0, y: 0 } },
+    wavelengthValue: 'primary',
+    samplingSize: 32,
+    zeroPad: 'none',
+    colorMode: 'pseudo',
+    opdMode: 'raw',
+    logScale: false,
+    token: { aborted: false, abort() {} },
+    onProgress() {},
+  }).then((computed) => {
+    const spotCall = calls.find((call) => call.name === 'runDesktopNativeSpotRaytraceForPopup');
+    const psfCall = calls.find((call) => call.name === 'runDesktopNativePsfMapForPopup');
+    expect(Boolean(spotCall), 'Multi-Field PSF did not trace detector rays');
+    expect(spotCall.payload.pattern === 'grid', 'Multi-Field PSF detector rays must use the pupil grid pattern');
+    expect(psfCall.payload.propagationMode === 'auto', 'Multi-Field PSF did not enable hybrid propagation');
+    expect(psfCall.payload.rayHitsUm.length === 65, 'Multi-Field PSF did not forward detector hits');
+    expect(psfCall.payload.targetHitYGridMm === targetY, 'Multi-Field PSF did not forward OPD target intersections');
+    expect(psfCall.payload.hybridOutputSize === 512, 'Multi-Field PSF hybrid output size changed');
+    expect(Math.abs(psfCall.payload.diffractionFwhmXUm - 1.028 * 0.5876 * 4) < 1e-12, 'Multi-Field PSF diffraction width is wrong');
+    expect(computed.method === 'hybrid-geometric', 'Multi-Field PSF dropped the hybrid method');
+    expect(computed.pixelSizeUm === 2.5, 'Multi-Field PSF ignored the hybrid detector pixel scale');
+    expect(computed.geometricSampling?.effectiveSpacingUm === 312.5, 'Multi-Field PSF dropped measured detector spacing');
+  });
   console.log(JSON.stringify({ ok: true, presetCount, defaultGrid: '5×5', defaultFieldPoints: 25, trueColor: true, initialWavefront: 'Preserve P/T (Raw)', mosaicOnly: true, initialLogScale: false, stopButton: false }, null, 2));
 `;
 
@@ -100,6 +150,7 @@ const temporaryBundle = join(tmpdir(), `coopt-multi-field-psf-ui-${randomUUID()}
 try {
   await writeFile(temporaryBundle, bundled, 'utf8');
   await import(pathToFileURL(temporaryBundle).href);
+  await globalThis.__multiFieldHybridTestPromise;
 } catch (error) {
   console.error(`Multi-Field PSF UI diagnostic failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;

@@ -151,6 +151,16 @@ export interface NativeParaxialMetricsRequest {
 export interface NativeParaxialMetricsResponse {
   backend: string;
   metrics: NativeParaxialMetrics;
+  /** Axis-resolved metrics. X is the sagittal/X-Z meridian, Y the tangential/Y-Z meridian. */
+  axisMetrics?: {
+    x: NativeParaxialMetrics;
+    y: NativeParaxialMetrics;
+  };
+  axisFocusStatus?: {
+    x: "finite" | "afocal";
+    y: "finite" | "afocal";
+  };
+  primaryAxis?: "x" | "y";
   message: string;
 }
 
@@ -518,6 +528,9 @@ export interface NativeOpdMapResponse {
   }>;
   entrancePupilCoordinateXGrid?: Array<Array<number | null>>;
   entrancePupilCoordinateYGrid?: Array<Array<number | null>>;
+  /** Ray intersection coordinates on the evaluation surface, in its local frame. */
+  targetHitXGridMm?: Array<Array<number | null>>;
+  targetHitYGridMm?: Array<Array<number | null>>;
   sampleCount: number;
   hitCount: number;
   referenceCorrectedSampleCount?: number;
@@ -736,6 +749,14 @@ export interface NativePsfMapRequest {
   removeTilt?: boolean;
   zeroPadTo?: number;
   recenterIfWrapped?: boolean;
+  /** Auto retains coherent FFT when sampled adequately and uses a geometric hybrid for severe blur. */
+  propagationMode?: "auto" | "coherent-fft" | "hybrid-geometric";
+  targetHitXGridMm?: Array<Array<number | null>>;
+  targetHitYGridMm?: Array<Array<number | null>>;
+  rayHitsUm?: Array<{ xUm: number; yUm: number; weight?: number }>;
+  hybridOutputSize?: number;
+  diffractionFwhmXUm?: number;
+  diffractionFwhmYUm?: number;
 }
 
 export interface NativePsfFwhm {
@@ -765,6 +786,21 @@ export interface NativePsfMapResponse {
   psfData: number[][];
   metrics: NativePsfMetrics;
   pixelSizeUm?: number;
+  method?: "coherent-fft" | "hybrid-geometric";
+  fieldOfViewUm?: number;
+  geometricSpanUm?: { x: number; y: number };
+  geometricSampling?: {
+    mode: "line" | "area";
+    rayCount: number;
+    effectiveSpacingUm: number;
+    axis: { x: number; y: number };
+  };
+  phaseSampling?: {
+    maxAdjacentWaves: number;
+    requiredPupilSampling: number;
+    undersampled: boolean;
+  };
+  diagnostic?: string;
   message: string;
 }
 

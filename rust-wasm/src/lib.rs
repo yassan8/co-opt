@@ -1,4 +1,4 @@
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 use js_sys::{Float64Array, Function};
 use serde::{Deserialize, Serialize};
@@ -1921,6 +1921,98 @@ fn is_gap_row(row: &Value) -> bool {
         let c = compact(s);
         c == "gap" || c == "airgap" || s == "gap" || s == "air gap"
     })
+}
+
+const TRACE_FLAG_IDEAL_THIN_LENS: i32 = 128;
+const TRACE_FLAG_IDEAL_THIN_LENS_BACK: i32 = 256;
+
+fn is_ideal_thin_lens_row(row: &Value) -> bool {
+    if get_field(row, "_idealThinLens")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    ["_blockType", "blockType", "block_type", "blockTypeName"]
+        .iter()
+        .filter_map(|key| get_field(row, key).and_then(value_to_string))
+        .map(|value| compact(&value))
+        .any(|value| value == "thinlens" || value == "paraxial")
+}
+
+fn is_ideal_thin_lens_back_row(row: &Value) -> bool {
+    is_ideal_thin_lens_row(row)
+        && ["_surfaceRole", "surfaceRole"]
+            .iter()
+            .filter_map(|key| get_field(row, key).and_then(value_to_string))
+            .map(|value| compact(&value))
+            .any(|value| value == "back")
+}
+
+fn parse_ideal_thin_lens_focal(value: Option<&Value>) -> f64 {
+    let focal = value.and_then(value_to_f64).unwrap_or(f64::INFINITY);
+    if focal.is_finite() && focal.abs() >= 1.0e-12 {
+        focal
+    } else {
+        f64::INFINITY
+    }
+}
+
+fn ideal_thin_lens_focal_pair(row: &Value) -> (f64, f64) {
+    let scalar = get_field(row, "focalLength");
+    let x = get_field(row, "_thinLensFocalLengthX")
+        .or_else(|| get_field(row, "focalLengthX"))
+        .or(scalar)
+        .or_else(|| get_field(row, "_thinLensFocalLengthY"))
+        .or_else(|| get_field(row, "focalLengthY"));
+    let y = get_field(row, "_thinLensFocalLengthY")
+        .or_else(|| get_field(row, "focalLengthY"))
+        .or(scalar)
+        .or_else(|| get_field(row, "_thinLensFocalLengthX"))
+        .or_else(|| get_field(row, "focalLengthX"));
+    (
+        parse_ideal_thin_lens_focal(x),
+        parse_ideal_thin_lens_focal(y),
+    )
+}
+
+fn apply_ideal_thin_lens_local(
+    ldx: f64,
+    ldy: f64,
+    ldz: f64,
+    hit_x: f64,
+    hit_y: f64,
+    focal_x: f64,
+    focal_y: f64,
+) -> [f64; 3] {
+    if !ldz.is_finite() || ldz.abs() < 1.0e-12 {
+        return normalize3(ldx, ldy, ldz);
+    }
+
+    // Slopes are expressed against the fixed local +Z coordinate. The lens
+    // power changes sign while tracing in -Z, preserving reciprocity.
+    let z_sign = if ldz >= 0.0 { 1.0 } else { -1.0 };
+    let mut slope_x = ldx / ldz;
+    let mut slope_y = ldy / ldz;
+    if focal_x.is_finite() {
+        slope_x -= z_sign * hit_x / focal_x;
+    }
+    if focal_y.is_finite() {
+        slope_y -= z_sign * hit_y / focal_y;
+    }
+    normalize3(slope_x * z_sign, slope_y * z_sign, z_sign)
+}
+
+fn ideal_thin_lens_opd_mm(hit_x: f64, hit_y: f64, focal_x: f64, focal_y: f64) -> f64 {
+    let mut opd = 0.0;
+    if focal_x.is_finite() {
+        opd -= hit_x * hit_x / (2.0 * focal_x);
+    }
+    if focal_y.is_finite() {
+        opd -= hit_y * hit_y / (2.0 * focal_y);
+    }
+    opd
 }
 
 fn get_safe_thickness(row: &Value) -> f64 {
@@ -4111,6 +4203,8 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
         let is_toric = (flags & 4) != 0;
         let is_rect_ap = (flags & 16) != 0;
         let is_odd_asphere = (flags & 32) != 0;
+        let is_ideal_thin_lens = (flags & TRACE_FLAG_IDEAL_THIN_LENS) != 0;
+        let is_ideal_thin_lens_back = (flags & TRACE_FLAG_IDEAL_THIN_LENS_BACK) != 0;
 
         let p = i * 24;
         let radius = row_params[p + 0];
@@ -4194,6 +4288,22 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
             continue;
         }
 
+        if is_ideal_thin_lens_back {
+            if let Some(checkpoint_set) = checkpoints.as_deref_mut() {
+                checkpoint_set.capture(i, [1.0, opl, px, py, pz, dx, dy, dz]);
+            }
+            if i == target_surface_index {
+                out[0] = 1.0;
+                out[1] = opl;
+                out[2] = px;
+                out[3] = py;
+                out[4] = pz;
+                return out;
+            }
+            preceding_surface_thickness = Some(thickness);
+            continue;
+        }
+
         let o = i * 3;
         let ox = row_origins[o + 0];
         let oy = row_origins[o + 1];
@@ -4222,7 +4332,13 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
         let ldy = im10 * dx + im11 * dy + im12 * dz;
         let ldz = im20 * dx + im21 * dy + im22 * dz;
 
-        let t = if is_toric {
+        let t = if is_ideal_thin_lens {
+            if ldz.abs() < EPS_R {
+                f64::NAN
+            } else {
+                -lpz / ldz
+            }
+        } else if is_toric {
             intersect_toric_internal(
                 &[lpx, lpy, lpz, ldx, ldy, ldz],
                 radius_x,
@@ -4306,6 +4422,10 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
             }
         }
 
+        if is_ideal_thin_lens {
+            opl += ideal_thin_lens_opd_mm(hx, hy, radius_x, radius_y) * 1000.0;
+        }
+
         // Transform hit to global
         let rr = i * 9;
         let rm00 = row_rots[rr + 0];
@@ -4376,7 +4496,10 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
             nz = -nz;
         }
 
-        let (ndx, ndy, ndz, n_next) = if is_mirror {
+        let (ndx, ndy, ndz, n_next) = if is_ideal_thin_lens {
+            let nn = apply_ideal_thin_lens_local(ldx, ldy, ldz, hx, hy, radius_x, radius_y);
+            (nn[0], nn[1], nn[2], n_cur)
+        } else if is_mirror {
             let dotn = ldx * nx + ldy * ny + ldz * nz;
             let rx = ldx - 2.0 * dotn * nx;
             let ry = ldy - 2.0 * dotn * ny;
@@ -4510,6 +4633,8 @@ fn trace_single_ray_hit_state_with_meta_core(
         let is_toric = (flags & 4) != 0;
         let is_rect_ap = (flags & 16) != 0;
         let is_odd_asphere = (flags & 32) != 0;
+        let is_ideal_thin_lens = (flags & TRACE_FLAG_IDEAL_THIN_LENS) != 0;
+        let is_ideal_thin_lens_back = (flags & TRACE_FLAG_IDEAL_THIN_LENS_BACK) != 0;
 
         let p = i * 24;
         let radius = row_params[p + 0];
@@ -4557,6 +4682,22 @@ fn trace_single_ray_hit_state_with_meta_core(
             continue;
         }
 
+        if is_ideal_thin_lens_back {
+            if i == target_surface_index {
+                out[0] = 1.0;
+                out[1] = opl;
+                out[2] = px;
+                out[3] = py;
+                out[4] = pz;
+                out[5] = dx;
+                out[6] = dy;
+                out[7] = dz;
+                return out;
+            }
+            preceding_surface_thickness = Some(thickness);
+            continue;
+        }
+
         let o = i * 3;
         let ox = row_origins[o + 0];
         let oy = row_origins[o + 1];
@@ -4585,7 +4726,13 @@ fn trace_single_ray_hit_state_with_meta_core(
         let ldy = im10 * dx + im11 * dy + im12 * dz;
         let ldz = im20 * dx + im21 * dy + im22 * dz;
 
-        let t = if is_toric {
+        let t = if is_ideal_thin_lens {
+            if ldz.abs() < EPS_R {
+                f64::NAN
+            } else {
+                -lpz / ldz
+            }
+        } else if is_toric {
             intersect_toric_internal(
                 &[lpx, lpy, lpz, ldx, ldy, ldz],
                 radius_x,
@@ -4660,6 +4807,10 @@ fn trace_single_ray_hit_state_with_meta_core(
             }
         }
 
+        if is_ideal_thin_lens {
+            opl += ideal_thin_lens_opd_mm(hx, hy, radius_x, radius_y) * 1000.0;
+        }
+
         let rr = i * 9;
         let rm00 = row_rots[rr + 0];
         let rm01 = row_rots[rr + 1];
@@ -4719,7 +4870,10 @@ fn trace_single_ray_hit_state_with_meta_core(
             nz = -nz;
         }
 
-        let (ndx, ndy, ndz, n_next) = if is_mirror {
+        let (ndx, ndy, ndz, n_next) = if is_ideal_thin_lens {
+            let nn = apply_ideal_thin_lens_local(ldx, ldy, ldz, hx, hy, radius_x, radius_y);
+            (nn[0], nn[1], nn[2], n_cur)
+        } else if is_mirror {
             let dotn = ldx * nx + ldy * ny + ldz * nz;
             let rx = ldx - 2.0 * dotn * nx;
             let ry = ldy - 2.0 * dotn * ny;
@@ -5862,12 +6016,17 @@ fn build_packed_meta_for_opd(
             }
         }
 
-        let is_toric = surf_type.contains("toric");
+        let is_ideal_thin_lens = is_ideal_thin_lens_row(row);
+        let is_ideal_thin_lens_back = is_ideal_thin_lens_back_row(row);
+        let is_toric = !is_ideal_thin_lens && surf_type.contains("toric");
         let is_odd = surf_type.contains("odd");
         let radius = get_field(row, "radius")
             .and_then(value_to_f64)
             .unwrap_or(f64::NAN);
-        let is_plane = !radius.is_finite() || radius.abs() < 1e-12 || surf_type.contains("plane");
+        let is_plane = is_ideal_thin_lens
+            || !radius.is_finite()
+            || radius.abs() < 1e-12
+            || surf_type.contains("plane");
 
         let mut flags = 0_i32;
         if is_mirror {
@@ -5887,6 +6046,12 @@ fn build_packed_meta_for_opd(
         }
         if is_odd {
             flags |= 32;
+        }
+        if is_ideal_thin_lens {
+            flags |= TRACE_FLAG_IDEAL_THIN_LENS;
+        }
+        if is_ideal_thin_lens_back {
+            flags |= TRACE_FLAG_IDEAL_THIN_LENS_BACK;
         }
         row_meta[m + 1] = flags;
 
@@ -5916,12 +6081,21 @@ fn build_packed_meta_for_opd(
                 None => f64::INFINITY,
             };
         row_params[p + 12] = semidia;
-        row_params[p + 13] = get_field(row, "radiusX")
-            .and_then(value_to_f64)
-            .unwrap_or(f64::NAN);
-        row_params[p + 14] = get_field(row, "radiusY")
-            .and_then(value_to_f64)
-            .unwrap_or(f64::NAN);
+        let (ideal_focal_x, ideal_focal_y) = ideal_thin_lens_focal_pair(row);
+        row_params[p + 13] = if is_ideal_thin_lens {
+            ideal_focal_x
+        } else {
+            get_field(row, "radiusX")
+                .and_then(value_to_f64)
+                .unwrap_or(f64::NAN)
+        };
+        row_params[p + 14] = if is_ideal_thin_lens {
+            ideal_focal_y
+        } else {
+            get_field(row, "radiusY")
+                .and_then(value_to_f64)
+                .unwrap_or(f64::NAN)
+        };
         row_params[p + 15] = get_field(row, "axis").and_then(value_to_f64).unwrap_or(0.0);
         row_params[p + 16] = get_safe_thickness(row);
         let mut ap_lim = get_field(row, "aperture")
@@ -6349,12 +6523,17 @@ fn build_trace_packed_meta_for_wavelength(
             }
         }
 
-        let is_toric = surf_type.contains("toric");
+        let is_ideal_thin_lens = is_ideal_thin_lens_row(row);
+        let is_ideal_thin_lens_back = is_ideal_thin_lens_back_row(row);
+        let is_toric = !is_ideal_thin_lens && surf_type.contains("toric");
         let is_odd = surf_type.contains("odd");
         let radius = get_field(row, "radius")
             .and_then(value_to_f64)
             .unwrap_or(f64::NAN);
-        let is_plane = !radius.is_finite() || radius.abs() < 1e-12 || surf_type.contains("plane");
+        let is_plane = is_ideal_thin_lens
+            || !radius.is_finite()
+            || radius.abs() < 1e-12
+            || surf_type.contains("plane");
 
         let mut flags = 0_i32;
         if is_mirror {
@@ -6374,6 +6553,12 @@ fn build_trace_packed_meta_for_wavelength(
         }
         if is_odd {
             flags |= 32;
+        }
+        if is_ideal_thin_lens {
+            flags |= TRACE_FLAG_IDEAL_THIN_LENS;
+        }
+        if is_ideal_thin_lens_back {
+            flags |= TRACE_FLAG_IDEAL_THIN_LENS_BACK;
         }
         row_meta[m + 1] = flags;
 
@@ -6403,12 +6588,21 @@ fn build_trace_packed_meta_for_wavelength(
                 None => f64::INFINITY,
             };
         row_params[p + 12] = semidia;
-        row_params[p + 13] = get_field(row, "radiusX")
-            .and_then(value_to_f64)
-            .unwrap_or(f64::NAN);
-        row_params[p + 14] = get_field(row, "radiusY")
-            .and_then(value_to_f64)
-            .unwrap_or(f64::NAN);
+        let (ideal_focal_x, ideal_focal_y) = ideal_thin_lens_focal_pair(row);
+        row_params[p + 13] = if is_ideal_thin_lens {
+            ideal_focal_x
+        } else {
+            get_field(row, "radiusX")
+                .and_then(value_to_f64)
+                .unwrap_or(f64::NAN)
+        };
+        row_params[p + 14] = if is_ideal_thin_lens {
+            ideal_focal_y
+        } else {
+            get_field(row, "radiusY")
+                .and_then(value_to_f64)
+                .unwrap_or(f64::NAN)
+        };
         row_params[p + 15] = get_field(row, "axis").and_then(value_to_f64).unwrap_or(0.0);
         row_params[p + 16] = get_safe_thickness(row);
         let mut ap_lim = get_field(row, "aperture")
@@ -11840,6 +12034,8 @@ fn run_native_opd_map_value_with_rows(
     let mut unreferenced_grid = vec![vec![None::<f64>; grid_size]; grid_size];
     let mut reference_sphere_grid = vec![vec![None::<f64>; grid_size]; grid_size];
     let mut pupil_mask_grid = vec![vec![None::<bool>; grid_size]; grid_size];
+    let mut target_hit_x_grid_mm = vec![vec![None::<f64>; grid_size]; grid_size];
+    let mut target_hit_y_grid_mm = vec![vec![None::<f64>; grid_size]; grid_size];
     let grid_index_for_pupil_coordinate = |coordinate: f64| -> usize {
         (((coordinate + 1.0) * (grid_size.saturating_sub(1)) as f64 / 2.0).round() as isize)
             .clamp(0, grid_size.saturating_sub(1) as isize) as usize
@@ -12002,6 +12198,28 @@ fn run_native_opd_map_value_with_rows(
             let ray_opl = target_hit[1];
             if !ray_opl.is_finite() {
                 continue;
+            }
+            let target_origin_base = target_surface_index * 3;
+            let target_rotation_base = target_surface_index * 9;
+            if target_origin_base + 2 < packed_target.row_origins.len()
+                && target_rotation_base + 8 < packed_target.row_inv_rots.len()
+            {
+                let inv =
+                    &packed_target.row_inv_rots[target_rotation_base..target_rotation_base + 9];
+                let local_point = mul_mat3_vec3(
+                    &[
+                        inv[0], inv[1], inv[2], inv[3], inv[4], inv[5], inv[6], inv[7], inv[8],
+                    ],
+                    [
+                        target_hit[2] - packed_target.row_origins[target_origin_base],
+                        target_hit[3] - packed_target.row_origins[target_origin_base + 1],
+                        target_hit[4] - packed_target.row_origins[target_origin_base + 2],
+                    ],
+                );
+                if local_point[0].is_finite() && local_point[1].is_finite() {
+                    target_hit_x_grid_mm[y][x] = Some(local_point[0]);
+                    target_hit_y_grid_mm[y][x] = Some(local_point[1]);
+                }
             }
             if let Some(chief_first_opl) = chief_first_surface_opl {
                 let marginal_first_state = trace_checkpoints.first_state;
@@ -12694,6 +12912,8 @@ fn run_native_opd_map_value_with_rows(
         "pupilMaskGrid": to_json_bool_grid(&pupil_mask_grid),
         "entrancePupilCoordinateXGrid": to_json_grid(&entrance_coordinate_x_grid),
         "entrancePupilCoordinateYGrid": to_json_grid(&entrance_coordinate_y_grid),
+        "targetHitXGridMm": to_json_grid(&target_hit_x_grid_mm),
+        "targetHitYGridMm": to_json_grid(&target_hit_y_grid_mm),
         "pupilSamplingMode": effective_pupil_sampling_mode,
         "chiefRayMode": requested_chief_ray_mode,
         "pupilNormalizationMode": pupil_normalization_mode,
@@ -15609,6 +15829,581 @@ fn sample_lsf_mtf_like_fft_bins_internal(
     (v0 + (v1 - v0) * t).clamp(0.0, 1.0)
 }
 
+fn parse_optional_number_grid(
+    req: &Value,
+    key: &str,
+    size: usize,
+) -> Option<Vec<Vec<Option<f64>>>> {
+    let rows = req.get(key)?.as_array()?;
+    if rows.len() != size {
+        return None;
+    }
+    let mut result = Vec::with_capacity(size);
+    for row in rows {
+        let values = row.as_array()?;
+        if values.len() != size {
+            return None;
+        }
+        result.push(
+            values
+                .iter()
+                .map(|value| value.as_f64().filter(|number| number.is_finite()))
+                .collect(),
+        );
+    }
+    Some(result)
+}
+
+fn parse_psf_ray_hits_um(req: &Value) -> Vec<(f64, f64, f64)> {
+    req.get("rayHitsUm")
+        .and_then(Value::as_array)
+        .map(|hits| {
+            hits.iter()
+                .filter_map(|hit| {
+                    let x_um = hit.get("xUm").and_then(Value::as_f64)?;
+                    let y_um = hit.get("yUm").and_then(Value::as_f64)?;
+                    let weight = hit
+                        .get("weight")
+                        .and_then(Value::as_f64)
+                        .filter(|value| value.is_finite() && *value > 0.0)
+                        .unwrap_or(1.0);
+                    (x_um.is_finite() && y_um.is_finite()).then_some((
+                        x_um / 1000.0,
+                        y_um / 1000.0,
+                        weight,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn median_f64(mut values: Vec<f64>) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let middle = values.len() / 2;
+    if values.len() % 2 == 0 {
+        (values[middle - 1] + values[middle]) * 0.5
+    } else {
+        values[middle]
+    }
+}
+
+fn phase_sampling_diagnostic_waves(grid: &[Vec<Option<f64>>]) -> (f64, usize, bool) {
+    let size = grid.len();
+    if size < 2 {
+        return (0.0, size, false);
+    }
+    let mut dx = Vec::new();
+    let mut dy = Vec::new();
+    for y in 0..size {
+        for x in 0..size {
+            let Some(value) = grid.get(y).and_then(|row| row.get(x)).and_then(|v| *v) else {
+                continue;
+            };
+            if x + 1 < size {
+                if let Some(next) = grid[y][x + 1] {
+                    let delta = next - value;
+                    if delta.is_finite() {
+                        dx.push(delta);
+                    }
+                }
+            }
+            if y + 1 < size {
+                if let Some(next) = grid[y + 1][x] {
+                    let delta = next - value;
+                    if delta.is_finite() {
+                        dy.push(delta);
+                    }
+                }
+            }
+        }
+    }
+    // A constant phase ramp merely translates the PSF. Remove the median ramp
+    // so the diagnostic reacts to unresolved curvature/aberration instead.
+    let median_dx = median_f64(dx.clone());
+    let median_dy = median_f64(dy.clone());
+    let max_adjacent_waves = dx
+        .into_iter()
+        .map(|value| (value - median_dx).abs())
+        .chain(dy.into_iter().map(|value| (value - median_dy).abs()))
+        .fold(0.0_f64, f64::max);
+    let required = (((size - 1) as f64 * 2.0 * max_adjacent_waves) + 1.0)
+        .ceil()
+        .max(size as f64) as usize;
+    (max_adjacent_waves, required, max_adjacent_waves > 0.5)
+}
+
+fn gaussian_blur_separable(grid: &mut Vec<Vec<f64>>, sigma_x: f64, sigma_y: f64) {
+    let size = grid.len();
+    if size == 0 {
+        return;
+    }
+    let build_kernel = |sigma: f64| -> Vec<f64> {
+        if !sigma.is_finite() || sigma < 0.35 {
+            return vec![1.0];
+        }
+        let sigma = sigma.min(24.0);
+        let radius = (sigma * 3.0).ceil() as isize;
+        let mut kernel: Vec<f64> = (-radius..=radius)
+            .map(|offset| (-0.5 * (offset as f64 / sigma).powi(2)).exp())
+            .collect();
+        let sum: f64 = kernel.iter().sum();
+        if sum > 0.0 {
+            for value in &mut kernel {
+                *value /= sum;
+            }
+        }
+        kernel
+    };
+    let kernel_x = build_kernel(sigma_x);
+    let kernel_y = build_kernel(sigma_y);
+    if kernel_x.len() > 1 {
+        let radius = (kernel_x.len() / 2) as isize;
+        let source = grid.clone();
+        for y in 0..size {
+            for x in 0..size {
+                let mut value = 0.0;
+                for (index, weight) in kernel_x.iter().enumerate() {
+                    let sx = (x as isize + index as isize - radius)
+                        .clamp(0, size.saturating_sub(1) as isize)
+                        as usize;
+                    value += source[y][sx] * weight;
+                }
+                grid[y][x] = value;
+            }
+        }
+    }
+    if kernel_y.len() > 1 {
+        let radius = (kernel_y.len() / 2) as isize;
+        let source = grid.clone();
+        for y in 0..size {
+            for x in 0..size {
+                let mut value = 0.0;
+                for (index, weight) in kernel_y.iter().enumerate() {
+                    let sy = (y as isize + index as isize - radius)
+                        .clamp(0, size.saturating_sub(1) as isize)
+                        as usize;
+                    value += source[sy][x] * weight;
+                }
+                grid[y][x] = value;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DetectorSamplingEstimate {
+    line_like: bool,
+    axis_x: f64,
+    axis_y: f64,
+    spacing_um: f64,
+}
+
+fn estimate_detector_sampling(hits: &[(f64, f64, f64)]) -> DetectorSamplingEstimate {
+    if hits.len() < 3 {
+        return DetectorSamplingEstimate {
+            line_like: false,
+            axis_x: 1.0,
+            axis_y: 0.0,
+            spacing_um: 0.0,
+        };
+    }
+
+    let weight_sum = hits
+        .iter()
+        .map(|(_, _, weight)| weight.max(0.0))
+        .sum::<f64>()
+        .max(1.0e-30);
+    let center_x = hits
+        .iter()
+        .map(|(x, _, weight)| x * weight.max(0.0))
+        .sum::<f64>()
+        / weight_sum;
+    let center_y = hits
+        .iter()
+        .map(|(_, y, weight)| y * weight.max(0.0))
+        .sum::<f64>()
+        / weight_sum;
+    let mut cov_xx = 0.0_f64;
+    let mut cov_xy = 0.0_f64;
+    let mut cov_yy = 0.0_f64;
+    for (x, y, weight) in hits {
+        let dx = (x - center_x) * 1000.0;
+        let dy = (y - center_y) * 1000.0;
+        let weight = weight.max(0.0);
+        cov_xx += weight * dx * dx;
+        cov_xy += weight * dx * dy;
+        cov_yy += weight * dy * dy;
+    }
+    cov_xx /= weight_sum;
+    cov_xy /= weight_sum;
+    cov_yy /= weight_sum;
+
+    let trace = cov_xx + cov_yy;
+    let discriminant = ((cov_xx - cov_yy).powi(2) + 4.0 * cov_xy * cov_xy).sqrt();
+    let major = ((trace + discriminant) * 0.5).max(0.0);
+    let minor = ((trace - discriminant) * 0.5).max(0.0);
+    let (mut axis_x, mut axis_y) = if cov_xy.abs() > 1.0e-24 {
+        (major - cov_yy, cov_xy)
+    } else if cov_xx >= cov_yy {
+        (1.0, 0.0)
+    } else {
+        (0.0, 1.0)
+    };
+    let axis_norm = axis_x.hypot(axis_y);
+    if axis_norm > 0.0 {
+        axis_x /= axis_norm;
+        axis_y /= axis_norm;
+    }
+    let line_like = major > 0.0 && minor / major.max(1.0e-30) < 1.0e-3;
+
+    if line_like {
+        let mut projected = hits
+            .iter()
+            .map(|(x, y, _)| {
+                ((x - center_x) * 1000.0) * axis_x + ((y - center_y) * 1000.0) * axis_y
+            })
+            .filter(|value| value.is_finite())
+            .collect::<Vec<_>>();
+        projected.sort_by(|left, right| {
+            left.partial_cmp(right)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let span = projected
+            .last()
+            .zip(projected.first())
+            .map(|(max, min)| max - min)
+            .unwrap_or(0.0)
+            .max(0.0);
+        let nominal_levels = (hits.len() as f64).sqrt().round().max(2.0);
+        let nominal_spacing = span / (nominal_levels - 1.0).max(1.0);
+        let minimum_gap = (nominal_spacing * 0.2).max(span * 1.0e-9).max(1.0e-12);
+        let maximum_gap = (nominal_spacing * 5.0).max(minimum_gap);
+        let gaps = projected
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .filter(|gap| gap.is_finite() && *gap >= minimum_gap && *gap <= maximum_gap)
+            .collect::<Vec<_>>();
+        let measured_spacing = median_f64(gaps);
+        return DetectorSamplingEstimate {
+            line_like: true,
+            axis_x,
+            axis_y,
+            spacing_um: if measured_spacing > 0.0 {
+                measured_spacing
+            } else {
+                nominal_spacing
+            },
+        };
+    }
+
+    // For a 2-D detector footprint, use a local nearest-neighbour estimate.
+    // X-ordering plus a small neighbourhood keeps this O(N log N) while
+    // avoiding the OPD-grid-size assumption that caused visible dot lattices.
+    let mut points = hits
+        .iter()
+        .map(|(x, y, _)| (x * 1000.0, y * 1000.0))
+        .filter(|(x, y)| x.is_finite() && y.is_finite())
+        .collect::<Vec<_>>();
+    points.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                left.1
+                    .partial_cmp(&right.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    let mut nearest = Vec::with_capacity(points.len());
+    for index in 0..points.len() {
+        let mut best = f64::INFINITY;
+        let start = index.saturating_sub(24);
+        let end = (index + 25).min(points.len());
+        for other in start..end {
+            if other == index {
+                continue;
+            }
+            let distance = (points[index].0 - points[other].0)
+                .hypot(points[index].1 - points[other].1);
+            if distance > 1.0e-12 && distance < best {
+                best = distance;
+            }
+        }
+        if best.is_finite() {
+            nearest.push(best);
+        }
+    }
+    DetectorSamplingEstimate {
+        line_like: false,
+        axis_x,
+        axis_y,
+        spacing_um: median_f64(nearest),
+    }
+}
+
+fn tent_blur_oriented(
+    grid: &mut Vec<Vec<f64>>,
+    radius_pixels: f64,
+    axis_x: f64,
+    axis_y: f64,
+) {
+    let size = grid.len();
+    if size == 0 || !radius_pixels.is_finite() || radius_pixels < 0.75 {
+        return;
+    }
+    let radius_pixels = radius_pixels.min(48.0);
+    let radius = radius_pixels.ceil() as isize;
+    let mut kernel = (-radius..=radius)
+        .map(|offset| {
+            let distance = (offset as f64).abs();
+            (1.0 - distance / radius_pixels).max(0.0)
+        })
+        .collect::<Vec<_>>();
+    let kernel_sum = kernel.iter().sum::<f64>();
+    if kernel_sum <= 0.0 {
+        return;
+    }
+    for weight in &mut kernel {
+        *weight /= kernel_sum;
+    }
+
+    let source = grid.clone();
+    let sample_bilinear = |x: f64, y: f64| -> f64 {
+        if x < 0.0 || y < 0.0 || x > (size - 1) as f64 || y > (size - 1) as f64 {
+            return 0.0;
+        }
+        let x0 = x.floor() as usize;
+        let y0 = y.floor() as usize;
+        let x1 = (x0 + 1).min(size - 1);
+        let y1 = (y0 + 1).min(size - 1);
+        let tx = x - x0 as f64;
+        let ty = y - y0 as f64;
+        source[y0][x0] * (1.0 - tx) * (1.0 - ty)
+            + source[y0][x1] * tx * (1.0 - ty)
+            + source[y1][x0] * (1.0 - tx) * ty
+            + source[y1][x1] * tx * ty
+    };
+    for y in 0..size {
+        for x in 0..size {
+            let mut value = 0.0;
+            for (index, weight) in kernel.iter().enumerate() {
+                let offset = index as isize - radius;
+                value += sample_bilinear(
+                    x as f64 + axis_x * offset as f64,
+                    y as f64 + axis_y * offset as f64,
+                ) * weight;
+            }
+            grid[y][x] = value;
+        }
+    }
+}
+
+fn fwhm_profile_pixels(profile: &[f64], center: usize) -> f64 {
+    if profile.is_empty() || center >= profile.len() {
+        return 0.0;
+    }
+    let peak = profile[center];
+    if !peak.is_finite() || peak <= 0.0 {
+        return 0.0;
+    }
+    let half = peak * 0.5;
+    let mut left = center;
+    while left > 0 && profile[left] >= half {
+        left -= 1;
+    }
+    let mut right = center;
+    while right + 1 < profile.len() && profile[right] >= half {
+        right += 1;
+    }
+    right.saturating_sub(left) as f64
+}
+
+fn run_hybrid_geometric_psf_value(
+    req: &Value,
+    raw_opd_grid: &[Vec<Option<f64>>],
+    hit_x_grid: Option<&[Vec<Option<f64>>]>,
+    hit_y_grid: Option<&[Vec<Option<f64>>]>,
+    requested_pixel_size_um: f64,
+) -> Result<Value, JsValue> {
+    let grid_size = raw_opd_grid.len();
+    let output_size = req
+        .get("hybridOutputSize")
+        .and_then(Value::as_u64)
+        .unwrap_or(512)
+        .clamp(128, 1024) as usize;
+    let amplitude_grid = parse_optional_number_grid(req, "gridAmplitude", grid_size);
+    let mut hits = parse_psf_ray_hits_um(req);
+    if hits.len() < 3 {
+        hits.clear();
+        if let (Some(hit_x_grid), Some(hit_y_grid)) = (hit_x_grid, hit_y_grid) {
+            for y in 0..grid_size {
+                for x in 0..grid_size {
+                    if raw_opd_grid[y][x].is_none() {
+                        continue;
+                    }
+                    let (Some(hit_x), Some(hit_y)) = (hit_x_grid[y][x], hit_y_grid[y][x]) else {
+                        continue;
+                    };
+                    let amplitude = amplitude_grid
+                        .as_ref()
+                        .and_then(|grid| grid[y][x])
+                        .unwrap_or(1.0)
+                        .max(0.0);
+                    let weight = amplitude * amplitude;
+                    if hit_x.is_finite() && hit_y.is_finite() && weight > 0.0 {
+                        hits.push((hit_x, hit_y, weight));
+                    }
+                }
+            }
+        }
+    }
+    if hits.len() < 3 {
+        return Err(JsValue::from_str(
+            "run_native_psf_from_opd_wasm_json: hybrid mode has too few detector hits",
+        ));
+    }
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for (x, y, _) in &hits {
+        min_x = min_x.min(*x);
+        max_x = max_x.max(*x);
+        min_y = min_y.min(*y);
+        max_y = max_y.max(*y);
+    }
+    let span_x_um = ((max_x - min_x) * 1000.0).max(0.0);
+    let span_y_um = ((max_y - min_y) * 1000.0).max(0.0);
+    let center_x = (min_x + max_x) * 0.5;
+    let center_y = (min_y + max_y) * 0.5;
+    let default_fwhm = requested_pixel_size_um * 4.112;
+    let diffraction_fwhm_x_um = req
+        .get("diffractionFwhmXUm")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(default_fwhm);
+    let diffraction_fwhm_y_um = req
+        .get("diffractionFwhmYUm")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(default_fwhm);
+    let blur_margin_um = 3.0 * diffraction_fwhm_x_um.max(diffraction_fwhm_y_um);
+    let field_of_view_um = (span_x_um.max(span_y_um) * 1.12 + 2.0 * blur_margin_um)
+        .max(requested_pixel_size_um * output_size as f64)
+        .max(1.0e-6);
+    let pixel_size_um = field_of_view_um / output_size as f64;
+    let center_pixel = (output_size as f64 - 1.0) * 0.5;
+    let mut image = vec![vec![0.0_f64; output_size]; output_size];
+    for (hit_x, hit_y, weight) in &hits {
+        let px = center_pixel + ((*hit_x - center_x) * 1000.0) / pixel_size_um;
+        let py = center_pixel + ((*hit_y - center_y) * 1000.0) / pixel_size_um;
+        if px < 0.0 || py < 0.0 || px > (output_size - 1) as f64 || py > (output_size - 1) as f64 {
+            continue;
+        }
+        let x0 = px.floor() as usize;
+        let y0 = py.floor() as usize;
+        let x1 = (x0 + 1).min(output_size - 1);
+        let y1 = (y0 + 1).min(output_size - 1);
+        let tx = px - x0 as f64;
+        let ty = py - y0 as f64;
+        image[y0][x0] += weight * (1.0 - tx) * (1.0 - ty);
+        image[y0][x1] += weight * tx * (1.0 - ty);
+        image[y1][x0] += weight * (1.0 - tx) * ty;
+        image[y1][x1] += weight * tx * ty;
+    }
+    let sampling = estimate_detector_sampling(&hits);
+    if sampling.line_like {
+        // A line focus collapses one pupil dimension. Reconstruct the missing
+        // detector density along its measured principal axis with a tent
+        // kernel. This is a partition-of-unity interpolation for uniformly
+        // spaced samples and therefore removes the artificial dotted lattice
+        // without increasing the traced ray count.
+        tent_blur_oriented(
+            &mut image,
+            2.0 * sampling.spacing_um / pixel_size_um,
+            sampling.axis_x,
+            sampling.axis_y,
+        );
+    } else if sampling.spacing_um > 0.0 {
+        let sample_sigma_pixels =
+            (sampling.spacing_um * 1.4 / 2.354_820_045) / pixel_size_um;
+        gaussian_blur_separable(&mut image, sample_sigma_pixels, sample_sigma_pixels);
+    }
+    let sigma_scale = 1.0 / 2.354_820_045;
+    gaussian_blur_separable(
+        &mut image,
+        diffraction_fwhm_x_um * sigma_scale / pixel_size_um,
+        diffraction_fwhm_y_um * sigma_scale / pixel_size_um,
+    );
+    let mut peak = 0.0_f64;
+    let mut peak_x = output_size / 2;
+    let mut peak_y = output_size / 2;
+    let mut energy = 0.0_f64;
+    for (y, row) in image.iter().enumerate() {
+        for (x, value) in row.iter().enumerate() {
+            energy += *value;
+            if *value > peak {
+                peak = *value;
+                peak_x = x;
+                peak_y = y;
+            }
+        }
+    }
+    if peak > 0.0 {
+        for row in &mut image {
+            for value in row {
+                *value /= peak;
+            }
+        }
+    }
+    let x_profile = image.get(peak_y).cloned().unwrap_or_default();
+    let y_profile: Vec<f64> = image
+        .iter()
+        .map(|row| row.get(peak_x).copied().unwrap_or(0.0))
+        .collect();
+    let fwhm_x = fwhm_profile_pixels(&x_profile, peak_x) * pixel_size_um;
+    let fwhm_y = fwhm_profile_pixels(&y_profile, peak_y) * pixel_size_um;
+    let (max_adjacent_waves, required_pupil_sampling, phase_undersampled) =
+        phase_sampling_diagnostic_waves(raw_opd_grid);
+    Ok(serde_json::json!({
+        "backend": "web-rust-wasm-hybrid-psf",
+        "gridSize": grid_size,
+        "fftSize": output_size,
+        "pixelSizeUm": pixel_size_um,
+        "fieldOfViewUm": field_of_view_um,
+        "geometricSpanUm": { "x": span_x_um, "y": span_y_um },
+        "geometricSampling": {
+            "mode": if sampling.line_like { "line" } else { "area" },
+            "rayCount": hits.len(),
+            "effectiveSpacingUm": sampling.spacing_um,
+            "axis": { "x": sampling.axis_x, "y": sampling.axis_y }
+        },
+        "method": "hybrid-geometric",
+        "phaseSampling": {
+            "maxAdjacentWaves": max_adjacent_waves,
+            "requiredPupilSampling": required_pupil_sampling,
+            "undersampled": phase_undersampled
+        },
+        "diagnostic": "Coherent FFT sampling was insufficient; detector-plane ray density was convolved with the diffraction kernel.",
+        "psfData": image,
+        "metrics": {
+            "strehlRatio": 0.0,
+            "fwhm": { "x": fwhm_x, "y": fwhm_y, "average": (fwhm_x + fwhm_y) * 0.5 },
+            "peakIntensity": 1.0,
+            "totalEnergy": if peak > 0.0 { energy / peak } else { 0.0 },
+            "encircledEnergy": [],
+            "centerPosition": { "x": peak_x, "y": peak_y }
+        },
+        "message": "Computed via Rust-WASM hybrid geometric + diffraction PSF"
+    }))
+}
+
 /// Compute PSF from an OPD map grid (grids are in *waves*, nulls = outside pupil).
 /// Matches the Tauri-native `run_native_psf_map` logic.
 ///
@@ -15666,6 +16461,84 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
         return Err(JsValue::from_str(
             "run_native_psf_from_opd_wasm_json: rawOpdGrid is empty",
         ));
+    }
+
+    let raw_opd_grid = parse_optional_number_grid(req, "rawOpdGrid", grid_n).ok_or_else(|| {
+        JsValue::from_str("run_native_psf_from_opd_wasm_json: rawOpdGrid must be square")
+    })?;
+    let diagnostic_opd_grid = parse_optional_number_grid(req, "displayOpdGrid", grid_n)
+        .unwrap_or_else(|| raw_opd_grid.clone());
+    let target_hit_x_grid = parse_optional_number_grid(req, "targetHitXGridMm", grid_n);
+    let target_hit_y_grid = parse_optional_number_grid(req, "targetHitYGridMm", grid_n);
+    let direct_ray_hits = parse_psf_ray_hits_um(req);
+    let requested_mode = req
+        .get("propagationMode")
+        .and_then(Value::as_str)
+        .unwrap_or("coherent-fft")
+        .trim()
+        .to_ascii_lowercase();
+    let (max_adjacent_waves, required_pupil_sampling, phase_undersampled) =
+        phase_sampling_diagnostic_waves(&diagnostic_opd_grid);
+    let requested_fft_size = zero_pad_to.max(grid_n);
+    let coherent_field_of_view_um = pixel_size_um * requested_fft_size as f64;
+    let geometric_span = if direct_ray_hits.len() >= 3 {
+        let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for (hit_x, hit_y, _) in &direct_ray_hits {
+            min_x = min_x.min(*hit_x);
+            max_x = max_x.max(*hit_x);
+            min_y = min_y.min(*hit_y);
+            max_y = max_y.max(*hit_y);
+        }
+        Some(((max_x - min_x) * 1000.0, (max_y - min_y) * 1000.0))
+    } else {
+        target_hit_x_grid
+            .as_ref()
+            .zip(target_hit_y_grid.as_ref())
+            .and_then(|(x_grid, y_grid)| {
+                let mut min_x = f64::INFINITY;
+                let mut max_x = f64::NEG_INFINITY;
+                let mut min_y = f64::INFINITY;
+                let mut max_y = f64::NEG_INFINITY;
+                let mut count = 0usize;
+                for y in 0..grid_n {
+                    for x in 0..grid_n {
+                        if raw_opd_grid[y][x].is_none() {
+                            continue;
+                        }
+                        if let (Some(hit_x), Some(hit_y)) = (x_grid[y][x], y_grid[y][x]) {
+                            min_x = min_x.min(hit_x);
+                            max_x = max_x.max(hit_x);
+                            min_y = min_y.min(hit_y);
+                            max_y = max_y.max(hit_y);
+                            count += 1;
+                        }
+                    }
+                }
+                (count >= 3).then_some(((max_x - min_x) * 1000.0, (max_y - min_y) * 1000.0))
+            })
+    };
+    let geometric_exceeds_fft = geometric_span
+        .map(|(span_x, span_y)| span_x.max(span_y) > coherent_field_of_view_um * 0.75)
+        .unwrap_or(false);
+    let use_hybrid = requested_mode == "hybrid-geometric"
+        || (requested_mode == "auto" && (phase_undersampled || geometric_exceeds_fft));
+    if use_hybrid {
+        if direct_ray_hits.len() >= 3
+            || (target_hit_x_grid.is_some() && target_hit_y_grid.is_some())
+        {
+            return run_hybrid_geometric_psf_value(
+                req,
+                &diagnostic_opd_grid,
+                target_hit_x_grid.as_deref(),
+                target_hit_y_grid.as_deref(),
+                pixel_size_um,
+            );
+        }
     }
 
     // ── Build complex pupil ───────────────────────────────────────────────────
@@ -15815,6 +16688,21 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
         "gridSize": grid_n,
         "fftSize": fft_size,
         "pixelSizeUm": pixel_size_um,
+        "fieldOfViewUm": pixel_size_um * fft_size as f64,
+        "method": "coherent-fft",
+        "geometricSpanUm": geometric_span.map(|(x, y)| serde_json::json!({ "x": x, "y": y })),
+        "phaseSampling": {
+            "maxAdjacentWaves": max_adjacent_waves,
+            "requiredPupilSampling": required_pupil_sampling,
+            "undersampled": phase_undersampled
+        },
+        "diagnostic": if requested_mode == "auto" && use_hybrid && target_hit_x_grid.is_none() {
+            "Hybrid PSF was requested by the sampling diagnostic, but detector hit coordinates were unavailable; coherent FFT was retained."
+        } else if phase_undersampled {
+            "Coherent FFT phase sampling is below Nyquist. Increase pupil sampling or use Auto with detector hit coordinates."
+        } else {
+            "Coherent FFT sampling is adequate."
+        },
         "psfData": psf,
         "metrics": {
             "strehlRatio": strehl_ratio,
@@ -17107,13 +17995,15 @@ pub fn run_native_opd_psf_mtf_batch_wasm_json(req_json: String) -> Result<JsValu
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_display_mode_grid, clear_trace_system_metadata_cache, register_trace_system_metadata,
-        run_native_mtf_malacara_from_opd_value, trace_ray_batch_hit_point_cached,
+        apply_display_mode_grid, build_packed_meta_for_opd, clear_trace_system_metadata_cache,
+        register_trace_system_metadata, run_native_mtf_malacara_from_opd_value,
+        run_native_psf_from_opd_value, trace_ray_batch_hit_point_cached,
         trace_ray_batch_hit_point_with_meta, trace_ray_batch_spot_metrics_cached,
         trace_ray_batch_spot_metrics_with_meta, trace_single_ray_hit_point_with_meta_core_impl,
         trace_single_ray_hit_state_with_meta_core, trace_spot_metric_jobs_cached,
         OpdTraceCheckpoints,
     };
+    use serde_json::Value;
 
     fn test_grid() -> (
         Vec<Vec<Option<f64>>>,
@@ -17536,6 +18426,291 @@ mod tests {
         assert_eq!(state[0], 1.0);
         assert!((point[4] + 0.5).abs() < 1.0e-12);
         assert!((state[4] + 0.5).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn ideal_thin_lens_keeps_unpowered_axis_and_focuses_powered_axis() {
+        let rows = vec![
+            serde_json::json!({
+                "_blockType": "Paraxial",
+                "_surfaceRole": "front",
+                "_idealThinLens": true,
+                "_thinLensFocalLengthX": 100.0,
+                "_thinLensFocalLengthY": 0.0,
+                "radius": 103.36,
+                "surfType": "Toric",
+                "thickness": 100.0,
+                "material": "N-BK7"
+            }),
+            serde_json::json!({
+                "object type": "Image",
+                "radius": "INF",
+                "thickness": 0.0,
+                "material": "AIR"
+            }),
+        ];
+        let packed = build_packed_meta_for_opd(&rows, 0.5876, 1);
+        let ray = [5.0, 4.0, -10.0, 0.0, 0.0, 1.0];
+        let hit = trace_single_ray_hit_state_with_meta_core(
+            &ray,
+            1,
+            1.0,
+            &packed.row_meta,
+            &packed.row_params,
+            &packed.row_origins,
+            &packed.row_inv_rots,
+            &packed.row_rots,
+            packed.row_count,
+        );
+
+        assert_eq!(hit[0], 1.0);
+        assert!(hit[2].abs() < 1.0e-9, "powered X focus: {}", hit[2]);
+        assert!(
+            (hit[3] - 4.0).abs() < 1.0e-9,
+            "unpowered Y height: {}",
+            hit[3]
+        );
+    }
+
+    #[test]
+    fn ideal_thin_lens_phase_flattens_paraxial_focus_and_reverse_trace_is_reciprocal() {
+        let rows = vec![
+            serde_json::json!({
+                "_blockType": "ThinLens",
+                "_surfaceRole": "front",
+                "_idealThinLens": true,
+                "_thinLensFocalLengthX": 100.0,
+                "_thinLensFocalLengthY": 0.0,
+                "radius": 103.36,
+                "surfType": "Toric",
+                "thickness": 100.0,
+                "material": "N-BK7"
+            }),
+            serde_json::json!({
+                "object type": "Image",
+                "radius": "INF",
+                "thickness": 0.0,
+                "material": "AIR"
+            }),
+        ];
+        let packed = build_packed_meta_for_opd(&rows, 0.5876, 1);
+        let chief = trace_single_ray_hit_state_with_meta_core(
+            &[0.0, 4.0, -10.0, 0.0, 0.0, 1.0],
+            1,
+            1.0,
+            &packed.row_meta,
+            &packed.row_params,
+            &packed.row_origins,
+            &packed.row_inv_rots,
+            &packed.row_rots,
+            packed.row_count,
+        );
+        let marginal = trace_single_ray_hit_state_with_meta_core(
+            &[5.0, 4.0, -10.0, 0.0, 0.0, 1.0],
+            1,
+            1.0,
+            &packed.row_meta,
+            &packed.row_params,
+            &packed.row_origins,
+            &packed.row_inv_rots,
+            &packed.row_rots,
+            packed.row_count,
+        );
+        assert!(
+            (marginal[1] - chief[1]).abs() < 0.2,
+            "OPL residual um: {}",
+            marginal[1] - chief[1]
+        );
+
+        let reverse = trace_single_ray_hit_state_with_meta_core(
+            &[0.0, 4.0, 100.0, 5.0, 0.0, -100.0],
+            0,
+            1.0,
+            &packed.row_meta,
+            &packed.row_params,
+            &packed.row_origins,
+            &packed.row_inv_rots,
+            &packed.row_rots,
+            packed.row_count,
+        );
+        assert_eq!(reverse[0], 1.0);
+        assert!(
+            reverse[5].abs() < 1.0e-12,
+            "reverse X direction: {}",
+            reverse[5]
+        );
+        assert!(
+            (reverse[7] + 1.0).abs() < 1.0e-12,
+            "reverse Z direction: {}",
+            reverse[7]
+        );
+    }
+
+    #[test]
+    fn auto_psf_uses_hybrid_detector_density_for_anamorphic_line_focus() {
+        let size = 32usize;
+        let mut opd = vec![vec![Value::Null; size]; size];
+        let mut hit_x = vec![vec![Value::Null; size]; size];
+        let mut hit_y = vec![vec![Value::Null; size]; size];
+        for y in 0..size {
+            let v = -1.0 + 2.0 * y as f64 / (size - 1) as f64;
+            for x in 0..size {
+                let u = -1.0 + 2.0 * x as f64 / (size - 1) as f64;
+                if u * u + v * v > 1.0 {
+                    continue;
+                }
+                opd[y][x] = Value::from(80.0 * v * v);
+                hit_x[y][x] = Value::from(u * 1.0e-9);
+                hit_y[y][x] = Value::from(v * 10.0);
+            }
+        }
+        let response = run_native_psf_from_opd_value(&serde_json::json!({
+            "rawOpdGrid": opd.clone(),
+            "displayOpdGrid": opd,
+            "targetHitXGridMm": hit_x,
+            "targetHitYGridMm": hit_y,
+            "wavelengthUm": 0.5876,
+            "pixelSizeUm": 0.75,
+            "zeroPadTo": 128,
+            "propagationMode": "auto",
+            "hybridOutputSize": 256,
+            "diffractionFwhmXUm": 3.0,
+            "diffractionFwhmYUm": 3.0
+        }))
+        .expect("hybrid PSF should succeed");
+        assert_eq!(
+            response.get("method").and_then(Value::as_str),
+            Some("hybrid-geometric")
+        );
+        let span = response.get("geometricSpanUm").expect("geometric span");
+        assert!(span.get("y").and_then(Value::as_f64).unwrap_or(0.0) > 18_000.0);
+        assert!(span.get("x").and_then(Value::as_f64).unwrap_or(1.0) < 0.001);
+        let fwhm = response
+            .get("metrics")
+            .and_then(|metrics| metrics.get("fwhm"))
+            .expect("FWHM metrics");
+        let fwhm_x = fwhm
+            .get("x")
+            .and_then(Value::as_f64)
+            .unwrap_or(f64::INFINITY);
+        let fwhm_y = fwhm.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+        assert!(fwhm_y > 10_000.0, "vertical line FWHM: {fwhm_y}");
+        assert!(fwhm_x < fwhm_y * 0.02, "line aspect: {fwhm_x} x {fwhm_y}");
+    }
+
+    #[test]
+    fn hybrid_line_density_uses_measured_ray_spacing_when_opd_grid_is_larger() {
+        let opd_size = 256usize;
+        let mut opd = vec![vec![Value::Null; opd_size]; opd_size];
+        for y in 0..opd_size {
+            let v = -1.0 + 2.0 * y as f64 / (opd_size - 1) as f64;
+            for x in 0..opd_size {
+                let u = -1.0 + 2.0 * x as f64 / (opd_size - 1) as f64;
+                if u * u + v * v <= 1.0 {
+                    opd[y][x] = Value::from(80.0 * v * v);
+                }
+            }
+        }
+        let detector_side = 65usize;
+        let repeated_per_row = 64usize;
+        let ray_hits = (0..detector_side)
+            .flat_map(|row| {
+                let y_um = -10_000.0 + 20_000.0 * row as f64 / (detector_side - 1) as f64;
+                (0..repeated_per_row).map(move |_| {
+                    serde_json::json!({ "xUm": 0.0, "yUm": y_um, "weight": 1.0 })
+                })
+            })
+            .collect::<Vec<_>>();
+        let response = run_native_psf_from_opd_value(&serde_json::json!({
+            "rawOpdGrid": opd.clone(),
+            "displayOpdGrid": opd,
+            "rayHitsUm": ray_hits,
+            "wavelengthUm": 0.5876,
+            "pixelSizeUm": 0.75,
+            "zeroPadTo": 1024,
+            "propagationMode": "auto",
+            "hybridOutputSize": 256,
+            "diffractionFwhmXUm": 3.0,
+            "diffractionFwhmYUm": 3.0
+        }))
+        .expect("hybrid PSF should reconstruct the detector line");
+
+        let sampling = response
+            .get("geometricSampling")
+            .expect("geometric sampling diagnostics");
+        assert_eq!(sampling.get("mode").and_then(Value::as_str), Some("line"));
+        let spacing = sampling
+            .get("effectiveSpacingUm")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        assert!(
+            (spacing - 312.5).abs() < 1.0,
+            "measured detector spacing: {spacing}"
+        );
+
+        let image = response
+            .get("psfData")
+            .and_then(Value::as_array)
+            .expect("PSF image");
+        let center_x = image.len() / 2;
+        let center_y = image.len() / 2;
+        let central_profile = (center_y - 48..=center_y + 48)
+            .filter_map(|y| {
+                image[y]
+                    .as_array()
+                    .and_then(|row| row.get(center_x))
+                    .and_then(Value::as_f64)
+            })
+            .collect::<Vec<_>>();
+        let profile_min = central_profile.iter().copied().fold(f64::INFINITY, f64::min);
+        let profile_max = central_profile.iter().copied().fold(0.0_f64, f64::max);
+        assert!(profile_min > 0.0, "central line contains gaps");
+        assert!(
+            (profile_max - profile_min) / profile_max.max(1.0e-30) < 0.05,
+            "artificial line ripple remained: min={profile_min}, max={profile_max}"
+        );
+    }
+
+    #[test]
+    fn auto_psf_retains_coherent_fft_when_phase_and_extent_are_sampled() {
+        let size = 32usize;
+        let mut opd = vec![vec![Value::Null; size]; size];
+        let mut hit_x = vec![vec![Value::Null; size]; size];
+        let mut hit_y = vec![vec![Value::Null; size]; size];
+        for y in 0..size {
+            let v = -1.0 + 2.0 * y as f64 / (size - 1) as f64;
+            for x in 0..size {
+                let u = -1.0 + 2.0 * x as f64 / (size - 1) as f64;
+                if u * u + v * v > 1.0 {
+                    continue;
+                }
+                opd[y][x] = Value::from(0.02 * (u * u + v * v));
+                hit_x[y][x] = Value::from(u * 0.004);
+                hit_y[y][x] = Value::from(v * 0.004);
+            }
+        }
+        let response = run_native_psf_from_opd_value(&serde_json::json!({
+            "rawOpdGrid": opd.clone(),
+            "displayOpdGrid": opd,
+            "targetHitXGridMm": hit_x,
+            "targetHitYGridMm": hit_y,
+            "wavelengthUm": 0.5876,
+            "pixelSizeUm": 0.75,
+            "zeroPadTo": 128,
+            "propagationMode": "auto"
+        }))
+        .expect("coherent PSF should succeed");
+        assert_eq!(
+            response.get("method").and_then(Value::as_str),
+            Some("coherent-fft")
+        );
+        assert_eq!(
+            response
+                .get("phaseSampling")
+                .and_then(|sampling| sampling.get("undersampled"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
     }
 
     #[test]

@@ -202,6 +202,8 @@ function __computeWasmTraceBatchSystemHash(effectiveSystemRows, surfaceData, wav
       mixString(row?.thickness);
       mixString(row?.type);
       mixString(row?.surfType);
+      mixString(row?._blockType ?? row?.blockType ?? row?.block_type);
+      mixString(row?._surfaceRole ?? row?.surfaceRole);
       mixString(row?.['object type'] ?? row?.object ?? row?.Object);
       mixString(row?.apertureShape ?? row?._apertureShape ?? row?.ApertureShape);
       mixString(row?.sto);
@@ -224,6 +226,8 @@ function __computeWasmTraceBatchSystemHash(effectiveSystemRows, surfaceData, wav
       mixNumber(row?.__cooptActualSemidia ?? row?.semidia, 1e6);
       mixNumber(row?.radiusX, 1e6);
       mixNumber(row?.radiusY ?? row?.radius, 1e6);
+      mixNumber(row?._thinLensFocalLengthX ?? row?.focalLengthX ?? row?.focalLength, 1e6);
+      mixNumber(row?._thinLensFocalLengthY ?? row?.focalLengthY ?? row?.focalLength, 1e6);
       mixNumber(row?.axis, 1e6);
       mixNumber(row?.thickness, 1e6);
       mixNumber(row?.aperture, 1e6);
@@ -2821,14 +2825,24 @@ function __rtApplyIdealThinLens(localRay, hitPoint, row) {
   const hitX = Number(hitPoint?.x) || 0;
   const hitY = Number(hitPoint?.y) || 0;
 
-  if (Number.isFinite(fx)) slopeX -= hitX / fx;
-  if (Number.isFinite(fy)) slopeY -= hitY / fy;
+  if (Number.isFinite(fx)) slopeX -= zSign * hitX / fx;
+  if (Number.isFinite(fy)) slopeY -= zSign * hitY / fy;
 
   return norm({
     x: slopeX * zSign,
     y: slopeY * zSign,
     z: zSign
   });
+}
+
+function __rtIdealThinLensOpdMicrons(hitPoint, row) {
+  const { fx, fy } = __rtGetThinLensFocalPair(row);
+  const x = Number(hitPoint?.x) || 0;
+  const y = Number(hitPoint?.y) || 0;
+  let opdMm = 0;
+  if (Number.isFinite(fx)) opdMm -= (x * x) / (2 * fx);
+  if (Number.isFinite(fy)) opdMm -= (y * y) / (2 * fy);
+  return opdMm * 1000;
 }
 
 // Normalize legacy CoordTrans rows into explicit fields (one-time in-memory migration).
@@ -3477,8 +3491,10 @@ function __buildRustStopSolverPackedMeta(effectiveSystemRows, surfaceData, stopS
 
       const surfType = String(row?.surfType ?? row?.type ?? '').trim().toLowerCase();
       const radius = Number(row?.radius);
-      const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
-      const isToricSurface = surfType === 'toric';
+      const isIdealThinLens = __rtIsThinLensRow(row);
+      const isIdealThinLensBack = __rtIsThinLensBackRow(row);
+      const isPlaneSurface = isIdealThinLens || !Number.isFinite(radius) || radius === 0;
+      const isToricSurface = !isIdealThinLens && surfType === 'toric';
       // Toric surfaces are now supported by rust-wasm hit-point solver path.
       const isOddAsphere = !isToricSurface && surfType.includes('odd');
       const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
@@ -3528,6 +3544,8 @@ function __buildRustStopSolverPackedMeta(effectiveSystemRows, surfaceData, stopS
       if (isImageSurface) flags |= 8;
       if (Number.isFinite(rectHalfW) && Number.isFinite(rectHalfH)) flags |= 16;
       if (isOddAsphere) flags |= 32;
+      if (isIdealThinLens) flags |= 128;
+      if (isIdealThinLensBack) flags |= 256;
 
       let n2 = 0;
       if (kind === 0) {
@@ -3579,8 +3597,9 @@ function __buildRustStopSolverPackedMeta(effectiveSystemRows, surfaceData, stopS
       rowParams[p + 10] = Number(row?.coef9) || 0;
       rowParams[p + 11] = Number(row?.coef10) || 0;
       rowParams[p + 12] = semiDia;
-      rowParams[p + 13] = Number(row?.radiusX);
-      rowParams[p + 14] = Number(row?.radiusY);
+      const idealFocal = __rtGetThinLensFocalPair(row);
+      rowParams[p + 13] = isIdealThinLens ? idealFocal.fx : Number(row?.radiusX);
+      rowParams[p + 14] = isIdealThinLens ? idealFocal.fy : Number(row?.radiusY);
       rowParams[p + 15] = Number(row?.axis) || 0;
       rowParams[p + 16] = Number(row?.thickness) || 0;
       rowParams[p + 17] = apertureLimit;
@@ -4074,7 +4093,6 @@ function __getLockstepBatchIncompatReason(effectiveSystemRows, targetSurfaceInde
   for (let i = 0; i <= maxIdx; i++) {
     const row = effectiveSystemRows[i] || {};
 
-    if (__rtIsThinLensRow(row)) return 'thin_lens_requires_scalar';
     if (isObjectRow(row) || __rtIsGapRow(row) || __rtIsCoordTransRow(row)) continue;
     // Plane surfaces (radius=0/INF) are supported in lockstep via local z=0 intersection.
   }
@@ -4241,6 +4259,21 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
       continue;
     }
 
+    if (__rtIsThinLensBackRow(row)) {
+      const thickness = parseFloat(row.thickness) || 0;
+      for (let r = 0; r < list.length; r++) {
+        if (!alive[r]) continue;
+        const s = rayState[r];
+        if (i === targetSurfaceIndex) {
+          out[r] = { ...s.pos };
+          alive[r] = 0;
+        } else if (thickness !== 0 && Number.isFinite(thickness)) {
+          s.pos = add(s.pos, scale(s.dir, thickness));
+        }
+      }
+      continue;
+    }
+
     const surfaceInfo = surfaceData[i];
     if (!surfaceInfo) {
       for (let r = 0; r < list.length; r++) alive[r] = 0;
@@ -4248,11 +4281,12 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     }
 
     const radius = Number(row.radius);
-    const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
+    const isIdealThinLens = __rtIsThinLensRow(row);
+    const isPlaneSurface = isIdealThinLens || !Number.isFinite(radius) || radius === 0;
     const rowIsStopSurface = __rtIsStopSurfaceRow(row);
     const rowIsImageSurface = __rtIsImageSurfaceRow(row);
     const surfType = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
-    const isToricSurface = surfType === 'toric';
+    const isToricSurface = !isIdealThinLens && surfType === 'toric';
     const asphereMode = __rtAsphereModeFromSurfType(surfType);
     const n2Uniform = (() => {
       if (!rowRefractiveIndexCache) return NaN;
@@ -4679,7 +4713,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
       }
       s.pos = globalHitPoint;
 
-      pendingNormalRows.push({ ridx, normal, localRay });
+      pendingNormalRows.push({ ridx, normal, localRay, hitPoint });
       pendingNormalFlat.push(normal.x, normal.y, normal.z);
     }
 
@@ -4696,7 +4730,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
     let rustRefractOut = null;
     let rustRefractN2 = null;
-    if (!isMirror && !rowIsStopSurface && !rowIsImageSurface && useRustWasm && pendingNormalRows.length) {
+    if (!isIdealThinLens && !isMirror && !rowIsStopSurface && !rowIsImageSurface && useRustWasm && pendingNormalRows.length) {
       const buffers = __ensureRustRefractBuffers(pendingNormalRows.length);
       if (buffers) {
         for (let p = 0; p < pendingNormalRows.length; p++) {
@@ -4774,7 +4808,10 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
         ? normal
         : (globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, normal)));
 
-      if (isMirror) {
+      if (isIdealThinLens) {
+        const localOutDir = __rtApplyIdealThinLens(localRay, item.hitPoint, row);
+        s.dir = norm(applyMatrixToVector(surfaceInfo.rotationMatrix, localOutDir));
+      } else if (isMirror) {
         // Mirror parity with scalar path:
         // - Front-side incidence (dot<0): reflect
         // - Back-side incidence (dot>=0): transmit (keep direction)
@@ -5498,8 +5535,10 @@ function __traceSingleRayHitPoint_rustMeta(opticalSystemRows, ray0, n0, targetSu
 
       const surfType = String(row?.surfType ?? row?.type ?? '').trim().toLowerCase();
       const radius = Number(row?.radius);
-      const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
-      const isToricSurface = surfType === 'toric';
+      const isIdealThinLens = __rtIsThinLensRow(row);
+      const isIdealThinLensBack = __rtIsThinLensBackRow(row);
+      const isPlaneSurface = isIdealThinLens || !Number.isFinite(radius) || radius === 0;
+      const isToricSurface = !isIdealThinLens && surfType === 'toric';
       const isOddAsphere = !isToricSurface && surfType.includes('odd');
       const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
       const imageTypeRaw = row['object type'] ?? row.object ?? row.Object ?? row.type ?? '';
@@ -5548,6 +5587,8 @@ function __traceSingleRayHitPoint_rustMeta(opticalSystemRows, ray0, n0, targetSu
       if (isImageSurface) flags |= 8;
       if (Number.isFinite(rectHalfW) && Number.isFinite(rectHalfH)) flags |= 16;
       if (isOddAsphere) flags |= 32;
+      if (isIdealThinLens) flags |= 128;
+      if (isIdealThinLensBack) flags |= 256;
 
       let n2 = 0;
       if (kind === 0) {
@@ -5599,8 +5640,9 @@ function __traceSingleRayHitPoint_rustMeta(opticalSystemRows, ray0, n0, targetSu
       rowParams[p + 10] = Number(row?.coef9) || 0;
       rowParams[p + 11] = Number(row?.coef10) || 0;
       rowParams[p + 12] = semiDia;
-      rowParams[p + 13] = Number(row?.radiusX);
-      rowParams[p + 14] = Number(row?.radiusY);
+      const idealFocal = __rtGetThinLensFocalPair(row);
+      rowParams[p + 13] = isIdealThinLens ? idealFocal.fx : Number(row?.radiusX);
+      rowParams[p + 14] = isIdealThinLens ? idealFocal.fy : Number(row?.radiusY);
       rowParams[p + 15] = Number(row?.axis) || 0;
       rowParams[p + 16] = Number(row?.thickness) || 0;
       rowParams[p + 17] = apertureLimit;
@@ -5741,8 +5783,10 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
 
       const surfType = String(row?.surfType ?? row?.type ?? '').trim().toLowerCase();
       const radius = Number(row?.radius);
-      const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
-      const isToricSurface = surfType === 'toric';
+      const isIdealThinLens = __rtIsThinLensRow(row);
+      const isIdealThinLensBack = __rtIsThinLensBackRow(row);
+      const isPlaneSurface = isIdealThinLens || !Number.isFinite(radius) || radius === 0;
+      const isToricSurface = !isIdealThinLens && surfType === 'toric';
       const isOddAsphere = !isToricSurface && surfType.includes('odd');
       if (isToricSurface) {
         return null;
@@ -5794,6 +5838,8 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
       if (isImageSurface) flags |= 8;
       if (Number.isFinite(rectHalfW) && Number.isFinite(rectHalfH)) flags |= 16;
       if (isOddAsphere) flags |= 32;
+      if (isIdealThinLens) flags |= 128;
+      if (isIdealThinLensBack) flags |= 256;
 
       let n2 = 0;
       if (kind === 0) {
@@ -5845,8 +5891,9 @@ function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurface
       rowParams[p + 10] = Number(row?.coef9) || 0;
       rowParams[p + 11] = Number(row?.coef10) || 0;
       rowParams[p + 12] = semiDia;
-      rowParams[p + 13] = Number(row?.radiusX);
-      rowParams[p + 14] = Number(row?.radiusY);
+      const idealFocal = __rtGetThinLensFocalPair(row);
+      rowParams[p + 13] = isIdealThinLens ? idealFocal.fx : Number(row?.radiusX);
+      rowParams[p + 14] = isIdealThinLens ? idealFocal.fy : Number(row?.radiusY);
       rowParams[p + 15] = Number(row?.axis) || 0;
       rowParams[p + 16] = Number(row?.thickness) || 0;
       rowParams[p + 17] = apertureLimit;
@@ -6187,6 +6234,28 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
       continue;
     }
 
+    if (__rtIsThinLensBackRow(row)) {
+      const thickness = parseFloat(row.thickness) || 0;
+      for (let r = 0; r < list.length; r++) {
+        if (!alive[r] || done[r]) continue;
+        const s = rayState[r];
+        if (i === targetSurfaceIndex) {
+          done[r] = 1;
+          alive[r] = 0;
+          s.status = 'ok';
+          out[r] = {
+            success: true,
+            status: 'ok',
+            hitPoint: { ...s.pos },
+            oplMicrons: s.oplMicrons
+          };
+        } else if (thickness !== 0 && Number.isFinite(thickness)) {
+          s.pos = add(s.pos, scale(s.dir, thickness));
+        }
+      }
+      continue;
+    }
+
     const surfaceInfo = surfaceData[i];
     if (!surfaceInfo) {
       for (let r = 0; r < list.length; r++) {
@@ -6198,11 +6267,12 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
     }
 
     const radius = Number(row.radius);
-    const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
+    const isIdealThinLens = __rtIsThinLensRow(row);
+    const isPlaneSurface = isIdealThinLens || !Number.isFinite(radius) || radius === 0;
     const rowIsStopSurface = __rtIsStopSurfaceRow(row);
     const rowIsImageSurface = __rtIsImageSurfaceRow(row);
     const surfType = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
-    const isToricSurface = surfType === 'toric';
+    const isToricSurface = !isIdealThinLens && surfType === 'toric';
     const asphereMode = __rtAsphereModeFromSurfType(surfType);
     const n2Uniform = (() => {
       if (!rowRefractiveIndexCache) return NaN;
@@ -6562,6 +6632,10 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
         }
       }
 
+      if (isIdealThinLens) {
+        s.oplMicrons += __rtIdealThinLensOpdMicrons(hitPoint, row);
+      }
+
       s.oplAnchor = globalHitPoint;
       s.pos = globalHitPoint;
 
@@ -6593,7 +6667,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
       const dotProduct = dot(localRay.dir, normal);
       if (dotProduct > 0) normal = scale(normal, -1);
 
-      pendingNormalRows.push({ ridx, normal, localRay });
+      pendingNormalRows.push({ ridx, normal, localRay, hitPoint });
       pendingNormalFlat.push(normal.x, normal.y, normal.z);
     }
 
@@ -6609,7 +6683,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
     const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
     let rustRefractOut = null;
     let rustRefractN2 = null;
-    if (!isMirror && !rowIsStopSurface && !rowIsImageSurface && useRustWasm && pendingNormalRows.length) {
+    if (!isIdealThinLens && !isMirror && !rowIsStopSurface && !rowIsImageSurface && useRustWasm && pendingNormalRows.length) {
       const buffers = __ensureRustRefractBuffers(pendingNormalRows.length);
       if (buffers) {
         for (let p = 0; p < pendingNormalRows.length; p++) {
@@ -6681,7 +6755,10 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
       const normal = item.normal;
       const globalNormal = norm(globalNormalBatch?.[p] || applyMatrixToVector(surfaceInfo.rotationMatrix, normal));
 
-      if (isMirror) {
+      if (isIdealThinLens) {
+        const localOutDir = __rtApplyIdealThinLens(localRay, item.hitPoint, row);
+        s.dir = norm(applyMatrixToVector(surfaceInfo.rotationMatrix, localOutDir));
+      } else if (isMirror) {
         const dotProduct = dot(localRay.dir, normal);
         if (dotProduct < 0) {
           const reflectIdx = mirrorReflectMap ? mirrorReflectMap[p] : -1;
