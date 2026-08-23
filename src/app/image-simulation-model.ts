@@ -7,6 +7,7 @@ import {
   generateOpticalShowcaseTargetSvg,
   OPTICAL_SHOWCASE_TARGET_SPEC,
 } from './optical-showcase-target.ts';
+import type { DistortionGridMapLike } from '../../evaluation/aberrations/distortion-normalization.ts';
 
 export type ImageSimulationImage = {
   width: number;
@@ -17,13 +18,7 @@ export type ImageSimulationImage = {
 export type ImageSimulationTargetKind = 'optical-showcase' | 'field-chart' | 'usaf-array' | 'grid-points';
 
 export type ImageSimulationScaleMode = 'field-fit' | 'sensor-width' | 'pixel-pitch';
-export type ImageSimulationDistortionMap = {
-  gridSize: number;
-  idealX: number[];
-  idealY: number[];
-  realX: Array<number | null>;
-  realY: Array<number | null>;
-};
+export type ImageSimulationDistortionMap = DistortionGridMapLike;
 
 export type ImageSimulationPhysicalExtent = {
   minXmm: number;
@@ -474,16 +469,42 @@ export function warpImageWithDistortion(
   if (prepared.validCount <= 0) return { ...image, rgba: new Uint8ClampedArray(image.rgba) };
   const out = new Uint8ClampedArray(image.width * image.height * 4);
   const extent = rasterExtent || prepared.extent;
+  const gridStepX = prepared.extent.widthMm / Math.max(1, prepared.gridSize - 1);
+  const gridStepY = prepared.extent.heightMm / Math.max(1, prepared.gridSize - 1);
+  const epsilonX = Math.max(1e-9, gridStepX * 1e-4);
+  const epsilonY = Math.max(1e-9, gridStepY * 1e-4);
+  const solveToleranceMm = Math.max(1e-10, Math.min(extent.widthMm, extent.heightMm) * 1e-10);
   for (let rasterY = 0; rasterY < image.height; rasterY += 1) {
     const realY = extent.maxYmm - (rasterY / Math.max(1, image.height - 1)) * extent.heightMm;
     for (let rasterX = 0; rasterX < image.width; rasterX += 1) {
       const realX = extent.minXmm + (rasterX / Math.max(1, image.width - 1)) * extent.widthMm;
       let idealX = realX;
       let idealY = realY;
-      for (let iteration = 0; iteration < 5; iteration += 1) {
+      for (let iteration = 0; iteration < 10; iteration += 1) {
         const [offsetX, offsetY] = sampleDisplacement(prepared, idealX, idealY);
-        idealX = realX - offsetX;
-        idealY = realY - offsetY;
+        const residualX = idealX + offsetX - realX;
+        const residualY = idealY + offsetY - realY;
+        if (Math.hypot(residualX, residualY) <= solveToleranceMm) break;
+        const [offsetPlusX0, offsetPlusX1] = sampleDisplacement(prepared, idealX + epsilonX, idealY);
+        const [offsetMinusX0, offsetMinusX1] = sampleDisplacement(prepared, idealX - epsilonX, idealY);
+        const [offsetPlusY0, offsetPlusY1] = sampleDisplacement(prepared, idealX, idealY + epsilonY);
+        const [offsetMinusY0, offsetMinusY1] = sampleDisplacement(prepared, idealX, idealY - epsilonY);
+        const jacobian00 = 1 + (offsetPlusX0 - offsetMinusX0) / (2 * epsilonX);
+        const jacobian01 = (offsetPlusY0 - offsetMinusY0) / (2 * epsilonY);
+        const jacobian10 = (offsetPlusX1 - offsetMinusX1) / (2 * epsilonX);
+        const jacobian11 = 1 + (offsetPlusY1 - offsetMinusY1) / (2 * epsilonY);
+        const determinant = jacobian00 * jacobian11 - jacobian01 * jacobian10;
+        if (!(Number.isFinite(determinant) && Math.abs(determinant) > 1e-10)) {
+          idealX = realX - offsetX;
+          idealY = realY - offsetY;
+          continue;
+        }
+        const deltaX = (jacobian11 * residualX - jacobian01 * residualY) / determinant;
+        const deltaY = (-jacobian10 * residualX + jacobian00 * residualY) / determinant;
+        const maxStepX = prepared.extent.widthMm * 0.5;
+        const maxStepY = prepared.extent.heightMm * 0.5;
+        idealX -= clamp(deltaX, -maxStepX, maxStepX);
+        idealY -= clamp(deltaY, -maxStepY, maxStepY);
       }
       const sourceX = (idealX - extent.minXmm) / extent.widthMm * (image.width - 1);
       const sourceY = (extent.maxYmm - idealY) / extent.heightMm * (image.height - 1);

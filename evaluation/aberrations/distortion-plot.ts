@@ -4,6 +4,7 @@
 // Supports multi-wavelength plotting from Source table.
 
 import { calculateDistortionData, calculateGridDistortion } from './distortion.ts';
+import { normalizeDistortionMapsToReference } from './distortion-normalization.ts';
 import { getObjectRows, getOpticalSystemRows, getSourceRows } from '../../utils/data-utils.ts';
 import { getPrimaryWavelength } from '../../data/glass.ts';
 
@@ -404,15 +405,28 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
   };
 
   const { idealGrid, realGrid, gridSize, maxFieldAngle, meta } = data;
-  const horizontalOffset = estimateGridHorizontalOffset(idealGrid, realGrid);
+  const normalizedResult = normalizeDistortionMapsToReference([{
+    gridSize,
+    idealX: idealGrid.x,
+    idealY: idealGrid.y,
+    realX: realGrid.x,
+    realY: realGrid.y,
+  }]);
+  const referencedRealGrid = normalizedResult.reference.valid
+    ? {
+        x: normalizedResult.maps[0].realX,
+        y: normalizedResult.maps[0].realY,
+      }
+    : realGrid;
+  const horizontalOffset = estimateGridHorizontalOffset(idealGrid, referencedRealGrid);
   const offsetRealGrid = {
-    x: realGrid.x.map((value) => {
+    x: referencedRealGrid.x.map((value) => {
       if (value === null || value === undefined) return null;
       const x = Number(value);
       if (!Number.isFinite(x)) return null;
       return Number.isFinite(Number(horizontalOffset)) ? x + Number(horizontalOffset) : x;
     }),
-    y: realGrid.y.map((value) => {
+    y: referencedRealGrid.y.map((value) => {
       if (value === null || value === undefined) return null;
       const y = Number(value);
       return Number.isFinite(y) ? y : null;

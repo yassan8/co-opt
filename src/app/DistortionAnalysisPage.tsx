@@ -3,8 +3,10 @@ import Plotly from 'plotly.js-dist-min';
 import { detectConjugateType } from '../../utils/conjugate-detection.ts';
 import { plotDistortionPercent, plotGridDistortion } from '../../evaluation/aberrations/distortion-plot.ts';
 import { applyDistortionHorizontalOffset as applySharedDistortionHorizontalOffset } from '../../evaluation/aberrations/distortion-display.ts';
+import { normalizeDistortionSeriesLinearReference } from '../../evaluation/aberrations/distortion-normalization.ts';
 import { runNativeDistortion, runNativeGridDistortion } from '../../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../../src/desktop/runtime.ts';
+import { hasAnamorphicIdealThinLens } from '../../utils/ideal-thin-lens.ts';
 import { AnalysisGridSamplingField } from './AnalysisGridSamplingField';
 
 export type DistortionAnalysisType = 'distortion' | 'distortion-grid';
@@ -477,8 +479,11 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
         });
         setProgress(base + span, `Distortion (λ=${wl.toFixed(4)} um, backend=${backendLabel})`);
       }
+      const referencedData = hasAnamorphicIdealThinLens(opticalSystemRows)
+        ? allData.map((data) => normalizeDistortionSeriesLinearReference(data))
+        : allData;
       const enableDisplayOffset = true;
-      const distortionData = enableDisplayOffset ? applySharedDistortionHorizontalOffset(allData) : allData;
+      const distortionData = enableDisplayOffset ? applySharedDistortionHorizontalOffset(referencedData) : referencedData;
       const bestData = sanitizeDistortionData(distortionData);
       if (!bestData.length) {
         throw new Error('Distortion returned no plottable points (all chief rays failed).');
