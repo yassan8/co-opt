@@ -57,6 +57,8 @@ type SimulationSummary = {
   backend: string;
   conjugateType: 'finite' | 'infinite';
   psfFields: number;
+  lineSpreadFields: number;
+  effectiveKernelSupport: number;
   failedFields: number;
   distortionPoints: number;
   unreachedDistortionPoints: number;
@@ -513,6 +515,8 @@ export function ImageSimulationPage() {
       wavelengthEntries.forEach((entry) => fieldKernelsByWavelength.set(wavelengthKey(entry.wavelength), []));
 
       let psfFields = 0;
+      let lineSpreadFields = 0;
+      let effectiveKernelSupport = kernelSize;
       let failedFields = 0;
       if (simulationMode !== 'distortion') {
         const definition = deriveMultiFieldPsfFieldDefinition(objectRows);
@@ -557,19 +561,28 @@ export function ImageSimulationPage() {
               const key = wavelengthKey(component.wavelengthUm);
               const kernels = fieldKernelsByWavelength.get(key);
               if (!kernels || !Array.isArray(component.psfData) || !component.psfData.length) return;
+              const useAdaptiveLineSpread = component.method === 'hybrid-geometric'
+                && component.geometricSampling?.mode === 'line';
+              const rebinnedKernel = resamplePsfToImageKernel(
+                component.psfData,
+                component.pixelSizeUm,
+                imagePixelPitchXUm,
+                imagePixelPitchYUm,
+                kernelSize,
+                rotation,
+                useAdaptiveLineSpread ? {
+                  maxSize: Math.min(2049, Math.max(sourceImage.width, sourceImage.height) | 1),
+                  lineAxis: component.geometricSampling?.axis,
+                } : undefined,
+              );
               kernels.push({
                 xNorm: normalizeFieldCoordinateForImage(point.x, simulationMaxX, definition.mode) * fieldToRasterX,
                 yNorm: normalizeFieldCoordinateForImage(point.y, simulationMaxY, definition.mode) * fieldToRasterY,
-                kernel: resamplePsfToImageKernel(
-                  component.psfData,
-                  component.pixelSizeUm,
-                  imagePixelPitchXUm,
-                  imagePixelPitchYUm,
-                  kernelSize,
-                  rotation,
-                ),
+                kernel: rebinnedKernel,
                 fieldLabel: point.key,
               });
+              if (rebinnedKernel.lineSpread) lineSpreadFields += 1;
+              effectiveKernelSupport = Math.max(effectiveKernelSupport, rebinnedKernel.size);
               psfFields += 1;
             });
           } catch (caught: any) {
@@ -628,6 +641,8 @@ export function ImageSimulationPage() {
         backend: Array.from(new Set(distortionLayers.map((layer) => layer.backend))).join(' + '),
         conjugateType,
         psfFields,
+        lineSpreadFields,
+        effectiveKernelSupport,
         failedFields,
         imagePixelPitchXUm,
         distortionPoints: distortionReachability.total,
@@ -662,6 +677,7 @@ export function ImageSimulationPage() {
       const completionNotices: string[] = [];
       if (distortionReachability.unreached > 0) completionNotices.push(distortionReachability.unreached + '/' + distortionReachability.total + ' distortion nodes extrapolated');
       if (failedFields > 0) completionNotices.push(failedFields + ' field PSF sets unavailable');
+      if (lineSpreadFields > 0) completionNotices.push(lineSpreadFields + ' full-span line PSFs');
       setProgressText(completionNotices.length ? 'Done · ' + completionNotices.join(' · ') : 'Done');
     } catch (caught: any) {
       const message = String(caught?.message || caught || 'Image simulation failed');
@@ -825,7 +841,7 @@ export function ImageSimulationPage() {
         <span><small>EFL · F/# · Airy diameter</small>{Number.isFinite(summary.focalLengthMm) && Number.isFinite(summary.workingFNumber) && Number.isFinite(summary.airyDiameterUm) ? summary.focalLengthMm.toFixed(3) + ' mm · F/' + summary.workingFNumber.toFixed(2) + ' · ' + summary.airyDiameterUm.toFixed(2) + ' µm · ' + summary.airyDiameterPixels.toFixed(2) + ' px' : 'Unavailable'}</span>
         <span><small>Nyquist · cutoff</small>{summary.nyquistLpmm.toFixed(1)} lp/mm · {Number.isFinite(summary.cutoffLpmm) ? summary.cutoffLpmm.toFixed(1) + ' lp/mm · MTF ' + summary.diffractionMtfAtNyquist.toFixed(3) : 'cutoff unavailable'}</span>
         <span><small>Chart frequency</small>{summary.chartFrequencyLpmm !== null ? summary.chartFrequencyLpmm.toFixed(1) + ' lp/mm · diffraction MTF ' + (Number.isFinite(summary.diffractionMtfAtChart) ? summary.diffractionMtfAtChart.toFixed(3) : '—') + (sourceKind === 'field-chart' ? ' · calibrated target maximum' : sourceKind === 'optical-showcase' ? ' · USAF G1 E6 maximum' : ' · USAF E3 nominal') : 'Broadband ≤ ' + summary.nyquistLpmm.toFixed(1) + ' lp/mm'}</span>
-        <span><small>PSF fields</small>{summary.psfFields}{summary.failedFields > 0 ? ' · ' + summary.failedFields + ' unavailable' : ''}</span>
+        <span><small>PSF fields</small>{summary.psfFields}{summary.lineSpreadFields > 0 ? ' · ' + summary.lineSpreadFields + ' line · ' + summary.effectiveKernelSupport + ' px support' : ''}{summary.failedFields > 0 ? ' · ' + summary.failedFields + ' unavailable' : ''}</span>
         <span><small>Elapsed</small>{(summary.elapsedMs / 1000).toFixed(2)} s</span>
       </footer>}
     </div>

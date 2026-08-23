@@ -89,6 +89,14 @@ export type FieldPsfComputeResult = {
     weight: number;
     psfData: number[][];
     pixelSizeUm: number;
+    method: 'coherent-fft' | 'hybrid-geometric';
+    geometricSpanUm?: { x: number; y: number };
+    geometricSampling?: {
+      mode: 'line' | 'area';
+      rayCount: number;
+      effectiveSpacingUm: number;
+      axis: { x: number; y: number };
+    };
   }>;
 };
 
@@ -373,6 +381,7 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
           : scale.pixelSizeUm,
       },
       method: (psf as any)?.method === 'hybrid-geometric' ? 'hybrid-geometric' : 'coherent-fft',
+      geometricSpanUm: (psf as any)?.geometricSpanUm,
       diagnostic: (psf as any)?.diagnostic,
       geometricSampling: (psf as any)?.geometricSampling,
       opdRmsUm: calculateMultiFieldPsfOpdRmsUm(gridOpd, pupilMask),
@@ -484,6 +493,9 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
       weight: Number(result.weight),
       psfData: result.psfData,
       pixelSizeUm: Number(result.scale?.pixelSizeUm),
+      method: result.method,
+      geometricSpanUm: result.geometricSpanUm,
+      geometricSampling: result.geometricSampling,
     })),
   };
 }

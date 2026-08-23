@@ -33,6 +33,9 @@ assert.match(
   'PSF rotation and image-pixel rebinning must happen in one conservative stage',
 );
 assert.match(files.multi, /spectralComponents: results\.map/);
+assert.match(files.multi, /geometricSampling: result\.geometricSampling/);
+assert.match(files.page, /component\.method === 'hybrid-geometric'/);
+assert.match(files.page, /full-span line PSFs/);
 assert.match(files.page, /opdMode:\s*'pistonTiltRemoved'/);
 assert.match(files.page, /Full: Distortion \+ PSF/);
 assert.match(files.page, /Distortion only/);
@@ -70,6 +73,8 @@ assert.match(files.model, /warpImageWithDistortion/);
 assert.match(files.model, /srgbToLinear/);
 assert.match(files.model, /resamplePsfToImageKernel/);
 assert.match(files.model, /exact overlap area/);
+assert.match(files.model, /buildImageSimulationLineSpread/);
+assert.match(files.model, /convolveLineChannel/);
 assert.match(files.model, /Math\.floor\(columns \/ 2\)/);
 assert.match(files.model, /combineImageSimulationSpectralLayers/);
 assert.match(files.model, /calculateMaxLateralChromaticDisplacementUm/);
