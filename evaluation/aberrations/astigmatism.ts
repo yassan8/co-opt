@@ -28,8 +28,14 @@
 import { calculateChiefRayNewton } from './transverse-aberration.ts';
 import { getObjectRows, getSourceRows } from '../../utils/data-utils.ts';
 import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, solveRayOriginsToStopPointsWithRustMeta } from '../../raytracing/core/ray-tracing.ts';
+import { calculateParaxialData } from '../../raytracing/core/ray-paraxial.ts';
 import { findInfiniteSystemChiefRayOrigin } from '../../raytracing/generation/gen-ray-cross-infinite.ts';
 import { asphericSurfaceZ } from '../../optical/surface.ts';
+import {
+    isIdealThinLensBackRow,
+    isIdealThinLensOnlySystem,
+    isIdealThinLensRow,
+} from '../../utils/ideal-thin-lens.ts';
 
 const RUST_RT_OPTIONS = Object.freeze({
     useRustWasm: true,
@@ -3325,6 +3331,48 @@ export async function calculateAstigmatismDataNativeLike(
         await yieldToUI();
     }
 
+    // A pure ideal cylindrical/anamorphic system can be perfectly afocal in
+    // one meridian. The RMS focus search then has no finite minimum for that
+    // axis, which is a physical result rather than a trace failure. Preserve
+    // the finite axis and mark the other as afocal using the same X/Y
+    // paraxial model used by the rest of the application.
+    if (computedRows.length === 0 && isIdealThinLensOnlySystem(opticalSystemRows)) {
+        let lastPowerSurfaceIndex = -1;
+        for (let i = 1; i < opticalSystemRows.length - 1; i += 1) {
+            const row = opticalSystemRows[i];
+            if (isIdealThinLensRow(row) && !isIdealThinLensBackRow(row)) lastPowerSurfaceIndex = i;
+        }
+        const powerOriginZ = Number(surfaceOrigins?.[lastPowerSurfaceIndex]?.origin?.z);
+        const referenceOriginZ = Number.isFinite(powerOriginZ)
+            ? powerOriginZ
+            : Number(imageSurfaceInfo?.origin?.z) || 0;
+        for (const field of dedupedFieldSettings) {
+            for (const wavelength of wavelengths) {
+                const paraxial = calculateParaxialData(opticalSystemRows, wavelength.wavelengthUm);
+                const imageDistanceX = Number(paraxial?.imageDistanceX ?? paraxial?.imageDistance);
+                const imageDistanceY = Number(paraxial?.imageDistanceY ?? paraxial?.imageDistance);
+                const sagittalFocusZ = Number.isFinite(imageDistanceX) ? referenceOriginZ + imageDistanceX : null;
+                const meridionalFocusZ = Number.isFinite(imageDistanceY) ? referenceOriginZ + imageDistanceY : null;
+                const paraxialImageZ = Number.isFinite(meridionalFocusZ)
+                    ? meridionalFocusZ
+                    : Number.isFinite(sagittalFocusZ)
+                        ? sagittalFocusZ
+                        : Number(imageSurfaceInfo?.origin?.z) || referenceOriginZ;
+                computedRows.push({
+                    wavelength: wavelength.wavelengthUm,
+                    fieldAngle: Math.abs(Number(field.y) || 0),
+                    fieldName: field.displayName,
+                    paraxialImageZ,
+                    meridionalFocusZ,
+                    sagittalFocusZ,
+                    meridionalFocusStatus: Number.isFinite(meridionalFocusZ) ? 'finite' : 'afocal',
+                    sagittalFocusStatus: Number.isFinite(sagittalFocusZ) ? 'finite' : 'afocal',
+                    paraxialFallback: true,
+                });
+            }
+        }
+    }
+
     if (primaryReferenceZ === null) {
         primaryReferenceZ = computedRows.find(row => Math.abs(row.wavelength - primaryWavelength) < 1e-6)?.paraxialImageZ ?? null;
     }
@@ -3343,6 +3391,9 @@ export async function calculateAstigmatismDataNativeLike(
             paraxialImageZ: row.paraxialImageZ,
             meridionalDeviation,
             sagittalDeviation,
+            meridionalFocusStatus: row.meridionalFocusStatus || (meridionalDeviation === null ? 'unresolved' : 'finite'),
+            sagittalFocusStatus: row.sagittalFocusStatus || (sagittalDeviation === null ? 'unresolved' : 'finite'),
+            paraxialFallback: row.paraxialFallback === true,
             astigmaticDifference: (meridionalDeviation !== null && sagittalDeviation !== null)
                 ? (meridionalDeviation - sagittalDeviation)
                 : null,

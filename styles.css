@@ -9216,6 +9216,16 @@ body.dark-mode .di-nonseq-details > p { border-color: #1e3a8a; background: #1725
     border-bottom: 1px solid #dbe3ee;
     background: #f8fafc;
 }
+
+.analysis-window-psf-diagnostic {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    border-bottom: 1px solid #dbe5f0;
+    background: #f8fafc;
+    color: #475569;
+    font-size: 11px;
+    line-height: 1.35;
+}
 .di-hybrid-summary > div:first-child { display: grid; gap: 2px; }
 .di-hybrid-summary strong { color: #24324a; font-size: 12px; }
 .di-hybrid-summary > div:first-child span { color: #64748b; font-size: 10px; }

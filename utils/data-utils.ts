@@ -676,7 +676,31 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
       // === PRIMARY SYSTEM DATA ===
       debugOutput += "=== Primary Optical System Data ===\n";
       debugOutput += `Primary Wavelength:               ${primaryWavelength} μm\n`;
-      debugOutput += `Focal Length (FL):                ${paraxialData.focalLength?.toFixed(6) || 'N/A'} mm\n`;
+      const axisValue = (value: unknown): string => {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) return numeric.toFixed(6);
+        if (numeric === Infinity) return 'Infinity';
+        if (numeric === -Infinity) return '-Infinity';
+        return 'N/A';
+      };
+      const focalLengthX = Number(paraxialData.focalLengthX ?? paraxialData.focalLength);
+      const focalLengthY = Number(paraxialData.focalLengthY ?? paraxialData.focalLength);
+      const backFocalLengthX = Number(paraxialData.backFocalLengthX ?? paraxialData.backFocalLength);
+      const backFocalLengthY = Number(paraxialData.backFocalLengthY ?? paraxialData.backFocalLength);
+      const imageDistanceX = Number(paraxialData.imageDistanceX ?? paraxialData.imageDistance);
+      const imageDistanceY = Number(paraxialData.imageDistanceY ?? paraxialData.imageDistance);
+      const axisResolved = (
+        Number.isFinite(focalLengthX)
+        && Number.isFinite(focalLengthY)
+        && Math.abs(focalLengthX - focalLengthY) > 1e-9
+      ) || imageDistanceX !== imageDistanceY;
+
+      if (axisResolved) {
+        debugOutput += `Focal Length X (FLx):             ${axisValue(focalLengthX)} mm\n`;
+        debugOutput += `Focal Length Y (FLy):             ${axisValue(focalLengthY)} mm\n`;
+      } else {
+        debugOutput += `Focal Length (FL):                ${axisValue(paraxialData.focalLength)} mm\n`;
+      }
       
       // Matrix-based first-order values (ABCD): EFL/BFL/principal planes.
       let eflValue = 'N/A';
@@ -701,11 +725,22 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
       } catch (error) {
         duWarn('Principal point calculation error:', error);
       }
-      debugOutput += `Effective Focal Length (EFL):     ${eflValue} mm\n`;
-      debugOutput += `SH1 (Princ.Plane 1):              ${sh1Value} mm\n`;
-      debugOutput += `SH2 (Princ.Plane 2):              ${sh2Value} mm\n`;
-      debugOutput += `Back Focal Length (BFL):          ${bflValue} mm\n`;
-      debugOutput += `Image Distance:                   ${paraxialData.imageDistance?.toFixed(6) || 'N/A'} mm\n`;
+      if (axisResolved) {
+        const principalX = calculatePrincipalPointPositions(opticalSystemRows, primaryWavelength, 'sagittal');
+        const principalY = calculatePrincipalPointPositions(opticalSystemRows, primaryWavelength, 'tangential');
+        debugOutput += `Effective Focal Length X (EFLx): ${axisValue(principalX?.effectiveFocalLengthMm ?? focalLengthX)} mm\n`;
+        debugOutput += `Effective Focal Length Y (EFLy): ${axisValue(principalY?.effectiveFocalLengthMm ?? focalLengthY)} mm\n`;
+        debugOutput += `SH1 X / Y:                       ${axisValue(principalX?.frontPrincipalFromFirstSurfaceMm)} / ${axisValue(principalY?.frontPrincipalFromFirstSurfaceMm)} mm\n`;
+        debugOutput += `SH2 X / Y:                       ${axisValue(principalX?.rearPrincipalFromLastSurfaceMm)} / ${axisValue(principalY?.rearPrincipalFromLastSurfaceMm)} mm\n`;
+        debugOutput += `Back Focal Length X / Y:         ${axisValue(backFocalLengthX)} / ${axisValue(backFocalLengthY)} mm\n`;
+        debugOutput += `Image Distance X / Y:            ${axisValue(imageDistanceX)} / ${axisValue(imageDistanceY)} mm\n`;
+      } else {
+        debugOutput += `Effective Focal Length (EFL):     ${eflValue} mm\n`;
+        debugOutput += `SH1 (Princ.Plane 1):              ${sh1Value} mm\n`;
+        debugOutput += `SH2 (Princ.Plane 2):              ${sh2Value} mm\n`;
+        debugOutput += `Back Focal Length (BFL):          ${bflValue} mm\n`;
+        debugOutput += `Image Distance:                   ${axisValue(paraxialData.imageDistance)} mm\n`;
+      }
       
       // Object and Image Distances
       const objectThickness = opticalSystemRows[0].thickness;
@@ -741,9 +776,13 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
       
       // Paraxial Magnification β = α[1] / α[IMG]
       let paraxialMagnification = 'N/A';
+      let paraxialMagnificationX = 'N/A';
+      let paraxialMagnificationY = 'N/A';
       
       if (objectDistanceStr === "INF" || objectDistanceStr === "INFINITY") {
         paraxialMagnification = '0.000000'; // Infinite object
+        paraxialMagnificationX = '0.000000';
+        paraxialMagnificationY = '0.000000';
       } else {
         // Calculate initial alpha for finite object
         const objectDistance = parseFloat(objectThickness);
@@ -753,6 +792,14 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
           if (finalAlpha && Math.abs(finalAlpha) > 1e-10) {
             const beta = initialAlpha / finalAlpha;
             paraxialMagnification = beta.toFixed(6);
+          }
+          const finalAlphaX = Number(paraxialData.finalAlphaX ?? paraxialData.finalAlpha);
+          const finalAlphaY = Number(paraxialData.finalAlphaY ?? paraxialData.finalAlpha);
+          if (Number.isFinite(finalAlphaX) && Math.abs(finalAlphaX) > 1e-10) {
+            paraxialMagnificationX = (initialAlpha / finalAlphaX).toFixed(6);
+          }
+          if (Number.isFinite(finalAlphaY) && Math.abs(finalAlphaY) > 1e-10) {
+            paraxialMagnificationY = (initialAlpha / finalAlphaY).toFixed(6);
           }
         }
       }
@@ -764,7 +811,11 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
         debugOutput += `Exit Pupil Magnification (βexp): ${betaExpStr}\n`;
         debugOutput += `Exit Pupil Diameter (ExPD):     ${exitPupil.diameter.toFixed(6)} mm\n`;
       }
-      debugOutput += `Paraxial Magnification:           ${paraxialMagnification}\n`;
+      if (axisResolved) {
+        debugOutput += `Paraxial Magnification X / Y:     ${paraxialMagnificationX} / ${paraxialMagnificationY}\n`;
+      } else {
+        debugOutput += `Paraxial Magnification:           ${paraxialMagnification}\n`;
+      }
       
       // Object Space F# = ABS(F#_work / β) if β≠0, else 0
       let objectSpaceFNumber = 'N/A';
@@ -790,15 +841,25 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
       // Image Space F# = f' / EnPD
       let imageSpaceFNumber = 'N/A';
       let imageSpaceFNumberValue = NaN;
+      let imageSpaceFNumberX = NaN;
+      let imageSpaceFNumberY = NaN;
       if (focalLength && entrancePupil && entrancePupil.diameter) {
         const fNumberImg = focalLength / entrancePupil.diameter;
         imageSpaceFNumberValue = fNumberImg;
         imageSpaceFNumber = fNumberImg.toFixed(6);
+        imageSpaceFNumberX = Number.isFinite(focalLengthX) ? Math.abs(focalLengthX / entrancePupil.diameter) : Infinity;
+        imageSpaceFNumberY = Number.isFinite(focalLengthY) ? Math.abs(focalLengthY / entrancePupil.diameter) : Infinity;
       }
-      debugOutput += `Image Space F#:                   ${imageSpaceFNumber}\n`;
+      if (axisResolved) {
+        debugOutput += `Image Space F# X / Y:             ${axisValue(imageSpaceFNumberX)} / ${axisValue(imageSpaceFNumberY)}\n`;
+      } else {
+        debugOutput += `Image Space F#:                   ${imageSpaceFNumber}\n`;
+      }
       
       // Paraxial Working F# = (-ExP + id) / ExPD (using exit pupil position from origin)
       let paraxialWorkingFNumber = 'N/A';
+      let paraxialWorkingFNumberX = NaN;
+      let paraxialWorkingFNumberY = NaN;
       
       // Get exit pupil position from origin (not from Image plane)
       let exitPupilPositionFromOrigin = null;
@@ -816,7 +877,17 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
         const fNumberWork = (-exitPupilPositionFromOrigin + paraxialData.imageDistance) / exitPupilDiameterForWorkingF;
         paraxialWorkingFNumber = fNumberWork.toFixed(6);
       }
-      debugOutput += `Paraxial Working F#:              ${paraxialWorkingFNumber}\n`;
+      if (axisResolved && exitPupilPositionFromOrigin !== null && exitPupilDiameterForWorkingF) {
+        paraxialWorkingFNumberX = Number.isFinite(imageDistanceX)
+          ? Math.abs((-exitPupilPositionFromOrigin + imageDistanceX) / exitPupilDiameterForWorkingF)
+          : Infinity;
+        paraxialWorkingFNumberY = Number.isFinite(imageDistanceY)
+          ? Math.abs((-exitPupilPositionFromOrigin + imageDistanceY) / exitPupilDiameterForWorkingF)
+          : Infinity;
+        debugOutput += `Paraxial Working F# X / Y:        ${axisValue(paraxialWorkingFNumberX)} / ${axisValue(paraxialWorkingFNumberY)}\n`;
+      } else {
+        debugOutput += `Paraxial Working F#:              ${paraxialWorkingFNumber}\n`;
+      }
       
       // Object Space NA = ABS(NA_img * β)
       let objectSpaceNA = 'N/A';
@@ -835,8 +906,23 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
           objectSpaceNA = naObj.toFixed(6);
         }
       }
-      debugOutput += `Object Space NA:                  ${objectSpaceNA}\n`;
-      debugOutput += `Image Space NA:                   ${imageSpaceNA}\n`;
+      if (axisResolved) {
+        const imageSpaceNAX = Number.isFinite(paraxialWorkingFNumberX) && paraxialWorkingFNumberX > 1e-12
+          ? 1 / (2 * paraxialWorkingFNumberX)
+          : 0;
+        const imageSpaceNAY = Number.isFinite(paraxialWorkingFNumberY) && paraxialWorkingFNumberY > 1e-12
+          ? 1 / (2 * paraxialWorkingFNumberY)
+          : 0;
+        const betaX = Number(paraxialMagnificationX);
+        const betaY = Number(paraxialMagnificationY);
+        const objectSpaceNAX = Number.isFinite(betaX) ? Math.abs(imageSpaceNAX * betaX) : 0;
+        const objectSpaceNAY = Number.isFinite(betaY) ? Math.abs(imageSpaceNAY * betaY) : 0;
+        debugOutput += `Object Space NA X / Y:            ${axisValue(objectSpaceNAX)} / ${axisValue(objectSpaceNAY)}\n`;
+        debugOutput += `Image Space NA X / Y:             ${axisValue(imageSpaceNAX)} / ${axisValue(imageSpaceNAY)}\n`;
+      } else {
+        debugOutput += `Object Space NA:                  ${objectSpaceNA}\n`;
+        debugOutput += `Image Space NA:                   ${imageSpaceNA}\n`;
+      }
       
       // === PUPIL CALCULATION RESULTS ===
       debugOutput += "\n=== Pupil Calculation ===\n";

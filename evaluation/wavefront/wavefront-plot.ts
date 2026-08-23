@@ -23,6 +23,7 @@ import { setLastWavefrontState, getLastWavefrontMeta } from './last-wavefront-ru
 import { createOPDCalculator, createWavefrontAnalyzer } from './wavefront.ts';
 import { detectConjugateType } from '../../utils/conjugate-detection.ts';
 import { convertImageHeightToEffectiveObject } from '../../optical/ray-renderer.ts';
+import { isRotationallySymmetricIdealThinLensOnlySystem } from '../../utils/ideal-thin-lens.ts';
 
 function toFiniteNumber(value, fallback = 0) {
     const num = Number(value);
@@ -2951,52 +2952,7 @@ export class WavefrontPlotter {
 }
 
 function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []) {
-    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
-
-    const normalize = (value: any) => String(value ?? '').trim().toLowerCase();
-    const compact = (value: any) => normalize(value).replace(/[\s_-]+/g, '');
-
-    let hasIdealParaxial = false;
-
-    for (const row of opticalSystemRows) {
-        if (!row || typeof row !== 'object') continue;
-
-        const objectType = compact(row?.['object type'] ?? row?.objectType ?? row?.object ?? '');
-        const surfType = compact(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surfaceType ?? '');
-        const blockType = compact(row?._blockType ?? row?.blockType ?? '');
-        const kind = compact(row?.kind ?? '');
-
-        const isIdealParaxial = (
-            blockType === 'paraxial'
-            || blockType === 'thinlens'
-            || surfType === 'thinlens'
-            || Number.isFinite(Number(row?._thinLensFocalLengthX))
-            || Number.isFinite(Number(row?._thinLensFocalLengthY))
-        );
-
-        if (isIdealParaxial) {
-            hasIdealParaxial = true;
-            continue;
-        }
-
-        const isPassiveRow = (
-            objectType === 'object'
-            || objectType === 'image'
-            || objectType === 'stop'
-            || surfType === 'stop'
-            || surfType === 'gap'
-            || surfType === 'airgap'
-            || blockType === 'gap'
-            || blockType === 'coordbreak'
-            || kind === 'gap'
-        );
-
-        if (isPassiveRow) continue;
-
-        return false;
-    }
-
-    return hasIdealParaxial;
+    return isRotationallySymmetricIdealThinLensOnlySystem(opticalSystemRows);
 }
 
 /**
@@ -3046,7 +3002,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
             console.error('❌ 光学系データがありません');
             throw new Error('光学系データがありません。JSONファイルをロードしてください。');
         }
-        
+
         if (!objectRows || objectRows.length === 0) {
             console.warn('⚠️ Objectデータがありません、軸上設定を使用');
             // デフォルトのObjectデータを作成

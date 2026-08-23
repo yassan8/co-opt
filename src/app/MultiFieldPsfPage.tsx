@@ -72,6 +72,14 @@ export type FieldPsfComputeResult = {
   image: MultiFieldPsfImage;
   metrics: any;
   backend: string;
+  method: 'coherent-fft' | 'hybrid-geometric';
+  diagnostic?: string;
+  geometricSampling?: {
+    mode: 'line' | 'area';
+    rayCount: number;
+    effectiveSpacingUm: number;
+    axis: { x: number; y: number };
+  };
   psfData: number[][];
   trueColorData: null | { red: Float32Array[]; green: Float32Array[]; blue: Float32Array[] };
   pixelSizeUm: number;
@@ -276,6 +284,7 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
   const fftSize = !requestedZeroPad ? autoFftSize : Math.max(selectedSamplingSize, requestedZeroPad);
   const opdRunner = await waitForFunction('runDesktopNativeOpdMapForPopup');
   const psfRunner = await waitForFunction('runDesktopNativePsfMapForPopup');
+  const spotRunner = await waitForFunction('runDesktopNativeSpotRaytraceForPopup');
 
   const computeOne = async (entry: WavelengthEntry, index: number) => {
     throwIfCancelled(token);
@@ -290,6 +299,19 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
       opdDisplayMode: opdMode,
       suppressProgressHud: true,
     })), token);
+    onProgress(base + span * 0.48, `Detector rays ${(entry.wavelength * 1000).toFixed(1)} nm`);
+    const spot = await raceWithCancel(Promise.resolve(spotRunner.fn({
+      objectRows: [fieldObjectRow],
+      rayCount: Math.max(257, Math.min(4096, selectedSamplingSize * selectedSamplingSize)),
+      ringCount: Math.max(8, Math.round(Math.sqrt(selectedSamplingSize))),
+      pattern: 'grid',
+      wavelengthMode: 'primary',
+      wavelengthUm: entry.wavelength,
+    })), token);
+    const rayHitsUm = (Array.isArray((spot as any)?.series) ? (spot as any).series : [])
+      .flatMap((series: any) => Array.isArray(series?.points) ? series.points : [])
+      .map((point: any) => ({ xUm: Number(point?.xUm), yUm: Number(point?.yUm), weight: 1 }))
+      .filter((point: any) => Number.isFinite(point.xUm) && Number.isFinite(point.yUm));
 
     const gridOpd = Array.from({ length: selectedSamplingSize }, () => new Array(selectedSamplingSize).fill(0));
     const gridAmplitude = Array.from({ length: selectedSamplingSize }, () => new Array(selectedSamplingSize).fill(0));
@@ -324,6 +346,13 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
       removeTilt: false,
       zeroPadTo: fftSize,
       recenterIfWrapped: false,
+      propagationMode: 'auto',
+      targetHitXGridMm: (opd as any)?.targetHitXGridMm,
+      targetHitYGridMm: (opd as any)?.targetHitYGridMm,
+      rayHitsUm,
+      hybridOutputSize: 512,
+      diffractionFwhmXUm: 1.028 * entry.wavelength * scale.fNumberWorking,
+      diffractionFwhmYUm: 1.028 * entry.wavelength * scale.fNumberWorking,
       suppressProgressHud: true,
       referenceModeHint: (opd as any)?.referenceMode,
       chiefReferenceModeHint: (opd as any)?.chiefReferenceMode,
@@ -337,7 +366,15 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
       psfData: Array.isArray((psf as any)?.psfData) ? (psf as any).psfData : [],
       metrics: (psf as any)?.metrics || null,
       backend: String((psf as any)?.backend || 'NativeRust'),
-      scale,
+      scale: {
+        ...scale,
+        pixelSizeUm: Number.isFinite(Number((psf as any)?.pixelSizeUm))
+          ? Number((psf as any).pixelSizeUm)
+          : scale.pixelSizeUm,
+      },
+      method: (psf as any)?.method === 'hybrid-geometric' ? 'hybrid-geometric' : 'coherent-fft',
+      diagnostic: (psf as any)?.diagnostic,
+      geometricSampling: (psf as any)?.geometricSampling,
       opdRmsUm: calculateMultiFieldPsfOpdRmsUm(gridOpd, pupilMask),
     };
   };
@@ -435,6 +472,9 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
     image,
     metrics,
     backend: first.backend,
+    method: first.method,
+    diagnostic: first.diagnostic,
+    geometricSampling: first.geometricSampling,
     psfData: accumulator,
     trueColorData: trueColorAccumulator,
     pixelSizeUm: Number.isFinite(targetPitch) && targetPitch > 0 ? targetPitch : 1,

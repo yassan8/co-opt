@@ -346,6 +346,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
     const plotOptions = { ...defaultOptions, ...options };
     
     const traces = [];
+    const axisNotes = [];
 
     const maxAbsAngle = isAngleField
         ? Math.max(...fsList.map(fs => Math.abs(parseFloat(fs?.y ?? fs?.yFieldAngle ?? fs?.fieldAngle ?? 0) || 0)))
@@ -387,6 +388,9 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
                 meridionalZ.push(d.meridionalDeviation);  // 既に相対値
             }
         });
+        if (meridionalAngles.length === 0 && wlData.some(d => d.meridionalFocusStatus === 'afocal')) {
+            axisNotes.push(`M/Y (${(wlNum * 1000).toFixed(1)}nm): afocal`);
+        }
         
         if (meridionalAngles.length > 0) {
             traces.push({
@@ -415,6 +419,9 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
                 sagittalZ.push(d.sagittalDeviation);  // 既に相対値
             }
         });
+        if (sagittalAngles.length === 0 && wlData.some(d => d.sagittalFocusStatus === 'afocal')) {
+            axisNotes.push(`S/X (${(wlNum * 1000).toFixed(1)}nm): afocal`);
+        }
         
         if (sagittalAngles.length > 0) {
             traces.push({
@@ -487,6 +494,14 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
             text: plotOptions.title,
             font: { size: 16, family: 'Arial, sans-serif' }
         },
+        annotations: axisNotes.length > 0 ? [{
+            xref: 'paper', yref: 'paper', x: 0.01, y: 0.99,
+            xanchor: 'left', yanchor: 'top',
+            text: axisNotes.join('<br>'), showarrow: false, align: 'left',
+            font: { size: 12, color: '#526176' },
+            bgcolor: 'rgba(255,255,255,0.86)',
+            bordercolor: '#d6dee9', borderwidth: 1, borderpad: 5
+        }] : [],
         xaxis: {
             title: {
                 text: plotOptions.xAxisTitle,

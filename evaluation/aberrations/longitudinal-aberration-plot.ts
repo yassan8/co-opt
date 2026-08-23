@@ -48,6 +48,7 @@ export function plotLongitudinalAberration(containerId: string, aberrationData: 
     
     // Plotlyトレースを作成
     const traces = [];
+    const axisNotes: string[] = [];
     
     // 波長に応じた色を取得する関数
     // 可視光スペクトルに基づいた色分け
@@ -80,6 +81,11 @@ export function plotLongitudinalAberration(containerId: string, aberrationData: 
         
         // 瞳座標でソート（Y軸の値が単調増加するように）
         const sortedPoints = [...data.points].sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
+        if (sortedPoints.length === 0) {
+            const note = 'Meridional (Y): afocal — no finite longitudinal focus';
+            if (!axisNotes.includes(note)) axisNotes.push(note);
+            return;
+        }
         
         // X軸とY軸を入れ替え：X軸=縦収差、Y軸=瞳座標
         const xValues = sortedPoints.map(p => p.longitudinalAberration);
@@ -110,6 +116,11 @@ export function plotLongitudinalAberration(containerId: string, aberrationData: 
         
         // 瞳座標でソート（Y軸の値が単調増加するように）
         const sortedPoints = [...data.points].sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
+        if (sortedPoints.length === 0) {
+            const note = 'Sagittal (X): afocal — no finite longitudinal focus';
+            if (!axisNotes.includes(note)) axisNotes.push(note);
+            return;
+        }
         
         // X軸とY軸を入れ替え：X軸=縦収差、Y軸=瞳座標
         const xValues = sortedPoints.map(p => p.longitudinalAberration);
@@ -228,6 +239,22 @@ export function plotLongitudinalAberration(containerId: string, aberrationData: 
             text: title,
             font: { size: 18 }
         },
+        annotations: axisNotes.length > 0 ? [{
+            xref: 'paper',
+            yref: 'paper',
+            x: 0.01,
+            y: 0.99,
+            xanchor: 'left',
+            yanchor: 'top',
+            text: axisNotes.join('<br>'),
+            showarrow: false,
+            align: 'left',
+            font: { size: 12, color: '#526176' },
+            bgcolor: 'rgba(255,255,255,0.86)',
+            bordercolor: '#d6dee9',
+            borderwidth: 1,
+            borderpad: 5,
+        }] : [],
         xaxis: {
             title: {
                 text: 'Longitudinal Aberration (mm)',

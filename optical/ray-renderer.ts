@@ -2426,6 +2426,20 @@ function resolveStopConfigCached(opticalSystemRows, surfaceOrigins, fallbackZ, f
     return resolveStopConfig(opticalSystemRows, surfaceOrigins, fallbackZ, fallbackRadius);
 }
 
+function resolveObjectSamplingApertureRadius(objectSurface, stopConfig, defaultRadius = 10) {
+    const objectSemiDiameter = Number(objectSurface?.semidia);
+    if (Number.isFinite(objectSemiDiameter) && objectSemiDiameter > 0) {
+        return objectSemiDiameter;
+    }
+
+    const stopRadius = Number(stopConfig?.radius);
+    if (stopConfig?.hasStop === true && Number.isFinite(stopRadius) && stopRadius > 0) {
+        return stopRadius;
+    }
+
+    return defaultRadius;
+}
+
 /**
  * Set ray emission pattern
  * @param {string} pattern - 'grid' or 'annular'
@@ -4211,10 +4225,14 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
         // Apply sag to object Z position
         const actualObjectZ = isInfiniteObject ? objectZ : objectZ + objectSag;
         
-        const apertureRadius = Number(surf.semidia) || Number(surf.thickness) || 10;
         const thicknessNumeric = Number(surf.thickness);
         const entrancePupilZ = Number.isFinite(thicknessNumeric) ? objectZ + thicknessNumeric : objectZ + 1;
-        const stopConfig = resolveStopConfigCached(opticalSystemRows, surfaceOrigins, entrancePupilZ, apertureRadius);
+        const objectSemiDiameter = Number(surf.semidia);
+        const stopFallbackRadius = Number.isFinite(objectSemiDiameter) && objectSemiDiameter > 0
+            ? objectSemiDiameter
+            : 10;
+        const stopConfig = resolveStopConfigCached(opticalSystemRows, surfaceOrigins, entrancePupilZ, stopFallbackRadius);
+        const apertureRadius = resolveObjectSamplingApertureRadius(surf, stopConfig);
         const stopRadiusLimited = Math.min(stopConfig.radius, apertureRadius);
         const stopCenter = stopConfig.center || { x: 0, y: 0 };
 
@@ -5771,8 +5789,17 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
             : (isInfiniteObject ? objectZ : objectZ + objectSag);
         
         // console.log(`📍 Rectangle object position: (${centerX}, ${centerY}, ${objectZ})`);
-        const apertureRadius = Number(surf.semidia) || Number(surf.thickness) || 10;
-        const stopConfig = resolveStopConfig(opticalSystemRows, surfaceOrigins, actualObjectZ + (Number(surf.thickness) || 10), apertureRadius);
+        const objectSemiDiameter = Number(surf.semidia);
+        const stopFallbackRadius = Number.isFinite(objectSemiDiameter) && objectSemiDiameter > 0
+            ? objectSemiDiameter
+            : 10;
+        const stopConfig = resolveStopConfig(
+            opticalSystemRows,
+            surfaceOrigins,
+            actualObjectZ + (Number(surf.thickness) || 10),
+            stopFallbackRadius
+        );
+        const apertureRadius = resolveObjectSamplingApertureRadius(surf, stopConfig);
         const stopRadiusLimited = Math.min(stopConfig.radius, apertureRadius);
         const stopCenter = stopConfig.center || { x: 0, y: 0 };
         const stopZ = stopConfig.z;

@@ -7,6 +7,7 @@ import { runNativeMtfMap, runNativeOpdMap, runMtfBatchViaWasm, runMtfBatchViaWas
 import { convertImageHeightToEffectiveObject } from '../optical/ray-renderer.ts';
 import { TFMTFWorkerPool, getGlobalTFMTFWorkerPool } from './tfmtf-worker-pool.ts';
 import { extractPSFGridFromCalculatorResult, validatePSFGrid, extractPSFMetadata } from './psf-serialization.ts';
+import { isRotationallySymmetricIdealThinLensOnlySystem } from '../utils/ideal-thin-lens.ts';
 
 // Singleton for PSF calculator to avoid repeated initialization
 let _psfCalculatorSingletonPromise = null;
@@ -21,48 +22,7 @@ async function getPSFCalculatorSingleton() {
 }
 
 function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []) {
-    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
-
-    let hasIdealParaxial = false;
-    for (const row of opticalSystemRows) {
-        if (!row || typeof row !== 'object') continue;
-
-        const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
-        const surfType = String(row?.surfType ?? row?.type ?? row?.surfaceType ?? '').trim().toLowerCase();
-        const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
-
-        const isIdealParaxial = (
-            blockType === 'paraxial'
-            || blockType === 'thinlens'
-            || surfType === 'thinlens'
-            || Number.isFinite(Number(row?._thinLensFocalLengthX))
-            || Number.isFinite(Number(row?._thinLensFocalLengthY))
-        );
-        if (isIdealParaxial) {
-            hasIdealParaxial = true;
-            continue;
-        }
-
-        const isPassiveRow = (
-            objectType === ''
-            || objectType === 'object'
-            || objectType === 'image'
-            || objectType === 'stop'
-            || surfType === 'gap'
-            || surfType === 'air gap'
-            || blockType === 'gap'
-            || blockType === 'air gap'
-            || surfType === 'coordinate break'
-            || surfType === 'coordbrk'
-            || blockType === 'coordinate break'
-            || blockType === 'coordbrk'
-        );
-        if (isPassiveRow) continue;
-
-        return false;
-    }
-
-    return hasIdealParaxial;
+    return isRotationallySymmetricIdealThinLensOnlySystem(opticalSystemRows);
 }
 
 type MtfPlotOptions = {
@@ -439,7 +399,6 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
         throw new Error('光学システムデータがありません。まず光学システムを設定してください。');
     }
-
     let selectedObject = rawSelectedObject;
     let objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? 'Point');
     let objectTypeLower = objectTypeRaw.toLowerCase();

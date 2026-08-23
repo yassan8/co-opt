@@ -151,7 +151,7 @@ function getObjectRowsFromHost(host: any): any[] {
     }
     if (Array.isArray(activeConfig?.object) && activeConfig.object.length > 0) rows = activeConfig.object;
   } catch (_) {}
-  return Array.isArray(rows) ? rows : [];
+  return Array.isArray(rows) ? rows.filter((row) => row && row.enabled !== false) : [];
 }
 
 function findImageSurfaceIndex(rows: any[]): number | undefined {
@@ -304,7 +304,20 @@ async function renderThroughFocusSpot(options: ThroughFocusSpotOptions): Promise
 
   const rows = Math.max(1, focusGrid.length);
   const columns = Math.max(1, defocusValues.length);
-  const halfScaleUm = scaleUm / 2;
+  const coordinateMagnitudes = focusGrid
+    .flatMap((row) => row || [])
+    .flatMap((cell) => cell?.pointsByWavelength || [])
+    .flatMap((group) => group?.points || [])
+    .flatMap((point) => [Math.abs(Number(point?.xUm)), Math.abs(Number(point?.yUm))])
+    .filter((value) => Number.isFinite(value));
+  // Keep the requested scale as the minimum, but never crop an entire line
+  // focus out of view. This matters for an ideal lens with one unpowered axis:
+  // the focused-axis defocus can be tens of microns while the orthogonal beam
+  // remains many millimetres tall.
+  const contentHalfScaleUm = coordinateMagnitudes.length > 0
+    ? Math.max(...coordinateMagnitudes) * 1.05
+    : 0;
+  const halfScaleUm = Math.max(scaleUm / 2, contentHalfScaleUm, 0.5);
   const traces: any[] = [];
   const layout: any = {
     showlegend: true,
@@ -511,11 +524,11 @@ async function renderNativeSpotDiagram(options: {
     const y1 = 1 - row * (cellHeight + verticalGap);
     const y0 = y1 - cellHeight;
     layout[`xaxis${suffix}`] = {
-      domain: [x0, x1], zeroline: true, range: [-range, range],
+      domain: [x0, x1], zeroline: false, range: [-range, range],
       title: row === rows - 1 ? 'X (µm)' : '', anchor: yRef,
     };
     layout[`yaxis${suffix}`] = {
-      domain: [y0, y1], zeroline: true, range: [-range, range],
+      domain: [y0, y1], zeroline: false, range: [-range, range],
       title: column === 0 ? 'Y (µm)' : '', anchor: xRef, scaleanchor: xRef, scaleratio: 1,
     };
     layout.annotations.push({

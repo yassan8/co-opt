@@ -98,6 +98,12 @@ import type { InvokeRequestEnvelope } from "../../shared/contracts/ipc";
 import { isTauriRuntime } from "../runtime";
 import { asphericSag } from "../../../raytracing/core/ray-tracing.ts";
 import { getRefractiveIndex as getParaxialRefractiveIndex } from "../../../raytracing/core/ray-paraxial.ts";
+import {
+  getIdealThinLensFocalPair,
+  hasAnamorphicIdealThinLens,
+  hasIdealThinLens,
+  isRotationallySymmetricIdealThinLensOnlySystem,
+} from "../../../utils/ideal-thin-lens.ts";
 
 export async function readDesktopSetting(key: string): Promise<string | null> {
   const k = String(key ?? "").trim();
@@ -2479,6 +2485,120 @@ export async function runNativeChiefRayAngle(
   );
 }
 
+function buildAxisParaxialMetricSet(
+  base: NativeParaxialMetrics,
+  focalLength: unknown,
+  backFocalLength: unknown,
+  imageDistance: unknown,
+  magnification?: unknown,
+  workingFNumber?: unknown,
+): NativeParaxialMetrics {
+  const efl = Number(focalLength);
+  const bfl = Number(backFocalLength);
+  const imd = Number(imageDistance);
+  const enpd = Number(base.ENPD);
+  const expd = Number(base.EXPD);
+  const beta = Number(magnification);
+  const requestedWorkingFNumber = Number(workingFNumber);
+  const finiteMetric = (value: number, fallback = 0) => Number.isFinite(value) ? value : fallback;
+  const fnoImg = Number.isFinite(efl) && Math.abs(enpd) > 1e-12 ? Math.abs(efl / enpd) : 0;
+  const fnoWrk = Number.isFinite(requestedWorkingFNumber) && requestedWorkingFNumber > 0
+    ? Math.abs(requestedWorkingFNumber)
+    : (requestedWorkingFNumber === Infinity
+      ? Infinity
+      : (Number.isFinite(imd) && Math.abs(expd) > 1e-12 ? Math.abs(imd / expd) : 0));
+  const naImg = fnoWrk > 1e-12 ? 1 / (2 * fnoWrk) : 0;
+  const fnoObj = Number.isFinite(beta) && Math.abs(beta) > 1e-12 && fnoWrk > 0
+    ? Math.abs(fnoWrk / beta)
+    : 0;
+  const naObj = Number.isFinite(beta) ? Math.abs(naImg * beta) : 0;
+  return {
+    ...base,
+    FL: finiteMetric(efl),
+    EFL: finiteMetric(efl),
+    BFL: finiteMetric(bfl),
+    IMD: Number.isFinite(imd) ? imd : (imd === Infinity ? Infinity : finiteMetric(imd)),
+    PMAG: finiteMetric(beta),
+    FNO_OBJ: finiteMetric(fnoObj),
+    FNO_IMG: finiteMetric(fnoImg),
+    FNO_WRK: Number.isFinite(fnoWrk) ? fnoWrk : (fnoWrk === Infinity ? Infinity : finiteMetric(fnoWrk)),
+    NA_OBJ: finiteMetric(naObj),
+    NA_IMG: finiteMetric(naImg),
+  };
+}
+
+async function addAxisResolvedParaxialMetrics(
+  response: NativeParaxialMetricsResponse,
+  opticalSystemRows: any[],
+  sourceRows: any[],
+): Promise<NativeParaxialMetricsResponse> {
+  const { calculateParaxialData } = await import("../../../raytracing/core/ray-paraxial.ts");
+  const wavelength = getPrimaryWavelengthUm(sourceRows, 0.5876);
+  const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
+  if (!paraxial || !response?.metrics) return response;
+
+  const objectThickness = Number(opticalSystemRows?.[0]?.thickness);
+  const initialAlpha = Number.isFinite(objectThickness) && Math.abs(objectThickness) > 1e-12
+    ? -1 / objectThickness
+    : NaN;
+  const magnificationFor = (finalAlpha: unknown): number => {
+    const alpha = Number(finalAlpha);
+    return Number.isFinite(initialAlpha) && Number.isFinite(alpha) && Math.abs(alpha) > 1e-12
+      ? initialAlpha / alpha
+      : 0;
+  };
+  const exitPupilPosition = Number(paraxial?.exitPupilDetails?.position);
+  const exitPupilDiameter = Number(paraxial?.exitPupilDetails?.diameter);
+  const workingFNumberFor = (imageDistance: unknown): number => {
+    const distance = Number(imageDistance);
+    if (distance === Infinity) return Infinity;
+    return Number.isFinite(distance)
+      && Number.isFinite(exitPupilPosition)
+      && Number.isFinite(exitPupilDiameter)
+      && Math.abs(exitPupilDiameter) > 1e-12
+      ? Math.abs((-exitPupilPosition + distance) / exitPupilDiameter)
+      : NaN;
+  };
+
+  const imageDistanceForX = paraxial.imageDistanceX ?? paraxial.imageDistance;
+  const imageDistanceForY = paraxial.imageDistanceY ?? paraxial.imageDistance;
+
+  const x = buildAxisParaxialMetricSet(
+    response.metrics,
+    paraxial.focalLengthX ?? paraxial.focalLength,
+    paraxial.backFocalLengthX ?? paraxial.backFocalLength,
+    imageDistanceForX,
+    magnificationFor(paraxial.finalAlphaX ?? paraxial.finalAlpha),
+    workingFNumberFor(imageDistanceForX),
+  );
+  const y = buildAxisParaxialMetricSet(
+    response.metrics,
+    paraxial.focalLengthY ?? paraxial.focalLength,
+    paraxial.backFocalLengthY ?? paraxial.backFocalLength,
+    imageDistanceForY,
+    magnificationFor(paraxial.finalAlphaY ?? paraxial.finalAlpha),
+    workingFNumberFor(imageDistanceForY),
+  );
+  const yPowered = Math.abs(Number(y.EFL)) > 1e-12;
+  const xPowered = Math.abs(Number(x.EFL)) > 1e-12;
+  const xFiniteFocus = Number.isFinite(Number(x.IMD));
+  const yFiniteFocus = Number.isFinite(Number(y.IMD));
+  const primaryAxis: "x" | "y" = xFiniteFocus !== yFiniteFocus
+    ? (xFiniteFocus ? "x" : "y")
+    : (yPowered || !xPowered ? "y" : "x");
+  return {
+    ...response,
+    metrics: hasAnamorphicIdealThinLens(opticalSystemRows) ? (primaryAxis === "x" ? x : y) : response.metrics,
+    axisMetrics: { x, y },
+    axisFocusStatus: {
+      x: xFiniteFocus ? "finite" : "afocal",
+      y: yFiniteFocus ? "finite" : "afocal",
+    },
+    primaryAxis,
+    message: `${response.message} (axis-resolved X/Y paraxial model)`,
+  };
+}
+
 export async function runNativeParaxialMetrics(
   payload: NativeParaxialMetricsRequest,
 ): Promise<NativeParaxialMetricsResponse> {
@@ -2534,14 +2654,15 @@ export async function runNativeParaxialMetrics(
       NA_IMG: toMetric("NA_IMG"),
     };
 
-    return {
+    const response = {
       backend: String((wasmOut as any)?.backend || "web-rust-wasm"),
       metrics,
       message: String((wasmOut as any)?.message || "Computed via Web Rust/WASM paraxial metrics API"),
     } as NativeParaxialMetricsResponse;
+    return addAxisResolvedParaxialMetrics(response, opticalSystemRows, sourceRows);
   }
 
-  return invokeCommand<NativeParaxialMetricsRequest, NativeParaxialMetricsResponse>(
+  const response = await invokeCommand<NativeParaxialMetricsRequest, NativeParaxialMetricsResponse>(
     "run_native_paraxial_metrics",
     {
       opticalSystemRows,
@@ -2549,6 +2670,7 @@ export async function runNativeParaxialMetrics(
       objectRows,
     },
   );
+  return addAxisResolvedParaxialMetrics(response, opticalSystemRows, sourceRows);
 }
 
 export async function runNativeSeidel(
@@ -2559,6 +2681,30 @@ export async function runNativeSeidel(
   const objectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : [];
   const afocal = payload?.afocal === true;
   const referenceWavelengthUm = Number(payload?.referenceWavelengthUm);
+
+  if (hasAnamorphicIdealThinLens(opticalSystemRows)) {
+    throw new Error(
+      "Classical Seidel coefficients assume a rotationally symmetric system and are unavailable for different ideal-lens X/Y powers.",
+    );
+  }
+  if (isRotationallySymmetricIdealThinLensOnlySystem(opticalSystemRows)) {
+    const wavelengthUm = Number.isFinite(referenceWavelengthUm) && referenceWavelengthUm > 0
+      ? referenceWavelengthUm
+      : getPrimaryWavelengthUm(sourceRows, 0.5876);
+    return {
+      backend: "ideal-paraxial-analytic",
+      totals: { I: 0, II: 0, III: 0, P: 0, IV: 0, V: 0, LCA: 0, TCA: 0 },
+      surfaceCoefficients: [],
+      stopSurfaceIndex: Math.max(0, opticalSystemRows.findIndex((row: any) => String(row?.["object type"] ?? row?.object ?? "").trim().toLowerCase() === "stop")),
+      wavelengthUm,
+      message: "Ideal rotationally symmetric Paraxial/ThinLens system: Seidel coefficients are zero by definition",
+    };
+  }
+  if (hasIdealThinLens(opticalSystemRows)) {
+    throw new Error(
+      "Seidel coefficients for a mixed real-surface + ideal Paraxial/ThinLens system are not implemented. Replace the ideal block with real surfaces for this analysis.",
+    );
+  }
 
   if (!isTauriRuntime()) {
     if (opticalSystemRows.length === 0) throw new Error("runNativeSeidel(web): opticalSystemRows is empty");
@@ -2580,17 +2726,6 @@ export async function runNativeSeidel(
       return 0.5876;
     })();
     const rowsForWasm = enrichRowsWithResolvedRindexForWasm(opticalSystemRows, wavelengthUm);
-    const referenceWavelengthMode = String(referenceSphereOptions.referenceSphereWavelengthMode || "primary-wavelength");
-    const referenceWavelength = referenceWavelengthMode === "primary-wavelength"
-      ? getPrimaryWavelengthFromSourceRows(sourceRows)
-      : wavelengthUm;
-    const diagnosticReferenceRows = Array.isArray((payload as any)?.referenceOpticalSystemRows)
-      ? (payload as any).referenceOpticalSystemRows
-      : undefined;
-    const referenceRowsForWasm = diagnosticReferenceRows
-      || (referenceWavelengthMode === "primary-wavelength"
-        ? enrichRowsWithResolvedRindexForWasm(opticalSystemRows, referenceWavelength)
-        : undefined);
     const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
     const rust = await preloadRustRayTracingWasm();
     const runNativeWasm = (rust as any)?.run_native_seidel_wasm_json;
@@ -2604,7 +2739,6 @@ export async function runNativeSeidel(
 
     const wasmOutRaw = runNativeWasm(JSON.stringify({
       opticalSystemRows: rowsForWasm,
-      referenceOpticalSystemRows: referenceRowsForWasm,
       sourceRows,
       objectRows,
       afocal,
@@ -2931,67 +3065,11 @@ export async function runNativeTransverseRmsBatch(
 }
 
 function hasParaxialOrThinLensNativeLike(opticalSystemRows: any[] = []): boolean {
-  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
-
-  for (const row of opticalSystemRows) {
-    if (!row || typeof row !== "object") continue;
-    const surfType = String((row as any)?.surfType ?? (row as any)?.type ?? (row as any)?.surfaceType ?? "").trim().toLowerCase();
-    const blockType = String((row as any)?._blockType ?? (row as any)?.blockType ?? "").trim().toLowerCase();
-    const isIdealParaxial = (
-      blockType === "paraxial"
-      || blockType === "thinlens"
-      || surfType === "thinlens"
-      || Number.isFinite(Number((row as any)?._thinLensFocalLengthX))
-      || Number.isFinite(Number((row as any)?._thinLensFocalLengthY))
-    );
-    if (isIdealParaxial) return true;
-  }
-  return false;
+  return hasIdealThinLens(opticalSystemRows);
 }
 
 function isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows: any[] = []): boolean {
-  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
-
-  let hasIdealParaxial = false;
-  for (const row of opticalSystemRows) {
-    if (!row || typeof row !== "object") continue;
-
-    const objectType = String((row as any)?.["object type"] ?? (row as any)?.object ?? (row as any)?.Object ?? "").trim().toLowerCase();
-    const surfType = String((row as any)?.surfType ?? (row as any)?.type ?? (row as any)?.surfaceType ?? "").trim().toLowerCase();
-    const blockType = String((row as any)?._blockType ?? (row as any)?.blockType ?? "").trim().toLowerCase();
-
-    const isIdealParaxial = (
-      blockType === "paraxial"
-      || blockType === "thinlens"
-      || surfType === "thinlens"
-      || Number.isFinite(Number((row as any)?._thinLensFocalLengthX))
-      || Number.isFinite(Number((row as any)?._thinLensFocalLengthY))
-    );
-    if (isIdealParaxial) {
-      hasIdealParaxial = true;
-      continue;
-    }
-
-    const isPassiveRow = (
-      objectType === ""
-      || objectType === "object"
-      || objectType === "image"
-      || objectType === "stop"
-      || surfType === "gap"
-      || surfType === "air gap"
-      || blockType === "gap"
-      || blockType === "air gap"
-      || surfType === "coordinate break"
-      || surfType === "coordbrk"
-      || blockType === "coordinate break"
-      || blockType === "coordbrk"
-    );
-    if (isPassiveRow) continue;
-
-    return false;
-  }
-
-  return hasIdealParaxial;
+  return isRotationallySymmetricIdealThinLensOnlySystem(opticalSystemRows);
 }
 
 function computeFiniteGridRmsNativeLike(grid: any): number {
@@ -3094,18 +3172,8 @@ function computeFiniteGridRmsNativeLike(grid: any): number {
   return Math.sqrt(Math.max(0, residualSumSq / count));
 }
 
-function parseThinLensFocalValueNativeLike(value: unknown): number {
-  if (isInfinitySpec(value)) return Number.POSITIVE_INFINITY;
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || Math.abs(numeric) < 1e-12) return Number.POSITIVE_INFINITY;
-  return Math.abs(numeric);
-}
-
 function getThinLensFocalPairNativeLike(row: any): { fx: number; fy: number } {
-  return {
-    fx: parseThinLensFocalValueNativeLike(row?._thinLensFocalLengthX ?? row?.focalLengthX ?? row?.focalLength ?? row?._thinLensFocalLengthY ?? row?.focalLengthY),
-    fy: parseThinLensFocalValueNativeLike(row?._thinLensFocalLengthY ?? row?.focalLengthY ?? row?.focalLength ?? row?._thinLensFocalLengthX ?? row?.focalLengthX),
-  };
+  return getIdealThinLensFocalPair(row);
 }
 
 function buildIdealParaxialAnalyticOpdResponse(
@@ -3577,6 +3645,12 @@ export async function runNativeOpdMap(
       entrancePupilCoordinateYGrid: Array.isArray(wasmOut?.entrancePupilCoordinateYGrid)
         ? wasmOut.entrancePupilCoordinateYGrid
         : undefined,
+      targetHitXGridMm: Array.isArray(wasmOut?.targetHitXGridMm)
+        ? wasmOut.targetHitXGridMm
+        : undefined,
+      targetHitYGridMm: Array.isArray(wasmOut?.targetHitYGridMm)
+        ? wasmOut.targetHitYGridMm
+        : undefined,
       displayFit: wasmOut?.displayFit && typeof wasmOut.displayFit === "object"
         ? wasmOut.displayFit
         : undefined,
@@ -3627,12 +3701,6 @@ export async function runNativeOpdMap(
         : undefined,
       exitPupilCenter: wasmOut?.exitPupilCenter && typeof wasmOut.exitPupilCenter === "object"
         ? normalizeNativePoint(wasmOut.exitPupilCenter)
-        : undefined,
-      entrancePupilCoordinateXGrid: Array.isArray(wasmOut?.entrancePupilCoordinateXGrid)
-        ? wasmOut.entrancePupilCoordinateXGrid
-        : undefined,
-      entrancePupilCoordinateYGrid: Array.isArray(wasmOut?.entrancePupilCoordinateYGrid)
-        ? wasmOut.entrancePupilCoordinateYGrid
         : undefined,
       sampleCount: Number.isFinite(Number(wasmOut?.sampleCount)) ? Number(wasmOut.sampleCount) : 0,
       hitCount: Number.isFinite(Number(wasmOut?.hitCount)) ? Number(wasmOut.hitCount) : 0,
@@ -3750,7 +3818,6 @@ export async function runNativeOpdRmsWaves(
       : pickImageSurfaceIndexNativeLike(Array.isArray((payload as any)?.opticalSystemRows) ? (payload as any).opticalSystemRows : []),
   } as NativeOpdRmsWavesRequest;
   payload = normalizedPayload;
-  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   if (normalizedPayload.referenceMode === "exit-pupil") {
     const mapResponse = await runNativeOpdMap(normalizedPayload as NativeOpdMapRequest);
     const displayGrid = Array.isArray(mapResponse.displayOpdGrid)
@@ -4141,6 +4208,14 @@ export async function runNativePsfMap(
       pixelSizeUm: Number.isFinite(Number(payload?.pixelSizeUm)) ? Number(payload?.pixelSizeUm) : 1,
       removeTilt: payload?.removeTilt === true,
       zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Number(payload.zeroPadTo) : 0,
+      propagationMode: payload?.propagationMode,
+      targetHitXGridMm: payload?.targetHitXGridMm,
+      targetHitYGridMm: payload?.targetHitYGridMm,
+      rayHitsUm: payload?.rayHitsUm,
+      hybridOutputSize: payload?.hybridOutputSize,
+      diffractionFwhmXUm: payload?.diffractionFwhmXUm,
+      diffractionFwhmYUm: payload?.diffractionFwhmYUm,
+      gridAmplitude: payload?.gridAmplitude,
     }));
     const res: any = (typeof psfRaw === "string") ? JSON.parse(psfRaw) : psfRaw;
 
@@ -4153,7 +4228,15 @@ export async function runNativePsfMap(
       pixelSizeUm: Number.isFinite(Number((res as any)?.pixelSizeUm))
         ? Number((res as any).pixelSizeUm)
         : (Number.isFinite(Number(payload?.pixelSizeUm)) ? Number(payload?.pixelSizeUm) : undefined),
-      message: "Computed via Web Rust/WASM PSF API",
+      method: (res as any)?.method === "hybrid-geometric" ? "hybrid-geometric" : "coherent-fft",
+      fieldOfViewUm: Number.isFinite(Number((res as any)?.fieldOfViewUm))
+        ? Number((res as any).fieldOfViewUm)
+        : undefined,
+      geometricSpanUm: (res as any)?.geometricSpanUm,
+      geometricSampling: (res as any)?.geometricSampling,
+      phaseSampling: (res as any)?.phaseSampling,
+      diagnostic: typeof (res as any)?.diagnostic === "string" ? (res as any).diagnostic : undefined,
+      message: String((res as any)?.message || "Computed via Web Rust/WASM PSF API"),
     };
   }
   return invokeCommand<NativePsfMapRequest, NativePsfMapResponse>("run_native_psf_map", payload);
@@ -7884,69 +7967,85 @@ export async function runNativeGridDistortion(
     const sensorHeightMm = sensorOverrideUsed ? Math.abs(requestedSensorHeightMm) : Number.NaN;
     const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
     emitProgress(4, "Grid distortion: estimating paraxial model...");
-    const focalLengthCandidates = [
-      Number(paraxial?.focalLength),
-      Number(paraxial?.effectiveFocalLength),
-      Number(paraxial?.focal_length),
-      Number(paraxial?.EFL),
-      Number(paraxial?.FL),
-    ];
-    let focalLength = Number.NaN;
-    for (const candidate of focalLengthCandidates) {
-      if (Number.isFinite(candidate) && Math.abs(candidate) > 1e-12) {
-        focalLength = Math.abs(candidate);
-        break;
+    const pickFiniteFocalLength = (...candidates: unknown[]) => {
+      for (const value of candidates) {
+        const candidate = Number(value);
+        if (Number.isFinite(candidate) && Math.abs(candidate) > 1e-12) return Math.abs(candidate);
       }
-    }
-    const imageDistance = Number(paraxial?.imageDistance ?? paraxial?.image_distance);
-    const magnification = (
+      return Number.NaN;
+    };
+    const focalLengthX = pickFiniteFocalLength(
+      paraxial?.focalLengthX,
+      paraxial?.sagittal?.focalLength,
+      paraxial?.focalLength,
+      paraxial?.effectiveFocalLength,
+    );
+    const focalLengthY = pickFiniteFocalLength(
+      paraxial?.focalLengthY,
+      paraxial?.tangential?.focalLength,
+      paraxial?.focalLength,
+      paraxial?.effectiveFocalLength,
+    );
+    const imageDistanceX = Number(paraxial?.imageDistanceX ?? paraxial?.sagittal?.imageDistance ?? paraxial?.imageDistance ?? paraxial?.image_distance);
+    const imageDistanceY = Number(paraxial?.imageDistanceY ?? paraxial?.tangential?.imageDistance ?? paraxial?.imageDistance ?? paraxial?.image_distance);
+    const magnificationX = (
       gridFieldMode === "height"
       && finiteSystem
-      && Number.isFinite(imageDistance)
+      && Number.isFinite(imageDistanceX)
       && Number.isFinite(objectDistance)
       && Math.abs(objectDistance) > 1e-12
     )
-      ? Math.abs(imageDistance / objectDistance)
+      ? Math.abs(imageDistanceX / objectDistance)
       : -1;
-    const hasFiniteFocalLength = Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12;
-    // Match distortion behavior: continue with a normalized focal length instead of hard-failing.
-    const focalLengthForGrid = hasFiniteFocalLength ? focalLength : 1.0;
-    const imageScaleForHeight = (gridFieldMode === "height" && finiteSystem && Number.isFinite(magnification) && Math.abs(magnification) > 1e-9)
-      ? Math.abs(magnification)
+    const magnificationY = (
+      gridFieldMode === "height"
+      && finiteSystem
+      && Number.isFinite(imageDistanceY)
+      && Number.isFinite(objectDistance)
+      && Math.abs(objectDistance) > 1e-12
+    )
+      ? Math.abs(imageDistanceY / objectDistance)
+      : -1;
+    const hasFiniteFocalLengthX = Number.isFinite(focalLengthX) && Math.abs(focalLengthX) > 1e-12;
+    const hasFiniteFocalLengthY = Number.isFinite(focalLengthY) && Math.abs(focalLengthY) > 1e-12;
+    // Keep the grid operational for an afocal axis while reporting the fallback.
+    const focalLengthForGridX = hasFiniteFocalLengthX ? focalLengthX : 1.0;
+    const focalLengthForGridY = hasFiniteFocalLengthY ? focalLengthY : 1.0;
+    const axisAnamorphic = Math.abs(focalLengthForGridX - focalLengthForGridY) > 1e-9 * Math.max(1, focalLengthForGridX, focalLengthForGridY);
+    const imageScaleForHeightX = (gridFieldMode === "height" && finiteSystem && Number.isFinite(magnificationX) && Math.abs(magnificationX) > 1e-9)
+      ? Math.abs(magnificationX)
+      : 1.0;
+    const imageScaleForHeightY = (gridFieldMode === "height" && finiteSystem && Number.isFinite(magnificationY) && Math.abs(magnificationY) > 1e-9)
+      ? Math.abs(magnificationY)
       : 1.0;
     const maxImageX = gridFieldMode === "angle"
-      ? focalLengthForGrid * Math.tan((gridFieldExtents.x * Math.PI) / 180)
+      ? focalLengthForGridX * Math.tan((gridFieldExtents.x * Math.PI) / 180)
       : gridFieldMode === "height"
-        ? gridFieldExtents.x * imageScaleForHeight
+        ? gridFieldExtents.x * imageScaleForHeightX
         : gridFieldExtents.x;
     const maxImageY = gridFieldMode === "angle"
-      ? focalLengthForGrid * Math.tan((gridFieldExtents.y * Math.PI) / 180)
+      ? focalLengthForGridY * Math.tan((gridFieldExtents.y * Math.PI) / 180)
       : gridFieldMode === "height"
-        ? gridFieldExtents.y * imageScaleForHeight
+        ? gridFieldExtents.y * imageScaleForHeightY
         : gridFieldExtents.y;
-    const imageHeightToObjectScale = (
-      gridFieldMode === "imageheight"
-      && finiteSystem
-      && Number.isFinite(imageDistance)
-      && Number.isFinite(objectDistance)
-      && Math.abs(imageDistance) > 1e-12
-    )
-      ? Math.abs(objectDistance / imageDistance)
-      : 1.0;
+    const imageHeightToObjectScaleX = gridFieldMode === "imageheight" && finiteSystem && Number.isFinite(imageDistanceX) && Number.isFinite(objectDistance) && Math.abs(imageDistanceX) > 1e-12
+      ? Math.abs(objectDistance / imageDistanceX) : 1.0;
+    const imageHeightToObjectScaleY = gridFieldMode === "imageheight" && finiteSystem && Number.isFinite(imageDistanceY) && Number.isFinite(objectDistance) && Math.abs(imageDistanceY) > 1e-12
+      ? Math.abs(objectDistance / imageDistanceY) : 1.0;
     const gridRangeScale = Math.SQRT2 / 2;
     const scaledMaxImageX = sensorOverrideUsed ? sensorWidthMm / 2 : maxImageX * gridRangeScale;
     const scaledMaxImageY = sensorOverrideUsed ? sensorHeightMm / 2 : maxImageY * gridRangeScale;
     const stepX = (2 * scaledMaxImageX) / Math.max(1, gridSize - 1);
     const stepY = (2 * scaledMaxImageY) / Math.max(1, gridSize - 1);
     const fieldMaxX = gridFieldMode === "angle"
-      ? (Math.atan(scaledMaxImageX / focalLengthForGrid) * 180) / Math.PI
-      : gridFieldMode === "height" && finiteSystem && imageScaleForHeight > 1e-9
-        ? scaledMaxImageX / imageScaleForHeight
+      ? (Math.atan(scaledMaxImageX / focalLengthForGridX) * 180) / Math.PI
+      : gridFieldMode === "height" && finiteSystem && imageScaleForHeightX > 1e-9
+        ? scaledMaxImageX / imageScaleForHeightX
         : scaledMaxImageX;
     const fieldMaxY = gridFieldMode === "angle"
-      ? (Math.atan(scaledMaxImageY / focalLengthForGrid) * 180) / Math.PI
-      : gridFieldMode === "height" && finiteSystem && imageScaleForHeight > 1e-9
-        ? scaledMaxImageY / imageScaleForHeight
+      ? (Math.atan(scaledMaxImageY / focalLengthForGridY) * 180) / Math.PI
+      : gridFieldMode === "height" && finiteSystem && imageScaleForHeightY > 1e-9
+        ? scaledMaxImageY / imageScaleForHeightY
         : scaledMaxImageY;
 
     const idealX: number[] = [];
@@ -7954,19 +8053,19 @@ export async function runNativeGridDistortion(
     const objectRows: any[] = [];
     for (let yi = 0; yi < gridSize; yi++) {
       const imageY = -scaledMaxImageY + yi * stepY;
-      const thetaYRad = Math.atan(imageY / focalLengthForGrid);
+      const thetaYRad = Math.atan(imageY / focalLengthForGridY);
       const thetaY = (thetaYRad * 180) / Math.PI;
       for (let xi = 0; xi < gridSize; xi++) {
         const imageX = -scaledMaxImageX + xi * stepX;
-        const thetaXRad = Math.atan(imageX / focalLengthForGrid);
+        const thetaXRad = Math.atan(imageX / focalLengthForGridX);
         const thetaX = (thetaXRad * 180) / Math.PI;
         const index = yi * gridSize + xi;
         idealX.push(imageX);
         idealY.push(imageY);
         if (gridFieldMode === "imageheight") {
           if (finiteSystem) {
-            const objectX = imageX * imageHeightToObjectScale;
-            const objectY = imageY * imageHeightToObjectScale;
+            const objectX = imageX * imageHeightToObjectScaleX;
+            const objectY = imageY * imageHeightToObjectScaleY;
             objectRows.push({
               id: `Field-${index}`,
               name: `Field-${index}`,
@@ -7992,8 +8091,8 @@ export async function runNativeGridDistortion(
             });
           }
         } else if (gridFieldMode === "height") {
-          const objectX = finiteSystem && imageScaleForHeight > 1e-9 ? (imageX / imageScaleForHeight) : imageX;
-          const objectY = finiteSystem && imageScaleForHeight > 1e-9 ? (imageY / imageScaleForHeight) : imageY;
+          const objectX = finiteSystem && imageScaleForHeightX > 1e-9 ? (imageX / imageScaleForHeightX) : imageX;
+          const objectY = finiteSystem && imageScaleForHeightY > 1e-9 ? (imageY / imageScaleForHeightY) : imageY;
           objectRows.push({
             id: `Field-${index}`,
             name: `Field-${index}`,
@@ -8057,15 +8156,15 @@ export async function runNativeGridDistortion(
       // A conventional grid-distortion plot is radial for a centred optical
       // system. Reuse the same robust distortion solver as the 1-D plot, then
       // project each traced radial image height back onto its grid azimuth.
-      if (typeof traceRadialDistortion === "function") {
+      if (typeof traceRadialDistortion === "function" && !axisAnamorphic) {
         try {
           const radialSamples = idealX.map((x, index) => {
             const radius = Math.hypot(x, idealY[index]);
             if (gridFieldMode === "angle") {
-              return (Math.atan(radius / focalLengthForGrid) * 180) / Math.PI;
+              return (Math.atan(radius / focalLengthForGridX) * 180) / Math.PI;
             }
-            if (gridFieldMode === "height" && finiteSystem && imageScaleForHeight > 1e-9) {
-              return radius / imageScaleForHeight;
+            if (gridFieldMode === "height" && finiteSystem && imageScaleForHeightX > 1e-9) {
+              return radius / imageScaleForHeightX;
             }
             return radius;
           });
@@ -8118,7 +8217,9 @@ export async function runNativeGridDistortion(
           radialWasmChiefRayError = String((error as any)?.message || error || "radial WASM distortion failed");
         }
       } else {
-        radialWasmChiefRayError = "missing run_native_distortion_wasm_json";
+        radialWasmChiefRayError = axisAnamorphic
+          ? "radial shortcut disabled for axis-resolved X/Y power"
+          : "missing run_native_distortion_wasm_json";
       }
 
       const traceInfinite = (rust as any)?.trace_image_height_infinite_candidate_exact_with_rows;
@@ -8279,9 +8380,13 @@ export async function runNativeGridDistortion(
       maxFieldAngle: gridFieldMode === "angle" ? Math.max(fieldMaxX, fieldMaxY) : NaN,
       meta: {
         wavelength,
-        focalLength: hasFiniteFocalLength ? focalLength : NaN,
-        focalLengthFallbackUsed: !hasFiniteFocalLength,
-        focalLengthForGrid,
+        focalLength: hasFiniteFocalLengthY ? focalLengthY : NaN,
+        focalLengthX: hasFiniteFocalLengthX ? focalLengthX : NaN,
+        focalLengthY: hasFiniteFocalLengthY ? focalLengthY : NaN,
+        focalLengthFallbackUsed: !hasFiniteFocalLengthX || !hasFiniteFocalLengthY,
+        focalLengthForGridX,
+        focalLengthForGridY,
+        axisAnamorphic,
         finiteSystem,
         gridFieldMode,
         sensorOverrideUsed,
@@ -8316,6 +8421,7 @@ export async function runNativeGridDistortion(
 export async function runNativeMagnificationChromaticAberration(
   payload: NativeMagnificationChromaticAberrationRequest,
 ): Promise<NativeMagnificationChromaticAberrationResponse> {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
   const tauriRuntime = isTauriRuntime();
   const chiefRayDefinition = String(payload?.chiefRayDefinition || "stop-center").trim().toLowerCase();
   const useExactStopCenterWasmInTauri = tauriRuntime && chiefRayDefinition.startsWith("stop-center");

@@ -1760,6 +1760,8 @@ export function calculateLongitudinalAberration(
             wavelength: wavelength,
             rayType: 'meridional',
             points: plottedMeridionalPoints,
+            focusStatus: plottedMeridionalPoints.length > 0 ? 'finite' : 'afocal',
+            axis: 'y',
             paraxialAberration: (Number.isFinite(currentFocusDistance) && Number.isFinite(primaryFocusDistance))
                 ? (currentFocusDistance - primaryFocusDistance)
                 : null
@@ -1899,6 +1901,8 @@ export function calculateLongitudinalAberration(
             wavelength: wavelength,
             rayType: 'sagittal',
             points: plottedSagittalPoints,
+            focusStatus: plottedSagittalPoints.length > 0 ? 'finite' : 'afocal',
+            axis: 'x',
             paraxialAberration: (Number.isFinite(currentFocusDistance) && Number.isFinite(primaryFocusDistance))
                 ? (currentFocusDistance - primaryFocusDistance)
                 : null  // 近軸の縦収差（色収差成分）

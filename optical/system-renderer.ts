@@ -3216,10 +3216,14 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
                 }
             }
             
-            // 手動で設定された半径値があるかチェック
-            if (window.forceStopRadius && !isNaN(window.forceStopRadius)) {
-                console.log(`🔧 [findStopSurface] 手動設定の半径を使用: ${window.forceStopRadius}`);
-                stopRadius = window.forceStopRadius;
+            // Optional diagnostic override. Keep the core stop resolver usable in
+            // workers and Node-based verification where `window` does not exist.
+            const forcedStopRadius = (typeof globalThis !== 'undefined')
+                ? Number((globalThis as any).forceStopRadius)
+                : NaN;
+            if (Number.isFinite(forcedStopRadius) && forcedStopRadius > 0) {
+                console.log(`🔧 [findStopSurface] 手動設定の半径を使用: ${forcedStopRadius}`);
+                stopRadius = forcedStopRadius;
             }
             
             // NaNチェック

@@ -6,6 +6,12 @@
 import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, calculateRefractiveIndexHerzberger, calculateRefractiveIndexHikari } from '../../data/glass.ts';
 import { hikariGlassDB } from '../../data/hikari_catalog.ts';
 import { detectConjugateType } from '../../utils/conjugate-detection.ts';
+import {
+  getIdealThinLensFocalPair,
+  isAnamorphicIdealThinLensRow,
+  isIdealThinLensBackRow,
+  isIdealThinLensRow,
+} from '../../utils/ideal-thin-lens.ts';
 
 // デバッグレベル設定（0: エラーのみ、1: 警告+エラー、2: 情報+警告+エラー、3: すべて）
 const DEBUG_LEVEL = 1;
@@ -83,9 +89,22 @@ export function calculatePupilsByNewSpec(opticalSystemRows, wavelength = 0.58756
  */
 function hasToricSurfaces(opticalSystemRows) {
   if (!opticalSystemRows || !Array.isArray(opticalSystemRows)) return false;
-  return opticalSystemRows.some(surface => 
-    surface && surface.surfType === 'Toric'
+  return opticalSystemRows.some(surface =>
+    surface && (
+      (surface.surfType === 'Toric' && !isIdealThinLensRow(surface))
+      || isAnamorphicIdealThinLensRow(surface)
+    )
   );
+}
+
+function getIdealThinLensPower(surface, meridian = 'average') {
+  if (!isIdealThinLensRow(surface) || isIdealThinLensBackRow(surface)) return null;
+  const { fx, fy } = getIdealThinLensFocalPair(surface);
+  const powerX = Number.isFinite(fx) ? 1 / fx : 0;
+  const powerY = Number.isFinite(fy) ? 1 / fy : 0;
+  if (meridian === 'sagittal') return powerX;
+  if (meridian === 'tangential') return powerY;
+  return (powerX + powerY) / 2;
 }
 
 /**
@@ -100,6 +119,11 @@ export function getSafeRadius(surface, meridian = 'average') {
     return Infinity;
   }
   
+  // Ideal Paraxial/ThinLens blocks carry their optical power explicitly.
+  // Their serialized front/back radii are editor geometry only and must never
+  // be interpreted as real refracting toric surfaces.
+  if (isIdealThinLensRow(surface)) return Infinity;
+
   // Toric surface handling
   if (surface.surfType === 'Toric') {
     // Get axis rotation (degrees)
@@ -474,7 +498,10 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       
       const radius = getSafeRadius(surface, meridian);
       const thickness = getSafeThickness(surface);
-      const combinedPower = Number(surface?.__cooptCombinedPower);
+      const idealThinLensPower = getIdealThinLensPower(surface, meridian);
+      const combinedPower = Number.isFinite(idealThinLensPower)
+        ? idealThinLensPower
+        : Number(surface?.__cooptCombinedPower);
       const isStopSurface = String(surface?.['object type'] ?? surface?.object ?? '').trim().toLowerCase() === 'stop';
       
       // Mirror面の検出
@@ -483,7 +510,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       // 次の媒質の屈折率を決定
       let nextN = 1.0; // デフォルトは空気
       
-      if (Number.isFinite(combinedPower)) {
+      if (Number.isFinite(combinedPower) || isIdealThinLensBackRow(surface)) {
         nextN = prevN;
       } else if (isMirror) {
         // Mirror面: 屈折率反転法 (n' = -n)
@@ -804,10 +831,20 @@ export function calculateFullSystemParaxialTraceWithToric(opticalSystemRows, wav
     astigmatism: astigmatism,
     // BFL/IMDはY方向（tangential）のみを使用
     focalLength: tangentialResult.focalLength,
+    focalLengthX: sagittalResult.focalLength,
+    focalLengthY: tangentialResult.focalLength,
     backFocalLength: tangentialResult.backFocalLength,
+    backFocalLengthX: sagittalResult.backFocalLength,
+    backFocalLengthY: tangentialResult.backFocalLength,
     imageDistance: tangentialResult.imageDistance,
+    imageDistanceX: sagittalResult.imageDistance,
+    imageDistanceY: tangentialResult.imageDistance,
     finalHeight: tangentialResult.finalHeight,
-    finalAlpha: tangentialResult.finalAlpha
+    finalHeightX: sagittalResult.finalHeight,
+    finalHeightY: tangentialResult.finalHeight,
+    finalAlpha: tangentialResult.finalAlpha,
+    finalAlphaX: sagittalResult.finalAlpha,
+    finalAlphaY: tangentialResult.finalAlpha
   };
   
   return resultObject;
@@ -1727,12 +1764,15 @@ function findFirstLastPhysicalSurfaceIndex(opticalSystemRows) {
 }
 
 function resolveNextMediumIndex(surface, prevN, wavelength, meridian = 'average') {
-  const combinedPower = Number(surface?.__cooptCombinedPower);
+  const idealThinLensPower = getIdealThinLensPower(surface, meridian);
+  const combinedPower = Number.isFinite(idealThinLensPower)
+    ? idealThinLensPower
+    : Number(surface?.__cooptCombinedPower);
   const isMirror = (surface?.material === 'MIRROR' || surface?.material === 'Mirror');
   const isStopSurface = String(surface?.['object type'] ?? surface?.object ?? '').trim().toLowerCase() === 'stop';
 
   let nextN = 1.0;
-  if (Number.isFinite(combinedPower)) {
+  if (Number.isFinite(combinedPower) || isIdealThinLensBackRow(surface)) {
     nextN = prevN;
   } else if (isMirror) {
     // Keep consistent with traceParaxialBasisRay behavior.
@@ -1951,9 +1991,17 @@ export function calculateParaxialData(opticalSystemRows, wavelength = 0.5875618)
 
     const result = {
       focalLength: fullSystemResult.focalLength,
+      focalLengthX: fullSystemResult.focalLengthX ?? fullSystemResult.sagittal?.focalLength ?? fullSystemResult.focalLength,
+      focalLengthY: fullSystemResult.focalLengthY ?? fullSystemResult.tangential?.focalLength ?? fullSystemResult.focalLength,
       backFocalLength: fullSystemResult.backFocalLength,
+      backFocalLengthX: fullSystemResult.backFocalLengthX ?? fullSystemResult.sagittal?.backFocalLength ?? fullSystemResult.backFocalLength,
+      backFocalLengthY: fullSystemResult.backFocalLengthY ?? fullSystemResult.tangential?.backFocalLength ?? fullSystemResult.backFocalLength,
       imageDistance: fullSystemResult.imageDistance,
+      imageDistanceX: fullSystemResult.imageDistanceX ?? fullSystemResult.sagittal?.imageDistance ?? fullSystemResult.imageDistance,
+      imageDistanceY: fullSystemResult.imageDistanceY ?? fullSystemResult.tangential?.imageDistance ?? fullSystemResult.imageDistance,
       finalAlpha: fullSystemResult.finalAlpha,
+      finalAlphaX: fullSystemResult.finalAlphaX ?? fullSystemResult.sagittal?.finalAlpha ?? fullSystemResult.finalAlpha,
+      finalAlphaY: fullSystemResult.finalAlphaY ?? fullSystemResult.tangential?.finalAlpha ?? fullSystemResult.finalAlpha,
       entrancePupilDiameter: EnP,
       exitPupilDiameter: ExP,
       wavelength: wavelength,
@@ -2297,13 +2345,14 @@ function buildPrincipalPointTraceSystem(opticalSystemRows, wavelength = 0.587561
     if (isThinLensSurface(surface)) {
       const blockId = String(surface._blockId ?? '').trim();
       const frontSurface = { ...surface };
-      let combinedPower = 0;
+      const explicitIdealPower = getIdealThinLensPower(surface, meridian);
+      let combinedPower = Number.isFinite(explicitIdealPower) ? explicitIdealPower : 0;
       let carryThickness = Number(getSafeThickness(surface)) || 0;
       let prevN = 1.0;
       let nextN = getRefractiveIndex(surface, wavelength);
       const frontRadius = getSafeRadius(surface, meridian);
       if (!Number.isFinite(nextN) || nextN === 0) nextN = 1.0;
-      if (frontRadius !== Infinity && frontRadius !== 0) {
+      if (!Number.isFinite(explicitIdealPower) && frontRadius !== Infinity && frontRadius !== 0) {
         combinedPower += (nextN - prevN) / frontRadius;
       }
 
@@ -2323,7 +2372,7 @@ function buildPrincipalPointTraceSystem(opticalSystemRows, wavelength = 0.587561
             const backRadius = getSafeRadius(nextSurface, meridian);
             let exitN = getRefractiveIndex(nextSurface, wavelength);
             if (!Number.isFinite(exitN) || exitN === 0) exitN = 1.0;
-            if (backRadius !== Infinity && backRadius !== 0) {
+            if (!Number.isFinite(explicitIdealPower) && backRadius !== Infinity && backRadius !== 0) {
               combinedPower += (exitN - nextN) / backRadius;
             }
             carryThickness = Number(getSafeThickness(nextSurface)) || 0;
@@ -2376,7 +2425,10 @@ function traceParaxialBasisRay(opticalSystemRows, initialHeight = 1.0, initialAl
     
     const radius = getSafeRadius(surface, meridian);
     const thickness = getSafeThickness(surface);
-    const combinedPower = Number(surface?.__cooptCombinedPower);
+    const idealThinLensPower = getIdealThinLensPower(surface, meridian);
+    const combinedPower = Number.isFinite(idealThinLensPower)
+      ? idealThinLensPower
+      : Number(surface?.__cooptCombinedPower);
     
     // Mirror面の検出
     const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
@@ -2385,7 +2437,7 @@ function traceParaxialBasisRay(opticalSystemRows, initialHeight = 1.0, initialAl
     // 次の媒質の屈折率を決定
     let nextN = 1.0; // デフォルトは空気
     
-    if (Number.isFinite(combinedPower)) {
+    if (Number.isFinite(combinedPower) || isIdealThinLensBackRow(surface)) {
       nextN = prevN;
     } else if (isMirror) {
       // Mirror面: ZEMAXスタイル - 屈折率は変えずに反射を処理

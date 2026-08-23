@@ -16,6 +16,7 @@ import { findFiniteSystemChiefRayDirection } from '../../raytracing/generation/g
 import { findInfiniteSystemChiefRayOrigin } from '../../raytracing/generation/gen-ray-cross-infinite.ts';
 import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from './zernike-fitting.ts';
 import { getGlobalWavefrontCache, WavefrontCache } from './wavefront-cache.ts';
+import { isRotationallySymmetricIdealThinLensOnlySystem } from '../../utils/ideal-thin-lens.ts';
 
 // Helper function to detect mirror surfaces
 function isMirrorRow(row) {
@@ -45,45 +46,7 @@ function __wavefrontIsGapRow(row) {
 }
 
 function __wavefrontIsIdealParaxialOnlySystem(opticalSystemRows: any[] = []) {
-    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
-
-    let hasIdealParaxial = false;
-    for (const row of opticalSystemRows) {
-        if (!row || typeof row !== 'object') continue;
-
-        const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
-        const surfType = String(row?.surfType ?? row?.type ?? row?.surfaceType ?? '').trim().toLowerCase();
-        const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
-
-        const isIdealParaxial = (
-            blockType === 'paraxial'
-            || blockType === 'thinlens'
-            || surfType === 'thinlens'
-            || Number.isFinite(Number(row?._thinLensFocalLengthX))
-            || Number.isFinite(Number(row?._thinLensFocalLengthY))
-        );
-        if (isIdealParaxial) {
-            hasIdealParaxial = true;
-            continue;
-        }
-
-        const isPassiveRow = (
-            objectType === ''
-            || objectType === 'object'
-            || objectType === 'image'
-            || objectType === 'stop'
-            || __wavefrontIsGapRow(row)
-            || surfType === 'coordinate break'
-            || surfType === 'coordbrk'
-            || blockType === 'coordinate break'
-            || blockType === 'coordbrk'
-        );
-        if (isPassiveRow) continue;
-
-        return false;
-    }
-
-    return hasIdealParaxial;
+    return isRotationallySymmetricIdealThinLensOnlySystem(opticalSystemRows);
 }
 function setCheckOnAxisOPDSymmetry(enabled) {
     try {
@@ -5821,7 +5784,7 @@ ${surfaceTypeList}
             //     console.log(`  セグメント${i}: 距離=${distance.toFixed(4)}mm = ${distanceInMicrons.toFixed(4)}μm, 屈折率=${refractiveIndex.toFixed(4)}, 光路長=${opticalSegment.toFixed(4)}μm`);
             // }
         }
-        
+
         // console.log(`📏 総光路長: ${totalOpticalPath.toFixed(4)} μm`);  // ログ削減
 
         const result = (totalOpticalPath > 0 && isFinite(totalOpticalPath)) ? totalOpticalPath : NaN;
@@ -8381,7 +8344,7 @@ export class WavefrontAberrationAnalyzer {
         };
         
         // Check OPD value symmetry for on-axis fields
-        if (window.__checkOnAxisOPDSymmetry && wavefrontMap.pupilCoordinates && wavefrontMap.opds) {
+        if (typeof window !== 'undefined' && window.__checkOnAxisOPDSymmetry && wavefrontMap.pupilCoordinates && wavefrontMap.opds) {
             setCheckOnAxisOPDSymmetry(false); // Clear flag
             console.log(`🔍 [OPD Symmetry] Checking ${wavefrontMap.opds.length} OPD values...`);
             
