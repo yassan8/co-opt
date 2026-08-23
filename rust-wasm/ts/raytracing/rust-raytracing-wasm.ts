@@ -33,6 +33,7 @@ export type RustRayTracingWasm = {
   run_native_paraxial_metrics_wasm_json?: (reqJson: string) => any;
   run_native_seidel_wasm_json?: (reqJson: string) => any;
   run_native_opd_map_wasm_json?: (reqJson: string) => any;
+  run_nonsequential_trace_wasm_json?: (reqJson: string) => any;
   run_native_opd_rms_waves_wasm_json?: (reqJson: string) => any;
   compute_native_opd_grid_rms_waves_wasm_json?: (reqJson: string) => any;
   trace_single_ray_hit_point_with_meta?: (
@@ -286,10 +287,11 @@ const RUST_WASM_RETRY_COOLDOWN_MS = 1000;
 const RUST_WASM_THREAD_POOL_INIT_TIMEOUT_MS = 3000;
 const isNodeRuntime = (() => {
   const hasProcessNode = (typeof process !== 'undefined') && !!(process as any)?.versions?.node;
-  // Node 20+ can expose `navigator`, so prefer concrete DOM globals.
+  // Diagnostics install a lightweight `window = globalThis` shim before importing
+  // the browser-compatible tracing modules. A window symbol alone therefore does
+  // not prove that this is a browser; require a real DOM or worker importScripts.
   const hasBrowserGlobals = (
-    typeof window !== 'undefined'
-    || typeof document !== 'undefined'
+    typeof document !== 'undefined'
     || (typeof self !== 'undefined' && typeof (self as any)?.importScripts === 'function')
   );
   const isElectronRenderer = (typeof process !== 'undefined') && String((process as any)?.type || '').toLowerCase() === 'renderer';
@@ -503,6 +505,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           run_native_seidel_wasm_json: mod.run_native_seidel_wasm_json,
           run_native_opd_map_wasm_json: mod.run_native_opd_map_wasm_json,
           run_native_opd_rms_waves_wasm_json: mod.run_native_opd_rms_waves_wasm_json,
+          run_nonsequential_trace_wasm_json: mod.run_nonsequential_trace_wasm_json,
           compute_native_opd_grid_rms_waves_wasm_json: mod.compute_native_opd_grid_rms_waves_wasm_json,
           trace_single_ray_hit_point_with_meta: mod.trace_single_ray_hit_point_with_meta,
           trace_ray_batch_hit_point_with_meta: mod.trace_ray_batch_hit_point_with_meta,

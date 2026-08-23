@@ -6067,6 +6067,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
       dir,
       n: nStart,
       wavelength: Number(ray0?.wavelength) || 0.55,
+      oplAnchor: { ...pos },
       oplMicrons: 0.0,
       status: 'active'
     };
@@ -6111,13 +6112,6 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
     ? new Float64Array(effectiveSystemRows.length)
     : null;
   if (rowRefractiveIndexCache) rowRefractiveIndexCache.fill(NaN);
-
-  const addThicknessOpl = (state, thicknessMm) => {
-    if (!state || !Number.isFinite(thicknessMm) || thicknessMm === 0) return;
-    const nCur = Number(state.n);
-    if (!Number.isFinite(nCur) || !(nCur > 0)) return;
-    state.oplMicrons += Math.abs(thicknessMm) * 1000 * nCur;
-  };
 
   for (let i = 0; i < effectiveSystemRows.length; i++) {
     const row = effectiveSystemRows[i] || {};
@@ -6185,7 +6179,6 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
         for (let r = 0; r < list.length; r++) {
           if (!alive[r] || done[r]) continue;
           const s = rayState[r];
-          addThicknessOpl(s, thickness);
           if (!advanced) {
             s.pos = add(s.pos, scale(s.dir, thickness));
           }
@@ -6496,10 +6489,11 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
         return transformPointToGlobal(hitPoint, surfaceInfo);
       })();
 
+      const oplAnchor = s.oplAnchor ?? s.pos;
       const segDistMm = Math.hypot(
-        Number(globalHitPoint.x) - Number(s.pos.x),
-        Number(globalHitPoint.y) - Number(s.pos.y),
-        Number(globalHitPoint.z) - Number(s.pos.z)
+        Number(globalHitPoint.x) - Number(oplAnchor.x),
+        Number(globalHitPoint.y) - Number(oplAnchor.y),
+        Number(globalHitPoint.z) - Number(oplAnchor.z)
       );
       if (!Number.isFinite(segDistMm) || segDistMm < 0) {
         alive[ridx] = 0;
@@ -6568,6 +6562,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
         }
       }
 
+      s.oplAnchor = globalHitPoint;
       s.pos = globalHitPoint;
 
       if (i === targetSurfaceIndex) {
@@ -6776,7 +6771,6 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
         const ridx = item.ridx;
         if (!alive[ridx] || done[ridx]) continue;
         const s = rayState[ridx];
-        addThicknessOpl(s, thickness);
         if (!advanced) {
           s.pos = add(s.pos, scale(s.dir, thickness));
         }

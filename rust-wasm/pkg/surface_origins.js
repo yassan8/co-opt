@@ -766,6 +766,20 @@ export function run_native_seidel_wasm_json(req_json) {
 }
 
 /**
+ * @param {string} request_json
+ * @returns {any}
+ */
+export function run_nonsequential_trace_wasm_json(request_json) {
+    const ptr0 = passStringToWasm0(request_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.run_nonsequential_trace_wasm_json(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * @param {any} optical_system_rows
  * @param {number} image_surface_index
  * @param {number} wavelength_um

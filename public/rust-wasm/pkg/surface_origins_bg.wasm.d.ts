@@ -45,6 +45,7 @@ export const run_native_opd_rms_waves_wasm_json: (a: number, b: number) => [numb
 export const run_native_paraxial_metrics_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_seidel_wasm_json: (a: number, b: number) => [number, number, number];
+export const run_nonsequential_trace_wasm_json: (a: number, b: number) => [number, number, number];
 export const solve_image_height_component_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
 export const solve_image_height_pair_exact_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
 export const solve_image_height_pair_with_rows: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];

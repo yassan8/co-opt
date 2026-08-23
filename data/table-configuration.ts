@@ -9,11 +9,13 @@ const w: Record<string, any> = window;
 // System Configuration管理モジュール
 // 複数のConfigurationを保存・切り替え可能にする
 
-import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows } from './block-schema.ts';
+import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, isPhysicalBlockType, type DesignConnection, type LoadIssue } from './block-schema.ts';
 import { storageGetItem, storageSetItem, storageRemoveItem } from '../utils/local-storage-gateway.ts';
 import { calculateParaxialData, getRefractiveIndex } from '../raytracing/core/ray-paraxial.ts';
 import { getGlassDataWithSellmeier, getPrimaryWavelength } from './glass.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedSystemRequirementsTableData } from './table-system-requirements.ts';
+import { normalizeCoherentAssemblyDesign, type CoherentAssemblyDesign } from '../analysis/coherent-assembly.ts';
+import { migrateLegacyCoherentDesign } from '../analysis/hybrid-design.ts';
 
 // Block interface (for type safety with block-schema)
 interface Block {
@@ -230,6 +232,15 @@ function normalizeLoadedSystemConfiguration(systemConfig: SystemConfiguration | 
     if (cfg.name === undefined || cfg.name === null) {
       cfg.name = `Config ${String(cfg.id ?? '') || ''}`.trim() || 'Config';
     }
+    if (cfg.coherentDesign && Array.isArray(cfg.blocks) && !cfg.blocks.some((block: any) => isPhysicalBlockType(block?.blockType))) {
+      const migrated = migrateLegacyCoherentDesign(normalizeCoherentAssemblyDesign(cfg.coherentDesign), cfg.blocks as any);
+      cfg.blocks = migrated.blocks as any;
+      cfg.designConnections = migrated.designConnections;
+      delete cfg.coherentDesign;
+      cfg.schemaVersion = BLOCK_SCHEMA_VERSION;
+      cfg.metadata.coherentDesignMigrated = true;
+      cfg.metadata.modified = new Date().toISOString();
+    }
     normalizeImageSurfaceBlocksForConfiguration(cfg);
     normalizeFixedStopBlocksForConfiguration(cfg);
     backfillMissingGlassPropertiesForConfiguration(cfg);
@@ -383,6 +394,7 @@ interface ConfigurationMetadata {
   modified: string;
   optimizationTarget?: any;
   locked: boolean;
+  coherentDesignMigrated?: boolean;
   designer?: {
     type: "human" | "ai" | "imported";
     name: string;
@@ -403,6 +415,10 @@ export interface Configuration {
   meritFunction?: any[];
   scenarios?: any[];
   activeScenarioId?: string | number;
+  /** Port graph for physical assembly blocks stored in blocks[]. */
+  designConnections?: DesignConnection[];
+  /** Legacy 0.1 assembly snapshot; migrated into blocks[] on load. */
+  coherentDesign?: CoherentAssemblyDesign;
 }
 
 interface SystemConfiguration {
@@ -420,6 +436,7 @@ interface ConfigurationListItem {
   created: string;
   modified: string;
   locked: boolean;
+  coherentDesignMigrated?: boolean;
 }
 
 interface LoadConfigurationOptions {
@@ -1153,8 +1170,15 @@ export function addConfiguration(name: string): number {
   // 現在のアクティブなConfigurationのデータをコピー
   const activeConfig = getActiveConfiguration();
   if (activeConfig) {
-    newConfig.object = JSON.parse(JSON.stringify(activeConfig.object));
-    newConfig.opticalSystem = JSON.parse(JSON.stringify(activeConfig.opticalSystem));
+    newConfig.blocks = JSON.parse(JSON.stringify(activeConfig.blocks ?? []));
+    newConfig.source = JSON.parse(JSON.stringify(activeConfig.source ?? []));
+    newConfig.object = JSON.parse(JSON.stringify(activeConfig.object ?? []));
+    newConfig.opticalSystem = JSON.parse(JSON.stringify(activeConfig.opticalSystem ?? []));
+    newConfig.systemData = JSON.parse(JSON.stringify(activeConfig.systemData ?? { referenceFocalLength: '' }));
+    newConfig.designConnections = JSON.parse(JSON.stringify(activeConfig.designConnections ?? []));
+    if (activeConfig.coherentDesign) {
+      newConfig.coherentDesign = JSON.parse(JSON.stringify(activeConfig.coherentDesign));
+    }
     if (activeConfig.meritFunction) {
       newConfig.meritFunction = JSON.parse(JSON.stringify(activeConfig.meritFunction));
     }

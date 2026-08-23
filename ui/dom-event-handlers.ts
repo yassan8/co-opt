@@ -114,8 +114,11 @@ import {
     evaluateZoomCompensation,
     validateZoomLawDefinitions,
     validateBlocksConfiguration,
+    isPhysicalBlockType,
+    type PhysicalBlockType,
     BLOCK_SCHEMA_VERSION
 } from '../data/block-schema.ts';
+import { createDefaultPhysicalBlock, normalizeDesignConnections, portsForPhysicalBlock } from '../analysis/hybrid-design.ts';
 import { SetBlockParameterCommand } from '../core/undo-history.ts';
 import { getOrCreateCooptWindowSyncSenderId, requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 import { 
@@ -7677,6 +7680,26 @@ function formatBlockPreview(block: any): string {
     };
 
     const type = String(b.blockType ?? '');
+    if (isPhysicalBlockType(type)) {
+        const p = b.parameters ?? {};
+        const xyz = `Offset XYZ=${String(p.positionXmm ?? 0)},${String(p.positionYmm ?? 0)},${String(p.positionZmm ?? 0)} mm`;
+        if (type === 'BroadbandSource') return `${p.minWavelengthNm ?? '—'}–${p.maxWavelengthNm ?? '—'} nm · ${p.totalPowerW ?? '—'} W · ${xyz}`;
+        if (type === 'FrequencyCombSource') return `f_rep=${p.repetitionRateHz ?? '—'} Hz · f_ceo=${p.ceoFrequencyHz ?? '—'} Hz · ${xyz}`;
+        if (type === 'BeamSplitter') {
+            const model = String(p.beamSplitterModel ?? 'ideal');
+            const modelLabel = model === 'ideal' ? 'Ideal' : model.charAt(0).toUpperCase() + model.slice(1);
+            const substrate = model === 'ideal'
+                ? ''
+                : ` · n(d)=${p.substrateIndexNd ?? '—'} · t=${p.substrateThicknessMm ?? '—'} mm`;
+            return `${modelLabel} · R/T=${p.reflectance ?? '—'}/${p.transmittance ?? '—'}${substrate} · ${xyz}`;
+        }
+        if (type === 'ReflectionGrating') return `${p.grooveDensityLinesPerMm ?? '—'} lines/mm · order ${p.order ?? '—'} · ${xyz}`;
+        if (type === 'AreaDetector') return `${p.pixelCountX ?? '—'}×${p.pixelCountY ?? '—'} · ${p.pixelPitchUm ?? '—'} µm · ${xyz}`;
+        if (type === 'TimeDetector') return `${p.samplingRateHz ?? '—'} Hz · ${p.sampleCount ?? '—'} samples · ${xyz}`;
+        if (type === 'Target') return `${p.profile ?? 'flat'} / ${p.interaction ?? 'specular'} · ${xyz}`;
+        return `${p.widthMm ?? '—'}×${p.heightMm ?? '—'}×${p.depthMm ?? '—'} mm · ${xyz}`;
+    }
+
     const isAsphereType = (v: any): boolean => {
         const s = String(v ?? '').trim().toLowerCase().replace(/\s+/g, '');
         return s.includes('aspheric');
@@ -9596,6 +9619,56 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
     const activeConfigIdForInspector = String(activeCfg?.id ?? '').trim();
     const maxImageHeightTargetMm = __cooptGetMaxImageHeightTargetMmFromObjectRows(Array.isArray(activeCfg?.object) ? activeCfg.object : []);
+    const hierarchyConnections = normalizeDesignConnections(Array.isArray(activeCfg?.blocks) ? activeCfg.blocks : [], activeCfg?.designConnections);
+    const hierarchyChildren = new Map<string, string[]>();
+    const hierarchyParents = new Map<string, string[]>();
+    const hierarchyPathByChild = new Map<string, string>();
+    for (const connection of hierarchyConnections) {
+        const fromId = String(connection?.from?.blockId ?? '').trim();
+        const toId = String(connection?.to?.blockId ?? '').trim();
+        if (!fromId || !toId) continue;
+        const children = hierarchyChildren.get(fromId) ?? [];
+        if (!children.includes(toId)) children.push(toId);
+        hierarchyChildren.set(fromId, children);
+        const parents = hierarchyParents.get(toId) ?? [];
+        if (!parents.includes(fromId)) parents.push(fromId);
+        hierarchyParents.set(toId, parents);
+        hierarchyPathByChild.set(toId, String(connection?.pathLabel ?? 'main'));
+    }
+    const hierarchyDepth = new Map<string, number>();
+    const physicalIds = (Array.isArray(blocksInOrder) ? blocksInOrder : [])
+        .filter((block: any) => isPhysicalBlockType(String(block?.blockType ?? '')))
+        .map((block: any) => String(block?.blockId ?? '')).filter(Boolean);
+    for (const id of physicalIds) if (!(hierarchyParents.get(id)?.length)) hierarchyDepth.set(id, 0);
+    for (let pass = 0; pass < physicalIds.length; pass += 1) {
+        let changed = false;
+        for (const id of physicalIds) {
+            const parentDepths = (hierarchyParents.get(id) ?? []).map((parentId) => hierarchyDepth.get(parentId)).filter((value): value is number => Number.isFinite(value));
+            if (!parentDepths.length) continue;
+            const nextDepth = Math.min(...parentDepths) + 1;
+            if (hierarchyDepth.get(id) !== nextDepth) { hierarchyDepth.set(id, nextDepth); changed = true; }
+        }
+        if (!changed) break;
+    }
+    const hierarchyStorageKey = `coopt.designIntent.collapsedPaths.${activeConfigIdForInspector || 'default'}`;
+    const collapsedHierarchyIds = (() => {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(hierarchyStorageKey) || '[]');
+            return new Set<string>(Array.isArray(parsed) ? parsed.map(String) : []);
+        } catch (_) { return new Set<string>(); }
+    })();
+    const persistCollapsedHierarchy = () => {
+        try { localStorage.setItem(hierarchyStorageKey, JSON.stringify(Array.from(collapsedHierarchyIds))); } catch (_) {}
+    };
+    const isHiddenByCollapsedParent = (id: string, visiting = new Set<string>()): boolean => {
+        if (!id || visiting.has(id)) return false;
+        visiting.add(id);
+        const parents = hierarchyParents.get(id) ?? [];
+        for (const parentId of parents) {
+            if (collapsedHierarchyIds.has(parentId) || isHiddenByCollapsedParent(parentId, new Set(visiting))) return true;
+        }
+        return false;
+    };
 
     // Show error banner if scope errors exist
     try {
@@ -9725,7 +9798,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     const headerZoom = document.createElement('div');
     headerZoom.textContent = 'Zoom';
     const headerSurf = document.createElement('div');
-    headerSurf.textContent = 'Surfaces';
+    headerSurf.textContent = 'Surfaces / ports';
     collapsedHeader.appendChild(headerDrag);
     collapsedHeader.appendChild(headerId);
     collapsedHeader.appendChild(headerValues);
@@ -10268,7 +10341,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         };
 
         const attachQuickScopeToggle = (wrapper: HTMLElement, path: string) => {
-            if (blockType === 'Stop') return;
+            if (blockType === 'Stop' || isPhysicalBlockType(blockType)) return;
             const key = String(path ?? '').trim().split('.').pop() || '';
             if (!key) return;
             wrapper.insertBefore(createQuickScopeToggle(key), wrapper.firstChild);
@@ -10326,7 +10399,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             for (const item of items) {
                 const option = document.createElement('option');
                 option.value = item;
-                option.textContent = item;
+                option.textContent = path === 'parameters.beamSplitterModel'
+                    ? ({ ideal: 'Ideal surface', plate: 'Plate', cube: 'Cube', pellicle: 'Pellicle' } as Record<string, string>)[item] ?? item
+                    : item;
                 if (item === currentText) option.selected = true;
                 select.appendChild(option);
             }
@@ -10482,7 +10557,49 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             target.appendChild(shell.wrapper);
         };
 
-        if (blockType === 'Lens' || blockType === 'PositiveLens') {
+        if (isPhysicalBlockType(blockType)) {
+            root.classList.add('block-inspector-quick-editor-physical');
+            const specRow = createQuickRow();
+            if (blockType === 'BroadbandSource') {
+                appendTextField('λ min', 'parameters.minWavelengthNm', params.minWavelengthNm, 74, specRow);
+                appendTextField('λ max', 'parameters.maxWavelengthNm', params.maxWavelengthNm, 74, specRow);
+                appendTextField('Power W', 'parameters.totalPowerW', params.totalPowerW, 72, specRow);
+            } else if (blockType === 'FrequencyCombSource') {
+                appendTextField('λ center', 'parameters.centerWavelengthNm', params.centerWavelengthNm, 76, specRow);
+                appendTextField('f rep', 'parameters.repetitionRateHz', params.repetitionRateHz, 94, specRow);
+                appendTextField('f CEO', 'parameters.ceoFrequencyHz', params.ceoFrequencyHz, 94, specRow);
+                appendTextField('Lines', 'parameters.lineCount', params.lineCount, 62, specRow);
+            } else if (blockType === 'BeamSplitter') {
+                const splitterModel = String(params.beamSplitterModel ?? 'ideal').toLowerCase();
+                appendSelectField('Model', 'parameters.beamSplitterModel', splitterModel, ['ideal', 'plate', 'cube', 'pellicle'], 82, specRow);
+                appendTextField('R', 'parameters.reflectance', params.reflectance, 62, specRow);
+                appendTextField('T', 'parameters.transmittance', params.transmittance, 62, specRow);
+            } else if (blockType === 'ReflectionGrating') {
+                appendTextField('lines/mm', 'parameters.grooveDensityLinesPerMm', params.grooveDensityLinesPerMm, 82, specRow);
+                appendTextField('Order', 'parameters.order', params.order, 58, specRow);
+                appendTextField('Efficiency', 'parameters.efficiency', params.efficiency, 68, specRow);
+            } else if (blockType === 'Target') {
+                appendSelectField('Profile', 'parameters.profile', params.profile, ['flat', 'step', 'tilt', 'sine', 'csv', 'stl'], 82, specRow);
+                appendSelectField('Interaction', 'parameters.interaction', params.interaction, ['specular', 'lambertian', 'abg', 'harvey-shack', 'bsdf-csv'], 108, specRow);
+                appendTextField('Reflect.', 'parameters.reflectance', params.reflectance, 68, specRow);
+            } else if (blockType === 'AreaDetector') {
+                appendTextField('Pixels X', 'parameters.pixelCountX', params.pixelCountX, 72, specRow);
+                appendTextField('Pixels Y', 'parameters.pixelCountY', params.pixelCountY, 72, specRow);
+                appendTextField('Pitch µm', 'parameters.pixelPitchUm', params.pixelPitchUm, 72, specRow);
+                appendTextField('QE', 'parameters.quantumEfficiency', params.quantumEfficiency, 60, specRow);
+            } else if (blockType === 'TimeDetector') {
+                appendTextField('Sample Hz', 'parameters.samplingRateHz', params.samplingRateHz, 94, specRow);
+                appendTextField('Samples', 'parameters.sampleCount', params.sampleCount, 72, specRow);
+                appendTextField('Bandwidth', 'parameters.detectionBandwidthHz', params.detectionBandwidthHz, 94, specRow);
+            } else {
+                appendTextField('Width', 'parameters.widthMm', params.widthMm, 68, specRow);
+                appendTextField('Height', 'parameters.heightMm', params.heightMm, 68, specRow);
+                appendTextField('Depth', 'parameters.depthMm', params.depthMm, 68, specRow);
+                if (blockType === 'NDFilter') appendTextField('T', 'parameters.transmission', params.transmission, 62, specRow);
+                if (blockType === 'FoldMirror') appendTextField('R', 'parameters.reflectance', params.reflectance, 62, specRow);
+            }
+            root.appendChild(specRow);
+        } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
             root.classList.add('block-inspector-quick-editor-multiline');
             root.style.setProperty('--quick-cols', '6');
             const row1 = createQuickRow();
@@ -10616,13 +10733,46 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
     for (const b of list) {
         const blockId = String(b.blockId ?? '').trim();
+        if (isPhysicalBlockType(String(b?.blockType ?? '')) && isHiddenByCollapsedParent(blockId)) continue;
         const row = document.createElement('div');
         row.className = 'block-inspector-row block-inspector-row-spreadsheet';
         if (blockId && __blockInspectorExpandedBlockId === blockId) row.classList.add('selected');
 
         const colId = document.createElement('div');
         colId.className = 'block-inspector-col-id';
-        colId.textContent = buildBlockInspectorLabelText(b);
+        const blockLabel = document.createElement('span');
+        blockLabel.className = 'block-inspector-tree-label';
+        blockLabel.textContent = buildBlockInspectorLabelText(b);
+        const isPhysicalTreeBlock = isPhysicalBlockType(String(b?.blockType ?? ''));
+        if (isPhysicalTreeBlock) row.classList.add('block-inspector-row-physical');
+        if (isPhysicalTreeBlock) {
+            const depth = Math.max(0, hierarchyDepth.get(blockId) ?? 0);
+            colId.classList.add('block-inspector-col-id-tree');
+            colId.style.setProperty('--di-tree-depth', String(depth));
+            const children = hierarchyChildren.get(blockId) ?? [];
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'block-inspector-tree-toggle';
+            toggle.textContent = children.length ? (collapsedHierarchyIds.has(blockId) ? '▸' : '▾') : '·';
+            toggle.disabled = children.length === 0;
+            toggle.title = children.length ? 'Collapse / expand connected downstream blocks' : 'No downstream connection';
+            toggle.onclick = (event: MouseEvent) => {
+                event.preventDefault(); event.stopPropagation();
+                if (!children.length) return;
+                if (collapsedHierarchyIds.has(blockId)) collapsedHierarchyIds.delete(blockId); else collapsedHierarchyIds.add(blockId);
+                persistCollapsedHierarchy();
+                try { refreshBlockInspector(); } catch (_) {}
+            };
+            colId.appendChild(toggle);
+            const pathLabel = hierarchyPathByChild.get(blockId);
+            if (pathLabel) {
+                const pathChip = document.createElement('span');
+                pathChip.className = 'block-inspector-tree-path';
+                pathChip.textContent = pathLabel;
+                colId.appendChild(pathChip);
+            }
+        }
+        colId.appendChild(blockLabel);
 
         const realBlock = (blockById && typeof blockById.get === 'function') ? blockById.get(blockId) || b : b;
         const zoomGroupLabel = getZoomGroupLabel(realBlock);
@@ -10675,7 +10825,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         const colParams = document.createElement('div');
         colParams.className = 'block-inspector-col-params';
         const previewText = String(b.preview ?? '');
-        const quickEditor = quickEditorEnabled ? createQuickEditor(realBlock) : null;
+        const quickEditor = quickEditorEnabled && (!isPhysicalTreeBlock || __blockInspectorExpandedBlockId === blockId)
+            ? createQuickEditor(realBlock)
+            : null;
         if (quickEditor) {
             if (previewText) colParams.title = previewText;
             colParams.appendChild(quickEditor);
@@ -10706,7 +10858,35 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         const colCount = document.createElement('div');
         colCount.className = 'block-inspector-col-count';
         const n = getLogicalSurfaceCountForBlock(b);
-        colCount.textContent = `→ ${Number.isFinite(n) ? n : 0} surfaces`;
+        if (isPhysicalTreeBlock) {
+            colCount.classList.add('block-inspector-physical-actions');
+            const portLabel = document.createElement('span');
+            portLabel.textContent = String(portsForPhysicalBlock(rawTypeForSummary as PhysicalBlockType).length) + ' ports';
+            const editButton = document.createElement('button');
+            editButton.type = 'button';
+            editButton.className = 'block-inspector-physical-edit';
+            editButton.textContent = __blockInspectorExpandedBlockId === blockId ? 'Done' : 'Edit';
+            editButton.title = __blockInspectorExpandedBlockId === blockId ? 'Close parameter editor' : 'Edit parameters';
+            editButton.onclick = (event: MouseEvent) => {
+                event.preventDefault();
+                event.stopPropagation();
+                __blockInspectorExpandedBlockId = __blockInspectorExpandedBlockId === blockId ? null : blockId;
+                try { refreshBlockInspector(); } catch (_) {}
+            };
+            const removeButton = document.createElement('button');
+            removeButton.type = 'button';
+            removeButton.className = 'block-inspector-physical-remove';
+            removeButton.textContent = 'Remove';
+            removeButton.title = 'Remove ' + buildBlockInspectorLabelText(b);
+            removeButton.onclick = (event: MouseEvent) => {
+                event.preventDefault();
+                event.stopPropagation();
+                __deleteDesignIntentBlock(blockId);
+            };
+            colCount.append(portLabel, editButton, removeButton);
+        } else {
+            colCount.textContent = '→ ' + String(Number.isFinite(n) ? n : 0) + ' surfaces';
+        }
 
         // Drag handle
         const dragHandle = document.createElement('span');
@@ -13369,6 +13549,12 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
         metadata: { source: 'ui-add' }
     };
 
+    if (isPhysicalBlockType(type)) {
+        const physical = createDefaultPhysicalBlock(type, id) as any;
+        physical.metadata = { ...(physical.metadata ?? {}), source: 'ui-add' };
+        return physical;
+    }
+
     if (type === 'Paraxial') {
         base.parameters = {
             zoomGroup: 'Fixed',
@@ -13620,13 +13806,14 @@ function __blocks_addBlockToActiveConfig(blockType: string, insertAfterBlockId: 
     let imageIdx = blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'ImageSurface');
     if (imageIdx < 0) imageIdx = blocks.length;
 
-    let insertIdx = imageIdx;
+    const physicalBlock = isPhysicalBlockType(type);
+    let insertIdx = physicalBlock ? blocks.length : imageIdx;
     if (type === 'ObjectSurface') insertIdx = 0;
 
     const afterId = String(insertAfterBlockId ?? '').trim();
     if (afterId) {
         const idx = blocks.findIndex(b => b && String(b.blockId ?? '').trim() === afterId);
-        if (idx >= 0) insertIdx = Math.min(idx + 1, imageIdx);
+        if (idx >= 0) insertIdx = physicalBlock ? idx + 1 : Math.min(idx + 1, imageIdx);
     }
 
     blocks.splice(insertIdx, 0, newBlock);
@@ -13678,6 +13865,12 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
 
     const removedBlock = JSON.parse(JSON.stringify(blocks[idx]));
     const removed = blocks.splice(idx, 1);
+    if (Array.isArray(activeCfg.designConnections)) {
+        activeCfg.designConnections = activeCfg.designConnections.filter((connection: any) => (
+            String(connection?.from?.blockId ?? '') !== id && String(connection?.to?.blockId ?? '') !== id
+        ));
+    }
+    if (isPhysicalBlockType(type)) delete activeCfg.coherentDesign;
 
     // If ImageSurface was deleted, immediately recreate it at the end to keep system valid
     if (type === 'ImageSurface') {
@@ -13691,14 +13884,19 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
         activeCfg.metadata.modified = new Date().toISOString();
     } catch (_) {}
 
-    try {
-        const issues = validateBlocksConfiguration(activeCfg);
-        const fatals = issues.filter(i => i && i.severity === 'fatal');
-        if (fatals.length > 0) {
-            blocks.splice(idx, 0, ...(removed || []));
-            return { ok: false, reason: 'block validation failed.' };
-        }
-    } catch (_) {}
+    // Removing an assembly-only block cannot invalidate the exact sequential
+    // surface train. Do not let unrelated legacy validation errors prevent
+    // Source/Comb/Splitter/Detector removal.
+    if (!isPhysicalBlockType(type)) {
+        try {
+            const issues = validateBlocksConfiguration(activeCfg);
+            const fatals = issues.filter(i => i && i.severity === 'fatal');
+            if (fatals.length > 0) {
+                blocks.splice(idx, 0, ...(removed || []));
+                return { ok: false, reason: 'block validation failed.' };
+            }
+        } catch (_) {}
+    }
 
     try {
         saveSystemConfigurations(systemConfig);
@@ -13707,6 +13905,31 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
     }
 
     return { ok: true, blockData: removedBlock, blockIndex: idx };
+}
+
+function __deleteDesignIntentBlock(blockId: string): boolean {
+    const bid = String(blockId ?? '').trim();
+    if (!bid) {
+        alert('Select a block first to delete.');
+        return false;
+    }
+    const res = __blocks_deleteBlockFromActiveConfig(bid);
+    if (!res || res.ok !== true) {
+        alert('Failed to delete block: ' + (res?.reason || 'unknown error'));
+        return false;
+    }
+    try {
+        if (w.undoHistory && w.DeleteBlockCommand && !w.undoHistory.isExecuting && res.blockData && typeof res.blockIndex === 'number') {
+            const sysConfig = loadSystemConfigurations();
+            const cmd = new w.DeleteBlockCommand(sysConfig.activeConfigId, res.blockData, res.blockIndex);
+            w.undoHistory.record(cmd);
+        }
+    } catch (_) {}
+    if (__blockInspectorExpandedBlockId === bid) __blockInspectorExpandedBlockId = null;
+    try {
+        __cooptScheduleDesignIntentUiRefresh({ forceExpandedRows: true, refreshBlockInspector: true, triggerRender: true, debounceMs: 40 });
+    } catch (_) {}
+    return true;
 }
 
 function __blocks_generateZoomScenariosForActiveConfig(): any {
@@ -13789,27 +14012,31 @@ function setupDesignIntentButtons(): void {
         const target = e.target as HTMLElement | null;
         if (!target) return;
 
-        const toolbar = target.closest('[id="design-intent-toolbar"]') as HTMLElement | null;
+        const quickStrip = target.closest('.di-physical-add-strip');
+        const toolbar = (target.closest('[id="design-intent-toolbar"]')
+            ?? quickStrip?.parentElement?.querySelector('[id="design-intent-toolbar"]')) as HTMLElement | null;
         if (!toolbar) return;
 
         const typeSelect = toolbar.querySelector('[id="design-intent-add-block-type"]') as HTMLSelectElement | null;
         const addBtn = target.closest('[id="design-intent-add-block-btn"]');
+        const quickAddBtn = target.closest('[data-design-intent-add-type]') as HTMLElement | null;
         const deleteBtn = target.closest('[id="design-intent-delete-block-btn"]');
         const paramAllOnBtn = target.closest('[id="design-intent-param-all-on-btn"]');
         const paramAllOffBtn = target.closest('[id="design-intent-param-all-off-btn"]');
         const autoSetAperturesBtn = target.closest('[id="design-intent-auto-set-apertures-btn"]');
         const zoomScenarioBtn = target.closest('[id="design-intent-generate-zoom-scenarios-btn"]');
 
-        if (!addBtn && !deleteBtn && !paramAllOnBtn && !paramAllOffBtn && !autoSetAperturesBtn && !zoomScenarioBtn) {
+        if (!addBtn && !quickAddBtn && !deleteBtn && !paramAllOnBtn && !paramAllOffBtn && !autoSetAperturesBtn && !zoomScenarioBtn) {
             return;
         }
 
         try { e.preventDefault(); } catch (_) {}
         try { e.stopPropagation(); } catch (_) {}
 
-        if (addBtn) {
+        if (addBtn || quickAddBtn) {
             try {
-                const type = String(typeSelect?.value ?? 'Lens').trim();
+                const quickType = String(quickAddBtn?.dataset.designIntentAddType ?? '').trim();
+                const type = quickType || String(typeSelect?.value ?? 'Lens').trim();
                 const after = __blockInspectorExpandedBlockId;
                 const res = __blocks_addBlockToActiveConfig(type, after);
                 if (!res || res.ok !== true) {
@@ -13836,30 +14063,10 @@ function setupDesignIntentButtons(): void {
 
         if (deleteBtn) {
             try {
-                const bid = String(__blockInspectorExpandedBlockId ?? '').trim();
-                if (!bid) {
-                    alert('Select (expand) a block first to delete.');
-                    return;
-                }
-                const res = __blocks_deleteBlockFromActiveConfig(bid);
-                if (!res || res.ok !== true) {
-                    alert(`Failed to delete block: ${res?.reason || 'unknown error'}`);
-                    return;
-                }
-                try {
-                    if (w.undoHistory && w.DeleteBlockCommand && !w.undoHistory.isExecuting && res.blockData && typeof res.blockIndex === 'number') {
-                        const sysConfig = loadSystemConfigurations();
-                        const cmd = new w.DeleteBlockCommand(sysConfig.activeConfigId, res.blockData, res.blockIndex);
-                        w.undoHistory.record(cmd);
-                    }
-                } catch (_) {}
-                __blockInspectorExpandedBlockId = null;
-                try {
-                    __cooptScheduleDesignIntentUiRefresh({ forceExpandedRows: true, refreshBlockInspector: true, triggerRender: true, debounceMs: 40 });
-                } catch (_) {}
+                __deleteDesignIntentBlock(String(__blockInspectorExpandedBlockId ?? ''));
             } catch (err) {
-                console.error('❌ Failed to delete block:', err);
-                alert(`Failed to delete block: ${(err as Error)?.message || String(err)}`);
+                console.error('Failed to delete block:', err);
+                alert('Failed to delete block: ' + ((err as Error)?.message || String(err)));
             }
             return;
         }

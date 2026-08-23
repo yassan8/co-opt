@@ -156,7 +156,8 @@ function isThinLensBackRow(row) {
     return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
 }
 
-// traceRay の rayPath は Object 行 / Coord Trans 行を交点として記録しない。
+// traceRay の rayPath は Object 行 / Coord Trans 行と、Paraxial/ThinLens の
+// synthetic back row を交点として記録しない。
 // surfaceIndex(テーブル行) -> rayPath の point index への変換を行う。
 function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
     if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) return null;
@@ -166,6 +167,7 @@ function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
         const row = opticalSystemRows[i];
         if (isCoordTransRow(row)) continue;
         if (isObjectRow(row)) continue;
+        if (isThinLensBackRow(row)) continue;
         count++;
     }
     return count > 0 ? count : null;
@@ -1435,7 +1437,12 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
         const allCrossBeamRays = [];
         const resolvedTargetSurfaceIndex = (() => {
             const rows = Array.isArray(opticalSystemRows) ? opticalSystemRows : [];
-            if (Number.isInteger(Number(targetSurfaceIndex))) {
+            const hasExplicitTargetSurface = (
+                targetSurfaceIndex !== null &&
+                targetSurfaceIndex !== undefined &&
+                String(targetSurfaceIndex).trim() !== ''
+            );
+            if (hasExplicitTargetSurface && Number.isInteger(Number(targetSurfaceIndex))) {
                 return Math.max(0, Math.min(Number(targetSurfaceIndex), Math.max(0, rows.length - 1)));
             }
             const imageIndex = rows.findIndex((row) => {

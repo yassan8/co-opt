@@ -1,0 +1,326 @@
+.coherent-signal-page {
+  --signal-border: #d7e0eb;
+  --signal-muted: #66758a;
+  --signal-surface: #ffffff;
+  --signal-soft: #f6f8fb;
+  min-width: 0;
+  height: 100%;
+  overflow: auto;
+  background: #f4f7fb;
+  color: #1d2a3b;
+}
+
+.coherent-signal-commandbar {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.55fr) minmax(520px, 1.8fr);
+  align-items: end;
+  gap: 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--signal-border);
+  background: var(--signal-surface);
+}
+
+.coherent-signal-identity,
+.coherent-signal-title {
+  min-width: 0;
+}
+
+.coherent-signal-title {
+  display: grid;
+  gap: 2px;
+}
+
+.coherent-signal-title strong {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.coherent-signal-title span {
+  color: var(--signal-muted);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.coherent-signal-controls {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.6fr) repeat(3, minmax(98px, 0.8fr)) auto;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.coherent-signal-control {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 4px;
+  min-width: 0;
+  margin: 0 !important;
+}
+
+.coherent-signal-control > span {
+  display: block;
+  min-width: 0;
+  color: var(--signal-muted);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.1;
+  white-space: normal;
+}
+
+.coherent-signal-control select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 26px 0 9px;
+  border: 1px solid #cbd6e4;
+  border-radius: 7px;
+  background: var(--signal-surface);
+  color: inherit;
+  font-size: 12px;
+}
+
+.coherent-signal-controls .analysis-window-primary-action {
+  min-width: 64px;
+  height: 34px;
+  margin: 0;
+  align-self: end;
+}
+
+.coherent-signal-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) minmax(220px, 1.6fr);
+  gap: 1px;
+  padding: 1px 0;
+  border-bottom: 1px solid var(--signal-border);
+  background: var(--signal-border);
+}
+
+.coherent-signal-overview > div {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 8px 12px;
+  background: var(--signal-surface);
+}
+
+.coherent-signal-overview span {
+  color: var(--signal-muted);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.coherent-signal-overview strong {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.coherent-signal-status strong {
+  color: #1d5dca;
+}
+
+.coherent-signal-error,
+.coherent-signal-page-warning {
+  margin: 10px 12px 0;
+}
+
+.coherent-signal-warning {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #f1d28a;
+  border-radius: 7px;
+  background: #fff8e6;
+  color: #795b12;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.coherent-signal-results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.coherent-signal-result-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid var(--signal-border);
+  border-radius: 10px;
+  background: var(--signal-surface);
+  box-shadow: 0 1px 3px rgba(31, 45, 61, 0.06);
+}
+
+.coherent-signal-result-card > header {
+  min-width: 0;
+}
+
+.coherent-signal-result-card > header h2 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.coherent-signal-result-card > header p {
+  margin: 3px 0 0;
+  color: var(--signal-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.coherent-signal-figure {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+
+.coherent-signal-heatmap {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: 52vh;
+  aspect-ratio: 1;
+  margin: 0 auto;
+  border: 1px solid #243044;
+  border-radius: 6px;
+  background: #020307;
+  object-fit: contain;
+}
+
+.coherent-signal-figure figcaption {
+  min-width: 0;
+  color: var(--signal-muted);
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.coherent-signal-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.coherent-signal-metrics span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #e0e7f0;
+  border-radius: 7px;
+  background: var(--signal-soft);
+  color: var(--signal-muted);
+  font-size: 9px;
+  line-height: 1.15;
+}
+
+.coherent-signal-metrics strong {
+  min-width: 0;
+  color: #172336;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.coherent-signal-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  border: 1px dashed #cbd6e4;
+  border-radius: 8px;
+  color: var(--signal-muted);
+  font-size: 12px;
+}
+
+body.dark-mode .coherent-signal-page {
+  --signal-border: #334154;
+  --signal-muted: #a8b4c5;
+  --signal-surface: #151b24;
+  --signal-soft: #1c2430;
+  background: #10151c;
+  color: #eef3f9;
+}
+
+body.dark-mode .coherent-signal-control select,
+body.dark-mode .coherent-signal-result-card {
+  border-color: var(--signal-border);
+}
+
+body.dark-mode .coherent-signal-metrics span {
+  border-color: #364459;
+}
+
+body.dark-mode .coherent-signal-metrics strong {
+  color: #f1f5fa;
+}
+
+body.dark-mode .coherent-signal-warning {
+  border-color: #705920;
+  background: #332a13;
+  color: #f0d58b;
+}
+
+@media (max-width: 1050px) {
+  .coherent-signal-commandbar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .coherent-signal-overview {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .coherent-signal-status {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 700px) {
+  .coherent-signal-commandbar {
+    padding: 10px;
+  }
+
+  .coherent-signal-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .coherent-signal-controls .analysis-window-primary-action {
+    width: 100%;
+  }
+
+  .coherent-signal-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .coherent-signal-status {
+    grid-column: 1 / -1;
+  }
+
+  .coherent-signal-results-grid {
+    padding: 8px;
+  }
+
+  .coherent-signal-result-card {
+    padding: 9px;
+  }
+}
