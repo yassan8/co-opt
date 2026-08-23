@@ -383,6 +383,35 @@ const blurred = await convolveImageSpatiallyVarying(impulse, [
 assert.ok(blurred.rgba[centerOffset] < 255, 'blur must reduce the impulse peak');
 assert.ok(blurred.rgba[centerOffset + 4] > 0, 'blur must spread energy to neighboring pixels');
 
+const linePsf = Array.from({ length: 81 }, () => {
+  const row = new Array(9).fill(0);
+  row[4] = 1;
+  return row;
+});
+const adaptiveLineKernel = resamplePsfToImageKernel(linePsf, 1, 1, 1, 15, 0, {
+  maxSize: 101,
+  lineAxis: { x: 0, y: 1 },
+});
+assert.ok(adaptiveLineKernel.size >= 81, 'hybrid line PSF support must not be cropped to the manual kernel size');
+assert.equal(adaptiveLineKernel.lineSpread?.axis, 'y', 'vertical detector line must use the fast vertical line-spread path');
+assert.ok((adaptiveLineKernel.lineSpread?.segments.length || 0) <= 48, 'line-spread integration must keep bounded piecewise segments');
+const lineImpulse = {
+  width: 9,
+  height: 101,
+  rgba: new Uint8ClampedArray(9 * 101 * 4),
+};
+for (let index = 0; index < 9 * 101; index += 1) lineImpulse.rgba[index * 4 + 3] = 255;
+const lineImpulseOffset = (50 * 9 + 4) * 4;
+lineImpulse.rgba[lineImpulseOffset] = 255;
+lineImpulse.rgba[lineImpulseOffset + 1] = 255;
+lineImpulse.rgba[lineImpulseOffset + 2] = 255;
+const lineBlurred = await convolveImageSpatiallyVarying(lineImpulse, [
+  { xNorm: 0, yNorm: 0, kernel: adaptiveLineKernel },
+]);
+const illuminatedLineRows = Array.from({ length: 101 }, (_, y) => lineBlurred.rgba[(y * 9 + 4) * 4])
+  .filter((value) => value > 0).length;
+assert.ok(illuminatedLineRows >= 75, 'full-span line PSF must spread the image across its physical detector extent');
+
 const shiftedChromaticMap = {
   ...identityMap,
   realX: idealX.map((x) => x + 0.012),

@@ -38,6 +38,11 @@ export type ImageSimulationKernel = {
   size: number;
   data: Float32Array;
   sparse: Array<{ dx: number; dy: number; weight: number }>;
+  lineSpread?: {
+    axis: 'x' | 'y';
+    profile: Float32Array;
+    segments: Array<{ start: number; end: number; weight: number }>;
+  };
 };
 
 export type ImageSimulationFieldKernel = {
@@ -507,6 +512,61 @@ function buildSparseKernel(size: number, data: Float32Array): ImageSimulationKer
   return sparse;
 }
 
+function buildImageSimulationLineSpread(
+  axis: 'x' | 'y',
+  profileInput: Float32Array,
+  center: number,
+  maxSegments = 48,
+): NonNullable<ImageSimulationKernel['lineSpread']> | undefined {
+  const profile = new Float32Array(profileInput);
+  let sum = 0;
+  let peak = 0;
+  for (const value of profile) {
+    sum += Math.max(0, Number(value) || 0);
+    peak = Math.max(peak, Math.max(0, Number(value) || 0));
+  }
+  if (!(sum > 0) || !(peak > 0)) return undefined;
+  for (let index = 0; index < profile.length; index += 1) profile[index] /= sum;
+  const threshold = peak / sum * 1e-7;
+  let first = 0;
+  let last = profile.length - 1;
+  while (first < last && profile[first] <= threshold) first += 1;
+  while (last > first && profile[last] <= threshold) last -= 1;
+  const binWidth = Math.max(1, Math.ceil((last - first + 1) / Math.max(1, maxSegments)));
+  const segments: NonNullable<ImageSimulationKernel['lineSpread']>['segments'] = [];
+  for (let startIndex = first; startIndex <= last; startIndex += binWidth) {
+    const endIndex = Math.min(last, startIndex + binWidth - 1);
+    let weight = 0;
+    for (let index = startIndex; index <= endIndex; index += 1) weight += profile[index];
+    if (!(weight > 0)) continue;
+    segments.push({
+      start: startIndex - center,
+      end: endIndex - center,
+      weight,
+    });
+  }
+  return { axis, profile, segments };
+}
+
+function resolveImageSimulationLineAxis(
+  lineAxis: { x: number; y: number } | undefined,
+  rotationDeg: number,
+): 'x' | 'y' | null {
+  if (!lineAxis) return null;
+  const inputX = Number(lineAxis.x);
+  const inputY = Number(lineAxis.y);
+  const norm = Math.hypot(inputX, inputY);
+  if (!(norm > 0)) return null;
+  const radians = (Number(rotationDeg) || 0) * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const rasterX = (cos * inputX + sin * inputY) / norm;
+  const rasterY = (-sin * inputX + cos * inputY) / norm;
+  if (Math.abs(rasterY) <= 1e-3) return 'x';
+  if (Math.abs(rasterX) <= 1e-3) return 'y';
+  return null;
+}
+
 export function createIdentityImageSimulationKernel(size = 21): ImageSimulationKernel {
   const normalizedSize = Math.max(3, Math.floor(size) | 1);
   const data = new Float32Array(normalizedSize * normalizedSize);
@@ -580,16 +640,23 @@ export function resamplePsfToImageKernel(
   imagePixelPitchYUm: number,
   requestedSize = 21,
   rotationDeg = 0,
+  options: {
+    maxSize?: number;
+    lineAxis?: { x: number; y: number };
+  } = {},
 ): ImageSimulationKernel {
-  const size = Math.max(3, Math.min(41, Math.floor(requestedSize) | 1));
-  const data = new Float32Array(size * size);
   const rows = Array.isArray(psfData) ? psfData.length : 0;
   const columns = rows > 0 && Array.isArray(psfData[0]) ? psfData[0].length : 0;
   const sourcePitch = Number(psfPixelSizeUm);
   const targetPitchX = Number(imagePixelPitchXUm);
   const targetPitchY = Number(imagePixelPitchYUm);
+  const requested = Math.max(3, Math.floor(requestedSize) | 1);
+  const alignedLineAxis = resolveImageSimulationLineAxis(options.lineAxis, rotationDeg);
+  const configuredMaximum = alignedLineAxis
+    ? Math.max(41, Math.min(2049, Math.floor(Number(options.maxSize) || 41) | 1))
+    : 41;
   if (!(rows > 0 && columns > 0 && sourcePitch > 0 && targetPitchX > 0 && targetPitchY > 0)) {
-    return createIdentityImageSimulationKernel(size);
+    return createIdentityImageSimulationKernel(Math.min(configuredMaximum, requested));
   }
   // fftshift places the zero-frequency PSF sample at floor(N / 2), including
   // even FFT grids. Treat every sample as an energy-carrying cell and rebin by
@@ -597,6 +664,45 @@ export function resamplePsfToImageKernel(
   // centered sample of an even grid into an artificial 2x2 blur.
   const sourceCenterX = Math.floor(columns / 2);
   const sourceCenterY = Math.floor(rows / 2);
+  let requiredSize = requested;
+  if (alignedLineAxis && configuredMaximum > 41) {
+    let peak = 0;
+    for (const row of psfData) for (const value of row || []) peak = Math.max(peak, Math.max(0, Number(value) || 0));
+    const threshold = peak * 1e-8;
+    let minSourceX = columns;
+    let maxSourceX = -1;
+    let minSourceY = rows;
+    let maxSourceY = -1;
+    for (let sourceY = 0; sourceY < rows; sourceY += 1) {
+      for (let sourceX = 0; sourceX < columns; sourceX += 1) {
+        if ((Number(psfData[sourceY]?.[sourceX]) || 0) <= threshold) continue;
+        minSourceX = Math.min(minSourceX, sourceX);
+        maxSourceX = Math.max(maxSourceX, sourceX);
+        minSourceY = Math.min(minSourceY, sourceY);
+        maxSourceY = Math.max(maxSourceY, sourceY);
+      }
+    }
+    if (maxSourceX >= minSourceX && maxSourceY >= minSourceY) {
+      const radians = (Number(rotationDeg) || 0) * Math.PI / 180;
+      const cos = Math.cos(radians);
+      const sin = Math.sin(radians);
+      const corners = [
+        { x: (minSourceX - sourceCenterX - 0.5) * sourcePitch, y: (minSourceY - sourceCenterY - 0.5) * sourcePitch },
+        { x: (maxSourceX - sourceCenterX + 0.5) * sourcePitch, y: (minSourceY - sourceCenterY - 0.5) * sourcePitch },
+        { x: (maxSourceX - sourceCenterX + 0.5) * sourcePitch, y: (maxSourceY - sourceCenterY + 0.5) * sourcePitch },
+        { x: (minSourceX - sourceCenterX - 0.5) * sourcePitch, y: (maxSourceY - sourceCenterY + 0.5) * sourcePitch },
+      ].map((point) => ({ x: cos * point.x + sin * point.y, y: -sin * point.x + cos * point.y }));
+      const supportX = Math.max(...corners.map((point) => point.x)) - Math.min(...corners.map((point) => point.x));
+      const supportY = Math.max(...corners.map((point) => point.y)) - Math.min(...corners.map((point) => point.y));
+      requiredSize = Math.max(
+        requested,
+        Math.ceil(supportX / targetPitchX) + 2,
+        Math.ceil(supportY / targetPitchY) + 2,
+      ) | 1;
+    }
+  }
+  const size = Math.max(3, Math.min(configuredMaximum, requiredSize) | 1);
+  const data = new Float32Array(size * size);
   const targetCenter = (size - 1) / 2;
   const radians = (Number(rotationDeg) || 0) * Math.PI / 180;
   const cos = Math.cos(radians);
@@ -645,7 +751,17 @@ export function resamplePsfToImageKernel(
   for (let index = 0; index < data.length; index += 1) sum += data[index];
   if (!(sum > 0)) return createIdentityImageSimulationKernel(size);
   for (let index = 0; index < data.length; index += 1) data[index] /= sum;
-  return { size, data, sparse: buildSparseKernel(size, data) };
+  let lineSpread: ImageSimulationKernel['lineSpread'];
+  if (alignedLineAxis) {
+    const profile = new Float32Array(size);
+    if (alignedLineAxis === 'x') {
+      for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) profile[x] += data[y * size + x];
+    } else {
+      for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) profile[y] += data[y * size + x];
+    }
+    lineSpread = buildImageSimulationLineSpread(alignedLineAxis, profile, targetCenter);
+  }
+  return { size, data, sparse: buildSparseKernel(size, data), lineSpread };
 }
 
 function blendFieldKernel(
@@ -662,6 +778,27 @@ function blendFieldKernel(
   const kernelFor = (node: ImageSimulationFieldKernel) => node[channel] || node.kernel;
   if (ranked[0].distance2 <= 1e-14) return kernelFor(ranked[0].node);
   const size = kernelFor(ranked[0].node).size;
+  const lineAxis = kernelFor(ranked[0].node).lineSpread?.axis;
+  if (lineAxis && ranked.every(({ node }) => {
+    const kernel = kernelFor(node);
+    return kernel.size === size && kernel.lineSpread?.axis === lineAxis && kernel.lineSpread.profile.length === size;
+  })) {
+    const profile = new Float32Array(size);
+    let weightSum = 0;
+    ranked.forEach(({ node, distance2 }) => {
+      const weight = 1 / Math.max(1e-6, distance2);
+      weightSum += weight;
+      const source = kernelFor(node).lineSpread!.profile;
+      for (let index = 0; index < size; index += 1) profile[index] += source[index] * weight;
+    });
+    if (weightSum > 0) for (let index = 0; index < size; index += 1) profile[index] /= weightSum;
+    return {
+      size,
+      data: new Float32Array(0),
+      sparse: [],
+      lineSpread: buildImageSimulationLineSpread(lineAxis, profile, (size - 1) / 2),
+    };
+  }
   const data = new Float32Array(size * size);
   let weightSum = 0;
   ranked.forEach(({ node, distance2 }) => {
@@ -705,6 +842,73 @@ export async function convolveImageSpatiallyVarying(
     green[index] = srgbToLinear(rgba[index * 4 + 1]);
     blue[index] = srgbToLinear(rgba[index * 4 + 2]);
   }
+  type LinePrefixes = { red: Float64Array; green: Float64Array; blue: Float64Array };
+  const buildLinePrefix = (plane: Float32Array, axis: 'x' | 'y') => {
+    if (axis === 'x') {
+      const prefix = new Float64Array(height * (width + 1));
+      for (let y = 0; y < height; y += 1) {
+        const rowOffset = y * (width + 1);
+        const planeOffset = y * width;
+        for (let x = 0; x < width; x += 1) prefix[rowOffset + x + 1] = prefix[rowOffset + x] + plane[planeOffset + x];
+      }
+      return prefix;
+    }
+    const prefix = new Float64Array(width * (height + 1));
+    for (let x = 0; x < width; x += 1) {
+      const columnOffset = x * (height + 1);
+      for (let y = 0; y < height; y += 1) prefix[columnOffset + y + 1] = prefix[columnOffset + y] + plane[y * width + x];
+    }
+    return prefix;
+  };
+  const lineAxes = new Set(fieldKernels.map((node) => node.kernel.lineSpread?.axis).filter((axis): axis is 'x' | 'y' => Boolean(axis)));
+  const linePrefixes = new Map<'x' | 'y', LinePrefixes>();
+  lineAxes.forEach((axis) => linePrefixes.set(axis, {
+    red: buildLinePrefix(red, axis),
+    green: buildLinePrefix(green, axis),
+    blue: buildLinePrefix(blue, axis),
+  }));
+  const convolveLineChannel = (
+    plane: Float32Array,
+    prefix: Float64Array,
+    x: number,
+    y: number,
+    lineSpread: NonNullable<ImageSimulationKernel['lineSpread']>,
+  ) => {
+    let value = 0;
+    for (const segment of lineSpread.segments) {
+      const segmentLength = Math.max(1, segment.end - segment.start + 1);
+      if (lineSpread.axis === 'x') {
+        const rawStart = x - segment.end;
+        const rawEnd = x - segment.start;
+        const start = Math.max(0, rawStart);
+        const end = Math.min(width - 1, rawEnd);
+        const rowOffset = y * (width + 1);
+        let intervalSum = start <= end ? prefix[rowOffset + end + 1] - prefix[rowOffset + start] : 0;
+        if (rawStart < 0) intervalSum += Math.min(rawEnd, -1) - rawStart + 1 > 0
+          ? (Math.min(rawEnd, -1) - rawStart + 1) * plane[y * width]
+          : 0;
+        if (rawEnd >= width) intervalSum += rawEnd - Math.max(rawStart, width) + 1 > 0
+          ? (rawEnd - Math.max(rawStart, width) + 1) * plane[y * width + width - 1]
+          : 0;
+        value += intervalSum / segmentLength * segment.weight;
+      } else {
+        const rawStart = y - segment.end;
+        const rawEnd = y - segment.start;
+        const start = Math.max(0, rawStart);
+        const end = Math.min(height - 1, rawEnd);
+        const columnOffset = x * (height + 1);
+        let intervalSum = start <= end ? prefix[columnOffset + end + 1] - prefix[columnOffset + start] : 0;
+        if (rawStart < 0) intervalSum += Math.min(rawEnd, -1) - rawStart + 1 > 0
+          ? (Math.min(rawEnd, -1) - rawStart + 1) * plane[x]
+          : 0;
+        if (rawEnd >= height) intervalSum += rawEnd - Math.max(rawStart, height) + 1 > 0
+          ? (rawEnd - Math.max(rawStart, height) + 1) * plane[(height - 1) * width + x]
+          : 0;
+        value += intervalSum / segmentLength * segment.weight;
+      }
+    }
+    return value;
+  };
   const out = new Uint8ClampedArray(pixelCount * 4);
   const tileSize = Math.max(16, Math.min(96, Math.floor(Number(options.tileSize) || 32)));
   const tileColumns = Math.ceil(width / tileSize);
@@ -726,6 +930,11 @@ export async function convolveImageSpatiallyVarying(
       const greenKernel = channelSpecific ? blendFieldKernel(fieldKernels, xNorm, yNorm, 'greenKernel') : scalarKernel;
       const blueKernel = channelSpecific ? blendFieldKernel(fieldKernels, xNorm, yNorm, 'blueKernel') : scalarKernel;
       const convolveChannel = (plane: Float32Array, x: number, y: number, kernel: ImageSimulationKernel) => {
+        if (kernel.lineSpread) {
+          const prefixSet = linePrefixes.get(kernel.lineSpread.axis);
+          const prefix = plane === red ? prefixSet?.red : plane === green ? prefixSet?.green : prefixSet?.blue;
+          if (prefix) return convolveLineChannel(plane, prefix, x, y, kernel.lineSpread);
+        }
         let sum = 0;
         for (const entry of kernel.sparse) {
           const sourceX = clamp(x - entry.dx, 0, width - 1);
@@ -739,7 +948,14 @@ export async function convolveImageSpatiallyVarying(
           let sumR = 0;
           let sumG = 0;
           let sumB = 0;
-          if (scalarKernel) {
+          if (scalarKernel?.lineSpread) {
+            const prefixSet = linePrefixes.get(scalarKernel.lineSpread.axis);
+            if (prefixSet) {
+              sumR = convolveLineChannel(red, prefixSet.red, x, y, scalarKernel.lineSpread);
+              sumG = convolveLineChannel(green, prefixSet.green, x, y, scalarKernel.lineSpread);
+              sumB = convolveLineChannel(blue, prefixSet.blue, x, y, scalarKernel.lineSpread);
+            }
+          } else if (scalarKernel) {
             for (const entry of scalarKernel.sparse) {
               const sourceX = clamp(x - entry.dx, 0, width - 1);
               const sourceY = clamp(y - entry.dy, 0, height - 1);
