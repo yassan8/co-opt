@@ -66,6 +66,7 @@ export type FieldPsfComputeOptions = {
   logScale: boolean;
   token: CancelToken;
   onProgress: (percent: number, message: string) => void;
+  includeComplexField?: boolean;
 };
 
 export type FieldPsfComputeResult = {
@@ -97,6 +98,8 @@ export type FieldPsfComputeResult = {
       effectiveSpacingUm: number;
       axis: { x: number; y: number };
     };
+    fieldReal?: number[][];
+    fieldImag?: number[][];
   }>;
 };
 
@@ -279,6 +282,7 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
     logScale,
     token,
     onProgress,
+    includeComplexField = false,
   } = options;
   const primary = getPrimaryWavelength(host, sourceRows);
   const wavelengthEntries = buildWavelengthEntries(wavelengthValue, sourceRows, primary);
@@ -367,6 +371,7 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
       referenceSphereCenterHint: (opd as any)?.referenceSphereCenter,
       referenceSphereRadiusMmHint: (opd as any)?.referenceSphereRadiusMm,
       objectIndexHint: 0,
+      includeComplexField,
     })), token);
     return {
       wavelength: entry.wavelength,
@@ -385,6 +390,8 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
       diagnostic: (psf as any)?.diagnostic,
       geometricSampling: (psf as any)?.geometricSampling,
       opdRmsUm: calculateMultiFieldPsfOpdRmsUm(gridOpd, pupilMask),
+      fieldReal: Array.isArray((psf as any)?.fieldReal) ? (psf as any).fieldReal : undefined,
+      fieldImag: Array.isArray((psf as any)?.fieldImag) ? (psf as any).fieldImag : undefined,
     };
   };
 
@@ -496,6 +503,8 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
       method: result.method,
       geometricSpanUm: result.geometricSpanUm,
       geometricSampling: result.geometricSampling,
+      fieldReal: result.fieldReal,
+      fieldImag: result.fieldImag,
     })),
   };
 }

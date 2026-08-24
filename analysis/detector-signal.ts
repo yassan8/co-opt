@@ -26,6 +26,29 @@ export interface ImagingDetectorSignal {
   exposureTimeS: number;
 }
 
+export interface CoherentDetectorFieldSample {
+  pixelX: number;
+  pixelY: number;
+  coherenceGroupId: string;
+  frequencyHz: number;
+  wavelengthNm: number;
+  fieldRe: number;
+  fieldIm: number;
+}
+
+export interface CoherentPsfPlane extends SpectralPsfPlane {
+  fieldReal?: number[][];
+  fieldImag?: number[][];
+}
+
+export interface CoherentFieldDetectorSignal {
+  signal: ImagingDetectorSignal;
+  spectralModeCount: number;
+  inputFieldPowerW: number;
+  complexKernelCount: number;
+  warning: string;
+}
+
 const finite = (value: unknown, fallback = 0): number => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const clamp = (value: number, minimum: number, maximum: number): number => Math.max(minimum, Math.min(maximum, value));
 
@@ -291,4 +314,185 @@ export function convolveDetectorPowerWithPsf(options: {
     powerWPerPixel: output, width, height, detector: options.detector,
     wavelengthNm: options.wavelengthNm, inputPowerW,
   });
+}
+
+type ComplexKernelTap = { dx: number; dy: number; re: number; im: number; power: number };
+
+function buildComplexDetectorKernel(
+  plane: CoherentPsfPlane,
+  detectorPitchUm: number,
+  maximumTaps = 1024,
+): ComplexKernelTap[] {
+  const real = Array.isArray(plane.fieldReal) ? plane.fieldReal : [];
+  const imag = Array.isArray(plane.fieldImag) ? plane.fieldImag : [];
+  const height = Math.min(real.length, imag.length);
+  const rowWidths = real.slice(0, height)
+    .map((row, index) => Math.min(row?.length ?? 0, imag[index]?.length ?? 0));
+  const width = rowWidths.length ? Math.min(...rowWidths) : 0;
+  if (!(height > 0 && width > 0)) return [];
+  const sourcePitchUm = Math.max(1e-9, finite(plane.pixelSizeUm, detectorPitchUm));
+  const centerX = (width - 1) / 2;
+  const centerY = (height - 1) / 2;
+  let maximumPower = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const re = finite(real[y]?.[x]);
+      const im = finite(imag[y]?.[x]);
+      maximumPower = Math.max(maximumPower, re * re + im * im);
+    }
+  }
+  if (!(maximumPower > 0)) return [];
+  const threshold = maximumPower * 1e-9;
+  const aggregated = new Map<string, ComplexKernelTap>();
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const re = finite(real[y]?.[x]);
+      const im = finite(imag[y]?.[x]);
+      const power = re * re + im * im;
+      if (!(power > threshold)) continue;
+      const dx = Math.round((x - centerX) * sourcePitchUm / detectorPitchUm);
+      const dy = Math.round((y - centerY) * sourcePitchUm / detectorPitchUm);
+      const key = `${dx}:${dy}`;
+      const previous = aggregated.get(key);
+      if (previous) {
+        previous.re += re;
+        previous.im += im;
+        previous.power = previous.re * previous.re + previous.im * previous.im;
+      } else {
+        aggregated.set(key, { dx, dy, re, im, power });
+      }
+    }
+  }
+  const taps = Array.from(aggregated.values())
+    .map((tap) => ({ ...tap, power: tap.re * tap.re + tap.im * tap.im }))
+    .filter((tap) => tap.power > 0)
+    .sort((left, right) => right.power - left.power)
+    .slice(0, Math.max(1, maximumTaps));
+  const energy = taps.reduce((sum, tap) => sum + tap.power, 0);
+  if (!(energy > 0)) return [];
+  const normalization = Math.sqrt(energy);
+  return taps.map((tap) => ({
+    ...tap,
+    re: tap.re / normalization,
+    im: tap.im / normalization,
+    power: tap.power / energy,
+  }));
+}
+
+/**
+ * Propagates physical-path complex detector fields through the exact-lens
+ * coherent impulse response before square-law detection. Fields interfere only
+ * when both their optical frequency and coherence group match.
+ */
+export function convolveDetectorFieldsWithCoherentPsf(options: {
+  spectralFields: CoherentDetectorFieldSample[];
+  width: number;
+  height: number;
+  detector: CoherentDetectorSpec;
+  spectralPsf: CoherentPsfPlane[];
+}): CoherentFieldDetectorSignal | null {
+  const width = Math.max(1, Math.round(finite(options.width, 1)));
+  const height = Math.max(1, Math.round(finite(options.height, 1)));
+  const detectorPitchUm = Math.max(1e-9, finite(options.detector.pixelPitchUm, 1));
+  const planes = options.spectralPsf.filter((plane) => (
+    Array.isArray(plane.fieldReal) && plane.fieldReal.length > 0
+    && Array.isArray(plane.fieldImag) && plane.fieldImag.length > 0
+  ));
+  const samples = options.spectralFields.filter((sample) => (
+    Number.isFinite(sample.pixelX) && Number.isFinite(sample.pixelY)
+    && Number.isFinite(sample.frequencyHz) && sample.frequencyHz > 0
+    && Number.isFinite(sample.wavelengthNm) && sample.wavelengthNm > 0
+    && Number.isFinite(sample.fieldRe) && Number.isFinite(sample.fieldIm)
+  ));
+  if (!planes.length || !samples.length) return null;
+
+  const kernelCache = new Map<number, ComplexKernelTap[]>();
+  const nearestPlaneIndex = (wavelengthNm: number): number => {
+    let best = 0;
+    let distance = Number.POSITIVE_INFINITY;
+    planes.forEach((plane, index) => {
+      const candidate = Math.abs(finite(plane.wavelengthUm) * 1000 - wavelengthNm);
+      if (candidate < distance) { best = index; distance = candidate; }
+    });
+    return best;
+  };
+  const kernelFor = (index: number): ComplexKernelTap[] => {
+    const cached = kernelCache.get(index);
+    if (cached) return cached;
+    const kernel = buildComplexDetectorKernel(planes[index], detectorPitchUm);
+    kernelCache.set(index, kernel);
+    return kernel;
+  };
+
+  type Mode = { wavelengthNm: number; field: Map<number, { re: number; im: number }> };
+  const modes = new Map<string, Mode>();
+  let inputFieldPowerW = 0;
+  for (const sample of samples) {
+    const sourceX = Math.round(sample.pixelX);
+    const sourceY = Math.round(sample.pixelY);
+    if (sourceX < 0 || sourceX >= width || sourceY < 0 || sourceY >= height) continue;
+    const kernel = kernelFor(nearestPlaneIndex(sample.wavelengthNm));
+    if (!kernel.length) continue;
+    inputFieldPowerW += sample.fieldRe * sample.fieldRe + sample.fieldIm * sample.fieldIm;
+    const modeKey = `${sample.coherenceGroupId || 'source'}:${sample.frequencyHz.toPrecision(15)}`;
+    const mode = modes.get(modeKey) ?? { wavelengthNm: sample.wavelengthNm, field: new Map() };
+    modes.set(modeKey, mode);
+    for (const tap of kernel) {
+      const x = sourceX + tap.dx;
+      const y = sourceY + tap.dy;
+      if (x < 0 || x >= width || y < 0 || y >= height) continue;
+      const index = y * width + x;
+      const previous = mode.field.get(index) ?? { re: 0, im: 0 };
+      previous.re += sample.fieldRe * tap.re - sample.fieldIm * tap.im;
+      previous.im += sample.fieldRe * tap.im + sample.fieldIm * tap.re;
+      mode.field.set(index, previous);
+    }
+  }
+  if (!modes.size) return null;
+
+  const powerWPerPixel = new Float64Array(width * height);
+  const electronsPerPixel = new Float64Array(width * height);
+  const exposureTimeS = Math.max(0, finite(options.detector.exposureTimeS, 0));
+  for (const mode of modes.values()) {
+    const wavelengthM = mode.wavelengthNm * 1e-9;
+    const photonEnergyJ = PLANCK_J_S * LIGHT_M_S / Math.max(1e-30, wavelengthM);
+    const qe = quantumEfficiency(options.detector, mode.wavelengthNm);
+    for (const [index, field] of mode.field) {
+      const power = field.re * field.re + field.im * field.im;
+      powerWPerPixel[index] += power;
+      electronsPerPixel[index] += power * exposureTimeS / photonEnergyJ * qe;
+    }
+  }
+
+  const bitDepth = Math.max(1, Math.min(30, Math.round(finite(options.detector.bitDepth, 16))));
+  const maximumAdu = 2 ** bitDepth - 1;
+  const fullWell = Math.max(1, finite(options.detector.saturationElectrons, Number.POSITIVE_INFINITY));
+  const aduPerPixel = new Uint32Array(width * height);
+  let integratedPowerW = 0;
+  let maximumPowerWPerPixel = 0;
+  let maximumElectronsPerPixel = 0;
+  let saturatedPixelCount = 0;
+  for (let index = 0; index < powerWPerPixel.length; index += 1) {
+    const power = powerWPerPixel[index];
+    const electrons = electronsPerPixel[index];
+    integratedPowerW += power;
+    maximumPowerWPerPixel = Math.max(maximumPowerWPerPixel, power);
+    maximumElectronsPerPixel = Math.max(maximumElectronsPerPixel, electrons);
+    if (electrons >= fullWell) saturatedPixelCount += 1;
+    aduPerPixel[index] = Math.round(clamp(electrons / fullWell, 0, 1) * maximumAdu);
+  }
+  return {
+    signal: {
+      kind: 'area', width, height, powerWPerPixel, electronsPerPixel, aduPerPixel,
+      integratedPowerW, maximumPowerWPerPixel, maximumElectronsPerPixel,
+      capturedFraction: inputFieldPowerW > 0 ? clamp(integratedPowerW / inputFieldPowerW, 0, 1) : 0,
+      saturatedPixelCount, bitDepth, exposureTimeS,
+    },
+    spectralModeCount: modes.size,
+    inputFieldPowerW,
+    complexKernelCount: kernelCache.size,
+    warning: planes.length < new Set(samples.map((sample) => sample.wavelengthNm.toPrecision(12))).size
+      ? `Exact-lens complex fields were sampled at ${planes.length} wavelength${planes.length === 1 ? '' : 's'} and matched to the nearest physical spectral line.`
+      : '',
+  };
 }

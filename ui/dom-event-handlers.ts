@@ -7706,12 +7706,15 @@ function formatBlockPreview(block: any): string {
     };
     
     if (type === 'Paraxial') {
-        const flx = pick('focalLengthX') || pick('focalLength');
-        const fly = pick('focalLengthY') || pick('focalLength');
+        const shared = pick('focalLength');
+        const explicitX = pick('focalLengthX');
+        const explicitY = pick('focalLengthY');
+        const flx = String(explicitX) !== '' ? explicitX : shared;
+        const fly = String(explicitY) !== '' ? explicitY : shared;
         const parts = [];
         if (String(flx) !== '' || String(fly) !== '') {
-            parts.push(`Fx=${String(flx || fly)}`);
-            parts.push(`Fy=${String(fly || flx)}`);
+            parts.push(`Fx=${String(String(flx) !== '' ? flx : fly)}`);
+            parts.push(`Fy=${String(String(fly) !== '' ? fly : flx)}`);
         }
         return parts.join(' ');
     }

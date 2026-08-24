@@ -20,6 +20,7 @@ assert.ok(fig2Request.surfaces.some((surface) => surface.interaction.kind === 'd
 const fig2Result = await runNonSequentialTrace(fig2, 'preview');
 assert.ok(fig2Result.segments.length > 0, 'Figure 2 produces physical ray segments');
 assert.ok(fig2Result.detectors[0].hitCount > 0, 'Figure 2 reaches the area detector');
+assert.ok(fig2Result.detectors[0].spectralFields.length > 0, 'area detector exports wavelength-resolved complex fields');
 const fig2Accounted = fig2Result.energy.detectedRayPowerW + fig2Result.energy.escapedPowerW + fig2Result.energy.absorbedPowerW + fig2Result.energy.truncatedPowerW;
 closeRelative(fig2Accounted, fig2Result.energy.emittedPowerW, 1e-9, 'Figure 2 energy accounting');
 const scatteredTarget = structuredClone(fig2);
@@ -43,6 +44,7 @@ for (const line of combResult.spectrumLines) {
 }
 assert.ok(combResult.segments.some((segment) => segment.history.includes(':m1')), 'm=1 diffracted rays are generated');
 assert.ok(combResult.detectors[0].hitCount > 0, 'dispersed comb reaches physical area detector');
+assert.ok(combResult.detectors[0].spectralFields.length > 0, 'comb detector preserves complex field per frequency and coherence group');
 
 const dual = createPatentFig14DualCombDesign();
 dual.detector.sampleCount = 512;

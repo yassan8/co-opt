@@ -4216,6 +4216,7 @@ export async function runNativePsfMap(
       diffractionFwhmXUm: payload?.diffractionFwhmXUm,
       diffractionFwhmYUm: payload?.diffractionFwhmYUm,
       gridAmplitude: payload?.gridAmplitude,
+      includeComplexField: payload?.includeComplexField === true,
     }));
     const res: any = (typeof psfRaw === "string") ? JSON.parse(psfRaw) : psfRaw;
 
@@ -4224,6 +4225,8 @@ export async function runNativePsfMap(
       gridSize: size,
       fftSize: Array.isArray((res as any)?.psfData) ? (res as any).psfData.length : size,
       psfData: Array.isArray((res as any)?.psfData) ? (res as any).psfData : [],
+      fieldReal: Array.isArray((res as any)?.fieldReal) ? (res as any).fieldReal : undefined,
+      fieldImag: Array.isArray((res as any)?.fieldImag) ? (res as any).fieldImag : undefined,
       metrics: ((res as any)?.metrics || {}) as any,
       pixelSizeUm: Number.isFinite(Number((res as any)?.pixelSizeUm))
         ? Number((res as any).pixelSizeUm)

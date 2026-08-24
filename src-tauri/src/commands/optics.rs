@@ -905,6 +905,8 @@ pub struct NativePsfMapRequest {
     pub hybrid_output_size: Option<u32>,
     pub diffraction_fwhm_x_um: Option<f64>,
     pub diffraction_fwhm_y_um: Option<f64>,
+    #[serde(default)]
+    pub include_complex_field: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -955,6 +957,10 @@ pub struct NativePsfMapResponse {
     pub grid_size: usize,
     pub fft_size: usize,
     pub psf_data: Vec<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_real: Option<Vec<Vec<f64>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_imag: Option<Vec<Vec<f64>>>,
     pub metrics: NativePsfMetrics,
     pub strehl_ratio: f64,
     pub aberrated_peak: f64,
@@ -4287,9 +4293,7 @@ struct NativeDetectorSamplingEstimate {
     spacing_um: f64,
 }
 
-fn estimate_native_detector_sampling(
-    hits: &[(f64, f64, f64)],
-) -> NativeDetectorSamplingEstimate {
+fn estimate_native_detector_sampling(hits: &[(f64, f64, f64)]) -> NativeDetectorSamplingEstimate {
     if hits.len() < 3 {
         return NativeDetectorSamplingEstimate {
             line_like: false,
@@ -4355,10 +4359,8 @@ fn estimate_native_detector_sampling(
             })
             .filter(|value| value.is_finite())
             .collect::<Vec<_>>();
-        projected.sort_by(|left, right| {
-            left.partial_cmp(right)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        projected
+            .sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
         let span = projected
             .last()
             .zip(projected.first())
@@ -4411,8 +4413,8 @@ fn estimate_native_detector_sampling(
             if other == index {
                 continue;
             }
-            let distance = (points[index].0 - points[other].0)
-                .hypot(points[index].1 - points[other].1);
+            let distance =
+                (points[index].0 - points[other].0).hypot(points[index].1 - points[other].1);
             if distance > 1.0e-12 && distance < best {
                 best = distance;
             }
@@ -4595,8 +4597,7 @@ fn run_hybrid_geometric_psf_native(
             sampling.axis_y,
         );
     } else if sampling.spacing_um > 0.0 {
-        let sample_sigma_pixels =
-            (sampling.spacing_um * 1.4 / 2.354_820_045) / pixel_size_um;
+        let sample_sigma_pixels = (sampling.spacing_um * 1.4 / 2.354_820_045) / pixel_size_um;
         gaussian_blur_native_psf(&mut image, sample_sigma_pixels, sample_sigma_pixels);
     }
     let sigma_scale = 1.0 / 2.354_820_045;
@@ -4623,6 +4624,8 @@ fn run_hybrid_geometric_psf_native(
         grid_size,
         fft_size: output_size,
         psf_data: image,
+        field_real: None,
+        field_imag: None,
         strehl_ratio: 0.0,
         aberrated_peak: peak,
         ideal_peak: 0.0,
@@ -4871,6 +4874,39 @@ pub fn run_native_psf_map(
             Some(0.0)
         };
 
+        let total_field_energy = intensity
+            .iter()
+            .flat_map(|row| row.iter())
+            .copied()
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .sum::<f64>();
+        let (mut field_real, mut field_imag) =
+            if req.include_complex_field && total_field_energy > 0.0 {
+                let normalization = total_field_energy.sqrt();
+                let normalized_real = fft_real
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|value| value / normalization)
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let normalized_imag = fft_imag
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|value| value / normalization)
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    Some(fft_shift_2d(&normalized_real)),
+                    Some(fft_shift_2d(&normalized_imag)),
+                )
+            } else {
+                (None, None)
+            };
+
         if aberrated_peak > 0.0 {
             intensity
                 .iter_mut()
@@ -4892,6 +4928,12 @@ pub fn run_native_psf_map(
                     let shift_y = c_y as isize - peak_y as isize;
                     let shift_x = c_x as isize - peak_x as isize;
                     psf = circular_shift_2d(&psf, shift_y, shift_x);
+                    if let Some(real) = field_real.as_mut() {
+                        *real = circular_shift_2d(real, shift_y, shift_x);
+                    }
+                    if let Some(imag) = field_imag.as_mut() {
+                        *imag = circular_shift_2d(imag, shift_y, shift_x);
+                    }
                 }
             }
         }
@@ -4912,6 +4954,8 @@ pub fn run_native_psf_map(
             grid_size,
             fft_size,
             psf_data: psf,
+            field_real,
+            field_imag,
             metrics,
             strehl_ratio: strehl_ratio_override.unwrap_or(0.0),
             aberrated_peak,
@@ -5763,6 +5807,7 @@ fn compute_native_through_focus_job(
             hybrid_output_size: None,
             diffraction_fwhm_x_um: None,
             diffraction_fwhm_y_um: None,
+            include_complex_field: false,
         },
         app.clone(),
     )?;
@@ -6365,6 +6410,7 @@ pub fn run_native_field_mtf_map(
                             hybrid_output_size: None,
                             diffraction_fwhm_x_um: None,
                             diffraction_fwhm_y_um: None,
+                            include_complex_field: false,
                         },
                         app.clone(),
                     )?;
@@ -6677,6 +6723,7 @@ pub fn run_native_field_mtf_map(
                             hybrid_output_size: None,
                             diffraction_fwhm_x_um: None,
                             diffraction_fwhm_y_um: None,
+                            include_complex_field: false,
                         },
                         app.clone(),
                     )?;

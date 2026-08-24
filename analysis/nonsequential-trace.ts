@@ -37,6 +37,15 @@ export interface NonSequentialDetectorResult {
   integratedPowerW: number;
   maximumWPerPixel: number;
   hitCount: number;
+  spectralFields: Array<{
+    pixelX: number;
+    pixelY: number;
+    coherenceGroupId: string;
+    frequencyHz: number;
+    wavelengthNm: number;
+    fieldRe: number;
+    fieldIm: number;
+  }>;
   timeSeconds: number[];
   timeSignalW: number[];
   rfBeats: Array<{ lineIndex: number; frequencyHz: number; powerW: number }>;

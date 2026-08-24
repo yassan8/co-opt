@@ -3,16 +3,20 @@
   --signal-muted: #66758a;
   --signal-surface: #ffffff;
   --signal-soft: #f6f8fb;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   height: 100%;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: #f4f7fb;
   color: #1d2a3b;
 }
 
 .coherent-signal-commandbar {
   display: grid;
-  grid-template-columns: minmax(150px, 0.55fr) minmax(520px, 1.8fr);
+  grid-template-columns: minmax(140px, 0.45fr) minmax(620px, 2fr);
   align-items: end;
   gap: 14px;
   padding: 12px 14px;
@@ -44,7 +48,7 @@
 
 .coherent-signal-controls {
   display: grid;
-  grid-template-columns: minmax(150px, 1.6fr) repeat(3, minmax(98px, 0.8fr)) auto;
+  grid-template-columns: minmax(145px, 1.3fr) minmax(145px, 1.3fr) repeat(3, minmax(92px, 0.75fr)) auto;
   align-items: end;
   gap: 8px;
   min-width: 0;
@@ -131,6 +135,17 @@
   margin: 10px 12px 0;
 }
 
+.coherent-signal-note {
+  margin: 8px 12px 0;
+  padding: 7px 10px;
+  border: 1px solid #d8e3f0;
+  border-radius: 7px;
+  background: #edf4fc;
+  color: #425d7c;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .coherent-signal-warning {
   margin-top: 8px;
   padding: 8px 10px;
@@ -145,7 +160,7 @@
 
 .coherent-signal-results-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr));
   align-items: start;
   gap: 12px;
   min-width: 0;
@@ -153,6 +168,7 @@
 }
 
 .coherent-signal-result-card {
+  box-sizing: border-box;
   display: grid;
   gap: 10px;
   min-width: 0;
@@ -162,6 +178,14 @@
   border-radius: 10px;
   background: var(--signal-surface);
   box-shadow: 0 1px 3px rgba(31, 45, 61, 0.06);
+}
+
+.coherent-signal-result-card--primary {
+  border-color: #aebed2;
+}
+
+.coherent-signal-result-card--wide {
+  grid-column: 1 / -1;
 }
 
 .coherent-signal-result-card > header {
@@ -189,17 +213,38 @@
   margin: 0;
 }
 
-.coherent-signal-heatmap {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  max-height: 52vh;
+.coherent-signal-detector-stage {
+  display: flex;
+  width: min(100%, 52vh);
   aspect-ratio: 1;
+  align-items: center;
+  justify-content: center;
   margin: 0 auto;
   border: 1px solid #243044;
   border-radius: 6px;
+  overflow: hidden;
+  background: #737c88;
+}
+
+.coherent-signal-heatmap {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  flex: 0 0 auto;
   background: #020307;
-  object-fit: contain;
+}
+
+.coherent-signal-timeplot {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: 44vh;
+  aspect-ratio: 3.2 / 1;
+  border: 1px solid #243044;
+  border-radius: 6px;
+  background: #07101e;
 }
 
 .coherent-signal-figure figcaption {
@@ -278,6 +323,16 @@ body.dark-mode .coherent-signal-warning {
   border-color: #705920;
   background: #332a13;
   color: #f0d58b;
+}
+
+body.dark-mode .coherent-signal-note {
+  border-color: #334d6b;
+  background: #17283b;
+  color: #b9d0e9;
+}
+
+body.dark-mode .coherent-signal-detector-stage {
+  background: #505966;
 }
 
 @media (max-width: 1050px) {
