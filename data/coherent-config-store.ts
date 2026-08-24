@@ -90,26 +90,30 @@ function applyHybridDesignToConfiguration(active: any, design: CoherentAssemblyD
     parameters.dimensionConfidence = component.dimensionConfidence;
   }
 
-  const source = design.source;
-  const sourceBlock = byId.get(String(source?.componentId ?? source?.id ?? ''));
-  if (sourceBlock) Object.assign(sourceBlock.parameters ?? (sourceBlock.parameters = {}), {
-    centerWavelengthNm: source.centerWavelengthNm, minWavelengthNm: source.minWavelengthNm,
-    maxWavelengthNm: source.maxWavelengthNm, bandwidthFwhmNm: source.bandwidthFwhmNm,
-    spectralSamples: source.spectralSamples, totalPowerW: source.totalPowerW,
-    beamDiameterMm: source.beamDiameterMm, divergenceDeg: source.divergenceDeg,
-    spatialProfile: source.spatialProfile, coherenceGroupId: source.coherenceGroupId,
-    repetitionRateHz: source.repetitionRateHz, ceoFrequencyHz: source.ceoFrequencyHz,
-    lineCount: source.lineCount, lineWidthHz: source.lineWidthHz,
-  });
-  const detector = design.detector;
-  const detectorBlock = byId.get(String(detector?.componentId ?? detector?.id ?? ''));
-  if (detectorBlock) Object.assign(detectorBlock.parameters ?? (detectorBlock.parameters = {}), {
-    pixelCountX: detector.pixelCountX, pixelCountY: detector.pixelCountY, pixelPitchUm: detector.pixelPitchUm,
-    responsivity: detector.responsivity, fillFactor: detector.fillFactor, exposureTimeS: detector.exposureTimeS,
-    saturationElectrons: detector.saturationElectrons, bitDepth: detector.bitDepth, frontOnly: detector.frontOnly,
-    samplingRateHz: detector.samplingRateHz, detectionBandwidthHz: detector.detectionBandwidthHz,
-    integrationTimeS: detector.integrationTimeS, sampleCount: detector.sampleCount,
-  });
+  for (const source of design.sources?.length ? design.sources : [design.source]) {
+    const sourceBlock = byId.get(String(source?.componentId ?? source?.id ?? ''));
+    if (!sourceBlock) continue;
+    Object.assign(sourceBlock.parameters ?? (sourceBlock.parameters = {}), {
+      centerWavelengthNm: source.centerWavelengthNm, minWavelengthNm: source.minWavelengthNm,
+      maxWavelengthNm: source.maxWavelengthNm, bandwidthFwhmNm: source.bandwidthFwhmNm,
+      spectralSamples: source.spectralSamples, totalPowerW: source.totalPowerW,
+      beamDiameterMm: source.beamDiameterMm, divergenceDeg: source.divergenceDeg,
+      spatialProfile: source.spatialProfile, coherenceGroupId: source.coherenceGroupId,
+      repetitionRateHz: source.repetitionRateHz, ceoFrequencyHz: source.ceoFrequencyHz,
+      lineCount: source.lineCount, lineWidthHz: source.lineWidthHz,
+    });
+  }
+  for (const detector of design.detectors?.length ? design.detectors : [design.detector]) {
+    const detectorBlock = byId.get(String(detector?.componentId ?? detector?.id ?? ''));
+    if (!detectorBlock) continue;
+    Object.assign(detectorBlock.parameters ?? (detectorBlock.parameters = {}), {
+      pixelCountX: detector.pixelCountX, pixelCountY: detector.pixelCountY, pixelPitchUm: detector.pixelPitchUm,
+      responsivity: detector.responsivity, fillFactor: detector.fillFactor, exposureTimeS: detector.exposureTimeS,
+      saturationElectrons: detector.saturationElectrons, bitDepth: detector.bitDepth, frontOnly: detector.frontOnly,
+      samplingRateHz: detector.samplingRateHz, detectionBandwidthHz: detector.detectionBandwidthHz,
+      integrationTimeS: detector.integrationTimeS, sampleCount: detector.sampleCount,
+    });
+  }
   const gratingBlock = byId.get(String(design.grating?.componentId ?? ''));
   if (gratingBlock) Object.assign(gratingBlock.parameters ?? (gratingBlock.parameters = {}), {
     grooveDensityLinesPerMm: design.grating.grooveDensityLinesPerMm,
@@ -130,8 +134,9 @@ function applyHybridDesignToConfiguration(active: any, design: CoherentAssemblyD
     scatterSigmaDeg: design.target.scatterSigmaDeg, bsdfSamples: design.target.bsdfSamples,
     reflectance: design.targetReflectance,
   });
+  const componentIds = new Set((design.components ?? []).map((component) => String(component.id)));
   active.designConnections = (design.connections ?? [])
-    .filter((connection) => byId.has(String(connection.fromComponentId)) && byId.has(String(connection.toComponentId)))
+    .filter((connection) => componentIds.has(String(connection.fromComponentId)) && componentIds.has(String(connection.toComponentId)))
     .map((connection) => ({
       id: connection.id,
       from: { blockId: connection.fromComponentId, portId: connection.fromPortId ?? 'out' },

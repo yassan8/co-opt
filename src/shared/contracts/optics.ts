@@ -757,6 +757,8 @@ export interface NativePsfMapRequest {
   hybridOutputSize?: number;
   diffractionFwhmXUm?: number;
   diffractionFwhmYUm?: number;
+  /** Return the normalized complex detector-plane impulse response for coherent signal propagation. */
+  includeComplexField?: boolean;
 }
 
 export interface NativePsfFwhm {
@@ -784,6 +786,8 @@ export interface NativePsfMapResponse {
   gridSize: number;
   fftSize: number;
   psfData: number[][];
+  fieldReal?: number[][];
+  fieldImag?: number[][];
   metrics: NativePsfMetrics;
   pixelSizeUm?: number;
   method?: "coherent-fft" | "hybrid-geometric";

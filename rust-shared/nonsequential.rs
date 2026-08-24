@@ -523,6 +523,18 @@ pub struct RfBeatResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DetectorSpectralFieldResult {
+    pub pixel_x: usize,
+    pub pixel_y: usize,
+    pub coherence_group_id: String,
+    pub frequency_hz: f64,
+    pub wavelength_nm: f64,
+    pub field_re: f64,
+    pub field_im: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DetectorResult {
     pub detector_id: String,
     pub kind: String,
@@ -532,6 +544,7 @@ pub struct DetectorResult {
     pub integrated_power_w: f64,
     pub maximum_w_per_pixel: f64,
     pub hit_count: usize,
+    pub spectral_fields: Vec<DetectorSpectralFieldResult>,
     pub time_seconds: Vec<f64>,
     pub time_signal_w: Vec<f64>,
     pub rf_beats: Vec<RfBeatResult>,
@@ -771,6 +784,7 @@ struct DetectorContribution {
     coherence_group_id: String,
     line_index: i64,
     frequency_hz: f64,
+    wavelength_nm: f64,
     field: Complex,
     ray_power_w: f64,
     history: String,
@@ -1693,7 +1707,8 @@ fn aggregate_detectors(
             .iter()
             .filter(|item| item.detector_id == detector.id)
             .collect();
-        let mut spectral_fields: HashMap<(usize, usize, String, u64), Complex> = HashMap::new();
+        let mut spectral_fields: HashMap<(usize, usize, String, u64), (Complex, f64)> =
+            HashMap::new();
         for item in &relevant {
             let key = (
                 item.pixel_x,
@@ -1704,16 +1719,36 @@ fn aggregate_detectors(
             let current = spectral_fields
                 .get(&key)
                 .copied()
-                .unwrap_or(Complex { re: 0.0, im: 0.0 });
-            spectral_fields.insert(key, current.add(item.field));
+                .unwrap_or((Complex { re: 0.0, im: 0.0 }, item.wavelength_nm));
+            spectral_fields.insert(key, (current.0.add(item.field), item.wavelength_nm));
         }
         let mut intensity = vec![0.0; width * height];
-        for ((px, py, _, _), field) in &spectral_fields {
+        let mut spectral_field_results = Vec::with_capacity(spectral_fields.len());
+        for ((px, py, coherence_group_id, frequency_bits), (field, wavelength_nm)) in
+            &spectral_fields
+        {
             let index = py.saturating_mul(width).saturating_add(*px);
             if index < intensity.len() {
                 intensity[index] += field.norm2() * detector.responsivity.max(0.0);
+                spectral_field_results.push(DetectorSpectralFieldResult {
+                    pixel_x: *px,
+                    pixel_y: *py,
+                    coherence_group_id: coherence_group_id.clone(),
+                    frequency_hz: f64::from_bits(*frequency_bits),
+                    wavelength_nm: *wavelength_nm,
+                    field_re: field.re,
+                    field_im: field.im,
+                });
             }
         }
+        spectral_field_results.sort_by(|left, right| {
+            left.frequency_hz
+                .partial_cmp(&right.frequency_hz)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.coherence_group_id.cmp(&right.coherence_group_id))
+                .then_with(|| left.pixel_y.cmp(&right.pixel_y))
+                .then_with(|| left.pixel_x.cmp(&right.pixel_x))
+        });
         let integrated: f64 = intensity.iter().sum();
         let maximum = intensity.iter().copied().fold(0.0_f64, f64::max);
         let mut time_seconds = Vec::new();
@@ -1779,6 +1814,7 @@ fn aggregate_detectors(
             integrated_power_w: integrated,
             maximum_w_per_pixel: maximum,
             hit_count: relevant.len(),
+            spectral_fields: spectral_field_results,
             time_seconds,
             time_signal_w,
             rf_beats,
@@ -1885,6 +1921,7 @@ pub fn trace_nonsequential(request: &TraceRequest) -> Result<TraceResult, String
                             coherence_group_id: ray.coherence_group_id.clone(),
                             line_index: ray.line_index,
                             frequency_hz: ray.frequency_hz,
+                            wavelength_nm: ray.wavelength_nm,
                             field,
                             ray_power_w: power,
                             history: ray.history.join(" > "),

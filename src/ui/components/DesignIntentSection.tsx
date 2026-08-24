@@ -6,7 +6,9 @@ function HybridAssemblySummary() {
   const [error, setError] = useState('');
   useEffect(() => subscribeActiveCoherentDesign((next) => setSnapshot(next)), []);
   const physical = snapshot.design.components.filter((component) => component.kind !== 'sequential-group');
-  const sequential = snapshot.design.components.some((component) => component.kind === 'sequential-group');
+  const sequentialComponents = snapshot.design.components.filter((component) => component.kind === 'sequential-group');
+  const connectable = [...physical, ...sequentialComponents];
+  const sequential = sequentialComponents.length > 0;
   if (physical.length === 0) return null;
 
   const commit = (mutate: (draft: ActiveCoherentDesignSnapshot['design']) => void, reason: string) => {
@@ -20,7 +22,7 @@ function HybridAssemblySummary() {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
-  const componentById = (id: string) => physical.find((component) => component.id === id);
+  const componentById = (id: string) => connectable.find((component) => component.id === id);
   const defaultPort = (componentId: string, side: 'from' | 'to') => {
     const component = componentById(componentId);
     const preferred = side === 'from'
@@ -31,9 +33,9 @@ function HybridAssemblySummary() {
       ?? '';
   };
   const addConnection = (fromId?: string, fromPortId?: string) => {
-    if (physical.length < 2) return;
-    const from = componentById(fromId ?? '') ?? physical[0];
-    const to = physical.find((component) => component.id !== from.id) ?? physical[1];
+    if (connectable.length < 2) return;
+    const from = componentById(fromId ?? '') ?? connectable[0];
+    const to = connectable.find((component) => component.id !== from.id) ?? connectable[1];
     commit((draft) => {
       draft.connections.push({
         id: `connection-${Date.now().toString(36)}`,
@@ -71,7 +73,7 @@ function HybridAssemblySummary() {
               draft.connections[index].fromComponentId = event.target.value;
               draft.connections[index].fromPortId = defaultPort(event.target.value, 'from');
             }, 'connection-from')}>
-              {physical.map((component) => <option value={component.id} key={component.id}>{component.label}</option>)}
+              {connectable.map((component) => <option value={component.id} key={component.id}>{component.label}</option>)}
             </select></label>
             <label>Port<select value={connection.fromPortId ?? ''} onChange={(event) => commit((draft) => { draft.connections[index].fromPortId = event.target.value; }, 'connection-from-port')}>
               {(from?.ports ?? []).map((port) => <option value={port.id} key={port.id}>{port.label}</option>)}
@@ -81,7 +83,7 @@ function HybridAssemblySummary() {
               draft.connections[index].toComponentId = event.target.value;
               draft.connections[index].toPortId = defaultPort(event.target.value, 'to');
             }, 'connection-to')}>
-              {physical.map((component) => <option value={component.id} key={component.id}>{component.label}</option>)}
+              {connectable.map((component) => <option value={component.id} key={component.id}>{component.label}</option>)}
             </select></label>
             <label>Port<select value={connection.toPortId ?? ''} onChange={(event) => commit((draft) => { draft.connections[index].toPortId = event.target.value; }, 'connection-to-port')}>
               {(to?.ports ?? []).map((port) => <option value={port.id} key={port.id}>{port.label}</option>)}
@@ -93,7 +95,7 @@ function HybridAssemblySummary() {
           </div>;
         })}
         <div className="di-connection-editor__actions">
-          <button type="button" onClick={() => addConnection()} disabled={physical.length < 2}>Add connection</button>
+          <button type="button" onClick={() => addConnection()} disabled={connectable.length < 2}>Add connection</button>
           {splitter ? <button type="button" onClick={() => addConnection(splitter.id, 'reflect')}>Add reflected path</button> : null}
         </div>
         {error ? <div className="di-connection-error" role="alert">{error}</div> : null}

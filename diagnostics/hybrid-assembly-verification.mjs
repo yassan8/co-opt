@@ -3,7 +3,11 @@ import { readFile } from 'node:fs/promises';
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
 import { createPatentFig2AssemblyDesign } from '../analysis/coherent-assembly.ts';
 import { worldPortPosition } from '../analysis/coherent-port-layout.ts';
-import { calculateImagingDetectorSignal, convolveDetectorPowerWithPsf } from '../analysis/detector-signal.ts';
+import {
+  calculateImagingDetectorSignal,
+  convolveDetectorFieldsWithCoherentPsf,
+  convolveDetectorPowerWithPsf,
+} from '../analysis/detector-signal.ts';
 import {
   buildHybridAssemblyFromConfiguration,
   createDefaultPhysicalBlock,
@@ -21,10 +25,13 @@ const exactBlocks = [
 const sourceBlock = createDefaultPhysicalBlock('BroadbandSource', 'source');
 const splitterBlock = createDefaultPhysicalBlock('BeamSplitter', 'splitter');
 const detectorBlock = createDefaultPhysicalBlock('AreaDetector', 'detector');
+const detectorBlock2 = createDefaultPhysicalBlock('AreaDetector', 'detector-2');
 sourceBlock.parameters.totalPowerW = 0.002;
 detectorBlock.parameters.pixelCountX = 9;
 detectorBlock.parameters.pixelCountY = 7;
 detectorBlock.parameters.pixelPitchUm = 4;
+detectorBlock2.parameters.pixelCountX = 5;
+detectorBlock2.parameters.pixelCountY = 5;
 
 const retrofocusJson = JSON.parse(await readFile(new URL('../Examples/US3834556_RETROFUCUS WIDE-ANGLE LENS SYSTEM_1／3.5.json', import.meta.url), 'utf8'));
 const retrofocusConfig = retrofocusJson.configurations.configurations[0];
@@ -42,10 +49,11 @@ assert.deepEqual(mixedRows, baselineRows, 'physical blocks never modify exact se
 
 const config = {
   id: 1, name: 'Hybrid verification', schemaVersion: '0.2',
-  blocks: [...exactBlocks, sourceBlock, splitterBlock, detectorBlock],
+  blocks: [...exactBlocks, sourceBlock, splitterBlock, detectorBlock, detectorBlock2],
   designConnections: [
     { id: 'source-splitter', from: { blockId: 'source', portId: 'emit' }, to: { blockId: 'splitter', portId: 'common' }, distanceMm: 20, autoPlace: true, pathLabel: 'common' },
     { id: 'splitter-detector', from: { blockId: 'splitter', portId: 'transmit' }, to: { blockId: 'detector', portId: 'detect' }, distanceMm: 50, autoPlace: true, pathLabel: 'image' },
+    { id: 'splitter-detector-2', from: { blockId: 'splitter', portId: 'reflect' }, to: { blockId: 'detector-2', portId: 'detect' }, distanceMm: 35, autoPlace: true, pathLabel: 'monitor' },
   ],
   source: [{ wavelength: 0.5875618, weight: 1, primary: 'Primary Wavelength' }],
   object: [{ position: 'Angle', xHeightAngle: 0, yHeightAngle: 0 }], opticalSystem: baselineRows,
@@ -57,7 +65,8 @@ assert.equal(hybrid.preset, 'custom-hybrid');
 assert.equal(hybrid.source.totalPowerW, 0.002);
 assert.equal(hybrid.detector.pixelCountX, 9);
 assert.equal(hybrid.detector.pixelCountY, 7);
-assert.equal(hybrid.connections.length, 2);
+assert.equal(hybrid.connections.length, 3);
+assert.equal(hybrid.detectors.length, 2, 'all physical detectors remain in the Hybrid design');
 assert.ok(hybrid.components.some((component) => component.kind === 'sequential-group'));
 const component = (id) => hybrid.components.find((entry) => entry.id === id);
 const gap = (fromId, fromPort, toId, toPort) => {
@@ -73,6 +82,8 @@ const idealSplitterInteraction = request.surfaces.find((surface) => surface.inte
 assert.ok(idealSplitterInteraction, 'Beam Splitter is present in the non-sequential request');
 assert.equal(idealSplitterInteraction.beamSplitterModel, 'ideal', 'default Beam Splitter does not require a substrate index');
 assert.ok(request.surfaces.some((surface) => surface.interaction.kind === 'detector'));
+assert.equal(request.detectors.length, 2, 'all detectors are sent to one non-sequential trace');
+assert.equal(request.surfaces.filter((surface) => surface.interaction.kind === 'detector').length, 2);
 
 const physicalConfig = JSON.parse(JSON.stringify(config));
 const physicalSplitter = physicalConfig.blocks.find((block) => block.blockType === 'BeamSplitter');
@@ -137,12 +148,40 @@ const hybridSignal = convolveDetectorPowerWithPsf({
 assert.ok(Math.abs(hybridSignal.integratedPowerW - 1) < 1e-12, 'physical detector map times exact PSF conserves in-bounds power');
 assert.ok(Math.abs(hybridSignal.powerWPerPixel[12] - 0.5) < 1e-12, 'exact PSF shapes the physical-path center hit');
 
+const complexDelta = [{
+  wavelengthUm: 0.5, weight: 1, psfData: [[1]], pixelSizeUm: 5,
+  fieldReal: [[1]], fieldImag: [[0]],
+}];
+const cancelSignal = convolveDetectorFieldsWithCoherentPsf({
+  spectralFields: [
+    { pixelX: 1, pixelY: 1, coherenceGroupId: 'same', frequencyHz: 6e14, wavelengthNm: 500, fieldRe: 1, fieldIm: 0 },
+    { pixelX: 1, pixelY: 1, coherenceGroupId: 'same', frequencyHz: 6e14, wavelengthNm: 500, fieldRe: -1, fieldIm: 0 },
+  ],
+  width: 3, height: 3, detector, spectralPsf: complexDelta,
+});
+assert.ok(cancelSignal, 'complex exact-lens propagation is available');
+assert.ok(cancelSignal.signal.integratedPowerW < 1e-20, 'opposite fields in one coherent mode cancel before detection');
+const incoherentSignal = convolveDetectorFieldsWithCoherentPsf({
+  spectralFields: [
+    { pixelX: 1, pixelY: 1, coherenceGroupId: 'left', frequencyHz: 6e14, wavelengthNm: 500, fieldRe: 1, fieldIm: 0 },
+    { pixelX: 1, pixelY: 1, coherenceGroupId: 'right', frequencyHz: 6e14, wavelengthNm: 500, fieldRe: -1, fieldIm: 0 },
+  ],
+  width: 3, height: 3, detector, spectralPsf: complexDelta,
+});
+assert.ok(Math.abs(incoherentSignal.signal.integratedPowerW - 2) < 1e-12, 'different coherence groups add as intensity');
+
 const removedConnections = normalizeDesignConnections([sourceBlock, splitterBlock, detectorBlock], []);
 assert.equal(removedConnections.length, 0, 'an explicitly empty connection list stays empty after Remove');
 const autoConnections = normalizeDesignConnections([sourceBlock, splitterBlock, detectorBlock], undefined);
 assert.equal(autoConnections.length, 2, 'legacy Configs without designConnections receive a single auto path');
 assert.equal(autoConnections[0].from.portId, 'emit');
 assert.equal(autoConnections[1].to.portId, 'detect');
+const sequentialConnection = normalizeDesignConnections(
+  [sourceBlock, detectorBlock],
+  [{ id: 'through-lens', from: { blockId: 'source', portId: 'emit' }, to: { blockId: 'sequential-group:main', portId: 'in' }, distanceMm: 10, autoPlace: true, pathLabel: 'main' }],
+  ['sequential-group:main'],
+);
+assert.equal(sequentialConnection.length, 1, 'connections to the exact sequential group survive normalization');
 
 const legacy = createPatentFig2AssemblyDesign();
 const migrated = migrateLegacyCoherentDesign(legacy, exactBlocks);
@@ -158,6 +197,7 @@ console.log(JSON.stringify({
   retrofocusExactSurfaceRows: retrofocusRows.length,
   physicalBlocks: hybrid.components.filter((component) => component.kind !== 'sequential-group').length,
   connections: hybrid.connections.length,
+  detectorCount: hybrid.detectors.length,
   detector: {
     integratedPowerW: signal.integratedPowerW,
     peakElectrons: signal.maximumElectronsPerPixel,

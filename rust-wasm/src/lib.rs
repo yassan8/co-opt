@@ -16068,10 +16068,8 @@ fn estimate_detector_sampling(hits: &[(f64, f64, f64)]) -> DetectorSamplingEstim
             })
             .filter(|value| value.is_finite())
             .collect::<Vec<_>>();
-        projected.sort_by(|left, right| {
-            left.partial_cmp(right)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        projected
+            .sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
         let span = projected
             .last()
             .zip(projected.first())
@@ -16127,8 +16125,8 @@ fn estimate_detector_sampling(hits: &[(f64, f64, f64)]) -> DetectorSamplingEstim
             if other == index {
                 continue;
             }
-            let distance = (points[index].0 - points[other].0)
-                .hypot(points[index].1 - points[other].1);
+            let distance =
+                (points[index].0 - points[other].0).hypot(points[index].1 - points[other].1);
             if distance > 1.0e-12 && distance < best {
                 best = distance;
             }
@@ -16145,12 +16143,7 @@ fn estimate_detector_sampling(hits: &[(f64, f64, f64)]) -> DetectorSamplingEstim
     }
 }
 
-fn tent_blur_oriented(
-    grid: &mut Vec<Vec<f64>>,
-    radius_pixels: f64,
-    axis_x: f64,
-    axis_y: f64,
-) {
+fn tent_blur_oriented(grid: &mut Vec<Vec<f64>>, radius_pixels: f64, axis_x: f64, axis_y: f64) {
     let size = grid.len();
     if size == 0 || !radius_pixels.is_finite() || radius_pixels < 0.75 {
         return;
@@ -16331,8 +16324,7 @@ fn run_hybrid_geometric_psf_value(
             sampling.axis_y,
         );
     } else if sampling.spacing_um > 0.0 {
-        let sample_sigma_pixels =
-            (sampling.spacing_um * 1.4 / 2.354_820_045) / pixel_size_um;
+        let sample_sigma_pixels = (sampling.spacing_um * 1.4 / 2.354_820_045) / pixel_size_um;
         gaussian_blur_separable(&mut image, sample_sigma_pixels, sample_sigma_pixels);
     }
     let sigma_scale = 1.0 / 2.354_820_045;
@@ -16606,6 +16598,28 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
             }
         }
     }
+    let include_complex_field = req
+        .get("includeComplexField")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let complex_field = if include_complex_field && total_energy > 0.0 {
+        let normalization = total_energy.sqrt();
+        let field_real = fft_shift_2d_internal(
+            fft_real
+                .iter()
+                .map(|row| row.iter().map(|value| value / normalization).collect())
+                .collect(),
+        );
+        let field_imag = fft_shift_2d_internal(
+            fft_imag
+                .iter()
+                .map(|row| row.iter().map(|value| value / normalization).collect())
+                .collect(),
+        );
+        Some((field_real, field_imag))
+    } else {
+        None
+    };
 
     // Strehl = actual_peak / ideal_peak where ideal_peak = n_pupil² (unnormalized FFT)
     let ideal_peak = (n_pupil as f64) * (n_pupil as f64);
@@ -16683,7 +16697,7 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
     let fwhm_y = fwhm_pixels(&y_profile, psf_peak_y) * pixel_size_um;
     let fwhm_avg = (fwhm_x + fwhm_y) * 0.5;
 
-    Ok(serde_json::json!({
+    let mut response = serde_json::json!({
         "backend": "web-rust-wasm-psf",
         "gridSize": grid_n,
         "fftSize": fft_size,
@@ -16716,7 +16730,12 @@ fn run_native_psf_from_opd_value(req: &Value) -> Result<Value, JsValue> {
         },
         "strehlRatio": strehl_ratio,
         "message": "Computed via WASM PSF (run_native_psf_from_opd_wasm_json)"
-    }))
+    });
+    if let Some((field_real, field_imag)) = complex_field {
+        response["fieldReal"] = serde_json::json!(field_real);
+        response["fieldImag"] = serde_json::json!(field_imag);
+    }
+    Ok(response)
 }
 
 #[wasm_bindgen]
@@ -18616,9 +18635,8 @@ mod tests {
         let ray_hits = (0..detector_side)
             .flat_map(|row| {
                 let y_um = -10_000.0 + 20_000.0 * row as f64 / (detector_side - 1) as f64;
-                (0..repeated_per_row).map(move |_| {
-                    serde_json::json!({ "xUm": 0.0, "yUm": y_um, "weight": 1.0 })
-                })
+                (0..repeated_per_row)
+                    .map(move |_| serde_json::json!({ "xUm": 0.0, "yUm": y_um, "weight": 1.0 }))
             })
             .collect::<Vec<_>>();
         let response = run_native_psf_from_opd_value(&serde_json::json!({
@@ -18662,7 +18680,10 @@ mod tests {
                     .and_then(Value::as_f64)
             })
             .collect::<Vec<_>>();
-        let profile_min = central_profile.iter().copied().fold(f64::INFINITY, f64::min);
+        let profile_min = central_profile
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min);
         let profile_max = central_profile.iter().copied().fold(0.0_f64, f64::max);
         assert!(profile_min > 0.0, "central line contains gaps");
         assert!(

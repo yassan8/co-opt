@@ -156,8 +156,11 @@ function physicalComponent(block: Block): CoherentPhysicalComponent {
   };
 }
 
-export function normalizeDesignConnections(blocks: Block[], input: unknown): DesignConnection[] {
-  const ids = new Set(blocks.map((block) => String(block.blockId ?? '')).filter(Boolean));
+export function normalizeDesignConnections(blocks: Block[], input: unknown, extraComponentIds: string[] = []): DesignConnection[] {
+  const ids = new Set([
+    ...blocks.map((block) => String(block.blockId ?? '')).filter(Boolean),
+    ...extraComponentIds.map(String).filter(Boolean),
+  ]);
   const hasExplicitConnections = Array.isArray(input);
   const valid = (hasExplicitConnections ? input : []).filter((connection: any) => (
     connection && ids.has(String(connection.from?.blockId ?? '')) && ids.has(String(connection.to?.blockId ?? ''))
@@ -259,19 +262,28 @@ export function buildHybridAssemblyFromConfiguration(config: Configuration): Coh
   const physicalBlocks = blocks.filter((block) => isPhysicalBlockType(block.blockType));
   const components = physicalBlocks.map(physicalComponent);
   const sequentialBlocks = blocks.filter(isSequentialDesignBlock);
-  if (sequentialBlocks.length > 0) {
+  const sequentialGroupId = sequentialBlocks.length > 0 ? 'sequential-group:main' : '';
+  if (sequentialGroupId) {
     components.push({
-      id: 'sequential-group:main', label: 'Exact sequential optics', kind: 'sequential-group', shape: 'box',
+      id: sequentialGroupId, label: 'Exact sequential optics', kind: 'sequential-group', shape: 'box',
       autoTransform: identityTransform(), manualOffset: identityTransform(),
       dimensions: { widthMm: 0, heightMm: 0, depthMm: 0 }, dimensionConfidence: 'Exact', powerEfficiency: 1,
       pathIds: ['main'], ports: [
         { id: 'in', label: 'Input', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: 0, y: 0, z: -1 } },
         { id: 'out', label: 'Output', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: 0, y: 0, z: 1 } },
       ],
-      metadata: { source: 'blocks-reference', blockIds: sequentialBlocks.map((block) => block.blockId) },
+      metadata: {
+        source: 'blocks-reference',
+        blockIds: sequentialBlocks.map((block) => block.blockId),
+        opticalSystemRows: clone(config.opticalSystem ?? []),
+      },
     });
   }
-  const designConnections = normalizeDesignConnections(blocks, config.designConnections);
+  const designConnections = normalizeDesignConnections(
+    blocks,
+    config.designConnections,
+    sequentialGroupId ? [sequentialGroupId] : [],
+  );
   const coherentConnections = designConnections.map((connection) => ({
     id: connection.id,
     fromComponentId: connection.from.blockId,
@@ -293,13 +305,19 @@ export function buildHybridAssemblyFromConfiguration(config: Configuration): Coh
     pathMap.set(label, ids);
   }
 
-  const sourceBlock = physicalBlocks.find((block) => block.blockType === 'BroadbandSource' || block.blockType === 'FrequencyCombSource');
-  const detectorBlock = physicalBlocks.find((block) => block.blockType === 'AreaDetector' || block.blockType === 'TimeDetector');
+  const sourceBlocks = physicalBlocks.filter((block) => block.blockType === 'BroadbandSource' || block.blockType === 'FrequencyCombSource');
+  const detectorBlocks = physicalBlocks.filter((block) => block.blockType === 'AreaDetector' || block.blockType === 'TimeDetector');
   const gratingBlock = physicalBlocks.find((block) => block.blockType === 'ReflectionGrating');
   const targetBlock = physicalBlocks.find((block) => block.blockType === 'Target');
   const splitterBlock = physicalBlocks.find((block) => block.blockType === 'BeamSplitter');
-  const source = sourceFromBlock(sourceBlock, config);
-  const detector = detectorFromBlock(detectorBlock);
+  const sources = sourceBlocks.length > 0
+    ? sourceBlocks.map((block) => sourceFromBlock(block, config))
+    : [sourceFromBlock(undefined, config)];
+  const detectors = detectorBlocks.length > 0
+    ? detectorBlocks.map(detectorFromBlock)
+    : [detectorFromBlock(undefined)];
+  const source = sources[0];
+  const detector = detectors[0];
   const gp = gratingBlock?.parameters ?? {};
   const tp = targetBlock?.parameters ?? {};
   const bp = splitterBlock?.parameters ?? {};
@@ -309,7 +327,7 @@ export function buildHybridAssemblyFromConfiguration(config: Configuration): Coh
     paths: Array.from(pathMap, ([id, componentIds]) => ({ id, label: id, componentIds, roundTrip: false, throughput: 1 })),
     blockSequences: sequentialBlocks.length ? [{ id: 'sequential:main', label: 'Exact sequential optics', pathId: 'main', blocks: sequentialBlocks, rootTransform: identityTransform() }] : [],
     clearance: { radialMm: 5, axialMm: 3 },
-    source, sources: [source],
+    source, sources,
     beamSplitter: {
       model: ['plate', 'cube', 'pellicle'].includes(String(bp.beamSplitterModel)) ? bp.beamSplitterModel as 'plate' | 'cube' | 'pellicle' : 'ideal',
       reflectance: Math.max(0, finite(bp.reflectance, 0.5)),
@@ -325,7 +343,7 @@ export function buildHybridAssemblyFromConfiguration(config: Configuration): Coh
     },
     grating: { componentId: String(gratingBlock?.blockId ?? ''), grooveDensityLinesPerMm: positive(gp.grooveDensityLinesPerMm, 600), incidenceAngleDeg: finite(gp.incidenceAngleDeg), order: Math.round(finite(gp.order, 1)), allowedOrders: Array.isArray(gp.allowedOrders) ? gp.allowedOrders.map(Number).filter(Number.isFinite) : [Math.round(finite(gp.order, 1))], efficiency: Math.max(0, finite(gp.efficiency, 0.75)), blazeAngleDeg: finite(gp.blazeAngleDeg, 10.369), blazeWavelengthNm: positive(gp.blazeWavelengthNm, source.centerWavelengthNm), grooveDirection: { x: finite(gp.grooveDirectionX), y: finite(gp.grooveDirectionY, 1), z: finite(gp.grooveDirectionZ) } as Vec3Mm, detectorMagnification: positive(gp.detectorMagnification, 1) },
     target: { kind: ['step', 'tilt', 'sine', 'csv'].includes(String(tp.profile)) ? tp.profile as any : 'flat', spanMm: positive(tp.widthMm, 10), offsetUm: finite(tp.offsetUm), amplitudeUm: finite(tp.amplitudeUm), periodMm: positive(tp.periodMm, 2), stepPositionMm: finite(tp.stepPositionMm), interaction: ['lambertian', 'abg', 'harvey-shack', 'bsdf-csv'].includes(String(tp.interaction)) ? tp.interaction as any : 'specular', scatterSamples: Math.max(1, Math.min(128, Math.round(positive(tp.scatterSamples, 16)))), scatterA: Math.max(0, finite(tp.scatterA, 1)), scatterB: positive(tp.scatterB, 0.01), scatterG: positive(tp.scatterG, 2), scatterSigmaDeg: positive(tp.scatterSigmaDeg, 5), bsdfSamples: Array.isArray(tp.bsdfSamples) ? tp.bsdfSamples : [] },
-    detector, detectors: [detector],
+    detector, detectors,
     traceSettings: { maxInteractions: 24, minRelativePower: 1e-9, maxGeneratedRays: 250000, rayEpsilonMm: 1e-5, renderSegmentLimit: 25000, previewSpatialSamples: 9, previewSpectralSamples: 9 },
     attenuatorTransmission: Math.max(0, finite(physicalBlocks.find((block) => block.blockType === 'NDFilter')?.parameters?.transmission, 1)),
     targetReflectance: Math.max(0, finite(tp.reflectance, 1)), visibility: 1, calibrationOffsetMm: 0,
