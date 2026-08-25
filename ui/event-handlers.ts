@@ -447,6 +447,7 @@ w.runDesktopAnalysisComputeForPopup = runDesktopAnalysisComputeForPopup;
 async function runDesktopNativeOpdMapForPopup(payload: {
     objectIndex?: number;
     objectRowsOverride?: any[];
+    defocusMm?: number;
     gridSize?: number;
     wavelengthUm?: number;
     surfaceIndex?: number;
@@ -454,7 +455,7 @@ async function runDesktopNativeOpdMapForPopup(payload: {
     suppressProgressHud?: boolean;
 }) {
     const popupRows = collectPopupRowsFromMainWindow();
-    const opticalSystemRows = popupRows.opticalSystemRows;
+    const opticalSystemRows = clonePopupOpticalRowsWithDefocusShift(popupRows.opticalSystemRows, payload?.defocusMm);
     const sourceRows = popupRows.sourceRows;
     const objectRows = Array.isArray(payload?.objectRowsOverride) && payload.objectRowsOverride.length > 0
         ? payload.objectRowsOverride.map((row: any) => row && typeof row === 'object' ? { ...row } : row)

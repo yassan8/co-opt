@@ -7,6 +7,7 @@ declare global {
 const w: Record<string, any> = window;
 
 import { getOrCreateCooptWindowSyncSenderId } from '../core/window-facade.ts';
+import { persistRowsToActiveAnalysisSet } from './table-configuration.ts';
 
 // メモ　物体高だけでなく画角も扱えるようにする
 
@@ -117,6 +118,7 @@ export function saveTableData(data: SourceRow[]): void {
   }
   if (data && Array.isArray(data)) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    persistRowsToActiveAnalysisSet('source', data);
   } else {
     console.warn('⚠️ [TableSource] Invalid data, not saving:', data);
   }

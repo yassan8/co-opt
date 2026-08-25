@@ -92,22 +92,24 @@
 }
 
 .coherent-signal-overview {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(130px, 1fr)) minmax(220px, 1.6fr);
-  gap: 1px;
-  padding: 1px 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 0;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--signal-border);
-  background: var(--signal-border);
+  background: var(--signal-surface);
 }
 
 .coherent-signal-overview > div {
-  display: grid;
-  align-content: center;
-  gap: 3px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  flex: 0 1 auto;
   min-width: 0;
-  min-height: 54px;
-  padding: 8px 12px;
-  background: var(--signal-surface);
+  min-height: 20px;
+  padding: 1px 10px;
+  border-right: 1px solid var(--signal-border);
 }
 
 .coherent-signal-overview span {
@@ -119,15 +121,63 @@
 
 .coherent-signal-overview strong {
   min-width: 0;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 650;
-  line-height: 1.25;
+  line-height: 1.2;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
+.coherent-signal-status,
+.coherent-signal-target-summary {
+  flex: 1 1 420px !important;
+}
+
 .coherent-signal-status strong {
   color: #1d5dca;
+}
+
+.coherent-signal-target-summary {
+  border-right: 0 !important;
+}
+
+.coherent-signal-target-summary span {
+  flex: 0 0 auto;
+}
+
+.coherent-signal-target-summary strong {
+  min-width: 0;
+}
+
+.coherent-signal-progress {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--signal-border);
+  background: var(--signal-surface);
+  color: var(--signal-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.coherent-signal-progress__track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dbe3ef;
+}
+
+.coherent-signal-progress__value {
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 120ms linear;
+}
+
+.coherent-signal-progress:not(.is-running) .coherent-signal-progress__value {
+  background: #64748b;
 }
 
 .coherent-signal-error,
@@ -234,6 +284,7 @@
   max-height: 100%;
   flex: 0 0 auto;
   background: #020307;
+  image-rendering: auto;
 }
 
 .coherent-signal-timeplot {
@@ -257,6 +308,74 @@
   overflow-wrap: anywhere;
 }
 
+.coherent-signal-reconstruction-card {
+  border-color: #9fb6cf;
+}
+
+.coherent-signal-reconstruction-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.72fr) minmax(420px, 1.28fr);
+  align-items: stretch;
+  gap: 12px;
+  min-width: 0;
+}
+
+.coherent-signal-reconstruction-image-stage {
+  display: flex;
+  width: min(100%, 46vh);
+  aspect-ratio: 1;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid #243044;
+  border-radius: 6px;
+  background: #020307;
+}
+
+.coherent-signal-reconstruction-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: auto;
+}
+
+.coherent-signal-profile-plot {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  max-height: 46vh;
+  aspect-ratio: 2.8 / 1;
+  border: 1px solid #d7e0eb;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.coherent-signal-profile-legend {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+}
+
+.coherent-signal-profile-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.coherent-signal-profile-legend i {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: #66758a;
+}
+
+.coherent-signal-profile-legend i.is-recovered {
+  height: 2px;
+  background: #e07a16;
+}
+
 .coherent-signal-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
@@ -275,6 +394,11 @@
   color: var(--signal-muted);
   font-size: 9px;
   line-height: 1.15;
+}
+
+.coherent-signal-metrics .coherent-signal-route-invalid {
+  background: color-mix(in srgb, var(--danger-color, #dc2626) 8%, var(--panel-bg, #fff));
+  border-color: color-mix(in srgb, var(--danger-color, #dc2626) 35%, var(--panel-border, #d8e1ee));
 }
 
 .coherent-signal-metrics strong {
@@ -315,6 +439,10 @@ body.dark-mode .coherent-signal-metrics span {
   border-color: #364459;
 }
 
+body.dark-mode .coherent-signal-progress__track {
+  background: #334155;
+}
+
 body.dark-mode .coherent-signal-metrics strong {
   color: #f1f5fa;
 }
@@ -341,12 +469,8 @@ body.dark-mode .coherent-signal-detector-stage {
     align-items: stretch;
   }
 
-  .coherent-signal-overview {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .coherent-signal-status {
-    grid-column: span 2;
+  .coherent-signal-reconstruction-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -363,12 +487,9 @@ body.dark-mode .coherent-signal-detector-stage {
     width: 100%;
   }
 
-  .coherent-signal-overview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .coherent-signal-status {
-    grid-column: 1 / -1;
+  .coherent-signal-overview > div {
+    flex: 1 1 100%;
+    border-right: 0;
   }
 
   .coherent-signal-results-grid {

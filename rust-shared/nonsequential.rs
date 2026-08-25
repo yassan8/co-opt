@@ -103,6 +103,8 @@ fn default_aperture_kind() -> String {
 pub struct TargetProfileSpec {
     #[serde(default = "default_flat")]
     pub kind: String,
+    #[serde(default = "default_target_span")]
+    pub span_mm: f64,
     #[serde(default)]
     pub offset_um: f64,
     #[serde(default)]
@@ -120,6 +122,11 @@ fn default_flat() -> String {
 }
 fn default_period() -> f64 {
     1.0
+}
+fn default_target_span() -> f64 {
+    // Preserves the legacy amplitude-as-slope result when an older request
+    // does not yet provide the physical Target width.
+    2.0
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -945,7 +952,16 @@ fn target_height_and_slope(profile: &TargetProfileSpec, x_mm: f64) -> (f64, f64)
                 },
             0.0,
         ),
-        "tilt" => (offset + amplitude * x_mm, amplitude),
+        "tilt" => {
+            // Match the Design Intent/Web definition: amplitude is the height
+            // excursion from the center to either edge, not a slope unit.
+            let half_span = if profile.span_mm.abs() > 1e-12 {
+                profile.span_mm.abs() * 0.5
+            } else {
+                1.0
+            };
+            (offset + amplitude * x_mm / half_span, amplitude / half_span)
+        }
         "sine" => {
             let period = profile.period_mm.abs().max(1e-12);
             let phase = 2.0 * PI * x_mm / period;
@@ -2497,5 +2513,28 @@ mod tests {
         assert_eq!(directions.len(), 16);
         assert!((directions.iter().map(|entry| entry.1).sum::<f64>() - 0.7).abs() < 1e-12);
         assert!(directions.iter().all(|entry| entry.0.z < 0.0));
+    }
+
+    #[test]
+    fn target_tilt_and_sine_use_design_intent_height_units() {
+        let base = TargetProfileSpec {
+            span_mm: 50.0,
+            offset_um: 3.0,
+            amplitude_um: 20.0,
+            period_mm: 10.0,
+            ..TargetProfileSpec::default()
+        };
+        let tilt = TargetProfileSpec { kind: "tilt".to_string(), ..base.clone() };
+        let (tilt_left_mm, tilt_slope) = target_height_and_slope(&tilt, -25.0);
+        let (tilt_right_mm, _) = target_height_and_slope(&tilt, 25.0);
+        assert!((tilt_left_mm + 0.017).abs() < 1e-12);
+        assert!((tilt_right_mm - 0.023).abs() < 1e-12);
+        assert!((tilt_slope - 0.0008).abs() < 1e-12);
+
+        let sine = TargetProfileSpec { kind: "sine".to_string(), ..base };
+        let (sine_high_mm, _) = target_height_and_slope(&sine, 2.5);
+        let (sine_low_mm, _) = target_height_and_slope(&sine, 7.5);
+        assert!((sine_high_mm - 0.023).abs() < 1e-12);
+        assert!((sine_low_mm + 0.017).abs() < 1e-12);
     }
 }

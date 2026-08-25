@@ -6,7 +6,7 @@ if (typeof globalThis.self === 'undefined') globalThis.self = new EventTarget();
 const { findStopSurface } = await import('../optical/system-renderer.ts');
 const { calculateSurfaceOrigins } = await import('../raytracing/core/ray-tracing.ts');
 const { generateSpotDiagramAsync } = await import('../evaluation/spot-diagram.ts');
-const { expandBlocksToOpticalSystemRows } = await import('../data/block-schema.ts');
+const { expandBlocksToOpticalSystemRows, validateBlocksConfiguration } = await import('../data/block-schema.ts');
 const { generateRayStartPointsForObject } = await import('../optical/ray-renderer.ts');
 const { runNativeSpotRaytrace } = await import('../src/desktop/ipc/client.ts');
 
@@ -15,6 +15,11 @@ const input = JSON.parse(fs.readFileSync(
   'utf8',
 ));
 const activeConfig = input?.configurations?.configurations?.[0];
+assert.deepEqual(
+  validateBlocksConfiguration(activeConfig).filter((issue) => issue?.severity === 'fatal'),
+  [],
+  'a zero focal-length axis is an intentional unpowered paraxial axis, not a validation failure',
+);
 const expanded = expandBlocksToOpticalSystemRows(activeConfig?.blocks || []);
 assert.equal(
   (expanded?.issues || []).filter((issue) => issue?.severity === 'fatal').length,

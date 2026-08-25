@@ -4568,9 +4568,9 @@ fn trace_single_ray_hit_point_with_meta_core_impl(
     out
 }
 
-fn trace_single_ray_hit_state_with_meta_core(
+fn trace_single_ray_hit_state_with_meta_core_direction(
     ray: &[f64],
-    target_surface_index: usize,
+    target_step_index: usize,
     n_start: f64,
     row_meta: &[i32],
     row_params: &[f64],
@@ -4578,9 +4578,11 @@ fn trace_single_ray_hit_state_with_meta_core(
     row_inv_rots: &[f64],
     row_rots: &[f64],
     row_count: usize,
+    reverse: bool,
+    front_medium_index: f64,
 ) -> [f64; 8] {
     let mut out = [0.0_f64; 8];
-    if ray.len() < 6 || row_count == 0 || target_surface_index >= row_count {
+    if ray.len() < 6 || row_count == 0 || target_step_index >= row_count {
         out[0] = 2.0;
         return out;
     }
@@ -4624,7 +4626,38 @@ fn trace_single_ray_hit_state_with_meta_core(
     let mut opl = 0.0_f64;
     let mut preceding_surface_thickness: Option<f64> = None;
 
-    for i in 0..=target_surface_index {
+    // The physical prescription remains unchanged for Back entry.  This table
+    // only describes which medium exists immediately before each saved surface
+    // in the original Front -> Back coordinate system.
+    let mut reverse_medium_before = vec![
+        if front_medium_index.is_finite() && front_medium_index > 0.0 {
+            front_medium_index
+        } else {
+            1.0
+        };
+        row_count
+    ];
+    if reverse {
+        let mut forward_medium = reverse_medium_before[0];
+        for surface_index in 0..row_count {
+            reverse_medium_before[surface_index] = forward_medium;
+            let meta_base = surface_index * 4;
+            let param_base = surface_index * 24;
+            let kind = row_meta[meta_base];
+            let flags = row_meta[meta_base + 1];
+            let is_mirror = (flags & 1) != 0;
+            let is_ideal_thin_lens = (flags & TRACE_FLAG_IDEAL_THIN_LENS) != 0;
+            let n_after = row_params[param_base + 20];
+            if !is_mirror && !is_ideal_thin_lens && n_after.is_finite() && n_after > 0.0
+                && (kind == 0 || kind == 2 || kind == 3)
+            {
+                forward_medium = n_after;
+            }
+        }
+    }
+
+    for step in 0..=target_step_index {
+        let i = if reverse { row_count - 1 - step } else { step };
         let m = i * 4;
         let kind = row_meta[m + 0];
         let flags = row_meta[m + 1];
@@ -4665,7 +4698,7 @@ fn trace_single_ray_hit_state_with_meta_core(
         let is_qcon = (flags & 64) != 0;
 
         if kind == 1 || kind == 2 || kind == 3 {
-            if i == target_surface_index {
+            if step == target_step_index {
                 out[0] = 1.0;
                 out[1] = opl;
                 out[2] = px;
@@ -4676,14 +4709,14 @@ fn trace_single_ray_hit_state_with_meta_core(
                 out[7] = dz;
                 return out;
             }
-            if (kind == 2 || kind == 3) && n2.is_finite() && n2 > 0.0 {
+            if !reverse && (kind == 2 || kind == 3) && n2.is_finite() && n2 > 0.0 {
                 n_cur = n2;
             }
             continue;
         }
 
         if is_ideal_thin_lens_back {
-            if i == target_surface_index {
+            if step == target_step_index {
                 out[0] = 1.0;
                 out[1] = opl;
                 out[2] = px;
@@ -4870,6 +4903,7 @@ fn trace_single_ray_hit_state_with_meta_core(
             nz = -nz;
         }
 
+        let exit_medium = if reverse { reverse_medium_before[i] } else { n2 };
         let (ndx, ndy, ndz, n_next) = if is_ideal_thin_lens {
             let nn = apply_ideal_thin_lens_local(ldx, ldy, ldz, hx, hy, radius_x, radius_y);
             (nn[0], nn[1], nn[2], n_cur)
@@ -4880,7 +4914,7 @@ fn trace_single_ray_hit_state_with_meta_core(
             let rz = ldz - 2.0 * dotn * nz;
             let nn = normalize3(rx, ry, rz);
             (nn[0], nn[1], nn[2], n_cur)
-        } else if n2.is_finite() && n2 > 0.0 && (n_cur - n2).abs() > EPS_R {
+        } else if exit_medium.is_finite() && exit_medium > 0.0 && (n_cur - exit_medium).abs() > EPS_R {
             let mut cos_i = -(nx * ldx + ny * ldy + nz * ldz);
             if cos_i < 0.0 {
                 cos_i = 0.0;
@@ -4888,7 +4922,7 @@ fn trace_single_ray_hit_state_with_meta_core(
             if cos_i > 1.0 {
                 cos_i = 1.0;
             }
-            let eta = n_cur / n2;
+            let eta = n_cur / exit_medium;
             let mut k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
             if k < 0.0 {
                 if k > -1.0e-10 {
@@ -4909,7 +4943,7 @@ fn trace_single_ray_hit_state_with_meta_core(
             let ry = eta * ldy + (eta * cos_i - sqrt_k) * ny;
             let rz = eta * ldz + (eta * cos_i - sqrt_k) * nz;
             let nn = normalize3(rx, ry, rz);
-            (nn[0], nn[1], nn[2], n2)
+            (nn[0], nn[1], nn[2], exit_medium)
         } else {
             (ldx, ldy, ldz, n_cur)
         };
@@ -4919,7 +4953,7 @@ fn trace_single_ray_hit_state_with_meta_core(
         let gdz = rm20 * ndx + rm21 * ndy + rm22 * ndz;
         let gnorm = normalize3(gdx, gdy, gdz);
 
-        if i == target_surface_index {
+        if step == target_step_index {
             out[0] = 1.0;
             out[1] = opl;
             out[2] = ghx;
@@ -4944,6 +4978,32 @@ fn trace_single_ray_hit_state_with_meta_core(
     out[0] = 6.0;
     out[1] = opl;
     out
+}
+
+fn trace_single_ray_hit_state_with_meta_core(
+    ray: &[f64],
+    target_surface_index: usize,
+    n_start: f64,
+    row_meta: &[i32],
+    row_params: &[f64],
+    row_origins: &[f64],
+    row_inv_rots: &[f64],
+    row_rots: &[f64],
+    row_count: usize,
+) -> [f64; 8] {
+    trace_single_ray_hit_state_with_meta_core_direction(
+        ray,
+        target_surface_index,
+        n_start,
+        row_meta,
+        row_params,
+        row_origins,
+        row_inv_rots,
+        row_rots,
+        row_count,
+        false,
+        n_start,
+    )
 }
 
 #[wasm_bindgen]
@@ -5042,6 +5102,115 @@ pub fn trace_ray_batch_hit_point_with_rows_json(
         &packed.row_rots,
         packed.row_count,
     ))
+}
+
+/// Exact Sequential Group tracing for the Hybrid Port router.
+///
+/// `entry_port` is `front` or `back`.  Back entry traverses the same packed
+/// physical surfaces in descending order; radii, conics and polynomial/Qcon/
+/// Toric coefficients are never sign-rewritten.
+#[wasm_bindgen]
+pub fn trace_sequential_group_with_rows_json(
+    optical_rows_json: String,
+    rays: &[f64],
+    ray_count: usize,
+    wavelength_um: f64,
+    n_start: f64,
+    entry_port: String,
+    front_medium_index: f64,
+) -> Result<Vec<f64>, JsValue> {
+    let raw_rows: Vec<Value> = serde_json::from_str(&optical_rows_json).map_err(|error| {
+        JsValue::from_str(&format!(
+            "trace_sequential_group_with_rows_json: rows JSON: {error}"
+        ))
+    })?;
+    if raw_rows.is_empty() || rays.len() < ray_count.saturating_mul(6) {
+        return Err(JsValue::from_str(
+            "trace_sequential_group_with_rows_json: invalid rows/rays",
+        ));
+    }
+    let rows = raw_rows
+        .iter()
+        .map(normalize_coord_trans_row)
+        .collect::<Vec<Value>>();
+    let reverse = entry_port.trim().eq_ignore_ascii_case("back");
+    let aperture_target = if reverse { 0 } else { rows.len() - 1 };
+    let packed = build_packed_meta_for_opd(&rows, wavelength_um, aperture_target);
+    let mut out = vec![0.0_f64; ray_count.saturating_mul(8)];
+    for ray_index in 0..ray_count {
+        let ray_base = ray_index * 6;
+        let result = trace_single_ray_hit_state_with_meta_core_direction(
+            &rays[ray_base..ray_base + 6],
+            packed.row_count - 1,
+            n_start,
+            &packed.row_meta,
+            &packed.row_params,
+            &packed.row_origins,
+            &packed.row_inv_rots,
+            &packed.row_rots,
+            packed.row_count,
+            reverse,
+            front_medium_index,
+        );
+        let out_base = ray_index * 8;
+        out[out_base..out_base + 8].copy_from_slice(&result);
+    }
+    Ok(out)
+}
+
+/// Surface-by-surface companion for Render. Results are stored in traversal
+/// order as `[status, opl_um, x, y, z, dx, dy, dz]` for every ray and every
+/// saved row. The tracing physics is exactly the same as the final-state API.
+#[wasm_bindgen]
+pub fn trace_sequential_group_path_with_rows_json(
+    optical_rows_json: String,
+    rays: &[f64],
+    ray_count: usize,
+    wavelength_um: f64,
+    n_start: f64,
+    entry_port: String,
+    front_medium_index: f64,
+) -> Result<Vec<f64>, JsValue> {
+    let raw_rows: Vec<Value> = serde_json::from_str(&optical_rows_json).map_err(|error| {
+        JsValue::from_str(&format!(
+            "trace_sequential_group_path_with_rows_json: rows JSON: {error}"
+        ))
+    })?;
+    if raw_rows.is_empty() || rays.len() < ray_count.saturating_mul(6) {
+        return Err(JsValue::from_str(
+            "trace_sequential_group_path_with_rows_json: invalid rows/rays",
+        ));
+    }
+    let rows = raw_rows
+        .iter()
+        .map(normalize_coord_trans_row)
+        .collect::<Vec<Value>>();
+    let reverse = entry_port.trim().eq_ignore_ascii_case("back");
+    let aperture_target = if reverse { 0 } else { rows.len() - 1 };
+    let packed = build_packed_meta_for_opd(&rows, wavelength_um, aperture_target);
+    let row_count = packed.row_count;
+    let mut out = vec![0.0_f64; ray_count.saturating_mul(row_count).saturating_mul(8)];
+    for ray_index in 0..ray_count {
+        let ray_base = ray_index * 6;
+        for target_step in 0..row_count {
+            let result = trace_single_ray_hit_state_with_meta_core_direction(
+                &rays[ray_base..ray_base + 6],
+                target_step,
+                n_start,
+                &packed.row_meta,
+                &packed.row_params,
+                &packed.row_origins,
+                &packed.row_inv_rots,
+                &packed.row_rots,
+                row_count,
+                reverse,
+                front_medium_index,
+            );
+            let out_base = (ray_index * row_count + target_step) * 8;
+            out[out_base..out_base + 8].copy_from_slice(&result);
+        }
+    }
+    Ok(out)
 }
 
 #[wasm_bindgen]
@@ -18019,7 +18188,8 @@ mod tests {
         run_native_psf_from_opd_value, trace_ray_batch_hit_point_cached,
         trace_ray_batch_hit_point_with_meta, trace_ray_batch_spot_metrics_cached,
         trace_ray_batch_spot_metrics_with_meta, trace_single_ray_hit_point_with_meta_core_impl,
-        trace_single_ray_hit_state_with_meta_core, trace_spot_metric_jobs_cached,
+        trace_single_ray_hit_state_with_meta_core, trace_single_ray_hit_state_with_meta_core_direction,
+        trace_spot_metric_jobs_cached,
         OpdTraceCheckpoints,
     };
     use serde_json::Value;
@@ -18445,6 +18615,142 @@ mod tests {
         assert_eq!(state[0], 1.0);
         assert!((point[4] + 0.5).abs() < 1.0e-12);
         assert!((state[4] + 0.5).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn port_routed_exact_reverse_uses_same_physical_surfaces_and_swapped_media() {
+        let row_count = 2;
+        let row_meta = vec![0, 2, 0, 0, 0, 2, 1, 0];
+        let mut row_params = vec![0.0; row_count * 24];
+        for index in 0..row_count {
+            let base = index * 24;
+            row_params[base] = f64::INFINITY;
+            row_params[base + 12] = f64::INFINITY;
+            row_params[base + 17] = f64::INFINITY;
+        }
+        row_params[16] = 10.0;
+        row_params[20] = 1.5;
+        row_params[24 + 20] = 1.0;
+        let row_origins = vec![0.0, 0.0, 0.0, 0.0, 0.0, 10.0];
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let row_rots = identity.repeat(row_count);
+        assert_eq!(row_meta.len(), row_count * 4);
+        assert_eq!(row_params.len(), row_count * 24);
+        assert_eq!(row_origins.len(), row_count * 3);
+        assert_eq!(row_rots.len(), row_count * 9);
+
+        let forward = trace_single_ray_hit_state_with_meta_core_direction(
+            &[0.2, -0.1, -1.0, 0.0, 0.0, 1.0],
+            1,
+            1.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &row_rots,
+            &row_rots,
+            row_count,
+            false,
+            1.0,
+        );
+        let reverse = trace_single_ray_hit_state_with_meta_core_direction(
+            &[forward[2], forward[3], forward[4] + 1.0, -forward[5], -forward[6], -forward[7]],
+            1,
+            1.0,
+            &row_meta,
+            &row_params,
+            &row_origins,
+            &row_rots,
+            &row_rots,
+            row_count,
+            true,
+            1.0,
+        );
+        assert_eq!(forward[0], 1.0, "forward={forward:?}");
+        assert_eq!(reverse[0], 1.0, "reverse={reverse:?}");
+        assert!((forward[1] - reverse[1]).abs() < 1.0e-8);
+        assert!((reverse[2] - 0.2).abs() < 1.0e-9);
+        assert!((reverse[3] + 0.1).abs() < 1.0e-9);
+        assert!(reverse[4].abs() < 1.0e-9);
+        assert!(reverse[5].abs() < 1.0e-12);
+        assert!(reverse[6].abs() < 1.0e-12);
+        assert!((reverse[7] + 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn port_routed_reverse_is_reciprocal_for_supported_exact_surface_families() {
+        let prescriptions = vec![
+            serde_json::json!({
+                "surfType": "Spherical", "radius": 45.0, "conic": 0.0,
+                "thickness": 5.0, "material": "1.52", "semidia": 15.0
+            }),
+            serde_json::json!({
+                "surfType": "Aspheric even", "radius": 45.0, "conic": -0.4,
+                "coef1": 2.0e-7, "coef2": -3.0e-10,
+                "thickness": 5.0, "material": "1.52", "semidia": 15.0
+            }),
+            serde_json::json!({
+                "surfType": "Aspheric odd", "radius": 45.0, "conic": -0.2,
+                "coef1": 1.0e-6, "coef2": -2.0e-9,
+                "thickness": 5.0, "material": "1.52", "semidia": 15.0
+            }),
+            serde_json::json!({
+                "surfType": "Qcon", "radius": 45.0, "conic": -0.3,
+                "qconNrad": 15.0, "coef1": 1.0e-5, "coef2": -2.0e-6,
+                "thickness": 5.0, "material": "1.52", "semidia": 15.0
+            }),
+            serde_json::json!({
+                "surfType": "Toric", "radius": 45.0, "radiusX": 55.0,
+                "radiusY": 32.0, "axis": 17.0, "conic": -0.1,
+                "thickness": 5.0, "material": "1.52", "semidia": 15.0
+            }),
+        ];
+        for first_surface in prescriptions {
+            let label = first_surface
+                .get("surfType")
+                .and_then(Value::as_str)
+                .unwrap_or("surface")
+                .to_string();
+            let rows = vec![
+                first_surface,
+                serde_json::json!({
+                    "surfType": "Spherical", "radius": -60.0, "conic": 0.0,
+                    "thickness": 0.0, "material": "AIR", "semidia": 15.0
+                }),
+            ];
+            let packed = build_packed_meta_for_opd(&rows, 0.5876, 1);
+            let norm = (0.012_f64 * 0.012 + 0.007_f64 * 0.007 + 1.0).sqrt();
+            let initial = [0.45, -0.31, -2.0, 0.012 / norm, 0.007 / norm, 1.0 / norm];
+            let first_hit = trace_single_ray_hit_state_with_meta_core_direction(
+                &initial, 0, 1.0, &packed.row_meta, &packed.row_params,
+                &packed.row_origins, &packed.row_inv_rots, &packed.row_rots,
+                packed.row_count, false, 1.0,
+            );
+            let forward = trace_single_ray_hit_state_with_meta_core_direction(
+                &initial, 1, 1.0, &packed.row_meta, &packed.row_params,
+                &packed.row_origins, &packed.row_inv_rots, &packed.row_rots,
+                packed.row_count, false, 1.0,
+            );
+            assert_eq!(first_hit[0], 1.0, "{label} first={first_hit:?}");
+            assert_eq!(forward[0], 1.0, "{label} forward={forward:?}");
+            let reverse_start = [
+                forward[2] + forward[5] * 2.0,
+                forward[3] + forward[6] * 2.0,
+                forward[4] + forward[7] * 2.0,
+                -forward[5], -forward[6], -forward[7],
+            ];
+            let reverse = trace_single_ray_hit_state_with_meta_core_direction(
+                &reverse_start, 1, 1.0, &packed.row_meta, &packed.row_params,
+                &packed.row_origins, &packed.row_inv_rots, &packed.row_rots,
+                packed.row_count, true, 1.0,
+            );
+            assert_eq!(reverse[0], 1.0, "{label} reverse={reverse:?}");
+            assert!((reverse[2] - first_hit[2]).abs() < 1.0e-6, "{label} x");
+            assert!((reverse[3] - first_hit[3]).abs() < 1.0e-6, "{label} y");
+            assert!((reverse[4] - first_hit[4]).abs() < 1.0e-6, "{label} z");
+            assert!((reverse[5] + initial[3]).abs() < 1.0e-8, "{label} dx");
+            assert!((reverse[6] + initial[4]).abs() < 1.0e-8, "{label} dy");
+            assert!((reverse[7] + initial[5]).abs() < 1.0e-8, "{label} dz");
+        }
     }
 
     #[test]

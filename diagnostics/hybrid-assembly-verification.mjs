@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
-import { createPatentFig2AssemblyDesign } from '../analysis/coherent-assembly.ts';
+import { createPatentFig2AssemblyDesign, resolveComponentTransform } from '../analysis/coherent-assembly.ts';
 import { worldPortPosition } from '../analysis/coherent-port-layout.ts';
+import { readOptionalExampleFixture } from './optional-example-fixture.mjs';
+import { getHybridDetectorPlaneOffset } from '../analysis/hybrid-detector-plane.ts';
 import {
   calculateImagingDetectorSignal,
   convolveDetectorFieldsWithCoherentPsf,
@@ -43,6 +45,19 @@ const retrofocusHybridRows = expandBlocksToOpticalSystemRows([
 ]).rows;
 assert.deepEqual(retrofocusHybridRows, retrofocusRows, 'Retrofocus exact surfaces, glass, aspheres and apertures are unchanged by Hybrid physical blocks');
 
+const detectorZReproJson = await readOptionalExampleFixture('20260823_bug_03.json');
+if (detectorZReproJson) {
+  const detectorZReproConfig = detectorZReproJson.configurations.configurations[0];
+  const detectorZReproDesign = buildHybridAssemblyFromConfiguration(detectorZReproConfig);
+  const detectorZOffset = getHybridDetectorPlaneOffset(detectorZReproDesign, 'AreaDetector-1');
+  assert.equal(detectorZOffset.supported, true, 'direct sequential-to-detector connection supports detector-plane PSF propagation');
+  assert.ok(Math.abs(detectorZOffset.defocusMm - 10) < 1e-9, 'Detector Z=10 mm becomes +10 mm exact-lens defocus');
+  const movedDetectorConfig = JSON.parse(JSON.stringify(detectorZReproConfig));
+  movedDetectorConfig.blocks.find((block) => block.blockId === 'AreaDetector-1').parameters.positionZmm = 25;
+  const movedDetectorOffset = getHybridDetectorPlaneOffset(buildHybridAssemblyFromConfiguration(movedDetectorConfig), 'AreaDetector-1');
+  assert.ok(Math.abs(movedDetectorOffset.defocusMm - 25) < 1e-9, 'changing Detector Z updates the detector-plane defocus');
+}
+
 const baselineRows = expandBlocksToOpticalSystemRows(exactBlocks).rows;
 const mixedRows = expandBlocksToOpticalSystemRows([...exactBlocks, sourceBlock, splitterBlock, detectorBlock]).rows;
 assert.deepEqual(mixedRows, baselineRows, 'physical blocks never modify exact sequential rows');
@@ -68,7 +83,17 @@ assert.equal(hybrid.detector.pixelCountY, 7);
 assert.equal(hybrid.connections.length, 3);
 assert.equal(hybrid.detectors.length, 2, 'all physical detectors remain in the Hybrid design');
 assert.ok(hybrid.components.some((component) => component.kind === 'sequential-group'));
+assert.equal(hybrid.blockSequences.length, 1, 'legacy Config remains one main exact sequential group');
+assert.equal(hybrid.blockSequences[0].id, 'sequential:main');
 const component = (id) => hybrid.components.find((entry) => entry.id === id);
+assert.ok(Math.abs(component('detector').dimensions.widthMm - 0.036) < 1e-12, 'detector width follows Pixels X times pixel pitch');
+assert.ok(Math.abs(component('detector').dimensions.heightMm - 0.028) < 1e-12, 'detector height follows Pixels Y times pixel pitch');
+const widerPitchConfig = JSON.parse(JSON.stringify(config));
+widerPitchConfig.blocks.find((block) => block.blockId === 'detector').parameters.pixelPitchUm = 8;
+const widerPitchHybrid = buildHybridAssemblyFromConfiguration(widerPitchConfig);
+const widerPitchDetector = widerPitchHybrid.components.find((entry) => entry.id === 'detector');
+assert.ok(Math.abs(widerPitchDetector.dimensions.widthMm - 0.072) < 1e-12, 'detector Render width updates when pixel pitch changes');
+assert.ok(Math.abs(widerPitchDetector.dimensions.heightMm - 0.056) < 1e-12, 'detector Render height updates when pixel pitch changes');
 const gap = (fromId, fromPort, toId, toPort) => {
   const from = worldPortPosition(component(fromId), fromPort, 'from');
   const to = worldPortPosition(component(toId), toPort, 'to');
@@ -76,7 +101,36 @@ const gap = (fromId, fromPort, toId, toPort) => {
 };
 assert.ok(Math.abs(gap('source', 'emit', 'splitter', 'common') - 20) < 1e-9, 'source to splitter follows stored port distance');
 assert.ok(Math.abs(gap('splitter', 'transmit', 'detector', 'detect') - 50) < 1e-9, 'splitter to detector follows stored port distance');
+
+const multiGroupConfig = JSON.parse(JSON.stringify(config));
+multiGroupConfig.sequentialGroups = [
+  { id: 'measurement', label: 'Measurement optics', pathLabel: 'measurement', blockIds: ['object', 'lens', 'image'] },
+  { id: 'reference', label: 'Reference optics', pathLabel: 'reference', blockIds: ['stop'] },
+];
+multiGroupConfig.designConnections = [
+  { id: 'measurement-detector', from: { blockId: 'sequential-group:measurement', portId: 'out' }, to: { blockId: 'detector', portId: 'detect' }, distanceMm: 12, autoPlace: true, pathLabel: 'measurement' },
+  { id: 'reference-detector', from: { blockId: 'sequential-group:reference', portId: 'out' }, to: { blockId: 'detector-2', portId: 'detect' }, distanceMm: 18, autoPlace: true, pathLabel: 'reference' },
+];
+const multiGroupHybrid = buildHybridAssemblyFromConfiguration(multiGroupConfig);
+assert.equal(multiGroupHybrid.blockSequences.length, 2, 'one Config can contain multiple exact sequential groups');
+assert.deepEqual(multiGroupHybrid.blockSequences.map((sequence) => sequence.label), ['Measurement optics', 'Reference optics']);
+assert.deepEqual(multiGroupHybrid.blockSequences[0].blocks.map((block) => block.blockId), ['object', 'lens', 'image']);
+assert.deepEqual(multiGroupHybrid.blockSequences[1].blocks.map((block) => block.blockId), ['stop']);
+assert.ok(multiGroupHybrid.components.some((entry) => entry.id === 'sequential-group:measurement'));
+assert.ok(multiGroupHybrid.components.some((entry) => entry.id === 'sequential-group:reference'));
+assert.equal(multiGroupHybrid.connections.length, 2, 'connections to both exact groups survive Config normalization');
+const measurementOffset = getHybridDetectorPlaneOffset(multiGroupHybrid, 'detector');
+const referenceOffset = getHybridDetectorPlaneOffset(multiGroupHybrid, 'detector-2');
+assert.equal(measurementOffset.sequenceId, 'sequential:measurement');
+assert.equal(referenceOffset.sequenceId, 'sequential:reference');
+assert.ok(Math.abs(measurementOffset.defocusMm - 12) < 1e-9);
+assert.ok(Math.abs(referenceOffset.defocusMm - 18) < 1e-9);
 const request = buildNonSequentialTraceRequest(hybrid, 'preview');
+const emittedAt = request.sources[0].transform.positionMm;
+const sourceEndFace = worldPortPosition(component('source'), 'emit', 'from');
+const sourceCentre = resolveComponentTransform(component('source')).positionMm;
+assert.deepEqual(emittedAt, sourceEndFace, 'source rays start at the physical Emit end face');
+assert.notDeepEqual(emittedAt, sourceCentre, 'source rays do not start inside the source body');
 assert.ok(!request.surfaces.some((surface) => surface.interaction.kind === 'thin-lens'), 'exact sequential group is never converted to a thin lens');
 const idealSplitterInteraction = request.surfaces.find((surface) => surface.interaction.kind === 'beam-splitter')?.interaction;
 assert.ok(idealSplitterInteraction, 'Beam Splitter is present in the non-sequential request');
@@ -108,6 +162,21 @@ assert.equal(physicalInteraction.backSurfaceReflectance, 0.04);
 const disconnectedHybrid = buildHybridAssemblyFromConfiguration({ ...config, designConnections: [] });
 assert.equal(disconnectedHybrid.connections.length, 0);
 assert.equal(disconnectedHybrid.paths.length, 0, 'removed connections do not leave stale Optical path labels');
+
+const combBlock = createDefaultPhysicalBlock('FrequencyCombSource', 'comb-at-sequential-input');
+combBlock.parameters.positionXmm = 7;
+const combHybrid = buildHybridAssemblyFromConfiguration({
+  ...config,
+  blocks: [...exactBlocks, combBlock],
+  designConnections: [],
+});
+const combComponent = combHybrid.components.find((entry) => entry.id === combBlock.blockId);
+const combSequential = combHybrid.components.find((entry) => entry.id === 'sequential-group:main');
+const combEmit = worldPortPosition(combComponent, 'emit', 'from');
+const sequentialInput = worldPortPosition(combSequential, 'in', 'to');
+assert.ok(Math.abs(combEmit.x - sequentialInput.x - 7) < 1e-9, 'Comb manual X remains an offset from the sequential input');
+assert.ok(Math.abs(combEmit.y - sequentialInput.y) < 1e-9, 'Comb Emit aligns vertically with the sequential input');
+assert.ok(Math.abs(combEmit.z - sequentialInput.z) < 1e-9, 'Comb Emit end face starts at the exact sequential input plane');
 
 const delta = [
   [0, 0, 0],
@@ -148,6 +217,17 @@ const hybridSignal = convolveDetectorPowerWithPsf({
 assert.ok(Math.abs(hybridSignal.integratedPowerW - 1) < 1e-12, 'physical detector map times exact PSF conserves in-bounds power');
 assert.ok(Math.abs(hybridSignal.powerWPerPixel[12] - 0.5) < 1e-12, 'exact PSF shapes the physical-path center hit');
 
+const pupilGridMap = new Float64Array(81);
+for (const index of [20, 22, 24, 38, 40, 42, 56, 58, 60]) pupilGridMap[index] = 1 / 9;
+const collapsedPupilSignal = convolveDetectorPowerWithPsf({
+  powerWPerPixel: pupilGridMap, width: 9, height: 9,
+  detector: { ...detector, pixelCountX: 9, pixelCountY: 9, pixelPitchUm: 5, saturationElectrons: 1e30 },
+  psfData: [[0, 1, 0], [1, 4, 1], [0, 1, 0]], psfPixelSizeUm: 5, wavelengthNm: 500,
+  collapseInputToCentroid: true,
+});
+assert.ok(Math.abs(collapsedPupilSignal.integratedPowerW - 1) < 1e-12, 'collapsed sequential pupil grid conserves detector power');
+assert.ok(Math.abs(collapsedPupilSignal.powerWPerPixel[40] - 0.5) < 1e-12, 'regular source-ray grid is replaced by one exact-lens PSF at its centroid');
+
 const complexDelta = [{
   wavelengthUm: 0.5, weight: 1, psfData: [[1]], pixelSizeUm: 5,
   fieldReal: [[1]], fieldImag: [[0]],
@@ -169,6 +249,17 @@ const incoherentSignal = convolveDetectorFieldsWithCoherentPsf({
   width: 3, height: 3, detector, spectralPsf: complexDelta,
 });
 assert.ok(Math.abs(incoherentSignal.signal.integratedPowerW - 2) < 1e-12, 'different coherence groups add as intensity');
+const collapsedComplexSignal = convolveDetectorFieldsWithCoherentPsf({
+  spectralFields: [
+    { pixelX: 0, pixelY: 1, coherenceGroupId: 'pupil', frequencyHz: 6e14, wavelengthNm: 500, fieldRe: 1, fieldIm: 0 },
+    { pixelX: 2, pixelY: 1, coherenceGroupId: 'pupil', frequencyHz: 6e14, wavelengthNm: 500, fieldRe: 1, fieldIm: 0 },
+  ],
+  width: 3, height: 3, detector, spectralPsf: complexDelta,
+  collapseSpatialSamplesPerMode: true,
+});
+assert.ok(collapsedComplexSignal, 'coherent pupil-grid collapse remains available');
+assert.ok(Math.abs(collapsedComplexSignal.signal.integratedPowerW - 2) < 1e-12, 'coherent pupil-grid collapse conserves in-phase mode power');
+assert.ok(Math.abs(collapsedComplexSignal.signal.powerWPerPixel[4] - 2) < 1e-12, 'coherent pupil samples form one centered exact-lens image');
 
 const removedConnections = normalizeDesignConnections([sourceBlock, splitterBlock, detectorBlock], []);
 assert.equal(removedConnections.length, 0, 'an explicitly empty connection list stays empty after Remove');

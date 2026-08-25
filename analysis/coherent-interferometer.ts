@@ -6,6 +6,8 @@ export type CoherentPreset = 'broadband-grating' | 'dual-resonator' | 'dual-comb
 
 export interface BeamSplitterSpec {
   model?: 'ideal' | 'plate' | 'cube' | 'pellicle';
+  /** Common-port reflection exits through this lateral port. */
+  reflectionPort?: 'reflect' | 'recombine';
   reflectance: number;
   transmittance: number;
   reflectedPhaseDeg?: number;

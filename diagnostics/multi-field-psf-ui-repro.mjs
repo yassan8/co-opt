@@ -1,11 +1,21 @@
 import { build } from 'esbuild';
 import { randomUUID } from 'node:crypto';
-import { unlink, writeFile } from 'node:fs/promises';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const coherentSignalSource = await readFile(new URL('../src/app/CoherentSignalPage.tsx', import.meta.url), 'utf8');
+if (/setTimeout\(\(\) => void run\('(preview|full)'\)/u.test(coherentSignalSource)) {
+  throw new Error('Coherent Signal must not auto-run after Design Intent changes');
+}
+if (!coherentSignalSource.includes('Settings changed · press Run')) {
+  throw new Error('Coherent Signal does not expose the manual Run pending state');
+}
+if (!coherentSignalSource.includes('totalPowerW: detectorResult.integratedPowerW')) {
+  throw new Error('Coherent Signal does not suppress the sequential source-ray grid artifact');
+}
 
 const stubPlugin = {
   name: 'multi-field-psf-ui-stubs',
@@ -113,12 +123,16 @@ const entry = `
     colorMode: 'pseudo',
     opdMode: 'raw',
     logScale: false,
+    defocusMm: 2.5,
     token: { aborted: false, abort() {} },
     onProgress() {},
   }).then((computed) => {
+    const opdCall = calls.find((call) => call.name === 'runDesktopNativeOpdMapForPopup');
     const spotCall = calls.find((call) => call.name === 'runDesktopNativeSpotRaytraceForPopup');
     const psfCall = calls.find((call) => call.name === 'runDesktopNativePsfMapForPopup');
     expect(Boolean(spotCall), 'Multi-Field PSF did not trace detector rays');
+    expect(opdCall.payload.defocusMm === 2.5, 'Detector defocus was not passed to OPD tracing');
+    expect(spotCall.payload.defocusMm === 2.5, 'Detector defocus was not passed to spot tracing');
     expect(spotCall.payload.pattern === 'grid', 'Multi-Field PSF detector rays must use the pupil grid pattern');
     expect(psfCall.payload.propagationMode === 'auto', 'Multi-Field PSF did not enable hybrid propagation');
     expect(psfCall.payload.rayHitsUm.length === 65, 'Multi-Field PSF did not forward detector hits');

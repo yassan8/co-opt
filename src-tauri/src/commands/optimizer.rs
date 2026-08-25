@@ -1,8 +1,8 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet, VecDeque};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -382,7 +382,9 @@ pub fn evaluate_optimizer_candidates_multi_scenario(
         && req.candidate_deltas.is_empty()
         && req.candidate_vectors.is_empty()
     {
-        return Err("evaluate_optimizer_candidates_multi_scenario: candidates is empty".to_string());
+        return Err(
+            "evaluate_optimizer_candidates_multi_scenario: candidates is empty".to_string(),
+        );
     }
     if req.scenario_batches.is_empty() {
         return Err(
@@ -536,13 +538,15 @@ fn apply_candidate_vector(
                 binding.variable_index
             )
         })?;
-        let output = binding.output_baseline
-            + binding.slope * (input - binding.input_baseline);
+        let output = binding.output_baseline + binding.slope * (input - binding.input_baseline);
         if !input.is_finite() || !output.is_finite() {
             return Err("evaluate_optimizer_candidates: non-finite vector value".to_string());
         }
         let rows = rows_by_config.get_mut(&binding.config_id).ok_or_else(|| {
-            format!("evaluate_optimizer_candidates: unknown config {}", binding.config_id)
+            format!(
+                "evaluate_optimizer_candidates: unknown config {}",
+                binding.config_id
+            )
         })?;
         let row = rows.get_mut(binding.row_index).ok_or_else(|| {
             format!(
@@ -577,7 +581,10 @@ fn apply_candidate_updates(
     let mut rows_by_config = base_rows_by_config.clone();
     for update in updates {
         let rows = rows_by_config.get_mut(&update.config_id).ok_or_else(|| {
-            format!("evaluate_optimizer_candidates: unknown config {}", update.config_id)
+            format!(
+                "evaluate_optimizer_candidates: unknown config {}",
+                update.config_id
+            )
         })?;
         let row = rows.get_mut(update.row_index).ok_or_else(|| {
             format!(
@@ -1897,8 +1904,8 @@ fn apply_direction_step(
 
 fn augmented_cost(eval: EvalState, mu_total: f64, penalty: f64) -> f64 {
     eval.score
-    + mu_total * eval.squared_violation_score.sqrt()
-    + 0.5 * penalty * eval.squared_violation_score
+        + mu_total * eval.squared_violation_score.sqrt()
+        + 0.5 * penalty * eval.squared_violation_score
 }
 
 enum LineSearchResult {
@@ -2371,13 +2378,18 @@ fn approximate_gradient(
             let h = (v.scale * 1e-3).max(MIN_STEP);
             let mut trial_rows = rows.to_vec();
             set_numeric_field(&mut trial_rows, v.row_index, &v.field_key, x0 + h);
-            let f1 = evaluate_state(&trial_rows, source_rows, object_rows, vars, requirements).score;
+            let f1 =
+                evaluate_state(&trial_rows, source_rows, object_rows, vars, requirements).score;
             let g = if f1.is_finite() && f0.is_finite() {
                 (f1 - f0) / h
             } else {
                 0.0
             };
-            if g.is_finite() { g } else { 0.0 }
+            if g.is_finite() {
+                g
+            } else {
+                0.0
+            }
         })
         .collect()
 }
@@ -2472,11 +2484,7 @@ fn collect_optimizable_variables(rows: &[Value]) -> Vec<VariableSpec> {
 /// string together with an `optimizeCoefN: "V"` flag.  Treating that empty
 /// string as non-numeric here silently removes the variable from the native
 /// optimizer, although the same design is accepted by the web optimizer.
-fn optimizer_variable_baseline(
-    rows: &[Value],
-    row_index: usize,
-    field_key: &str,
-) -> Option<f64> {
+fn optimizer_variable_baseline(rows: &[Value], row_index: usize, field_key: &str) -> Option<f64> {
     if let Some(value) = get_numeric_field(rows, row_index, field_key) {
         return Some(value);
     }
@@ -2622,8 +2630,13 @@ fn evaluate_state(
     }
 
     // TS parity: optimize requirement score first (violation + soft; soft is currently 0 here).
-    let (requirement_score, violation_score, squared_violation_score, equal_violation, inequal_violation) =
-        evaluate_requirements(rows, source_rows, object_rows, requirements);
+    let (
+        requirement_score,
+        violation_score,
+        squared_violation_score,
+        equal_violation,
+        inequal_violation,
+    ) = evaluate_requirements(rows, source_rows, object_rows, requirements);
     let score = requirement_score;
     EvalState {
         geometry_merit,
@@ -2805,28 +2818,35 @@ fn evaluate_requirement_currents(
         &mut operand_cache,
     ));
 
-    requirements.iter().map(|req| {
-        if is_stop_requested() {
-            return None;
-        }
-        if !req.enabled {
-            return None;
-        }
-
-        let cache_key = req.cache_key.as_str();
-        if let Some(v) = operand_cache.get(cache_key) {
-            if !prefetched_cache_keys.contains(cache_key) {
-                optimizer_profile_record_cache_hit(cache_key, &req.operand);
+    requirements
+        .iter()
+        .map(|req| {
+            if is_stop_requested() {
+                return None;
             }
-            *v
-        } else {
-            let t0 = Instant::now();
-            let v = evaluate_operand_value(rows, source_rows, object_rows, req);
-            optimizer_profile_record_operand_eval(cache_key, &req.operand, t0.elapsed().as_nanos());
-            operand_cache.insert(cache_key, v);
-            v
-        }
-    }).collect()
+            if !req.enabled {
+                return None;
+            }
+
+            let cache_key = req.cache_key.as_str();
+            if let Some(v) = operand_cache.get(cache_key) {
+                if !prefetched_cache_keys.contains(cache_key) {
+                    optimizer_profile_record_cache_hit(cache_key, &req.operand);
+                }
+                *v
+            } else {
+                let t0 = Instant::now();
+                let v = evaluate_operand_value(rows, source_rows, object_rows, req);
+                optimizer_profile_record_operand_eval(
+                    cache_key,
+                    &req.operand,
+                    t0.elapsed().as_nanos(),
+                );
+                operand_cache.insert(cache_key, v);
+                v
+            }
+        })
+        .collect()
 }
 
 fn paraxial_metric_value(metrics: &ParaxialMetrics, operand: &str) -> Option<f64> {
@@ -2854,8 +2874,21 @@ fn paraxial_metric_value(metrics: &ParaxialMetrics, operand: &str) -> Option<f64
 fn is_shared_paraxial_metric_operand(operand: &str) -> bool {
     matches!(
         operand,
-        "FL" | "EFL" | "BFL" | "IMD" | "BEXP" | "EXPD" | "EXPP" | "ENPD" | "ENPP"
-            | "ENPM" | "PMAG" | "FNO_OBJ" | "FNO_IMG" | "FNO_WRK" | "NA_OBJ" | "NA_IMG"
+        "FL" | "EFL"
+            | "BFL"
+            | "IMD"
+            | "BEXP"
+            | "EXPD"
+            | "EXPP"
+            | "ENPD"
+            | "ENPP"
+            | "ENPM"
+            | "PMAG"
+            | "FNO_OBJ"
+            | "FNO_IMG"
+            | "FNO_WRK"
+            | "NA_OBJ"
+            | "NA_IMG"
     )
 }
 
@@ -3016,7 +3049,11 @@ fn evaluate_edge_thickness(rows: &[Value], req: &RequirementSpec) -> Option<f64>
     }
 }
 
-fn evaluate_surface_distance(rows: &[Value], start_selection: &str, end_selection: &str) -> Option<f64> {
+fn evaluate_surface_distance(
+    rows: &[Value],
+    start_selection: &str,
+    end_selection: &str,
+) -> Option<f64> {
     let start_index = resolve_row_index_by_id_or_position(rows, start_selection)?;
     let end_index = resolve_row_index_by_id_or_position(rows, end_selection)?;
     if start_index == end_index {
@@ -3519,8 +3556,13 @@ fn prefill_parallel_spot_cache<'a>(
         .into_par_iter()
         .filter_map(|group| {
             let t0 = Instant::now();
-            let values = evaluate_batched_spot_requirements(rows, source_rows, object_rows, &group)?;
-            let computed_count = values.iter().filter(|entry| !entry.from_memo).count().max(1);
+            let values =
+                evaluate_batched_spot_requirements(rows, source_rows, object_rows, &group)?;
+            let computed_count = values
+                .iter()
+                .filter(|entry| !entry.from_memo)
+                .count()
+                .max(1);
             let share_nanos = t0.elapsed().as_nanos() / computed_count as u128;
             Some((values, share_nanos))
         })
@@ -3537,11 +3579,7 @@ fn prefill_parallel_spot_cache<'a>(
             if entry.from_memo {
                 optimizer_profile_record_cache_hit(cache_key, &requirement.operand);
             } else {
-                optimizer_profile_record_operand_eval(
-                    cache_key,
-                    &requirement.operand,
-                    share_nanos,
-                );
+                optimizer_profile_record_operand_eval(cache_key, &requirement.operand, share_nanos);
             }
         }
     }
@@ -5594,14 +5632,8 @@ mod tests {
         let individual = requirements
             .iter()
             .map(|requirement| {
-                native_spot_size_um(
-                    &rows,
-                    &source_rows,
-                    &object_rows,
-                    requirement,
-                    "annular",
-                )
-                .expect("individual Spot evaluation should succeed")
+                native_spot_size_um(&rows, &source_rows, &object_rows, requirement, "annular")
+                    .expect("individual Spot evaluation should succeed")
             })
             .collect::<Vec<_>>();
         let requirement_refs = requirements.iter().collect::<Vec<_>>();
@@ -5637,12 +5669,24 @@ mod tests {
         ];
         let candidates = vec![
             HashMap::from([
-                ("wide".to_string(), vec![serde_json::json!({ "thickness": 5.0 })]),
-                ("tele".to_string(), vec![serde_json::json!({ "thickness": 50.0 })]),
+                (
+                    "wide".to_string(),
+                    vec![serde_json::json!({ "thickness": 5.0 })],
+                ),
+                (
+                    "tele".to_string(),
+                    vec![serde_json::json!({ "thickness": 50.0 })],
+                ),
             ]),
             HashMap::from([
-                ("wide".to_string(), vec![serde_json::json!({ "thickness": 7.0 })]),
-                ("tele".to_string(), vec![serde_json::json!({ "thickness": 70.0 })]),
+                (
+                    "wide".to_string(),
+                    vec![serde_json::json!({ "thickness": 7.0 })],
+                ),
+                (
+                    "tele".to_string(),
+                    vec![serde_json::json!({ "thickness": 70.0 })],
+                ),
             ]),
         ];
 
@@ -5662,8 +5706,14 @@ mod tests {
         .expect("candidate batch should evaluate");
 
         assert_eq!(response.currents_per_candidate.len(), 2);
-        assert_eq!(response.currents_per_candidate[0], vec![Some(5.0), Some(50.0)]);
-        assert_eq!(response.currents_per_candidate[1], vec![Some(7.0), Some(70.0)]);
+        assert_eq!(
+            response.currents_per_candidate[0],
+            vec![Some(5.0), Some(50.0)]
+        );
+        assert_eq!(
+            response.currents_per_candidate[1],
+            vec![Some(7.0), Some(70.0)]
+        );
     }
 
     #[test]
@@ -5836,14 +5886,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let parallel = approximate_augmented_gradient(
-            &mut rows,
-            &[],
-            &[],
-            &vars,
-            &requirements,
-            2.0,
-        );
+        let parallel =
+            approximate_augmented_gradient(&mut rows, &[], &[], &vars, &requirements, 2.0);
 
         assert_eq!(parallel, serial);
     }
@@ -5976,8 +6020,14 @@ mod tests {
         ];
 
         assert_eq!(evaluate_surface_distance(&rows, "2", "4"), Some(5.0));
-        assert_eq!(evaluate_surface_distance(&rows, "Surface 2", "4: third"), Some(5.0));
-        assert_eq!(evaluate_surface_distance(&rows, "Surf 2", "Surface 2"), Some(0.0));
+        assert_eq!(
+            evaluate_surface_distance(&rows, "Surface 2", "4: third"),
+            Some(5.0)
+        );
+        assert_eq!(
+            evaluate_surface_distance(&rows, "Surf 2", "Surface 2"),
+            Some(0.0)
+        );
         assert_eq!(evaluate_surface_distance(&rows, "missing", "4"), None);
     }
 
@@ -5991,7 +6041,10 @@ mod tests {
         ];
 
         assert_eq!(evaluate_surface_distance(&rows, "1", "3"), Some(5.0));
-        assert_eq!(evaluate_surface_distance(&rows, "Surface 1", "Surf 3"), Some(5.0));
+        assert_eq!(
+            evaluate_surface_distance(&rows, "Surface 1", "Surf 3"),
+            Some(5.0)
+        );
     }
 
     #[test]

@@ -139,7 +139,12 @@ import {
     saveCurrentToActiveConfiguration as saveCurrentToActiveConfigurationFromTableConfig,
     loadActiveConfigurationToTables as loadActiveConfigurationToTablesFromTableConfig,
     shouldPreferImportedOpticalRows,
-    clearAllPersistedState
+    clearAllPersistedState,
+    getLensSectionInputBinding,
+    normalizeLensSectionAnalysisInputs,
+    setLensSectionInputBinding,
+    type LensSectionInputBinding,
+    type LensSectionPort
 } from '../data/table-configuration.ts';
 import {
     loadTableData as loadSourceTableData,
@@ -7357,6 +7362,108 @@ function __blocks_setVarScope(blockId: string, key: string, scope: string): void
     } catch (_) {}
 }
 
+function __blocks_sequentialGroupKey(value: any): string {
+    return String(value ?? '').trim()
+        .replace(/^sequential-group:/, '')
+        .replace(/^sequential:/, '') || 'main';
+}
+
+function __blocks_ensureSequentialGroup(activeCfg: any, groupId: string): any {
+    if (!activeCfg || typeof activeCfg !== 'object') return null;
+    if (!Array.isArray(activeCfg.sequentialGroups)) activeCfg.sequentialGroups = [];
+    const key = __blocks_sequentialGroupKey(groupId);
+    let group = activeCfg.sequentialGroups.find((entry: any) => __blocks_sequentialGroupKey(entry?.id) === key);
+    if (!group) {
+        group = {
+            id: key,
+            label: key === 'main' ? 'Lens design 1' : `Lens design ${activeCfg.sequentialGroups.length + 1}`,
+            blockIds: [],
+            pathLabel: key === 'main' ? 'main' : key,
+            rootTransform: {
+                positionMm: { x: 0, y: 0, z: 0 },
+                rotationDeg: { x: 0, y: 0, z: 0 }
+            }
+        };
+        activeCfg.sequentialGroups.push(group);
+    }
+    if (!Array.isArray(group.blockIds)) group.blockIds = [];
+    return group;
+}
+
+function __blocks_assignSequentialBlockToGroup(activeCfg: any, blockId: string, groupId: string): boolean {
+    const id = String(blockId ?? '').trim();
+    if (!activeCfg || !id || !Array.isArray(activeCfg.blocks)) return false;
+    const block = activeCfg.blocks.find((entry: any) => String(entry?.blockId ?? '').trim() === id);
+    if (!block || isPhysicalBlockType(String(block?.blockType ?? ''))) return false;
+
+    const target = __blocks_ensureSequentialGroup(activeCfg, groupId);
+    if (!target) return false;
+    for (const group of activeCfg.sequentialGroups) {
+        if (!Array.isArray(group?.blockIds)) group.blockIds = [];
+        group.blockIds = group.blockIds.filter((candidate: any) => String(candidate ?? '').trim() !== id);
+    }
+    target.blockIds.push(id);
+    const orderById = new Map<string, number>();
+    activeCfg.blocks.forEach((entry: any, index: number) => {
+        const entryId = String(entry?.blockId ?? '').trim();
+        if (entryId) orderById.set(entryId, index);
+    });
+    target.blockIds.sort((left: any, right: any) => (
+        (orderById.get(String(left ?? '').trim()) ?? Number.MAX_SAFE_INTEGER)
+        - (orderById.get(String(right ?? '').trim()) ?? Number.MAX_SAFE_INTEGER)
+    ));
+    return true;
+}
+
+function __blocks_groupIdForBlock(activeCfg: any, blockId: string): string {
+    const id = String(blockId ?? '').trim();
+    if (!id) return '';
+    const group = (Array.isArray(activeCfg?.sequentialGroups) ? activeCfg.sequentialGroups : []).find((entry: any) => (
+        Array.isArray(entry?.blockIds)
+        && entry.blockIds.some((candidate: any) => String(candidate ?? '').trim() === id)
+    ));
+    if (group) return __blocks_sequentialGroupKey(group.id);
+    const block = Array.isArray(activeCfg?.blocks)
+        ? activeCfg.blocks.find((entry: any) => String(entry?.blockId ?? '').trim() === id)
+        : null;
+    return block && !isPhysicalBlockType(String(block?.blockType ?? '')) ? 'main' : '';
+}
+
+function __blocks_updateLensSectionInput(
+    sectionId: string,
+    port: LensSectionPort,
+    patch: Partial<LensSectionInputBinding>
+): void {
+    try {
+        const systemConfig = cooptLoadCanonicalDesignIntentSystemConfig();
+        if (!systemConfig || !Array.isArray(systemConfig.configurations)) return;
+        const activeCfg = systemConfig.configurations.find((entry: any) => (
+            String(entry?.id ?? '') === String(systemConfig.activeConfigId ?? '')
+        ));
+        if (!activeCfg) return;
+        normalizeLensSectionAnalysisInputs(activeCfg);
+        const current = getLensSectionInputBinding(activeCfg, sectionId, port);
+        setLensSectionInputBinding(activeCfg, { ...current, ...patch, sectionId, port });
+        if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+        activeCfg.metadata.modified = new Date().toISOString();
+        saveSystemConfigurationsFromTableConfig(systemConfig);
+        try { window.dispatchEvent(new CustomEvent('coopt:analysis-input-sets-updated')); } catch (_) {}
+        try { window.dispatchEvent(new CustomEvent('coopt:system-configurations-updated')); } catch (_) {}
+    } catch (_) {}
+}
+
+function __blocks_refreshExpandedRows(activeCfg: any): void {
+    try {
+        if (typeof expandBlocksToOpticalSystemRows === 'function' && Array.isArray(activeCfg?.blocks)) {
+            const exp = expandBlocksToOpticalSystemRows(activeCfg.blocks);
+            if (exp && Array.isArray(exp.rows)) {
+                activeCfg.opticalSystem = exp.rows;
+                try { if (typeof saveOpticalSystemTableData === 'function') saveOpticalSystemTableData(exp.rows as any); } catch (_) {}
+            }
+        }
+    } catch (_) {}
+}
+
 function __blocks_moveBlock(fromBlockId: string, toBlockId: string, position: 'before' | 'after'): void {
     try {
         const systemConfig = loadSystemConfigurations();
@@ -7375,16 +7482,49 @@ function __blocks_moveBlock(fromBlockId: string, toBlockId: string, position: 'b
         const finalIdx = (position === 'before') ? insertIdx : insertIdx + 1;
         blocks.splice(finalIdx, 0, moved);
 
+        const destinationGroupId = __blocks_groupIdForBlock(activeCfg, toBlockId);
+        if (destinationGroupId && !isPhysicalBlockType(String(moved?.blockType ?? ''))) {
+            __blocks_assignSequentialBlockToGroup(activeCfg, fromBlockId, destinationGroupId);
+        }
+
         // Re-expand optical system from new block order
-        try {
-            if (typeof expandBlocksToOpticalSystemRows === 'function') {
-                const exp = expandBlocksToOpticalSystemRows(blocks);
-                if (exp && Array.isArray(exp.rows)) {
-                    activeCfg.opticalSystem = exp.rows;
-                    try { if (typeof saveOpticalSystemTableData === 'function') saveOpticalSystemTableData(exp.rows as any); } catch (_) {}
-                }
-            }
-        } catch (_) {}
+        __blocks_refreshExpandedRows(activeCfg);
+
+        if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+        activeCfg.metadata.modified = new Date().toISOString();
+        saveSystemConfigurations(systemConfig);
+        try { refreshBlockInspector(); } catch (_) {}
+        try { if (typeof (w as any).loadActiveConfigurationToTables === 'function') (w as any).loadActiveConfigurationToTables({ applyToUI: true }); } catch (_) {}
+    } catch (_) {}
+}
+
+function __blocks_moveBlockToSequentialGroup(blockId: string, targetGroupId: string): void {
+    try {
+        const systemConfig = loadSystemConfigurations();
+        if (!systemConfig || !Array.isArray(systemConfig.configurations)) return;
+        const activeCfg = systemConfig.configurations.find((entry: any) => entry && String(entry.id) === String(systemConfig.activeConfigId));
+        if (!activeCfg || !Array.isArray(activeCfg.blocks)) return;
+
+        const id = String(blockId ?? '').trim();
+        const blockIndex = activeCfg.blocks.findIndex((entry: any) => String(entry?.blockId ?? '').trim() === id);
+        if (blockIndex < 0 || isPhysicalBlockType(String(activeCfg.blocks[blockIndex]?.blockType ?? ''))) return;
+
+        const target = __blocks_ensureSequentialGroup(activeCfg, targetGroupId);
+        if (!target) return;
+        const previousTargetIds = target.blockIds.map(String).filter((candidate: string) => candidate !== id);
+        const [moved] = activeCfg.blocks.splice(blockIndex, 1);
+        let insertIndex = activeCfg.blocks.length;
+        const lastTargetId = previousTargetIds[previousTargetIds.length - 1];
+        if (lastTargetId) {
+            const lastTargetIndex = activeCfg.blocks.findIndex((entry: any) => String(entry?.blockId ?? '').trim() === lastTargetId);
+            if (lastTargetIndex >= 0) insertIndex = lastTargetIndex + 1;
+        } else {
+            const imageIndex = activeCfg.blocks.findIndex((entry: any) => String(entry?.blockType ?? '').trim() === 'ImageSurface');
+            if (imageIndex >= 0) insertIndex = imageIndex;
+        }
+        activeCfg.blocks.splice(insertIndex, 0, moved);
+        __blocks_assignSequentialBlockToGroup(activeCfg, id, targetGroupId);
+        __blocks_refreshExpandedRows(activeCfg);
 
         if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
         activeCfg.metadata.modified = new Date().toISOString();
@@ -7683,8 +7823,8 @@ function formatBlockPreview(block: any): string {
     if (isPhysicalBlockType(type)) {
         const p = b.parameters ?? {};
         const xyz = `Offset XYZ=${String(p.positionXmm ?? 0)},${String(p.positionYmm ?? 0)},${String(p.positionZmm ?? 0)} mm`;
-        if (type === 'BroadbandSource') return `${p.minWavelengthNm ?? '—'}–${p.maxWavelengthNm ?? '—'} nm · ${p.totalPowerW ?? '—'} W · ${xyz}`;
-        if (type === 'FrequencyCombSource') return `f_rep=${p.repetitionRateHz ?? '—'} Hz · f_ceo=${p.ceoFrequencyHz ?? '—'} Hz · ${xyz}`;
+        if (type === 'BroadbandSource') return `${p.minWavelengthNm ?? '—'}–${p.maxWavelengthNm ?? '—'} nm · ${p.totalPowerW ?? '—'} W · rays R${p.renderSpatialSamples ?? Math.min(9, p.spatialSamples ?? 9)}/D${p.detectorSpatialSamples ?? p.spatialSamples ?? 81} · ${xyz}`;
+        if (type === 'FrequencyCombSource') return `f_rep=${p.repetitionRateHz ?? '—'} Hz · f_ceo=${p.ceoFrequencyHz ?? '—'} Hz · rays R${p.renderSpatialSamples ?? Math.min(9, p.spatialSamples ?? 9)}/D${p.detectorSpatialSamples ?? p.spatialSamples ?? 81} · ${xyz}`;
         if (type === 'BeamSplitter') {
             const model = String(p.beamSplitterModel ?? 'ideal');
             const modelLabel = model === 'ideal' ? 'Ideal' : model.charAt(0).toUpperCase() + model.slice(1);
@@ -8552,6 +8692,7 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     if (!block) return;
 
     const blockType = String(block?.blockType ?? '').trim();
+    const isPhysicalAssemblyChange = isPhysicalBlockType(blockType);
     if ((blockType === 'Lens' || blockType === 'PositiveLens') && String(path) === 'parameters.bending') {
             const bendingUpdate = cooptResolveLensBendingUpdate(block, newValue);
             if (!bendingUpdate) {
@@ -8711,8 +8852,8 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
             }
             __cooptRequestRenderRedrawWithRows(rowsSnapshot);
             try { delete w.__cooptDeferDerivedUiUntil; } catch (_) {}
-        }, 650);
-    }, 420);
+        }, isPhysicalAssemblyChange ? 0 : 650);
+    }, isPhysicalAssemblyChange ? 40 : 420);
 }
 
 const ZOOM_GROUP_OPTIONS = ['Fixed', ...Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index))];
@@ -9621,6 +9762,226 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     syncDesignIntentQuickEditorToggle();
     const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
     const activeConfigIdForInspector = String(activeCfg?.id ?? '').trim();
+    type AssemblyParameterChoice = { value: string | number | boolean; label: string };
+    type AssemblyParameterPresentation = { label: string; compactLabel?: string; help: string; choices?: AssemblyParameterChoice[] };
+    const getAssemblyParameterPresentation = (type: string, rawKey: string): AssemblyParameterPresentation | null => {
+        if (!isPhysicalBlockType(type)) return null;
+        const common: Record<string, AssemblyParameterPresentation> = {
+            positionXmm: { label: 'Position X (mm)', compactLabel: 'X (mm)', help: 'Manual offset along the world X axis from the automatic port placement.' },
+            positionYmm: { label: 'Position Y (mm)', compactLabel: 'Y (mm)', help: 'Manual offset along the world Y axis from the automatic port placement.' },
+            positionZmm: { label: 'Position Z (mm)', compactLabel: 'Z (mm)', help: 'Manual offset along the world Z axis from the automatic port placement.' },
+            rotationXdeg: { label: 'Rotation X (deg)', compactLabel: 'Rot. X', help: 'Manual rotation about the component X axis, in degrees.' },
+            rotationYdeg: { label: 'Rotation Y (deg)', compactLabel: 'Rot. Y', help: 'Manual rotation about the component Y axis, in degrees.' },
+            rotationZdeg: { label: 'Rotation Z (deg)', compactLabel: 'Rot. Z', help: 'Manual rotation about the component Z axis, in degrees.' },
+            widthMm: { label: 'Body width (mm)', compactLabel: 'Width (mm)', help: 'Physical outer width used by Render, fit and collision checks.' },
+            heightMm: { label: 'Body height (mm)', compactLabel: 'Height (mm)', help: 'Physical outer height used by Render, fit and collision checks.' },
+            depthMm: { label: 'Body depth (mm)', compactLabel: 'Depth (mm)', help: 'Physical length along the local optical axis.' },
+            apertureDiameterMm: { label: 'Clear aperture (mm)', help: 'Usable optical diameter; rays outside this aperture are clipped.' },
+            dimensionConfidence: {
+                label: 'Dimension confidence',
+                help: 'Exact means measured input, Estimated uses an assumed envelope, and Missing prevents a confirmed volume.',
+                choices: [
+                    { value: 'Exact', label: 'Exact' },
+                    { value: 'Estimated', label: 'Estimated' },
+                    { value: 'Missing', label: 'Missing' },
+                ],
+            },
+            radialClearanceMm: { label: 'Radial clearance (mm)', help: 'Mechanical allowance added around the optical body.' },
+            axialClearanceMm: { label: 'Axial clearance (mm)', help: 'Mechanical allowance added before and after the optical body.' },
+            centerWavelengthNm: { label: 'Center wavelength (nm)', compactLabel: 'Center λ (nm)', help: 'Center of the emitted optical spectrum.' },
+            totalPowerW: { label: 'Total optical power (W)', compactLabel: 'Power (W)', help: 'Total power distributed across all spatial samples and wavelengths or comb lines.' },
+            beamDiameterMm: { label: 'Beam diameter (mm)', help: 'Diameter of the emitted beam at the Source end face.' },
+            sourceModel: {
+                label: 'Emission model',
+                help: 'Fiber facet uses the numerical aperture and ambient refractive index to derive the launch half-angle.',
+                choices: [
+                    { value: 'fiber-facet', label: 'Fiber facet' },
+                    { value: 'collimated', label: 'Collimated beam' },
+                ],
+            },
+            numericalAperture: { label: 'Numerical aperture (NA)', compactLabel: 'NA', help: 'Source-side numerical aperture. In air, NA 0.1 corresponds to a 5.739 deg launch half-angle.' },
+            ambientRefractiveIndex: { label: 'Ambient refractive index', compactLabel: 'Ambient n', help: 'Refractive index immediately outside the emitting facet; use 1.0 for air.' },
+            coherenceGroupId: { label: 'Coherence group', help: 'Only fields with the same group and optical frequency are added coherently.' },
+            renderSpatialSamples: { label: 'Render rays / wavelength', compactLabel: 'Render rays', help: 'Pupil ray samples emitted per wavelength or comb line for the live Render view. Keep this modest for responsive editing.' },
+            detectorSpatialSamples: { label: 'Detector rays / wavelength', compactLabel: 'Signal rays', help: 'Pupil ray samples emitted per wavelength or comb line when Coherent Signal calculates Detector power and phase.' },
+            reflectance: { label: 'Reflectance R', compactLabel: 'Reflectance', help: 'Fraction of incident optical power sent into the reflected path.' },
+            transmittance: { label: 'Transmittance T', compactLabel: 'Transmittance', help: 'Fraction of incident optical power sent into the transmitted path.' },
+            transmission: { label: 'Transmission T', compactLabel: 'Transmission', help: 'Fraction of incident optical power passed by this component.' },
+            interaction: { label: 'Ray interaction', help: 'Selects how a ray is reflected, scattered, transmitted or absorbed at this component.' },
+        };
+        const byType: Partial<Record<PhysicalBlockType, Record<string, AssemblyParameterPresentation>>> = {
+            BroadbandSource: {
+                minWavelengthNm: { label: 'Minimum wavelength (nm)', compactLabel: 'Min λ (nm)', help: 'Shortest wavelength included in the emitted spectrum.' },
+                maxWavelengthNm: { label: 'Maximum wavelength (nm)', compactLabel: 'Max λ (nm)', help: 'Longest wavelength included in the emitted spectrum.' },
+                spectralSamples: { label: 'Spectral samples', help: 'Number of wavelength samples used between the minimum and maximum wavelengths.' },
+                divergenceDeg: { label: 'Launch half-angle (deg)', help: 'Fallback angular half-width. When Numerical aperture is present, the half-angle is derived from asin(NA / ambient n).' },
+                spectralShape: {
+                    label: 'Spectral profile',
+                    help: 'Selects the wavelength-domain power envelope.',
+                    choices: [
+                        { value: 'gaussian', label: 'Gaussian' },
+                        { value: 'flat', label: 'Flat' },
+                        { value: 'csv', label: 'CSV data' },
+                    ],
+                },
+                spatialProfile: {
+                    label: 'Spatial profile',
+                    help: 'Gaussian weights rays toward the axis; Top-hat uses uniform irradiance.',
+                    choices: [
+                        { value: 'gaussian', label: 'Gaussian' },
+                        { value: 'top-hat', label: 'Top-hat' },
+                    ],
+                },
+                spatialSamples: { label: 'Legacy shared ray samples', help: 'Compatibility value used only when separate Render and Detector ray counts are absent.' },
+            },
+            FrequencyCombSource: {
+                repetitionRateHz: { label: 'Repetition rate (Hz)', compactLabel: 'Rep. rate (Hz)', help: 'Frequency spacing f_rep between adjacent comb lines.' },
+                ceoFrequencyHz: { label: 'CEO frequency (Hz)', compactLabel: 'CEO freq. (Hz)', help: 'Carrier-envelope offset f_ceo in νn = f_ceo + n f_rep.' },
+                lineCount: { label: 'Comb line count', compactLabel: 'Comb lines', help: 'Number of discrete optical frequencies generated around the center.' },
+                lineWidthHz: { label: 'Comb linewidth (Hz)', help: 'Optical linewidth assigned to each comb mode.' },
+                initialPhaseRad: { label: 'Initial phase (rad)', help: 'Common starting optical phase of this comb source.' },
+                groupDelayDispersionFs2: { label: 'Group-delay dispersion (fs²)', help: 'Quadratic spectral phase applied across the comb.' },
+                divergenceDeg: { label: 'Launch half-angle (deg)', help: 'Fallback angular half-width. When Numerical aperture is present, the half-angle is derived from asin(NA / ambient n).' },
+                spectralShape: {
+                    label: 'Spectral envelope',
+                    help: 'Selects the power envelope applied across the generated comb lines.',
+                    choices: [
+                        { value: 'gaussian', label: 'Gaussian' },
+                        { value: 'flat', label: 'Flat' },
+                        { value: 'csv', label: 'CSV data' },
+                    ],
+                },
+                spatialProfile: {
+                    label: 'Spatial profile',
+                    help: 'Gaussian weights rays toward the axis; Top-hat uses uniform irradiance.',
+                    choices: [
+                        { value: 'gaussian', label: 'Gaussian' },
+                        { value: 'top-hat', label: 'Top-hat' },
+                    ],
+                },
+            },
+            BeamSplitter: {
+                beamSplitterModel: {
+                    label: 'Beam-splitter model',
+                    compactLabel: 'BS model',
+                    help: 'Ideal is a zero-thickness splitting surface. Cube traces between its exterior faces and diagonal coating. Plate includes refraction through the parallel substrate and the resulting lateral optical-axis displacement.',
+                    choices: [
+                        { value: 'ideal', label: 'Ideal surface' },
+                        { value: 'plate', label: 'Plate' },
+                        { value: 'cube', label: 'Cube' },
+                        { value: 'pellicle', label: 'Pellicle' },
+                    ],
+                },
+                reflectionPort: {
+                    label: 'Common reflection side',
+                    compactLabel: 'Reflect side',
+                    help: 'Selects which lateral port receives the Common-port reflected beam and therefore fixes the diagonal coating orientation.',
+                    choices: [
+                        { value: 'reflect', label: 'Reflect (+X)' },
+                        { value: 'recombine', label: 'Recombine (-X)' },
+                    ],
+                },
+                reflectedPhaseDeg: { label: 'Reflected phase (deg)', help: 'Phase shift applied to the reflected complex field.' },
+                transmittedPhaseDeg: { label: 'Transmitted phase (deg)', help: 'Phase shift applied to the transmitted complex field.' },
+                substrateMaterial: { label: 'Substrate glass', help: 'Glass name used by a physical Plate, Cube or Pellicle model.' },
+                substrateIndexNd: { label: 'Substrate index nd', help: 'Refractive index of the beam-splitter substrate at the d line.' },
+                substrateAbbeNumber: { label: 'Substrate Abbe number', help: 'Dispersion value used to estimate the substrate index versus wavelength.' },
+                substrateThicknessMm: { label: 'Substrate thickness (mm)', help: 'Normal substrate thickness. For Plate, this value and the refractive index determine the transmitted-beam lateral displacement.' },
+                wedgeDeg: { label: 'Substrate wedge (deg)', help: 'Angle between the front and rear substrate faces.' },
+                backSurfaceReflectance: { label: 'Rear-surface reflectance', help: 'Residual power reflectance of the substrate rear face.' },
+            },
+            ReflectionGrating: {
+                grooveDensityLinesPerMm: { label: 'Groove density (lines/mm)', compactLabel: 'Grooves (lines/mm)', help: 'Number of grating grooves per millimetre used by the vector grating equation.' },
+                order: { label: 'Primary diffraction order', compactLabel: 'Order', help: 'Diffraction order emphasized for the main connected output.' },
+                allowedOrders: { label: 'Allowed orders', help: 'List of diffraction orders that may generate outgoing rays.' },
+                efficiency: { label: 'Diffraction efficiency', compactLabel: 'Efficiency', help: 'Fraction of incident power assigned to the selected diffraction order.' },
+                blazeAngleDeg: { label: 'Blaze angle (deg)', help: 'Facet blaze angle used for the grating efficiency model.' },
+                blazeWavelengthNm: { label: 'Blaze wavelength (nm)', help: 'Wavelength at which the configured order is centered on the blaze condition.' },
+                grooveDirectionX: { label: 'Groove direction X', help: 'X component of the local groove-direction vector.' },
+                grooveDirectionY: { label: 'Groove direction Y', help: 'Y component of the local groove-direction vector.' },
+                grooveDirectionZ: { label: 'Groove direction Z', help: 'Z component of the local groove-direction vector.' },
+                incidentSide: {
+                    label: 'Incident side',
+                    help: 'Selects which physical face accepts the incoming ray.',
+                    choices: [
+                        { value: 'front', label: 'Front face' },
+                        { value: 'back', label: 'Back face' },
+                    ],
+                },
+            },
+            Target: {
+                profile: {
+                    label: 'Surface profile',
+                    help: 'Selects the mathematical or imported target surface shape.',
+                    choices: [
+                        { value: 'flat', label: 'Flat' },
+                        { value: 'step', label: 'Step' },
+                        { value: 'tilt', label: 'Tilt' },
+                        { value: 'sine', label: 'Sine' },
+                        { value: 'csv', label: 'CSV profile' },
+                    ],
+                },
+                interaction: {
+                    label: 'Ray interaction',
+                    help: 'Selects the reflection or single-scatter model used at the target.',
+                    choices: [
+                        { value: 'specular', label: 'Specular' },
+                        { value: 'lambertian', label: 'Lambertian' },
+                        { value: 'abg', label: 'ABg scatter' },
+                        { value: 'harvey-shack', label: 'Harvey–Shack' },
+                        { value: 'bsdf-csv', label: 'BSDF CSV' },
+                    ],
+                },
+                offsetUm: { label: 'Base height (µm)', help: 'Reference height added to the selected target profile.' },
+                amplitudeUm: { label: 'Profile amplitude (µm)', help: 'Step: height change. Tilt: half of the edge-to-edge height change, so local X = -width/2 is offset-amplitude and +width/2 is offset+amplitude. Sine: peak height about the base height.' },
+                periodMm: { label: 'Profile period (mm)', help: 'Spatial period of a sinusoidal target profile.' },
+                stepPositionMm: { label: 'Step position (mm)', help: 'Lateral position of the height discontinuity for a step target.' },
+                scatterSamples: { label: 'Scatter samples', help: 'Number of sampled outgoing rays generated by a scattering interaction.' },
+                scatterA: { label: 'ABg A', help: 'Scale coefficient A of the ABg scatter model.' },
+                scatterB: { label: 'ABg B', help: 'Offset coefficient B of the ABg scatter model.' },
+                scatterG: { label: 'ABg g', help: 'Angular exponent g of the ABg scatter model.' },
+                scatterSigmaDeg: { label: 'Scatter sigma (deg)', help: 'Angular width used by the Harvey-Shack style scatter approximation.' },
+                bsdfSamples: { label: 'BSDF data', help: 'Sampled bidirectional scattering distribution used by the target.' },
+            },
+            AreaDetector: {
+                pixelCountX: { label: 'Pixels X', compactLabel: 'Pixels X', help: 'Number of active detector columns.' },
+                pixelCountY: { label: 'Pixels Y', compactLabel: 'Pixels Y', help: 'Number of active detector rows.' },
+                pixelPitchUm: { label: 'Pixel pitch (µm)', compactLabel: 'Pitch (µm)', help: 'Center-to-center spacing of adjacent detector pixels.' },
+                quantumEfficiency: { label: 'Quantum efficiency', compactLabel: 'QE', help: 'Fraction of incident photons converted to photoelectrons.' },
+                fillFactor: { label: 'Fill factor', help: 'Active photosensitive area divided by total pixel area.' },
+                exposureTimeS: { label: 'Exposure time (s)', help: 'Time over which optical power is integrated into charge.' },
+                saturationElectrons: { label: 'Full well (electrons)', help: 'Maximum stored charge before the pixel saturates.' },
+                bitDepth: { label: 'ADC bit depth', help: 'Digital output resolution used when converting electrons to ADU.' },
+                frontOnly: {
+                    label: 'Accepted incidence',
+                    help: 'Front only rejects rays arriving from the detector rear; Both sides accept either direction.',
+                    choices: [
+                        { value: true, label: 'Front only' },
+                        { value: false, label: 'Front and rear' },
+                    ],
+                },
+            },
+            TimeDetector: {
+                samplingRateHz: { label: 'Sampling rate (Hz)', compactLabel: 'Sample rate (Hz)', help: 'Number of temporal signal samples acquired each second.' },
+                sampleCount: { label: 'Time samples', compactLabel: 'Samples', help: 'Number of samples in the detector time record.' },
+                detectionBandwidthHz: { label: 'Detection bandwidth (Hz)', compactLabel: 'Bandwidth (Hz)', help: 'Electrical bandwidth retained by the time detector.' },
+                integrationTimeS: { label: 'Integration time (s)', help: 'Observation interval used for temporal power and RF beat analysis.' },
+                responsivity: { label: 'Responsivity (A/W)', help: 'Electrical current produced per watt of incident optical power.' },
+            },
+            STLObject: {
+                stlPath: { label: 'STL file', help: 'Path to the triangulated mechanical or optical object used for intersection tests.' },
+            },
+        };
+        const known = byType[type as PhysicalBlockType]?.[rawKey] ?? common[rawKey];
+        if (known) return known;
+        const readable = String(rawKey ?? '')
+            .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+            .replace(/\bMm\b/g, '(mm)')
+            .replace(/\bNm\b/g, '(nm)')
+            .replace(/\bDeg\b/g, '(deg)')
+            .replace(/^./, (value) => value.toUpperCase());
+        return { label: readable || rawKey, help: 'Physical or optical parameter stored with this assembly component.' };
+    };
     const maxImageHeightTargetMm = __cooptGetMaxImageHeightTargetMmFromObjectRows(Array.isArray(activeCfg?.object) ? activeCfg.object : []);
     const hierarchyConnections = normalizeDesignConnections(Array.isArray(activeCfg?.blocks) ? activeCfg.blocks : [], activeCfg?.designConnections);
     const hierarchyChildren = new Map<string, string[]>();
@@ -9808,6 +10169,321 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     collapsedHeader.appendChild(headerZoom);
     collapsedHeader.appendChild(headerSurf);
     container.appendChild(collapsedHeader);
+
+    type SequentialGroupView = {
+        key: string;
+        label: string;
+        blockIds: string[];
+    };
+    const sequentialBlockIds = list
+        .filter((entry: any) => !isPhysicalBlockType(String(entry?.blockType ?? '')))
+        .map((entry: any) => String(entry?.blockId ?? '').trim())
+        .filter(Boolean);
+    const sequentialIdSet = new Set(sequentialBlockIds);
+    const sequentialGroups: SequentialGroupView[] = [];
+    const assignedSequentialIds = new Set<string>();
+    const configuredGroups = Array.isArray(activeCfg?.sequentialGroups) ? activeCfg.sequentialGroups : [];
+    for (const definition of configuredGroups) {
+        const key = __blocks_sequentialGroupKey(definition?.id);
+        if (sequentialGroups.some((entry) => entry.key === key)) continue;
+        const memberIds = (Array.isArray(definition?.blockIds) ? definition.blockIds : [])
+            .map((value: any) => String(value ?? '').trim())
+            .filter((id: string) => sequentialIdSet.has(id) && !assignedSequentialIds.has(id));
+        memberIds.forEach((id: string) => assignedSequentialIds.add(id));
+        const rawLabel = String(definition?.label ?? '').trim();
+        sequentialGroups.push({
+            key,
+            label: !rawLabel || rawLabel === 'Exact sequential optics'
+                ? (key === 'main' ? 'Main lens train' : `Lens train · ${key}`)
+                : rawLabel.replace(/^Lens\s+section\b/i, 'Lens design'),
+            blockIds: memberIds
+        });
+    }
+    if (sequentialGroups.length === 0) {
+        sequentialGroups.push({ key: 'main', label: 'Lens design 1', blockIds: [] });
+    }
+    const unassignedSequentialIds = sequentialBlockIds.filter((id: string) => !assignedSequentialIds.has(id));
+    let mainSequentialGroup = sequentialGroups.find((entry) => entry.key === 'main');
+    if (!mainSequentialGroup && unassignedSequentialIds.length > 0) {
+        mainSequentialGroup = { key: 'main', label: 'Lens design 1', blockIds: [] };
+        sequentialGroups.unshift(mainSequentialGroup);
+    }
+    (mainSequentialGroup ?? sequentialGroups[0]).blockIds.push(...unassignedSequentialIds);
+
+    const renderTargetByBlockId = new Map<string, HTMLElement>();
+    const lensSectionStorageKey = `coopt.designIntent.collapsedLensSections.${activeConfigIdForInspector || 'default'}`;
+    const collapsedLensSections = (() => {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(lensSectionStorageKey) || '[]');
+            return new Set<string>(Array.isArray(parsed) ? parsed.map(String) : []);
+        } catch (_) {
+            return new Set<string>();
+        }
+    })();
+    const persistCollapsedLensSections = () => {
+        try { localStorage.setItem(lensSectionStorageKey, JSON.stringify(Array.from(collapsedLensSections))); } catch (_) {}
+    };
+    const recordAddedBlock = (res: any) => {
+        __blockInspectorExpandedBlockId = String(res?.blockId ?? '') || null;
+        try {
+            if (w.undoHistory && w.AddBlockCommand && !w.undoHistory.isExecuting && res?.blockData && typeof res?.insertIndex === 'number') {
+                const sysConfig = loadSystemConfigurations();
+                const cmd = new w.AddBlockCommand(sysConfig.activeConfigId, res.blockData, res.insertIndex);
+                w.undoHistory.record(cmd);
+            }
+        } catch (_) {}
+        try {
+            __cooptScheduleDesignIntentUiRefresh({ forceExpandedRows: true, refreshBlockInspector: true, triggerRender: true, debounceMs: 40 });
+        } catch (_) {}
+    };
+    const addSequentialBlockOptions = (select: HTMLSelectElement) => {
+        const exactGroup = document.createElement('optgroup');
+        exactGroup.label = 'Exact sequential optics';
+        const options: Array<[string, string]> = [
+            ['SingleSurface', 'Single Surface'],
+            ['Lens', 'Lens'],
+            ['Paraxial', 'Paraxial'],
+            ['Doublet', 'Doublet'],
+            ['Triplet', 'Triplet'],
+            ['Mirror', 'Sequential Mirror'],
+            ['Gap', 'Gap'],
+            ['Stop', 'Stop'],
+            ['CoordTrans', 'Coordinate Transform']
+        ];
+        for (const [value, label] of options) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            exactGroup.appendChild(option);
+        }
+        const planeGroup = document.createElement('optgroup');
+        planeGroup.label = 'Boundary planes';
+        for (const [value, label] of [['ObjectPlane', 'Object Surface'], ['ImagePlane', 'Image Surface']] as Array<[string, string]>) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            planeGroup.appendChild(option);
+        }
+        select.append(exactGroup, planeGroup);
+        select.value = 'Lens';
+    };
+    for (const [groupIndex, group] of sequentialGroups.entries()) {
+        const section = document.createElement('section');
+        section.className = 'block-inspector-lens-section';
+        section.dataset.sequentialGroupId = group.key;
+        if (collapsedLensSections.has(group.key)) section.classList.add('is-collapsed');
+
+        const sectionHeader = document.createElement('div');
+        sectionHeader.className = 'block-inspector-section-header';
+        const sectionToggle = document.createElement('button');
+        sectionToggle.type = 'button';
+        sectionToggle.className = 'block-inspector-section-toggle';
+        sectionToggle.textContent = collapsedLensSections.has(group.key) ? '▸' : '▾';
+        sectionToggle.title = 'Collapse / expand this lens design';
+        const sectionTitle = document.createElement('div');
+        sectionTitle.className = 'block-inspector-section-title-wrap';
+        const sectionEyebrow = document.createElement('span');
+        sectionEyebrow.textContent = `LENS DESIGN ${groupIndex + 1}`;
+        const sectionName = document.createElement('strong');
+        sectionName.textContent = group.label;
+        sectionTitle.append(sectionEyebrow, sectionName);
+        const frontPort = document.createElement('span');
+        frontPort.className = 'block-inspector-port-chip';
+        frontPort.textContent = 'Front';
+        const flowArrow = document.createElement('span');
+        flowArrow.className = 'block-inspector-section-flow';
+        flowArrow.textContent = '→';
+        const backPort = document.createElement('span');
+        backPort.className = 'block-inspector-port-chip';
+        backPort.textContent = 'Back';
+        const sectionCount = document.createElement('span');
+        sectionCount.className = 'block-inspector-section-count';
+        sectionCount.textContent = `${group.blockIds.length} blocks`;
+
+        const addControl = document.createElement('div');
+        addControl.className = 'block-inspector-section-add';
+        const addSelect = document.createElement('select');
+        addSelect.setAttribute('aria-label', `Add block to ${group.label}`);
+        addSequentialBlockOptions(addSelect);
+        const addButton = document.createElement('button');
+        addButton.type = 'button';
+        addButton.textContent = 'Add';
+        addButton.title = `Add an exact sequential block to ${group.label}`;
+        addButton.onclick = (event: MouseEvent) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const lastGroupBlockId = [...group.blockIds].reverse().find((id) => sequentialIdSet.has(id)) ?? null;
+            const res = __blocks_addBlockToActiveConfig(addSelect.value, lastGroupBlockId, group.key);
+            if (!res || res.ok !== true) {
+                alert(`Failed to add block: ${res?.reason || 'unknown error'}`);
+                return;
+            }
+            recordAddedBlock(res);
+        };
+        addControl.append(addSelect, addButton);
+        sectionHeader.append(sectionToggle, sectionTitle, addControl, frontPort, flowArrow, backPort, sectionCount);
+
+        const sectionBody = document.createElement('div');
+        sectionBody.className = 'block-inspector-section-body';
+        normalizeLensSectionAnalysisInputs(activeCfg);
+        const launchPanel = document.createElement('div');
+        launchPanel.className = 'block-inspector-launch-panel';
+        const launchHeading = document.createElement('div');
+        launchHeading.className = 'block-inspector-launch-heading';
+        const launchTitle = document.createElement('strong');
+        launchTitle.textContent = 'Analysis input';
+        const launchHelp = document.createElement('span');
+        launchHelp.textContent = 'Route uses connected optics. Local launches the selected Source and Field directly at this port.';
+        launchHeading.append(launchTitle, launchHelp);
+        launchPanel.appendChild(launchHeading);
+
+        const sourceSets = Array.isArray(activeCfg?.sourceSets) ? activeCfg.sourceSets : [];
+        const fieldSets = Array.isArray(activeCfg?.fieldSets) ? activeCfg.fieldSets : [];
+        const makeLaunchSelect = (
+            label: string,
+            value: string,
+            options: Array<{ value: string; label: string }>,
+            title: string
+        ): { field: HTMLLabelElement; select: HTMLSelectElement } => {
+            const field = document.createElement('label');
+            field.className = 'block-inspector-launch-field';
+            const caption = document.createElement('span');
+            caption.textContent = label;
+            const select = document.createElement('select');
+            select.title = title;
+            for (const optionDefinition of options) {
+                const option = document.createElement('option');
+                option.value = optionDefinition.value;
+                option.textContent = optionDefinition.label;
+                select.appendChild(option);
+            }
+            select.value = value;
+            field.append(caption, select);
+            return { field, select };
+        };
+
+        for (const port of ['Front', 'Back'] as LensSectionPort[]) {
+            const binding = getLensSectionInputBinding(activeCfg, group.key, port);
+            const launchRow = document.createElement('div');
+            launchRow.className = 'block-inspector-launch-row';
+            const portLabel = document.createElement('strong');
+            portLabel.className = 'block-inspector-launch-port';
+            portLabel.textContent = port;
+            const modeControl = makeLaunchSelect('Input', binding.mode, [
+                { value: 'route', label: 'From route' },
+                { value: 'local', label: 'Local analysis' },
+                { value: 'disabled', label: 'Disabled' }
+            ], 'From route follows Port connections. Local analysis starts a standalone ray set here.');
+            const sourceControl = makeLaunchSelect(
+                'Source',
+                binding.sourceSetId,
+                sourceSets.map((set: any) => ({ value: String(set.id), label: String(set.label) })),
+                'Named wavelength and weight table edited in Source.'
+            );
+            const fieldControl = makeLaunchSelect(
+                'Field',
+                binding.fieldSetId,
+                fieldSets.map((set: any) => ({ value: String(set.id), label: String(set.label) })),
+                'Named field-angle or object-height table edited in Field.'
+            );
+            const syncEnabledState = () => {
+                const local = modeControl.select.value === 'local';
+                sourceControl.select.disabled = !local;
+                fieldControl.select.disabled = !local;
+                launchRow.classList.toggle('is-route', modeControl.select.value === 'route');
+                launchRow.classList.toggle('is-disabled', modeControl.select.value === 'disabled');
+            };
+            modeControl.select.onchange = () => {
+                __blocks_updateLensSectionInput(group.key, port, { mode: modeControl.select.value as any });
+                syncEnabledState();
+            };
+            sourceControl.select.onchange = () => {
+                __blocks_updateLensSectionInput(group.key, port, { sourceSetId: sourceControl.select.value });
+            };
+            fieldControl.select.onchange = () => {
+                __blocks_updateLensSectionInput(group.key, port, { fieldSetId: fieldControl.select.value });
+            };
+            launchRow.append(portLabel, modeControl.field, sourceControl.field, fieldControl.field);
+            launchPanel.appendChild(launchRow);
+            syncEnabledState();
+        }
+        sectionBody.appendChild(launchPanel);
+        if (group.blockIds.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'block-inspector-section-empty';
+            empty.textContent = 'Add a Lens, Surface, Stop, Gap, or Coordinate Transform here.';
+            sectionBody.appendChild(empty);
+        }
+        const setCollapsed = (collapsed: boolean) => {
+            section.classList.toggle('is-collapsed', collapsed);
+            sectionToggle.textContent = collapsed ? '▸' : '▾';
+            if (collapsed) collapsedLensSections.add(group.key); else collapsedLensSections.delete(group.key);
+            persistCollapsedLensSections();
+        };
+        sectionToggle.onclick = (event: MouseEvent) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setCollapsed(!section.classList.contains('is-collapsed'));
+        };
+        sectionHeader.ondblclick = (event: MouseEvent) => {
+            if ((event.target as HTMLElement)?.closest('button, select')) return;
+            setCollapsed(!section.classList.contains('is-collapsed'));
+        };
+        const clearGroupDropState = () => section.classList.remove('is-drag-target');
+        section.addEventListener('dragover', (event: DragEvent) => {
+            const draggedId = String(__blocks_draggedBlockId ?? '').trim();
+            if (!draggedId || !sequentialIdSet.has(draggedId) || group.blockIds.includes(draggedId)) return;
+            event.preventDefault();
+            section.classList.add('is-drag-target');
+        });
+        section.addEventListener('dragleave', (event: DragEvent) => {
+            if (!section.contains(event.relatedTarget as Node | null)) clearGroupDropState();
+        });
+        section.addEventListener('drop', (event: DragEvent) => {
+            const draggedId = String(__blocks_draggedBlockId ?? '').trim();
+            clearGroupDropState();
+            if (!draggedId || !sequentialIdSet.has(draggedId) || group.blockIds.includes(draggedId)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            __blocks_moveBlockToSequentialGroup(draggedId, group.key);
+        });
+
+        section.append(sectionHeader, sectionBody);
+        container.appendChild(section);
+        group.blockIds.forEach((blockId) => renderTargetByBlockId.set(blockId, sectionBody));
+    }
+
+    const physicalBlockIds = list
+        .filter((entry: any) => isPhysicalBlockType(String(entry?.blockType ?? '')))
+        .map((entry: any) => String(entry?.blockId ?? '').trim())
+        .filter(Boolean);
+    let assemblyBody: HTMLElement | null = null;
+    if (physicalBlockIds.length > 0) {
+        const assemblySection = document.createElement('section');
+        assemblySection.className = 'block-inspector-assembly-section';
+        const assemblyHeader = document.createElement('div');
+        assemblyHeader.className = 'block-inspector-section-header block-inspector-assembly-header';
+        const assemblyIcon = document.createElement('span');
+        assemblyIcon.className = 'block-inspector-assembly-icon';
+        assemblyIcon.textContent = '◇';
+        const assemblyTitle = document.createElement('div');
+        assemblyTitle.className = 'block-inspector-section-title-wrap';
+        assemblyTitle.innerHTML = '<span>PHYSICAL ASSEMBLY</span><strong>Sources, routing parts, targets, and detectors</strong>';
+        const assemblyCount = document.createElement('span');
+        assemblyCount.className = 'block-inspector-section-count';
+        assemblyCount.textContent = `${physicalBlockIds.length} parts`;
+        const assemblyHint = document.createElement('span');
+        assemblyHint.className = 'block-inspector-assembly-hint';
+        assemblyHint.textContent = 'Add from the toolbar above';
+        assemblyHeader.append(assemblyIcon, assemblyTitle, assemblyCount, assemblyHint);
+        assemblyBody = document.createElement('div');
+        assemblyBody.className = 'block-inspector-section-body';
+        assemblySection.append(assemblyHeader, assemblyBody);
+        container.appendChild(assemblySection);
+        physicalBlockIds.forEach((blockId) => renderTargetByBlockId.set(blockId, assemblyBody as HTMLElement));
+    }
+    const fallbackRenderTarget = assemblyBody ?? container;
+    const blockRenderTargetForId = (blockId: string): HTMLElement => renderTargetByBlockId.get(blockId) ?? fallbackRenderTarget;
 
     const quickEditorEnabled = readDesignIntentQuickEditorEnabled();
 
@@ -10350,6 +11026,16 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             wrapper.insertBefore(createQuickScopeToggle(key), wrapper.firstChild);
         };
 
+        const applyAssemblyQuickFieldPresentation = (wrapper: HTMLElement, path: string) => {
+            const key = String(path ?? '').trim().split('.').pop() || '';
+            const presentation = getAssemblyParameterPresentation(blockType, key);
+            if (!presentation) return;
+            const tag = wrapper.querySelector('.block-inspector-quick-label') as HTMLElement | null;
+            if (tag) tag.textContent = presentation.compactLabel ?? presentation.label;
+            wrapper.title = `${presentation.label}\n${presentation.help}`;
+            wrapper.setAttribute('aria-label', `${presentation.label}. ${presentation.help}`);
+        };
+
         const appendTextField = (label: string, path: string, currentValue: any, widthPx: number, target: HTMLElement = root) => {
             const shell = createQuickFieldShell(label);
             const input = document.createElement('input');
@@ -10378,6 +11064,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             stopRowToggle(input);
             shell.content.appendChild(input);
             attachQuickScopeToggle(shell.wrapper, path);
+            applyAssemblyQuickFieldPresentation(shell.wrapper, path);
             target.appendChild(shell.wrapper);
         };
 
@@ -10417,6 +11104,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             stopRowToggle(select);
             shell.content.appendChild(select);
             attachQuickScopeToggle(shell.wrapper, path);
+            applyAssemblyQuickFieldPresentation(shell.wrapper, path);
             target.appendChild(shell.wrapper);
         };
 
@@ -10575,6 +11263,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             } else if (blockType === 'BeamSplitter') {
                 const splitterModel = String(params.beamSplitterModel ?? 'ideal').toLowerCase();
                 appendSelectField('Model', 'parameters.beamSplitterModel', splitterModel, ['ideal', 'plate', 'cube', 'pellicle'], 82, specRow);
+                appendSelectField('Reflect side', 'parameters.reflectionPort', String(params.reflectionPort ?? 'reflect').toLowerCase(), ['reflect', 'recombine'], 96, specRow);
                 appendTextField('R', 'parameters.reflectance', params.reflectance, 62, specRow);
                 appendTextField('T', 'parameters.transmittance', params.transmittance, 62, specRow);
             } else if (blockType === 'ReflectionGrating') {
@@ -10602,6 +11291,23 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (blockType === 'FoldMirror') appendTextField('R', 'parameters.reflectance', params.reflectance, 62, specRow);
             }
             root.appendChild(specRow);
+            if (blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource') {
+                const rayRow = createQuickRow();
+                appendTextField('Render rays', 'parameters.renderSpatialSamples', params.renderSpatialSamples ?? Math.min(9, Number(params.spatialSamples) || 9), 78, rayRow);
+                appendTextField('Signal rays', 'parameters.detectorSpatialSamples', params.detectorSpatialSamples ?? params.spatialSamples ?? 81, 78, rayRow);
+                root.appendChild(rayRow);
+            }
+        } else if (blockType === 'Paraxial') {
+            root.classList.add('block-inspector-quick-editor-multiline');
+            root.style.setProperty('--quick-cols', '3');
+            const row = createQuickRow();
+            const semiDiameter = aperture.front ?? aperture.s1 ?? aperture.back ?? '';
+
+            appendTextField('Fx', 'parameters.focalLengthX', params.focalLengthX ?? params.focalLengthY ?? params.focalLength, 72, row);
+            appendTextField('Fy', 'parameters.focalLengthY', params.focalLengthY ?? params.focalLengthX ?? params.focalLength, 72, row);
+            appendTextField('SD', 'aperture.front', semiDiameter, 58, row);
+
+            root.appendChild(row);
         } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
             root.classList.add('block-inspector-quick-editor-multiline');
             root.style.setProperty('--quick-cols', '6');
@@ -10963,7 +11669,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             try { refreshBlockInspector(); } catch (_) {}
         };
 
-        container.appendChild(row);
+        blockRenderTargetForId(blockId).appendChild(row);
 
         const expandedBlock = blockById && typeof blockById.get === 'function' ? blockById.get(blockId) : null;
         if (expandedBlock && __blockInspectorExpandedBlockId === blockId) {
@@ -11177,10 +11883,14 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (key === 'zoomgroup') return true;
                 if (key.includes('semidia') || key === 'semidiameter') return true;
                 if (/^rindex\d*$/.test(key)) return true;
+                if ((blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource') && key === 'spatialsamples') return true;
                 return false;
             };
             if (quickEditorEnabled) {
-                if (blockType === 'Lens' || blockType === 'PositiveLens') {
+                if (blockType === 'Paraxial') {
+                    ['focalLengthX', 'focalLengthY'].forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
+                    ['front', 's1', 'back', 'surf1', 'surf2'].forEach((k) => quickEditorCoveredApertureKeys.add(k.toLowerCase()));
+                } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
                     ['frontRadius', 'backRadius', 'centerThickness', 'material', 'rindex', 'abbe'].forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
                     ['front', 'back'].forEach((k) => quickEditorCoveredApertureKeys.add(k.toLowerCase()));
                 } else if (blockType === 'Doublet') {
@@ -11222,6 +11932,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 }
                 return true;
             });
+            if (blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource') {
+                if (!allParamKeys.includes('renderSpatialSamples')) allParamKeys.push('renderSpatialSamples');
+                if (!allParamKeys.includes('detectorSpatialSamples')) allParamKeys.push('detectorSpatialSamples');
+            }
             if ((blockType === 'Gap' || blockType === 'AirGap') && !allParamKeys.includes('material')) {
                 allParamKeys.push('material');
             }
@@ -11451,6 +12165,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
             const getDisplayLabelForKey = (rawLabel: string): string => {
                 const label = String(rawLabel ?? '').trim();
+                const assemblyPresentation = getAssemblyParameterPresentation(blockType, label);
+                if (assemblyPresentation) return assemblyPresentation.label;
                 if (blockType === 'Paraxial') {
                     if (label === 'surfType' || label === 'frontSurfType') return 'X/Y Power';
                     if (label === 'focalLengthX') return 'Focal Length X';
@@ -11628,8 +12344,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const name = document.createElement('div');
                 const coefLabel = getCoefDisplayLabel(label);
                 const displayLabel = getDisplayLabelForKey(label);
-                name.textContent = coefLabel || displayLabel;
-                name.title = isQconCoefKey(label)
+                const assemblyPresentation = getAssemblyParameterPresentation(blockType, label);
+                name.textContent = `${coefLabel || displayLabel}${assemblyPresentation ? ' ⓘ' : ''}`;
+                name.title = assemblyPresentation
+                    ? `${assemblyPresentation.label}\n${assemblyPresentation.help}`
+                    : isQconCoefKey(label)
                     ? `${coefLabel || displayLabel}\n\n${QCON_POLYNOMIAL_TOOLTIP}`
                     : (coefLabel || displayLabel);
                 name.style.fontSize = '12px';
@@ -11674,6 +12393,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const isCoordOrder = blockType === 'CoordTrans' && label === 'order';
                 const isCoordToSurf = blockType === 'CoordTrans' && label === 'toSurf';
                 const isZoomGroup = label === 'zoomGroup';
+                const assemblyChoices = assemblyPresentation?.choices ?? [];
                 // Exclude refractive-index / dispersion fields from slider display.
                 const isGlassProperty = /^(?:rindex|nd|vd|abbe)\d*$/i.test(label);
                 const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isGapThicknessMode && !isObjectDistanceMode && !isImageSemidiaMode && !isApertureShape && !isCoordReturn && !isCoordOrder && !isCoordToSurf && !isZoomGroup && !isNaN(parseFloat(String(value)));
@@ -11686,7 +12406,42 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
                 let inputElement: HTMLElement;
 
-                if (isSurfType) {
+                if (assemblyChoices.length > 0) {
+                    const select = document.createElement('select');
+                    select.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
+                    select.style.background = isDarkMode ? '#111827' : '#fff';
+                    select.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    select.style.cursor = 'pointer';
+
+                    const valueKey = (candidate: string | number | boolean): string => `${typeof candidate}:${String(candidate)}`;
+                    const currentKey = valueKey(value as string | number | boolean);
+                    const hasCurrentValue = assemblyChoices.some((choice) => valueKey(choice.value) === currentKey);
+                    const resolvedChoices: AssemblyParameterChoice[] = hasCurrentValue
+                        ? assemblyChoices
+                        : [
+                            { value: value as string | number | boolean, label: `${String(value)} (current)` },
+                            ...assemblyChoices,
+                        ];
+
+                    resolvedChoices.forEach((choice, choiceIndex) => {
+                        const option = document.createElement('option');
+                        option.value = String(choiceIndex);
+                        option.textContent = choice.label;
+                        if (valueKey(choice.value) === currentKey) option.selected = true;
+                        select.appendChild(option);
+                    });
+
+                    select.addEventListener('change', () => {
+                        const nextValue = resolvedChoices[Number(select.value)]?.value;
+                        if (nextValue !== undefined && valueKey(nextValue) !== currentKey) {
+                            cooptApplyBlockValue(blockId, path, value, nextValue);
+                        }
+                    });
+
+                    applyCompactEditorSizing(select);
+                    relaxFieldSizing(select);
+                    inputElement = select;
+                } else if (isSurfType) {
                     // Create dropdown for surface type
                     const select = document.createElement('select');
                     select.style.fontSize = '12px';
@@ -12683,6 +13438,12 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
                 const resolveExpandedParamValue = (key: string) => {
                     let value = (params as any)[key];
+                    if ((blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource') && key === 'renderSpatialSamples' && (value === undefined || value === null || String(value).trim() === '')) {
+                        value = Math.min(9, Number((params as any).spatialSamples) || 9);
+                    }
+                    if ((blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource') && key === 'detectorSpatialSamples' && (value === undefined || value === null || String(value).trim() === '')) {
+                        value = Number((params as any).spatialSamples) || 81;
+                    }
                     if (blockType === 'Paraxial' && key === 'focalLengthX' && (value === undefined || value === null || String(value).trim() === '')) {
                         value = (params as any).focalLengthY ?? (params as any).focalLength ?? 100;
                     }
@@ -13107,7 +13868,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 panel.appendChild(empty);
             }
 
-            container.appendChild(panel);
+            blockRenderTargetForId(blockId).appendChild(panel);
         }
     }
 }
@@ -13745,7 +14506,11 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
     return base;
 }
 
-function __blocks_addBlockToActiveConfig(blockType: string, insertAfterBlockId: string | null = null): any {
+function __blocks_addBlockToActiveConfig(
+    blockType: string,
+    insertAfterBlockId: string | null = null,
+    sequentialGroupId: string | null = null
+): any {
     const systemConfig = loadSystemConfigurations();
     if (!systemConfig || !Array.isArray(systemConfig.configurations)) {
         return { ok: false, reason: 'systemConfigurations not found.' };
@@ -13805,6 +14570,13 @@ function __blocks_addBlockToActiveConfig(blockType: string, insertAfterBlockId: 
 
     const newId = __blocks_generateUniqueBlockId(blocks, type);
     const newBlock = __blocks_makeDefaultBlock(type, newId);
+    const validationIssueKey = (issue: any): string => `${String(issue?.blockId ?? '')}\u0000${String(issue?.message ?? '')}`;
+    const preExistingFatalKeys = new Set<string>();
+    try {
+        for (const issue of validateBlocksConfiguration(activeCfg)) {
+            if (issue?.severity === 'fatal') preExistingFatalKeys.add(validationIssueKey(issue));
+        }
+    } catch (_) {}
 
     let imageIdx = blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'ImageSurface');
     if (imageIdx < 0) imageIdx = blocks.length;
@@ -13821,6 +14593,10 @@ function __blocks_addBlockToActiveConfig(blockType: string, insertAfterBlockId: 
 
     blocks.splice(insertIdx, 0, newBlock);
 
+    if (!physicalBlock && String(sequentialGroupId ?? '').trim()) {
+        __blocks_assignSequentialBlockToGroup(activeCfg, newId, String(sequentialGroupId));
+    }
+
     try {
         if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
         activeCfg.metadata.modified = new Date().toISOString();
@@ -13829,9 +14605,18 @@ function __blocks_addBlockToActiveConfig(blockType: string, insertAfterBlockId: 
     try {
         const issues = validateBlocksConfiguration(activeCfg);
         const fatals = issues.filter(i => i && i.severity === 'fatal');
-        if (fatals.length > 0) {
+        // Existing configuration errors belong to their original blocks and
+        // must not disable insertion of an otherwise valid, unrelated block.
+        const introducedFatals = fatals.filter((issue) => !preExistingFatalKeys.has(validationIssueKey(issue)));
+        if (introducedFatals.length > 0) {
             blocks.splice(insertIdx, 1);
-            return { ok: false, reason: 'block validation failed.' };
+            if (Array.isArray(activeCfg.sequentialGroups)) {
+                for (const group of activeCfg.sequentialGroups) {
+                    if (!Array.isArray(group?.blockIds)) continue;
+                    group.blockIds = group.blockIds.filter((candidate: any) => String(candidate ?? '').trim() !== newId);
+                }
+            }
+            return { ok: false, reason: String(introducedFatals[0]?.message ?? 'block validation failed.') };
         }
     } catch (_) {}
 
@@ -13865,9 +14650,16 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
     if (idx < 0) return { ok: false, reason: `block not found: ${id}` };
 
     const type = String(blocks[idx]?.blockType ?? '').trim();
+    const previousSequentialGroupId = __blocks_groupIdForBlock(activeCfg, id);
 
     const removedBlock = JSON.parse(JSON.stringify(blocks[idx]));
     const removed = blocks.splice(idx, 1);
+    if (Array.isArray(activeCfg.sequentialGroups)) {
+        for (const group of activeCfg.sequentialGroups) {
+            if (!Array.isArray(group?.blockIds)) continue;
+            group.blockIds = group.blockIds.filter((candidate: any) => String(candidate ?? '').trim() !== id);
+        }
+    }
     if (Array.isArray(activeCfg.designConnections)) {
         activeCfg.designConnections = activeCfg.designConnections.filter((connection: any) => (
             String(connection?.from?.blockId ?? '') !== id && String(connection?.to?.blockId ?? '') !== id
@@ -13880,6 +14672,9 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
         const newId = __blocks_generateUniqueBlockId(blocks, 'ImageSurface');
         const newBlock = __blocks_makeDefaultBlock('ImageSurface', newId);
         blocks.push(newBlock);
+        if (previousSequentialGroupId) {
+            __blocks_assignSequentialBlockToGroup(activeCfg, newId, previousSequentialGroupId);
+        }
     }
 
     try {
@@ -13896,6 +14691,9 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
             const fatals = issues.filter(i => i && i.severity === 'fatal');
             if (fatals.length > 0) {
                 blocks.splice(idx, 0, ...(removed || []));
+                if (previousSequentialGroupId) {
+                    __blocks_assignSequentialBlockToGroup(activeCfg, id, previousSequentialGroupId);
+                }
                 return { ok: false, reason: 'block validation failed.' };
             }
         } catch (_) {}
@@ -14015,31 +14813,27 @@ function setupDesignIntentButtons(): void {
         const target = e.target as HTMLElement | null;
         if (!target) return;
 
-        const quickStrip = target.closest('.di-physical-add-strip');
-        const toolbar = (target.closest('[id="design-intent-toolbar"]')
-            ?? quickStrip?.parentElement?.querySelector('[id="design-intent-toolbar"]')) as HTMLElement | null;
+        const toolbar = target.closest('[id="design-intent-toolbar"]') as HTMLElement | null;
         if (!toolbar) return;
 
         const typeSelect = toolbar.querySelector('[id="design-intent-add-block-type"]') as HTMLSelectElement | null;
         const addBtn = target.closest('[id="design-intent-add-block-btn"]');
-        const quickAddBtn = target.closest('[data-design-intent-add-type]') as HTMLElement | null;
         const deleteBtn = target.closest('[id="design-intent-delete-block-btn"]');
         const paramAllOnBtn = target.closest('[id="design-intent-param-all-on-btn"]');
         const paramAllOffBtn = target.closest('[id="design-intent-param-all-off-btn"]');
         const autoSetAperturesBtn = target.closest('[id="design-intent-auto-set-apertures-btn"]');
         const zoomScenarioBtn = target.closest('[id="design-intent-generate-zoom-scenarios-btn"]');
 
-        if (!addBtn && !quickAddBtn && !deleteBtn && !paramAllOnBtn && !paramAllOffBtn && !autoSetAperturesBtn && !zoomScenarioBtn) {
+        if (!addBtn && !deleteBtn && !paramAllOnBtn && !paramAllOffBtn && !autoSetAperturesBtn && !zoomScenarioBtn) {
             return;
         }
 
         try { e.preventDefault(); } catch (_) {}
         try { e.stopPropagation(); } catch (_) {}
 
-        if (addBtn || quickAddBtn) {
+        if (addBtn) {
             try {
-                const quickType = String(quickAddBtn?.dataset.designIntentAddType ?? '').trim();
-                const type = quickType || String(typeSelect?.value ?? 'Lens').trim();
+                const type = String(typeSelect?.value ?? 'Lens').trim();
                 const after = __blockInspectorExpandedBlockId;
                 const res = __blocks_addBlockToActiveConfig(type, after);
                 if (!res || res.ok !== true) {

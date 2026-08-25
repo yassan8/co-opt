@@ -745,7 +745,7 @@ export function createOpticalSceneSolidGroup(
         addLoopOutline(
           solid,
           clipped.sectionLoops,
-          `Lens Section Outline ${String(index + 1).padStart(3, '0')}`,
+          `Lens Design Outline ${String(index + 1).padStart(3, '0')}`,
           'solidSectionOutline',
           1003,
         );

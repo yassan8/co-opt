@@ -542,6 +542,86 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "Evaluates Analysis MTF at the selected wavelength, field, frequency, and sampling. MTFT is tangential/meridional, MTFS is sagittal, and MTFA is their average."
   },
+  "ROUTE_OPL": {
+    name: "Route OPL",
+    description: "Optical path length of a saved Port route",
+    parameters: [
+      { key: "param1", label: "Route" },
+      { key: "param4", label: "Rays", description: "Spatial ray count (blank=25)" },
+      { key: "param5", label: "Spectrum", description: "Spectral samples (blank=1)" }
+    ],
+    notes: "Traces the saved connection order, including every Exact Sequential Group in Front or Back direction. Unit: mm."
+  },
+  "ROUTE_OPD": {
+    name: "Route OPD",
+    description: "Signed measurement minus reference optical path",
+    parameters: [
+      { key: "param1", label: "Route Set" },
+      { key: "param4", label: "Rays", description: "Spatial ray count (blank=25)" },
+      { key: "param5", label: "Spectrum", description: "Spectral samples (blank=1)" }
+    ],
+    notes: "Uses the Measurement and Reference routes saved in the selected Route Set. Unit: mm."
+  },
+  "ROUTE_CX": {
+    name: "Detector centroid X",
+    description: "X centroid of a saved route on its Detector",
+    parameters: [{ key: "param1", label: "Route" }, { key: "param4", label: "Rays" }, { key: "param5", label: "Spectrum" }],
+    notes: "Unit: mm in the Detector local coordinate system. Invalid or missed routes return FAIL."
+  },
+  "ROUTE_CY": {
+    name: "Detector centroid Y",
+    description: "Y centroid of a saved route on its Detector",
+    parameters: [{ key: "param1", label: "Route" }, { key: "param4", label: "Rays" }, { key: "param5", label: "Spectrum" }],
+    notes: "Unit: mm in the Detector local coordinate system. Invalid or missed routes return FAIL."
+  },
+  "ROUTE_POWER": {
+    name: "Detector received power",
+    description: "Power received from a saved Port route",
+    parameters: [{ key: "param1", label: "Route" }, { key: "param4", label: "Rays" }, { key: "param5", label: "Spectrum" }],
+    notes: "Unit: W. Beam Splitter, ND Filter and explicit path loss are included."
+  },
+  "ROUTE_SPOT": {
+    name: "Route spot RMS",
+    description: "RMS radius of route intersections on its Detector",
+    parameters: [{ key: "param1", label: "Route" }, { key: "param4", label: "Rays" }, { key: "param5", label: "Spectrum" }],
+    notes: "Unit: mm. This is traced from the exact physical surface sequences, not a nearest-group PSF approximation."
+  },
+  "ROUTE_PSF_RMS": {
+    name: "Route PSF RMS",
+    description: "Detector-plane RMS radius for a saved Port route",
+    parameters: [{ key: "param1", label: "Route" }, { key: "param4", label: "Rays" }, { key: "param5", label: "Spectrum" }],
+    notes: "Unit: µm. Uses the exact Port-routed detector intersections; invalid or missed routes return FAIL."
+  },
+  "ROUTE_WFE": {
+    name: "Route wavefront RMS",
+    description: "Piston/tilt-removed optical path RMS",
+    parameters: [{ key: "param1", label: "Route" }, { key: "param4", label: "Rays" }, { key: "param5", label: "Spectrum" }],
+    notes: "Unit: µm. Piston and source-pupil tilt are fitted independently for each wavelength before incoherent spectral weighting."
+  },
+  "ROUTE_STREHL": {
+    name: "Route Strehl",
+    description: "Maréchal Strehl estimate from the routed wavefront",
+    parameters: [{ key: "param1", label: "Route" }, { key: "param4", label: "Rays" }, { key: "param5", label: "Spectrum" }],
+    notes: "Dimensionless 0–1 estimate computed from the exact-route wavefront RMS at each sampled wavelength."
+  },
+  "ROUTE_MTF": {
+    name: "Route MTF",
+    description: "Detector-plane MTF at a specified spatial frequency",
+    parameters: [
+      { key: "param1", label: "Route" },
+      { key: "param2", label: "Freq (lp/mm)" },
+      { key: "param3", label: "Axis", description: "T, S, or A (average)" },
+      { key: "param4", label: "Rays" },
+      { key: "param5", label: "Spectrum" }
+    ],
+    notes: "Power-weighted ray-distribution MTF. Spectral lines are combined incoherently; T uses Detector X and S uses Detector Y."
+  },
+  "ROUTE_VIS": {
+    name: "Interference visibility",
+    description: "Ideal visibility from measurement/reference received powers",
+    parameters: [{ key: "param1", label: "Route Set" }, { key: "param4", label: "Rays" }, { key: "param5", label: "Spectrum" }],
+    notes: "Returns 2 sqrt(Pm Pr) / (Pm + Pr). Routes must share one Detector and a coherent source group."
+  },
   "EDGE": {
     name: "EDGE",
     description: "Edge Thickness",
@@ -678,6 +758,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'TOT_LCA', 'TOT_TCA',
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
   'MTFT', 'MTFS', 'MTFA',
+  'ROUTE_OPL', 'ROUTE_OPD', 'ROUTE_CX', 'ROUTE_CY', 'ROUTE_POWER', 'ROUTE_SPOT', 'ROUTE_PSF_RMS', 'ROUTE_WFE', 'ROUTE_STREHL', 'ROUTE_MTF', 'ROUTE_VIS',
   'LA_RMS_UM', 'SA', 'TA_RMS_UM', 'LCA_RMS_UM', 'CRA_DEG', 'DIST', 'OPD_RMS_WAVES',
   'ZERN_COEFF',
   'EDGE', 'ALL_EDGE_ELEMENT', 'EDGE_AIR', 'ALL_EDGE_AIR', 'CTCT', 'RADI', 'RADI_ALL', 'SDIST', 'GAP', 'THIC', 'REQMATH'
@@ -782,6 +863,106 @@ export class InspectorManager {
     try {
       this._installPrincipalPointZoomGroupPickerIfNeeded(data);
     } catch (_) {}
+    try {
+      this._installPortRoutePickerIfNeeded(data);
+    } catch (_) {}
+  }
+
+  _installPortRoutePickerIfNeeded(data: any): void {
+    const operandType = String(data?.operand ?? '').trim().toUpperCase();
+    const routeOperands = new Set(['ROUTE_OPL', 'ROUTE_CX', 'ROUTE_CY', 'ROUTE_POWER', 'ROUTE_SPOT', 'ROUTE_PSF_RMS', 'ROUTE_WFE', 'ROUTE_STREHL', 'ROUTE_MTF']);
+    const routeSetOperands = new Set(['ROUTE_OPD', 'ROUTE_VIS']);
+    if (!routeOperands.has(operandType) && !routeSetOperands.has(operandType)) return;
+    const rowId = data?.id;
+    if (rowId === undefined || rowId === null) return;
+    const system = tryLoadSystemConfigurations();
+    const configurations = Array.isArray(system?.configurations) ? system.configurations : [];
+    const hint = String(data?.configId ?? system?.activeConfigId ?? '').trim();
+    const config = configurations.find((entry: any) => String(entry?.id) === hint)
+      ?? configurations.find((entry: any) => String(entry?.name ?? '').trim() === hint)
+      ?? configurations.find((entry: any) => String(entry?.id) === String(system?.activeConfigId ?? ''))
+      ?? configurations[0];
+    if (!config) return;
+    const entries = routeOperands.has(operandType)
+      ? (Array.isArray(config.portRoutes) ? config.portRoutes : []).map((route: any) => ({
+          id: String(route?.id ?? ''),
+          label: `${String(route?.label ?? route?.id ?? 'Route')} → ${String(route?.detectorBlockId ?? 'Detector')}`,
+        }))
+      : (Array.isArray(config.routeSets) ? config.routeSets : []).map((set: any) => ({
+          id: String(set?.id ?? ''),
+          label: `${String(set?.label ?? set?.id ?? 'Route Set')} · ${String(set?.measurementRouteId ?? '—')} / ${String(set?.referenceRouteId ?? '—')}`,
+        }));
+    const validEntries = entries.filter((entry: any) => entry.id);
+    if (validEntries.length === 0) {
+      this._appendInspectorHtml(`<div class="inspector-row"><strong>${routeOperands.has(operandType) ? 'Route' : 'Route Set'}:</strong> (create one in Design Intents → Optical routes)</div>`);
+      return;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'inspector-row';
+    const label = document.createElement('strong');
+    label.textContent = `${routeOperands.has(operandType) ? 'Route' : 'Route Set'}: `;
+    const select = document.createElement('select');
+    select.style.cssText = 'min-width:220px;padding:4px 6px;margin-left:6px;';
+    for (const entry of validEntries) {
+      const option = document.createElement('option');
+      option.value = entry.id;
+      option.textContent = entry.label;
+      option.selected = entry.id === String(data?.param1 ?? '');
+      select.appendChild(option);
+    }
+    wrapper.append(label, select);
+    this.contentElement?.appendChild(wrapper);
+
+    const appendSelect = (labelText: string, value: string, options: Array<{ value: string; label: string }>, key: string) => {
+      const row = document.createElement('div');
+      row.className = 'inspector-row';
+      const rowLabel = document.createElement('strong');
+      rowLabel.textContent = `${labelText}: `;
+      const control = document.createElement('select');
+      control.style.cssText = 'min-width:220px;padding:4px 6px;margin-left:6px;';
+      for (const entry of options) {
+        const option = document.createElement('option');
+        option.value = entry.value;
+        option.textContent = entry.label;
+        option.selected = entry.value === value;
+        control.appendChild(option);
+      }
+      row.append(rowLabel, control);
+      this.contentElement?.appendChild(row);
+      control.addEventListener('change', () => {
+        try {
+          const editor = w.systemRequirementsEditor;
+          editor?.table?.updateData?.([{ id: rowId, [key]: control.value }]);
+          editor?.saveToStorage?.();
+          editor?.scheduleEvaluateAndUpdate?.();
+        } catch (_) {}
+      });
+    };
+    const objectRows = Array.isArray(config.object) ? config.object : [];
+    if (objectRows.length > 0) {
+      appendSelect('Field', String(data?.routeFieldIndex ?? '0'), objectRows.map((field: any, index: number) => ({
+        value: String(index),
+        label: `${index + 1}: X ${Number(field?.xHeightAngle ?? field?.xFieldAngle ?? field?.xAngle ?? field?.x ?? 0) || 0}, Y ${Number(field?.yHeightAngle ?? field?.yFieldAngle ?? field?.yAngle ?? field?.fieldAngle ?? field?.y ?? 0) || 0}`,
+      })), 'routeFieldIndex');
+    }
+    const sourceBlock = (Array.isArray(config.blocks) ? config.blocks : []).find((block: any) => block?.blockType === 'FrequencyCombSource' || block?.blockType === 'BroadbandSource');
+    const sourceParameters = sourceBlock?.parameters ?? {};
+    const sourceCount = Math.max(1, Math.min(129, Math.round(Number(sourceParameters.lineCount ?? sourceParameters.spectralSamples ?? 1) || 1)));
+    appendSelect('Spectrum', String(data?.routeSpectrumIndex ?? ''), [
+      { value: '', label: 'All sampled wavelengths / comb lines' },
+      ...Array.from({ length: sourceCount }, (_, index) => ({ value: String(index), label: `${sourceBlock?.blockType === 'FrequencyCombSource' ? 'Comb line' : 'Wavelength'} ${index + 1}` })),
+    ], 'routeSpectrumIndex');
+    if (!String(data?.param1 ?? '') && select.value) {
+      try { w.systemRequirementsEditor?.table?.updateData?.([{ id: rowId, param1: select.value }]); } catch (_) {}
+    }
+    select.addEventListener('change', () => {
+      try {
+        const editor = w.systemRequirementsEditor;
+        editor?.table?.updateData?.([{ id: rowId, param1: select.value }]);
+        editor?.saveToStorage?.();
+        editor?.scheduleEvaluateAndUpdate?.();
+      } catch (_) {}
+    });
   }
 
   _installEflBlockPickerIfNeeded(data: any): void {

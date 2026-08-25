@@ -1706,7 +1706,7 @@ function buildGeminiTools() {
             },
             {
                 name: 'apply_optical_system_rows',
-                description: 'Optical System（surface rows）を active configuration に取り込み、可能なら Design Intent（blocks）へ自動変換してUIへ反映します。特許の処方表/表をAIが行配列に整形した後に適用する用途。',
+                description: 'Optical System（surface rows）を active configuration に取り込み、可能なら Design Intent（blocks）へ自動変換してUIへ反映します。文献の処方表を行配列に整形した後に適用する用途。',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -1966,7 +1966,7 @@ function buildOpenAITools() {
             type: 'function',
             function: {
                 name: 'apply_optical_system_rows',
-                description: 'Optical System（surface rows）を active configuration に取り込み、可能なら Design Intent（blocks）へ自動変換してUIへ反映します。特許の処方表/表をAIが行配列に整形した後に適用する用途。',
+                description: 'Optical System（surface rows）を active configuration に取り込み、可能なら Design Intent（blocks）へ自動変換してUIへ反映します。文献の処方表を行配列に整形した後に適用する用途。',
                 parameters: {
                     type: 'object',
                     additionalProperties: false,
