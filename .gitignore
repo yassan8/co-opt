@@ -28,6 +28,9 @@ glass data/
 *.xls
 *.xlsx
 
+# Private local designs and examples
+/private/
+
 # Backup files
 *.bak*
 *.backup

@@ -1251,6 +1251,66 @@ export function trace_ray_batch_with_system_json(ray_array_ptr, system_meta_json
 }
 
 /**
+ * Surface-by-surface companion for Render. Results are stored in traversal
+ * order as `[status, opl_um, x, y, z, dx, dy, dz]` for every ray and every
+ * saved row. The tracing physics is exactly the same as the final-state API.
+ * @param {string} optical_rows_json
+ * @param {Float64Array} rays
+ * @param {number} ray_count
+ * @param {number} wavelength_um
+ * @param {number} n_start
+ * @param {string} entry_port
+ * @param {number} front_medium_index
+ * @returns {Float64Array}
+ */
+export function trace_sequential_group_path_with_rows_json(optical_rows_json, rays, ray_count, wavelength_um, n_start, entry_port, front_medium_index) {
+    const ptr0 = passStringToWasm0(optical_rows_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(rays, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(entry_port, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.trace_sequential_group_path_with_rows_json(ptr0, len0, ptr1, len1, ray_count, wavelength_um, n_start, ptr2, len2, front_medium_index);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v4;
+}
+
+/**
+ * Exact Sequential Group tracing for the Hybrid Port router.
+ *
+ * `entry_port` is `front` or `back`.  Back entry traverses the same packed
+ * physical surfaces in descending order; radii, conics and polynomial/Qcon/
+ * Toric coefficients are never sign-rewritten.
+ * @param {string} optical_rows_json
+ * @param {Float64Array} rays
+ * @param {number} ray_count
+ * @param {number} wavelength_um
+ * @param {number} n_start
+ * @param {string} entry_port
+ * @param {number} front_medium_index
+ * @returns {Float64Array}
+ */
+export function trace_sequential_group_with_rows_json(optical_rows_json, rays, ray_count, wavelength_um, n_start, entry_port, front_medium_index) {
+    const ptr0 = passStringToWasm0(optical_rows_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(rays, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(entry_port, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.trace_sequential_group_with_rows_json(ptr0, len0, ptr1, len1, ray_count, wavelength_um, n_start, ptr2, len2, front_medium_index);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v4;
+}
+
+/**
  * @param {Float64Array} ray
  * @param {number} target_surface_index
  * @param {number} n_start

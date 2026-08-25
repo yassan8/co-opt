@@ -314,6 +314,106 @@ export function listDesignVariablesFromBlocks(blocksOrConfig) {
   return out;
 }
 
+const CONNECTION_VARIABLE_KEYS = ['distanceMm', 'azimuthDeg', 'elevationDeg'];
+const GROUP_VARIABLE_KEYS = ['positionX', 'positionY', 'positionZ', 'rotationX', 'rotationY', 'rotationZ'];
+
+function assemblyVariableValue(config, kind, owner, key) {
+  if (kind === 'connection') return normalizeMaybeNumber(owner?.[key]);
+  const root = owner?.rootTransform ?? {};
+  if (key === 'positionX') return normalizeMaybeNumber(root?.positionMm?.x ?? 0);
+  if (key === 'positionY') return normalizeMaybeNumber(root?.positionMm?.y ?? 0);
+  if (key === 'positionZ') return normalizeMaybeNumber(root?.positionMm?.z ?? 0);
+  if (key === 'rotationX') return normalizeMaybeNumber(root?.rotationDeg?.x ?? 0);
+  if (key === 'rotationY') return normalizeMaybeNumber(root?.rotationDeg?.y ?? 0);
+  if (key === 'rotationZ') return normalizeMaybeNumber(root?.rotationDeg?.z ?? 0);
+  return '';
+}
+
+/** Continuous Port-route layout variables, expressed with the same descriptors as block variables. */
+export function listAssemblyDesignVariables(config) {
+  if (!config || typeof config !== 'object') return [];
+  const out = [];
+  for (const connection of (Array.isArray(config.designConnections) ? config.designConnections : [])) {
+    const ownerId = String(connection?.id ?? '').trim();
+    if (!ownerId) continue;
+    for (const key of CONNECTION_VARIABLE_KEYS) {
+      const entry = connection?.variables?.[key];
+      if (!shouldMarkV(entry)) continue;
+      out.push({
+        id: `connection:${ownerId}.${key}`,
+        blockId: `connection:${ownerId}`,
+        blockType: 'PortConnection',
+        key,
+        value: assemblyVariableValue(config, 'connection', connection, key),
+      });
+    }
+  }
+  for (const group of (Array.isArray(config.sequentialGroups) ? config.sequentialGroups : [])) {
+    const ownerId = String(group?.id ?? '').trim();
+    if (!ownerId) continue;
+    for (const key of GROUP_VARIABLE_KEYS) {
+      const entry = group?.rootTransformVariables?.[key];
+      if (!shouldMarkV(entry)) continue;
+      out.push({
+        id: `group:${ownerId}.${key}`,
+        blockId: `group:${ownerId}`,
+        blockType: 'SequentialGroupPose',
+        key,
+        value: assemblyVariableValue(config, 'group', group, key),
+      });
+    }
+  }
+  return out;
+}
+
+export function getAssemblyVariableEntry(config, variableId) {
+  const match = String(variableId ?? '').trim().match(/^(connection|group):(.+)\.([^.]+)$/);
+  if (!match || !config || typeof config !== 'object') return null;
+  const [, kind, ownerId, key] = match;
+  if (kind === 'connection') {
+    const owner = (config.designConnections ?? []).find((item) => String(item?.id) === ownerId);
+    return owner?.variables?.[key] ?? null;
+  }
+  const owner = (config.sequentialGroups ?? []).find((item) => String(item?.id) === ownerId);
+  return owner?.rootTransformVariables?.[key] ?? null;
+}
+
+export function getAssemblyDesignVariableValue(config, variableId) {
+  const match = String(variableId ?? '').trim().match(/^(connection|group):(.+)\.([^.]+)$/);
+  if (!match || !config || typeof config !== 'object') return '';
+  const [, kind, ownerId, key] = match;
+  const owner = kind === 'connection'
+    ? (config.designConnections ?? []).find((item) => String(item?.id) === ownerId)
+    : (config.sequentialGroups ?? []).find((item) => String(item?.id) === ownerId);
+  return owner ? assemblyVariableValue(config, kind, owner, key) : '';
+}
+
+export function setAssemblyDesignVariableValue(config, variableId, newValue) {
+  const match = String(variableId ?? '').trim().match(/^(connection|group):(.+)\.([^.]+)$/);
+  const numeric = Number(newValue);
+  if (!match || !Number.isFinite(numeric) || !config || typeof config !== 'object') return false;
+  const [, kind, ownerId, key] = match;
+  if (kind === 'connection') {
+    if (!CONNECTION_VARIABLE_KEYS.includes(key)) return false;
+    const owner = (config.designConnections ?? []).find((item) => String(item?.id) === ownerId);
+    if (!owner) return false;
+    owner[key] = key === 'distanceMm' ? Math.max(0, numeric) : (key === 'elevationDeg' ? Math.max(-90, Math.min(90, numeric)) : numeric);
+    if (owner.variables?.[key]) owner.variables[key].value = owner[key];
+    return true;
+  }
+  if (!GROUP_VARIABLE_KEYS.includes(key)) return false;
+  const owner = (config.sequentialGroups ?? []).find((item) => String(item?.id) === ownerId);
+  if (!owner) return false;
+  if (!owner.rootTransform) owner.rootTransform = { positionMm: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 } };
+  if (!owner.rootTransform.positionMm) owner.rootTransform.positionMm = { x: 0, y: 0, z: 0 };
+  if (!owner.rootTransform.rotationDeg) owner.rootTransform.rotationDeg = { x: 0, y: 0, z: 0 };
+  const positionKey = key.startsWith('position');
+  const axis = key.slice(-1).toLowerCase();
+  (positionKey ? owner.rootTransform.positionMm : owner.rootTransform.rotationDeg)[axis] = numeric;
+  if (owner.rootTransformVariables?.[key]) owner.rootTransformVariables[key].value = numeric;
+  return true;
+}
+
 /**
  * Applies a new value into the block parameters (canonical value store).
  * This does not change optimize flags.

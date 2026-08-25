@@ -9,9 +9,9 @@ import {
 export type CoherentPresetId = CoherentAssemblyDesign['preset'];
 
 export const COHERENT_PRESET_OPTIONS: Array<{ id: CoherentPresetId; label: string }> = [
-  { id: 'patent-fig-2', label: 'Patent Figure 2 · SuperK + Grating + Camera' },
+  { id: 'patent-fig-2', label: 'Supercontinuum + Grating + Camera' },
   { id: 'comb-grating-area', label: 'Comb + Grating + Area Detector' },
-  { id: 'patent-fig-14-dual-comb', label: 'Patent Figure 14 · Dual Comb' },
+  { id: 'patent-fig-14-dual-comb', label: 'Dual Comb Interferometer' },
 ];
 
 function clone<T>(value: T): T {
@@ -178,7 +178,7 @@ export function createPatentFig14DualCombDesign(): CoherentAssemblyDesign {
     schemaVersion: '1.0',
     preset: 'patent-fig-14-dual-comb',
     revision: 0,
-    name: 'Patent Figure 14 · Dual frequency comb',
+    name: 'Dual frequency comb interferometer',
     components: [firstSource, secondSource, splitter, target, detectorComponent],
     paths: [
       { id: 'dual-comb', label: 'Dual-comb receive path', componentIds: ['comb-source-61', 'comb-source-62', 'beam-splitter-63', 'time-detector-65'], roundTrip: false, throughput: 0.5 },

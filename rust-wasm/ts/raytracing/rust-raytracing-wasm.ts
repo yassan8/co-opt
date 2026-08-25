@@ -74,6 +74,24 @@ export type RustRayTracingWasm = {
     wavelengthUm: number,
     nStart: number
   ) => Float64Array | number[];
+  trace_sequential_group_with_rows_json?: (
+    opticalRowsJson: string,
+    rays: Float64Array,
+    rayCount: number,
+    wavelengthUm: number,
+    nStart: number,
+    entryPort: 'front' | 'back',
+    frontMediumIndex: number,
+  ) => Float64Array | number[];
+  trace_sequential_group_path_with_rows_json?: (
+    opticalRowsJson: string,
+    rays: Float64Array,
+    rayCount: number,
+    wavelengthUm: number,
+    nStart: number,
+    entryPort: 'front' | 'back',
+    frontMediumIndex: number,
+  ) => Float64Array | number[];
   trace_ray_batch_spot_metrics_with_meta?: (
     rays: Float64Array,
     rayCount: number,
@@ -511,6 +529,8 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           trace_ray_batch_hit_point_with_meta: mod.trace_ray_batch_hit_point_with_meta,
           trace_ray_batch_hit_point_cached: mod.trace_ray_batch_hit_point_cached,
           trace_ray_batch_hit_point_with_rows_json: mod.trace_ray_batch_hit_point_with_rows_json,
+          trace_sequential_group_with_rows_json: mod.trace_sequential_group_with_rows_json,
+          trace_sequential_group_path_with_rows_json: mod.trace_sequential_group_path_with_rows_json,
           trace_ray_batch_spot_metrics_with_meta: mod.trace_ray_batch_spot_metrics_with_meta,
           solve_ray_origins_to_stop_points_with_meta_batch: mod.solve_ray_origins_to_stop_points_with_meta_batch,
           solve_image_height_component_with_rows: mod.solve_image_height_component_with_rows,

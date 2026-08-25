@@ -73,6 +73,7 @@
     "diag:coherent-design-intent": "node --import tsx diagnostics/coherent-design-intent-bridge-verification.mjs",
     "diag:coherent-port-layout": "node --import tsx diagnostics/coherent-port-layout-verification.mjs",
     "diag:hybrid-assembly": "node --import tsx diagnostics/hybrid-assembly-verification.mjs",
+    "diag:port-routed-exact": "node --import tsx diagnostics/port-routed-exact-verification.mjs",
     "diag:optimizer-mtf-shared": "node --import tsx diagnostics/optimizer-mtf-shared-batch-repro.mjs",
     "wasm:rebuild": "bash ./scripts/build-rust-wasm.sh",
     "wasm:rebuild:threads": "bash -c 'COOPT_WASM_THREADS=1 bash ./scripts/build-rust-wasm.sh'",

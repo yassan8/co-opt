@@ -15,7 +15,7 @@ export default function ConfigurationSection() {
       <div id="config-order-list" className="config-order-list" aria-label="Configuration order"></div>
       <div id="config-info" className="config-info"></div>
       <div className="configuration-note">
-        Source and Requirements are shared across configurations.
+        Source/Field sets belong to this configuration. Requirements are shared.
       </div>
     </section>
   );

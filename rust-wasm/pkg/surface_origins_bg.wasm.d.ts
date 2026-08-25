@@ -68,6 +68,8 @@ export const trace_ray_batch_hit_point_with_rows_json: (a: number, b: number, c:
 export const trace_ray_batch_spot_metrics_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
 export const trace_ray_batch_spot_metrics_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
 export const trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+export const trace_sequential_group_path_with_rows_json: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+export const trace_sequential_group_with_rows_json: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
 export const trace_single_ray_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];
 export const trace_spot_metric_jobs_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number];
 export const transform_point_to_global_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];

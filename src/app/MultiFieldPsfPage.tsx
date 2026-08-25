@@ -67,6 +67,7 @@ export type FieldPsfComputeOptions = {
   token: CancelToken;
   onProgress: (percent: number, message: string) => void;
   includeComplexField?: boolean;
+  defocusMm?: number;
 };
 
 export type FieldPsfComputeResult = {
@@ -102,6 +103,31 @@ export type FieldPsfComputeResult = {
     fieldImag?: number[][];
   }>;
 };
+
+export function applyImagePlaneDefocus(opticalRows: any[], defocusMm: number): any[] {
+  const cloned = (Array.isArray(opticalRows) ? opticalRows : [])
+    .map((row) => row && typeof row === 'object' ? { ...row } : row);
+  const shift = Number(defocusMm);
+  if (!Number.isFinite(shift) || Math.abs(shift) < 1e-15) return cloned;
+  let imageIndex = -1;
+  for (let index = cloned.length - 1; index >= 0; index -= 1) {
+    const row = cloned[index] || {};
+    const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+    if (objectType === 'image') {
+      imageIndex = index;
+      break;
+    }
+  }
+  const precedingIndex = imageIndex > 0 ? imageIndex - 1 : Math.max(0, cloned.length - 2);
+  if (precedingIndex < 0 || precedingIndex >= cloned.length) return cloned;
+  const preceding = cloned[precedingIndex] && typeof cloned[precedingIndex] === 'object'
+    ? { ...cloned[precedingIndex] }
+    : {};
+  const thickness = Number(preceding.thickness);
+  preceding.thickness = (Number.isFinite(thickness) ? thickness : 0) + shift;
+  cloned[precedingIndex] = preceding;
+  return cloned;
+}
 
 function formatMetric(value: unknown, digits = 3): string {
   const numeric = Number(value);
@@ -283,6 +309,7 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
     token,
     onProgress,
     includeComplexField = false,
+    defocusMm = 0,
   } = options;
   const primary = getPrimaryWavelength(host, sourceRows);
   const wavelengthEntries = buildWavelengthEntries(wavelengthValue, sourceRows, primary);
@@ -310,6 +337,7 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
       wavelengthUm: entry.wavelength,
       opdDisplayMode: opdMode,
       suppressProgressHud: true,
+      defocusMm,
     })), token);
     onProgress(base + span * 0.48, `Detector rays ${(entry.wavelength * 1000).toFixed(1)} nm`);
     const spot = await raceWithCancel(Promise.resolve(spotRunner.fn({
@@ -319,6 +347,7 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
       pattern: 'grid',
       wavelengthMode: 'primary',
       wavelengthUm: entry.wavelength,
+      defocusMm,
     })), token);
     const rayHitsUm = (Array.isArray((spot as any)?.series) ? (spot as any).series : [])
       .flatMap((series: any) => Array.isArray(series?.points) ? series.points : [])
@@ -347,7 +376,8 @@ export async function computeFieldPsf(options: FieldPsfComputeOptions): Promise<
     }
     const validCount = pupilMask.reduce((sum, row) => sum + row.filter(Boolean).length, 0);
     if (validCount <= 0) throw new Error(`No valid pupil samples at ${(entry.wavelength * 1000).toFixed(1)} nm.`);
-    const scale = derivePsfScale(opticalRows, entry.wavelength, selectedSamplingSize, fftSize);
+    const scaleRows = applyImagePlaneDefocus(opticalRows, defocusMm);
+    const scale = derivePsfScale(scaleRows, entry.wavelength, selectedSamplingSize, fftSize);
     onProgress(base + span * 0.7, `PSF ${(entry.wavelength * 1000).toFixed(1)} nm`);
     const psf = await raceWithCancel(Promise.resolve(psfRunner.fn({
       gridOpd,

@@ -5,6 +5,7 @@ declare global {
   }
 }
 const w: Record<string, any> = window;
+import { persistRowsToActiveAnalysisSet } from './table-configuration.ts';
 
 // データの保存・復元用キー
 const STORAGE_KEY = "objectTableData";
@@ -117,7 +118,7 @@ export function saveTableData(data: ObjectRow[]): void {
   }
   if (data && Array.isArray(data)) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    persistObjectRowsToActiveConfiguration(data);
+    persistRowsToActiveAnalysisSet('field', data);
   } else {
     console.warn('⚠️ [TableObject] Invalid data, not saving:', data);
   }

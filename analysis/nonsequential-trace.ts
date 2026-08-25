@@ -7,6 +7,7 @@ import {
   type CoherentSourceSpec,
   type Vec3Mm,
 } from './coherent-assembly.ts';
+import { worldPortPosition } from './coherent-port-layout.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { preloadRustRayTracingWasm } from '../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 
@@ -33,7 +34,7 @@ export interface NonSequentialDetectorResult {
   kind: 'area' | 'time' | string;
   width: number;
   height: number;
-  intensityWPerPixel: number[];
+  intensityWPerPixel: ArrayLike<number>;
   integratedPowerW: number;
   maximumWPerPixel: number;
   hitCount: number;
@@ -94,6 +95,22 @@ function componentTransform(design: CoherentAssemblyDesign, id: string | undefin
   return { positionMm: transform.positionMm, rotationDeg: transform.rotationDeg };
 }
 
+function sourceTransform(design: CoherentAssemblyDesign, id: string | undefined): Record<string, unknown> {
+  const component = componentById(design, id);
+  if (!component) return componentTransform(design, id);
+  const transform = resolveComponentTransform(component);
+  const emitPort = component.ports.find((port) => port.id === 'emit')
+    ?? component.ports.find((port) => port.id === 'out');
+  return {
+    // A physical source emits at its aperture/end face. Starting rays at the
+    // component centre made the trace disagree visibly with the 3D source body.
+    positionMm: emitPort
+      ? worldPortPosition(component, emitPort.id, 'from')
+      : transform.positionMm,
+    rotationDeg: transform.rotationDeg,
+  };
+}
+
 function sourceRequest(design: CoherentAssemblyDesign, source: CoherentSourceSpec, quality: TraceQuality, index: number): Record<string, unknown> {
   const settings = design.traceSettings;
   const repetitionRateHz = finite(source.repetitionRateHz, finite(source.repetitionRateGHz) * 1e9);
@@ -103,13 +120,18 @@ function sourceRequest(design: CoherentAssemblyDesign, source: CoherentSourceSpe
   const spectralCount = quality === 'preview'
     ? Math.min(clampInt(requestedSpectral, 1, 100001), settings?.previewSpectralSamples ?? 9)
     : clampInt(requestedSpectral, 1, 100001);
-  const spatialCount = quality === 'preview'
-    ? Math.min(clampInt(source.spatialSamples, 1, 4096), settings?.previewSpatialSamples ?? 9)
-    : clampInt(source.spatialSamples, 1, 4096);
+  const configuredSpatial = quality === 'preview'
+    ? source.renderSpatialSamples
+    : source.detectorSpatialSamples;
+  const spatialCount = Number.isFinite(Number(configuredSpatial))
+    ? clampInt(configuredSpatial, 1, 4096)
+    : quality === 'preview'
+      ? Math.min(clampInt(source.spatialSamples, 1, 4096), settings?.previewSpatialSamples ?? 9)
+      : clampInt(source.spatialSamples, 1, 4096);
   return {
     id: source.id ?? `source-${index + 1}`,
     coherenceGroupId: source.coherenceGroupId ?? source.id ?? `source-${index + 1}`,
-    transform: componentTransform(design, source.componentId ?? source.id),
+    transform: sourceTransform(design, source.componentId ?? source.id),
     totalPowerW: finite(source.totalPowerW, 0),
     beamDiameterMm: Math.max(0, finite(source.beamDiameterMm, 1)),
     divergenceDeg: finite(source.divergenceDeg, 0),
@@ -244,6 +266,7 @@ function surfaceFor(design: CoherentAssemblyDesign, item: CoherentPhysicalCompon
       kind: 'profile',
       targetProfile: {
         kind: design.target.kind,
+        spanMm: finite(design.target.spanMm, 2),
         offsetUm: finite(design.target.offsetUm, 0),
         amplitudeUm: finite(design.target.amplitudeUm, 0),
         periodMm: finite(design.target.periodMm, 1),

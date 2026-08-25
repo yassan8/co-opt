@@ -9,7 +9,7 @@ const w: Record<string, any> = window;
 // System Configuration管理モジュール
 // 複数のConfigurationを保存・切り替え可能にする
 
-import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, isPhysicalBlockType, type DesignConnection, type LoadIssue } from './block-schema.ts';
+import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, isPhysicalBlockType, type DesignConnection, type PortRoute, type PortRouteSet, type LoadIssue } from './block-schema.ts';
 import { storageGetItem, storageSetItem, storageRemoveItem } from '../utils/local-storage-gateway.ts';
 import { calculateParaxialData, getRefractiveIndex } from '../raytracing/core/ray-paraxial.ts';
 import { getGlassDataWithSellmeier, getPrimaryWavelength } from './glass.ts';
@@ -245,6 +245,7 @@ function normalizeLoadedSystemConfiguration(systemConfig: SystemConfiguration | 
     normalizeFixedStopBlocksForConfiguration(cfg);
     backfillMissingGlassPropertiesForConfiguration(cfg);
     interpolateExplicitApertureSemidiaForConfiguration(cfg);
+    normalizeLensSectionAnalysisInputs(cfg);
   }
 
   return systemConfig;
@@ -402,6 +403,186 @@ interface ConfigurationMetadata {
   };
 }
 
+export type LensSectionInputMode = 'route' | 'local' | 'disabled';
+export type LensSectionPort = 'Front' | 'Back';
+
+export interface AnalysisSourceSet {
+  id: string;
+  label: string;
+  rows: any[];
+}
+
+export interface AnalysisFieldSet {
+  id: string;
+  label: string;
+  rows: any[];
+}
+
+export interface LensSectionInputBinding {
+  sectionId: string;
+  port: LensSectionPort;
+  mode: LensSectionInputMode;
+  sourceSetId: string;
+  fieldSetId: string;
+}
+
+export const DEFAULT_SOURCE_SET_ID = 'source-default';
+export const DEFAULT_FIELD_SET_ID = 'field-default';
+const ACTIVE_SOURCE_SET_STORAGE_PREFIX = 'coopt.analysisInput.activeSourceSet.';
+const ACTIVE_FIELD_SET_STORAGE_PREFIX = 'coopt.analysisInput.activeFieldSet.';
+
+function cloneRowsForAnalysisSet(rows: any): any[] {
+  if (!Array.isArray(rows)) return [];
+  try {
+    return JSON.parse(JSON.stringify(rows));
+  } catch (_) {
+    return rows.map((row: any) => row && typeof row === 'object' ? { ...row } : row);
+  }
+}
+
+function readGlobalSourceRowsForAnalysisSet(): any[] {
+  try {
+    const parsed = JSON.parse(storageGetItem('sourceTableData') || 'null');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+/** Add named analysis inputs to legacy configurations without changing legacy analysis results. */
+export function normalizeLensSectionAnalysisInputs(cfg: Configuration): Configuration {
+  if (!cfg || typeof cfg !== 'object') return cfg;
+  const globalSourceRows = readGlobalSourceRowsForAnalysisSet();
+  const legacySourceRows = globalSourceRows.length > 0 ? globalSourceRows : cloneRowsForAnalysisSet(cfg.source);
+  const legacyFieldRows = cloneRowsForAnalysisSet(cfg.object);
+
+  if (!Array.isArray(cfg.sourceSets) || cfg.sourceSets.length === 0) {
+    cfg.sourceSets = [{ id: DEFAULT_SOURCE_SET_ID, label: 'Default source', rows: cloneRowsForAnalysisSet(legacySourceRows) }];
+  } else {
+    cfg.sourceSets = cfg.sourceSets
+      .filter((set: any) => set && typeof set === 'object')
+      .map((set: any, index: number) => ({
+        id: String(set.id ?? '').trim() || `source-set-${index + 1}`,
+        label: String(set.label ?? '').trim() || `Source set ${index + 1}`,
+        rows: cloneRowsForAnalysisSet(set.rows)
+      }));
+  }
+  if (!cfg.sourceSets.some((set) => set.id === DEFAULT_SOURCE_SET_ID)) {
+    cfg.sourceSets.unshift({ id: DEFAULT_SOURCE_SET_ID, label: 'Default source', rows: cloneRowsForAnalysisSet(legacySourceRows) });
+  }
+
+  if (!Array.isArray(cfg.fieldSets) || cfg.fieldSets.length === 0) {
+    cfg.fieldSets = [{ id: DEFAULT_FIELD_SET_ID, label: 'Default field', rows: cloneRowsForAnalysisSet(legacyFieldRows) }];
+  } else {
+    cfg.fieldSets = cfg.fieldSets
+      .filter((set: any) => set && typeof set === 'object')
+      .map((set: any, index: number) => ({
+        id: String(set.id ?? '').trim() || `field-set-${index + 1}`,
+        label: String(set.label ?? '').trim() || `Field set ${index + 1}`,
+        rows: cloneRowsForAnalysisSet(set.rows)
+      }));
+  }
+  if (!cfg.fieldSets.some((set) => set.id === DEFAULT_FIELD_SET_ID)) {
+    cfg.fieldSets.unshift({ id: DEFAULT_FIELD_SET_ID, label: 'Default field', rows: cloneRowsForAnalysisSet(legacyFieldRows) });
+  }
+
+  const sourceIds = new Set(cfg.sourceSets.map((set) => set.id));
+  const fieldIds = new Set(cfg.fieldSets.map((set) => set.id));
+  cfg.lensSectionInputs = (Array.isArray(cfg.lensSectionInputs) ? cfg.lensSectionInputs : [])
+    .filter((binding: any) => binding && typeof binding === 'object')
+    .map((binding: any) => ({
+      sectionId: String(binding.sectionId ?? '').trim() || 'main',
+      port: String(binding.port ?? '').toLowerCase() === 'back' ? 'Back' : 'Front',
+      mode: ['route', 'local', 'disabled'].includes(String(binding.mode ?? ''))
+        ? binding.mode as LensSectionInputMode
+        : 'route',
+      sourceSetId: sourceIds.has(String(binding.sourceSetId ?? '')) ? String(binding.sourceSetId) : DEFAULT_SOURCE_SET_ID,
+      fieldSetId: fieldIds.has(String(binding.fieldSetId ?? '')) ? String(binding.fieldSetId) : DEFAULT_FIELD_SET_ID
+    }));
+  return cfg;
+}
+
+export function getLensSectionInputBinding(
+  cfg: Configuration,
+  sectionId: string,
+  port: LensSectionPort
+): LensSectionInputBinding {
+  normalizeLensSectionAnalysisInputs(cfg);
+  const normalizedSectionId = String(sectionId ?? '').trim() || 'main';
+  const existing = cfg.lensSectionInputs?.find((binding) => (
+    binding.sectionId === normalizedSectionId && binding.port === port
+  ));
+  if (existing) return { ...existing };
+  return {
+    sectionId: normalizedSectionId,
+    port,
+    mode: normalizedSectionId === 'main' && port === 'Front' ? 'local' : 'route',
+    sourceSetId: DEFAULT_SOURCE_SET_ID,
+    fieldSetId: DEFAULT_FIELD_SET_ID
+  };
+}
+
+export function setLensSectionInputBinding(cfg: Configuration, next: LensSectionInputBinding): void {
+  normalizeLensSectionAnalysisInputs(cfg);
+  const normalized: LensSectionInputBinding = {
+    ...getLensSectionInputBinding(cfg, next.sectionId, next.port),
+    ...next,
+    sectionId: String(next.sectionId ?? '').trim() || 'main',
+    port: next.port === 'Back' ? 'Back' : 'Front'
+  };
+  cfg.lensSectionInputs = (cfg.lensSectionInputs ?? []).filter((binding) => !(
+    binding.sectionId === normalized.sectionId && binding.port === normalized.port
+  ));
+  cfg.lensSectionInputs.push(normalized);
+}
+
+export function resolveLensSectionAnalysisInput(
+  cfg: Configuration,
+  sectionId: string,
+  port: LensSectionPort
+): LensSectionInputBinding & { sourceRows: any[]; fieldRows: any[] } {
+  normalizeLensSectionAnalysisInputs(cfg);
+  const binding = getLensSectionInputBinding(cfg, sectionId, port);
+  const sourceSet = cfg.sourceSets?.find((set) => set.id === binding.sourceSetId) ?? cfg.sourceSets?.[0];
+  const fieldSet = cfg.fieldSets?.find((set) => set.id === binding.fieldSetId) ?? cfg.fieldSets?.[0];
+  return {
+    ...binding,
+    sourceRows: cloneRowsForAnalysisSet(sourceSet?.rows),
+    fieldRows: cloneRowsForAnalysisSet(fieldSet?.rows)
+  };
+}
+
+export function getActiveAnalysisSetId(kind: 'source' | 'field', cfg: Configuration): string {
+  normalizeLensSectionAnalysisInputs(cfg);
+  const prefix = kind === 'source' ? ACTIVE_SOURCE_SET_STORAGE_PREFIX : ACTIVE_FIELD_SET_STORAGE_PREFIX;
+  const fallback = kind === 'source' ? DEFAULT_SOURCE_SET_ID : DEFAULT_FIELD_SET_ID;
+  const sets = kind === 'source' ? cfg.sourceSets! : cfg.fieldSets!;
+  const stored = String(storageGetItem(`${prefix}${String(cfg.id)}`) ?? '').trim();
+  return sets.some((set) => set.id === stored) ? stored : fallback;
+}
+
+export function setActiveAnalysisSetId(kind: 'source' | 'field', cfg: Configuration, setId: string): void {
+  const prefix = kind === 'source' ? ACTIVE_SOURCE_SET_STORAGE_PREFIX : ACTIVE_FIELD_SET_STORAGE_PREFIX;
+  storageSetItem(`${prefix}${String(cfg.id)}`, String(setId));
+}
+
+export function persistRowsToActiveAnalysisSet(kind: 'source' | 'field', rows: any[]): void {
+  try {
+    const systemConfig = loadSystemConfigurations();
+    const cfg = systemConfig.configurations.find((entry) => idsEqual(entry?.id, systemConfig.activeConfigId));
+    if (!cfg) return;
+    normalizeLensSectionAnalysisInputs(cfg);
+    const activeSetId = getActiveAnalysisSetId(kind, cfg);
+    const sets = kind === 'source' ? cfg.sourceSets! : cfg.fieldSets!;
+    const target = sets.find((set) => set.id === activeSetId) ?? sets[0];
+    if (target) target.rows = cloneRowsForAnalysisSet(rows);
+    if (kind === 'source') cfg.source = cloneRowsForAnalysisSet(rows);
+    else cfg.object = cloneRowsForAnalysisSet(rows);
+    cfg.metadata.modified = new Date().toISOString();
+    saveSystemConfigurations(systemConfig);
+  } catch (_) {}
+}
+
 export interface Configuration {
   id: number | string;
   name: string;
@@ -417,6 +598,31 @@ export interface Configuration {
   activeScenarioId?: string | number;
   /** Port graph for physical assembly blocks stored in blocks[]. */
   designConnections?: DesignConnection[];
+  /** Saved, deterministic connection traversal order for Hybrid analyses. */
+  portRoutes?: PortRoute[];
+  /** Measurement/reference routes grouped by receiving detector. */
+  routeSets?: PortRouteSet[];
+  /** Named exact sequential sections addressable from the Hybrid port graph. */
+  sequentialGroups?: Array<{
+    id: string;
+    label: string;
+    blockIds: string[];
+    pathLabel?: string;
+    rootTransform?: {
+      positionMm: { x: number; y: number; z: number };
+      rotationDeg: { x: number; y: number; z: number };
+    };
+    rootTransformVariables?: Partial<Record<
+      'positionX' | 'positionY' | 'positionZ' | 'rotationX' | 'rotationY' | 'rotationZ',
+      { value?: number; optimize?: { mode?: 'F' | 'V'; min?: number; max?: number; scale?: number } }
+    >>;
+  }>;
+  /** Named wavelength tables selectable by Lens design launch profiles. */
+  sourceSets?: AnalysisSourceSet[];
+  /** Named object/field tables selectable by Lens design launch profiles. */
+  fieldSets?: AnalysisFieldSet[];
+  /** Front/Back launch behavior for standalone and port-routed section analysis. */
+  lensSectionInputs?: LensSectionInputBinding[];
   /** Legacy 0.1 assembly snapshot; migrated into blocks[] on load. */
   coherentDesign?: CoherentAssemblyDesign;
 }
@@ -594,6 +800,7 @@ export function saveSystemConfigurations(systemConfig: SystemConfiguration): voi
         normalizeImageSurfaceBlocksForConfiguration(cfg);
         normalizeFixedStopBlocksForConfiguration(cfg);
         interpolateExplicitApertureSemidiaForConfiguration(cfg);
+        normalizeLensSectionAnalysisInputs(cfg);
       }
     } catch (_) {}
     try {
@@ -750,11 +957,14 @@ export function saveCurrentToActiveConfiguration(options: SaveConfigurationOptio
   }
   
   // 各テーブルからデータを取得
-  // Source is global (shared across configurations).
-  // Persist it to the shared storage key, but do not store it per-config.
+  // Source/Field tables edit the currently selected named sets in this config.
+  normalizeLensSectionAnalysisInputs(activeConfig);
   try {
     const globalSource = w.tableSource ? w.tableSource.getData() : [];
     storageSetItem('sourceTableData', JSON.stringify(globalSource));
+    const activeSourceSet = activeConfig.sourceSets?.find((set) => set.id === getActiveAnalysisSetId('source', activeConfig));
+    if (activeSourceSet && Array.isArray(globalSource)) activeSourceSet.rows = cloneRowsForAnalysisSet(globalSource);
+    if (Array.isArray(globalSource)) activeConfig.source = cloneRowsForAnalysisSet(globalSource);
   } catch (_) {}
   
   // Do not wipe object rows when this window does not host the Object table
@@ -764,6 +974,8 @@ export function saveCurrentToActiveConfiguration(options: SaveConfigurationOptio
     : null;
   if (Array.isArray(objectDataFromTable)) {
     activeConfig.object = objectDataFromTable;
+    const activeFieldSet = activeConfig.fieldSets?.find((set) => set.id === getActiveAnalysisSetId('field', activeConfig));
+    if (activeFieldSet) activeFieldSet.rows = cloneRowsForAnalysisSet(objectDataFromTable);
   }
 
   // Expanded Optical System is derived from Blocks.
@@ -890,6 +1102,13 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
 
   // If the active config uses blocks, deterministically expand to legacy surface rows for UI/evaluation.
   const preferImportedOpticalRows = shouldPreferImportedOpticalRows(activeConfig);
+  normalizeLensSectionAnalysisInputs(activeConfig);
+  const activeSourceSet = activeConfig.sourceSets?.find((set) => set.id === getActiveAnalysisSetId('source', activeConfig))
+    ?? activeConfig.sourceSets?.[0];
+  const activeFieldSet = activeConfig.fieldSets?.find((set) => set.id === getActiveAnalysisSetId('field', activeConfig))
+    ?? activeConfig.fieldSets?.[0];
+  const activeSourceRows = cloneRowsForAnalysisSet(activeSourceSet?.rows ?? activeConfig.source);
+  const activeFieldRows = cloneRowsForAnalysisSet(activeFieldSet?.rows ?? activeConfig.object);
   let effectiveOpticalSystem = activeConfig.opticalSystem;
   if (configurationHasBlocks(activeConfig) && !preferImportedOpticalRows) {
     const normalizeIdsInPlace = (rows: any[]): void => {
@@ -1037,18 +1256,12 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
   }
   
   // 各テーブルのlocalStorageに書き込み
-  // Source is global. Do not override it on configuration switches.
-  // Back-compat: if global source is missing but this config has legacy source, seed it once.
+  // Project the currently edited named sets into the legacy Source/Field tables.
+  // Old configurations have one synthesized default set, so their behavior is unchanged.
   try {
-    const hasGlobal = !!storageGetItem('sourceTableData');
-    const legacy = Array.isArray(activeConfig.source) ? activeConfig.source : null;
-    if (!hasGlobal && legacy && legacy.length > 0) {
-      storageSetItem('sourceTableData', JSON.stringify(legacy));
-    }
+    storageSetItem('sourceTableData', JSON.stringify(activeSourceRows));
   } catch (_) {}
-  if (activeConfig.object) {
-    storageSetItem('objectTableData', JSON.stringify(activeConfig.object));
-  }
+  storageSetItem('objectTableData', JSON.stringify(activeFieldRows));
   if (effectiveOpticalSystem) {
     if (configurationHasBlocks(activeConfig) && !preferImportedOpticalRows) {
       // Blocks-only evaluation path should not persist Expanded Optical System rows.
@@ -1133,16 +1346,8 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
     };
 
     // Update tabulator tables if present
-    // Source is global; do not swap per config.
-    let globalSourceRows: any[] = [];
-    try {
-      const json = storageGetItem('sourceTableData');
-      const parsed = json ? JSON.parse(json) : null;
-      globalSourceRows = Array.isArray(parsed) ? parsed : [];
-    } catch (_) {}
-    
-    await applyTableData(w.tableSource, globalSourceRows);
-    await applyTableData(w.tableObject, activeConfig.object || []);
+    await applyTableData(w.tableSource, activeSourceRows);
+    await applyTableData(w.tableObject, activeFieldRows);
     await applyTableData(w.tableOpticalSystem, effectiveOpticalSystem || []);
 
     // Update system data input (reference focal length)
@@ -1176,6 +1381,12 @@ export function addConfiguration(name: string): number {
     newConfig.opticalSystem = JSON.parse(JSON.stringify(activeConfig.opticalSystem ?? []));
     newConfig.systemData = JSON.parse(JSON.stringify(activeConfig.systemData ?? { referenceFocalLength: '' }));
     newConfig.designConnections = JSON.parse(JSON.stringify(activeConfig.designConnections ?? []));
+    newConfig.sequentialGroups = JSON.parse(JSON.stringify(activeConfig.sequentialGroups ?? []));
+    newConfig.sourceSets = JSON.parse(JSON.stringify(activeConfig.sourceSets ?? []));
+    newConfig.fieldSets = JSON.parse(JSON.stringify(activeConfig.fieldSets ?? []));
+    newConfig.lensSectionInputs = JSON.parse(JSON.stringify(activeConfig.lensSectionInputs ?? []));
+    newConfig.portRoutes = JSON.parse(JSON.stringify(activeConfig.portRoutes ?? []));
+    newConfig.routeSets = JSON.parse(JSON.stringify(activeConfig.routeSets ?? []));
     if (activeConfig.coherentDesign) {
       newConfig.coherentDesign = JSON.parse(JSON.stringify(activeConfig.coherentDesign));
     }

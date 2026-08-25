@@ -220,6 +220,22 @@ export function trace_ray_batch_spot_metrics_with_meta(rays: Float64Array, ray_c
  */
 export function trace_ray_batch_with_system_json(ray_array_ptr: number, system_meta_json: string, row_count: number, n_start: number): any;
 
+/**
+ * Surface-by-surface companion for Render. Results are stored in traversal
+ * order as `[status, opl_um, x, y, z, dx, dy, dz]` for every ray and every
+ * saved row. The tracing physics is exactly the same as the final-state API.
+ */
+export function trace_sequential_group_path_with_rows_json(optical_rows_json: string, rays: Float64Array, ray_count: number, wavelength_um: number, n_start: number, entry_port: string, front_medium_index: number): Float64Array;
+
+/**
+ * Exact Sequential Group tracing for the Hybrid Port router.
+ *
+ * `entry_port` is `front` or `back`.  Back entry traverses the same packed
+ * physical surfaces in descending order; radii, conics and polynomial/Qcon/
+ * Toric coefficients are never sign-rewritten.
+ */
+export function trace_sequential_group_with_rows_json(optical_rows_json: string, rays: Float64Array, ray_count: number, wavelength_um: number, n_start: number, entry_port: string, front_medium_index: number): Float64Array;
+
 export function trace_single_ray_hit_point_with_meta(ray: Float64Array, target_surface_index: number, n_start: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): Float64Array;
 
 export function trace_spot_metric_jobs_cached(rays: Float64Array, ray_offsets: Uint32Array, ray_counts: Uint32Array, target_surface_indices: Uint32Array, n_starts: Float64Array, reference_xs: Float64Array, reference_ys: Float64Array, metadata_handles: Uint32Array, job_count: number): Float64Array;
@@ -324,6 +340,8 @@ export interface InitOutput {
     readonly trace_ray_batch_spot_metrics_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly trace_ray_batch_spot_metrics_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
     readonly trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+    readonly trace_sequential_group_path_with_rows_json: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly trace_sequential_group_with_rows_json: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly trace_single_ray_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];
     readonly trace_spot_metric_jobs_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number];
     readonly transform_point_to_global_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];

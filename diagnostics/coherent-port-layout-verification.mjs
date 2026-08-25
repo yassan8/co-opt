@@ -9,6 +9,8 @@ import {
   initializeCoherentPortConnections,
   patchConnectionLayout,
   reflowCoherentAssembly,
+  worldPortDirection,
+  worldPortPosition,
 } from '../analysis/coherent-port-layout.ts';
 import { evaluateOpticalPathClearance } from '../analysis/coherent-clearance.ts';
 
@@ -47,6 +49,14 @@ const baseVolume = evaluateCoherentAssembly(initialized).opticalVolumeMm3;
 const rotatedVolume = evaluateCoherentAssembly(rotatedObject).opticalVolumeMm3;
 close(rotatedVolume, baseVolume, 1e-6, 'fold angle changes placement but not component solid volume');
 assert.ok(Math.abs(position(rotatedObject, 'target-100').z - position(initialized, 'target-100').z) > 5, 'fold angle moves downstream arm in world Z');
+const rotatedFrom = rotatedObject.components.find((component) => component.id === objectConnection.fromComponentId);
+const rotatedTo = rotatedObject.components.find((component) => component.id === objectConnection.toComponentId);
+const fromPort = worldPortPosition(rotatedFrom, objectConnection.fromPortId, 'from');
+const toPort = worldPortPosition(rotatedTo, objectConnection.toPortId, 'to');
+const distance = Math.hypot(toPort.x - fromPort.x, toPort.y - fromPort.y, toPort.z - fromPort.z) || 1;
+const travel = { x: (toPort.x - fromPort.x) / distance, y: (toPort.y - fromPort.y) / distance, z: (toPort.z - fromPort.z) / distance };
+const inputNormal = worldPortDirection(rotatedTo, objectConnection.toPortId, 'to');
+close(travel.x * inputNormal.x + travel.y * inputNormal.y + travel.z * inputNormal.z, -1, 1e-9, 'auto-placed input face opposes the incoming optical path');
 
 assert.equal(evaluateOpticalPathClearance(initialized).length, 0, 'preset beam segments clear non-endpoint mechanical envelopes');
 const obstructed = structuredClone(initialized);

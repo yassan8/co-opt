@@ -48,12 +48,51 @@ export interface DesignConnection {
   distanceMm: number;
   azimuthDeg?: number;
   elevationDeg?: number;
+  /** Passive connections may be traversed in either direction by an explicit route. */
+  allowReverse?: boolean;
   autoPlace: boolean;
   pathLabel?: string;
+  /** Continuous route-layout variables use the same F/V convention as block variables. */
+  variables?: Partial<Record<'distanceMm' | 'azimuthDeg' | 'elevationDeg', {
+    value?: number;
+    optimize?: { mode?: 'F' | 'V'; min?: number; max?: number; scale?: number };
+  }>>;
   manualOffset?: {
     positionMm: { x: number; y: number; z: number };
     rotationDeg: { x: number; y: number; z: number };
   };
+}
+
+export type PortRouteTraversalDirection = 'forward' | 'reverse';
+
+export interface PortRouteStep {
+  connectionId: string;
+  direction: PortRouteTraversalDirection;
+  /** Route-specific port used when one physical link returns through another optical port. */
+  departurePortId?: string;
+  arrivalPortId?: string;
+}
+
+export interface PortRoute {
+  id: string;
+  label: string;
+  enabled?: boolean;
+  sourceBlockId?: string;
+  detectorBlockId?: string;
+  /** An explicit ordered list may reference the same connection more than once. */
+  steps: PortRouteStep[];
+  migratedFromPathLabel?: boolean;
+}
+
+export interface PortRouteSet {
+  id: string;
+  label: string;
+  detectorBlockId: string;
+  routeIds: string[];
+  measurementRouteId?: string;
+  referenceRouteId?: string;
+  /** Added to measurement OPL - reference OPL for calibrated interference. */
+  opdCalibrationMm?: number;
 }
 
 type LoadIssueSeverity = 'fatal' | 'warning' | 'info';
@@ -2227,9 +2266,17 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
 
     if (isPhysicalBlockType(blockType)) {
       const parameters = isPlainObject(block.parameters) ? block.parameters : {};
+      if (blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource') {
+        const legacySamples = Number(parameters.spatialSamples);
+        const detectorFallback = Number.isFinite(legacySamples) && legacySamples > 0 ? legacySamples : 81;
+        const renderSamples = Number(parameters.renderSpatialSamples);
+        const detectorSamples = Number(parameters.detectorSpatialSamples);
+        if (!Number.isFinite(renderSamples) || renderSamples <= 0) parameters.renderSpatialSamples = Math.min(9, detectorFallback);
+        if (!Number.isFinite(detectorSamples) || detectorSamples <= 0) parameters.detectorSpatialSamples = detectorFallback;
+      }
       const positiveKeysByType: Partial<Record<PhysicalBlockType, string[]>> = {
-        BroadbandSource: ['centerWavelengthNm', 'totalPowerW', 'beamDiameterMm'],
-        FrequencyCombSource: ['centerWavelengthNm', 'repetitionRateHz', 'totalPowerW', 'beamDiameterMm'],
+        BroadbandSource: ['centerWavelengthNm', 'totalPowerW', 'beamDiameterMm', 'renderSpatialSamples', 'detectorSpatialSamples'],
+        FrequencyCombSource: ['centerWavelengthNm', 'repetitionRateHz', 'totalPowerW', 'beamDiameterMm', 'renderSpatialSamples', 'detectorSpatialSamples'],
         BeamSplitter: ['widthMm', 'heightMm', 'depthMm'],
         FoldMirror: ['widthMm', 'heightMm', 'depthMm'],
         NDFilter: ['widthMm', 'heightMm', 'depthMm'],
@@ -2456,15 +2503,19 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
       const needsDerivedRadii = isThinLens && (!hasFrontRadius || !hasBackRadius);
 
       if (needsDerivedRadii) {
-        const focalBase = focalLengthY ?? focalLength ?? focalLengthX;
-        if (focalBase === undefined || String(focalBase ?? '').trim() === '') {
+        const focalInputs = [
+          ['focalLengthX', focalLengthX],
+          ['focalLengthY', focalLengthY],
+          ['focalLength', focalLength],
+        ].filter(([, value]) => value !== undefined && String(value ?? '').trim() !== '');
+        if (focalInputs.length === 0) {
           issues.push({ severity: 'fatal', phase: 'validate', message: 'ThinLens.focalLengthX or ThinLens.focalLengthY is required when radii are not given.', blockId: block.blockId });
         } else {
-          const f = normalizeThicknessToRowValue(focalBase);
-          if (typeof f !== 'number' && f !== 'INF') {
-            issues.push({ severity: 'fatal', phase: 'validate', message: `ThinLens focal length must be numeric or INF (got: ${String(focalBase)})`, blockId: block.blockId });
-          } else if (typeof f === 'number' && Math.abs(f) < 1e-12) {
-            issues.push({ severity: 'fatal', phase: 'validate', message: 'ThinLens focal length must be non-zero.', blockId: block.blockId });
+          for (const [axis, rawValue] of focalInputs) {
+            const f = normalizeThicknessToRowValue(rawValue);
+            if (typeof f !== 'number' && f !== 'INF') {
+              issues.push({ severity: 'fatal', phase: 'validate', message: `ThinLens ${axis} must be numeric or INF (got: ${String(rawValue)})`, blockId: block.blockId });
+            }
           }
         }
       }

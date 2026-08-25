@@ -1578,9 +1578,9 @@ function formatNumberList(values: number[]): string {
 function buildLiteratureSummary(sourceUrl: string, result: LiteratureExtractResult): string {
   const lines: string[] = [];
   const asphereRowCount = countCandidateRowsWithPatentAsphereMarkers(result.candidateTableRows);
-  lines.push('[Patent Literature Import Draft]');
+  lines.push('[Optical Prescription Import Draft]');
   lines.push(`Source URL: ${sourceUrl.trim() || (result.sourceUrls[0] || 'n/a')}`);
-  lines.push(`Patent IDs: ${result.patentIds.length > 0 ? result.patentIds.join(', ') : 'n/a'}`);
+  lines.push(`Document IDs: ${result.patentIds.length > 0 ? result.patentIds.join(', ') : 'n/a'}`);
   lines.push('');
   lines.push('[Detected Spec Candidates]');
   lines.push(`Focal length(s): ${formatNumberList(result.focalLengths)}`);
@@ -2226,14 +2226,14 @@ async function applyDraftToWorkspace(rows: Array<Record<string, any>>, systemDat
           const newId = maxId + 1;
           const importedConfig = JSON.parse(JSON.stringify(activeConfig));
           importedConfig.id = newId;
-          importedConfig.name = `${String(activeConfig.name || 'Config')} (Patent Import)`;
+          importedConfig.name = `${String(activeConfig.name || 'Config')} (Prescription Import)`;
           importedConfig.metadata = {
             ...(importedConfig.metadata || {}),
             created: nowIso,
             modified: nowIso,
             designer: {
               type: 'imported',
-              name: 'patent-import',
+              name: 'prescription-import',
               confidence: null,
             },
           };
@@ -2331,7 +2331,7 @@ export function LiteratureImportPanel() {
   const [rawText, setRawText] = useState('');
   const [summary, setSummary] = useState('');
   const [draftPreview, setDraftPreview] = useState('');
-  const [status, setStatus] = useState('Select a patent PDF, then extract its lens prescription.');
+  const [status, setStatus] = useState('Select a source PDF, then extract its optical prescription.');
   const [result, setResult] = useState<LiteratureExtractResult | null>(null);
   const [selectedEmbodiment, setSelectedEmbodiment] = useState('all');
   const [selectedZoom, setSelectedZoom] = useState('all');
@@ -2406,14 +2406,14 @@ export function LiteratureImportPanel() {
     setSelectedEmbodiment(value);
     if (!result) return;
     const draft = await rebuildDraft(result, value, selectedZoom, summary);
-    setStatus(`Updated patent selection. ${countPatentDraftSurfaceRows(draft.rows)} surface row(s) are ready.`);
+    setStatus(`Updated prescription selection. ${countPatentDraftSurfaceRows(draft.rows)} surface row(s) are ready.`);
   };
 
   const handleZoomChange = async (value: string) => {
     setSelectedZoom(value);
     if (!result) return;
     const draft = await rebuildDraft(result, selectedEmbodiment, value, summary);
-    setStatus(`Updated patent selection. ${countPatentDraftSurfaceRows(draft.rows)} surface row(s) are ready.`);
+    setStatus(`Updated prescription selection. ${countPatentDraftSurfaceRows(draft.rows)} surface row(s) are ready.`);
   };
 
   const handleRunOcr = async (mode: 'replace' | 'append' = 'append') => {
@@ -2465,7 +2465,7 @@ export function LiteratureImportPanel() {
       setStatus(`Loaded ${loaded.sourceKind.toUpperCase()} text (${loaded.text.length.toLocaleString()} chars). Run Extract Candidate Data next.`);
     } catch (error) {
       const message = String((error as any)?.message || error || 'Unknown error');
-      setStatus(`URL load failed: ${message}. Many patent sites block browser fetch by CORS. Download the PDF and choose it with Select patent PDF instead.`);
+      setStatus(`URL load failed: ${message}. Some document sites block browser fetch by CORS. Download the PDF and choose it with Select source PDF instead.`);
     } finally {
       setIsLoadingUrl(false);
     }
@@ -2601,8 +2601,8 @@ export function LiteratureImportPanel() {
     const applied = await applyDraftToWorkspace(draft.rows, draft.summaryText, 'new');
     setStatus(
       applied.saved
-        ? `Patent optical system rows applied as a new Design Intent configuration (${draft.surfaceCount} surface row(s), ${applied.blockCount} block(s)).`
-        : 'Patent optical system rows were parsed, but the new Design Intent configuration could not be saved.'
+        ? `Optical prescription rows applied as a new Design Intent configuration (${draft.surfaceCount} surface row(s), ${applied.blockCount} block(s)).`
+        : 'Optical prescription rows were parsed, but the new Design Intent configuration could not be saved.'
     );
   };
 
@@ -2621,8 +2621,8 @@ export function LiteratureImportPanel() {
       <div className="literature-import-panel">
         <div className="literature-import-panel__header">
           <div>
-            <h3>Patent Prescription Import</h3>
-            <p>Read an optical prescription from a patent PDF, verify the detected surface rows, and import an editable configuration.</p>
+            <h3>Optical Prescription Import</h3>
+            <p>Read an optical prescription from a source PDF, verify the detected surface rows, and import an editable configuration.</p>
           </div>
         </div>
 
@@ -2632,7 +2632,7 @@ export function LiteratureImportPanel() {
           <div className="literature-import-panel__stepHeader">
             <span className="literature-import-panel__stepNumber">1</span>
             <div>
-              <h4>Choose the patent source</h4>
+              <h4>Choose the source document</h4>
               <p>PDF text is read locally. Scanned PDFs can be processed with OCR.</p>
             </div>
           </div>
@@ -2640,7 +2640,7 @@ export function LiteratureImportPanel() {
           <div className="literature-import-panel__actions">
             <label className="literature-import-panel__fileButton">
               <input type="file" accept="application/pdf,.pdf" onChange={handlePdfInputChange} />
-              <span>{isLoadingPdf ? 'Reading PDF…' : 'Select patent PDF'}</span>
+              <span>{isLoadingPdf ? 'Reading PDF…' : 'Select source PDF'}</span>
             </label>
             <button type="button" onClick={() => void handleRunOcr('append')} disabled={isRunningOcr || !sourcePdfBlob}>
               {isRunningOcr ? 'Running OCR…' : 'Run OCR'}
@@ -2664,7 +2664,7 @@ export function LiteratureImportPanel() {
                   onChange={(event) => setRawText(event.target.value)}
                   onPaste={handleRawTextPaste}
                   rows={7}
-                  placeholder="Paste patent table text or OCR output here…"
+                  placeholder="Paste prescription table text or OCR output here…"
                 />
               </label>
             </div>

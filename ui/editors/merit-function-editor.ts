@@ -42,6 +42,8 @@ import { generateCrossBeam } from '../../raytracing/generation/gen-ray-cross-fin
 import { generateInfiniteSystemCrossBeam } from '../../raytracing/generation/gen-ray-cross-infinite.ts';
 import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.ts';
 import { loadSystemConfigurations } from '../../data/table-configuration.ts';
+import type { Configuration } from '../../data/table-configuration.ts';
+import { runPortRoutedTrace, type PortRouteMetrics } from '../../analysis/port-routed-trace.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../../data/table-optical-system.ts';
 import { loadTableData as loadMeritFunctionTableData, saveTableData as saveMeritFunctionTableData } from '../../data/table-merit-function.ts';
 import { loadLastSpotSettings } from '../spot-diagram-settings-storage.ts';
@@ -2592,6 +2594,18 @@ class MeritFunctionEditor {
             return Number.isFinite(syncNum) ? syncNum : 1e9;
         };
         switch (operand.operand) {
+            case 'ROUTE_OPL':
+            case 'ROUTE_OPD':
+            case 'ROUTE_CX':
+            case 'ROUTE_CY':
+            case 'ROUTE_POWER':
+            case 'ROUTE_SPOT':
+            case 'ROUTE_PSF_RMS':
+            case 'ROUTE_WFE':
+            case 'ROUTE_STREHL':
+            case 'ROUTE_MTF':
+            case 'ROUTE_VIS':
+                return this.calculatePortRouteOperandAsync(operand);
             case 'TOT3_SPH':
             case 'TOT3_COMA':
             case 'TOT3_ASTI':
@@ -2707,6 +2721,123 @@ class MeritFunctionEditor {
             default:
                 return this.calculateOperandValue(operand);
         }
+    }
+
+    getPortRouteConfiguration(configId: any): Configuration | null {
+        const system = tryLoadSystemConfigurations();
+        const configurations = Array.isArray(system?.configurations) ? system.configurations : [];
+        const hint = String(configId ?? system?.activeConfigId ?? '').trim();
+        const source = configurations.find((entry: any) => String(entry?.id) === hint)
+            ?? configurations.find((entry: any) => String(entry?.name ?? '').trim() === hint)
+            ?? configurations.find((entry: any) => String(entry?.id) === String(system?.activeConfigId ?? ''))
+            ?? configurations[0];
+        if (!source) return null;
+        const config = cloneJson(source) as Configuration;
+        const key = String(config.id);
+        const blocksOverride = (typeof window !== 'undefined' ? (window as any).__cooptBlocksOverride : null)?.[key];
+        if (Array.isArray(blocksOverride)) config.blocks = cloneJson(blocksOverride);
+        const assemblyOverride = (typeof window !== 'undefined' ? (window as any).__cooptAssemblyOverride : null)?.[key];
+        if (assemblyOverride && typeof assemblyOverride === 'object') {
+            config.designConnections = cloneJson(assemblyOverride.designConnections ?? config.designConnections ?? []);
+            config.sequentialGroups = cloneJson(assemblyOverride.sequentialGroups ?? config.sequentialGroups ?? []);
+            config.portRoutes = cloneJson(assemblyOverride.portRoutes ?? config.portRoutes ?? []);
+            config.routeSets = cloneJson(assemblyOverride.routeSets ?? config.routeSets ?? []);
+        }
+        return config;
+    }
+
+    portRouteMetricValue(operand: any, metrics: PortRouteMetrics[], config: Configuration): number {
+        const type = String(operand?.operand ?? '').trim().toUpperCase();
+        const selectedId = String(operand?.param1 ?? '').trim();
+        if (type === 'ROUTE_OPD' || type === 'ROUTE_VIS') {
+            const routeSet = (config.routeSets ?? []).find((entry) => String(entry.id) === selectedId);
+            if (!routeSet) return 1e9;
+            const measurement = metrics.find((entry) => entry.routeId === routeSet.measurementRouteId);
+            const reference = metrics.find((entry) => entry.routeId === routeSet.referenceRouteId);
+            if (!measurement?.valid || !reference?.valid || measurement.detectorId !== reference.detectorId) return 1e9;
+            if (type === 'ROUTE_OPD') return measurement.oplMm - reference.oplMm;
+            const sum = measurement.receivedPowerW + reference.receivedPowerW;
+            return sum > 0 ? 2 * Math.sqrt(measurement.receivedPowerW * reference.receivedPowerW) / sum : 1e9;
+        }
+        const metric = metrics.find((entry) => entry.routeId === selectedId);
+        if (!metric?.valid) return 1e9;
+        if (type === 'ROUTE_OPL') return metric.oplMm;
+        if (type === 'ROUTE_CX') return metric.centroidXmm;
+        if (type === 'ROUTE_CY') return metric.centroidYmm;
+        if (type === 'ROUTE_POWER') return metric.receivedPowerW;
+        if (type === 'ROUTE_SPOT') return metric.spotRmsMm;
+        if (type === 'ROUTE_PSF_RMS') return metric.spotRmsMm * 1000;
+        if (type === 'ROUTE_WFE') return metric.wavefrontRmsUm;
+        if (type === 'ROUTE_STREHL') return metric.strehl;
+        if (type === 'ROUTE_MTF') return metric.mtf;
+        return 1e9;
+    }
+
+    async calculatePortRouteOperandsBatchAsync(operands: any[]): Promise<number[]> {
+        const rows = Array.isArray(operands) ? operands : [];
+        if (rows.length === 0) return [];
+        const config = this.getPortRouteConfiguration(rows[0]?.configId);
+        if (!config) return rows.map(() => 1e9);
+        const values = rows.map(() => 1e9);
+        const groups = new Map<string, Array<{ operand: any; index: number }>>();
+        rows.forEach((operand, index) => {
+            const type = String(operand?.operand ?? '').trim().toUpperCase();
+            const frequency = type === 'ROUTE_MTF' ? Math.max(0, Number(operand?.param2) || 0) : 0;
+            const axis = String(operand?.param3 ?? 'A').trim().toUpperCase();
+            const orientation = axis.startsWith('T') ? 'tangential' : axis.startsWith('S') ? 'sagittal' : 'average';
+            const spatialSamples = Math.max(1, Math.min(1024, Math.round(Number(operand?.param4) || 25)));
+            const spectralSamples = Math.max(1, Math.min(129, Math.round(Number(operand?.param5) || 1)));
+            const fieldIndex = Math.max(0, Math.round(Number(operand?.routeFieldIndex) || 0));
+            const spectralLineIndex = String(operand?.routeSpectrumIndex ?? '').trim() === ''
+                ? undefined
+                : Math.max(0, Math.round(Number(operand?.routeSpectrumIndex) || 0));
+            const key = `${spatialSamples}|${spectralSamples}|${frequency}|${orientation}|${fieldIndex}|${spectralLineIndex ?? 'all'}`;
+            const group = groups.get(key) ?? [];
+            group.push({ operand, index });
+            groups.set(key, group);
+        });
+        for (const group of groups.values()) {
+            const routeIds = new Set<string>();
+            for (const { operand } of group) {
+                const type = String(operand?.operand ?? '').trim().toUpperCase();
+                const selectedId = String(operand?.param1 ?? '').trim();
+                if (type === 'ROUTE_OPD' || type === 'ROUTE_VIS') {
+                    const set = (config.routeSets ?? []).find((entry) => String(entry.id) === selectedId);
+                    if (set?.measurementRouteId) routeIds.add(String(set.measurementRouteId));
+                    if (set?.referenceRouteId) routeIds.add(String(set.referenceRouteId));
+                } else if (selectedId) routeIds.add(selectedId);
+            }
+            if (routeIds.size === 0) continue;
+            const first = group[0].operand;
+            const type = String(first?.operand ?? '').trim().toUpperCase();
+            const axis = String(first?.param3 ?? 'A').trim().toUpperCase();
+            const objectRows = Array.isArray((config as any).object) ? (config as any).object : [];
+            const fieldIndex = Math.max(0, Math.min(Math.max(0, objectRows.length - 1), Math.round(Number(first?.routeFieldIndex) || 0)));
+            const spectralLineIndex = String(first?.routeSpectrumIndex ?? '').trim() === ''
+                ? undefined
+                : Math.max(0, Math.round(Number(first?.routeSpectrumIndex) || 0));
+            try {
+                const result = await runPortRoutedTrace(config, {
+                    routeIds: Array.from(routeIds),
+                    spatialSamples: Math.max(1, Math.min(1024, Math.round(Number(first?.param4) || 25))),
+                    spectralSamples: Math.max(1, Math.min(129, Math.round(Number(first?.param5) || 1))),
+                    fieldObjectRow: objectRows[fieldIndex] ? cloneJson(objectRows[fieldIndex]) : undefined,
+                    spectralLineIndex,
+                    renderRayLimit: 0,
+                    mtfFrequencyLpMm: type === 'ROUTE_MTF' ? Math.max(0, Number(first?.param2) || 0) : 0,
+                    mtfOrientation: axis.startsWith('T') ? 'tangential' : axis.startsWith('S') ? 'sagittal' : 'average',
+                });
+                for (const entry of group) values[entry.index] = this.portRouteMetricValue(entry.operand, result.routeMetrics, config);
+            } catch (error) {
+                if (shouldEmitOptimizationWarning('port-route-operand')) console.warn('[Route Operand] Trace failed:', error);
+            }
+        }
+        return values;
+    }
+
+    async calculatePortRouteOperandAsync(operand: any): Promise<number> {
+        const [value] = await this.calculatePortRouteOperandsBatchAsync([operand]);
+        return Number.isFinite(value) ? value : 1e9;
     }
 
     async calculateDistortionAtMaxFieldAsync(operand: any, opticalSystemData: any[]): Promise<number> {

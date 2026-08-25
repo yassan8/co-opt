@@ -16,7 +16,14 @@
  */
 
 import { expandBlocksIntoConfiguration, expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
-import { listDesignVariablesFromBlocks, setDesignVariableValue } from './design-variables.ts';
+import {
+  getAssemblyDesignVariableValue,
+  getAssemblyVariableEntry,
+  listAssemblyDesignVariables,
+  listDesignVariablesFromBlocks,
+  setAssemblyDesignVariableValue,
+  setDesignVariableValue,
+} from './design-variables.ts';
 import { findSimilarGlassesByNdVd, getGlassDataWithSellmeier } from '../data/glass.ts';
 import { loadSystemConfigurations, saveSystemConfigurations } from '../data/table-configuration.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
@@ -637,6 +644,17 @@ function hasAsyncPreferredRequirementOperands(requirementRows = []) {
     'MTFT',
     'MTFS',
     'MTFA',
+    'ROUTE_OPL',
+    'ROUTE_OPD',
+    'ROUTE_CX',
+    'ROUTE_CY',
+    'ROUTE_POWER',
+    'ROUTE_SPOT',
+    'ROUTE_PSF_RMS',
+    'ROUTE_WFE',
+    'ROUTE_STREHL',
+    'ROUTE_MTF',
+    'ROUTE_VIS',
   ]);
   for (const row of Array.isArray(requirementRows) ? requirementRows : []) {
     if (!row || typeof row !== 'object') continue;
@@ -688,7 +706,9 @@ function optimizerOperandCacheKey(item) {
     String(requirement?.param2 ?? ''),
     String(requirement?.param3 ?? ''),
     String(requirement?.param4 ?? ''),
-    String(requirement?.param5 ?? '')
+    String(requirement?.param5 ?? ''),
+    String(requirement?.routeFieldIndex ?? ''),
+    String(requirement?.routeSpectrumIndex ?? '')
   ].join('|');
 }
 
@@ -762,6 +782,17 @@ async function prefetchOptimizerAsyncRequirementGroups(editor, items, operandVal
     'LA_RMS_UM',
     'SA',
     'ZERN_COEFF',
+    'ROUTE_OPL',
+    'ROUTE_OPD',
+    'ROUTE_CX',
+    'ROUTE_CY',
+    'ROUTE_POWER',
+    'ROUTE_SPOT',
+    'ROUTE_PSF_RMS',
+    'ROUTE_WFE',
+    'ROUTE_STREHL',
+    'ROUTE_MTF',
+    'ROUTE_VIS',
   ]);
   const groups = new Map<string, Array<any>>();
   const taGroups = new Map<string, Array<any>>();
@@ -786,6 +817,8 @@ async function prefetchOptimizerAsyncRequirementGroups(editor, items, operandVal
         param3: requirement.param3,
         param4: requirement.param4,
         param5: requirement.param5,
+        routeFieldIndex: requirement.routeFieldIndex,
+        routeSpectrumIndex: requirement.routeSpectrumIndex,
         target: requirement.target,
         weight: requirement.weight,
       },
@@ -842,6 +875,33 @@ async function prefetchOptimizerAsyncRequirementGroups(editor, items, operandVal
         } catch (_) {
           prefetchFailures += taEntries.length;
           bumpOptimizerProfileCount('kktTaBatchPrefetchFailures', 1);
+        }
+      }
+
+      const routeOperandNames = new Set(['ROUTE_OPL', 'ROUTE_OPD', 'ROUTE_CX', 'ROUTE_CY', 'ROUTE_POWER', 'ROUTE_SPOT', 'ROUTE_PSF_RMS', 'ROUTE_WFE', 'ROUTE_STREHL', 'ROUTE_MTF', 'ROUTE_VIS']);
+      const routeEntriesBySampling = new Map<string, Array<any>>();
+      for (const entry of entries) {
+        if (!routeOperandNames.has(String(entry?.opObj?.operand ?? '').trim().toUpperCase())) continue;
+        const samplingKey = `${String(entry?.opObj?.param4 ?? '')}|${String(entry?.opObj?.param5 ?? '')}|${String(entry?.opObj?.routeFieldIndex ?? '')}|${String(entry?.opObj?.routeSpectrumIndex ?? '')}`;
+        if (!routeEntriesBySampling.has(samplingKey)) routeEntriesBySampling.set(samplingKey, []);
+        routeEntriesBySampling.get(samplingKey)?.push(entry);
+      }
+      if (typeof editor.calculatePortRouteOperandsBatchAsync === 'function') {
+        for (const routeEntries of routeEntriesBySampling.values()) {
+          try {
+            const routeValues = await editor.calculatePortRouteOperandsBatchAsync(routeEntries.map((entry) => entry.opObj));
+            if (!Array.isArray(routeValues) || routeValues.length !== routeEntries.length) continue;
+            for (let index = 0; index < routeEntries.length; index++) {
+              const value = Number(routeValues[index]);
+              if (!Number.isFinite(value)) continue;
+              operandValueCache.set(routeEntries[index].cacheKey, value);
+              prefetchedValues += 1;
+            }
+            bumpOptimizerProfileCount('portRouteBatchPrefetchCalls', 1);
+          } catch (_) {
+            prefetchFailures += routeEntries.length;
+            bumpOptimizerProfileCount('portRouteBatchPrefetchFailures', 1);
+          }
         }
       }
 
@@ -3339,7 +3399,10 @@ function coerceInfiniteRadiusVariableValue(key, rawValue) {
 }
 
 function getNumericVariables(activeCfg) {
-  const all = listDesignVariablesFromBlocks(activeCfg);
+  const all = [
+    ...listDesignVariablesFromBlocks(activeCfg),
+    ...listAssemblyDesignVariables(activeCfg),
+  ];
   const coerceBlankToZero = (v) => {
     if (!v || typeof v !== 'object') return v;
     if (typeof v.value === 'number' && Number.isFinite(v.value)) return v;
@@ -3391,6 +3454,7 @@ function getNumericVariables(activeCfg) {
 function parseJointVariableId(variableId) {
   const s = String(variableId ?? '').trim();
   if (!s) return { configId: null, baseId: '' };
+  if (/^(connection|group):/.test(s)) return { configId: null, baseId: s };
   const idx = s.indexOf(':');
   if (idx > 0) {
     const configId = s.slice(0, idx).trim();
@@ -3410,6 +3474,44 @@ function snapshotBlocksByConfigId(blocksByConfigId) {
     }
   }
   return out;
+}
+
+function setAssemblyOverrideGlobal(value) {
+  try {
+    if (typeof window === 'undefined') return;
+    if (value !== undefined) {
+      (window as any).__cooptAssemblyOverride = value;
+      return;
+    }
+    try { delete (window as any).__cooptAssemblyOverride; } catch (_) {}
+  } catch (_) {
+    // ignore
+  }
+}
+
+function snapshotAssemblyByConfigId(assemblyByConfigId) {
+  const out = {};
+  for (const [key, value] of Object.entries(assemblyByConfigId || {})) {
+    try {
+      out[String(key)] = JSON.parse(JSON.stringify(value));
+    } catch {
+      out[String(key)] = null;
+    }
+  }
+  return out;
+}
+
+function restoreAssemblyByConfigId(assemblyByConfigId, snapshot) {
+  if (!assemblyByConfigId || typeof assemblyByConfigId !== 'object' || !snapshot || typeof snapshot !== 'object') return false;
+  try {
+    for (const [key, value] of Object.entries(snapshot)) {
+      if (!Object.prototype.hasOwnProperty.call(assemblyByConfigId, key)) continue;
+      assemblyByConfigId[key] = JSON.parse(JSON.stringify(value));
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function restoreBlocksByConfigId(blocksByConfigId, snapshot) {
@@ -3477,7 +3579,7 @@ function preserveBlockVariableMetadata(originalBlocks, nextBlocks) {
   return nextBlocks;
 }
 
-function persistBlocksByConfigIdToSystemConfig({ systemConfig, configsById, targetConfigIds, blocksByConfigId }) {
+function persistBlocksByConfigIdToSystemConfig({ systemConfig, configsById, targetConfigIds, blocksByConfigId, assemblyByConfigId }) {
   try {
     const ids = Array.isArray(targetConfigIds) ? targetConfigIds.map(id => String(id)) : [];
     for (const cid of ids) {
@@ -3497,6 +3599,14 @@ function persistBlocksByConfigIdToSystemConfig({ systemConfig, configsById, targ
       cfg.blocks = Array.isArray(persistedBlocks)
         ? persistedBlocks
         : JSON.parse(JSON.stringify(blocks));
+      const assembly = assemblyByConfigId ? assemblyByConfigId[String(cid)] : null;
+      if (assembly && typeof assembly === 'object') {
+        cfg.designConnections = JSON.parse(JSON.stringify(assembly.designConnections ?? []));
+        cfg.sequentialGroups = JSON.parse(JSON.stringify(assembly.sequentialGroups ?? []));
+        cfg.portRoutes = JSON.parse(JSON.stringify(assembly.portRoutes ?? []));
+        cfg.routeSets = JSON.parse(JSON.stringify(assembly.routeSets ?? []));
+      }
+
       updateExpandedOpticalSystemInConfig(cfg);
       syncDerivedSystemDataFromOpticalSystem(cfg);
     }
@@ -3549,6 +3659,9 @@ function restoreBestSnapshotAndPersist({
     const restoredBlocksByConfigId = snapshotBlocksByConfigId(finalEval.blocksSnapshot);
     const okRestore = restoreBlocksByConfigId(jointState?.blocksByConfigId, restoredBlocksByConfigId);
     if (!okRestore) return false;
+    if (finalEval.assemblySnapshot) {
+      restoreAssemblyByConfigId(jointState?.assemblyByConfigId, finalEval.assemblySnapshot);
+    }
 
     // Keep the active-config evaluator consistent with the restored blocks.
     try {
@@ -3564,6 +3677,7 @@ function restoreBestSnapshotAndPersist({
       configsById,
       targetConfigIds,
       blocksByConfigId: restoredBlocksByConfigId,
+      assemblyByConfigId: jointState?.assemblyByConfigId,
       baselineBlocksByConfigId: jointState?.baselineBlocksByConfigId
     });
   } catch {
@@ -3616,6 +3730,9 @@ function getScopeFromVariableEntry(entry) {
 }
 
 function getVariableEntryById(config, variableId) {
+  if (/^(connection|group):/.test(String(variableId ?? '').trim())) {
+    return getAssemblyVariableEntry(config, variableId);
+  }
   if (!config || !Array.isArray(config.blocks)) return null;
   const id = String(variableId ?? '').trim();
   const dot = id.indexOf('.');
@@ -3733,6 +3850,9 @@ function getCurrentDesignValueFromBlocks(blocks, baseId) {
 }
 
 function getCurrentDesignValueByVariableId(config, variableId) {
+  if (/^(connection|group):/.test(String(variableId ?? '').trim())) {
+    return getAssemblyDesignVariableValue(config, variableId);
+  }
   if (!config || !Array.isArray(config.blocks)) return '';
   const id = String(variableId ?? '').trim();
   const dot = id.indexOf('.');
@@ -3912,6 +4032,7 @@ function coerceBlankAsphereToZero(v) {
 function enumerateJointVariables({
   targetConfigIds,
   blocksByConfigId,
+  assemblyByConfigId,
   activeConfigId
 }) {
   const ids = Array.isArray(targetConfigIds) ? targetConfigIds.map(id => String(id)) : [];
@@ -3933,8 +4054,8 @@ function enumerateJointVariables({
       errors.push(`Config ${cfgId} has no blocks.`);
       continue;
     }
-    const cfgView = { blocks };
-    const all = listDesignVariablesFromBlocks(cfgView);
+    const cfgView = { ...(assemblyByConfigId?.[cfgId] ?? {}), blocks };
+    const all = [...listDesignVariablesFromBlocks(cfgView), ...listAssemblyDesignVariables(cfgView)];
     for (const v0 of all) {
       const entry = getVariableEntryById(cfgView, v0.id);
       const scope = getScopeFromVariableEntry(entry);
@@ -4004,7 +4125,7 @@ function updateActiveOpticalSystemOverrideFromBlocks(activeBlocks) {
     } catch (_) {}
   }
 }
-function setJointDesignVariableValue({ blocksByConfigId, targetConfigIds, activeConfigId }, jointVariableId, newValue) {
+function setJointDesignVariableValue({ blocksByConfigId, assemblyByConfigId, targetConfigIds, activeConfigId }, jointVariableId, newValue) {
   const { configId, baseId } = parseJointVariableId(jointVariableId);
   const activeId = String(activeConfigId ?? '').trim();
   const ids = Array.isArray(targetConfigIds) ? targetConfigIds.map(id => String(id)) : [];
@@ -4043,9 +4164,21 @@ function setJointDesignVariableValue({ blocksByConfigId, targetConfigIds, active
   for (const cid of applyTo) {
     const blocks = blocksByConfigId ? blocksByConfigId[cid] : null;
     if (!Array.isArray(blocks)) continue;
-    const cfgView = { blocks };
-    const v2 = clampValueIfNeeded(blocks, newValue);
-    const ok = setDesignVariableValue(cfgView, baseId, v2);
+    const cfgView = { ...(assemblyByConfigId?.[cid] ?? {}), blocks };
+    const entry = /^(connection|group):/.test(baseId)
+      ? getAssemblyVariableEntry(cfgView, baseId)
+      : getVariableEntryFromBlocks(blocks, baseId);
+    const v2 = (() => {
+      const n = (typeof newValue === 'number') ? newValue : Number(newValue);
+      if (!Number.isFinite(n)) return newValue;
+      const opt = (entry && typeof entry === 'object') ? entry.optimize : null;
+      const lo = Number.isFinite(Number(opt?.min)) ? Number(opt.min) : -Infinity;
+      const hi = Number.isFinite(Number(opt?.max)) ? Number(opt.max) : Infinity;
+      return Math.max(lo, Math.min(hi, n));
+    })();
+    const ok = /^(connection|group):/.test(baseId)
+      ? setAssemblyDesignVariableValue(cfgView, baseId, v2)
+      : setDesignVariableValue(cfgView, baseId, clampValueIfNeeded(blocks, v2));
 
     if (ok) okAny = true;
     if (cid === activeId) {
@@ -4055,20 +4188,24 @@ function setJointDesignVariableValue({ blocksByConfigId, targetConfigIds, active
   return okAny;
 }
 
-function getJointCurrentValue({ blocksByConfigId, activeConfigId }, jointVariableId) {
+function getJointCurrentValue({ blocksByConfigId, assemblyByConfigId, activeConfigId }, jointVariableId) {
   const { configId, baseId } = parseJointVariableId(jointVariableId);
   const activeId = String(activeConfigId ?? '').trim();
   const cid = configId ? String(configId) : activeId;
   const blocks = blocksByConfigId ? blocksByConfigId[cid] : null;
-  return getCurrentDesignValueFromBlocks(blocks, baseId);
+  return /^(connection|group):/.test(baseId)
+    ? getAssemblyDesignVariableValue({ ...(assemblyByConfigId?.[cid] ?? {}), blocks }, baseId)
+    : getCurrentDesignValueFromBlocks(blocks, baseId);
 }
 
-function getJointVariableEntry({ blocksByConfigId, activeConfigId }, jointVariableId) {
+function getJointVariableEntry({ blocksByConfigId, assemblyByConfigId, activeConfigId }, jointVariableId) {
   const { configId, baseId } = parseJointVariableId(jointVariableId);
   const activeId = String(activeConfigId ?? '').trim();
   const cid = configId ? String(configId) : activeId;
   const blocks = blocksByConfigId ? blocksByConfigId[cid] : null;
-  return getVariableEntryFromBlocks(blocks, baseId);
+  return /^(connection|group):/.test(baseId)
+    ? getAssemblyVariableEntry({ ...(assemblyByConfigId?.[cid] ?? {}), blocks }, baseId)
+    : getVariableEntryFromBlocks(blocks, baseId);
 }
 
 function getMaterialCandidatesForVar(activeCfg, variableId, currentValue) {
@@ -7181,12 +7318,21 @@ export async function runOptimizationMVP(options = {}) {
   // Non-persistent override map so Merit evaluation can see in-flight block edits.
   /** @type {Record<string, any[]>} */
   const blocksByConfigId = {};
+  /** Full non-block layout state used by Port-routed variables and operands. */
+  const assemblyByConfigId = {};
   for (const cid of targetConfigIds) {
     const cfg = configsById[cid];
     blocksByConfigId[cid] = JSON.parse(JSON.stringify(cfg.blocks || []));
+    assemblyByConfigId[cid] = JSON.parse(JSON.stringify({
+      designConnections: cfg.designConnections ?? [],
+      sequentialGroups: cfg.sequentialGroups ?? [],
+      portRoutes: cfg.portRoutes ?? [],
+      routeSets: cfg.routeSets ?? [],
+    }));
   }
 
   let __prevBlocksOverride;
+  let __prevAssemblyOverride;
   let __prevOpticalRowsOverride;
   let __prevScenarioOverride;
   let __prevMeritFastMode;
@@ -7196,6 +7342,7 @@ export async function runOptimizationMVP(options = {}) {
   let __prevTaEvalRunId;
   let __persistedOptimizerResultForUi = false;
   try { __prevBlocksOverride = (typeof window !== 'undefined') ? window.__cooptBlocksOverride : undefined; } catch (_) { __prevBlocksOverride = undefined; }
+  try { __prevAssemblyOverride = (typeof window !== 'undefined') ? window.__cooptAssemblyOverride : undefined; } catch (_) { __prevAssemblyOverride = undefined; }
   try { __prevOpticalRowsOverride = (typeof globalThis !== 'undefined') ? globalThis.__cooptOpticalSystemRowsOverride : undefined; } catch (_) { __prevOpticalRowsOverride = undefined; }
   try { __prevScenarioOverride = (typeof window !== 'undefined') ? window.__cooptScenarioOverride : undefined; } catch (_) { __prevScenarioOverride = undefined; }
   try { __prevMeritFastMode = (typeof globalThis !== 'undefined') ? globalThis.__cooptMeritFastMode : undefined; } catch (_) { __prevMeritFastMode = undefined; }
@@ -7207,6 +7354,9 @@ export async function runOptimizationMVP(options = {}) {
   const restorePreOptimizationGlobalsForUiSync = () => {
     try {
       setBlocksOverrideGlobal(__persistedOptimizerResultForUi ? undefined : __prevBlocksOverride);
+    } catch (_) {}
+    try {
+      setAssemblyOverrideGlobal(__persistedOptimizerResultForUi ? undefined : __prevAssemblyOverride);
     } catch (_) {}
     try {
       if (typeof window !== 'undefined') {
@@ -7344,6 +7494,11 @@ export async function runOptimizationMVP(options = {}) {
   try {
     setBlocksOverrideGlobal(blocksByConfigId);
   } catch (_) {}
+  try {
+    // Keep a live reference: finite-difference updates mutate these objects in
+    // place, so route operands always see the current candidate geometry.
+    setAssemblyOverrideGlobal(assemblyByConfigId);
+  } catch (_) {}
 
   // Allow shared yield helpers (e.g. nextFrame()) to attribute time to this run.
   try {
@@ -7461,7 +7616,9 @@ export async function runOptimizationMVP(options = {}) {
 
   const jointState = {
     blocksByConfigId,
+    assemblyByConfigId,
     baselineBlocksByConfigId: snapshotBlocksByConfigId(blocksByConfigId),
+    baselineAssemblyByConfigId: snapshotAssemblyByConfigId(assemblyByConfigId),
     targetConfigIds,
     activeConfigId
   };
@@ -7487,6 +7644,13 @@ export async function runOptimizationMVP(options = {}) {
           const clonedBlocks = cloneForOptimizerResult(blocks) || blocks;
           materializeBlockVariableValuesFromParameters(clonedBlocks);
           cfg.blocks = clonedBlocks;
+          const assembly = assemblyByConfigId?.[cid];
+          if (assembly) {
+            cfg.designConnections = cloneForOptimizerResult(assembly.designConnections ?? []);
+            cfg.sequentialGroups = cloneForOptimizerResult(assembly.sequentialGroups ?? []);
+            cfg.portRoutes = cloneForOptimizerResult(assembly.portRoutes ?? []);
+            cfg.routeSets = cloneForOptimizerResult(assembly.routeSets ?? []);
+          }
           try {
             const expanded = expandBlocksIntoConfiguration(cfg);
             if (expanded && Array.isArray(expanded.expandedOpticalSystem)) {
@@ -7527,7 +7691,10 @@ export async function runOptimizationMVP(options = {}) {
     const snap = (e.blocksSnapshot && typeof e.blocksSnapshot === 'object')
       ? snapshotBlocksByConfigId(e.blocksSnapshot)
       : snapshotBlocksByConfigId(blocksByConfigId);
-    const scoredEval = { ...e, blocksSnapshot: snap };
+    const assemblySnap = (e.assemblySnapshot && typeof e.assemblySnapshot === 'object')
+      ? snapshotAssemblyByConfigId(e.assemblySnapshot)
+      : snapshotAssemblyByConfigId(assemblyByConfigId);
+    const scoredEval = { ...e, blocksSnapshot: snap, assemblySnapshot: assemblySnap };
     if (
       !bestScoreEval ||
       toFiniteNumber(e.score, Infinity) < (toFiniteNumber(bestScoreEval.score, Infinity) - 1e-12)
@@ -7620,7 +7787,7 @@ export async function runOptimizationMVP(options = {}) {
     }
     : evalCompositeFromRequirements;
 
-  const jointVars = enumerateJointVariables({ targetConfigIds, blocksByConfigId, activeConfigId });
+  const jointVars = enumerateJointVariables({ targetConfigIds, blocksByConfigId, assemblyByConfigId, activeConfigId });
   if (Array.isArray(jointVars.errors) && jointVars.errors.length > 0) {
     return { ok: false, reason: `Design variables are inconsistent across configs: ${jointVars.errors.slice(0, 6).join(' | ')}${jointVars.errors.length > 6 ? ' | ...' : ''}` };
   }
@@ -10049,6 +10216,7 @@ export async function runOptimizationMVP(options = {}) {
           const candidateBlocksByConfigId = snapshotBlocksByConfigId(blocksByConfigId);
           const candidateState = {
             blocksByConfigId: candidateBlocksByConfigId,
+            assemblyByConfigId: snapshotAssemblyByConfigId(assemblyByConfigId),
             targetConfigIds,
             activeConfigId,
           };
@@ -12272,7 +12440,8 @@ export async function runOptimizationMVP(options = {}) {
           if (!applyXToDesignState(x)) return evalResult;
           return {
             ...evalResult,
-            blocksSnapshot: snapshotBlocksByConfigId(blocksByConfigId)
+            blocksSnapshot: snapshotBlocksByConfigId(blocksByConfigId),
+            assemblySnapshot: snapshotAssemblyByConfigId(assemblyByConfigId),
           };
         } catch (_) {
           return evalResult;
@@ -12289,6 +12458,9 @@ export async function runOptimizationMVP(options = {}) {
             ? sourceEval.blocksSnapshot
             : null;
           const preferredBlocksSnapshot = sourceBlocksSnapshot || bestScoreBlocksSnapshot;
+          if (sourceEval?.assemblySnapshot) {
+            restoreAssemblyByConfigId(assemblyByConfigId, sourceEval.assemblySnapshot);
+          }
           if (preferredBlocksSnapshot && typeof preferredBlocksSnapshot === 'object') {
             const snapshot = snapshotBlocksByConfigId(preferredBlocksSnapshot);
             const restored = restoreBlocksByConfigId(blocksByConfigId, snapshot);
@@ -15307,7 +15479,7 @@ export async function runOptimizationMVP(options = {}) {
     }
 
     // Refresh variable list each outer iter (in case user toggled flags mid-run)
-    const curJointVars = enumerateJointVariables({ targetConfigIds, blocksByConfigId, activeConfigId });
+    const curJointVars = enumerateJointVariables({ targetConfigIds, blocksByConfigId, assemblyByConfigId, activeConfigId });
     const curVars = (Array.isArray(curJointVars.numeric) ? curJointVars.numeric : [])
       .map(coerceBlankAsphereToZero)
       .filter(v => v && typeof v.value === 'number' && Number.isFinite(v.value));
@@ -15535,6 +15707,9 @@ export async function runOptimizationMVP(options = {}) {
     // Always restore global overrides, even on early return/errors.
     try {
       setBlocksOverrideGlobal(__persistedOptimizerResultForUi ? undefined : __prevBlocksOverride);
+    } catch (_) {}
+    try {
+      setAssemblyOverrideGlobal(__persistedOptimizerResultForUi ? undefined : __prevAssemblyOverride);
     } catch (_) {}
     try {
       if (typeof globalThis !== 'undefined') {

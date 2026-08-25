@@ -7,7 +7,14 @@ import { MtfAnalysisPage } from './MtfAnalysisPage';
 import { PsfAnalysisPage } from './PsfAnalysisPage';
 import { MultiFieldPsfPage } from './MultiFieldPsfPage';
 import { ImageSimulationPage } from './ImageSimulationPage';
-import { installNonSequentialRenderOverlay } from './nonsequential-render-overlay';
+import {
+  DESIGN_CONNECTION_SELECTED_EVENT,
+  installNonSequentialRenderOverlay,
+  PORT_ROUTED_RENDER_STATUS_EVENT,
+  RENDER_CONNECTIONS_STORAGE_KEY,
+  RENDER_CONNECTIONS_VISIBILITY_EVENT,
+  type PortRoutedRenderStatusDetail,
+} from './nonsequential-render-overlay';
 import { CoherentInterferometerPage } from './CoherentInterferometerEntry';
 import { cloneOptimizeConfigWithLiveObjectRows } from './optimize-run-config';
 import { WavefrontAnalysisPage } from './WavefrontAnalysisPage';
@@ -76,6 +83,7 @@ const RENDER_SECTION_ANGLE_KEY = 'coopt.render.sectionAngleDegrees';
 const RENDER_DESIGN_INTENT_SYNC_KEY = 'coopt.render.designIntentLiveSync';
 const OPTIMIZE_PROGRESS_SYNC_KEY = 'coopt.optimizeProgress';
 const NAVIGATOR_COLLAPSED_KEY = 'coopt.workspace.navigatorCollapsed';
+const NAVIGATOR_TREE_GROUPS_KEY = 'coopt.workspace.navigatorTreeGroups';
 const SYSTEM_TEXT_WINDOW_ID = 'system-text-window';
 const SYSTEM_TEXT_WINDOW_TITLE = 'System Console';
 const RENDER_SCALE_BAR_MIN_WIDTH_PX = 72;
@@ -4696,6 +4704,42 @@ export default function App() {
   }, []);
 
   const [renderWindowStatus, setRenderWindowStatus] = useState("Initializing...");
+  const portRoutedRenderActiveRef = useRef(false);
+  useEffect(() => {
+    const handlePortRoutedStatus = (event: Event) => {
+      const detail = (event as CustomEvent<PortRoutedRenderStatusDetail>).detail;
+      const previouslyOwnedRays = portRoutedRenderActiveRef.current;
+      // Keep the legacy rays available while a Port-routed trace is still
+      // running, failed, or returned no drawable rays.  The routed overlay
+      // takes ownership only after it has a completed, non-empty result.
+      portRoutedRenderActiveRef.current = detail?.active === true
+        && detail.state === 'ready'
+        && Number(detail.rayCount) > 0;
+      if (previouslyOwnedRays && !portRoutedRenderActiveRef.current) {
+        // A stale routed result may already have caused the base rays to be
+        // omitted. Regenerate them when the next trace cannot own the view.
+        window.setTimeout(() => {
+          try { void (window as any).__cooptRenderWindowRedraw?.(); } catch (_) {}
+        }, 0);
+      }
+      if (!detail?.active) return;
+      if (detail.state === 'tracing') {
+        setRenderWindowStatus(`Tracing optical routes (${detail.routeCount} ${detail.routeCount === 1 ? 'route' : 'routes'})...`);
+        return;
+      }
+      if (detail.state === 'error') {
+        setRenderWindowStatus('Optical route trace failed');
+        return;
+      }
+      if (detail.state === 'ready') {
+        setRenderWindowStatus(
+          `Ready (3D · ${detail.rayCount} routed rays · ${detail.routeCount} ${detail.routeCount === 1 ? 'route' : 'routes'})`,
+        );
+      }
+    };
+    window.addEventListener(PORT_ROUTED_RENDER_STATUS_EVENT, handlePortRoutedStatus);
+    return () => window.removeEventListener(PORT_ROUTED_RENDER_STATUS_EVENT, handlePortRoutedStatus);
+  }, []);
   const [renderViewAxis, setRenderViewAxis] = useState<'YZ' | 'XZ'>('YZ');
   const [renderViewMode, setRenderViewMode] = useState<'3D' | 'XZ' | 'YZ'>('3D');
   const [renderExportFormat, setRenderExportFormat] = useState<'fcstd' | 'solid-stl' | 'surface-stl'>(() => (
@@ -4714,6 +4758,13 @@ export default function App() {
       return localStorage.getItem(RENDER_SHOW_SECTION_CUT_KEY) === 'true';
     } catch (_) {
       return false;
+    }
+  });
+  const [renderShowPortConnections, setRenderShowPortConnections] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(RENDER_CONNECTIONS_STORAGE_KEY) !== 'false';
+    } catch (_) {
+      return true;
     }
   });
   const [renderSectionAngle, setRenderSectionAngle] = useState<number>(() => {
@@ -4806,7 +4857,15 @@ export default function App() {
   const optimizeConsolePrevMinRef = useRef<number>(Number.NaN);
   const optimizeConsoleLastIterRef = useRef<number>(-1);
   const optimizeConsoleStartedAtRef = useRef<number>(0);
-  const [treeOpenGroups, setTreeOpenGroups] = useState<Set<string>>(new Set(['panels', 'analysis']));
+  const [treeOpenGroups, setTreeOpenGroups] = useState<Set<string>>(() => {
+    const defaults = new Set(['panels', 'analysis', 'analysis-image-quality', 'analysis-simulation']);
+    try {
+      const stored = JSON.parse(localStorage.getItem(NAVIGATOR_TREE_GROUPS_KEY) || 'null');
+      return Array.isArray(stored) ? new Set(stored.map(String)) : defaults;
+    } catch (_) {
+      return defaults;
+    }
+  });
   const [navigatorCollapsed, setNavigatorCollapsed] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem(NAVIGATOR_COLLAPSED_KEY);
@@ -8635,7 +8694,7 @@ const collectLegacyCrossRays = async (
     const quickInitialRayCount = resolveQuickInitialRenderRayCount(redrawOptions);
     const fullRayCount = resolveRenderRedrawRayCountOverride(redrawOptions);
     const effectiveRayCountOverride = quickInitialRayCount || fullRayCount;
-    const shouldSkipRayGeneration = redrawOptions?.skipRayGeneration === true;
+    const shouldSkipRayGeneration = redrawOptions?.skipRayGeneration === true || portRoutedRenderActiveRef.current;
     const rustOriginsGlobal = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
     const hadOwnRustOriginsFlag = !!(rustOriginsGlobal && Object.prototype.hasOwnProperty.call(rustOriginsGlobal, '__COOPT_USE_RUST_SURFACE_ORIGINS'));
     const previousRustOriginsFlag = rustOriginsGlobal ? rustOriginsGlobal.__COOPT_USE_RUST_SURFACE_ORIGINS : undefined;
@@ -9310,6 +9369,15 @@ const collectLegacyCrossRays = async (
   }, [renderShowSolids, renderShowSectionCut, renderSectionAngle]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(RENDER_CONNECTIONS_STORAGE_KEY, renderShowPortConnections ? 'true' : 'false');
+    } catch (_) {}
+    window.dispatchEvent(new CustomEvent(RENDER_CONNECTIONS_VISIBILITY_EVENT, {
+      detail: { visible: renderShowPortConnections },
+    }));
+  }, [renderShowPortConnections]);
+
+  useEffect(() => {
     if (!isRenderWindowMode) return;
     scheduleRenderRedraw().catch(() => {
       setRenderWindowStatus('Draw failed');
@@ -9415,6 +9483,7 @@ const collectLegacyCrossRays = async (
     };
     w.__cooptRenderWindowRedraw = async (rows?: any[], syncStamp?: string, objectRows?: any[]) => {
       const normalizedSyncStamp = String(syncStamp ?? '').trim();
+      let appliedSystemConfig = false;
       try {
         const pendingSystemConfig = w.__cooptPendingRenderSystemConfig;
         if (pendingSystemConfig && typeof pendingSystemConfig === 'object') {
@@ -9425,11 +9494,22 @@ const collectLegacyCrossRays = async (
           try {
             w.__cooptSystemConfig = clonedPendingSystemConfig;
             w.__cooptPreferRuntimeSystemConfig = true;
+            appliedSystemConfig = true;
           } catch (_) {}
         }
       } catch (_) {
       } finally {
         try { delete w.__cooptPendingRenderSystemConfig; } catch (_) {}
+      }
+      if (appliedSystemConfig) {
+        // The Render iframe has its own event scope. Notify its Hybrid overlay
+        // immediately after adopting the host Config so detector pitch/count,
+        // component envelopes and port positions rebuild before ray redraw.
+        try {
+          window.dispatchEvent(new CustomEvent('coopt:system-configurations-updated', {
+            detail: { reason: 'render-system-config-sync' },
+          }));
+        } catch (_) {}
       }
       if (Array.isArray(objectRows)) {
         renderActiveObjectRowsRef.current = objectRows.length > 0 ? objectRows : [];
@@ -13003,6 +13083,7 @@ const collectLegacyCrossRays = async (
                   <option value="image">Image</option>
                 </select>
                 <span className="render-options-divider" />
+                <label className="render-option-toggle" title="Show intended Port Connections as dotted arrows. Solid coloured lines remain traced rays."><input type="checkbox" checked={renderShowPortConnections} onChange={(e) => setRenderShowPortConnections(e.target.checked)} />Connections</label>
                 <label className="render-option-toggle"><input type="checkbox" checked={renderShowDesignIntentLabels} onChange={(e) => handleToggleRenderLabels(e.target.checked)} />Labels</label>
                 <label className="render-option-toggle"><input type="checkbox" checked={renderShowPrincipalPointLabels} onChange={(e) => handleToggleRenderPrincipalPoints(e.target.checked)} />Paraxial</label>
                 <label className="render-option-toggle"><input type="checkbox" checked={renderShowSurfaceNumberLabels} onChange={(e) => handleToggleRenderSurfaceNumbers(e.target.checked)} />Surface No.</label>
@@ -13286,7 +13367,7 @@ const collectLegacyCrossRays = async (
     { key: 'field', label: 'Field', icon: '◎' },
     { key: 'intent', label: 'Design Intent', icon: '🧩' },
     { key: 'requirements', label: 'Requirements', icon: '📏' },
-    { key: 'literature', label: 'Patent', icon: '📚' },
+    { key: 'literature', label: 'Prescription Import', icon: '📚' },
   ];
 
   const variableCountSummary = (() => {
@@ -13438,26 +13519,43 @@ const collectLegacyCrossRays = async (
     );
   };
 
-  const WIN_ANALYSIS_ITEMS = [
-    { value: 'spot-diagram',                      label: 'Spot Diagram' },
-    { value: 'spherical-aberration',              label: 'Spherical Aberration' },
-    { value: 'astigmatism',                       label: 'Astigmatism' },
-    { value: 'distortion',                        label: 'Distortion' },
-    { value: 'distortion-grid',                   label: 'Grid Distortion' },
-    { value: 'magnification-chromatic-aberration',label: 'Lateral Chromatic Aberration' },
-    { value: 'integrated-aberration',             label: 'Integrated Aberration' },
-    { value: 'transverse-aberration',             label: 'Transverse Aberration' },
-    { value: 'opd-fan',                           label: 'OPD Fan (Test)' },
-    { value: 'opd',                               label: 'OPD (Test)' },
-    { value: 'psf',                               label: 'PSF (Test)' },
-    { value: 'multi-field-psf',                   label: 'Multi-Field PSF' },
-    { value: 'image-simulation',                  label: 'Image Simulation' },
-    { value: 'coherent-interferometer',           label: 'Coherent Signal' },
-    { value: 'mtf',                               label: 'MTF (Test)' },
-    { value: 'through-focus-spot',                label: 'Through-Focus Spot' },
-    { value: 'through-focus-mtf',                 label: 'Through-Focus MTF (Test)' },
-    { value: 'field-mtf',                         label: 'Field MTF (Test)' },
+  const WIN_ANALYSIS_GROUPS = [
+    {
+      id: 'image-quality', label: 'Image Quality', items: [
+        { value: 'spot-diagram', label: 'Spot Diagram' },
+        { value: 'psf', label: 'PSF', beta: true },
+        { value: 'multi-field-psf', label: 'Multi-Field PSF' },
+        { value: 'mtf', label: 'MTF', beta: true },
+        { value: 'field-mtf', label: 'Field MTF', beta: true },
+      ],
+    },
+    {
+      id: 'aberrations', label: 'Aberrations', items: [
+        { value: 'spherical-aberration', label: 'Spherical Aberration' },
+        { value: 'astigmatism', label: 'Astigmatism' },
+        { value: 'magnification-chromatic-aberration', label: 'Lateral Chromatic Aberration' },
+        { value: 'transverse-aberration', label: 'Transverse Aberration' },
+        { value: 'integrated-aberration', label: 'Integrated Aberration' },
+        { value: 'opd-fan', label: 'OPD Fan', beta: true },
+        { value: 'opd', label: 'OPD', beta: true },
+      ],
+    },
+    {
+      id: 'field-focus', label: 'Field & Focus', items: [
+        { value: 'distortion', label: 'Distortion' },
+        { value: 'distortion-grid', label: 'Grid Distortion' },
+        { value: 'through-focus-spot', label: 'Through-Focus Spot' },
+        { value: 'through-focus-mtf', label: 'Through-Focus MTF', beta: true },
+      ],
+    },
+    {
+      id: 'simulation', label: 'Simulation', items: [
+        { value: 'image-simulation', label: 'Image Simulation' },
+        { value: 'coherent-interferometer', label: 'Coherent Signal' },
+      ],
+    },
   ];
+  const WIN_ANALYSIS_ITEMS = WIN_ANALYSIS_GROUPS.flatMap((group) => group.items);
 
   const getNextMdiZIndex = () => {
     const zWorkspace = Object.values(mdiWindowStates).map((w) => Number(w.zIndex) || 0);
@@ -15121,6 +15219,17 @@ const collectLegacyCrossRays = async (
     syncWorkspaceUiAfterOpen();
   };
 
+  (window as any).__cooptOpenDesignConnection = (detail: {
+    connectionId?: string;
+    fromComponentId?: string;
+    toComponentId?: string;
+  }) => {
+    openMdiWindow('intent');
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(DESIGN_CONNECTION_SELECTED_EVENT, { detail }));
+    }, 120);
+  };
+
   const closeMdiWindow = (key: WorkspaceFocus) => {
     setMdiWindowStates(prev => ({ ...prev, [key]: { ...prev[key], open: false } }));
   };
@@ -15386,6 +15495,7 @@ const collectLegacyCrossRays = async (
       const next = new Set(prev);
       if (next.has(group)) next.delete(group);
       else next.add(group);
+      try { localStorage.setItem(NAVIGATOR_TREE_GROUPS_KEY, JSON.stringify(Array.from(next))); } catch (_) {}
       return next;
     });
   };
@@ -15651,27 +15761,50 @@ const collectLegacyCrossRays = async (
             </div>
             {treeOpenGroups.has('analysis') && (
               <div className="win-tree-children">
-                <div
-                  className={`win-tree-leaf${mdiAuxWindows.render?.open ? ' is-open' : ''}`}
-                  onClick={() => { closeWorkspaceMenus(); openRenderMdiWindow(); }}
-                >
-                  Render
-                </div>
-                <div
-                  className={`win-tree-leaf${mdiAuxWindows['analysis-system-data']?.open ? ' is-open' : ''}`}
-                  onClick={() => { closeWorkspaceMenus(); openSystemDataMdiWindow(); }}
-                >
-                  System Data
-                </div>
-                {WIN_ANALYSIS_ITEMS.map(a => (
+                <div className="win-tree-subgroup">
                   <div
-                    key={a.value}
-                    className={`win-tree-leaf${mdiAuxWindows[`analysis-${a.value}`]?.open ? ' is-open' : ''}`}
-                    onClick={() => { closeWorkspaceMenus(); openAnalysisMdiWindow(a.value, a.label); }}
+                    className={`win-tree-subgroup-label${treeOpenGroups.has('analysis-system') ? ' is-open' : ''}`}
+                    onClick={() => toggleTreeGroup('analysis-system')}
                   >
-                    {a.label}
+                    <span className="win-tree-caret">{treeOpenGroups.has('analysis-system') ? '▾' : '▸'}</span>
+                    <span>System</span>
                   </div>
-                ))}
+                  {treeOpenGroups.has('analysis-system') && <div className="win-tree-subgroup-children">
+                    <div
+                      className={`win-tree-leaf${mdiAuxWindows.render?.open ? ' is-open' : ''}`}
+                      onClick={() => { closeWorkspaceMenus(); openRenderMdiWindow(); }}
+                    >Render</div>
+                    <div
+                      className={`win-tree-leaf${mdiAuxWindows['analysis-system-data']?.open ? ' is-open' : ''}`}
+                      onClick={() => { closeWorkspaceMenus(); openSystemDataMdiWindow(); }}
+                    >System Data</div>
+                  </div>}
+                </div>
+                {WIN_ANALYSIS_GROUPS.map((group) => {
+                  const groupKey = `analysis-${group.id}`;
+                  const isOpen = treeOpenGroups.has(groupKey);
+                  return <div className="win-tree-subgroup" key={group.id}>
+                    <div
+                      className={`win-tree-subgroup-label${isOpen ? ' is-open' : ''}`}
+                      onClick={() => toggleTreeGroup(groupKey)}
+                    >
+                      <span className="win-tree-caret">{isOpen ? '▾' : '▸'}</span>
+                      <span>{group.label}</span>
+                    </div>
+                    {isOpen && <div className="win-tree-subgroup-children">
+                      {group.items.map((item) => (
+                        <div
+                          key={item.value}
+                          className={`win-tree-leaf${mdiAuxWindows[`analysis-${item.value}`]?.open ? ' is-open' : ''}`}
+                          onClick={() => { closeWorkspaceMenus(); openAnalysisMdiWindow(item.value, item.label); }}
+                        >
+                          <span>{item.label}</span>
+                          {item.beta ? <span className="win-tree-beta">Beta</span> : null}
+                        </div>
+                      ))}
+                    </div>}
+                  </div>;
+                })}
               </div>
             )}
           </div>

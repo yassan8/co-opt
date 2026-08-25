@@ -27,6 +27,14 @@ export interface ImagingDetectorSignal {
 }
 
 export interface CoherentDetectorFieldSample {
+  routeId?: string;
+  sourceId?: string;
+  lineIndex?: number;
+  /** Target-local X coordinate carried by a reflected routed ray. */
+  targetXmm?: number;
+  pupilXmm?: number;
+  pupilYmm?: number;
+  opticalPathLengthMm?: number;
   pixelX: number;
   pixelY: number;
   coherenceGroupId: string;
@@ -44,13 +52,94 @@ export interface CoherentPsfPlane extends SpectralPsfPlane {
 export interface CoherentFieldDetectorSignal {
   signal: ImagingDetectorSignal;
   spectralModeCount: number;
+  interferingModeCount: number;
   inputFieldPowerW: number;
   complexKernelCount: number;
   warning: string;
 }
 
+function accumulateFractionalComplex(
+  field: Map<number, { re: number; im: number }>,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  re: number,
+  im: number,
+): void {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const taps = [
+    { x: x0, y: y0, weight: (1 - fx) * (1 - fy) },
+    { x: x0 + 1, y: y0, weight: fx * (1 - fy) },
+    { x: x0, y: y0 + 1, weight: (1 - fx) * fy },
+    { x: x0 + 1, y: y0 + 1, weight: fx * fy },
+  ].filter((tap) => tap.weight > 1e-12 && tap.x >= 0 && tap.x < width && tap.y >= 0 && tap.y < height);
+  const powerNormalization = Math.sqrt(taps.reduce((sum, tap) => sum + tap.weight * tap.weight, 0)) || 1;
+  for (const tap of taps) {
+    const amplitudeWeight = tap.weight / powerNormalization;
+    const index = tap.y * width + tap.x;
+    const previous = field.get(index) ?? { re: 0, im: 0 };
+    previous.re += re * amplitudeWeight;
+    previous.im += im * amplitudeWeight;
+    field.set(index, previous);
+  }
+}
+
 const finite = (value: unknown, fallback = 0): number => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const clamp = (value: number, minimum: number, maximum: number): number => Math.max(minimum, Math.min(maximum, value));
+
+export interface DetectorDisplayRaster {
+  width: number;
+  height: number;
+  values: Float64Array;
+  maximum: number;
+  downsampled: boolean;
+}
+
+/**
+ * Builds a display-sized detector raster without losing isolated detector
+ * hits. Browser image interpolation can erase one bright detector pixel when a
+ * large sensor (for example 2048 x 2048) is fitted into a much smaller window,
+ * so every display cell keeps the peak value of the source pixels it covers.
+ * This only affects visualization; signal totals and detector metrics continue
+ * to use the full-resolution arrays.
+ */
+export function buildDetectorDisplayRaster(
+  source: ArrayLike<number>,
+  sourceWidth: number,
+  sourceHeight: number,
+  maximumDisplayEdge = 512,
+): DetectorDisplayRaster {
+  const width = Math.max(1, Math.round(finite(sourceWidth, 1)));
+  const height = Math.max(1, Math.round(finite(sourceHeight, 1)));
+  const edge = Math.max(1, Math.round(finite(maximumDisplayEdge, 512)));
+  const scale = Math.min(1, edge / Math.max(width, height));
+  const displayWidth = Math.max(1, Math.round(width * scale));
+  const displayHeight = Math.max(1, Math.round(height * scale));
+  const values = new Float64Array(displayWidth * displayHeight);
+  let maximum = 0;
+  for (let index = 0; index < width * height; index += 1) {
+    const value = Math.max(0, finite(source[index]));
+    if (!(value > 0)) continue;
+    const sourceX = index % width;
+    const sourceY = Math.floor(index / width);
+    const displayX = Math.min(displayWidth - 1, Math.floor(sourceX * displayWidth / width));
+    const displayY = Math.min(displayHeight - 1, Math.floor(sourceY * displayHeight / height));
+    const displayIndex = displayY * displayWidth + displayX;
+    values[displayIndex] = Math.max(values[displayIndex], value);
+    maximum = Math.max(maximum, value);
+  }
+  return {
+    width: displayWidth,
+    height: displayHeight,
+    values,
+    maximum,
+    downsampled: displayWidth !== width || displayHeight !== height,
+  };
+}
 
 function quantumEfficiency(detector: CoherentDetectorSpec, wavelengthNm: number): number {
   const samples = Array.isArray(detector.quantumEfficiency)
@@ -250,6 +339,64 @@ export function calculateDetectorSignalFromPowerMap(options: {
 }
 
 /**
+ * Converts discrete Monte-Carlo ray hits into a sampled irradiance estimate.
+ * Each hit is spread by an adaptive, normalized Gaussian kernel, so detector
+ * power is conserved while an undersampled pupil no longer appears as isolated
+ * bright pixels. This is used only when no physical complex PSF is available.
+ */
+export function reconstructSampledDetectorIrradiance(options: {
+  powerWPerPixel: ArrayLike<number>;
+  width: number;
+  height: number;
+  sampleCount?: number;
+  maximumSigmaPx?: number;
+}): Float64Array {
+  const width = Math.max(1, Math.round(finite(options.width, 1)));
+  const height = Math.max(1, Math.round(finite(options.height, 1)));
+  const count = width * height;
+  const samples: Array<{ x: number; y: number; powerW: number }> = [];
+  let totalPowerW = 0;
+  for (let index = 0; index < count; index += 1) {
+    const powerW = Math.max(0, finite(options.powerWPerPixel[index]));
+    if (!(powerW > 0)) continue;
+    samples.push({ x: index % width, y: Math.floor(index / width), powerW });
+    totalPowerW += powerW;
+  }
+  const output = new Float64Array(count);
+  if (!samples.length || !(totalPowerW > 0)) return output;
+  const effectiveSamples = Math.max(samples.length, Math.round(finite(options.sampleCount, samples.length)));
+  const meanSpacingPx = Math.sqrt(count / Math.max(1, effectiveSamples));
+  const sigmaPx = clamp(meanSpacingPx * 0.32, 0.75, Math.max(0.75, finite(options.maximumSigmaPx, 6)));
+  const radius = Math.max(1, Math.ceil(sigmaPx * 3));
+  const weights = Array.from({ length: radius * 2 + 1 }, (_, index) => {
+    const offset = index - radius;
+    return Math.exp(-0.5 * offset * offset / (sigmaPx * sigmaPx));
+  });
+  for (const sample of samples) {
+    const minimumX = Math.max(0, sample.x - radius);
+    const maximumX = Math.min(width - 1, sample.x + radius);
+    const minimumY = Math.max(0, sample.y - radius);
+    const maximumY = Math.min(height - 1, sample.y + radius);
+    let normalization = 0;
+    for (let y = minimumY; y <= maximumY; y += 1) {
+      const wy = weights[y - sample.y + radius];
+      for (let x = minimumX; x <= maximumX; x += 1) {
+        normalization += wy * weights[x - sample.x + radius];
+      }
+    }
+    if (!(normalization > 0)) continue;
+    const scale = sample.powerW / normalization;
+    for (let y = minimumY; y <= maximumY; y += 1) {
+      const wy = weights[y - sample.y + radius];
+      for (let x = minimumX; x <= maximumX; x += 1) {
+        output[y * width + x] += scale * wy * weights[x - sample.x + radius];
+      }
+    }
+  }
+  return output;
+}
+
+/**
  * Applies the exact sequential PSF to a physical-path detector irradiance map.
  * The sparse kernel is expressed in detector-pixel offsets, so PSF and sensor
  * pitches may differ. Energy is conserved except for light blurred outside the
@@ -263,6 +410,13 @@ export function convolveDetectorPowerWithPsf(options: {
   psfData: number[][];
   psfPixelSizeUm: number;
   wavelengthNm: number;
+  /**
+   * The Hybrid sequential bridge represents the source aperture with a regular
+   * ray grid. Those rays are pupil samples, not separate object points. Collapse
+   * them to their power centroid before applying the exact-lens PSF so the
+   * source sampling grid cannot appear in the detector image.
+   */
+  collapseInputToCentroid?: boolean;
 }): ImagingDetectorSignal {
   const width = Math.max(1, Math.round(finite(options.width, 1)));
   const height = Math.max(1, Math.round(finite(options.height, 1)));
@@ -297,17 +451,53 @@ export function convolveDetectorPowerWithPsf(options: {
 
   const output = new Float64Array(width * height);
   let inputPowerW = 0;
+  let weightedX = 0;
+  let weightedY = 0;
+  const sourceSamples: Array<{ x: number; y: number; power: number }> = [];
   for (let index = 0; index < width * height; index += 1) {
     const power = Math.max(0, finite(options.powerWPerPixel[index]));
     if (!(power > 0)) continue;
     inputPowerW += power;
-    const sourceX = index % width;
-    const sourceY = Math.floor(index / width);
+    const x = index % width;
+    const y = Math.floor(index / width);
+    if (options.collapseInputToCentroid) {
+      weightedX += x * power;
+      weightedY += y * power;
+    } else {
+      sourceSamples.push({ x, y, power });
+    }
+  }
+  if (options.collapseInputToCentroid && inputPowerW > 0) {
+    // Bilinear placement retains a half-pixel centroid without reintroducing
+    // the original regular pupil grid.
+    const centerX = clamp(weightedX / inputPowerW, 0, width - 1);
+    const centerY = clamp(weightedY / inputPowerW, 0, height - 1);
+    const x0 = Math.floor(centerX);
+    const y0 = Math.floor(centerY);
+    const x1 = Math.min(width - 1, x0 + 1);
+    const y1 = Math.min(height - 1, y0 + 1);
+    const tx = centerX - x0;
+    const ty = centerY - y0;
+    const deposits = [
+      { x: x0, y: y0, weight: (1 - tx) * (1 - ty) },
+      { x: x1, y: y0, weight: tx * (1 - ty) },
+      { x: x0, y: y1, weight: (1 - tx) * ty },
+      { x: x1, y: y1, weight: tx * ty },
+    ];
+    for (const deposit of deposits) {
+      if (deposit.weight > 0) sourceSamples.push({
+        x: deposit.x,
+        y: deposit.y,
+        power: inputPowerW * deposit.weight,
+      });
+    }
+  }
+  for (const sample of sourceSamples) {
     for (const entry of kernel) {
-      const x = sourceX + entry.dx;
-      const y = sourceY + entry.dy;
+      const x = sample.x + entry.dx;
+      const y = sample.y + entry.dy;
       if (x < 0 || x >= width || y < 0 || y >= height) continue;
-      output[y * width + x] += power * entry.weight;
+      output[y * width + x] += sample.power * entry.weight;
     }
   }
   return calculateDetectorSignalFromPowerMap({
@@ -323,8 +513,14 @@ function buildComplexDetectorKernel(
   detectorPitchUm: number,
   maximumTaps = 1024,
 ): ComplexKernelTap[] {
-  const real = Array.isArray(plane.fieldReal) ? plane.fieldReal : [];
-  const imag = Array.isArray(plane.fieldImag) ? plane.fieldImag : [];
+  const hasComplexField = Array.isArray(plane.fieldReal) && plane.fieldReal.length > 0
+    && Array.isArray(plane.fieldImag) && plane.fieldImag.length > 0;
+  const real = hasComplexField
+    ? plane.fieldReal!
+    : (Array.isArray(plane.psfData) ? plane.psfData.map((row) => row.map((value) => Math.sqrt(Math.max(0, finite(value))))) : []);
+  const imag = hasComplexField
+    ? plane.fieldImag!
+    : real.map((row) => row.map(() => 0));
   const height = Math.min(real.length, imag.length);
   const rowWidths = real.slice(0, height)
     .map((row, index) => Math.min(row?.length ?? 0, imag[index]?.length ?? 0));
@@ -390,13 +586,15 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
   height: number;
   detector: CoherentDetectorSpec;
   spectralPsf: CoherentPsfPlane[];
+  collapseSpatialSamplesPerMode?: boolean;
 }): CoherentFieldDetectorSignal | null {
   const width = Math.max(1, Math.round(finite(options.width, 1)));
   const height = Math.max(1, Math.round(finite(options.height, 1)));
   const detectorPitchUm = Math.max(1e-9, finite(options.detector.pixelPitchUm, 1));
   const planes = options.spectralPsf.filter((plane) => (
-    Array.isArray(plane.fieldReal) && plane.fieldReal.length > 0
-    && Array.isArray(plane.fieldImag) && plane.fieldImag.length > 0
+    (Array.isArray(plane.fieldReal) && plane.fieldReal.length > 0
+      && Array.isArray(plane.fieldImag) && plane.fieldImag.length > 0)
+    || (Array.isArray(plane.psfData) && plane.psfData.length > 0)
   ));
   const samples = options.spectralFields.filter((sample) => (
     Number.isFinite(sample.pixelX) && Number.isFinite(sample.pixelY)
@@ -405,6 +603,24 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
     && Number.isFinite(sample.fieldRe) && Number.isFinite(sample.fieldIm)
   ));
   if (!planes.length || !samples.length) return null;
+
+  // A complex PSF cell cannot resolve structure finer than its own physical
+  // pitch. When the Detector pixels are much smaller, reconstruct on the PSF
+  // sampling grid and distribute each reconstructed cell over the physical
+  // pixels it covers. Treating every PSF cell as a single tiny Detector pixel
+  // creates the artificial dotted lattice seen with oversampled sensors.
+  const finestPsfPitchUm = planes.reduce((minimum, plane) => {
+    const pitch = finite(plane.pixelSizeUm);
+    return pitch > 0 ? Math.min(minimum, pitch) : minimum;
+  }, Number.POSITIVE_INFINITY);
+  const calculationScale = Number.isFinite(finestPsfPitchUm)
+    ? Math.min(1, detectorPitchUm / finestPsfPitchUm)
+    : 1;
+  const calculationWidth = Math.max(1, Math.round(width * calculationScale));
+  const calculationHeight = Math.max(1, Math.round(height * calculationScale));
+  const calculationPitchUm = detectorPitchUm / calculationScale;
+  const toCalculationX = (pixelX: number): number => (pixelX + 0.5) * calculationWidth / width - 0.5;
+  const toCalculationY = (pixelY: number): number => (pixelY + 0.5) * calculationHeight / height - 0.5;
 
   const kernelCache = new Map<number, ComplexKernelTap[]>();
   const nearestPlaneIndex = (wavelengthNm: number): number => {
@@ -419,39 +635,197 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
   const kernelFor = (index: number): ComplexKernelTap[] => {
     const cached = kernelCache.get(index);
     if (cached) return cached;
-    const kernel = buildComplexDetectorKernel(planes[index], detectorPitchUm);
+    const maximumTaps = calculationScale < 1
+      ? Math.min(4096, calculationWidth * calculationHeight)
+      : Math.min(2048, calculationWidth * calculationHeight);
+    const kernel = buildComplexDetectorKernel(
+      planes[index],
+      calculationPitchUm,
+      maximumTaps,
+    );
     kernelCache.set(index, kernel);
     return kernel;
   };
 
   type Mode = { wavelengthNm: number; field: Map<number, { re: number; im: number }> };
   const modes = new Map<string, Mode>();
-  let inputFieldPowerW = 0;
+  const routeIdsByMode = new Map<string, Set<string>>();
   for (const sample of samples) {
-    const sourceX = Math.round(sample.pixelX);
-    const sourceY = Math.round(sample.pixelY);
-    if (sourceX < 0 || sourceX >= width || sourceY < 0 || sourceY >= height) continue;
-    const kernel = kernelFor(nearestPlaneIndex(sample.wavelengthNm));
-    if (!kernel.length) continue;
-    inputFieldPowerW += sample.fieldRe * sample.fieldRe + sample.fieldIm * sample.fieldIm;
     const modeKey = `${sample.coherenceGroupId || 'source'}:${sample.frequencyHz.toPrecision(15)}`;
-    const mode = modes.get(modeKey) ?? { wavelengthNm: sample.wavelengthNm, field: new Map() };
-    modes.set(modeKey, mode);
-    for (const tap of kernel) {
-      const x = sourceX + tap.dx;
-      const y = sourceY + tap.dy;
-      if (x < 0 || x >= width || y < 0 || y >= height) continue;
-      const index = y * width + x;
-      const previous = mode.field.get(index) ?? { re: 0, im: 0 };
-      previous.re += sample.fieldRe * tap.re - sample.fieldIm * tap.im;
-      previous.im += sample.fieldRe * tap.im + sample.fieldIm * tap.re;
-      mode.field.set(index, previous);
+    const routeIds = routeIdsByMode.get(modeKey) ?? new Set<string>();
+    routeIds.add(sample.routeId || 'unrouted');
+    routeIdsByMode.set(modeKey, routeIds);
+  }
+  let inputFieldPowerW = 0;
+  if (options.collapseSpatialSamplesPerMode) {
+    type ModeInput = {
+      modeKey: string;
+      routeId: string;
+      wavelengthNm: number;
+      totalPower: number;
+      weightedX: number;
+      weightedY: number;
+      sumRe: number;
+      sumIm: number;
+      strongestRe: number;
+      strongestIm: number;
+      strongestPower: number;
+    };
+    const grouped = new Map<string, ModeInput>();
+    for (const sample of samples) {
+      if (sample.pixelX < 0 || sample.pixelX >= width || sample.pixelY < 0 || sample.pixelY >= height) continue;
+      const sourceX = toCalculationX(sample.pixelX);
+      const sourceY = toCalculationY(sample.pixelY);
+      const power = sample.fieldRe * sample.fieldRe + sample.fieldIm * sample.fieldIm;
+      inputFieldPowerW += power;
+      const modeKey = `${sample.coherenceGroupId || 'source'}:${sample.frequencyHz.toPrecision(15)}`;
+      const routeId = sample.routeId || 'unrouted';
+      const groupKey = `${modeKey}:${routeId}`;
+      const mode = grouped.get(groupKey) ?? {
+        modeKey,
+        routeId,
+        wavelengthNm: sample.wavelengthNm,
+        totalPower: 0, weightedX: 0, weightedY: 0,
+        sumRe: 0, sumIm: 0,
+        strongestRe: 1, strongestIm: 0, strongestPower: -1,
+      };
+      mode.totalPower += power;
+      mode.weightedX += sourceX * power;
+      mode.weightedY += sourceY * power;
+      mode.sumRe += sample.fieldRe;
+      mode.sumIm += sample.fieldIm;
+      if (power > mode.strongestPower) {
+        mode.strongestRe = sample.fieldRe;
+        mode.strongestIm = sample.fieldIm;
+        mode.strongestPower = power;
+      }
+      grouped.set(groupKey, mode);
+    }
+    for (const input of grouped.values()) {
+      const kernel = kernelFor(nearestPlaneIndex(input.wavelengthNm));
+      if (!kernel.length || !(input.totalPower > 0)) continue;
+      const sourceX = clamp(input.weightedX / input.totalPower, 0, calculationWidth - 1);
+      const sourceY = clamp(input.weightedY / input.totalPower, 0, calculationHeight - 1);
+      // Detector-hit rays sample one routed pupil. They are therefore collapsed
+      // into one complex image before the exact-lens PSF is applied. Routes stay
+      // separate here so their PSFs can still interfere on the common Detector.
+      let phaseRe = input.sumRe;
+      let phaseIm = input.sumIm;
+      let phaseLength = Math.hypot(phaseRe, phaseIm);
+      if (!(phaseLength > 1e-15)) {
+        phaseRe = input.strongestRe;
+        phaseIm = input.strongestIm;
+        phaseLength = Math.hypot(phaseRe, phaseIm);
+      }
+      if (!(phaseLength > 0)) continue;
+      const sourceAmplitude = Math.sqrt(input.totalPower);
+      const sourceRe = sourceAmplitude * phaseRe / phaseLength;
+      const sourceIm = sourceAmplitude * phaseIm / phaseLength;
+      const mode = modes.get(input.modeKey) ?? { wavelengthNm: input.wavelengthNm, field: new Map() };
+      modes.set(input.modeKey, mode);
+      const routeField = new Map<number, { re: number; im: number }>();
+      for (const tap of kernel) {
+        accumulateFractionalComplex(
+          routeField,
+          calculationWidth,
+          calculationHeight,
+          sourceX + tap.dx,
+          sourceY + tap.dy,
+          sourceRe * tap.re - sourceIm * tap.im,
+          sourceRe * tap.im + sourceIm * tap.re,
+        );
+      }
+      const reconstructedPower = Array.from(routeField.values()).reduce(
+        (sum, field) => sum + field.re * field.re + field.im * field.im,
+        0,
+      );
+      const routeScale = reconstructedPower > 0 ? Math.sqrt(input.totalPower / reconstructedPower) : 0;
+      for (const [index, field] of routeField) {
+        const previous = mode.field.get(index) ?? { re: 0, im: 0 };
+        previous.re += field.re * routeScale;
+        previous.im += field.im * routeScale;
+        mode.field.set(index, previous);
+      }
+    }
+  } else {
+    type RoutedModeSamples = {
+      modeKey: string;
+      wavelengthNm: number;
+      totalPower: number;
+      samples: CoherentDetectorFieldSample[];
+    };
+    const grouped = new Map<string, RoutedModeSamples>();
+    for (const sample of samples) {
+      if (sample.pixelX < 0 || sample.pixelX >= width || sample.pixelY < 0 || sample.pixelY >= height) continue;
+      const power = sample.fieldRe * sample.fieldRe + sample.fieldIm * sample.fieldIm;
+      inputFieldPowerW += power;
+      const modeKey = `${sample.coherenceGroupId || 'source'}:${sample.frequencyHz.toPrecision(15)}`;
+      const routeId = sample.routeId || 'unrouted';
+      const groupKey = `${modeKey}:${routeId}`;
+      const group = grouped.get(groupKey) ?? {
+        modeKey,
+        wavelengthNm: sample.wavelengthNm,
+        totalPower: 0,
+        samples: [],
+      };
+      group.totalPower += power;
+      group.samples.push(sample);
+      grouped.set(groupKey, group);
+    }
+    for (const group of grouped.values()) {
+      const kernel = kernelFor(nearestPlaneIndex(group.wavelengthNm));
+      if (!kernel.length || !(group.totalPower > 0)) continue;
+      const routeField = new Map<number, { re: number; im: number }>();
+      // Keep a deterministic spatial/phase cross-section without making the
+      // cost grow as Detector rays × every PSF cell. Route normalization below
+      // restores the total power represented by all samples in the group.
+      const maximumSpatialSamples = 64;
+      const representativeSamples = group.samples.length <= maximumSpatialSamples
+        ? group.samples
+        : Array.from({ length: maximumSpatialSamples }, (_, index) => (
+          group.samples[Math.min(
+            group.samples.length - 1,
+            Math.floor((index + 0.5) * group.samples.length / maximumSpatialSamples),
+          )]
+        ));
+      for (const sample of representativeSamples) {
+        const sourceX = toCalculationX(sample.pixelX);
+        const sourceY = toCalculationY(sample.pixelY);
+        for (const tap of kernel) {
+          accumulateFractionalComplex(
+            routeField,
+            calculationWidth,
+            calculationHeight,
+            sourceX + tap.dx,
+            sourceY + tap.dy,
+            sample.fieldRe * tap.re - sample.fieldIm * tap.im,
+            sample.fieldRe * tap.im + sample.fieldIm * tap.re,
+          );
+        }
+      }
+      const reconstructedPower = Array.from(routeField.values()).reduce(
+        (sum, field) => sum + field.re * field.re + field.im * field.im,
+        0,
+      );
+      const mode = modes.get(group.modeKey) ?? { wavelengthNm: group.wavelengthNm, field: new Map() };
+      modes.set(group.modeKey, mode);
+      // Exact destructive interference is a valid zero-signal result. Keep
+      // the mode even when its reconstructed field cancels completely so the
+      // caller receives a calculated dark Detector image instead of null.
+      if (!(reconstructedPower > 0)) continue;
+      const routeScale = Math.sqrt(group.totalPower / reconstructedPower);
+      for (const [index, field] of routeField) {
+        const previous = mode.field.get(index) ?? { re: 0, im: 0 };
+        previous.re += field.re * routeScale;
+        previous.im += field.im * routeScale;
+        mode.field.set(index, previous);
+      }
     }
   }
   if (!modes.size) return null;
 
-  const powerWPerPixel = new Float64Array(width * height);
-  const electronsPerPixel = new Float64Array(width * height);
+  const calculationPowerWPerPixel = new Float64Array(calculationWidth * calculationHeight);
+  const calculationElectronsPerPixel = new Float64Array(calculationWidth * calculationHeight);
   const exposureTimeS = Math.max(0, finite(options.detector.exposureTimeS, 0));
   for (const mode of modes.values()) {
     const wavelengthM = mode.wavelengthNm * 1e-9;
@@ -459,8 +833,30 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
     const qe = quantumEfficiency(options.detector, mode.wavelengthNm);
     for (const [index, field] of mode.field) {
       const power = field.re * field.re + field.im * field.im;
-      powerWPerPixel[index] += power;
-      electronsPerPixel[index] += power * exposureTimeS / photonEnergyJ * qe;
+      calculationPowerWPerPixel[index] += power;
+      calculationElectronsPerPixel[index] += power * exposureTimeS / photonEnergyJ * qe;
+    }
+  }
+
+  let powerWPerPixel = calculationPowerWPerPixel;
+  let electronsPerPixel = calculationElectronsPerPixel;
+  if (calculationWidth !== width || calculationHeight !== height) {
+    powerWPerPixel = new Float64Array(width * height);
+    electronsPerPixel = new Float64Array(width * height);
+    const xBinCounts = new Uint32Array(calculationWidth);
+    const yBinCounts = new Uint32Array(calculationHeight);
+    for (let x = 0; x < width; x += 1) xBinCounts[Math.min(calculationWidth - 1, Math.floor(x * calculationWidth / width))] += 1;
+    for (let y = 0; y < height; y += 1) yBinCounts[Math.min(calculationHeight - 1, Math.floor(y * calculationHeight / height))] += 1;
+    for (let y = 0; y < height; y += 1) {
+      const calculationY = Math.min(calculationHeight - 1, Math.floor(y * calculationHeight / height));
+      for (let x = 0; x < width; x += 1) {
+        const calculationX = Math.min(calculationWidth - 1, Math.floor(x * calculationWidth / width));
+        const calculationIndex = calculationY * calculationWidth + calculationX;
+        const detectorIndex = y * width + x;
+        const coveredPixelCount = Math.max(1, xBinCounts[calculationX] * yBinCounts[calculationY]);
+        powerWPerPixel[detectorIndex] = calculationPowerWPerPixel[calculationIndex] / coveredPixelCount;
+        electronsPerPixel[detectorIndex] = calculationElectronsPerPixel[calculationIndex] / coveredPixelCount;
+      }
     }
   }
 
@@ -489,10 +885,19 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
       saturatedPixelCount, bitDepth, exposureTimeS,
     },
     spectralModeCount: modes.size,
+    interferingModeCount: Array.from(routeIdsByMode.values()).reduce((count, routeIds) => count + Number(routeIds.size > 1), 0),
     inputFieldPowerW,
     complexKernelCount: kernelCache.size,
-    warning: planes.length < new Set(samples.map((sample) => sample.wavelengthNm.toPrecision(12))).size
-      ? `Exact-lens complex fields were sampled at ${planes.length} wavelength${planes.length === 1 ? '' : 's'} and matched to the nearest physical spectral line.`
-      : '',
+    warning: [
+      planes.length < new Set(samples.map((sample) => sample.wavelengthNm.toPrecision(12))).size
+        ? `Exact-lens fields were sampled at ${planes.length} wavelength${planes.length === 1 ? '' : 's'} and matched to the nearest physical spectral line.`
+        : '',
+      planes.some((plane) => !(Array.isArray(plane.fieldReal) && plane.fieldReal.length > 0 && Array.isArray(plane.fieldImag) && plane.fieldImag.length > 0))
+        ? 'Some exact-lens results supplied intensity only; their coherent kernel uses the measured PSF amplitude with zero residual phase.'
+        : '',
+      calculationScale < 1
+        ? `Detector pixels oversample the exact-lens field; the complex signal was reconstructed at ${calculationPitchUm.toFixed(4)} µm and area-integrated onto the ${detectorPitchUm.toFixed(4)} µm pixels.`
+        : '',
+    ].filter(Boolean).join(' '),
   };
 }

@@ -6,15 +6,21 @@ import {
   type PhysicalBlockType,
 } from '../data/block-schema.ts';
 import type { Configuration } from '../data/table-configuration.ts';
-import { reflowCoherentAssembly } from './coherent-port-layout.ts';
+import { reflowCoherentAssembly, worldPortPosition } from './coherent-port-layout.ts';
 import type {
   CoherentAssemblyDesign,
+  CoherentBlockSequence,
   CoherentDetectorSpec,
   CoherentPhysicalComponent,
   CoherentSourceSpec,
+  ComponentTransform,
   OpticalPort,
   Vec3Mm,
 } from './coherent-assembly.ts';
+import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
+import { resolveComponentTransform } from './coherent-assembly.ts';
+import { canonicalPortId, normalizePortRouteConfiguration } from './port-routes.ts';
+import { expandSequentialGroupRows } from './sequential-group-rows.ts';
 
 const PHYSICAL_SET = new Set<string>(PHYSICAL_BLOCK_TYPES);
 const finite = (value: unknown, fallback = 0): number => {
@@ -25,6 +31,14 @@ const positive = (value: unknown, fallback: number): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
+const sourceHalfAngleDeg = (parameters: Record<string, any>): number => {
+  const numericalAperture = finite(parameters.numericalAperture, NaN);
+  const ambientIndex = positive(parameters.ambientRefractiveIndex, 1);
+  if (Number.isFinite(numericalAperture) && numericalAperture >= 0) {
+    return Math.asin(Math.min(1, numericalAperture / ambientIndex)) * 180 / Math.PI;
+  }
+  return Math.max(0, finite(parameters.divergenceDeg));
+};
 const identityTransform = () => ({
   positionMm: { x: 0, y: 0, z: 0 },
   rotationDeg: { x: 0, y: 0, z: 0 },
@@ -33,11 +47,112 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 export const isSequentialDesignBlock = (block: Block): boolean => !isPhysicalBlockType(block?.blockType);
 
+interface HybridSequentialGroup {
+  key: string;
+  sequenceId: string;
+  componentId: string;
+  label: string;
+  pathId: string;
+  blocks: Block[];
+  rootTransform: ComponentTransform;
+  rootTransformVariables?: Record<string, unknown>;
+}
+
+const sequentialGroupKey = (value: unknown): string => {
+  const raw = String(value ?? '').trim()
+    .replace(/^sequential-group:/, '')
+    .replace(/^sequential:/, '');
+  return raw || 'main';
+};
+
+export const sequentialGroupComponentId = (sequenceOrGroupId: unknown): string => (
+  `sequential-group:${sequentialGroupKey(sequenceOrGroupId)}`
+);
+
+export const sequentialGroupSequenceId = (sequenceOrGroupId: unknown): string => (
+  `sequential:${sequentialGroupKey(sequenceOrGroupId)}`
+);
+
+function sanitizeTransform(value: any): ComponentTransform {
+  return {
+    positionMm: {
+      x: finite(value?.positionMm?.x),
+      y: finite(value?.positionMm?.y),
+      z: finite(value?.positionMm?.z),
+    },
+    rotationDeg: {
+      x: finite(value?.rotationDeg?.x),
+      y: finite(value?.rotationDeg?.y),
+      z: finite(value?.rotationDeg?.z),
+    },
+  };
+}
+
+export function resolveHybridSequentialGroups(config: Configuration): HybridSequentialGroup[] {
+  const blocks = Array.isArray(config.blocks) ? config.blocks as Block[] : [];
+  const sequentialBlocks = blocks.filter(isSequentialDesignBlock);
+  const sequentialById = new Map(sequentialBlocks.map((block) => [String(block.blockId ?? ''), block]));
+  const assigned = new Set<string>();
+  const definitions = Array.isArray(config.sequentialGroups) ? config.sequentialGroups : [];
+  const groups: HybridSequentialGroup[] = [];
+  if (sequentialBlocks.length === 0 && definitions.length === 0) return groups;
+
+  for (const definition of definitions) {
+    const key = sequentialGroupKey(definition?.id);
+    if (groups.some((group) => group.key === key)) continue;
+    const requestedIds = Array.isArray(definition?.blockIds) ? definition.blockIds.map(String) : [];
+    const members: Block[] = [];
+    for (const blockId of requestedIds) {
+      const block = sequentialById.get(blockId);
+      if (!block || assigned.has(blockId)) continue;
+      assigned.add(blockId);
+      members.push(block);
+    }
+    groups.push({
+      key,
+      sequenceId: sequentialGroupSequenceId(key),
+      componentId: sequentialGroupComponentId(key),
+      label: String(definition?.label ?? '').trim() || (key === 'main' ? 'Exact sequential optics' : `Exact sequential optics · ${key}`),
+      pathId: String(definition?.pathLabel ?? '').trim() || (key === 'main' ? 'main' : key),
+      blocks: members,
+      rootTransform: sanitizeTransform(definition?.rootTransform),
+      rootTransformVariables: clone(definition?.rootTransformVariables ?? {}),
+    });
+  }
+
+  const unassigned = sequentialBlocks.filter((block) => !assigned.has(String(block.blockId ?? '')));
+  if (unassigned.length > 0 || groups.length === 0) {
+    let main = groups.find((group) => group.key === 'main');
+    if (!main) {
+      main = {
+        key: 'main',
+        sequenceId: sequentialGroupSequenceId('main'),
+        componentId: sequentialGroupComponentId('main'),
+        label: 'Exact sequential optics',
+        pathId: 'main',
+        blocks: [],
+        rootTransform: identityTransform(),
+        rootTransformVariables: {},
+      };
+      groups.unshift(main);
+    }
+    main.blocks.push(...unassigned);
+  }
+
+  return groups;
+}
+
 export function portsForPhysicalBlock(type: PhysicalBlockType): OpticalPort[] {
   const inPort = { id: 'in', label: 'Input', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: 0, y: 0, z: -1 } };
   const outPort = { id: 'out', label: 'Output', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: 0, y: 0, z: 1 } };
   if (type === 'BroadbandSource' || type === 'FrequencyCombSource') return [{ ...outPort, id: 'emit', label: 'Emit' }];
   if (type === 'AreaDetector' || type === 'TimeDetector') return [{ ...inPort, id: 'detect', label: 'Detect' }];
+  if (type === 'FoldMirror') {
+    return [
+      { ...inPort, id: 'in', label: 'Incident' },
+      { ...inPort, id: 'out', label: 'Reflected' },
+    ];
+  }
   if (type === 'BeamSplitter') {
     return [
       { ...inPort, id: 'common', label: 'Common' },
@@ -49,29 +164,30 @@ export function portsForPhysicalBlock(type: PhysicalBlockType): OpticalPort[] {
   if (type === 'Target') {
     return [
       { ...inPort, id: 'incident', label: 'Incident' },
-      { ...outPort, id: 'specular', label: 'Specular' },
+      { ...inPort, id: 'specular', label: 'Specular' },
       { id: 'scatter', label: 'Scatter', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: 0, y: 1, z: 0 } },
     ];
   }
   if (type === 'ReflectionGrating') {
     return [
       { ...inPort, id: 'incident', label: 'Incident' },
-      { ...outPort, id: 'order-0', label: 'Order 0' },
-      { id: 'order+1', label: 'Order +1', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: 1, y: 0, z: 0 } },
-      { id: 'order-1', label: 'Order -1', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: -1, y: 0, z: 0 } },
+      { ...inPort, id: 'order-0', label: 'Order 0' },
+      { id: 'order+1', label: 'Order +1', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: 0.5, y: 0, z: -0.8660254037844386 } },
+      { id: 'order-1', label: 'Order -1', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: -0.5, y: 0, z: -0.8660254037844386 } },
     ];
   }
   return [inPort, outPort];
 }
 
 const defaultParameters: Record<PhysicalBlockType, Record<string, unknown>> = {
-  BroadbandSource: { centerWavelengthNm: 587.5618, minWavelengthNm: 435.8343, maxWavelengthNm: 656.2725, spectralSamples: 31, totalPowerW: 0.001, beamDiameterMm: 5, divergenceDeg: 0, spatialProfile: 'gaussian', coherenceGroupId: 'source-1' },
-  FrequencyCombSource: { centerWavelengthNm: 1550, repetitionRateHz: 100e6, ceoFrequencyHz: 20e6, lineCount: 101, lineWidthHz: 1000, totalPowerW: 0.001, beamDiameterMm: 2, coherenceGroupId: 'comb-1' },
+  BroadbandSource: { centerWavelengthNm: 587.5618, minWavelengthNm: 435.8343, maxWavelengthNm: 656.2725, spectralSamples: 31, totalPowerW: 0.001, beamDiameterMm: 5, divergenceDeg: 0, spatialProfile: 'gaussian', renderSpatialSamples: 9, detectorSpatialSamples: 81, spatialSamples: 81, coherenceGroupId: 'source-1' },
+  FrequencyCombSource: { centerWavelengthNm: 1550, repetitionRateHz: 100e6, ceoFrequencyHz: 20e6, lineCount: 101, lineWidthHz: 1000, totalPowerW: 0.001, beamDiameterMm: 2, renderSpatialSamples: 9, detectorSpatialSamples: 81, spatialSamples: 81, coherenceGroupId: 'comb-1' },
   BeamSplitter: {
     widthMm: 20,
     heightMm: 20,
     depthMm: 3,
     beamSplitterModel: 'ideal',
+    reflectionPort: 'reflect',
     reflectance: 0.5,
     transmittance: 0.5,
     reflectedPhaseDeg: 90,
@@ -125,16 +241,52 @@ function componentKind(type: PhysicalBlockType): CoherentPhysicalComponent['kind
 function physicalComponent(block: Block): CoherentPhysicalComponent {
   const type = block.blockType as PhysicalBlockType;
   const p = block.parameters ?? {};
+  const beamSplitterModel = String(p.beamSplitterModel ?? 'ideal').toLowerCase();
   const beamDiameter = positive(p.beamDiameterMm, 5);
   const pixelWidth = positive(p.pixelCountX, 1024) * positive(p.pixelPitchUm, 5) * 1e-3;
   const pixelHeight = positive(p.pixelCountY, 1024) * positive(p.pixelPitchUm, 5) * 1e-3;
   const width = type === 'AreaDetector' ? pixelWidth : positive(p.widthMm, beamDiameter + 10);
   const height = type === 'AreaDetector' ? pixelHeight : positive(p.heightMm, beamDiameter + 10);
   const depth = positive(p.depthMm, type.endsWith('Source') ? 30 : type.includes('Detector') ? 10 : 3);
-  const ports = portsForPhysicalBlock(type).map((port) => ({
-    ...port,
-    localPositionMm: { x: port.localPositionMm.x * depth, y: port.localPositionMm.y * height, z: port.localPositionMm.z * depth },
-  }));
+  const ports = portsForPhysicalBlock(type).map((port) => {
+    let localDirection = port.localDirection;
+    if (type === 'ReflectionGrating' && /^order[+-]?\d+$/i.test(port.id)) {
+      const order = Number(port.id.match(/([+-]?\d+)$/)?.[1] ?? p.order ?? 0);
+      const shift = order * positive(p.blazeWavelengthNm, 600) * 1e-6 * positive(p.grooveDensityLinesPerMm, 600);
+      if (Math.abs(shift) <= 1) localDirection = { x: shift, y: 0, z: -Math.sqrt(Math.max(0, 1 - shift * shift)) };
+    }
+    const directionLength = Math.hypot(localDirection.x, localDirection.y, localDirection.z) || 1;
+    const direction = {
+      x: localDirection.x / directionLength,
+      y: localDirection.y / directionLength,
+      z: localDirection.z / directionLength,
+    };
+    if (type === 'BeamSplitter' && beamSplitterModel !== 'cube') {
+      // Ideal, plate and pellicle split at their optical surface. A cube has
+      // real entrance/exit faces, while a flat splitter keeps all ports on the
+      // coated plane and lets the tracer calculate the substrate displacement.
+      return {
+        ...port,
+        localPositionMm: { x: 0, y: 0, z: 0 },
+      };
+    }
+    const faceScale = 0.5 / Math.max(
+      Math.abs(direction.x) / Math.max(width, 1e-9),
+      Math.abs(direction.y) / Math.max(height, 1e-9),
+      Math.abs(direction.z) / Math.max(depth, 1e-9),
+      1e-9,
+    );
+    return {
+      ...port,
+      // Ports live on the physical envelope, not at the component centre.
+      // This keeps connection lines readable around splitters and detectors.
+      localPositionMm: {
+        x: direction.x * faceScale,
+        y: direction.y * faceScale,
+        z: direction.z * faceScale,
+      },
+    };
+  });
   return {
     id: String(block.blockId),
     label: String(block.metadata?.label ?? p.label ?? type),
@@ -152,7 +304,19 @@ function physicalComponent(block: Block): CoherentPhysicalComponent {
     powerEfficiency: finite(p.efficiency ?? p.reflectance ?? p.transmission, 1),
     pathIds: [String(block.metadata?.pathId ?? 'main')],
     ports,
-    metadata: { source: 'blocks', blockId: block.blockId, blockType: type, ...block.metadata },
+    metadata: {
+      source: 'blocks',
+      blockId: block.blockId,
+      blockType: type,
+      ...(type === 'BeamSplitter' ? {
+        beamSplitterModel,
+        reflectionPort: String(p.reflectionPort ?? 'reflect').toLowerCase() === 'recombine' ? 'recombine' : 'reflect',
+        substrateIndexNd: positive(p.substrateIndexNd, 1.5168),
+        substrateThicknessMm: positive(p.substrateThicknessMm, depth),
+        wedgeDeg: finite(p.wedgeDeg, 0),
+      } : {}),
+      ...block.metadata,
+    },
   };
 }
 
@@ -171,9 +335,11 @@ export function normalizeDesignConnections(blocks: Block[], input: unknown, extr
     distanceMm: Math.max(0, finite(connection.distanceMm, 10)),
     azimuthDeg: Number.isFinite(Number(connection.azimuthDeg)) ? Number(connection.azimuthDeg) : undefined,
     elevationDeg: Number.isFinite(Number(connection.elevationDeg)) ? Number(connection.elevationDeg) : undefined,
+    allowReverse: connection.allowReverse === true,
     autoPlace: connection.autoPlace !== false,
     pathLabel: String(connection.pathLabel ?? 'main'),
     manualOffset: connection.manualOffset ? clone(connection.manualOffset) : undefined,
+    variables: connection.variables ? clone(connection.variables) : undefined,
   }));
   // An explicit empty array means that the user intentionally removed every
   // connection. Only legacy Configs with no designConnections field receive
@@ -207,7 +373,16 @@ export function normalizeDesignConnections(blocks: Block[], input: unknown, extr
 
 function sourceFromBlock(block: Block | undefined, config: Configuration): CoherentSourceSpec {
   const p = block?.parameters ?? {};
-  const wavelengthsNm = (config.source ?? []).map((row: any) => finite(row?.wavelength, NaN) * 1000).filter(Number.isFinite);
+  const mainFrontInput = (config.lensSectionInputs ?? []).find((binding) => (
+    String(binding?.sectionId ?? 'main') === 'main' && binding?.port === 'Front'
+  ));
+  const selectedSourceSet = mainFrontInput?.mode === 'local'
+    ? (config.sourceSets ?? []).find((set) => set.id === mainFrontInput.sourceSetId)
+    : null;
+  const sourceRows = Array.isArray(selectedSourceSet?.rows) && selectedSourceSet.rows.length > 0
+    ? selectedSourceSet.rows
+    : (config.source ?? []);
+  const wavelengthsNm = sourceRows.map((row: any) => finite(row?.wavelength, NaN) * 1000).filter(Number.isFinite);
   const min = wavelengthsNm.length ? Math.min(...wavelengthsNm) : 435.8343;
   const max = wavelengthsNm.length ? Math.max(...wavelengthsNm) : 656.2725;
   const comb = block?.blockType === 'FrequencyCombSource';
@@ -222,8 +397,14 @@ function sourceFromBlock(block: Block | undefined, config: Configuration): Coher
     spectralSamples: Math.max(1, Math.round(positive(p.spectralSamples, wavelengthsNm.length || 3))),
     totalPowerW: positive(p.totalPowerW, 0.001),
     beamDiameterMm: positive(p.beamDiameterMm, 5),
-    divergenceDeg: Math.max(0, finite(p.divergenceDeg)),
+    numericalAperture: Number.isFinite(finite(p.numericalAperture, NaN))
+      ? Math.max(0, finite(p.numericalAperture))
+      : undefined,
+    ambientRefractiveIndex: positive(p.ambientRefractiveIndex, 1),
+    divergenceDeg: sourceHalfAngleDeg(p),
     spatialProfile: p.spatialProfile === 'top-hat' ? 'top-hat' : 'gaussian',
+    renderSpatialSamples: Math.max(1, Math.round(positive(p.renderSpatialSamples, Math.min(9, positive(p.spatialSamples, 9))))),
+    detectorSpatialSamples: Math.max(1, Math.round(positive(p.detectorSpatialSamples, positive(p.spatialSamples, 81)))),
     spatialSamples: Math.max(1, Math.round(positive(p.spatialSamples, 49))),
     coherenceGroupId: String(p.coherenceGroupId ?? 'source-1'),
     repetitionRateHz: comb ? positive(p.repetitionRateHz, 100e6) : undefined,
@@ -262,38 +443,103 @@ export function buildHybridAssemblyFromConfiguration(config: Configuration): Coh
   const physicalBlocks = blocks.filter((block) => isPhysicalBlockType(block.blockType));
   const components = physicalBlocks.map(physicalComponent);
   const sequentialBlocks = blocks.filter(isSequentialDesignBlock);
-  const sequentialGroupId = sequentialBlocks.length > 0 ? 'sequential-group:main' : '';
-  if (sequentialGroupId) {
+  const sequentialGroups = resolveHybridSequentialGroups(config);
+  const blockSequences: CoherentBlockSequence[] = [];
+  for (const group of sequentialGroups) {
+    const canReuseLegacyRows = sequentialGroups.length === 1
+      && group.blocks.length === sequentialBlocks.length
+      && Array.isArray(config.opticalSystem)
+      && config.opticalSystem.length > 0;
+    const sequentialRows = canReuseLegacyRows
+      ? clone(config.opticalSystem ?? [])
+      : expandSequentialGroupRows(group.blocks);
+    const surfaceOrigins = Array.isArray(sequentialRows) && sequentialRows.length > 0
+      ? calculateSurfaceOrigins(sequentialRows)
+      : [];
+    const firstOrigin = surfaceOrigins[0]?.origin ?? { x: 0, y: 0, z: 0 };
+    const lastOrigin = surfaceOrigins[surfaceOrigins.length - 1]?.origin ?? firstOrigin;
+    const lastRotation = surfaceOrigins[surfaceOrigins.length - 1]?.rotationMatrix;
+    const outputDirection = {
+      x: finite(lastRotation?.[0]?.[2], 0),
+      y: finite(lastRotation?.[1]?.[2], 0),
+      z: finite(lastRotation?.[2]?.[2], 1),
+    };
     components.push({
-      id: sequentialGroupId, label: 'Exact sequential optics', kind: 'sequential-group', shape: 'box',
-      autoTransform: identityTransform(), manualOffset: identityTransform(),
+      id: group.componentId, label: group.label, kind: 'sequential-group', shape: 'box',
+      autoTransform: identityTransform(), manualOffset: clone(group.rootTransform),
       dimensions: { widthMm: 0, heightMm: 0, depthMm: 0 }, dimensionConfidence: 'Exact', powerEfficiency: 1,
-      pathIds: ['main'], ports: [
-        { id: 'in', label: 'Input', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: 0, y: 0, z: -1 } },
-        { id: 'out', label: 'Output', localPositionMm: { x: 0, y: 0, z: 0 }, localDirection: { x: 0, y: 0, z: 1 } },
+      pathIds: [group.pathId], ports: [
+        { id: 'front', label: 'Front', localPositionMm: { ...firstOrigin }, localDirection: { x: 0, y: 0, z: -1 } },
+        { id: 'back', label: 'Back', localPositionMm: { ...lastOrigin }, localDirection: outputDirection },
       ],
       metadata: {
         source: 'blocks-reference',
-        blockIds: sequentialBlocks.map((block) => block.blockId),
-        opticalSystemRows: clone(config.opticalSystem ?? []),
+        sequenceId: group.sequenceId,
+        groupId: group.key,
+        blockIds: group.blocks.map((block) => block.blockId),
+        opticalSystemRows: sequentialRows,
       },
+    });
+    blockSequences.push({
+      id: group.sequenceId,
+      label: group.label,
+      pathId: group.pathId,
+      blocks: clone(group.blocks),
+      manualOffset: clone(group.rootTransform),
+      rootTransform: clone(group.rootTransform),
+      rootTransformVariables: clone(group.rootTransformVariables ?? {}),
     });
   }
   const designConnections = normalizeDesignConnections(
     blocks,
     config.designConnections,
-    sequentialGroupId ? [sequentialGroupId] : [],
+    sequentialGroups.map((group) => group.componentId),
   );
+  const primarySequentialGroupId = sequentialGroups.find((group) => group.key === 'main')?.componentId
+    ?? sequentialGroups[0]?.componentId
+    ?? '';
+  if (primarySequentialGroupId) {
+    const sequentialGroup = components.find((component) => component.id === primarySequentialGroupId);
+    const downstreamIds = new Set(designConnections.map((connection) => String(connection.to.blockId)));
+    const explicitlyConnectedIds = new Set(designConnections.flatMap((connection) => [
+      String(connection.from.blockId),
+      String(connection.to.blockId),
+    ]));
+    if (sequentialGroup) {
+      const sequentialInput = worldPortPosition(sequentialGroup, 'front', 'to');
+      for (const component of components) {
+        if (component.kind !== 'source' || downstreamIds.has(component.id) || explicitlyConnectedIds.has(component.id)) continue;
+        // Source XYZ is a manual offset from the natural launch position. The
+        // natural position puts the physical Emit end face exactly on the
+        // first surface origin of the exact sequential train.
+        const sourceAtZeroManualPosition: CoherentPhysicalComponent = {
+          ...component,
+          manualOffset: {
+            ...component.manualOffset,
+            positionMm: { x: 0, y: 0, z: 0 },
+          },
+        };
+        const emitAt = worldPortPosition(sourceAtZeroManualPosition, 'emit', 'from');
+        component.autoTransform.positionMm = {
+          x: component.autoTransform.positionMm.x + sequentialInput.x - emitAt.x,
+          y: component.autoTransform.positionMm.y + sequentialInput.y - emitAt.y,
+          z: component.autoTransform.positionMm.z + sequentialInput.z - emitAt.z,
+        };
+      }
+    }
+  }
   const coherentConnections = designConnections.map((connection) => ({
     id: connection.id,
     fromComponentId: connection.from.blockId,
     toComponentId: connection.to.blockId,
-    fromPortId: connection.from.portId,
-    toPortId: connection.to.portId,
+    fromPortId: canonicalPortId(connection.from.blockId, connection.from.portId, config),
+    toPortId: canonicalPortId(connection.to.blockId, connection.to.portId, config),
     distanceMm: connection.distanceMm,
     azimuthDeg: connection.azimuthDeg,
     elevationDeg: connection.elevationDeg,
+    allowReverse: connection.allowReverse === true,
     autoPlace: connection.autoPlace !== false,
+    variables: connection.variables ? clone(connection.variables) : undefined,
     pathId: connection.pathLabel ?? 'main',
   }));
   const pathMap = new Map<string, string[]>();
@@ -325,11 +571,13 @@ export function buildHybridAssemblyFromConfiguration(config: Configuration): Coh
     schemaVersion: '1.0', mode: 'non-sequential', preset: 'custom-hybrid', revision: Number(config.metadata?.modified ? Date.parse(config.metadata.modified) : 0) || 0,
     name: `${config.name} · Hybrid Assembly`, components, connections: coherentConnections,
     paths: Array.from(pathMap, ([id, componentIds]) => ({ id, label: id, componentIds, roundTrip: false, throughput: 1 })),
-    blockSequences: sequentialBlocks.length ? [{ id: 'sequential:main', label: 'Exact sequential optics', pathId: 'main', blocks: sequentialBlocks, rootTransform: identityTransform() }] : [],
+    portRoutes: [], routeSets: [],
+    blockSequences,
     clearance: { radialMm: 5, axialMm: 3 },
     source, sources,
     beamSplitter: {
       model: ['plate', 'cube', 'pellicle'].includes(String(bp.beamSplitterModel)) ? bp.beamSplitterModel as 'plate' | 'cube' | 'pellicle' : 'ideal',
+      reflectionPort: String(bp.reflectionPort ?? 'reflect').toLowerCase() === 'recombine' ? 'recombine' : 'reflect',
       reflectance: Math.max(0, finite(bp.reflectance, 0.5)),
       transmittance: Math.max(0, finite(bp.transmittance, 0.5)),
       reflectedPhaseDeg: finite(bp.reflectedPhaseDeg, 90),
@@ -348,7 +596,29 @@ export function buildHybridAssemblyFromConfiguration(config: Configuration): Coh
     attenuatorTransmission: Math.max(0, finite(physicalBlocks.find((block) => block.blockType === 'NDFilter')?.parameters?.transmission, 1)),
     targetReflectance: Math.max(0, finite(tp.reflectance, 1)), visibility: 1, calibrationOffsetMm: 0,
   };
-  return reflowCoherentAssembly(design);
+  const routeConfiguration = normalizePortRouteConfiguration({
+    ...config,
+    designConnections: designConnections.map((connection) => ({
+      ...connection,
+      from: { ...connection.from, portId: canonicalPortId(connection.from.blockId, connection.from.portId, config) },
+      to: { ...connection.to, portId: canonicalPortId(connection.to.blockId, connection.to.portId, config) },
+    })),
+  });
+  design.portRoutes = routeConfiguration.routes;
+  design.routeSets = routeConfiguration.routeSets;
+  const reflowed = reflowCoherentAssembly(design);
+  const sequenceComponent = new Map(reflowed.components
+    .filter((component) => component.kind === 'sequential-group')
+    .map((component) => [String(component.metadata?.sequenceId ?? ''), component]));
+  reflowed.blockSequences = reflowed.blockSequences.map((sequence) => {
+    const component = sequenceComponent.get(sequence.id);
+    return component ? {
+      ...sequence,
+      manualOffset: clone(component.manualOffset),
+      rootTransform: resolveComponentTransform(component),
+    } : sequence;
+  });
+  return reflowed;
 }
 export function migrateLegacyCoherentDesign(
   legacy: CoherentAssemblyDesign,
@@ -402,7 +672,10 @@ export function migrateLegacyCoherentDesign(
       maxWavelengthNm: source.maxWavelengthNm, bandwidthFwhmNm: source.bandwidthFwhmNm,
       spectralSamples: source.spectralSamples, totalPowerW: source.totalPowerW,
       beamDiameterMm: source.beamDiameterMm, divergenceDeg: source.divergenceDeg,
-      spatialProfile: source.spatialProfile, spatialSamples: source.spatialSamples,
+      spatialProfile: source.spatialProfile,
+      renderSpatialSamples: source.renderSpatialSamples,
+      detectorSpatialSamples: source.detectorSpatialSamples,
+      spatialSamples: source.spatialSamples,
       coherenceGroupId: source.coherenceGroupId, repetitionRateHz: source.repetitionRateHz,
       ceoFrequencyHz: source.ceoFrequencyHz, lineCount: source.lineCount, lineWidthHz: source.lineWidthHz,
     });
@@ -437,6 +710,7 @@ export function migrateLegacyCoherentDesign(
       distanceMm: Math.max(0, finite(connection.distanceMm)),
       azimuthDeg: Number.isFinite(Number(connection.azimuthDeg)) ? Number(connection.azimuthDeg) : undefined,
       elevationDeg: Number.isFinite(Number(connection.elevationDeg)) ? Number(connection.elevationDeg) : undefined,
+      allowReverse: false,
       autoPlace: connection.autoPlace !== false,
       pathLabel: String(connection.pathId ?? 'main'),
     }];

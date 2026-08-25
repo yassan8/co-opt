@@ -3,6 +3,7 @@ import {
   type CoherentAssemblyDesign,
 } from '../analysis/coherent-assembly.ts';
 import { buildHybridAssemblyFromConfiguration } from '../analysis/hybrid-design.ts';
+import { normalizePortRouteConfiguration } from '../analysis/port-routes.ts';
 import {
   loadPersistedSystemConfigurations,
   loadSystemConfigurations,
@@ -30,7 +31,10 @@ interface CoherentUpdateDetail extends ActiveCoherentDesignSnapshot {
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 function readSystemConfig(): any {
-  return loadPersistedSystemConfigurations() ?? loadSystemConfigurations();
+  // Prefer the in-memory Design Intent edit when it exists. Reading persisted
+  // storage first made a quick "edit Source -> Run" sequence use the previous
+  // ray count until the debounced save completed.
+  return loadSystemConfigurations() ?? loadPersistedSystemConfigurations();
 }
 
 function activeConfig(system: any): any {
@@ -123,7 +127,20 @@ function applyHybridDesignToConfiguration(active: any, design: CoherentAssemblyD
     detectorMagnification: design.grating.detectorMagnification,
   });
   const splitter = blocks.find((block: any) => block?.blockType === 'BeamSplitter');
-  if (splitter) Object.assign(splitter.parameters ?? (splitter.parameters = {}), design.beamSplitter);
+  if (splitter) Object.assign(splitter.parameters ?? (splitter.parameters = {}), {
+    beamSplitterModel: design.beamSplitter.model,
+    reflectionPort: design.beamSplitter.reflectionPort ?? 'reflect',
+    reflectance: design.beamSplitter.reflectance,
+    transmittance: design.beamSplitter.transmittance,
+    reflectedPhaseDeg: design.beamSplitter.reflectedPhaseDeg,
+    transmittedPhaseDeg: design.beamSplitter.transmittedPhaseDeg,
+    substrateMaterial: design.beamSplitter.substrateMaterial,
+    substrateIndexNd: design.beamSplitter.substrateIndexNd,
+    substrateAbbeNumber: design.beamSplitter.substrateAbbeNumber,
+    substrateThicknessMm: design.beamSplitter.substrateThicknessMm,
+    wedgeDeg: design.beamSplitter.wedgeDeg,
+    backSurfaceReflectance: design.beamSplitter.backSurfaceReflectance,
+  });
   const target = blocks.find((block: any) => block?.blockType === 'Target');
   if (target) Object.assign(target.parameters ?? (target.parameters = {}), {
     profile: design.target.kind, widthMm: design.target.spanMm, offsetUm: design.target.offsetUm,
@@ -135,6 +152,18 @@ function applyHybridDesignToConfiguration(active: any, design: CoherentAssemblyD
     reflectance: design.targetReflectance,
   });
   const componentIds = new Set((design.components ?? []).map((component) => String(component.id)));
+  active.sequentialGroups = (design.blockSequences ?? []).map((sequence) => ({
+    id: String(sequence.id ?? '').replace(/^sequential-group:/, '').replace(/^sequential:/, '') || 'main',
+    label: String(sequence.label ?? '').trim() || 'Exact sequential optics',
+    blockIds: (Array.isArray(sequence.blocks) ? sequence.blocks : [])
+      .map((block: any) => String(block?.blockId ?? ''))
+      .filter(Boolean),
+    pathLabel: String(sequence.pathId ?? '').trim() || 'main',
+    // Persist only the authored offset. rootTransform is the resolved world
+    // pose after port auto-placement and must not be reapplied on the next load.
+    rootTransform: clone(sequence.manualOffset ?? sequence.rootTransform),
+    rootTransformVariables: clone(sequence.rootTransformVariables ?? {}),
+  }));
   active.designConnections = (design.connections ?? [])
     .filter((connection) => componentIds.has(String(connection.fromComponentId)) && componentIds.has(String(connection.toComponentId)))
     .map((connection) => ({
@@ -142,8 +171,36 @@ function applyHybridDesignToConfiguration(active: any, design: CoherentAssemblyD
       from: { blockId: connection.fromComponentId, portId: connection.fromPortId ?? 'out' },
       to: { blockId: connection.toComponentId, portId: connection.toPortId ?? 'in' },
       distanceMm: Number(connection.distanceMm ?? 0), azimuthDeg: Number.isFinite(Number(connection.azimuthDeg)) ? Number(connection.azimuthDeg) : undefined, elevationDeg: Number.isFinite(Number(connection.elevationDeg)) ? Number(connection.elevationDeg) : undefined, autoPlace: connection.autoPlace !== false, pathLabel: connection.pathId,
+      allowReverse: connection.allowReverse === true,
+      variables: clone(connection.variables ?? {}),
     }));
+  active.portRoutes = clone(design.portRoutes ?? active.portRoutes ?? []);
+  active.routeSets = clone(design.routeSets ?? active.routeSets ?? []);
   delete active.coherentDesign;
+}
+
+export function readActiveConfiguration(): any {
+  return clone(activeConfig(readSystemConfig()));
+}
+
+export function detectActivePortRoutes(): ActiveCoherentDesignSnapshot {
+  const system = readSystemConfig();
+  const active = activeConfig(system);
+  if (!active) throw new Error('Active configuration was not found.');
+  const detected = normalizePortRouteConfiguration({ ...active, portRoutes: undefined, routeSets: undefined });
+  const current = buildHybridAssemblyFromConfiguration(active);
+  current.portRoutes = detected.routes;
+  current.routeSets = detected.routeSets;
+  return updateActiveCoherentDesign(current, 'route-auto-detect');
+}
+
+function coherentSnapshotContentSignature(snapshot: ActiveCoherentDesignSnapshot): string {
+  const { revision: _revision, ...designContent } = snapshot.design;
+  return JSON.stringify({
+    configId: snapshot.configId,
+    configName: snapshot.configName,
+    design: designContent,
+  });
 }
 function persist(
   input: CoherentAssemblyDesign,
@@ -209,16 +266,36 @@ export function subscribeActiveCoherentDesign(
   listener: (snapshot: ActiveCoherentDesignSnapshot, reason: string) => void,
 ): () => void {
   let disposed = false;
+  let storageRefreshTimer: number | null = null;
+  let lastDeliveredSignature = coherentSnapshotContentSignature(readActiveCoherentDesign());
   const deliver = (detail?: Partial<CoherentUpdateDetail>) => {
     if (disposed || detail?.origin === instanceId) return;
     const snapshot = detail?.design && detail.configId !== undefined
       ? { design: normalizeCoherentAssemblyDesign(detail.design), configId: String(detail.configId), configName: String(detail.configName ?? 'Config') }
       : readActiveCoherentDesign();
+    // Several same-origin windows can persist the same Config while an
+    // analysis is running. Do not turn equivalent storage/DOM notifications
+    // into fresh React snapshots, because that restarts Preview and Full PSF.
+    const signature = coherentSnapshotContentSignature(snapshot);
+    if (signature === lastDeliveredSignature) return;
+    lastDeliveredSignature = signature;
     listener(snapshot, String(detail?.reason ?? 'external'));
   };
   const domListener = (event: Event) => deliver((event as CustomEvent<CoherentUpdateDetail>).detail);
   window.addEventListener(EVENT_NAME, domListener);
   window.addEventListener('coopt:system-configurations-updated', domListener);
+  // MDI analysis windows run in same-origin iframes. A DOM event dispatched
+  // by Design Intents stays in the host window, while the persisted Config
+  // change is observable here through the cross-document storage event.
+  const storageListener = (event: StorageEvent) => {
+    if (event.key !== null && event.key !== 'systemConfigurations') return;
+    if (storageRefreshTimer !== null) window.clearTimeout(storageRefreshTimer);
+    storageRefreshTimer = window.setTimeout(() => {
+      storageRefreshTimer = null;
+      deliver({ reason: 'configuration-storage-updated' });
+    }, 40);
+  };
+  window.addEventListener('storage', storageListener);
   const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(CHANNEL_NAME) : null;
   if (channel) channel.onmessage = (event) => deliver(event.data as CoherentUpdateDetail);
   let unlistenTauri: (() => void) | undefined;
@@ -230,8 +307,10 @@ export function subscribeActiveCoherentDesign(
   }
   return () => {
     disposed = true;
+    if (storageRefreshTimer !== null) window.clearTimeout(storageRefreshTimer);
     window.removeEventListener(EVENT_NAME, domListener);
     window.removeEventListener('coopt:system-configurations-updated', domListener);
+    window.removeEventListener('storage', storageListener);
     channel?.close();
     unlistenTauri?.();
   };
