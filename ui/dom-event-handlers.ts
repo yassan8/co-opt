@@ -9892,6 +9892,15 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             },
             ReflectionGrating: {
                 grooveDensityLinesPerMm: { label: 'Groove density (lines/mm)', compactLabel: 'Grooves (lines/mm)', help: 'Number of grating grooves per millimetre used by the vector grating equation.' },
+                detectorMagnification: { label: 'Detector depth magnification', compactLabel: 'Depth mag.', help: 'Effective relay magnification from grating angle to the Camera depth axis. It must match the physical relay lens ratio; increase it to reduce spectral-carrier cycles per Camera pixel.' },
+                delayModel: {
+                    label: 'Delay model',
+                    help: 'Diffractive phase models an ordinary zero-thickness grating. Detector-linear OPD models the calibrated grating/relay delay gradient along Camera Y for white-light depth encoding.',
+                    choices: [
+                        { value: 'diffractive-phase', label: 'Diffractive phase' },
+                        { value: 'detector-linear-opd', label: 'Detector-linear OPD' },
+                    ],
+                },
                 order: { label: 'Primary diffraction order', compactLabel: 'Order', help: 'Diffraction order emphasized for the main connected output.' },
                 allowedOrders: { label: 'Allowed orders', help: 'List of diffraction orders that may generate outgoing rays.' },
                 efficiency: { label: 'Diffraction efficiency', compactLabel: 'Efficiency', help: 'Fraction of incident power assigned to the selected diffraction order.' },
@@ -9932,6 +9941,14 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         { value: 'bsdf-csv', label: 'BSDF CSV' },
                     ],
                 },
+                surfaceResponse: {
+                    label: 'Surface response',
+                    help: 'Specular normal applies the local profile slope to the reflected-ray direction. Telecentric phase keeps the nominal return direction and encodes the surface only as the physical round-trip optical path; use it for the coaxial line-imaging approximation where lateral beam walk is intentionally excluded.',
+                    choices: [
+                        { value: 'specular-normal', label: 'Specular normal' },
+                        { value: 'telecentric-phase', label: 'Telecentric phase' },
+                    ],
+                },
                 offsetUm: { label: 'Base height (µm)', help: 'Reference height added to the selected target profile.' },
                 amplitudeUm: { label: 'Profile amplitude (µm)', help: 'Step: height change. Tilt: half of the edge-to-edge height change, so local X = -width/2 is offset-amplitude and +width/2 is offset+amplitude. Sine: peak height about the base height.' },
                 periodMm: { label: 'Profile period (mm)', help: 'Spatial period of a sinusoidal target profile.' },
@@ -9952,6 +9969,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 exposureTimeS: { label: 'Exposure time (s)', help: 'Time over which optical power is integrated into charge.' },
                 saturationElectrons: { label: 'Full well (electrons)', help: 'Maximum stored charge before the pixel saturates.' },
                 bitDepth: { label: 'ADC bit depth', help: 'Digital output resolution used when converting electrons to ADU.' },
+                calibrationMinUm: { label: 'Minimum reconstructed height (µm)', compactLabel: 'Height min (µm)', help: 'Lower limit of the calibrated surface-height search range. Keep this close to the expected physical measurement range to reject unrelated correlation peaks.' },
+                calibrationMaxUm: { label: 'Maximum reconstructed height (µm)', compactLabel: 'Height max (µm)', help: 'Upper limit of the calibrated surface-height search range. It must be greater than the minimum reconstructed height.' },
                 frontOnly: {
                     label: 'Accepted incidence',
                     help: 'Front only rejects rays arriving from the detector rear; Both sides accept either direction.',
@@ -11268,6 +11287,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 appendTextField('T', 'parameters.transmittance', params.transmittance, 62, specRow);
             } else if (blockType === 'ReflectionGrating') {
                 appendTextField('lines/mm', 'parameters.grooveDensityLinesPerMm', params.grooveDensityLinesPerMm, 82, specRow);
+                appendTextField('Depth mag.', 'parameters.detectorMagnification', params.detectorMagnification ?? 1, 72, specRow);
                 appendTextField('Order', 'parameters.order', params.order, 58, specRow);
                 appendTextField('Efficiency', 'parameters.efficiency', params.efficiency, 68, specRow);
             } else if (blockType === 'Target') {
@@ -11279,6 +11299,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 appendTextField('Pixels Y', 'parameters.pixelCountY', params.pixelCountY, 72, specRow);
                 appendTextField('Pitch µm', 'parameters.pixelPitchUm', params.pixelPitchUm, 72, specRow);
                 appendTextField('QE', 'parameters.quantumEfficiency', params.quantumEfficiency, 60, specRow);
+                appendTextField('Height min', 'parameters.calibrationMinUm', params.calibrationMinUm ?? -80, 72, specRow);
+                appendTextField('Height max', 'parameters.calibrationMaxUm', params.calibrationMaxUm ?? 80, 72, specRow);
             } else if (blockType === 'TimeDetector') {
                 appendTextField('Sample Hz', 'parameters.samplingRateHz', params.samplingRateHz, 94, specRow);
                 appendTextField('Samples', 'parameters.sampleCount', params.sampleCount, 72, specRow);
@@ -11935,6 +11957,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if (blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource') {
                 if (!allParamKeys.includes('renderSpatialSamples')) allParamKeys.push('renderSpatialSamples');
                 if (!allParamKeys.includes('detectorSpatialSamples')) allParamKeys.push('detectorSpatialSamples');
+            }
+            if (blockType === 'AreaDetector') {
+                if (!allParamKeys.includes('calibrationMinUm')) allParamKeys.push('calibrationMinUm');
+                if (!allParamKeys.includes('calibrationMaxUm')) allParamKeys.push('calibrationMaxUm');
             }
             if ((blockType === 'Gap' || blockType === 'AirGap') && !allParamKeys.includes('material')) {
                 allParamKeys.push('material');

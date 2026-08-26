@@ -2,6 +2,7 @@ import type { CoherentDetectorSpec } from './coherent-assembly.ts';
 
 const PLANCK_J_S = 6.62607015e-34;
 const LIGHT_M_S = 299792458;
+const TWO_PI = Math.PI * 2;
 
 export interface SpectralPsfPlane {
   wavelengthUm: number;
@@ -35,6 +36,8 @@ export interface CoherentDetectorFieldSample {
   pupilXmm?: number;
   pupilYmm?: number;
   opticalPathLengthMm?: number;
+  /** Reference-arm OPL gradient encoded on final Detector local Y. */
+  detectorDelaySlopeMmPerMm?: number;
   pixelX: number;
   pixelY: number;
   coherenceGroupId: string;
@@ -56,6 +59,14 @@ export interface CoherentFieldDetectorSignal {
   inputFieldPowerW: number;
   complexKernelCount: number;
   warning: string;
+}
+
+export interface DetectorLinearOpdCameraRaster {
+  width: number;
+  height: number;
+  powerWPerPixel: Float64Array;
+  pairedSampleCount: number;
+  spectralModeCount: number;
 }
 
 function accumulateFractionalComplex(
@@ -90,6 +101,169 @@ function accumulateFractionalComplex(
 
 const finite = (value: unknown, fallback = 0): number => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const clamp = (value: number, minimum: number, maximum: number): number => Math.max(minimum, Math.min(maximum, value));
+
+/**
+ * Builds the broadband Camera interferogram for a routed linear-OPD
+ * reference arm. Measurement and reference rays are paired by source mode and
+ * launch pupil before their traced OPL is compared. This preserves the
+ * physical Target phase while preventing two unrelated sparse Monte-Carlo
+ * hits from being treated as one coherent field sample.
+ */
+export function synthesizeDetectorLinearOpdCameraRaster(options: {
+  spectralFields: CoherentDetectorFieldSample[];
+  measurementRouteId: string;
+  referenceRouteId: string;
+  opdCalibrationMm?: number;
+  detector: CoherentDetectorSpec;
+  cameraXMin: number;
+  cameraXMax: number;
+  maximumWidth?: number;
+  maximumHeight?: number;
+}): DetectorLinearOpdCameraRaster | null {
+  const detectorWidth = Math.max(1, Math.round(finite(options.detector.pixelCountX, 1)));
+  const detectorHeight = Math.max(1, Math.round(finite(options.detector.pixelCountY, 1)));
+  const cameraXMin = clamp(Math.floor(finite(options.cameraXMin)), 0, detectorWidth - 1);
+  const cameraXMax = clamp(Math.ceil(finite(options.cameraXMax, detectorWidth - 1)), cameraXMin, detectorWidth - 1);
+  const width = Math.max(1, Math.min(
+    cameraXMax - cameraXMin + 1,
+    Math.max(16, Math.round(finite(options.maximumWidth, 256))),
+  ));
+  const height = Math.max(1, Math.min(
+    detectorHeight,
+    Math.max(16, Math.round(finite(options.maximumHeight, 2048))),
+  ));
+  const pupilKey = (sample: CoherentDetectorFieldSample): string => [
+    sample.sourceId ?? '',
+    Math.round(finite(sample.lineIndex, -1)),
+    finite(sample.pupilXmm).toFixed(9),
+    finite(sample.pupilYmm).toFixed(9),
+  ].join(':');
+  const references = new Map<string, CoherentDetectorFieldSample>();
+  for (const sample of options.spectralFields) {
+    if (sample.routeId === options.referenceRouteId
+      && Number.isFinite(sample.opticalPathLengthMm)
+      && Math.abs(finite(sample.detectorDelaySlopeMmPerMm)) > 1e-15) {
+      references.set(pupilKey(sample), sample);
+    }
+  }
+  type Column = {
+    count: number;
+    dcPower: number;
+    interferenceAmplitude: number;
+    weightedOpdMm: number;
+    weightedSlope: number;
+  };
+  type Mode = { wavelengthNm: number; columns: Map<number, Column> };
+  const modes = new Map<string, Mode>();
+  let pairedSampleCount = 0;
+  const calibrationMm = finite(options.opdCalibrationMm);
+  for (const measurement of options.spectralFields) {
+    if (measurement.routeId !== options.measurementRouteId
+      || !Number.isFinite(measurement.opticalPathLengthMm)) continue;
+    const reference = references.get(pupilKey(measurement));
+    if (!reference || Math.abs(reference.frequencyHz - measurement.frequencyHz) > Math.max(1e-3, measurement.frequencyHz * 1e-12)) continue;
+    const normalizedX = (measurement.pixelX - cameraXMin) / Math.max(1, cameraXMax - cameraXMin + 1);
+    const x = clamp(Math.floor(normalizedX * width), 0, width - 1);
+    const measurementPower = measurement.fieldRe ** 2 + measurement.fieldIm ** 2;
+    const referencePower = reference.fieldRe ** 2 + reference.fieldIm ** 2;
+    const interferenceAmplitude = Math.sqrt(Math.max(0, measurementPower * referencePower));
+    if (!(interferenceAmplitude > 0)) continue;
+    const modeKey = `${measurement.coherenceGroupId || 'source'}:${measurement.frequencyHz.toPrecision(15)}`;
+    const mode = modes.get(modeKey) ?? { wavelengthNm: measurement.wavelengthNm, columns: new Map<number, Column>() };
+    const column = mode.columns.get(x) ?? {
+      count: 0,
+      dcPower: 0,
+      interferenceAmplitude: 0,
+      weightedOpdMm: 0,
+      weightedSlope: 0,
+    };
+    const opdMm = finite(measurement.opticalPathLengthMm)
+      - finite(reference.opticalPathLengthMm)
+      + calibrationMm;
+    column.count += 1;
+    column.dcPower += measurementPower + referencePower;
+    column.interferenceAmplitude += interferenceAmplitude;
+    column.weightedOpdMm += opdMm * interferenceAmplitude;
+    column.weightedSlope += finite(reference.detectorDelaySlopeMmPerMm) * interferenceAmplitude;
+    mode.columns.set(x, column);
+    modes.set(modeKey, mode);
+    pairedSampleCount += 1;
+  }
+  if (!modes.size || pairedSampleCount === 0) return null;
+
+  type ResolvedColumn = { dcPower: number; interferenceAmplitude: number; opdMm: number; slope: number };
+  const resolve = (column: Column): ResolvedColumn => ({
+    dcPower: column.dcPower / Math.max(1, column.count),
+    interferenceAmplitude: column.interferenceAmplitude / Math.max(1, column.count),
+    opdMm: column.weightedOpdMm / Math.max(1e-30, column.interferenceAmplitude),
+    slope: column.weightedSlope / Math.max(1e-30, column.interferenceAmplitude),
+  });
+  const interpolateColumns = (columns: Map<number, Column>): Array<ResolvedColumn | null> => {
+    const known = Array.from(columns.entries())
+      .map(([x, column]) => ({ x, value: resolve(column) }))
+      .sort((left, right) => left.x - right.x);
+    if (!known.length) return new Array(width).fill(null);
+    const result = new Array<ResolvedColumn | null>(width).fill(null);
+    let rightIndex = 0;
+    for (let x = 0; x < width; x += 1) {
+      while (rightIndex < known.length && known[rightIndex].x < x) rightIndex += 1;
+      const right = known[Math.min(known.length - 1, rightIndex)];
+      const left = known[rightIndex <= 0 ? 0 : Math.min(known.length - 1, rightIndex - 1)];
+      if (right.x === x) {
+        result[x] = { ...right.value };
+        continue;
+      }
+      if (left.x === right.x) {
+        result[x] = { ...left.value };
+        continue;
+      }
+      const fraction = clamp((x - left.x) / (right.x - left.x), 0, 1);
+      result[x] = {
+        dcPower: left.value.dcPower + (right.value.dcPower - left.value.dcPower) * fraction,
+        interferenceAmplitude: left.value.interferenceAmplitude
+          + (right.value.interferenceAmplitude - left.value.interferenceAmplitude) * fraction,
+        opdMm: left.value.opdMm + (right.value.opdMm - left.value.opdMm) * fraction,
+        slope: left.value.slope + (right.value.slope - left.value.slope) * fraction,
+      };
+    }
+    return result;
+  };
+
+  const powerWPerPixel = new Float64Array(width * height);
+  const detectorPitchMm = Math.max(1e-12, finite(options.detector.pixelPitchUm, 5) * 1e-3);
+  const detectorYScale = detectorHeight / height;
+  for (const mode of modes.values()) {
+    const columns = interpolateColumns(mode.columns);
+    for (let x = 0; x < width; x += 1) {
+      const column = columns[x];
+      if (!column) continue;
+      const wavelengthMm = Math.max(1e-12, mode.wavelengthNm * 1e-6);
+      const y0Mm = ((0.5 * detectorYScale) - detectorHeight / 2) * detectorPitchMm;
+      const yStepMm = detectorYScale * detectorPitchMm;
+      let phase = TWO_PI * (column.opdMm - column.slope * y0Mm) / wavelengthMm;
+      const phaseStep = -TWO_PI * column.slope * yStepMm / wavelengthMm;
+      const incrementRe = Math.cos(phaseStep);
+      const incrementIm = Math.sin(phaseStep);
+      let phaseRe = Math.cos(phase);
+      let phaseIm = Math.sin(phase);
+      for (let y = 0; y < height; y += 1) {
+        powerWPerPixel[y * width + x] += Math.max(
+          0,
+          column.dcPower + 2 * column.interferenceAmplitude * phaseRe,
+        );
+        const nextRe = phaseRe * incrementRe - phaseIm * incrementIm;
+        phaseIm = phaseRe * incrementIm + phaseIm * incrementRe;
+        phaseRe = nextRe;
+        if ((y & 255) === 255) {
+          phase += phaseStep * 256;
+          phaseRe = Math.cos(phase);
+          phaseIm = Math.sin(phase);
+        }
+      }
+    }
+  }
+  return { width, height, powerWPerPixel, pairedSampleCount, spectralModeCount: modes.size };
+}
 
 export interface DetectorDisplayRaster {
   width: number;
@@ -647,7 +821,15 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
     return kernel;
   };
 
-  type Mode = { wavelengthNm: number; field: Map<number, { re: number; im: number }> };
+  type EncodedRouteField = {
+    detectorDelaySlopeMmPerMm: number;
+    field: Map<number, { re: number; im: number }>;
+  };
+  type Mode = {
+    wavelengthNm: number;
+    field: Map<number, { re: number; im: number }>;
+    encodedRouteFields: EncodedRouteField[];
+  };
   const modes = new Map<string, Mode>();
   const routeIdsByMode = new Map<string, Set<string>>();
   for (const sample of samples) {
@@ -670,6 +852,7 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
       strongestRe: number;
       strongestIm: number;
       strongestPower: number;
+      detectorDelaySlopeMmPerMm: number;
     };
     const grouped = new Map<string, ModeInput>();
     for (const sample of samples) {
@@ -688,6 +871,7 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
         totalPower: 0, weightedX: 0, weightedY: 0,
         sumRe: 0, sumIm: 0,
         strongestRe: 1, strongestIm: 0, strongestPower: -1,
+        detectorDelaySlopeMmPerMm: finite(sample.detectorDelaySlopeMmPerMm),
       };
       mode.totalPower += power;
       mode.weightedX += sourceX * power;
@@ -721,7 +905,7 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
       const sourceAmplitude = Math.sqrt(input.totalPower);
       const sourceRe = sourceAmplitude * phaseRe / phaseLength;
       const sourceIm = sourceAmplitude * phaseIm / phaseLength;
-      const mode = modes.get(input.modeKey) ?? { wavelengthNm: input.wavelengthNm, field: new Map() };
+      const mode = modes.get(input.modeKey) ?? { wavelengthNm: input.wavelengthNm, field: new Map(), encodedRouteFields: [] };
       modes.set(input.modeKey, mode);
       const routeField = new Map<number, { re: number; im: number }>();
       for (const tap of kernel) {
@@ -740,6 +924,17 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
         0,
       );
       const routeScale = reconstructedPower > 0 ? Math.sqrt(input.totalPower / reconstructedPower) : 0;
+      if (Math.abs(input.detectorDelaySlopeMmPerMm) > 1e-15) {
+        const scaled = new Map<number, { re: number; im: number }>();
+        for (const [index, field] of routeField) {
+          scaled.set(index, { re: field.re * routeScale, im: field.im * routeScale });
+        }
+        mode.encodedRouteFields.push({
+          detectorDelaySlopeMmPerMm: input.detectorDelaySlopeMmPerMm,
+          field: scaled,
+        });
+        continue;
+      }
       for (const [index, field] of routeField) {
         const previous = mode.field.get(index) ?? { re: 0, im: 0 };
         previous.re += field.re * routeScale;
@@ -753,6 +948,7 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
       wavelengthNm: number;
       totalPower: number;
       samples: CoherentDetectorFieldSample[];
+      detectorDelaySlopeMmPerMm: number;
     };
     const grouped = new Map<string, RoutedModeSamples>();
     for (const sample of samples) {
@@ -767,6 +963,7 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
         wavelengthNm: sample.wavelengthNm,
         totalPower: 0,
         samples: [],
+        detectorDelaySlopeMmPerMm: finite(sample.detectorDelaySlopeMmPerMm),
       };
       group.totalPower += power;
       group.samples.push(sample);
@@ -779,7 +976,10 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
       // Keep a deterministic spatial/phase cross-section without making the
       // cost grow as Detector rays × every PSF cell. Route normalization below
       // restores the total power represented by all samples in the group.
-      const maximumSpatialSamples = 64;
+      // Preserve enough of the physically traced pupil/field distribution for
+      // a smooth Detector image.  The old 64-ray cap produced a visible lattice
+      // and made Detector-rays/wavelength changes ineffective for reconstruction.
+      const maximumSpatialSamples = 256;
       const representativeSamples = group.samples.length <= maximumSpatialSamples
         ? group.samples
         : Array.from({ length: maximumSpatialSamples }, (_, index) => (
@@ -807,13 +1007,24 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
         (sum, field) => sum + field.re * field.re + field.im * field.im,
         0,
       );
-      const mode = modes.get(group.modeKey) ?? { wavelengthNm: group.wavelengthNm, field: new Map() };
+      const mode = modes.get(group.modeKey) ?? { wavelengthNm: group.wavelengthNm, field: new Map(), encodedRouteFields: [] };
       modes.set(group.modeKey, mode);
       // Exact destructive interference is a valid zero-signal result. Keep
       // the mode even when its reconstructed field cancels completely so the
       // caller receives a calculated dark Detector image instead of null.
       if (!(reconstructedPower > 0)) continue;
       const routeScale = Math.sqrt(group.totalPower / reconstructedPower);
+      if (Math.abs(group.detectorDelaySlopeMmPerMm) > 1e-15) {
+        const scaled = new Map<number, { re: number; im: number }>();
+        for (const [index, field] of routeField) {
+          scaled.set(index, { re: field.re * routeScale, im: field.im * routeScale });
+        }
+        mode.encodedRouteFields.push({
+          detectorDelaySlopeMmPerMm: group.detectorDelaySlopeMmPerMm,
+          field: scaled,
+        });
+        continue;
+      }
       for (const [index, field] of routeField) {
         const previous = mode.field.get(index) ?? { re: 0, im: 0 };
         previous.re += field.re * routeScale;
@@ -824,38 +1035,89 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
   }
   if (!modes.size) return null;
 
-  const calculationPowerWPerPixel = new Float64Array(calculationWidth * calculationHeight);
-  const calculationElectronsPerPixel = new Float64Array(calculationWidth * calculationHeight);
   const exposureTimeS = Math.max(0, finite(options.detector.exposureTimeS, 0));
-  for (const mode of modes.values()) {
-    const wavelengthM = mode.wavelengthNm * 1e-9;
-    const photonEnergyJ = PLANCK_J_S * LIGHT_M_S / Math.max(1e-30, wavelengthM);
-    const qe = quantumEfficiency(options.detector, mode.wavelengthNm);
-    for (const [index, field] of mode.field) {
-      const power = field.re * field.re + field.im * field.im;
-      calculationPowerWPerPixel[index] += power;
-      calculationElectronsPerPixel[index] += power * exposureTimeS / photonEnergyJ * qe;
-    }
-  }
-
-  let powerWPerPixel = calculationPowerWPerPixel;
-  let electronsPerPixel = calculationElectronsPerPixel;
-  if (calculationWidth !== width || calculationHeight !== height) {
+  const hasDetectorDelayEncoding = Array.from(modes.values())
+    .some((mode) => mode.encodedRouteFields.length > 0);
+  let powerWPerPixel: Float64Array;
+  let electronsPerPixel: Float64Array;
+  if (hasDetectorDelayEncoding) {
     powerWPerPixel = new Float64Array(width * height);
     electronsPerPixel = new Float64Array(width * height);
-    const xBinCounts = new Uint32Array(calculationWidth);
-    const yBinCounts = new Uint32Array(calculationHeight);
-    for (let x = 0; x < width; x += 1) xBinCounts[Math.min(calculationWidth - 1, Math.floor(x * calculationWidth / width))] += 1;
-    for (let y = 0; y < height; y += 1) yBinCounts[Math.min(calculationHeight - 1, Math.floor(y * calculationHeight / height))] += 1;
-    for (let y = 0; y < height; y += 1) {
-      const calculationY = Math.min(calculationHeight - 1, Math.floor(y * calculationHeight / height));
-      for (let x = 0; x < width; x += 1) {
-        const calculationX = Math.min(calculationWidth - 1, Math.floor(x * calculationWidth / width));
-        const calculationIndex = calculationY * calculationWidth + calculationX;
-        const detectorIndex = y * width + x;
-        const coveredPixelCount = Math.max(1, xBinCounts[calculationX] * yBinCounts[calculationY]);
-        powerWPerPixel[detectorIndex] = calculationPowerWPerPixel[calculationIndex] / coveredPixelCount;
-        electronsPerPixel[detectorIndex] = calculationElectronsPerPixel[calculationIndex] / coveredPixelCount;
+    for (const mode of modes.values()) {
+      const wavelengthM = mode.wavelengthNm * 1e-9;
+      const photonEnergyJ = PLANCK_J_S * LIGHT_M_S / Math.max(1e-30, wavelengthM);
+      const qe = quantumEfficiency(options.detector, mode.wavelengthNm);
+      const activeIndices = new Set<number>(mode.field.keys());
+      for (const encoded of mode.encodedRouteFields) {
+        for (const index of encoded.field.keys()) activeIndices.add(index);
+      }
+      for (const calculationIndex of activeIndices) {
+        const calculationX = calculationIndex % calculationWidth;
+        const calculationY = Math.floor(calculationIndex / calculationWidth);
+        const detectorX0 = Math.ceil(calculationX * width / calculationWidth);
+        const detectorX1 = Math.min(width, Math.ceil((calculationX + 1) * width / calculationWidth));
+        const detectorY0 = Math.ceil(calculationY * height / calculationHeight);
+        const detectorY1 = Math.min(height, Math.ceil((calculationY + 1) * height / calculationHeight));
+        const coveredPixelCount = Math.max(1, (detectorX1 - detectorX0) * (detectorY1 - detectorY0));
+        const baseField = mode.field.get(calculationIndex) ?? { re: 0, im: 0 };
+        for (let detectorY = detectorY0; detectorY < detectorY1; detectorY += 1) {
+          const detectorYmm = (detectorY - height / 2 + 0.5) * detectorPitchUm * 1e-3;
+          let re = baseField.re;
+          let im = baseField.im;
+          for (const encoded of mode.encodedRouteFields) {
+            const field = encoded.field.get(calculationIndex);
+            if (!field) continue;
+            const phase = TWO_PI
+              * encoded.detectorDelaySlopeMmPerMm
+              * detectorYmm * 1e6
+              / mode.wavelengthNm;
+            const cosine = Math.cos(phase);
+            const sine = Math.sin(phase);
+            re += field.re * cosine - field.im * sine;
+            im += field.re * sine + field.im * cosine;
+          }
+          const power = (re * re + im * im) / coveredPixelCount;
+          const electrons = power * exposureTimeS / photonEnergyJ * qe;
+          for (let detectorX = detectorX0; detectorX < detectorX1; detectorX += 1) {
+            const detectorIndex = detectorY * width + detectorX;
+            powerWPerPixel[detectorIndex] += power;
+            electronsPerPixel[detectorIndex] += electrons;
+          }
+        }
+      }
+    }
+  } else {
+    const calculationPowerWPerPixel = new Float64Array(calculationWidth * calculationHeight);
+    const calculationElectronsPerPixel = new Float64Array(calculationWidth * calculationHeight);
+    for (const mode of modes.values()) {
+      const wavelengthM = mode.wavelengthNm * 1e-9;
+      const photonEnergyJ = PLANCK_J_S * LIGHT_M_S / Math.max(1e-30, wavelengthM);
+      const qe = quantumEfficiency(options.detector, mode.wavelengthNm);
+      for (const [index, field] of mode.field) {
+        const power = field.re * field.re + field.im * field.im;
+        calculationPowerWPerPixel[index] += power;
+        calculationElectronsPerPixel[index] += power * exposureTimeS / photonEnergyJ * qe;
+      }
+    }
+    powerWPerPixel = calculationPowerWPerPixel;
+    electronsPerPixel = calculationElectronsPerPixel;
+    if (calculationWidth !== width || calculationHeight !== height) {
+      powerWPerPixel = new Float64Array(width * height);
+      electronsPerPixel = new Float64Array(width * height);
+      const xBinCounts = new Uint32Array(calculationWidth);
+      const yBinCounts = new Uint32Array(calculationHeight);
+      for (let x = 0; x < width; x += 1) xBinCounts[Math.min(calculationWidth - 1, Math.floor(x * calculationWidth / width))] += 1;
+      for (let y = 0; y < height; y += 1) yBinCounts[Math.min(calculationHeight - 1, Math.floor(y * calculationHeight / height))] += 1;
+      for (let y = 0; y < height; y += 1) {
+        const calculationY = Math.min(calculationHeight - 1, Math.floor(y * calculationHeight / height));
+        for (let x = 0; x < width; x += 1) {
+          const calculationX = Math.min(calculationWidth - 1, Math.floor(x * calculationWidth / width));
+          const calculationIndex = calculationY * calculationWidth + calculationX;
+          const detectorIndex = y * width + x;
+          const coveredPixelCount = Math.max(1, xBinCounts[calculationX] * yBinCounts[calculationY]);
+          powerWPerPixel[detectorIndex] = calculationPowerWPerPixel[calculationIndex] / coveredPixelCount;
+          electronsPerPixel[detectorIndex] = calculationElectronsPerPixel[calculationIndex] / coveredPixelCount;
+        }
       }
     }
   }

@@ -2,8 +2,6 @@ export const SPEED_OF_LIGHT_M_PER_S = 299_792_458;
 
 const TWO_PI = Math.PI * 2;
 
-export type CoherentPreset = 'broadband-grating' | 'dual-resonator' | 'dual-comb';
-
 export interface BeamSplitterSpec {
   model?: 'ideal' | 'plate' | 'cube' | 'pellicle';
   /** Common-port reflection exits through this lateral port. */

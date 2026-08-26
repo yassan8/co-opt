@@ -13,6 +13,26 @@ import { worldPortDirection, worldPortPosition } from './coherent-port-layout.ts
 import type { CoherentDetectorFieldSample } from './detector-signal.ts';
 
 const TWO_PI = Math.PI * 2;
+const COOPERATIVE_RAY_CHUNK = 8192;
+const cooperativeYieldQueue: Array<() => void> = [];
+let cooperativeYieldChannel: MessageChannel | null = null;
+
+function yieldToHost(): Promise<void> {
+  const immediate = (globalThis as any).setImmediate;
+  if (typeof immediate === 'function') return new Promise((resolve) => immediate(resolve));
+  if (typeof MessageChannel !== 'undefined') {
+    cooperativeYieldChannel ??= (() => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => cooperativeYieldQueue.shift()?.();
+      return channel;
+    })();
+    return new Promise((resolve) => {
+      cooperativeYieldQueue.push(resolve);
+      cooperativeYieldChannel!.port2.postMessage(0);
+    });
+  }
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 export interface PortRoutedTraceOptions {
   routeSetId?: string;
@@ -114,6 +134,8 @@ interface RoutedRay extends SequentialGroupRayState {
   sourceId: string;
   lineIndex: number;
   targetXmm?: number;
+  /** Equivalent grating/relay OPL gradient evaluated on Detector local Y. */
+  detectorDelaySlopeMmPerMm?: number;
 }
 
 interface SpectrumSample { wavelengthNm: number; powerFraction: number; frequencyHz: number; lineIndex: number }
@@ -326,11 +348,12 @@ function targetSurfaceAtLocalX(
   const profileTangent = String(parameters.profileAxis ?? 'x').toLowerCase() === 'y' ? axes.y : axes.x;
   const heightMm = sampleTargetHeightUm(spec, localXmm) * 1e-3;
   let slope = 0;
-  if (spec.kind === 'tilt') {
+  const phaseOnly = String(parameters.surfaceResponse ?? fallback?.surfaceResponse ?? 'specular-normal').toLowerCase() === 'telecentric-phase';
+  if (!phaseOnly && spec.kind === 'tilt') {
     slope = spec.amplitudeUm * 1e-3 / Math.max(1e-12, spec.spanMm / 2);
-  } else if (spec.kind === 'sine') {
+  } else if (!phaseOnly && spec.kind === 'sine') {
     slope = spec.amplitudeUm * 1e-3 * TWO_PI / spec.periodMm * Math.cos(TWO_PI * localXmm / spec.periodMm);
-  } else if (spec.kind === 'csv') {
+  } else if (!phaseOnly && spec.kind === 'csv') {
     const delta = Math.max(1e-6, Math.min(1e-3, spec.spanMm * 1e-5));
     slope = (sampleTargetHeightUm(spec, localXmm + delta) - sampleTargetHeightUm(spec, localXmm - delta)) * 1e-3 / (2 * delta);
   }
@@ -352,7 +375,15 @@ function intersectTargetSurface(
   for (let iteration = 0; iteration < 6; iteration += 1) {
     const localXmm = dot(subtract(hit.point, basePoint), profileTangent);
     const surface = targetSurfaceAtLocalX(component, parameters, fallback, localXmm);
-    const next = intersectRayPlane(ray, add(basePoint, scale(axes.z, surface.heightMm)), surface.normal);
+    // The tangent plane must pass through the evaluated profile point
+    // (localX, height(localX)). Anchoring it at the component origin instead
+    // produces the tangent-line intercept h - x h', which badly corrupts
+    // steep sine and tilt targets even though the displayed surface is right.
+    const surfacePoint = add(
+      basePoint,
+      add(scale(profileTangent, localXmm), scale(axes.z, surface.heightMm)),
+    );
+    const next = intersectRayPlane(ray, surfacePoint, surface.normal);
     if (!next) return null;
     const converged = distance(hit.point, next.point) < 1e-10;
     hit = next;
@@ -692,6 +723,7 @@ function applyComponentInteraction(
   let componentOplMm = 0;
   let pathMm: Vec3Mm[] = [];
   let targetXmm = ray.targetXmm;
+  let detectorDelaySlopeMmPerMm = ray.detectorDelaySlopeMmPerMm;
   if (component.kind === 'beam-splitter') {
     const entry = String(entryPortId).toLowerCase();
     const exit = String(exitPortId).toLowerCase();
@@ -715,6 +747,54 @@ function applyComponentInteraction(
     if (!computed) return null;
     direction = computed;
     powerFactor = finite(parameters.efficiency, finite(design.grating.efficiency, powerFactor));
+    // The vector grating equation changes the outgoing direction, but a
+    // coherent trace also needs the boundary phase associated with the groove
+    // position.  Without exp(i m K·r), rays leaving different grooves have the
+    // wrong relative phase: Render still looks diffracted while the Detector
+    // carrier collapses or turns into a sampling lattice.
+    const order = gratingOrderFromPort(exitPortId, finite(parameters.order, 1));
+    const normal = componentAxes(component).z;
+    const grooveLocal = normalize({
+      x: finite(parameters.grooveDirectionX, 0),
+      y: finite(parameters.grooveDirectionY, 1),
+      z: finite(parameters.grooveDirectionZ, 0),
+    });
+    const groove = transformLocalDirection(component, grooveLocal);
+    const dispersion = normalize(cross(groove, normal));
+    const grooveOrigin = worldPortPosition(component, entryPortId, 'to');
+    const grooveCoordinateMm = dot(subtract(ray.positionMm, grooveOrigin), dispersion);
+    phase = TWO_PI
+      * order
+      * Math.max(0, finite(parameters.grooveDensityLinesPerMm, 600))
+      * grooveCoordinateMm;
+    const inferredDelayModel = finite(parameters.detectorMagnification, finite(design.grating?.detectorMagnification, 1)) > 1 + 1e-12
+      ? 'detector-linear-opd'
+      : 'diffractive-phase';
+    const delayModel = String(parameters.delayModel ?? inferredDelayModel).toLowerCase();
+    if (delayModel === 'detector-linear-opd' || delayModel === 'blazed-echelon-opd') {
+      // The grating and its relay encode reference-arm delay on Detector Y.
+      // Keep this as an OPL slope instead of adding a wavelength-independent
+      // groove phase: the latter steers the diffracted ray but cannot move the
+      // broadband white-light envelope when the Target height changes.
+      const centerWavelengthMm = Math.max(1e-12, finite(design.source?.centerWavelengthNm, ray.wavelengthNm) * 1e-6);
+      const incidenceRad = finite(parameters.incidenceAngleDeg, finite(design.grating?.incidenceAngleDeg)) * Math.PI / 180;
+      const diffractionSine = order
+        * centerWavelengthMm
+        * Math.max(0, finite(parameters.grooveDensityLinesPerMm, 600))
+        - Math.sin(incidenceRad);
+      if (Math.abs(diffractionSine) <= 1) {
+        detectorDelaySlopeMmPerMm = diffractionSine
+          / Math.max(1e-12, Math.abs(finite(parameters.detectorMagnification, finite(design.grating?.detectorMagnification, 1))));
+      }
+      if (delayModel === 'blazed-echelon-opd') {
+        // Backward-compatible migration for Config revisions created before
+        // Detector-linear OPD was introduced. Those revisions calibrated out
+        // this legacy scalar echelon path term, so retain it until the Config
+        // is next saved with the new delay model.
+        const blazeRad = finite(parameters.blazeAngleDeg, finite(design.grating.blazeAngleDeg)) * Math.PI / 180;
+        componentOplMm += order * 2 * Math.tan(blazeRad) * grooveCoordinateMm;
+      }
+    }
   } else if (component.kind === 'target') {
     if (String(parameters.interaction ?? design.target.interaction ?? 'specular') !== 'specular') return null;
     const targetOrigin = worldPortPosition(component, entryPortId, 'to');
@@ -722,7 +802,8 @@ function applyComponentInteraction(
     const profileTangent = String(parameters.profileAxis ?? 'x').toLowerCase() === 'y' ? targetAxes.y : targetAxes.x;
     const localXmm = dot(subtract(ray.positionMm, targetOrigin), profileTangent);
     targetXmm = localXmm;
-    direction = reflectedDirection(ray.direction, targetSurfaceAtLocalX(component, parameters, design.target, localXmm).normal);
+    const surface = targetSurfaceAtLocalX(component, parameters, design.target, localXmm);
+    direction = reflectedDirection(ray.direction, surface.normal);
     powerFactor = finite(parameters.reflectance, finite(design.targetReflectance, powerFactor));
   } else if (component.kind === 'mirror') {
     direction = reflectedDirection(ray.direction, componentAxes(component).z);
@@ -751,6 +832,7 @@ function applyComponentInteraction(
       opticalPathLengthMm: finite(ray.opticalPathLengthMm) + componentOplMm,
       phaseRad: ray.phaseRad + phase + TWO_PI * componentOplMm * 1e6 / ray.wavelengthNm,
       targetXmm,
+      detectorDelaySlopeMmPerMm,
       history: [...(ray.history ?? []), `${component.id}:${exitPortId}`],
     },
     pathMm,
@@ -995,11 +1077,14 @@ export async function runPortRoutedTrace(config: Configuration, options: PortRou
         `${resolved.route.label} · ${stepIndex + 1}/${resolved.steps.length}`,
         resolved,
       );
+      await yieldToHost();
       const arrivalComponent = components.get(step.arrival.blockId);
       if (!arrivalComponent) { failureReason = `Missing component ${step.arrival.blockId}.`; activeRays = []; break; }
       const arrivalParameters = parametersByComponent.get(arrivalComponent.id) ?? {};
       const arrived: RoutedRay[] = [];
-      for (const ray of activeRays) {
+      for (let rayIndex = 0; rayIndex < activeRays.length; rayIndex += 1) {
+        if (rayIndex > 0 && rayIndex % COOPERATIVE_RAY_CHUNK === 0) await yieldToHost();
+        const ray = activeRays[rayIndex];
         const hit = arrivalComponent.kind === 'beam-splitter'
           ? beamSplitterEntryIntersection(ray, arrivalComponent, step.arrival.portId, arrivalParameters, design.beamSplitter)
           : arrivalComponent.kind === 'target'
@@ -1016,7 +1101,9 @@ export async function runPortRoutedTrace(config: Configuration, options: PortRou
 
       if (stepIndex === resolved.steps.length - 1) {
         if (arrivalComponent.id !== detectorId) { failureReason = 'Route ended before its detector.'; activeRays = []; break; }
-        for (const ray of arrived) {
+        for (let rayIndex = 0; rayIndex < arrived.length; rayIndex += 1) {
+          if (rayIndex > 0 && rayIndex % COOPERATIVE_RAY_CHUNK === 0) await yieldToHost();
+          const ray = arrived[rayIndex];
           const timeFrontAccepted = detector.frontOnly === false || dot(ray.direction, worldPortDirection(arrivalComponent, 'detect', 'to')) < -1e-10;
           const pixel = isTimeDetector
             ? (timeFrontAccepted ? { index: 0, pixelX: 0, pixelY: 0, xMm: 0, yMm: 0 } : null)
@@ -1047,6 +1134,7 @@ export async function runPortRoutedTrace(config: Configuration, options: PortRou
             pupilXmm: ray.pupilXmm,
             pupilYmm: ray.pupilYmm,
             opticalPathLengthMm: ray.opticalPathLengthMm,
+            detectorDelaySlopeMmPerMm: ray.detectorDelaySlopeMmPerMm,
             pixelX: pixel.pixelX,
             pixelY: pixel.pixelY,
             coherenceGroupId: String(ray.coherenceGroupId ?? ''),
@@ -1075,9 +1163,11 @@ export async function runPortRoutedTrace(config: Configuration, options: PortRou
           includeSegments: finite(options.renderRayLimit, 25000) > segments.length,
         });
         const traced: RoutedRay[] = [];
-        exactResults.forEach((exact, index) => {
+        for (let index = 0; index < exactResults.length; index += 1) {
+          if (index > 0 && index % COOPERATIVE_RAY_CHUNK === 0) await yieldToHost();
+          const exact = exactResults[index];
           const input = arrived[index];
-          if (!exact.ok) { failureReason = exact.failureReason ?? 'Exact traversal failed.'; return; }
+          if (!exact.ok) { failureReason = exact.failureReason ?? 'Exact traversal failed.'; continue; }
           const ray = {
             ...input,
             ...exact.rayState,
@@ -1092,14 +1182,17 @@ export async function runPortRoutedTrace(config: Configuration, options: PortRou
             if (segments.length >= finite(options.renderRayLimit, 25000)) break;
             segments.push({ routeId: resolved.route.id, rayId: ray.id, sequence: stepIndex, fromMm: exactSegment.fromMm, toMm: exactSegment.toMm, kind: 'exact-sequential', direction: entryPort === 'Front' ? 'forward' : 'reverse', wavelengthNm: ray.wavelengthNm, powerW: ray.powerW });
           }
-        });
+        }
         activeRays = traced;
       } else {
-        activeRays = arrived.flatMap((ray) => {
+        const interactedRays: RoutedRay[] = [];
+        for (let rayIndex = 0; rayIndex < arrived.length; rayIndex += 1) {
+          if (rayIndex > 0 && rayIndex % COOPERATIVE_RAY_CHUNK === 0) await yieldToHost();
+          const ray = arrived[rayIndex];
           const interactionStart = { ...ray.positionMm };
           const interaction = applyComponentInteraction(ray, arrivalComponent, step.arrival.portId, next.departure.portId, design, arrivalParameters);
           const interacted = interaction?.ray;
-          if (!interacted) { failureReason = `${arrivalComponent.label} interaction/order is unavailable for this ray.`; return []; }
+          if (!interacted) { failureReason = `${arrivalComponent.label} interaction/order is unavailable for this ray.`; continue; }
           let previousPoint = interactionStart;
           for (const pathPoint of interaction?.pathMm ?? []) {
             if (segments.length >= finite(options.renderRayLimit, 25000)) break;
@@ -1118,8 +1211,9 @@ export async function runPortRoutedTrace(config: Configuration, options: PortRou
             }
             previousPoint = pathPoint;
           }
-          return [interacted];
-        });
+          interactedRays.push(interacted);
+        }
+        activeRays = interactedRays;
       }
     }
 

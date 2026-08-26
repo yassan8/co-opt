@@ -4733,7 +4733,7 @@ export default function App() {
       }
       if (detail.state === 'ready') {
         setRenderWindowStatus(
-          `Ready (3D · ${detail.rayCount} routed rays · ${detail.routeCount} ${detail.routeCount === 1 ? 'route' : 'routes'})`,
+          `Ready (${detail.rayCount} routed rays · ${detail.routeCount} ${detail.routeCount === 1 ? 'route' : 'routes'})`,
         );
       }
     };
@@ -9027,19 +9027,12 @@ const collectLegacyCrossRays = async (
       try {
         setRenderWindowStatus('Finalizing camera and render...');
         const cameraStartMs = performance.now();
-        if (typeof w.setCameraForYZCrossSection === 'function') {
-          w.setCameraForYZCrossSection({
-            includeRayStartMargin: true,
-            storeDrawCrossBounds: true,
-            centerVerticalOnOpticalAxis: true,
-            fitOpticalSystemOnly: false,
-            ...(render3DTransverseRadiusMm > 0 ? {
-              cameraBoundsOverride: {
-                minY: -render3DTransverseRadiusMm,
-                maxY: render3DTransverseRadiusMm,
-              },
-            } : {}),
-          });
+        if (typeof w.fitCameraToOpticalSystem === 'function') {
+          // 3D must restore its oblique camera after either cross-section
+          // view. fitCameraToOpticalSystem keeps optical Z horizontal while
+          // still exposing both transverse axes; the Hybrid overlay then fits
+          // the complete assembly without replacing this direction.
+          w.fitCameraToOpticalSystem();
         } else if (typeof w.fitCameraToScene === 'function') {
           w.fitCameraToScene();
         } else if (typeof w.adjustCameraView === 'function') {

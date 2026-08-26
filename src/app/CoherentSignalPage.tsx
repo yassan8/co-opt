@@ -3,15 +3,16 @@ import {
   buildDetectorDisplayRaster,
   calculateImagingDetectorSignal,
   calculateDetectorSignalFromPowerMap,
-  convolveDetectorFieldsWithCoherentPsf,
   convolveDetectorPowerWithPsf,
   reconstructSampledDetectorIrradiance,
+  synthesizeDetectorLinearOpdCameraRaster,
   type ImagingDetectorSignal,
 } from '../../analysis/detector-signal.ts';
+import { convolveDetectorFieldsInWorker } from './coherent-detector-worker-client.ts';
 import {
-  reconstructPatentFig2FromDetectorSignal,
+  reconstructSurfaceFromDetectorSignal,
   type CoherentDetectorSpec,
-  type Fig2SimulationResult,
+  type CoherentSurfaceSimulationResult,
   type TargetProfileSpec,
 } from '../../analysis/coherent-assembly.ts';
 import {
@@ -53,10 +54,14 @@ type AreaResult = {
 };
 
 type SurfaceReconstruction = {
-  result: Fig2SimulationResult;
+  result: CoherentSurfaceSimulationResult;
   baseOpdMm: number;
   calibrationMinUm: number;
   calibrationMaxUm: number;
+  usable: boolean;
+  sampledTargetSpanMm: number;
+  targetCoverageFraction: number;
+  blockingReasons: string[];
 };
 
 type DualCombSurfaceReconstruction = {
@@ -120,7 +125,7 @@ function profilePeakToValley(values: ArrayLike<number>): number {
   return Number.isFinite(minimum) && Number.isFinite(maximum) ? maximum - minimum : 0;
 }
 
-function recoveredStepHeightUm(result: Fig2SimulationResult, target: TargetProfileSpec): number | null {
+function recoveredStepHeightUm(result: CoherentSurfaceSimulationResult, target: TargetProfileSpec): number | null {
   if (target.kind !== 'step') return null;
   const left: number[] = [];
   const right: number[] = [];
@@ -214,7 +219,7 @@ function ImagingSignalCanvas({ signal, quantity, logScale }: { signal: ImagingDe
   </div>;
 }
 
-function CoherenceEnvelopeCanvas({ result }: { result: Fig2SimulationResult }) {
+function CoherenceEnvelopeCanvas({ result }: { result: CoherentSurfaceSimulationResult }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -255,7 +260,7 @@ function CoherenceEnvelopeCanvas({ result }: { result: Fig2SimulationResult }) {
   </div>;
 }
 
-function HeightProfileCanvas({ result }: { result: Pick<Fig2SimulationResult, 'xMm' | 'targetHeightUm' | 'recoveredHeightUm'> }) {
+function HeightProfileCanvas({ result }: { result: Pick<CoherentSurfaceSimulationResult, 'xMm' | 'targetHeightUm' | 'recoveredHeightUm'> }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -426,14 +431,28 @@ export function CoherentSignalPage() {
     });
   }, [design, objectIndex, samplingSize]);
 
+  const clearComputedResults = useCallback(() => {
+    setPsfByDetector({});
+    setReferenceSignals({});
+    setBranchResult(null);
+    setRouteMetrics([]);
+    setAreaResults({});
+    setSurfaceReconstructions({});
+    setDualCombReconstructions({});
+  }, []);
+
   useEffect(() => subscribeActiveCoherentDesign((next) => {
     runToken.current += 1;
     cancelRef.current?.abort('Config changed');
     setSnapshot(next);
+    // Results belong to the exact Configuration revision that produced them.
+    // Keeping the previous reconstruction visible after switching Config or
+    // editing the Target made a stale, flat profile look like a new result.
+    clearComputedResults();
     setError('');
     setStatus('Stale · press Run');
     setProgress({ percent: 0, message: '', running: false, visible: false });
-  }), []);
+  }), [clearComputedResults]);
 
   const run = useCallback(async (quality: 'preview' | 'full') => {
     const tokenId = ++runToken.current;
@@ -472,6 +491,10 @@ export function CoherentSignalPage() {
             fieldObjectRow: { ...objectRows[activeObjectIndex] },
             renderRayLimit: design.traceSettings?.renderSegmentLimit ?? 25000,
             denseComplexFields: false,
+            // Coherent Signal consumes the sparse complex hit list directly.
+            // Holding another full-resolution Camera irradiance plane during
+            // exact-PSF calculation adds tens of megabytes for no new physics.
+            spectralFieldsOnly: true,
             onProgress: (traceProgress) => {
               if (tokenId !== runToken.current || cancel.aborted) return;
               const percent = Math.min(34, 2 + traceProgress.percent * 0.32);
@@ -572,16 +595,21 @@ export function CoherentSignalPage() {
       const totalSourcePowerW = (design.sources?.length ? design.sources : [design.source])
         .reduce((sum, source) => sum + Math.max(0, finite(source.totalPowerW)), 0);
       const nextReferenceSignals: Record<string, ImagingDetectorSignal> = {};
-      for (const entry of detectorEntries) {
-        if (entry.detector.kind === 'time') continue;
-        const detectorPsf = nextPsfByDetector[entry.id] ?? firstPsf;
-        if (!detectorPsf) continue;
-        nextReferenceSignals[entry.id] = calculateImagingDetectorSignal({
-          spectralPsf: detectorPsf.spectralComponents,
-          detector: entry.detector,
-          totalPowerW: totalSourcePowerW,
-          opticalThroughput: 1,
-        });
+      // A routed physical result already owns one detector-sized power,
+      // electron and ADU raster. Do not allocate a second 3072 x 1024 set for
+      // the diagnostic single-group PSF; its scalar PSF metrics remain below.
+      if (!routedResult) {
+        for (const entry of detectorEntries) {
+          if (entry.detector.kind === 'time') continue;
+          const detectorPsf = nextPsfByDetector[entry.id] ?? firstPsf;
+          if (!detectorPsf) continue;
+          nextReferenceSignals[entry.id] = calculateImagingDetectorSignal({
+            spectralPsf: detectorPsf.spectralComponents,
+            detector: entry.detector,
+            totalPowerW: totalSourcePowerW,
+            opticalThroughput: 1,
+          });
+        }
       }
 
       const nextAreaResults: Record<string, AreaResult> = {};
@@ -618,12 +646,18 @@ export function CoherentSignalPage() {
           const calibrationNote = opdCalibrationMm !== 0
             ? `OPD calibration ${opdCalibrationMm.toFixed(6)} mm is applied as an equivalent delay; Physical OPD remains ${physicalOpdMm.toFixed(6)} mm.`
             : '';
-          const coherent = detectorPsf ? convolveDetectorFieldsWithCoherentPsf({
+          const coherent = detectorPsf ? await convolveDetectorFieldsInWorker({
             spectralFields: routedDetector.spectralFields,
             width: routedDetector.width,
             height: routedDetector.height,
             detector: spec,
             spectralPsf: detectorPsf.spectralComponents,
+          }, cancel, (completedModes, totalModes) => {
+            if (tokenId !== runToken.current || cancel.aborted) return;
+            const fraction = completedModes / Math.max(1, totalModes);
+            const percent = Math.min(97, 90 + fraction * 7);
+            setProgress({ percent, message: `Converting Detector ${detectorIndex + 1}/${branchDetectors.length} · ${completedModes}/${totalModes} modes`, running: true, visible: true });
+            setStatus(`Converting Camera modes · ${completedModes}/${totalModes} · ${Math.round(percent)}%`);
           }) : null;
           if (coherent) {
             nextAreaResults[detectorResult.detectorId] = {
@@ -635,8 +669,20 @@ export function CoherentSignalPage() {
               warning: [coherent.warning, calibrationNote, pathWarning].filter(Boolean).join(' '),
             };
           } else {
+            const sparsePower = routedDetector.intensityW.length
+              ? routedDetector.intensityW
+              : (() => {
+                const values = new Float64Array(routedDetector.width * routedDetector.height);
+                for (const sample of routedDetector.spectralFields) {
+                  const x = Math.round(finite(sample.pixelX, -1));
+                  const y = Math.round(finite(sample.pixelY, -1));
+                  if (x < 0 || x >= routedDetector.width || y < 0 || y >= routedDetector.height) continue;
+                  values[y * routedDetector.width + x] += sample.fieldRe ** 2 + sample.fieldIm ** 2;
+                }
+                return values;
+              })();
             const sampledIrradiance = reconstructSampledDetectorIrradiance({
-              powerWPerPixel: routedDetector.intensityW,
+              powerWPerPixel: sparsePower,
               width: routedDetector.width,
               height: routedDetector.height,
               sampleCount: routedDetector.hitCount,
@@ -686,12 +732,18 @@ export function CoherentSignalPage() {
           };
           continue;
         }
-        const coherent = convolveDetectorFieldsWithCoherentPsf({
+        const coherent = await convolveDetectorFieldsInWorker({
           spectralFields: detectorResult.spectralFields ?? [],
           width: detectorResult.width,
           height: detectorResult.height,
           detector: spec,
           spectralPsf: detectorPsf.spectralComponents,
+        }, cancel, (completedModes, totalModes) => {
+          if (tokenId !== runToken.current || cancel.aborted) return;
+          const fraction = completedModes / Math.max(1, totalModes);
+          const percent = Math.min(97, 90 + fraction * 7);
+          setProgress({ percent, message: `Converting Detector ${detectorIndex + 1}/${branchDetectors.length} · ${completedModes}/${totalModes} modes`, running: true, visible: true });
+          setStatus(`Converting Camera modes · ${completedModes}/${totalModes} · ${Math.round(percent)}%`);
         });
         if (coherent) {
           nextAreaResults[detectorResult.detectorId] = {
@@ -724,18 +776,37 @@ export function CoherentSignalPage() {
       }
 
       const nextSurfaceReconstructions: Record<string, SurfaceReconstruction> = {};
-      const supportsFig2Reconstruction = Boolean(routedResult)
+      const supportsSurfaceReconstruction = Boolean(routedResult)
         && design.source.kind !== 'frequency-comb'
         && design.target.interaction !== 'lambertian'
         && design.target.interaction !== 'abg'
         && design.target.interaction !== 'harvey-shack'
         && design.target.interaction !== 'bsdf-csv'
         && design.components.some((component) => component.kind === 'reflection-grating');
-      if (supportsFig2Reconstruction && routedResult) {
-        setProgress({ percent: 99, message: 'Extracting coherence ridge and surface height', running: true, visible: true });
+      if (supportsSurfaceReconstruction && routedResult) {
         const persistedRouteSets = design.routeSets?.length
           ? design.routeSets
           : (readActiveConfiguration()?.routeSets ?? []);
+        let flatReferenceRoutedResult: PortRoutedTraceResult | null = null;
+        if (traceConfiguration) {
+          const flatReferenceConfiguration = structuredClone(traceConfiguration);
+          const targetBlock = (flatReferenceConfiguration.blocks ?? []).find((block: any) => block.blockType === 'Target');
+          if (targetBlock?.parameters) {
+            targetBlock.parameters.profile = 'flat';
+            targetBlock.parameters.offsetUm = 0;
+            targetBlock.parameters.amplitudeUm = 0;
+            setProgress({ percent: 98, message: 'Acquiring flat Camera reference', running: true, visible: true });
+            flatReferenceRoutedResult = await runPortRoutedTrace(flatReferenceConfiguration, {
+              samplePurpose: quality === 'preview' ? 'render' : 'detector',
+              spectralSamples: quality === 'preview' ? 3 : undefined,
+              fieldObjectRow: { ...objectRows[activeObjectIndex] },
+              renderRayLimit: 0,
+              spectralFieldsOnly: true,
+            });
+            if (tokenId !== runToken.current || cancel.aborted) return;
+          }
+        }
+        setProgress({ percent: 99, message: 'Extracting coherence ridge and surface height', running: true, visible: true });
         for (const detectorEntry of areaEntries) {
           const detectorComponentId = detectorEntry.detector.componentId ?? detectorEntry.id;
           const routeSet = persistedRouteSets.find((set: any) => (
@@ -752,6 +823,65 @@ export function CoherentSignalPage() {
           const cameraSignal = nextAreaResults[detectorEntry.id];
           if (!cameraSignal) continue;
           const cameraDetectorTrace = routedResult.detectors.find((entry) => entry.detectorId === detectorEntry.id);
+          const measurementSamples = (cameraDetectorTrace?.spectralFields ?? []).filter((sample) => (
+            sample.routeId === routeSet.measurementRouteId
+            && Number.isFinite(sample.pixelX)
+            && Number.isFinite(sample.targetXmm)
+          ));
+          const cameraXValues = measurementSamples.map((sample) => sample.pixelX);
+          const targetXValues = measurementSamples.map((sample) => Number(sample.targetXmm));
+          const cameraXMin = cameraXValues.length ? Math.floor(Math.min(...cameraXValues)) : 0;
+          const cameraXMax = cameraXValues.length
+            ? Math.ceil(Math.max(...cameraXValues))
+            : Math.max(0, (cameraDetectorTrace?.width ?? cameraSignal.signal.width) - 1);
+          let targetXMinMm = targetXValues.length ? Math.min(...targetXValues) : -design.target.spanMm * 0.5;
+          let targetXMaxMm = targetXValues.length ? Math.max(...targetXValues) : design.target.spanMm * 0.5;
+          if (measurementSamples.length >= 2) {
+            const meanCameraX = cameraXValues.reduce((sum, value) => sum + value, 0) / cameraXValues.length;
+            const meanTargetX = targetXValues.reduce((sum, value) => sum + value, 0) / targetXValues.length;
+            const covariance = measurementSamples.reduce((sum, sample) => (
+              sum + (sample.pixelX - meanCameraX) * (Number(sample.targetXmm) - meanTargetX)
+            ), 0);
+            if (covariance < 0) [targetXMinMm, targetXMaxMm] = [targetXMaxMm, targetXMinMm];
+          }
+          const flatReferenceDetectorTrace = flatReferenceRoutedResult?.detectors
+            .find((entry) => entry.detectorId === detectorEntry.id);
+          const detectorPsf = nextPsfByDetector[detectorEntry.id] ?? firstPsf;
+          const flatReferenceSignal = flatReferenceDetectorTrace && detectorPsf
+            ? (await convolveDetectorFieldsInWorker({
+              spectralFields: flatReferenceDetectorTrace.spectralFields,
+              width: flatReferenceDetectorTrace.width,
+              height: flatReferenceDetectorTrace.height,
+              detector: detectorEntry.detector,
+              spectralPsf: detectorPsf.spectralComponents,
+            }, cancel))?.signal
+            : null;
+          const routedMetrologyCamera = cameraDetectorTrace
+            ? synthesizeDetectorLinearOpdCameraRaster({
+              spectralFields: cameraDetectorTrace.spectralFields,
+              measurementRouteId: routeSet.measurementRouteId,
+              referenceRouteId: routeSet.referenceRouteId,
+              opdCalibrationMm: finite(routeSet.opdCalibrationMm),
+              detector: detectorEntry.detector,
+              cameraXMin,
+              cameraXMax,
+              maximumWidth: 512,
+              maximumHeight: 2048,
+            })
+            : null;
+          const flatRoutedMetrologyCamera = flatReferenceDetectorTrace
+            ? synthesizeDetectorLinearOpdCameraRaster({
+              spectralFields: flatReferenceDetectorTrace.spectralFields,
+              measurementRouteId: routeSet.measurementRouteId,
+              referenceRouteId: routeSet.referenceRouteId,
+              opdCalibrationMm: finite(routeSet.opdCalibrationMm),
+              detector: detectorEntry.detector,
+              cameraXMin,
+              cameraXMax,
+              maximumWidth: 512,
+              maximumHeight: 2048,
+            })
+            : null;
           const calibration = detectorCalibrationRange(detectorEntry.detector);
           const calibratedCurrentOpdMm = measurement.oplMm - reference.oplMm + finite(routeSet.opdCalibrationMm);
           // The physical Route OPD is retained as instrument metadata. Surface
@@ -763,28 +893,61 @@ export function CoherentSignalPage() {
             detector: { ...detectorEntry.detector },
             detectors: [{ ...detectorEntry.detector }],
           };
-          nextSurfaceReconstructions[detectorEntry.id] = {
-            result: reconstructPatentFig2FromDetectorSignal({
-              powerWPerPixel: cameraSignal.signal.powerWPerPixel,
-              width: cameraSignal.signal.width,
-              height: cameraSignal.signal.height,
+          const reconstructionResult = reconstructSurfaceFromDetectorSignal({
+              powerWPerPixel: routedMetrologyCamera?.powerWPerPixel ?? cameraSignal.signal.powerWPerPixel,
+              flatReferencePowerWPerPixel: flatRoutedMetrologyCamera?.powerWPerPixel ?? flatReferenceSignal?.powerWPerPixel,
+              width: routedMetrologyCamera?.width ?? cameraSignal.signal.width,
+              height: routedMetrologyCamera?.height ?? cameraSignal.signal.height,
               detector: simulationDesign.detector,
               grating: simulationDesign.grating,
               sourceCenterWavelengthNm: simulationDesign.source.centerWavelengthNm,
+              sourceBandwidthFwhmNm: simulationDesign.source.bandwidthFwhmNm,
               baseOpdMm,
               targetSpanMm: simulationDesign.target.spanMm,
-              maximumDetectorPixelsX: 1024,
+              maximumDetectorPixelsX: 512,
               maximumDetectorPixelsY: 2048,
               calibrationMinUm: calibration.minimumUm,
               calibrationMaxUm: calibration.maximumUm,
-              spectralSampleCount: cameraSignal.spectralModeCount,
+              spectralSampleCount: routedMetrologyCamera?.spectralModeCount ?? cameraSignal.spectralModeCount,
               measurementSampleCount: cameraDetectorTrace?.hitCount,
               referenceHeightUm: 0,
+              cameraXMin: routedMetrologyCamera ? 0 : cameraXMin,
+              cameraXMax: routedMetrologyCamera ? routedMetrologyCamera.width - 1 : cameraXMax,
+              targetXMinMm,
+              targetXMaxMm,
               comparisonTarget: simulationDesign.target,
-            }),
+            });
+          const sampledTargetSpanMm = Math.abs(targetXMaxMm - targetXMinMm);
+          const targetCoverageFraction = sampledTargetSpanMm / Math.max(1e-9, Math.abs(simulationDesign.target.spanMm));
+          const blockingReasons: string[] = [];
+          if (targetCoverageFraction < 0.8) {
+            blockingReasons.push(`The physical measurement rays cover only ${sampledTargetSpanMm.toFixed(3)} mm (${(targetCoverageFraction * 100).toFixed(1)}%) of the configured ${Math.abs(simulationDesign.target.spanMm).toFixed(3)} mm Target span.`);
+          }
+          if (reconstructionResult.signalCoverageFraction < 0.8) {
+            blockingReasons.push(`Measurable Camera signal exists in only ${(reconstructionResult.signalCoverageFraction * 100).toFixed(1)}% of the reconstructed columns.`);
+          }
+          if (reconstructionResult.meanRidgeConfidence < 0.2) {
+            blockingReasons.push(`The flat-referenced white-light correlation confidence is only ${(reconstructionResult.meanRidgeConfidence * 100).toFixed(1)}%; one differential delay peak is required along Camera Y.`);
+          }
+          if (Number.isFinite(reconstructionResult.envelopeSamplesPerFwhm)
+            && Number(reconstructionResult.envelopeSamplesPerFwhm) < 2) {
+            blockingReasons.push(`The white-light correlation envelope has only ${Number(reconstructionResult.envelopeSamplesPerFwhm).toFixed(2)} Camera pixels/FWHM; at least 2 are required.`);
+          }
+          const interferingSpectralFraction = cameraSignal.spectralModeCount > 0
+            ? cameraSignal.interferingModeCount / cameraSignal.spectralModeCount
+            : 0;
+          if (interferingSpectralFraction < 0.5) {
+            blockingReasons.push(`Only ${cameraSignal.interferingModeCount} of ${cameraSignal.spectralModeCount} spectral modes overlap coherently on the Camera; at least half of the propagated bandwidth is required.`);
+          }
+          nextSurfaceReconstructions[detectorEntry.id] = {
+            result: reconstructionResult,
             baseOpdMm,
             calibrationMinUm: calibration.minimumUm,
             calibrationMaxUm: calibration.maximumUm,
+            usable: blockingReasons.length === 0,
+            sampledTargetSpanMm,
+            targetCoverageFraction,
+            blockingReasons,
           };
         }
       }
@@ -972,6 +1135,9 @@ export function CoherentSignalPage() {
   const selectedRawResult = branchResult?.detectors.find((entry) => entry.detectorId === selectedEntry?.id);
   const selectedAreaResult = selectedEntry ? areaResults[selectedEntry.id] : undefined;
   const selectedSurfaceReconstruction = selectedEntry ? surfaceReconstructions[selectedEntry.id] : undefined;
+  const selectedUsableSurfaceReconstruction = selectedSurfaceReconstruction?.usable
+    ? selectedSurfaceReconstruction
+    : undefined;
   const selectedDualCombReconstruction = selectedEntry ? dualCombReconstructions[selectedEntry.id] : undefined;
   const selectedReference = selectedEntry ? referenceSignals[selectedEntry.id] : undefined;
   const selectedPsf = selectedEntry ? psfByDetector[selectedEntry.id] : undefined;
@@ -1043,6 +1209,7 @@ export function CoherentSignalPage() {
           <span>Field</span>
           <select value={objectIndex} onChange={(event) => {
             setObjectIndex(Number(event.target.value));
+            clearComputedResults();
             setStatus('Settings changed · press Run');
           }}>
             {objectRows.map((row, index) => <option key={index} value={index}>{index + 1}: X {row.xHeightAngle ?? row.x ?? 0}, Y {row.yHeightAngle ?? row.y ?? 0}</option>)}
@@ -1058,6 +1225,7 @@ export function CoherentSignalPage() {
           <span>PSF pupil sampling</span>
           <select value={samplingSize} onChange={(event) => {
             setSamplingSize(Number(event.target.value));
+            clearComputedResults();
             setStatus('Settings changed · press Run');
           }}>
             <option value={32}>32 × 32</option><option value={64}>64 × 64</option><option value={128}>128 × 128</option><option value={256}>256 × 256</option>
@@ -1150,45 +1318,73 @@ export function CoherentSignalPage() {
               <span>OPD RMS<strong>{format(selectedPsf?.metrics?.opdRmsUm, 4)} µm</strong></span>
               <span>PSF sample<strong>{format(selectedPsf?.pixelSizeUm, 4)} µm</strong></span>
             </div>
+          </> : routeMetrics.length > 0 && selectedPsf ? <>
+            <div className="coherent-signal-metrics">
+              <span>Detector raster<strong>Not allocated</strong></span>
+              <span>Strehl<strong>{format(selectedPsf.metrics?.strehlRatio, 4)}</strong></span>
+              <span>OPD RMS<strong>{format(selectedPsf.metrics?.opdRmsUm, 4)} µm</strong></span>
+              <span>PSF sample<strong>{format(selectedPsf.pixelSizeUm, 4)} µm</strong></span>
+            </div>
+            <div className="coherent-signal-note">The diagnostic detector-sized reference image is omitted for routed calculations. The physical Camera signal and exact-lens PSF metrics are unchanged.</div>
           </> : <div className="coherent-signal-empty">Waiting for the exact sequential PSF.</div>}
         </section>
 
-        {selectedSurfaceReconstruction ? <section className="coherent-signal-result-card coherent-signal-result-card--wide coherent-signal-reconstruction-card">
-          <header><div><h2>Surface reconstruction · Camera 80 signal</h2><p>Camera 80 W/pixel is the only shape-measurement input. Each measured X column is correlated with the measured Camera reference column; its Detector-Y translation is converted to relative height by the grating calibration.</p></div></header>
+        {selectedSurfaceReconstruction && !selectedSurfaceReconstruction.usable ? <section className="coherent-signal-result-card coherent-signal-result-card--wide coherent-signal-reconstruction-card">
+          <header><div><h2>Surface reconstruction unavailable</h2><p>The Camera signal does not satisfy the physical sampling conditions required for a quantitative surface profile. The previous full-span orange curve was invalid and is no longer shown.</p></div></header>
+          <div className="coherent-signal-metrics">
+            <span>Target span sampled<strong>{format(selectedSurfaceReconstruction.sampledTargetSpanMm, 3)} mm · {format(selectedSurfaceReconstruction.targetCoverageFraction * 100, 1)}%</strong></span>
+            <span>Configured Target span<strong>{format(design.target.spanMm, 3)} mm</strong></span>
+            <span>Depth sampling<strong>{format(selectedSurfaceReconstruction.result.detectorHeightStepUm, 4)} µm / Camera pixel</strong></span>
+            <span>Envelope sampling<strong>{format(selectedSurfaceReconstruction.result.envelopeSamplesPerFwhm, 2)} pixels / FWHM</strong></span>
+            <span>Camera ray samples<strong>{selectedSurfaceReconstruction.result.measurementSampleCount?.toLocaleString() ?? '—'} hits</strong></span>
+            <span>Camera signal columns<strong>{format(selectedSurfaceReconstruction.result.signalCoverageFraction * 100, 1)}%</strong></span>
+            <span>Interfering spectral modes<strong>{selectedAreaResult ? `${selectedAreaResult.interferingModeCount} / ${selectedAreaResult.spectralModeCount}` : '—'}</strong></span>
+            <span>Diagnostic recovered P–V<strong>{format(profilePeakToValley(selectedSurfaceReconstruction.result.recoveredHeightUm), 3)} µm</strong></span>
+            <span>Diagnostic RMS error<strong>{format(selectedSurfaceReconstruction.result.rmsHeightErrorUm, 4)} µm</strong></span>
+            <span>Ridge confidence<strong>{format(selectedSurfaceReconstruction.result.meanRidgeConfidence * 100, 1)}%</strong></span>
+          </div>
+          {selectedSurfaceReconstruction.blockingReasons.map((reason) => <div className="coherent-signal-warning" key={reason}>{reason}</div>)}
+          <div className="coherent-signal-note">Increase the sample-arm field of view, overlap corresponding measurement/reference pupil samples on the Camera, and resolve one flat-referenced delay peak along Camera Y. Run again after those physical settings are corrected.</div>
+        </section> : null}
+
+        {selectedUsableSurfaceReconstruction ? <section className="coherent-signal-result-card coherent-signal-result-card--wide coherent-signal-reconstruction-card">
+          <header><div><h2>Surface reconstruction · area-detector signal</h2><p>The detector W/pixel raster is the only shape-measurement input. The configured profile maps to Detector X; each column is differentially correlated with a flat-reference capture to measure the white-light delay shift along Detector Y.</p></div></header>
           <div className="coherent-signal-reconstruction-grid">
             <figure className="coherent-signal-figure">
-              <CoherenceEnvelopeCanvas result={selectedSurfaceReconstruction.result} />
-              <figcaption>Camera 80 W/pixel → DC removal → measured-column correlation · cyan: detected y<sub>peak</sub>(x)</figcaption>
+              <CoherenceEnvelopeCanvas result={selectedUsableSurfaceReconstruction.result} />
+              <figcaption>Detector W/pixel → DC removal → flat-referenced correlation · cyan: detected y<sub>peak</sub>(x)</figcaption>
             </figure>
             <figure className="coherent-signal-figure">
-              <HeightProfileCanvas result={selectedSurfaceReconstruction.result} />
+              <HeightProfileCanvas result={selectedUsableSurfaceReconstruction.result} />
               <figcaption className="coherent-signal-profile-legend"><span><i className="is-input" />Input Target</span><span><i className="is-recovered" />Reconstructed</span></figcaption>
             </figure>
           </div>
           <div className="coherent-signal-metrics">
-            <span>Recovery<strong>Camera column shift → OPD → relative height</strong></span>
-            <span>Input P–V<strong>{format(profilePeakToValley(selectedSurfaceReconstruction.result.targetHeightUm), 3)} µm</strong></span>
-            <span>Recovered P–V<strong>{format(profilePeakToValley(selectedSurfaceReconstruction.result.recoveredHeightUm), 3)} µm</strong></span>
+            <span>Recovery<strong>Flat-referenced Camera Y shift → OPD → height</strong></span>
+            <span>Input P–V<strong>{format(profilePeakToValley(selectedUsableSurfaceReconstruction.result.targetHeightUm), 3)} µm</strong></span>
+            <span>Recovered P–V<strong>{format(profilePeakToValley(selectedUsableSurfaceReconstruction.result.recoveredHeightUm), 3)} µm</strong></span>
             {selectedRecoveredStepUm !== null ? <span>Recovered step<strong>{format(selectedRecoveredStepUm, 3)} µm</strong></span> : null}
-            <span>Height RMS error<strong>{format(selectedSurfaceReconstruction.result.rmsHeightErrorUm, 4)} µm</strong></span>
-            <span>Maximum error<strong>{format(selectedSurfaceReconstruction.result.maxAbsHeightErrorUm, 4)} µm</strong></span>
-            <span>Target X sampling<strong>{selectedSurfaceReconstruction.result.width.toLocaleString()} points · ΔX {format(selectedSurfaceReconstruction.result.xSampleIntervalMm, 4)} mm</strong></span>
-            {selectedSurfaceReconstruction.result.samplesPerTargetPeriod !== null ? <span>Sin sampling<strong>{format(selectedSurfaceReconstruction.result.samplesPerTargetPeriod, 2)} samples / period</strong></span> : null}
-            <span>Depth sampling<strong>{format(selectedSurfaceReconstruction.result.detectorHeightStepUm, 4)} µm / pixel</strong></span>
-            <span>Detected spectral modes<strong>{selectedSurfaceReconstruction.result.spectralSampleCount.toLocaleString()}</strong></span>
-            <span>Camera ray samples<strong>{selectedSurfaceReconstruction.result.measurementSampleCount?.toLocaleString() ?? '—'} hits</strong></span>
-            <span>Camera X coverage<strong>{format(selectedSurfaceReconstruction.result.signalCoverageFraction * 100, 1)}%</strong></span>
-            <span>Camera reference<strong>X {format(selectedSurfaceReconstruction.result.cameraReferenceXmm, 4)} mm · column {(selectedSurfaceReconstruction.result.cameraReferenceColumn ?? 0) + 1}</strong></span>
-            <span>Ridge confidence<strong>{format(selectedSurfaceReconstruction.result.meanRidgeConfidence * 100, 1)}%</strong></span>
-            <span>Route OPD metadata<strong>{format(selectedSurfaceReconstruction.baseOpdMm * 1000, 3)} µm</strong></span>
-            <span>Depth zero<strong>Camera reference column = 0 µm</strong></span>
-            <span>Calibration range<strong>{format(selectedSurfaceReconstruction.calibrationMinUm, 1)} … {format(selectedSurfaceReconstruction.calibrationMaxUm, 1)} µm</strong></span>
-            <span>Spectrum propagated<strong>{format(selectedSurfaceReconstruction.result.propagatingFraction * 100, 2)}%</strong></span>
+            <span>Height RMS error<strong>{format(selectedUsableSurfaceReconstruction.result.rmsHeightErrorUm, 4)} µm</strong></span>
+            <span>Maximum error<strong>{format(selectedUsableSurfaceReconstruction.result.maxAbsHeightErrorUm, 4)} µm</strong></span>
+            <span>Target X sampling<strong>{selectedUsableSurfaceReconstruction.result.width.toLocaleString()} points · ΔX {format(selectedUsableSurfaceReconstruction.result.xSampleIntervalMm, 4)} mm</strong></span>
+            {selectedUsableSurfaceReconstruction.result.samplesPerTargetPeriod !== null ? <span>Sin sampling<strong>{format(selectedUsableSurfaceReconstruction.result.samplesPerTargetPeriod, 2)} samples / period</strong></span> : null}
+            <span>Depth sampling<strong>{format(selectedUsableSurfaceReconstruction.result.detectorHeightStepUm, 4)} µm / pixel</strong></span>
+            <span>Detected spectral modes<strong>{selectedUsableSurfaceReconstruction.result.spectralSampleCount.toLocaleString()}</strong></span>
+            <span>Camera ray samples<strong>{selectedUsableSurfaceReconstruction.result.measurementSampleCount?.toLocaleString() ?? '—'} hits</strong></span>
+            <span>Camera X coverage<strong>{format(selectedUsableSurfaceReconstruction.result.signalCoverageFraction * 100, 1)}%</strong></span>
+            <span>System calibration<strong>{selectedUsableSurfaceReconstruction.result.flatReferenceApplied ? 'Flat Camera interferogram applied' : 'Routed OPD + grating axis'}</strong></span>
+            <span>Ridge confidence<strong>{format(selectedUsableSurfaceReconstruction.result.meanRidgeConfidence * 100, 1)}%</strong></span>
+            <span>Envelope width<strong>{format(selectedUsableSurfaceReconstruction.result.coherenceEnvelopeFwhmUm, 4)} µm FWHM</strong></span>
+            <span>Envelope sampling<strong>{format(selectedUsableSurfaceReconstruction.result.envelopeSamplesPerFwhm, 2)} pixels / FWHM</strong></span>
+            <span>Route OPD metadata<strong>{format(selectedUsableSurfaceReconstruction.baseOpdMm * 1000, 3)} µm</strong></span>
+            <span>Depth zero<strong>{selectedUsableSurfaceReconstruction.result.flatReferenceApplied ? 'Flat Target Camera ridge = 0 µm' : 'Routed zero-OPD plane'}</strong></span>
+            <span>Calibration range<strong>{format(selectedUsableSurfaceReconstruction.calibrationMinUm, 1)} … {format(selectedUsableSurfaceReconstruction.calibrationMaxUm, 1)} µm</strong></span>
+            <span>Spectrum propagated<strong>{format(selectedUsableSurfaceReconstruction.result.propagatingFraction * 100, 2)}%</strong></span>
           </div>
-          {selectedSurfaceReconstruction.result.warningMessages
+          {selectedUsableSurfaceReconstruction.result.warningMessages
             .filter((warning) => !warning.startsWith('Assembly dimensions') && !warning.includes('mechanical-envelope'))
             .map((warning) => <div className="coherent-signal-warning" key={warning}>{warning}</div>)}
-          <div className="coherent-signal-note">This is a Camera-derived relative profile. The configured Target is used only for the gray comparison curve and error figures. Acquire and save a flat Camera 80 reference to establish absolute height.</div>
+          <div className="coherent-signal-note">The orange profile is derived from the measured and flat-reference Camera interferograms. The configured Target supplies only the gray comparison curve and error figures; it is not used by the reconstruction.</div>
         </section> : null}
 
         {selectedDualCombReconstruction ? <section className="coherent-signal-result-card coherent-signal-result-card--wide coherent-signal-reconstruction-card">
@@ -1203,10 +1399,11 @@ export function CoherentSignalPage() {
             <span>Recovered P–V<strong>{format(profilePeakToValley(selectedDualCombReconstruction.result.recoveredHeightUm), 3)} µm</strong></span>
             <span>Height RMS error<strong>{format(selectedDualCombReconstruction.result.rmsHeightErrorUm, 4)} µm</strong></span>
             <span>Maximum error<strong>{format(selectedDualCombReconstruction.result.maxAbsHeightErrorUm, 4)} µm</strong></span>
-            <span>Profile mapping<strong>Target X → Camera {selectedDualCombReconstruction.result.profileAxis.toUpperCase()}</strong></span>
+            <span>Profile mapping<strong>Target profile → Camera {selectedDualCombReconstruction.result.profileAxis.toUpperCase()}</strong></span>
             <span>Camera sampling<strong>{selectedDualCombReconstruction.result.width.toLocaleString()} points</strong></span>
-            <span>Camera coverage<strong>{format(selectedDualCombReconstruction.result.coverageFraction * 100, 1)}%</strong></span>
-            <span>Matched comb lines<strong>{format(selectedDualCombReconstruction.result.meanLineCount, 1)} / X bin</strong></span>
+            <span>Camera bins recovered<strong>{format(selectedDualCombReconstruction.result.coverageFraction * 100, 1)}%</strong></span>
+            <span>Target span sampled<strong>{format(selectedDualCombReconstruction.result.targetRangeMm, 3)} mm · {format(selectedDualCombReconstruction.result.targetCoverageFraction * 100, 1)}%</strong></span>
+            <span>Matched comb lines<strong>{format(selectedDualCombReconstruction.result.meanLineCount, 1)} / profile bin</strong></span>
             <span>Phase-fit RMS<strong>{format(selectedDualCombReconstruction.result.meanPhaseFitRmsRad, 5)} rad</strong></span>
             <span>System-phase calibration<strong>{selectedDualCombReconstruction.result.flatReferenceApplied ? 'Flat Camera RF reference applied' : 'Not applied'}</strong></span>
             <span>Surface calibration<strong>{selectedDualCombReconstruction.result.slopeCalibrationApplied ? `${selectedDualCombReconstruction.result.slopeCalibrationReferenceCount ?? 1} tilt × ${selectedDualCombReconstruction.result.heightCalibrationReferenceCount ?? 0} height references · mean shift ${format(selectedDualCombReconstruction.result.meanCameraShiftPx, 3)} px` : 'Not required / not detected'}</strong></span>
