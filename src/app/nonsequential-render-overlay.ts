@@ -585,12 +585,13 @@ function fitCameraToAssembly(group: THREE.Group): void {
   const center = box.getCenter(new THREE.Vector3());
   const diagonal = Math.max(10, box.getSize(new THREE.Vector3()).length());
   const distance = Math.max(diagonal * 1.6, Number(camera.position?.distanceTo?.(controls.target)) || 0);
-  // Hybrid assemblies are authored primarily in the X-Z bench plane. View
-  // that plane from +Y, with world X as screen-up, so world Z remains
-  // horizontal while split/return arms stay visibly separated.
-  const viewDirection = new THREE.Vector3(0, -1, 0);
-  camera.up.set(1, 0, 0);
-  camera.position.copy(center).addScaledVector(viewDirection, -distance);
+  // Fit the assembly without changing the view selected by the Render
+  // window. The previous hard-coded +Y view overwrote 3D and Y-Z immediately
+  // after their base redraw completed, making every button look like X-Z.
+  const viewFromTarget = new THREE.Vector3().subVectors(camera.position, controls.target);
+  if (viewFromTarget.lengthSq() < 1e-12) viewFromTarget.set(0, 1, 0);
+  viewFromTarget.normalize();
+  camera.position.copy(center).addScaledVector(viewFromTarget, distance);
   controls.target.copy(center);
   camera.lookAt(center);
   controls.update?.();

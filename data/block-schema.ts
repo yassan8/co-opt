@@ -2274,13 +2274,17 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
         if (!Number.isFinite(renderSamples) || renderSamples <= 0) parameters.renderSpatialSamples = Math.min(9, detectorFallback);
         if (!Number.isFinite(detectorSamples) || detectorSamples <= 0) parameters.detectorSpatialSamples = detectorFallback;
       }
+      if (blockType === 'AreaDetector') {
+        if (!Number.isFinite(Number(parameters.calibrationMinUm))) parameters.calibrationMinUm = -80;
+        if (!Number.isFinite(Number(parameters.calibrationMaxUm))) parameters.calibrationMaxUm = 80;
+      }
       const positiveKeysByType: Partial<Record<PhysicalBlockType, string[]>> = {
         BroadbandSource: ['centerWavelengthNm', 'totalPowerW', 'beamDiameterMm', 'renderSpatialSamples', 'detectorSpatialSamples'],
         FrequencyCombSource: ['centerWavelengthNm', 'repetitionRateHz', 'totalPowerW', 'beamDiameterMm', 'renderSpatialSamples', 'detectorSpatialSamples'],
         BeamSplitter: ['widthMm', 'heightMm', 'depthMm'],
         FoldMirror: ['widthMm', 'heightMm', 'depthMm'],
         NDFilter: ['widthMm', 'heightMm', 'depthMm'],
-        ReflectionGrating: ['grooveDensityLinesPerMm', 'widthMm', 'heightMm', 'depthMm'],
+        ReflectionGrating: ['grooveDensityLinesPerMm', 'detectorMagnification', 'widthMm', 'heightMm', 'depthMm'],
         Target: ['widthMm', 'heightMm', 'depthMm'],
         AreaDetector: ['pixelCountX', 'pixelCountY', 'pixelPitchUm'],
         TimeDetector: ['samplingRateHz', 'sampleCount'],
@@ -2298,6 +2302,13 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
         if (raw === undefined || raw === null || String(raw).trim() === '') continue;
         if (!Number.isFinite(Number(raw))) {
           issues.push({ severity: 'fatal', phase: 'validate', message: `${blockType}.${key} must be numeric.`, blockId: block.blockId });
+        }
+      }
+      if (blockType === 'AreaDetector') {
+        const minimumUm = Number(parameters.calibrationMinUm);
+        const maximumUm = Number(parameters.calibrationMaxUm);
+        if (Number.isFinite(minimumUm) && Number.isFinite(maximumUm) && !(minimumUm < maximumUm)) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: 'AreaDetector minimum reconstructed height must be less than its maximum.', blockId: block.blockId });
         }
       }
       continue;

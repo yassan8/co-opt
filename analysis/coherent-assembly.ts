@@ -126,6 +126,8 @@ export interface TargetProfileSpec {
   periodMm: number;
   stepPositionMm: number;
   csvPoints?: Array<{ xMm: number; zUm: number }>;
+  /** Controls whether local slope steers the return ray or only adds round-trip phase. */
+  surfaceResponse?: 'specular-normal' | 'telecentric-phase';
   interaction?: 'specular' | 'lambertian' | 'abg' | 'harvey-shack' | 'bsdf-csv';
   scatterSamples?: number;
   scatterA?: number;
@@ -231,7 +233,8 @@ export interface CoherentTraceSettings {
 export interface CoherentAssemblyDesign {
   schemaVersion: '0.1' | '1.0';
   mode: OpticalTraceMode;
-  preset: 'custom-hybrid' | 'patent-fig-2' | 'comb-grating-area' | 'patent-fig-14-dual-comb';
+  /** Custom assemblies are authored from the active Configuration; no built-in instrument preset is embedded. */
+  preset: 'custom-hybrid';
   revision?: number;
   name: string;
   components: CoherentPhysicalComponent[];
@@ -296,7 +299,7 @@ export interface AssemblyEvaluation {
   confidence: DimensionConfidence;
 }
 
-export interface Fig2SimulationResult {
+export interface CoherentSurfaceSimulationResult {
   width: number;
   height: number;
   xMm: number[];
@@ -321,6 +324,12 @@ export interface Fig2SimulationResult {
   /** Native optical carrier cycles between adjacent Detector-Y pixels. */
   carrierCyclesPerPixel: number;
   carrierAliased: boolean;
+  /** Estimated Gaussian-source coherence-envelope FWHM on the reflected-height axis. */
+  coherenceEnvelopeFwhmUm?: number;
+  /** Detector-Y samples across the estimated coherence-envelope FWHM. */
+  envelopeSamplesPerFwhm?: number;
+  /** True when a separately traced flat Target established the system ridge. */
+  flatReferenceApplied?: boolean;
   measurementSampleCount: number | null;
   samplingLimited: boolean;
   intensityWPerPixel: Float64Array;
@@ -337,11 +346,11 @@ export interface Fig2SimulationResult {
   warningMessages: string[];
 }
 
-export interface Fig2SimulationOptions {
+export interface CoherentSurfaceSimulationOptions {
   /**
    * Signed measurement-minus-reference OPD for a zero-height Target.  The
-   * port-routed Hybrid trace supplies this value so the patent reconstruction
-   * uses the physical arm placement instead of the legacy path-length sketch.
+   * port-routed Hybrid trace supplies this value so reconstruction uses the
+   * physical arm placement instead of a manually entered path-length sketch.
    */
   baseOpdMm?: number;
   /** Legacy shared calculation limit. */
@@ -356,13 +365,16 @@ export interface Fig2SimulationOptions {
   calibrationMaxUm?: number;
 }
 
-export interface Fig2DetectorReconstructionOptions {
+export interface CoherentDetectorReconstructionOptions {
   powerWPerPixel: ArrayLike<number>;
+  /** Flat-Target Camera capture made with the same routes and detector settings. */
+  flatReferencePowerWPerPixel?: ArrayLike<number>;
   width: number;
   height: number;
   detector: CoherentDetectorSpec;
   grating: CoherentGratingSpec;
   sourceCenterWavelengthNm: number;
+  sourceBandwidthFwhmNm?: number;
   baseOpdMm: number;
   targetSpanMm: number;
   calibrationMinUm: number;
@@ -376,6 +388,12 @@ export interface Fig2DetectorReconstructionOptions {
   referenceColumn?: number;
   /** Height assigned to the measured reference column. A flat calibration normally supplies this. */
   referenceHeightUm?: number;
+  /** Inclusive Camera-X range illuminated by the measurement route. */
+  cameraXMin?: number;
+  cameraXMax?: number;
+  /** Physical Target-X coordinates represented by cameraXMin/cameraXMax. */
+  targetXMinMm?: number;
+  targetXMaxMm?: number;
   /** Used only for the gray comparison curve and error metrics, never by ridge extraction. */
   comparisonTarget?: TargetProfileSpec;
 }
@@ -711,143 +729,48 @@ function defaultPorts(_depthMm: number): OpticalPort[] {
   ];
 }
 
-function component(input: Omit<CoherentPhysicalComponent, 'manualOffset' | 'ports'> & { ports?: OpticalPort[] }): CoherentPhysicalComponent {
-  return {
-    ...input,
-    manualOffset: identityOffset(),
-    ports: input.ports ?? defaultPorts(input.dimensions.depthMm),
-  };
-}
 /**
- * Patent Fig. 2 physical-layout starting point. Dimensions are deliberately
- * marked Estimated until the user enters catalogue or measured dimensions.
+ * Empty, instrument-neutral fallback used only when no active Configuration is
+ * available. Physical components, routes and dimensions are always authored
+ * in Design Intents and Optical Routes rather than embedded as a preset.
  */
-export function createPatentFig2AssemblyDesign(): CoherentAssemblyDesign {
-  const components: CoherentPhysicalComponent[] = [
-    component({
-      id: 'source-11', label: 'Broadband source', reference: '11', kind: 'source', shape: 'box',
-      autoTransform: transform(0, 0, -300), dimensions: { widthMm: 36, heightMm: 28, depthMm: 48 },
-      dimensionConfidence: 'Estimated', pathIds: ['common'], powerEfficiency: 1,
-    }),
-    component({
-      id: 'mirror-21', label: 'Fold mirror', reference: '21', kind: 'mirror', shape: 'cylinder',
-      autoTransform: transform(0, 0, -250, 0, -45, 0), dimensions: { widthMm: 25, heightMm: 25, depthMm: 5, apertureDiameterMm: 22 },
-      dimensionConfidence: 'Estimated', pathIds: ['common'], powerEfficiency: 0.98,
-      ports: [
-        { id: 'in', label: 'Input', localPositionMm: vector(0, 0, 0), localDirection: vector(-1 / Math.SQRT2, 0, -1 / Math.SQRT2) },
-        { id: 'out', label: 'Output', localPositionMm: vector(0, 0, 0), localDirection: vector(1 / Math.SQRT2, 0, -1 / Math.SQRT2) },
-      ],
-    }),
-    component({
-      id: 'attenuator-22', label: 'ND filter', reference: '22', kind: 'attenuator', shape: 'box',
-      autoTransform: transform(40, 0, -250, 0, 90, 0), dimensions: { widthMm: 25, heightMm: 25, depthMm: 3, apertureDiameterMm: 20 },
-      dimensionConfidence: 'Estimated', pathIds: ['common'], powerEfficiency: 0.5,
-    }),
-    component({
-      id: 'beam-expander-23a', label: 'Beam expander L1', reference: '23a', kind: 'lens', shape: 'lens',
-      autoTransform: transform(80, 0, -250, 0, 90, 0), dimensions: { widthMm: 20, heightMm: 20, depthMm: 4, apertureDiameterMm: 18, frontRadiusMm: -28, backRadiusMm: 28, centerThicknessMm: 4 },
-      dimensionConfidence: 'Estimated', pathIds: ['common'], powerEfficiency: 0.99, refractiveIndexNd: 1.5168, abbeNumber: 64.17, metadata: { focalLengthMm: -25 },
-    }),
-    component({
-      id: 'beam-expander-23b', label: 'Beam expander L2', reference: '23b', kind: 'lens', shape: 'lens',
-      autoTransform: transform(110, 0, -250, 0, 90, 0), dimensions: { widthMm: 30, heightMm: 30, depthMm: 5, apertureDiameterMm: 28, frontRadiusMm: 45, backRadiusMm: -45, centerThicknessMm: 5 },
-      dimensionConfidence: 'Estimated', pathIds: ['common'], powerEfficiency: 0.99, refractiveIndexNd: 1.5168, abbeNumber: 64.17, metadata: { focalLengthMm: 50 },
-    }),
-    component({
-      id: 'beam-splitter-24', label: 'Beam splitter', reference: '24', kind: 'beam-splitter', shape: 'box',
-      autoTransform: transform(150, 0, -250, 0, -45, 0), dimensions: { widthMm: 20, heightMm: 20, depthMm: 20, apertureDiameterMm: 18 },
-      dimensionConfidence: 'Estimated', pathIds: ['common', 'object', 'reference', 'detector'], powerEfficiency: 1,
-      ports: [
-        { id: 'common', label: 'Common', localPositionMm: vector(0, 0, 0), localDirection: vector(-1 / Math.SQRT2, 0, 1 / Math.SQRT2) },
-        { id: 'object', label: 'Object arm', localPositionMm: vector(0, 0, 0), localDirection: vector(1 / Math.SQRT2, 0, -1 / Math.SQRT2) },
-        { id: 'reference', label: 'Reference arm', localPositionMm: vector(0, 0, 0), localDirection: vector(1 / Math.SQRT2, 0, 1 / Math.SQRT2) },
-        { id: 'detector', label: 'Detector', localPositionMm: vector(0, 0, 0), localDirection: vector(-1 / Math.SQRT2, 0, -1 / Math.SQRT2) },
-      ],
-    }),
-    component({
-      id: 'cylindrical-lens-25', label: 'Cylindrical lens', reference: '25', kind: 'cylindrical-lens', shape: 'box',
-      autoTransform: transform(190, 0, -250, 0, 90, 0), dimensions: { widthMm: 30, heightMm: 25, depthMm: 5, apertureDiameterMm: 22 },
-      dimensionConfidence: 'Estimated', pathIds: ['object'], powerEfficiency: 0.99, refractiveIndexNd: 1.5168, abbeNumber: 64.17, metadata: { focalLengthXmm: 1000000000, focalLengthYmm: 1000 },
-    }),
-    component({
-      id: 'focus-lens-26', label: 'Object focusing lens', reference: '26', kind: 'lens', shape: 'lens',
-      autoTransform: transform(240, 0, -250, 0, 90, 0), dimensions: { widthMm: 30, heightMm: 30, depthMm: 6, apertureDiameterMm: 28, frontRadiusMm: 50, backRadiusMm: -50, centerThicknessMm: 6 },
-      dimensionConfidence: 'Estimated', pathIds: ['object'], powerEfficiency: 0.99, refractiveIndexNd: 1.5168, abbeNumber: 64.17, metadata: { focalLengthMm: 200 },
-    }),
-    component({
-      id: 'target-100', label: 'Measurement target', reference: '100', kind: 'target', shape: 'box',
-      autoTransform: transform(400, 0, -250, 0, 90, 0), dimensions: { widthMm: 55, heightMm: 55, depthMm: 6 },
-      dimensionConfidence: 'Estimated', pathIds: ['object'], powerEfficiency: 0.7,
-    }),
-    component({
-      id: 'focus-lens-27', label: 'Reference lens 1', reference: '27', kind: 'lens', shape: 'lens',
-      autoTransform: transform(150, 0, -160), dimensions: { widthMm: 25, heightMm: 25, depthMm: 5.5, apertureDiameterMm: 23, frontRadiusMm: 42, backRadiusMm: -42, centerThicknessMm: 5.5 },
-      dimensionConfidence: 'Estimated', pathIds: ['reference'], powerEfficiency: 0.99, refractiveIndexNd: 1.5168, abbeNumber: 64.17, metadata: { focalLengthMm: 400 },
-    }),
-    component({
-      id: 'focus-lens-28', label: 'Reference lens 2', reference: '28', kind: 'lens', shape: 'lens',
-      autoTransform: transform(150, 0, -100), dimensions: { widthMm: 25, heightMm: 25, depthMm: 5.5, apertureDiameterMm: 23, frontRadiusMm: 42, backRadiusMm: -42, centerThicknessMm: 5.5 },
-      dimensionConfidence: 'Estimated', pathIds: ['reference'], powerEfficiency: 0.99, refractiveIndexNd: 1.5168, abbeNumber: 64.17, metadata: { focalLengthMm: 100 },
-    }),
-    component({
-      id: 'grating-70', label: 'Reflection grating', reference: '70', kind: 'reflection-grating', shape: 'box',
-      autoTransform: transform(150, 0, 0, 0, 10.369, 0), dimensions: { widthMm: 30, heightMm: 30, depthMm: 6, apertureDiameterMm: 25 },
-      dimensionConfidence: 'Estimated', pathIds: ['reference'], powerEfficiency: 0.75,
-    }),
-    component({
-      id: 'detector-80', label: '2D detector', reference: '80', kind: 'detector', shape: 'box',
-      autoTransform: transform(150, 0, -340), dimensions: { widthMm: 36, heightMm: 32, depthMm: 18 },
-      dimensionConfidence: 'Estimated', pathIds: ['detector'], powerEfficiency: 1,
-    }),
-  ];
-
-  const paths: CoherentPathDefinition[] = [
-    { id: 'common', label: 'Common path', componentIds: ['source-11', 'mirror-21', 'attenuator-22', 'beam-expander-23a', 'beam-expander-23b', 'beam-splitter-24'], roundTrip: false, throughput: 0.98 * 0.99 * 0.99 },
-    { id: 'object', label: 'Object arm', componentIds: ['beam-splitter-24', 'cylindrical-lens-25', 'focus-lens-26', 'target-100'], roundTrip: true, throughput: 0.99 * 0.99 * 0.99 * 0.99 },
-    { id: 'reference', label: 'Reference arm', componentIds: ['beam-splitter-24', 'focus-lens-27', 'focus-lens-28', 'grating-70'], roundTrip: true, throughput: 0.99 * 0.99 * 0.99 * 0.99 },
-    { id: 'detector', label: 'Recombination path', componentIds: ['beam-splitter-24', 'detector-80'], roundTrip: false, throughput: 1 },
-  ];
-
-  const connections: CoherentConnection[] = paths.flatMap((path) => path.componentIds.slice(1).map((id, index) => ({
-    id: `${path.id}-${index + 1}`,
-    fromComponentId: path.componentIds[index],
-    toComponentId: id,
-    pathId: path.id,
-    roundTrip: path.roundTrip,
-  })));
-
+export function createGenericCoherentAssemblyDesign(): CoherentAssemblyDesign {
+  const source: CoherentSourceSpec = {
+    id: 'source', kind: 'gaussian-broadband', centerWavelengthNm: 550,
+    bandwidthFwhmNm: 100, spectralSamples: 65, totalPowerW: 1,
+    beamDiameterMm: 1, divergenceDeg: 0, spatialProfile: 'gaussian',
+    spatialSamples: 9, coherenceGroupId: 'default',
+  };
+  const detector: CoherentDetectorSpec = {
+    id: 'detector', kind: 'area', pixelCountX: 1, pixelCountY: 1,
+    pixelPitchUm: 1, responsivity: 1, fillFactor: 1, frontOnly: true,
+  };
   return {
     schemaVersion: '1.0',
     mode: 'non-sequential',
-    preset: 'patent-fig-2',
-    name: 'Broadband grating interferometer',
-    components,
-    connections,
-    paths,
-    blockSequences: [
-      { id: 'common-sequence', label: 'Common path', pathId: 'common', blocks: [], rootTransform: transform(0, 0, -300) },
-      { id: 'object-sequence', label: 'Object arm', pathId: 'object', blocks: [], rootTransform: transform(150, 0, -250, 0, 90, 0) },
-      { id: 'reference-sequence', label: 'Reference arm', pathId: 'reference', blocks: [], rootTransform: transform(150, 0, -250) },
-      { id: 'detector-sequence', label: 'Detector path', pathId: 'detector', blocks: [], rootTransform: transform(150, 0, -250, 0, 180, 0) },
-    ],
-    clearance: { radialMm: 5, axialMm: 3 },
-    source: { id: 'source-11', componentId: 'source-11', kind: 'supercontinuum', centerWavelengthNm: 600, minWavelengthNm: 400, maxWavelengthNm: 800, bandwidthFwhmNm: 160, spectralSamples: 65, spectralShape: 'gaussian', totalPowerW: 0.001, beamDiameterMm: 2, exitApertureDiameterMm: 8, divergenceDeg: 0.05, spatialProfile: 'gaussian', spatialSamples: 49, coherenceGroupId: 'superk-11' },
-    sources: [{ id: 'source-11', componentId: 'source-11', kind: 'supercontinuum', centerWavelengthNm: 600, minWavelengthNm: 400, maxWavelengthNm: 800, bandwidthFwhmNm: 160, spectralSamples: 65, spectralShape: 'gaussian', totalPowerW: 0.001, beamDiameterMm: 2, exitApertureDiameterMm: 8, divergenceDeg: 0.05, spatialProfile: 'gaussian', spatialSamples: 49, coherenceGroupId: 'superk-11' }],
-    beamSplitter: { reflectance: 0.45, transmittance: 0.55, reflectedPhaseDeg: 90, transmittedPhaseDeg: 0 },
-    grating: { componentId: 'grating-70', grooveDensityLinesPerMm: 600, incidenceAngleDeg: 10.369, order: 1, allowedOrders: [1], blazeAngleDeg: 10.369, blazeWavelengthNm: 600, efficiency: 0.75, substrateReflectivity: 0.9, nondiffractedReflectivity: 0, incidentSide: 'front', grooveDirection: { x: 0, y: 1, z: 0 }, detectorMagnification: 1 },
-    target: { kind: 'step', spanMm: 8, offsetUm: 0, amplitudeUm: 20, periodMm: 2, stepPositionMm: 0 },
-    detector: { id: 'detector-80', componentId: 'detector-80', kind: 'area', pixelCountX: 128, pixelCountY: 128, pixelPitchUm: 10, activeWidthMm: 1.28, activeHeightMm: 1.28, fillFactor: 1, responsivity: 1, exposureTimeS: 0.001, bitDepth: 16, frontOnly: false, calibrationMinUm: -80, calibrationMaxUm: 80 },
-    detectors: [{ id: 'detector-80', componentId: 'detector-80', kind: 'area', pixelCountX: 128, pixelCountY: 128, pixelPitchUm: 10, activeWidthMm: 1.28, activeHeightMm: 1.28, fillFactor: 1, responsivity: 1, exposureTimeS: 0.001, bitDepth: 16, frontOnly: false, calibrationMinUm: -80, calibrationMaxUm: 80 }],
+    preset: 'custom-hybrid',
+    name: 'Coherent signal',
+    components: [],
+    connections: [],
+    paths: [],
+    blockSequences: [],
+    clearance: { radialMm: 0, axialMm: 0 },
+    source,
+    sources: [source],
+    beamSplitter: { reflectance: 0.5, transmittance: 0.5, reflectedPhaseDeg: 90, transmittedPhaseDeg: 0 },
+    grating: { grooveDensityLinesPerMm: 1, incidenceAngleDeg: 0, order: 0, allowedOrders: [0], efficiency: 1, detectorMagnification: 1 },
+    target: { kind: 'flat', spanMm: 1, offsetUm: 0, amplitudeUm: 0, periodMm: 1, stepPositionMm: 0 },
+    detector,
+    detectors: [detector],
     traceSettings: { maxInteractions: 24, minRelativePower: 1e-9, maxGeneratedRays: 250000, rayEpsilonMm: 1e-5, renderSegmentLimit: 25000, previewSpatialSamples: 9, previewSpectralSamples: 9 },
-    attenuatorTransmission: 0.5,
-    targetReflectance: 0.7,
-    visibility: 0.92,
+    attenuatorTransmission: 1,
+    targetReflectance: 1,
+    visibility: 1,
     calibrationOffsetMm: 0,
   };
 }
-
 export function normalizeCoherentAssemblyDesign(value: unknown): CoherentAssemblyDesign {
-  const fallback = createPatentFig2AssemblyDesign();
+  const fallback = createGenericCoherentAssemblyDesign();
   if (!value || typeof value !== 'object') return fallback;
   const source = value as Partial<CoherentAssemblyDesign>;
   const clone = JSON.parse(JSON.stringify(fallback)) as CoherentAssemblyDesign;
@@ -876,10 +799,10 @@ export function normalizeCoherentAssemblyDesign(value: unknown): CoherentAssembl
   const normalizedDetector = { ...clone.detector, ...(source.detector ?? {}) };
   const normalizedSources = Array.isArray(source.sources) && source.sources.length > 0
     ? source.sources.map((entry, index) => ({ ...normalizedSource, ...entry, id: entry.id ?? `source-${index + 1}` }))
-    : [{ ...normalizedSource, id: normalizedSource.id ?? 'source-11' }];
+    : [{ ...normalizedSource, id: normalizedSource.id ?? 'source' }];
   const normalizedDetectors = Array.isArray(source.detectors) && source.detectors.length > 0
     ? source.detectors.map((entry, index) => ({ ...normalizedDetector, ...entry, id: entry.id ?? `detector-${index + 1}` }))
-    : [{ ...normalizedDetector, id: normalizedDetector.id ?? 'detector-80' }];
+    : [{ ...normalizedDetector, id: normalizedDetector.id ?? 'detector' }];
 
 
   return {
@@ -887,7 +810,7 @@ export function normalizeCoherentAssemblyDesign(value: unknown): CoherentAssembl
     ...source,
     schemaVersion: '1.0',
     mode: source.mode === 'sequential' ? 'sequential' : 'non-sequential',
-    preset: source.preset ?? clone.preset,
+    preset: 'custom-hybrid',
     components: normalizedComponents,
     connections: Array.isArray(source.connections) ? source.connections : clone.connections,
     paths: Array.isArray(source.paths) ? source.paths : clone.paths,
@@ -1189,10 +1112,10 @@ function pathThroughput(design: CoherentAssemblyDesign, id: CoherentPathDefiniti
   return clamp(finite(path?.throughput, 1), 0, 1);
 }
 
-export function simulatePatentFig2(
+export function simulateCoherentSurfaceSignal(
   input: CoherentAssemblyDesign,
-  options: Fig2SimulationOptions = {},
-): Fig2SimulationResult {
+  options: CoherentSurfaceSimulationOptions = {},
+): CoherentSurfaceSimulationResult {
   const design = normalizeCoherentAssemblyDesign(input);
   const assembly = evaluateCoherentAssembly(design);
   const splitter = evaluateBeamSplitter(design.beamSplitter);
@@ -1466,9 +1389,172 @@ function removeMovingAverage(signal: Float64Array, radius: number): Float64Array
   return residual;
 }
 
+/**
+ * Returns the modulation envelope of one measured Camera column.
+ *
+ * Figure-2-style acquisition encodes reference-arm delay along Detector Y.
+ * Surface depth is therefore the Y position of the white-light correlation
+ * maximum, not the translation that best correlates a column with some other
+ * Target-X column. A local modulation-RMS detector removes the optical carrier
+ * while retaining that directly measured correlation maximum. Unlike a
+ * Hilbert transform it remains well-defined when the sampled carrier lies at
+ * (or aliases onto) the Camera Nyquist frequency.
+ */
+function extractCameraCoherenceEnvelope(
+  intensity: Float64Array,
+  backgroundRadius: number,
+): Float64Array {
+  const length = intensity.length;
+  const residual = removeMovingAverage(intensity, backgroundRadius);
+
+  // Normalize by the local DC illumination so vignetting and the exact-lens
+  // PSF do not move the detected coherence maximum toward a brighter row.
+  const prefix = new Float64Array(length + 1);
+  const residualEnergyPrefix = new Float64Array(length + 1);
+  let meanIntensity = 0;
+  for (let index = 0; index < length; index += 1) {
+    meanIntensity += Math.max(0, intensity[index]);
+    prefix[index + 1] = prefix[index] + Math.max(0, intensity[index]);
+    residualEnergyPrefix[index + 1] = residualEnergyPrefix[index] + residual[index] * residual[index];
+  }
+  meanIntensity /= Math.max(1, length);
+  const illuminationFloor = Math.max(1e-30, meanIntensity * 1e-3);
+  const rawEnvelope = new Float64Array(length);
+  const modulationRadius = 1;
+  for (let index = 0; index < length; index += 1) {
+    const low = Math.max(0, index - backgroundRadius);
+    const high = Math.min(length, index + backgroundRadius + 1);
+    const localDc = (prefix[high] - prefix[low]) / Math.max(1, high - low);
+    const modulationLow = Math.max(0, index - modulationRadius);
+    const modulationHigh = Math.min(length, index + modulationRadius + 1);
+    const modulationRms = Math.sqrt(
+      (residualEnergyPrefix[modulationHigh] - residualEnergyPrefix[modulationLow])
+        / Math.max(1, modulationHigh - modulationLow),
+    );
+    rawEnvelope[index] = modulationRms / Math.max(illuminationFloor, localDc);
+  }
+
+  // A one-pixel triangular filter suppresses Monte-Carlo pixel noise without
+  // broadening a narrow white-light correlation line materially.
+  const envelope = new Float64Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const previous = rawEnvelope[Math.max(0, index - 1)];
+    const current = rawEnvelope[index];
+    const next = rawEnvelope[Math.min(length - 1, index + 1)];
+    envelope[index] = (previous + 2 * current + next) * 0.25;
+  }
+  return envelope;
+}
+
+/** Selects the measured Camera-Y intensity maximum independently at each X. */
+function detectCameraEnvelopeRidge(
+  envelope: Float64Array,
+  width: number,
+  height: number,
+  validRows: number[],
+): RidgeTrackingResult {
+  const rows = validRows.length ? validRows : Array.from({ length: height }, (_, index) => index);
+  const y = new Array<number>(width).fill(rows[0] ?? 0);
+  const confidence = new Array<number>(width).fill(0);
+  for (let x = 0; x < width; x += 1) {
+    let peakY = rows[0] ?? 0;
+    let peak = Number.NEGATIVE_INFINITY;
+    for (const row of rows) {
+      const value = envelope[row * width + x];
+      if (value > peak) {
+        peak = value;
+        peakY = row;
+      }
+    }
+    let subpixelY = peakY;
+    if (peakY > 0 && peakY + 1 < height) {
+      const previous = envelope[(peakY - 1) * width + x];
+      const current = envelope[peakY * width + x];
+      const next = envelope[(peakY + 1) * width + x];
+      const curvature = previous - 2 * current + next;
+      if (Math.abs(curvature) > 1e-15) {
+        subpixelY += clamp(0.5 * (previous - next) / curvature, -0.5, 0.5);
+      }
+    }
+    let alternative = 0;
+    for (const row of rows) {
+      if (Math.abs(row - peakY) <= 2) continue;
+      const value = envelope[row * width + x];
+      const previous = row > 0 ? envelope[(row - 1) * width + x] : Number.NEGATIVE_INFINITY;
+      const next = row + 1 < height ? envelope[(row + 1) * width + x] : Number.NEGATIVE_INFINITY;
+      if (value >= previous && value >= next) alternative = Math.max(alternative, value);
+    }
+    y[x] = subpixelY;
+    confidence[x] = clamp(1 - alternative / Math.max(1e-30, peak), 0, 1);
+  }
+  return {
+    y,
+    confidence,
+    breakBefore: new Array<boolean>(width).fill(false),
+  };
+}
+
 interface CameraColumnCorrelation {
   scoreByLag: Float64Array;
   minimumLag: number;
+}
+
+/**
+ * Suppresses column-local correlation peak hops without consulting the Target
+ * prescription.  A Hampel-style replacement removes isolated low-confidence
+ * outliers, then a short Savitzky-Golay pass rejects Camera-column noise while
+ * retaining smooth slope and curvature. Strong, well-measured discontinuities
+ * divide the profile into separate segments so a real step is not rounded.
+ */
+function regularizeDifferentialCameraLag(
+  rawLag: number[],
+  confidence: number[],
+  minimumLag: number,
+  maximumLag: number,
+): number[] {
+  if (rawLag.length < 5) return [...rawLag];
+  const robust = [...rawLag];
+  const median = (values: number[]): number => {
+    const sorted = [...values].sort((left, right) => left - right);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) * 0.5;
+  };
+  for (let index = 2; index + 2 < rawLag.length; index += 1) {
+    const neighborhood = rawLag.slice(index - 2, index + 3);
+    const localMedian = median(neighborhood);
+    const deviation = median(neighborhood.map((value) => Math.abs(value - localMedian)));
+    const threshold = Math.max(1.25, deviation * 3.5);
+    if (confidence[index] < 0.65 && Math.abs(rawLag[index] - localMedian) > threshold) {
+      robust[index] = localMedian;
+    }
+  }
+
+  const lagSpan = Math.max(1, maximumLag - minimumLag);
+  const discontinuityThreshold = Math.max(8, lagSpan * 0.18);
+  const breakBefore = robust.map((value, index) => (
+    index > 0
+      && Math.min(confidence[index - 1], confidence[index]) > 0.35
+      && Math.abs(value - robust[index - 1]) > discontinuityThreshold
+  ));
+  const smoothOnce = (input: number[]): number[] => {
+    const output = [...input];
+    // Five-point quadratic Savitzky-Golay coefficients. At the current
+    // >20 Camera samples/period this removes pixel-scale jitter without
+    // attenuating the measured Sine amplitude.
+    const coefficients = [-3, 12, 17, 12, -3];
+    for (let index = 2; index + 2 < input.length; index += 1) {
+      let crossesBreak = false;
+      for (let cursor = index - 1; cursor <= index + 2; cursor += 1) {
+        if (breakBefore[cursor]) { crossesBreak = true; break; }
+      }
+      if (crossesBreak) continue;
+      let value = 0;
+      for (let offset = -2; offset <= 2; offset += 1) value += coefficients[offset + 2] * input[index + offset];
+      output[index] = clamp(value / 35, minimumLag, maximumLag);
+    }
+    return output;
+  };
+  return smoothOnce(smoothOnce(robust));
 }
 
 /**
@@ -1530,31 +1616,115 @@ function correlateCameraColumns(
 }
 
 /**
+ * Measures the movement of the white-light interferogram against a separately
+ * acquired flat-Target Camera capture.  The flat image removes relay
+ * curvature, pupil phase and fixed Camera-Y shear per Target-X column; only
+ * the measured Camera rasters enter this differential estimate.
+ */
+function detectDifferentialCameraRidge(
+  measuredSignal: Float64Array,
+  flatSignal: Float64Array,
+  width: number,
+  height: number,
+  minimumLag: number,
+  maximumLag: number,
+  flatRidge: RidgeTrackingResult,
+  peakExclusionRadius = 2,
+): { ridge: RidgeTrackingResult; lag: number[] } {
+  const measuredColumn = new Float64Array(height);
+  const flatColumn = new Float64Array(height);
+  const lag = new Array<number>(width).fill(0);
+  const confidence = new Array<number>(width).fill(0);
+  for (let x = 0; x < width; x += 1) {
+    for (let y = 0; y < height; y += 1) {
+      measuredColumn[y] = measuredSignal[y * width + x];
+      flatColumn[y] = flatSignal[y * width + x];
+    }
+    const correlation = correlateCameraColumns(
+      measuredColumn,
+      flatColumn,
+      minimumLag,
+      maximumLag,
+    );
+    let peakIndex = 0;
+    for (let index = 1; index < correlation.scoreByLag.length; index += 1) {
+      if (correlation.scoreByLag[index] > correlation.scoreByLag[peakIndex]) peakIndex = index;
+    }
+    let subpixelIndex = peakIndex;
+    if (peakIndex > 0 && peakIndex + 1 < correlation.scoreByLag.length) {
+      const previous = correlation.scoreByLag[peakIndex - 1];
+      const current = correlation.scoreByLag[peakIndex];
+      const next = correlation.scoreByLag[peakIndex + 1];
+      const curvature = previous - 2 * current + next;
+      if (Math.abs(curvature) > 1e-15) {
+        subpixelIndex += clamp(0.5 * (previous - next) / curvature, -0.5, 0.5);
+      }
+    }
+    const selectedLag = correlation.minimumLag + subpixelIndex;
+    lag[x] = selectedLag;
+    const peak = correlation.scoreByLag[peakIndex];
+    let alternative = 0;
+    for (let index = 0; index < correlation.scoreByLag.length; index += 1) {
+      if (Math.abs(index - peakIndex) <= peakExclusionRadius) continue;
+      alternative = Math.max(alternative, correlation.scoreByLag[index]);
+    }
+    confidence[x] = clamp(1 - alternative / Math.max(1e-30, peak), 0, 1);
+  }
+  const regularizedLag = regularizeDifferentialCameraLag(lag, confidence, minimumLag, maximumLag);
+  const y = regularizedLag.map((value, index) => clamp(flatRidge.y[index] + value, 0, height - 1));
+  return {
+    lag: regularizedLag,
+    ridge: {
+      y,
+      confidence,
+      breakBefore: new Array<boolean>(width).fill(false),
+    },
+  };
+}
+
+/**
  * Reconstructs a surface strictly from the Camera power raster.  Optical Route
  * OPD and Detector/Grating calibration convert the detected Y ridge to height;
  * the optional Target profile is evaluated only after reconstruction for the
  * gray comparison curve and error metrics.
  */
-export function reconstructPatentFig2FromDetectorSignal(
-  options: Fig2DetectorReconstructionOptions,
-): Fig2SimulationResult {
-  const sourceWidth = Math.max(1, Math.round(finite(options.width, 1)));
+export function reconstructSurfaceFromDetectorSignal(
+  options: CoherentDetectorReconstructionOptions,
+): CoherentSurfaceSimulationResult {
+  const detectorWidth = Math.max(1, Math.round(finite(options.width, 1)));
   const sourceHeight = Math.max(1, Math.round(finite(options.height, 1)));
+  const cameraXMin = clamp(Math.round(finite(options.cameraXMin, 0)), 0, detectorWidth - 1);
+  const cameraXMax = clamp(
+    Math.round(finite(options.cameraXMax, detectorWidth - 1)),
+    cameraXMin,
+    detectorWidth - 1,
+  );
+  const sourceWidth = cameraXMax - cameraXMin + 1;
   const requestedMaximumWidth = Math.max(16, Math.min(2048, Math.round(finite(options.maximumDetectorPixelsX, 1024))));
   const measurementSampleCount = Number(options.measurementSampleCount);
-  const minimumSamplesPerProfilePoint = 32;
+  // A reconstructed profile point is inferred from a Camera column rather
+  // than from a single ray.  Keep enough physical Detector hits in every
+  // resampled column for the current/flat column correlation to be stable.
+  const minimumSamplesPerProfilePoint = 64;
   const samplingLimitedWidth = Number.isFinite(measurementSampleCount) && measurementSampleCount > 0
     ? Math.max(16, Math.floor(measurementSampleCount / minimumSamplesPerProfilePoint))
     : requestedMaximumWidth;
   const maximumWidth = Math.min(requestedMaximumWidth, samplingLimitedWidth);
   const maximumHeight = Math.max(16, Math.min(2048, Math.round(finite(options.maximumDetectorPixelsY, 2048))));
-  const width = Math.max(1, Math.min(sourceWidth, maximumWidth));
+  let width = Math.max(1, Math.min(sourceWidth, maximumWidth));
   const height = Math.max(1, Math.min(sourceHeight, maximumHeight));
   const pitchMm = Math.max(1e-9, finite(options.detector.pixelPitchUm, 5) * 1e-3);
-  const xSpanMm = Math.max(1e-9, finite(options.targetSpanMm, sourceWidth * pitchMm));
+  const configuredTargetSpanMm = Math.max(1e-9, Math.abs(finite(options.targetSpanMm, sourceWidth * pitchMm)));
+  const mappedTargetXMinMm = finite(options.targetXMinMm, -configuredTargetSpanMm * 0.5);
+  const mappedTargetXMaxMm = finite(options.targetXMaxMm, configuredTargetSpanMm * 0.5);
+  const mappedTargetLowMm = Math.min(mappedTargetXMinMm, mappedTargetXMaxMm);
+  const mappedTargetHighMm = Math.max(mappedTargetXMinMm, mappedTargetXMaxMm);
+  const xSpanMm = Math.max(1e-9, mappedTargetHighMm - mappedTargetLowMm);
   const xSampleIntervalMm = xSpanMm / Math.max(1, width - 1);
   const samplingLimited = width < Math.min(sourceWidth, requestedMaximumWidth);
-  const xMm = Array.from({ length: width }, (_, index) => (index / Math.max(1, width - 1) - 0.5) * xSpanMm);
+  const xMm = Array.from({ length: width }, (_, index) => (
+    mappedTargetXMinMm + index / Math.max(1, width - 1) * (mappedTargetXMaxMm - mappedTargetXMinMm)
+  ));
   const yZeroIndex = Math.floor(height / 2);
   const yMm = Array.from({ length: height }, (_, index) => (index - yZeroIndex) * pitchMm);
 
@@ -1565,7 +1735,8 @@ export function reconstructPatentFig2FromDetectorSignal(
   let maximum = 0;
   for (let sourceY = 0; sourceY < sourceHeight; sourceY += 1) {
     for (let sourceX = 0; sourceX < sourceWidth; sourceX += 1) {
-      const value = Math.max(0, finite(options.powerWPerPixel[sourceY * sourceWidth + sourceX]));
+      const detectorX = cameraXMin + sourceX;
+      const value = Math.max(0, finite(options.powerWPerPixel[sourceY * detectorWidth + detectorX]));
       integratedPowerW += value;
     }
   }
@@ -1579,7 +1750,8 @@ export function reconstructPatentFig2FromDetectorSignal(
       let samples = 0;
       for (let sourceY = sourceY0; sourceY < Math.min(sourceHeight, sourceY1); sourceY += 1) {
         for (let sourceX = sourceX0; sourceX < Math.min(sourceWidth, sourceX1); sourceX += 1) {
-          sum += Math.max(0, finite(options.powerWPerPixel[sourceY * sourceWidth + sourceX]));
+          const detectorX = cameraXMin + sourceX;
+          sum += Math.max(0, finite(options.powerWPerPixel[sourceY * detectorWidth + detectorX]));
           samples += 1;
         }
       }
@@ -1591,6 +1763,30 @@ export function reconstructPatentFig2FromDetectorSignal(
   const normalizedIntensity = new Float64Array(width * height);
   for (let index = 0; index < intensityWPerPixel.length; index += 1) {
     normalizedIntensity[index] = intensityWPerPixel[index] / Math.max(1e-30, maximum);
+  }
+
+  const flatReferenceIntensity = options.flatReferencePowerWPerPixel
+    ? new Float64Array(width * height)
+    : null;
+  if (flatReferenceIntensity) {
+    for (let y = 0; y < height; y += 1) {
+      const sourceY0 = Math.floor(y * sourceHeight / height);
+      const sourceY1 = Math.max(sourceY0 + 1, Math.floor((y + 1) * sourceHeight / height));
+      for (let x = 0; x < width; x += 1) {
+        const sourceX0 = Math.floor(x * sourceWidth / width);
+        const sourceX1 = Math.max(sourceX0 + 1, Math.floor((x + 1) * sourceWidth / width));
+        let sum = 0;
+        let samples = 0;
+        for (let sourceY = sourceY0; sourceY < Math.min(sourceHeight, sourceY1); sourceY += 1) {
+          for (let sourceX = sourceX0; sourceX < Math.min(sourceWidth, sourceX1); sourceX += 1) {
+            const detectorX = cameraXMin + sourceX;
+            sum += Math.max(0, finite(options.flatReferencePowerWPerPixel![sourceY * detectorWidth + detectorX]));
+            samples += 1;
+          }
+        }
+        flatReferenceIntensity[y * width + x] = sum / Math.max(1, samples);
+      }
+    }
   }
 
   const centerGrating = evaluateReflectionGrating({
@@ -1612,116 +1808,106 @@ export function reconstructPatentFig2FromDetectorSignal(
   const carrierPeriodPixels = aliasedCyclesPerPixel > 1e-4 ? 1 / aliasedCyclesPerPixel : 8;
   const backgroundRadius = Math.max(12, Math.min(96, Math.round(carrierPeriodPixels * 7)));
 
-  // Extract the fringe-only part of every actual Camera W/pixel column. The
-  // measured reference column retains real PSF, illumination and detector
-  // effects; no configured Target profile is used to build the decoder.
-  const residualRaster = new Float64Array(width * height);
+  // The configured profile maps to Detector X while reference-arm OPL maps to
+  // Detector Y. Extract the white-light correlation envelope independently in
+  // every measured column. A flat capture is a system calibration only; it is
+  // never used as a template in a column-correlation decoder.
+  const coherenceEnvelope = new Float64Array(width * height);
+  const flatReferenceEnvelope = flatReferenceIntensity ? new Float64Array(width * height) : null;
+  const correlationSignal = new Float64Array(width * height);
+  const flatCorrelationSignal = flatReferenceIntensity ? new Float64Array(width * height) : null;
   const columnEnergy = new Float64Array(width);
   const column = new Float64Array(height);
   for (let x = 0; x < width; x += 1) {
     for (let y = 0; y < height; y += 1) column[y] = intensityWPerPixel[y * width + x];
+    const envelope = extractCameraCoherenceEnvelope(column, backgroundRadius);
     const residual = removeMovingAverage(column, backgroundRadius);
     let energy = 0;
     for (let y = 0; y < height; y += 1) {
-      const value = residual[y];
-      residualRaster[y * width + x] = value;
+      const value = envelope[y];
+      coherenceEnvelope[y * width + x] = value;
+      correlationSignal[y * width + x] = residual[y];
       energy += value * value;
     }
     columnEnergy[x] = energy;
+    if (flatReferenceIntensity && flatReferenceEnvelope) {
+      for (let y = 0; y < height; y += 1) column[y] = flatReferenceIntensity[y * width + x];
+      const flatEnvelope = extractCameraCoherenceEnvelope(column, backgroundRadius);
+      const flatResidual = removeMovingAverage(column, backgroundRadius);
+      for (let y = 0; y < height; y += 1) {
+        flatReferenceEnvelope[y * width + x] = flatEnvelope[y];
+        flatCorrelationSignal![y * width + x] = flatResidual[y];
+      }
+    }
   }
   let strongestColumnEnergy = 0;
   columnEnergy.forEach((value) => { strongestColumnEnergy = Math.max(strongestColumnEnergy, value); });
   const requestedReferenceColumn = Math.round(finite(options.referenceColumn, Number.NaN));
-  let cameraReferenceColumn = Number.isFinite(requestedReferenceColumn)
+  const strongestCameraColumn = columnEnergy.reduce(
+    (best, value, index, array) => value > array[best] ? index : best,
+    0,
+  );
+  const cameraReferenceColumn = Number.isFinite(requestedReferenceColumn)
     ? Math.max(0, Math.min(width - 1, requestedReferenceColumn))
-    : columnEnergy.findIndex((value) => value > strongestColumnEnergy * 1e-4);
-  if (cameraReferenceColumn < 0) {
-    cameraReferenceColumn = columnEnergy.reduce((best, value, index, array) => value > array[best] ? index : best, 0);
-  }
-  const cameraReferenceXmm = xMm[cameraReferenceColumn] ?? 0;
+    : strongestCameraColumn;
+  const cameraReferenceXmm = xMm[cameraReferenceColumn] ?? mappedTargetXMinMm;
   const referenceHeightUm = finite(options.referenceHeightUm, 0);
-  const referenceColumn = new Float64Array(height);
-  for (let y = 0; y < height; y += 1) referenceColumn[y] = residualRaster[y * width + cameraReferenceColumn];
 
   const calibrationLowUm = Math.min(finite(options.calibrationMinUm, -80), finite(options.calibrationMaxUm, 80));
   const calibrationHighUm = Math.max(finite(options.calibrationMinUm, -80), finite(options.calibrationMaxUm, 80));
   const signedDetectorHeightStepUm = detectorDelayStepMm * 500;
   const safeSignedHeightStepUm = Math.abs(signedDetectorHeightStepUm) > 1e-12 ? signedDetectorHeightStepUm : 1;
-  const minimumLag = Math.floor(Math.min(
-    (calibrationLowUm - referenceHeightUm) / safeSignedHeightStepUm,
-    (calibrationHighUm - referenceHeightUm) / safeSignedHeightStepUm,
-  )) - 2;
-  const maximumLag = Math.ceil(Math.max(
-    (calibrationLowUm - referenceHeightUm) / safeSignedHeightStepUm,
-    (calibrationHighUm - referenceHeightUm) / safeSignedHeightStepUm,
-  )) + 2;
-  const calibratedHeightByY = new Array<number>(height);
   const validRidgeRows: number[] = [];
   for (let y = 0; y < height; y += 1) {
-    const heightUm = referenceHeightUm + (y - yZeroIndex) * safeSignedHeightStepUm;
-    calibratedHeightByY[y] = heightUm;
-    if (heightUm >= calibrationLowUm && heightUm <= calibrationHighUm) validRidgeRows.push(y);
+    const detectorHeightUm = (y - yZeroIndex) * safeSignedHeightStepUm;
+    // Read the white-light intensity maximum inside the calibrated Detector-Y
+    // depth span. Searching the full sensor would admit periodic
+    // correlation replicas caused by the finite/discrete simulated spectrum.
+    // A flat capture establishes the system zero but is not a column template;
+    // both flat and measured maxima are selected independently in this same
+    // physical height window.
+    const absoluteHeightUm = referenceHeightUm + detectorHeightUm - finite(options.baseOpdMm) * 500;
+    if (absoluteHeightUm >= calibrationLowUm && absoluteHeightUm <= calibrationHighUm) validRidgeRows.push(y);
   }
 
-  // A Target height translates its measured Camera column along Detector Y.
-  // Cross-correlating every column with the measured reference column turns
-  // that translation into a height response map, even when the optical carrier
-  // itself aliases at the Detector pitch.
-  const coherenceEnvelope = new Float64Array(width * height);
-  const signalColumn = new Float64Array(height);
-  for (let x = 0; x < width; x += 1) {
-    for (let y = 0; y < height; y += 1) signalColumn[y] = residualRaster[y * width + x];
-    const correlation = correlateCameraColumns(signalColumn, referenceColumn, minimumLag, maximumLag);
-    for (const y of validRidgeRows) {
-      const lag = Math.round((calibratedHeightByY[y] - referenceHeightUm) / safeSignedHeightStepUm);
-      const responseIndex = lag - correlation.minimumLag;
-      if (responseIndex >= 0 && responseIndex < correlation.scoreByLag.length) {
-        coherenceEnvelope[y * width + x] = correlation.scoreByLag[responseIndex];
-      }
-    }
-  }
-  const ridge = trackCoherenceRidge(
-    coherenceEnvelope,
-    width,
-    height,
-    validRidgeRows,
-    calibratedHeightByY,
-    cameraReferenceColumn === 0 ? referenceHeightUm : undefined,
-  );
-  const rawRecoveredHeightUm = ridge.y.map((subpixelY) => {
-    const lower = Math.max(0, Math.min(height - 1, Math.floor(subpixelY)));
-    const upper = Math.max(0, Math.min(height - 1, lower + 1));
-    const fraction = subpixelY - lower;
-    return clamp(
-      calibratedHeightByY[lower] + (calibratedHeightByY[upper] - calibratedHeightByY[lower]) * fraction,
-      calibrationLowUm,
-      calibrationHighUm,
-    );
-  });
-  const repairedRecovery = repairShortCorrelationExcursions(
-    rawRecoveredHeightUm,
-    detectorHeightStepUm,
-    calibrationHighUm - calibrationLowUm,
-  );
-  const recoveredHeightUm = repairedRecovery.values;
-  repairedRecovery.repaired.forEach((wasRepaired, index) => {
-    if (!wasRepaired) return;
-    ridge.y[index] = yZeroIndex + (recoveredHeightUm[index] - referenceHeightUm) / safeSignedHeightStepUm;
-    ridge.confidence[index] = Math.min(ridge.confidence[index], 0.25);
-  });
+  const directRidge = detectCameraEnvelopeRidge(coherenceEnvelope, width, height, validRidgeRows);
+  const flatRidge = flatReferenceEnvelope
+    ? detectCameraEnvelopeRidge(flatReferenceEnvelope, width, height, validRidgeRows)
+    : null;
+  const minimumDifferentialLag = Math.floor(Math.min(
+    (calibrationLowUm - referenceHeightUm) / safeSignedHeightStepUm,
+    (calibrationHighUm - referenceHeightUm) / safeSignedHeightStepUm,
+  ));
+  const maximumDifferentialLag = Math.ceil(Math.max(
+    (calibrationLowUm - referenceHeightUm) / safeSignedHeightStepUm,
+    (calibrationHighUm - referenceHeightUm) / safeSignedHeightStepUm,
+  ));
+  const differential = flatReferenceEnvelope && flatCorrelationSignal && flatRidge
+    ? detectDifferentialCameraRidge(
+      correlationSignal,
+      flatCorrelationSignal,
+      width,
+      height,
+      minimumDifferentialLag,
+      maximumDifferentialLag,
+      flatRidge,
+      8,
+    )
+    : null;
+  const ridge = differential?.ridge ?? directRidge;
+  const recoveredHeightUm = ridge.y.map((subpixelY, index) => clamp(
+    referenceHeightUm + (differential
+      ? differential.lag[index] * safeSignedHeightStepUm
+      : (subpixelY - yZeroIndex) * safeSignedHeightStepUm - finite(options.baseOpdMm) * 500),
+    calibrationLowUm,
+    calibrationHighUm,
+  ));
   ridge.breakBefore = recoveredHeightUm.map((value, index) => (
     index > 0 && Math.abs(value - recoveredHeightUm[index - 1]) > Math.max(detectorHeightStepUm * 12, (calibrationHighUm - calibrationLowUm) * 0.2)
   ));
 
-  const comparisonReferenceHeightUm = options.comparisonTarget
-    ? sampleTargetHeightUm(options.comparisonTarget, cameraReferenceXmm)
-    : 0;
   const targetHeightUm = options.comparisonTarget
-    ? xMm.map((x) => (
-      sampleTargetHeightUm(options.comparisonTarget!, x)
-      - comparisonReferenceHeightUm
-      + referenceHeightUm
-    ))
+    ? xMm.map((x) => sampleTargetHeightUm(options.comparisonTarget!, x))
     : new Array<number>(width).fill(Number.NaN);
   const errors = recoveredHeightUm
     .map((value, index) => value - targetHeightUm[index])
@@ -1742,6 +1928,13 @@ export function reconstructPatentFig2FromDetectorSignal(
   }
   const signalCoverageFraction = coveredColumns / Math.max(1, width);
   const meanRidgeConfidence = ridge.confidence.reduce((sum, value) => sum + value, 0) / Math.max(1, ridge.confidence.length);
+  const bandwidthFwhmNm = Math.abs(finite(options.sourceBandwidthFwhmNm));
+  const coherenceEnvelopeFwhmUm = bandwidthFwhmNm > 1e-12
+    ? 0.0002205 * Math.pow(Math.max(1e-6, finite(options.sourceCenterWavelengthNm, 600)), 2) / bandwidthFwhmNm
+    : Number.NaN;
+  const envelopeSamplesPerFwhm = Number.isFinite(coherenceEnvelopeFwhmUm)
+    ? coherenceEnvelopeFwhmUm / Math.max(1e-12, detectorHeightStepUm)
+    : Number.NaN;
   const samplesPerTargetPeriod = options.comparisonTarget?.kind === 'sine'
     ? Math.abs(finite(options.comparisonTarget.periodMm)) / Math.max(1e-12, xSampleIntervalMm)
     : null;
@@ -1750,10 +1943,14 @@ export function reconstructPatentFig2FromDetectorSignal(
   if (!(Math.abs(centerSlope) > 1e-12)) warningMessages.push('The grating provides no usable Detector-Y depth calibration.');
   if (validRidgeRows.length < 3) warningMessages.push('The calibrated height range does not overlap enough Detector-Y rows.');
   if (signalCoverageFraction < 0.8) warningMessages.push(`Camera signal covers only ${(signalCoverageFraction * 100).toFixed(1)}% of Target-X reconstruction columns.`);
-  if (meanRidgeConfidence < 0.1) warningMessages.push('Camera-derived coherence-ridge confidence is low; increase Detector rays/wavelength or fringe contrast.');
-  if (cyclesPerPixel > 0.5) warningMessages.push(`The native fringe carrier is undersampled (${cyclesPerPixel.toFixed(3)} optical cycles/Detector-Y pixel). Camera-column correlation can recover relative translation, but absolute optical phase is aliased.`);
+  if (meanRidgeConfidence < 0.2) warningMessages.push('Camera-derived white-light ridge confidence is low; increase Detector rays/wavelength, improve arm overlap, or increase fringe visibility.');
+  if (Number.isFinite(envelopeSamplesPerFwhm) && envelopeSamplesPerFwhm < 2) warningMessages.push(`The white-light correlation envelope is undersampled (${envelopeSamplesPerFwhm.toFixed(2)} Camera pixels/FWHM; 2 or more required).`);
+  if (cyclesPerPixel > 0.5) warningMessages.push(`The optical fringe carrier is undersampled (${cyclesPerPixel.toFixed(3)} cycles/Camera pixel); Figure-2 height still uses the directly detected white-light envelope position, not aliased fringe phase.`);
   if (samplingLimited) warningMessages.push(`Camera sampling provides ${Math.round(measurementSampleCount).toLocaleString()} Detector hits; Target-X reconstruction is binned to ${width.toLocaleString()} points (about ${minimumSamplesPerProfilePoint} hits/point required). Increase Detector rays/wavelength for finer recovery.`);
   if (samplesPerTargetPeriod !== null && samplesPerTargetPeriod < 8) warningMessages.push(`Sine profile is undersampled along Target X (${samplesPerTargetPeriod.toFixed(2)} samples/period; 8 or more recommended).`);
+  const targetCoverageFraction = xSpanMm / configuredTargetSpanMm;
+  if (targetCoverageFraction < 0.8) warningMessages.push(`The measurement route samples only ${xSpanMm.toFixed(3)} mm (${(targetCoverageFraction * 100).toFixed(1)}%) of the configured ${configuredTargetSpanMm.toFixed(3)} mm Target span. Unsampled Target regions are not reconstructed.`);
+  if (!flatReferenceEnvelope) warningMessages.push('No flat Camera calibration was acquired; absolute height uses the routed OPD and grating-axis calibration.');
 
   return {
     width,
@@ -1775,6 +1972,9 @@ export function reconstructPatentFig2FromDetectorSignal(
     cameraReferenceXmm,
     carrierCyclesPerPixel: cyclesPerPixel,
     carrierAliased: cyclesPerPixel > 0.5,
+    coherenceEnvelopeFwhmUm,
+    envelopeSamplesPerFwhm,
+    flatReferenceApplied: Boolean(flatReferenceEnvelope),
     measurementSampleCount: Number.isFinite(measurementSampleCount) ? Math.max(0, Math.round(measurementSampleCount)) : null,
     samplingLimited,
     intensityWPerPixel,

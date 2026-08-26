@@ -2254,7 +2254,10 @@ function fitCameraToOpticalSystem() {
         
         
         // Position camera to view the system from a good angle
-        camera.position.set(cameraDistance * 0.7, cameraDistance * 0.5, systemCenterZ);
+        // View the bench from -X so the camera's screen-right axis follows +Z.
+        // This keeps the optical propagation direction left-to-right, matching
+        // both cross-section views and the conventional lens-layout reading.
+        camera.position.set(-cameraDistance * 0.7, cameraDistance * 0.5, systemCenterZ);
         camera.lookAt(0, 0, systemCenterZ);
         camera.up.set(0, 1, 0);
         

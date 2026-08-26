@@ -46,6 +46,10 @@ export interface DualCombCameraReconstructionResult {
   phaseFitRmsRad: number[];
   validLineCount: number[];
   coverageFraction: number;
+  /** Physical Target-coordinate span represented by the recovered samples. */
+  targetRangeMm: number;
+  /** Illuminated/recovered Target span divided by the configured Target span. */
+  targetCoverageFraction: number;
   meanPhaseFitRmsRad: number;
   meanLineCount: number;
   referenceColumn: number;
@@ -226,6 +230,7 @@ function reconstructFromFlatCameraMeasurement(
         shiftPx: slopeDetectorCoordinate - flatDetectorCoordinate,
         shiftXpx: slopeReference ? slopeReference.pixelX - flat.pixelX : Number.NaN,
         shiftYpx: slopeReference ? slopeReference.pixelY - flat.pixelY : Number.NaN,
+        targetXmm: slopeReference ? finite(slopeReference.targetXmm, flat.targetXmm) : Number.NaN,
         differential: slopeReference ? multiplyConjugate(
           { re: slopeReference.fieldRe, im: slopeReference.fieldIm },
           { re: flat.fieldRe, im: flat.fieldIm },
@@ -299,6 +304,7 @@ function reconstructFromFlatCameraMeasurement(
       shiftPx: number;
       shiftXpx: number;
       shiftYpx: number;
+      targetXmm: number;
       differential: Complex | null;
     }>;
     heightCalibrationCurve: Array<{
@@ -423,16 +429,22 @@ function reconstructFromFlatCameraMeasurement(
     const center = Math.floor(sorted.length / 2);
     return sorted.length % 2 ? sorted[center] : 0.5 * (sorted[center - 1] + sorted[center]);
   };
-  const robustLocalQuadraticSmooth = (positions: number[], values: number[]): number[] => {
+  const robustLocalQuadraticSmooth = (
+    positions: number[],
+    values: number[],
+    requestedRadius?: number,
+  ): number[] => {
     if (positions.length < 4 || positions.length !== values.length) return [...values];
     const positiveSpacings = positions.slice(1)
       .map((position, index) => position - positions[index])
       .filter((spacing) => Number.isFinite(spacing) && spacing > 1e-9);
     const spacing = median(positiveSpacings);
     const span = Math.max(1e-9, positions[positions.length - 1] - positions[0]);
-    // About five measured profile points participate in each fit. This removes
-    // sub-pixel ray/Camera quantization without erasing a 1 mm sine period.
-    const radius = Math.max(1e-6, spacing * 2.5, span / 48);
+    // About five measured profile points participate in each fit. Keep the
+    // window tied only to the measured Camera sampling interval: a fraction of
+    // the full profile span would erase short-period surfaces (for example a
+    // 1 mm sine across a 50 mm target).
+    const radius = Math.max(1e-6, finite(requestedRadius, Math.max(spacing * 2.5, span / 48)));
     const fitAt = (centerPosition: number, robustWeights?: number[]): number => {
       const augmented = Array.from({ length: 3 }, () => new Array<number>(4).fill(0));
       let usable = 0;
@@ -513,12 +525,14 @@ function reconstructFromFlatCameraMeasurement(
           pointIndex === 0 || Math.abs(entry.shiftPx - entries[pointIndex - 1].shiftPx) > 1e-7
         ));
       if (points.length < 2) return Number.NaN;
+      // A Camera displacement outside the measured calibration envelope is
+      // not evidence for an arbitrarily steeper surface. Clamp to the nearest
+      // calibrated gradient instead of extrapolating numerical ray noise.
+      if (shiftPx <= points[0].shiftPx) return points[0].gradient;
+      if (shiftPx >= points[points.length - 1].shiftPx) return points[points.length - 1].gradient;
       let left = points[0];
       let right = points[1];
-      if (shiftPx >= points[points.length - 1].shiftPx) {
-        left = points[points.length - 2];
-        right = points[points.length - 1];
-      } else if (shiftPx > points[0].shiftPx) {
+      if (shiftPx > points[0].shiftPx) {
         for (let pointIndex = 1; pointIndex < points.length; pointIndex += 1) {
           if (shiftPx <= points[pointIndex].shiftPx) {
             left = points[pointIndex - 1];
@@ -635,7 +649,9 @@ function reconstructFromFlatCameraMeasurement(
       const opdMm = slopeReferenceOpdMm[referenceIndex]?.[index];
       if (!Number.isFinite(shiftPx) || !Number.isFinite(opdMm)) continue;
       const referenceHeightMm = slopeReferenceSets[referenceIndex].offsetUm * 1e-3
-        + gradient * xPositionMm;
+        + gradient * median(pairs.map((entry) => (
+          entry.calibrationCurve.find((calibration) => calibration.referenceIndex === referenceIndex)?.targetXmm
+        )).filter(Number.isFinite));
       shiftGradientSquare += gradient * gradient;
       shiftGradientCross += gradient * (shiftPx - shiftPerHeight * referenceHeightMm);
       // RF group delay aliases first on the steep calibration planes. Use the
@@ -738,11 +754,14 @@ function reconstructFromFlatCameraMeasurement(
       const opdMm = slopeReferenceOpdMm[referenceIndex]?.[index];
       if (Number.isFinite(shiftXpx) && Number.isFinite(shiftYpx) && Number.isFinite(opdMm)) {
         const reference = slopeReferenceSets[referenceIndex];
+        const referenceTargetXmm = median(pairs.map((entry) => (
+          entry.calibrationCurve.find((calibration) => calibration.referenceIndex === referenceIndex)?.targetXmm
+        )).filter(Number.isFinite));
         nodes.push({
           shiftXpx,
           shiftYpx,
           opdMm,
-          heightMm: reference.offsetUm * 1e-3 + reference.gradient * xPositionMm,
+          heightMm: reference.offsetUm * 1e-3 + reference.gradient * referenceTargetXmm,
         });
       }
     }
@@ -761,18 +780,22 @@ function reconstructFromFlatCameraMeasurement(
     const robustHeightMm = xMm.length <= 128
       ? robustLocalQuadraticSmooth(xMm, interpolatedHeightMm)
       : (() => {
-        const positiveSpacings = xMm.slice(1).map((x, index) => x - xMm[index]).filter((spacing) => spacing > 1e-9);
-        const smoothingRadiusMm = Math.max(1e-6, median(positiveSpacings) * 5);
-        return interpolatedHeightMm.map((heightMm, index) => {
+        const positiveSpacings = xMm.slice(1)
+          .map((x, index) => x - xMm[index])
+          .filter((spacing) => spacing > 1e-9);
+        const spacing = median(positiveSpacings);
+        const medianRadiusMm = Math.max(1e-6, spacing * 2.5);
+        const medianFiltered = interpolatedHeightMm.map((heightMm, index) => {
           const neighbors: number[] = [];
-          for (let neighbor = index; neighbor >= 0 && xMm[index] - xMm[neighbor] <= smoothingRadiusMm; neighbor -= 1) {
+          for (let neighbor = index; neighbor >= 0 && xMm[index] - xMm[neighbor] <= medianRadiusMm; neighbor -= 1) {
             neighbors.push(interpolatedHeightMm[neighbor]);
           }
-          for (let neighbor = index + 1; neighbor < xMm.length && xMm[neighbor] - xMm[index] <= smoothingRadiusMm; neighbor += 1) {
+          for (let neighbor = index + 1; neighbor < xMm.length && xMm[neighbor] - xMm[index] <= medianRadiusMm; neighbor += 1) {
             neighbors.push(interpolatedHeightMm[neighbor]);
           }
           return neighbors.length >= 3 ? median(neighbors) : heightMm;
         });
+        return robustLocalQuadraticSmooth(xMm, medianFiltered, Math.max(1e-6, spacing * 2.75));
       })();
     const referenceHeightMm = robustHeightMm[referenceColumn] ?? 0;
     slopeRecoveredHeightUm = robustHeightMm.map((heightMm) => (heightMm - referenceHeightMm) * 1000);
@@ -787,7 +810,9 @@ function reconstructFromFlatCameraMeasurement(
   const slopeCandidatePeakToValleyUm = peakToValley(slopeRecoveredHeightUm);
   const phaseCandidatePeakToValleyUm = peakToValley(phaseRecoveredHeightUm);
   const slopeCalibrationApplied = hasSlopeCalibration && (
-    slopeReferenceSets.length >= 2
+    calibratedHeightAvailable
+      ? slopeCandidatePeakToValleyUm > 0.05
+      : slopeReferenceSets.length >= 2
       ? slopeCandidatePeakToValleyUm > Math.max(0.05, phaseCandidatePeakToValleyUm * 0.05)
       : slopeCandidatePeakToValleyUm > phaseCandidatePeakToValleyUm * 1.25
   );
@@ -814,12 +839,15 @@ function reconstructFromFlatCameraMeasurement(
   const meanLineCount = validColumns.length
     ? validColumns.reduce((sum, index) => sum + validLineCount[index], 0) / validColumns.length
     : 0;
+  const targetRangeMm = xMm.length > 1 ? Math.max(0, xMm[xMm.length - 1] - xMm[0]) : 0;
+  const targetCoverageFraction = Math.min(1, targetRangeMm / Math.max(1e-12, Math.abs(finite(options.targetSpanMm))));
   const warningMessages: string[] = [];
   if (!beamsOverlap) warningMessages.push('Probe measurement, Probe reference and LO beams do not overlap on the Camera. No per-pixel dual-comb RF interference exists; align their Camera centroids in Render before reconstruction.');
   if (validColumns.length < 2) warningMessages.push('Flat-referenced dual-comb recovery needs RF phase on at least two Target profile samples.');
   if (meanLineCount < 3) warningMessages.push('Fewer than three matched comb lines are available per Target-X sample; OPD phase slope cannot be fitted reliably.');
   if (timeIntegratedCamera) warningMessages.push(`The configured exposure integrates over the RF beats (up to ${(maximumBeatFrequencyHz / 1e6).toFixed(6)} MHz). A single Camera frame loses their phase; use ≥${(2 * maximumBeatFrequencyHz / 1e6).toFixed(3)} Mfps or per-pixel lock-in I/Q.`);
   if ((options.comparisonTarget?.kind === 'tilt' || options.comparisonTarget?.kind === 'sine') && !slopeCalibrationApplied) warningMessages.push('This continuously sloped surface needs a known micro-tilt Camera calibration before its return-beam displacement can be converted to quantitative height.');
+  if (targetCoverageFraction < 0.8) warningMessages.push(`Illuminated Camera samples cover ${targetRangeMm.toFixed(3)} mm (${(targetCoverageFraction * 100).toFixed(1)}%) of the configured Target profile span.`);
 
   return {
     width: xMm.length,
@@ -831,6 +859,8 @@ function reconstructFromFlatCameraMeasurement(
     phaseFitRmsRad,
     validLineCount,
     coverageFraction: validColumns.length / Math.max(1, xMm.length),
+    targetRangeMm,
+    targetCoverageFraction,
     meanPhaseFitRmsRad: validFits.length ? validFits.reduce((sum, value) => sum + value, 0) / validFits.length : Number.NaN,
     meanLineCount,
     referenceColumn,
@@ -890,10 +920,34 @@ export function reconstructDualCombSurfaceFromCamera(
   const measurementSpanY = measurementSamples.length
     ? Math.max(...measurementSamples.map((sample) => sample.pixelY)) - Math.min(...measurementSamples.map((sample) => sample.pixelY))
     : 0;
-  // The target profile may be rotated on the Camera by the relay optics. Use
-  // the detector axis carrying the larger measurement-field extent rather than
-  // assuming that local Target X always maps to Camera X.
-  const profileAxis: 'x' | 'y' = measurementSpanY > measurementSpanX ? 'y' : 'x';
+  const targetMappedSamples = measurementSamples.filter((sample) => Number.isFinite(sample.targetXmm));
+  const correlationWithTarget = (axis: 'x' | 'y'): number => {
+    if (targetMappedSamples.length < 3) return Number.NaN;
+    const targetMean = targetMappedSamples.reduce((sum, sample) => sum + finite(sample.targetXmm), 0)
+      / targetMappedSamples.length;
+    const detectorMean = targetMappedSamples.reduce((sum, sample) => (
+      sum + finite(axis === 'x' ? sample.pixelX : sample.pixelY)
+    ), 0) / targetMappedSamples.length;
+    let covariance = 0;
+    let targetVariance = 0;
+    let detectorVariance = 0;
+    for (const sample of targetMappedSamples) {
+      const targetOffset = finite(sample.targetXmm) - targetMean;
+      const detectorOffset = finite(axis === 'x' ? sample.pixelX : sample.pixelY) - detectorMean;
+      covariance += targetOffset * detectorOffset;
+      targetVariance += targetOffset * targetOffset;
+      detectorVariance += detectorOffset * detectorOffset;
+    }
+    return covariance / Math.sqrt(Math.max(Number.MIN_VALUE, targetVariance * detectorVariance));
+  };
+  const targetCorrelationX = Math.abs(correlationWithTarget('x'));
+  const targetCorrelationY = Math.abs(correlationWithTarget('y'));
+  // A dispersed interferogram can span most of the Camera in Y even when the
+  // Target profile maps to X. Prefer the measured Target-coordinate
+  // correlation and use beam extent only when no Target coordinates exist.
+  const profileAxis: 'x' | 'y' = Number.isFinite(targetCorrelationX) && Number.isFinite(targetCorrelationY)
+    ? (targetCorrelationY > targetCorrelationX ? 'y' : 'x')
+    : (measurementSpanY > measurementSpanX ? 'y' : 'x');
   const profilePixelCount = profileAxis === 'x' ? detectorWidth : detectorHeight;
   const routeBounds = [options.measurementRouteId, options.referenceRouteId, options.localOscillatorRouteId]
     .map((routeId) => {
@@ -1047,6 +1101,8 @@ export function reconstructDualCombSurfaceFromCamera(
     : 0;
   const exposureTimeS = Math.max(0, finite(options.exposureTimeS));
   const timeIntegratedCamera = maximumBeatFrequencyHz > 0 && exposureTimeS * maximumBeatFrequencyHz > 0.25;
+  const targetRangeMm = xMm.length > 1 ? Math.max(0, xMm[xMm.length - 1] - xMm[0]) : 0;
+  const targetCoverageFraction = Math.min(1, targetRangeMm / Math.max(1e-12, Math.abs(finite(options.targetSpanMm))));
   const warningMessages: string[] = [];
   if (!routeSamples.length) warningMessages.push('No routed dual-comb Camera fields reached this Detector.');
   for (const [routeId, bounds] of [options.measurementRouteId, options.referenceRouteId, options.localOscillatorRouteId]
@@ -1059,6 +1115,7 @@ export function reconstructDualCombSurfaceFromCamera(
   if (timeIntegratedCamera) warningMessages.push(`The configured exposure integrates over the RF beats (up to ${(maximumBeatFrequencyHz / 1e6).toFixed(6)} MHz). A single Camera frame loses their phase; use ≥${(2 * maximumBeatFrequencyHz / 1e6).toFixed(3)} Mfps or per-pixel lock-in I/Q.`);
   if (validColumns.length && validColumns.length < width * 0.8) warningMessages.push(`Dual-comb RF phase covers only ${(validColumns.length / width * 100).toFixed(1)}% of Camera-${profileAxis.toUpperCase()} bins.`);
   if (!flatReferenceApplied) warningMessages.push('No flat Camera RF reference was applied. Fixed lens, grating and route phase remains in the recovered profile.');
+  if (targetCoverageFraction < 0.8) warningMessages.push(`Illuminated Camera samples cover ${targetRangeMm.toFixed(3)} mm (${(targetCoverageFraction * 100).toFixed(1)}%) of the configured Target profile span.`);
 
   return {
     width,
@@ -1070,6 +1127,8 @@ export function reconstructDualCombSurfaceFromCamera(
     phaseFitRmsRad,
     validLineCount,
     coverageFraction: validColumns.length / Math.max(1, width),
+    targetRangeMm,
+    targetCoverageFraction,
     meanPhaseFitRmsRad,
     meanLineCount,
     referenceColumn,
