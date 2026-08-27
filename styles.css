@@ -9397,6 +9397,8 @@ body.dark-mode .di-hybrid-summary__metrics span { border-color: #475569; backgro
 .di-connection-remove { height: 28px; color: #b42318; }
 .di-connection-editor__actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .di-connection-editor__actions button { min-height: 28px; }
+.di-placement-exception-picker { width: min(420px, 100%); }
+.di-placement-exception-picker select { width: 100%; }
 .di-connection-empty { padding: 7px 9px; border: 1px dashed #cbd5e1; border-radius: 6px; background: #f8fafc; color: #64748b; font-size: 10px; }
 .di-connection-error { color: #b42318; font-size: 10px; }
 .di-variable-input { display: grid; grid-template-columns: minmax(0, 1fr) 28px; gap: 3px; }
@@ -9549,6 +9551,101 @@ body.dark-mode .di-signal-path-options em { background: #24456d; color: #bfdbfe;
     gap: 2px;
 }
 
+.di-routing-mode {
+  display: grid;
+  grid-template-columns: auto minmax(11rem, 16rem);
+  align-items: center;
+  gap: 0.55rem;
+  margin-left: auto;
+  font: inherit;
+  color: var(--text-muted, #5b6b84);
+}
+
+.di-routing-mode > span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.di-routing-mode select {
+  min-height: 2.15rem;
+  width: 100%;
+}
+
+.di-auto-routing-note {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+  margin: 0.7rem 1rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #c9d8ec;
+  border-radius: 0.6rem;
+  background: #f4f8fd;
+  color: #405574;
+  font: inherit;
+}
+
+.di-auto-routing-note strong {
+  flex: 0 0 auto;
+  color: #1f3d67;
+}
+
+.di-auto-routing-note span {
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.di-auto-component-kinds,
+.di-auto-detector-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.55rem 0.75rem 0.7rem;
+}
+
+.di-auto-component-kinds > span {
+  padding: 0.2rem 0.45rem;
+  border: 1px solid #d4deeb;
+  border-radius: 999px;
+  background: #fff;
+  color: #334b6c;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.di-auto-detector {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #d4deeb;
+  border-radius: 0.6rem;
+  background: #fff;
+  font: inherit;
+}
+
+.di-auto-detector span,
+.di-auto-detector em {
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  background: #f0f5fb;
+  color: #506684;
+  font-size: 0.78rem;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .di-routing-mode { margin-left: 0; }
+  .di-auto-routing-note { align-items: flex-start; flex-direction: column; }
+  .di-auto-detector { grid-template-columns: 1fr 1fr; }
+}
+
 .di-assembly-overview__title strong {
     color: #1e293b;
     font-size: 13px;
@@ -9661,6 +9758,18 @@ body.dark-mode .di-signal-path-options em { background: #24456d; color: #bfdbfe;
 .di-layout-section__header strong { color: #27364d; font-size: 10px; }
 .di-layout-section__header small { color: #718096; font-size: 9px; font-weight: 450; }
 .di-layout-section__header > button { flex: 0 0 auto; }
+.di-layout-section__header > em {
+    min-width: 22px;
+    padding: 2px 7px;
+    border: 1px solid #dbe3ee;
+    border-radius: 999px;
+    background: #fff;
+    color: #64748b;
+    font-size: 9px;
+    font-style: normal;
+    font-weight: 700;
+    text-align: center;
+}
 
 .di-lens-placement-row {
     overflow: hidden;
@@ -10115,6 +10224,14 @@ body.dark-mode .di-signal-path-options em { background: #24456d; color: #bfdbfe;
     padding-top: 7px;
     border-top: 1px solid #edf1f6;
 }
+.di-fixed-placement-note {
+    grid-column: span 3;
+    align-self: center;
+    max-width: 440px;
+    color: #718096;
+    font-size: 9px;
+    line-height: 1.35;
+}
 
 .di-variable-input { height: 30px; }
 .di-connection-arrow { align-self: end; height: 30px; line-height: 30px; }
@@ -10146,6 +10263,7 @@ body.dark-mode .di-signal-path-options em { background: #24456d; color: #bfdbfe;
 body.dark-mode .di-connection-remove { border-color: #7f1d1d; background: #2a171b; color: #fca5a5 !important; }
 body.dark-mode .di-connection-remove:hover:not(:disabled) { border-color: #b91c1c; background: #3b171c; color: #fecaca !important; }
 body.dark-mode .di-connection-remove:disabled { border-color: #4b2b2d; background: #211619; color: #9f7777 !important; }
+body.dark-mode .di-fixed-placement-note { color: #94a3b8; }
 body.dark-mode .di-path-builder { border-color: #3f5877; background: #121c2b; }
 body.dark-mode .di-path-builder__intro strong { color: #c7d9f3; }
 body.dark-mode .di-path-builder__intro span,
@@ -10270,6 +10388,7 @@ body.dark-mode .di-layout-section__header strong,
 body.dark-mode .di-lens-placement-row > summary strong { color: #e2e8f0; }
 body.dark-mode .di-layout-section__header small,
 body.dark-mode .di-lens-placement-row > summary :is(em, small) { color: #94a3b8; }
+body.dark-mode .di-layout-section__header > em { border-color: #475569; background: #172033; color: #cbd5e1; }
 body.dark-mode .di-lens-placement-row > summary:hover,
 body.dark-mode .di-lens-placement-row__body { border-color: #334155; background: #172033; }
 body.dark-mode .di-lens-placement-row > summary .di-sequential-group-index { background: #334155; color: #cbd5e1; }
@@ -10487,6 +10606,7 @@ body.dark-mode .di-route-sets > summary { color: #cbd5e1; }
     white-space: nowrap;
 }
 .di-path-segment__mode.is-auto { border-color: #bfd5f2; background: #eff6ff; color: #355784; }
+.di-path-segment__mode.is-override { border-color: #e8c07a; background: #fff8e8; color: #855c18; }
 .di-path-segment__shared { border-color: #decdf8; background: #f7f2ff; color: #6b4b91; }
 .di-path-segment__body {
     display: grid;
@@ -10602,6 +10722,7 @@ body.dark-mode .di-route-geometry > summary em,
 body.dark-mode .di-path-segment__distance,
 body.dark-mode .di-path-segment__mode { border-color: #475569; color: #cbd5e1; }
 body.dark-mode .di-path-segment__mode.is-auto { border-color: #385a83; background: #172b46; color: #bfdbfe; }
+body.dark-mode .di-path-segment__mode.is-override { border-color: #765b2e; background: #2b2417; color: #f6d28b; }
 body.dark-mode .di-path-segment__shared { border-color: #5b4777; background: #291f3a; color: #d8c6f1; }
 body.dark-mode .di-signal-advanced { border-color: #334155; }
 body.dark-mode .di-signal-advanced > summary { color: #cbd5e1; }

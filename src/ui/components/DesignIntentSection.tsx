@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { detectActivePortRoutes, readActiveCoherentDesign, subscribeActiveCoherentDesign, updateActiveCoherentDesign, type ActiveCoherentDesignSnapshot } from '../../../data/coherent-config-store.ts';
+import { getConnectionLayoutParameters } from '../../../analysis/coherent-port-layout.ts';
 import { DESIGN_CONNECTION_SELECTED_EVENT, OPTICAL_ROUTE_SELECTED_EVENT, RENDER_SELECTED_ROUTE_STORAGE_KEY } from '../../app/nonsequential-render-overlay.ts';
 
 const lensDesignLabel = (value: unknown, fallback = '') => {
@@ -15,7 +16,14 @@ function HybridAssemblySummary() {
   const [splitterOutputPort, setSplitterOutputPort] = useState<'transmit' | 'reflect' | 'recombine'>('transmit');
   const [pathBuilderMessage, setPathBuilderMessage] = useState('');
   const engineeringViewRef = useRef<HTMLDetailsElement>(null);
-  const connectionEditorRef = useRef<HTMLDetailsElement>(null);
+  const revealPlacementException = (connectionId: string) => {
+    if (!connectionId) return;
+    setSelectedConnectionId(connectionId);
+    if (engineeringViewRef.current) engineeringViewRef.current.open = true;
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      document.querySelector(`[data-design-connection-id="${CSS.escape(connectionId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }));
+  };
   useEffect(() => subscribeActiveCoherentDesign((next) => setSnapshot(next)), []);
   useEffect(() => {
     setPathDraft([]);
@@ -25,12 +33,7 @@ function HybridAssemblySummary() {
     const selectConnection = (event: Event) => {
       const connectionId = String((event as CustomEvent<{ connectionId?: string }>).detail?.connectionId ?? '');
       if (!connectionId) return;
-      setSelectedConnectionId(connectionId);
-      if (engineeringViewRef.current) engineeringViewRef.current.open = true;
-      if (connectionEditorRef.current) connectionEditorRef.current.open = true;
-      window.requestAnimationFrame(() => {
-        document.querySelector(`[data-design-connection-id="${CSS.escape(connectionId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      });
+      revealPlacementException(connectionId);
     };
     window.addEventListener(DESIGN_CONNECTION_SELECTED_EVENT, selectConnection);
     return () => window.removeEventListener(DESIGN_CONNECTION_SELECTED_EVENT, selectConnection);
@@ -42,6 +45,11 @@ function HybridAssemblySummary() {
   const sequential = sequentialComponents.length > 0;
   const routes = snapshot.design.portRoutes ?? [];
   const routeSets = snapshot.design.routeSets ?? [];
+  const placementExceptions = snapshot.design.connections.filter((connection) => connection.placementOverride === true);
+  const automaticConnections = snapshot.design.connections.filter((connection) => connection.placementOverride !== true);
+  const exceptionCandidateId = automaticConnections.some((connection) => connection.id === selectedConnectionId)
+    ? selectedConnectionId
+    : (automaticConnections[0]?.id ?? '');
 
   const commit = (mutate: (draft: ActiveCoherentDesignSnapshot['design']) => void, reason: string) => {
     try {
@@ -110,6 +118,30 @@ function HybridAssemblySummary() {
       ?? component?.ports[side === 'from' ? Math.max(0, component.ports.length - 1) : 0]?.id
       ?? '';
   };
+  const setPlacementMode = (
+    draft: ActiveCoherentDesignSnapshot['design'],
+    connectionId: string,
+    mode: 'automatic' | 'override' | 'fixed',
+  ) => {
+    const target = draft.connections.find((connection) => connection.id === connectionId);
+    if (!target) return;
+    if (mode === 'override') {
+      const initialized = getConnectionLayoutParameters(draft, target);
+      if (initialized) Object.assign(target, initialized);
+      target.autoPlace = true;
+      target.placementOverride = true;
+      return;
+    }
+    target.autoPlace = mode === 'automatic';
+    target.placementOverride = false;
+    const variables = target.variables as Record<string, unknown> | undefined;
+    if (variables) {
+      delete variables.distanceMm;
+      delete variables.azimuthDeg;
+      delete variables.elevationDeg;
+      if (Object.keys(variables).length === 0) delete target.variables;
+    }
+  };
   const addConnection = (fromId?: string, fromPortId?: string) => {
     if (connectable.length < 2) return;
     const from = componentById(fromId ?? '') ?? connectable[0];
@@ -125,6 +157,7 @@ function HybridAssemblySummary() {
         distanceMm: 10,
         allowReverse: passive(from) && passive(to),
         autoPlace: true,
+        placementOverride: true,
         pathId: fromPortId === 'reflect' ? 'reflect' : 'main',
       });
     }, 'connection-add');
@@ -198,6 +231,7 @@ function HybridAssemblySummary() {
           distanceMm: 10,
           allowReverse: passive(fromId) && passive(toId),
           autoPlace: true,
+          placementOverride: false,
           pathId: routeId,
         });
         createdLinks += 1;
@@ -266,9 +300,94 @@ function HybridAssemblySummary() {
       connection.fromComponentId !== componentId && connection.toComponentId !== componentId
     ));
   }, 'sequential-group-delete');
+  const automaticRouting = snapshot.design.routingMode === 'automatic-scene';
+  if (automaticRouting) return <div className="di-hybrid-summary is-automatic" aria-label="Automatic optical assembly status">
+    <div className="di-assembly-overview">
+      <div className="di-assembly-overview__title"><strong>Optical Assembly</strong><span>Build the physical scene; rays find the next surface and Detector automatically.</span></div>
+      <label className="di-routing-mode"><span>Tracing</span><select value="automatic-scene" onChange={(event) => commit((draft) => { draft.routingMode = event.target.value as 'automatic-scene' | 'engineered-paths'; }, 'assembly-routing-mode')}><option value="automatic-scene">Automatic scene trace</option><option value="engineered-paths">Engineered paths</option></select></label>
+      <div className="di-hybrid-summary__metrics">
+        <span>{physical.length} physical Blocks</span>
+        <span>{sequentialComponents.length} exact lens {sequentialComponents.length === 1 ? 'design' : 'designs'}</span>
+        <span>{detectors.length} {detectors.length === 1 ? 'Detector' : 'Detectors'}</span>
+      </div>
+    </div>
+    <div className="di-auto-routing-note"><strong>No Port wiring is required.</strong><span>Beam Splitters branch automatically; mirrors and Targets reflect; gratings diffract; each exact Lens design is traversed Front↔Back as one physical component.</span></div>
+    <div className="di-assembly-guide" aria-label="Automatic Optical Assembly setup steps">
+      <div><span>1</span><strong>Blocks</strong><small>Add Sources, optics, Targets and Detectors in the table above.</small></div>
+      <div><span>2</span><strong>Lens designs</strong><small>Group each continuous exact surface prescription once.</small></div>
+      <div><span>3</span><strong>Detector signals</strong><small>Run Coherent Signal; route roles are inferred from the encountered parts.</small></div>
+    </div>
+    <section className="di-assembly-main di-auto-block-summary" aria-label="Assembly Blocks">
+      <div className="di-assembly-main__header"><span><strong>1 · Blocks</strong><small>The block list above is the physical scene. XYZ and rotation determine what a ray can hit.</small></span><em>{physical.length}</em></div>
+      <div className="di-auto-component-kinds">
+        {physical.map((component) => <span key={component.id}>{component.label}</span>)}
+      </div>
+    </section>
+    <section className="di-assembly-main di-assembly-lens-designs" aria-label="Lens designs">
+      <div className="di-assembly-main__header"><span><strong>2 · Lens designs</strong><small>Optical Blocks stay in the table above. Open only to change the compound component pose.</small></span><em>{sequentialComponents.length}</em></div>
+      <div className="di-lens-design-summary-list">
+        {snapshot.design.blockSequences.map((sequence, index) => {
+          const pose = sequence.manualOffset ?? sequence.rootTransform;
+          const position = pose?.positionMm ?? { x: 0, y: 0, z: 0 };
+          const rotation = pose?.rotationDeg ?? { x: 0, y: 0, z: 0 };
+          return <details className="di-lens-design-summary" key={sequence.id}>
+            <summary>
+              <span className="di-sequential-group-index">{index + 1}</span>
+              <span className="di-lens-design-summary__identity"><strong>{lensDesignLabel(sequence.label, `Lens design ${index + 1}`)}</strong><small>{sequence.blocks.length} {sequence.blocks.length === 1 ? 'Block' : 'Blocks'} · Front ↔ Back</small></span>
+              <span className={`di-lens-placement-blocks${sequence.blocks.length === 0 ? ' is-empty' : ''}`} aria-label={`${sequence.label} Blocks`}>
+                {sequence.blocks.length === 0 ? 'No Blocks yet' : sequence.blocks.map((block, blockIndex) => {
+                  const label = sequenceBlockLabel(block, blockIndex);
+                  return <span key={String((block as { blockId?: unknown })?.blockId ?? blockIndex)} title={label}><b>{blockIndex + 1}</b>{label}</span>;
+                })}
+              </span>
+              <span className="di-lens-design-summary__placement">XYZ {Number(position.x ?? 0).toFixed(1)}, {Number(position.y ?? 0).toFixed(1)}, {Number(position.z ?? 0).toFixed(1)} mm · R {Number(rotation.x ?? 0).toFixed(1)}, {Number(rotation.y ?? 0).toFixed(1)}, {Number(rotation.z ?? 0).toFixed(1)}°</span>
+            </summary>
+            <div className="di-lens-design-summary__body">
+              <label className="di-control-field"><span>Name</span><input value={lensDesignLabel(sequence.label, `Lens design ${index + 1}`)} onChange={(event) => commit((draft) => {
+                const target = draft.blockSequences.find((entry) => entry.id === sequence.id);
+                if (target) target.label = event.target.value || `Lens design ${index + 1}`;
+              }, 'sequential-group-label')} /></label>
+              <div className="di-route-variable-grid" aria-label={`${sequence.label} pose variables`}>{([
+                ['positionX', 'X (mm)', 'positionMm', 'x'], ['positionY', 'Y (mm)', 'positionMm', 'y'], ['positionZ', 'Z (mm)', 'positionMm', 'z'],
+                ['rotationX', 'RX (°)', 'rotationDeg', 'x'], ['rotationY', 'RY (°)', 'rotationDeg', 'y'], ['rotationZ', 'RZ (°)', 'rotationDeg', 'z'],
+              ] as const).map(([key, label, section, axis]) => {
+                const variable = (sequence.rootTransformVariables as any)?.[key];
+                const mode = variable?.optimize?.mode === 'V' ? 'V' : 'F';
+                return <label key={key}><span>{label}</span><input type="number" step="0.1" value={Number((pose as any)?.[section]?.[axis] ?? 0)} onChange={(event) => commit((draft) => {
+                  const target = draft.blockSequences.find((entry) => entry.id === sequence.id) as any;
+                  if (!target) return;
+                  target.manualOffset ??= JSON.parse(JSON.stringify(target.rootTransform));
+                  target.manualOffset[section][axis] = Number(event.target.value) || 0;
+                }, 'sequential-group-pose')} /><button type="button" className={`di-variable-mode ${mode === 'V' ? 'is-variable' : ''}`} onClick={() => commit((draft) => {
+                  const target = draft.blockSequences.find((entry) => entry.id === sequence.id) as any;
+                  if (!target) return;
+                  target.rootTransformVariables ??= {};
+                  const targetPose = target.manualOffset ?? target.rootTransform;
+                  target.rootTransformVariables[key] = { value: Number(targetPose[section][axis] ?? 0), optimize: { ...(target.rootTransformVariables[key]?.optimize ?? {}), mode: mode === 'V' ? 'F' : 'V' } };
+                }, 'sequential-group-variable')}>{mode}</button></label>;
+              })}</div>
+              <button type="button" className="di-connection-remove is-danger" onClick={() => removeSequentialGroup(sequence.id)} disabled={sequence.blocks.length > 0 || snapshot.design.blockSequences.length <= 1}>Remove empty design</button>
+            </div>
+          </details>;
+        })}
+        <button type="button" className="di-lens-design-add" onClick={addSequentialGroup}>Add lens design</button>
+      </div>
+    </section>
+    <section className="di-assembly-main di-assembly-signals" aria-label="Detector signals">
+      <div className="di-assembly-main__header"><span><strong>3 · Detector signals</strong><small>Every physical Detector is collected automatically. Target and Grating histories determine Measurement and Reference roles.</small></span><em>{detectors.length}</em></div>
+      <div className="di-auto-detector-list">
+        {detectors.length === 0 ? <div className="di-connection-empty">Add an Area Detector or Time Detector Block.</div> : detectors.map((detector) => {
+          const set = routeSets.find((entry) => entry.detectorBlockId === detector.id);
+          return <div className="di-auto-detector" key={detector.id}><strong>{detector.label}</strong><span>{set?.measurementRouteId ? 'Measurement' : 'Measurement pending'}</span><span>{set?.referenceRouteId ? 'Reference' : 'Reference pending'}</span><em>{set?.routeIds.length ?? 0} signal branches</em></div>;
+        })}
+      </div>
+    </section>
+    {error ? <div className="di-connection-error" role="alert">{error}</div> : null}
+  </div>;
   return <div className="di-hybrid-summary" aria-label="Hybrid optical assembly status">
     <div className="di-assembly-overview">
       <div className="di-assembly-overview__title"><strong>Optical Assembly</strong><span>After building the Blocks above, place them and define complete Source-to-Detector paths.</span></div>
+      <label className="di-routing-mode"><span>Tracing</span><select value="engineered-paths" onChange={(event) => commit((draft) => { draft.routingMode = event.target.value as 'automatic-scene' | 'engineered-paths'; }, 'assembly-routing-mode')}><option value="automatic-scene">Automatic scene trace</option><option value="engineered-paths">Engineered paths</option></select></label>
       <div className="di-hybrid-summary__metrics">
       {sequential ? <span>{sequentialComponents.length} lens {sequentialComponents.length === 1 ? 'design' : 'designs'}</span> : null}
       <span>{physical.length} physical Blocks</span>
@@ -336,11 +455,12 @@ function HybridAssemblySummary() {
     <details className="di-assembly-advanced di-assembly-engineering" ref={engineeringViewRef}>
       <summary><span><strong>Engineering view</strong><small>Raw ports and connection records for troubleshooting or nonstandard routing.</small></span><em>Optional</em></summary>
       <div className="di-assembly-advanced__body">
-    <details className="di-connection-editor di-layout-section di-assembly-panel" ref={connectionEditorRef}>
-      <summary><span><strong>Placement exceptions</strong><small>Paths create links automatically. Open only to override a port, distance, direction, or optimization variable.</small></span><em>{snapshot.design.connections.length}</em></summary>
+    <section className="di-connection-editor di-layout-section">
+      <header className="di-layout-section__header"><span><strong>Placement exceptions</strong><small>Only links whose automatic placement has been intentionally overridden are listed here.</small></span><em>{placementExceptions.length}</em></header>
       <div className="di-connection-editor__body">
-        {snapshot.design.connections.length === 0 ? <div className="di-connection-empty">No connections. Parts remain in the Config and Render, but no Hybrid path is traced.</div> : null}
-        {snapshot.design.connections.map((connection, index) => {
+        {placementExceptions.length === 0 ? <div className="di-connection-empty">No placement exceptions. Normal path links use their automatically initialized spacing and direction.</div> : null}
+        {placementExceptions.map((connection) => {
+          const index = snapshot.design.connections.findIndex((entry) => entry.id === connection.id);
           const from = componentById(connection.fromComponentId);
           const to = componentById(connection.toComponentId);
           return <div className={`di-connection-row${selectedConnectionId === connection.id ? ' is-selected' : ''}`} data-design-connection-id={connection.id} key={connection.id} onPointerDown={() => setSelectedConnectionId(connection.id)}>
@@ -378,19 +498,25 @@ function HybridAssemblySummary() {
                 target.variables[key] = { value: Number(target[key] ?? 0), optimize: { ...(target.variables[key]?.optimize ?? {}), mode: mode === 'V' ? 'F' : 'V' } };
               }, 'connection-variable')}>{mode}</button></span></label>;
             })}
-            <label className="di-connection-reverse"><input type="checkbox" checked={connection.autoPlace !== false} onChange={(event) => commit((draft) => { draft.connections[index].autoPlace = event.target.checked; }, 'connection-auto-place')} />Auto-place</label>
             <label className="di-connection-reverse"><input type="checkbox" checked={connection.allowReverse === true} onChange={(event) => commit((draft) => { draft.connections[index].allowReverse = event.target.checked; }, 'connection-reverse')} />Bidirectional</label>
-            <button type="button" className="di-connection-remove is-danger" onClick={() => commit((draft) => { draft.connections.splice(index, 1); }, 'connection-delete')}>Remove</button>
+            <button type="button" className="di-connection-remove is-danger" onClick={() => commit((draft) => setPlacementMode(draft, connection.id, 'automatic'), 'connection-placement-automatic')}>Remove override</button>
             </div>
           </div>;
         })}
         <div className="di-connection-editor__actions">
-          <button type="button" onClick={() => addConnection()} disabled={connectable.length < 2}>Add connection</button>
-          {splitter ? <button type="button" onClick={() => addConnection(splitter.id, 'reflect')}>Add reflected path</button> : null}
+          <label className="di-control-field di-placement-exception-picker"><span>Automatic link</span><select value={exceptionCandidateId} onChange={(event) => setSelectedConnectionId(event.target.value)} disabled={automaticConnections.length === 0}>
+            {automaticConnections.length === 0 ? <option value="">All links have overrides</option> : automaticConnections.map((connection) => <option value={connection.id} key={connection.id}>{componentLabel(componentById(connection.fromComponentId), connection.fromComponentId)} → {componentLabel(componentById(connection.toComponentId), connection.toComponentId)}</option>)}
+          </select></label>
+          <button type="button" onClick={() => {
+            commit((draft) => setPlacementMode(draft, exceptionCandidateId, 'override'), 'connection-placement-override');
+            revealPlacementException(exceptionCandidateId);
+          }} disabled={!exceptionCandidateId}>Override selected link</button>
+          <button type="button" onClick={() => addConnection()} disabled={connectable.length < 2}>Add custom connection</button>
+          {splitter ? <button type="button" onClick={() => addConnection(splitter.id, 'reflect')}>Add reflected connection</button> : null}
         </div>
         {error ? <div className="di-connection-error" role="alert">{error}</div> : null}
       </div>
-    </details>
+    </section>
       </div>
     </details>
     <section className="di-assembly-main di-assembly-paths" aria-label="Optical paths">
@@ -474,16 +600,18 @@ function HybridAssemblySummary() {
                   const arrivalId = step.direction === 'reverse' ? connection.fromComponentId : connection.toComponentId;
                   const sharedPathCount = routes.filter((candidate) => candidate.steps.some((candidateStep) => candidateStep.connectionId === connection.id)).length;
                   const autoPlace = connection.autoPlace !== false;
+                  const placementOverride = autoPlace && connection.placementOverride === true;
+                  const placementMode = !autoPlace ? 'fixed' : (placementOverride ? 'override' : 'automatic');
                   return <details className="di-path-segment" key={`${route.id}-geometry-${stepIndex}-${connection.id}`}>
                     <summary>
                       <span className="di-route-step__number">{stepIndex + 1}</span>
                       <span className="di-path-segment__identity"><strong>{componentLabel(componentById(departureId), departureId)} → {componentLabel(componentById(arrivalId), arrivalId)}</strong><small>{step.direction === 'reverse' ? 'Reverse traversal' : 'Forward traversal'}</small></span>
                       <span className="di-path-segment__distance">{Number(connection.distanceMm ?? 0).toFixed(2)} mm</span>
-                      <span className={`di-path-segment__mode${autoPlace ? ' is-auto' : ''}`}>{autoPlace ? 'Auto-place' : 'Fixed positions'}</span>
+                      <span className={`di-path-segment__mode${autoPlace ? ' is-auto' : ''}${placementOverride ? ' is-override' : ''}`}>{placementMode === 'automatic' ? 'Automatic' : (placementMode === 'override' ? 'Override' : 'Fixed positions')}</span>
                       {sharedPathCount > 1 ? <span className="di-path-segment__shared">Shared by {sharedPathCount} paths</span> : null}
                     </summary>
                     <div className="di-path-segment__body">
-                      {([['distanceMm', 'Distance (mm)', 0.1]] as const).map(([key, label, inputStep]) => {
+                      {placementOverride ? ([['distanceMm', 'Distance (mm)', 0.1]] as const).map(([key, label, inputStep]) => {
                         const variable = (connection.variables as any)?.[key];
                         const mode = variable?.optimize?.mode === 'V' ? 'V' : 'F';
                         return <label className="di-control-field" key={key}><span>{label}</span><span className="di-variable-input"><input type="number" min={0} step={inputStep} value={Number(connection.distanceMm ?? 0)} onChange={(event) => commit((draft) => {
@@ -495,12 +623,13 @@ function HybridAssemblySummary() {
                           target.variables ??= {};
                           target.variables[key] = { value: Number(target[key] ?? 0), optimize: { ...(target.variables[key]?.optimize ?? {}), mode: mode === 'V' ? 'F' : 'V' } };
                         }, 'connection-variable')}>{mode}</button></span></label>;
-                      })}
-                      <label className="di-control-field"><span>Placement</span><select value={autoPlace ? 'auto' : 'fixed'} onChange={(event) => commit((draft) => {
-                        const target = draft.connections.find((entry) => entry.id === connection.id);
-                        if (target) target.autoPlace = event.target.value === 'auto';
-                      }, 'connection-auto-place')}><option value="auto">Auto-place next Block</option><option value="fixed">Keep component positions</option></select></label>
-                      {autoPlace ? ([['azimuthDeg', 'Azimuth (°)', -360, 360], ['elevationDeg', 'Elevation (°)', -90, 90]] as const).map(([key, label, min, max]) => {
+                      }) : null}
+                      <label className="di-control-field"><span>Placement</span><select value={placementMode} onChange={(event) => {
+                        const nextMode = event.target.value as 'automatic' | 'override' | 'fixed';
+                        commit((draft) => setPlacementMode(draft, connection.id, nextMode), 'connection-placement-mode');
+                        if (nextMode === 'override') revealPlacementException(connection.id);
+                      }}><option value="automatic">Automatic (read-only)</option><option value="override">Override placement</option><option value="fixed">Keep component positions</option></select></label>
+                      {placementOverride ? ([['azimuthDeg', 'Azimuth (°)', -360, 360], ['elevationDeg', 'Elevation (°)', -90, 90]] as const).map(([key, label, min, max]) => {
                         const variable = (connection.variables as any)?.[key];
                         const mode = variable?.optimize?.mode === 'V' ? 'V' : 'F';
                         return <label className="di-control-field" key={key}><span>{label}</span><span className="di-variable-input"><input type="number" min={min} max={max} step="0.1" value={Number((connection as any)[key] ?? 0)} onChange={(event) => commit((draft) => {
@@ -514,7 +643,9 @@ function HybridAssemblySummary() {
                           target.variables ??= {};
                           target.variables[key] = { value: Number(target[key] ?? 0), optimize: { ...(target.variables[key]?.optimize ?? {}), mode: mode === 'V' ? 'F' : 'V' } };
                         }, 'connection-variable')}>{mode}</button></span></label>;
-                      }) : <p className="di-path-segment__help">This link follows the stored positions of both Blocks. Open Engineering view only if its ports must change.</p>}
+                      }) : <p className="di-path-segment__help">{autoPlace
+                        ? `Automatic placement: ${Number(connection.distanceMm ?? 0).toFixed(2)} mm · Az ${Number(connection.azimuthDeg ?? 0).toFixed(1)}° · El ${Number(connection.elevationDeg ?? 0).toFixed(1)}°. Select Override placement to edit.`
+                        : 'Distance and direction are derived from the stored positions of both Blocks.'}</p>}
                     </div>
                   </details>;
                 })}

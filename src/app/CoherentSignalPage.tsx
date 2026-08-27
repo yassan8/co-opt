@@ -385,6 +385,7 @@ export function CoherentSignalPage() {
   const runToken = useRef(0);
   const cancelRef = useRef<CancelToken | null>(null);
   const design = snapshot.design;
+  const automaticSceneRouting = design.routingMode === 'automatic-scene';
   const detectors = useMemo(
     () => design.detectors?.length ? design.detectors : [design.detector],
     [design.detector, design.detectors],
@@ -484,7 +485,8 @@ export function CoherentSignalPage() {
         const activeConfiguration = readActiveConfiguration();
         traceConfiguration = activeConfiguration;
         const savedRoutes = design.portRoutes ?? [];
-        if (activeConfiguration && savedRoutes.some((route) => route.enabled !== false)) {
+        const automaticScene = activeConfiguration?.assemblyRoutingMode === 'automatic-scene';
+        if (activeConfiguration && (automaticScene || savedRoutes.some((route) => route.enabled !== false))) {
           routedResult = await runPortRoutedTrace(activeConfiguration, {
             samplePurpose: quality === 'preview' ? 'render' : 'detector',
             spectralSamples: quality === 'preview' ? 3 : undefined,
@@ -1253,7 +1255,9 @@ export function CoherentSignalPage() {
       <div><span>Selected detector</span><strong>{selectedEntry?.label ?? 'None'}</strong></div>
       <div><span>Detector type</span><strong>{selectedEntry?.detector.kind === 'time' ? 'Time signal' : `${selectedEntry?.detector.pixelCountX ?? 0} × ${selectedEntry?.detector.pixelCountY ?? 0} · ${format(selectedEntry?.detector.pixelPitchUm, 3)} µm`}</strong></div>
       <div><span>Receivers</span><strong>{detectorEntries.length} configured · {physicalDetectorCount} physical</strong></div>
-      <div><span>Assembly</span><strong>{design.connections.length > 0 ? `${design.connections.length} connections${hasConnectedSplitter ? ' · split paths' : ''}` : 'Not connected'}</strong></div>
+      <div><span>Assembly</span><strong>{automaticSceneRouting
+        ? `Automatic scene${hasConnectedSplitter ? ' · split paths' : ''}`
+        : (design.connections.length > 0 ? `${design.connections.length} connections${hasConnectedSplitter ? ' · split paths' : ''}` : 'Not connected')}</strong></div>
       <div><span>Exact optics</span><strong>{selectedSequentialGroups.length > 0 ? selectedSequenceLabel : 'Not connected'}</strong></div>
       <div className="coherent-signal-status" aria-live="polite"><span>Status</span><strong>{status}</strong></div>
       <div className="coherent-signal-target-summary"><span>Target</span><strong>{selectedTargetSummary}</strong></div>
@@ -1269,13 +1273,13 @@ export function CoherentSignalPage() {
     {error ? <div className="analysis-window-error coherent-signal-error">{error}</div> : null}
     {physicalDetectorCount === 0 ? <div className="coherent-signal-warning coherent-signal-page-warning">Add an Area Detector or Time Detector in Design Intents, then connect it to the assembly.</div> : null}
     {selectedEntry && !physicalDetectorConnected ? <div className="coherent-signal-warning coherent-signal-page-warning">{selectedEntry.label} is not connected, so it cannot receive assembly rays.</div> : null}
-    {selectedSequentialGroups.length > 1 && routeMetrics.length === 0 ? <div className="coherent-signal-warning coherent-signal-page-warning">{selectedEntry?.label} has {selectedSequentialGroups.length} Exact Sequential Groups upstream. Save an Optical Route to trace them in explicit Port order.</div> : null}
+    {!automaticSceneRouting && selectedSequentialGroups.length > 1 && routeMetrics.length === 0 ? <div className="coherent-signal-warning coherent-signal-page-warning">{selectedEntry?.label} has {selectedSequentialGroups.length} Exact Sequential Groups upstream. Save an Optical Route to trace them in explicit Port order.</div> : null}
     {detectorEntries.length > 1 ? <div className="coherent-signal-note">All detectors are calculated in one run. Choose a detector above to inspect it. A detector absorbs the first ray that reaches its active surface; a detector directly behind it will not receive that ray.</div> : null}
 
     <main className="coherent-signal-results-grid">
       {selectedEntry?.detector.kind !== 'time' ? <>
         <section className="coherent-signal-result-card coherent-signal-result-card--primary">
-          <header><div><h2>{selectedEntry?.label ?? 'Detector'} · Physical signal</h2><p>{selectedAreaResult?.propagation === 'coherent-field' ? 'Port-routed complex fields pass through the exact-lens coherent PSF and interfere by wavelength and coherence group.' : selectedAreaResult?.propagation === 'port-routed-exact' ? 'Saved Optical Routes traverse every Exact Sequential Group and physical component in order.' : 'Assembly amplitude and phase pass through the exact sequential-lens complex PSF before detector conversion.'}</p></div></header>
+          <header><div><h2>{selectedEntry?.label ?? 'Detector'} · Physical signal</h2><p>{selectedAreaResult?.propagation === 'coherent-field' ? 'Port-routed complex fields pass through the exact-lens coherent PSF and interfere by wavelength and coherence group.' : selectedAreaResult?.propagation === 'port-routed-exact' ? (automaticSceneRouting ? 'Automatic scene tracing traverses every inferred physical branch and Exact Sequential Group.' : 'Saved Optical Routes traverse every Exact Sequential Group and physical component in order.') : 'Assembly amplitude and phase pass through the exact sequential-lens complex PSF before detector conversion.'}</p></div></header>
           {selectedAreaResult && selectedRawResult ? <>
             <figure className="coherent-signal-figure">
               <ImagingSignalCanvas signal={selectedAreaResult.signal} quantity={quantity} logScale={logScale} />

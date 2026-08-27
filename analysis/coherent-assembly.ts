@@ -93,6 +93,8 @@ export interface CoherentConnection {
   elevationDeg?: number;
   allowReverse?: boolean;
   autoPlace?: boolean;
+  /** True only when the automatically initialized placement values are intentionally user-authored. */
+  placementOverride?: boolean;
   variables?: Record<string, unknown>;
 }
 
@@ -237,6 +239,7 @@ export interface CoherentAssemblyDesign {
   preset: 'custom-hybrid';
   revision?: number;
   name: string;
+  routingMode?: 'automatic-scene' | 'engineered-paths';
   components: CoherentPhysicalComponent[];
   connections: CoherentConnection[];
   paths: CoherentPathDefinition[];

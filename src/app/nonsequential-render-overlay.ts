@@ -1039,7 +1039,8 @@ export function installNonSequentialRenderOverlay(): () => void {
       traceTimer = null;
       const activeConfiguration = readActiveConfiguration();
       const savedRoutes = activeConfiguration?.portRoutes ?? snapshot.design.portRoutes ?? [];
-      const tracePromise = activeConfiguration && savedRoutes.some((route) => route.enabled !== false)
+      const automaticScene = activeConfiguration?.assemblyRoutingMode === 'automatic-scene';
+      const tracePromise = activeConfiguration && (automaticScene || savedRoutes.some((route) => route.enabled !== false))
         ? runPortRoutedTrace(activeConfiguration, {
           samplePurpose: 'render',
           spectralSamples: 3,

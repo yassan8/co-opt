@@ -596,6 +596,8 @@ export interface Configuration {
   meritFunction?: any[];
   scenarios?: any[];
   activeScenarioId?: string | number;
+  /** Normal UI uses scene-derived routing; saved Port paths remain an advanced compatibility mode. */
+  assemblyRoutingMode?: 'automatic-scene' | 'engineered-paths';
   /** Port graph for physical assembly blocks stored in blocks[]. */
   designConnections?: DesignConnection[];
   /** Saved, deterministic connection traversal order for Hybrid analyses. */
@@ -693,6 +695,7 @@ function createDefaultConfiguration(id: number, name: string): Configuration {
     // Block schema (canonical for AI designs; optional during transition)
     schemaVersion: BLOCK_SCHEMA_VERSION,
     blocks: defaultBlocks,
+    assemblyRoutingMode: 'automatic-scene',
     source: [
       { id: 1, wavelength: 0.4358343, weight: 1, primary: '', angle: 0 },
       { id: 2, wavelength: 0.5875618, weight: 1, primary: 'Primary Wavelength', angle: 0 },

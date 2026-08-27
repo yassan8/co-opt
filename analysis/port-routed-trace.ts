@@ -1,5 +1,6 @@
 import type { Configuration } from '../data/table-configuration.ts';
 import { buildHybridAssemblyFromConfiguration } from './hybrid-design.ts';
+import { assemblyRoutingMode, compileAutomaticAssemblyRouting } from './automatic-assembly-routing.ts';
 import { normalizePortRouteConfiguration } from './port-routes.ts';
 import { traceSequentialGroupBatch, type SequentialGroupRayState } from './exact-sequential-group.ts';
 import {
@@ -937,8 +938,12 @@ function routeMtf(hits: DetectorHit[], frequencyLpMm: number, orientation: PortR
 }
 
 export async function runPortRoutedTrace(config: Configuration, options: PortRoutedTraceOptions = {}): Promise<PortRoutedTraceResult> {
-  const design = buildHybridAssemblyFromConfiguration(config);
-  const normalized = normalizePortRouteConfiguration(config);
+  const automatic = assemblyRoutingMode(config) === 'automatic-scene'
+    ? compileAutomaticAssemblyRouting(config)
+    : null;
+  const traceConfig = automatic?.configuration ?? config;
+  const design = buildHybridAssemblyFromConfiguration(traceConfig);
+  const normalized = normalizePortRouteConfiguration(traceConfig);
   const routeSet = options.routeSetId ? normalized.routeSets.find((entry) => entry.id === options.routeSetId) : undefined;
   const routeSetIds = routeSet
     ? Array.from(new Set([
@@ -974,13 +979,16 @@ export async function runPortRoutedTrace(config: Configuration, options: PortRou
   const detectorComponents = design.components.filter((component) => component.kind === 'detector' || component.kind === 'time-detector');
   if (sourceComponents.length === 1 && sourceSpecs.length === 1) sources.set(sourceComponents[0].id, sourceSpecs[0]);
   if (detectorComponents.length === 1 && detectorSpecs.length === 1) detectors.set(detectorComponents[0].id, detectorSpecs[0]);
-  const parametersByComponent = new Map((config.blocks ?? []).map((block) => [String(block.blockId ?? ''), block.parameters ?? {}]));
+  const parametersByComponent = new Map((traceConfig.blocks ?? []).map((block) => [String(block.blockId ?? ''), block.parameters ?? {}]));
   const detectorResults = new Map<string, PortRoutedDetectorResult>();
   const complexByDetectorMode = new Map<string, Map<string, CoherentDetectorMode>>();
   const segments: PortRoutedSegment[] = [];
   const routeMetrics: PortRouteMetrics[] = [];
-  const warnings = normalized.issues.map((issue) => `${issue.routeId}: ${issue.message}`);
-  for (const block of config.blocks ?? []) {
+  const warnings = [
+    ...(automatic?.warnings ?? []),
+    ...normalized.issues.map((issue) => `${issue.routeId}: ${issue.message}`),
+  ];
+  for (const block of traceConfig.blocks ?? []) {
     if (block?.blockType !== 'Target') continue;
     const profile = String(block.parameters?.profile ?? 'flat').toLowerCase();
     if (profile !== 'flat' && Math.abs(finite(block.parameters?.amplitudeUm)) < 1e-15) {
