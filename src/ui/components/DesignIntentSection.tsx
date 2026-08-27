@@ -11,13 +11,22 @@ function HybridAssemblySummary() {
   const [snapshot, setSnapshot] = useState<ActiveCoherentDesignSnapshot>(() => readActiveCoherentDesign());
   const [error, setError] = useState('');
   const [selectedConnectionId, setSelectedConnectionId] = useState('');
+  const [pathDraft, setPathDraft] = useState<string[]>([]);
+  const [splitterOutputPort, setSplitterOutputPort] = useState<'transmit' | 'reflect' | 'recombine'>('transmit');
+  const [pathBuilderMessage, setPathBuilderMessage] = useState('');
+  const engineeringViewRef = useRef<HTMLDetailsElement>(null);
   const connectionEditorRef = useRef<HTMLDetailsElement>(null);
   useEffect(() => subscribeActiveCoherentDesign((next) => setSnapshot(next)), []);
+  useEffect(() => {
+    setPathDraft([]);
+    setPathBuilderMessage('');
+  }, [snapshot.configId]);
   useEffect(() => {
     const selectConnection = (event: Event) => {
       const connectionId = String((event as CustomEvent<{ connectionId?: string }>).detail?.connectionId ?? '');
       if (!connectionId) return;
       setSelectedConnectionId(connectionId);
+      if (engineeringViewRef.current) engineeringViewRef.current.open = true;
       if (connectionEditorRef.current) connectionEditorRef.current.open = true;
       window.requestAnimationFrame(() => {
         document.querySelector(`[data-design-connection-id="${CSS.escape(connectionId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -56,6 +65,13 @@ function HybridAssemblySummary() {
       : authoredLabel;
     return /^Lens\s+design\b/i.test(label) ? label : `Lens design · ${label}`;
   };
+  const sequenceBlockLabel = (block: unknown, index: number) => {
+    if (!block || typeof block !== 'object') return `Block ${index + 1}`;
+    const entry = block as { blockId?: unknown; blockType?: unknown; metadata?: { label?: unknown } };
+    return String(entry.metadata?.label ?? '').trim()
+      || String(entry.blockId ?? '').trim()
+      || `${String(entry.blockType ?? 'Block').trim() || 'Block'} ${index + 1}`;
+  };
   const routeEndpoint = (route: (typeof routes)[number], side: 'source' | 'detector') => {
     const step = side === 'source' ? route.steps[0] : route.steps[route.steps.length - 1];
     const connection = snapshot.design.connections.find((entry) => entry.id === step?.connectionId);
@@ -65,7 +81,7 @@ function HybridAssemblySummary() {
       : (step.direction === 'reverse' ? connection.fromComponentId : connection.toComponentId);
     return componentLabel(componentById(blockId), blockId);
   };
-  const routeComponentChain = (route: (typeof routes)[number]) => {
+  const routeComponentIds = (route: (typeof routes)[number]) => {
     const componentIds: string[] = [];
     for (const step of route.steps) {
       const connection = snapshot.design.connections.find((entry) => entry.id === step.connectionId);
@@ -75,8 +91,10 @@ function HybridAssemblySummary() {
       if (componentIds.at(-1) !== departure) componentIds.push(departure);
       componentIds.push(arrival);
     }
-    return componentIds.map((componentId) => componentLabel(componentById(componentId), componentId));
+    return componentIds;
   };
+  const routeComponentChain = (route: (typeof routes)[number]) => routeComponentIds(route)
+    .map((componentId) => componentLabel(componentById(componentId), componentId));
   const routeRole = (routeId: string) => {
     const set = routeSets.find((entry) => entry.routeIds.includes(routeId));
     if (set?.measurementRouteId === routeId) return 'Measurement';
@@ -110,6 +128,119 @@ function HybridAssemblySummary() {
         pathId: fromPortId === 'reflect' ? 'reflect' : 'main',
       });
     }, 'connection-add');
+  };
+  const appendPathComponent = (componentId: string) => {
+    setPathDraft((current) => [...current, componentId]);
+    setPathBuilderMessage('');
+  };
+  const createPathFromDraft = () => {
+    if (pathDraft.length < 2) {
+      setError('Choose at least two Blocks in traversal order.');
+      return;
+    }
+    const chain = [...pathDraft];
+    const stamp = Date.now().toString(36);
+    let createdLinks = 0;
+    let routeWasCreated = false;
+    commit((draft) => {
+      const routeId = `route-${stamp}`;
+      const passive = (componentId: string) => {
+        const component = componentById(componentId);
+        return component ? !['source', 'detector', 'time-detector'].includes(component.kind) : false;
+      };
+      const nextConnectionId = () => {
+        let id = `connection-${stamp}-${createdLinks + 1}`;
+        while (draft.connections.some((connection) => connection.id === id)) {
+          createdLinks += 1;
+          id = `connection-${stamp}-${createdLinks + 1}`;
+        }
+        return id;
+      };
+      const steps: NonNullable<typeof draft.portRoutes>[number]['steps'] = [];
+      for (let index = 0; index < chain.length - 1; index += 1) {
+        const fromId = chain[index];
+        const toId = chain[index + 1];
+        if (!fromId || !toId || fromId === toId) continue;
+        const fromComponent = componentById(fromId);
+        const toComponent = componentById(toId);
+        const returningThroughSplitter = fromComponent?.kind === 'beam-splitter'
+          && (chain.slice(0, index).includes(fromId) || ['detector', 'time-detector'].includes(toComponent?.kind ?? ''));
+        const requestedFromPort = fromComponent?.kind === 'beam-splitter'
+          ? (returningThroughSplitter ? 'recombine' : splitterOutputPort)
+          : defaultPort(fromId, 'from');
+        const requestedToPort = defaultPort(toId, 'to');
+        const directCandidates = draft.connections.filter((connection) => (
+          connection.fromComponentId === fromId && connection.toComponentId === toId
+        ));
+        const direct = directCandidates.find((connection) => (
+          connection.fromPortId === requestedFromPort && connection.toPortId === requestedToPort
+        )) ?? (fromComponent?.kind === 'beam-splitter' ? undefined : directCandidates[0]);
+        if (direct) {
+          steps.push({ connectionId: direct.id, direction: 'forward' });
+          continue;
+        }
+        const reverse = draft.connections.find((connection) => (
+          connection.fromComponentId === toId
+          && connection.toComponentId === fromId
+          && connection.allowReverse === true
+        ));
+        if (reverse) {
+          steps.push({ connectionId: reverse.id, direction: 'reverse' });
+          continue;
+        }
+        const connectionId = nextConnectionId();
+        draft.connections.push({
+          id: connectionId,
+          fromComponentId: fromId,
+          fromPortId: requestedFromPort,
+          toComponentId: toId,
+          toPortId: requestedToPort,
+          distanceMm: 10,
+          allowReverse: passive(fromId) && passive(toId),
+          autoPlace: true,
+          pathId: routeId,
+        });
+        createdLinks += 1;
+        steps.push({ connectionId, direction: 'forward' });
+      }
+      if (steps.length === 0) throw new Error('The selected order does not contain a valid connection.');
+      draft.portRoutes ??= [];
+      const signature = steps.map((step) => `${step.connectionId}:${step.direction}`).join('|');
+      const existingRoute = draft.portRoutes.find((route) => (
+        route.steps.map((step) => `${step.connectionId}:${step.direction}`).join('|') === signature
+      ));
+      let savedRouteId = routeId;
+      if (existingRoute) {
+        existingRoute.enabled = true;
+        savedRouteId = existingRoute.id;
+      } else {
+        const first = componentById(chain[0]);
+        const last = componentById(chain.at(-1) ?? '');
+        draft.portRoutes.push({
+          id: routeId,
+          label: `Optical path ${draft.portRoutes.length + 1}`,
+          enabled: true,
+          sourceBlockId: first?.kind === 'source' ? first.id : undefined,
+          detectorBlockId: last && ['detector', 'time-detector'].includes(last.kind) ? last.id : undefined,
+          steps,
+        });
+        routeWasCreated = true;
+      }
+      const last = componentById(chain.at(-1) ?? '');
+      if (last && ['detector', 'time-detector'].includes(last.kind)) {
+        draft.routeSets ??= [];
+        let set = draft.routeSets.find((entry) => entry.detectorBlockId === last.id);
+        if (!set) {
+          set = { id: `route-set-${stamp}`, label: `${componentLabel(last)} signal`, detectorBlockId: last.id, routeIds: [] };
+          draft.routeSets.push(set);
+        }
+        if (!set.routeIds.includes(savedRouteId)) set.routeIds.push(savedRouteId);
+        if (!set.measurementRouteId) set.measurementRouteId = savedRouteId;
+        else if (!set.referenceRouteId && set.measurementRouteId !== savedRouteId) set.referenceRouteId = savedRouteId;
+      }
+    }, 'path-and-connections-add');
+    setPathDraft([]);
+    setPathBuilderMessage(`${routeWasCreated ? 'Optical path created' : 'Existing optical path reused'} · ${createdLinks} missing ${createdLinks === 1 ? 'link' : 'links'} added.`);
   };
   const splitter = physical.find((component) => component.kind === 'beam-splitter');
   const addSequentialGroup = () => commit((draft) => {
@@ -145,52 +276,69 @@ function HybridAssemblySummary() {
       <span>{routeSets.length} detector {routeSets.length === 1 ? 'signal' : 'signals'}</span>
       </div>
     </div>
-    {sequential ? <details className="di-sequential-group-editor di-assembly-panel">
-      <summary><span><strong>Lens designs</strong><small>Each continuous physical lens train is authored once and may appear in multiple Optical paths.</small></span><em>{sequentialComponents.length}</em></summary>
-      <div className="di-sequential-group-editor__body">
-        <div className="di-context-note"><strong>What is a lens design?</strong><span>It is one continuous exact surface prescription with Front and Back ports, so the same real lens design can be placed in an arm and traced in either direction.</span></div>
-        <div className="di-sequential-group-list">
-          {snapshot.design.blockSequences.map((sequence, index) => <div className="di-sequential-group-row" key={sequence.id}>
-            <span className="di-sequential-group-index">{index + 1}</span>
-            <label className="di-control-field"><span>Name</span><input value={lensDesignLabel(sequence.label, `Lens design ${index + 1}`)} onChange={(event) => commit((draft) => {
-              const target = draft.blockSequences.find((entry) => entry.id === sequence.id);
-              if (target) target.label = event.target.value || `Lens design ${index + 1}`;
-            }, 'sequential-group-label')} /></label>
-            <span className="di-sequential-group-count">{sequence.blocks.length} blocks</span>
-            <button type="button" className="di-connection-remove is-danger" onClick={() => removeSequentialGroup(sequence.id)} disabled={sequence.blocks.length > 0 || snapshot.design.blockSequences.length <= 1}>Remove</button>
-            <div className="di-subsection-label"><strong>Assembly offset</strong><span>Fine adjustment from the position established by connected ports.</span></div>
-            <div className="di-route-variable-grid" aria-label={`${sequence.label} pose variables`}>
-              {([
-                ['positionX', 'ΔX', 'positionMm', 'x'], ['positionY', 'ΔY', 'positionMm', 'y'], ['positionZ', 'ΔZ', 'positionMm', 'z'],
-                ['rotationX', 'RX', 'rotationDeg', 'x'], ['rotationY', 'RY', 'rotationDeg', 'y'], ['rotationZ', 'RZ', 'rotationDeg', 'z'],
-              ] as const).map(([key, label, section, axis]) => {
-                const variable = (sequence.rootTransformVariables as any)?.[key];
-                const mode = variable?.optimize?.mode === 'V' ? 'V' : 'F';
-                const pose = sequence.manualOffset ?? sequence.rootTransform;
-                return <label key={key}><span>{label}</span><input type="number" step="0.1" value={Number((pose as any)?.[section]?.[axis] ?? 0)} onChange={(event) => commit((draft) => {
-                  const target = draft.blockSequences.find((entry) => entry.id === sequence.id) as any;
-                  if (!target) return;
-                  target.manualOffset ??= JSON.parse(JSON.stringify(target.rootTransform));
-                  target.manualOffset[section][axis] = Number(event.target.value) || 0;
-                }, 'sequential-group-pose')} /><button type="button" className={`di-variable-mode ${mode === 'V' ? 'is-variable' : ''}`} onClick={() => commit((draft) => {
-                  const target = draft.blockSequences.find((entry) => entry.id === sequence.id) as any;
-                  if (!target) return;
-                  target.rootTransformVariables ??= {};
-                  const targetPose = target.manualOffset ?? target.rootTransform;
-                  target.rootTransformVariables[key] = { value: Number(targetPose[section][axis] ?? 0), optimize: { ...(target.rootTransformVariables[key]?.optimize ?? {}), mode: mode === 'V' ? 'F' : 'V' } };
-                }, 'sequential-group-variable')}>{mode}</button></label>;
-              })}
+    <div className="di-assembly-guide" aria-label="Optical Assembly setup steps">
+      <div><span>1</span><strong>Lens designs</strong><small>Confirm which Blocks form each exact lens train.</small></div>
+      <div><span>2</span><strong>Optical paths</strong><small>Choose the Source-to-Detector traversal order.</small></div>
+      <div><span>3</span><strong>Detector signals</strong><small>Select the Detector, Measurement path, and Reference path.</small></div>
+    </div>
+    <section className="di-assembly-main di-assembly-lens-designs" aria-label="Lens designs">
+      <div className="di-assembly-main__header"><span><strong>1 · Lens designs</strong><small>Open a design only when its name or physical pose needs to change. Its optical Blocks remain in the table above.</small></span><em>{sequentialComponents.length}</em></div>
+      <div className="di-lens-design-summary-list">
+        {snapshot.design.blockSequences.map((sequence, index) => {
+          const pose = sequence.manualOffset ?? sequence.rootTransform;
+          const position = pose?.positionMm ?? { x: 0, y: 0, z: 0 };
+          const rotation = pose?.rotationDeg ?? { x: 0, y: 0, z: 0 };
+          return <details className="di-lens-design-summary" key={sequence.id}>
+            <summary>
+              <span className="di-sequential-group-index">{index + 1}</span>
+              <span className="di-lens-design-summary__identity"><strong>{lensDesignLabel(sequence.label, `Lens design ${index + 1}`)}</strong><small>{sequence.blocks.length} {sequence.blocks.length === 1 ? 'Block' : 'Blocks'} · Front → Back</small></span>
+              <span className={`di-lens-placement-blocks${sequence.blocks.length === 0 ? ' is-empty' : ''}`} aria-label={`${sequence.label} Blocks`}>
+                {sequence.blocks.length === 0 ? 'No Blocks yet' : sequence.blocks.map((block, blockIndex) => {
+                  const label = sequenceBlockLabel(block, blockIndex);
+                  return <span key={String((block as { blockId?: unknown })?.blockId ?? blockIndex)} title={label}><b>{blockIndex + 1}</b>{label}</span>;
+                })}
+              </span>
+              <span className="di-lens-design-summary__placement">XYZ {Number(position.x ?? 0).toFixed(1)}, {Number(position.y ?? 0).toFixed(1)}, {Number(position.z ?? 0).toFixed(1)} mm · R {Number(rotation.x ?? 0).toFixed(1)}, {Number(rotation.y ?? 0).toFixed(1)}, {Number(rotation.z ?? 0).toFixed(1)}°</span>
+            </summary>
+            <div className="di-lens-design-summary__body">
+              <label className="di-control-field"><span>Name</span><input value={lensDesignLabel(sequence.label, `Lens design ${index + 1}`)} onChange={(event) => commit((draft) => {
+                const target = draft.blockSequences.find((entry) => entry.id === sequence.id);
+                if (target) target.label = event.target.value || `Lens design ${index + 1}`;
+              }, 'sequential-group-label')} /></label>
+              <div className="di-route-variable-grid" aria-label={`${sequence.label} pose variables`}>
+                {([
+                  ['positionX', 'X (mm)', 'positionMm', 'x'], ['positionY', 'Y (mm)', 'positionMm', 'y'], ['positionZ', 'Z (mm)', 'positionMm', 'z'],
+                  ['rotationX', 'RX (°)', 'rotationDeg', 'x'], ['rotationY', 'RY (°)', 'rotationDeg', 'y'], ['rotationZ', 'RZ (°)', 'rotationDeg', 'z'],
+                ] as const).map(([key, label, section, axis]) => {
+                  const variable = (sequence.rootTransformVariables as any)?.[key];
+                  const mode = variable?.optimize?.mode === 'V' ? 'V' : 'F';
+                  return <label key={key}><span>{label}</span><input type="number" step="0.1" value={Number((pose as any)?.[section]?.[axis] ?? 0)} onChange={(event) => commit((draft) => {
+                    const target = draft.blockSequences.find((entry) => entry.id === sequence.id) as any;
+                    if (!target) return;
+                    target.manualOffset ??= JSON.parse(JSON.stringify(target.rootTransform));
+                    target.manualOffset[section][axis] = Number(event.target.value) || 0;
+                  }, 'sequential-group-pose')} /><button type="button" className={`di-variable-mode ${mode === 'V' ? 'is-variable' : ''}`} onClick={() => commit((draft) => {
+                    const target = draft.blockSequences.find((entry) => entry.id === sequence.id) as any;
+                    if (!target) return;
+                    target.rootTransformVariables ??= {};
+                    const targetPose = target.manualOffset ?? target.rootTransform;
+                    target.rootTransformVariables[key] = { value: Number(targetPose[section][axis] ?? 0), optimize: { ...(target.rootTransformVariables[key]?.optimize ?? {}), mode: mode === 'V' ? 'F' : 'V' } };
+                  }, 'sequential-group-variable')}>{mode}</button></label>;
+                })}
+              </div>
+              <button type="button" className="di-connection-remove is-danger" onClick={() => removeSequentialGroup(sequence.id)} disabled={sequence.blocks.length > 0 || snapshot.design.blockSequences.length <= 1}>Remove empty design</button>
             </div>
-          </div>)}
-        </div>
-        <div className="di-single-section-note">Build and edit the optical Blocks inside each Lens design below. Drag a Block onto another design to move it.</div>
-        <div className="di-connection-editor__actions"><button type="button" onClick={addSequentialGroup}>Add another lens design</button></div>
+          </details>;
+        })}
+        <button type="button" className="di-lens-design-add" onClick={addSequentialGroup}>Add lens design</button>
       </div>
-    </details> : null}
-    <details className="di-connection-editor di-assembly-panel" ref={connectionEditorRef}>
-      <summary><span><strong>Placement links</strong><small>Physical spacing and port geometry used by the Optical paths. Open only when changing layout.</small></span><em>{snapshot.design.connections.length}</em></summary>
+    </section>
+    <details className="di-assembly-advanced di-assembly-engineering" ref={engineeringViewRef}>
+      <summary><span><strong>Engineering view</strong><small>Raw ports and connection records for troubleshooting or nonstandard routing.</small></span><em>Optional</em></summary>
+      <div className="di-assembly-advanced__body">
+    <details className="di-connection-editor di-layout-section di-assembly-panel" ref={connectionEditorRef}>
+      <summary><span><strong>Placement exceptions</strong><small>Paths create links automatically. Open only to override a port, distance, direction, or optimization variable.</small></span><em>{snapshot.design.connections.length}</em></summary>
       <div className="di-connection-editor__body">
-        <p>Each connection places the destination from the source port. Distance and direction can be fixed (F) or optimized (V).</p>
         {snapshot.design.connections.length === 0 ? <div className="di-connection-empty">No connections. Parts remain in the Config and Render, but no Hybrid path is traced.</div> : null}
         {snapshot.design.connections.map((connection, index) => {
           const from = componentById(connection.fromComponentId);
@@ -243,11 +391,41 @@ function HybridAssemblySummary() {
         {error ? <div className="di-connection-error" role="alert">{error}</div> : null}
       </div>
     </details>
-    <details className="di-route-editor di-assembly-panel" open>
-      <summary><span><strong>Optical paths</strong><small>Complete Source-to-Detector sequences used by Render, Signal, and Optimize.</small></span><em>{routes.length}</em></summary>
+      </div>
+    </details>
+    <section className="di-assembly-main di-assembly-paths" aria-label="Optical paths">
+      <div className="di-assembly-main__header"><span><strong>2 · Optical paths</strong><small>Choose Blocks in traversal order. Placement links are generated automatically.</small></span><em>{routes.length}</em></div>
       <div className="di-route-editor__body">
-        <div className="di-route-editor__intro"><p>Work with one complete path at a time. Shared lens designs stay linked; placement links and repeated return passes are kept inside the path definition.</p><button type="button" onClick={() => { try { setSnapshot(detectActivePortRoutes()); setError(''); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}>Detect paths</button></div>
-        {routes.length === 0 ? <div className="di-connection-empty">No saved route. Add connections, then use Auto detect.</div> : routes.map((route, routeIndex) => {
+        <div className="di-route-editor__intro"><p>Choose Blocks in traversal order. Missing placement links and the complete Optical path are created together.</p><button type="button" onClick={() => { try { setSnapshot(detectActivePortRoutes()); setError(''); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}>Detect from links</button></div>
+        <div className="di-path-builder">
+          <div className="di-path-builder__intro"><strong>Build a complete path</strong><span>Click the Source, intervening Blocks, and Detector in order. Click the same Block again for a return pass.</span></div>
+          <div className="di-path-builder__palette" aria-label="Blocks available for a new optical path">
+            {connectable.map((component) => {
+              const uses = pathDraft.filter((id) => id === component.id).length;
+              return <button type="button" key={component.id} className={uses > 0 ? 'is-used' : ''} onClick={() => appendPathComponent(component.id)}><span>+</span>{componentLabel(component)}{uses > 0 ? <em>{uses}</em> : null}</button>;
+            })}
+          </div>
+          <div className={`di-path-builder__chain${pathDraft.length === 0 ? ' is-empty' : ''}`} aria-label="New optical path order">
+            {pathDraft.length === 0 ? <span>Choose the Source, intervening Blocks, and Detector.</span> : pathDraft.map((componentId, index) => <span key={`${componentId}-${index}`}><b>{index + 1}</b>{componentLabel(componentById(componentId), componentId)}<button type="button" aria-label={`Remove ${componentLabel(componentById(componentId), componentId)} from path`} onClick={() => setPathDraft((current) => current.filter((_, itemIndex) => itemIndex !== index))}>×</button></span>)}
+          </div>
+          <div className="di-path-builder__actions">
+            {routes.length > 0 ? <label className="di-control-field"><span>Start from existing path</span><select value="" onChange={(event) => {
+              const route = routes.find((entry) => entry.id === event.target.value);
+              if (!route) return;
+              setPathDraft(routeComponentIds(route));
+              const splitterStep = route.steps.map((step) => ({ step, connection: snapshot.design.connections.find((connection) => connection.id === step.connectionId) }))
+                .find(({ step, connection }) => step.direction === 'forward' && connection?.fromComponentId === splitter?.id);
+              const port = splitterStep?.connection?.fromPortId;
+              if (port === 'transmit' || port === 'reflect' || port === 'recombine') setSplitterOutputPort(port);
+              setPathBuilderMessage('');
+            }}><option value="">Copy path…</option>{routes.map((route) => <option value={route.id} key={route.id}>{route.label}</option>)}</select></label> : null}
+            {splitter && pathDraft.includes(splitter.id) ? <label className="di-control-field"><span>First Beam Splitter output</span><select value={splitterOutputPort} onChange={(event) => setSplitterOutputPort(event.target.value as typeof splitterOutputPort)}><option value="transmit">Transmit</option><option value="reflect">Reflect</option><option value="recombine">Recombine</option></select></label> : null}
+            <button type="button" className="di-primary-button" disabled={pathDraft.length < 2} onClick={createPathFromDraft}>Create optical path</button>
+            <button type="button" disabled={pathDraft.length === 0} onClick={() => { setPathDraft([]); setPathBuilderMessage(''); }}>Clear</button>
+          </div>
+          {pathBuilderMessage ? <div className="di-path-builder__message" role="status">{pathBuilderMessage}</div> : null}
+        </div>
+        {routes.length === 0 ? <div className="di-connection-empty">No saved Optical path. Choose Blocks above, or detect paths from existing links.</div> : routes.map((route, routeIndex) => {
           const missingStep = route.steps.find((step) => !snapshot.design.connections.some((connection) => connection.id === step.connectionId));
           const routeIssue = (() => {
             if (missingStep) return `Connection ${missingStep.connectionId} was removed.`;
@@ -285,8 +463,65 @@ function HybridAssemblySummary() {
             <div className="di-route-chain" aria-label={`${route.label} component order`}>
               {routeComponentChain(route).map((label, index, chain) => <span key={`${route.id}-${index}-${label}`}>{label}{index < chain.length - 1 ? <i aria-hidden="true">→</i> : null}</span>)}
             </div>
+            <details className="di-route-geometry">
+              <summary><span><strong>Path geometry</strong><small>Spacing and placement for the links used by this path.</small></span><em>{route.steps.length}</em></summary>
+              <div className="di-path-segment-list">
+                {route.steps.map((step, stepIndex) => {
+                  const connectionIndex = snapshot.design.connections.findIndex((entry) => entry.id === step.connectionId);
+                  const connection = snapshot.design.connections[connectionIndex];
+                  if (!connection) return <div className="di-connection-error" role="alert" key={`${route.id}-geometry-${stepIndex}`}>Link {stepIndex + 1} is missing.</div>;
+                  const departureId = step.direction === 'reverse' ? connection.toComponentId : connection.fromComponentId;
+                  const arrivalId = step.direction === 'reverse' ? connection.fromComponentId : connection.toComponentId;
+                  const sharedPathCount = routes.filter((candidate) => candidate.steps.some((candidateStep) => candidateStep.connectionId === connection.id)).length;
+                  const autoPlace = connection.autoPlace !== false;
+                  return <details className="di-path-segment" key={`${route.id}-geometry-${stepIndex}-${connection.id}`}>
+                    <summary>
+                      <span className="di-route-step__number">{stepIndex + 1}</span>
+                      <span className="di-path-segment__identity"><strong>{componentLabel(componentById(departureId), departureId)} → {componentLabel(componentById(arrivalId), arrivalId)}</strong><small>{step.direction === 'reverse' ? 'Reverse traversal' : 'Forward traversal'}</small></span>
+                      <span className="di-path-segment__distance">{Number(connection.distanceMm ?? 0).toFixed(2)} mm</span>
+                      <span className={`di-path-segment__mode${autoPlace ? ' is-auto' : ''}`}>{autoPlace ? 'Auto-place' : 'Fixed positions'}</span>
+                      {sharedPathCount > 1 ? <span className="di-path-segment__shared">Shared by {sharedPathCount} paths</span> : null}
+                    </summary>
+                    <div className="di-path-segment__body">
+                      {([['distanceMm', 'Distance (mm)', 0.1]] as const).map(([key, label, inputStep]) => {
+                        const variable = (connection.variables as any)?.[key];
+                        const mode = variable?.optimize?.mode === 'V' ? 'V' : 'F';
+                        return <label className="di-control-field" key={key}><span>{label}</span><span className="di-variable-input"><input type="number" min={0} step={inputStep} value={Number(connection.distanceMm ?? 0)} onChange={(event) => commit((draft) => {
+                          const target = draft.connections.find((entry) => entry.id === connection.id) as any;
+                          if (target) target.distanceMm = Math.max(0, Number(event.target.value) || 0);
+                        }, 'connection-distanceMm')} /><button type="button" className={`di-variable-mode ${mode === 'V' ? 'is-variable' : ''}`} onClick={() => commit((draft) => {
+                          const target = draft.connections.find((entry) => entry.id === connection.id) as any;
+                          if (!target) return;
+                          target.variables ??= {};
+                          target.variables[key] = { value: Number(target[key] ?? 0), optimize: { ...(target.variables[key]?.optimize ?? {}), mode: mode === 'V' ? 'F' : 'V' } };
+                        }, 'connection-variable')}>{mode}</button></span></label>;
+                      })}
+                      <label className="di-control-field"><span>Placement</span><select value={autoPlace ? 'auto' : 'fixed'} onChange={(event) => commit((draft) => {
+                        const target = draft.connections.find((entry) => entry.id === connection.id);
+                        if (target) target.autoPlace = event.target.value === 'auto';
+                      }, 'connection-auto-place')}><option value="auto">Auto-place next Block</option><option value="fixed">Keep component positions</option></select></label>
+                      {autoPlace ? ([['azimuthDeg', 'Azimuth (°)', -360, 360], ['elevationDeg', 'Elevation (°)', -90, 90]] as const).map(([key, label, min, max]) => {
+                        const variable = (connection.variables as any)?.[key];
+                        const mode = variable?.optimize?.mode === 'V' ? 'V' : 'F';
+                        return <label className="di-control-field" key={key}><span>{label}</span><span className="di-variable-input"><input type="number" min={min} max={max} step="0.1" value={Number((connection as any)[key] ?? 0)} onChange={(event) => commit((draft) => {
+                          const target = draft.connections.find((entry) => entry.id === connection.id) as any;
+                          if (!target) return;
+                          const value = Number(event.target.value) || 0;
+                          target[key] = key === 'elevationDeg' ? Math.max(-90, Math.min(90, value)) : value;
+                        }, `connection-${key}`)} /><button type="button" className={`di-variable-mode ${mode === 'V' ? 'is-variable' : ''}`} onClick={() => commit((draft) => {
+                          const target = draft.connections.find((entry) => entry.id === connection.id) as any;
+                          if (!target) return;
+                          target.variables ??= {};
+                          target.variables[key] = { value: Number(target[key] ?? 0), optimize: { ...(target.variables[key]?.optimize ?? {}), mode: mode === 'V' ? 'F' : 'V' } };
+                        }, 'connection-variable')}>{mode}</button></span></label>;
+                      }) : <p className="di-path-segment__help">This link follows the stored positions of both Blocks. Open Engineering view only if its ports must change.</p>}
+                    </div>
+                  </details>;
+                })}
+              </div>
+            </details>
             <details className="di-route-definition">
-              <summary>Path definition · {route.steps.length} placement links · {routeEndpoint(route, 'source')} → {routeEndpoint(route, 'detector')}</summary>
+              <summary>Advanced path definition · {route.steps.length} links · {routeEndpoint(route, 'source')} → {routeEndpoint(route, 'detector')}</summary>
               <div className="di-route-steps">
               {route.steps.map((step, stepIndex) => {
                 const connection = snapshot.design.connections.find((entry) => entry.id === step.connectionId);
@@ -311,24 +546,37 @@ function HybridAssemblySummary() {
             {routeIssue ? <div className="di-connection-error" role="alert">{routeIssue}</div> : null}
           </div>;
         })}
-        <div className="di-route-editor__actions"><button type="button" disabled={snapshot.design.connections.length === 0} onClick={() => commit((draft) => {
-          draft.portRoutes ??= [];
-          draft.portRoutes.push({ id: `route-${Date.now().toString(36)}`, label: `Route ${draft.portRoutes.length + 1}`, enabled: true, steps: [{ connectionId: draft.connections[0]?.id ?? '', direction: 'forward' }] });
-        }, 'route-add')}>Add route</button></div>
       </div>
-    </details>
-    <details className="di-signal-editor di-assembly-panel" open>
-      <summary><span><strong>Detector signals</strong><small>Group paths arriving at one Detector and assign their measurement, reference, and auxiliary roles.</small></span><em>{routeSets.length}</em></summary>
+    </section>
+    <section className="di-assembly-main di-assembly-signals" aria-label="Detector signals">
+      <div className="di-assembly-main__header"><span><strong>3 · Detector signals</strong><small>Normally only these three selections are needed. Extra LO paths and calibration remain optional.</small></span><em>{routeSets.length}</em></div>
+      <div className="di-signal-editor">
       <div className="di-signal-editor__body">
-        <div className="di-context-note"><strong>Signal roles</strong><span>Choose the Measurement and Reference paths explicitly. Other included paths are treated as LO or auxiliary contributions.</span></div>
         <div className="di-route-sets">
           {routeSets.length === 0 ? <div className="di-connection-empty">No Detector signal is configured.</div> : null}
           {routeSets.map((set, setIndex) => <section className="di-signal-card" key={set.id}>
-            <div className="di-signal-card__header">
-              <label className="di-control-field"><span>Signal name</span><input aria-label="Detector signal name" value={set.label} onChange={(event) => commit((draft) => { if (draft.routeSets?.[setIndex]) draft.routeSets[setIndex].label = event.target.value || `Detector signal ${setIndex + 1}`; }, 'route-set-label')} /></label>
+            <div className="di-signal-primary-grid">
               <label className="di-control-field"><span>Detector</span><select value={set.detectorBlockId ?? ''} onChange={(event) => commit((draft) => { if (draft.routeSets?.[setIndex]) draft.routeSets[setIndex].detectorBlockId = event.target.value; }, 'route-set-detector')}><option value="">Select detector</option>{detectors.map((detector) => <option value={detector.id} key={detector.id}>{detector.label}</option>)}</select></label>
-              <button type="button" className="di-connection-remove is-danger" onClick={() => commit((draft) => { draft.routeSets?.splice(setIndex, 1); }, 'route-set-delete')}>Remove</button>
+              <label className="di-control-field"><span>Measurement path</span><select value={set.measurementRouteId ?? ''} onChange={(event) => commit((draft) => {
+                const target = draft.routeSets?.[setIndex]; if (!target) return;
+                target.measurementRouteId = event.target.value || undefined;
+                if (event.target.value && !target.routeIds.includes(event.target.value)) target.routeIds.push(event.target.value);
+              }, 'route-set-measurement')}><option value="">None</option>{routes.map((route) => <option key={route.id} value={route.id}>{route.label}</option>)}</select></label>
+              <label className="di-control-field"><span>Reference path</span><select value={set.referenceRouteId ?? ''} onChange={(event) => commit((draft) => {
+                const target = draft.routeSets?.[setIndex]; if (!target) return;
+                target.referenceRouteId = event.target.value || undefined;
+                if (event.target.value && !target.routeIds.includes(event.target.value)) target.routeIds.push(event.target.value);
+              }, 'route-set-reference')}><option value="">None</option>{routes.map((route) => <option key={route.id} value={route.id}>{route.label}</option>)}</select></label>
             </div>
+            <div className="di-signal-primary-note"><strong>{set.label}</strong><span>{Math.max(0, set.routeIds.length - Number(Boolean(set.measurementRouteId)) - Number(Boolean(set.referenceRouteId)))} additional / LO {set.routeIds.length === 1 ? 'path' : 'paths'}</span></div>
+            <details className="di-signal-advanced">
+              <summary>Advanced signal calibration</summary>
+              <div className="di-signal-advanced__body">
+              <div className="di-signal-card__header">
+                <label className="di-control-field"><span>Signal name</span><input aria-label="Detector signal name" value={set.label} onChange={(event) => commit((draft) => { if (draft.routeSets?.[setIndex]) draft.routeSets[setIndex].label = event.target.value || `Detector signal ${setIndex + 1}`; }, 'route-set-label')} /></label>
+                <label className="di-control-field"><span>OPD calibration (mm)</span><input type="number" step="0.000001" value={Number(set.opdCalibrationMm ?? 0)} onChange={(event) => commit((draft) => { if (draft.routeSets?.[setIndex]) draft.routeSets[setIndex].opdCalibrationMm = Number(event.target.value) || 0; }, 'route-set-opd-calibration')} /></label>
+                <button type="button" className="di-connection-remove is-danger" onClick={() => commit((draft) => { draft.routeSets?.splice(setIndex, 1); }, 'route-set-delete')}>Remove signal</button>
+              </div>
             <fieldset className="di-signal-path-group">
               <legend>Included Optical paths</legend>
               <div className="di-signal-path-options">{routes.map((route) => {
@@ -343,13 +591,10 @@ function HybridAssemblySummary() {
                   if (!event.target.checked && target.referenceRouteId === route.id) target.referenceRouteId = undefined;
                 }, 'route-set-membership')} /><span>{route.label}</span>{included ? <em>{role}</em> : null}</label>;
               })}</div>
-              <small>Only checked paths contribute to this Detector signal.</small>
+              <small>Checked paths contribute to this Detector signal. Paths other than Measurement and Reference are treated as LO or auxiliary.</small>
             </fieldset>
-            <div className="di-signal-role-grid">
-              <label className="di-control-field"><span>Measurement path</span><select value={set.measurementRouteId ?? ''} onChange={(event) => commit((draft) => { if (draft.routeSets?.[setIndex]) draft.routeSets[setIndex].measurementRouteId = event.target.value || undefined; }, 'route-set-measurement')}><option value="">None</option>{set.routeIds.map((routeId) => <option key={routeId} value={routeId}>{routes.find((route) => route.id === routeId)?.label ?? routeId}</option>)}</select></label>
-              <label className="di-control-field"><span>Reference path</span><select value={set.referenceRouteId ?? ''} onChange={(event) => commit((draft) => { if (draft.routeSets?.[setIndex]) draft.routeSets[setIndex].referenceRouteId = event.target.value || undefined; }, 'route-set-reference')}><option value="">None</option>{set.routeIds.map((routeId) => <option key={routeId} value={routeId}>{routes.find((route) => route.id === routeId)?.label ?? routeId}</option>)}</select></label>
-              <label className="di-control-field"><span>OPD calibration (mm)</span><input type="number" step="0.000001" value={Number(set.opdCalibrationMm ?? 0)} onChange={(event) => commit((draft) => { if (draft.routeSets?.[setIndex]) draft.routeSets[setIndex].opdCalibrationMm = Number(event.target.value) || 0; }, 'route-set-opd-calibration')} /></label>
-            </div>
+              </div>
+            </details>
           </section>)}
           <button type="button" className="di-signal-add" disabled={routes.length === 0} onClick={() => commit((draft) => {
           draft.routeSets ??= [];
@@ -359,7 +604,8 @@ function HybridAssemblySummary() {
         }, 'route-set-add')}>Add detector signal</button>
         </div>
       </div>
-    </details>
+      </div>
+    </section>
   </div>;
 }
 

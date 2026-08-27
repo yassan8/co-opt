@@ -252,6 +252,112 @@ function addBeamSplitterHousing(
   group.add(housing);
 }
 
+function addGratingGrooveOverlay(
+  mesh: THREE.Mesh,
+  design: CoherentAssemblyDesign,
+  item: CoherentAssemblyDesign['components'][number],
+  width: number,
+  height: number,
+  depth: number,
+): void {
+  const grating = design.grating?.componentId === item.id ? design.grating : null;
+  const rawDirection = grating?.grooveDirection ?? {
+    x: Number(item.metadata?.grooveDirectionX) || 0,
+    y: Number(item.metadata?.grooveDirectionY) || 1,
+    z: Number(item.metadata?.grooveDirectionZ) || 0,
+  };
+  const grooveDirection = new THREE.Vector2(Number(rawDirection.x) || 0, Number(rawDirection.y) || 0);
+  if (grooveDirection.lengthSq() < 1e-12) grooveDirection.set(0, 1);
+  grooveDirection.normalize();
+  const acrossGrooves = new THREE.Vector2(-grooveDirection.y, grooveDirection.x);
+  const halfWidth = width * 0.5;
+  const halfHeight = height * 0.5;
+  const acrossExtent = Math.abs(acrossGrooves.x) * halfWidth + Math.abs(acrossGrooves.y) * halfHeight;
+  const lineCount = 11;
+  const positions: number[] = [];
+
+  const clipAxis = (
+    center: number,
+    direction: number,
+    halfExtent: number,
+    interval: { min: number; max: number },
+  ): boolean => {
+    if (Math.abs(direction) < 1e-12) return Math.abs(center) <= halfExtent + 1e-9;
+    const a = (-halfExtent - center) / direction;
+    const b = (halfExtent - center) / direction;
+    interval.min = Math.max(interval.min, Math.min(a, b));
+    interval.max = Math.min(interval.max, Math.max(a, b));
+    return interval.max >= interval.min;
+  };
+
+  for (let index = 0; index < lineCount; index += 1) {
+    const offset = lineCount === 1 ? 0 : -acrossExtent + (2 * acrossExtent * index) / (lineCount - 1);
+    const center = acrossGrooves.clone().multiplyScalar(offset);
+    const interval = { min: Number.NEGATIVE_INFINITY, max: Number.POSITIVE_INFINITY };
+    if (!clipAxis(center.x, grooveDirection.x, halfWidth * 0.94, interval)) continue;
+    if (!clipAxis(center.y, grooveDirection.y, halfHeight * 0.94, interval)) continue;
+    const start = center.clone().addScaledVector(grooveDirection, interval.min);
+    const end = center.clone().addScaledVector(grooveDirection, interval.max);
+    const faceZ = depth * 0.5 + Math.max(0.015, depth * 0.004);
+    positions.push(start.x, start.y, faceZ, end.x, end.y, faceZ);
+  }
+
+  const grooveGeometry = new THREE.BufferGeometry();
+  grooveGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  const grooves = new THREE.LineSegments(
+    grooveGeometry,
+    new THREE.LineBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.92, depthTest: false }),
+  );
+  grooves.name = `nonseq-${item.id}-grooves`;
+  grooves.renderOrder = 42;
+  mesh.add(grooves);
+
+  const arrowLength = Math.max(1.2, Math.min(width, height) * 0.72);
+  const arrowDirection = new THREE.Vector3(grooveDirection.x, grooveDirection.y, 0);
+  const arrow = new THREE.Group();
+  arrow.name = `nonseq-${item.id}-groove-direction`;
+  const shaftLength = arrowLength * 0.76;
+  const headLength = arrowLength - shaftLength;
+  const arrowOrigin = arrowDirection.clone().multiplyScalar(-arrowLength * 0.5);
+  const arrowZ = depth * 0.5 + Math.max(0.03, depth * 0.008);
+  const arrowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x0f766e,
+    transparent: true,
+    opacity: 0.98,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(Math.max(0.07, Math.min(width, height) * 0.009), Math.max(0.07, Math.min(width, height) * 0.009), shaftLength, 10),
+    arrowMaterial,
+  );
+  shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), arrowDirection);
+  shaft.position.copy(arrowOrigin).addScaledVector(arrowDirection, shaftLength * 0.5);
+  shaft.position.z = arrowZ;
+  shaft.renderOrder = 43;
+  arrow.add(shaft);
+  const head = new THREE.Mesh(
+    new THREE.ConeGeometry(Math.max(0.18, Math.min(width, height) * 0.032), headLength, 14),
+    arrowMaterial.clone(),
+  );
+  head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), arrowDirection);
+  head.position.copy(arrowOrigin).addScaledVector(arrowDirection, shaftLength + headLength * 0.5);
+  head.position.z = arrowZ;
+  head.renderOrder = 43;
+  arrow.add(head);
+  mesh.add(arrow);
+
+  const dominantAxis = Math.abs(grooveDirection.x) > 0.999
+    ? 'X'
+    : Math.abs(grooveDirection.y) > 0.999
+      ? 'Y'
+      : 'CUSTOM';
+  const label = makeLabelSprite(`GROOVES ${dominantAxis}`, '#0f766e', 22);
+  label.name = `nonseq-${item.id}-groove-label`;
+  label.position.set(0, height * 0.68, depth * 0.56);
+  mesh.add(label);
+}
+
 function addComponent(group: THREE.Group, design: CoherentAssemblyDesign, componentId: string): void {
   const item = design.components.find((entry) => entry.id === componentId);
   if (!item) return;
@@ -286,6 +392,7 @@ function addComponent(group: THREE.Group, design: CoherentAssemblyDesign, compon
   group.add(mesh);
   const edge = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 }));
   mesh.add(edge);
+  if (isGrating) addGratingGrooveOverlay(mesh, design, item, width, height, depth);
 }
 
 function addExactSequentialGroups(group: THREE.Group, design: CoherentAssemblyDesign): void {
@@ -348,7 +455,7 @@ const connectionColor = (tone: 'default' | 'transmit' | 'reflect' | 'detector'):
   return 0x64748b;
 };
 
-function makeLabelSprite(text: string, color: string): THREE.Sprite {
+function makeLabelSprite(text: string, color: string, screenHeightPx = 32): THREE.Sprite {
   const canvas = document.createElement('canvas');
   canvas.height = 80;
   let context = canvas.getContext('2d');
@@ -378,7 +485,6 @@ function makeLabelSprite(text: string, color: string): THREE.Sprite {
   const sprite = new THREE.Sprite(material);
   // Match the small XYZ orientation labels. Port text stays the same screen
   // size while zooming; only its marker remains world-sized for selection.
-  const screenHeightPx = 32;
   const screenWidthPx = screenHeightPx * canvas.width / canvas.height;
   sprite.userData = { screenWidthPx, screenHeightPx };
   sprite.onBeforeRender = (renderer, _scene, camera) => {

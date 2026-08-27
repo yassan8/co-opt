@@ -315,6 +315,12 @@ function physicalComponent(block: Block): CoherentPhysicalComponent {
         substrateThicknessMm: positive(p.substrateThicknessMm, depth),
         wedgeDeg: finite(p.wedgeDeg, 0),
       } : {}),
+      ...(type === 'ReflectionGrating' ? {
+        grooveDirectionX: finite(p.grooveDirectionX, 0),
+        grooveDirectionY: finite(p.grooveDirectionY, 1),
+        grooveDirectionZ: finite(p.grooveDirectionZ, 0),
+        grooveDensityLinesPerMm: positive(p.grooveDensityLinesPerMm, 600),
+      } : {}),
       ...block.metadata,
     },
   };
