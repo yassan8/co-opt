@@ -10230,7 +10230,19 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     (mainSequentialGroup ?? sequentialGroups[0]).blockIds.push(...unassignedSequentialIds);
 
     const renderTargetByBlockId = new Map<string, HTMLElement>();
-    const lensSectionStorageKey = `coopt.designIntent.collapsedLensSections.${activeConfigIdForInspector || 'default'}`;
+    // A numeric Config id is commonly reused by unrelated JSON files.  Using
+    // it alone made a collapsed Lens design in one file hide the Blocks of a
+    // newly loaded file with the same id.  Include the authored group/member
+    // signature so collapse state follows the actual design instead.
+    const lensSectionSignature = sequentialGroups
+        .map((group) => `${group.key}:${group.blockIds.join(',')}`)
+        .join('|');
+    let lensSectionSignatureHash = 2166136261;
+    for (let index = 0; index < lensSectionSignature.length; index += 1) {
+        lensSectionSignatureHash ^= lensSectionSignature.charCodeAt(index);
+        lensSectionSignatureHash = Math.imul(lensSectionSignatureHash, 16777619);
+    }
+    const lensSectionStorageKey = `coopt.designIntent.collapsedLensSections.${activeConfigIdForInspector || 'default'}.${(lensSectionSignatureHash >>> 0).toString(36)}`;
     const collapsedLensSections = (() => {
         try {
             const parsed = JSON.parse(localStorage.getItem(lensSectionStorageKey) || '[]');
@@ -11055,7 +11067,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             wrapper.setAttribute('aria-label', `${presentation.label}. ${presentation.help}`);
         };
 
-        const appendTextField = (label: string, path: string, currentValue: any, widthPx: number, target: HTMLElement = root) => {
+        const appendTextField = (label: string, path: string, currentValue: any, widthPx: number, target: HTMLElement = root): HTMLElement => {
             const shell = createQuickFieldShell(label);
             const input = document.createElement('input');
             input.type = 'text';
@@ -11085,6 +11097,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             attachQuickScopeToggle(shell.wrapper, path);
             applyAssemblyQuickFieldPresentation(shell.wrapper, path);
             target.appendChild(shell.wrapper);
+            return shell.wrapper;
         };
 
         const appendSpacerField = (label: string, widthPx: number, target: HTMLElement = root) => {
@@ -11124,6 +11137,40 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             shell.content.appendChild(select);
             attachQuickScopeToggle(shell.wrapper, path);
             applyAssemblyQuickFieldPresentation(shell.wrapper, path);
+            target.appendChild(shell.wrapper);
+            return shell.wrapper;
+        };
+
+        const appendGrooveAxisField = (target: HTMLElement = root) => {
+            const x = Number(params.grooveDirectionX) || 0;
+            const y = Number(params.grooveDirectionY) || 0;
+            const z = Number(params.grooveDirectionZ) || 0;
+            const axis = Math.abs(z) < 1e-9 && Math.abs(x) > 0.999 && Math.abs(y) < 1e-9
+                ? 'Local X'
+                : Math.abs(z) < 1e-9 && Math.abs(y) > 0.999 && Math.abs(x) < 1e-9
+                    ? 'Local Y'
+                    : 'Custom';
+            const shell = createQuickFieldShell('Grooves');
+            shell.wrapper.title = 'Grating groove direction in the component local plane. Render shows the same direction.';
+            const select = document.createElement('select');
+            styleQuickInput(select, 82);
+            ['Local X', 'Local Y', 'Custom'].forEach((value) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = value;
+                option.selected = value === axis;
+                select.appendChild(option);
+            });
+            select.addEventListener('change', () => {
+                if (select.value === 'Custom') return;
+                const nextX = select.value === 'Local X' ? 1 : 0;
+                const nextY = select.value === 'Local Y' ? 1 : 0;
+                if (x !== nextX) cooptApplyBlockValue(blockId, 'parameters.grooveDirectionX', params.grooveDirectionX, nextX);
+                if (y !== nextY) cooptApplyBlockValue(blockId, 'parameters.grooveDirectionY', params.grooveDirectionY, nextY);
+                if (z !== 0) cooptApplyBlockValue(blockId, 'parameters.grooveDirectionZ', params.grooveDirectionZ, 0);
+            });
+            stopRowToggle(select);
+            shell.content.appendChild(select);
             target.appendChild(shell.wrapper);
         };
 
@@ -11287,6 +11334,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 appendTextField('T', 'parameters.transmittance', params.transmittance, 62, specRow);
             } else if (blockType === 'ReflectionGrating') {
                 appendTextField('lines/mm', 'parameters.grooveDensityLinesPerMm', params.grooveDensityLinesPerMm, 82, specRow);
+                appendGrooveAxisField(specRow);
                 appendTextField('Depth mag.', 'parameters.detectorMagnification', params.detectorMagnification ?? 1, 72, specRow);
                 appendTextField('Order', 'parameters.order', params.order, 58, specRow);
                 appendTextField('Efficiency', 'parameters.efficiency', params.efficiency, 68, specRow);
@@ -11306,30 +11354,63 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 appendTextField('Samples', 'parameters.sampleCount', params.sampleCount, 72, specRow);
                 appendTextField('Bandwidth', 'parameters.detectionBandwidthHz', params.detectionBandwidthHz, 94, specRow);
             } else {
-                appendTextField('Width', 'parameters.widthMm', params.widthMm, 68, specRow);
-                appendTextField('Height', 'parameters.heightMm', params.heightMm, 68, specRow);
-                appendTextField('Depth', 'parameters.depthMm', params.depthMm, 68, specRow);
                 if (blockType === 'NDFilter') appendTextField('T', 'parameters.transmission', params.transmission, 62, specRow);
                 if (blockType === 'FoldMirror') appendTextField('R', 'parameters.reflectance', params.reflectance, 62, specRow);
             }
-            root.appendChild(specRow);
+            if (specRow.childElementCount > 0) root.appendChild(specRow);
             if (blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource') {
                 const rayRow = createQuickRow();
                 appendTextField('Render rays', 'parameters.renderSpatialSamples', params.renderSpatialSamples ?? Math.min(9, Number(params.spatialSamples) || 9), 78, rayRow);
                 appendTextField('Signal rays', 'parameters.detectorSpatialSamples', params.detectorSpatialSamples ?? params.spatialSamples ?? 81, 78, rayRow);
                 root.appendChild(rayRow);
             }
+            if (blockType === 'Target') {
+                const profile = String(params.profile ?? 'flat').toLowerCase();
+                const shapeRow = createQuickRow();
+                if (profile === 'step' || profile === 'tilt' || profile === 'sine') {
+                    appendTextField('Height µm', 'parameters.amplitudeUm', params.amplitudeUm ?? 0, 72, shapeRow);
+                }
+                if (profile === 'sine') appendTextField('Period mm', 'parameters.periodMm', params.periodMm ?? 2, 72, shapeRow);
+                if (profile === 'step') appendTextField('Step X mm', 'parameters.stepPositionMm', params.stepPositionMm ?? 0, 72, shapeRow);
+                if (shapeRow.childElementCount > 0) root.appendChild(shapeRow);
+            }
+
+            // Placement and envelope are common to every assembly part. Keep
+            // them compact instead of repeating ten full-width parameter rows.
+            const placementRow = createQuickRow();
+            appendTextField('X mm', 'parameters.positionXmm', params.positionXmm ?? 0, 66, placementRow);
+            appendTextField('Y mm', 'parameters.positionYmm', params.positionYmm ?? 0, 66, placementRow);
+            appendTextField('Z mm', 'parameters.positionZmm', params.positionZmm ?? 0, 66, placementRow);
+            appendTextField('Rot X', 'parameters.rotationXdeg', params.rotationXdeg ?? 0, 62, placementRow);
+            appendTextField('Rot Y', 'parameters.rotationYdeg', params.rotationYdeg ?? 0, 62, placementRow);
+            appendTextField('Rot Z', 'parameters.rotationZdeg', params.rotationZdeg ?? 0, 62, placementRow);
+            root.appendChild(placementRow);
+
+            const envelopeRow = createQuickRow();
+            appendTextField('Width', 'parameters.widthMm', params.widthMm, 66, envelopeRow);
+            appendTextField('Height', 'parameters.heightMm', params.heightMm, 66, envelopeRow);
+            appendTextField('Depth', 'parameters.depthMm', params.depthMm, 66, envelopeRow);
+            appendTextField('Aperture', 'parameters.apertureDiameterMm', params.apertureDiameterMm, 72, envelopeRow);
+            root.appendChild(envelopeRow);
         } else if (blockType === 'Paraxial') {
             root.classList.add('block-inspector-quick-editor-multiline');
-            root.style.setProperty('--quick-cols', '3');
-            const row = createQuickRow();
             const semiDiameter = aperture.front ?? aperture.s1 ?? aperture.back ?? '';
 
-            appendTextField('Fx', 'parameters.focalLengthX', params.focalLengthX ?? params.focalLengthY ?? params.focalLength, 72, row);
-            appendTextField('Fy', 'parameters.focalLengthY', params.focalLengthY ?? params.focalLengthX ?? params.focalLength, 72, row);
-            appendTextField('SD', 'aperture.front', semiDiameter, 58, row);
+            // Fx/Fy are the ideal-lens equivalents of surface radius, so keep
+            // both controls in the Radius column. Explicit grid placement is
+            // intentional: nested display:contents rows can otherwise place
+            // these controls in the last visible spreadsheet column.
+            const fxField = appendTextField('Fx', 'parameters.focalLengthX', params.focalLengthX ?? params.focalLengthY ?? params.focalLength, 72);
+            fxField.style.gridColumn = '1';
+            fxField.style.gridRow = '1';
 
-            root.appendChild(row);
+            const fyField = appendTextField('Fy', 'parameters.focalLengthY', params.focalLengthY ?? params.focalLengthX ?? params.focalLength, 72);
+            fyField.style.gridColumn = '1';
+            fyField.style.gridRow = '2';
+
+            const sdField = appendTextField('SD', 'aperture.front', semiDiameter, 58);
+            sdField.style.gridColumn = '6';
+            sdField.style.gridRow = '1 / span 2';
         } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
             root.classList.add('block-inspector-quick-editor-multiline');
             root.style.setProperty('--quick-cols', '6');
@@ -11909,7 +11990,43 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 return false;
             };
             if (quickEditorEnabled) {
-                if (blockType === 'Paraxial') {
+                if (isPhysicalBlockType(blockType)) {
+                    [
+                        'positionXmm', 'positionYmm', 'positionZmm',
+                        'rotationXdeg', 'rotationYdeg', 'rotationZdeg',
+                        'widthMm', 'heightMm', 'depthMm', 'apertureDiameterMm',
+                    ].forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
+                    const physicalQuickKeys: Partial<Record<PhysicalBlockType, string[]>> = {
+                        BroadbandSource: ['minWavelengthNm', 'maxWavelengthNm', 'totalPowerW', 'renderSpatialSamples', 'detectorSpatialSamples'],
+                        FrequencyCombSource: ['centerWavelengthNm', 'repetitionRateHz', 'ceoFrequencyHz', 'lineCount', 'renderSpatialSamples', 'detectorSpatialSamples'],
+                        BeamSplitter: ['beamSplitterModel', 'reflectionPort', 'reflectance', 'transmittance'],
+                        FoldMirror: ['reflectance'],
+                        NDFilter: ['transmission'],
+                        ReflectionGrating: ['grooveDensityLinesPerMm', 'detectorMagnification', 'order', 'efficiency'],
+                        Target: ['profile', 'interaction', 'reflectance'],
+                        AreaDetector: ['pixelCountX', 'pixelCountY', 'pixelPitchUm', 'quantumEfficiency', 'calibrationMinUm', 'calibrationMaxUm'],
+                        TimeDetector: ['samplingRateHz', 'sampleCount', 'detectionBandwidthHz'],
+                    };
+                    (physicalQuickKeys[blockType as PhysicalBlockType] ?? []).forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
+                    if (blockType === 'Target') {
+                        const profile = String(params.profile ?? 'flat').toLowerCase();
+                        if (profile === 'step' || profile === 'tilt' || profile === 'sine') quickEditorCoveredParamKeys.add('amplitudeum');
+                        if (profile === 'sine') quickEditorCoveredParamKeys.add('periodmm');
+                        if (profile === 'step') quickEditorCoveredParamKeys.add('steppositionmm');
+                    }
+                    if (blockType === 'ReflectionGrating') {
+                        const gx = Number(params.grooveDirectionX) || 0;
+                        const gy = Number(params.grooveDirectionY) || 0;
+                        const gz = Number(params.grooveDirectionZ) || 0;
+                        const isAxisAligned = Math.abs(gz) < 1e-9 && (
+                            (Math.abs(gx) > 0.999 && Math.abs(gy) < 1e-9)
+                            || (Math.abs(gy) > 0.999 && Math.abs(gx) < 1e-9)
+                        );
+                        if (isAxisAligned) {
+                            ['grooveDirectionX', 'grooveDirectionY', 'grooveDirectionZ'].forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
+                        }
+                    }
+                } else if (blockType === 'Paraxial') {
                     ['focalLengthX', 'focalLengthY'].forEach((k) => quickEditorCoveredParamKeys.add(k.toLowerCase()));
                     ['front', 's1', 'back', 'surf1', 'surf2'].forEach((k) => quickEditorCoveredApertureKeys.add(k.toLowerCase()));
                 } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
@@ -13421,6 +13538,37 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const shouldSkipExpandedParamKey = (key: string): boolean => {
                     if (shouldHideExpandedField(key)) return true;
                     if (quickEditorEnabled && quickEditorCoveredParamKeys.has(String(key).toLowerCase())) return true;
+                    if (isPhysicalBlockType(blockType)) {
+                        const lower = String(key).toLowerCase();
+                        const sourceUsesNa = Number(params.numericalAperture) > 0;
+                        if ((blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource') && sourceUsesNa && lower === 'divergencedeg') return true;
+                        if (blockType === 'BeamSplitter') {
+                            const model = String(params.beamSplitterModel ?? 'ideal').toLowerCase();
+                            if (model === 'ideal' && [
+                                'substratematerial', 'substrateindexnd', 'substrateabbenumber',
+                                'substratethicknessmm', 'wedgedeg', 'backsurfacereflectance',
+                            ].includes(lower)) return true;
+                            if (model !== 'plate' && lower === 'wedgedeg') return true;
+                        }
+                        if (blockType === 'ReflectionGrating' && lower === 'allowedorders') {
+                            const configured = Array.isArray(params.allowedOrders) ? params.allowedOrders.map(Number).filter(Number.isFinite) : [];
+                            if (configured.length <= 1 && (!configured.length || configured[0] === Number(params.order))) return true;
+                        }
+                        if (blockType === 'Target') {
+                            const profile = String(params.profile ?? 'flat').toLowerCase();
+                            const interaction = String(params.interaction ?? 'specular').toLowerCase();
+                            if (lower === 'periodmm' && profile !== 'sine') return true;
+                            if (lower === 'steppositionmm' && profile !== 'step') return true;
+                            if (lower === 'amplitudeum' && !['step', 'tilt', 'sine'].includes(profile)) return true;
+                            if (['scattersamples', 'scattera', 'scatterb', 'scatterg', 'scattersigmadeg', 'bsdfsamples'].includes(lower)) {
+                                if (interaction === 'specular') return true;
+                                if (lower === 'bsdfsamples' && interaction !== 'bsdf-csv') return true;
+                                if (['scattera', 'scatterb', 'scatterg'].includes(lower) && interaction !== 'abg') return true;
+                                if (lower === 'scattersigmadeg' && interaction !== 'harvey-shack') return true;
+                            }
+                        }
+                        if (blockType === 'AreaDetector' && lower === 'responsivity' && Number.isFinite(Number(params.quantumEfficiency))) return true;
+                    }
                     if (blockType === 'ImageSurface' && key === 'optimizeSemiDia') return true;
                     if (blockType === 'ImageSurface' && key === 'thickness') return true;
                     if (/^coef\d+$/.test(key) && params.surfType === 'Spherical') return true;
