@@ -75,6 +75,7 @@ function announce(detail: CoherentUpdateDetail): void {
 
 function applyHybridDesignToConfiguration(active: any, design: CoherentAssemblyDesign): void {
   const blocks = Array.isArray(active?.blocks) ? active.blocks : [];
+  active.assemblyRoutingMode = design.routingMode === 'automatic-scene' ? 'automatic-scene' : 'engineered-paths';
   const byId = new Map<string, any>(blocks.map((block: any) => [String(block?.blockId ?? ''), block]));
   for (const component of design.components ?? []) {
     const blockId = String(component.metadata?.blockId ?? component.id ?? '');
@@ -170,7 +171,7 @@ function applyHybridDesignToConfiguration(active: any, design: CoherentAssemblyD
       id: connection.id,
       from: { blockId: connection.fromComponentId, portId: connection.fromPortId ?? 'out' },
       to: { blockId: connection.toComponentId, portId: connection.toPortId ?? 'in' },
-      distanceMm: Number(connection.distanceMm ?? 0), azimuthDeg: Number.isFinite(Number(connection.azimuthDeg)) ? Number(connection.azimuthDeg) : undefined, elevationDeg: Number.isFinite(Number(connection.elevationDeg)) ? Number(connection.elevationDeg) : undefined, autoPlace: connection.autoPlace !== false, pathLabel: connection.pathId,
+      distanceMm: Number(connection.distanceMm ?? 0), azimuthDeg: Number.isFinite(Number(connection.azimuthDeg)) ? Number(connection.azimuthDeg) : undefined, elevationDeg: Number.isFinite(Number(connection.elevationDeg)) ? Number(connection.elevationDeg) : undefined, autoPlace: connection.autoPlace !== false, placementOverride: connection.placementOverride === true, pathLabel: connection.pathId,
       allowReverse: connection.allowReverse === true,
       variables: clone(connection.variables ?? {}),
     }));
@@ -219,12 +220,18 @@ function persist(
     undoByConfig.set(configId, undo);
     redoByConfig.set(configId, []);
   }
-  const design = normalizeCoherentAssemblyDesign(input);
-  design.revision = options.preserveRevision
-    ? Math.max(0, Math.round(Number(design.revision) || 0))
-    : Math.max(Number(previous.revision) || 0, Number(design.revision) || 0) + 1;
-  applyHybridDesignToConfiguration(active, design);
+  const authoredDesign = normalizeCoherentAssemblyDesign(input);
+  authoredDesign.revision = options.preserveRevision
+    ? Math.max(0, Math.round(Number(authoredDesign.revision) || 0))
+    : Math.max(Number(previous.revision) || 0, Number(authoredDesign.revision) || 0) + 1;
+  applyHybridDesignToConfiguration(active, authoredDesign);
   if (active.metadata && typeof active.metadata === 'object') active.metadata.modified = new Date().toISOString();
+  // Rebuild from the just-updated Config before notifying other windows. This
+  // applies Auto-place distance/azimuth/elevation and synchronizes the resolved
+  // world pose of every Exact Sequential Group. Sending the authored snapshot
+  // here left Render on the old component transforms until a reload.
+  const design = buildHybridAssemblyFromConfiguration(active);
+  design.revision = authoredDesign.revision;
   saveSystemConfigurations(system);
   const snapshot = { design, configId, configName: String(active.name ?? 'Config') };
   announce({ ...snapshot, origin: instanceId, reason });

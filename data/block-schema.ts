@@ -51,6 +51,8 @@ export interface DesignConnection {
   /** Passive connections may be traversed in either direction by an explicit route. */
   allowReverse?: boolean;
   autoPlace: boolean;
+  /** Distinguishes ordinary generated placement from an intentional geometry override. */
+  placementOverride?: boolean;
   pathLabel?: string;
   /** Continuous route-layout variables use the same F/V convention as block variables. */
   variables?: Partial<Record<'distanceMm' | 'azimuthDeg' | 'elevationDeg', {

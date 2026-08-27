@@ -343,6 +343,7 @@ export function normalizeDesignConnections(blocks: Block[], input: unknown, extr
     elevationDeg: Number.isFinite(Number(connection.elevationDeg)) ? Number(connection.elevationDeg) : undefined,
     allowReverse: connection.allowReverse === true,
     autoPlace: connection.autoPlace !== false,
+    placementOverride: connection.placementOverride === true,
     pathLabel: String(connection.pathLabel ?? 'main'),
     manualOffset: connection.manualOffset ? clone(connection.manualOffset) : undefined,
     variables: connection.variables ? clone(connection.variables) : undefined,
@@ -547,6 +548,7 @@ export function buildHybridAssemblyFromConfiguration(config: Configuration): Coh
     elevationDeg: connection.elevationDeg,
     allowReverse: connection.allowReverse === true,
     autoPlace: connection.autoPlace !== false,
+    placementOverride: connection.placementOverride === true,
     variables: connection.variables ? clone(connection.variables) : undefined,
     pathId: connection.pathLabel ?? 'main',
   }));
@@ -577,7 +579,7 @@ export function buildHybridAssemblyFromConfiguration(config: Configuration): Coh
   const bp = splitterBlock?.parameters ?? {};
   const design: CoherentAssemblyDesign = {
     schemaVersion: '1.0', mode: 'non-sequential', preset: 'custom-hybrid', revision: Number(config.metadata?.modified ? Date.parse(config.metadata.modified) : 0) || 0,
-    name: `${config.name} · Hybrid Assembly`, components, connections: coherentConnections,
+    name: `${config.name} · Hybrid Assembly`, routingMode: config.assemblyRoutingMode === 'automatic-scene' ? 'automatic-scene' : 'engineered-paths', components, connections: coherentConnections,
     paths: Array.from(pathMap, ([id, componentIds]) => ({ id, label: id, componentIds, roundTrip: false, throughput: 1 })),
     portRoutes: [], routeSets: [],
     blockSequences,
@@ -720,6 +722,7 @@ export function migrateLegacyCoherentDesign(
       elevationDeg: Number.isFinite(Number(connection.elevationDeg)) ? Number(connection.elevationDeg) : undefined,
       allowReverse: false,
       autoPlace: connection.autoPlace !== false,
+      placementOverride: connection.placementOverride === true,
       pathLabel: String(connection.pathId ?? 'main'),
     }];
   });

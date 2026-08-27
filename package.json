@@ -69,6 +69,7 @@
     "diag:image-simulation-ui": "node diagnostics/image-simulation-ui-repro.mjs",
     "diag:coherent-interferometer": "node --import tsx diagnostics/coherent-interferometer-verification.mjs",
     "diag:coherent-assembly": "node --import tsx diagnostics/coherent-assembly-verification.mjs",
+    "diag:automatic-assembly-routing": "node --import tsx diagnostics/automatic-assembly-routing-verification.mjs",
     "diag:port-routed-exact": "node --import tsx diagnostics/port-routed-exact-verification.mjs",
     "diag:optimizer-mtf-shared": "node --import tsx diagnostics/optimizer-mtf-shared-batch-repro.mjs",
     "wasm:rebuild": "bash ./scripts/build-rust-wasm.sh",
