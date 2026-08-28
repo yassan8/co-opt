@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { detectActivePortRoutes, readActiveCoherentDesign, subscribeActiveCoherentDesign, updateActiveCoherentDesign, type ActiveCoherentDesignSnapshot } from '../../../data/coherent-config-store.ts';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { detectActivePortRoutes, readActiveCoherentDesign, readActiveConfiguration, subscribeActiveCoherentDesign, updateActiveCoherentDesign, type ActiveCoherentDesignSnapshot } from '../../../data/coherent-config-store.ts';
 import { getConnectionLayoutParameters } from '../../../analysis/coherent-port-layout.ts';
+import { compileOpticalSystem } from '../../../analysis/optical-system-compiler.ts';
 import { DESIGN_CONNECTION_SELECTED_EVENT, OPTICAL_ROUTE_SELECTED_EVENT, RENDER_SELECTED_ROUTE_STORAGE_KEY } from '../../app/nonsequential-render-overlay.ts';
 
 const lensDesignLabel = (value: unknown, fallback = '') => {
@@ -8,7 +9,335 @@ const lensDesignLabel = (value: unknown, fallback = '') => {
   return label.replace(/^Lens\s+section\b/i, 'Lens design');
 };
 
+const SYSTEM_KIND_LABELS: Record<string, string> = {
+  source: 'Source',
+  mirror: 'Mirror',
+  attenuator: 'Filter',
+  lens: 'Lens',
+  'cylindrical-lens': 'Cylindrical lens',
+  'beam-splitter': 'Beam splitter',
+  target: 'Target',
+  'reflection-grating': 'Grating',
+  detector: 'Area detector',
+  'time-detector': 'Time detector',
+  'stl-object': 'STL object',
+  'sequential-group': 'Lens train',
+  stop: 'Stop',
+};
+
 function HybridAssemblySummary() {
+  const [snapshot, setSnapshot] = useState<ActiveCoherentDesignSnapshot>(() => readActiveCoherentDesign());
+  const [selectedComponentId, setSelectedComponentId] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => subscribeActiveCoherentDesign((next) => setSnapshot(next)), []);
+  useEffect(() => {
+    setSelectedComponentId('');
+    setError('');
+  }, [snapshot.configId]);
+
+  const design = snapshot.design;
+  const components = design.components ?? [];
+  const physical = components.filter((component) => component.kind !== 'sequential-group');
+  const lensTrains = components.filter((component) => component.kind === 'sequential-group');
+  const sources = physical.filter((component) => component.kind === 'source');
+  const detectors = physical.filter((component) => component.kind === 'detector' || component.kind === 'time-detector');
+  const routingParts = physical.filter((component) => !['source', 'detector', 'time-detector'].includes(component.kind));
+  const componentById = new Map(components.map((component) => [component.id, component]));
+  const sequenceByComponentId = new Map(design.blockSequences.map((sequence) => [
+    sequence.id.replace(/^sequential:/, 'sequential-group:'),
+    sequence,
+  ]));
+  const compiledSystem = useMemo(() => {
+    const configuration = readActiveConfiguration();
+    return configuration ? compileOpticalSystem(configuration) : null;
+  }, [snapshot.configId, design]);
+
+  const commit = (mutate: (draft: ActiveCoherentDesignSnapshot['design']) => void, reason: string) => {
+    try {
+      const draft = JSON.parse(JSON.stringify(design)) as ActiveCoherentDesignSnapshot['design'];
+      mutate(draft);
+      updateActiveCoherentDesign(draft, reason);
+      setSnapshot(readActiveCoherentDesign());
+      setError('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const displayLabel = (componentId: string) => {
+    const component = componentById.get(componentId);
+    if (!component) return componentId;
+    if (component.kind !== 'sequential-group') return component.label || SYSTEM_KIND_LABELS[component.kind] || component.kind;
+    const sequence = sequenceByComponentId.get(componentId);
+    const label = lensDesignLabel(sequence?.label ?? component.label, 'Lens train');
+    return label.replace(/^Lens\s+design\b/i, 'Lens train');
+  };
+
+  const routeComponentIds = (route: NonNullable<typeof design.portRoutes>[number]) => {
+    const ids: string[] = [];
+    for (const step of route.steps) {
+      const connection = design.connections.find((entry) => entry.id === step.connectionId);
+      if (!connection) continue;
+      const departure = step.direction === 'reverse' ? connection.toComponentId : connection.fromComponentId;
+      const arrival = step.direction === 'reverse' ? connection.fromComponentId : connection.toComponentId;
+      if (ids[ids.length - 1] !== departure) ids.push(departure);
+      if (ids[ids.length - 1] !== arrival) ids.push(arrival);
+    }
+    return ids;
+  };
+
+  const graphLanes = (() => {
+    if (!design.connections.length) return [] as Array<{ id: string; label: string; ids: string[] }>;
+    const outgoing = new Map<string, typeof design.connections>();
+    const incoming = new Set<string>();
+    for (const connection of design.connections) {
+      const entries = outgoing.get(connection.fromComponentId) ?? [];
+      entries.push(connection);
+      outgoing.set(connection.fromComponentId, entries);
+      incoming.add(connection.toComponentId);
+    }
+    const roots = sources.map((source) => source.id);
+    if (!roots.length) {
+      for (const component of components) if (!incoming.has(component.id)) roots.push(component.id);
+    }
+    const lanes: Array<{ id: string; label: string; ids: string[] }> = [];
+    const walk = (currentId: string, ids: string[], usedConnections: Set<string>) => {
+      if (lanes.length >= 12 || ids.length > Math.max(components.length * 2, 12)) return;
+      const next = (outgoing.get(currentId) ?? []).filter((connection) => !usedConnections.has(connection.id));
+      const current = componentById.get(currentId);
+      if (!next.length || current?.kind === 'detector' || current?.kind === 'time-detector') {
+        if (ids.length > 1) lanes.push({ id: `scene-${lanes.length}`, label: `Path ${lanes.length + 1}`, ids });
+        return;
+      }
+      for (const connection of next) {
+        walk(connection.toComponentId, [...ids, connection.toComponentId], new Set([...usedConnections, connection.id]));
+      }
+    };
+    for (const root of roots) walk(root, [root], new Set());
+    return lanes;
+  })();
+
+  const savedRouteLanes = (design.portRoutes ?? [])
+    .filter((route) => route.enabled !== false)
+    .map((route) => ({ id: route.id, label: route.label || 'Optical path', ids: routeComponentIds(route) }))
+    .filter((route) => route.ids.length > 1);
+  const compiledRouteLanes = (compiledSystem?.paths ?? [])
+    .map((path) => ({ id: path.id, label: path.label || 'Optical path', ids: path.componentIds }))
+    .filter((path) => path.ids.length > 1);
+  const fallbackIds = [
+    ...sources.map((component) => component.id),
+    ...lensTrains.map((component) => component.id),
+    ...routingParts.map((component) => component.id),
+    ...detectors.map((component) => component.id),
+  ];
+  // Saved routes are display hints only in unified mode. They preserve the
+  // intended return/recombine order better than a raw directed connection
+  // graph; when absent, the physical graph supplies a compact preview.
+  const rawLanes = compiledRouteLanes.length
+    ? compiledRouteLanes
+    : savedRouteLanes.length
+      ? savedRouteLanes
+      : graphLanes;
+  const seenLaneSignatures = new Set<string>();
+  const flowLanes = (rawLanes.length ? rawLanes : [{ id: 'system', label: 'System', ids: fallbackIds }])
+    .filter((lane) => {
+      const signature = lane.ids.join('>');
+      if (!signature || seenLaneSignatures.has(signature)) return false;
+      seenLaneSignatures.add(signature);
+      return true;
+    });
+  const visibleLanes = flowLanes.slice(0, 8);
+
+  const focusComponent = (componentId: string) => {
+    setSelectedComponentId(componentId);
+    const component = componentById.get(componentId);
+    if (!component) return;
+    let target: HTMLElement | null = null;
+    if (component.kind === 'sequential-group') {
+      const groupId = String(component.metadata?.groupId ?? component.id.replace(/^sequential-group:/, ''));
+      target = document.querySelector<HTMLElement>(`#block-inspector [data-sequential-group-id="${CSS.escape(groupId)}"]`);
+      if (target?.classList.contains('is-collapsed')) target.querySelector<HTMLButtonElement>('.block-inspector-section-toggle')?.click();
+    } else {
+      const blockId = String(component.metadata?.blockId ?? component.id);
+      target = document.querySelector<HTMLElement>(`#block-inspector [data-block-id="${CSS.escape(blockId)}"]`);
+      target?.click();
+    }
+    target?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+  };
+
+  const addLensTrain = () => commit((draft) => {
+    const keys = new Set((draft.blockSequences ?? []).map((sequence) => String(sequence.id).replace(/^sequential:/, '')));
+    let ordinal = Math.max(2, keys.size + 1);
+    while (keys.has(`group-${ordinal}`)) ordinal += 1;
+    draft.blockSequences.push({
+      id: `sequential:group-${ordinal}`,
+      label: `Lens train ${ordinal}`,
+      pathId: `group-${ordinal}`,
+      blocks: [],
+      manualOffset: { positionMm: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 } },
+      rootTransform: { positionMm: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 } },
+    });
+  }, 'sequential-group-add');
+
+  const removeEmptyLensTrain = (sequenceId: string) => commit((draft) => {
+    const sequence = draft.blockSequences.find((entry) => entry.id === sequenceId);
+    if (!sequence || sequence.blocks.length > 0 || draft.blockSequences.length <= 1) return;
+    const componentId = sequenceId.replace(/^sequential:/, 'sequential-group:');
+    draft.blockSequences = draft.blockSequences.filter((entry) => entry.id !== sequenceId);
+    draft.components = draft.components.filter((component) => component.id !== componentId);
+    draft.connections = draft.connections.filter((connection) => connection.fromComponentId !== componentId && connection.toComponentId !== componentId);
+  }, 'sequential-group-delete');
+
+  const exactBlockCount = design.blockSequences.reduce((sum, sequence) => sum + sequence.blocks.length, 0);
+  const selectedComponent = componentById.get(selectedComponentId);
+  const isLegacyRouted = design.routingMode === 'engineered-paths';
+  const checkErrors = compiledSystem?.issues.filter((issue) => issue.severity === 'error') ?? [];
+  const checkWarnings = compiledSystem?.issues.filter((issue) => issue.severity === 'warning') ?? [];
+  const formattedMemory = compiledSystem
+    ? compiledSystem.estimatedWorkingBytes >= 1024 ** 3
+      ? `${(compiledSystem.estimatedWorkingBytes / 1024 ** 3).toFixed(2)} GiB`
+      : `${Math.max(1, Math.round(compiledSystem.estimatedWorkingBytes / 1024 ** 2))} MiB`
+    : '—';
+
+  return <div className="di-hybrid-summary di-unified-system" aria-label="Optical System">
+    <div className="di-system-header">
+      <div className="di-system-header__title">
+        <strong>Optical System</strong>
+        <span>One physical design for exact lens analysis, branching, Render and Detector signal.</span>
+      </div>
+      <div className="di-system-header__metrics" aria-label="Optical System summary">
+        <span><b>{exactBlockCount}</b> exact Blocks</span>
+        <span><b>{routingParts.length}</b> routing parts</span>
+        <span><b>{detectors.length}</b> Detectors</span>
+      </div>
+    </div>
+
+    {isLegacyRouted ? <div className="di-system-legacy-note">
+      <span><strong>Saved path compatibility</strong>This imported design still follows its authored Port routes.</span>
+      <button type="button" onClick={() => commit((draft) => { draft.routingMode = 'automatic-scene'; }, 'assembly-use-unified-system')}>Use unified tracing</button>
+    </div> : null}
+
+    <section className="di-system-flow" aria-label="System Flow">
+      <header>
+        <span><strong>System Flow</strong><small>Click a component to edit it in Blocks. Lens trains use the exact sequential tracer automatically.</small></span>
+        <em>{flowLanes.length} {flowLanes.length === 1 ? 'path' : 'paths'}</em>
+      </header>
+      <div className="di-system-flow__lanes">
+        {visibleLanes.map((lane, laneIndex) => <div className="di-system-flow__lane" key={lane.id}>
+          <span className="di-system-flow__lane-label">{lane.label || `Path ${laneIndex + 1}`}</span>
+          <div className="di-system-flow__chain">
+            {lane.ids.map((componentId, index) => {
+              const component = componentById.get(componentId);
+              if (!component) return null;
+              const sequence = sequenceByComponentId.get(componentId);
+              return <span className="di-system-flow__step" key={`${lane.id}-${componentId}-${index}`}>
+                <button
+                  type="button"
+                  className={`di-system-node is-${component.kind}${selectedComponentId === componentId ? ' is-selected' : ''}`}
+                  onClick={() => focusComponent(componentId)}
+                  title={`Edit ${displayLabel(componentId)}`}
+                >
+                  <span>{SYSTEM_KIND_LABELS[component.kind] || component.kind}</span>
+                  <strong>{displayLabel(componentId)}</strong>
+                  {sequence ? <small>{sequence.blocks.length} exact {sequence.blocks.length === 1 ? 'Block' : 'Blocks'}</small> : null}
+                </button>
+                {index < lane.ids.length - 1 ? <i aria-hidden="true">→</i> : null}
+              </span>;
+            })}
+          </div>
+        </div>)}
+        {flowLanes.length > visibleLanes.length ? <div className="di-system-flow__more">+ {flowLanes.length - visibleLanes.length} additional paths are traced automatically</div> : null}
+        {fallbackIds.length === 0 ? <div className="di-connection-empty">Add a Source, optical Blocks and a Detector above.</div> : null}
+      </div>
+    </section>
+
+    <div className="di-system-workflow" aria-label="Optical System workflow">
+      <span><b>1</b><strong>Build</strong>Add and order Blocks above.</span>
+      <span><b>2</b><strong>Edit</strong>{selectedComponent ? displayLabel(selectedComponent.id) : 'Select a component in the flow.'}</span>
+      <span><b>3</b><strong>Analyze</strong>The analysis chooses exact or scene tracing.</span>
+    </div>
+
+    {compiledSystem ? <section className={`di-system-check is-${compiledSystem.status}`} aria-label="System Check">
+      <header>
+        <span>
+          <strong>System Check</strong>
+          <small>Blocks compile into the paths shared by Render, Signal and Optimize.</small>
+        </span>
+        <em>{compiledSystem.status === 'ready' ? 'Ready' : compiledSystem.status === 'warning' ? `${checkWarnings.length} warnings` : `${checkErrors.length} errors`}</em>
+      </header>
+      <div className="di-system-check__summary">
+        <span><b>{compiledSystem.paths.length}</b> compiled paths</span>
+        <span><b>{compiledSystem.detectors.length}</b> receivers</span>
+        <span><b>{formattedMemory}</b> estimated working memory</span>
+        <span><b>{compiledSystem.routeSource === 'physical-scene' ? 'Physical scene' : compiledSystem.routeSource === 'saved-paths' ? 'Stored branch hints' : 'Compatibility fallback'}</b></span>
+      </div>
+      {compiledSystem.issues.length ? <div className="di-system-check__issues">
+        {compiledSystem.issues.map((issue) => <button
+          type="button"
+          className={`is-${issue.severity}`}
+          key={issue.id}
+          onClick={() => issue.componentId && focusComponent(issue.componentId)}
+          disabled={!issue.componentId}
+        >
+          <span>{issue.severity === 'error' ? 'Error' : issue.severity === 'warning' ? 'Check' : 'Info'}</span>
+          <strong>{issue.title}</strong>
+          <small>{issue.message}</small>
+        </button>)}
+      </div> : <p className="di-system-check__ready">Every Source and Detector has a complete compiled path. Run verifies apertures and detector-pixel hits.</p>}
+    </section> : null}
+
+    <details className="di-system-engineering">
+      <summary><span><strong>Engineering</strong><small>Open only for compound Lens train placement or legacy design migration.</small></span><em>{design.blockSequences.length}</em></summary>
+      <div className="di-system-engineering__body">
+        <div className="di-system-engineering__heading">
+          <span><strong>Lens train placement</strong><small>Optical prescription Blocks remain in the main Blocks editor.</small></span>
+          <button type="button" onClick={addLensTrain}>Add lens train</button>
+        </div>
+        <div className="di-system-lens-list">
+          {design.blockSequences.map((sequence, index) => {
+            const pose = sequence.manualOffset ?? sequence.rootTransform;
+            return <details className="di-system-lens" key={sequence.id}>
+              <summary>
+                <span><strong>{lensDesignLabel(sequence.label, `Lens train ${index + 1}`).replace(/^Lens\s+design\b/i, 'Lens train')}</strong><small>{sequence.blocks.length} exact {sequence.blocks.length === 1 ? 'Block' : 'Blocks'} · Front ↔ Back</small></span>
+                <em>XYZ {Number(pose?.positionMm?.x ?? 0).toFixed(1)}, {Number(pose?.positionMm?.y ?? 0).toFixed(1)}, {Number(pose?.positionMm?.z ?? 0).toFixed(1)} mm</em>
+              </summary>
+              <div className="di-system-lens__body">
+                <label className="di-control-field"><span>Name</span><input value={lensDesignLabel(sequence.label, `Lens train ${index + 1}`).replace(/^Lens\s+design\b/i, 'Lens train')} onChange={(event) => commit((draft) => {
+                  const target = draft.blockSequences.find((entry) => entry.id === sequence.id);
+                  if (target) target.label = event.target.value || `Lens train ${index + 1}`;
+                }, 'sequential-group-label')} /></label>
+                <div className="di-route-variable-grid" aria-label={`${sequence.label} pose variables`}>{([
+                  ['positionX', 'X (mm)', 'positionMm', 'x'], ['positionY', 'Y (mm)', 'positionMm', 'y'], ['positionZ', 'Z (mm)', 'positionMm', 'z'],
+                  ['rotationX', 'RX (°)', 'rotationDeg', 'x'], ['rotationY', 'RY (°)', 'rotationDeg', 'y'], ['rotationZ', 'RZ (°)', 'rotationDeg', 'z'],
+                ] as const).map(([key, label, section, axis]) => {
+                  const variable = (sequence.rootTransformVariables as any)?.[key];
+                  const mode = variable?.optimize?.mode === 'V' ? 'V' : 'F';
+                  return <label key={key}><span>{label}</span><input type="number" step="0.1" value={Number((pose as any)?.[section]?.[axis] ?? 0)} onChange={(event) => commit((draft) => {
+                    const target = draft.blockSequences.find((entry) => entry.id === sequence.id) as any;
+                    if (!target) return;
+                    target.manualOffset ??= JSON.parse(JSON.stringify(target.rootTransform));
+                    target.manualOffset[section][axis] = Number(event.target.value) || 0;
+                  }, 'sequential-group-pose')} /><button type="button" className={`di-variable-mode ${mode === 'V' ? 'is-variable' : ''}`} onClick={() => commit((draft) => {
+                    const target = draft.blockSequences.find((entry) => entry.id === sequence.id) as any;
+                    if (!target) return;
+                    target.rootTransformVariables ??= {};
+                    const targetPose = target.manualOffset ?? target.rootTransform;
+                    target.rootTransformVariables[key] = { value: Number(targetPose[section][axis] ?? 0), optimize: { ...(target.rootTransformVariables[key]?.optimize ?? {}), mode: mode === 'V' ? 'F' : 'V' } };
+                  }, 'sequential-group-variable')}>{mode}</button></label>;
+                })}</div>
+                <button type="button" className="di-connection-remove is-danger" onClick={() => removeEmptyLensTrain(sequence.id)} disabled={sequence.blocks.length > 0 || design.blockSequences.length <= 1}>Remove empty train</button>
+              </div>
+            </details>;
+          })}
+        </div>
+        {(design.connections.length || (design.portRoutes?.length ?? 0) || (design.routeSets?.length ?? 0)) ? <p className="di-system-derived-note">Internal routing data is retained for compatibility and optimization, but is generated or inferred from the physical system and is not edited in the normal workflow.</p> : null}
+      </div>
+    </details>
+    {error ? <div className="di-connection-error" role="alert">{error}</div> : null}
+  </div>;
+}
+
+function LegacyHybridAssemblySummary() {
   const [snapshot, setSnapshot] = useState<ActiveCoherentDesignSnapshot>(() => readActiveCoherentDesign());
   const [error, setError] = useState('');
   const [selectedConnectionId, setSelectedConnectionId] = useState('');
@@ -96,7 +425,7 @@ function HybridAssemblySummary() {
       if (!connection) continue;
       const departure = step.direction === 'reverse' ? connection.toComponentId : connection.fromComponentId;
       const arrival = step.direction === 'reverse' ? connection.fromComponentId : connection.toComponentId;
-      if (componentIds.at(-1) !== departure) componentIds.push(departure);
+      if (componentIds[componentIds.length - 1] !== departure) componentIds.push(departure);
       componentIds.push(arrival);
     }
     return componentIds;
@@ -249,7 +578,7 @@ function HybridAssemblySummary() {
         savedRouteId = existingRoute.id;
       } else {
         const first = componentById(chain[0]);
-        const last = componentById(chain.at(-1) ?? '');
+        const last = componentById(chain[chain.length - 1] ?? '');
         draft.portRoutes.push({
           id: routeId,
           label: `Optical path ${draft.portRoutes.length + 1}`,
@@ -260,7 +589,7 @@ function HybridAssemblySummary() {
         });
         routeWasCreated = true;
       }
-      const last = componentById(chain.at(-1) ?? '');
+      const last = componentById(chain[chain.length - 1] ?? '');
       if (last && ['detector', 'time-detector'].includes(last.kind)) {
         draft.routeSets ??= [];
         let set = draft.routeSets.find((entry) => entry.detectorBlockId === last.id);
