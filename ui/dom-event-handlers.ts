@@ -7376,7 +7376,7 @@ function __blocks_ensureSequentialGroup(activeCfg: any, groupId: string): any {
     if (!group) {
         group = {
             id: key,
-            label: key === 'main' ? 'Lens design 1' : `Lens design ${activeCfg.sequentialGroups.length + 1}`,
+            label: key === 'main' ? 'Lens train 1' : `Lens train ${activeCfg.sequentialGroups.length + 1}`,
             blockIds: [],
             pathLabel: key === 'main' ? 'main' : key,
             rootTransform: {
@@ -10214,17 +10214,17 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             key,
             label: !rawLabel || rawLabel === 'Exact sequential optics'
                 ? (key === 'main' ? 'Main lens train' : `Lens train · ${key}`)
-                : rawLabel.replace(/^Lens\s+section\b/i, 'Lens design'),
+                : rawLabel.replace(/^Lens\s+(?:section|design)\b/i, 'Lens train'),
             blockIds: memberIds
         });
     }
     if (sequentialGroups.length === 0) {
-        sequentialGroups.push({ key: 'main', label: 'Lens design 1', blockIds: [] });
+        sequentialGroups.push({ key: 'main', label: 'Lens train 1', blockIds: [] });
     }
     const unassignedSequentialIds = sequentialBlockIds.filter((id: string) => !assignedSequentialIds.has(id));
     let mainSequentialGroup = sequentialGroups.find((entry) => entry.key === 'main');
     if (!mainSequentialGroup && unassignedSequentialIds.length > 0) {
-        mainSequentialGroup = { key: 'main', label: 'Lens design 1', blockIds: [] };
+        mainSequentialGroup = { key: 'main', label: 'Lens train 1', blockIds: [] };
         sequentialGroups.unshift(mainSequentialGroup);
     }
     (mainSequentialGroup ?? sequentialGroups[0]).blockIds.push(...unassignedSequentialIds);
@@ -10310,11 +10310,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         sectionToggle.type = 'button';
         sectionToggle.className = 'block-inspector-section-toggle';
         sectionToggle.textContent = collapsedLensSections.has(group.key) ? '▸' : '▾';
-        sectionToggle.title = 'Collapse / expand this lens design';
+        sectionToggle.title = 'Collapse / expand this lens train';
         const sectionTitle = document.createElement('div');
         sectionTitle.className = 'block-inspector-section-title-wrap';
         const sectionEyebrow = document.createElement('span');
-        sectionEyebrow.textContent = `LENS DESIGN ${groupIndex + 1}`;
+        sectionEyebrow.textContent = `LENS TRAIN ${groupIndex + 1}`;
         const sectionName = document.createElement('strong');
         sectionName.textContent = group.label;
         sectionTitle.append(sectionEyebrow, sectionName);
@@ -10438,7 +10438,18 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             launchPanel.appendChild(launchRow);
             syncEnabledState();
         }
-        sectionBody.appendChild(launchPanel);
+        const launchDetails = document.createElement('details');
+        launchDetails.className = 'block-inspector-launch-details';
+        const launchSummary = document.createElement('summary');
+        const launchSummaryText = document.createElement('span');
+        const launchSummaryTitle = document.createElement('strong');
+        launchSummaryTitle.textContent = 'Local analysis input';
+        const launchSummaryHelp = document.createElement('small');
+        launchSummaryHelp.textContent = 'Optional Source and Field override for standalone Front / Back analysis.';
+        launchSummaryText.append(launchSummaryTitle, launchSummaryHelp);
+        launchSummary.appendChild(launchSummaryText);
+        launchDetails.append(launchSummary, launchPanel);
+        sectionBody.appendChild(launchDetails);
         if (group.blockIds.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'block-inspector-section-empty';

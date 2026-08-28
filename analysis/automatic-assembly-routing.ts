@@ -22,6 +22,7 @@ export interface AutomaticAssemblyRoutingResult {
   routes: PortRoute[];
   routeSets: PortRouteSet[];
   warnings: string[];
+  routeSource: 'physical-scene' | 'saved-paths' | 'legacy-fallback';
 }
 
 interface TraversalLink {
@@ -342,7 +343,14 @@ export function compileAutomaticAssemblyRouting(config: Configuration): Automati
       authoredLabel: route.label,
     };
   }).filter((route) => route.links.length > 0 && route.sourceId && route.detectorId);
-  const traversals = migratedRoutes.length > 0 ? migratedRoutes : discovered.routes;
+  // A saved traversal is an internal ambiguity hint for shared Beam Splitter
+  // ports and return passes, not a second user-facing authoring model. New
+  // systems without such a hint are compiled solely from physical scene hits.
+  const useSavedPaths = migratedRoutes.length > 0;
+  const traversals = useSavedPaths ? migratedRoutes : discovered.routes;
+  const routeSource: AutomaticAssemblyRoutingResult['routeSource'] = useSavedPaths
+    ? 'saved-paths'
+    : 'physical-scene';
   const connectionBySignature = new Map<string, DesignConnection>();
   const connectionFor = (link: TraversalLink): DesignConnection => {
     const signature = `${link.fromComponentId}:${link.fromPortId}>${link.toComponentId}:${link.toPortId}`;
@@ -371,8 +379,8 @@ export function compileAutomaticAssemblyRouting(config: Configuration): Automati
     return connection;
   };
   const routes: PortRoute[] = traversals.map((route, index) => ({
-    id: 'routeId' in route ? route.routeId : `scene-route-${index + 1}`,
-    label: 'authoredLabel' in route ? route.authoredLabel : routeLabel(design, route.links, index),
+    id: 'routeId' in route ? String(route.routeId) : `scene-route-${index + 1}`,
+    label: 'authoredLabel' in route ? String(route.authoredLabel ?? '') : routeLabel(design, route.links, index),
     enabled: true,
     sourceBlockId: route.sourceId,
     detectorBlockId: route.detectorId,
@@ -409,6 +417,7 @@ export function compileAutomaticAssemblyRouting(config: Configuration): Automati
     connections: configuration.designConnections,
     routes,
     routeSets,
-    warnings: migratedRoutes.length > 0 ? [] : discovered.warnings,
+    warnings: useSavedPaths ? [] : discovered.warnings,
+    routeSource,
   };
 }

@@ -36,6 +36,7 @@ import {
   type ActiveCoherentDesignSnapshot,
 } from '../../data/coherent-config-store.ts';
 import { runPortRoutedTrace, type PortRouteMetrics, type PortRoutedTraceResult } from '../../analysis/port-routed-trace.ts';
+import { compileOpticalSystem } from '../../analysis/optical-system-compiler.ts';
 import { computeFieldPsf, type FieldPsfComputeResult } from './MultiFieldPsfPage.tsx';
 import { createCancelToken, getBestHost, getRows, type CancelToken } from './PsfAnalysisPage.tsx';
 import './CoherentSignalPage.css';
@@ -386,6 +387,10 @@ export function CoherentSignalPage() {
   const cancelRef = useRef<CancelToken | null>(null);
   const design = snapshot.design;
   const automaticSceneRouting = design.routingMode === 'automatic-scene';
+  const compiledSystem = useMemo(() => {
+    const configuration = readActiveConfiguration();
+    return configuration ? compileOpticalSystem(configuration, { pupilSampling: samplingSize }) : null;
+  }, [snapshot.configId, design, samplingSize]);
   const detectors = useMemo(
     () => design.detectors?.length ? design.detectors : [design.detector],
     [design.detector, design.detectors],
@@ -405,9 +410,9 @@ export function CoherentSignalPage() {
   }, [detectorEntries, selectedDetectorId]);
 
   const connectedComponentIds = useMemo(() => new Set(
-    design.connections.flatMap((connection) => [connection.fromComponentId, connection.toComponentId]),
-  ), [design.connections]);
-  const hasPhysicalSignalPath = design.connections.length > 0;
+    (compiledSystem?.paths ?? []).flatMap((path) => path.componentIds),
+  ), [compiledSystem]);
+  const hasPhysicalSignalPath = (compiledSystem?.paths.length ?? 0) > 0;
   const hasConnectedSplitter = design.components.some((component) => (
     component.kind === 'beam-splitter' && connectedComponentIds.has(component.id)
   ));
@@ -464,6 +469,17 @@ export function CoherentSignalPage() {
     setStatus(quality === 'preview' ? 'Previewing exact lens…' : 'Tracing assembly and exact lens…');
     setProgress({ percent: 1, message: 'Preparing Detector calculation', running: true, visible: true });
     try {
+      const activeConfiguration = readActiveConfiguration();
+      if (!activeConfiguration) throw new Error('Active configuration was not found.');
+      const runSystem = compileOpticalSystem(activeConfiguration, { pupilSampling: samplingSize });
+      if (!runSystem.canRun) {
+        const blockers = runSystem.issues
+          .filter((issue) => issue.severity === 'error')
+          .map((issue) => issue.title)
+          .slice(0, 3)
+          .join('; ');
+        throw new Error(`System Check failed: ${blockers || 'the optical system is incomplete'}.`);
+      }
       const host = getBestHost();
       const fallbackOpticalRows = getRows(host, 'optical');
       const objectRows = getRows(host, 'object');
@@ -480,14 +496,12 @@ export function CoherentSignalPage() {
 
       let nextBranch: NonSequentialTraceResult | null = null;
       let routedResult: PortRoutedTraceResult | null = null;
-      let traceConfiguration: any = null;
+      let traceConfiguration: any = runSystem.configuration;
       if (hasPhysicalSignalPath) {
-        const activeConfiguration = readActiveConfiguration();
-        traceConfiguration = activeConfiguration;
         const savedRoutes = design.portRoutes ?? [];
-        const automaticScene = activeConfiguration?.assemblyRoutingMode === 'automatic-scene';
-        if (activeConfiguration && (automaticScene || savedRoutes.some((route) => route.enabled !== false))) {
-          routedResult = await runPortRoutedTrace(activeConfiguration, {
+        const automaticScene = traceConfiguration?.assemblyRoutingMode === 'automatic-scene';
+        if (traceConfiguration && (automaticScene || savedRoutes.some((route) => route.enabled !== false))) {
+          routedResult = await runPortRoutedTrace(traceConfiguration, {
             samplePurpose: quality === 'preview' ? 'render' : 'detector',
             spectralSamples: quality === 'preview' ? 3 : undefined,
             fieldObjectRow: { ...objectRows[activeObjectIndex] },
@@ -634,7 +648,9 @@ export function CoherentSignalPage() {
           const detectorRoutes = routedResult.routeMetrics.filter((route) => route.valid && route.detectorId === detectorResult.detectorId);
           const routeOplValues = detectorRoutes.map((route) => route.oplMm).filter(Number.isFinite);
           const physicalOpdMm = routeOplValues.length > 1 ? Math.max(...routeOplValues) - Math.min(...routeOplValues) : 0;
-          const detectorRouteSet = design.routeSets?.find((set) => set.detectorBlockId === detectorResult.detectorId);
+          const detectorRouteSet = (traceConfiguration?.routeSets ?? design.routeSets)?.find((set: any) => (
+            set.detectorBlockId === detectorResult.detectorId
+          ));
           const measurementRoute = detectorRoutes.find((route) => route.routeId === detectorRouteSet?.measurementRouteId);
           const referenceRoute = detectorRoutes.find((route) => route.routeId === detectorRouteSet?.referenceRouteId);
           const opdCalibrationMm = finite(detectorRouteSet?.opdCalibrationMm);
@@ -786,8 +802,10 @@ export function CoherentSignalPage() {
         && design.target.interaction !== 'bsdf-csv'
         && design.components.some((component) => component.kind === 'reflection-grating');
       if (supportsSurfaceReconstruction && routedResult) {
-        const persistedRouteSets = design.routeSets?.length
-          ? design.routeSets
+        const persistedRouteSets = traceConfiguration?.routeSets?.length
+          ? traceConfiguration.routeSets
+          : design.routeSets?.length
+            ? design.routeSets
           : (readActiveConfiguration()?.routeSets ?? []);
         let flatReferenceRoutedResult: PortRoutedTraceResult | null = null;
         if (traceConfiguration) {
@@ -1033,11 +1051,15 @@ export function CoherentSignalPage() {
         }
         setProgress({ percent: 99, message: 'Demodulating dual-comb Camera phase', running: true, visible: true });
         const activeConfiguration = readActiveConfiguration();
-        const persistedRoutes = design.portRoutes?.length
-          ? design.portRoutes
+        const persistedRoutes = traceConfiguration?.portRoutes?.length
+          ? traceConfiguration.portRoutes
+          : design.portRoutes?.length
+            ? design.portRoutes
           : (activeConfiguration?.portRoutes ?? []);
-        const persistedRouteSets = design.routeSets?.length
-          ? design.routeSets
+        const persistedRouteSets = traceConfiguration?.routeSets?.length
+          ? traceConfiguration.routeSets
+          : design.routeSets?.length
+            ? design.routeSets
           : (activeConfiguration?.routeSets ?? []);
         for (const detectorEntry of areaEntries) {
           const detectorComponentId = detectorEntry.detector.componentId ?? detectorEntry.id;
@@ -1158,7 +1180,10 @@ export function CoherentSignalPage() {
     ?? selectedSequentialGroups[0]?.label
     ?? 'Active exact optics';
   const physicalDetectorConnected = selectedEntry
-    ? connectedComponentIds.has(selectedEntry.detector.componentId ?? selectedEntry.id)
+    ? (compiledSystem?.detectors.find((detector) => (
+      detector.id === selectedEntry.id
+      || detector.componentId === (selectedEntry.detector.componentId ?? selectedEntry.id)
+    ))?.routeIds.length ?? 0) > 0
     : false;
   const selectedDetectorRouteMetrics = selectedEntry
     ? routeMetrics.filter((route) => route.detectorId === selectedEntry.id)
@@ -1171,8 +1196,10 @@ export function CoherentSignalPage() {
   const selectedPhysicalOpdMm = selectedRouteOpl.length > 1
     ? Math.max(...selectedRouteOpl) - Math.min(...selectedRouteOpl)
     : 0;
-  const persistedRouteSets = design.routeSets?.length
-    ? design.routeSets
+  const persistedRouteSets = compiledSystem?.routeSets?.length
+    ? compiledSystem.routeSets
+    : design.routeSets?.length
+      ? design.routeSets
     : (readActiveConfiguration()?.routeSets ?? []);
   const selectedRouteSet = selectedEntry
     ? persistedRouteSets.find((set: any) => (
@@ -1200,6 +1227,13 @@ export function CoherentSignalPage() {
     : null;
   const isDualCombDesign = (design.sources?.length ? design.sources : [design.source])
     .filter((source) => source.kind === 'frequency-comb').length >= 2;
+  const compileErrors = compiledSystem?.issues.filter((issue) => issue.severity === 'error') ?? [];
+  const compileWarnings = compiledSystem?.issues.filter((issue) => issue.severity === 'warning') ?? [];
+  const compiledMemory = compiledSystem
+    ? compiledSystem.estimatedWorkingBytes >= 1024 ** 3
+      ? `${(compiledSystem.estimatedWorkingBytes / 1024 ** 3).toFixed(2)} GiB`
+      : `${Math.max(1, Math.round(compiledSystem.estimatedWorkingBytes / 1024 ** 2))} MiB`
+    : '—';
 
   return <div className="analysis-window-page coherent-signal-page">
     <header className="analysis-window-commandbar coherent-signal-commandbar">
@@ -1247,7 +1281,13 @@ export function CoherentSignalPage() {
             </select>
           </label>
         </> : null}
-        <button className="analysis-window-primary-action" type="button" onClick={() => void run('full')}>Run</button>
+        <button
+          className="analysis-window-primary-action"
+          type="button"
+          onClick={() => void run('full')}
+          disabled={!compiledSystem?.canRun || progress.running}
+          title={!compiledSystem?.canRun ? 'Resolve the System Check errors before running.' : undefined}
+        >Run</button>
       </div>
     </header>
 
@@ -1256,12 +1296,29 @@ export function CoherentSignalPage() {
       <div><span>Detector type</span><strong>{selectedEntry?.detector.kind === 'time' ? 'Time signal' : `${selectedEntry?.detector.pixelCountX ?? 0} × ${selectedEntry?.detector.pixelCountY ?? 0} · ${format(selectedEntry?.detector.pixelPitchUm, 3)} µm`}</strong></div>
       <div><span>Receivers</span><strong>{detectorEntries.length} configured · {physicalDetectorCount} physical</strong></div>
       <div><span>Assembly</span><strong>{automaticSceneRouting
-        ? `Automatic scene${hasConnectedSplitter ? ' · split paths' : ''}`
+        ? `${compiledSystem?.paths.length ?? 0} compiled path${(compiledSystem?.paths.length ?? 0) === 1 ? '' : 's'}${hasConnectedSplitter ? ' · split' : ''}`
         : (design.connections.length > 0 ? `${design.connections.length} connections${hasConnectedSplitter ? ' · split paths' : ''}` : 'Not connected')}</strong></div>
       <div><span>Exact optics</span><strong>{selectedSequentialGroups.length > 0 ? selectedSequenceLabel : 'Not connected'}</strong></div>
       <div className="coherent-signal-status" aria-live="polite"><span>Status</span><strong>{status}</strong></div>
       <div className="coherent-signal-target-summary"><span>Target</span><strong>{selectedTargetSummary}</strong></div>
     </section>
+
+    {compiledSystem ? <section className={`coherent-system-check is-${compiledSystem.status}`} aria-label="System Check">
+      <div className="coherent-system-check__status">
+        <span><strong>System Check</strong><small>Blocks → exact lens trains → physical paths → Detector</small></span>
+        <em>{compiledSystem.status === 'ready' ? 'Ready' : compiledSystem.status === 'warning' ? `${compileWarnings.length} checks` : `${compileErrors.length} errors`}</em>
+      </div>
+      <div className="coherent-system-check__facts">
+        <span><b>{compiledSystem.paths.length}</b> paths</span>
+        <span><b>{compiledSystem.detectors.length}</b> receivers</span>
+        <span><b>{compiledMemory}</b> memory estimate</span>
+        <span><b>{compiledSystem.routeSource === 'physical-scene' ? 'Physical scene' : compiledSystem.routeSource === 'saved-paths' ? 'Stored branch hints' : 'Compatibility fallback'}</b></span>
+      </div>
+      {compiledSystem.issues.length ? <details className="coherent-system-check__issues" open={compileErrors.length > 0}>
+        <summary>Review {compiledSystem.issues.length} {compiledSystem.issues.length === 1 ? 'item' : 'items'}</summary>
+        <div>{compiledSystem.issues.map((issue) => <p className={`is-${issue.severity}`} key={issue.id}><b>{issue.title}</b><span>{issue.message}</span></p>)}</div>
+      </details> : null}
+    </section> : null}
 
     {progress.visible ? <section className={`coherent-signal-progress${progress.running ? ' is-running' : ''}`} aria-label="Detector signal calculation progress">
       <div className="coherent-signal-progress__track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress.percent)}>
