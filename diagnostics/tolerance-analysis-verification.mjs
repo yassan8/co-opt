@@ -35,6 +35,13 @@ const evaluate = async (candidate, rows) => {
   const values = new Map(rows.map((row) => [String(row.id), Number(radius) + Number(focus)]));
   return buildCandidateEvaluation(rows, values);
 };
+let candidateBatchCalls = 0;
+let maximumCandidateBatch = 0;
+const evaluateBatch = async (batch, rows) => {
+  candidateBatchCalls += 1;
+  maximumCandidateBatch = Math.max(maximumCandidateBatch, batch.length);
+  return Promise.all(batch.map((candidate) => evaluate(candidate, rows)));
+};
 
 const candidates = listToleranceCandidates(systemConfig, ['1']);
 assert(candidates.some((entry) => entry.id === 'L1.radius'), 'Lens radius must be available without an Optimize V flag.');
@@ -60,12 +67,38 @@ const sensitivity = await runSensitivityAnalysis({ systemConfig, study, requirem
 assert.equal(sensitivity.parameters.length, 1);
 assert(Math.abs(sensitivity.parameters[0].requirements[0].derivativePerUnit - 1) < 1e-12, 'Central sensitivity derivative must match the analytic value.');
 assert.equal(sensitivity.nominal.passed, true);
+candidateBatchCalls = 0;
+maximumCandidateBatch = 0;
+const batchedSensitivity = await runSensitivityAnalysis({
+  systemConfig,
+  study,
+  requirementRows,
+  evaluateCandidate: evaluate,
+  evaluateCandidates: evaluateBatch,
+});
+assert.deepEqual(batchedSensitivity.parameters, sensitivity.parameters, 'Batched sensitivity must preserve the serial numeric result.');
+assert.equal(candidateBatchCalls, 2, 'Uncompensated sensitivity must use one nominal batch and one minus/plus batch.');
+assert.equal(maximumCandidateBatch, 2);
 
 const first = await runMonteCarloTolerance({ systemConfig, study, requirementRows, evaluateCandidate: evaluate });
 const second = await runMonteCarloTolerance({ systemConfig, study, requirementRows, evaluateCandidate: evaluate });
 assert.deepEqual(first.trials.map((trial) => trial.appliedDeltas), second.trials.map((trial) => trial.appliedDeltas), 'Seeded Monte Carlo must be reproducible.');
 assert.equal(first.trialsCompleted, 64);
 assert.equal(first.validTrials, 64);
+candidateBatchCalls = 0;
+maximumCandidateBatch = 0;
+const batchedMonteCarlo = await runMonteCarloTolerance({
+  systemConfig,
+  study,
+  requirementRows,
+  evaluateCandidate: evaluate,
+  evaluateCandidates: evaluateBatch,
+  candidateBatchSize: 16,
+});
+assert.deepEqual(batchedMonteCarlo.trials, first.trials, 'Batched Monte Carlo must preserve seeded serial results exactly.');
+assert.equal(candidateBatchCalls, 5, '64 trials at batch size 16 must use one nominal batch plus four trial batches.');
+assert.equal(batchedMonteCarlo.execution.maximumBatchSize, 16);
+assert.equal(batchedMonteCarlo.execution.backend, 'candidate-batch');
 
 const zeroStudy = clone(study);
 zeroStudy.parameters[0].minusTolerance = 0;
@@ -84,6 +117,28 @@ compensatedStudy.compensators = [{ id: 'C1', enabled: true, configId: '1', varia
 const compensated = await runMonteCarloTolerance({ systemConfig, study: compensatedStudy, requirementRows: compensateRows, evaluateCandidate: evaluate });
 const meanScore = (result) => result.trials.reduce((sum, trial) => sum + trial.score, 0) / result.trials.length;
 assert(meanScore(compensated) < meanScore(uncompensated), 'Compensation must reduce the average merit violation.');
+const compensationBatchStudy = clone(compensatedStudy);
+compensationBatchStudy.runSettings.trials = 12;
+compensationBatchStudy.compensators[0].samples = 7;
+const compensationSerial = await runMonteCarloTolerance({
+  systemConfig,
+  study: compensationBatchStudy,
+  requirementRows: compensateRows,
+  evaluateCandidate: evaluate,
+});
+candidateBatchCalls = 0;
+maximumCandidateBatch = 0;
+const compensationBatched = await runMonteCarloTolerance({
+  systemConfig,
+  study: compensationBatchStudy,
+  requirementRows: compensateRows,
+  evaluateCandidate: evaluate,
+  evaluateCandidates: evaluateBatch,
+  candidateBatchSize: 4,
+});
+assert.deepEqual(compensationBatched.trials, compensationSerial.trials, 'Batched compensator search must preserve the selected candidate and score.');
+assert(candidateBatchCalls < compensationBatched.execution.candidateEvaluations, 'Compensator candidates must cross the evaluator in batches.');
+assert.equal(maximumCandidateBatch, 4, 'Configured candidate chunks must cap compensation memory use.');
 
 assert.deepEqual(wilsonConfidence95(0, 0), { low: 0, high: 0 });
 const interval = wilsonConfidence95(50, 100);
@@ -124,6 +179,9 @@ console.log(JSON.stringify({
   candidates: candidates.length,
   sensitivityDerivative: sensitivity.parameters[0].requirements[0].derivativePerUnit,
   seededTrials: first.trialsCompleted,
+  candidateBatchCalls,
+  maximumCandidateBatch,
+  compensationCandidateEvaluations: compensationBatched.execution.candidateEvaluations,
   uncompensatedMeanScore: meanScore(uncompensated),
   compensatedMeanScore: meanScore(compensated),
   routeNominalPassed: routeNominal.passed,

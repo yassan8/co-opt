@@ -15,7 +15,10 @@ import {
   type ToleranceProgress,
   type ToleranceStudy,
 } from '../../analysis/tolerance-study.ts';
-import { evaluateRequirementsForToleranceCandidate } from '../../analysis/tolerance-requirements-adapter.ts';
+import {
+  evaluateRequirementsForToleranceCandidate,
+  evaluateRequirementsForToleranceCandidates,
+} from '../../analysis/tolerance-requirements-adapter.ts';
 import { loadSystemConfigurations, saveSystemConfigurations, type SystemConfiguration } from '../../data/table-configuration.ts';
 import type { ToleranceVariableDescriptor } from '../../optimization/design-variables.ts';
 import { getBestHost } from './PsfAnalysisPage.tsx';
@@ -234,6 +237,8 @@ export default function ToleranceAnalysisPage({ mode }: { mode: EngineeringAnaly
         study: runStudy,
         requirementRows: selectedRequirements,
         evaluateCandidate: (candidate: any, rows: any[]) => evaluateRequirementsForToleranceCandidate(host, candidate, rows, controller.signal),
+        evaluateCandidates: (candidates: any[], rows: any[]) => evaluateRequirementsForToleranceCandidates(host, candidates, rows, controller.signal),
+        candidateBatchSize: 24,
         onProgress: setProgress,
         signal: controller.signal,
       };
@@ -331,12 +336,12 @@ export default function ToleranceAnalysisPage({ mode }: { mode: EngineeringAnaly
 
 function SensitivityResultView({ result, onDisableLowImpact }: { result: SensitivityAnalysisResult; onDisableLowImpact: () => void }) {
   const maximum = Math.max(1e-12, ...result.parameters.filter((entry) => Number.isFinite(entry.impact)).map((entry) => entry.impact));
-  return <div className="tolerance-result-content"><div className="tolerance-metrics"><MetricCard label="Nominal" value={result.nominal.passed ? 'Pass' : 'Fail'} /><MetricCard label="Parameters" value={String(result.parameters.length)} /><MetricCard label="Elapsed" value={`${(result.elapsedMs / 1000).toFixed(1)} s`} /><button type="button" onClick={onDisableLowImpact}>Disable impact &lt; 1%</button></div><div className="tolerance-sensitivity-list">{result.parameters.map((entry) => {
+  return <div className="tolerance-result-content"><div className="tolerance-metrics"><MetricCard label="Nominal" value={result.nominal.passed ? 'Pass' : 'Fail'} /><MetricCard label="Parameters" value={String(result.parameters.length)} /><MetricCard label="Elapsed" value={`${(result.elapsedMs / 1000).toFixed(1)} s`} /><MetricCard label="Evaluation" value={result.execution?.backend === 'candidate-batch' ? 'Batched' : 'Fallback'} note={result.execution ? `${result.execution.candidateEvaluations} candidates · ${result.execution.candidateBatches} batches${result.execution.engines?.length ? ` · ${result.execution.engines.join(', ')}` : ''}` : undefined} /><button type="button" onClick={onDisableLowImpact}>Disable impact &lt; 1%</button></div><div className="tolerance-sensitivity-list">{result.parameters.map((entry) => {
     const width = Number.isFinite(entry.impact) ? Math.min(100, 100 * entry.impact / maximum) : 100;
     return <div className="tolerance-sensitivity-row" key={entry.parameterId}><div><strong>{entry.label}</strong><span>{Number.isFinite(entry.impact) ? `${(entry.impact * 100).toFixed(2)}% of nominal margin` : 'Invalid perturbed state'}</span></div><div className="tolerance-impact-track"><div className={Number.isFinite(entry.impact) ? '' : 'is-invalid'} style={{ width: `${width}%` }} /></div><small>Asymmetry {Number.isFinite(entry.nonlinearAsymmetry) ? percent(entry.nonlinearAsymmetry) : '—'}</small></div>;
   })}</div></div>;
 }
 
 function ToleranceResultView({ result, onCreateWorst }: { result: MonteCarloToleranceResult; onCreateWorst: () => void }) {
-  return <div className="tolerance-result-content"><div className="tolerance-metrics"><MetricCard label="Overall yield" value={percent(result.yield)} note={`95% CI ${percent(result.yieldConfidence95.low)}–${percent(result.yieldConfidence95.high)}`} /><MetricCard label="Valid trials" value={`${result.validTrials}/${result.trialsCompleted}`} /><MetricCard label="Passed" value={String(result.passedTrials)} /><MetricCard label="Seed" value={String(result.seed)} /><button type="button" onClick={onCreateWorst} disabled={!result.worstTrial}>Create Config from worst trial</button></div><div className="tolerance-table-wrap"><table className="tolerance-table"><thead><tr><th>Requirement</th><th>Yield</th><th>Mean</th><th>Std dev</th><th>P05</th><th>Median</th><th>P95</th></tr></thead><tbody>{result.requirements.map((entry) => <tr key={entry.requirementId}><td>{entry.requirementId}</td><td>{percent(entry.yield)}</td><td>{formatNumber(entry.mean)}</td><td>{formatNumber(entry.standardDeviation)}</td><td>{formatNumber(entry.p05)}</td><td>{formatNumber(entry.p50)}</td><td>{formatNumber(entry.p95)}</td></tr>)}</tbody></table></div></div>;
+  return <div className="tolerance-result-content"><div className="tolerance-metrics"><MetricCard label="Overall yield" value={percent(result.yield)} note={`95% CI ${percent(result.yieldConfidence95.low)}–${percent(result.yieldConfidence95.high)}`} /><MetricCard label="Valid trials" value={`${result.validTrials}/${result.trialsCompleted}`} /><MetricCard label="Passed" value={String(result.passedTrials)} /><MetricCard label="Elapsed" value={`${(result.elapsedMs / 1000).toFixed(1)} s`} /><MetricCard label="Evaluation" value={result.execution?.backend === 'candidate-batch' ? 'Batched' : 'Fallback'} note={result.execution ? `${result.execution.candidateEvaluations} candidates · ${result.execution.candidateBatches} batches${result.execution.engines?.length ? ` · ${result.execution.engines.join(', ')}` : ''}` : undefined} /><MetricCard label="Seed" value={String(result.seed)} /><button type="button" onClick={onCreateWorst} disabled={!result.worstTrial}>Create Config from worst trial</button></div><div className="tolerance-table-wrap"><table className="tolerance-table"><thead><tr><th>Requirement</th><th>Yield</th><th>Mean</th><th>Std dev</th><th>P05</th><th>Median</th><th>P95</th></tr></thead><tbody>{result.requirements.map((entry) => <tr key={entry.requirementId}><td>{entry.requirementId}</td><td>{percent(entry.yield)}</td><td>{formatNumber(entry.mean)}</td><td>{formatNumber(entry.standardDeviation)}</td><td>{formatNumber(entry.p05)}</td><td>{formatNumber(entry.p50)}</td><td>{formatNumber(entry.p95)}</td></tr>)}</tbody></table></div></div>;
 }

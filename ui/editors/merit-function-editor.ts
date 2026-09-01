@@ -2723,6 +2723,81 @@ class MeritFunctionEditor {
         }
     }
 
+    /**
+     * Evaluates one candidate's Requirement operands with the coarsest native /
+     * WASM calls available. This keeps the requested sampling unchanged; it
+     * only combines route traces, multi-field spot traces and independent
+     * worker-backed operands so tolerance studies do not pay one IPC boundary
+     * per scoped Requirement.
+     */
+    async calculateOperandValuesBatchAsync(operands: any[]): Promise<number[]> {
+        const rows = Array.isArray(operands) ? operands : [];
+        if (rows.length === 0) return [];
+        const values = new Array<number>(rows.length).fill(Number.NaN);
+        const handled = new Set<number>();
+        const groupBy = (entries: Array<{ operand: any; index: number }>, keyOf: (operand: any) => string) => {
+            const groups = new Map<string, Array<{ operand: any; index: number }>>();
+            for (const entry of entries) {
+                const key = keyOf(entry.operand);
+                const group = groups.get(key) ?? [];
+                group.push(entry);
+                groups.set(key, group);
+            }
+            return groups;
+        };
+        const indexed = rows.map((operand, index) => ({ operand, index }));
+        const routeTypes = new Set([
+            'ROUTE_OPL', 'ROUTE_OPD', 'ROUTE_CX', 'ROUTE_CY', 'ROUTE_POWER',
+            'ROUTE_SPOT', 'ROUTE_PSF_RMS', 'ROUTE_WFE', 'ROUTE_STREHL', 'ROUTE_MTF', 'ROUTE_VIS',
+        ]);
+        const routeEntries = indexed.filter(({ operand }) => routeTypes.has(String(operand?.operand ?? '').trim().toUpperCase()));
+        for (const group of groupBy(routeEntries, (operand) => String(operand?.configId ?? '')).values()) {
+            const batch = await this.calculatePortRouteOperandsBatchAsync(group.map((entry) => entry.operand));
+            group.forEach((entry, localIndex) => {
+                const value = Number(batch[localIndex]);
+                values[entry.index] = Number.isFinite(value) ? value : 1e9;
+                handled.add(entry.index);
+            });
+        }
+
+        const spotTypes = new Set(['SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT', 'SPOT_SIZE_CURRENT']);
+        const spotEntries = indexed.filter(({ operand, index }) => !handled.has(index)
+            && spotTypes.has(String(operand?.operand ?? '').trim().toUpperCase()));
+        const spotKey = (operand: any) => [
+            String(operand?.configId ?? ''),
+            String(operand?.operand ?? '').trim().toUpperCase() === 'SPOT_SIZE_RECT' ? 'grid' : 'annular',
+            String(operand?.param1 ?? ''),
+            String(operand?.param4 ?? ''),
+            String(operand?.param5 ?? ''),
+        ].join('|');
+        for (const group of groupBy(spotEntries, spotKey).values()) {
+            const batch = await this.calculateSpotSizeBatchViaNativeAsync(group.map((entry) => entry.operand));
+            for (let localIndex = 0; localIndex < group.length; localIndex += 1) {
+                const entry = group[localIndex];
+                const value = Number(batch[localIndex]);
+                values[entry.index] = Number.isFinite(value)
+                    ? value
+                    : await this.calculateOperandValueAsync(entry.operand);
+                handled.add(entry.index);
+            }
+        }
+
+        const remaining = indexed.filter(({ index }) => !handled.has(index));
+        // Four concurrent calls fit the existing Web Worker pool without the
+        // large transient allocations caused by launching every MTF/OPD job at
+        // once. Desktop IPC also benefits from overlapping request setup.
+        const workerCount = Math.max(1, Math.min(4, remaining.length));
+        let cursor = 0;
+        await Promise.all(Array.from({ length: workerCount }, async () => {
+            while (cursor < remaining.length) {
+                const entry = remaining[cursor++];
+                const value = Number(await this.calculateOperandValueAsync(entry.operand));
+                values[entry.index] = Number.isFinite(value) ? value : 1e9;
+            }
+        }));
+        return values;
+    }
+
     getPortRouteConfiguration(configId: any): Configuration | null {
         const system = tryLoadSystemConfigurations();
         const configurations = Array.isArray(system?.configurations) ? system.configurations : [];
