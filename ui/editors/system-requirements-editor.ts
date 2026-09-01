@@ -13,6 +13,7 @@ import { loadTableData as loadSystemRequirementsTableData, saveTableData as save
 import { loadSpotDiagramSettingsByConfigId, saveSpotDiagramSettingsByConfigId } from '../spot-diagram-settings-storage.ts';
 import { generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
 import { calculateChiefRayNewton } from '../../evaluation/aberrations/transverse-aberration.ts';
+import { computeRequirementViolation } from '../../analysis/tolerance-study.ts';
 
 // Extend Window interface for global properties
 declare global {
@@ -3685,13 +3686,8 @@ class SystemRequirementsEditor {
   computeViolationAmount(op: string, current: any, target: number, tol: number): number {
     if (current === null || current === undefined) return NaN;
     if (typeof current === 'string' && current.trim() === '') return NaN;
-    const c = Number(current);
-    const t = Number(target);
-    const z = Math.max(0, Number(tol));
-    if (!Number.isFinite(c) || !Number.isFinite(t)) return NaN;
-    if (op === '<=') return Math.max(0, c - (t + z));
-    if (op === '>=') return Math.max(0, (t - z) - c);
-    return Math.max(0, Math.abs(c - t) - z);
+    const amount = computeRequirementViolation(op, current, target, tol);
+    return Number.isFinite(amount) ? amount : NaN;
   }
 
   _sanitizeCurrentForUI(rawCurrent: any): { current: any; ok: boolean } {

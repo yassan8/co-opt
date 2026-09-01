@@ -7,6 +7,19 @@
 
 import { getGlassDataWithSellmeier } from '../data/glass.ts';
 
+export interface ToleranceVariableDescriptor {
+  id: string;
+  configId?: string;
+  blockId: string;
+  blockType: string;
+  key: string;
+  value: number;
+  label: string;
+  unit: string;
+  category: 'radius' | 'thickness' | 'material' | 'asphere' | 'decenter' | 'tilt' | 'aperture' | 'position' | 'other';
+  suggestedCompensator?: boolean;
+}
+
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
@@ -311,6 +324,146 @@ export function listDesignVariablesFromBlocks(blocksOrConfig) {
     }
   }
 
+  return out;
+}
+
+/** Returns the current numeric value for any stable "blockId.parameter" reference. */
+export function getDesignVariableValue(config, variableId) {
+  if (!config || !Array.isArray(config.blocks)) return '';
+  const id = String(variableId ?? '').trim();
+  const dot = id.indexOf('.');
+  if (dot <= 0) return '';
+  const blockId = id.slice(0, dot);
+  const key = id.slice(dot + 1);
+  const block = config.blocks.find((entry) => isPlainObject(entry) && String(entry.blockId) === blockId);
+  return block ? getValueFromBlock(block, key) : '';
+}
+
+const TOLERANCE_BLOCK_TYPES = new Set([
+  'Lens', 'PositiveLens', 'Doublet', 'Triplet', 'Surface', 'Stop', 'Gap', 'AirGap',
+  'CoordinateTransform', 'Paraxial', 'ParaxialLens', 'IdealLens', 'Mirror', 'FoldMirror',
+  'BeamSplitter', 'NDFilter', 'ReflectionGrating', 'Target', 'AreaDetector', 'TimeDetector',
+]);
+
+const TOLERANCE_KEY_PATTERN = /(radius|thickness|conic|coef|coefficient|qcon|decenter|tilt|position[xyz]|rotation[xyz]|rindex|refractiveindex|abbe|semi(?:dia|diameter)|wedge|distance|focal(?:length)?[xy]?|pixelpitch|pitchum)/i;
+const TOLERANCE_KEY_DENY_PATTERN = /(sample|sampling|count|number|rays?|wavelength|power|weight|primary|mode|shape|profile|order|density|efficiency|reflect|transmi|phase|exposure|bitdepth|saturation|fillfactor|quantum|responsivity|period|amplitude|offset|height|width|depth)/i;
+
+function toleranceCategory(key) {
+  const value = String(key ?? '').toLowerCase();
+  if (value.includes('radius') || value.includes('focal')) return 'radius';
+  if (value.includes('thickness') || value.includes('distance')) return 'thickness';
+  if (value.includes('rindex') || value.includes('refractive') || value.includes('abbe')) return 'material';
+  if (value.includes('conic') || value.includes('coef') || value.includes('qcon')) return 'asphere';
+  if (value.includes('decenter')) return 'decenter';
+  if (value.includes('tilt') || value.includes('rotation')) return 'tilt';
+  if (value.includes('semi')) return 'aperture';
+  if (value.includes('position')) return 'position';
+  return 'other';
+}
+
+function toleranceUnit(key, category) {
+  const value = String(key ?? '').toLowerCase();
+  if (category === 'tilt' || value.includes('angle')) return 'deg';
+  if (category === 'material' || category === 'asphere') return '';
+  if (value.includes('pitchum')) return 'µm';
+  return 'mm';
+}
+
+function readableToleranceKey(key) {
+  return String(key ?? '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/^./, (value) => value.toUpperCase());
+}
+
+/**
+ * Enumerates manufacturing/alignment values independently from Optimize's V flags.
+ * Categorical and calculation-control fields are intentionally omitted.
+ */
+export function listToleranceVariablesFromConfig(config): ToleranceVariableDescriptor[] {
+  if (!config || !Array.isArray(config.blocks)) return [];
+  const out: ToleranceVariableDescriptor[] = [];
+  const seen = new Set();
+  const blocks = config.blocks;
+  let lastGapId = '';
+  for (const block of blocks) {
+    const blockType = String(block?.blockType ?? '').trim();
+    if (blockType === 'Gap' || blockType === 'AirGap') lastGapId = String(block?.blockId ?? '');
+  }
+
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
+    const block = blocks[blockIndex];
+    if (!isPlainObject(block)) continue;
+    const blockId = String(block.blockId ?? '').trim();
+    const blockType = String(block.blockType ?? '').trim();
+    if (!blockId || !TOLERANCE_BLOCK_TYPES.has(blockType)) continue;
+    const keys = new Set([
+      ...Object.keys(isPlainObject(block.parameters) ? block.parameters : {}),
+      ...Object.keys(isPlainObject(block.variables) ? block.variables : {}),
+    ]);
+    for (const key of keys) {
+      if (!TOLERANCE_KEY_PATTERN.test(key) || TOLERANCE_KEY_DENY_PATTERN.test(key)) continue;
+      if (/^(bending|objectdistance|imagedistance|thicknessmode|semidiamode)$/i.test(key)) continue;
+      const numeric = Number(getValueFromBlock(block, key));
+      if (!Number.isFinite(numeric)) continue;
+      const id = `${blockId}.${key}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const category = toleranceCategory(key);
+      const blockLabel = String(block?.parameters?.label ?? block?.parameters?.name ?? block?.metadata?.label ?? blockId);
+      out.push({
+        id,
+        blockId,
+        blockType,
+        key,
+        value: numeric,
+        label: `${blockLabel} · ${readableToleranceKey(key)}`,
+        unit: toleranceUnit(key, category),
+        category,
+        suggestedCompensator: blockId === lastGapId && /^thickness$/i.test(key),
+      });
+    }
+  }
+
+  for (const connection of (Array.isArray(config.designConnections) ? config.designConnections : [])) {
+    const ownerId = String(connection?.id ?? '').trim();
+    if (!ownerId) continue;
+    for (const key of CONNECTION_VARIABLE_KEYS) {
+      const value = Number(assemblyVariableValue(config, 'connection', connection, key));
+      if (!Number.isFinite(value)) continue;
+      const id = `connection:${ownerId}.${key}`;
+      out.push({
+        id,
+        blockId: `connection:${ownerId}`,
+        blockType: 'PortConnection',
+        key,
+        value,
+        label: `${String(connection?.label ?? ownerId)} · ${readableToleranceKey(key)}`,
+        unit: key === 'distanceMm' ? 'mm' : 'deg',
+        category: key === 'distanceMm' ? 'position' : 'tilt',
+      });
+    }
+  }
+
+  for (const group of (Array.isArray(config.sequentialGroups) ? config.sequentialGroups : [])) {
+    const ownerId = String(group?.id ?? '').trim();
+    if (!ownerId) continue;
+    for (const key of GROUP_VARIABLE_KEYS) {
+      const value = Number(assemblyVariableValue(config, 'group', group, key));
+      if (!Number.isFinite(value)) continue;
+      const id = `group:${ownerId}.${key}`;
+      out.push({
+        id,
+        blockId: `group:${ownerId}`,
+        blockType: 'SequentialGroupPose',
+        key,
+        value,
+        label: `${String(group?.label ?? ownerId)} · ${readableToleranceKey(key)}`,
+        unit: key.startsWith('position') ? 'mm' : 'deg',
+        category: key.startsWith('position') ? 'position' : 'tilt',
+      });
+    }
+  }
   return out;
 }
 

@@ -7,6 +7,7 @@ import { MtfAnalysisPage } from './MtfAnalysisPage';
 import { PsfAnalysisPage } from './PsfAnalysisPage';
 import { MultiFieldPsfPage } from './MultiFieldPsfPage';
 import { ImageSimulationPage } from './ImageSimulationPage';
+import ToleranceAnalysisPage from './ToleranceAnalysisPage';
 import {
   DESIGN_CONNECTION_SELECTED_EVENT,
   installNonSequentialRenderOverlay,
@@ -10149,7 +10150,7 @@ const collectLegacyCrossRays = async (
   useEffect(() => {
     if (!analysisWindowMode.enabled) return;
     if (analysisWindowMode.analysis === 'astigmatism') return;
-    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid' || analysisWindowMode.analysis === 'spot-diagram' || analysisWindowMode.analysis === 'spherical-aberration' || analysisWindowMode.analysis === 'magnification-chromatic-aberration' || analysisWindowMode.analysis === 'integrated-aberration' || analysisWindowMode.analysis === 'transverse-aberration' || analysisWindowMode.analysis === 'opd-fan' || analysisWindowMode.analysis === 'through-focus-spot' || analysisWindowMode.analysis === 'opd' || analysisWindowMode.analysis === 'psf' || analysisWindowMode.analysis === 'multi-field-psf' || analysisWindowMode.analysis === 'image-simulation') return;
+    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid' || analysisWindowMode.analysis === 'spot-diagram' || analysisWindowMode.analysis === 'spherical-aberration' || analysisWindowMode.analysis === 'magnification-chromatic-aberration' || analysisWindowMode.analysis === 'integrated-aberration' || analysisWindowMode.analysis === 'transverse-aberration' || analysisWindowMode.analysis === 'opd-fan' || analysisWindowMode.analysis === 'through-focus-spot' || analysisWindowMode.analysis === 'opd' || analysisWindowMode.analysis === 'psf' || analysisWindowMode.analysis === 'multi-field-psf' || analysisWindowMode.analysis === 'image-simulation' || analysisWindowMode.analysis === 'sensitivity-analysis' || analysisWindowMode.analysis === 'tolerance-analysis') return;
 
     let restoreOpener: (() => void) | null = null;
     let tauriCloseUnlisten: (() => void) | null = null;
@@ -10240,12 +10241,14 @@ const collectLegacyCrossRays = async (
       'multi-field-psf': 'Multi-Field PSF',
       'image-simulation': 'Image Simulation',
       'coherent-interferometer': 'Coherent Signal',
+      'sensitivity-analysis': 'Sensitivity Analysis',
+      'tolerance-analysis': 'Tolerance Analysis',
       'mtf': 'Modulation Transfer Function',
       'through-focus-spot': 'Through-Focus Spot',
       'through-focus-mtf': 'Through-Focus MTF',
       'field-mtf': 'Field MTF',
     };
-    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf', 'multi-field-psf', 'image-simulation', 'coherent-interferometer']);
+    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid', 'spot-diagram', 'spherical-aberration', 'magnification-chromatic-aberration', 'integrated-aberration', 'transverse-aberration', 'opd-fan', 'through-focus-spot', 'opd', 'psf', 'multi-field-psf', 'image-simulation', 'coherent-interferometer', 'sensitivity-analysis', 'tolerance-analysis']);
 
     const targetButtonId = analysisButtonMap[analysisWindowMode.analysis];
     const targetPopupTitle = analysisPopupTitleMap[analysisWindowMode.analysis];
@@ -10368,6 +10371,13 @@ const collectLegacyCrossRays = async (
 
   if (analysisWindowMode.analysis === 'image-simulation') {
     return <ImageSimulationPage />;
+  }
+
+  if (analysisWindowMode.analysis === 'sensitivity-analysis') {
+    return <ToleranceAnalysisPage mode="sensitivity" />;
+  }
+  if (analysisWindowMode.analysis === 'tolerance-analysis') {
+    return <ToleranceAnalysisPage mode="tolerance" />;
   }
 
   if (isOptimizeWindowMode) {
@@ -13545,6 +13555,12 @@ const collectLegacyCrossRays = async (
       id: 'simulation', label: 'Simulation', items: [
         { value: 'image-simulation', label: 'Image Simulation' },
         { value: 'coherent-interferometer', label: 'Coherent Signal' },
+      ],
+    },
+    {
+      id: 'engineering', label: 'Engineering', items: [
+        { value: 'sensitivity-analysis', label: 'Sensitivity Analysis' },
+        { value: 'tolerance-analysis', label: 'Tolerance Analysis' },
       ],
     },
   ];

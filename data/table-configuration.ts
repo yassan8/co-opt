@@ -219,6 +219,7 @@ export function loadPersistedSystemConfigurations(): SystemConfiguration | null 
 function normalizeLoadedSystemConfiguration(systemConfig: SystemConfiguration | null | undefined): SystemConfiguration | null {
   if (!systemConfig || typeof systemConfig !== 'object') return null;
   if (!Array.isArray(systemConfig.configurations)) return null;
+  if (!Array.isArray(systemConfig.toleranceStudies)) systemConfig.toleranceStudies = [];
 
   for (const cfg of systemConfig.configurations) {
     if (!cfg || typeof cfg !== 'object') continue;
@@ -629,11 +630,13 @@ export interface Configuration {
   coherentDesign?: CoherentAssemblyDesign;
 }
 
-interface SystemConfiguration {
+export interface SystemConfiguration {
   configurations: Configuration[];
   activeConfigId: number | string;
   meritFunction: any[];
   systemRequirements: any[];
+  /** Saved sensitivity/tolerance studies; Requirements remain the pass/fail specification. */
+  toleranceStudies?: any[];
   optimizationRules: Record<string, any>;
 }
 
@@ -732,6 +735,7 @@ const defaultSystemConfig: SystemConfiguration = {
   activeConfigId: 1,
   meritFunction: [],  // グローバルなMerit Function（全configで共有、各行にconfigId指定）
   systemRequirements: [], // グローバルなSystem Requirements（全configで共有、各行にconfigId指定）
+  toleranceStudies: [],
   optimizationRules: {}  // フェーズ4用（空で準備）
 };
 
