@@ -1,0 +1,99 @@
+.tolerance-page {
+  --tol-border: #d5deeb;
+  --tol-soft: #f5f8fc;
+  --tol-text-soft: #5c6f8d;
+  min-width: 760px;
+  color: #14213a;
+  overflow: auto;
+}
+
+.tolerance-commandbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--tol-border);
+}
+
+.tolerance-commandbar .analysis-window-field { min-width: 132px; }
+.tolerance-commandbar .analysis-window-field select { min-width: 132px; }
+.tolerance-commandbar .analysis-window-primary-action { white-space: nowrap; }
+
+.tolerance-options { min-width: 360px; max-height: min(70vh, 640px); overflow: auto; }
+.tolerance-requirements { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--tol-border); }
+.tolerance-requirements > span { color: var(--tol-text-soft); font-size: 12px; }
+.tolerance-requirements label { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+
+.tolerance-progress { padding: 8px 14px; border-bottom: 1px solid var(--tol-border); background: white; }
+.tolerance-progress > div:first-child { display: flex; justify-content: space-between; font-size: 12px; color: var(--tol-text-soft); }
+.tolerance-progress__track { height: 3px; margin-top: 6px; overflow: hidden; border-radius: 2px; background: #e7edf7; }
+.tolerance-progress__track > div { height: 100%; background: #2f6fed; transition: width 120ms linear; }
+
+.tolerance-setup,
+.tolerance-results { margin: 12px; border: 1px solid var(--tol-border); border-radius: 9px; background: white; overflow: hidden; }
+.tolerance-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding: 12px; background: var(--tol-soft); border-bottom: 1px solid var(--tol-border); }
+.tolerance-section-heading > div:first-child { display: grid; gap: 2px; }
+.tolerance-section-heading strong { font-size: 14px; }
+.tolerance-section-heading span { color: var(--tol-text-soft); font-size: 11px; }
+.tolerance-add-controls { display: flex; gap: 6px; align-items: center; }
+.tolerance-add-controls select { width: min(390px, 36vw); }
+
+.tolerance-table-wrap { width: 100%; overflow: auto; }
+.tolerance-table { width: 100%; min-width: 720px; border-collapse: collapse; table-layout: auto; font-size: 12px; }
+.tolerance-table th { padding: 7px 9px; color: var(--tol-text-soft); text-align: left; font-weight: 600; background: #fbfcfe; border-bottom: 1px solid var(--tol-border); white-space: nowrap; }
+.tolerance-table td { padding: 7px 9px; border-bottom: 1px solid #e6ebf3; vertical-align: middle; }
+.tolerance-table tbody tr:last-child td { border-bottom: 0; }
+.tolerance-table td:nth-child(2) { min-width: 230px; }
+.tolerance-table td strong { display: block; font-size: 12px; }
+.tolerance-table td small { display: block; margin-top: 2px; color: var(--tol-text-soft); }
+.tolerance-table input[type="number"] { width: 92px; }
+.tolerance-table select { min-width: 155px; }
+.tolerance-table button.is-danger,
+.tolerance-compensator-row button.is-danger { color: #b4232d; border-color: #efc4c8; }
+
+.tolerance-empty { padding: 24px !important; text-align: center; color: var(--tol-text-soft); }
+.tolerance-compensators { border-top: 1px solid var(--tol-border); }
+.tolerance-compensators > summary { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.tolerance-compensators > summary::-webkit-details-marker { display: none; }
+.tolerance-compensators > summary span { color: var(--tol-text-soft); font-size: 12px; }
+.tolerance-compensators > div { display: grid; gap: 8px; padding: 0 12px 12px; }
+.tolerance-compensator-row { display: grid; grid-template-columns: minmax(230px, 1fr) 150px 150px auto; align-items: end; gap: 8px; }
+.tolerance-compensator-row label { display: grid; gap: 3px; font-size: 11px; color: var(--tol-text-soft); }
+.tolerance-compensator-row label:first-child { display: flex; align-items: center; color: inherit; font-size: 12px; }
+
+.tolerance-result-heading { display: flex; align-items: baseline; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--tol-border); background: var(--tol-soft); }
+.tolerance-result-heading strong { font-size: 13px; }
+.tolerance-result-heading span { color: var(--tol-text-soft); font-size: 11px; }
+.tolerance-empty-result { padding: 40px 16px; color: var(--tol-text-soft); text-align: center; }
+.tolerance-result-content { min-height: 160px; }
+.tolerance-metrics { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; border-bottom: 1px solid var(--tol-border); }
+.tolerance-metric { min-width: 135px; display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--tol-border); border-radius: 7px; background: #fbfcfe; }
+.tolerance-metric span,
+.tolerance-metric small { color: var(--tol-text-soft); font-size: 10px; }
+.tolerance-metric strong { font-size: 16px; }
+
+.tolerance-sensitivity-list { display: grid; gap: 1px; }
+.tolerance-sensitivity-row { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 2fr) 130px; align-items: center; gap: 12px; padding: 9px 12px; border-bottom: 1px solid #e8edf5; }
+.tolerance-sensitivity-row > div:first-child { display: grid; gap: 2px; }
+.tolerance-sensitivity-row span,
+.tolerance-sensitivity-row small { color: var(--tol-text-soft); font-size: 11px; }
+.tolerance-impact-track { height: 9px; overflow: hidden; border-radius: 5px; background: #edf1f7; }
+.tolerance-impact-track > div { height: 100%; min-width: 2px; border-radius: inherit; background: linear-gradient(90deg, #88aef1, #2f6fed); }
+.tolerance-impact-track > div.is-invalid { background: repeating-linear-gradient(135deg, #c93c49 0 6px, #e88c94 6px 12px); }
+
+.dark-mode .tolerance-page { --tol-border: #3b4658; --tol-soft: #202938; --tol-text-soft: #aab7cc; color: #eef3fb; }
+.dark-mode .tolerance-setup,
+.dark-mode .tolerance-results,
+.dark-mode .tolerance-progress { background: #171e29; }
+.dark-mode .tolerance-table th,
+.dark-mode .tolerance-metric { background: #202938; }
+.dark-mode .tolerance-table td,
+.dark-mode .tolerance-sensitivity-row { border-color: #303b4d; }
+
+@media (max-width: 900px) {
+  .tolerance-section-heading { align-items: stretch; flex-direction: column; }
+  .tolerance-add-controls { flex-wrap: wrap; }
+  .tolerance-add-controls select { width: 100%; }
+  .tolerance-compensator-row { grid-template-columns: 1fr 1fr; }
+  .tolerance-sensitivity-row { grid-template-columns: 1fr; }
+}

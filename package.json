@@ -72,6 +72,7 @@
     "diag:automatic-assembly-routing": "node --import tsx diagnostics/automatic-assembly-routing-verification.mjs",
     "diag:optical-system-compiler": "node --import tsx diagnostics/optical-system-compiler-verification.mjs",
     "diag:port-routed-exact": "node --import tsx diagnostics/port-routed-exact-verification.mjs",
+    "diag:tolerance": "node --import tsx diagnostics/tolerance-analysis-verification.mjs",
     "diag:optimizer-mtf-shared": "node --import tsx diagnostics/optimizer-mtf-shared-batch-repro.mjs",
     "wasm:rebuild": "bash ./scripts/build-rust-wasm.sh",
     "wasm:rebuild:threads": "bash -c 'COOPT_WASM_THREADS=1 bash ./scripts/build-rust-wasm.sh'",

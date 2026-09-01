@@ -2450,6 +2450,8 @@ type AnalysisWindowKey =
   | 'psf'
   | 'multi-field-psf'
   | 'image-simulation'
+  | 'sensitivity-analysis'
+  | 'tolerance-analysis'
   | 'mtf'
   | 'through-focus-spot'
   | 'through-focus-mtf'
@@ -2470,6 +2472,8 @@ const ANALYSIS_WINDOW_SIZE_MAP: Record<AnalysisWindowKey, { width: number; heigh
   'psf': { width: 980, height: 760, title: 'Point Spread Function' },
   'multi-field-psf': { width: 1180, height: 820, title: 'Multi-Field PSF' },
   'image-simulation': { width: 1280, height: 900, title: 'Image Simulation' },
+  'sensitivity-analysis': { width: 1180, height: 820, title: 'Sensitivity Analysis' },
+  'tolerance-analysis': { width: 1280, height: 860, title: 'Tolerance Analysis' },
   'mtf': { width: 980, height: 760, title: 'Modulation Transfer Function' },
   'through-focus-spot': { width: 1100, height: 820, title: 'Through-Focus Spot' },
   'through-focus-mtf': { width: 1100, height: 820, title: 'Through-Focus MTF' },
