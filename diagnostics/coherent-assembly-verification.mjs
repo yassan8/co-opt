@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   createGenericCoherentAssemblyDesign,
   normalizeCoherentAssemblyDesign,
+  reconstructSurfaceFromDetectorSignal,
   simulateCoherentSurfaceSignal,
 } from '../analysis/coherent-assembly.ts';
 import { reflowCoherentAssembly } from '../analysis/coherent-port-layout.ts';
@@ -56,6 +57,59 @@ assert.equal(result.height, 64, 'configured detector height is used');
 assert.equal(result.intensityWPerPixel.length, 32 * 64, 'detector raster is complete');
 assert.ok(result.propagatingFraction > 0, 'configured grating has propagating spectral samples');
 assert.ok(Number.isFinite(result.integratedPowerW), 'coherent detector power is finite');
+
+// A flat-reference Camera reconstruction measures relative Detector-Y lag.
+// Its coverage must remain valid even when the absolute routed OPD places the
+// nominal ridge outside the relative height calibration window.
+const differentialWidth = 24;
+const differentialHeight = 128;
+const flatCamera = new Float64Array(differentialWidth * differentialHeight);
+const measuredCamera = new Float64Array(differentialWidth * differentialHeight);
+for (let x = 0; x < differentialWidth; x += 1) {
+  const shift = 3 * Math.sin(2 * Math.PI * x / Math.max(1, differentialWidth - 1));
+  for (let y = 0; y < differentialHeight; y += 1) {
+    const sample = (center) => {
+      const envelope = Math.exp(-0.5 * ((y - center) / 7) ** 2);
+      return 1 + 0.8 * envelope * Math.cos(2 * Math.PI * 0.45 * (y - center));
+    };
+    flatCamera[y * differentialWidth + x] = sample(differentialHeight / 2);
+    measuredCamera[y * differentialWidth + x] = sample(differentialHeight / 2 + shift);
+  }
+}
+const differentialReconstruction = reconstructSurfaceFromDetectorSignal({
+  powerWPerPixel: measuredCamera,
+  flatReferencePowerWPerPixel: flatCamera,
+  width: differentialWidth,
+  height: differentialHeight,
+  detector: {
+    ...design.detector,
+    pixelCountX: differentialWidth,
+    pixelCountY: differentialHeight,
+    pixelPitchUm: 10,
+  },
+  grating: {
+    ...design.grating,
+    detectorMagnification: 12.5,
+  },
+  sourceCenterWavelengthNm: 650,
+  sourceBandwidthFwhmNm: 300,
+  baseOpdMm: 10,
+  targetSpanMm: 25,
+  maximumDetectorPixelsX: differentialWidth,
+  maximumDetectorPixelsY: differentialHeight,
+  calibrationMinUm: -15,
+  calibrationMaxUm: 15,
+  spectralSampleCount: 129,
+  measurementSampleCount: differentialWidth * 128,
+  cameraXMin: 0,
+  cameraXMax: differentialWidth - 1,
+  targetXMinMm: -12.5,
+  targetXMaxMm: 12.5,
+});
+assert.ok(
+  differentialReconstruction.signalCoverageFraction > 0.8,
+  'flat-referenced coverage uses the measured Camera raster when absolute routed OPD is outside the relative calibration window',
+);
 
 const placementFixture = normalizeCoherentAssemblyDesign({
   ...empty,
