@@ -1923,10 +1923,19 @@ export function reconstructSurfaceFromDetectorSignal(
     : Number.NaN;
   let envelopeMaximum = 0;
   coherenceEnvelope.forEach((value) => { envelopeMaximum = Math.max(envelopeMaximum, value); });
+  // A differential flat-reference reconstruction measures a Camera-Y lag,
+  // so the absolute routed OPD does not need to lie inside the relative
+  // height-calibration window.  detectCameraEnvelopeRidge already falls back
+  // to the full detector when that absolute window contains no rows; use the
+  // same rows for coverage or an otherwise valid differential reconstruction
+  // is incorrectly reported as 0% signal coverage.
+  const coverageRows = differential
+    ? Array.from({ length: height }, (_, index) => index)
+    : validRidgeRows;
   let coveredColumns = 0;
   for (let x = 0; x < width; x += 1) {
     let columnMaximum = 0;
-    for (const y of validRidgeRows) columnMaximum = Math.max(columnMaximum, coherenceEnvelope[y * width + x]);
+    for (const y of coverageRows) columnMaximum = Math.max(columnMaximum, coherenceEnvelope[y * width + x]);
     if (columnMaximum > envelopeMaximum * 1e-4) coveredColumns += 1;
   }
   const signalCoverageFraction = coveredColumns / Math.max(1, width);
