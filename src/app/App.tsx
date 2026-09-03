@@ -13553,14 +13553,14 @@ const collectLegacyCrossRays = async (
     },
     {
       id: 'simulation', label: 'Simulation', items: [
-        { value: 'image-simulation', label: 'Image Simulation' },
-        { value: 'coherent-interferometer', label: 'Coherent Signal' },
+        { value: 'image-simulation', label: 'Image Simulation', beta: true },
+        { value: 'coherent-interferometer', label: 'Coherent Signal', beta: true },
       ],
     },
     {
       id: 'engineering', label: 'Engineering', items: [
-        { value: 'sensitivity-analysis', label: 'Sensitivity Analysis' },
-        { value: 'tolerance-analysis', label: 'Tolerance Analysis' },
+        { value: 'sensitivity-analysis', label: 'Sensitivity Analysis', beta: true },
+        { value: 'tolerance-analysis', label: 'Tolerance Analysis', beta: true },
       ],
     },
   ];
