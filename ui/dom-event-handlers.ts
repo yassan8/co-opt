@@ -119,6 +119,7 @@ import {
     BLOCK_SCHEMA_VERSION
 } from '../data/block-schema.ts';
 import { createDefaultPhysicalBlock, normalizeDesignConnections, portsForPhysicalBlock } from '../analysis/hybrid-design.ts';
+import { resolveSubstrateDispersion } from '../analysis/material-dispersion.ts';
 import { SetBlockParameterCommand } from '../core/undo-history.ts';
 import { getOrCreateCooptWindowSyncSenderId, requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 import { 
@@ -9777,6 +9778,12 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             heightMm: { label: 'Body height (mm)', compactLabel: 'Height (mm)', help: 'Physical outer height used by Render, fit and collision checks.' },
             depthMm: { label: 'Body depth (mm)', compactLabel: 'Depth (mm)', help: 'Physical length along the local optical axis.' },
             apertureDiameterMm: { label: 'Clear aperture (mm)', help: 'Usable optical diameter; rays outside this aperture are clipped.' },
+            substrateMaterial: { label: 'Substrate glass', help: 'Catalog glass uses its wavelength-dependent dispersion formula. Leave blank to use nd and Abbe number below.' },
+            substrateIndexNd: { label: 'Substrate index nd', help: 'Index at 587.5618 nm for a custom substrate. Used when Substrate glass is blank.' },
+            substrateAbbeNumber: { label: 'Substrate Abbe number', help: 'With blank Substrate glass, a positive Abbe number gives a Cauchy dispersion estimate; 0 gives a constant index. Catalog glass uses its own dispersion coefficients.' },
+            initialPhaseRad: { label: 'Initial phase (rad)', help: 'Optical phase at the source exit.' },
+            relativeDelayFs: { label: 'Relative delay (fs)', help: 'Spectral phase slope relative to the source center frequency.' },
+            groupDelayDispersionFs2: { label: 'Group-delay dispersion (fs²)', help: 'Quadratic spectral phase at the source exit. Shared source phase cancels between two arms split from the same source.' },
             dimensionConfidence: {
                 label: 'Dimension confidence',
                 help: 'Exact means measured input, Estimated uses an assumed envelope, and Missing prevents a confirmed volume.',
@@ -9840,7 +9847,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 lineCount: { label: 'Comb line count', compactLabel: 'Comb lines', help: 'Number of discrete optical frequencies generated around the center.' },
                 lineWidthHz: { label: 'Comb linewidth (Hz)', help: 'Optical linewidth assigned to each comb mode.' },
                 initialPhaseRad: { label: 'Initial phase (rad)', help: 'Common starting optical phase of this comb source.' },
-                groupDelayDispersionFs2: { label: 'Group-delay dispersion (fs²)', help: 'Quadratic spectral phase applied across the comb.' },
                 divergenceDeg: { label: 'Launch half-angle (deg)', help: 'Fallback angular half-width. When Numerical aperture is present, the half-angle is derived from asin(NA / ambient n).' },
                 spectralShape: {
                     label: 'Spectral envelope',
@@ -9883,9 +9889,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 },
                 reflectedPhaseDeg: { label: 'Reflected phase (deg)', help: 'Phase shift applied to the reflected complex field.' },
                 transmittedPhaseDeg: { label: 'Transmitted phase (deg)', help: 'Phase shift applied to the transmitted complex field.' },
-                substrateMaterial: { label: 'Substrate glass', help: 'Glass name used by a physical Plate, Cube or Pellicle model.' },
-                substrateIndexNd: { label: 'Substrate index nd', help: 'Refractive index of the beam-splitter substrate at the d line.' },
-                substrateAbbeNumber: { label: 'Substrate Abbe number', help: 'Dispersion value used to estimate the substrate index versus wavelength.' },
                 substrateThicknessMm: { label: 'Substrate thickness (mm)', help: 'Normal substrate thickness. For Plate, this value and the refractive index determine the transmitted-beam lateral displacement.' },
                 wedgeDeg: { label: 'Substrate wedge (deg)', help: 'Angle between the front and rear substrate faces.' },
                 backSurfaceReflectance: { label: 'Rear-surface reflectance', help: 'Residual power reflectance of the substrate rear face.' },
@@ -11799,7 +11802,13 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             panel.dataset.blockId = String(blockId);
             panel.setAttribute('data-block-id', String(blockId));
 
-            const params = (expandedBlock.parameters && typeof expandedBlock.parameters === 'object') ? expandedBlock.parameters : {};
+            const storedParams = (expandedBlock.parameters && typeof expandedBlock.parameters === 'object') ? expandedBlock.parameters : {};
+            // Show dispersion controls on older files without mutating them just by opening the inspector.
+            const params = blockType === 'NDFilter' || blockType === 'BeamSplitter'
+                ? { ...resolveSubstrateDispersion(storedParams), ...storedParams }
+                : blockType === 'BroadbandSource' || blockType === 'FrequencyCombSource'
+                  ? { initialPhaseRad: 0, relativeDelayFs: 0, groupDelayDispersionFs2: 0, ...storedParams }
+                  : storedParams;
             const vars = (expandedBlock.variables && typeof expandedBlock.variables === 'object') ? expandedBlock.variables : {};
             const quickEditorCoveredParamKeys = new Set<string>();
             const quickEditorCoveredApertureKeys = new Set<string>();

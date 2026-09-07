@@ -5,6 +5,7 @@ import {
   type BeamSplitterSpec,
 } from './coherent-interferometer.ts';
 import type { PortRoute, PortRouteSet } from '../data/block-schema.ts';
+import { substrateRefractiveIndex } from './material-dispersion.ts';
 
 const TWO_PI = Math.PI * 2;
 
@@ -75,6 +76,7 @@ export interface CoherentPhysicalComponent {
   powerEfficiency?: number;
   refractiveIndexNd?: number;
   abbeNumber?: number;
+  material?: string;
   pathIds: string[];
   ports: OpticalPort[];
   metadata?: Record<string, unknown>;
@@ -955,18 +957,11 @@ function distance(a: Vec3Mm, b: Vec3Mm): number {
 }
 
 function refractiveIndexAtWavelength(item: CoherentPhysicalComponent, wavelengthNm: number): number {
-  const nd = finite(item.refractiveIndexNd, 1);
-  if (!(nd > 1)) return 1;
-  const abbe = finite(item.abbeNumber, Infinity);
-  if (!(abbe > 0) || !Number.isFinite(abbe)) return nd;
-  const lambdaUm = Math.max(1e-6, wavelengthNm * 1e-3);
-  const lambdaFUm = 0.4861327;
-  const lambdaCUm = 0.6562725;
-  const lambdaDUm = 0.5875618;
-  const deltaFC = (nd - 1) / abbe;
-  const b = deltaFC / (1 / (lambdaFUm * lambdaFUm) - 1 / (lambdaCUm * lambdaCUm));
-  const a = nd - b / (lambdaDUm * lambdaDUm);
-  return a + b / (lambdaUm * lambdaUm);
+  return substrateRefractiveIndex({
+    substrateMaterial: item.material ?? '',
+    substrateIndexNd: finite(item.refractiveIndexNd, 1),
+    substrateAbbeNumber: item.abbeNumber ?? 0,
+  }, wavelengthNm);
 }
 
 function calculateGeometricPathLength(design: CoherentAssemblyDesign, path: CoherentPathDefinition): number {

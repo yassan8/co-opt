@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   buildDetectorDisplayRaster,
   calculateImagingDetectorSignal,
@@ -47,7 +47,7 @@ const format = (value: unknown, digits = 3): string => Number.isFinite(Number(va
 type DisplayQuantity = 'adu' | 'electrons' | 'power';
 type AreaResult = {
   signal: ImagingDetectorSignal;
-  propagation: 'port-routed-exact' | 'coherent-field' | 'intensity-fallback';
+  propagation: 'port-routed-exact' | 'routed-coherent' | 'coherent-field' | 'intensity-fallback';
   spectralModeCount: number;
   interferingModeCount: number;
   complexKernelCount: number;
@@ -191,7 +191,107 @@ function detectorId(detector: CoherentDetectorSpec, index: number): string {
   return String(detector.id ?? detector.componentId ?? `detector-${index + 1}`);
 }
 
-function ImagingSignalCanvas({ signal, quantity, logScale }: { signal: ImagingDetectorSignal; quantity: DisplayQuantity; logScale: boolean }) {
+interface AxisTick {
+  value: number;
+  positionPercent: number;
+  label: string;
+}
+
+function formatAxisTick(value: number, step = 0): string {
+  const zeroTolerance = step > 0 ? step * 1e-8 : 1e-12;
+  if (Math.abs(value) <= zeroTolerance) return '0';
+  const magnitude = Math.abs(value);
+  if (magnitude >= 1e6 || magnitude < 1e-4) return value.toExponential(1);
+  if (step > 0 && Number.isFinite(step)) {
+    const decimals = Math.max(0, Math.min(6, -Math.floor(Math.log10(step))));
+    return value.toFixed(decimals).replace(/(\.\d*?[1-9])0+$|\.0+$/u, '$1');
+  }
+  if (magnitude >= 100) return value.toFixed(0);
+  if (magnitude >= 10) return value.toFixed(1).replace(/\.0$/u, '');
+  return value.toFixed(2).replace(/(\.\d*?[1-9])0+$|\.0+$/u, '$1');
+}
+
+function niceAxisStep(minimum: number, maximum: number, targetIntervals = 6): number {
+  const rawStep = Math.abs(maximum - minimum) / Math.max(1, targetIntervals);
+  if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
+  const exponent = 10 ** Math.floor(Math.log10(rawStep));
+  const fraction = rawStep / exponent;
+  const niceFraction = fraction <= 1.5 ? 1 : fraction <= 3 ? 2 : fraction <= 7 ? 5 : 10;
+  return niceFraction * exponent;
+}
+
+function buildAxisTicks(minimum: number, maximum: number, targetIntervals = 6): AxisTick[] {
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return [];
+  const lower = Math.min(minimum, maximum);
+  const upper = Math.max(minimum, maximum);
+  if (Math.abs(upper - lower) <= 1e-15) {
+    return [{ value: lower, positionPercent: 50, label: formatAxisTick(lower) }];
+  }
+  const step = niceAxisStep(lower, upper, targetIntervals);
+  const epsilon = step * 1e-8;
+  const first = Math.ceil((lower - epsilon) / step) * step;
+  const last = Math.floor((upper + epsilon) / step) * step;
+  const values: number[] = [];
+  for (let value = first; value <= last + epsilon && values.length < 24; value += step) {
+    values.push(Math.abs(value) <= epsilon ? 0 : Number(value.toPrecision(12)));
+  }
+  if (lower < 0 && upper > 0 && !values.some((value) => value === 0)) values.push(0);
+  if (values.length < 2) values.push(lower, upper);
+  return [...new Set(values)]
+    .sort((a, b) => a - b)
+    .map((value) => ({
+      value,
+      positionPercent: (value - minimum) / (maximum - minimum) * 100,
+      label: formatAxisTick(value, step),
+    }));
+}
+
+function PlotAxes({
+  xMinimum,
+  xMaximum,
+  yMinimum,
+  yMaximum,
+  xLabel,
+  yLabel,
+  children,
+  className = '',
+  imageAspectRatio,
+}: {
+  xMinimum: number;
+  xMaximum: number;
+  yMinimum: number;
+  yMaximum: number;
+  xLabel: string;
+  yLabel: string;
+  children: ReactNode;
+  className?: string;
+  imageAspectRatio?: number;
+}) {
+  const xTicks = buildAxisTicks(xMinimum, xMaximum);
+  const yTicks = buildAxisTicks(yMinimum, yMaximum);
+  return <div className={`coherent-signal-axis-frame ${className}`.trim()}
+    style={imageAspectRatio ? { '--detector-aspect-ratio': imageAspectRatio } as CSSProperties : undefined}>
+    <div className="coherent-signal-axis-title coherent-signal-axis-title--y">{yLabel}</div>
+    <div className="coherent-signal-axis-ticks coherent-signal-axis-ticks--y">
+      {yTicks.map((tick) => <span
+        key={`y-${tick.value}`}
+        className={tick.value === 0 ? 'is-zero' : ''}
+        style={{ top: `${tick.positionPercent}%` }}
+      >{tick.label}</span>)}
+    </div>
+    <div className="coherent-signal-axis-body">{children}</div>
+    <div className="coherent-signal-axis-ticks coherent-signal-axis-ticks--x">
+      {xTicks.map((tick) => <span
+        key={`x-${tick.value}`}
+        className={tick.value === 0 ? 'is-zero' : ''}
+        style={{ left: `${tick.positionPercent}%` }}
+      >{tick.label}</span>)}
+    </div>
+    <div className="coherent-signal-axis-title coherent-signal-axis-title--x">{xLabel}</div>
+  </div>;
+}
+
+function ImagingSignalCanvas({ signal, quantity, logScale, pixelPitchUm }: { signal: ImagingDetectorSignal; quantity: DisplayQuantity; logScale: boolean; pixelPitchUm: number }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -215,9 +315,22 @@ function ImagingSignalCanvas({ signal, quantity, logScale }: { signal: ImagingDe
     }
     context.putImageData(image, 0, 0);
   }, [logScale, quantity, signal]);
-  return <div className="coherent-signal-detector-stage" aria-label="Area Detector pixel boundary">
-    <canvas ref={ref} className="coherent-signal-heatmap" aria-label={`${quantity} detector signal`} />
-  </div>;
+  const halfWidthMm = signal.width * Math.max(1e-9, finite(pixelPitchUm, 1)) * 0.0005;
+  const halfHeightMm = signal.height * Math.max(1e-9, finite(pixelPitchUm, 1)) * 0.0005;
+  return <PlotAxes
+    xMinimum={-halfWidthMm}
+    xMaximum={halfWidthMm}
+    yMinimum={-halfHeightMm}
+    yMaximum={halfHeightMm}
+    xLabel="Detector X (mm)"
+    yLabel="Detector Y (mm)"
+    className="coherent-signal-axis-frame--detector"
+    imageAspectRatio={signal.width / signal.height}
+  >
+    <div className="coherent-signal-detector-stage" aria-label="Area Detector pixel boundary" style={{ aspectRatio: `${signal.width} / ${signal.height}` }}>
+      <canvas ref={ref} className="coherent-signal-heatmap" aria-label={`${quantity} detector signal`} />
+    </div>
+  </PlotAxes>;
 }
 
 function CoherenceEnvelopeCanvas({ result }: { result: CoherentSurfaceSimulationResult }) {
@@ -256,9 +369,23 @@ function CoherenceEnvelopeCanvas({ result }: { result: CoherentSurfaceSimulation
     }
     context.stroke();
   }, [result]);
-  return <div className="coherent-signal-reconstruction-image-stage">
-    <canvas ref={ref} className="coherent-signal-reconstruction-image" aria-label="Coherence envelope and detected depth ridge" />
-  </div>;
+  const xMinimum = result.xMm[0] ?? 0;
+  const xMaximum = result.xMm[result.xMm.length - 1] ?? result.width - 1;
+  const yMinimum = result.yMm[0] ?? 0;
+  const yMaximum = result.yMm[result.yMm.length - 1] ?? result.height - 1;
+  return <PlotAxes
+    xMinimum={xMinimum}
+    xMaximum={xMaximum}
+    yMinimum={yMinimum}
+    yMaximum={yMaximum}
+    xLabel="Target X (mm)"
+    yLabel="Detector Y (mm)"
+    className="coherent-signal-axis-frame--reconstruction"
+  >
+    <div className="coherent-signal-reconstruction-image-stage">
+      <canvas ref={ref} className="coherent-signal-reconstruction-image" aria-label="Coherence envelope and detected depth ridge" />
+    </div>
+  </PlotAxes>;
 }
 
 function HeightProfileCanvas({ result }: { result: Pick<CoherentSurfaceSimulationResult, 'xMm' | 'targetHeightUm' | 'recoveredHeightUm'> }) {
@@ -288,16 +415,29 @@ function HeightProfileCanvas({ result }: { result: Pick<CoherentSurfaceSimulatio
     const plotHeight = height - inset.top - inset.bottom;
     const px = (value: number) => inset.left + (value - xMinimum) / Math.max(1e-12, xMaximum - xMinimum) * plotWidth;
     const py = (value: number) => inset.top + (zMaximum - value) / Math.max(1e-12, zMaximum - zMinimum) * plotHeight;
-    context.strokeStyle = '#e1e7ef';
     context.lineWidth = 1;
     context.fillStyle = '#66758a';
     context.font = '12px system-ui, sans-serif';
-    for (let tick = 0; tick <= 4; tick += 1) {
-      const y = inset.top + tick * plotHeight / 4;
-      const value = zMaximum - tick * (zMaximum - zMinimum) / 4;
+    context.textAlign = 'right';
+    for (const tick of buildAxisTicks(zMinimum, zMaximum)) {
+      const y = py(tick.value);
+      context.strokeStyle = tick.value === 0 ? '#b8c3d2' : '#e1e7ef';
       context.beginPath(); context.moveTo(inset.left, y); context.lineTo(width - inset.right, y); context.stroke();
-      context.fillText(value.toFixed(1), 5, y + 4);
+      context.fillStyle = tick.value === 0 ? '#35465d' : '#66758a';
+      context.font = tick.value === 0 ? '600 12px system-ui, sans-serif' : '12px system-ui, sans-serif';
+      context.fillText(tick.label, inset.left - 8, y + 4);
     }
+    context.textAlign = 'center';
+    for (const tick of buildAxisTicks(xMinimum, xMaximum)) {
+      const x = px(tick.value);
+      context.strokeStyle = tick.value === 0 ? '#b8c3d2' : '#e1e7ef';
+      context.beginPath(); context.moveTo(x, inset.top); context.lineTo(x, height - inset.bottom); context.stroke();
+      context.fillStyle = tick.value === 0 ? '#35465d' : '#66758a';
+      context.font = tick.value === 0 ? '600 12px system-ui, sans-serif' : '12px system-ui, sans-serif';
+      context.fillText(tick.label, x, height - inset.bottom + 17);
+    }
+    context.textAlign = 'left';
+    context.font = '12px system-ui, sans-serif';
     context.strokeStyle = '#7a8799';
     context.strokeRect(inset.left, inset.top, plotWidth, plotHeight);
     const draw = (values: number[], color: string, lineWidth: number) => {
@@ -330,7 +470,8 @@ function TimeSignalCanvas({ result }: { result: NonSequentialDetectorResult }) {
     const canvas = ref.current;
     if (!canvas) return;
     const width = 900;
-    const height = 280;
+    const height = 300;
+    const inset = { left: 76, right: 18, top: 18, bottom: 42 };
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext('2d');
@@ -347,21 +488,53 @@ function TimeSignalCanvas({ result }: { result: NonSequentialDetectorResult }) {
       maximum = Math.max(maximum, finite(value));
     }
     const span = Math.max(1e-30, maximum - minimum);
-    context.strokeStyle = 'rgba(142, 164, 194, 0.22)';
+    const times = result.timeSeconds ?? [];
+    const minimumTime = times.length ? finite(times[0]) : 0;
+    const maximumTime = times.length ? finite(times[times.length - 1], values.length - 1) : values.length - 1;
+    const plotWidth = width - inset.left - inset.right;
+    const plotHeight = height - inset.top - inset.bottom;
+    const timeScale = Math.abs(maximumTime) < 1e-6 ? 1e9 : Math.abs(maximumTime) < 1e-3 ? 1e6 : Math.abs(maximumTime) < 1 ? 1e3 : 1;
+    const timeUnit = timeScale === 1e9 ? 'ns' : timeScale === 1e6 ? 'µs' : timeScale === 1e3 ? 'ms' : 's';
     context.lineWidth = 1;
-    for (let grid = 1; grid < 4; grid += 1) {
-      const y = grid * height / 4;
-      context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke();
+    context.fillStyle = '#9fb1c9';
+    context.font = '12px system-ui, sans-serif';
+    for (const tick of buildAxisTicks(minimum, maximum, 5)) {
+      const y = inset.top + (maximum - tick.value) / span * plotHeight;
+      context.strokeStyle = tick.value === 0 ? 'rgba(184, 204, 232, 0.45)' : 'rgba(142, 164, 194, 0.22)';
+      context.beginPath(); context.moveTo(inset.left, y); context.lineTo(width - inset.right, y); context.stroke();
+      context.textAlign = 'right';
+      context.fillStyle = tick.value === 0 ? '#dbe7f8' : '#9fb1c9';
+      context.fillText(tick.label, inset.left - 8, y + 4);
     }
+    const scaledMinimumTime = minimumTime * timeScale;
+    const scaledMaximumTime = maximumTime * timeScale;
+    for (const tick of buildAxisTicks(scaledMinimumTime, scaledMaximumTime, 5)) {
+      const x = inset.left + (tick.value - scaledMinimumTime) / Math.max(1e-30, scaledMaximumTime - scaledMinimumTime) * plotWidth;
+      context.strokeStyle = tick.value === 0 ? 'rgba(184, 204, 232, 0.45)' : 'rgba(142, 164, 194, 0.22)';
+      context.beginPath(); context.moveTo(x, inset.top); context.lineTo(x, height - inset.bottom); context.stroke();
+      context.textAlign = 'center';
+      context.fillStyle = tick.value === 0 ? '#dbe7f8' : '#9fb1c9';
+      context.fillText(tick.label, x, height - inset.bottom + 18);
+    }
+    context.strokeStyle = '#7a8799';
+    context.strokeRect(inset.left, inset.top, plotWidth, plotHeight);
     context.strokeStyle = '#65a8ff';
     context.lineWidth = 1.5;
     context.beginPath();
     values.forEach((raw, index) => {
-      const x = index / Math.max(1, values.length - 1) * (width - 1);
-      const y = height - 1 - (finite(raw) - minimum) / span * (height - 1);
+      const x = inset.left + index / Math.max(1, values.length - 1) * plotWidth;
+      const y = inset.top + (maximum - finite(raw)) / span * plotHeight;
       if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
     });
     context.stroke();
+    context.fillStyle = '#9fb1c9';
+    context.textAlign = 'center';
+    context.fillText(`Time (${timeUnit})`, inset.left + plotWidth / 2, height - 8);
+    context.save();
+    context.translate(16, inset.top + plotHeight / 2);
+    context.rotate(-Math.PI / 2);
+    context.fillText('Power (W)', 0, 0);
+    context.restore();
   }, [result]);
   return <canvas ref={ref} className="coherent-signal-timeplot" aria-label="Time detector signal" />;
 }
@@ -567,7 +740,11 @@ export function CoherentSignalPage() {
       const nextPsfByDetector: Record<string, FieldPsfComputeResult> = {};
       let firstPsf: FieldPsfComputeResult | null = null;
       const exactPsfWarnings: string[] = [];
-      const psfJobs = Array.from(jobs.values());
+      // A point-source PSF of the nearest standalone lens has a different
+      // conjugate/pupil from the complete routed interferometer. Routed fields
+      // already carry all physical lens OPL to the Camera; do not filter them
+      // through that standalone PSF again. Sequential PSF analysis is unchanged.
+      const psfJobs = routedResult ? [] : Array.from(jobs.values());
       for (let jobIndex = 0; jobIndex < psfJobs.length; jobIndex += 1) {
         const job = psfJobs[jobIndex];
         if (!job.opticalRows.length) throw new Error(`${job.sequenceLabel} has no exact sequential optical surfaces.`);
@@ -664,23 +841,24 @@ export function CoherentSignalPage() {
           const calibrationNote = opdCalibrationMm !== 0
             ? `OPD calibration ${opdCalibrationMm.toFixed(6)} mm is applied as an equivalent delay; Physical OPD remains ${physicalOpdMm.toFixed(6)} mm.`
             : '';
-          const coherent = detectorPsf ? await convolveDetectorFieldsInWorker({
+          const coherent = await convolveDetectorFieldsInWorker({
             spectralFields: routedDetector.spectralFields,
             width: routedDetector.width,
             height: routedDetector.height,
             detector: spec,
-            spectralPsf: detectorPsf.spectralComponents,
+            spectralPsf: [],
+            inputPlane: 'detector',
           }, cancel, (completedModes, totalModes) => {
             if (tokenId !== runToken.current || cancel.aborted) return;
             const fraction = completedModes / Math.max(1, totalModes);
             const percent = Math.min(97, 90 + fraction * 7);
             setProgress({ percent, message: `Converting Detector ${detectorIndex + 1}/${branchDetectors.length} · ${completedModes}/${totalModes} modes`, running: true, visible: true });
             setStatus(`Converting Camera modes · ${completedModes}/${totalModes} · ${Math.round(percent)}%`);
-          }) : null;
+          });
           if (coherent) {
             nextAreaResults[detectorResult.detectorId] = {
               signal: coherent.signal,
-              propagation: 'coherent-field',
+              propagation: 'routed-coherent',
               spectralModeCount: coherent.spectralModeCount,
               interferingModeCount: coherent.interferingModeCount,
               complexKernelCount: coherent.complexKernelCount,
@@ -867,13 +1045,14 @@ export function CoherentSignalPage() {
           const flatReferenceDetectorTrace = flatReferenceRoutedResult?.detectors
             .find((entry) => entry.detectorId === detectorEntry.id);
           const detectorPsf = nextPsfByDetector[detectorEntry.id] ?? firstPsf;
-          const flatReferenceSignal = flatReferenceDetectorTrace && detectorPsf
+          const flatReferenceSignal = flatReferenceDetectorTrace
             ? (await convolveDetectorFieldsInWorker({
               spectralFields: flatReferenceDetectorTrace.spectralFields,
               width: flatReferenceDetectorTrace.width,
               height: flatReferenceDetectorTrace.height,
               detector: detectorEntry.detector,
-              spectralPsf: detectorPsf.spectralComponents,
+              spectralPsf: [],
+              inputPlane: 'detector',
             }, cancel))?.signal
             : null;
           const routedMetrologyCamera = cameraDetectorTrace
@@ -1225,6 +1404,8 @@ export function CoherentSignalPage() {
   const selectedRecoveredStepUm = selectedSurfaceReconstruction
     ? recoveredStepHeightUm(selectedSurfaceReconstruction.result, design.target)
     : null;
+  const surfaceReconstructionBlockingSummary = selectedSurfaceReconstruction?.blockingReasons[0]
+    ?? 'The Camera signal does not satisfy the physical sampling conditions required for a quantitative surface profile.';
   const isDualCombDesign = (design.sources?.length ? design.sources : [design.source])
     .filter((source) => source.kind === 'frequency-comb').length >= 2;
   const compileErrors = compiledSystem?.issues.filter((issue) => issue.severity === 'error') ?? [];
@@ -1257,9 +1438,9 @@ export function CoherentSignalPage() {
             {detectorEntries.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
           </select>
         </label>
-        <label className="window-inline-field coherent-signal-control">
+        <label className="window-inline-field coherent-signal-control" title="Standalone Sequential PSF only. Routed Camera sampling is set on the physical source.">
           <span>PSF pupil sampling</span>
-          <select value={samplingSize} onChange={(event) => {
+          <select value={samplingSize} disabled={hasPhysicalSignalPath && (automaticSceneRouting || design.portRoutes?.some(route => route.enabled !== false))} onChange={(event) => {
             setSamplingSize(Number(event.target.value));
             clearComputedResults();
             setStatus('Settings changed · press Run');
@@ -1336,14 +1517,14 @@ export function CoherentSignalPage() {
     <main className="coherent-signal-results-grid">
       {selectedEntry?.detector.kind !== 'time' ? <>
         <section className="coherent-signal-result-card coherent-signal-result-card--primary">
-          <header><div><h2>{selectedEntry?.label ?? 'Detector'} · Physical signal</h2><p>{selectedAreaResult?.propagation === 'coherent-field' ? 'Port-routed complex fields pass through the exact-lens coherent PSF and interfere by wavelength and coherence group.' : selectedAreaResult?.propagation === 'port-routed-exact' ? (automaticSceneRouting ? 'Automatic scene tracing traverses every inferred physical branch and Exact Sequential Group.' : 'Saved Optical Routes traverse every Exact Sequential Group and physical component in order.') : 'Assembly amplitude and phase pass through the exact sequential-lens complex PSF before detector conversion.'}</p></div></header>
+          <header><div><h2>{selectedEntry?.label ?? 'Detector'} · Physical signal</h2><p>{selectedAreaResult?.propagation === 'routed-coherent' ? 'Complex amplitudes traced through the complete optical routes to the Camera are combined by wavelength and coherence group. No standalone lens PSF is applied again.' : selectedAreaResult?.propagation === 'coherent-field' ? 'Complex fields pass through the exact-lens coherent PSF and interfere by wavelength and coherence group.' : selectedAreaResult?.propagation === 'port-routed-exact' ? (automaticSceneRouting ? 'Automatic scene tracing traverses every inferred physical branch and Exact Sequential Group.' : 'Saved Optical Routes traverse every Exact Sequential Group and physical component in order.') : 'Assembly amplitude and phase pass through the exact sequential-lens complex PSF before detector conversion.'}</p></div></header>
           {selectedAreaResult && selectedRawResult ? <>
             <figure className="coherent-signal-figure">
-              <ImagingSignalCanvas signal={selectedAreaResult.signal} quantity={quantity} logScale={logScale} />
+              <ImagingSignalCanvas signal={selectedAreaResult.signal} quantity={quantity} logScale={logScale} pixelPitchUm={finite(selectedEntry?.detector.pixelPitchUm, 1)} />
               <figcaption>{quantity === 'adu' ? 'ADU' : quantity === 'electrons' ? 'Electrons / pixel' : 'W / pixel'} · {logScale ? 'Log' : 'Linear'} · {selectedAreaResult.signal.width} × {selectedAreaResult.signal.height} pixels</figcaption>
             </figure>
             <div className="coherent-signal-metrics">
-              <span>Propagation<strong>{selectedAreaResult.propagation === 'port-routed-exact' ? 'Port-routed exact' : selectedAreaResult.propagation === 'coherent-field' ? 'Complex field + exact lens' : 'Intensity fallback'}</strong></span>
+              <span>Propagation<strong>{selectedAreaResult.propagation === 'routed-coherent' ? 'Routed wavefront · ray-based' : selectedAreaResult.propagation === 'port-routed-exact' ? 'Port-routed exact' : selectedAreaResult.propagation === 'coherent-field' ? 'Complex field + exact lens' : 'Intensity fallback'}</strong></span>
               <span>Detected<strong>{selectedAreaResult.signal.integratedPowerW.toExponential(4)} W</strong></span>
               <span>Maximum<strong>{selectedAreaResult.signal.maximumPowerWPerPixel.toExponential(4)} W/pixel</strong></span>
               <span>Peak charge<strong>{selectedAreaResult.signal.maximumElectronsPerPixel.toExponential(4)} e⁻</strong></span>
@@ -1353,7 +1534,7 @@ export function CoherentSignalPage() {
               <span>Ray hit rate<strong>{selectedLaunchedRays > 0 ? `${format(selectedReachedRays / selectedLaunchedRays * 100, 2)}%` : '—'}</strong></span>
               <span>Interfering modes<strong>{selectedAreaResult.interferingModeCount.toLocaleString()}</strong></span>
               <span>Spectral modes<strong>{selectedAreaResult.spectralModeCount.toLocaleString()}</strong></span>
-              <span>Lens wavelengths<strong>{selectedAreaResult.complexKernelCount.toLocaleString()}</strong></span>
+              {selectedAreaResult.propagation !== 'routed-coherent' ? <span>Lens wavelengths<strong>{selectedAreaResult.complexKernelCount.toLocaleString()}</strong></span> : null}
               <span>Physical OPD<strong>{selectedRouteMetrics.length > 1 ? `${format(selectedPhysicalOpdMm, 6)} mm` : '—'}</strong></span>
               <span>Calibrated OPD<strong>{selectedRouteMetrics.length > 1 ? `${format(selectedCalibratedOpdMm, 6)} mm` : '—'}</strong></span>
               <span>Beam offset<strong>{selectedRouteMetrics.length > 1 ? `${format(selectedBeamOffsetMm, 4)} mm` : '—'}</strong></span>
@@ -1361,6 +1542,7 @@ export function CoherentSignalPage() {
               <span>Energy accounted<strong>{format(accountedEnergy, 2)}%</strong></span>
             </div>
             {selectedAreaResult.warning ? <div className="coherent-signal-warning">{selectedAreaResult.warning}</div> : null}
+            {selectedAreaResult.propagation === 'routed-coherent' ? <div className="coherent-signal-note">Ray-based wavefront reconstruction retains traced OPL, material dispersion and interference. Aperture diffraction and unresolved wavefront discontinuities are not a full wave-optics solution.</div> : null}
           </> : <div className="coherent-signal-empty">{hasPhysicalSignalPath ? 'No rays reached this detector.' : 'Connect this detector to the optical assembly.'}</div>}
         </section>
 
@@ -1368,7 +1550,7 @@ export function CoherentSignalPage() {
           <header><div><h2>{routeMetrics.length > 0 ? 'Single-group PSF reference' : 'Exact lens reference'} · {selectedSequenceLabel}</h2><p>{routeMetrics.length > 0 ? 'Diagnostic reference only; it does not replace or post-process the Port-routed physical signal.' : 'Sequential lens PSF on the selected detector without Beam Splitter, grating, target or path loss.'}</p></div></header>
           {selectedReference ? <>
             <figure className="coherent-signal-figure">
-              <ImagingSignalCanvas signal={selectedReference} quantity={quantity} logScale={logScale} />
+              <ImagingSignalCanvas signal={selectedReference} quantity={quantity} logScale={logScale} pixelPitchUm={finite(selectedEntry?.detector.pixelPitchUm, 1)} />
               <figcaption>Reference only · {selectedReference.width} × {selectedReference.height} pixels</figcaption>
             </figure>
             <div className="coherent-signal-metrics">
@@ -1387,11 +1569,11 @@ export function CoherentSignalPage() {
               <span>PSF sample<strong>{format(selectedPsf.pixelSizeUm, 4)} µm</strong></span>
             </div>
             <div className="coherent-signal-note">The diagnostic detector-sized reference image is omitted for routed calculations. The physical Camera signal and exact-lens PSF metrics are unchanged.</div>
-          </> : <div className="coherent-signal-empty">Waiting for the exact sequential PSF.</div>}
+          </> : <div className="coherent-signal-empty">{routeMetrics.length > 0 ? 'Standalone PSF is not applied to routed Camera fields. Use the separate PSF analysis for a lens-design reference.' : 'Waiting for the exact sequential PSF.'}</div>}
         </section>
 
         {selectedSurfaceReconstruction && !selectedSurfaceReconstruction.usable ? <section className="coherent-signal-result-card coherent-signal-result-card--wide coherent-signal-reconstruction-card">
-          <header><div><h2>Surface reconstruction unavailable</h2><p>The Camera signal does not satisfy the physical sampling conditions required for a quantitative surface profile. The previous full-span orange curve was invalid and is no longer shown.</p></div></header>
+          <header><div><h2>Surface reconstruction unavailable</h2><p>{surfaceReconstructionBlockingSummary}</p></div></header>
           <div className="coherent-signal-metrics">
             <span>Target span sampled<strong>{format(selectedSurfaceReconstruction.sampledTargetSpanMm, 3)} mm · {format(selectedSurfaceReconstruction.targetCoverageFraction * 100, 1)}%</strong></span>
             <span>Configured Target span<strong>{format(design.target.spanMm, 3)} mm</strong></span>

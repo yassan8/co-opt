@@ -1,4 +1,5 @@
 import type { CoherentDetectorSpec } from './coherent-assembly.ts';
+import { reconstructCoherentRayField } from './coherent-ray-field.ts';
 
 const PLANCK_J_S = 6.62607015e-34;
 const LIGHT_M_S = 299792458;
@@ -761,6 +762,8 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
   detector: CoherentDetectorSpec;
   spectralPsf: CoherentPsfPlane[];
   collapseSpatialSamplesPerMode?: boolean;
+  /** Routed samples already include propagation through all lenses to Camera. */
+  inputPlane?: 'before-psf' | 'detector';
 }): CoherentFieldDetectorSignal | null {
   const width = Math.max(1, Math.round(finite(options.width, 1)));
   const height = Math.max(1, Math.round(finite(options.height, 1)));
@@ -776,7 +779,8 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
     && Number.isFinite(sample.wavelengthNm) && sample.wavelengthNm > 0
     && Number.isFinite(sample.fieldRe) && Number.isFinite(sample.fieldIm)
   ));
-  if (!planes.length || !samples.length) return null;
+  const detectorPlane = options.inputPlane === 'detector';
+  if ((!planes.length && !detectorPlane) || !samples.length) return null;
 
   // A complex PSF cell cannot resolve structure finer than its own physical
   // pitch. When the Detector pixels are much smaller, reconstruct on the PSF
@@ -787,7 +791,7 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
     const pitch = finite(plane.pixelSizeUm);
     return pitch > 0 ? Math.min(minimum, pitch) : minimum;
   }, Number.POSITIVE_INFINITY);
-  const calculationScale = Number.isFinite(finestPsfPitchUm)
+  const calculationScale = !detectorPlane && Number.isFinite(finestPsfPitchUm)
     ? Math.min(1, detectorPitchUm / finestPsfPitchUm)
     : 1;
   const calculationWidth = Math.max(1, Math.round(width * calculationScale));
@@ -807,6 +811,9 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
     return best;
   };
   const kernelFor = (index: number): ComplexKernelTap[] => {
+    // These fields already carry the physical lens OPL at the Camera plane.
+    // An unrelated standalone point-source PSF must not be applied a second time.
+    if (detectorPlane) return [{ dx: 0, dy: 0, re: 1, im: 0, power: 1 }];
     const cached = kernelCache.get(index);
     if (cached) return cached;
     const maximumTaps = calculationScale < 1
@@ -839,6 +846,7 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
     routeIdsByMode.set(modeKey, routeIds);
   }
   let inputFieldPowerW = 0;
+  let unresolvedRayFields = 0;
   if (options.collapseSpatialSamplesPerMode) {
     type ModeInput = {
       modeKey: string;
@@ -973,34 +981,27 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
       const kernel = kernelFor(nearestPlaneIndex(group.wavelengthNm));
       if (!kernel.length || !(group.totalPower > 0)) continue;
       const routeField = new Map<number, { re: number; im: number }>();
-      // Keep a deterministic spatial/phase cross-section without making the
-      // cost grow as Detector rays × every PSF cell. Route normalization below
-      // restores the total power represented by all samples in the group.
-      // Preserve enough of the physically traced pupil/field distribution for
-      // a smooth Detector image.  The old 64-ray cap produced a visible lattice
-      // and made Detector-rays/wavelength changes ineffective for reconstruction.
-      const maximumSpatialSamples = 256;
-      const representativeSamples = group.samples.length <= maximumSpatialSamples
-        ? group.samples
-        : Array.from({ length: maximumSpatialSamples }, (_, index) => (
-          group.samples[Math.min(
-            group.samples.length - 1,
-            Math.floor((index + 0.5) * group.samples.length / maximumSpatialSamples),
-          )]
-        ));
-      for (const sample of representativeSamples) {
-        const sourceX = toCalculationX(sample.pixelX);
-        const sourceY = toCalculationY(sample.pixelY);
+      // Never stride through the golden-angle pupil: selecting 256 of 4096
+      // rays creates deterministic spiral arms. Reconstruct the sampled field
+      // before PSF convolution and keep every ray in the unresolved fallback.
+      const continuous = reconstructCoherentRayField(group.samples, calculationWidth, calculationHeight, width, height);
+      const sampledField = continuous ?? new Map<number, { re: number; im: number }>();
+      if (!continuous) {
+        if (group.samples.length >= 32) unresolvedRayFields++;
+        for (const sample of group.samples) accumulateFractionalComplex(sampledField, calculationWidth, calculationHeight,
+          toCalculationX(sample.pixelX), toCalculationY(sample.pixelY), sample.fieldRe, sample.fieldIm);
+      }
+      for (const [sourceIndex, sample] of sampledField) {
+        const sourceX = sourceIndex % calculationWidth;
+        const sourceY = Math.floor(sourceIndex / calculationWidth);
         for (const tap of kernel) {
-          accumulateFractionalComplex(
-            routeField,
-            calculationWidth,
-            calculationHeight,
-            sourceX + tap.dx,
-            sourceY + tap.dy,
-            sample.fieldRe * tap.re - sample.fieldIm * tap.im,
-            sample.fieldRe * tap.im + sample.fieldIm * tap.re,
-          );
+          const x = sourceX + tap.dx, y = sourceY + tap.dy;
+          if (x < 0 || x >= calculationWidth || y < 0 || y >= calculationHeight) continue;
+          const index = y * calculationWidth + x;
+          const value = routeField.get(index) ?? { re: 0, im: 0 };
+          value.re += sample.re * tap.re - sample.im * tap.im;
+          value.im += sample.re * tap.im + sample.im * tap.re;
+          routeField.set(index, value);
         }
       }
       const reconstructedPower = Array.from(routeField.values()).reduce(
@@ -1151,10 +1152,13 @@ export function convolveDetectorFieldsWithCoherentPsf(options: {
     inputFieldPowerW,
     complexKernelCount: kernelCache.size,
     warning: [
-      planes.length < new Set(samples.map((sample) => sample.wavelengthNm.toPrecision(12))).size
+      unresolvedRayFields > 0
+        ? 'Some routed fields could not be reconstructed as a resolved smooth wavefront; all measured ray samples were retained without continuous interpolation.'
+        : '',
+      !detectorPlane && planes.length < new Set(samples.map((sample) => sample.wavelengthNm.toPrecision(12))).size
         ? `Exact-lens fields were sampled at ${planes.length} wavelength${planes.length === 1 ? '' : 's'} and matched to the nearest physical spectral line.`
         : '',
-      planes.some((plane) => !(Array.isArray(plane.fieldReal) && plane.fieldReal.length > 0 && Array.isArray(plane.fieldImag) && plane.fieldImag.length > 0))
+      !detectorPlane && planes.some((plane) => !(Array.isArray(plane.fieldReal) && plane.fieldReal.length > 0 && Array.isArray(plane.fieldImag) && plane.fieldImag.length > 0))
         ? 'Some exact-lens results supplied intensity only; their coherent kernel uses the measured PSF amplitude with zero residual phase.'
         : '',
       calculationScale < 1

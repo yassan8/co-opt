@@ -577,6 +577,7 @@ async function runDesktopNativePsfMapForPopup(payload: {
     referenceSphereCenterHint?: { x?: number; y?: number; z?: number };
     referenceSphereRadiusMmHint?: number;
     objectIndexHint?: number;
+    includeComplexField?: boolean;
 }) {
     const jobId = `native-psf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlistenProgress: null | (() => void) = null;
@@ -619,6 +620,7 @@ async function runDesktopNativePsfMapForPopup(payload: {
             zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Number(payload?.zeroPadTo) : undefined,
             recenterIfWrapped: !!payload?.recenterIfWrapped,
             propagationMode: payload?.propagationMode,
+            includeComplexField: payload?.includeComplexField === true,
             targetHitXGridMm: payload?.targetHitXGridMm,
             targetHitYGridMm: payload?.targetHitYGridMm,
             rayHitsUm: payload?.rayHitsUm,
