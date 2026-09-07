@@ -200,7 +200,7 @@ const defaultParameters: Record<PhysicalBlockType, Record<string, unknown>> = {
     backSurfaceReflectance: 0,
   },
   FoldMirror: { widthMm: 25, heightMm: 25, depthMm: 3, reflectance: 0.98 },
-  NDFilter: { widthMm: 25, heightMm: 25, depthMm: 3, transmission: 0.5 },
+  NDFilter: { widthMm: 25, heightMm: 25, depthMm: 3, transmission: 0.5, substrateMaterial: 'N-BK7', substrateIndexNd: 1.5168, substrateAbbeNumber: 64.17 },
   ReflectionGrating: { widthMm: 30, heightMm: 30, depthMm: 6, grooveDensityLinesPerMm: 600, order: 1, allowedOrders: [1], efficiency: 0.75, blazeAngleDeg: 0, blazeWavelengthNm: 550, delayModel: 'diffractive-phase', detectorMagnification: 1, grooveDirectionX: 0, grooveDirectionY: 1, grooveDirectionZ: 0 },
   Target: { widthMm: 50, heightMm: 50, depthMm: 5, profile: 'flat', interaction: 'specular', surfaceResponse: 'specular-normal', reflectance: 0.7, amplitudeUm: 0, periodMm: 2, stepPositionMm: 0, scatterSamples: 16, scatterA: 1, scatterB: 0.01, scatterG: 2, scatterSigmaDeg: 5, bsdfSamples: [] },
   AreaDetector: { pixelCountX: 1024, pixelCountY: 1024, pixelPitchUm: 5, quantumEfficiency: 0.8, fillFactor: 1, exposureTimeS: 0.01, saturationElectrons: 30000, bitDepth: 16, frontOnly: true, calibrationMinUm: -80, calibrationMaxUm: 80 },
@@ -418,6 +418,10 @@ function sourceFromBlock(block: Block | undefined, config: Configuration): Coher
     ceoFrequencyHz: comb ? Math.max(0, finite(p.ceoFrequencyHz, 20e6)) : undefined,
     lineCount: comb ? Math.max(1, Math.round(positive(p.lineCount, 101))) : undefined,
     lineWidthHz: comb ? positive(p.lineWidthHz, 1000) : undefined,
+    initialPhaseRad: finite(p.initialPhaseRad),
+    relativePhaseRad: finite(p.relativePhaseRad),
+    relativeDelayFs: finite(p.relativeDelayFs),
+    groupDelayDispersionFs2: finite(p.groupDelayDispersionFs2),
   };
 }
 

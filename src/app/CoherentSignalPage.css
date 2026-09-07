@@ -311,23 +311,132 @@
   margin: 0;
 }
 
-.coherent-signal-detector-stage {
+.coherent-signal-axis-frame {
+  display: grid;
+  grid-template-columns: 18px 42px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 16px 18px;
+  width: min(100%, calc(52vh + 60px));
+  min-width: 0;
+  margin: 0 auto;
+  color: var(--signal-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.coherent-signal-axis-frame--detector {
+  /* Cap height by limiting width proportionally, never by squashing the image.
+     The 60px axis gutter is outside the physical Detector rectangle. */
+  width: min(100%, calc(52vh * var(--detector-aspect-ratio, 1) + 60px));
+  grid-template-rows: auto 16px 18px;
+  align-self: start;
+}
+
+.coherent-signal-axis-body {
+  grid-column: 3;
+  grid-row: 1;
   display: flex;
-  width: min(100%, 52vh);
-  aspect-ratio: 1;
+  min-width: 0;
   align-items: center;
   justify-content: center;
+}
+
+.coherent-signal-axis-title {
+  color: #52647d;
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
+}
+
+.coherent-signal-axis-title--y {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  justify-self: center;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.coherent-signal-axis-title--x {
+  grid-column: 3;
+  grid-row: 3;
+  align-self: end;
+}
+
+.coherent-signal-axis-ticks {
+  color: var(--signal-muted);
+  line-height: 1;
+}
+
+.coherent-signal-axis-ticks--y {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  margin-right: 5px;
+}
+
+.coherent-signal-axis-ticks--x {
+  grid-column: 3;
+  grid-row: 2;
+  position: relative;
+  margin-top: 4px;
+}
+
+.coherent-signal-axis-ticks--y span,
+.coherent-signal-axis-ticks--x span {
+  position: absolute;
+  white-space: nowrap;
+}
+
+.coherent-signal-axis-ticks--y span {
+  right: 0;
+  transform: translateY(-50%);
+}
+
+.coherent-signal-axis-ticks--x span {
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.coherent-signal-axis-ticks--y span::after {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 2px);
+  width: 4px;
+  border-top: 1px solid #aab6c6;
+  content: '';
+}
+
+.coherent-signal-axis-ticks--x span::before {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  height: 4px;
+  border-left: 1px solid #aab6c6;
+  content: '';
+}
+
+.coherent-signal-axis-ticks span.is-zero {
+  color: #35465d;
+  font-weight: 700;
+}
+
+.coherent-signal-detector-stage {
+  position: relative;
+  width: 100%;
+  flex: 0 0 auto;
   margin: 0 auto;
-  border: 1px solid #243044;
+  outline: 1px solid #243044;
   border-radius: 6px;
   overflow: hidden;
   background: #737c88;
 }
 
 .coherent-signal-heatmap {
+  position: absolute;
+  inset: 0;
   display: block;
-  width: auto;
-  height: auto;
+  width: 100%;
+  height: 100%;
   max-width: 100%;
   max-height: 100%;
   flex: 0 0 auto;
@@ -379,6 +488,10 @@
   border: 1px solid #243044;
   border-radius: 6px;
   background: #020307;
+}
+
+body.dark-mode .coherent-signal-axis-title {
+  color: #a9b8cd;
 }
 
 .coherent-signal-reconstruction-image {

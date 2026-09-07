@@ -12,6 +12,7 @@ import {
 } from './coherent-assembly.ts';
 import { worldPortDirection, worldPortPosition } from './coherent-port-layout.ts';
 import type { CoherentDetectorFieldSample } from './detector-signal.ts';
+import { sourceSpectralPhaseRad, substrateRefractiveIndex } from './material-dispersion.ts';
 
 const TWO_PI = Math.PI * 2;
 const COOPERATIVE_RAY_CHUNK = 8192;
@@ -279,6 +280,7 @@ function launchRays(component: CoherentPhysicalComponent, source: any, options: 
   const divergenceTan = Math.tan(Math.max(0, finite(source.divergenceDeg, 0)) * Math.PI / 180);
   const rays: RoutedRay[] = [];
   for (const spectral of samples) {
+    const initialPhaseRad = sourceSpectralPhaseRad(source, spectral.frequencyHz);
     for (const sample of spatialSamples) {
       const offset = add(scale(xAxis, sample.gx * radius), scale(yAxis, sample.gy * radius));
       const rayDirection = normalize(add(direction, add(scale(xAxis, sample.gx * divergenceTan), scale(yAxis, sample.gy * divergenceTan))));
@@ -288,11 +290,11 @@ function launchRays(component: CoherentPhysicalComponent, source: any, options: 
         positionMm: add(center, offset),
         direction: rayDirection,
         wavelengthNm: spectral.wavelengthNm,
-        refractiveIndex: 1,
+        refractiveIndex: Math.max(1e-9, finite(source.ambientRefractiveIndex, 1)),
         opticalPathLengthMm: 0,
         amplitudeRe: Math.sqrt(powerW), amplitudeIm: 0,
         coherenceGroupId: String(source.coherenceGroupId ?? component.id), history: [component.id],
-        powerW, phaseRad: finite(source.initialPhaseRad, 0),
+        powerW, phaseRad: initialPhaseRad,
         pupilXmm: sample.gx * radius,
         pupilYmm: sample.gy * radius,
         frequencyHz: spectral.frequencyHz,
@@ -521,7 +523,7 @@ function beamSplitterPropagation(
     };
   }
 
-  const substrateIndex = Math.max(1e-9, finite(parameters.substrateIndexNd, finite(fallback?.substrateIndexNd, 1.5168)));
+  const substrateIndex = substrateRefractiveIndex(parameters, ray.wavelengthNm, fallback);
   if (model === 'cube') {
     const incidentIndex = Math.max(1e-9, finite(ray.refractiveIndex, 1));
     const entryOutwardNormal = worldPortDirection(component, entryPortId, 'to');
@@ -811,7 +813,7 @@ function applyComponentInteraction(
     powerFactor = finite(parameters.reflectance, powerFactor);
   } else if (component.kind === 'attenuator') {
     powerFactor = finite(parameters.transmission, finite(design.attenuatorTransmission, powerFactor));
-    const substrateIndex = Math.max(1e-9, finite(parameters.substrateIndexNd, 1.5168));
+    const substrateIndex = substrateRefractiveIndex(parameters, ray.wavelengthNm);
     const propagation = parallelSlabPropagation(ray, component, entryPortId, exitPortId, substrateIndex);
     if (!propagation) return null;
     positionMm = propagation.positionMm;
@@ -1101,8 +1103,9 @@ export async function runPortRoutedTrace(config: Configuration, options: PortRou
         if (!hit) { failureReason = `Ray did not reach ${step.arrival.blockId}:${step.arrival.portId}.`; continue; }
         const from = { ...ray.positionMm };
         ray.positionMm = hit.point;
-        ray.opticalPathLengthMm = finite(ray.opticalPathLengthMm) + hit.distanceMm * finite(ray.refractiveIndex, 1);
-        ray.phaseRad += TWO_PI * hit.distanceMm * 1e6 / ray.wavelengthNm;
+        const propagationOplMm = hit.distanceMm * finite(ray.refractiveIndex, 1);
+        ray.opticalPathLengthMm = finite(ray.opticalPathLengthMm) + propagationOplMm;
+        ray.phaseRad += TWO_PI * propagationOplMm * 1e6 / ray.wavelengthNm;
         if (segments.length < finite(options.renderRayLimit, 25000)) segments.push({ routeId: resolved.route.id, rayId: ray.id, sequence: stepIndex, fromMm: from, toMm: hit.point, kind: 'free-space', direction: step.direction, wavelengthNm: ray.wavelengthNm, powerW: ray.powerW });
         arrived.push(ray);
       }

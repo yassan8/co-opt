@@ -69,6 +69,7 @@
     "diag:image-simulation-ui": "node diagnostics/image-simulation-ui-repro.mjs",
     "diag:coherent-interferometer": "node --import tsx diagnostics/coherent-interferometer-verification.mjs",
     "diag:coherent-assembly": "node --import tsx diagnostics/coherent-assembly-verification.mjs",
+    "diag:coherent-dispersion": "node --import tsx diagnostics/coherent-dispersion-verification.mjs",
     "diag:automatic-assembly-routing": "node --import tsx diagnostics/automatic-assembly-routing-verification.mjs",
     "diag:optical-system-compiler": "node --import tsx diagnostics/optical-system-compiler-verification.mjs",
     "diag:port-routed-exact": "node --import tsx diagnostics/port-routed-exact-verification.mjs",
