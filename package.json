@@ -85,7 +85,10 @@
     "verify:analysis:wavefront": "node --import tsx diagnostics/analysis-verification.mjs --stage wavefront",
     "verify:analysis:diffraction": "node --import tsx diagnostics/analysis-verification.mjs --stage diffraction",
     "verify:analysis:integrated": "node --import tsx diagnostics/analysis-verification.mjs --stage integrated",
-    "verify:analysis:environment": "node --import tsx diagnostics/analysis-verification.mjs --stage environment"
+    "verify:analysis:environment": "node --import tsx diagnostics/analysis-verification.mjs --stage environment",
+    "verify:software": "node diagnostics/software-validation.mjs",
+    "verify:software:native": "node diagnostics/software-validation.mjs --native",
+    "verify:software:policy": "node --test diagnostics/software-validation/result-policy.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.3.0",

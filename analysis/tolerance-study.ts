@@ -68,6 +68,7 @@ export interface RequirementEvaluation {
   margin: number;
   passed: boolean;
   valid: boolean;
+  monitorOnly?: boolean;
   reason?: string;
 }
 
@@ -111,6 +112,17 @@ export interface SensitivityAnalysisResult {
   execution?: ToleranceExecutionSummary;
 }
 
+export function sensitivityContributionFractions(
+  parameters: Array<Pick<SensitivityParameterResult, 'parameterId' | 'impact'>>,
+): Record<string, number> {
+  const squared = parameters.map((entry) => ({
+    id: entry.parameterId,
+    value: Number.isFinite(entry.impact) && entry.impact > 0 ? entry.impact ** 2 : 0,
+  }));
+  const total = squared.reduce((sum, entry) => sum + entry.value, 0);
+  return Object.fromEntries(squared.map((entry) => [entry.id, total > 0 ? entry.value / total : 0]));
+}
+
 export interface MonteCarloRequirementSummary {
   requirementId: string;
   samples: number;
@@ -136,6 +148,7 @@ export interface MonteCarloTrialResult {
 export interface MonteCarloToleranceResult {
   method: 'monte-carlo';
   nominal: CandidateEvaluation;
+  monitorOnly?: boolean;
   seed: number;
   trialsRequested: number;
   trialsCompleted: number;
@@ -170,7 +183,7 @@ export interface ToleranceResultSummary {
 }
 
 export interface ToleranceProgress {
-  phase: 'nominal' | 'sensitivity' | 'compensation' | 'monte-carlo' | 'done';
+  phase: 'nominal' | 'sensitivity' | 'compensation' | 'monte-carlo' | 'done' | 'cancelled';
   completed: number;
   total: number;
   percent: number;
@@ -307,6 +320,16 @@ export function setToleranceVariableValue(systemConfig: any, configId: string, v
     : setDesignVariableValue(config, variableRef, value);
 }
 
+function isUsableToleranceNominal(parameter: ToleranceParameterSpec, nominalValue: number | null): nominalValue is number {
+  if (nominalValue === null || !Number.isFinite(nominalValue)) return false;
+  const identity = `${parameter.variableRef} ${parameter.label}`;
+  // Air/vacuum rows use zero as an internal material sentinel. Perturbing that
+  // sentinel creates a non-physical refractive index and invalidates every
+  // Monte-Carlo trial, so ignore stale auto-generated material parameters.
+  if (/\b(?:rindex|refractive\s*index|abbe)\b/i.test(identity) && nominalValue <= 0) return false;
+  return true;
+}
+
 export function computeRequirementViolation(operator: any, current: any, target: any, tolerance: any): number {
   const value = Number(current);
   const spec = Number(target);
@@ -338,11 +361,14 @@ export function buildCandidateEvaluation(requirementRows: any[], values: Map<str
     const raw = values.get(id);
     const current = Number(raw);
     const rowValid = Number.isFinite(current) && !errors.has(id);
+    const monitorOnly = row.analysisMonitor === true;
     const operator = (row.op === '<=' || row.op === '>=') ? row.op : '=';
-    const violation = rowValid ? computeRequirementViolation(operator, current, row.target, row.tol) : Number.POSITIVE_INFINITY;
+    const violation = monitorOnly && rowValid
+      ? 0
+      : rowValid ? computeRequirementViolation(operator, current, row.target, row.tol) : Number.POSITIVE_INFINITY;
     const weight = Math.max(0, finite(row.weight, 1));
     const contribution = Number.isFinite(violation) ? weight * violation : Number.POSITIVE_INFINITY;
-    const rowPassed = rowValid && violation <= 0;
+    const rowPassed = rowValid && (monitorOnly || violation <= 0);
     requirements.push({
       id,
       operand: String(row.operand ?? ''),
@@ -354,16 +380,20 @@ export function buildCandidateEvaluation(requirementRows: any[], values: Map<str
       weight,
       violation,
       contribution,
-      margin: rowValid ? computeRequirementMargin(operator, current, row.target, row.tol) : Number.NEGATIVE_INFINITY,
+      margin: rowValid
+        ? monitorOnly ? Math.max(Math.abs(current), 1e-12) : computeRequirementMargin(operator, current, row.target, row.tol)
+        : Number.NEGATIVE_INFINITY,
       passed: rowPassed,
       valid: rowValid,
+      monitorOnly,
       reason: errors.get(id),
     });
     if (!rowValid) valid = false;
     if (!rowPassed) passed = false;
     score = Number.isFinite(score + contribution) ? score + contribution : Number.POSITIVE_INFINITY;
   }
-  return { valid, passed: valid && passed, score, requirements };
+  const firstInvalid = requirements.find((entry) => !entry.valid);
+  return { valid, passed: valid && passed, score, requirements, reason: firstInvalid?.reason };
 }
 
 function abortIfRequested(signal?: AbortSignal): void {
@@ -373,6 +403,27 @@ function abortIfRequested(signal?: AbortSignal): void {
 function publishProgress(context: ToleranceRunContext, phase: ToleranceProgress['phase'], completed: number, total: number, message: string): void {
   const safeTotal = Math.max(1, total);
   context.onProgress?.({ phase, completed, total, percent: clamp(100 * completed / safeTotal, 0, 100), message });
+}
+
+function publishPercentProgress(
+  context: ToleranceRunContext,
+  phase: ToleranceProgress['phase'],
+  percent: number,
+  completed: number,
+  total: number,
+  message: string,
+): void {
+  context.onProgress?.({ phase, completed, total, percent: clamp(percent, 0, 100), message });
+}
+
+async function yieldToUi(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => setTimeout(resolve, 0));
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
 }
 
 function createExecutionState(): ToleranceExecutionState {
@@ -496,7 +547,8 @@ export async function runSensitivityAnalysis(context: ToleranceRunContext): Prom
   const execution = createExecutionState();
   const rows = selectedRequirements(context);
   abortIfRequested(context.signal);
-  publishProgress(context, 'nominal', 0, 1, 'Evaluating nominal design');
+  publishPercentProgress(context, 'nominal', 1, 0, 1, 'Preparing nominal design');
+  await yieldToUi();
   const parameters = context.study.parameters.filter((entry) => entry.enabled && entry.variableRef && (entry.minusTolerance > 0 || entry.plusTolerance > 0));
   const parameterEntries: Array<{
     parameter: ToleranceParameterSpec;
@@ -506,7 +558,7 @@ export async function runSensitivityAnalysis(context: ToleranceRunContext): Prom
   }> = [];
   for (const parameter of parameters) {
     const nominalValue = getToleranceVariableValue(context.systemConfig, parameter.configId, parameter.variableRef);
-    if (nominalValue === null) continue;
+    if (!isUsableToleranceNominal(parameter, nominalValue)) continue;
     const fraction = clamp(context.study.runSettings.sensitivityStepFraction, 0.001, 1);
     const fallbackTolerance = Math.max(parameter.minusTolerance, parameter.plusTolerance);
     const minusDelta = Math.max(Number.EPSILON, (parameter.minusTolerance || fallbackTolerance) * fraction);
@@ -514,6 +566,8 @@ export async function runSensitivityAnalysis(context: ToleranceRunContext): Prom
     parameterEntries.push({ parameter, nominalValue, minusDelta, plusDelta });
   }
   const nominal = (await evaluateCandidatesWithCompensation(context, [clone(context.systemConfig)], rows, execution))[0].evaluation;
+  publishPercentProgress(context, 'sensitivity', 5, 0, parameterEntries.length, 'Nominal design complete');
+  await yieldToUi();
   const evaluatedByParameter = new Map<string, { minus: CandidateEvaluation; plus: CandidateEvaluation }>();
   const results: SensitivityParameterResult[] = [];
   const invalidEvaluation = { valid: false, requirements: [], score: Infinity, passed: false } as CandidateEvaluation;
@@ -522,6 +576,16 @@ export async function runSensitivityAnalysis(context: ToleranceRunContext): Prom
     ? Math.max(1, Math.floor(clamp(Math.round(configuredBatchSize), 2, 128) / 2))
     : Math.max(1, parameterEntries.length);
   for (let start = 0; start < parameterEntries.length; start += pairBatchSize) {
+    const batchEnd = Math.min(parameterEntries.length, start + pairBatchSize);
+    publishPercentProgress(
+      context,
+      'sensitivity',
+      5 + 94 * start / Math.max(1, parameterEntries.length),
+      start,
+      parameterEntries.length,
+      `Preparing sensitivity ${start + 1}-${batchEnd}/${parameterEntries.length}`,
+    );
+    await yieldToUi();
     const candidates: any[] = [];
     const references: Array<{ parameterId: string; side: 'minus' | 'plus' }> = [];
     for (const entry of parameterEntries.slice(start, start + pairBatchSize)) {
@@ -543,6 +607,15 @@ export async function runSensitivityAnalysis(context: ToleranceRunContext): Prom
       current[reference.side] = entry.evaluation;
       evaluatedByParameter.set(reference.parameterId, current);
     });
+    publishPercentProgress(
+      context,
+      'sensitivity',
+      5 + 94 * batchEnd / Math.max(1, parameterEntries.length),
+      batchEnd,
+      parameterEntries.length,
+      `Sensitivity ${batchEnd}/${parameterEntries.length}`,
+    );
+    await yieldToUi();
   }
   for (let index = 0; index < parameterEntries.length; index += 1) {
     abortIfRequested(context.signal);
@@ -558,7 +631,9 @@ export async function runSensitivityAnalysis(context: ToleranceRunContext): Prom
       const p = plusRequirement?.current ?? null;
       const derivative = n !== null && m !== null && p !== null ? (p - m) / (plusDelta + minusDelta) : null;
       const change = n !== null ? Math.max(m === null ? Infinity : Math.abs(m - n), p === null ? Infinity : Math.abs(p - n)) : Infinity;
-      const scale = Math.max(Math.abs(nominalRequirement.margin), Math.abs(nominalRequirement.target) * 1e-6, 1e-12);
+      const scale = nominalRequirement.monitorOnly
+        ? Math.max(Math.abs(n ?? 0), 1e-12)
+        : Math.max(Math.abs(nominalRequirement.margin), Math.abs(nominalRequirement.target) * 1e-6, 1e-12);
       return {
         requirementId: nominalRequirement.id,
         nominal: n,
@@ -583,7 +658,6 @@ export async function runSensitivityAnalysis(context: ToleranceRunContext): Prom
       minusValid: minus.valid,
       plusValid: plus.valid,
     });
-    publishProgress(context, 'sensitivity', index + 1, parameterEntries.length, `Sensitivity ${index + 1}/${parameterEntries.length}`);
   }
   results.sort((a, b) => b.impact - a.impact);
   publishProgress(context, 'done', 1, 1, 'Sensitivity complete');
@@ -649,17 +723,36 @@ export async function runMonteCarloTolerance(context: ToleranceRunContext): Prom
   const startedAt = new Date().toISOString();
   const execution = createExecutionState();
   const rows = selectedRequirements(context);
-  const parameters = context.study.parameters.filter((entry) => entry.enabled && entry.variableRef && (entry.minusTolerance > 0 || entry.plusTolerance > 0));
+  const parameters = context.study.parameters.filter((entry) => {
+    if (!(entry.enabled && entry.variableRef && (entry.minusTolerance > 0 || entry.plusTolerance > 0))) return false;
+    return isUsableToleranceNominal(
+      entry,
+      getToleranceVariableValue(context.systemConfig, entry.configId, entry.variableRef),
+    );
+  });
   const trialsRequested = clamp(Math.round(context.study.runSettings.trials), 1, 100000);
   const random = mulberry32(context.study.runSettings.seed);
-  publishProgress(context, 'nominal', 0, 1, 'Evaluating nominal design');
+  publishPercentProgress(context, 'nominal', 1, 0, 1, 'Preparing nominal design');
+  await yieldToUi();
   const nominal = (await evaluateCandidatesWithCompensation(context, [clone(context.systemConfig)], rows, execution))[0].evaluation;
+  const monitorOnly = nominal.requirements.length > 0 && nominal.requirements.every((requirement) => requirement.monitorOnly);
+  publishPercentProgress(context, 'monte-carlo', 5, 0, trialsRequested, 'Nominal design complete');
+  await yieldToUi();
   const trials: MonteCarloTrialResult[] = [];
   let worstTrial: MonteCarloTrialResult | null = null;
   const batchSize = clamp(Math.round(finite(context.candidateBatchSize, 24)), 1, 128);
   for (let chunkStart = 0; chunkStart < trialsRequested; chunkStart += batchSize) {
     abortIfRequested(context.signal);
     const chunkEnd = Math.min(trialsRequested, chunkStart + batchSize);
+    publishPercentProgress(
+      context,
+      'monte-carlo',
+      5 + 94 * chunkStart / Math.max(1, trialsRequested),
+      chunkStart,
+      trialsRequested,
+      `Preparing trials ${chunkStart + 1}-${chunkEnd}/${trialsRequested}`,
+    );
+    await yieldToUi();
     const pending: Array<{ index: number; candidate: any | null; appliedDeltas: Record<string, number> }> = [];
     const validCandidates: any[] = [];
     const validPendingIndexes: number[] = [];
@@ -709,8 +802,15 @@ export async function runMonteCarloTolerance(context: ToleranceRunContext): Prom
       trials.push(trial);
       if (!worstTrial || (!trial.valid && worstTrial.valid) || trial.score > worstTrial.score) worstTrial = trial;
     }
-    publishProgress(context, 'monte-carlo', chunkEnd, trialsRequested, `Trials ${chunkEnd}/${trialsRequested}`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    publishPercentProgress(
+      context,
+      'monte-carlo',
+      5 + 94 * chunkEnd / Math.max(1, trialsRequested),
+      chunkEnd,
+      trialsRequested,
+      `Trials ${chunkEnd}/${trialsRequested}`,
+    );
+    await yieldToUi();
   }
   const validTrials = trials.filter((trial) => trial.valid).length;
   const passedTrials = trials.filter((trial) => trial.valid && trial.passed).length;
@@ -738,7 +838,8 @@ export async function runMonteCarloTolerance(context: ToleranceRunContext): Prom
     yield: validTrials > 0 ? passedTrials / validTrials : 0,
     yieldConfidence95: wilsonConfidence95(passedTrials, validTrials),
     requirements: summaries,
-    worstTrial,
+    worstTrial: monitorOnly ? null : worstTrial,
+    monitorOnly,
     trials,
     startedAt,
     elapsedMs: performance.now() - started,
@@ -747,13 +848,17 @@ export async function runMonteCarloTolerance(context: ToleranceRunContext): Prom
 }
 
 export function resultSummary(result: SensitivityAnalysisResult | MonteCarloToleranceResult): ToleranceResultSummary {
+  const monitorOnly = result.method === 'monte-carlo'
+    && (result.monitorOnly === true || (result.nominal.requirements.length > 0 && result.nominal.requirements.every((entry) => entry.monitorOnly)));
   return {
     method: result.method,
     completedAt: new Date().toISOString(),
     elapsedMs: result.elapsedMs,
-    yield: result.method === 'monte-carlo' ? result.yield : undefined,
+    yield: result.method === 'monte-carlo' && !monitorOnly ? result.yield : undefined,
     trialCount: result.method === 'monte-carlo' ? result.trialsCompleted : undefined,
-    parameterCount: result.method === 'sensitivity' ? result.parameters.length : Object.keys(result.worstTrial?.appliedDeltas || {}).length,
+    parameterCount: result.method === 'sensitivity'
+      ? result.parameters.length
+      : Object.keys(result.worstTrial?.appliedDeltas || result.trials[0]?.appliedDeltas || {}).length,
     requirementCount: result.nominal.requirements.length,
   };
 }

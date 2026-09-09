@@ -1,5 +1,10 @@
 # Analysis Verification Suite
 
+For the broader software audit (interferometers, Camera input independence,
+save-state/preflight checks, engineering studies, typecheck, and explicit
+unverified UI/runtime scope), see [Software validation (Japanese)](software-validation-ja.md).
+Run it with `npm run verify:software:native` when both Rust toolchains are available.
+
 The verification suite makes optical-analysis correctness reproducible instead of relying on visual inspection alone. It is intentionally ordered from shared ray-tracing physics to integrated image simulation; a downstream analysis is not considered verified while its dependencies are uncertain.
 
 ## Run

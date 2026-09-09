@@ -30,6 +30,33 @@ interface CoherentUpdateDetail extends ActiveCoherentDesignSnapshot {
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
+interface CoherentPersistOptions {
+  recordHistory?: boolean;
+  preserveRevision?: boolean;
+  configId?: string;
+}
+
+interface GlobalUndoHistory {
+  isExecuting?: boolean;
+  record?: (command: {
+    id: string;
+    description: string;
+    timestamp: number;
+    execute: () => void;
+    undo: () => void;
+  }) => void;
+}
+
+function designContentSignature(design: CoherentAssemblyDesign): string {
+  const { revision: _revision, ...content } = normalizeCoherentAssemblyDesign(design);
+  return JSON.stringify(content);
+}
+
+function historyDescription(reason: string): string {
+  const label = String(reason ?? '').trim().replace(/[-_]+/g, ' ');
+  return label ? `Edit Optical System: ${label}` : 'Edit Optical System';
+}
+
 function readSystemConfig(): any {
   // Prefer the in-memory Design Intent edit when it exists. Reading persisted
   // storage first made a quick "edit Source -> Run" sequence use the previous
@@ -106,6 +133,8 @@ function applyHybridDesignToConfiguration(active: any, design: CoherentAssemblyD
       spatialProfile: source.spatialProfile, coherenceGroupId: source.coherenceGroupId,
       repetitionRateHz: source.repetitionRateHz, ceoFrequencyHz: source.ceoFrequencyHz,
       lineCount: source.lineCount, lineWidthHz: source.lineWidthHz,
+      initialPhaseRad: source.initialPhaseRad, relativePhaseRad: source.relativePhaseRad,
+      relativeDelayFs: source.relativeDelayFs, groupDelayDispersionFs2: source.groupDelayDispersionFs2,
     });
   }
   for (const detector of design.detectors?.length ? design.detectors : [design.detector]) {
@@ -206,21 +235,21 @@ function coherentSnapshotContentSignature(snapshot: ActiveCoherentDesignSnapshot
 function persist(
   input: CoherentAssemblyDesign,
   reason: string,
-  options: { recordHistory?: boolean; preserveRevision?: boolean } = {},
+  options: CoherentPersistOptions = {},
 ): ActiveCoherentDesignSnapshot {
   const system = clone(readSystemConfig());
-  const active = activeConfig(system);
+  const selectedActive = activeConfig(system);
+  const requestedConfigId = String(options.configId ?? '').trim();
+  const active = requestedConfigId
+    ? (Array.isArray(system?.configurations)
+      ? system.configurations.find((entry: any) => String(entry?.id ?? '') === requestedConfigId)
+      : null)
+    : selectedActive;
   if (!active) throw new Error('Active configuration was not found.');
   const configId = String(active.id ?? '');
   const previous = buildHybridAssemblyFromConfiguration(active);
-  if (options.recordHistory !== false && JSON.stringify(previous) !== JSON.stringify(input)) {
-    const undo = undoByConfig.get(configId) ?? [];
-    undo.push(clone(previous));
-    if (undo.length > 100) undo.shift();
-    undoByConfig.set(configId, undo);
-    redoByConfig.set(configId, []);
-  }
   const authoredDesign = normalizeCoherentAssemblyDesign(input);
+  const changed = designContentSignature(previous) !== designContentSignature(authoredDesign);
   authoredDesign.revision = options.preserveRevision
     ? Math.max(0, Math.round(Number(authoredDesign.revision) || 0))
     : Math.max(Number(previous.revision) || 0, Number(authoredDesign.revision) || 0) + 1;
@@ -233,9 +262,42 @@ function persist(
   const design = buildHybridAssemblyFromConfiguration(active);
   design.revision = authoredDesign.revision;
   saveSystemConfigurations(system);
-  const snapshot = { design, configId, configName: String(active.name ?? 'Config') };
-  announce({ ...snapshot, origin: instanceId, reason });
-  return snapshot;
+  const targetSnapshot = { design, configId, configName: String(active.name ?? 'Config') };
+  const currentlySelected = activeConfig(system);
+  const announcedSnapshot = currentlySelected && String(currentlySelected.id ?? '') !== configId
+    ? {
+      design: buildHybridAssemblyFromConfiguration(currentlySelected),
+      configId: String(currentlySelected.id ?? ''),
+      configName: String(currentlySelected.name ?? 'Config'),
+    }
+    : targetSnapshot;
+  announce({ ...announcedSnapshot, origin: instanceId, reason });
+
+  if (options.recordHistory !== false && changed) {
+    const before = clone(previous);
+    const after = clone(authoredDesign);
+    const history = (typeof window !== 'undefined'
+      ? (window as Window & { undoHistory?: GlobalUndoHistory }).undoHistory
+      : undefined);
+    if (history && typeof history.record === 'function') {
+      history.record({
+        id: `coherent-design-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        description: historyDescription(reason),
+        timestamp: Date.now(),
+        execute: () => { persist(after, `redo:${reason}`, { recordHistory: false, configId }); },
+        undo: () => { persist(before, `undo:${reason}`, { recordHistory: false, configId }); },
+      });
+    } else {
+      // Headless/legacy callers without the global history retain the original
+      // coherent-design-only undo API as a fallback.
+      const undo = undoByConfig.get(configId) ?? [];
+      undo.push(before);
+      if (undo.length > 100) undo.shift();
+      undoByConfig.set(configId, undo);
+      redoByConfig.set(configId, []);
+    }
+  }
+  return targetSnapshot;
 }
 
 export function updateActiveCoherentDesign(
@@ -276,7 +338,7 @@ export function subscribeActiveCoherentDesign(
   let storageRefreshTimer: number | null = null;
   let lastDeliveredSignature = coherentSnapshotContentSignature(readActiveCoherentDesign());
   const deliver = (detail?: Partial<CoherentUpdateDetail>) => {
-    if (disposed || detail?.origin === instanceId) return;
+    if (disposed) return;
     const snapshot = detail?.design && detail.configId !== undefined
       ? { design: normalizeCoherentAssemblyDesign(detail.design), configId: String(detail.configId), configName: String(detail.configName ?? 'Config') }
       : readActiveCoherentDesign();

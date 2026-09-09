@@ -4,7 +4,9 @@
   --tol-text-soft: #5c6f8d;
   min-width: 760px;
   color: #14213a;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .tolerance-commandbar {
@@ -22,6 +24,7 @@
 .tolerance-options { min-width: 360px; max-height: min(70vh, 640px); overflow: auto; }
 .tolerance-requirements { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--tol-border); }
 .tolerance-requirements > span { color: var(--tol-text-soft); font-size: 12px; }
+.tolerance-requirements > small { color: var(--tol-text-soft); font-size: 11px; }
 .tolerance-requirements label { display: flex; align-items: center; gap: 7px; font-size: 12px; }
 
 .tolerance-progress { padding: 8px 14px; border-bottom: 1px solid var(--tol-border); background: white; }
@@ -30,7 +33,7 @@
 .tolerance-progress__track > div { height: 100%; background: #2f6fed; transition: width 120ms linear; }
 
 .tolerance-setup,
-.tolerance-results { margin: 12px; border: 1px solid var(--tol-border); border-radius: 9px; background: white; overflow: hidden; }
+.tolerance-results { flex: 0 0 auto; margin: 12px; border: 1px solid var(--tol-border); border-radius: 9px; background: white; overflow: hidden; }
 .tolerance-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding: 12px; background: var(--tol-soft); border-bottom: 1px solid var(--tol-border); }
 .tolerance-section-heading > div:first-child { display: grid; gap: 2px; }
 .tolerance-section-heading strong { font-size: 14px; }
@@ -39,6 +42,18 @@
 .tolerance-add-controls select { width: min(390px, 36vw); }
 
 .tolerance-table-wrap { width: 100%; overflow: auto; }
+.tolerance-running-setup {
+  min-height: 96px;
+  display: grid;
+  place-content: center;
+  gap: 5px;
+  padding: 18px;
+  color: var(--tol-text-soft);
+  text-align: center;
+  background: #fbfcfe;
+}
+.tolerance-running-setup strong { color: var(--tol-text); font-size: 13px; }
+.tolerance-running-setup span { font-size: 11px; }
 .tolerance-table { width: 100%; min-width: 720px; border-collapse: collapse; table-layout: auto; font-size: 12px; }
 .tolerance-table th { padding: 7px 9px; color: var(--tol-text-soft); text-align: left; font-weight: 600; background: #fbfcfe; border-bottom: 1px solid var(--tol-border); white-space: nowrap; }
 .tolerance-table td { padding: 7px 9px; border-bottom: 1px solid #e6ebf3; vertical-align: middle; }
@@ -61,11 +76,39 @@
 .tolerance-compensator-row label { display: grid; gap: 3px; font-size: 11px; color: var(--tol-text-soft); }
 .tolerance-compensator-row label:first-child { display: flex; align-items: center; color: inherit; font-size: 12px; }
 
-.tolerance-result-heading { display: flex; align-items: baseline; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--tol-border); background: var(--tol-soft); }
+.tolerance-results {
+  display: flex;
+  flex-direction: column;
+  min-height: 240px;
+  max-height: min(65vh, 720px);
+}
+.tolerance-result-heading { flex: 0 0 auto; display: flex; align-items: baseline; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--tol-border); background: var(--tol-soft); }
 .tolerance-result-heading strong { font-size: 13px; }
 .tolerance-result-heading span { color: var(--tol-text-soft); font-size: 11px; }
 .tolerance-empty-result { padding: 40px 16px; color: var(--tol-text-soft); text-align: center; }
-.tolerance-result-content { min-height: 160px; }
+.tolerance-result-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--analysis-scrollbar-thumb) transparent;
+}
+.tolerance-result-content::-webkit-scrollbar { width: 10px; }
+.tolerance-result-content::-webkit-scrollbar-track { background: transparent; }
+.tolerance-result-content::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--analysis-scrollbar-thumb);
+  background-clip: padding-box;
+}
+.tolerance-result-content::-webkit-scrollbar-thumb:hover {
+  background: var(--analysis-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
 .tolerance-metrics { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; border-bottom: 1px solid var(--tol-border); }
 .tolerance-metric { min-width: 135px; display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--tol-border); border-radius: 7px; background: #fbfcfe; }
 .tolerance-metric span,
@@ -77,6 +120,9 @@
 .tolerance-sensitivity-row > div:first-child { display: grid; gap: 2px; }
 .tolerance-sensitivity-row span,
 .tolerance-sensitivity-row small { color: var(--tol-text-soft); font-size: 11px; }
+.tolerance-contribution { display: grid; gap: 4px; }
+.tolerance-contribution > span { display: flex; align-items: baseline; justify-content: space-between; }
+.tolerance-contribution > span strong { color: var(--tol-text); font-size: 12px; }
 .tolerance-impact-track { height: 9px; overflow: hidden; border-radius: 5px; background: #edf1f7; }
 .tolerance-impact-track > div { height: 100%; min-width: 2px; border-radius: inherit; background: linear-gradient(90deg, #88aef1, #2f6fed); }
 .tolerance-impact-track > div.is-invalid { background: repeating-linear-gradient(135deg, #c93c49 0 6px, #e88c94 6px 12px); }

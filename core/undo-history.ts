@@ -203,6 +203,7 @@ export class SetBlockParameterCommand extends Command {
       systemConfig: sysConfig,
       activeConfigId: String((sysConfig as any)?.activeConfigId ?? (cfg as any)?.id ?? ''),
       changedPath: this.parameterPath,
+      refreshBlockInspector: true,
       triggerRender: true,
       debounceMs: 80,
     })) {
@@ -308,6 +309,18 @@ export class SetLensBendingCommand extends Command {
   }
 
   refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
+    if (requestDesignIntentUiRefresh({
+      systemConfig: sysConfig,
+      activeConfigId: String((sysConfig as any)?.activeConfigId ?? (cfg as any)?.id ?? ''),
+      changedPath: 'parameters.bending',
+      forceExpandedRows: true,
+      refreshBlockInspector: true,
+      triggerRender: true,
+      debounceMs: 80,
+    })) {
+      return;
+    }
+
     if (w.expandBlocksToOpticalSystemRows) {
       const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
       if (expanded && expanded.rows) {
@@ -351,31 +364,36 @@ export class SetSurfaceFieldCommand extends Command {
   }
   
   execute(): void {
-    const cfg = this.getConfig();
-    const surface = cfg.opticalSystemRows?.find((s: any) => s.id === this.surfaceId);
+    const sysConfig = w.loadSystemConfigurations();
+    const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId || String(c.id) === String(this.configId));
+    if (!cfg) return;
+    const rows = Array.isArray(cfg.opticalSystemRows)
+      ? cfg.opticalSystemRows
+      : (Array.isArray((cfg as any).opticalSystem) ? (cfg as any).opticalSystem : []);
+    const surface = rows.find((s: any) => String(s.id) === String(this.surfaceId));
     if (surface) {
       (surface as any)[this.field] = this.newValue;
-      this.saveAndRefresh();
+      this.saveAndRefresh(sysConfig);
     }
   }
   
   undo(): void {
-    const cfg = this.getConfig();
-    const surface = cfg.opticalSystemRows?.find((s: any) => s.id === this.surfaceId);
+    const sysConfig = w.loadSystemConfigurations();
+    const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId || String(c.id) === String(this.configId));
+    if (!cfg) return;
+    const rows = Array.isArray(cfg.opticalSystemRows)
+      ? cfg.opticalSystemRows
+      : (Array.isArray((cfg as any).opticalSystem) ? (cfg as any).opticalSystem : []);
+    const surface = rows.find((s: any) => String(s.id) === String(this.surfaceId));
     if (surface) {
       (surface as any)[this.field] = this.oldValue;
-      this.saveAndRefresh();
+      this.saveAndRefresh(sysConfig);
     }
   }
   
-  getConfig(): Configuration {
-    const sysConfig = w.loadSystemConfigurations();
-    return sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
-  }
-  
-  saveAndRefresh(): void {
+  saveAndRefresh(sysConfig: SystemConfigurations): void {
     if (w.saveSystemConfigurations) {
-      w.saveSystemConfigurations();
+      w.saveSystemConfigurations(sysConfig);
     }
     
     // Reload table to reflect changes

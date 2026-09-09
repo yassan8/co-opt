@@ -4,8 +4,10 @@ import {
   createDefaultToleranceStudy,
   getToleranceVariableValue,
   listToleranceCandidates,
+  resultSummary,
   runMonteCarloTolerance,
   runSensitivityAnalysis,
+  sensitivityContributionFractions,
   setToleranceVariableValue,
   wilsonConfidence95,
 } from '../analysis/tolerance-study.ts';
@@ -67,18 +69,44 @@ const sensitivity = await runSensitivityAnalysis({ systemConfig, study, requirem
 assert.equal(sensitivity.parameters.length, 1);
 assert(Math.abs(sensitivity.parameters[0].requirements[0].derivativePerUnit - 1) < 1e-12, 'Central sensitivity derivative must match the analytic value.');
 assert.equal(sensitivity.nominal.passed, true);
+const monitorRows = [{ ...requirementRows[0], id: 'MONITOR', analysisMonitor: true, op: '>=', target: 999 }];
+const invalidMonitor = buildCandidateEvaluation(monitorRows, new Map(), new Map([['MONITOR', 'No finite MTF value.']]));
+assert.equal(invalidMonitor.valid, false);
+assert.equal(invalidMonitor.reason, 'No finite MTF value.', 'Invalid monitor evaluations must retain a user-visible reason.');
+const monitorSensitivity = await runSensitivityAnalysis({ systemConfig, study, requirementRows: monitorRows, evaluateCandidate: evaluate });
+assert.equal(monitorSensitivity.nominal.passed, true, 'A sensitivity-only monitor must not become a failing specification.');
+assert.equal(monitorSensitivity.nominal.score, 0, 'A sensitivity-only monitor must not add merit violation.');
+assert.equal(monitorSensitivity.nominal.requirements[0].monitorOnly, true);
+assert(Math.abs(monitorSensitivity.parameters[0].requirements[0].normalizedImpact - 0.025) < 1e-12, 'Automatic monitor impact must be normalized to the nominal metric.');
+assert.deepEqual(
+  sensitivityContributionFractions([{ parameterId: 'A', impact: 3 }, { parameterId: 'B', impact: 4 }]),
+  { A: 0.36, B: 0.64 },
+  'Sensitivity contribution must use squared response and total 100%.',
+);
+const monitorTolerance = await runMonteCarloTolerance({ systemConfig, study, requirementRows: monitorRows, evaluateCandidate: evaluate });
+assert.equal(monitorTolerance.monitorOnly, true, 'A monitor-only Monte Carlo run must identify itself as distribution-only.');
+assert.equal(monitorTolerance.worstTrial, null, 'A monitor-only run must not invent a worst failing configuration.');
+assert.equal(monitorTolerance.requirements[0].validSamples, 64);
+assert(Number.isFinite(monitorTolerance.requirements[0].mean), 'A monitor-only run must still report metric statistics.');
+assert.equal(resultSummary(monitorTolerance).yield, undefined, 'A monitor-only run must not persist a fake 100% yield.');
+assert.equal(resultSummary(monitorTolerance).parameterCount, 1, 'Monitor-only summaries must retain the varied-parameter count.');
 candidateBatchCalls = 0;
 maximumCandidateBatch = 0;
+const sensitivityProgress = [];
 const batchedSensitivity = await runSensitivityAnalysis({
   systemConfig,
   study,
   requirementRows,
   evaluateCandidate: evaluate,
   evaluateCandidates: evaluateBatch,
+  onProgress: (entry) => sensitivityProgress.push(entry),
 });
 assert.deepEqual(batchedSensitivity.parameters, sensitivity.parameters, 'Batched sensitivity must preserve the serial numeric result.');
 assert.equal(candidateBatchCalls, 2, 'Uncompensated sensitivity must use one nominal batch and one minus/plus batch.');
 assert.equal(maximumCandidateBatch, 2);
+assert.equal(sensitivityProgress[0].percent, 1, 'Sensitivity must paint a non-zero preparing state before nominal evaluation.');
+assert.equal(sensitivityProgress.at(-1).percent, 100, 'Sensitivity progress must finish at 100%.');
+assert(sensitivityProgress.every((entry, index) => index === 0 || entry.percent >= sensitivityProgress[index - 1].percent), 'Sensitivity progress must not move backwards.');
 
 const first = await runMonteCarloTolerance({ systemConfig, study, requirementRows, evaluateCandidate: evaluate });
 const second = await runMonteCarloTolerance({ systemConfig, study, requirementRows, evaluateCandidate: evaluate });
@@ -87,6 +115,7 @@ assert.equal(first.trialsCompleted, 64);
 assert.equal(first.validTrials, 64);
 candidateBatchCalls = 0;
 maximumCandidateBatch = 0;
+const monteCarloProgress = [];
 const batchedMonteCarlo = await runMonteCarloTolerance({
   systemConfig,
   study,
@@ -94,11 +123,16 @@ const batchedMonteCarlo = await runMonteCarloTolerance({
   evaluateCandidate: evaluate,
   evaluateCandidates: evaluateBatch,
   candidateBatchSize: 16,
+  onProgress: (entry) => monteCarloProgress.push(entry),
 });
 assert.deepEqual(batchedMonteCarlo.trials, first.trials, 'Batched Monte Carlo must preserve seeded serial results exactly.');
 assert.equal(candidateBatchCalls, 5, '64 trials at batch size 16 must use one nominal batch plus four trial batches.');
 assert.equal(batchedMonteCarlo.execution.maximumBatchSize, 16);
 assert.equal(batchedMonteCarlo.execution.backend, 'candidate-batch');
+assert.equal(monteCarloProgress[0].percent, 1, 'Tolerance analysis must paint a non-zero preparing state before nominal evaluation.');
+assert.equal(monteCarloProgress.at(-1).percent, 100, 'Tolerance progress must finish at 100%.');
+assert(monteCarloProgress.some((entry) => entry.percent > 5 && entry.percent < 100), 'Tolerance analysis must report intermediate batch progress.');
+assert(monteCarloProgress.every((entry, index) => index === 0 || entry.percent >= monteCarloProgress[index - 1].percent), 'Tolerance progress must not move backwards.');
 
 const zeroStudy = clone(study);
 zeroStudy.parameters[0].minusTolerance = 0;

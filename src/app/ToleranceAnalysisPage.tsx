@@ -7,6 +7,7 @@ import {
   resultSummary,
   runMonteCarloTolerance,
   runSensitivityAnalysis,
+  sensitivityContributionFractions,
   setToleranceVariableValue,
   type MonteCarloToleranceResult,
   type SensitivityAnalysisResult,
@@ -20,7 +21,9 @@ import {
   evaluateRequirementsForToleranceCandidates,
 } from '../../analysis/tolerance-requirements-adapter.ts';
 import { loadSystemConfigurations, saveSystemConfigurations, type SystemConfiguration } from '../../data/table-configuration.ts';
+import { loadTableData as loadSystemRequirementsTableData } from '../../data/table-system-requirements.ts';
 import type { ToleranceVariableDescriptor } from '../../optimization/design-variables.ts';
+import { selectEngineeringRunRequirements } from '../../analysis/engineering-requirement-selection.ts';
 import { getBestHost } from './PsfAnalysisPage.tsx';
 import './ToleranceAnalysisPage.css';
 
@@ -35,6 +38,7 @@ const clone = <T,>(value: T): T => {
 const finite = (value: unknown, fallback = 0): number => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const percent = (value: number): string => `${(100 * value).toFixed(value >= 0.995 || value <= 0.005 ? 1 : 1)}%`;
 const formatNumber = (value: unknown, digits = 5): string => {
+  if (value === null || value === undefined || value === '') return '—';
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return '—';
   if (numeric !== 0 && (Math.abs(numeric) < 1e-4 || Math.abs(numeric) >= 1e5)) return numeric.toExponential(3);
@@ -42,11 +46,27 @@ const formatNumber = (value: unknown, digits = 5): string => {
 };
 
 function readSystemConfig(host: any): SystemConfiguration {
+  let loaded: SystemConfiguration | null = null;
   try {
     const value = host?.ConfigurationManager?.loadSystemConfigurations?.();
-    if (value?.configurations) return clone(value);
+    if (value?.configurations) loaded = clone(value);
   } catch (_) {}
-  return clone(loadSystemConfigurations());
+  const snapshot = loaded ?? clone(loadSystemConfigurations());
+  if (!Array.isArray(snapshot.systemRequirements) || snapshot.systemRequirements.length === 0) {
+    let fallbackRequirements: any[] = [];
+    try {
+      const liveRows = host?.systemRequirementsEditor?.getData?.();
+      if (Array.isArray(liveRows) && liveRows.length > 0) fallbackRequirements = liveRows;
+    } catch (_) {}
+    if (fallbackRequirements.length === 0) {
+      try {
+        const persistedRows = loadSystemRequirementsTableData();
+        if (Array.isArray(persistedRows) && persistedRows.length > 0) fallbackRequirements = persistedRows;
+      } catch (_) {}
+    }
+    if (fallbackRequirements.length > 0) snapshot.systemRequirements = clone(fallbackRequirements);
+  }
+  return snapshot;
 }
 
 function saveSystemConfig(host: any, value: SystemConfiguration): void {
@@ -85,6 +105,38 @@ function parameterFromCandidate(variable: ToleranceVariableDescriptor): Toleranc
     plusTolerance: tolerance,
     distribution: 'normal',
     sigmaMode: 'three-sigma',
+  };
+}
+
+function isSuggestedLensDefault(variable: ToleranceVariableDescriptor): boolean {
+  if (variable.category === 'radius' || variable.category === 'thickness') return true;
+  if (variable.category === 'material') return Number.isFinite(variable.value) && variable.value > 0;
+  // Do not turn every unused conic/asphere coefficient into a study variable.
+  // A non-zero prescription is included; a zero coefficient can still be
+  // added explicitly when its manufacturing tolerance is intentional.
+  if (variable.category === 'asphere') return Math.abs(variable.value) > 0;
+  return variable.category === 'decenter' || variable.category === 'tilt';
+}
+
+function automaticEngineeringMonitor(systemConfig: SystemConfiguration): any {
+  return {
+    id: '__engineering-auto-mtfa',
+    enabled: true,
+    analysisMonitor: true,
+    operand: 'MTFA',
+    rationale: 'Automatic engineering monitor used when no Requirements are configured.',
+    configId: String(systemConfig.activeConfigId ?? systemConfig.configurations?.[0]?.id ?? ''),
+    param1: '1',
+    param2: '1',
+    param3: '',
+    param4: '10',
+    param5: '32',
+    fieldScope: '1',
+    wavelengthScope: 'PRIMARY',
+    op: '>=',
+    target: 1,
+    tol: 0,
+    weight: 1,
   };
 }
 
@@ -144,7 +196,8 @@ export default function ToleranceAnalysisPage({ mode }: { mode: EngineeringAnaly
 
   const persistStudies = (nextStudies: ToleranceStudy[], nextSelectedId = selectedStudyId) => {
     const normalized = nextStudies.map(normalizeToleranceStudy);
-    const nextSystem = clone(systemConfig);
+    // This window may have been open while another editor changed the design.
+    const nextSystem = readSystemConfig(host);
     nextSystem.toleranceStudies = normalized;
     setStudies(normalized);
     setSelectedStudyId(nextSelectedId);
@@ -189,8 +242,7 @@ export default function ToleranceAnalysisPage({ mode }: { mode: EngineeringAnaly
 
   const addLensTolerances = () => {
     if (!study) return;
-    const allowed = new Set(['radius', 'thickness', 'material', 'asphere', 'decenter', 'tilt']);
-    const additions = availableCandidates.filter((entry) => allowed.has(entry.category)).map(parameterFromCandidate);
+    const additions = availableCandidates.filter(isSuggestedLensDefault).map(parameterFromCandidate);
     patchStudy({ parameters: [...study.parameters, ...additions] });
   };
 
@@ -217,28 +269,72 @@ export default function ToleranceAnalysisPage({ mode }: { mode: EngineeringAnaly
 
   const selectedRequirements = useMemo(() => {
     const selected = new Set(study?.requirementIds || []);
-    return requirements.filter((row: any) => selected.size === 0 || selected.has(String(row.id)));
+    const matched = requirements.filter((row: any) => selected.size === 0 || selected.has(String(row.id)));
+    // Requirement rows can be replaced or regenerated after a Study is saved.
+    // Treat an entirely stale explicit selection as "all enabled" so the Run
+    // action does not become silently disabled by IDs that no longer exist.
+    return matched.length > 0 || requirements.length === 0 ? matched : requirements;
   }, [requirements, study?.requirementIds]);
+  const selectedRequirementIds = useMemo(
+    () => new Set(selectedRequirements.map((row: any) => String(row.id))),
+    [selectedRequirements],
+  );
+  const usesAutomaticRequirementMonitor = selectedRequirements.length === 0;
 
   const run = async () => {
     if (!study || busy) return;
     setError('');
+    if (study.parameters.length === 0) {
+      setError(`Add at least one ${mode === 'sensitivity' ? 'sensitivity' : 'tolerance'} parameter before running.`);
+      return;
+    }
+    // A sensitivity result can contain hundreds of rows. Keeping that tree
+    // mounted while candidate-preparation progress updates arrive causes React
+    // to reconcile both the parameter table and the previous result on every
+    // update, which can make a repeat run appear frozen.
+    setResult(null);
     setBusy(true);
     setProgress({ phase: 'nominal', completed: 0, total: 1, percent: 0, message: 'Preparing study' });
     const controller = new AbortController();
     abortRef.current = controller;
     const snapshot = readSystemConfig(host);
+    const runRequirements = selectEngineeringRunRequirements(snapshot, study.requirementIds, () => automaticEngineeringMonitor(snapshot));
+    setSystemConfig(snapshot);
+    let lastEvaluationProgressAt = 0;
+    const publishEvaluationProgress = (completed: number, total: number, message: string) => {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      // Candidate compilation can report dozens of times per second. The
+      // outer study progress still updates every batch; this message throttle
+      // keeps the controls responsive without hiding meaningful milestones.
+      if (completed > 0 && completed < total && now - lastEvaluationProgressAt < 120) return;
+      lastEvaluationProgressAt = now;
+      setProgress((current) => current ? { ...current, message } : current);
+    };
+    const candidateBatchSize = Math.max(
+      2,
+      Math.min(24, Math.floor(48 / Math.max(1, runRequirements.rows.length))),
+    );
     try {
-      const runStudy = mode === 'sensitivity'
-        ? { ...study, runSettings: { ...study.runSettings, compensate: false } }
-        : study;
+      const runStudy = {
+        ...study,
+        requirementIds: runRequirements.automatic ? [] : study.requirementIds,
+        runSettings: mode === 'sensitivity'
+          ? { ...study.runSettings, compensate: false }
+          : study.runSettings,
+      };
       const context = {
         systemConfig: snapshot,
         study: runStudy,
-        requirementRows: selectedRequirements,
+        requirementRows: runRequirements.rows,
         evaluateCandidate: (candidate: any, rows: any[]) => evaluateRequirementsForToleranceCandidate(host, candidate, rows, controller.signal),
-        evaluateCandidates: (candidates: any[], rows: any[]) => evaluateRequirementsForToleranceCandidates(host, candidates, rows, controller.signal),
-        candidateBatchSize: 24,
+        evaluateCandidates: (candidates: any[], rows: any[]) => evaluateRequirementsForToleranceCandidates(
+          host,
+          candidates,
+          rows,
+          controller.signal,
+          publishEvaluationProgress,
+        ),
+        candidateBatchSize,
         onProgress: setProgress,
         signal: controller.signal,
       };
@@ -247,7 +343,11 @@ export default function ToleranceAnalysisPage({ mode }: { mode: EngineeringAnaly
       const nextStudies = studies.map((entry) => entry.id === study.id ? { ...entry, lastResultSummary: resultSummary(next) } : entry);
       persistStudies(nextStudies);
     } catch (nextError) {
-      if ((nextError as any)?.name !== 'AbortError') setError(nextError instanceof Error ? nextError.message : String(nextError));
+      if ((nextError as any)?.name === 'AbortError') {
+        setProgress((current) => current ? { ...current, phase: 'cancelled', message: 'Cancelled' } : current);
+      } else {
+        setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
     } finally {
       abortRef.current = null;
       setBusy(false);
@@ -295,14 +395,14 @@ export default function ToleranceAnalysisPage({ mode }: { mode: EngineeringAnaly
         {mode === 'tolerance' ? <label className="analysis-window-field"><span>Seed</span><input type="number" value={study.runSettings.seed} onChange={(event) => patchStudy({ runSettings: { ...study.runSettings, seed: Number(event.target.value) } })} /></label> : null}
         {mode === 'sensitivity' ? <label className="analysis-window-field"><span>Difference step</span><select value={study.runSettings.sensitivityStepFraction} onChange={(event) => patchStudy({ runSettings: { ...study.runSettings, sensitivityStepFraction: Number(event.target.value) } })}><option value={0.1}>10% of specified step</option><option value={0.25}>25% of specified step</option><option value={0.5}>50% of specified step</option><option value={1}>Full specified step</option></select></label> : null}
         {mode === 'tolerance' ? <label className="analysis-window-toggle"><input type="checkbox" checked={study.runSettings.compensate} onChange={(event) => patchStudy({ runSettings: { ...study.runSettings, compensate: event.target.checked } })} />Use compensators</label> : null}
-        <div className="tolerance-requirements"><strong>Requirements</strong><span>{selectedRequirements.length} enabled</span>{requirements.map((row: any) => <label key={String(row.id)}><input type="checkbox" checked={study.requirementIds.length === 0 || study.requirementIds.includes(String(row.id))} onChange={(event) => {
-          const currentlyAll = study.requirementIds.length === 0;
+        <div className="tolerance-requirements"><strong>Requirements</strong><span>{usesAutomaticRequirementMonitor ? 'Automatic MTF monitor' : `${selectedRequirements.length} enabled`}</span>{usesAutomaticRequirementMonitor ? <small>Field 1 MTFA · 10 lp/mm · primary wavelength · 32 × 32 pupil{mode === 'tolerance' ? ' · distribution only (no pass/fail)' : ''}</small> : null}{requirements.map((row: any) => <label key={String(row.id)}><input type="checkbox" checked={selectedRequirementIds.has(String(row.id))} onChange={(event) => {
+          const currentlyAll = selectedRequirements.length === requirements.length;
           const base = currentlyAll ? requirements.map((entry: any) => String(entry.id)) : [...study.requirementIds];
           const next = event.target.checked ? Array.from(new Set([...base, String(row.id)])) : base.filter((id) => id !== String(row.id));
           patchStudy({ requirementIds: next.length === requirements.length ? [] : next });
         }} />{row.operand} · Config {row.configId || systemConfig.activeConfigId}</label>)}</div>
       </div></details>
-      <button className="analysis-window-primary-action" type="button" disabled={busy || study.parameters.length === 0 || selectedRequirements.length === 0} onClick={() => void run()}>{mode === 'sensitivity' ? 'Run Sensitivity' : 'Run Tolerance'}</button>
+      <button className="analysis-window-primary-action" type="button" disabled={busy} onClick={() => void run()}>{mode === 'sensitivity' ? 'Run Sensitivity' : 'Run Tolerance'}</button>
       {busy ? <button type="button" onClick={() => abortRef.current?.abort('Stopped')}>Stop</button> : null}
     </div>
 
@@ -311,22 +411,26 @@ export default function ToleranceAnalysisPage({ mode }: { mode: EngineeringAnaly
 
     <section className="tolerance-setup">
       <div className="tolerance-section-heading"><div><strong>{mode === 'sensitivity' ? 'Sensitivity parameters' : 'Tolerance parameters'}</strong><span>{mode === 'sensitivity' ? 'Specify the negative and positive perturbation used to measure each derivative.' : 'Manufacturing and alignment variation. Suggested values are estimates and should be replaced by supplier data.'}</span></div><div className="tolerance-add-controls"><select value={candidateId} onChange={(event) => setCandidateId(event.target.value)}><option value="">Select parameter</option>{availableCandidates.map((entry) => <option key={`${entry.configId}|${entry.id}`} value={`${entry.configId}|${entry.id}`}>{entry.label} · Config {entry.configId}</option>)}</select><button type="button" onClick={addSelectedParameter} disabled={!candidateId}>Add</button><button type="button" onClick={addLensTolerances} disabled={availableCandidates.length === 0}>Add lens defaults</button></div></div>
-      <div className="tolerance-table-wrap"><table className="tolerance-table"><thead><tr><th>On</th><th>Parameter</th><th>Nominal</th><th>{mode === 'sensitivity' ? '−Step' : '−Tol'}</th><th>{mode === 'sensitivity' ? '+Step' : '+Tol'}</th>{mode === 'tolerance' ? <th>Distribution</th> : null}<th /></tr></thead><tbody>
+      {busy ? <div className="tolerance-running-setup" aria-live="polite">
+        <strong>{study.parameters.filter((entry) => entry.enabled).length} configured parameters</strong>
+        <span>Inputs are temporarily collapsed while candidate batches are evaluated.</span>
+      </div> : <div className="tolerance-table-wrap"><table className="tolerance-table"><thead><tr><th>On</th><th>Parameter</th><th>Nominal</th><th>{mode === 'sensitivity' ? '−Step' : '−Tol'}</th><th>{mode === 'sensitivity' ? '+Step' : '+Tol'}</th>{mode === 'tolerance' ? <th>Distribution</th> : null}<th /></tr></thead><tbody>
         {study.parameters.length === 0 ? <tr><td colSpan={mode === 'tolerance' ? 7 : 6} className="tolerance-empty">Add manufacturing or alignment parameters to begin.</td></tr> : null}
         {study.parameters.map((parameter) => {
           const candidate = candidateById.get(`${parameter.configId}|${parameter.variableRef}`);
           const nominal = getToleranceVariableValue(systemConfig, parameter.configId, parameter.variableRef);
           return <tr key={parameter.id}><td><input type="checkbox" checked={parameter.enabled} onChange={(event) => patchParameter(parameter.id, { enabled: event.target.checked })} /></td><td><strong>{parameter.label || candidate?.label || parameter.variableRef}</strong><small>Config {parameter.configId} · {parameter.unit || candidate?.unit || 'unitless'}</small></td><td>{formatNumber(nominal)}</td><td><input type="number" min={0} step="any" value={parameter.minusTolerance} onChange={(event) => patchParameter(parameter.id, { minusTolerance: Math.max(0, finite(event.target.value)) })} /></td><td><input type="number" min={0} step="any" value={parameter.plusTolerance} onChange={(event) => patchParameter(parameter.id, { plusTolerance: Math.max(0, finite(event.target.value)) })} /></td>{mode === 'tolerance' ? <td><select value={`${parameter.distribution}|${parameter.sigmaMode}`} onChange={(event) => { const [distribution, sigmaMode] = event.target.value.split('|'); patchParameter(parameter.id, { distribution: distribution as any, sigmaMode: sigmaMode as any }); }}><option value="normal|three-sigma">Normal · limits = 3σ</option><option value="normal|one-sigma">Normal · limits = 1σ</option><option value="uniform|full-width">Uniform · full limits</option></select></td> : null}<td><button className="is-danger" type="button" onClick={() => patchStudy({ parameters: study.parameters.filter((entry) => entry.id !== parameter.id) })}>Remove</button></td></tr>;
         })}
-      </tbody></table></div>
+      </tbody></table></div>}
       {mode === 'tolerance' ? <details className="tolerance-compensators"><summary><strong>Compensation</strong><span>{study.compensators.filter((entry) => entry.enabled).length || 'No'} active compensator</span></summary><div><button type="button" onClick={addCompensator}>Add auto-focus compensator</button>{study.compensators.map((compensator) => <div className="tolerance-compensator-row" key={compensator.id}><label><input type="checkbox" checked={compensator.enabled} onChange={(event) => patchStudy({ compensators: study.compensators.map((entry) => entry.id === compensator.id ? { ...entry, enabled: event.target.checked } : entry) })} />{compensator.label || compensator.variableRef}</label><label>Min<input type="number" step="any" value={compensator.minimum} onChange={(event) => patchStudy({ compensators: study.compensators.map((entry) => entry.id === compensator.id ? { ...entry, minimum: finite(event.target.value) } : entry) })} /></label><label>Max<input type="number" step="any" value={compensator.maximum} onChange={(event) => patchStudy({ compensators: study.compensators.map((entry) => entry.id === compensator.id ? { ...entry, maximum: finite(event.target.value) } : entry) })} /></label><button className="is-danger" type="button" onClick={() => patchStudy({ compensators: study.compensators.filter((entry) => entry.id !== compensator.id) })}>Remove</button></div>)}</div></details> : null}
     </section>
 
     <section className="tolerance-results">
-      <div className="tolerance-result-heading"><strong>{analysisTitle} results</strong><span>Evaluated against the selected Requirements.</span></div>
-      {!activeResult ? <div className="tolerance-empty-result">Run {mode === 'sensitivity' ? 'Sensitivity' : 'Tolerance'} to calculate results from the selected Requirements.</div> : null}
+      <div className="tolerance-result-heading"><strong>{analysisTitle} results</strong><span>{usesAutomaticRequirementMonitor ? 'Automatic MTF monitor; add a Requirement to evaluate pass/fail.' : 'Evaluated against the selected Requirements.'}</span></div>
+      {!activeResult ? <div className="tolerance-empty-result">Run {mode === 'sensitivity' ? 'Sensitivity' : 'Tolerance'} to calculate {usesAutomaticRequirementMonitor ? 'the automatic MTF monitor.' : 'results from the selected Requirements.'}</div> : null}
       {activeResult?.method === 'sensitivity' ? <SensitivityResultView result={activeResult} onDisableLowImpact={() => {
-        const low = new Set(activeResult.parameters.filter((entry) => entry.impact < 0.01).map((entry) => entry.parameterId));
+        const contributions = sensitivityContributionFractions(activeResult.parameters);
+        const low = new Set(activeResult.parameters.filter((entry) => (contributions[entry.parameterId] ?? 0) < 0.01).map((entry) => entry.parameterId));
         patchStudy({ parameters: study.parameters.map((entry) => low.has(entry.id) ? { ...entry, enabled: false } : entry) });
       }} /> : null}
       {activeResult?.method === 'monte-carlo' ? <ToleranceResultView result={activeResult} onCreateWorst={createWorstConfig} /> : null}
@@ -335,13 +439,26 @@ export default function ToleranceAnalysisPage({ mode }: { mode: EngineeringAnaly
 }
 
 function SensitivityResultView({ result, onDisableLowImpact }: { result: SensitivityAnalysisResult; onDisableLowImpact: () => void }) {
-  const maximum = Math.max(1e-12, ...result.parameters.filter((entry) => Number.isFinite(entry.impact)).map((entry) => entry.impact));
-  return <div className="tolerance-result-content"><div className="tolerance-metrics"><MetricCard label="Nominal" value={result.nominal.passed ? 'Pass' : 'Fail'} /><MetricCard label="Parameters" value={String(result.parameters.length)} /><MetricCard label="Elapsed" value={`${(result.elapsedMs / 1000).toFixed(1)} s`} /><MetricCard label="Evaluation" value={result.execution?.backend === 'candidate-batch' ? 'Batched' : 'Fallback'} note={result.execution ? `${result.execution.candidateEvaluations} candidates · ${result.execution.candidateBatches} batches${result.execution.engines?.length ? ` · ${result.execution.engines.join(', ')}` : ''}` : undefined} /><button type="button" onClick={onDisableLowImpact}>Disable impact &lt; 1%</button></div><div className="tolerance-sensitivity-list">{result.parameters.map((entry) => {
-    const width = Number.isFinite(entry.impact) ? Math.min(100, 100 * entry.impact / maximum) : 100;
-    return <div className="tolerance-sensitivity-row" key={entry.parameterId}><div><strong>{entry.label}</strong><span>{Number.isFinite(entry.impact) ? `${(entry.impact * 100).toFixed(2)}% of nominal margin` : 'Invalid perturbed state'}</span></div><div className="tolerance-impact-track"><div className={Number.isFinite(entry.impact) ? '' : 'is-invalid'} style={{ width: `${width}%` }} /></div><small>Asymmetry {Number.isFinite(entry.nonlinearAsymmetry) ? percent(entry.nonlinearAsymmetry) : '—'}</small></div>;
+  const monitorOnly = result.nominal.requirements.length > 0 && result.nominal.requirements.every((entry) => entry.monitorOnly);
+  const monitorNames = Array.from(new Set(result.nominal.requirements.map((entry) => entry.operand))).join(', ');
+  const contributions = sensitivityContributionFractions(result.parameters);
+  const hasContribution = Object.values(contributions).some((value) => value > 0);
+  return <div className="tolerance-result-content"><div className="tolerance-metrics"><MetricCard label="Nominal" value={monitorOnly ? 'Monitor' : result.nominal.passed ? 'Pass' : 'Fail'} note={monitorOnly ? `${monitorNames} relative change` : undefined} /><MetricCard label="Parameters" value={String(result.parameters.length)} /><MetricCard label="Contribution" value={hasContribution ? '100% total' : '—'} note="Squared effect (RSS)" /><MetricCard label="Elapsed" value={`${(result.elapsedMs / 1000).toFixed(1)} s`} /><MetricCard label="Evaluation" value={result.execution?.backend === 'candidate-batch' ? 'Batched' : 'Fallback'} note={result.execution ? `${result.execution.candidateEvaluations} candidates · ${result.execution.candidateBatches} batches${result.execution.engines?.length ? ` · ${result.execution.engines.join(', ')}` : ''}` : undefined} /><button type="button" onClick={onDisableLowImpact} disabled={!hasContribution}>Disable contribution &lt; 1%</button></div><div className="tolerance-sensitivity-list">{result.parameters.map((entry) => {
+    const contribution = contributions[entry.parameterId] ?? 0;
+    const width = Number.isFinite(entry.impact) ? 100 * contribution : 100;
+    return <div className="tolerance-sensitivity-row" key={entry.parameterId}><div><strong>{entry.label}</strong><span>{Number.isFinite(entry.impact) ? `${(entry.impact * 100).toFixed(2)}% ${monitorOnly ? 'relative MTFA change' : 'of Requirement margin'}` : 'Invalid perturbed state'}</span></div><div className="tolerance-contribution"><span>Contribution <strong>{Number.isFinite(entry.impact) ? percent(contribution) : '—'}</strong></span><div className="tolerance-impact-track"><div className={Number.isFinite(entry.impact) ? '' : 'is-invalid'} style={{ width: `${width}%` }} /></div></div><small>Asymmetry {Number.isFinite(entry.nonlinearAsymmetry) ? percent(entry.nonlinearAsymmetry) : '—'}</small></div>;
   })}</div></div>;
 }
 
 function ToleranceResultView({ result, onCreateWorst }: { result: MonteCarloToleranceResult; onCreateWorst: () => void }) {
-  return <div className="tolerance-result-content"><div className="tolerance-metrics"><MetricCard label="Overall yield" value={percent(result.yield)} note={`95% CI ${percent(result.yieldConfidence95.low)}–${percent(result.yieldConfidence95.high)}`} /><MetricCard label="Valid trials" value={`${result.validTrials}/${result.trialsCompleted}`} /><MetricCard label="Passed" value={String(result.passedTrials)} /><MetricCard label="Elapsed" value={`${(result.elapsedMs / 1000).toFixed(1)} s`} /><MetricCard label="Evaluation" value={result.execution?.backend === 'candidate-batch' ? 'Batched' : 'Fallback'} note={result.execution ? `${result.execution.candidateEvaluations} candidates · ${result.execution.candidateBatches} batches${result.execution.engines?.length ? ` · ${result.execution.engines.join(', ')}` : ''}` : undefined} /><MetricCard label="Seed" value={String(result.seed)} /><button type="button" onClick={onCreateWorst} disabled={!result.worstTrial}>Create Config from worst trial</button></div><div className="tolerance-table-wrap"><table className="tolerance-table"><thead><tr><th>Requirement</th><th>Yield</th><th>Mean</th><th>Std dev</th><th>P05</th><th>Median</th><th>P95</th></tr></thead><tbody>{result.requirements.map((entry) => <tr key={entry.requirementId}><td>{entry.requirementId}</td><td>{percent(entry.yield)}</td><td>{formatNumber(entry.mean)}</td><td>{formatNumber(entry.standardDeviation)}</td><td>{formatNumber(entry.p05)}</td><td>{formatNumber(entry.p50)}</td><td>{formatNumber(entry.p95)}</td></tr>)}</tbody></table></div></div>;
+  const monitorOnly = result.monitorOnly === true || (result.nominal.requirements.length > 0 && result.nominal.requirements.every((entry) => entry.monitorOnly));
+  const unavailable = result.validTrials === 0;
+  const unavailableReason = result.nominal.reason
+    || result.nominal.requirements.find((entry) => !entry.valid)?.reason
+    || 'No trial returned a finite monitor value.';
+  const monitorSaturated = monitorOnly && result.requirements.length > 0 && result.requirements.every((entry) => (
+    entry.validSamples > 0
+    && [entry.mean, entry.standardDeviation, entry.p05, entry.p50, entry.p95].every((value) => Number.isFinite(Number(value)) && Math.abs(Number(value)) <= 1e-12)
+  ));
+  return <div className="tolerance-result-content"><div className="tolerance-metrics">{unavailable ? <MetricCard label="Result status" value="Unavailable" note={unavailableReason} /> : monitorOnly ? <MetricCard label="Mode" value="Monitor" note="No pass/fail Requirement" /> : <MetricCard label="Overall yield" value={percent(result.yield)} note={`95% CI ${percent(result.yieldConfidence95.low)}–${percent(result.yieldConfidence95.high)}`} />}{monitorSaturated && !unavailable ? <MetricCard label="Monitor status" value="At lower limit" note="MTFA is 0 for every trial; use a lower frequency or add a Requirement." /> : null}<MetricCard label="Valid trials" value={`${result.validTrials}/${result.trialsCompleted}`} />{!monitorOnly && !unavailable ? <MetricCard label="Passed" value={String(result.passedTrials)} /> : null}<MetricCard label="Elapsed" value={`${(result.elapsedMs / 1000).toFixed(1)} s`} /><MetricCard label="Evaluation" value={result.execution?.backend === 'candidate-batch' ? 'Batched' : 'Fallback'} note={result.execution ? `${result.execution.candidateEvaluations} candidates · ${result.execution.candidateBatches} batches${result.execution.engines?.length ? ` · ${result.execution.engines.join(', ')}` : ''}` : undefined} /><MetricCard label="Seed" value={String(result.seed)} />{!monitorOnly && !unavailable ? <button type="button" onClick={onCreateWorst} disabled={!result.worstTrial}>Create Config from worst trial</button> : null}</div><div className="tolerance-table-wrap"><table className="tolerance-table"><thead><tr><th>{monitorOnly ? 'Monitor' : 'Requirement'}</th><th>{monitorOnly ? 'Mode' : 'Yield'}</th><th>Mean</th><th>Std dev</th><th>P05</th><th>Median</th><th>P95</th></tr></thead><tbody>{result.requirements.map((entry) => <tr key={entry.requirementId}><td>{monitorOnly ? 'Field 1 MTFA · 10 lp/mm' : entry.requirementId}</td><td>{unavailable ? 'Unavailable' : monitorOnly ? monitorSaturated ? 'Lower limit' : 'Monitor' : percent(entry.yield)}</td><td>{formatNumber(entry.mean)}</td><td>{formatNumber(entry.standardDeviation)}</td><td>{formatNumber(entry.p05)}</td><td>{formatNumber(entry.p50)}</td><td>{formatNumber(entry.p95)}</td></tr>)}</tbody></table></div></div>;
 }
