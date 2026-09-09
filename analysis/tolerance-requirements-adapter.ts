@@ -206,6 +206,7 @@ async function tryNativeCandidateBatch(
   candidates: any[],
   requirementRows: any[],
   signal?: AbortSignal,
+  onProgress?: (completed: number, total: number, message: string) => void,
 ): Promise<CandidateEvaluation[] | null> {
   if (!isTauriRuntime() || candidates.length < 2) return null;
   const meritEditor = host?.meritFunctionEditor;
@@ -248,6 +249,8 @@ async function tryNativeCandidateBatch(
       return rowsByConfig;
     });
     compiledCandidates.push(compiled);
+    onProgress?.(compiledCandidates.length, candidates.length, `Prepared ${compiledCandidates.length}/${candidates.length} candidates`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
   const scenarioBatches = await withCandidateOverrides(host, candidates[0], async () => configIds.map((configId) => {
     const tables = typeof meritEditor.getConfigTablesByConfigId === 'function'
@@ -275,7 +278,9 @@ async function tryNativeCandidateBatch(
     };
   }));
   const ipc = await import('../src/desktop/ipc/client.ts');
+  onProgress?.(0, candidates.length, `Computing ${candidates.length} candidates in Rust/Rayon`);
   const response = await ipc.evaluateOptimizerCandidatesMultiScenario({ candidates: compiledCandidates, scenarioBatches });
+  onProgress?.(candidates.length, candidates.length, `Computed ${candidates.length}/${candidates.length} candidates`);
   const currents = Array.isArray(response?.currentsPerCandidate) ? response.currentsPerCandidate : [];
   if (currents.length !== candidates.length) return null;
   const orderedEntries = configIds.flatMap((configId) => groups.get(configId) ?? []);
@@ -315,8 +320,9 @@ async function tryWasmMtfCandidateBatch(
   candidates: any[],
   requirementRows: any[],
   signal?: AbortSignal,
+  onProgress?: (completed: number, total: number, message: string) => void,
 ): Promise<CandidateEvaluation[] | null> {
-  if (candidates.length < 2) return null;
+  if (candidates.length === 0) return null;
   const meritEditor = host?.meritFunctionEditor;
   const requirementEditor = host?.systemRequirementsEditor;
   if (!meritEditor || typeof meritEditor.getOpticalSystemDataByConfigId !== 'function') return null;
@@ -350,6 +356,8 @@ async function tryWasmMtfCandidateBatch(
       }
       return rowsByConfig;
     }));
+    onProgress?.(compiledCandidates.length, candidates.length, `Prepared ${compiledCandidates.length}/${candidates.length} MTF candidates`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
   const tablesByConfig = await withCandidateOverrides(host, candidates[0], async () => {
     const tables: Record<string, { source: any[]; object: any[] }> = {};
@@ -416,7 +424,14 @@ async function tryWasmMtfCandidateBatch(
   }
   if (jobs.length === 0) return null;
   const ipc = await import('../src/desktop/ipc/client.ts');
-  const response = await ipc.runMtfBatchViaWasmWorkerPool({ jobs });
+  onProgress?.(0, candidates.length, `Computing ${candidates.length} MTF candidates in WASM Worker`);
+  const response = await ipc.runMtfBatchViaWasmWorkerPool({
+    jobs,
+    forceWorker: true,
+    workerTimeoutMs: 120000,
+    signal,
+  });
+  onProgress?.(candidates.length, candidates.length, `Computed ${candidates.length}/${candidates.length} MTF candidates`);
   const jobResults = Array.isArray(response?.results) ? response.results : [];
   if (jobResults.length !== jobs.length) return null;
   const rawByCandidate = candidates.map(() => new Array<number | null>(expanded.length).fill(null));
@@ -454,15 +469,24 @@ async function tryWasmMtfCandidateBatch(
     for (const entry of expanded) if (!values.has(entry.id)) errors.set(entry.id, 'WASM MTF batch returned no finite value.');
     return { ...buildCandidateEvaluation(requirementRows, values, errors), evaluationBackend: 'wasm-worker-pool' } as CandidateEvaluation;
   });
+  // If the Worker produced no finite metric at all, retry through the scoped
+  // evaluator instead of accepting an entirely invalid batch as a result.
+  if (results.every((entry) => !entry.valid)) return null;
   const signature = `mtf:${paritySignature(requirementRows)}`;
+  const verifyParity = host?.__COOPT_VERIFY_TOLERANCE_BATCH_PARITY === true;
   const cachedParity = nativeParity.get(signature);
-  if (cachedParity === false) return null;
-  if (cachedParity !== true) {
+  if (verifyParity && cachedParity === false) return null;
+  if (verifyParity && cachedParity !== true) {
     const reference = await evaluateCandidateInternal(host, candidates[0], requirementRows, signal);
     const passed = evaluationsMatch(reference, results[0]);
     nativeParity.set(signature, passed);
     if (!passed) return null;
     results[0] = reference;
+  } else if (!verifyParity) {
+    // The established Worker calculation is used directly during interactive
+    // studies. Re-running the same nominal MTF on the main WASM instance here
+    // blocks painting and leaves the UI apparently frozen at 0%.
+    nativeParity.set(signature, true);
   }
   return results;
 }
@@ -491,19 +515,27 @@ export async function evaluateRequirementsForToleranceCandidates(
   candidateSystemConfigs: any[],
   requirementRows: any[],
   signal?: AbortSignal,
+  onProgress?: (completed: number, total: number, message: string) => void,
 ): Promise<CandidateEvaluation[]> {
   const candidates = Array.isArray(candidateSystemConfigs) ? candidateSystemConfigs : [];
   if (candidates.length === 0) return [];
   return enqueueEvaluation(async () => {
-    const native = await tryNativeCandidateBatch(host, candidates, requirementRows, signal).catch(() => null);
+    let native: CandidateEvaluation[] | null = null;
+    try {
+      native = await tryNativeCandidateBatch(host, candidates, requirementRows, signal, onProgress);
+    } catch (error) {
+      if (signal?.aborted || (error as any)?.name === 'AbortError') throw error;
+    }
     if (native) return native;
-    const mtf = await tryWasmMtfCandidateBatch(host, candidates, requirementRows, signal).catch(() => null);
+    const mtf = await tryWasmMtfCandidateBatch(host, candidates, requirementRows, signal, onProgress);
     if (mtf) return mtf;
     const results: CandidateEvaluation[] = [];
     for (const candidate of candidates) {
       if (signal?.aborted) throw new DOMException(String(signal.reason || 'Cancelled'), 'AbortError');
       const evaluated = await evaluateCandidateInternal(host, candidate, requirementRows, signal);
       results.push({ ...evaluated, evaluationBackend: 'scoped-batch-fallback' });
+      onProgress?.(results.length, candidates.length, `Computed ${results.length}/${candidates.length} candidates`);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     return results;
   });

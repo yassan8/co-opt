@@ -1,0 +1,1517 @@
+{
+  "source": [
+    {
+      "id": 1,
+      "wavelength": 0.6328,
+      "weight": 1,
+      "primary": "Primary Wavelength",
+      "angle": 0
+    }
+  ],
+  "object": [
+    {
+      "id": 1,
+      "xHeightAngle": 0,
+      "yHeightAngle": 0,
+      "position": "Rectangle",
+      "angle": 0
+    }
+  ],
+  "opticalSystem": [
+    {
+      "id": 0,
+      "object type": "Object",
+      "surfType": "Spherical",
+      "comment": "",
+      "radius": "INF",
+      "optimizeR": "",
+      "thickness": 100,
+      "optimizeT": "",
+      "semidia": "",
+      "optimizeSemiDia": "",
+      "material": "AIR",
+      "optimizeMaterial": "",
+      "rindex": "",
+      "optimizeRI": "",
+      "abbe": "",
+      "optimizeAbbe": "",
+      "conic": "",
+      "optimizeConic": "",
+      "coef1": "",
+      "optimizeCoef1": "",
+      "coef2": "",
+      "optimizeCoef2": "",
+      "coef3": "",
+      "optimizeCoef3": "",
+      "coef4": "",
+      "optimizeCoef4": "",
+      "coef5": "",
+      "optimizeCoef5": "",
+      "coef6": "",
+      "optimizeCoef6": "",
+      "coef7": "",
+      "optimizeCoef7": "",
+      "coef8": "",
+      "optimizeCoef8": "",
+      "coef9": "",
+      "optimizeCoef9": "",
+      "coef10": "",
+      "optimizeCoef10": "",
+      "_blockType": "Object",
+      "_blockId": null
+    },
+    {
+      "id": 1,
+      "object type": "",
+      "surfType": "Toric",
+      "comment": "",
+      "radius": "51.68",
+      "optimizeR": "",
+      "thickness": 0,
+      "optimizeT": "",
+      "semidia": "",
+      "optimizeSemiDia": "",
+      "material": "AIR",
+      "optimizeMaterial": "",
+      "rindex": "",
+      "optimizeRI": "",
+      "abbe": "",
+      "optimizeAbbe": "",
+      "conic": "",
+      "optimizeConic": "",
+      "coef1": "",
+      "optimizeCoef1": "",
+      "coef2": "",
+      "optimizeCoef2": "",
+      "coef3": "",
+      "optimizeCoef3": "",
+      "coef4": "",
+      "optimizeCoef4": "",
+      "coef5": "",
+      "optimizeCoef5": "",
+      "coef6": "",
+      "optimizeCoef6": "",
+      "coef7": "",
+      "optimizeCoef7": "",
+      "coef8": "",
+      "optimizeCoef8": "",
+      "coef9": "",
+      "optimizeCoef9": "",
+      "coef10": "",
+      "optimizeCoef10": "",
+      "_blockType": "Paraxial",
+      "_blockId": "relay-lens",
+      "_surfaceRole": "front",
+      "_idealThinLens": true,
+      "_thinLensFocalLengthX": 50,
+      "_thinLensFocalLengthY": 50,
+      "radiusX": "51.68",
+      "radiusY": "51.68",
+      "axis": "0",
+      "qconNrad": ""
+    },
+    {
+      "id": 2,
+      "object type": "",
+      "surfType": "Toric",
+      "comment": "",
+      "radius": "-51.68",
+      "optimizeR": "",
+      "thickness": 100,
+      "optimizeT": "",
+      "semidia": "",
+      "optimizeSemiDia": "",
+      "material": "AIR",
+      "optimizeMaterial": "",
+      "rindex": "",
+      "optimizeRI": "",
+      "abbe": "",
+      "optimizeAbbe": "",
+      "conic": "",
+      "optimizeConic": "",
+      "coef1": "",
+      "optimizeCoef1": "",
+      "coef2": "",
+      "optimizeCoef2": "",
+      "coef3": "",
+      "optimizeCoef3": "",
+      "coef4": "",
+      "optimizeCoef4": "",
+      "coef5": "",
+      "optimizeCoef5": "",
+      "coef6": "",
+      "optimizeCoef6": "",
+      "coef7": "",
+      "optimizeCoef7": "",
+      "coef8": "",
+      "optimizeCoef8": "",
+      "coef9": "",
+      "optimizeCoef9": "",
+      "coef10": "",
+      "optimizeCoef10": "",
+      "_blockType": "Paraxial",
+      "_blockId": "relay-lens",
+      "_surfaceRole": "back",
+      "_idealThinLens": true,
+      "_thinLensFocalLengthX": 50,
+      "_thinLensFocalLengthY": 50,
+      "radiusX": "-51.68",
+      "radiusY": "-51.68",
+      "axis": "0",
+      "qconNrad": "",
+      "__cooptGapBlockType": "Gap",
+      "__cooptGapThickness": 100,
+      "__cooptGapMaterial": "AIR",
+      "__cooptGapApplied": true
+    },
+    {
+      "id": 3,
+      "object type": "Image",
+      "surfType": "Spherical",
+      "comment": "",
+      "radius": "INF",
+      "radiusX": "",
+      "radiusY": "",
+      "axis": "",
+      "optimizeR": "",
+      "thickness": "",
+      "optimizeT": "",
+      "semidia": "",
+      "optimizeSemiDia": "",
+      "apertureShape": "Circular",
+      "apertureWidth": "",
+      "apertureHeight": "",
+      "material": "",
+      "optimizeMaterial": "",
+      "rindex": "",
+      "optimizeRI": "",
+      "abbe": "",
+      "optimizeAbbe": "",
+      "conic": "",
+      "optimizeConic": "",
+      "coef1": "",
+      "optimizeCoef1": "",
+      "coef2": "",
+      "optimizeCoef2": "",
+      "coef3": "",
+      "optimizeCoef3": "",
+      "coef4": "",
+      "optimizeCoef4": "",
+      "coef5": "",
+      "optimizeCoef5": "",
+      "coef6": "",
+      "optimizeCoef6": "",
+      "coef7": "",
+      "optimizeCoef7": "",
+      "coef8": "",
+      "optimizeCoef8": "",
+      "coef9": "",
+      "optimizeCoef9": "",
+      "coef10": "",
+      "optimizeCoef10": "",
+      "_blockType": "ImageSurface",
+      "_blockId": "relay-image"
+    }
+  ],
+  "meritFunction": [],
+  "systemRequirements": [],
+  "systemData": {
+    "referenceFocalLength": "50"
+  },
+  "configurations": {
+    "configurations": [
+      {
+        "id": 1,
+        "name": "Fizeau · tilted flat · 632.8 nm",
+        "schemaVersion": "0.1",
+        "source": [
+          {
+            "id": 1,
+            "wavelength": 0.6328,
+            "weight": 1,
+            "primary": "Primary Wavelength",
+            "angle": 0
+          }
+        ],
+        "object": [
+          {
+            "id": 1,
+            "xHeightAngle": 0,
+            "yHeightAngle": 0,
+            "position": "Rectangle",
+            "angle": 0
+          }
+        ],
+        "opticalSystem": [
+          {
+            "id": 0,
+            "object type": "Object",
+            "surfType": "Spherical",
+            "comment": "",
+            "radius": "INF",
+            "optimizeR": "",
+            "thickness": 100,
+            "optimizeT": "",
+            "semidia": "",
+            "optimizeSemiDia": "",
+            "material": "AIR",
+            "optimizeMaterial": "",
+            "rindex": "",
+            "optimizeRI": "",
+            "abbe": "",
+            "optimizeAbbe": "",
+            "conic": "",
+            "optimizeConic": "",
+            "coef1": "",
+            "optimizeCoef1": "",
+            "coef2": "",
+            "optimizeCoef2": "",
+            "coef3": "",
+            "optimizeCoef3": "",
+            "coef4": "",
+            "optimizeCoef4": "",
+            "coef5": "",
+            "optimizeCoef5": "",
+            "coef6": "",
+            "optimizeCoef6": "",
+            "coef7": "",
+            "optimizeCoef7": "",
+            "coef8": "",
+            "optimizeCoef8": "",
+            "coef9": "",
+            "optimizeCoef9": "",
+            "coef10": "",
+            "optimizeCoef10": "",
+            "_blockType": "Object",
+            "_blockId": null
+          },
+          {
+            "id": 1,
+            "object type": "",
+            "surfType": "Toric",
+            "comment": "",
+            "radius": "51.68",
+            "optimizeR": "",
+            "thickness": 0,
+            "optimizeT": "",
+            "semidia": "",
+            "optimizeSemiDia": "",
+            "material": "AIR",
+            "optimizeMaterial": "",
+            "rindex": "",
+            "optimizeRI": "",
+            "abbe": "",
+            "optimizeAbbe": "",
+            "conic": "",
+            "optimizeConic": "",
+            "coef1": "",
+            "optimizeCoef1": "",
+            "coef2": "",
+            "optimizeCoef2": "",
+            "coef3": "",
+            "optimizeCoef3": "",
+            "coef4": "",
+            "optimizeCoef4": "",
+            "coef5": "",
+            "optimizeCoef5": "",
+            "coef6": "",
+            "optimizeCoef6": "",
+            "coef7": "",
+            "optimizeCoef7": "",
+            "coef8": "",
+            "optimizeCoef8": "",
+            "coef9": "",
+            "optimizeCoef9": "",
+            "coef10": "",
+            "optimizeCoef10": "",
+            "_blockType": "Paraxial",
+            "_blockId": "relay-lens",
+            "_surfaceRole": "front",
+            "_idealThinLens": true,
+            "_thinLensFocalLengthX": 50,
+            "_thinLensFocalLengthY": 50,
+            "radiusX": "51.68",
+            "radiusY": "51.68",
+            "axis": "0",
+            "qconNrad": ""
+          },
+          {
+            "id": 2,
+            "object type": "",
+            "surfType": "Toric",
+            "comment": "",
+            "radius": "-51.68",
+            "optimizeR": "",
+            "thickness": 100,
+            "optimizeT": "",
+            "semidia": "",
+            "optimizeSemiDia": "",
+            "material": "AIR",
+            "optimizeMaterial": "",
+            "rindex": "",
+            "optimizeRI": "",
+            "abbe": "",
+            "optimizeAbbe": "",
+            "conic": "",
+            "optimizeConic": "",
+            "coef1": "",
+            "optimizeCoef1": "",
+            "coef2": "",
+            "optimizeCoef2": "",
+            "coef3": "",
+            "optimizeCoef3": "",
+            "coef4": "",
+            "optimizeCoef4": "",
+            "coef5": "",
+            "optimizeCoef5": "",
+            "coef6": "",
+            "optimizeCoef6": "",
+            "coef7": "",
+            "optimizeCoef7": "",
+            "coef8": "",
+            "optimizeCoef8": "",
+            "coef9": "",
+            "optimizeCoef9": "",
+            "coef10": "",
+            "optimizeCoef10": "",
+            "_blockType": "Paraxial",
+            "_blockId": "relay-lens",
+            "_surfaceRole": "back",
+            "_idealThinLens": true,
+            "_thinLensFocalLengthX": 50,
+            "_thinLensFocalLengthY": 50,
+            "radiusX": "-51.68",
+            "radiusY": "-51.68",
+            "axis": "0",
+            "qconNrad": "",
+            "__cooptGapBlockType": "Gap",
+            "__cooptGapThickness": 100,
+            "__cooptGapMaterial": "AIR",
+            "__cooptGapApplied": true
+          },
+          {
+            "id": 3,
+            "object type": "Image",
+            "surfType": "Spherical",
+            "comment": "",
+            "radius": "INF",
+            "radiusX": "",
+            "radiusY": "",
+            "axis": "",
+            "optimizeR": "",
+            "thickness": "",
+            "optimizeT": "",
+            "semidia": "",
+            "optimizeSemiDia": "",
+            "apertureShape": "Circular",
+            "apertureWidth": "",
+            "apertureHeight": "",
+            "material": "",
+            "optimizeMaterial": "",
+            "rindex": "",
+            "optimizeRI": "",
+            "abbe": "",
+            "optimizeAbbe": "",
+            "conic": "",
+            "optimizeConic": "",
+            "coef1": "",
+            "optimizeCoef1": "",
+            "coef2": "",
+            "optimizeCoef2": "",
+            "coef3": "",
+            "optimizeCoef3": "",
+            "coef4": "",
+            "optimizeCoef4": "",
+            "coef5": "",
+            "optimizeCoef5": "",
+            "coef6": "",
+            "optimizeCoef6": "",
+            "coef7": "",
+            "optimizeCoef7": "",
+            "coef8": "",
+            "optimizeCoef8": "",
+            "coef9": "",
+            "optimizeCoef9": "",
+            "coef10": "",
+            "optimizeCoef10": "",
+            "_blockType": "ImageSurface",
+            "_blockId": "relay-image"
+          }
+        ],
+        "meritFunction": [],
+        "systemRequirements": [],
+        "systemData": {
+          "referenceFocalLength": "50"
+        },
+        "metadata": {
+          "created": "2026-09-08T00:00:00.000Z",
+          "modified": "2026-09-08T00:00:00.000Z",
+          "optimizationTarget": null,
+          "locked": false,
+          "description": "Two-beam Fizeau approximation. Monochromatic 632.8 nm, collimated Gaussian beam diameter 4 mm. A 50:50 pickup cube sends light along +Z and sends both returns to the same Camera. Reference flat: ideal AR entrance Z=75 mm, 5 mm N-BK7, 4% reflecting rear reference face Z=80 mm. Test face nominal Z=100 mm, reflectance 4%, tilt X=0.02 deg. Both beams traverse the reference substrate twice; physical cavity OPD is 40 mm on axis when parallel. The flat BeamSplitter uses a local 45-degree coating normal: rotation Y=-135 deg makes the physical reference face normal to global Z, not oblique. Fixed R/T and scalar phase; first reflected pair only, no higher cavity orders, polarization or coating-stack model. Treat the source as a coherent monochromatic laser with coherence length greater than 40 mm. Run Coherent Signal after each change. No surface-height inversion or grating calibration is claimed."
+        },
+        "blocks": [
+          {
+            "blockId": "source",
+            "blockType": "BroadbandSource",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "centerWavelengthNm": 632.8,
+              "minWavelengthNm": 632.8,
+              "maxWavelengthNm": 632.8,
+              "spectralSamples": 1,
+              "totalPowerW": 0.0001,
+              "beamDiameterMm": 4,
+              "divergenceDeg": 0,
+              "spatialProfile": "gaussian",
+              "renderSpatialSamples": 49,
+              "detectorSpatialSamples": 4096,
+              "spatialSamples": 4096,
+              "coherenceGroupId": "fizeau-source",
+              "positionXmm": 0,
+              "positionYmm": 0,
+              "positionZmm": -115,
+              "rotationXdeg": 0,
+              "rotationYdeg": 0,
+              "rotationZdeg": 0,
+              "depthMm": 30,
+              "widthMm": 12,
+              "heightMm": 12,
+              "bandwidthFwhmNm": 0.01
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "Monochromatic · 632.8 nm"
+            }
+          },
+          {
+            "blockId": "bs",
+            "blockType": "BeamSplitter",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "widthMm": 20,
+              "heightMm": 20,
+              "depthMm": 20,
+              "beamSplitterModel": "cube",
+              "reflectionPort": "reflect",
+              "reflectance": 0.5,
+              "transmittance": 0.5,
+              "reflectedPhaseDeg": 90,
+              "transmittedPhaseDeg": 0,
+              "substrateMaterial": "N-BK7",
+              "substrateIndexNd": 1.5168,
+              "substrateAbbeNumber": 64.17,
+              "substrateThicknessMm": 20,
+              "wedgeDeg": 0,
+              "backSurfaceReflectance": 0,
+              "positionXmm": 0,
+              "positionYmm": 0,
+              "positionZmm": 0,
+              "rotationXdeg": 0,
+              "rotationYdeg": 0,
+              "rotationZdeg": 0
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "50:50 cube BS · 20 mm"
+            }
+          },
+          {
+            "blockId": "measurement-mirror",
+            "blockType": "FoldMirror",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "widthMm": 15,
+              "heightMm": 15,
+              "depthMm": 2,
+              "reflectance": 0.04,
+              "positionXmm": 0,
+              "positionYmm": 0,
+              "positionZmm": 101,
+              "rotationXdeg": 0.02,
+              "rotationYdeg": 0,
+              "rotationZdeg": 0
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "Test flat · 4% · tilt X 0.02 deg"
+            }
+          },
+          {
+            "blockId": "reference-flat",
+            "blockType": "BeamSplitter",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "widthMm": 20,
+              "heightMm": 20,
+              "depthMm": 5,
+              "beamSplitterModel": "plate",
+              "reflectionPort": "reflect",
+              "reflectance": 0.04,
+              "transmittance": 0.96,
+              "reflectedPhaseDeg": 0,
+              "transmittedPhaseDeg": 0,
+              "substrateMaterial": "N-BK7",
+              "substrateIndexNd": 1.5168,
+              "substrateAbbeNumber": 64.17,
+              "substrateThicknessMm": 5,
+              "wedgeDeg": 0,
+              "backSurfaceReflectance": 0,
+              "positionXmm": 0,
+              "positionYmm": 0,
+              "positionZmm": 80,
+              "rotationXdeg": 0,
+              "rotationYdeg": -135,
+              "rotationZdeg": 0
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "Reference flat · 4% · rear reference face Z=80 mm"
+            }
+          },
+          {
+            "blockId": "relay-object",
+            "blockType": "ObjectSurface",
+            "role": null,
+            "parameters": {
+              "objectDistanceMode": "Finite",
+              "objectDistance": 100,
+              "semiDiameter": 3
+            },
+            "variables": {},
+            "constraints": {},
+            "metadata": {
+              "label": "BS output plane",
+              "source": "design-intent",
+              "collapsed": false
+            }
+          },
+          {
+            "blockId": "relay-lens",
+            "blockType": "Paraxial",
+            "role": null,
+            "parameters": {
+              "focalLength": 50,
+              "focalLengthX": 50,
+              "focalLengthY": 50,
+              "centerThickness": 0,
+              "semiDiameter": 8,
+              "material": "AIR"
+            },
+            "variables": {},
+            "constraints": {},
+            "metadata": {
+              "label": "1:1 Camera relay · ideal f=50 mm",
+              "source": "design-intent",
+              "collapsed": false
+            }
+          },
+          {
+            "blockId": "relay-gap",
+            "blockType": "Gap",
+            "role": null,
+            "parameters": {
+              "thickness": 100,
+              "material": "AIR"
+            },
+            "variables": {},
+            "constraints": {},
+            "metadata": {
+              "label": "Image distance · 100 mm",
+              "source": "design-intent",
+              "collapsed": false
+            }
+          },
+          {
+            "blockId": "relay-image",
+            "blockType": "ImageSurface",
+            "role": null,
+            "parameters": {
+              "semiDiameter": 3
+            },
+            "variables": {},
+            "constraints": {},
+            "metadata": {
+              "label": "Camera image plane",
+              "source": "design-intent",
+              "collapsed": false
+            }
+          },
+          {
+            "blockId": "camera",
+            "blockType": "AreaDetector",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "pixelCountX": 128,
+              "pixelCountY": 128,
+              "pixelPitchUm": 40,
+              "quantumEfficiency": 0.8,
+              "fillFactor": 1,
+              "exposureTimeS": 0.000001,
+              "saturationElectrons": 30000,
+              "bitDepth": 16,
+              "frontOnly": true,
+              "calibrationMinUm": -80,
+              "calibrationMaxUm": 80,
+              "positionXmm": -225,
+              "positionYmm": 0,
+              "positionZmm": 0,
+              "rotationXdeg": 0,
+              "rotationYdeg": -90,
+              "rotationZdeg": 0,
+              "depthMm": 10
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "Fizeau Camera"
+            }
+          }
+        ],
+        "sequentialGroups": [
+          {
+            "id": "camera-relay",
+            "label": "Camera relay · 1:1",
+            "blockIds": [
+              "relay-object",
+              "relay-lens",
+              "relay-gap",
+              "relay-image"
+            ],
+            "rootTransform": {
+              "positionMm": {
+                "x": -20,
+                "y": 0,
+                "z": 0
+              },
+              "rotationDeg": {
+                "x": 0,
+                "y": -90,
+                "z": 0
+              }
+            }
+          }
+        ],
+        "designConnections": [
+          {
+            "id": "source-bs",
+            "from": {
+              "blockId": "source",
+              "portId": "emit"
+            },
+            "to": {
+              "blockId": "bs",
+              "portId": "common"
+            },
+            "enabled": true,
+            "allowReverse": false,
+            "autoPlace": false
+          },
+          {
+            "id": "bs-reference-flat",
+            "from": {
+              "blockId": "bs",
+              "portId": "transmit"
+            },
+            "to": {
+              "blockId": "reference-flat",
+              "portId": "common"
+            },
+            "enabled": true,
+            "allowReverse": true,
+            "autoPlace": false
+          },
+          {
+            "id": "reference-flat-test",
+            "from": {
+              "blockId": "reference-flat",
+              "portId": "transmit"
+            },
+            "to": {
+              "blockId": "measurement-mirror",
+              "portId": "in"
+            },
+            "enabled": true,
+            "allowReverse": true,
+            "autoPlace": false
+          },
+          {
+            "id": "bs-relay",
+            "from": {
+              "blockId": "bs",
+              "portId": "recombine"
+            },
+            "to": {
+              "blockId": "sequential-group:camera-relay",
+              "portId": "Front"
+            },
+            "enabled": true,
+            "allowReverse": false,
+            "autoPlace": false
+          },
+          {
+            "id": "relay-camera",
+            "from": {
+              "blockId": "sequential-group:camera-relay",
+              "portId": "Back"
+            },
+            "to": {
+              "blockId": "camera",
+              "portId": "detect"
+            },
+            "enabled": true,
+            "allowReverse": false,
+            "autoPlace": false
+          }
+        ],
+        "portRoutes": [
+          {
+            "id": "measurement",
+            "label": "Test return · transmit flat → test → transmit flat → Camera",
+            "enabled": true,
+            "sourceBlockId": "source",
+            "detectorBlockId": "camera",
+            "steps": [
+              {
+                "connectionId": "source-bs",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "bs-reference-flat",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "reference-flat-test",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "reference-flat-test",
+                "direction": "reverse",
+                "departurePortId": "out"
+              },
+              {
+                "connectionId": "bs-reference-flat",
+                "direction": "reverse"
+              },
+              {
+                "connectionId": "bs-relay",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "relay-camera",
+                "direction": "forward"
+              }
+            ]
+          },
+          {
+            "id": "reference",
+            "label": "Reference return · rear reference face → Camera",
+            "enabled": true,
+            "sourceBlockId": "source",
+            "detectorBlockId": "camera",
+            "steps": [
+              {
+                "connectionId": "source-bs",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "bs-reference-flat",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "bs-reference-flat",
+                "direction": "reverse",
+                "departurePortId": "reflect"
+              },
+              {
+                "connectionId": "bs-relay",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "relay-camera",
+                "direction": "forward"
+              }
+            ]
+          }
+        ],
+        "routeSets": [
+          {
+            "id": "fizeau-camera",
+            "label": "Fizeau · reference and test reflection",
+            "enabled": true,
+            "detectorBlockId": "camera",
+            "routeIds": [
+              "measurement",
+              "reference"
+            ],
+            "measurementRouteId": "measurement",
+            "referenceRouteId": "reference",
+            "opdCalibrationMm": 0
+          }
+        ],
+        "assemblyRoutingMode": "engineered-paths"
+      },
+      {
+        "id": 2,
+        "name": "Fizeau · parallel flats · piston test",
+        "schemaVersion": "0.1",
+        "source": [
+          {
+            "id": 1,
+            "wavelength": 0.6328,
+            "weight": 1,
+            "primary": "Primary Wavelength",
+            "angle": 0
+          }
+        ],
+        "object": [
+          {
+            "id": 1,
+            "xHeightAngle": 0,
+            "yHeightAngle": 0,
+            "position": "Rectangle",
+            "angle": 0
+          }
+        ],
+        "opticalSystem": [
+          {
+            "id": 0,
+            "object type": "Object",
+            "surfType": "Spherical",
+            "comment": "",
+            "radius": "INF",
+            "optimizeR": "",
+            "thickness": 100,
+            "optimizeT": "",
+            "semidia": "",
+            "optimizeSemiDia": "",
+            "material": "AIR",
+            "optimizeMaterial": "",
+            "rindex": "",
+            "optimizeRI": "",
+            "abbe": "",
+            "optimizeAbbe": "",
+            "conic": "",
+            "optimizeConic": "",
+            "coef1": "",
+            "optimizeCoef1": "",
+            "coef2": "",
+            "optimizeCoef2": "",
+            "coef3": "",
+            "optimizeCoef3": "",
+            "coef4": "",
+            "optimizeCoef4": "",
+            "coef5": "",
+            "optimizeCoef5": "",
+            "coef6": "",
+            "optimizeCoef6": "",
+            "coef7": "",
+            "optimizeCoef7": "",
+            "coef8": "",
+            "optimizeCoef8": "",
+            "coef9": "",
+            "optimizeCoef9": "",
+            "coef10": "",
+            "optimizeCoef10": "",
+            "_blockType": "Object",
+            "_blockId": null
+          },
+          {
+            "id": 1,
+            "object type": "",
+            "surfType": "Toric",
+            "comment": "",
+            "radius": "51.68",
+            "optimizeR": "",
+            "thickness": 0,
+            "optimizeT": "",
+            "semidia": "",
+            "optimizeSemiDia": "",
+            "material": "AIR",
+            "optimizeMaterial": "",
+            "rindex": "",
+            "optimizeRI": "",
+            "abbe": "",
+            "optimizeAbbe": "",
+            "conic": "",
+            "optimizeConic": "",
+            "coef1": "",
+            "optimizeCoef1": "",
+            "coef2": "",
+            "optimizeCoef2": "",
+            "coef3": "",
+            "optimizeCoef3": "",
+            "coef4": "",
+            "optimizeCoef4": "",
+            "coef5": "",
+            "optimizeCoef5": "",
+            "coef6": "",
+            "optimizeCoef6": "",
+            "coef7": "",
+            "optimizeCoef7": "",
+            "coef8": "",
+            "optimizeCoef8": "",
+            "coef9": "",
+            "optimizeCoef9": "",
+            "coef10": "",
+            "optimizeCoef10": "",
+            "_blockType": "Paraxial",
+            "_blockId": "relay-lens",
+            "_surfaceRole": "front",
+            "_idealThinLens": true,
+            "_thinLensFocalLengthX": 50,
+            "_thinLensFocalLengthY": 50,
+            "radiusX": "51.68",
+            "radiusY": "51.68",
+            "axis": "0",
+            "qconNrad": ""
+          },
+          {
+            "id": 2,
+            "object type": "",
+            "surfType": "Toric",
+            "comment": "",
+            "radius": "-51.68",
+            "optimizeR": "",
+            "thickness": 100,
+            "optimizeT": "",
+            "semidia": "",
+            "optimizeSemiDia": "",
+            "material": "AIR",
+            "optimizeMaterial": "",
+            "rindex": "",
+            "optimizeRI": "",
+            "abbe": "",
+            "optimizeAbbe": "",
+            "conic": "",
+            "optimizeConic": "",
+            "coef1": "",
+            "optimizeCoef1": "",
+            "coef2": "",
+            "optimizeCoef2": "",
+            "coef3": "",
+            "optimizeCoef3": "",
+            "coef4": "",
+            "optimizeCoef4": "",
+            "coef5": "",
+            "optimizeCoef5": "",
+            "coef6": "",
+            "optimizeCoef6": "",
+            "coef7": "",
+            "optimizeCoef7": "",
+            "coef8": "",
+            "optimizeCoef8": "",
+            "coef9": "",
+            "optimizeCoef9": "",
+            "coef10": "",
+            "optimizeCoef10": "",
+            "_blockType": "Paraxial",
+            "_blockId": "relay-lens",
+            "_surfaceRole": "back",
+            "_idealThinLens": true,
+            "_thinLensFocalLengthX": 50,
+            "_thinLensFocalLengthY": 50,
+            "radiusX": "-51.68",
+            "radiusY": "-51.68",
+            "axis": "0",
+            "qconNrad": "",
+            "__cooptGapBlockType": "Gap",
+            "__cooptGapThickness": 100,
+            "__cooptGapMaterial": "AIR",
+            "__cooptGapApplied": true
+          },
+          {
+            "id": 3,
+            "object type": "Image",
+            "surfType": "Spherical",
+            "comment": "",
+            "radius": "INF",
+            "radiusX": "",
+            "radiusY": "",
+            "axis": "",
+            "optimizeR": "",
+            "thickness": "",
+            "optimizeT": "",
+            "semidia": "",
+            "optimizeSemiDia": "",
+            "apertureShape": "Circular",
+            "apertureWidth": "",
+            "apertureHeight": "",
+            "material": "",
+            "optimizeMaterial": "",
+            "rindex": "",
+            "optimizeRI": "",
+            "abbe": "",
+            "optimizeAbbe": "",
+            "conic": "",
+            "optimizeConic": "",
+            "coef1": "",
+            "optimizeCoef1": "",
+            "coef2": "",
+            "optimizeCoef2": "",
+            "coef3": "",
+            "optimizeCoef3": "",
+            "coef4": "",
+            "optimizeCoef4": "",
+            "coef5": "",
+            "optimizeCoef5": "",
+            "coef6": "",
+            "optimizeCoef6": "",
+            "coef7": "",
+            "optimizeCoef7": "",
+            "coef8": "",
+            "optimizeCoef8": "",
+            "coef9": "",
+            "optimizeCoef9": "",
+            "coef10": "",
+            "optimizeCoef10": "",
+            "_blockType": "ImageSurface",
+            "_blockId": "relay-image"
+          }
+        ],
+        "meritFunction": [],
+        "systemRequirements": [],
+        "systemData": {
+          "referenceFocalLength": "50"
+        },
+        "metadata": {
+          "created": "2026-09-08T00:00:00.000Z",
+          "modified": "2026-09-08T00:00:00.000Z",
+          "optimizationTarget": null,
+          "locked": false,
+          "description": "Two-beam Fizeau approximation. Monochromatic 632.8 nm, collimated Gaussian beam diameter 4 mm. A 50:50 pickup cube sends light along +Z and sends both returns to the same Camera. Reference flat: ideal AR entrance Z=75 mm, 5 mm N-BK7, 4% reflecting rear reference face Z=80 mm. Test face nominal Z=100 mm, reflectance 4%, tilt X=0 deg. Both beams traverse the reference substrate twice; physical cavity OPD is 40 mm on axis when parallel. The flat BeamSplitter uses a local 45-degree coating normal: rotation Y=-135 deg makes the physical reference face normal to global Z, not oblique. Fixed R/T and scalar phase; first reflected pair only, no higher cavity orders, polarization or coating-stack model. Treat the source as a coherent monochromatic laser with coherence length greater than 40 mm. Run Coherent Signal after each change. No surface-height inversion or grating calibration is claimed. This parallel/collimated configuration gives uniform phase across the illuminated aperture, not circular fringes. Shift the test body Z by 0.0001582 mm (lambda/4) to reverse the interference phase; compare Detected W because the display auto-scales each image."
+        },
+        "blocks": [
+          {
+            "blockId": "source",
+            "blockType": "BroadbandSource",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "centerWavelengthNm": 632.8,
+              "minWavelengthNm": 632.8,
+              "maxWavelengthNm": 632.8,
+              "spectralSamples": 1,
+              "totalPowerW": 0.0001,
+              "beamDiameterMm": 4,
+              "divergenceDeg": 0,
+              "spatialProfile": "gaussian",
+              "renderSpatialSamples": 49,
+              "detectorSpatialSamples": 4096,
+              "spatialSamples": 4096,
+              "coherenceGroupId": "fizeau-source",
+              "positionXmm": 0,
+              "positionYmm": 0,
+              "positionZmm": -115,
+              "rotationXdeg": 0,
+              "rotationYdeg": 0,
+              "rotationZdeg": 0,
+              "depthMm": 30,
+              "widthMm": 12,
+              "heightMm": 12,
+              "bandwidthFwhmNm": 0.01
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "Monochromatic · 632.8 nm"
+            }
+          },
+          {
+            "blockId": "bs",
+            "blockType": "BeamSplitter",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "widthMm": 20,
+              "heightMm": 20,
+              "depthMm": 20,
+              "beamSplitterModel": "cube",
+              "reflectionPort": "reflect",
+              "reflectance": 0.5,
+              "transmittance": 0.5,
+              "reflectedPhaseDeg": 90,
+              "transmittedPhaseDeg": 0,
+              "substrateMaterial": "N-BK7",
+              "substrateIndexNd": 1.5168,
+              "substrateAbbeNumber": 64.17,
+              "substrateThicknessMm": 20,
+              "wedgeDeg": 0,
+              "backSurfaceReflectance": 0,
+              "positionXmm": 0,
+              "positionYmm": 0,
+              "positionZmm": 0,
+              "rotationXdeg": 0,
+              "rotationYdeg": 0,
+              "rotationZdeg": 0
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "50:50 cube BS · 20 mm"
+            }
+          },
+          {
+            "blockId": "measurement-mirror",
+            "blockType": "FoldMirror",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "widthMm": 15,
+              "heightMm": 15,
+              "depthMm": 2,
+              "reflectance": 0.04,
+              "positionXmm": 0,
+              "positionYmm": 0,
+              "positionZmm": 101,
+              "rotationXdeg": 0,
+              "rotationYdeg": 0,
+              "rotationZdeg": 0
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "Test flat · 4% · parallel · move Z for piston"
+            }
+          },
+          {
+            "blockId": "reference-flat",
+            "blockType": "BeamSplitter",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "widthMm": 20,
+              "heightMm": 20,
+              "depthMm": 5,
+              "beamSplitterModel": "plate",
+              "reflectionPort": "reflect",
+              "reflectance": 0.04,
+              "transmittance": 0.96,
+              "reflectedPhaseDeg": 0,
+              "transmittedPhaseDeg": 0,
+              "substrateMaterial": "N-BK7",
+              "substrateIndexNd": 1.5168,
+              "substrateAbbeNumber": 64.17,
+              "substrateThicknessMm": 5,
+              "wedgeDeg": 0,
+              "backSurfaceReflectance": 0,
+              "positionXmm": 0,
+              "positionYmm": 0,
+              "positionZmm": 80,
+              "rotationXdeg": 0,
+              "rotationYdeg": -135,
+              "rotationZdeg": 0
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "Reference flat · 4% · rear reference face Z=80 mm"
+            }
+          },
+          {
+            "blockId": "relay-object",
+            "blockType": "ObjectSurface",
+            "role": null,
+            "parameters": {
+              "objectDistanceMode": "Finite",
+              "objectDistance": 100,
+              "semiDiameter": 3
+            },
+            "variables": {},
+            "constraints": {},
+            "metadata": {
+              "label": "BS output plane",
+              "source": "design-intent",
+              "collapsed": false
+            }
+          },
+          {
+            "blockId": "relay-lens",
+            "blockType": "Paraxial",
+            "role": null,
+            "parameters": {
+              "focalLength": 50,
+              "focalLengthX": 50,
+              "focalLengthY": 50,
+              "centerThickness": 0,
+              "semiDiameter": 8,
+              "material": "AIR"
+            },
+            "variables": {},
+            "constraints": {},
+            "metadata": {
+              "label": "1:1 Camera relay · ideal f=50 mm",
+              "source": "design-intent",
+              "collapsed": false
+            }
+          },
+          {
+            "blockId": "relay-gap",
+            "blockType": "Gap",
+            "role": null,
+            "parameters": {
+              "thickness": 100,
+              "material": "AIR"
+            },
+            "variables": {},
+            "constraints": {},
+            "metadata": {
+              "label": "Image distance · 100 mm",
+              "source": "design-intent",
+              "collapsed": false
+            }
+          },
+          {
+            "blockId": "relay-image",
+            "blockType": "ImageSurface",
+            "role": null,
+            "parameters": {
+              "semiDiameter": 3
+            },
+            "variables": {},
+            "constraints": {},
+            "metadata": {
+              "label": "Camera image plane",
+              "source": "design-intent",
+              "collapsed": false
+            }
+          },
+          {
+            "blockId": "camera",
+            "blockType": "AreaDetector",
+            "role": null,
+            "constraints": {},
+            "parameters": {
+              "pixelCountX": 128,
+              "pixelCountY": 128,
+              "pixelPitchUm": 40,
+              "quantumEfficiency": 0.8,
+              "fillFactor": 1,
+              "exposureTimeS": 0.000001,
+              "saturationElectrons": 30000,
+              "bitDepth": 16,
+              "frontOnly": true,
+              "calibrationMinUm": -80,
+              "calibrationMaxUm": 80,
+              "positionXmm": -225,
+              "positionYmm": 0,
+              "positionZmm": 0,
+              "rotationXdeg": 0,
+              "rotationYdeg": -90,
+              "rotationZdeg": 0,
+              "depthMm": 10
+            },
+            "variables": {},
+            "metadata": {
+              "source": "design-intent",
+              "collapsed": true,
+              "label": "Fizeau Camera"
+            }
+          }
+        ],
+        "sequentialGroups": [
+          {
+            "id": "camera-relay",
+            "label": "Camera relay · 1:1",
+            "blockIds": [
+              "relay-object",
+              "relay-lens",
+              "relay-gap",
+              "relay-image"
+            ],
+            "rootTransform": {
+              "positionMm": {
+                "x": -20,
+                "y": 0,
+                "z": 0
+              },
+              "rotationDeg": {
+                "x": 0,
+                "y": -90,
+                "z": 0
+              }
+            }
+          }
+        ],
+        "designConnections": [
+          {
+            "id": "source-bs",
+            "from": {
+              "blockId": "source",
+              "portId": "emit"
+            },
+            "to": {
+              "blockId": "bs",
+              "portId": "common"
+            },
+            "enabled": true,
+            "allowReverse": false,
+            "autoPlace": false
+          },
+          {
+            "id": "bs-reference-flat",
+            "from": {
+              "blockId": "bs",
+              "portId": "transmit"
+            },
+            "to": {
+              "blockId": "reference-flat",
+              "portId": "common"
+            },
+            "enabled": true,
+            "allowReverse": true,
+            "autoPlace": false
+          },
+          {
+            "id": "reference-flat-test",
+            "from": {
+              "blockId": "reference-flat",
+              "portId": "transmit"
+            },
+            "to": {
+              "blockId": "measurement-mirror",
+              "portId": "in"
+            },
+            "enabled": true,
+            "allowReverse": true,
+            "autoPlace": false
+          },
+          {
+            "id": "bs-relay",
+            "from": {
+              "blockId": "bs",
+              "portId": "recombine"
+            },
+            "to": {
+              "blockId": "sequential-group:camera-relay",
+              "portId": "Front"
+            },
+            "enabled": true,
+            "allowReverse": false,
+            "autoPlace": false
+          },
+          {
+            "id": "relay-camera",
+            "from": {
+              "blockId": "sequential-group:camera-relay",
+              "portId": "Back"
+            },
+            "to": {
+              "blockId": "camera",
+              "portId": "detect"
+            },
+            "enabled": true,
+            "allowReverse": false,
+            "autoPlace": false
+          }
+        ],
+        "portRoutes": [
+          {
+            "id": "measurement",
+            "label": "Test return · transmit flat → test → transmit flat → Camera",
+            "enabled": true,
+            "sourceBlockId": "source",
+            "detectorBlockId": "camera",
+            "steps": [
+              {
+                "connectionId": "source-bs",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "bs-reference-flat",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "reference-flat-test",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "reference-flat-test",
+                "direction": "reverse",
+                "departurePortId": "out"
+              },
+              {
+                "connectionId": "bs-reference-flat",
+                "direction": "reverse"
+              },
+              {
+                "connectionId": "bs-relay",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "relay-camera",
+                "direction": "forward"
+              }
+            ]
+          },
+          {
+            "id": "reference",
+            "label": "Reference return · rear reference face → Camera",
+            "enabled": true,
+            "sourceBlockId": "source",
+            "detectorBlockId": "camera",
+            "steps": [
+              {
+                "connectionId": "source-bs",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "bs-reference-flat",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "bs-reference-flat",
+                "direction": "reverse",
+                "departurePortId": "reflect"
+              },
+              {
+                "connectionId": "bs-relay",
+                "direction": "forward"
+              },
+              {
+                "connectionId": "relay-camera",
+                "direction": "forward"
+              }
+            ]
+          }
+        ],
+        "routeSets": [
+          {
+            "id": "fizeau-camera",
+            "label": "Fizeau · reference and test reflection",
+            "enabled": true,
+            "detectorBlockId": "camera",
+            "routeIds": [
+              "measurement",
+              "reference"
+            ],
+            "measurementRouteId": "measurement",
+            "referenceRouteId": "reference",
+            "opdCalibrationMm": 0
+          }
+        ],
+        "assemblyRoutingMode": "engineered-paths"
+      }
+    ],
+    "activeConfigId": 1,
+    "optimizationRules": []
+  }
+}

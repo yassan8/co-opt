@@ -4648,23 +4648,35 @@ function buildSharedMtfWorkerRequest(request: any, jobs: unknown[]): any {
 
 export async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
   const jobs = Array.isArray(request?.jobs) ? request.jobs : [];
+  const forceWorker = request?.forceWorker === true;
+  const signal = request?.signal as AbortSignal | undefined;
+  const requestedTimeout = Number(request?.workerTimeoutMs);
+  const workerTimeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.max(5000, Math.min(600000, Math.round(requestedTimeout)))
+    : 120000;
+  const workerRequest = { ...(request || {}) };
+  delete workerRequest.forceWorker;
+  delete workerRequest.workerTimeoutMs;
+  delete workerRequest.signal;
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   const logElapsed = () => {
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     return Math.max(0, now - startedAt).toFixed(1);
   };
-  if (jobs.length <= 1 || typeof Worker === "undefined") {
+  if (jobs.length === 0 || (jobs.length <= 1 && !forceWorker) || typeof Worker === "undefined") {
     console.info(`[TFMTF WorkerPool] bypassed: jobs=${jobs.length}, worker=${typeof Worker !== "undefined"}, elapsed=${logElapsed()}ms`);
-    return runMtfBatchViaWasm(request);
+    return runMtfBatchViaWasm(workerRequest);
   }
 
   if (
+    !forceWorker
+    &&
     typeof crossOriginIsolated !== "undefined"
     && crossOriginIsolated
     && typeof SharedArrayBuffer === "function"
   ) {
     console.info(`[TFMTF WorkerPool] bypassed: crossOriginIsolated=true, using Rayon WASM path, jobs=${jobs.length}`);
-    const rayonResponse = await runMtfBatchViaWasm(request);
+    const rayonResponse = await runMtfBatchViaWasm(workerRequest);
     const rayonNow = typeof performance !== "undefined" ? performance.now() : Date.now();
     console.info(`[TFMTF WorkerPool] Rayon finished: jobs=${jobs.length}, elapsed=${Math.max(0, rayonNow - startedAt).toFixed(1)}ms`);
     return rayonResponse;
@@ -4689,25 +4701,59 @@ export async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
   const workerCount = Math.max(1, Math.min(6, jobs.length, parallelGroupLimit, Number.isFinite(hardwareConcurrency) ? hardwareConcurrency : 4));
   console.info(`[TFMTF WorkerPool] starting: jobs=${jobs.length}, workers=${workerCount}, hardwareConcurrency=${hardwareConcurrency}`);
   const runPoolBatch = async (): Promise<any> => {
+    if (signal?.aborted) throw new DOMException(String(signal.reason || 'Cancelled'), 'AbortError');
     const { chunks, chunkJobIndexes, strategy } = splitMtfJobsAcrossWorkers(jobs, workerCount);
     const pool = getMtfWasmWorkerPool(workerCount);
     const responses = await Promise.all(chunks.map((chunk, index) => new Promise<any>((resolve, reject) => {
       const requestId = `tfmtf-${Date.now()}-${++mtfWasmWorkerRequestSequence}-${index}`;
       const worker = pool.workers[index];
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      const cleanup = () => {
+        if (timeoutId !== null) clearTimeout(timeoutId);
+        signal?.removeEventListener?.('abort', onAbort);
+        worker.onmessage = null;
+        worker.onerror = null;
+      };
+      const resolveOnce = (value: any) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+      const rejectOnce = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      const onAbort = () => rejectOnce(new DOMException(String(signal?.reason || 'Cancelled'), 'AbortError'));
       worker.onmessage = (event: MessageEvent<any>) => {
         const message = event.data;
         if (message?.requestId !== requestId) return;
         if (message.ok !== true) {
-          reject(new Error(String(message.error || "TF-MTF WASM worker failed")));
+          rejectOnce(new Error(String(message.error || "TF-MTF WASM worker failed")));
           return;
         }
-        resolve(message.response);
+        resolveOnce(message.response);
       };
-      worker.onerror = (event) => reject(new Error(String(event.message || "TF-MTF WASM worker error")));
-      worker.postMessage({
-        requestId,
-        request: buildSharedMtfWorkerRequest(request, chunk),
-      });
+      worker.onerror = (event) => rejectOnce(new Error(String(event.message || "TF-MTF WASM worker error")));
+      timeoutId = setTimeout(() => rejectOnce(new Error(
+        `TF-MTF WASM worker timed out after ${workerTimeoutMs} ms (${chunk.length} jobs)`,
+      )), workerTimeoutMs);
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener?.('abort', onAbort, { once: true });
+      try {
+        worker.postMessage({
+          requestId,
+          request: buildSharedMtfWorkerRequest(workerRequest, chunk),
+        });
+      } catch (error) {
+        rejectOnce(error);
+      }
     })));
     const results = responses
       .flatMap((response, workerIndex) => remapMtfWorkerChunkResults(
@@ -4742,8 +4788,13 @@ export async function runMtfBatchViaWasmWorkerPool(request: any): Promise<any> {
     return await scheduled;
   } catch (error) {
     disposeMtfWasmWorkerPool();
+    if (signal?.aborted || (error as any)?.name === 'AbortError') throw error;
+    if (forceWorker) {
+      console.error(`[TFMTF WorkerPool] failed after ${logElapsed()}ms`, error);
+      throw error;
+    }
     console.warn(`[TFMTF WorkerPool] failed after ${logElapsed()}ms; retrying on the main WASM instance`, error);
-    return runMtfBatchViaWasm(request);
+    return runMtfBatchViaWasm(workerRequest);
   } finally {
     console.info(`[TFMTF WorkerPool] finished: jobs=${jobs.length}, workers=${workerCount}, elapsed=${logElapsed()}ms`);
   }

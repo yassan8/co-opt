@@ -12,6 +12,7 @@ import {
 } from './coherent-assembly.ts';
 import { buildHybridAssemblyFromConfiguration } from './hybrid-design.ts';
 import { worldPortDirection, worldPortPosition } from './coherent-port-layout.ts';
+import { normalizePortRouteConfiguration, resolvePortRoute } from './port-routes.ts';
 
 export type AssemblyRoutingMode = 'automatic-scene' | 'engineered-paths';
 
@@ -319,34 +320,51 @@ export function compileAutomaticAssemblyRouting(config: Configuration): Automati
   // reference and return-pass topology. Treat that topology as a one-time
   // migration hint, not as editable runtime plumbing. New assemblies with no
   // saved routes are discovered solely from physical scene intersections.
-  const authoredConnections = new Map((config.designConnections ?? []).map((connection) => [connection.id, connection]));
-  const migratedRoutes = (config.portRoutes ?? []).filter((route) => route.enabled !== false).map((route) => {
-    const links: TraversalLink[] = [];
-    for (const step of route.steps ?? []) {
-      const connection = authoredConnections.get(step.connectionId);
-      if (!connection) continue;
-      const reverse = step.direction === 'reverse';
-      const from = reverse ? connection.to : connection.from;
-      const to = reverse ? connection.from : connection.to;
-      links.push({
-        fromComponentId: from.blockId,
-        fromPortId: step.departurePortId ?? from.portId,
-        toComponentId: to.blockId,
-        toPortId: step.arrivalPortId ?? to.portId,
-      });
+  // Preserve the existing migration of cached Source/Detector IDs and the
+  // legacy Front/Back aliases; the connection steps are authoritative.
+  const authoredRoutes = (config.portRoutes?.length
+    ? normalizePortRouteConfiguration(config).routes : []).filter((route) => route.enabled !== false);
+  const authoredWarnings: string[] = [];
+  const componentById = new Map(design.components.map((component) => [component.id, component]));
+  const migratedRoutes = authoredRoutes.flatMap((route) => {
+    // Do not silently omit a removed link or dereference a deleted component.
+    // Reject the complete saved traversal; the preflight surfaces these errors.
+    const resolved = resolvePortRoute(config, route);
+    if (!resolved.valid) {
+      authoredWarnings.push(...resolved.issues.map((issue) => (
+        `Saved path ${route.label || route.id}: ${issue.message}${issue.port ? ` (${issue.port.blockId}:${issue.port.portId})` : ''}`
+      )));
+      return [];
     }
-    return {
+    for (const step of resolved.steps) {
+      for (const endpoint of [step.departure, step.arrival]) {
+        const component = componentById.get(endpoint.blockId);
+        if (!component || !component.ports.some((port) => port.id === endpoint.portId)) {
+          authoredWarnings.push(`Saved path ${route.label || route.id}: component or port is missing (${endpoint.blockId}:${endpoint.portId}).`);
+          return [];
+        }
+      }
+    }
+    const links: TraversalLink[] = resolved.steps.map((step) => ({
+      fromComponentId: step.departure.blockId,
+      fromPortId: step.departure.portId,
+      toComponentId: step.arrival.blockId,
+      toPortId: step.arrival.portId,
+    }));
+    return [{
       links,
       sourceId: String(route.sourceBlockId ?? links[0]?.fromComponentId ?? ''),
       detectorId: String(route.detectorBlockId ?? links[links.length - 1]?.toComponentId ?? ''),
       routeId: route.id,
       authoredLabel: route.label,
-    };
+    }];
   }).filter((route) => route.links.length > 0 && route.sourceId && route.detectorId);
   // A saved traversal is an internal ambiguity hint for shared Beam Splitter
   // ports and return passes, not a second user-facing authoring model. New
   // systems without such a hint are compiled solely from physical scene hits.
-  const useSavedPaths = migratedRoutes.length > 0;
+  // An invalid saved topology must not be replaced with a different discovered
+  // path: that could display a plausible signal for the wrong optical system.
+  const useSavedPaths = authoredRoutes.length > 0;
   const traversals = useSavedPaths ? migratedRoutes : discovered.routes;
   const routeSource: AutomaticAssemblyRoutingResult['routeSource'] = useSavedPaths
     ? 'saved-paths'
@@ -417,7 +435,7 @@ export function compileAutomaticAssemblyRouting(config: Configuration): Automati
     connections: configuration.designConnections,
     routes,
     routeSets,
-    warnings: useSavedPaths ? [] : discovered.warnings,
+    warnings: useSavedPaths ? authoredWarnings : discovered.warnings,
     routeSource,
   };
 }
