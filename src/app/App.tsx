@@ -4763,9 +4763,9 @@ export default function App() {
   });
   const [renderShowPortConnections, setRenderShowPortConnections] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(RENDER_CONNECTIONS_STORAGE_KEY) !== 'false';
+      return localStorage.getItem(RENDER_CONNECTIONS_STORAGE_KEY) === 'true';
     } catch (_) {
-      return true;
+      return false;
     }
   });
   const [renderSectionAngle, setRenderSectionAngle] = useState<number>(() => {

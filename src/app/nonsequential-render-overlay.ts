@@ -688,7 +688,13 @@ function fitCameraToAssembly(group: THREE.Group): void {
   const controls = (window as any).controls ?? (typeof (window as any).getControls === 'function' ? (window as any).getControls() : null);
   const renderer = (window as any).renderer ?? (typeof (window as any).getRenderer === 'function' ? (window as any).getRenderer() : null);
   if (!camera || !controls || !renderer) return;
-  const box = new THREE.Box3().setFromObject(group);
+  const parts = group.children.filter((child) =>
+    child.userData.type === 'nonSequentialComponent' || child.userData.type === 'portRoutedExactGroup');
+  const fitObjects = parts.length > 0 ? parts : group.children.filter((child) =>
+    child.userData.type === 'nonSequentialRay');
+  group.updateWorldMatrix(true, true);
+  const box = new THREE.Box3();
+  for (const object of fitObjects) box.expandByObject(object);
   if (box.isEmpty()) return;
   const center = box.getCenter(new THREE.Vector3());
   const diagonal = Math.max(10, box.getSize(new THREE.Vector3()).length());
@@ -704,26 +710,34 @@ function fitCameraToAssembly(group: THREE.Group): void {
   camera.lookAt(center);
   controls.update?.();
   camera.updateMatrixWorld?.(true);
-  const corners: THREE.Vector3[] = [];
-  for (const x of [box.min.x, box.max.x]) {
-    for (const y of [box.min.y, box.max.y]) {
-      for (const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z));
-    }
-  }
-  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
-  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
-  let halfWidth = 1;
-  let halfHeight = 1;
-  for (const corner of corners) {
-    const offset = corner.sub(center);
-    halfWidth = Math.max(halfWidth, Math.abs(offset.dot(right)));
-    halfHeight = Math.max(halfHeight, Math.abs(offset.dot(up)));
-  }
-  const canvas = renderer.domElement as HTMLCanvasElement | undefined;
-  const aspect = Math.max(0.2, (canvas?.clientWidth || 1) / Math.max(1, canvas?.clientHeight || 1));
   if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
     const ortho = camera as THREE.OrthographicCamera;
-    const fitHeight = Math.max(halfHeight * 2, halfWidth * 2 / aspect) * 1.18;
+    const bounds = new THREE.Box3();
+    const toView = new THREE.Matrix4();
+    const corner = new THREE.Vector3();
+    for (const part of fitObjects) part.traverseVisible((object) => {
+      const geometry = (object as THREE.Mesh).geometry;
+      if (!geometry?.getAttribute('position')) return;
+      if (!geometry.boundingBox) geometry.computeBoundingBox();
+      const local = geometry.boundingBox;
+      if (!local || local.isEmpty()) return;
+      toView.multiplyMatrices(ortho.matrixWorldInverse, object.matrixWorld);
+      for (const x of [local.min.x, local.max.x]) {
+        for (const y of [local.min.y, local.max.y]) {
+          for (const z of [local.min.z, local.max.z]) {
+            bounds.expandByPoint(corner.set(x, y, z).applyMatrix4(toView));
+          }
+        }
+      }
+    });
+    if (bounds.isEmpty()) return;
+    const size = bounds.getSize(new THREE.Vector3());
+    const viewport = renderer.getSize(new THREE.Vector2());
+    const aspect = Math.max(1, viewport.x) / Math.max(1, viewport.y);
+    const fitHeight = Math.max(size.y, size.x / aspect, 1e-6) * 1.12;
+    const offset = bounds.getCenter(new THREE.Vector3()).setZ(0).applyQuaternion(ortho.quaternion);
+    ortho.position.add(offset);
+    controls.target.add(offset);
     ortho.left = -fitHeight * aspect / 2;
     ortho.right = fitHeight * aspect / 2;
     ortho.top = fitHeight / 2;
@@ -761,7 +775,7 @@ export function drawNonSequentialOverlay(scene: THREE.Scene, payload: OverlayPay
     group.add(line);
   }
   for (const item of payload.design.components) addComponent(group, payload.design, item.id);
-  if (options.showConnections !== false) addConnectionOverlay(group, payload.design, options.selectedConnectionId, effectiveSelectedRouteId, options.showLabels === true);
+  if (options.showConnections === true) addConnectionOverlay(group, payload.design, options.selectedConnectionId, effectiveSelectedRouteId, options.showLabels === true);
   scene.add(group);
   const renderer = (window as any).renderer ?? (typeof (window as any).getRenderer === 'function' ? (window as any).getRenderer() : null);
   const camera = (window as any).camera ?? (typeof (window as any).getCamera === 'function' ? (window as any).getCamera() : null);
@@ -824,7 +838,7 @@ export function installNonSequentialRenderOverlay(): () => void {
   let traceTimer: number | null = null;
   let traceToken = 0;
   let showConnections = (() => {
-    try { return localStorage.getItem(RENDER_CONNECTIONS_STORAGE_KEY) !== 'false'; } catch (_) { return true; }
+    try { return localStorage.getItem(RENDER_CONNECTIONS_STORAGE_KEY) === 'true'; } catch (_) { return false; }
   })();
   let selectedConnectionId: string | null = null;
   let selectedRouteId: string | null = (() => {
@@ -1080,7 +1094,7 @@ export function installNonSequentialRenderOverlay(): () => void {
   };
   const visibilityListener = (event: Event) => {
     const detail = (event as CustomEvent<{ visible?: boolean }>).detail;
-    showConnections = detail?.visible !== false;
+    showConnections = detail?.visible === true;
     if (!showConnections) {
       hoveredConnectionId = null;
       hideTooltip();

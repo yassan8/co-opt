@@ -2258,14 +2258,30 @@ function fitCameraToOpticalSystem() {
         // This keeps the optical propagation direction left-to-right, matching
         // both cross-section views and the conventional lens-layout reading.
         camera.position.set(-cameraDistance * 0.7, cameraDistance * 0.5, systemCenterZ);
-        camera.lookAt(0, 0, systemCenterZ);
         camera.up.set(0, 1, 0);
+        camera.lookAt(0, 0, systemCenterZ);
         
         // Set controls target to center of optical system
         controls.target.set(0, 0, systemCenterZ);
         controls.update();
         
-        // Force camera projection matrix update
+        // Orthographic framing depends on the frustum, not camera distance.
+        const bounds = __coopt_calculateOpticalElementsBounds(scene, true);
+        if (camera.isOrthographicCamera && renderer && bounds) {
+            camera.updateMatrixWorld(true);
+            const projected = bounds.clone().applyMatrix4(camera.matrixWorldInverse);
+            const size = projected.getSize(new THREE.Vector3());
+            const viewport = renderer.getSize(new THREE.Vector2());
+            const aspect = Math.max(1, viewport.x) / Math.max(1, viewport.y);
+            const height = Math.max(size.y, size.x / aspect, 1e-6) * 1.12;
+            const width = height * aspect;
+            const center = projected.getCenter(new THREE.Vector3());
+            camera.left = center.x - width / 2;
+            camera.right = center.x + width / 2;
+            camera.top = center.y + height / 2;
+            camera.bottom = center.y - height / 2;
+            camera.zoom = 1;
+        }
         camera.updateProjectionMatrix();
         
         // Force render
@@ -2912,13 +2928,13 @@ function updateCameraViewBounds() {
 // グローバルに公開
 window['updateCameraViewBounds'] = updateCameraViewBounds;
 
-function __coopt_calculateOpticalElementsBounds(scene) {
+function __coopt_calculateOpticalElementsBounds(scene, physicalOnly = false) {
     try {
         if (!scene) return null;
         const box = new THREE.Box3();
         let has = false;
 
-        scene.traverse((child) => {
+        scene.traverseVisible((child) => {
             if (!child || child.visible === false) return;
             if (!(child.isMesh || child.isLine || child.isGroup)) return;
 
@@ -2927,6 +2943,7 @@ function __coopt_calculateOpticalElementsBounds(scene) {
 
             const name = String(child.name || '');
             const ud = child.userData || {};
+            if (physicalOnly && (child.isGroup || ud.isRayLine || ud.type === 'ray' || ud.type === 'nonSequentialRay')) return;
             const isOptical = !!(
                 ud.isOpticalElement ||
                 ud.isLensSurface ||

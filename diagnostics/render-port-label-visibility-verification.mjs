@@ -54,11 +54,13 @@ const labels = () => objects('designPortLabel').length + objects('opticalRoutePa
 drawNonSequentialOverlay(scene, payload);
 assert.equal(labels(), 0, 'ordinary sequential Front/Back labels default to hidden');
 assert.equal(objects('nonSequentialRay').length, 1, 'rays remain drawn');
+assert.equal(objects('designPortOverlay').length, 0, 'Connections defaults to hidden');
+drawNonSequentialOverlay(scene, payload, { showConnections: true });
 assert.equal(objects('designPortOverlay').length, 2, 'connection markers and hover targets remain available');
 assert.ok(objects('designPortOverlay')[0].userData.tooltip.includes('FRONT'));
-drawNonSequentialOverlay(scene, payload, { showLabels: true });
+drawNonSequentialOverlay(scene, payload, { showConnections: true, showLabels: true });
 assert.equal(objects('designPortLabel').length, 2, 'explicit Labels enables unconnected Front/Back');
-drawNonSequentialOverlay(scene, payload, { showLabels: false });
+drawNonSequentialOverlay(scene, payload, { showConnections: true, showLabels: false });
 assert.equal(labels(), 0, 'redraw removes old labels');
 
 design.components.push(makeComponent('next', 30));
@@ -66,10 +68,10 @@ design.connections = [{ id: 'link', fromComponentId: 'lens', fromPortId: 'back',
 design.portRoutes = [{ id: 'route', enabled: true, steps: [{ connectionId: 'link', direction: 'forward' }, { connectionId: 'link', direction: 'reverse' }] }];
 for (const zeroLength of [false, true]) {
   design.components[1] = makeComponent('next', zeroLength ? 10 : 30);
-  drawNonSequentialOverlay(scene, payload, { selectedConnectionId: 'link', selectedRouteId: 'route', showLabels: false });
+  drawNonSequentialOverlay(scene, payload, { showConnections: true, selectedConnectionId: 'link', selectedRouteId: 'route', showLabels: false });
   assert.equal(labels(), 0, 'selected links and repeated route passes cannot bypass Labels off');
   assert.equal(objects('nonSequentialRay').length, 1);
-  drawNonSequentialOverlay(scene, payload, { selectedConnectionId: 'link', selectedRouteId: 'route', showLabels: true });
+  drawNonSequentialOverlay(scene, payload, { showConnections: true, selectedConnectionId: 'link', selectedRouteId: 'route', showLabels: true });
   assert.equal(objects('designPortLabel').length, 4);
   assert.equal(objects('opticalRoutePassLabel').length, 1, 'route numbering follows Labels even at co-located ports');
 }
@@ -83,6 +85,22 @@ assert.equal(objects('nonSequentialRay').length, 1);
 const key = 'coopt.render.showDesignIntentLabels';
 const tick = () => new Promise((resolve) => setTimeout(resolve, 15));
 const livePayload = { design: { ...design, components: [makeComponent('mirror', 0, 'mirror')], connections: [], portRoutes: [] }, revision: 2 };
+// A distant ray endpoint must not shrink the physical component in the view.
+const fitCamera = new THREE.OrthographicCamera(-100, 100, 50, -50, 0.1, 1000);
+fitCamera.position.set(0, 0, 100);
+globalThis.camera = fitCamera;
+globalThis.controls = { target: new THREE.Vector3(), update() {} };
+globalThis.renderer = { getSize: (size) => size.set(1200, 600), render() {} };
+drawNonSequentialOverlay(scene, {
+  ...livePayload,
+  result: { ...payload.result, segments: [{ ...payload.result.segments[0], endMm: { x: 1000, y: 0, z: 40 } }] },
+}, { fitAssembly: true });
+assert.ok(fitCamera.right - fitCamera.left < 40, 'fit uses physical optics rather than distant ray endpoints');
+assert.equal(objects('nonSequentialRay').length, 1, 'fitting does not remove the ray geometry');
+delete globalThis.camera;
+delete globalThis.controls;
+delete globalThis.renderer;
+values.set('coopt.render.showPortConnections', 'true');
 let dispose = installNonSequentialRenderOverlay();
 await tick();
 const deliver = () => dispatchEvent(new CustomEvent('coopt:nonsequential-trace-updated', { detail: livePayload }));
