@@ -32,6 +32,7 @@ interface OverlayPayload {
 
 interface OverlayDrawOptions {
   showConnections?: boolean;
+  showLabels?: boolean;
   selectedConnectionId?: string | null;
   selectedRouteId?: string | null;
   fitAssembly?: boolean;
@@ -530,7 +531,7 @@ function overlayScale(design: CoherentAssemblyDesign): number {
   );
 }
 
-function addConnectionOverlay(group: THREE.Group, design: CoherentAssemblyDesign, selectedConnectionId?: string | null, selectedRouteId?: string | null): void {
+function addConnectionOverlay(group: THREE.Group, design: CoherentAssemblyDesign, selectedConnectionId?: string | null, selectedRouteId?: string | null, showLabels = false): void {
   const model = buildCoherentRenderConnectionOverlay(design);
   const selectedRoute = (design.portRoutes ?? []).find((route) => route.id === selectedRouteId);
   const routeSteps = new Map<string, Array<{ number: number; direction: 'forward' | 'reverse' }>>();
@@ -566,7 +567,7 @@ function addConnectionOverlay(group: THREE.Group, design: CoherentAssemblyDesign
     const delta = end.clone().sub(start);
     const length = delta.length();
     if (length <= 1e-8) {
-      if (selectedByRoute) {
+      if (selectedByRoute && showLabels) {
         const passLabel = makeLabelSprite(
           selectedSteps.map((step) => `${step.number}${step.direction === 'reverse' ? 'R' : 'F'}`).join(' · '),
           selectedSteps.some((step) => step.direction === 'reverse') ? '#be185d' : '#0369a1',
@@ -619,7 +620,7 @@ function addConnectionOverlay(group: THREE.Group, design: CoherentAssemblyDesign
     arrow.renderOrder = 59;
     arrow.userData = { ...line.userData, baseOpacity: 0.82 };
     connectionGroup.add(arrow);
-    if (selectedByRoute) {
+    if (selectedByRoute && showLabels) {
       const passLabel = makeLabelSprite(
         selectedSteps.map((step) => `${step.number}${step.direction === 'reverse' ? 'R' : 'F'}`).join(' · '),
         selectedSteps.some((step) => step.direction === 'reverse') ? '#be185d' : '#0369a1',
@@ -658,9 +659,10 @@ function addConnectionOverlay(group: THREE.Group, design: CoherentAssemblyDesign
     // Connected port names are available as hover tooltips. Showing every
     // FRONT/BACK/IN/OUT label at once makes a routed assembly unreadable,
     // especially where a physical component and a Sequential Group meet.
-    // Keep labels only for a selected connection and for ports that still need
-    // wiring; route order is already indicated by the numbered pass labels.
-    if (port.connected && !selectedConnectionPorts.has(port.id)) continue;
+    // All persistent annotations obey Render > Options > Labels, including
+    // unconnected Front/Back ports on an ordinary sequential lens design.
+    // With Labels enabled, retain the selected/unconnected-port policy.
+    if (!showLabels || (port.connected && !selectedConnectionPorts.has(port.id))) continue;
     const label = makeLabelSprite(port.label, port.connected ? '#334155' : '#b91c1c');
     const inputSide = ['in', 'input', 'common', 'detect'].includes(String(port.portId).toLowerCase());
     const labelHalfWidthPx = Number(label.userData.screenWidthPx ?? 24) * 0.5;
@@ -759,7 +761,7 @@ export function drawNonSequentialOverlay(scene: THREE.Scene, payload: OverlayPay
     group.add(line);
   }
   for (const item of payload.design.components) addComponent(group, payload.design, item.id);
-  if (options.showConnections !== false) addConnectionOverlay(group, payload.design, options.selectedConnectionId, effectiveSelectedRouteId);
+  if (options.showConnections !== false) addConnectionOverlay(group, payload.design, options.selectedConnectionId, effectiveSelectedRouteId, options.showLabels === true);
   scene.add(group);
   const renderer = (window as any).renderer ?? (typeof (window as any).getRenderer === 'function' ? (window as any).getRenderer() : null);
   const camera = (window as any).camera ?? (typeof (window as any).getCamera === 'function' ? (window as any).getCamera() : null);
@@ -976,6 +978,11 @@ export function installNonSequentialRenderOverlay(): () => void {
         : null;
       drawNonSequentialOverlay(scene, latestPayload, {
         showConnections,
+        // Read on every redraw so Labels changes, view switches and late trace
+        // results all use the current preference. Missing storage means off.
+        showLabels: (() => {
+          try { return localStorage.getItem('coopt.render.showDesignIntentLabels') === 'true'; } catch (_) { return false; }
+        })(),
         selectedConnectionId,
         selectedRouteId,
         fitAssembly: !!fitKey && fitKey !== lastAssemblyFitKey,
